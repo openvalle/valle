@@ -800,15 +800,54 @@ export default function Demo(ctx) {
         String::from_utf8_lossy(&result.stderr)
     );
     let report: Value = serde_json::from_slice(&result.stdout).unwrap();
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(stderr.is_empty(), "{stderr}");
     assert_eq!(report["delivery"]["frames"], 3);
     assert_eq!(report["delivery"]["width"], 160);
     assert_eq!(report["delivery"]["height"], 90);
+    let backend = report["delivery"]["backend"].as_str().unwrap();
+    if cfg!(target_os = "macos") {
+        assert!(["metal", "raster"].contains(&backend));
+    } else {
+        assert_eq!(backend, "raster");
+    }
     let bytes = std::fs::read(&output).unwrap();
     assert_eq!(&bytes[4..8], b"ftyp");
     let repeated = invoke();
     assert!(!repeated.status.success());
     assert!(String::from_utf8_lossy(&repeated.stderr).contains("overwrite"));
     assert_eq!(std::fs::read(&output).unwrap(), bytes);
+
+    let raster = valle()
+        .args(["motion", "render"])
+        .arg(&source)
+        .args([
+            "--ffmpeg-log-level",
+            "info",
+            "--backend",
+            "raster",
+            "--duration",
+            "0.3",
+            "--fps",
+            "10",
+            "--size",
+            "160x90",
+        ])
+        .arg("-o")
+        .arg(dir.path().join("raster.mp4"))
+        .output()
+        .unwrap();
+    assert!(
+        raster.status.success(),
+        "{}",
+        String::from_utf8_lossy(&raster.stderr)
+    );
+    let raster_report: Value = serde_json::from_slice(&raster.stdout).unwrap();
+    let stderr = String::from_utf8_lossy(&raster.stderr);
+    assert!(stderr.contains("[libx264"), "{stderr}");
+    assert!(stderr.contains("Qavg:"), "{stderr}");
+    assert_eq!(raster_report["delivery"]["backend"], "raster");
+    assert_eq!(raster_report["renderId"], report["renderId"]);
 }
 
 #[test]

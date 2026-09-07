@@ -1,4 +1,7 @@
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::{BTreeMap, VecDeque},
+    sync::Arc,
+};
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -25,6 +28,53 @@ pub(crate) struct BuiltMotionProgram {
     pub layout_boxes: BTreeMap<String, [f32; 4]>,
 }
 
+/// Worker-local font registries keyed by the ordered, verified dependency digests. A seek can
+/// reuse a registry, while a font edit necessarily selects a different key. Keep only a small
+/// LRU so repeatedly replacing a Studio package cannot retain every previous font collection.
+#[derive(Default)]
+pub(super) struct MotionFontCache {
+    defaults: Option<valle_motion::Fonts>,
+    entries: VecDeque<(Vec<ContentDigest>, valle_motion::Fonts)>,
+}
+
+impl MotionFontCache {
+    const CAPACITY: usize = 4;
+
+    pub(super) fn get(
+        &mut self,
+        dependencies: &[(ContentDigest, &[u8])],
+    ) -> Result<&valle_motion::Fonts, ProgramPrepareError> {
+        let key: Vec<_> = dependencies.iter().map(|(digest, _)| *digest).collect();
+        if let Some(index) = self.entries.iter().position(|(cached, _)| *cached == key) {
+            let entry = self.entries.remove(index).expect("located font registry");
+            self.entries.push_back(entry);
+        } else {
+            if self.defaults.is_none() {
+                let mut fonts = valle_motion::Fonts::default();
+                valle_motion::register_default_motion_fonts(&mut fonts).map_err(|error| {
+                    ProgramPrepareError::MotionLayout {
+                        reason: error.to_string(),
+                    }
+                })?;
+                self.defaults = Some(fonts);
+            }
+            let mut fonts = self
+                .defaults
+                .as_ref()
+                .expect("registered default fonts")
+                .clone();
+            for (digest, bytes) in dependencies {
+                register_motion_dependency_font(&mut fonts, bytes, digest)?;
+            }
+            if self.entries.len() == Self::CAPACITY {
+                self.entries.pop_front();
+            }
+            self.entries.push_back((key, fonts));
+        }
+        Ok(&self.entries.back().expect("cached font registry").1)
+    }
+}
+
 pub(crate) struct CompiledMotionProgramContext<'a> {
     pub prepared: &'a valle_motion::PreparedScene,
     pub instance: &'a crate::render::CompiledMotionInstance,
@@ -34,6 +84,7 @@ pub(crate) struct CompiledMotionProgramContext<'a> {
     pub fps: FrameRate,
     pub styles: &'a valle_motion::StyleCache,
     pub faces: &'a valle_motion::FaceCache,
+    pub fonts: &'a valle_motion::Fonts,
     pub program_to_device: super::DeviceTransform,
     pub clip_id: &'a str,
     pub render_seed: u32,
@@ -86,25 +137,12 @@ pub(crate) fn build_compiled_motion_program(
         })?;
     let signals = cues.sample(local_frame, context.fps);
 
-    let mut fonts = valle_motion::Fonts::default();
-    valle_motion::register_default_motion_fonts(&mut fonts).map_err(|error| {
-        ProgramPrepareError::MotionLayout {
-            reason: error.to_string(),
-        }
-    })?;
-    for resource in context.evaluated.motion_artifact_dependencies() {
-        let crate::render::VerifiedResourceFacts::Font { bytes, .. } = resource.facts() else {
-            continue;
-        };
-        let digest = *resource.digest();
-        register_motion_dependency_font(&mut fonts, bytes, &digest)?;
-    }
     let options = valle_motion::LayoutOptions {
         viewport: valle_motion::Viewport::new((
             context.viewport.width(),
             context.viewport.height(),
         )),
-        fonts: &fonts,
+        fonts: context.fonts,
         styles: Some(context.styles),
     };
     let mut tree = valle_motion::build_tree(
@@ -1370,6 +1408,35 @@ export default function Card() {{
         );
         assert_eq!(report.program.requirements().fonts.len(), 1);
         report.program.requirements().fonts[0].clone()
+    }
+
+    #[test]
+    fn cached_fonts_preserve_content_aliases_after_font_changes_and_eviction() {
+        let mut cache = MotionFontCache::default();
+        let digest = ContentDigest::of_bytes(DEPENDENCY_FONT);
+        let dependencies = [(digest, DEPENDENCY_FONT)];
+        let alias = valle_motion::font_family_alias(&digest);
+        let cold = emitted_font_request(cache.get(&dependencies).unwrap(), &alias);
+        assert_eq!(cold.face_hash.into_bytes(), *digest.as_bytes());
+
+        // Visit enough distinct dependency sets to evict the initial set, as hot reload or
+        // alternating clips can do. Every set must resolve its own immutable font bytes.
+        for bytes in valle_motion::DEFAULT_MOTION_FONT_WEIGHTS.iter().take(5) {
+            let replacement = ContentDigest::of_bytes(bytes);
+            let fonts = cache.get(&[(replacement, bytes)]).unwrap();
+            let request =
+                emitted_font_request(fonts, &valle_motion::font_family_alias(&replacement));
+            assert_eq!(request.face_hash.into_bytes(), *replacement.as_bytes());
+        }
+        assert_eq!(cache.entries.len(), MotionFontCache::CAPACITY);
+        assert_eq!(
+            emitted_font_request(cache.get(&dependencies).unwrap(), &alias),
+            cold
+        );
+        assert_eq!(
+            emitted_font_request(cache.get(&dependencies).unwrap(), &alias),
+            cold
+        );
     }
 
     #[test]

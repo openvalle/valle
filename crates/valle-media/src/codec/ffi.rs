@@ -7,6 +7,9 @@ use anyhow::{Context as _, Result, bail};
 use ff::{Packet, Rational, color, encoder, format, frame, software};
 use ffmpeg_next as ff;
 
+/// Process-wide libav logging controls for native hosts. Set the level before starting workers.
+pub use ff::util::log::{Level as FfmpegLogLevel, set_level as set_ffmpeg_log_level};
+
 static FF_INIT: Once = Once::new();
 
 /// Initialize libav once.

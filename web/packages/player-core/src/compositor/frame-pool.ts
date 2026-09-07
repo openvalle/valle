@@ -8,10 +8,14 @@ import {
   type ProductFrameWorkerRequest,
 } from "./frame-protocol.ts";
 
-const DEFAULT_WORKERS = 4;
+// Keep one warm WASM/font package by default. Cached preparation no longer needs several
+// copies of the default fonts; pool callers can request more workers for heavier timelines.
+const DEFAULT_WORKERS = 1;
 const DEFAULT_READY_FRAMES = 64;
 const DEFAULT_READY_BYTES = 96 * 1024 * 1024;
-const WORKER_PIPELINE_DEPTH = 8;
+// A worker runs its dispatched batch synchronously. Keep that batch short so a seek or clock
+// catch-up does not wait behind eight obsolete frames; the ready cache provides the lookahead.
+const WORKER_PIPELINE_DEPTH = 2;
 const WORKER_REFILL_THRESHOLD = 0;
 // Keep a bounded 1.6-second cushion while the main thread consumes already-admitted frames.
 // Planning and GPU execution use independent threads/resources; serial burst alternation leaves

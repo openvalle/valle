@@ -38,6 +38,7 @@ pub fn run(action: MotionAction) -> Result<std::process::ExitCode> {
             frame,
             input,
             output,
+            backend,
             assets,
             font,
             data,
@@ -54,6 +55,7 @@ pub fn run(action: MotionAction) -> Result<std::process::ExitCode> {
             parse_fps(&fps)?,
             resolve_canvas_size(canvas)?,
             frame,
+            backend.into(),
         ),
         MotionAction::Studio {
             input,
@@ -91,6 +93,7 @@ fn render(
     fps: FrameRate,
     canvas: MotionViewport,
     frame: Option<i64>,
+    backend: valle_render::executor::skia::SkiaBackendKind,
 ) -> Result<std::process::ExitCode> {
     use valle_engine::fixed_package::{fixed_package_files, open_verified_fixed_package};
     use valle_render::host::{
@@ -169,7 +172,7 @@ fn render(
     let renderer = NativeRenderer::new(
         project,
         NativeRenderOptions {
-            backend: valle_render::executor::skia::SkiaBackendKind::Raster,
+            backend,
             progress: crate::output::render_progress(),
             ..NativeRenderOptions::default()
         },

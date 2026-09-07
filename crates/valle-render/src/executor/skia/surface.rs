@@ -26,6 +26,18 @@ pub enum SkiaBackendKind {
     Metal,
 }
 
+impl SkiaBackendKind {
+    /// Choose an available device once at the delivery boundary. Sandboxed/headless macOS
+    /// processes may have no Metal device even though the binary includes Metal support.
+    pub fn preferred_available() -> Self {
+        #[cfg(all(target_os = "macos", feature = "native"))]
+        if objc2_metal::MTLCreateSystemDefaultDevice().is_some() {
+            return Self::Metal;
+        }
+        Self::Raster
+    }
+}
+
 /// Font-outline coverage implementation used by the platform `SkFontMgr` selected for this
 /// executor. This is intentionally separate from [`SkiaBackendKind`]: a Metal surface on macOS
 /// still rasterizes `TextBlob` glyphs through CoreText, while CanvasKit uses FreeType.

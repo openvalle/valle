@@ -915,7 +915,10 @@ export class BrowserValleWebPlayer {
     // Start the media clock only after a bounded decode-independent cushion exists. Without this
     // phase the clock spends its first transition consuming the very frames the worker is still
     // producing, and a realtime-capable planner can never recover that initial debt.
-    await Promise.all(planning.slice(0, 16).map((job) => job.ready));
+    const prebufferFrames = Math.min(16, Math.max(1,
+      Math.ceil(canonicalRationalNumber(this.requireRenderReceipt().frameRate, "frameRate") * 0.1),
+    ));
+    await Promise.all(planning.slice(0, prebufferFrames).map((job) => job.ready));
     const prefetched = await audio;
     if (generation !== this.playGeneration || this.closed) return;
     await this.clock.start(this.timeS, { useAudioClock: prefetched !== null });
@@ -1187,7 +1190,6 @@ export class BrowserValleWebPlayer {
       }
       planner = new ProductFramePlannerPool({
         workerUrl: this.runtimeAssets.workers.productFrame,
-        size: 1,
         allocateGeneration: () => this.allocateGeneration(),
       });
       await planner.init(bootstrap);
@@ -1723,6 +1725,10 @@ export class BrowserValleWebPlayer {
       this.playbackFrame === null ? clockFrame : this.playbackFrame + 1,
     );
     while (this.playing && !this.closed && generation === this.playGeneration && frame <= lastFrame) {
+      // Preview follows the media clock. After a slow frame, seek planning forward instead of
+      // replaying an ever-growing backlog; exact renderFrame/seek and offline export keep every
+      // requested frame. The clamped clock still lets us present the final frame once.
+      frame = Math.max(frame, this.frameAtSeconds(clamp(this.clock.now(), 0, this.lastFrameTimeS())));
       this.prefetchPlanningWindow(frame);
       const dueTime = frame / fps;
       while (this.playing && !this.closed && generation === this.playGeneration) {

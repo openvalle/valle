@@ -12,6 +12,37 @@ const RENDER_ID = "sha256:111111111111111111111111111111111111111111111111111111
 const SCENE_DIGEST = `sha256:${"4".repeat(64)}`;
 const TOPOLOGY_DIGEST = `sha256:${"5".repeat(64)}`;
 
+test("slow preview follows the media clock and still presents the final frame", async () => {
+  const player = Object.create(BrowserValleWebPlayer.prototype) as any;
+  let time = 0;
+  const presented: number[] = [];
+  const prefetched: number[] = [];
+  Object.assign(player, {
+    playing: true,
+    closed: false,
+    playGeneration: 1,
+    playbackFrame: null,
+    timeS: 0,
+    clock: { now: () => time },
+    requireRenderReceipt: () => ({ frameRate: "30/1", frameCount: 10 }),
+    frameAtSeconds: (seconds: number) => {
+      expect(seconds).toBeGreaterThanOrEqual(0);
+      expect(seconds).toBeLessThanOrEqual(0.3);
+      return Math.floor(seconds * 30);
+    },
+    lastFrameTimeS: () => 9 / 30,
+    prefetchPlanningWindow: (frame: number) => { prefetched.push(frame); },
+    async renderFrame(frame: number) { presented.push(frame); time += 0.08; },
+    pause() { this.playing = false; },
+  });
+  await player.runPlaybackPump(1);
+  expect(presented).toEqual([0, 2, 4, 7, 9]);
+  expect(prefetched).toEqual(presented);
+  expect(player.playbackFrame).toBe(9);
+  expect(player.timeS).toBe(0.3);
+  expect(player.playing).toBe(false);
+});
+
 test("common audio decoded PCM digest matches the cross-platform byte domain", async () => {
   const samples = Float32Array.from([0.1, 0.2]);
   const buffer = {

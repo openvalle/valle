@@ -323,6 +323,7 @@ impl PrepareOutput {
 pub struct ProductPrepareCaches {
     motion_styles: valle_motion::StyleCache,
     motion_faces: valle_motion::FaceCache,
+    motion_fonts: motion::MotionFontCache,
     #[cfg(feature = "text")]
     text_semantics: crate::text_semantic::TextSemantics,
 }
@@ -332,6 +333,7 @@ impl ProductPrepareCaches {
         Self {
             motion_styles: valle_motion::StyleCache::new(),
             motion_faces: valle_motion::FaceCache::new(),
+            motion_fonts: motion::MotionFontCache::default(),
             #[cfg(feature = "text")]
             text_semantics: crate::text_semantic::TextSemantics::product(),
         }
@@ -358,6 +360,7 @@ struct PrepareState<'a> {
     frame: PrepareFrameContext,
     motion_styles: &'a valle_motion::StyleCache,
     motion_faces: &'a valle_motion::FaceCache,
+    motion_fonts: &'a mut motion::MotionFontCache,
     #[cfg(feature = "text")]
     text_semantics: Option<&'a mut crate::text_semantic::TextSemantics>,
     requests: request::RequestAllocator,
@@ -384,6 +387,7 @@ impl<'a> PrepareState<'a> {
             frame,
             motion_styles: &caches.motion_styles,
             motion_faces: &caches.motion_faces,
+            motion_fonts: &mut caches.motion_fonts,
             #[cfg(feature = "text")]
             text_semantics: Some(&mut caches.text_semantics),
             requests: request::RequestAllocator::default(),

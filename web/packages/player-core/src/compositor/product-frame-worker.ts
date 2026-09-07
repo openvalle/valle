@@ -24,7 +24,9 @@ let messageChain = Promise.resolve();
 const sentTemplateHashes = new Set<string>();
 let lastReadyAt: number | null = null;
 let lastReleaseMs = 0;
-const RESULT_BATCH_FRAMES = 8;
+// Dispatch can still prefetch multiple jobs, but publish each frame immediately. Waiting for
+// eight evaluate/prepare calls delays both resource fulfillment and the first visible frame.
+const RESULT_BATCH_FRAMES = 1;
 
 interface StartedFrame {
   id: string;

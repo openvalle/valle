@@ -223,6 +223,18 @@ pub(super) fn print_delivery_report(
             "audioOnly": summary.audio_only,
         }),
     );
+    if let Some(profile) = summary
+        .pipeline
+        .as_ref()
+        .and_then(|pipeline| pipeline.profile)
+    {
+        report.get_mut("delivery").expect("delivery report")["backend"] =
+            json!(match profile.surface_backend {
+                SkiaBackendKind::Raster => "raster",
+                #[cfg(target_os = "macos")]
+                SkiaBackendKind::Metal => "metal",
+            });
+    }
     crate::output::emit(Value::Object(report));
     Ok(())
 }

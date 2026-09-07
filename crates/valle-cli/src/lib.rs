@@ -89,8 +89,30 @@ pub struct Cli {
     /// Emit progress and results as NDJSON.
     #[arg(long, global = true, conflicts_with = "json")]
     pub events: bool,
+    /// FFmpeg diagnostics written to stderr. Info includes encoder parameters and statistics.
+    #[arg(long, global = true, value_enum, default_value = "error")]
+    pub ffmpeg_log_level: FfmpegLogLevelArg,
     #[command(subcommand)]
     pub cmd: Cmd,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum FfmpegLogLevelArg {
+    Error,
+    Warning,
+    Info,
+    Debug,
+}
+
+impl From<FfmpegLogLevelArg> for valle_media::codec::ffi::FfmpegLogLevel {
+    fn from(value: FfmpegLogLevelArg) -> Self {
+        match value {
+            FfmpegLogLevelArg::Error => Self::Error,
+            FfmpegLogLevelArg::Warning => Self::Warning,
+            FfmpegLogLevelArg::Info => Self::Info,
+            FfmpegLogLevelArg::Debug => Self::Debug,
+        }
+    }
 }
 
 /// Public authoring and media commands.
@@ -532,6 +554,9 @@ pub enum MotionAction {
         /// Destination file. Existing files are never overwritten.
         #[arg(short, long)]
         output: PathBuf,
+        /// Compositor backend. Auto uses an available Metal device on macOS, otherwise CPU Raster.
+        #[arg(long, value_enum, default_value = "auto")]
+        backend: MotionRenderBackend,
         /// Bind an asset control as name=path; may be repeated.
         #[arg(long = "asset", value_name = "NAME=PATH")]
         assets: Vec<String>,
@@ -578,6 +603,25 @@ pub enum MotionAction {
         #[command(flatten)]
         canvas: MotionCanvasArgs,
     },
+}
+
+#[derive(Clone, Copy, clap::ValueEnum)]
+pub enum MotionRenderBackend {
+    Auto,
+    Raster,
+    #[cfg(target_os = "macos")]
+    Metal,
+}
+
+impl From<MotionRenderBackend> for valle_render::executor::skia::SkiaBackendKind {
+    fn from(value: MotionRenderBackend) -> Self {
+        match value {
+            MotionRenderBackend::Auto => Self::preferred_available(),
+            MotionRenderBackend::Raster => Self::Raster,
+            #[cfg(target_os = "macos")]
+            MotionRenderBackend::Metal => Self::Metal,
+        }
+    }
 }
 
 /// Fixed-package Native delivery operations.
@@ -1149,6 +1193,7 @@ pub fn run() -> std::process::ExitCode {
         }
     };
     output::init(cli.json, cli.events);
+    valle_media::codec::ffi::set_ffmpeg_log_level(cli.ffmpeg_log_level.into());
     match dispatch(cli.cmd) {
         Ok(code) => code,
         Err(e) => {

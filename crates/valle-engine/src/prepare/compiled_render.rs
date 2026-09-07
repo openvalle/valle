@@ -376,6 +376,20 @@ fn prepare_endpoint(
             )
             .map_err(|error| PrepareError::at(path, error))?;
             let assets = compiled_motion_assets(source, path)?;
+            let font_dependencies: Vec<_> = source
+                .motion_artifact_dependencies()
+                .iter()
+                .filter_map(|resource| match resource.facts() {
+                    VerifiedResourceFacts::Font { bytes, .. } => {
+                        Some((*resource.digest(), bytes.as_ref()))
+                    }
+                    _ => None,
+                })
+                .collect();
+            let fonts = state
+                .motion_fonts
+                .get(&font_dependencies)
+                .map_err(|error| PrepareError::at(format!("{path}.motion"), error))?;
             let built =
                 motion::build_compiled_motion_program(motion::CompiledMotionProgramContext {
                     prepared: prepared_scene,
@@ -386,6 +400,7 @@ fn prepare_endpoint(
                     fps: render.canvas().frame_rate(),
                     styles: state.motion_styles,
                     faces: state.motion_faces,
+                    fonts,
                     program_to_device,
                     clip_id: &clip.clip_id,
                     render_seed: render_seed(render),
@@ -498,13 +513,17 @@ fn install_compiled_motion_fonts(
     source: &EvaluatedSourceRef,
     path: &str,
 ) -> Result<motion::FixtureProgram, PrepareError> {
-    for (index, bytes) in valle_motion::DEFAULT_MOTION_FONT_WEIGHTS.iter().enumerate() {
-        let digest = ContentDigest::of_bytes(bytes);
-        fixture = fixture.with_font(SemanticFont::new(
-            valle_motion::DEFAULT_MOTION_FONT_FILES[index],
-            digest,
-            0,
-        ));
+    // These bytes are compiled into the binary/WASM module. Hash them once per instance, not
+    // once per frame (the default CJK face alone is over 16 MB).
+    static DEFAULT_FONTS: std::sync::OnceLock<Vec<SemanticFont>> = std::sync::OnceLock::new();
+    for font in DEFAULT_FONTS.get_or_init(|| {
+        valle_motion::DEFAULT_MOTION_FONT_FILES
+            .iter()
+            .zip(valle_motion::DEFAULT_MOTION_FONT_WEIGHTS)
+            .map(|(name, bytes)| SemanticFont::new(*name, ContentDigest::of_bytes(bytes), 0))
+            .collect()
+    }) {
+        fixture = fixture.with_font(font.clone());
     }
     for resource in source.motion_artifact_dependencies() {
         let VerifiedResourceFacts::Font { descriptor, .. } = resource.facts() else {
