@@ -1,0 +1,19 @@
+// Center zoom transition adapted from Zeh Fernando's GL Transitions DreamyZoom, omitting layered
+// blur to reduce sampling cost.
+uniform shader from_tex;
+uniform shader to_tex;
+uniform float2 resolution;
+uniform float progress;
+
+half4 main(float2 xy) {
+    float p = clamp(progress, 0.0, 1.0);
+    float2 uv = xy / resolution;
+    float2 c = float2(0.5, 0.5);
+    // Expand the source scale from one to 1.5.
+    float2 from_uv = (uv - c) * (1.0 + p * 0.5) + c;
+    // Contract the destination scale from 1.5 to one.
+    float2 to_uv = (uv - c) * (1.5 - p * 0.5) + c;
+    half4 a = from_tex.eval(clamp(from_uv, 0.0, 1.0) * resolution);
+    half4 b = to_tex.eval(clamp(to_uv, 0.0, 1.0) * resolution);
+    return mix(a, b, half(smoothstep(0.0, 1.0, p)));
+}

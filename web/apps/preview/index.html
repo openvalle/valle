@@ -1,0 +1,482 @@
+<!doctype html>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Valle Web Player</title>
+<!-- Takumi's vendored module graph uses relative imports so it also loads inside module Workers. -->
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #0a0b0e;
+    --bg-elev: #131519;
+    --panel: #16181d;
+    --panel-2: #1c1f26;
+    --line: rgba(255, 255, 255, 0.08);
+    --line-strong: rgba(255, 255, 255, 0.14);
+    --text: #e8eaed;
+    --muted: #9aa0ab;
+    --muted-2: #6b7280;
+    --accent: #7c6cff;
+    --accent-2: #4aa8ff;
+    --accent-soft: rgba(124, 108, 255, 0.16);
+    --danger: #ff6b6b;
+    --radius: 14px;
+    --ctrl-h: 38px;
+    font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    min-height: 100dvh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    /* Safe centering falls back to start alignment when content exceeds the viewport height. */
+    justify-content: center;
+    justify-content: safe center;
+    padding: clamp(12px, 3vw, 32px);
+    background:
+      radial-gradient(1200px 600px at 50% -10%, rgba(124, 108, 255, 0.10), transparent 60%),
+      radial-gradient(900px 500px at 110% 110%, rgba(74, 168, 255, 0.08), transparent 55%),
+      var(--bg);
+  }
+
+  .app {
+    width: min(100%, 1040px);
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+
+  /* ── top bar ─────────────────────────────────────────────── */
+  .topbar {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    flex-wrap: wrap;
+  }
+  .brand {
+    display: inline-flex;
+    align-items: center;
+    gap: 9px;
+    font-weight: 650;
+    letter-spacing: 0.2px;
+    font-size: 15px;
+    user-select: none;
+  }
+  .brand .mark {
+    width: 22px;
+    height: 22px;
+    display: block;
+    filter: drop-shadow(0 1px 6px rgba(124, 108, 255, 0.5));
+  }
+  .brand .sub {
+    color: var(--muted);
+    font-weight: 500;
+    padding: 2px 8px;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+  }
+  .meta {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    flex-wrap: wrap;
+  }
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--muted);
+    background: var(--panel);
+    border: 1px solid var(--line);
+    padding: 5px 10px;
+    border-radius: 999px;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+  }
+  .chip b { color: var(--text); font-weight: 600; }
+  .chip.live { color: var(--accent-2); border-color: rgba(74, 168, 255, 0.35); }
+  /* Indicators for effects unavailable in web preview. */
+  .chip.warn { color: #ffcf5c; border-color: rgba(255, 207, 92, 0.4); }
+  .chip .dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: currentColor; box-shadow: 0 0 8px currentColor;
+  }
+
+  /* ── stage ───────────────────────────────────────────────── */
+  .stage {
+    /* Reserve room for controls and fit the stage using its canvas aspect ratio, including portrait timelines. */
+    --stage-max-h: max(240px, calc(100dvh - 240px));
+    width: min(100%, calc(var(--stage-max-h) * var(--stage-ar, 1.77778)));
+    max-height: var(--stage-max-h);
+    margin-inline: auto;
+    position: relative;
+    border-radius: var(--radius);
+    overflow: hidden;
+    border: 1px solid var(--line);
+    /* muted transparency checker — revealed only where the composited frame is transparent */
+    background-color: #0c0d10;
+    background-image:
+      linear-gradient(45deg, #15161b 25%, transparent 25%, transparent 75%, #15161b 75%),
+      linear-gradient(45deg, #15161b 25%, transparent 25%, transparent 75%, #15161b 75%);
+    background-size: 26px 26px;
+    background-position: 0 0, 13px 13px;
+    box-shadow: 0 20px 60px -24px rgba(0, 0, 0, 0.8), inset 0 0 0 1px rgba(255,255,255,0.02);
+    display: grid;
+    place-items: center;
+    aspect-ratio: 16 / 9;
+    line-height: 0;
+  }
+  valle-player#stage {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    display: block;
+    background: transparent;
+    min-height: 0;
+  }
+  /* In fullscreen, let the canvas object-fit handle letterboxing. */
+  .stage:fullscreen {
+    width: 100%;
+    max-height: none;
+  }
+  /* click surface + center play affordance */
+  .stage .hit {
+    position: absolute;
+    inset: 0;
+    cursor: pointer;
+    display: grid;
+    place-items: center;
+    background: transparent;
+    transition: background 0.18s ease;
+  }
+  .stage[data-playing="false"] .hit { background: rgba(0, 0, 0, 0.18); }
+  .stage[data-playing="true"] .hit:not(:hover) .bigplay { opacity: 0; transform: scale(0.9); }
+  .bigplay {
+    width: 64px; height: 64px;
+    border-radius: 50%;
+    display: grid; place-items: center;
+    background: rgba(20, 21, 26, 0.72);
+    border: 1px solid var(--line-strong);
+    backdrop-filter: blur(8px);
+    color: #fff;
+    transition: opacity 0.18s ease, transform 0.18s ease, background 0.18s ease;
+    box-shadow: 0 8px 30px -8px rgba(0,0,0,0.7);
+  }
+  .stage .hit:hover .bigplay { background: rgba(124, 108, 255, 0.4); transform: scale(1.04); }
+  .bigplay svg { width: 26px; height: 26px; display: block; }
+
+  /* overlays */
+  .overlay {
+    position: absolute; inset: 0;
+    display: grid; place-items: center;
+    gap: 12px;
+    background: rgba(10, 11, 14, 0.78);
+    backdrop-filter: blur(4px);
+    color: var(--muted);
+    font-size: 13px;
+    z-index: 3;
+    transition: opacity 0.25s ease;
+  }
+  .overlay[hidden] { display: none; }
+  .overlay.err { color: var(--danger); }
+  .overlay .stack {
+    display: grid; place-items: center; gap: 10px; text-align: center;
+    max-width: 80%;
+  }
+  .overlay pre {
+    margin: 0; max-width: min(680px, 82vw); max-height: 46vh;
+    overflow: auto; font-size: 11px; line-height: 1.5;
+    color: #ffb3b3; text-align: left;
+    white-space: pre-wrap; word-break: break-word;
+    background: rgba(0,0,0,0.35); padding: 10px 12px; border-radius: 8px;
+    border: 1px solid rgba(255,107,107,0.25);
+  }
+  .spinner {
+    width: 30px; height: 30px; border-radius: 50%;
+    border: 2.5px solid var(--line-strong);
+    border-top-color: var(--accent);
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 2s; } }
+
+  /* ── controls ────────────────────────────────────────────── */
+  .controls {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 12px 14px 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  /* seek bar */
+  .seekrow { display: flex; align-items: center; gap: 12px; }
+  input#scrub {
+    -webkit-appearance: none;
+    appearance: none;
+    flex: 1;
+    height: 6px;
+    border-radius: 999px;
+    background:
+      linear-gradient(90deg, var(--accent), var(--accent-2)) 0 / var(--pct, 0%) 100% no-repeat,
+      var(--panel-2);
+    outline: none;
+    cursor: pointer;
+  }
+  input#scrub::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 15px; height: 15px; border-radius: 50%;
+    background: #fff;
+    border: none;
+    box-shadow: 0 0 0 4px rgba(124, 108, 255, 0.25), 0 2px 6px rgba(0,0,0,0.5);
+    transition: box-shadow 0.15s ease, transform 0.1s ease;
+  }
+  input#scrub:hover::-webkit-slider-thumb { box-shadow: 0 0 0 6px rgba(124, 108, 255, 0.28), 0 2px 6px rgba(0,0,0,0.5); }
+  input#scrub:active::-webkit-slider-thumb { transform: scale(1.1); }
+  input#scrub::-moz-range-thumb {
+    width: 15px; height: 15px; border-radius: 50%;
+    background: #fff; border: none;
+    box-shadow: 0 0 0 4px rgba(124, 108, 255, 0.25);
+  }
+  input#scrub::-moz-range-progress {
+    height: 6px; border-radius: 999px;
+    background: linear-gradient(90deg, var(--accent), var(--accent-2));
+  }
+  input#scrub:focus-visible { box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent); }
+
+  .time {
+    font-variant-numeric: tabular-nums;
+    font-family: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+    font-size: 12.5px;
+    color: var(--muted);
+    white-space: nowrap;
+    user-select: none;
+  }
+  .time .cur { color: var(--text); }
+  .time .frame { color: var(--muted-2); }
+
+  /* transport row */
+  .transport { display: flex; align-items: center; gap: 6px; }
+  .transport .spacer { flex: 1; }
+  button.ctl {
+    appearance: none;
+    height: var(--ctrl-h);
+    min-width: var(--ctrl-h);
+    padding: 0 9px;
+    display: inline-grid;
+    place-items: center;
+    border: 1px solid var(--line);
+    background: var(--panel-2);
+    color: var(--text);
+    border-radius: 10px;
+    cursor: pointer;
+    transition: background 0.15s ease, border-color 0.15s ease, transform 0.06s ease, color 0.15s ease;
+  }
+  button.ctl:hover { background: #23262e; border-color: var(--line-strong); }
+  button.ctl:active { transform: translateY(1px); }
+  button.ctl:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent); }
+  button.ctl svg { width: 17px; height: 17px; display: block; }
+  button.ctl.primary {
+    background: linear-gradient(135deg, var(--accent), var(--accent-2));
+    border-color: transparent;
+    color: #fff;
+    min-width: 46px;
+    box-shadow: 0 6px 18px -8px rgba(124, 108, 255, 0.9);
+  }
+  button.ctl.primary:hover { filter: brightness(1.08); background: linear-gradient(135deg, var(--accent), var(--accent-2)); }
+  button.ctl.toggle[aria-pressed="true"] {
+    color: var(--accent-2);
+    border-color: rgba(74, 168, 255, 0.4);
+    background: var(--accent-soft);
+  }
+  button.ctl:disabled { opacity: 0.4; pointer-events: none; }
+
+  .hints {
+    display: flex; flex-wrap: wrap; gap: 6px 14px;
+    padding: 2px 4px 0;
+    font-size: 11.5px; color: var(--muted-2);
+    user-select: none;
+  }
+  .hints kbd {
+    font-family: ui-monospace, Menlo, monospace;
+    font-size: 10.5px;
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+    border-bottom-color: var(--line-strong);
+    border-radius: 5px;
+    padding: 1px 6px;
+    color: var(--muted);
+  }
+
+  /* perf HUD — overlays the stage, reads player.stats (diagnostic for preview + parity) */
+  .hud {
+    position: absolute;
+    top: 10px; left: 10px;
+    z-index: 4;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 11px;
+    line-height: 1.55;
+    color: var(--muted);
+    background: rgba(10, 11, 14, 0.82);
+    border: 1px solid var(--line);
+    border-radius: 9px;
+    padding: 8px 11px;
+    backdrop-filter: blur(6px);
+    pointer-events: none;
+    min-width: 168px;
+  }
+  .hud[hidden] { display: none; }
+  .hud .row { display: flex; justify-content: space-between; gap: 14px; }
+  .hud .k { color: var(--muted-2); }
+  .hud .v { color: var(--text); font-variant-numeric: tabular-nums; }
+  .hud .v.good { color: #5ce0a0; }
+  .hud .v.warn { color: #ffcf5c; }
+  .hud .fps { font-size: 15px; font-weight: 600; }
+  .hud hr { border: 0; border-top: 1px solid var(--line); margin: 6px -11px; }
+
+  /* seek-bar hover time tooltip */
+  .seekwrap { position: relative; flex: 1; display: flex; }
+  .seektip {
+    position: absolute;
+    bottom: calc(100% + 9px);
+    transform: translateX(-50%);
+    padding: 3px 7px;
+    font-family: ui-monospace, Menlo, monospace;
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+    color: var(--text);
+    background: #23262e;
+    border: 1px solid var(--line-strong);
+    border-radius: 6px;
+    white-space: nowrap;
+    pointer-events: none;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+  }
+  .seektip[hidden] { display: none; }
+
+  /* volume group (shown only for timelines with audio) */
+  .volume { display: inline-flex; align-items: center; gap: 4px; }
+  .volume[hidden] { display: none; }
+  input#vol {
+    -webkit-appearance: none; appearance: none;
+    width: 74px; height: 5px; border-radius: 999px; cursor: pointer;
+    background:
+      linear-gradient(90deg, var(--accent-2), var(--accent-2)) 0 / var(--vpct, 100%) 100% no-repeat,
+      var(--panel-2);
+  }
+  input#vol::-webkit-slider-thumb {
+    -webkit-appearance: none; appearance: none;
+    width: 12px; height: 12px; border-radius: 50%; background: #fff; border: none;
+    box-shadow: 0 0 0 3px rgba(74,168,255,0.25);
+  }
+  input#vol::-moz-range-thumb { width: 12px; height: 12px; border-radius: 50%; background: #fff; border: none; }
+
+  @media (max-width: 560px) {
+    .meta { margin-left: 0; width: 100%; }
+    .time { font-size: 11.5px; }
+    .hints { display: none; }
+    input#vol { width: 54px; }
+  }
+</style>
+
+<div class="app">
+  <header class="topbar">
+    <div class="brand">
+      <svg class="mark" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <defs>
+          <linearGradient id="vg" x1="0" y1="0" x2="24" y2="24" gradientUnits="userSpaceOnUse">
+            <stop stop-color="#7c6cff" /><stop offset="1" stop-color="#4aa8ff" />
+          </linearGradient>
+        </defs>
+        <rect x="1.5" y="1.5" width="21" height="21" rx="6" stroke="url(#vg)" stroke-width="1.6" />
+        <path d="M7 7.5 L11.4 16.5 A0.7 0.7 0 0 0 12.6 16.5 L17 7.5" stroke="url(#vg)"
+              stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" />
+      </svg>
+      <span>valle</span><span class="sub">preview</span>
+    </div>
+    <div class="meta" id="meta"><!-- chips injected --></div>
+  </header>
+
+  <div class="stage" id="stageWrap" data-playing="false">
+    <valle-player id="stage" loading-label="Booting render engine…">
+      <button class="hit" id="hit" type="button" aria-label="Play / pause">
+        <span class="bigplay" id="bigplay" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13l11-6.5z" /></svg>
+        </span>
+      </button>
+      <div class="hud" id="hud" hidden></div>
+    </valle-player>
+  </div>
+
+  <div class="controls">
+    <div class="seekrow">
+      <div class="seekwrap">
+        <input id="scrub" type="range" min="0" max="1" value="0" step="0.001"
+               aria-label="Seek" style="--pct:0%" />
+        <div class="seektip" id="seektip" hidden>0:00.000</div>
+      </div>
+      <span class="time"><span class="cur" id="tCur">0:00.000</span> / <span id="tDur">0:00.000</span>
+        &nbsp;·&nbsp;<span class="frame" id="tFrame">f0/0</span></span>
+    </div>
+    <div class="transport">
+      <button class="ctl" id="toStart" type="button" title="Start (Home)" aria-label="Jump to start">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 5h2v14H7zM19 5 9.5 12 19 19z"/></svg>
+      </button>
+      <button class="ctl" id="prevFrame" type="button" title="Previous frame (← or ,)" aria-label="Previous frame">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M15 5 6 12l9 7zM17 5h1.6v14H17z"/></svg>
+      </button>
+      <button class="ctl primary" id="playToggle" type="button" title="Play / pause (Space)" aria-label="Play">
+        <svg id="playIcon" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13l11-6.5z"/></svg>
+      </button>
+      <button class="ctl" id="nextFrame" type="button" title="Next frame (→ or .)" aria-label="Next frame">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M9 5l9 7-9 7zM5.4 5H7v14H5.4z"/></svg>
+      </button>
+      <button class="ctl" id="toEnd" type="button" title="End (End)" aria-label="Jump to end">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M15 5h2v14h-2zM5 5l9.5 7L5 19z"/></svg>
+      </button>
+      <span class="spacer"></span>
+      <span class="volume" id="volGroup" hidden>
+        <button class="ctl" id="muteBtn" type="button" title="Mute (M)" aria-label="Mute" aria-pressed="false">
+          <svg id="volIcon" viewBox="0 0 24 24" fill="currentColor"><path d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M16 8.5a4 4 0 0 1 0 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        </button>
+        <input id="vol" type="range" min="0" max="1" step="0.01" value="1" aria-label="Volume" style="--vpct:100%" />
+      </span>
+      <button class="ctl toggle" id="hudBtn" type="button" title="Perf stats (I)" aria-label="Toggle perf stats" aria-pressed="false">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19V11M9 19V5M14 19v-6M19 19V9"/></svg>
+      </button>
+      <button class="ctl toggle" id="loopBtn" type="button" title="Loop" aria-label="Loop" aria-pressed="false">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round"><path d="M17 2l4 4-4 4"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>
+      </button>
+      <button class="ctl" id="fsBtn" type="button" title="Fullscreen (F)" aria-label="Fullscreen">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M8 21H5a2 2 0 0 1-2-2v-3M16 21h3a2 2 0 0 0 2-2v-3"/></svg>
+      </button>
+    </div>
+    <div class="hints">
+      <span><kbd>Space</kbd> play/pause</span>
+      <span><kbd>←</kbd><kbd>→</kbd> frame</span>
+      <span><kbd>J</kbd><kbd>L</kbd> ±1s</span>
+      <span><kbd>Home</kbd><kbd>End</kbd> jump</span>
+      <span><kbd>F</kbd> fullscreen</span>
+      <span><kbd>M</kbd> mute</span>
+      <span><kbd>I</kbd> stats</span>
+    </div>
+  </div>
+</div>
+
+<script type="module" src="./src/main.ts"></script>

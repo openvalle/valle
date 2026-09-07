@@ -1,0 +1,17 @@
+// Transition through a multiplied source/destination image before revealing the destination.
+uniform shader from_tex;
+uniform shader to_tex;
+uniform float2 resolution;
+uniform float progress;
+
+half4 main(float2 xy) {
+    float p = clamp(progress, 0.0, 1.0);
+    half4 a = from_tex.eval(xy);
+    half4 b = to_tex.eval(xy);
+    half4 mul = a * b;
+    if (p < 0.5) {
+        return mix(a, mul, half(p * 2.0));
+    } else {
+        return mix(mul, b, half((p - 0.5) * 2.0));
+    }
+}

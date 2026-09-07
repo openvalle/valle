@@ -1,0 +1,24 @@
+[package]
+name = "valle-draw"
+description = "Shared geometry, drawing commands, text measurement interfaces, and target location."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+# Backend-independent types; do not add rendering or platform font dependencies.
+[dependencies]
+serde.workspace = true
+hex.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+libm.workspace = true
+ts-rs = { workspace = true, optional = true }
+
+[features]
+default = []
+ts = ["dep:ts-rs"]
+

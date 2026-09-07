@@ -1,0 +1,22 @@
+// Grid displacement with source RGB dispersion. Adapted from gre's GL Transitions FlyEye.
+uniform shader from_tex;
+uniform shader to_tex;
+uniform float2 resolution;
+uniform float progress;
+
+half4 main(float2 xy) {
+    float p = clamp(progress, 0.0, 1.0);
+    float inv = 1.0 - p;
+    float2 uv = xy / resolution;
+    float size = 0.04;
+    float zoom = 50.0;
+    float color_sep = 0.3;
+    float2 disp = size * float2(cos(zoom * uv.x), sin(zoom * uv.y));
+
+    half4 b = to_tex.eval(clamp(uv + inv * disp, 0.0, 1.0) * resolution);
+    half ar = from_tex.eval(clamp(uv + p * disp * (1.0 - color_sep), 0.0, 1.0) * resolution).r;
+    half ag = from_tex.eval(clamp(uv + p * disp, 0.0, 1.0) * resolution).g;
+    half ab = from_tex.eval(clamp(uv + p * disp * (1.0 + color_sep), 0.0, 1.0) * resolution).b;
+    half4 a = half4(ar, ag, ab, 1.0);
+    return b * half(p) + a * half(inv);
+}

@@ -1,0 +1,832 @@
+{
+  "spec": {
+    "enterFrames": 6,
+    "exitFrames": 6,
+    "holdCycleFrames": 4
+  },
+  "layout": {
+    "durationFrames": 24,
+    "enterFrames": 6,
+    "holdFrames": 12,
+    "exitFrames": 6,
+    "holdCycleFrames": 4
+  },
+  "contexts": [
+    {
+      "localFrame": 0,
+      "sample": {
+        "composition": "0/1"
+      },
+      "progress": 0.0,
+      "durationFrames": 24,
+      "fps": "30/1",
+      "currentPhase": "enter",
+      "enter": {
+        "active": true,
+        "frame": 0,
+        "elapsedFrames": 0,
+        "durationFrames": 6,
+        "progress": 0.0
+      },
+      "hold": {
+        "active": false,
+        "frame": 0,
+        "elapsedFrames": -6,
+        "durationFrames": 12,
+        "progress": 0.0,
+        "iteration": 0,
+        "cycleFrame": 0,
+        "cycleProgress": 0.0
+      },
+      "exit": {
+        "active": false,
+        "frame": 0,
+        "elapsedFrames": -18,
+        "durationFrames": 6,
+        "progress": 0.0
+      }
+    },
+    {
+      "localFrame": 1,
+      "sample": {
+        "composition": "1/30"
+      },
+      "progress": 0.041666666666666664,
+      "durationFrames": 24,
+      "fps": "30/1",
+      "currentPhase": "enter",
+      "enter": {
+        "active": true,
+        "frame": 1,
+        "elapsedFrames": 1,
+        "durationFrames": 6,
+        "progress": 0.16666666666666666
+      },
+      "hold": {
+        "active": false,
+        "frame": 0,
+        "elapsedFrames": -5,
+        "durationFrames": 12,
+        "progress": 0.0,
+        "iteration": 0,
+        "cycleFrame": 0,
+        "cycleProgress": 0.0
+      },
+      "exit": {
+        "active": false,
+        "frame": 0,
+        "elapsedFrames": -17,
+        "durationFrames": 6,
+        "progress": 0.0
+      }
+    },
+    {
+      "localFrame": 2,
+      "sample": {
+        "composition": "1/15"
+      },
+      "progress": 0.08333333333333333,
+      "durationFrames": 24,
+      "fps": "30/1",
+      "currentPhase": "enter",
+      "enter": {
+        "active": true,
+        "frame": 2,
+        "elapsedFrames": 2,
+        "durationFrames": 6,
+        "progress": 0.3333333333333333
+      },
+      "hold": {
+        "active": false,
+        "frame": 0,
+        "elapsedFrames": -4,
+        "durationFrames": 12,
+        "progress": 0.0,
+        "iteration": 0,
+        "cycleFrame": 0,
+        "cycleProgress": 0.0
+      },
+      "exit": {
+        "active": false,
+        "frame": 0,
+        "elapsedFrames": -16,
+        "durationFrames": 6,
+        "progress": 0.0
+      }
+    },
+    {
+      "localFrame": 3,
+      "sample": {
+        "composition": "1/10"
+      },
+      "progress": 0.125,
+      "durationFrames": 24,
+      "fps": "30/1",
+      "currentPhase": "enter",
+      "enter": {
+        "active": true,
+        "frame": 3,
+        "elapsedFrames": 3,
+        "durationFrames": 6,
+        "progress": 0.5
+      },
+      "hold": {
+        "active": false,
+        "frame": 0,
+        "elapsedFrames": -3,
+        "durationFrames": 12,
+        "progress": 0.0,
+        "iteration": 0,
+        "cycleFrame": 0,
+        "cycleProgress": 0.0
+      },
+      "exit": {
+        "active": false,
+        "frame": 0,
+        "elapsedFrames": -15,
+        "durationFrames": 6,
+        "progress": 0.0
+      }
+    },
+    {
+      "localFrame": 4,
+      "sample": {
+        "composition": "2/15"
+      },
+      "progress": 0.16666666666666666,
+      "durationFrames": 24,
+      "fps": "30/1",
+      "currentPhase": "enter",
+      "enter": {
+        "active": true,
+        "frame": 4,
+        "elapsedFrames": 4,
+        "durationFrames": 6,
+        "progress": 0.6666666666666666
+      },
+      "hold": {
+        "active": false,
+        "frame": 0,
+        "elapsedFrames": -2,
+        "durationFrames": 12,
+        "progress": 0.0,
+        "iteration": 0,
+        "cycleFrame": 0,
+        "cycleProgress": 0.0
+      },
+      "exit": {
+        "active": false,
+        "frame": 0,
+        "elapsedFrames": -14,
+        "durationFrames": 6,
+        "progress": 0.0
+      }
+    },
+    {
+      "localFrame": 5,
+      "sample": {
+        "composition": "1/6"
+      },
+      "progress": 0.20833333333333334,
+      "durationFrames": 24,
+      "fps": "30/1",
+      "currentPhase": "enter",
+      "enter": {
+        "active": true,
+        "frame": 5,
+        "elapsedFrames": 5,
+        "durationFrames": 6,
+        "progress": 0.8333333333333334
+      },
+      "hold": {
+        "active": false,
+        "frame": 0,
+        "elapsedFrames": -1,
+        "durationFrames": 12,
+        "progress": 0.0,
+        "iteration": 0,
+        "cycleFrame": 0,
+        "cycleProgress": 0.0
+      },
+      "exit": {
+        "active": false,
+        "frame": 0,
+        "elapsedFrames": -13,
+        "durationFrames": 6,
+        "progress": 0.0
+      }
+    },
+    {
+      "localFrame": 6,
+      "sample": {
+        "composition": "1/5"
+      },
+      "progress": 0.25,
+      "durationFrames": 24,
+      "fps": "30/1",
+      "currentPhase": "hold",
+      "enter": {
+        "active": false,
+        "frame": 6,
+        "elapsedFrames": 6,
+        "durationFrames": 6,
+        "progress": 1.0
+      },
+      "hold": {
+        "active": true,
+        "frame": 0,
+        "elapsedFrames": 0,
+        "durationFrames": 12,
+        "progress": 0.0,
+        "iteration": 0,
+        "cycleFrame": 0,
+        "cycleProgress": 0.0
+      },
+      "exit": {
+        "active": false,
+        "frame": 0,
+        "elapsedFrames": -12,
+        "durationFrames": 6,
+        "progress": 0.0
+      }
+    },
+    {
+      "localFrame": 7,
+      "sample": {
+        "composition": "7/30"
+      },
+      "progress": 0.2916666666666667,
+      "durationFrames": 24,
+      "fps": "30/1",
+      "currentPhase": "hold",
+      "enter": {
+        "active": false,
+        "frame": 6,
+        "elapsedFrames": 7,
+        "durationFrames": 6,
+        "progress": 1.0
+      },
+      "hold": {
+        "active": true,
+        "frame": 1,
+        "elapsedFrames": 1,
+        "durationFrames": 12,
+        "progress": 0.08333333333333333,
+        "iteration": 0,
+        "cycleFrame": 1,
+        "cycleProgress": 0.25
+      },
+      "exit": {
+        "active": false,
+        "frame": 0,
+        "elapsedFrames": -11,
+        "durationFrames": 6,
+        "progress": 0.0
+      }
+    },
+    {
+      "localFrame": 8,
+      "sample": {
+        "composition": "4/15"
+      },
+      "progress": 0.3333333333333333,
+      "durationFrames": 24,
+      "fps": "30/1",
+      "currentPhase": "hold",
+      "enter": {
+        "active": false,
+        "frame": 6,
+        "elapsedFrames": 8,
+        "durationFrames": 6,
+        "progress": 1.0
+      },
+      "hold": {
+        "active": true,
+        "frame": 2,
+        "elapsedFrames": 2,
+        "durationFrames": 12,
+        "progress": 0.16666666666666666,
+        "iteration": 0,
+        "cycleFrame": 2,
+        "cycleProgress": 0.5
+      },
+      "exit": {
+        "active": false,
+        "frame": 0,
+        "elapsedFrames": -10,
+        "durationFrames": 6,
+        "progress": 0.0
+      }
+    },
+    {
+      "localFrame": 9,
+      "sample": {
+        "composition": "3/10"
+      },
+      "progress": 0.375,
+      "durationFrames": 24,
+      "fps": "30/1",
+      "currentPhase": "hold",
+      "enter": {
+        "active": false,
+        "frame": 6,
+        "elapsedFrames": 9,
+        "durationFrames": 6,
+        "progress": 1.0
+      },
+      "hold": {
+        "active": true,
+        "frame": 3,
+        "elapsedFrames": 3,
+        "durationFrames": 12,
+        "progress": 0.25,
+        "iteration": 0,
+        "cycleFrame": 3,
+        "cycleProgress": 0.75
+      },
+      "exit": {
+        "active": false,
+        "frame": 0,
+        "elapsedFrames": -9,
+        "durationFrames": 6,
+        "progress": 0.0
+      }
+    },
+    {
+      "localFrame": 10,
+      "sample": {
+        "composition": "1/3"
+      },
+      "progress": 0.4166666666666667,
+      "durationFrames": 24,
+      "fps": "30/1",
+      "currentPhase": "hold",
+      "enter": {
+        "active": false,
+        "frame": 6,
+        "elapsedFrames": 10,
+        "durationFrames": 6,
+        "progress": 1.0
+      },
+      "hold": {
+        "active": true,
+        "frame": 4,
+        "elapsedFrames": 4,
+        "durationFrames": 12,
+        "progress": 0.3333333333333333,
+        "iteration": 1,
+        "cycleFrame": 0,
+        "cycleProgress": 0.0
+      },
+      "exit": {
+        "active": false,
+        "frame": 0,
+        "elapsedFrames": -8,
+        "durationFrames": 6,
+        "progress": 0.0
+      }
+    },
+    {
+      "localFrame": 11,
+      "sample": {
+        "composition": "11/30"
+      },
+      "progress": 0.4583333333333333,
+      "durationFrames": 24,
+      "fps": "30/1",
+      "currentPhase": "hold",
+      "enter": {
+        "active": false,
+        "frame": 6,
+        "elapsedFrames": 11,
+        "durationFrames": 6,
+        "progress": 1.0
+      },
+      "hold": {
+        "active": true,
+        "frame": 5,
+        "elapsedFrames": 5,
+        "durationFrames": 12,
+        "progress": 0.4166666666666667,
+        "iteration": 1,
+        "cycleFrame": 1,
+        "cycleProgress": 0.25
+      },
+      "exit": {
+        "active": false,
+        "frame": 0,
+        "elapsedFrames": -7,
+        "durationFrames": 6,
+        "progress": 0.0
+      }
+    },
+    {
+      "localFrame": 12,
+      "sample": {
+        "composition": "2/5"
+      },
+      "progress": 0.5,
+      "durationFrames": 24,
+      "fps": "30/1",
+      "currentPhase": "hold",
+      "enter": {
+        "active": false,
+        "frame": 6,
+        "elapsedFrames": 12,
+        "durationFrames": 6,
+        "progress": 1.0
+      },
+      "hold": {
+        "active": true,
+        "frame": 6,
+        "elapsedFrames": 6,
+        "durationFrames": 12,
+        "progress": 0.5,
+        "iteration": 1,
+        "cycleFrame": 2,
+        "cycleProgress": 0.5
+      },
+      "exit": {
+        "active": false,
+        "frame": 0,
+        "elapsedFrames": -6,
+        "durationFrames": 6,
+        "progress": 0.0
+      }
+    },
+    {
+      "localFrame": 13,
+      "sample": {
+        "composition": "13/30"
+      },
+      "progress": 0.5416666666666666,
+      "durationFrames": 24,
+      "fps": "30/1",
+      "currentPhase": "hold",
+      "enter": {
+        "active": false,
+        "frame": 6,
+        "elapsedFrames": 13,
+        "durationFrames": 6,
+        "progress": 1.0
+      },
+      "hold": {
+        "active": true,
+        "frame": 7,
+        "elapsedFrames": 7,
+        "durationFrames": 12,
+        "progress": 0.5833333333333334,
+        "iteration": 1,
+        "cycleFrame": 3,
+        "cycleProgress": 0.75
+      },
+      "exit": {
+        "active": false,
+        "frame": 0,
+        "elapsedFrames": -5,
+        "durationFrames": 6,
+        "progress": 0.0
+      }
+    },
+    {
+      "localFrame": 14,
+      "sample": {
+        "composition": "7/15"
+      },
+      "progress": 0.5833333333333334,
+      "durationFrames": 24,
+      "fps": "30/1",
+      "currentPhase": "hold",
+      "enter": {
+        "active": false,
+        "frame": 6,
+        "elapsedFrames": 14,
+        "durationFrames": 6,
+        "progress": 1.0
+      },
+      "hold": {
+        "active": true,
+        "frame": 8,
+        "elapsedFrames": 8,
+        "durationFrames": 12,
+        "progress": 0.6666666666666666,
+        "iteration": 2,
+        "cycleFrame": 0,
+        "cycleProgress": 0.0
+      },
+      "exit": {
+        "active": false,
+        "frame": 0,
+        "elapsedFrames": -4,
+        "durationFrames": 6,
+        "progress": 0.0
+      }
+    },
+    {
+      "localFrame": 15,
+      "sample": {
+        "composition": "1/2"
+      },
+      "progress": 0.625,
+      "durationFrames": 24,
+      "fps": "30/1",
+      "currentPhase": "hold",
+      "enter": {
+        "active": false,
+        "frame": 6,
+        "elapsedFrames": 15,
+        "durationFrames": 6,
+        "progress": 1.0
+      },
+      "hold": {
+        "active": true,
+        "frame": 9,
+        "elapsedFrames": 9,
+        "durationFrames": 12,
+        "progress": 0.75,
+        "iteration": 2,
+        "cycleFrame": 1,
+        "cycleProgress": 0.25
+      },
+      "exit": {
+        "active": false,
+        "frame": 0,
+        "elapsedFrames": -3,
+        "durationFrames": 6,
+        "progress": 0.0
+      }
+    },
+    {
+      "localFrame": 16,
+      "sample": {
+        "composition": "8/15"
+      },
+      "progress": 0.6666666666666666,
+      "durationFrames": 24,
+      "fps": "30/1",
+      "currentPhase": "hold",
+      "enter": {
+        "active": false,
+        "frame": 6,
+        "elapsedFrames": 16,
+        "durationFrames": 6,
+        "progress": 1.0
+      },
+      "hold": {
+        "active": true,
+        "frame": 10,
+        "elapsedFrames": 10,
+        "durationFrames": 12,
+        "progress": 0.8333333333333334,
+        "iteration": 2,
+        "cycleFrame": 2,
+        "cycleProgress": 0.5
+      },
+      "exit": {
+        "active": false,
+        "frame": 0,
+        "elapsedFrames": -2,
+        "durationFrames": 6,
+        "progress": 0.0
+      }
+    },
+    {
+      "localFrame": 17,
+      "sample": {
+        "composition": "17/30"
+      },
+      "progress": 0.7083333333333334,
+      "durationFrames": 24,
+      "fps": "30/1",
+      "currentPhase": "hold",
+      "enter": {
+        "active": false,
+        "frame": 6,
+        "elapsedFrames": 17,
+        "durationFrames": 6,
+        "progress": 1.0
+      },
+      "hold": {
+        "active": true,
+        "frame": 11,
+        "elapsedFrames": 11,
+        "durationFrames": 12,
+        "progress": 0.9166666666666666,
+        "iteration": 2,
+        "cycleFrame": 3,
+        "cycleProgress": 0.75
+      },
+      "exit": {
+        "active": false,
+        "frame": 0,
+        "elapsedFrames": -1,
+        "durationFrames": 6,
+        "progress": 0.0
+      }
+    },
+    {
+      "localFrame": 18,
+      "sample": {
+        "composition": "3/5"
+      },
+      "progress": 0.75,
+      "durationFrames": 24,
+      "fps": "30/1",
+      "currentPhase": "exit",
+      "enter": {
+        "active": false,
+        "frame": 6,
+        "elapsedFrames": 18,
+        "durationFrames": 6,
+        "progress": 1.0
+      },
+      "hold": {
+        "active": false,
+        "frame": 12,
+        "elapsedFrames": 12,
+        "durationFrames": 12,
+        "progress": 1.0,
+        "iteration": 2,
+        "cycleFrame": 4,
+        "cycleProgress": 1.0
+      },
+      "exit": {
+        "active": true,
+        "frame": 0,
+        "elapsedFrames": 0,
+        "durationFrames": 6,
+        "progress": 0.0
+      }
+    },
+    {
+      "localFrame": 19,
+      "sample": {
+        "composition": "19/30"
+      },
+      "progress": 0.7916666666666666,
+      "durationFrames": 24,
+      "fps": "30/1",
+      "currentPhase": "exit",
+      "enter": {
+        "active": false,
+        "frame": 6,
+        "elapsedFrames": 19,
+        "durationFrames": 6,
+        "progress": 1.0
+      },
+      "hold": {
+        "active": false,
+        "frame": 12,
+        "elapsedFrames": 13,
+        "durationFrames": 12,
+        "progress": 1.0,
+        "iteration": 2,
+        "cycleFrame": 4,
+        "cycleProgress": 1.0
+      },
+      "exit": {
+        "active": true,
+        "frame": 1,
+        "elapsedFrames": 1,
+        "durationFrames": 6,
+        "progress": 0.16666666666666666
+      }
+    },
+    {
+      "localFrame": 20,
+      "sample": {
+        "composition": "2/3"
+      },
+      "progress": 0.8333333333333334,
+      "durationFrames": 24,
+      "fps": "30/1",
+      "currentPhase": "exit",
+      "enter": {
+        "active": false,
+        "frame": 6,
+        "elapsedFrames": 20,
+        "durationFrames": 6,
+        "progress": 1.0
+      },
+      "hold": {
+        "active": false,
+        "frame": 12,
+        "elapsedFrames": 14,
+        "durationFrames": 12,
+        "progress": 1.0,
+        "iteration": 2,
+        "cycleFrame": 4,
+        "cycleProgress": 1.0
+      },
+      "exit": {
+        "active": true,
+        "frame": 2,
+        "elapsedFrames": 2,
+        "durationFrames": 6,
+        "progress": 0.3333333333333333
+      }
+    },
+    {
+      "localFrame": 21,
+      "sample": {
+        "composition": "7/10"
+      },
+      "progress": 0.875,
+      "durationFrames": 24,
+      "fps": "30/1",
+      "currentPhase": "exit",
+      "enter": {
+        "active": false,
+        "frame": 6,
+        "elapsedFrames": 21,
+        "durationFrames": 6,
+        "progress": 1.0
+      },
+      "hold": {
+        "active": false,
+        "frame": 12,
+        "elapsedFrames": 15,
+        "durationFrames": 12,
+        "progress": 1.0,
+        "iteration": 2,
+        "cycleFrame": 4,
+        "cycleProgress": 1.0
+      },
+      "exit": {
+        "active": true,
+        "frame": 3,
+        "elapsedFrames": 3,
+        "durationFrames": 6,
+        "progress": 0.5
+      }
+    },
+    {
+      "localFrame": 22,
+      "sample": {
+        "composition": "11/15"
+      },
+      "progress": 0.9166666666666666,
+      "durationFrames": 24,
+      "fps": "30/1",
+      "currentPhase": "exit",
+      "enter": {
+        "active": false,
+        "frame": 6,
+        "elapsedFrames": 22,
+        "durationFrames": 6,
+        "progress": 1.0
+      },
+      "hold": {
+        "active": false,
+        "frame": 12,
+        "elapsedFrames": 16,
+        "durationFrames": 12,
+        "progress": 1.0,
+        "iteration": 2,
+        "cycleFrame": 4,
+        "cycleProgress": 1.0
+      },
+      "exit": {
+        "active": true,
+        "frame": 4,
+        "elapsedFrames": 4,
+        "durationFrames": 6,
+        "progress": 0.6666666666666666
+      }
+    },
+    {
+      "localFrame": 23,
+      "sample": {
+        "composition": "23/30"
+      },
+      "progress": 0.9583333333333334,
+      "durationFrames": 24,
+      "fps": "30/1",
+      "currentPhase": "exit",
+      "enter": {
+        "active": false,
+        "frame": 6,
+        "elapsedFrames": 23,
+        "durationFrames": 6,
+        "progress": 1.0
+      },
+      "hold": {
+        "active": false,
+        "frame": 12,
+        "elapsedFrames": 17,
+        "durationFrames": 12,
+        "progress": 1.0,
+        "iteration": 2,
+        "cycleFrame": 4,
+        "cycleProgress": 1.0
+      },
+      "exit": {
+        "active": true,
+        "frame": 5,
+        "elapsedFrames": 5,
+        "durationFrames": 6,
+        "progress": 0.8333333333333334
+      }
+    }
+  ]
+}

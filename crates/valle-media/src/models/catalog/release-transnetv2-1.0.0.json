@@ -1,0 +1,198 @@
+{
+  "schema_version": 1,
+  "model": {
+    "id": "transnetv2",
+    "version": "1.0.0",
+    "display_name": "TransNetV2",
+    "task": "shot-boundary-detection",
+    "description": "Shot-boundary probabilities for fixed 100-frame windows"
+  },
+  "license": {
+    "spdx": "MIT",
+    "redistribution": "allowed",
+    "files": [
+      {
+        "path": "card/LICENSE",
+        "bytes": 1072,
+        "sha256": "a8d7a056688ccedebe89f18fd60f1a47128df94cb82669cd02459934919cbb6f"
+      }
+    ],
+    "notes": [
+      "The selected TransNetV2 source and upstream weights are MIT licensed."
+    ]
+  },
+  "provenance": {
+    "repository": "https://github.com/soCzech/TransNetV2",
+    "revision": "85cef72af9a916bdfd7cc94a670c9cdfbf12d1ed",
+    "weights": [],
+    "notes": [
+      "The upstream TensorFlow SavedModel was converted with the official convert_weights.py workflow.",
+      "The derived PyTorch checkpoint is 30509621 bytes with SHA-256 a03191f1d886181b2d51508475761e15fd5c865ebc44494db443058cc051c918."
+    ]
+  },
+  "release": {
+    "state": "ready",
+    "repository": "openvalle/valle-models"
+  },
+  "contract": {
+    "adapter": "transnetv2-shot-detection",
+    "version": 1,
+    "inputs": [
+      {
+        "name": "frames",
+        "dtype": "u8",
+        "layout": "nthwc",
+        "shape": [
+          1,
+          100,
+          27,
+          48,
+          3
+        ],
+        "range": [
+          0,
+          255
+        ],
+        "description": "RGB frame window"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "single_frame_pred",
+        "dtype": "f32",
+        "layout": "nt",
+        "shape": [
+          1,
+          100
+        ],
+        "range": [
+          0,
+          1
+        ],
+        "description": "Single-frame transition probability"
+      },
+      {
+        "name": "all_frames_pred",
+        "dtype": "f32",
+        "layout": "nt",
+        "shape": [
+          1,
+          100
+        ],
+        "range": [
+          0,
+          1
+        ],
+        "description": "All-frame transition probability"
+      }
+    ],
+    "preprocess": {
+      "color_space": "rgb",
+      "resize": [
+        48,
+        27
+      ],
+      "window_frames": 100,
+      "step_frames": 50
+    },
+    "postprocess": {
+      "retain_frame_range": [
+        25,
+        75
+      ],
+      "threshold": 0.5
+    }
+  },
+  "artifacts": [
+    {
+      "id": "onnx-fp32",
+      "format": "onnx",
+      "precision": "fp32",
+      "entrypoint": "transnetv2.onnx",
+      "files": [
+        {
+          "path": "transnetv2.onnx",
+          "bytes": 31252665,
+          "sha256": "9fd29bbd84ea20fa72c9340f72ddd248c7ccb2b105289683b1061eed97df28f4"
+        }
+      ],
+      "metadata": {
+        "opset": 17,
+        "window_frames": 100,
+        "step_frames": 50
+      }
+    }
+  ],
+  "routes": [
+    {
+      "id": "onnx-cpu-macos-arm64",
+      "artifact": "onnx-fp32",
+      "backend": "onnx-cpu",
+      "platforms": [
+        "macos"
+      ],
+      "architectures": [
+        "aarch64"
+      ],
+      "status": "verified",
+      "priority": 10,
+      "notes": "TensorFlow, PyTorch, ONNX and the Rust proof-of-concept runner passed locally on Apple M2 Pro."
+    },
+    {
+      "id": "onnx-cpu-macos-x86_64",
+      "artifact": "onnx-fp32",
+      "backend": "onnx-cpu",
+      "platforms": [
+        "macos"
+      ],
+      "architectures": [
+        "x86_64"
+      ],
+      "status": "unverified",
+      "priority": 10,
+      "notes": "The artifact is portable, but this host route has not been tested."
+    },
+    {
+      "id": "onnx-cpu-windows-x86_64",
+      "artifact": "onnx-fp32",
+      "backend": "onnx-cpu",
+      "platforms": [
+        "windows"
+      ],
+      "architectures": [
+        "x86_64"
+      ],
+      "status": "unverified",
+      "priority": 10,
+      "notes": "Promote only after the real-fixture Windows CI gate passes."
+    },
+    {
+      "id": "onnx-cpu-linux-x86_64",
+      "artifact": "onnx-fp32",
+      "backend": "onnx-cpu",
+      "platforms": [
+        "linux"
+      ],
+      "architectures": [
+        "x86_64"
+      ],
+      "status": "unverified",
+      "priority": 10,
+      "notes": "Promote only after the real-fixture Linux CI gate passes."
+    },
+    {
+      "id": "onnx-cpu-linux-aarch64",
+      "artifact": "onnx-fp32",
+      "backend": "onnx-cpu",
+      "platforms": [
+        "linux"
+      ],
+      "architectures": [
+        "aarch64"
+      ],
+      "status": "unverified",
+      "priority": 10,
+      "notes": "The graph is architecture-neutral; ONNX Runtime packaging remains unverified."
+    }
+  ]
+}

@@ -1,0 +1,74 @@
+// Chroma key using YCbCr distance, spatial feathering, shadow protection, and despill. Evaluate
+// straight colors and return premultiplied output.
+uniform shader tex;
+uniform float keyR;
+uniform float keyG;
+uniform float keyB;
+uniform float intensity;  // 0..1 keyed chroma range.
+uniform float shadow;     // 0..1 shadow protection.
+uniform float feather;    // Alpha feather radius in output pixels.
+uniform float edgeClean;  // 0..1 despill strength.
+
+const half3 LUMA = half3(0.299, 0.587, 0.114); // Rec.601
+const half CB_K = half(0.564);
+const half CR_K = half(0.713);
+// Chroma distance removed completely, increasing with intensity.
+const half KEY_MIN = half(0.02);
+const half KEY_MAX = half(0.30);
+// Chroma-distance transition width from removed to retained.
+const half KEY_BAND = half(0.12);
+// Maximum fully protected luminance when shadow is one.
+const half SHADOW_MAX_Y = half(0.35);
+
+half3 straight(half4 c) {
+    return c.a > 0.0 ? c.rgb / c.a : half3(0.0);
+}
+
+half2 chroma(half3 c) {
+    half y = dot(c, LUMA);
+    return half2((c.b - y) * CB_K, (c.r - y) * CR_K);
+}
+
+// Remove colors near the key chroma and restore dark regions according to shadow protection.
+half keyAlpha(half3 c, half2 kc) {
+    half d = length(chroma(c) - kc);
+    half t0 = mix(KEY_MIN, KEY_MAX, half(intensity));
+    half a = smoothstep(t0, t0 + KEY_BAND, d);
+    half ts = half(shadow) * SHADOW_MAX_Y + half(0.0002); // Epsilon keeps smoothstep nondegenerate when shadow is zero.
+    return max(a, half(1.0) - smoothstep(half(0.0), ts, dot(c, LUMA)));
+}
+
+half4 main(float2 xy) {
+    half2 kc = chroma(half3(half(keyR), half(keyG), half(keyB)));
+    half4 c = tex.eval(xy);
+    half3 rgb = straight(c);
+
+    // Average nine taps for feathering; zero feather makes all taps coincide.
+    half a = half(0.0);
+    for (int j = -1; j <= 1; ++j) {
+        for (int i = -1; i <= 1; ++i) {
+            half4 s = tex.eval(xy + float2(float(i), float(j)) * feather * 0.75);
+            a += keyAlpha(straight(s), kc);
+        }
+    }
+    a *= half(1.0 / 9.0);
+
+    // Reduce the key-chroma component while preserving luminance.
+    half klen = length(kc);
+    if (klen > 0.0 && edgeClean > 0.0) {
+        half y = dot(rgb, LUMA);
+        half2 kdir = kc / klen;
+        half2 pc = chroma(rgb);
+        half proj = dot(pc, kdir);
+        if (proj > 0.0) {
+            pc -= kdir * proj * half(edgeClean);
+            half r = y + pc.y / CR_K;
+            half b = y + pc.x / CB_K;
+            half g = (y - half(0.299) * r - half(0.114) * b) / half(0.587);
+            rgb = clamp(half3(r, g, b), 0.0, 1.0);
+        }
+    }
+
+    half outA = c.a * a;
+    return half4(rgb * outA, outA);
+}

@@ -1,0 +1,29 @@
+# Build output and dependencies
+/target/
+**/target/
+**/node_modules/
+/web/dist/
+/web/packages/engine/generated/
+*.rs.bk
+Cargo.lock.bak
+
+# Runtime output and caches
+.valle/
+.cache/
+/tmp/
+/outputs/
+/test-output/
+*.mp4
+
+# Editor and operating-system files
+.DS_Store
+.idea/
+.vscode/
+*.iml
+*.swp
+*.swo
+*~
+__pycache__/
+*.py[cod]
+/dist/
+/.dist-build-*/

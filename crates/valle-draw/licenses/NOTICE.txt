@@ -1,0 +1,18 @@
+Drawing and shader attribution
+
+src/draw.rs adapts rounded-sector geometry from d3-shape in Rust.
+Source: https://github.com/d3/d3-shape
+License: d3-shape-ISC.txt
+
+The following SkSL transitions adapt GL Transitions GLSL sources:
+  crosswarp: Eke Peter (upstream credit: Eke Péter)
+  directionalwarp: pschroen
+  dreamyzoom: Zeh Fernando
+  flyeye, linearblur, ripple: gre
+  simplezoom: 0gust1
+
+Source: https://github.com/gl-transitions/gl-transitions
+License: GL-Transitions-MIT.txt
+
+Changes include SkSL sampling interfaces, fixed transition parameters, and
+reduced sampling in dreamyzoom. Original author credits are retained above.

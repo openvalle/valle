@@ -1,0 +1,10 @@
+Media model runtime attribution
+
+Model session implementations, inference backends, installation code, and
+deployment metadata under ../src/models/ derive from OpenValle's internal
+valle-models codebase at
+commit aecf250858d1f1a0d9fa26b21f1df12c5a0e30a7 and are maintained locally.
+The MIT license and copyright notice are included in MIT.txt. The EdgeTAM adapter was
+originally declared Apache-2.0.
+
+Model weights are installed separately and retain their upstream licenses.

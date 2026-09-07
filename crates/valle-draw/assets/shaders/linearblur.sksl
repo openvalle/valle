@@ -1,0 +1,26 @@
+// Blend source and destination using 6x6 offset samples. Adapted from GL Transitions linearblur,
+// with peak displacement at halfway progress.
+uniform shader from_tex;
+uniform shader to_tex;
+uniform float2 resolution;
+uniform float progress;
+
+half4 main(float2 xy) {
+    float p = clamp(progress, 0.0, 1.0);
+    float2 uv = xy / resolution;
+    half4 c1 = half4(0.0);
+    half4 c2 = half4(0.0);
+    float disp = 0.1 * (0.5 - distance(0.5, p));
+    for (int xi = 0; xi < 6; xi++) {
+        float fx = float(xi) / 6.0 - 0.5;
+        for (int yi = 0; yi < 6; yi++) {
+            float fy = float(yi) / 6.0 - 0.5;
+            float2 v = float2(fx, fy);
+            c1 += from_tex.eval(clamp(uv + disp * v, 0.0, 1.0) * resolution);
+            c2 += to_tex.eval(clamp(uv + disp * v, 0.0, 1.0) * resolution);
+        }
+    }
+    c1 = c1 / 36.0;
+    c2 = c2 / 36.0;
+    return mix(c1, c2, half(p));
+}

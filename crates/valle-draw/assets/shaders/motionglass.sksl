@@ -1,0 +1,653 @@
+// Canonical Motion Glass fragment kernel.
+//
+// Native skia-safe and Web CanvasKit compile these exact bytes. All geometry/material values are
+// packed by valle-engine; platform executors bind one working-linear premultiplied child and never
+// interpret author intent or read pixels back to the CPU.
+
+uniform shader content;
+
+// header0 = mode (0 material, 1 foreground), owner kind (1 independent, 2 field), surface count,
+// merge distance in owner-space units (converted through the local projective metric per pixel).
+uniform float4 header0;
+// header2 = foreground-protection active bit, resolved screen light direction.xy, light intensity.
+uniform float4 header2;
+// device -> owner rows for the projective field metric.
+uniform float4 ownerInverse0;
+uniform float4 ownerInverse1;
+uniform float4 ownerInverse2;
+
+// bevel width, optical thickness, green-channel IOR, roughness.
+uniform float4 material0;
+// straight linear tint rgba; alpha is the sole tint-energy authority.
+uniform float4 materialTint;
+// IOR dispersion, specular strength, shadow strength, foreground gain.
+uniform float4 material1;
+// light elevation, reserved, reserved, reserved.
+uniform float4 material2;
+
+// Fixed product ABI: at most eight members and twenty-four polygon points per member.
+uniform float4 surfaceRect[8];
+// shape code, radius, presence, reserved.
+uniform float4 surfaceMeta[8];
+uniform float4 surfaceInverse0[8];
+uniform float4 surfaceInverse1[8];
+uniform float4 surfaceInverse2[8];
+// translation.xy, acceleration.xy
+uniform float4 surfaceMotion0[8];
+// angular, scale.x, scale.y, shear
+uniform float4 surfaceMotion1[8];
+// area, pressure, twist, path point count
+uniform float4 surfaceMotion2[8];
+uniform float4 foregroundBounds[8];
+// protection, tone bias, active, reserved
+uniform float4 foregroundMeta[8];
+// Two float2 points per vector; 12 vectors per surface.
+uniform float4 pathPointPairs[96];
+
+const float PI = 3.14159265358979323846;
+// Keep these device-space optical ratios synchronized with
+// valle-engine/compositor/glass/material.rs.
+const float MAX_REFRACTION_BEVEL_FRACTION = 0.30;
+const float OPTICAL_PATH_THICKNESS_FACTOR = 1.50;
+const float DIFFUSION_THICKNESS_FACTOR = 0.75;
+const float INTERFACE_THICKNESS_FACTOR = 0.13;
+
+// RuntimeEffect targets include WebGL 1 / ES2, where uniform arrays may only be indexed by a
+// compile-time constant. Keep the packed ABI dense, but resolve indices through constant accesses.
+float4 select8(int index, float4 v0, float4 v1, float4 v2, float4 v3,
+               float4 v4, float4 v5, float4 v6, float4 v7) {
+    if (index == 0) return v0;
+    if (index == 1) return v1;
+    if (index == 2) return v2;
+    if (index == 3) return v3;
+    if (index == 4) return v4;
+    if (index == 5) return v5;
+    if (index == 6) return v6;
+    return v7;
+}
+
+float4 select12(int index, float4 v0, float4 v1, float4 v2, float4 v3,
+                float4 v4, float4 v5, float4 v6, float4 v7,
+                float4 v8, float4 v9, float4 v10, float4 v11) {
+    if (index == 0) return v0;
+    if (index == 1) return v1;
+    if (index == 2) return v2;
+    if (index == 3) return v3;
+    if (index == 4) return v4;
+    if (index == 5) return v5;
+    if (index == 6) return v6;
+    if (index == 7) return v7;
+    if (index == 8) return v8;
+    if (index == 9) return v9;
+    if (index == 10) return v10;
+    return v11;
+}
+
+float4 rectAt(int index) {
+    return select8(index, surfaceRect[0], surfaceRect[1], surfaceRect[2], surfaceRect[3],
+                   surfaceRect[4], surfaceRect[5], surfaceRect[6], surfaceRect[7]);
+}
+float4 metaAt(int index) {
+    return select8(index, surfaceMeta[0], surfaceMeta[1], surfaceMeta[2], surfaceMeta[3],
+                   surfaceMeta[4], surfaceMeta[5], surfaceMeta[6], surfaceMeta[7]);
+}
+float4 inverse0At(int index) {
+    return select8(index, surfaceInverse0[0], surfaceInverse0[1], surfaceInverse0[2], surfaceInverse0[3],
+                   surfaceInverse0[4], surfaceInverse0[5], surfaceInverse0[6], surfaceInverse0[7]);
+}
+float4 inverse1At(int index) {
+    return select8(index, surfaceInverse1[0], surfaceInverse1[1], surfaceInverse1[2], surfaceInverse1[3],
+                   surfaceInverse1[4], surfaceInverse1[5], surfaceInverse1[6], surfaceInverse1[7]);
+}
+float4 inverse2At(int index) {
+    return select8(index, surfaceInverse2[0], surfaceInverse2[1], surfaceInverse2[2], surfaceInverse2[3],
+                   surfaceInverse2[4], surfaceInverse2[5], surfaceInverse2[6], surfaceInverse2[7]);
+}
+float4 motion0At(int index) {
+    return select8(index, surfaceMotion0[0], surfaceMotion0[1], surfaceMotion0[2], surfaceMotion0[3],
+                   surfaceMotion0[4], surfaceMotion0[5], surfaceMotion0[6], surfaceMotion0[7]);
+}
+float4 motion1At(int index) {
+    return select8(index, surfaceMotion1[0], surfaceMotion1[1], surfaceMotion1[2], surfaceMotion1[3],
+                   surfaceMotion1[4], surfaceMotion1[5], surfaceMotion1[6], surfaceMotion1[7]);
+}
+float4 motion2At(int index) {
+    return select8(index, surfaceMotion2[0], surfaceMotion2[1], surfaceMotion2[2], surfaceMotion2[3],
+                   surfaceMotion2[4], surfaceMotion2[5], surfaceMotion2[6], surfaceMotion2[7]);
+}
+float4 foregroundBoundsAt(int index) {
+    return select8(index, foregroundBounds[0], foregroundBounds[1], foregroundBounds[2], foregroundBounds[3],
+                   foregroundBounds[4], foregroundBounds[5], foregroundBounds[6], foregroundBounds[7]);
+}
+float4 foregroundMetaAt(int index) {
+    return select8(index, foregroundMeta[0], foregroundMeta[1], foregroundMeta[2], foregroundMeta[3],
+                   foregroundMeta[4], foregroundMeta[5], foregroundMeta[6], foregroundMeta[7]);
+}
+
+float4 pathPairAt(int surface, int pair) {
+    if (surface == 0) return select12(pair, pathPointPairs[0], pathPointPairs[1], pathPointPairs[2], pathPointPairs[3], pathPointPairs[4], pathPointPairs[5], pathPointPairs[6], pathPointPairs[7], pathPointPairs[8], pathPointPairs[9], pathPointPairs[10], pathPointPairs[11]);
+    if (surface == 1) return select12(pair, pathPointPairs[12], pathPointPairs[13], pathPointPairs[14], pathPointPairs[15], pathPointPairs[16], pathPointPairs[17], pathPointPairs[18], pathPointPairs[19], pathPointPairs[20], pathPointPairs[21], pathPointPairs[22], pathPointPairs[23]);
+    if (surface == 2) return select12(pair, pathPointPairs[24], pathPointPairs[25], pathPointPairs[26], pathPointPairs[27], pathPointPairs[28], pathPointPairs[29], pathPointPairs[30], pathPointPairs[31], pathPointPairs[32], pathPointPairs[33], pathPointPairs[34], pathPointPairs[35]);
+    if (surface == 3) return select12(pair, pathPointPairs[36], pathPointPairs[37], pathPointPairs[38], pathPointPairs[39], pathPointPairs[40], pathPointPairs[41], pathPointPairs[42], pathPointPairs[43], pathPointPairs[44], pathPointPairs[45], pathPointPairs[46], pathPointPairs[47]);
+    if (surface == 4) return select12(pair, pathPointPairs[48], pathPointPairs[49], pathPointPairs[50], pathPointPairs[51], pathPointPairs[52], pathPointPairs[53], pathPointPairs[54], pathPointPairs[55], pathPointPairs[56], pathPointPairs[57], pathPointPairs[58], pathPointPairs[59]);
+    if (surface == 5) return select12(pair, pathPointPairs[60], pathPointPairs[61], pathPointPairs[62], pathPointPairs[63], pathPointPairs[64], pathPointPairs[65], pathPointPairs[66], pathPointPairs[67], pathPointPairs[68], pathPointPairs[69], pathPointPairs[70], pathPointPairs[71]);
+    if (surface == 6) return select12(pair, pathPointPairs[72], pathPointPairs[73], pathPointPairs[74], pathPointPairs[75], pathPointPairs[76], pathPointPairs[77], pathPointPairs[78], pathPointPairs[79], pathPointPairs[80], pathPointPairs[81], pathPointPairs[82], pathPointPairs[83]);
+    return select12(pair, pathPointPairs[84], pathPointPairs[85], pathPointPairs[86], pathPointPairs[87], pathPointPairs[88], pathPointPairs[89], pathPointPairs[90], pathPointPairs[91], pathPointPairs[92], pathPointPairs[93], pathPointPairs[94], pathPointPairs[95]);
+}
+
+float materialize(float value) {
+    float p = clamp(value, 0.0, 1.0);
+    float p2 = p * p;
+    return p2 * p * (10.0 - 15.0 * p + 6.0 * p2);
+}
+
+float2 projectPoint(float4 row0, float4 row1, float4 row2, float2 point) {
+    float3 value = float3(point, 1.0);
+    float denominator = dot(row2.xyz, value);
+    return float2(dot(row0.xyz, value), dot(row1.xyz, value)) / denominator;
+}
+
+float2 localPoint(int surface, float2 devicePoint) {
+    return projectPoint(
+        inverse0At(surface),
+        inverse1At(surface),
+        inverse2At(surface),
+        devicePoint
+    );
+}
+
+float2 pathPoint(int surface, int index) {
+    int localPair = index / 2;
+    float4 pair = pathPairAt(surface, localPair);
+    return (index == localPair * 2) ? pair.xy : pair.zw;
+}
+
+// distance, normalization band, outward local normal.xy.
+float4 localShapeSample(int surface, float2 point) {
+    float4 rect = rectAt(surface);
+    float4 meta = metaAt(surface);
+    int shape = int(meta.x + 0.5);
+    float radius = meta.y;
+    float2 center = rect.xy + rect.zw * 0.5;
+    if (shape == 2) {
+        float2 delta = point - center;
+        float deltaLength = length(delta);
+        float2 normal = deltaLength > 1.0e-12 ? delta / deltaLength : float2(0.0);
+        return float4(deltaLength - radius, radius, normal);
+    }
+    if (shape == 1 || shape == 3) {
+        float2 halfSize = rect.zw * 0.5;
+        float r = min(radius, min(halfSize.x, halfSize.y));
+        float2 centerDelta = point - center;
+        float2 q = abs(centerDelta) - (halfSize - r);
+        float2 outside = max(q, float2(0.0));
+        float outsideLength = length(outside);
+        float distance = outsideLength + min(max(q.x, q.y), 0.0) - r;
+        float2 signs = float2(centerDelta.x < 0.0 ? -1.0 : 1.0,
+                              centerDelta.y < 0.0 ? -1.0 : 1.0);
+        float2 normal = float2(0.0);
+        if (outsideLength > 1.0e-12) {
+            normal = outside / outsideLength * signs;
+        } else if (length(centerDelta) > 1.0e-12) {
+            normal = q.x > q.y ? float2(signs.x, 0.0) : float2(0.0, signs.y);
+        }
+        return float4(distance, max(r, 0.001), normal);
+    }
+    int count = int(motion2At(surface).w + 0.5);
+    float minimumDistance = 1.0e20;
+    float2 closestDelta = float2(0.0);
+    float2 closestEdge = float2(1.0, 0.0);
+    float signedAreaTwice = 0.0;
+    bool inside = false;
+    for (int index = 0; index < 24; ++index) {
+        if (index >= count) break;
+        int next = index + 1;
+        if (next >= count) next = 0;
+        float2 a = pathPoint(surface, index);
+        float2 b = pathPoint(surface, next);
+        float2 ab = b - a;
+        float2 ap = point - a;
+        float t = clamp(dot(ap, ab) / max(dot(ab, ab), 1.0e-12), 0.0, 1.0);
+        float2 delta = point - (a + t * ab);
+        float distance = length(delta);
+        if (distance < minimumDistance) {
+            minimumDistance = distance;
+            closestDelta = delta;
+            closestEdge = ab;
+        }
+        signedAreaTwice += a.x * b.y - a.y * b.x;
+        if ((a.y > point.y) != (b.y > point.y)) {
+            float crossing = a.x + (point.y - a.y) * (b.x - a.x) / (b.y - a.y);
+            if (crossing > point.x) inside = !inside;
+        }
+    }
+    float band = max((rect.z + rect.w) * 0.125, 0.001);
+    float2 normal = float2(0.0);
+    if (minimumDistance > 1.0e-12) {
+        normal = closestDelta / minimumDistance * (inside ? -1.0 : 1.0);
+    } else {
+        float edgeLength = length(closestEdge);
+        if (edgeLength > 1.0e-12) {
+            normal = signedAreaTwice >= 0.0
+                ? float2(closestEdge.y, -closestEdge.x) / edgeLength
+                : float2(-closestEdge.y, closestEdge.x) / edgeLength;
+        }
+    }
+    return float4(inside ? -minimumDistance : minimumDistance, band, normal);
+}
+
+// distance, band, outward normal.xy in device space.
+float4 shapeSample(int surface, float2 devicePoint) {
+    float4 row0 = inverse0At(surface);
+    float4 row1 = inverse1At(surface);
+    float4 row2 = inverse2At(surface);
+    float denominator = dot(row2.xyz, float3(devicePoint, 1.0));
+    if (abs(denominator) <= 1.0e-12) return float4(1.0e20, 1.0e20, 0.0, 0.0);
+    float2 local = localPoint(surface, devicePoint);
+    float4 localSample = localShapeSample(surface, local);
+    float j00 = (row0.x - row2.x * local.x) / denominator;
+    float j01 = (row0.y - row2.y * local.x) / denominator;
+    float j10 = (row1.x - row2.x * local.y) / denominator;
+    float j11 = (row1.y - row2.y * local.y) / denominator;
+    float2 gradient = float2(
+        j00 * localSample.z + j10 * localSample.w,
+        j01 * localSample.z + j11 * localSample.w
+    );
+    float gradientLength = length(gradient);
+    if (gradientLength <= 1.0e-12) {
+        float fallback = sqrt(abs(j00 * j11 - j01 * j10));
+        if (fallback <= 1.0e-12) return float4(localSample.x, localSample.y, 0.0, 0.0);
+        return float4(localSample.x / fallback, localSample.y / fallback, 0.0, 0.0);
+    }
+    return float4(
+        localSample.x / gradientLength,
+        localSample.y / gradientLength,
+        gradient / gradientLength
+    );
+}
+
+// Local derivative of device -> owner at `point`. Field merge distance is authored in owner
+// space, so every member SDF is converted with this metric before evaluating the potential.
+// This keeps non-uniform and projective owners local instead of freezing a scale at the origin.
+float4 ownerJacobian(float2 point, out float2 owner) {
+    float3 homogeneousPoint = float3(point, 1.0);
+    float denominator = dot(ownerInverse2.xyz, homogeneousPoint);
+    if (abs(denominator) <= 1.0e-12) {
+        owner = float2(1.0e20);
+        return float4(0.0);
+    }
+    owner = float2(
+        dot(ownerInverse0.xyz, homogeneousPoint),
+        dot(ownerInverse1.xyz, homogeneousPoint)
+    ) / denominator;
+    return float4(
+        (ownerInverse0.x - ownerInverse2.x * owner.x) / denominator,
+        (ownerInverse0.y - ownerInverse2.y * owner.x) / denominator,
+        (ownerInverse1.x - ownerInverse2.x * owner.y) / denominator,
+        (ownerInverse1.y - ownerInverse2.y * owner.y) / denominator
+    );
+}
+
+float deviceDistanceToOwnerScale(float4 jacobian, float2 deviceNormal) {
+    float determinant = jacobian.x * jacobian.w - jacobian.y * jacobian.z;
+    if (abs(determinant) <= 1.0e-12) return 0.0;
+    float normalLength = length(deviceNormal);
+    if (normalLength <= 1.0e-12) return sqrt(abs(determinant));
+    float2 normal = deviceNormal / normalLength;
+    float2 ownerGradient = float2(
+        jacobian.w * normal.x - jacobian.z * normal.y,
+        -jacobian.y * normal.x + jacobian.x * normal.y
+    ) / determinant;
+    float ownerGradientLength = length(ownerGradient);
+    return ownerGradientLength > 1.0e-12 ? 1.0 / ownerGradientLength : 0.0;
+}
+
+float potential(float u) {
+    if (u <= 0.0) return 1.0 - u;
+    if (u < 1.0) {
+        float u2 = u*u;
+        float u3 = u2*u;
+        float u4 = u3*u;
+        float u5 = u4*u;
+        return 1.0 - u - 4.0*u3 + 7.0*u4 - 3.0*u5;
+    }
+    return 0.0;
+}
+
+float fieldDensity(float2 point) {
+    int count = int(header0.z + 0.5);
+    float merge = header0.w;
+    float2 owner;
+    float4 ownerMetric = ownerJacobian(point, owner);
+    float density = 0.0;
+    for (int surface = 0; surface < 8; ++surface) {
+        if (surface >= count) break;
+        float presence = materialize(metaAt(surface).z);
+        if (presence <= 0.0) continue;
+        float4 sample = shapeSample(surface, point);
+        float ownerPerDevice = deviceDistanceToOwnerScale(ownerMetric, sample.zw);
+        if (ownerPerDevice <= 1.0e-12) continue;
+        float effectiveDistanceOwner = (sample.x + (1.0 - presence) * sample.y)
+            * ownerPerDevice;
+        density += potential(effectiveDistanceOwner / merge);
+    }
+    return density;
+}
+
+// Resolve the center density and its motion numerator in one member traversal, then evaluate only
+// the four density neighbors needed by the gradient. The previous split fieldShape/fieldNormal/
+// fieldMotion path traversed the same members ten times per pixel (and each path member walks up
+// to 24 segments); this path needs five traversals and preserves the exact normalized mixture.
+// shape = density, pseudo distance, height, coverage. Motion is encoded as translation/
+// acceleration, angular/scale/shear, and area/pressure/twist/strain.
+void fieldSample(
+    float2 point,
+    out float4 shape,
+    out float2 normal,
+    out float4 motion0,
+    out float4 motion1,
+    out float4 motion2
+) {
+    motion0 = float4(0.0);
+    motion1 = float4(0.0);
+    motion2 = float4(0.0);
+    float weightedTranslationSq = 0.0;
+    float density = 0.0;
+    int active = 0;
+    int count = int(header0.z + 0.5);
+    float merge = header0.w;
+    float2 owner;
+    float4 ownerMetric = ownerJacobian(point, owner);
+    for (int surface = 0; surface < 8; ++surface) {
+        if (surface >= count) break;
+        float presence = materialize(metaAt(surface).z);
+        if (presence <= 0.0) continue;
+        float4 sample = shapeSample(surface, point);
+        float ownerPerDevice = deviceDistanceToOwnerScale(ownerMetric, sample.zw);
+        if (ownerPerDevice <= 1.0e-12) continue;
+        float effectiveDistanceOwner = (sample.x + (1.0 - presence) * sample.y)
+            * ownerPerDevice;
+        float rho = potential(effectiveDistanceOwner / merge);
+        if (rho <= 0.0) continue;
+        density += rho;
+        active += 1;
+        float4 memberMotion0 = motion0At(surface);
+        motion0 += memberMotion0 * rho;
+        motion1 += motion1At(surface) * rho;
+        motion2.xyz += motion2At(surface).xyz * rho;
+        weightedTranslationSq += rho * dot(memberMotion0.xy, memberMotion0.xy);
+    }
+    if (density <= 0.0) {
+        shape = float4(0.0, 1.0e20, 0.0, 0.0);
+        normal = float2(0.0);
+        return;
+    }
+    motion0 /= density;
+    motion1 /= density;
+    motion2.xyz /= density;
+    weightedTranslationSq /= density;
+    float meanSq = dot(motion0.xy, motion0.xy);
+    motion2.w = active > 1 ? sqrt(max(weightedTranslationSq - meanSq, 0.0)) : 0.0;
+
+    float dx = fieldDensity(point + float2(0.5, 0.0)) - fieldDensity(point - float2(0.5, 0.0));
+    float dy = fieldDensity(point + float2(0.0, 0.5)) - fieldDensity(point - float2(0.0, 0.5));
+    float2 gradient = float2(dx, dy);
+    float gradientLength = length(gradient);
+    normal = gradientLength > 1.0e-9 ? -gradient / gradientLength : float2(0.0);
+    float ownerPerDevice = deviceDistanceToOwnerScale(ownerMetric, normal);
+    if (ownerPerDevice <= 1.0e-12) {
+        shape = float4(0.0, 1.0e20, 0.0, 0.0);
+        normal = float2(0.0);
+        motion0 = float4(0.0);
+        motion1 = float4(0.0);
+        motion2 = float4(0.0);
+        return;
+    }
+    float mergeDevice = merge / ownerPerDevice;
+    float normalizedSlope = 1.0 / max(mergeDevice, 1.0);
+    float pseudoDistance = (1.0 - density) / max(max(gradientLength, normalizedSlope), 1.0e-6);
+    float coverageFloor = active > 1 ? 8.0 / mergeDevice : normalizedSlope;
+    float coverageDistance = (1.0 - density) / max(max(gradientLength, coverageFloor), 1.0e-6);
+    float coverage = materialize(clamp(0.5 - coverageDistance, 0.0, 1.0));
+    shape = float4(density, pseudoDistance, 0.0, coverage);
+}
+
+// Five-tap Gaussian approximation: one center and four diagonals. Clear materials use one direct
+// sample; rough materials keep coherent blur without the 25/75-eval cost of a tensor kernel.
+void sampleRoughBackdrop(float2 point, float radius, out float4 soft) {
+    radius = max(radius, 0.0);
+    if (radius < 0.5) {
+        soft = content.eval(point);
+        return;
+    }
+    float spread = radius * 1.3;
+    soft = content.eval(point) * 0.4;
+    soft += content.eval(point + float2(-spread, -spread)) * 0.15;
+    soft += content.eval(point + float2( spread, -spread)) * 0.15;
+    soft += content.eval(point + float2(-spread,  spread)) * 0.15;
+    soft += content.eval(point + float2( spread,  spread)) * 0.15;
+}
+
+float3 glassHighlightColor(float3 background) {
+    float luminance = dot(background, float3(0.2627, 0.6780, 0.0593));
+    float maximum = max(max(background.r, background.g), background.b);
+    float lum = luminance * 2.5;
+    float saturation = maximum * 2.5;
+    float influence = (lum / (1.0 + lum)) * (saturation / (1.0 + saturation));
+    float3 tinted = background / max(maximum, 0.001);
+    return clamp(mix(float3(1.0), tinted, influence * 0.22), 0.72, 1.08);
+}
+
+float2 refractedOffset(float3 surfaceNormal, float refractiveIndex, float opticalPath) {
+    float edgeTravel = opticalPath
+        * sqrt(max(refractiveIndex * refractiveIndex - 1.0, 0.0));
+    return -surfaceNormal.xy * edgeTravel;
+}
+
+float2 clampDelta(float2 value, float bevelWidth) {
+    float magnitude = length(value);
+    float limit = max(bevelWidth, 0.0) * MAX_REFRACTION_BEVEL_FRACTION;
+    return magnitude > limit && limit > 0.0 ? value * (limit / magnitude) : value;
+}
+
+half4 opticalPixel(
+    float2 point,
+    float signedDistance,
+    float2 normal,
+    float coverage,
+    float4 motion0,
+    float4 motion1,
+    float4 motion2
+) {
+    float bevelWidth = material0.x;
+    float thickness = material0.y;
+    float interior = clamp(-signedDistance / max(bevelWidth, 1.0e-6), 0.0, 1.0);
+    // Rounded height-field normal: the gentle power keeps curvature through most of the short axis
+    // while smoothstep still reaches both the interface and center with a zero derivative.
+    float smooth = interior * interior * (3.0 - 2.0 * interior);
+    float remaining = 1.0 - smooth;
+    float edgeCurve = pow(remaining, 1.35);
+    float viewFacing = sqrt(max(1.0 - edgeCurve * edgeCurve, 0.0));
+    float3 surfaceNormal = float3(normal * edgeCurve, viewFacing);
+    float2 tangent = float2(-normal.y, normal.x);
+    float normalAcceleration = dot(motion0.zw, normal);
+    float anisotropicScale = motion1.y * abs(normal.x) + motion1.z * abs(normal.y);
+    float normalDelta = (-normalAcceleration * 0.0000015 + anisotropicScale * 0.035
+        + motion2.x * 0.016 + motion2.y * 0.022 + motion2.w * 0.00015) * thickness;
+    float tangentDelta = (motion1.x * 0.025 + motion2.z * 0.018) * thickness;
+    float shearDelta = motion1.w * thickness * 0.02;
+    float motionEnvelope = 0.22 + 0.78 * edgeCurve;
+    float2 deformationDelta = normal * normalDelta + tangent * tangentDelta
+        + float2(normal.y, normal.x) * shearDelta;
+    if (thickness > 0.000000001) {
+        float2 dynamicSlope = surfaceNormal.xy
+            + deformationDelta / thickness * motionEnvelope * 1.6;
+        float slopeLength = length(dynamicSlope);
+        if (slopeLength > 1.0) dynamicSlope /= slopeLength;
+        float dynamicLength = length(dynamicSlope);
+        surfaceNormal = float3(
+            dynamicSlope,
+            sqrt(max(1.0 - dynamicLength * dynamicLength, 0.0))
+        );
+    }
+    float2 motionDelta = -motion0.xy * 0.00075 * thickness * motionEnvelope;
+
+    float greenIor = material0.z;
+    float dispersion = material1.x;
+    // Bound edge displacement to 30% of the bevel. Larger values fold the backdrop sampling
+    // map over itself and expose the fold as a vertical/horizontal caustic line.
+    float maximumIor = greenIor + dispersion;
+    float edgeGain = OPTICAL_PATH_THICKNESS_FACTOR
+        * sqrt(max(maximumIor * maximumIor - 1.0, 0.0));
+    float opticalThickness = min(
+        thickness,
+        bevelWidth * MAX_REFRACTION_BEVEL_FRACTION / max(edgeGain, 0.000000001)
+    );
+    float opticalPath = opticalThickness * OPTICAL_PATH_THICKNESS_FACTOR;
+    float2 redDelta = float2(0.0);
+    float2 greenDelta = float2(0.0);
+    float2 blueDelta = float2(0.0);
+    bool hasOpticalOffset = length(surfaceNormal.xy) > 0.000000001
+        || length(motionDelta) > 0.000000001;
+    if (hasOpticalOffset) {
+        greenDelta = clampDelta(
+            refractedOffset(surfaceNormal, greenIor, opticalPath) + motionDelta,
+            bevelWidth
+        );
+        redDelta = greenDelta;
+        blueDelta = greenDelta;
+        if (dispersion > 0.000000001) {
+            redDelta = clampDelta(
+                refractedOffset(surfaceNormal, max(greenIor - dispersion, 1.0), opticalPath)
+                    + motionDelta,
+                bevelWidth
+            );
+            blueDelta = clampDelta(
+                refractedOffset(surfaceNormal, greenIor + dispersion, opticalPath) + motionDelta,
+                bevelWidth
+            );
+        }
+    }
+    float2 samplePoint = point + greenDelta;
+    float4 soft;
+    // Blur is uniform across a material. The lens geometry moves the already-soft backdrop but
+    // does not create a second blur regime along its sides.
+    float blurRadius = material0.w * thickness * DIFFUSION_THICKNESS_FACTOR;
+    sampleRoughBackdrop(samplePoint, blurRadius, soft);
+    if (hasOpticalOffset && dispersion > 0.000000001) {
+        float4 redSoft;
+        float4 blueSoft;
+        sampleRoughBackdrop(point + redDelta, blurRadius, redSoft);
+        sampleRoughBackdrop(point + blueDelta, blurRadius, blueSoft);
+        soft.r = redSoft.r;
+        soft.b = blueSoft.b;
+    }
+    float3 rgb = soft.rgb;
+    float3 highlightColor = glassHighlightColor(rgb);
+
+    rgb = mix(rgb, materialTint.rgb, materialTint.a);
+
+    float luma = dot(rgb, float3(0.2627, 0.6780, 0.0593));
+    float saturation = 1.0 + (1.0 - material0.w) * 0.08;
+    rgb = clamp(luma + (rgb - luma) * saturation, 0.0, 1.0);
+
+    float lightZ = clamp(material2.x, 0.0, 1.0);
+    float lightXy = sqrt(max(1.0 - lightZ * lightZ, 0.0));
+    float3 lightVector = float3(header2.yz * lightXy, lightZ);
+    float3 halfRaw = lightVector + float3(0.0, 0.0, 1.0);
+    float3 halfVector = halfRaw / max(length(halfRaw), 1.0e-9);
+    float nDotH = max(dot(surfaceNormal, halfVector), 0.0);
+    float highlightPower = 18.0 + 84.0 * (1.0 - material0.w) * (1.0 - material0.w);
+    float specular = pow(nDotH, highlightPower);
+    float environmentPower = 3.0 + 10.0 * (1.0 - material0.w);
+    float environmentSpecular = pow(nDotH, environmentPower);
+    float fillPower = 6.0 + 34.0 * (1.0 - material0.w);
+    float fillSpecular = pow(max(surfaceNormal.z, 0.0), fillPower);
+    float f0 = (greenIor - 1.0) / (greenIor + 1.0);
+    f0 *= f0;
+    float interfaceWidth = max(thickness * INTERFACE_THICKNESS_FACTOR, 0.000001);
+    float interfaceRim = materialize(clamp(1.0 + signedDistance / interfaceWidth, 0.0, 1.0));
+    // Keep the strong grazing reflection on the actual material interface. Spreading it across
+    // the entire normal rolloff turns both straight sides into visibly separate strips.
+    float fresnel = f0
+        + (1.0 - f0) * pow(1.0 - surfaceNormal.z, 5.0) * interfaceRim;
+    float facing = dot(normal, header2.yz);
+    float keyRim = pow(max(facing, 0.0), 1.35);
+    float fillRim = pow(max(-facing, 0.0), 1.35);
+    float absorption = clamp(
+        material1.z * interfaceRim * (0.02 + 0.13 * fillRim),
+        0.0,
+        0.10
+    );
+    rgb *= 1.0 - absorption;
+
+    float reflection = clamp(
+        material1.y * (
+            fresnel * (0.18 + header2.w * (0.10 * keyRim + 0.035 * fillRim))
+            + header2.w * (
+                0.28 * specular + 0.13 * environmentSpecular + 0.06 * fillSpecular
+            )
+            + interfaceRim * header2.w * (0.13 * keyRim + 0.02 * fillRim)
+        ),
+        0.0,
+        0.48
+    );
+    rgb = mix(rgb, highlightColor, reflection);
+    return half4(float4(rgb * coverage, coverage));
+}
+
+half4 foregroundPixel(float2 point) {
+    float presence = materialize(surfaceMeta[0].z);
+    if (presence <= 0.0) return half4(0.0);
+    int inside = 0;
+    for (int y = 0; y < 4; ++y) {
+        for (int x = 0; x < 4; ++x) {
+            float2 samplePoint = point + (float2(float(x), float(y)) + 0.5) * 0.25 - 0.5;
+            float4 sample = shapeSample(0, samplePoint);
+            float effectiveDistance = sample.x + (1.0 - presence) * sample.y;
+            if (effectiveDistance <= 0.0) inside += 1;
+        }
+    }
+    return half4(content.eval(point) * (float(inside) / 16.0));
+}
+
+half4 main(float2 point) {
+    if (header0.x > 0.5) return foregroundPixel(point);
+
+    float signedDistance;
+    float coverage;
+    float2 normal;
+    float4 motion0;
+    float4 motion1;
+    float4 motion2;
+    if (header0.y < 1.5) {
+        float4 sample = shapeSample(0, point);
+        float presence = materialize(surfaceMeta[0].z);
+        float effectiveDistance = sample.x + (1.0 - presence) * sample.y;
+        signedDistance = effectiveDistance;
+        coverage = materialize(clamp(0.5 - effectiveDistance, 0.0, 1.0));
+        normal = sample.zw;
+        motion0 = surfaceMotion0[0];
+        motion1 = surfaceMotion1[0];
+        motion2 = float4(surfaceMotion2[0].xyz, 0.0);
+        half4 material = half4(0.0);
+        if (coverage > 0.0) {
+            material = opticalPixel(
+                point, signedDistance, normal, coverage, motion0, motion1, motion2
+            );
+        }
+        return material;
+    } else {
+        float4 field;
+        fieldSample(point, field, normal, motion0, motion1, motion2);
+        signedDistance = field.y;
+        coverage = field.w;
+        half4 material = half4(0.0);
+        if (coverage > 0.0) {
+            material = opticalPixel(
+                point, signedDistance, normal, coverage, motion0, motion1, motion2
+            );
+        }
+        return material;
+    }
+}

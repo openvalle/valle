@@ -1,0 +1,372 @@
+{
+  "schema_version": 1,
+  "model": {
+    "id": "omnishotcut",
+    "version": "1.0.0",
+    "display_name": "OmniShotCut",
+    "task": "shot-boundary-detection",
+    "description": "Shot ranges with intra-shot and inter-shot transition classes"
+  },
+  "license": {
+    "spdx": "MIT",
+    "redistribution": "allowed",
+    "files": [
+      {
+        "path": "card/LICENSE",
+        "bytes": 1096,
+        "sha256": "de36bb4f044531c92303730eeb737748ab3e8834bf293b2ffc23aa347fc32c26"
+      }
+    ],
+    "notes": [
+      "The selected source and weight are MIT licensed."
+    ]
+  },
+  "provenance": {
+    "repository": "https://github.com/UVA-Computer-Vision-Lab/OmniShotCut",
+    "revision": "23ad6fb41b296fb9258b0e7825125a914573b906",
+    "weights": [
+      {
+        "id": "omnishotcut",
+        "source": "https://huggingface.co/uva-cv-lab/OmniShotCut/resolve/7f646c4ff4bb843e18c013481fb5d9ed2b068c6b/OmniShotCut_ckpt.pth",
+        "bytes": 164149963,
+        "sha256": "5948ea78e00626c0e6c5e742e64873ef872cf4a5071d2a0841aed51c3e686cfa"
+      }
+    ],
+    "notes": [
+      "The CoreML candidate is excluded because it failed the flash_no_cut negative quality gate."
+    ]
+  },
+  "release": {
+    "state": "ready",
+    "repository": "openvalle/valle-models"
+  },
+  "contract": {
+    "adapter": "omnishotcut-shot-detection",
+    "version": 1,
+    "inputs": [
+      {
+        "name": "frames",
+        "dtype": "u8",
+        "layout": "thwc",
+        "shape": [
+          100,
+          96,
+          128,
+          3
+        ],
+        "range": [
+          0,
+          255
+        ],
+        "description": "RGB frame window"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "intra_idx",
+        "dtype": "i64",
+        "layout": "q",
+        "shape": [
+          24
+        ],
+        "range": null,
+        "description": "Intra-shot transition class per query"
+      },
+      {
+        "name": "inter_idx",
+        "dtype": "i64",
+        "layout": "q",
+        "shape": [
+          24
+        ],
+        "range": null,
+        "description": "Inter-shot transition class per query"
+      },
+      {
+        "name": "range_idx",
+        "dtype": "i64",
+        "layout": "q",
+        "shape": [
+          24
+        ],
+        "range": null,
+        "description": "Half-open shot ranges"
+      }
+    ],
+    "preprocess": {
+      "window_frames": 100,
+      "overlap_frames": 20,
+      "resize": [
+        128,
+        96
+      ],
+      "color_space": "rgb"
+    },
+    "postprocess": {
+      "range_end": "exclusive",
+      "overlap_merge": "model-contract"
+    }
+  },
+  "artifacts": [
+    {
+      "id": "onnx-fp32",
+      "format": "onnx",
+      "precision": "fp32",
+      "entrypoint": "omnishotcut.onnx",
+      "files": [
+        {
+          "path": "omnishotcut.onnx",
+          "bytes": 169481455,
+          "sha256": "dbfd6d0e5f067368ce9db5609a9965656797dccc570f0c1e8fbf690676705681"
+        }
+      ],
+      "metadata": {
+        "opset": 17,
+        "window_frames": 100,
+        "overlap_frames": 20
+      }
+    },
+    {
+      "id": "onnx-conv-qdq-u8s8",
+      "format": "onnx",
+      "precision": "int8-conv-fp32-rest",
+      "entrypoint": "omnishotcut_conv_qdq_u8s8.onnx",
+      "files": [
+        {
+          "path": "omnishotcut_conv_qdq_u8s8.onnx",
+          "bytes": 135617633,
+          "sha256": "c85fd2bbdd1fd81bde23acc69a4ff8a526a35ff3c6a83b32e4d7973579610a64"
+        }
+      ],
+      "metadata": {
+        "opset": 17,
+        "window_frames": 100,
+        "overlap_frames": 20,
+        "quantized_ops": "21 constant-weight Conv nodes",
+        "calibration": "seven fixed companion fixtures"
+      }
+    }
+  ],
+  "routes": [
+    {
+      "id": "onnx-cpu-macos-arm64",
+      "artifact": "onnx-conv-qdq-u8s8",
+      "backend": "onnx-cpu",
+      "platforms": [
+        "macos"
+      ],
+      "architectures": [
+        "aarch64"
+      ],
+      "status": "verified",
+      "priority": 100,
+      "requirements": {
+        "minimum_os": null,
+        "minimum_runtime": "ONNX Runtime 1.28.0"
+      },
+      "options": {
+        "memory_pattern": false,
+        "prepacking": true
+      },
+      "notes": "The Conv-QDQ graph passed seven semantic fixtures and Rust ort rc.13 on Apple M2 Pro; the fp32 artifact remains available as a fallback."
+    },
+    {
+      "id": "onnx-cpu-macos-x86_64",
+      "artifact": "onnx-conv-qdq-u8s8",
+      "backend": "onnx-cpu",
+      "platforms": [
+        "macos"
+      ],
+      "architectures": [
+        "x86_64"
+      ],
+      "status": "unverified",
+      "priority": 100,
+      "requirements": {
+        "minimum_os": null,
+        "minimum_runtime": "ONNX Runtime 1.28.0"
+      },
+      "options": {
+        "memory_pattern": false,
+        "prepacking": true
+      },
+      "notes": "The artifact is portable, but this host route has not been tested."
+    },
+    {
+      "id": "onnx-cpu-windows-x86_64",
+      "artifact": "onnx-conv-qdq-u8s8",
+      "backend": "onnx-cpu",
+      "platforms": [
+        "windows"
+      ],
+      "architectures": [
+        "x86_64"
+      ],
+      "status": "unverified",
+      "priority": 100,
+      "requirements": {
+        "minimum_os": null,
+        "minimum_runtime": "ONNX Runtime 1.28.0"
+      },
+      "options": {
+        "memory_pattern": false,
+        "prepacking": true
+      },
+      "notes": "Promote only after the real-fixture Windows CI gate passes."
+    },
+    {
+      "id": "onnx-cpu-linux-x86_64",
+      "artifact": "onnx-conv-qdq-u8s8",
+      "backend": "onnx-cpu",
+      "platforms": [
+        "linux"
+      ],
+      "architectures": [
+        "x86_64"
+      ],
+      "status": "unverified",
+      "priority": 100,
+      "requirements": {
+        "minimum_os": null,
+        "minimum_runtime": "ONNX Runtime 1.28.0"
+      },
+      "options": {
+        "memory_pattern": false,
+        "prepacking": true
+      },
+      "notes": "Promote only after the real-fixture Linux CI gate passes."
+    },
+    {
+      "id": "onnx-cpu-linux-aarch64",
+      "artifact": "onnx-conv-qdq-u8s8",
+      "backend": "onnx-cpu",
+      "platforms": [
+        "linux"
+      ],
+      "architectures": [
+        "aarch64"
+      ],
+      "status": "unverified",
+      "priority": 100,
+      "requirements": {
+        "minimum_os": null,
+        "minimum_runtime": "ONNX Runtime 1.28.0"
+      },
+      "options": {
+        "memory_pattern": false,
+        "prepacking": true
+      },
+      "notes": "The graph is architecture-neutral; ONNX Runtime packaging remains unverified."
+    },
+    {
+      "id": "onnx-fp32-macos-arm64",
+      "artifact": "onnx-fp32",
+      "backend": "onnx-cpu",
+      "platforms": [
+        "macos"
+      ],
+      "architectures": [
+        "aarch64"
+      ],
+      "status": "verified",
+      "priority": 10,
+      "requirements": {
+        "minimum_os": null,
+        "minimum_runtime": "ONNX Runtime 1.28.0"
+      },
+      "options": {
+        "memory_pattern": true,
+        "prepacking": true
+      },
+      "notes": "Verified FP32 fallback for semantic comparison and recovery from a graph-specific QDQ runtime issue."
+    },
+    {
+      "id": "onnx-fp32-macos-x86_64",
+      "artifact": "onnx-fp32",
+      "backend": "onnx-cpu",
+      "platforms": [
+        "macos"
+      ],
+      "architectures": [
+        "x86_64"
+      ],
+      "status": "unverified",
+      "priority": 10,
+      "requirements": {
+        "minimum_os": null,
+        "minimum_runtime": "ONNX Runtime 1.28.0"
+      },
+      "options": {
+        "memory_pattern": true,
+        "prepacking": true
+      },
+      "notes": "Portable FP32 fallback; this host route has not been tested."
+    },
+    {
+      "id": "onnx-fp32-windows-x86_64",
+      "artifact": "onnx-fp32",
+      "backend": "onnx-cpu",
+      "platforms": [
+        "windows"
+      ],
+      "architectures": [
+        "x86_64"
+      ],
+      "status": "unverified",
+      "priority": 10,
+      "requirements": {
+        "minimum_os": null,
+        "minimum_runtime": "ONNX Runtime 1.28.0"
+      },
+      "options": {
+        "memory_pattern": true,
+        "prepacking": true
+      },
+      "notes": "Portable FP32 fallback; promote only after the Windows real-fixture gate passes."
+    },
+    {
+      "id": "onnx-fp32-linux-x86_64",
+      "artifact": "onnx-fp32",
+      "backend": "onnx-cpu",
+      "platforms": [
+        "linux"
+      ],
+      "architectures": [
+        "x86_64"
+      ],
+      "status": "unverified",
+      "priority": 10,
+      "requirements": {
+        "minimum_os": null,
+        "minimum_runtime": "ONNX Runtime 1.28.0"
+      },
+      "options": {
+        "memory_pattern": true,
+        "prepacking": true
+      },
+      "notes": "Portable FP32 fallback; promote only after the Linux real-fixture gate passes."
+    },
+    {
+      "id": "onnx-fp32-linux-aarch64",
+      "artifact": "onnx-fp32",
+      "backend": "onnx-cpu",
+      "platforms": [
+        "linux"
+      ],
+      "architectures": [
+        "aarch64"
+      ],
+      "status": "unverified",
+      "priority": 10,
+      "requirements": {
+        "minimum_os": null,
+        "minimum_runtime": "ONNX Runtime 1.28.0"
+      },
+      "options": {
+        "memory_pattern": true,
+        "prepacking": true
+      },
+      "notes": "Portable FP32 fallback; ONNX Runtime packaging remains unverified on this architecture."
+    }
+  ]
+}

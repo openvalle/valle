@@ -1,0 +1,248 @@
+{
+  "schema_version": 1,
+  "model": {
+    "id": "realesrgan",
+    "version": "1.0.0",
+    "display_name": "Real-ESRGAN",
+    "task": "image-super-resolution",
+    "description": "Four-times image and video-frame super-resolution"
+  },
+  "license": {
+    "spdx": "BSD-3-Clause",
+    "redistribution": "allowed",
+    "files": [
+      {
+        "path": "card/LICENSE",
+        "bytes": 1519,
+        "sha256": "4a699ec4863d96a91fc265948a0c90033f7e8735d515524dcf3444736406e0c2"
+      }
+    ],
+    "notes": [
+      "The selected Real-ESRGAN source and weights are BSD-3-Clause."
+    ]
+  },
+  "provenance": {
+    "repository": "https://github.com/xinntao/Real-ESRGAN",
+    "revision": "v0.2.5.0",
+    "weights": [
+      {
+        "id": "realesr-general-x4v3",
+        "source": "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesr-general-x4v3.pth",
+        "bytes": 4885111,
+        "sha256": "8dc7edb9ac80ccdc30c3a5dca6616509367f05fbc184ad95b731f05bece96292"
+      },
+      {
+        "id": "realesr-general-wdn-x4v3",
+        "source": "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesr-general-wdn-x4v3.pth",
+        "bytes": 4885111,
+        "sha256": "1641f8c4464b9f097c9fdda5589273713f67cf59f3d909e0bd688f0cee269dca"
+      }
+    ],
+    "notes": [
+      "The release uses denoise strength zero and excludes GFPGAN."
+    ]
+  },
+  "release": {
+    "state": "ready",
+    "repository": "openvalle/valle-models"
+  },
+  "contract": {
+    "adapter": "realesrgan-super-resolution",
+    "version": 1,
+    "inputs": [
+      {
+        "name": "lr",
+        "dtype": "f32",
+        "layout": "nchw",
+        "shape": [
+          1,
+          3,
+          "height",
+          "width"
+        ],
+        "range": [
+          0,
+          1
+        ],
+        "description": "Low-resolution RGB image"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "sr",
+        "dtype": "f32",
+        "layout": "nchw",
+        "shape": [
+          1,
+          3,
+          "height4",
+          "width4"
+        ],
+        "range": [
+          0,
+          1
+        ],
+        "description": "Four-times RGB output"
+      }
+    ],
+    "preprocess": {
+      "color_space": "rgb",
+      "denoise_strength": 0,
+      "coreml_tile": [
+        320,
+        180
+      ],
+      "overlap_tiles": true
+    },
+    "postprocess": {
+      "clamp": [
+        0,
+        1
+      ],
+      "scale": 4,
+      "preserve_aspect_ratio": true
+    }
+  },
+  "artifacts": [
+    {
+      "id": "onnx-fp32",
+      "format": "onnx",
+      "precision": "fp32",
+      "entrypoint": "x4v3_dn000.onnx",
+      "files": [
+        {
+          "path": "x4v3_dn000.onnx",
+          "bytes": 4867412,
+          "sha256": "ab701aab75304268a2ada2c4f27a637357f689af719fe3f446f8918a7252c608"
+        }
+      ],
+      "metadata": {
+        "opset": 17,
+        "dynamic_shape": true,
+        "scale": 4
+      }
+    },
+    {
+      "id": "coreml-fp16-320x180",
+      "format": "coreml-package",
+      "precision": "fp16",
+      "entrypoint": "x4v3_dn000_fp16.mlpackage",
+      "files": [
+        {
+          "path": "x4v3_dn000_fp16.mlpackage/Data/com.apple.CoreML/model.mlmodel",
+          "bytes": 56410,
+          "sha256": "12d1d86a3d7eb74bafdb8b87d12d108356a82af1eb3ef6ddb3b1fee26bf34682"
+        },
+        {
+          "path": "x4v3_dn000_fp16.mlpackage/Data/com.apple.CoreML/weights/weight.bin",
+          "bytes": 2437344,
+          "sha256": "7a6088b2ee537938f380b9049fae2b85dad57b251d047ab8f5afd256417838ec"
+        },
+        {
+          "path": "x4v3_dn000_fp16.mlpackage/Manifest.json",
+          "bytes": 617,
+          "sha256": "c1485ca7aa3829a11f4f403c099a0101ee3c7ce052d3726f8b3fb685aaac6f2c"
+        }
+      ],
+      "metadata": {
+        "fixed_shape": true,
+        "width": 320,
+        "height": 180,
+        "scale": 4
+      }
+    }
+  ],
+  "routes": [
+    {
+      "id": "coreml-macos-arm64",
+      "artifact": "coreml-fp16-320x180",
+      "backend": "coreml",
+      "platforms": [
+        "macos"
+      ],
+      "architectures": [
+        "aarch64"
+      ],
+      "status": "verified",
+      "priority": 100,
+      "requirements": {
+        "minimum_os": "macOS 14",
+        "minimum_runtime": null
+      },
+      "options": {
+        "compute_units": "cpu-and-neural-engine"
+      },
+      "notes": "Compound parity, geometry, ANE placement and five quality cases passed on Apple M2 Pro."
+    },
+    {
+      "id": "onnx-cpu-macos-arm64",
+      "artifact": "onnx-fp32",
+      "backend": "onnx-cpu",
+      "platforms": [
+        "macos"
+      ],
+      "architectures": [
+        "aarch64"
+      ],
+      "status": "verified",
+      "priority": 10,
+      "notes": "The dynamic ONNX graph and tiled host contract passed locally on Apple M2 Pro."
+    },
+    {
+      "id": "onnx-cpu-macos-x86_64",
+      "artifact": "onnx-fp32",
+      "backend": "onnx-cpu",
+      "platforms": [
+        "macos"
+      ],
+      "architectures": [
+        "x86_64"
+      ],
+      "status": "unverified",
+      "priority": 10,
+      "notes": "The artifact is portable, but this host route has not been tested."
+    },
+    {
+      "id": "onnx-cpu-windows-x86_64",
+      "artifact": "onnx-fp32",
+      "backend": "onnx-cpu",
+      "platforms": [
+        "windows"
+      ],
+      "architectures": [
+        "x86_64"
+      ],
+      "status": "unverified",
+      "priority": 10,
+      "notes": "Promote only after the real-fixture Windows CI gate passes."
+    },
+    {
+      "id": "onnx-cpu-linux-x86_64",
+      "artifact": "onnx-fp32",
+      "backend": "onnx-cpu",
+      "platforms": [
+        "linux"
+      ],
+      "architectures": [
+        "x86_64"
+      ],
+      "status": "unverified",
+      "priority": 10,
+      "notes": "Promote only after the real-fixture Linux CI gate passes."
+    },
+    {
+      "id": "onnx-cpu-linux-aarch64",
+      "artifact": "onnx-fp32",
+      "backend": "onnx-cpu",
+      "platforms": [
+        "linux"
+      ],
+      "architectures": [
+        "aarch64"
+      ],
+      "status": "unverified",
+      "priority": 10,
+      "notes": "The graph is architecture-neutral; ONNX Runtime packaging remains unverified."
+    }
+  ]
+}

@@ -1,0 +1,163 @@
+uniform shader source;
+uniform shader destination;
+uniform float mode;
+uniform float opacity;
+uniform float compositeResult;
+
+float srgbEncodeChannel(float value) {
+    float magnitude = abs(value);
+    float encoded = magnitude <= 0.0031308
+        ? magnitude * 12.92
+        : 1.055 * pow(magnitude, 1.0 / 2.4) - 0.055;
+    return sign(value) * encoded;
+}
+
+float srgbDecodeChannel(float value) {
+    float magnitude = abs(value);
+    float decoded = magnitude <= 0.04045
+        ? magnitude / 12.92
+        : pow((magnitude + 0.055) / 1.055, 2.4);
+    return sign(value) * decoded;
+}
+
+float3 workingToSrgb(float3 value) {
+    float3 linear = float3(
+        1.6604910021084354 * value.r - 0.5876411387885495 * value.g - 0.07284986331988474 * value.b,
+       -0.12455047452159074 * value.r + 1.1328998971259594 * value.g - 0.008349422604369515 * value.b,
+       -0.01815076335490526 * value.r - 0.10057889800800739 * value.g + 1.118729661362913 * value.b
+    );
+    return float3(
+        srgbEncodeChannel(linear.r),
+        srgbEncodeChannel(linear.g),
+        srgbEncodeChannel(linear.b)
+    );
+}
+
+float3 srgbToWorking(float3 value) {
+    float3 linear = float3(
+        srgbDecodeChannel(value.r),
+        srgbDecodeChannel(value.g),
+        srgbDecodeChannel(value.b)
+    );
+    return float3(
+        0.627403895934699 * linear.r + 0.3292830383778836 * linear.g + 0.04331306568741723 * linear.b,
+        0.06909728935823205 * linear.r + 0.9195403950754589 * linear.g + 0.011362315566309159 * linear.b,
+        0.01639143887515025 * linear.r + 0.08801330787722578 * linear.g + 0.8955952532476238 * linear.b
+    );
+}
+
+float overlayChannel(float backdrop, float src) {
+    return backdrop <= 0.5
+        ? 2.0 * backdrop * src
+        : 1.0 - 2.0 * (1.0 - backdrop) * (1.0 - src);
+}
+
+float colorDodgeChannel(float backdrop, float src) {
+    if (backdrop == 0.0) return 0.0;
+    if (src >= 1.0) return 1.0;
+    return min(backdrop / (1.0 - src), 1.0);
+}
+
+float colorBurnChannel(float backdrop, float src) {
+    if (backdrop == 1.0) return 1.0;
+    if (src <= 0.0) return 0.0;
+    return 1.0 - min((1.0 - backdrop) / src, 1.0);
+}
+
+float softLightChannel(float backdrop, float src) {
+    if (src <= 0.5) {
+        return backdrop - (1.0 - 2.0 * src) * backdrop * (1.0 - backdrop);
+    }
+    float d = backdrop <= 0.25
+        ? ((16.0 * backdrop - 12.0) * backdrop + 4.0) * backdrop
+        : sqrt(backdrop);
+    return backdrop + (2.0 * src - 1.0) * (d - backdrop);
+}
+
+float luminosity(float3 color) {
+    return dot(color, float3(0.3, 0.59, 0.11));
+}
+
+float saturation(float3 color) {
+    return max(max(color.r, color.g), color.b) - min(min(color.r, color.g), color.b);
+}
+
+float3 clipColor(float3 color) {
+    float lum = luminosity(color);
+    float minimum = min(min(color.r, color.g), color.b);
+    float maximum = max(max(color.r, color.g), color.b);
+    if (minimum < 0.0 && lum != minimum) {
+        color = lum + (color - lum) * lum / (lum - minimum);
+    }
+    if (maximum > 1.0 && maximum != lum) {
+        color = lum + (color - lum) * (1.0 - lum) / (maximum - lum);
+    }
+    return color;
+}
+
+float3 setLum(float3 color, float target) {
+    return clipColor(color + (target - luminosity(color)));
+}
+
+float3 setSat(float3 color, float target) {
+    float minimum = min(min(color.r, color.g), color.b);
+    float maximum = max(max(color.r, color.g), color.b);
+    return maximum > minimum ? (color - minimum) * target / (maximum - minimum) : float3(0.0);
+}
+
+float3 blendRgb(float3 backdrop, float3 src, float selector) {
+    if (selector < 1.5) return backdrop * src;
+    if (selector < 2.5) return backdrop + src - backdrop * src;
+    if (selector < 3.5) return float3(
+        overlayChannel(backdrop.r, src.r),
+        overlayChannel(backdrop.g, src.g),
+        overlayChannel(backdrop.b, src.b));
+    if (selector < 4.5) return min(backdrop, src);
+    if (selector < 5.5) return max(backdrop, src);
+    if (selector < 6.5) return float3(
+        colorDodgeChannel(backdrop.r, src.r),
+        colorDodgeChannel(backdrop.g, src.g),
+        colorDodgeChannel(backdrop.b, src.b));
+    if (selector < 7.5) return float3(
+        colorBurnChannel(backdrop.r, src.r),
+        colorBurnChannel(backdrop.g, src.g),
+        colorBurnChannel(backdrop.b, src.b));
+    if (selector < 8.5) return max(backdrop + src - 1.0, 0.0);
+    if (selector < 9.5) return float3(
+        overlayChannel(src.r, backdrop.r),
+        overlayChannel(src.g, backdrop.g),
+        overlayChannel(src.b, backdrop.b));
+    if (selector < 10.5) return float3(
+        softLightChannel(backdrop.r, src.r),
+        softLightChannel(backdrop.g, src.g),
+        softLightChannel(backdrop.b, src.b));
+    if (selector < 11.5) return abs(backdrop - src);
+    if (selector < 12.5) return backdrop + src - 2.0 * backdrop * src;
+    if (selector < 13.5) return setLum(setSat(src, saturation(backdrop)), luminosity(backdrop));
+    if (selector < 14.5) return setLum(setSat(backdrop, saturation(src)), luminosity(backdrop));
+    if (selector < 15.5) return setLum(src, luminosity(backdrop));
+    return setLum(backdrop, luminosity(src));
+}
+
+half4 main(float2 xy) {
+    float4 src = float4(source.eval(xy)) * opacity;
+    float4 backdrop = float4(destination.eval(xy));
+    if (src.a == 0.0) {
+        return compositeResult > 0.5 ? half4(backdrop) : half4(src);
+    }
+    if (mode < 0.5) {
+        return compositeResult > 0.5
+            ? half4(src + backdrop * (1.0 - src.a))
+            : half4(src);
+    }
+    float3 srcSrgb = workingToSrgb(src.rgb / src.a);
+    float3 backdropSrgb = backdrop.a > 0.0
+        ? workingToSrgb(backdrop.rgb / backdrop.a)
+        : float3(0.0);
+    float3 blended = blendRgb(backdropSrgb, srcSrgb, mode);
+    float3 effectiveSrgb = (1.0 - backdrop.a) * srcSrgb + backdrop.a * blended;
+    float4 effective = float4(srgbToWorking(effectiveSrgb) * src.a, src.a);
+    return compositeResult > 0.5
+        ? half4(effective + backdrop * (1.0 - effective.a))
+        : half4(effective);
+}

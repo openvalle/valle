@@ -1,0 +1,97 @@
+[package]
+name = "valle-media"
+description = "Media decoding, analysis, and offline model-powered tools."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+png.workspace = true
+ffmpeg-next = { workspace = true, features = ["codec", "format", "software-scaling", "software-resampling"], optional = true }
+fs2 = { workspace = true, optional = true }
+hex = { workspace = true, optional = true }
+image = { workspace = true, optional = true }
+libloading = { workspace = true, optional = true }
+ort = { workspace = true, optional = true }
+qwen-asr = { workspace = true, optional = true }
+reqwest = { workspace = true, optional = true }
+rustfft = { workspace = true, optional = true }
+schemars = { workspace = true, optional = true }
+semver = { workspace = true, optional = true }
+sha2 = { workspace = true, optional = true }
+url = { workspace = true, optional = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = { workspace = true, optional = true }
+objc2 = { workspace = true, optional = true }
+objc2-core-ml = { workspace = true, optional = true }
+objc2-foundation = { workspace = true, optional = true }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys.workspace = true
+
+[dev-dependencies]
+hound.workspace = true
+tempfile.workspace = true
+
+[features]
+default = []
+libav = ["dep:ffmpeg-next"]
+model-store = [
+  "dep:fs2",
+  "dep:hex",
+  "dep:reqwest",
+  "dep:schemars",
+  "dep:semver",
+  "dep:sha2",
+  "dep:url",
+]
+model-onnx = ["model-store", "dep:libloading", "dep:ort"]
+model-qwen-native = ["model-store", "dep:qwen-asr"]
+model-coreml = [
+  "model-store",
+  "dep:image",
+  "dep:block2",
+  "dep:objc2",
+  "dep:objc2-core-ml",
+  "dep:objc2-foundation",
+]
+model-birefnet-onnx = ["model-onnx", "dep:image"]
+model-dpdfnet-onnx = ["model-onnx", "dep:rustfft"]
+model-demucs-onnx = ["model-onnx"]
+model-edgetam-onnx = ["model-onnx"]
+model-lama-onnx = ["model-onnx"]
+model-modnet-onnx = ["model-onnx", "dep:image"]
+model-omnishotcut-onnx = ["model-onnx"]
+model-realesrgan-onnx = ["model-onnx"]
+model-rife-onnx = ["model-onnx"]
+model-transnetv2-onnx = ["model-onnx"]
+
+tool-transcribe = ["model-qwen-native", "libav"]
+tool-matte = ["model-birefnet-onnx", "model-modnet-onnx", "libav"]
+tool-enhance = ["model-dpdfnet-onnx", "libav"]
+tool-separate = ["model-demucs-onnx", "libav"]
+tool-shots = ["model-omnishotcut-onnx", "model-transnetv2-onnx", "libav"]
+tool-segment = ["model-edgetam-onnx", "libav"]
+tool-inpaint = ["model-lama-onnx", "libav"]
+tool-upscale = ["model-realesrgan-onnx", "libav"]
+tool-interpolate = ["model-rife-onnx", "libav"]
+media-tools = [
+  "tool-transcribe",
+  "tool-matte",
+  "tool-enhance",
+  "tool-separate",
+  "tool-shots",
+  "tool-segment",
+  "tool-inpaint",
+  "tool-upscale",
+  "tool-interpolate",
+]
+
+beat = ["dep:rustfft"]

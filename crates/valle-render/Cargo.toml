@@ -1,0 +1,54 @@
+[package]
+name = "valle-render"
+description = "Native rendering, scheduling, output sinks, and Skia execution."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+valle-engine.workspace = true
+valle-media.workspace = true
+valle-draw = { workspace = true, optional = true }
+anyhow.workspace = true
+thiserror.workspace = true
+crossbeam-channel = { workspace = true, optional = true }
+png = { workspace = true, optional = true }
+reqwest = { workspace = true, optional = true }
+fs2 = { workspace = true, optional = true }
+sha2 = { workspace = true, optional = true }
+hex = { workspace = true, optional = true }
+tempfile = { workspace = true, optional = true }
+skia-safe = { workspace = true, optional = true }
+ttf-parser = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+[features]
+default = []
+# Standalone Motion rendering without libav.
+motion = ["dep:skia-safe", "dep:valle-draw", "dep:serde_json"]
+# Native encoding, text, rasterization, and remote assets.
+native = ["motion", "valle-media/libav", "valle-engine/text", "dep:crossbeam-channel", "dep:png", "dep:reqwest", "dep:fs2", "dep:sha2", "dep:hex", "dep:tempfile", "dep:ttf-parser", "dep:objc2-metal", "dep:skia-bindings"]
+# Optional Skottie support; enabling it changes the native Skia build.
+lottie = ["native", "skia-safe/skottie"]
+
+[target.'cfg(target_os = "macos")'.dependencies]
+skia-safe = { workspace = true, optional = true, features = ["metal", "ganesh"] }
+objc2-metal = { workspace = true, features = ["std", "MTLDevice", "MTLCommandQueue"], optional = true }
+skia-bindings = { workspace = true, optional = true }
+
+[dev-dependencies]
+cosmic-text.workspace = true
+serde_json.workspace = true
+libc.workspace = true
+valle-compiler = { workspace = true, features = ["motion"] }
+
+[[test]]
+name = "product_executor"
+required-features = ["motion"]
+
+[[test]]
+name = "product_host"
+required-features = ["native"]
+

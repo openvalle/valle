@@ -1,0 +1,33 @@
+// Reveal pixels in value-noise order using a hash and bilinear interpolation.
+uniform shader from_tex;
+uniform shader to_tex;
+uniform float2 resolution;
+uniform float progress;
+
+float hash21(float2 p) {
+    p = fract(p * float2(123.34, 456.21));
+    p += dot(p, p + 45.32);
+    return fract(p.x * p.y);
+}
+
+float value_noise(float2 p) {
+    float2 i = floor(p);
+    float2 f = fract(p);
+    float a = hash21(i);
+    float b = hash21(i + float2(1.0, 0.0));
+    float c = hash21(i + float2(0.0, 1.0));
+    float d = hash21(i + float2(1.0, 1.0));
+    float2 u = f * f * (3.0 - 2.0 * f);
+    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+}
+
+half4 main(float2 xy) {
+    float2 uv = xy / resolution;
+    // Noise frequency controls patch size.
+    float n = value_noise(uv * 5.0);
+    // Soften the reveal boundary around the current progress.
+    float t = smoothstep(n - 0.1, n + 0.1, progress);
+    half4 a = from_tex.eval(xy);
+    half4 b = to_tex.eval(xy);
+    return mix(a, b, half(t));
+}

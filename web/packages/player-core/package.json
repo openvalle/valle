@@ -1,0 +1,17 @@
+{
+  "name": "@valle/player-core",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./controller": "./src/player/controller.ts",
+    "./media/decoder-ring": "./src/media/decoder-ring.ts",
+    "./runtime-assets": "./src/runtime-assets.ts"
+  },
+  "dependencies": {
+    "@valle/engine": "workspace:0.0.0",
+    "canvaskit-wasm": "catalog:",
+    "mp4box": "2.4.1"
+  }
+}

@@ -1,0 +1,103 @@
+uniform shader content;
+uniform float transferCode;
+uniform float primariesCode;
+uniform float referenceWhiteNits;
+uniform float peakNits;
+
+float signedPower(float value, float exponent) {
+    return sign(value) * pow(abs(value), exponent);
+}
+
+float decodeSrgb(float value) {
+    float magnitude = abs(value);
+    float decoded = magnitude <= 0.04045
+        ? magnitude / 12.92
+        : pow((magnitude + 0.055) / 1.055, 2.4);
+    return sign(value) * decoded;
+}
+
+float decodeRec709(float value) {
+    float magnitude = abs(value);
+    float decoded = magnitude <= 0.081
+        ? magnitude / 4.5
+        : pow((magnitude + 0.099) / 1.099, 1.0 / 0.45);
+    return sign(value) * decoded;
+}
+
+float decodePq(float value) {
+    const float m1 = 2610.0 / 16384.0;
+    const float m2 = 2523.0 / 32.0;
+    const float c1 = 3424.0 / 4096.0;
+    const float c2 = 2413.0 / 128.0;
+    const float c3 = 2392.0 / 128.0;
+    float magnitude = abs(value);
+    float power = pow(magnitude, 1.0 / m2);
+    float decoded = pow(max(power - c1, 0.0) / max(c2 - c3 * power, 1.17549435e-38), 1.0 / m1);
+    return sign(value) * decoded * 100.0;
+}
+
+float decodeHlg(float value) {
+    const float a = 0.17883277;
+    const float b = 0.28466892;
+    const float c = 0.5599107;
+    float magnitude = abs(value);
+    float decoded = magnitude <= 0.5
+        ? magnitude * magnitude / 3.0
+        : (exp((magnitude - c) / a) + b) / 12.0;
+    return sign(value) * decoded;
+}
+
+float3 luminanceWeights() {
+    if (primariesCode < 0.5) return float3(0.212639, 0.715169, 0.072192);
+    if (primariesCode < 1.5) return float3(0.228975, 0.691739, 0.079287);
+    return float3(0.2627, 0.6780, 0.0593);
+}
+
+float3 decodeTransfer(float3 encoded) {
+    if (transferCode < 0.5) return encoded * (referenceWhiteNits / 100.0);
+    if (transferCode < 1.5) {
+        return float3(decodeSrgb(encoded.r), decodeSrgb(encoded.g), decodeSrgb(encoded.b))
+            * (referenceWhiteNits / 100.0);
+    }
+    if (transferCode < 2.5) {
+        return float3(decodeRec709(encoded.r), decodeRec709(encoded.g), decodeRec709(encoded.b))
+            * (referenceWhiteNits / 100.0);
+    }
+    if (transferCode < 3.5) {
+        return float3(decodePq(encoded.r), decodePq(encoded.g), decodePq(encoded.b));
+    }
+    float3 scene = float3(decodeHlg(encoded.r), decodeHlg(encoded.g), decodeHlg(encoded.b));
+    float sceneLuminance = dot(luminanceWeights(), scene);
+    float gamma = max(1.0, 1.2 + 0.42 * log(max(peakNits / 1000.0, 1.17549435e-38)) / log(10.0));
+    float scale = abs(sceneLuminance) <= 1.1920929e-7
+        ? 1.0
+        : pow(abs(sceneLuminance), gamma - 1.0);
+    return scene * scale * (peakNits / 100.0);
+}
+
+float3 toWorking(float3 source) {
+    if (primariesCode < 0.5) {
+        return float3(
+            0.627403896 * source.r + 0.329283038 * source.g + 0.043313066 * source.b,
+            0.069097289 * source.r + 0.919540395 * source.g + 0.011362316 * source.b,
+            0.016391439 * source.r + 0.088013308 * source.g + 0.895595253 * source.b
+        );
+    }
+    if (primariesCode < 1.5) {
+        return float3(
+            0.753833034 * source.r + 0.198597369 * source.g + 0.047569597 * source.b,
+            0.045743849 * source.r + 0.941777220 * source.g + 0.012478931 * source.b,
+           -0.001210340 * source.r + 0.017601717 * source.g + 0.983608623 * source.b
+        );
+    }
+    return source;
+}
+
+half4 main(float2 position) {
+    float4 sample = content.eval(position);
+    float alpha = sample.a;
+    if (alpha <= 0.0) return half4(0.0);
+    float3 encodedStraight = sample.rgb / alpha;
+    float3 workingStraight = toWorking(decodeTransfer(encodedStraight));
+    return half4(workingStraight * alpha, alpha);
+}

@@ -1,0 +1,9 @@
+{
+  "name": "@valle/preview",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@valle/player": "workspace:0.0.0"
+  }
+}

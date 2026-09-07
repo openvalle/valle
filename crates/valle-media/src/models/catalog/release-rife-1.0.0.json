@@ -1,0 +1,267 @@
+{
+  "schema_version": 1,
+  "model": {
+    "id": "rife",
+    "version": "1.0.0",
+    "display_name": "RIFE",
+    "task": "frame-interpolation",
+    "description": "Arbitrary-timestep video frame interpolation with RIFE v4.25"
+  },
+  "license": {
+    "spdx": "MIT",
+    "redistribution": "allowed",
+    "files": [
+      {
+        "path": "card/LICENSE",
+        "bytes": 1062,
+        "sha256": "7932fb49341512b959b1744a6d9cbb39e5a1ec89da438a34d0454d5d8df9fecd"
+      }
+    ],
+    "notes": [
+      "The upstream README applies MIT to the linked v4.25 weight content."
+    ]
+  },
+  "provenance": {
+    "repository": "https://github.com/hzwer/Practical-RIFE",
+    "revision": "17d8c7a1005b37f4c97bfee04e316aaec7fdc536",
+    "weights": [
+      {
+        "id": "rife-v4.25",
+        "source": "https://drive.google.com/uc?id=1ZKjcbmt1hypiFprJPIKW0Tt0lr_2i7bg",
+        "bytes": 22919050,
+        "sha256": "e63d481b7ae5d4a4e6ad7ac5b410ff78f3bf7be3b51b2e38ca8152747abde5b4"
+      }
+    ],
+    "notes": [
+      "The exporter replaces the upstream device-bound warp cache with a numerically equivalent portable implementation."
+    ]
+  },
+  "release": {
+    "state": "ready",
+    "repository": "openvalle/valle-models"
+  },
+  "contract": {
+    "adapter": "rife-frame-interpolation",
+    "version": 1,
+    "inputs": [
+      {
+        "name": "x",
+        "dtype": "f32",
+        "layout": "nchw",
+        "shape": [
+          1,
+          6,
+          "height",
+          "width"
+        ],
+        "range": [
+          0,
+          1
+        ],
+        "description": "Two RGB frames concatenated by channel"
+      },
+      {
+        "name": "t",
+        "dtype": "f32",
+        "layout": "nchw",
+        "shape": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "range": [
+          0,
+          1
+        ],
+        "description": "Interpolation time"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "mid",
+        "dtype": "f32",
+        "layout": "nchw",
+        "shape": [
+          1,
+          3,
+          "height",
+          "width"
+        ],
+        "range": [
+          0,
+          1
+        ],
+        "description": "Interpolated RGB frame"
+      }
+    ],
+    "preprocess": {
+      "color_space": "rgb",
+      "pad_dimension_multiple": 128,
+      "pad_edges": [
+        "right",
+        "bottom"
+      ],
+      "resize": false,
+      "concatenate": [
+        "frame0",
+        "frame1"
+      ]
+    },
+    "postprocess": {
+      "crop_to_source": true,
+      "clamp": [
+        0,
+        1
+      ],
+      "forbid_cross_shot": true
+    }
+  },
+  "artifacts": [
+    {
+      "id": "onnx-fp32",
+      "format": "onnx",
+      "precision": "fp32",
+      "entrypoint": "rife425.onnx",
+      "files": [
+        {
+          "path": "rife425.onnx",
+          "bytes": 22803527,
+          "sha256": "a9416e6750f87edb21cd3f68b9e1708f9dd9c97bcff6eb51fe02dbb8b05e7309"
+        }
+      ],
+      "metadata": {
+        "opset": 17,
+        "dynamic_shape": true,
+        "dimension_multiple": 128
+      }
+    },
+    {
+      "id": "coreml-fp16-singleconcat-iofp16-1152x1920",
+      "format": "coreml-package",
+      "precision": "fp16",
+      "entrypoint": "rife425_fp16_singleconcat_iofp16_1152x1920.mlpackage",
+      "files": [
+        {
+          "path": "rife425_fp16_singleconcat_iofp16_1152x1920.mlpackage/Data/com.apple.CoreML/model.mlmodel",
+          "bytes": 178579,
+          "sha256": "e9ac1504ef05e7976c7338093342f331768a82fe66cf8e5a7d164b70a40cdfbd"
+        },
+        {
+          "path": "rife425_fp16_singleconcat_iofp16_1152x1920.mlpackage/Data/com.apple.CoreML/weights/weight.bin",
+          "bytes": 20176616,
+          "sha256": "45dbeac9dc47f4696de0f106ff2fcf7689b879c2da31cc4ecca0ed04bf0b573e"
+        },
+        {
+          "path": "rife425_fp16_singleconcat_iofp16_1152x1920.mlpackage/Manifest.json",
+          "bytes": 617,
+          "sha256": "7c87878ec60723a648a852499fe34102b515add3a885838ffcad77e98b26a793"
+        }
+      ],
+      "metadata": {
+        "fixed_shape": true,
+        "width": 1152,
+        "height": 1920,
+        "external_io": "fp16",
+        "single_concat_last": true
+      }
+    }
+  ],
+  "routes": [
+    {
+      "id": "coreml-macos-arm64",
+      "artifact": "coreml-fp16-singleconcat-iofp16-1152x1920",
+      "backend": "coreml",
+      "platforms": [
+        "macos"
+      ],
+      "architectures": [
+        "aarch64"
+      ],
+      "status": "verified",
+      "priority": 100,
+      "requirements": {
+        "minimum_os": "macOS 14",
+        "minimum_runtime": null
+      },
+      "options": {
+        "compute_units": "cpu-and-gpu",
+        "external_io": "fp16",
+        "reshape_frequency": "infrequent",
+        "specialization_strategy": "fast-prediction",
+        "allow_low_precision_gpu": true
+      },
+      "notes": "Verified on Apple M2 Pro: numerical parity, 315/315 GPU placement, performance, and the corrected portrait multi-metric quality gate passed."
+    },
+    {
+      "id": "onnx-cpu-macos-arm64",
+      "artifact": "onnx-fp32",
+      "backend": "onnx-cpu",
+      "platforms": [
+        "macos"
+      ],
+      "architectures": [
+        "aarch64"
+      ],
+      "status": "verified",
+      "priority": 10,
+      "notes": "Verified on Apple M2 Pro with ONNX Runtime 1.27: dynamic-shape parity, corrected portrait quality, and local CPU execution passed."
+    },
+    {
+      "id": "onnx-cpu-macos-x86_64",
+      "artifact": "onnx-fp32",
+      "backend": "onnx-cpu",
+      "platforms": [
+        "macos"
+      ],
+      "architectures": [
+        "x86_64"
+      ],
+      "status": "unverified",
+      "priority": 10,
+      "notes": "The artifact is portable, but this host route has not been tested."
+    },
+    {
+      "id": "onnx-cpu-windows-x86_64",
+      "artifact": "onnx-fp32",
+      "backend": "onnx-cpu",
+      "platforms": [
+        "windows"
+      ],
+      "architectures": [
+        "x86_64"
+      ],
+      "status": "unverified",
+      "priority": 10,
+      "notes": "Promote only after the real-fixture Windows CI gate passes."
+    },
+    {
+      "id": "onnx-cpu-linux-x86_64",
+      "artifact": "onnx-fp32",
+      "backend": "onnx-cpu",
+      "platforms": [
+        "linux"
+      ],
+      "architectures": [
+        "x86_64"
+      ],
+      "status": "unverified",
+      "priority": 10,
+      "notes": "Promote only after the real-fixture Linux CI gate passes."
+    },
+    {
+      "id": "onnx-cpu-linux-aarch64",
+      "artifact": "onnx-fp32",
+      "backend": "onnx-cpu",
+      "platforms": [
+        "linux"
+      ],
+      "architectures": [
+        "aarch64"
+      ],
+      "status": "unverified",
+      "priority": 10,
+      "notes": "The graph is architecture-neutral; ONNX Runtime packaging remains unverified."
+    }
+  ]
+}

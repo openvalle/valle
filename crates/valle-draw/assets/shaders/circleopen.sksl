@@ -1,0 +1,16 @@
+// Reveal the destination through an expanding circle centered on the frame.
+uniform shader from_tex;
+uniform shader to_tex;
+uniform float2 resolution;
+uniform float progress;
+
+half4 main(float2 xy) {
+    float2 uv = xy / resolution;
+    float d = distance(uv, float2(0.5));
+    half4 a = from_tex.eval(xy);
+    half4 b = to_tex.eval(xy);
+    float r = progress * 0.7072;
+    float p = smoothstep(r - 0.01, r + 0.01, d);
+    // One selects the source outside; zero selects the destination inside.
+    return mix(b, a, half(p));
+}

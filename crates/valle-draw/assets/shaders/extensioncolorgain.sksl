@@ -1,0 +1,8 @@
+// valle.compositor/color-gain@1: scale premultiplied RGB while preserving coverage alpha.
+uniform shader tex;
+uniform float gain;
+
+half4 main(float2 xy) {
+    half4 src = tex.eval(xy);
+    return half4(src.rgb * half(gain), src.a);
+}

@@ -1,0 +1,37 @@
+// Color grading in normalized color space, matching the scalar implementation's midgray,
+// temperature range, and Rec.601 luminance weights.
+uniform shader tex;
+uniform float2 resolution;
+uniform float brightness;  // Additive brightness offset, -1..1.
+uniform float contrast;    // Contrast factor is 1+contrast around midgray.
+uniform float saturation;  // Saturation factor is 1+saturation around luminance.
+uniform float temperature; // Warmth adds red and subtracts blue.
+uniform float vignette;    // 0..1 vignette strength.
+
+half4 main(float2 xy) {
+    const half MID = half(128.0 / 255.0);       // Midgray pivot for brightness and contrast.
+    const half TEMP = half(60.0 / 255.0);       // Maximum red/blue offset at unit temperature.
+    const float CORNER = 0.70710678;            // Unit-square center-to-corner distance for vignette normalization.
+
+    half4 src = tex.eval(xy);
+    half3 c = src.a > 0.0 ? src.rgb / src.a : half3(0.0);
+    // brightness
+    c += half(brightness) * MID;
+    // Scale around midgray with a nonnegative factor.
+    half k = half(max(1.0 + contrast, 0.0));
+    c = (c - MID) * k + MID;
+    // Scale around Rec.601 luminance.
+    half lum = dot(c, half3(0.299, 0.587, 0.114));
+    c = half3(lum) + (c - half3(lum)) * half(1.0 + saturation);
+    // Warmth adds red and subtracts blue.
+    half t = half(temperature) * TEMP;
+    c.r += t;
+    c.b -= t;
+    // Darken radially, with normalized distance one at the corners.
+    if (vignette > 0.0) {
+        float2 d = xy / resolution - 0.5;
+        float dist = min(length(d) / CORNER, 1.0);
+        c *= half(1.0 - vignette * dist * dist);
+    }
+    return half4(clamp(c, 0.0, 1.0) * src.a, src.a);
+}

@@ -1,0 +1,40 @@
+[package]
+name = "valle-project"
+description = "Project timelines, asset registration, content addressing, and persistence."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+valle-timeline.workspace = true
+valle-compiler.workspace = true
+serde.workspace = true
+serde_json = { workspace = true, optional = true }
+serde_jcs = { workspace = true, optional = true }
+thiserror.workspace = true
+fs2 = { workspace = true, optional = true }
+tempfile = { workspace = true, optional = true }
+sha2 = { workspace = true, optional = true }
+hex = { workspace = true, optional = true }
+reflink-copy = { workspace = true, optional = true }
+rusqlite = { workspace = true, features = ["bundled", "hooks"], optional = true }
+unicode-normalization = { workspace = true, optional = true }
+valle-media = { workspace = true, optional = true }
+
+[features]
+default = ["host"]
+host = [
+    "dep:serde_json",
+    "dep:serde_jcs",
+    "dep:fs2",
+    "dep:tempfile",
+    "dep:sha2",
+    "dep:hex",
+    "dep:reflink-copy",
+    "dep:rusqlite",
+    "dep:unicode-normalization",
+]
+native = ["host", "dep:valle-media", "valle-media/libav"]

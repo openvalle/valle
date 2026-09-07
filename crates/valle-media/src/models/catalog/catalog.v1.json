@@ -1,0 +1,174 @@
+{
+  "schema_version": 1,
+  "generated_by": "valle-media",
+  "models": [
+    {
+      "id": "birefnet",
+      "display_name": "BiRefNet",
+      "task": "image-matting",
+      "latest": "1.0.0",
+      "releases": [
+        {
+          "version": "1.0.0",
+          "repository": "openvalle/valle-models",
+          "revision": "cca0606c07841243c17e807d89bc33ecdb92af05",
+          "manifest_path": "birefnet/release.v1.json"
+        }
+      ]
+    },
+    {
+      "id": "demucs",
+      "display_name": "Demucs",
+      "task": "audio-source-separation",
+      "latest": "1.0.0",
+      "releases": [
+        {
+          "version": "1.0.0",
+          "repository": "openvalle/valle-models",
+          "revision": "cca0606c07841243c17e807d89bc33ecdb92af05",
+          "manifest_path": "demucs/release.v1.json"
+        }
+      ]
+    },
+    {
+      "id": "dpdfnet",
+      "display_name": "DPDFNet",
+      "task": "speech-enhancement",
+      "latest": "1.0.0",
+      "releases": [
+        {
+          "version": "1.0.0",
+          "repository": "openvalle/valle-models",
+          "revision": "cca0606c07841243c17e807d89bc33ecdb92af05",
+          "manifest_path": "dpdfnet/release.v1.json"
+        }
+      ]
+    },
+    {
+      "id": "edgetam",
+      "display_name": "EdgeTAM",
+      "task": "video-object-segmentation",
+      "latest": "1.0.0",
+      "releases": [
+        {
+          "version": "1.0.0",
+          "repository": "openvalle/valle-models",
+          "revision": "cca0606c07841243c17e807d89bc33ecdb92af05",
+          "manifest_path": "edgetam/release.v1.json"
+        }
+      ]
+    },
+    {
+      "id": "lama",
+      "display_name": "LaMa",
+      "task": "image-inpainting",
+      "latest": "1.0.0",
+      "releases": [
+        {
+          "version": "1.0.0",
+          "repository": "openvalle/valle-models",
+          "revision": "cca0606c07841243c17e807d89bc33ecdb92af05",
+          "manifest_path": "lama/release.v1.json"
+        }
+      ]
+    },
+    {
+      "id": "modnet",
+      "display_name": "MODNet",
+      "task": "image-matting",
+      "latest": "1.0.0",
+      "releases": [
+        {
+          "version": "1.0.0",
+          "repository": "openvalle/valle-models",
+          "revision": "cca0606c07841243c17e807d89bc33ecdb92af05",
+          "manifest_path": "modnet/release.v1.json"
+        }
+      ]
+    },
+    {
+      "id": "omnishotcut",
+      "display_name": "OmniShotCut",
+      "task": "shot-boundary-detection",
+      "latest": "1.0.0",
+      "releases": [
+        {
+          "version": "1.0.0",
+          "repository": "openvalle/valle-models",
+          "revision": "cca0606c07841243c17e807d89bc33ecdb92af05",
+          "manifest_path": "omnishotcut/release.v1.json"
+        }
+      ]
+    },
+    {
+      "id": "realesrgan",
+      "display_name": "Real-ESRGAN",
+      "task": "image-super-resolution",
+      "latest": "1.0.0",
+      "releases": [
+        {
+          "version": "1.0.0",
+          "repository": "openvalle/valle-models",
+          "revision": "cca0606c07841243c17e807d89bc33ecdb92af05",
+          "manifest_path": "realesrgan/release.v1.json"
+        }
+      ]
+    },
+    {
+      "id": "rife",
+      "display_name": "RIFE",
+      "task": "frame-interpolation",
+      "latest": "1.0.0",
+      "releases": [
+        {
+          "version": "1.0.0",
+          "repository": "openvalle/valle-models",
+          "revision": "cca0606c07841243c17e807d89bc33ecdb92af05",
+          "manifest_path": "rife/release.v1.json"
+        }
+      ]
+    },
+    {
+      "id": "transnetv2",
+      "display_name": "TransNetV2",
+      "task": "shot-boundary-detection",
+      "latest": "1.0.0",
+      "releases": [
+        {
+          "version": "1.0.0",
+          "repository": "openvalle/valle-models",
+          "revision": "cca0606c07841243c17e807d89bc33ecdb92af05",
+          "manifest_path": "transnetv2/release.v1.json"
+        }
+      ]
+    },
+    {
+      "id": "qwen3-asr-0.6b",
+      "display_name": "Qwen3-ASR 0.6B",
+      "task": "speech-transcription",
+      "latest": "1.0.0",
+      "releases": [
+        {
+          "version": "1.0.0",
+          "repository": "Qwen/Qwen3-ASR-0.6B",
+          "revision": "5eb144179a02acc5e5ba31e748d22b0cf3e303b0",
+          "manifest_path": "release.v1.json"
+        }
+      ]
+    },
+    {
+      "id": "qwen3-aligner-0.6b",
+      "display_name": "Qwen3 ForcedAligner 0.6B",
+      "task": "forced-alignment",
+      "latest": "1.0.0",
+      "releases": [
+        {
+          "version": "1.0.0",
+          "repository": "Qwen/Qwen3-ForcedAligner-0.6B",
+          "revision": "c7cbfc2048c462b0d63a45797104fc9db3ad62b7",
+          "manifest_path": "release.v1.json"
+        }
+      ]
+    }
+  ]
+}

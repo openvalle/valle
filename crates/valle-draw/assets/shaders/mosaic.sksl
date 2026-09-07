@@ -1,0 +1,11 @@
+// Pixelate by sampling each block's center. Block size is measured in scaled output pixels.
+uniform shader tex;
+uniform float2 resolution;
+uniform float blockSize;
+uniform float2 anchor;
+
+half4 main(float2 xy) {
+    float b = max(blockSize, 1.0);
+    float2 cell = (floor((xy - anchor) / b) + 0.5) * b + anchor;
+    return tex.eval(clamp(cell, float2(0.0), resolution - 0.5));
+}

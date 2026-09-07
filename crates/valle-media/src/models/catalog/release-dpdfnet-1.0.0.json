@@ -1,0 +1,422 @@
+{
+  "schema_version": 1,
+  "model": {
+    "id": "dpdfnet",
+    "version": "1.0.0",
+    "display_name": "DPDFNet",
+    "task": "speech-enhancement",
+    "description": "CPU-oriented causal speech enhancement at 48 kHz"
+  },
+  "license": {
+    "spdx": "Apache-2.0",
+    "redistribution": "allowed",
+    "files": [
+      {
+        "path": "card/LICENSE",
+        "bytes": 11357,
+        "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+      }
+    ],
+    "notes": [
+      "The GitHub source and Hugging Face weight repository both declare Apache-2.0."
+    ]
+  },
+  "provenance": {
+    "repository": "https://github.com/ceva-ip/DPDFNet",
+    "revision": "1333776d470f01ecf4a533f098f4e8aeb3d00b89",
+    "weights": [
+      {
+        "id": "dpdfnet2-48khz-hr",
+        "source": "https://huggingface.co/Ceva-IP/DPDFNet/resolve/dd6818d00f50c836fed43a6243ebe49116de5964/onnx/dpdfnet2_48khz_hr.onnx",
+        "bytes": 10493337,
+        "sha256": "7f0575a5cec0ba4ffd8f8bd657e06d007e4ccdd955d76faab922b9d3291dc14b"
+      }
+    ],
+    "notes": [
+      "The FP32 ONNX file is a byte-identical mirror of the pinned upstream artifact.",
+      "The dynamic INT8 artifact is reproducibly derived from that FP32 graph with ONNX Runtime 1.28.0 by quantizing only per-tensor Gemm and MatMul linear paths.",
+      "Per-channel dynamic INT8 fails at runtime for higher-rank MatMul on ONNX Runtime 1.27 and 1.28 arm64. Conv INT8, static QDQ, FP16, preoptimized ORT graphs and CoreML were measured and rejected."
+    ]
+  },
+  "release": {
+    "state": "ready",
+    "repository": "openvalle/valle-models"
+  },
+  "contract": {
+    "adapter": "dpdfnet-streaming-enhancement",
+    "version": 1,
+    "inputs": [
+      {
+        "name": "spec",
+        "dtype": "f32",
+        "layout": "ncf2",
+        "shape": [
+          1,
+          1,
+          481,
+          2
+        ],
+        "range": null,
+        "description": "One complex STFT frame"
+      },
+      {
+        "name": "state_in",
+        "dtype": "f32",
+        "layout": "flat",
+        "shape": [
+          56436
+        ],
+        "range": null,
+        "description": "Recurrent streaming state"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "spec_e",
+        "dtype": "f32",
+        "layout": "ncf2",
+        "shape": [
+          1,
+          1,
+          481,
+          2
+        ],
+        "range": null,
+        "description": "Enhanced complex STFT frame"
+      },
+      {
+        "name": "state_out",
+        "dtype": "f32",
+        "layout": "flat",
+        "shape": [
+          56436
+        ],
+        "range": null,
+        "description": "Next recurrent state"
+      }
+    ],
+    "preprocess": {
+      "sample_rate": 48000,
+      "accepted_channels": [
+        1,
+        2
+      ],
+      "stereo_downmix": "arithmetic-mean",
+      "channels": 1,
+      "fft_size": 960,
+      "hop_length": 480,
+      "window": "vorbis",
+      "center": true,
+      "pad_mode": "reflect",
+      "input_tail_padding_samples": 960,
+      "stateful": true,
+      "serial_frame_inference": true,
+      "streaming_file_io": true,
+      "audio_memory": "constant-with-duration",
+      "state_init": {
+        "erb_norm_init": "first 481 ONNX metadata values",
+        "spec_norm_init": "following 96 ONNX metadata values",
+        "remaining": "zero"
+      },
+      "attenuation_limit_db": 12,
+      "noisy_frame_offset": 4
+    },
+    "postprocess": {
+      "latency_samples": 1920,
+      "stateful": true,
+      "drop_leading_samples": 1920,
+      "append_trailing_zeros": 1920,
+      "output_length": "exact-input-sample-count",
+      "encoding": "mono-f32-wav",
+      "output_publication": "atomic-no-replace",
+      "clamp": [
+        -1,
+        1
+      ]
+    }
+  },
+  "artifacts": [
+    {
+      "id": "onnx-fp32",
+      "format": "onnx",
+      "precision": "fp32",
+      "entrypoint": "dpdfnet2_48khz_hr.onnx",
+      "files": [
+        {
+          "path": "dpdfnet2_48khz_hr.onnx",
+          "bytes": 10493337,
+          "sha256": "7f0575a5cec0ba4ffd8f8bd657e06d007e4ccdd955d76faab922b9d3291dc14b"
+        }
+      ],
+      "metadata": {
+        "ir_version": 8,
+        "opset": 17,
+        "sample_rate": 48000,
+        "state_size": 56436,
+        "source": "byte-identical upstream mirror"
+      }
+    },
+    {
+      "id": "onnx-int8-dynamic-linear",
+      "format": "onnx",
+      "precision": "int8-dynamic",
+      "entrypoint": "dpdfnet2_48khz_hr_int8.onnx",
+      "files": [
+        {
+          "path": "dpdfnet2_48khz_hr_int8.onnx",
+          "bytes": 3574698,
+          "sha256": "694164a3955a5c3ddcefcf20a894f10884cd8d854827bd6dd1a5c8182a2c75e6"
+        }
+      ],
+      "metadata": {
+        "ir_version": 8,
+        "opset": 17,
+        "sample_rate": 48000,
+        "state_size": 56436,
+        "quantizer": "onnxruntime 1.28.0",
+        "quantization": "per-tensor dynamic QInt8 for Gemm and MatMul linear paths",
+        "matmul_integer_nodes": 36,
+        "float32_paths": [
+          "activations",
+          "model-io",
+          "recurrent-state",
+          "conv",
+          "gru"
+        ],
+        "source_sha256": "7f0575a5cec0ba4ffd8f8bd657e06d007e4ccdd955d76faab922b9d3291dc14b"
+      }
+    }
+  ],
+  "routes": [
+    {
+      "id": "onnx-int8-cpu-macos-arm64",
+      "artifact": "onnx-int8-dynamic-linear",
+      "backend": "onnx-cpu",
+      "platforms": [
+        "macos"
+      ],
+      "architectures": [
+        "aarch64"
+      ],
+      "status": "verified",
+      "priority": 40,
+      "requirements": {
+        "minimum_os": null,
+        "minimum_runtime": "ONNX Runtime 1.28.0"
+      },
+      "options": {
+        "intra_threads": 1,
+        "memory_pattern": true,
+        "prepacking": true
+      },
+      "notes": "Dynamic INT8 quality, exact-tail, long-audio and Rust host gates passed on Apple M2 Pro."
+    },
+    {
+      "id": "onnx-fp32-cpu-macos-arm64",
+      "artifact": "onnx-fp32",
+      "backend": "onnx-cpu",
+      "platforms": [
+        "macos"
+      ],
+      "architectures": [
+        "aarch64"
+      ],
+      "status": "verified",
+      "priority": 10,
+      "requirements": {
+        "minimum_os": null,
+        "minimum_runtime": "ONNX Runtime 1.28.0"
+      },
+      "options": {
+        "intra_threads": 1,
+        "memory_pattern": true,
+        "prepacking": true
+      },
+      "notes": "Portable FP32 fallback and Rust host parity passed on Apple M2 Pro."
+    },
+    {
+      "id": "onnx-int8-cpu-macos-x86_64",
+      "artifact": "onnx-int8-dynamic-linear",
+      "backend": "onnx-cpu",
+      "platforms": [
+        "macos"
+      ],
+      "architectures": [
+        "x86_64"
+      ],
+      "status": "unverified",
+      "priority": 40,
+      "requirements": {
+        "minimum_os": null,
+        "minimum_runtime": "ONNX Runtime 1.28.0"
+      },
+      "options": {
+        "intra_threads": 1,
+        "memory_pattern": true,
+        "prepacking": true
+      },
+      "notes": "The graph is portable, but no x86_64 Mac host gate has run."
+    },
+    {
+      "id": "onnx-fp32-cpu-macos-x86_64",
+      "artifact": "onnx-fp32",
+      "backend": "onnx-cpu",
+      "platforms": [
+        "macos"
+      ],
+      "architectures": [
+        "x86_64"
+      ],
+      "status": "unverified",
+      "priority": 10,
+      "requirements": {
+        "minimum_os": null,
+        "minimum_runtime": "ONNX Runtime 1.28.0"
+      },
+      "options": {
+        "intra_threads": 1,
+        "memory_pattern": true,
+        "prepacking": true
+      },
+      "notes": "Portable FP32 fallback; no x86_64 Mac host gate has run."
+    },
+    {
+      "id": "onnx-int8-cpu-linux-aarch64",
+      "artifact": "onnx-int8-dynamic-linear",
+      "backend": "onnx-cpu",
+      "platforms": [
+        "linux"
+      ],
+      "architectures": [
+        "aarch64"
+      ],
+      "status": "verified",
+      "priority": 40,
+      "requirements": {
+        "minimum_os": "Debian 12 (glibc 2.36)",
+        "minimum_runtime": "ONNX Runtime 1.28.0 shared library"
+      },
+      "options": {
+        "intra_threads": 1,
+        "memory_pattern": true,
+        "prepacking": true
+      },
+      "notes": "Verified on three real fixtures in a Debian 12 arm64 OrbStack VM with the official ONNX Runtime 1.28 shared library; adjacent-library loading, exact length, lag zero and macOS parity passed. VM timing is not physical Linux performance evidence."
+    },
+    {
+      "id": "onnx-fp32-cpu-linux-aarch64",
+      "artifact": "onnx-fp32",
+      "backend": "onnx-cpu",
+      "platforms": [
+        "linux"
+      ],
+      "architectures": [
+        "aarch64"
+      ],
+      "status": "verified",
+      "priority": 10,
+      "requirements": {
+        "minimum_os": "Debian 12 (glibc 2.36)",
+        "minimum_runtime": "ONNX Runtime 1.28.0 shared library"
+      },
+      "options": {
+        "intra_threads": 1,
+        "memory_pattern": true,
+        "prepacking": true
+      },
+      "notes": "FP32 fallback verified on a real fixture in Debian 12 arm64 with an explicit ONNX Runtime 1.28 path; decoded PCM was identical to the macOS arm64 Rust output."
+    },
+    {
+      "id": "onnx-int8-cpu-linux-x86_64",
+      "artifact": "onnx-int8-dynamic-linear",
+      "backend": "onnx-cpu",
+      "platforms": [
+        "linux"
+      ],
+      "architectures": [
+        "x86_64"
+      ],
+      "status": "unverified",
+      "priority": 40,
+      "requirements": {
+        "minimum_os": null,
+        "minimum_runtime": "ONNX Runtime 1.28.0 shared library"
+      },
+      "options": {
+        "intra_threads": 1,
+        "memory_pattern": true,
+        "prepacking": true
+      },
+      "notes": "Promote only after a native Linux x86_64 real-fixture gate passes."
+    },
+    {
+      "id": "onnx-fp32-cpu-linux-x86_64",
+      "artifact": "onnx-fp32",
+      "backend": "onnx-cpu",
+      "platforms": [
+        "linux"
+      ],
+      "architectures": [
+        "x86_64"
+      ],
+      "status": "unverified",
+      "priority": 10,
+      "requirements": {
+        "minimum_os": null,
+        "minimum_runtime": "ONNX Runtime 1.28.0 shared library"
+      },
+      "options": {
+        "intra_threads": 1,
+        "memory_pattern": true,
+        "prepacking": true
+      },
+      "notes": "Portable FP32 fallback; no native Linux x86_64 host gate has run."
+    },
+    {
+      "id": "onnx-int8-cpu-windows-x86_64",
+      "artifact": "onnx-int8-dynamic-linear",
+      "backend": "onnx-cpu",
+      "platforms": [
+        "windows"
+      ],
+      "architectures": [
+        "x86_64"
+      ],
+      "status": "unverified",
+      "priority": 40,
+      "requirements": {
+        "minimum_os": null,
+        "minimum_runtime": "ONNX Runtime 1.28.0"
+      },
+      "options": {
+        "intra_threads": 1,
+        "memory_pattern": true,
+        "prepacking": true
+      },
+      "notes": "Promote only after the Windows x86_64 real-fixture gate passes."
+    },
+    {
+      "id": "onnx-fp32-cpu-windows-x86_64",
+      "artifact": "onnx-fp32",
+      "backend": "onnx-cpu",
+      "platforms": [
+        "windows"
+      ],
+      "architectures": [
+        "x86_64"
+      ],
+      "status": "unverified",
+      "priority": 10,
+      "requirements": {
+        "minimum_os": null,
+        "minimum_runtime": "ONNX Runtime 1.28.0"
+      },
+      "options": {
+        "intra_threads": 1,
+        "memory_pattern": true,
+        "prepacking": true
+      },
+      "notes": "Portable FP32 fallback; no Windows x86_64 host gate has run."
+    }
+  ]
+}

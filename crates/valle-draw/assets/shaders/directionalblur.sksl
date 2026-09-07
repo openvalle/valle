@@ -1,0 +1,11 @@
+uniform shader tex;
+uniform float2 direction;
+uniform float span;
+half4 main(float2 xy) {
+    half4 value = half4(0.0);
+    for (int index = 0; index < 9; ++index) {
+        float amount = float(index) / 8.0 - 0.5;
+        value += tex.eval(xy + direction * span * amount);
+    }
+    return value / half(9.0);
+}

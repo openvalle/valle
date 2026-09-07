@@ -1,0 +1,313 @@
+{
+  "schema_version": 1,
+  "model": {
+    "id": "demucs",
+    "version": "1.0.0",
+    "display_name": "Demucs",
+    "task": "audio-source-separation",
+    "description": "Two-stem vocals and instrumental separation derived from htdemucs"
+  },
+  "license": {
+    "spdx": "MIT",
+    "redistribution": "allowed",
+    "files": [
+      {
+        "path": "card/LICENSE",
+        "bytes": 1087,
+        "sha256": "cf9b17822d1fcd4ff32ccbe14183386fb3adf6f2ff92dc184130823f7fc28173"
+      }
+    ],
+    "notes": [
+      "Demucs v4 code and the selected htdemucs weight are distributed under MIT."
+    ]
+  },
+  "provenance": {
+    "repository": "https://github.com/adefossez/demucs",
+    "revision": "6a604bb002d12c4fbabb303ba64db40b5c5743f0",
+    "weights": [
+      {
+        "id": "htdemucs-955717e8",
+        "source": "https://huggingface.co/adefossez/HTDemucs/resolve/bf35a81b663819a8255c8fefee17f9d812b786b5/955717e8.safetensors",
+        "bytes": 84025440,
+        "sha256": "d9fa14133cfcc034a6758923bb3a8ca9f8dfd0b582134643bbf83f72c17576dd"
+      }
+    ],
+    "notes": [
+      "The exporter pins the adefossez/HTDemucs repository revision instead of resolving its moving main branch.",
+      "All 533 state tensors match the legacy 955717e8-8726e21a.th checkpoint exactly; the different file hash reflects safetensors serialization.",
+      "The ONNX graph aggregates the upstream four sources into vocals and instrumental before iSTFT.",
+      "The CoreML graph aggregates the upstream four sources into vocals and instrumental before returning; the host performs STFT, two inverse STFTs, and time-branch addition without source aggregation."
+    ]
+  },
+  "release": {
+    "state": "ready",
+    "repository": "openvalle/valle-models"
+  },
+  "contract": {
+    "adapter": "demucs-source-separation",
+    "version": 2,
+    "inputs": [
+      {
+        "name": "mix",
+        "dtype": "f32",
+        "layout": "nct",
+        "shape": [
+          1,
+          2,
+          343980
+        ],
+        "range": null,
+        "description": "Stereo 44.1 kHz audio segment"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "stems",
+        "dtype": "f32",
+        "layout": "nsct",
+        "shape": [
+          1,
+          2,
+          2,
+          343980
+        ],
+        "range": null,
+        "description": "Vocals and instrumental"
+      }
+    ],
+    "preprocess": {
+      "sample_rate": 44100,
+      "channels": 2,
+      "segment_samples": 343980,
+      "stride_samples": 257985,
+      "overlap": 0.25,
+      "last_segment": "right-zero-pad",
+      "normalization_reference": "mono reference ref[t] = (left[t] + right[t]) / 2 over the decoded whole track",
+      "normalization_mean": "mean = sum(ref) / T",
+      "normalization_std": "std = sqrt(sum((ref - mean)^2) / (T - 1)) + 1e-8",
+      "overlap_window": "w[i] = (i + 1) / 171990 for 0 <= i < 171990; w[i] = (343980 - i) / 171990 for 171990 <= i < 343980",
+      "long_audio": "triangular weighted overlap-add with transition_power=1"
+    },
+    "postprocess": {
+      "stem_order": [
+        "vocals",
+        "instrumental"
+      ],
+      "instrumental_definition": "sum(drums,bass,other)",
+      "denormalization": {
+        "vocals": "output * std + mean",
+        "instrumental": "output * std + 3 * mean"
+      },
+      "long_audio": "divide the weighted sum by accumulated triangular weights",
+      "output_length": "crop each reconstructed stem to the original decoded sample count"
+    }
+  },
+  "artifacts": [
+    {
+      "id": "onnx-fp32",
+      "format": "onnx",
+      "precision": "fp32",
+      "entrypoint": "htdemucs.onnx",
+      "files": [
+        {
+          "path": "htdemucs.onnx",
+          "bytes": 170029787,
+          "sha256": "008f5df59661715d93fe0332f6304cfb5700260b3a015344573fcfee67e77132"
+        }
+      ],
+      "metadata": {
+        "opset": 18,
+        "native_fft": true,
+        "minimum_onnxruntime": "1.28.0",
+        "output_stems": [
+          "vocals",
+          "instrumental"
+        ],
+        "internal_sources": [
+          "drums",
+          "bass",
+          "other",
+          "vocals"
+        ],
+        "segment_samples": 343980,
+        "sample_rate": 44100
+      }
+    },
+    {
+      "id": "coreml-fp32-core",
+      "format": "coreml-package",
+      "precision": "fp32",
+      "entrypoint": "coreml_htdemucs_core.mlpackage",
+      "files": [
+        {
+          "path": "coreml_htdemucs_core.mlpackage/Data/com.apple.CoreML/model.mlmodel",
+          "bytes": 541040,
+          "sha256": "56bff6f4d98e79bb5500b173625bcc5be12a633745fef8f08869912a6e74927e"
+        },
+        {
+          "path": "coreml_htdemucs_core.mlpackage/Data/com.apple.CoreML/weights/weight.bin",
+          "bytes": 214666752,
+          "sha256": "834b75bd1d2ccfac136c4eb0a9aacb3ea07f02aaf1ba9a18689e7bb8031636c8"
+        },
+        {
+          "path": "coreml_htdemucs_core.mlpackage/Manifest.json",
+          "bytes": 617,
+          "sha256": "fa0828fcd32bbd2f6ca1c2bdfec1d28a0784a9022efe1a8c8472a92bd19bde9b"
+        }
+      ],
+      "metadata": {
+        "fixed_shape": true,
+        "internal_sources": [
+          "drums",
+          "bass",
+          "other",
+          "vocals"
+        ],
+        "output_stems": [
+          "vocals",
+          "instrumental"
+        ],
+        "outputs": [
+          {
+            "name": "masked_spec",
+            "shape": [
+              2,
+              2,
+              2,
+              2048,
+              336
+            ],
+            "stem_axis": 0
+          },
+          {
+            "name": "time_branch",
+            "shape": [
+              1,
+              2,
+              2,
+              343980
+            ],
+            "stem_axis": 1
+          }
+        ],
+        "in_graph_source_aggregation": true,
+        "host_stft_required": true,
+        "host_istft_required": true,
+        "host_istft_count": 2
+      }
+    }
+  ],
+  "routes": [
+    {
+      "id": "coreml-macos-arm64",
+      "artifact": "coreml-fp32-core",
+      "backend": "coreml",
+      "platforms": [
+        "macos"
+      ],
+      "architectures": [
+        "aarch64"
+      ],
+      "status": "verified",
+      "priority": 100,
+      "requirements": {
+        "minimum_os": "macOS 14",
+        "minimum_runtime": null
+      },
+      "options": {
+        "compute_units": "cpu-and-gpu"
+      },
+      "notes": "The two-stem CoreML separator core passed parity and placed all 1586 operations on GPU in one segment on Apple M2 Pro."
+    },
+    {
+      "id": "onnx-cpu-macos-arm64",
+      "artifact": "onnx-fp32",
+      "backend": "onnx-cpu",
+      "platforms": [
+        "macos"
+      ],
+      "architectures": [
+        "aarch64"
+      ],
+      "status": "verified",
+      "priority": 10,
+      "requirements": {
+        "minimum_os": null,
+        "minimum_runtime": "ONNX Runtime 1.28.0"
+      },
+      "notes": "The optimized two-stem graph passed Rust ORT 1.28 parity and performance tests on Apple M2 Pro."
+    },
+    {
+      "id": "onnx-cpu-macos-x86_64",
+      "artifact": "onnx-fp32",
+      "backend": "onnx-cpu",
+      "platforms": [
+        "macos"
+      ],
+      "architectures": [
+        "x86_64"
+      ],
+      "status": "unverified",
+      "priority": 10,
+      "requirements": {
+        "minimum_os": null,
+        "minimum_runtime": "ONNX Runtime 1.28.0"
+      },
+      "notes": "The artifact is portable, but this host route has not been tested."
+    },
+    {
+      "id": "onnx-cpu-windows-x86_64",
+      "artifact": "onnx-fp32",
+      "backend": "onnx-cpu",
+      "platforms": [
+        "windows"
+      ],
+      "architectures": [
+        "x86_64"
+      ],
+      "status": "unverified",
+      "priority": 10,
+      "requirements": {
+        "minimum_os": null,
+        "minimum_runtime": "ONNX Runtime 1.28.0"
+      },
+      "notes": "Promote only after the real-fixture Windows CI gate passes."
+    },
+    {
+      "id": "onnx-cpu-linux-x86_64",
+      "artifact": "onnx-fp32",
+      "backend": "onnx-cpu",
+      "platforms": [
+        "linux"
+      ],
+      "architectures": [
+        "x86_64"
+      ],
+      "status": "unverified",
+      "priority": 10,
+      "requirements": {
+        "minimum_os": null,
+        "minimum_runtime": "ONNX Runtime 1.28.0"
+      },
+      "notes": "Promote only after the real-fixture Linux CI gate passes."
+    },
+    {
+      "id": "onnx-cpu-linux-aarch64",
+      "artifact": "onnx-fp32",
+      "backend": "onnx-cpu",
+      "platforms": [
+        "linux"
+      ],
+      "architectures": [
+        "aarch64"
+      ],
+      "status": "verified",
+      "priority": 10,
+      "requirements": {
+        "minimum_os": null,
+        "minimum_runtime": "ONNX Runtime 1.28.0"
+      },
+      "notes": "Rust ort 2.0.0-rc.13 with ONNX Runtime 1.28 passed real-fixture parity and an 8 GiB memory-constrained run in an architecture-native Linux/aarch64 container inside an OrbStack VM on Apple M2 Pro. This verifies VM-backed runtime compatibility, not physical-server performance."
+    }
+  ]
+}

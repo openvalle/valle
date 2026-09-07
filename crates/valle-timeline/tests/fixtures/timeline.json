@@ -1,0 +1,40 @@
+{
+  "canvas": { "width": 1080, "height": 1920, "fps": 25 },
+  "resources": {
+    "main": "https://cdn.example.com/main.mp4",
+    "voice": "https://cdn.example.com/voice.wav",
+    "font": "https://cdn.example.com/inter.ttf"
+  },
+  "tracks": {
+    "visual": [{
+      "clips": [{
+        "start": 0,
+        "duration": 6,
+        "kind": "video",
+        "src": "main",
+        "fit": "cover"
+      }]
+    }],
+    "audio": [{
+      "clips": [{ "start": 0, "duration": 6, "src": "voice", "gain": 0.9 }]
+    }],
+    "caption": [{
+      "style": { "font": "font", "fontSize": 72 },
+      "clips": [{
+        "start": 1.4,
+        "duration": 2.2,
+        "text": "A programmable video editing engine",
+        "enter": "slide-up",
+        "exit": "fade"
+      }]
+    }],
+    "adjustment": [{
+      "clips": [{
+        "start": 0,
+        "duration": 6,
+        "kind": "color-grade",
+        "temperature": 0.08
+      }]
+    }]
+  }
+}

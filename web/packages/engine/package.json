@@ -1,0 +1,15 @@
+{
+  "name": "@valle/engine",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./internal": "./src/internal-timeline.ts",
+    "./protocol": "./src/generated/protocol.ts",
+    "./executor/canvaskit": "./src/executor/canvaskit/index.ts"
+  },
+  "dependencies": {
+    "canvaskit-wasm": "catalog:"
+  }
+}

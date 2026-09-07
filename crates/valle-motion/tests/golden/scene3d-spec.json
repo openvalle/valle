@@ -1,0 +1,76 @@
+{
+  "camera": {
+    "position": [
+      0.0,
+      1.2,
+      4.5
+    ],
+    "target": [
+      0.0,
+      0.4,
+      0.0
+    ],
+    "fovYDegrees": 38.0,
+    "near": 0.1,
+    "far": 100.0
+  },
+  "meshes": [
+    {
+      "key": "product",
+      "modelControl": "productModel",
+      "material": {
+        "kind": "lambert",
+        "color": [
+          0.32156864,
+          0.8627451,
+          1.0,
+          0.96
+        ],
+        "textureControl": "productTexture"
+      },
+      "transform": {
+        "translation": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "rotationDegrees": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      }
+    }
+  ],
+  "lights": [
+    {
+      "type": "ambient",
+      "intensity": 0.18
+    },
+    {
+      "type": "directional",
+      "direction": [
+        -0.7,
+        0.9,
+        0.55
+      ],
+      "intensity": 1.0
+    }
+  ],
+  "anchors": [
+    {
+      "key": "feature-anchor",
+      "parent": "product",
+      "position": [
+        0.82,
+        0.95,
+        0.28
+      ]
+    }
+  ]
+}

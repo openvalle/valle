@@ -1,0 +1,331 @@
+{
+  "schema_version": 1,
+  "model": {
+    "id": "lama",
+    "version": "1.0.0",
+    "display_name": "LaMa",
+    "task": "image-inpainting",
+    "description": "Mask-guided image inpainting and object removal"
+  },
+  "license": {
+    "spdx": "Apache-2.0",
+    "redistribution": "allowed",
+    "files": [
+      {
+        "path": "card/LICENSE",
+        "bytes": 11348,
+        "sha256": "4ceeeac5a802e86c413c22b16cce8e9a22027b0250c97e6f8ac97c14cf0542c0"
+      }
+    ],
+    "notes": [
+      "Only the inference generator is used; unrelated training evaluator weights are excluded."
+    ]
+  },
+  "provenance": {
+    "repository": "https://github.com/advimman/lama",
+    "revision": "786f5936b27fb3dacd2b1ad799e4de968ea697e7",
+    "weights": [
+      {
+        "id": "big-lama-archive",
+        "source": "https://huggingface.co/smartywu/big-lama/resolve/05cb2be7f8dbe6ca7c6e78f4fc827a4b2baaa4a9/big-lama.zip",
+        "bytes": 381428720,
+        "sha256": "f1b358ca24093b93a106183b98a3dea6e8ed09f3b43ea7251eb2c81e7b4575f6"
+      },
+      {
+        "id": "big-lama-generator",
+        "source": "derived:big-lama-archive#generator",
+        "bytes": 204547078,
+        "sha256": "85fee958ca51b2c1b97e4cd07557f8563e6b89d031b27187b4c094f23a31233f"
+      }
+    ],
+    "notes": [
+      "The generator is deterministically stripped from the pinned archive before export."
+    ]
+  },
+  "release": {
+    "state": "ready",
+    "repository": "openvalle/valle-models"
+  },
+  "contract": {
+    "adapter": "lama-image-inpainting",
+    "version": 1,
+    "inputs": [
+      {
+        "name": "image",
+        "dtype": "f32",
+        "layout": "nchw",
+        "shape": [
+          1,
+          3,
+          "height",
+          "width"
+        ],
+        "range": [
+          0,
+          1
+        ],
+        "description": "RGB source image"
+      },
+      {
+        "name": "mask",
+        "dtype": "f32",
+        "layout": "nchw",
+        "shape": [
+          1,
+          1,
+          "height",
+          "width"
+        ],
+        "range": [
+          0,
+          1
+        ],
+        "description": "One means pixels to replace"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "rgb",
+        "dtype": "f32",
+        "layout": "nchw",
+        "shape": [
+          1,
+          3,
+          "height",
+          "width"
+        ],
+        "range": [
+          0,
+          1
+        ],
+        "description": "Inpainted RGB crop"
+      }
+    ],
+    "preprocess": {
+      "canvas": [
+        640,
+        384
+      ],
+      "canvas_buckets": [
+        [
+          256,
+          256
+        ],
+        [
+          640,
+          384
+        ]
+      ],
+      "bucket_policy": "first context-expanded crop that fits without scaling; final bucket is fallback",
+      "host_contract": "crop-mask-with-context-and-pad"
+    },
+    "postprocess": {
+      "reject_non_finite": true,
+      "composite_to_source": true
+    }
+  },
+  "artifacts": [
+    {
+      "id": "onnx-fp32-buckets",
+      "format": "onnx",
+      "precision": "fp32",
+      "entrypoint": "lama_640x384.onnx",
+      "files": [
+        {
+          "path": "lama_256x256.onnx",
+          "bytes": 206161690,
+          "sha256": "e3a33df95c710421ec38f9344190ca56424812d444cc8044ab34510278cd4af3"
+        },
+        {
+          "path": "lama_640x384.onnx",
+          "bytes": 207690502,
+          "sha256": "e19a2560b41fdae45e206187a751b02e30dd89e478fb9f16907a789381552f38"
+        }
+      ],
+      "metadata": {
+        "opset": 17,
+        "fixed_shape_buckets": {
+          "256x256": "lama_256x256.onnx",
+          "fallback": "lama_640x384.onnx"
+        }
+      }
+    },
+    {
+      "id": "coreml-fp16-buckets",
+      "format": "coreml-package",
+      "precision": "fp16",
+      "entrypoint": "lama_fp16_640x384_gpu.mlpackage",
+      "files": [
+        {
+          "path": "lama_fp16_256x256_gpu.mlpackage/Data/com.apple.CoreML/model.mlmodel",
+          "bytes": 1360732,
+          "sha256": "a00ff89fb2b2f5e6f7f8df13f8c85fd53e67cee11e68102933993c4ba50d7c53"
+        },
+        {
+          "path": "lama_fp16_256x256_gpu.mlpackage/Data/com.apple.CoreML/weights/weight.bin",
+          "bytes": 102044288,
+          "sha256": "4a7f81739605593ef8a1cafb790128eb8c8b22ac1d805e38d261b240b0816447"
+        },
+        {
+          "path": "lama_fp16_256x256_gpu.mlpackage/Manifest.json",
+          "bytes": 617,
+          "sha256": "eceef0d7f7f00f7882bfa3f2e6d635e15fe76684eacf5149347bbac22d452fcb"
+        },
+        {
+          "path": "lama_fp16_640x384_gpu.mlpackage/Data/com.apple.CoreML/model.mlmodel",
+          "bytes": 1362774,
+          "sha256": "b236f5a2dc39b66d75f2c6cd1ef95e392fffd580d9df56371b38fc99aff8ed36"
+        },
+        {
+          "path": "lama_fp16_640x384_gpu.mlpackage/Data/com.apple.CoreML/weights/weight.bin",
+          "bytes": 102075136,
+          "sha256": "d82c2aa45635db55bc97f5bbf777e2f66ba25f686b5e62ca30d02d273b6a9c73"
+        },
+        {
+          "path": "lama_fp16_640x384_gpu.mlpackage/Manifest.json",
+          "bytes": 617,
+          "sha256": "353b45f958d73d74c1d5fe78b8554c993356d782ec8130e0e59fb8a5cf212a34"
+        }
+      ],
+      "metadata": {
+        "fixed_shape_buckets": {
+          "256x256": "lama_fp16_256x256_gpu.mlpackage",
+          "fallback": "lama_fp16_640x384_gpu.mlpackage"
+        }
+      }
+    }
+  ],
+  "routes": [
+    {
+      "id": "coreml-macos-arm64",
+      "artifact": "coreml-fp16-buckets",
+      "backend": "coreml",
+      "platforms": [
+        "macos"
+      ],
+      "architectures": [
+        "aarch64"
+      ],
+      "status": "verified",
+      "priority": 100,
+      "requirements": {
+        "minimum_os": "macOS 14",
+        "minimum_runtime": null
+      },
+      "options": {
+        "compute_units": "cpu-and-gpu",
+        "load_policy": "resolve-bucket-then-load",
+        "bucket_entrypoints": {
+          "256x256": "lama_fp16_256x256_gpu.mlpackage",
+          "fallback": "lama_fp16_640x384_gpu.mlpackage"
+        }
+      },
+      "notes": "Real-fixture quality and non-finite protection passed on Apple M2 Pro; ANE is intentionally excluded."
+    },
+    {
+      "id": "onnx-cpu-macos-arm64",
+      "artifact": "onnx-fp32-buckets",
+      "backend": "onnx-cpu",
+      "platforms": [
+        "macos"
+      ],
+      "architectures": [
+        "aarch64"
+      ],
+      "status": "verified",
+      "priority": 10,
+      "options": {
+        "load_policy": "resolve-bucket-then-load",
+        "bucket_entrypoints": {
+          "256x256": "lama_256x256.onnx",
+          "fallback": "lama_640x384.onnx"
+        }
+      },
+      "notes": "The fixed-canvas ONNX path and host contract passed locally on Apple M2 Pro."
+    },
+    {
+      "id": "onnx-cpu-macos-x86_64",
+      "artifact": "onnx-fp32-buckets",
+      "backend": "onnx-cpu",
+      "platforms": [
+        "macos"
+      ],
+      "architectures": [
+        "x86_64"
+      ],
+      "status": "unverified",
+      "priority": 10,
+      "options": {
+        "load_policy": "resolve-bucket-then-load",
+        "bucket_entrypoints": {
+          "256x256": "lama_256x256.onnx",
+          "fallback": "lama_640x384.onnx"
+        }
+      },
+      "notes": "The artifact is portable, but this host route has not been tested."
+    },
+    {
+      "id": "onnx-cpu-windows-x86_64",
+      "artifact": "onnx-fp32-buckets",
+      "backend": "onnx-cpu",
+      "platforms": [
+        "windows"
+      ],
+      "architectures": [
+        "x86_64"
+      ],
+      "status": "unverified",
+      "priority": 10,
+      "options": {
+        "load_policy": "resolve-bucket-then-load",
+        "bucket_entrypoints": {
+          "256x256": "lama_256x256.onnx",
+          "fallback": "lama_640x384.onnx"
+        }
+      },
+      "notes": "Promote only after the real-fixture Windows CI gate passes."
+    },
+    {
+      "id": "onnx-cpu-linux-x86_64",
+      "artifact": "onnx-fp32-buckets",
+      "backend": "onnx-cpu",
+      "platforms": [
+        "linux"
+      ],
+      "architectures": [
+        "x86_64"
+      ],
+      "status": "unverified",
+      "priority": 10,
+      "options": {
+        "load_policy": "resolve-bucket-then-load",
+        "bucket_entrypoints": {
+          "256x256": "lama_256x256.onnx",
+          "fallback": "lama_640x384.onnx"
+        }
+      },
+      "notes": "Promote only after the real-fixture Linux CI gate passes."
+    },
+    {
+      "id": "onnx-cpu-linux-aarch64",
+      "artifact": "onnx-fp32-buckets",
+      "backend": "onnx-cpu",
+      "platforms": [
+        "linux"
+      ],
+      "architectures": [
+        "aarch64"
+      ],
+      "status": "unverified",
+      "priority": 10,
+      "options": {
+        "load_policy": "resolve-bucket-then-load",
+        "bucket_entrypoints": {
+          "256x256": "lama_256x256.onnx",
+          "fallback": "lama_640x384.onnx"
+        }
+      },
+      "notes": "The graph is architecture-neutral; ONNX Runtime packaging remains unverified."
+    }
+  ]
+}

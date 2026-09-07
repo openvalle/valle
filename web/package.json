@@ -1,0 +1,33 @@
+{
+  "name": "@valle/web-workspace",
+  "private": true,
+  "packageManager": "bun@1.4.2",
+  "workspaces": {
+    "packages": [
+      "packages/*",
+      "apps/*"
+    ],
+    "catalog": {
+      "canvaskit-wasm": "0.42.0"
+    }
+  },
+  "scripts": {
+    "build": "bun run build:engine && bun run build:runtime",
+    "build:engine": "bun run scripts/build-engine.ts",
+    "build:runtime": "bun run scripts/build-runtime.ts",
+    "generate:packed-abi": "bun run scripts/generate-packed-abi.ts --write",
+    "generate:protocol": "cargo run --quiet --manifest-path tools/schema-gen/Cargo.toml -- --write && bun run generate:packed-abi",
+    "dev": "bun run scripts/dev.ts",
+    "typecheck": "tsc --project tsconfig.json --noEmit",
+    "verify:boundaries": "bun run scripts/verify-boundaries.ts && bun run verify:protocol",
+    "verify:protocol": "bun run scripts/verify-protocol-generation.ts",
+    "gate": "bun run typecheck && bun run build && bun test && bun run verify:boundaries",
+    "test": "bun test",
+    "test:parity": "bun test tests/parity",
+    "parity": "bun tests/parity/cli.ts"
+  },
+  "devDependencies": {
+    "@types/bun": "1.4.1",
+    "typescript": "7.0.2"
+  }
+}

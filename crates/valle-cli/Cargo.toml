@@ -1,0 +1,47 @@
+[package]
+name = "valle-cli"
+description = "Command-line tools for timelines, projects, Motion, assets, and media."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+autobins = false
+
+[[bin]]
+name = "valle"
+path = "src/main.rs"
+
+[dependencies]
+tempfile.workspace = true
+valle-timeline.workspace = true
+valle-motion.workspace = true
+valle-compiler = { workspace = true, features = ["motion"] }
+valle-engine.workspace = true
+valle-media = { workspace = true, features = ["media-tools", "beat"] }
+valle-render = { workspace = true, features = ["native", "lottie"] }
+valle-project = { workspace = true, features = ["native"] }
+ttf-parser.workspace = true
+png.workspace = true
+clap = { workspace = true, features = ["derive"] }
+ctrlc.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+sha2.workspace = true
+hex.workspace = true
+fs2.workspace = true
+getrandom.workspace = true
+libc.workspace = true
+base64.workspace = true
+mimalloc.workspace = true
+# Keep allocator option indices aligned with the pinned mimalloc runtime.
+libmimalloc-sys = { workspace = true, features = ["extended"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+valle-media = { workspace = true, features = ["model-coreml"] }
+
+[dev-dependencies]
+toml.workspace = true

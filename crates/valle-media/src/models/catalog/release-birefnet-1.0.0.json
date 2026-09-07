@@ -1,0 +1,441 @@
+{
+  "schema_version": 1,
+  "model": {
+    "id": "birefnet",
+    "version": "1.0.0",
+    "display_name": "BiRefNet",
+    "task": "image-matting",
+    "description": "High-resolution salient-object matting without a trimap or prompt"
+  },
+  "license": {
+    "spdx": "MIT",
+    "redistribution": "allowed",
+    "files": [
+      {
+        "path": "card/LICENSE",
+        "bytes": 1066,
+        "sha256": "92a7089e0915fc32bc40067560b398f1e6a7a5958abd7d04eda393629a5acefb"
+      }
+    ],
+    "notes": [
+      "The selected source and BiRefNet_dynamic weight repository are MIT licensed.",
+      "Non-commercial and unlicensed BiRefNet variants are excluded."
+    ]
+  },
+  "provenance": {
+    "repository": "https://github.com/ZhengPeng7/BiRefNet",
+    "revision": "d83f35576a13fd90f8cca7c5e73d0907c2297328",
+    "weights": [
+      {
+        "id": "birefnet-dynamic",
+        "source": "https://huggingface.co/ZhengPeng7/BiRefNet_dynamic/resolve/280306042f57b7a33854319da62fd86aaa89ec4c/model.safetensors",
+        "bytes": 444473596,
+        "sha256": "e3d2e4884e51ff30f0cd630edc6b1e41b06b7f23a0a2a5169f7b7cb33a711c2d"
+      }
+    ],
+    "notes": [
+      "The native ONNX graph uses opset-19 DeformConv and is the CPU/CUDA artifact.",
+      "The DirectML candidate lowers deformable convolution to the parity-checked GridSample representation.",
+      "Both ONNX artifacts use static QDQ INT8 quantization for the selected linear MatMul subgraph while keeping float32 external tensors.",
+      "Final QDQ graphs were verified with ONNX Runtime 1.27.0 and 1.28.0; onnx-ir was used only by rejected INT4 research."
+    ]
+  },
+  "release": {
+    "state": "ready",
+    "repository": "openvalle/valle-models"
+  },
+  "contract": {
+    "adapter": "birefnet-image-matting",
+    "version": 1,
+    "inputs": [
+      {
+        "name": "img",
+        "dtype": "f32",
+        "layout": "nchw",
+        "shape": [
+          1,
+          3,
+          "height",
+          "width"
+        ],
+        "range": null,
+        "description": "RGB image with ImageNet normalization"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "alpha",
+        "dtype": "f32",
+        "layout": "nchw",
+        "shape": [
+          1,
+          1,
+          "height",
+          "width"
+        ],
+        "range": [
+          0,
+          1
+        ],
+        "description": "Foreground alpha matte"
+      }
+    ],
+    "preprocess": {
+      "color_space": "rgb",
+      "normalization": {
+        "mean": [
+          0.485,
+          0.456,
+          0.406
+        ],
+        "std": [
+          0.229,
+          0.224,
+          0.225
+        ]
+      },
+      "profiles": {
+        "quality": [
+          1024,
+          1024
+        ],
+        "balanced": [
+          768,
+          768
+        ],
+        "coarse": [
+          512,
+          512
+        ]
+      }
+    },
+    "postprocess": {
+      "clamp": [
+        0,
+        1
+      ],
+      "resize_to_source": "bilinear-half-pixel",
+      "encoding": "alpha8-png"
+    }
+  },
+  "artifacts": [
+    {
+      "id": "onnx-int8-qdq-native-dynamic",
+      "format": "onnx",
+      "precision": "int8-qdq",
+      "entrypoint": "birefnet_native_int8_qdq.onnx",
+      "files": [
+        {
+          "path": "birefnet_native_int8_qdq.onnx",
+          "bytes": 347933182,
+          "sha256": "b0af6472559bbe245812d775f12608b10a7d96885ec83cf1b9dd36277c51ab0f"
+        }
+      ],
+      "metadata": {
+        "opset": 19,
+        "dynamic_shape": true,
+        "validated_sizes": [
+          512,
+          768,
+          1024
+        ],
+        "default_profile": "balanced",
+        "default_width": 768,
+        "default_height": 768,
+        "deform_conv_nodes": 20,
+        "grid_sample_nodes": 0,
+        "quantization": "static QDQ INT8 on selected linear MatMul nodes",
+        "external_dtype": "f32",
+        "verified_runtimes": [
+          "onnxruntime 1.27.0",
+          "onnxruntime 1.28.0"
+        ]
+      }
+    },
+    {
+      "id": "onnx-int8-qdq-gridsample-dynamic",
+      "format": "onnx",
+      "precision": "int8-qdq",
+      "entrypoint": "birefnet_gridsample_int8_qdq.onnx",
+      "files": [
+        {
+          "path": "birefnet_gridsample_int8_qdq.onnx",
+          "bytes": 352176884,
+          "sha256": "9e8e3d62a8c17dd973f766367dcbbb9282dbc818c5ed6c200478897d3632f94e"
+        }
+      ],
+      "metadata": {
+        "opset": 19,
+        "dynamic_shape": true,
+        "accepted_sizes": [
+          512,
+          768,
+          1024
+        ],
+        "validated_sizes": [
+          512
+        ],
+        "default_profile": "balanced",
+        "default_width": 768,
+        "default_height": 768,
+        "deform_conv_nodes": 0,
+        "grid_sample_nodes": 300,
+        "quantization": "static QDQ INT8 on selected linear MatMul nodes",
+        "external_dtype": "f32",
+        "route_scope": "future DirectML compatibility; ORT CPU smoke verified only at 512 and DirectML is not host-verified"
+      }
+    },
+    {
+      "id": "coreml-fp16-1024",
+      "format": "coreml-package",
+      "precision": "fp16",
+      "entrypoint": "birefnet_fp16_1024.mlpackage",
+      "files": [
+        {
+          "path": "birefnet_fp16_1024.mlpackage/Data/com.apple.CoreML/model.mlmodel",
+          "bytes": 3350772,
+          "sha256": "5ff580783881ed88df508f5f7c4dcc8457c8554a46eecbfee74295d0d78bedba"
+        },
+        {
+          "path": "birefnet_fp16_1024.mlpackage/Data/com.apple.CoreML/weights/weight.bin",
+          "bytes": 463618272,
+          "sha256": "ae6cfe2eb67b0e05eaabe06a9a9e72f5746fa98ee917416cab2777522e10fec9"
+        },
+        {
+          "path": "birefnet_fp16_1024.mlpackage/Manifest.json",
+          "bytes": 617,
+          "sha256": "4bb5465ae6554d5e56cc4b4588703bbd68991c4e452694a25f2b4444035d3b19"
+        }
+      ],
+      "metadata": {
+        "fixed_shape": true,
+        "width": 1024,
+        "height": 1024,
+        "profile": "quality"
+      }
+    },
+    {
+      "id": "coreml-fp16-512",
+      "format": "coreml-package",
+      "precision": "fp16",
+      "entrypoint": "birefnet_fp16_512.mlpackage",
+      "files": [
+        {
+          "path": "birefnet_fp16_512.mlpackage/Data/com.apple.CoreML/model.mlmodel",
+          "bytes": 3166485,
+          "sha256": "dfc1183acded87198f135e2dcfaa1091957ee4c4e697437eaa337ce8533e49fc"
+        },
+        {
+          "path": "birefnet_fp16_512.mlpackage/Data/com.apple.CoreML/weights/weight.bin",
+          "bytes": 463345440,
+          "sha256": "1555acaeaddd643cf11faf74b6776b9f7e404331bf778c16c00d39dc4b6b9812"
+        },
+        {
+          "path": "birefnet_fp16_512.mlpackage/Manifest.json",
+          "bytes": 617,
+          "sha256": "4257032ea88e2b473188f1ca8a319096810de3083319d2e124bf60b329550303"
+        }
+      ],
+      "metadata": {
+        "fixed_shape": true,
+        "width": 512,
+        "height": 512,
+        "profile": "coarse"
+      }
+    }
+  ],
+  "routes": [
+    {
+      "id": "coreml-quality-macos-arm64",
+      "artifact": "coreml-fp16-1024",
+      "backend": "coreml",
+      "platforms": [
+        "macos"
+      ],
+      "architectures": [
+        "aarch64"
+      ],
+      "status": "verified",
+      "priority": 100,
+      "requirements": {
+        "minimum_os": "macOS 14",
+        "minimum_runtime": null
+      },
+      "options": {
+        "compute_units": "cpu-and-gpu"
+      },
+      "notes": "Compiled CoreML FP16 quality route verified on Apple M2 Pro; 0.793 seconds median and approximately 1.48 GiB peak RSS."
+    },
+    {
+      "id": "coreml-coarse-macos-arm64",
+      "artifact": "coreml-fp16-512",
+      "backend": "coreml",
+      "platforms": [
+        "macos"
+      ],
+      "architectures": [
+        "aarch64"
+      ],
+      "status": "verified",
+      "priority": 80,
+      "requirements": {
+        "minimum_os": "macOS 14",
+        "minimum_runtime": null
+      },
+      "options": {
+        "compute_units": "cpu-and-gpu"
+      },
+      "notes": "Compiled CoreML FP16 coarse route verified on Apple M2 Pro; 0.223 seconds median and approximately 1.41 GiB peak RSS."
+    },
+    {
+      "id": "onnx-cpu-macos-arm64",
+      "artifact": "onnx-int8-qdq-native-dynamic",
+      "backend": "onnx-cpu",
+      "platforms": [
+        "macos"
+      ],
+      "architectures": [
+        "aarch64"
+      ],
+      "status": "verified",
+      "priority": 40,
+      "requirements": {
+        "minimum_os": null,
+        "minimum_runtime": "ONNX Runtime 1.28.0"
+      },
+      "options": {
+        "default_profile": "balanced",
+        "intra_threads": 6,
+        "memory_pattern": true,
+        "prepacking": true
+      },
+      "notes": "Native DeformConv INT8 QDQ route verified on Apple M2 Pro with ONNX Runtime CPU."
+    },
+    {
+      "id": "onnx-cpu-macos-x86_64",
+      "artifact": "onnx-int8-qdq-native-dynamic",
+      "backend": "onnx-cpu",
+      "platforms": [
+        "macos"
+      ],
+      "architectures": [
+        "x86_64"
+      ],
+      "status": "unverified",
+      "priority": 40,
+      "requirements": {
+        "minimum_os": null,
+        "minimum_runtime": "ONNX Runtime 1.28.0"
+      },
+      "notes": "Artifact route only; no x86_64 Mac host verification."
+    },
+    {
+      "id": "onnx-cpu-windows-x86_64",
+      "artifact": "onnx-int8-qdq-native-dynamic",
+      "backend": "onnx-cpu",
+      "platforms": [
+        "windows"
+      ],
+      "architectures": [
+        "x86_64"
+      ],
+      "status": "unverified",
+      "priority": 40,
+      "requirements": {
+        "minimum_os": null,
+        "minimum_runtime": "ONNX Runtime 1.28.0"
+      },
+      "notes": "Promote only after the real-fixture Windows CPU gate passes."
+    },
+    {
+      "id": "onnx-cpu-linux-x86_64",
+      "artifact": "onnx-int8-qdq-native-dynamic",
+      "backend": "onnx-cpu",
+      "platforms": [
+        "linux"
+      ],
+      "architectures": [
+        "x86_64"
+      ],
+      "status": "unverified",
+      "priority": 40,
+      "requirements": {
+        "minimum_os": null,
+        "minimum_runtime": "ONNX Runtime 1.28.0"
+      },
+      "notes": "Promote only after the real-fixture Linux CPU gate passes."
+    },
+    {
+      "id": "onnx-cpu-linux-aarch64",
+      "artifact": "onnx-int8-qdq-native-dynamic",
+      "backend": "onnx-cpu",
+      "platforms": [
+        "linux"
+      ],
+      "architectures": [
+        "aarch64"
+      ],
+      "status": "verified",
+      "priority": 40,
+      "requirements": {
+        "minimum_os": "Debian 12 (glibc 2.36)",
+        "minimum_runtime": "ONNX Runtime 1.28.0 shared library"
+      },
+      "notes": "Verified on three real fixtures at 512 in a Debian 12 arm64 OrbStack VM with the official Microsoft ONNX Runtime 1.28 shared library; output parity passed, while physical-host performance was not measured."
+    },
+    {
+      "id": "onnx-cuda-linux-x86_64",
+      "artifact": "onnx-int8-qdq-native-dynamic",
+      "backend": "onnx-cuda",
+      "platforms": [
+        "linux"
+      ],
+      "architectures": [
+        "x86_64"
+      ],
+      "status": "unverified",
+      "priority": 60,
+      "requirements": {
+        "minimum_os": null,
+        "minimum_runtime": "ONNX Runtime 1.28.0 with CUDAExecutionProvider"
+      },
+      "notes": "Native DeformConv is the selected CUDA artifact, but this route has not been tested."
+    },
+    {
+      "id": "onnx-cuda-windows-x86_64",
+      "artifact": "onnx-int8-qdq-native-dynamic",
+      "backend": "onnx-cuda",
+      "platforms": [
+        "windows"
+      ],
+      "architectures": [
+        "x86_64"
+      ],
+      "status": "unverified",
+      "priority": 60,
+      "requirements": {
+        "minimum_os": null,
+        "minimum_runtime": "ONNX Runtime 1.28.0 with CUDAExecutionProvider"
+      },
+      "notes": "Native DeformConv is the selected CUDA artifact, but this route has not been tested."
+    },
+    {
+      "id": "onnx-directml-windows-x86_64",
+      "artifact": "onnx-int8-qdq-gridsample-dynamic",
+      "backend": "onnx-directml",
+      "platforms": [
+        "windows"
+      ],
+      "architectures": [
+        "x86_64"
+      ],
+      "status": "unverified",
+      "priority": 70,
+      "requirements": {
+        "minimum_os": null,
+        "minimum_runtime": "ONNX Runtime 1.28.0 with DmlExecutionProvider"
+      },
+      "notes": "GridSample representation avoids native DeformConv. This future DirectML route has not been tested on Windows."
+    }
+  ]
+}

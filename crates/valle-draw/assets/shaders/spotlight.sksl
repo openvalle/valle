@@ -1,0 +1,22 @@
+// Preserve brightness inside a circle and darken the outside. Feather controls the soft edge;
+// radius is normalized to the shorter frame dimension.
+uniform shader tex;
+uniform float2 resolution;
+uniform float centerX;   // 0..1
+uniform float centerY;   // 0..1
+uniform float radius;    // Radius as a fraction of the shorter dimension.
+uniform float feather;   // Feather width as a fraction of the shorter dimension.
+uniform float intensity; // 0..1 darkening strength outside the circle.
+
+half4 main(float2 xy) {
+    half4 src = tex.eval(xy);
+    // Normalize by the shorter dimension to keep the circle isotropic.
+    float scale = min(resolution.x, resolution.y);
+    float2 d = (xy - float2(centerX, centerY) * resolution) / scale;
+    float dist = length(d);
+    float edge0 = radius;
+    float edge1 = radius + max(feather, 0.001);
+    float mask = smoothstep(edge1, edge0, dist);       // One inside the circle, zero outside.
+    float dark = mix(1.0 - clamp(intensity, 0.0, 1.0), 1.0, mask);
+    return half4(src.rgb * half(dark), src.a);
+}

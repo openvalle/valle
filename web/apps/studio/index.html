@@ -1,0 +1,532 @@
+<!doctype html>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Valle Studio</title>
+<!-- Relative imports allow the vendored Takumi module graph to load in both pages and module workers. -->
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #0a0b0e;
+    --panel: #16181d;
+    --panel-2: #1c1f26;
+    --line: rgba(255, 255, 255, 0.08);
+    --line-strong: rgba(255, 255, 255, 0.14);
+    --text: #e8eaed;
+    --muted: #9aa0ab;
+    --muted-2: #6b7280;
+    --accent: #7c6cff;
+    --accent-2: #4aa8ff;
+    --danger: #ff6b6b;
+    --radius: 10px;
+    font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    -webkit-font-smoothing: antialiased;
+  }
+  * { box-sizing: border-box; }
+  /* Three-column workspace constrained to the viewport; panels scroll independently. */
+  body {
+    margin: 0;
+    height: 100dvh;
+    overflow: hidden;
+  }
+  /* Keep dividers fixed above scrolling panels and align them to panel edges in JavaScript. */
+  .split {
+    position: fixed;
+    z-index: 20;
+    background: transparent;
+    transition: background 0.15s;
+  }
+  .split:hover, .split.dragging { background: rgba(74, 168, 255, 0.35); }
+  .split-v { width: 8px; cursor: col-resize; }
+  .split-h { height: 8px; cursor: row-resize; }
+
+  /* ── top bar ─────────────────────────────────────────────── */
+  .topbar {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-width: 0;
+  }
+  .brand {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-weight: 650;
+    font-size: 14px;
+    user-select: none;
+    white-space: nowrap;
+  }
+  .save-btn {
+    appearance: none;
+    background: var(--panel-2);
+    border: 1px solid var(--line-strong);
+    border-radius: var(--radius);
+    color: var(--text);
+    font: inherit;
+    font-size: 12px;
+    padding: 4px 14px;
+    cursor: pointer;
+  }
+  .save-btn:disabled { color: var(--muted-2); cursor: default; }
+  .save-btn.dirty { border-color: var(--accent); color: var(--accent); }
+  studio-project-controls { display: contents; }
+  .conflict-bar {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: rgba(255, 170, 60, 0.12);
+    border: 1px solid rgba(255, 170, 60, 0.5);
+    border-radius: var(--radius);
+    color: #ffd9a0;
+    font-size: 12px;
+    padding: 3px 10px;
+  }
+  .conflict-bar button {
+    appearance: none;
+    background: transparent;
+    border: 1px solid rgba(255, 170, 60, 0.5);
+    border-radius: 6px;
+    color: inherit;
+    font: inherit;
+    font-size: 11px;
+    padding: 2px 8px;
+    cursor: pointer;
+  }
+  .brand .sub {
+    color: var(--muted);
+    font-weight: 500;
+    padding: 2px 8px;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+  }
+  .meta {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    min-width: 0;
+  }
+  .chip {
+    font-size: 12px;
+    color: var(--muted);
+    background: var(--panel);
+    border: 1px solid var(--line);
+    padding: 4px 9px;
+    border-radius: 999px;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+  }
+  .chip b { color: var(--text); font-weight: 600; }
+  .chip.live { color: var(--accent-2); border-color: rgba(74, 168, 255, 0.35); }
+  .chip.warn { color: #ffcf5c; border-color: rgba(255, 207, 92, 0.4); }
+
+  /* Preview and selection surface. */
+  .stage {
+    position: relative;
+    min-width: 0;
+    min-height: 0;
+    /* A definite-height flex container lets the canvas resolve max-height while preserving aspect ratio, keeping hit-test coordinates aligned with visible content. */
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #0c0d10;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    overflow: hidden;
+  }
+  valle-player#studioPlayer {
+    width: auto;
+    height: 100%;
+    max-width: 100%;
+    max-height: 100%;
+    min-height: 0;
+    background: transparent;
+    cursor: crosshair;
+  }
+  .overlay {
+    position: absolute; inset: 0;
+    display: grid; place-items: center; gap: 12px;
+    background: rgba(10, 11, 14, 0.78);
+    color: var(--muted);
+    font-size: 13px;
+    z-index: 3;
+  }
+  .overlay[hidden] { display: none; }
+  .overlay.err { color: var(--danger); }
+  .overlay .stack { display: grid; place-items: center; gap: 10px; text-align: center; max-width: 84%; }
+  .overlay pre {
+    margin: 0; max-width: min(680px, 80vw); max-height: 44vh;
+    overflow: auto; font-size: 11px; line-height: 1.5;
+    color: #ffb3b3; text-align: left;
+    white-space: pre-wrap; word-break: break-word;
+    background: rgba(0,0,0,0.35); padding: 10px 12px; border-radius: 8px;
+    border: 1px solid rgba(255,107,107,0.25);
+  }
+  .spinner {
+    width: 28px; height: 28px; border-radius: 50%;
+    border: 2.5px solid var(--line-strong);
+    border-top-color: var(--accent);
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* Selection inspector. */
+  .inspector {
+    min-height: 0;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 12px;
+    overflow-y: auto;
+    font-size: 12.5px;
+  }
+  .inspector h2 {
+    margin: 0 0 10px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    color: var(--muted-2);
+  }
+  .empty {
+    color: var(--muted-2);
+    border: 1px dashed var(--line-strong);
+    border-radius: 8px;
+    padding: 14px;
+    text-align: center;
+    line-height: 1.6;
+  }
+
+  /* ── transport ───────────────────────────────────────────── */
+  .transport {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 8px 12px;
+  }
+  button.ctl {
+    appearance: none;
+    height: 34px;
+    min-width: 42px;
+    display: inline-grid;
+    place-items: center;
+    border: 1px solid transparent;
+    background: linear-gradient(135deg, var(--accent), var(--accent-2));
+    color: #fff;
+    border-radius: 8px;
+    cursor: pointer;
+  }
+  button.ctl:hover { filter: brightness(1.08); }
+  button.ctl:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent); }
+  button.ctl svg { width: 16px; height: 16px; display: block; }
+  input#scrub {
+    -webkit-appearance: none;
+    appearance: none;
+    flex: 1;
+    height: 5px;
+    border-radius: 999px;
+    background:
+      linear-gradient(90deg, var(--accent), var(--accent-2)) 0 / var(--pct, 0%) 100% no-repeat,
+      var(--panel-2);
+    outline: none;
+    cursor: pointer;
+  }
+  input#scrub::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 13px; height: 13px; border-radius: 50%;
+    background: #fff; border: none;
+    box-shadow: 0 0 0 4px rgba(124, 108, 255, 0.25);
+  }
+  input#scrub::-moz-range-thumb {
+    width: 13px; height: 13px; border-radius: 50%;
+    background: #fff; border: none;
+  }
+  .time {
+    font-variant-numeric: tabular-nums;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 12px;
+    color: var(--muted);
+    white-space: nowrap;
+    user-select: none;
+  }
+  .time .cur { color: var(--text); }
+
+  /* Timeline content spans the label column plus duration times pixels per second. Labels and ruler stay sticky; the playhead sits above clips and below labels. */
+  .tracks {
+    grid-column: 1 / -1;
+    min-height: 0;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    overflow: auto;
+    position: relative;
+  }
+  /* Timeline stacking: clips 1, playhead 3, labels 4, ruler 5. The preview selection box has a separate stacking context. */
+  .tl {
+    --label-w: 140px;
+    position: relative;
+    width: max-content;
+    min-width: 100%;
+    font-size: 11px;
+    user-select: none;
+  }
+  .tl-ruler {
+    position: sticky;
+    top: 0;
+    z-index: 5;
+    height: 24px;
+    background: var(--panel-2);
+    border-bottom: 1px solid var(--line-strong);
+    cursor: col-resize;
+  }
+  .tl-tick {
+    position: absolute;
+    top: 0; bottom: 0;
+    border-left: 1px solid var(--line-strong);
+    padding-left: 4px;
+    color: var(--muted-2);
+    font-family: ui-monospace, Menlo, monospace;
+    font-size: 10px;
+    line-height: 24px;
+    pointer-events: none;
+    white-space: nowrap;
+  }
+  /* Minor ruler ticks. */
+  .tl-tick-minor {
+    position: absolute;
+    bottom: 0;
+    height: 7px;
+    border-left: 1px solid var(--line);
+    pointer-events: none;
+  }
+  /* Keep track heights synchronized with ROW_H in studio-app.ts: video 48, audio 40, captions/effects 28, fallback 36. */
+  .tl-row {
+    display: flex;
+    width: max-content;
+    min-width: 100%;
+    height: 36px;
+    border-bottom: 1px solid var(--line);
+  }
+  .tl-row.kind-video { height: 48px; }
+  .tl-row.kind-audio { height: 40px; }
+  .tl-row.kind-text, .tl-row.kind-effect { height: 28px; }
+  .tl-label {
+    position: sticky;
+    left: 0;
+    z-index: 4;
+    flex: 0 0 var(--label-w);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0 10px;
+    background: var(--panel);
+    border-right: 1px solid var(--line-strong);
+    overflow: hidden;
+    white-space: nowrap;
+  }
+  .tl-kind {
+    font-size: 9px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    padding: 1px 5px;
+    border-radius: 4px;
+    flex: none;
+  }
+  .tl-tid { color: var(--muted); text-overflow: ellipsis; overflow: hidden; }
+  .tl-lane { position: relative; flex: none; }
+  .tl-clip {
+    position: absolute;
+    top: 5px; bottom: 5px;
+    z-index: 1;
+    border-radius: 5px;
+    border: 1px solid;
+    padding: 0 6px;
+    display: flex;
+    align-items: center;
+    overflow: hidden;
+    white-space: nowrap;
+    min-width: 3px;
+  }
+  .tl-clip span { overflow: hidden; text-overflow: ellipsis; position: relative; z-index: 1; text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9); }
+  /* Keyframe thumbnails fill video clips beneath their labels. */
+  .tl-clip canvas.tl-media {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    opacity: 0.8;
+    border-radius: 4px;
+  }
+  .kind-video .tl-kind, .tl-clip.kind-video { background: rgba(74, 168, 255, 0.16); border-color: rgba(74, 168, 255, 0.45); color: #bcdcff; }
+  .kind-text .tl-kind, .tl-clip.kind-text { background: rgba(124, 108, 255, 0.16); border-color: rgba(124, 108, 255, 0.5); color: #cfc8ff; }
+  .kind-audio .tl-kind, .tl-clip.kind-audio { background: rgba(92, 224, 160, 0.14); border-color: rgba(92, 224, 160, 0.4); color: #a9f0cd; }
+  .kind-effect .tl-kind, .tl-clip.kind-effect { background: rgba(255, 207, 92, 0.13); border-color: rgba(255, 207, 92, 0.4); color: #ffe3a3; }
+  .tl-playhead {
+    position: absolute;
+    top: 0; bottom: 0;
+    z-index: 3;
+    width: 0;
+    border-left: 1.5px solid var(--danger);
+    pointer-events: none;
+  }
+  .tl-playhead::before {
+    content: "";
+    position: absolute;
+    top: 0; left: -5px;
+    border: 5px solid transparent;
+    border-top-color: var(--danger);
+  }
+
+  /* Selection overlays, selected clips, and inspector state. */
+  .sel-box {
+    position: absolute;
+    z-index: 2;
+    border: 1.5px solid var(--accent-2);
+    border-radius: 2px;
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.55), inset 0 0 0 1px rgba(0, 0, 0, 0.35);
+    pointer-events: none;
+  }
+  .sel-box[hidden] { display: none; }
+  .tl-clip { cursor: grab; }
+  .tl-clip:hover { filter: brightness(1.12); }
+  .tl-clip:active { cursor: grabbing; }
+  /* Ten-pixel trim targets at clip ends, visible on hover or selection. */
+  .tl-clip .tl-trim {
+    position: absolute;
+    top: 0; bottom: 0;
+    width: 10px;
+    cursor: ew-resize;
+  }
+  .tl-trim.w { left: 0; border-radius: 5px 0 0 5px; }
+  .tl-trim.e { right: 0; border-radius: 0 5px 5px 0; }
+  .tl-clip:hover .tl-trim, .tl-clip.selected .tl-trim { background: rgba(255, 255, 255, 0.16); }
+  .tl-clip.selected {
+    outline: 2px solid var(--accent-2);
+    outline-offset: -1px;
+    box-shadow: 0 0 10px -2px rgba(74, 168, 255, 0.7);
+  }
+  /* Click the timecode to edit it in place. */
+  #tcInput {
+    width: 84px;
+    background: var(--panel-2);
+    border: 1px solid var(--line-strong);
+    border-radius: 5px;
+    color: var(--text);
+    font: inherit;
+    padding: 1px 5px;
+  }
+  .ins-row { display: flex; gap: 8px; padding: 4px 0; border-bottom: 1px solid var(--line); align-items: center; }
+  studio-inspector { display: block; }
+  .ins-k { flex: 0 0 64px; color: var(--muted-2); }
+  .ins-v { color: var(--text); min-width: 0; overflow-wrap: anywhere; white-space: pre-wrap; flex: 1; }
+  /* Shared editable fields use the applyEdit entry point. */
+  .ins-sec {
+    margin: 12px 0 2px;
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.7px;
+    color: var(--muted-2);
+  }
+  .ins-v input[type="number"], .ins-v textarea {
+    width: 100%;
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    color: var(--text);
+    font: inherit;
+    padding: 4px 7px;
+  }
+  .ins-v textarea { resize: vertical; min-height: 48px; }
+  .ins-v input[type="color"] {
+    width: 42px; height: 26px;
+    padding: 1px;
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+  }
+  .ins-v input:focus-visible, .ins-v textarea:focus-visible {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px rgba(124, 108, 255, 0.25);
+  }
+  button.ins-del {
+    margin-top: 14px;
+    width: 100%;
+    padding: 7px 0;
+    background: rgba(255, 107, 107, 0.12);
+    border: 1px solid rgba(255, 107, 107, 0.4);
+    color: var(--danger);
+    border-radius: 8px;
+    cursor: pointer;
+    font: inherit;
+  }
+  button.ins-del:hover { background: rgba(255, 107, 107, 0.2); }
+  .inspector details { margin-top: 10px; }
+  .inspector summary { color: var(--muted-2); cursor: pointer; font-size: 11px; }
+  .inspector pre {
+    margin: 6px 0 0;
+    font-size: 10.5px;
+    line-height: 1.5;
+    color: var(--muted);
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 8px;
+    overflow: auto;
+    max-height: 40vh;
+  }
+</style>
+
+<valle-studio-app id="studioShell">
+<header class="topbar">
+  <span class="brand"><span>valle</span><span class="sub">studio</span></span>
+  <studio-header-meta class="meta" id="meta"></studio-header-meta>
+  <!-- Project save controls and conflict state; hidden in file mode. -->
+  <studio-project-controls id="projectControls"></studio-project-controls>
+</header>
+
+<div class="stage" id="stageWrap">
+  <valle-player id="studioPlayer" loading-label="Booting render engine…">
+    <div class="overlay" id="loading">
+      <div class="stack"><div class="spinner"></div><div id="loadingText">Booting render engine…</div></div>
+    </div>
+    <div class="overlay err" id="errbox" hidden>
+      <div class="stack"><div>Studio error</div><pre id="errtext"></pre></div>
+    </div>
+    <div class="sel-box" id="selBox" hidden></div>
+  </valle-player>
+</div>
+
+<aside class="inspector" id="timelineInspector">
+  <h2>Inspector</h2>
+  <studio-inspector id="inspectorBody"></studio-inspector>
+</aside>
+
+<studio-motion-workspace class="inspector" id="motionWorkspace" hidden></studio-motion-workspace>
+
+<studio-transport class="transport" id="studioTransport"></studio-transport>
+
+<studio-timeline class="tracks" id="tracks">
+  <!-- The studio app rebuilds timeline rulers, tracks, clips, and playhead after updates or zoom changes. -->
+</studio-timeline>
+
+<!-- Draggable divider positioned at the panel boundary. -->
+<div class="split split-v" id="splitV" title="Drag to resize panel width"></div>
+<div class="split split-h" id="splitH" title="Drag to resize timeline height"></div>
+</valle-studio-app>
+
+<script type="module" src="./src/main.ts"></script>

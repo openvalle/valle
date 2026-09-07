@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "canonical_cases": [
+    {
+      "id": "canonical-empty-ntsc",
+      "json": "{\n  \"document\": {\n    \"metadata\": {\"z\": -0.0, \"unicode\": \"时间线 🎬\", \"nested\": {\"b\": 2, \"a\": 1}},\n    \"camera\": null,\n    \"captions\": {\"tracks\": []},\n    \"adjustments\": [],\n    \"audio\": {\"tracks\": []},\n    \"visual\": {\"tracks\": []},\n    \"background\": {\"color\": \"#000000ff\"},\n    \"canvas\": {\"duration\": \"1001/30000\", \"colorSpace\": \"srgb\", \"channelLayout\": \"stereo\", \"sampleRate\": 48000, \"fps\": \"30000/1001\", \"height\": 360, \"width\": 640}\n  }\n}"
+    },
+    {
+      "id": "canonical-sequence-transition",
+      "json": "{\"document\":{\"canvas\":{\"width\":1280,\"height\":720,\"fps\":\"24/1\",\"sampleRate\":44100,\"channelLayout\":\"stereo\",\"colorSpace\":\"srgb\",\"duration\":\"5/2\"},\"background\":{\"color\":\"#102030ff\"},\"visual\":{\"tracks\":[{\"id\":\"track:main\",\"items\":[{\"type\":\"clip\",\"id\":\"clip:a\",\"duration\":\"1/1\",\"layer\":{\"transform\":{\"position\":{\"type\":\"constant\",\"value\":[0.5,0.5]},\"scale\":{\"type\":\"constant\",\"value\":[1.0,1.0]},\"rotation\":{\"type\":\"constant\",\"value\":0.0},\"anchor\":[0.5,0.5]},\"opacity\":{\"type\":\"constant\",\"value\":1.0},\"mask\":null,\"filters\":[],\"blend\":\"normal\"},\"source\":{\"type\":\"solid\",\"color\":\"#ff0000ff\"}},{\"type\":\"transition\",\"id\":\"transition:ab\",\"duration\":\"1/2\",\"kernel\":{\"type\":\"cross-fade\"}},{\"type\":\"clip\",\"id\":\"clip:b\",\"duration\":\"3/2\",\"layer\":{\"transform\":{\"position\":{\"type\":\"constant\",\"value\":[0.5,0.5]},\"scale\":{\"type\":\"constant\",\"value\":[1.0,1.0]},\"rotation\":{\"type\":\"constant\",\"value\":0.0},\"anchor\":[0.5,0.5]},\"opacity\":{\"type\":\"constant\",\"value\":1.0},\"mask\":null,\"filters\":[],\"blend\":\"normal\"},\"source\":{\"type\":\"solid\",\"color\":\"#0000ffff\"}}]}]},\"audio\":{\"tracks\":[]},\"adjustments\":[],\"captions\":{\"tracks\":[]},\"camera\":null,\"metadata\":{\"review\":\"parity\"}}}"
+    },
+    {
+      "id": "canonical-six-decimal-scalars",
+      "json": "{\"document\":{\"canvas\":{\"width\":1280,\"height\":720,\"fps\":\"25/1\",\"sampleRate\":48000,\"channelLayout\":\"stereo\",\"colorSpace\":\"srgb\",\"duration\":\"3/10\"},\"background\":{\"color\":\"#000000ff\"},\"visual\":{\"tracks\":[]},\"audio\":{\"tracks\":[]},\"adjustments\":[],\"captions\":{\"tracks\":[]},\"camera\":{\"centerX\":{\"type\":\"constant\",\"value\":0.9299999999999999},\"centerY\":{\"type\":\"constant\",\"value\":0.13333333333333333},\"zoom\":{\"type\":\"constant\",\"value\":1.0000004},\"rotation\":{\"type\":\"constant\",\"value\":0.123456789}},\"metadata\":{\"openPrecision\":0.123456789}}}"
+    }
+  ],
+  "quantization_cases": [
+    {
+      "id": "ntsc-cumulative-half-frames",
+      "start": "0/1",
+      "durations": ["1001/60000", "1001/60000", "1001/60000"],
+      "frame_rate": "30000/1001",
+      "sample_rate": 48000
+    },
+    {
+      "id": "negative-half-away",
+      "start": "-1/60",
+      "durations": ["1/60", "1/96000", "1/96000"],
+      "frame_rate": "30/1",
+      "sample_rate": 48000
+    },
+    {
+      "id": "offset-boundaries-not-rounded-duration",
+      "start": "49/3000",
+      "durations": ["1/1500", "1/1000", "1/750"],
+      "frame_rate": "30/1",
+      "sample_rate": 44100
+    }
+  ],
+  "negative_cases": [
+    {
+      "kind": "canonical",
+      "id": "duplicate-object-key",
+      "json": "{\"document\":{\"metadata\":{\"x\":1,\"x\":2}}}",
+      "expected_code": "canonical-json:duplicate-object-key"
+    },
+    {
+      "kind": "canonical",
+      "id": "embedded-contract-authority",
+      "json": "{\"contract\":\"valle.resource/manifest@1.0\",\"document\":{}}",
+      "expected_code": "invalid-shape"
+    },
+    {
+      "kind": "frame-boundary",
+      "id": "frame-boundary-overflow",
+      "time": "9223372036854775807/1",
+      "frame_rate": "9223372036854775807/1",
+      "expected_code": "overflow"
+    },
+    {
+      "kind": "sample-boundary",
+      "id": "zero-sample-rate",
+      "time": "1/1",
+      "sample_rate": 0,
+      "expected_code": "invalid-sample-rate"
+    }
+  ]
+}

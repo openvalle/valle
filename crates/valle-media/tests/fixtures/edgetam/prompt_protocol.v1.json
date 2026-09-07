@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "decoder": "decoder_p3",
+  "seed_frame": 0,
+  "coordinate_space": "original_frame_pixels_xy",
+  "point_count": 3,
+  "labels": {
+    "0": "negative",
+    "1": "positive"
+  },
+  "selection_rule": [
+    "Use foreground points on distinct semantic or spatial parts of the target.",
+    "Use a negative point only when it excludes a plausible adjacent distractor.",
+    "Do not derive prompts from any frame after the seed frame."
+  ],
+  "benchmark_cases": {
+    "davis_bear": {
+      "frame_size": [854, 480],
+      "points": [[311, 290, 1], [242, 290, 1], [853, 0, 0]]
+    },
+    "davis_bmx_trees": {
+      "frame_size": [854, 480],
+      "points": [[440, 221, 1], [379, 297, 1], [504, 276, 1]]
+    }
+  },
+  "quality_gate": {
+    "metric": "J_and_F",
+    "minimum_per_backend_per_case": 0.85,
+    "cross_backend_mask_iou_minimum": 0.97
+  }
+}

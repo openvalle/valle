@@ -1,0 +1,9 @@
+D3 attribution
+
+src/compute/scale.rs adapts tick generation, nice bounds, and band-scale
+semantics from d3-array and d3-scale, implemented in Rust with Valle's
+shared deterministic math. The ISC notices are preserved alongside this file.
+
+Sources:
+https://github.com/d3/d3-array
+https://github.com/d3/d3-scale

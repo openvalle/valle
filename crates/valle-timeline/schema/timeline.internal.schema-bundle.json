@@ -1,0 +1,2349 @@
+{
+  "generator": {
+    "crate": "schemars",
+    "draft": "2020-12",
+    "mode": "internal-canonical-storage",
+    "version": "1.2.2"
+  },
+  "schemas": {
+    "resource-manifest.schema.json": {
+      "$defs": {
+        "AudioChannelLayoutWire": {
+          "enum": [
+            "mono",
+            "stereo",
+            "surround51",
+            "surround71"
+          ],
+          "type": "string"
+        },
+        "AudioResourceDescriptorWire": {
+          "additionalProperties": false,
+          "description": "Frozen audio stream and source-time semantics.",
+          "properties": {
+            "audioStream": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "channelLayout": {
+              "$ref": "#/$defs/AudioChannelLayoutWire"
+            },
+            "duration": {
+              "$ref": "#/$defs/RationalTime"
+            },
+            "presentationIndexDigest": {
+              "$ref": "#/$defs/ContentDigest"
+            },
+            "sampleRate": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "timeBase": {
+              "$ref": "#/$defs/ExactRational"
+            }
+          },
+          "required": [
+            "duration",
+            "timeBase",
+            "presentationIndexDigest",
+            "sampleRate",
+            "channelLayout",
+            "audioStream"
+          ],
+          "type": "object"
+        },
+        "ColorMatrixWire": {
+          "enum": [
+            "identity",
+            "bt709",
+            "bt2020-ncl"
+          ],
+          "type": "string"
+        },
+        "ColorPrimariesWire": {
+          "enum": [
+            "srgb",
+            "bt709",
+            "display-p3",
+            "bt2020"
+          ],
+          "type": "string"
+        },
+        "ColorTransferWire": {
+          "enum": [
+            "srgb",
+            "bt709",
+            "pq",
+            "hlg"
+          ],
+          "type": "string"
+        },
+        "ContentDigest": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "ContinuousBoundarySamplingWire": {
+          "enum": [
+            "left-limit"
+          ],
+          "type": "string"
+        },
+        "ExactRational": {
+          "pattern": "^(0|[1-9][0-9]*|-[1-9][0-9]*)/[1-9][0-9]*$",
+          "type": "string"
+        },
+        "FontResourceDescriptorWire": {
+          "additionalProperties": false,
+          "description": "One concrete font face and its supported variable-font axes.",
+          "properties": {
+            "faceIndex": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "variationAxes": {
+              "additionalProperties": {
+                "$ref": "#/$defs/FontVariationAxisWire"
+              },
+              "type": "object"
+            }
+          },
+          "required": [
+            "faceIndex",
+            "variationAxes"
+          ],
+          "type": "object"
+        },
+        "FontVariationAxisWire": {
+          "additionalProperties": false,
+          "properties": {
+            "default": {
+              "format": "double",
+              "type": "number"
+            },
+            "maximum": {
+              "format": "double",
+              "type": "number"
+            },
+            "minimum": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          "required": [
+            "minimum",
+            "default",
+            "maximum"
+          ],
+          "type": "object"
+        },
+        "ImageResourceDescriptorWire": {
+          "additionalProperties": false,
+          "description": "Frozen raster extent and interpretation.",
+          "properties": {
+            "color": {
+              "$ref": "#/$defs/MediaColorDescriptorWire"
+            },
+            "height": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "orientation": {
+              "$ref": "#/$defs/MediaOrientationWire"
+            },
+            "width": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "width",
+            "height",
+            "orientation",
+            "color"
+          ],
+          "type": "object"
+        },
+        "LottieArtifactAbiWire": {
+          "enum": [
+            "valle.lottie/artifact@1"
+          ],
+          "type": "string"
+        },
+        "LottieResourceDescriptorWire": {
+          "additionalProperties": false,
+          "description": "Frozen Lottie source clock, extent, and boundary-sample semantics.",
+          "properties": {
+            "boundarySampling": {
+              "$ref": "#/$defs/ContinuousBoundarySamplingWire"
+            },
+            "duration": {
+              "$ref": "#/$defs/RationalTime"
+            },
+            "height": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "timeBase": {
+              "$ref": "#/$defs/ExactRational"
+            },
+            "width": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "duration",
+            "timeBase",
+            "width",
+            "height",
+            "boundarySampling"
+          ],
+          "type": "object"
+        },
+        "MediaColorDescriptorWire": {
+          "additionalProperties": false,
+          "properties": {
+            "fullRange": {
+              "type": "boolean"
+            },
+            "matrix": {
+              "$ref": "#/$defs/ColorMatrixWire"
+            },
+            "primaries": {
+              "$ref": "#/$defs/ColorPrimariesWire"
+            },
+            "transfer": {
+              "$ref": "#/$defs/ColorTransferWire"
+            }
+          },
+          "required": [
+            "primaries",
+            "transfer",
+            "matrix",
+            "fullRange"
+          ],
+          "type": "object"
+        },
+        "MediaOrientationWire": {
+          "enum": [
+            "identity",
+            "rotate-90",
+            "rotate-180",
+            "rotate-270",
+            "flip-horizontal",
+            "flip-vertical"
+          ],
+          "type": "string"
+        },
+        "MotionArtifactAbiWire": {
+          "enum": [
+            "valle.motion/artifact@1"
+          ],
+          "type": "string"
+        },
+        "MotionArtifactDescriptorWire": {
+          "additionalProperties": false,
+          "description": "Motion artifact compositor-read semantics. The artifact's embedded `controls` object is the\nonly control schema; the manifest does not carry a second digest projection of it.",
+          "properties": {
+            "boundarySampling": {
+              "$ref": "#/$defs/ContinuousBoundarySamplingWire"
+            },
+            "readsDestination": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "readsDestination",
+            "boundarySampling"
+          ],
+          "type": "object"
+        },
+        "RationalTime": {
+          "pattern": "^(0|[1-9][0-9]*|-[1-9][0-9]*)/[1-9][0-9]*$",
+          "type": "string"
+        },
+        "RequiredNullable_for_uint32": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "ResourceEntryWire": {
+          "description": "Closed resource-kind union. A descriptor from one kind cannot be decoded as\nanother kind's descriptor.",
+          "oneOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "descriptor": {
+                  "$ref": "#/$defs/VideoResourceDescriptorWire"
+                },
+                "digest": {
+                  "$ref": "#/$defs/ContentDigest"
+                },
+                "kind": {
+                  "const": "video",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "digest",
+                "descriptor"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "descriptor": {
+                  "$ref": "#/$defs/AudioResourceDescriptorWire"
+                },
+                "digest": {
+                  "$ref": "#/$defs/ContentDigest"
+                },
+                "kind": {
+                  "const": "audio",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "digest",
+                "descriptor"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "descriptor": {
+                  "$ref": "#/$defs/ImageResourceDescriptorWire"
+                },
+                "digest": {
+                  "$ref": "#/$defs/ContentDigest"
+                },
+                "kind": {
+                  "const": "image",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "digest",
+                "descriptor"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "abi": {
+                  "$ref": "#/$defs/LottieArtifactAbiWire"
+                },
+                "descriptor": {
+                  "$ref": "#/$defs/LottieResourceDescriptorWire"
+                },
+                "digest": {
+                  "$ref": "#/$defs/ContentDigest"
+                },
+                "kind": {
+                  "const": "lottie",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "digest",
+                "abi",
+                "descriptor"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "descriptor": {
+                  "$ref": "#/$defs/FontResourceDescriptorWire"
+                },
+                "digest": {
+                  "$ref": "#/$defs/ContentDigest"
+                },
+                "kind": {
+                  "const": "font",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "digest",
+                "descriptor"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "abi": {
+                  "$ref": "#/$defs/MotionArtifactAbiWire"
+                },
+                "descriptor": {
+                  "$ref": "#/$defs/MotionArtifactDescriptorWire"
+                },
+                "digest": {
+                  "$ref": "#/$defs/ContentDigest"
+                },
+                "kind": {
+                  "const": "motion-artifact",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "digest",
+                "abi",
+                "descriptor"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "abi": {
+                  "$ref": "#/$defs/ShaderArtifactAbiWire"
+                },
+                "descriptor": {
+                  "$ref": "#/$defs/ShaderResourceDescriptorWire"
+                },
+                "digest": {
+                  "$ref": "#/$defs/ContentDigest"
+                },
+                "kind": {
+                  "const": "shader",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "digest",
+                "abi",
+                "descriptor"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "ShaderArtifactAbiWire": {
+          "enum": [
+            "valle.shader/artifact@1"
+          ],
+          "type": "string"
+        },
+        "ShaderResourceDescriptorWire": {
+          "additionalProperties": false,
+          "description": "Frozen shader parameter schema and destination-read semantics.",
+          "properties": {
+            "controlsSchemaDigest": {
+              "$ref": "#/$defs/ContentDigest"
+            },
+            "readsDestination": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "controlsSchemaDigest",
+            "readsDestination"
+          ],
+          "type": "object"
+        },
+        "VideoResourceDescriptorWire": {
+          "additionalProperties": false,
+          "description": "Frozen video stream and source-time semantics.",
+          "properties": {
+            "audioStream": {
+              "$ref": "#/$defs/RequiredNullable_for_uint32"
+            },
+            "color": {
+              "$ref": "#/$defs/MediaColorDescriptorWire"
+            },
+            "duration": {
+              "$ref": "#/$defs/RationalTime"
+            },
+            "height": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "orientation": {
+              "$ref": "#/$defs/MediaOrientationWire"
+            },
+            "presentationIndexDigest": {
+              "$ref": "#/$defs/ContentDigest"
+            },
+            "timeBase": {
+              "$ref": "#/$defs/ExactRational"
+            },
+            "videoStream": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "width": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "duration",
+            "timeBase",
+            "presentationIndexDigest",
+            "width",
+            "height",
+            "orientation",
+            "color",
+            "videoStream",
+            "audioStream"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "description": "Complete frozen resource-manifest envelope.",
+      "properties": {
+        "entries": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ResourceEntryWire"
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "entries"
+      ],
+      "title": "ResourceManifestEnvelopeWire",
+      "type": "object"
+    },
+    "timeline-document.schema.json": {
+      "$defs": {
+        "AdjustmentEffectExtensionWire": {
+          "additionalProperties": false,
+          "properties": {
+            "parameters": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": {
+              "$ref": "#/$defs/NamespacedKernelTypeWire"
+            }
+          },
+          "required": [
+            "type",
+            "parameters"
+          ],
+          "type": "object"
+        },
+        "AdjustmentEffectWire": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ColorGradeEffectWire"
+            },
+            {
+              "$ref": "#/$defs/AdjustmentEffectExtensionWire"
+            }
+          ]
+        },
+        "AudioCompositionWire": {
+          "additionalProperties": false,
+          "properties": {
+            "tracks": {
+              "items": {
+                "$ref": "#/$defs/AudioTrackWire"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "tracks"
+          ],
+          "type": "object"
+        },
+        "AudioEffectWire": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "parameters": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": {
+              "$ref": "#/$defs/NamespacedKernelTypeWire"
+            }
+          },
+          "required": [
+            "id",
+            "type",
+            "parameters"
+          ],
+          "type": "object"
+        },
+        "AudioItemWire": {
+          "oneOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "duration": {
+                  "$ref": "#/$defs/ExactRational"
+                },
+                "effects": {
+                  "items": {
+                    "$ref": "#/$defs/AudioEffectWire"
+                  },
+                  "type": "array"
+                },
+                "gain": {
+                  "$ref": "#/$defs/ParamWire2"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "pan": {
+                  "$ref": "#/$defs/ParamWire2"
+                },
+                "source": {
+                  "$ref": "#/$defs/AudioSourceWire"
+                },
+                "type": {
+                  "const": "clip",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "id",
+                "duration",
+                "source",
+                "gain",
+                "pan",
+                "effects"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "duration": {
+                  "$ref": "#/$defs/ExactRational"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "gap",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "id",
+                "duration"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "duration": {
+                  "$ref": "#/$defs/ExactRational"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "crossfade",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "id",
+                "duration"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "AudioSourceWire": {
+          "oneOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "endBehavior": {
+                  "$ref": "#/$defs/MediaEndBehaviorWire"
+                },
+                "rate": {
+                  "$ref": "#/$defs/ExactRational"
+                },
+                "resource": {
+                  "type": "string"
+                },
+                "sourceStart": {
+                  "$ref": "#/$defs/ExactRational"
+                },
+                "type": {
+                  "const": "media",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "resource",
+                "sourceStart",
+                "rate",
+                "endBehavior"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "AudioTrackWire": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "items": {
+              "items": {
+                "$ref": "#/$defs/AudioItemWire"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "id",
+            "items"
+          ],
+          "type": "object"
+        },
+        "BackgroundWire": {
+          "additionalProperties": false,
+          "properties": {
+            "color": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "color"
+          ],
+          "type": "object"
+        },
+        "BlendModeWire": {
+          "enum": [
+            "normal",
+            "screen",
+            "lighten",
+            "color-dodge",
+            "multiply",
+            "darken",
+            "color-burn",
+            "linear-burn",
+            "overlay",
+            "soft-light",
+            "hard-light",
+            "difference",
+            "exclusion",
+            "hue",
+            "saturation",
+            "color",
+            "luminosity"
+          ],
+          "type": "string"
+        },
+        "CameraTrackWire": {
+          "additionalProperties": false,
+          "properties": {
+            "centerX": {
+              "$ref": "#/$defs/ParamWire2"
+            },
+            "centerY": {
+              "$ref": "#/$defs/ParamWire2"
+            },
+            "rotation": {
+              "$ref": "#/$defs/ParamWire2"
+            },
+            "zoom": {
+              "$ref": "#/$defs/ParamWire2"
+            }
+          },
+          "required": [
+            "centerX",
+            "centerY",
+            "zoom",
+            "rotation"
+          ],
+          "type": "object"
+        },
+        "CanvasWire": {
+          "additionalProperties": false,
+          "properties": {
+            "channelLayout": {
+              "$ref": "#/$defs/ChannelLayoutWire"
+            },
+            "colorSpace": {
+              "$ref": "#/$defs/ColorSpaceWire"
+            },
+            "duration": {
+              "$ref": "#/$defs/ExactRational"
+            },
+            "fps": {
+              "$ref": "#/$defs/ExactRational"
+            },
+            "height": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "sampleRate": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "width": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "width",
+            "height",
+            "fps",
+            "sampleRate",
+            "channelLayout",
+            "colorSpace",
+            "duration"
+          ],
+          "type": "object"
+        },
+        "CaptionAlignWire": {
+          "enum": [
+            "top-left",
+            "top-center",
+            "top-right",
+            "center-left",
+            "center",
+            "center-right",
+            "bottom-left",
+            "bottom-center",
+            "bottom-right"
+          ],
+          "type": "string"
+        },
+        "CaptionBehaviorWire": {
+          "oneOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "axis": {
+                  "$ref": "#/$defs/ScrollAxisWire"
+                },
+                "speed": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "type": {
+                  "const": "scroll",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "axis",
+                "speed"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "mode": {
+                  "$ref": "#/$defs/KaraokeModeWire"
+                },
+                "type": {
+                  "const": "karaoke",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "mode"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "CaptionCompositionWire": {
+          "additionalProperties": false,
+          "properties": {
+            "tracks": {
+              "items": {
+                "$ref": "#/$defs/CaptionTrackWire"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "tracks"
+          ],
+          "type": "object"
+        },
+        "CaptionItemWire": {
+          "oneOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "behavior": {
+                  "$ref": "#/$defs/RequiredNullable_for_CaptionBehaviorWire"
+                },
+                "duration": {
+                  "$ref": "#/$defs/ExactRational"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "layout": {
+                  "$ref": "#/$defs/CaptionLayoutWire"
+                },
+                "presentation": {
+                  "$ref": "#/$defs/CaptionPresentationWire"
+                },
+                "runs": {
+                  "items": {
+                    "$ref": "#/$defs/TextRunWire"
+                  },
+                  "type": "array"
+                },
+                "style": {
+                  "$ref": "#/$defs/CaptionStyleWire"
+                },
+                "type": {
+                  "const": "clip",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "id",
+                "duration",
+                "runs",
+                "style",
+                "layout",
+                "presentation",
+                "behavior"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "duration": {
+                  "$ref": "#/$defs/ExactRational"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "gap",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "id",
+                "duration"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "CaptionLayoutWire": {
+          "additionalProperties": false,
+          "properties": {
+            "align": {
+              "$ref": "#/$defs/CaptionAlignWire"
+            },
+            "region": {
+              "items": {
+                "format": "double",
+                "type": "number"
+              },
+              "maxItems": 4,
+              "minItems": 4,
+              "type": "array"
+            }
+          },
+          "required": [
+            "region",
+            "align"
+          ],
+          "type": "object"
+        },
+        "CaptionPresentationWire": {
+          "additionalProperties": false,
+          "properties": {
+            "blurSigma": {
+              "$ref": "#/$defs/ParamWire2"
+            },
+            "clipInset": {
+              "$ref": "#/$defs/ParamWire3"
+            },
+            "opacity": {
+              "$ref": "#/$defs/ParamWire2"
+            },
+            "rotation": {
+              "$ref": "#/$defs/ParamWire2"
+            },
+            "scale": {
+              "$ref": "#/$defs/ParamWire2"
+            },
+            "translation": {
+              "$ref": "#/$defs/ParamWire"
+            }
+          },
+          "required": [
+            "opacity",
+            "translation",
+            "scale",
+            "rotation",
+            "clipInset",
+            "blurSigma"
+          ],
+          "type": "object"
+        },
+        "CaptionShadowWire": {
+          "additionalProperties": false,
+          "properties": {
+            "blurSigma": {
+              "format": "double",
+              "type": "number"
+            },
+            "color": {
+              "type": "string"
+            },
+            "offset": {
+              "items": {
+                "format": "double",
+                "type": "number"
+              },
+              "maxItems": 2,
+              "minItems": 2,
+              "type": "array"
+            }
+          },
+          "required": [
+            "color",
+            "offset",
+            "blurSigma"
+          ],
+          "type": "object"
+        },
+        "CaptionStyleWire": {
+          "additionalProperties": false,
+          "properties": {
+            "color": {
+              "type": "string"
+            },
+            "font": {
+              "type": "string"
+            },
+            "fontSize": {
+              "format": "double",
+              "type": "number"
+            },
+            "shadow": {
+              "$ref": "#/$defs/RequiredNullable_for_CaptionShadowWire"
+            }
+          },
+          "required": [
+            "font",
+            "fontSize",
+            "color",
+            "shadow"
+          ],
+          "type": "object"
+        },
+        "CaptionTrackWire": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "items": {
+              "items": {
+                "$ref": "#/$defs/CaptionItemWire"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "id",
+            "items"
+          ],
+          "type": "object"
+        },
+        "ChannelLayoutWire": {
+          "enum": [
+            "mono",
+            "stereo"
+          ],
+          "type": "string"
+        },
+        "ColorGradeEffectTag": {
+          "enum": [
+            "color-grade"
+          ],
+          "type": "string"
+        },
+        "ColorGradeEffectWire": {
+          "additionalProperties": false,
+          "properties": {
+            "temperature": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": {
+              "$ref": "#/$defs/ColorGradeEffectTag"
+            }
+          },
+          "required": [
+            "type",
+            "temperature"
+          ],
+          "type": "object"
+        },
+        "ColorSpaceWire": {
+          "enum": [
+            "srgb"
+          ],
+          "type": "string"
+        },
+        "CrossFadeTransitionKernelTag": {
+          "enum": [
+            "cross-fade"
+          ],
+          "type": "string"
+        },
+        "CrossFadeTransitionKernelWire": {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "$ref": "#/$defs/CrossFadeTransitionKernelTag"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        "CubicBezierEasingWire": {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "$ref": "#/$defs/CubicBezierTag"
+            },
+            "x1": {
+              "format": "double",
+              "type": "number"
+            },
+            "x2": {
+              "format": "double",
+              "type": "number"
+            },
+            "y1": {
+              "format": "double",
+              "type": "number"
+            },
+            "y2": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          "required": [
+            "type",
+            "x1",
+            "y1",
+            "x2",
+            "y2"
+          ],
+          "type": "object"
+        },
+        "CubicBezierTag": {
+          "enum": [
+            "cubic-bezier"
+          ],
+          "type": "string"
+        },
+        "EasingWire": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NamedEasingWire"
+            },
+            {
+              "$ref": "#/$defs/CubicBezierEasingWire"
+            }
+          ]
+        },
+        "ExactRational": {
+          "pattern": "^(0|[1-9][0-9]*|-[1-9][0-9]*)/[1-9][0-9]*$",
+          "type": "string"
+        },
+        "ExtrapolationWire": {
+          "enum": [
+            "clamp"
+          ],
+          "type": "string"
+        },
+        "InterpolationWire": {
+          "enum": [
+            "step",
+            "linear"
+          ],
+          "type": "string"
+        },
+        "KaraokeModeWire": {
+          "enum": [
+            "word",
+            "line"
+          ],
+          "type": "string"
+        },
+        "KeyframeWire": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "outEasing": {
+              "$ref": "#/$defs/RequiredNullable_for_EasingWire"
+            },
+            "time": {
+              "$ref": "#/$defs/ExactRational"
+            },
+            "value": {
+              "items": {
+                "format": "double",
+                "type": "number"
+              },
+              "maxItems": 2,
+              "minItems": 2,
+              "type": "array"
+            }
+          },
+          "required": [
+            "id",
+            "time",
+            "value",
+            "outEasing"
+          ],
+          "type": "object"
+        },
+        "KeyframeWire2": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "outEasing": {
+              "$ref": "#/$defs/RequiredNullable_for_EasingWire"
+            },
+            "time": {
+              "$ref": "#/$defs/ExactRational"
+            },
+            "value": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          "required": [
+            "id",
+            "time",
+            "value",
+            "outEasing"
+          ],
+          "type": "object"
+        },
+        "KeyframeWire3": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "outEasing": {
+              "$ref": "#/$defs/RequiredNullable_for_EasingWire"
+            },
+            "time": {
+              "$ref": "#/$defs/ExactRational"
+            },
+            "value": {
+              "items": {
+                "format": "double",
+                "type": "number"
+              },
+              "maxItems": 4,
+              "minItems": 4,
+              "type": "array"
+            }
+          },
+          "required": [
+            "id",
+            "time",
+            "value",
+            "outEasing"
+          ],
+          "type": "object"
+        },
+        "KeyframeWire4": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "outEasing": {
+              "$ref": "#/$defs/RequiredNullable_for_EasingWire"
+            },
+            "time": {
+              "$ref": "#/$defs/ExactRational"
+            },
+            "value": true
+          },
+          "required": [
+            "id",
+            "time",
+            "value",
+            "outEasing"
+          ],
+          "type": "object"
+        },
+        "LayerMaskWire": {
+          "oneOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "feather": {
+                  "$ref": "#/$defs/ParamWire2"
+                },
+                "invert": {
+                  "type": "boolean"
+                },
+                "rect": {
+                  "$ref": "#/$defs/ParamWire3"
+                },
+                "type": {
+                  "const": "rect",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "rect",
+                "feather",
+                "invert"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "feather": {
+                  "$ref": "#/$defs/ParamWire2"
+                },
+                "invert": {
+                  "type": "boolean"
+                },
+                "rect": {
+                  "$ref": "#/$defs/ParamWire3"
+                },
+                "type": {
+                  "const": "ellipse",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "rect",
+                "feather",
+                "invert"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "LayerTransformWire": {
+          "additionalProperties": false,
+          "properties": {
+            "anchor": {
+              "items": {
+                "format": "double",
+                "type": "number"
+              },
+              "maxItems": 2,
+              "minItems": 2,
+              "type": "array"
+            },
+            "position": {
+              "$ref": "#/$defs/ParamWire"
+            },
+            "rotation": {
+              "$ref": "#/$defs/ParamWire2"
+            },
+            "scale": {
+              "$ref": "#/$defs/ParamWire"
+            }
+          },
+          "required": [
+            "position",
+            "scale",
+            "rotation",
+            "anchor"
+          ],
+          "type": "object"
+        },
+        "LottieSamplingWire": {
+          "additionalProperties": false,
+          "properties": {
+            "fit": {
+              "$ref": "#/$defs/RasterFitWire"
+            }
+          },
+          "required": [
+            "fit"
+          ],
+          "type": "object"
+        },
+        "MediaEndBehaviorWire": {
+          "enum": [
+            "error",
+            "hold",
+            "loop"
+          ],
+          "type": "string"
+        },
+        "MotionCueBindingWire": {
+          "oneOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "end": {
+                  "$ref": "#/$defs/ExactRational"
+                },
+                "enterDuration": {
+                  "$ref": "#/$defs/ExactRational"
+                },
+                "exitDuration": {
+                  "$ref": "#/$defs/ExactRational"
+                },
+                "start": {
+                  "$ref": "#/$defs/ExactRational"
+                },
+                "type": {
+                  "const": "source-range",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "start",
+                "end",
+                "enterDuration",
+                "exitDuration"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "MotionPhaseOverridesWire": {
+          "additionalProperties": false,
+          "properties": {
+            "enterDuration": {
+              "$ref": "#/$defs/RequiredNullable_for_ExactRational"
+            },
+            "exitDuration": {
+              "$ref": "#/$defs/RequiredNullable_for_ExactRational"
+            }
+          },
+          "required": [
+            "enterDuration",
+            "exitDuration"
+          ],
+          "type": "object"
+        },
+        "NamedEasingWire": {
+          "enum": [
+            "linear",
+            "ease",
+            "ease-in",
+            "ease-out",
+            "ease-in-out"
+          ],
+          "type": "string"
+        },
+        "NamespacedKernelTypeWire": {
+          "pattern": "^[^/\\s]+/[^/\\s]+$",
+          "type": "string"
+        },
+        "ParamWire": {
+          "oneOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "type": {
+                  "const": "constant",
+                  "type": "string"
+                },
+                "value": {
+                  "items": {
+                    "format": "double",
+                    "type": "number"
+                  },
+                  "maxItems": 2,
+                  "minItems": 2,
+                  "type": "array"
+                }
+              },
+              "required": [
+                "type",
+                "value"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "extrapolation": {
+                  "$ref": "#/$defs/ExtrapolationWire"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "interpolation": {
+                  "$ref": "#/$defs/InterpolationWire"
+                },
+                "keyframes": {
+                  "items": {
+                    "$ref": "#/$defs/KeyframeWire"
+                  },
+                  "type": "array"
+                },
+                "type": {
+                  "const": "curve",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "id",
+                "interpolation",
+                "keyframes",
+                "extrapolation"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "ParamWire2": {
+          "oneOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "type": {
+                  "const": "constant",
+                  "type": "string"
+                },
+                "value": {
+                  "format": "double",
+                  "type": "number"
+                }
+              },
+              "required": [
+                "type",
+                "value"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "extrapolation": {
+                  "$ref": "#/$defs/ExtrapolationWire"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "interpolation": {
+                  "$ref": "#/$defs/InterpolationWire"
+                },
+                "keyframes": {
+                  "items": {
+                    "$ref": "#/$defs/KeyframeWire2"
+                  },
+                  "type": "array"
+                },
+                "type": {
+                  "const": "curve",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "id",
+                "interpolation",
+                "keyframes",
+                "extrapolation"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "ParamWire3": {
+          "oneOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "type": {
+                  "const": "constant",
+                  "type": "string"
+                },
+                "value": {
+                  "items": {
+                    "format": "double",
+                    "type": "number"
+                  },
+                  "maxItems": 4,
+                  "minItems": 4,
+                  "type": "array"
+                }
+              },
+              "required": [
+                "type",
+                "value"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "extrapolation": {
+                  "$ref": "#/$defs/ExtrapolationWire"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "interpolation": {
+                  "$ref": "#/$defs/InterpolationWire"
+                },
+                "keyframes": {
+                  "items": {
+                    "$ref": "#/$defs/KeyframeWire3"
+                  },
+                  "type": "array"
+                },
+                "type": {
+                  "const": "curve",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "id",
+                "interpolation",
+                "keyframes",
+                "extrapolation"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "ParamWire4": {
+          "oneOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "type": {
+                  "const": "constant",
+                  "type": "string"
+                },
+                "value": true
+              },
+              "required": [
+                "type",
+                "value"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "extrapolation": {
+                  "$ref": "#/$defs/ExtrapolationWire"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "interpolation": {
+                  "$ref": "#/$defs/InterpolationWire"
+                },
+                "keyframes": {
+                  "items": {
+                    "$ref": "#/$defs/KeyframeWire4"
+                  },
+                  "type": "array"
+                },
+                "type": {
+                  "const": "curve",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "id",
+                "interpolation",
+                "keyframes",
+                "extrapolation"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "RasterFitWire": {
+          "enum": [
+            "contain",
+            "cover",
+            "fill",
+            "none"
+          ],
+          "type": "string"
+        },
+        "RasterSamplingWire": {
+          "additionalProperties": false,
+          "properties": {
+            "fit": {
+              "$ref": "#/$defs/RasterFitWire"
+            }
+          },
+          "required": [
+            "fit"
+          ],
+          "type": "object"
+        },
+        "RequiredNullable_for_CameraTrackWire": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CameraTrackWire"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "RequiredNullable_for_CaptionBehaviorWire": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CaptionBehaviorWire"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "RequiredNullable_for_CaptionShadowWire": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CaptionShadowWire"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "RequiredNullable_for_EasingWire": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EasingWire"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "RequiredNullable_for_ExactRational": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ExactRational"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "RequiredNullable_for_LayerMaskWire": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LayerMaskWire"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "RequiredNullable_for_TextRunStyleWire": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TextRunStyleWire"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "RequiredNullable_for_TextRunTimingWire": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TextRunTimingWire"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "RequiredNullable_for_double": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "RequiredNullable_for_string": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ScrollAxisWire": {
+          "enum": [
+            "horizontal",
+            "vertical"
+          ],
+          "type": "string"
+        },
+        "TextRunStyleWire": {
+          "additionalProperties": false,
+          "properties": {
+            "color": {
+              "$ref": "#/$defs/RequiredNullable_for_string"
+            },
+            "fontSize": {
+              "$ref": "#/$defs/RequiredNullable_for_double"
+            }
+          },
+          "required": [
+            "fontSize",
+            "color"
+          ],
+          "type": "object"
+        },
+        "TextRunTimingWire": {
+          "additionalProperties": false,
+          "properties": {
+            "end": {
+              "$ref": "#/$defs/ExactRational"
+            },
+            "start": {
+              "$ref": "#/$defs/ExactRational"
+            }
+          },
+          "required": [
+            "start",
+            "end"
+          ],
+          "type": "object"
+        },
+        "TextRunWire": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "style": {
+              "$ref": "#/$defs/RequiredNullable_for_TextRunStyleWire"
+            },
+            "text": {
+              "type": "string"
+            },
+            "timing": {
+              "$ref": "#/$defs/RequiredNullable_for_TextRunTimingWire"
+            }
+          },
+          "required": [
+            "id",
+            "text",
+            "timing",
+            "style"
+          ],
+          "type": "object"
+        },
+        "TimedAdjustmentWire": {
+          "additionalProperties": false,
+          "properties": {
+            "duration": {
+              "$ref": "#/$defs/ExactRational"
+            },
+            "effect": {
+              "$ref": "#/$defs/AdjustmentEffectWire"
+            },
+            "id": {
+              "type": "string"
+            },
+            "start": {
+              "$ref": "#/$defs/ExactRational"
+            }
+          },
+          "required": [
+            "id",
+            "start",
+            "duration",
+            "effect"
+          ],
+          "type": "object"
+        },
+        "TimelineDocumentWire": {
+          "additionalProperties": false,
+          "description": "Typed root bands. Array order is retained because it is render-semantic.",
+          "properties": {
+            "adjustments": {
+              "items": {
+                "$ref": "#/$defs/TimedAdjustmentWire"
+              },
+              "type": "array"
+            },
+            "audio": {
+              "$ref": "#/$defs/AudioCompositionWire"
+            },
+            "background": {
+              "$ref": "#/$defs/BackgroundWire"
+            },
+            "camera": {
+              "$ref": "#/$defs/RequiredNullable_for_CameraTrackWire"
+            },
+            "canvas": {
+              "$ref": "#/$defs/CanvasWire"
+            },
+            "captions": {
+              "$ref": "#/$defs/CaptionCompositionWire"
+            },
+            "metadata": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "visual": {
+              "$ref": "#/$defs/VisualCompositionWire"
+            }
+          },
+          "required": [
+            "canvas",
+            "background",
+            "visual",
+            "audio",
+            "adjustments",
+            "captions",
+            "camera",
+            "metadata"
+          ],
+          "type": "object"
+        },
+        "TransitionKernelExtensionWire": {
+          "additionalProperties": false,
+          "properties": {
+            "parameters": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": {
+              "$ref": "#/$defs/NamespacedKernelTypeWire"
+            }
+          },
+          "required": [
+            "type",
+            "parameters"
+          ],
+          "type": "object"
+        },
+        "TransitionKernelWire": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CrossFadeTransitionKernelWire"
+            },
+            {
+              "$ref": "#/$defs/TransitionKernelExtensionWire"
+            }
+          ]
+        },
+        "VisualCompositionWire": {
+          "additionalProperties": false,
+          "properties": {
+            "tracks": {
+              "items": {
+                "$ref": "#/$defs/VisualTrackWire"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "tracks"
+          ],
+          "type": "object"
+        },
+        "VisualFilterWire": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "parameters": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": {
+              "$ref": "#/$defs/NamespacedKernelTypeWire"
+            }
+          },
+          "required": [
+            "id",
+            "type",
+            "parameters"
+          ],
+          "type": "object"
+        },
+        "VisualItemWire": {
+          "oneOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "duration": {
+                  "$ref": "#/$defs/ExactRational"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "layer": {
+                  "$ref": "#/$defs/VisualLayerWire"
+                },
+                "source": {
+                  "$ref": "#/$defs/VisualSourceWire"
+                },
+                "type": {
+                  "const": "clip",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "id",
+                "duration",
+                "layer",
+                "source"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "duration": {
+                  "$ref": "#/$defs/ExactRational"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "gap",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "id",
+                "duration"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "duration": {
+                  "$ref": "#/$defs/ExactRational"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "kernel": {
+                  "$ref": "#/$defs/TransitionKernelWire"
+                },
+                "type": {
+                  "const": "transition",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "id",
+                "duration",
+                "kernel"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "VisualLayerWire": {
+          "additionalProperties": false,
+          "properties": {
+            "blend": {
+              "$ref": "#/$defs/BlendModeWire"
+            },
+            "filters": {
+              "items": {
+                "$ref": "#/$defs/VisualFilterWire"
+              },
+              "type": "array"
+            },
+            "mask": {
+              "$ref": "#/$defs/RequiredNullable_for_LayerMaskWire"
+            },
+            "opacity": {
+              "$ref": "#/$defs/ParamWire2"
+            },
+            "transform": {
+              "$ref": "#/$defs/LayerTransformWire"
+            }
+          },
+          "required": [
+            "transform",
+            "opacity",
+            "mask",
+            "filters",
+            "blend"
+          ],
+          "type": "object"
+        },
+        "VisualSourceWire": {
+          "oneOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "endBehavior": {
+                  "$ref": "#/$defs/MediaEndBehaviorWire"
+                },
+                "rate": {
+                  "$ref": "#/$defs/ExactRational"
+                },
+                "resource": {
+                  "type": "string"
+                },
+                "sampling": {
+                  "$ref": "#/$defs/RasterSamplingWire"
+                },
+                "sourceStart": {
+                  "$ref": "#/$defs/ExactRational"
+                },
+                "type": {
+                  "const": "video",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "resource",
+                "sourceStart",
+                "rate",
+                "endBehavior",
+                "sampling"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "Intentionally has no sourceStart/rate/endBehavior fields.",
+              "properties": {
+                "resource": {
+                  "type": "string"
+                },
+                "sampling": {
+                  "$ref": "#/$defs/RasterSamplingWire"
+                },
+                "type": {
+                  "const": "image",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "resource",
+                "sampling"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "endBehavior": {
+                  "$ref": "#/$defs/MediaEndBehaviorWire"
+                },
+                "rate": {
+                  "$ref": "#/$defs/ExactRational"
+                },
+                "resource": {
+                  "type": "string"
+                },
+                "sampling": {
+                  "$ref": "#/$defs/LottieSamplingWire"
+                },
+                "sourceStart": {
+                  "$ref": "#/$defs/ExactRational"
+                },
+                "type": {
+                  "const": "lottie",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "resource",
+                "sourceStart",
+                "rate",
+                "endBehavior",
+                "sampling"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "component": {
+                  "type": "string"
+                },
+                "cues": {
+                  "additionalProperties": {
+                    "$ref": "#/$defs/MotionCueBindingWire"
+                  },
+                  "type": "object"
+                },
+                "endBehavior": {
+                  "$ref": "#/$defs/MediaEndBehaviorWire"
+                },
+                "phases": {
+                  "$ref": "#/$defs/MotionPhaseOverridesWire"
+                },
+                "props": {
+                  "additionalProperties": {
+                    "$ref": "#/$defs/ParamWire4"
+                  },
+                  "type": "object"
+                },
+                "rate": {
+                  "$ref": "#/$defs/ExactRational"
+                },
+                "resources": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                },
+                "sourceDuration": {
+                  "$ref": "#/$defs/ExactRational"
+                },
+                "sourceStart": {
+                  "$ref": "#/$defs/ExactRational"
+                },
+                "type": {
+                  "const": "motion",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "component",
+                "sourceStart",
+                "sourceDuration",
+                "rate",
+                "endBehavior",
+                "props",
+                "cues",
+                "resources",
+                "phases"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "color": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "solid",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "color"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "VisualTrackWire": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "items": {
+              "items": {
+                "$ref": "#/$defs/VisualItemWire"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "id",
+            "items"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "description": "Complete canonical Timeline envelope.",
+      "properties": {
+        "document": {
+          "$ref": "#/$defs/TimelineDocumentWire"
+        }
+      },
+      "required": [
+        "document"
+      ],
+      "title": "TimelineDocumentEnvelopeWire",
+      "type": "object"
+    }
+  }
+}

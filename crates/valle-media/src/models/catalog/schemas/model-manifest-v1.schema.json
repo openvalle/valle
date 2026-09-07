@@ -1,0 +1,449 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ModelManifest",
+  "type": "object",
+  "properties": {
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Artifact"
+      }
+    },
+    "contract": {
+      "$ref": "#/$defs/TaskContract"
+    },
+    "license": {
+      "$ref": "#/$defs/ModelLicense"
+    },
+    "model": {
+      "$ref": "#/$defs/ModelIdentity"
+    },
+    "provenance": {
+      "$ref": "#/$defs/Provenance"
+    },
+    "release": {
+      "$ref": "#/$defs/ReleaseState"
+    },
+    "routes": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Route"
+      }
+    },
+    "schema_version": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    }
+  },
+  "required": [
+    "schema_version",
+    "model",
+    "license",
+    "provenance",
+    "release",
+    "contract",
+    "artifacts",
+    "routes"
+  ],
+  "$defs": {
+    "Architecture": {
+      "type": "string",
+      "enum": [
+        "aarch64",
+        "x86_64"
+      ]
+    },
+    "Artifact": {
+      "type": "object",
+      "properties": {
+        "entrypoint": {
+          "description": "File or package-directory path used to load this artifact.",
+          "type": "string"
+        },
+        "files": {
+          "description": "Every file that must be fetched. Multi-file ONNX and `.mlpackage` are first-class.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ArtifactFile"
+          }
+        },
+        "format": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "metadata": {
+          "default": null
+        },
+        "precision": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "format",
+        "precision",
+        "entrypoint",
+        "files"
+      ]
+    },
+    "ArtifactFile": {
+      "type": "object",
+      "properties": {
+        "bytes": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "path": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "bytes",
+        "sha256"
+      ]
+    },
+    "Backend": {
+      "type": "string",
+      "enum": [
+        "native-cpu",
+        "onnx-cpu",
+        "onnx-cuda",
+        "onnx-directml",
+        "coreml"
+      ]
+    },
+    "Dimension": {
+      "anyOf": [
+        {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        {
+          "type": "string"
+        }
+      ]
+    },
+    "ModelIdentity": {
+      "type": "object",
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "display_name": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "task": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "version",
+        "display_name",
+        "task",
+        "description"
+      ]
+    },
+    "ModelLicense": {
+      "type": "object",
+      "properties": {
+        "files": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ArtifactFile"
+          }
+        },
+        "notes": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "redistribution": {
+          "$ref": "#/$defs/Redistribution"
+        },
+        "spdx": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "spdx",
+        "redistribution"
+      ]
+    },
+    "Platform": {
+      "type": "string",
+      "enum": [
+        "macos",
+        "windows",
+        "linux"
+      ]
+    },
+    "Provenance": {
+      "type": "object",
+      "properties": {
+        "notes": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "repository": {
+          "type": "string"
+        },
+        "revision": {
+          "type": "string"
+        },
+        "weights": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/WeightSource"
+          }
+        }
+      },
+      "required": [
+        "repository",
+        "revision"
+      ]
+    },
+    "Redistribution": {
+      "type": "string",
+      "enum": [
+        "allowed",
+        "forbidden",
+        "needs-review"
+      ]
+    },
+    "ReleaseReadiness": {
+      "type": "string",
+      "enum": [
+        "draft",
+        "ready"
+      ]
+    },
+    "ReleaseState": {
+      "description": "Publishing state of the per-model Hugging Face repository.\n\nThe immutable Hugging Face commit cannot be embedded in this document because that would\nmake the commit hash self-referential. It lives in [`CatalogRelease`] instead.",
+      "type": "object",
+      "properties": {
+        "repository": {
+          "description": "`namespace/repository`; absent while the model is still a local draft.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "state": {
+          "$ref": "#/$defs/ReleaseReadiness"
+        }
+      },
+      "required": [
+        "state"
+      ]
+    },
+    "Route": {
+      "type": "object",
+      "properties": {
+        "architectures": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Architecture"
+          }
+        },
+        "artifact": {
+          "type": "string"
+        },
+        "backend": {
+          "$ref": "#/$defs/Backend"
+        },
+        "id": {
+          "type": "string"
+        },
+        "notes": {
+          "type": "string",
+          "default": ""
+        },
+        "options": {
+          "default": null
+        },
+        "platforms": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Platform"
+          }
+        },
+        "priority": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "requirements": {
+          "$ref": "#/$defs/RouteRequirements",
+          "default": {
+            "minimum_os": null,
+            "minimum_runtime": null
+          }
+        },
+        "status": {
+          "$ref": "#/$defs/ValidationStatus"
+        }
+      },
+      "required": [
+        "id",
+        "artifact",
+        "backend",
+        "platforms",
+        "architectures",
+        "status",
+        "priority"
+      ]
+    },
+    "RouteRequirements": {
+      "type": "object",
+      "properties": {
+        "minimum_os": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "minimum_runtime": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "TaskContract": {
+      "type": "object",
+      "properties": {
+        "adapter": {
+          "description": "Rust host adapter identifier, for example `modnet-image-matting`.",
+          "type": "string"
+        },
+        "inputs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TensorSpec"
+          }
+        },
+        "outputs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TensorSpec"
+          }
+        },
+        "postprocess": {
+          "default": null
+        },
+        "preprocess": {
+          "default": null
+        },
+        "version": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "adapter",
+        "version",
+        "inputs",
+        "outputs"
+      ]
+    },
+    "TensorSpec": {
+      "type": "object",
+      "properties": {
+        "description": {
+          "type": "string",
+          "default": ""
+        },
+        "dtype": {
+          "type": "string"
+        },
+        "layout": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "range": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "number",
+            "format": "double"
+          },
+          "maxItems": 2,
+          "minItems": 2
+        },
+        "shape": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Dimension"
+          }
+        }
+      },
+      "required": [
+        "name",
+        "dtype",
+        "layout",
+        "shape"
+      ]
+    },
+    "ValidationStatus": {
+      "type": "string",
+      "enum": [
+        "verified",
+        "unverified",
+        "unsupported"
+      ]
+    },
+    "WeightSource": {
+      "type": "object",
+      "properties": {
+        "bytes": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "id": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "source",
+        "bytes",
+        "sha256"
+      ]
+    }
+  }
+}

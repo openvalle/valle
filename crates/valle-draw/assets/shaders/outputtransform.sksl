@@ -1,0 +1,127 @@
+uniform shader content;
+uniform float primariesCode;
+uniform float transferCode;
+uniform float toneMapCode;
+uniform float gamutMapCode;
+uniform float alphaCode;
+uniform float referenceWhiteNits;
+uniform float peakNits;
+
+float3 fromWorking(float3 working) {
+    if (primariesCode < 0.5) {
+        return float3(
+             1.660491002 * working.r - 0.587641139 * working.g - 0.072849863 * working.b,
+            -0.124550475 * working.r + 1.132899897 * working.g - 0.008349423 * working.b,
+            -0.018150763 * working.r - 0.100578898 * working.g + 1.118729661 * working.b
+        );
+    }
+    if (primariesCode < 1.5) {
+        return float3(
+             1.343578253 * working.r - 0.282179671 * working.g - 0.061398582 * working.b,
+            -0.065297453 * working.r + 1.075787916 * working.g - 0.010490463 * working.b,
+             0.002821787 * working.r - 0.019598495 * working.g + 1.016776707 * working.b
+        );
+    }
+    return working;
+}
+
+float3 targetWeights() {
+    if (primariesCode < 0.5) return float3(0.212639, 0.715169, 0.072192);
+    if (primariesCode < 1.5) return float3(0.228975, 0.691739, 0.079287);
+    return float3(0.2627, 0.6780, 0.0593);
+}
+
+float3 toneMap(float3 working) {
+    if (toneMapCode < 0.5) return working;
+    float luminance = dot(float3(0.2627, 0.6780, 0.0593), working);
+    if (luminance <= 0.0) return working;
+    float mapped = luminance / (1.0 + luminance);
+    return working * (mapped / luminance);
+}
+
+float3 gamutMap(float3 target, float maximum) {
+    if (gamutMapCode < 0.5) return clamp(target, 0.0, maximum);
+    if (all(greaterThanEqual(target, float3(0.0))) && all(lessThanEqual(target, float3(maximum)))) {
+        return target;
+    }
+    float luminance = clamp(dot(targetWeights(), target), 0.0, maximum);
+    float scale = 1.0;
+    for (int index = 0; index < 3; ++index) {
+        float delta = target[index] - luminance;
+        if (delta > 0.0) scale = min(scale, (maximum - luminance) / delta);
+        else if (delta < 0.0) scale = min(scale, luminance / -delta);
+    }
+    return clamp(float3(luminance) + (target - float3(luminance)) * scale, 0.0, maximum);
+}
+
+float encodeSrgb(float value) {
+    float relative = value * (100.0 / referenceWhiteNits);
+    float magnitude = abs(relative);
+    float encoded = magnitude <= 0.0031308
+        ? magnitude * 12.92
+        : 1.055 * pow(magnitude, 1.0 / 2.4) - 0.055;
+    return sign(relative) * encoded;
+}
+
+float encodeRec709(float value) {
+    float relative = value * (100.0 / referenceWhiteNits);
+    float magnitude = abs(relative);
+    float encoded = magnitude <= 0.018
+        ? magnitude * 4.5
+        : 1.099 * pow(magnitude, 0.45) - 0.099;
+    return sign(relative) * encoded;
+}
+
+float encodePq(float value) {
+    const float m1 = 2610.0 / 16384.0;
+    const float m2 = 2523.0 / 32.0;
+    const float c1 = 3424.0 / 4096.0;
+    const float c2 = 2413.0 / 128.0;
+    const float c3 = 2392.0 / 128.0;
+    float absolute = abs(value) * 0.01;
+    float power = pow(max(absolute, 0.0), m1);
+    float encoded = pow((c1 + c2 * power) / (1.0 + c3 * power), m2);
+    return sign(value) * encoded;
+}
+
+float encodeHlgCurve(float value) {
+    const float a = 0.17883277;
+    const float b = 0.28466892;
+    const float c = 0.5599107;
+    float magnitude = abs(value);
+    float encoded = magnitude <= (1.0 / 12.0)
+        ? sqrt(3.0 * magnitude)
+        : a * log(12.0 * magnitude - b) + c;
+    return sign(value) * encoded;
+}
+
+float3 encodeTransfer(float3 target) {
+    if (transferCode < 0.5) return target * (100.0 / referenceWhiteNits);
+    if (transferCode < 1.5) return float3(encodeSrgb(target.r), encodeSrgb(target.g), encodeSrgb(target.b));
+    if (transferCode < 2.5) return float3(encodeRec709(target.r), encodeRec709(target.g), encodeRec709(target.b));
+    if (transferCode < 3.5) return float3(encodePq(target.r), encodePq(target.g), encodePq(target.b));
+    float3 display = target * (100.0 / peakNits);
+    float displayLuminance = dot(targetWeights(), display);
+    float gamma = max(1.0, 1.2 + 0.42 * log(max(peakNits / 1000.0, 1.17549435e-38)) / log(10.0));
+    float scale = abs(displayLuminance) <= 1.1920929e-7
+        ? 1.0
+        : pow(abs(displayLuminance), (gamma - 1.0) / gamma);
+    return float3(
+        encodeHlgCurve(display.r / scale),
+        encodeHlgCurve(display.g / scale),
+        encodeHlgCurve(display.b / scale)
+    );
+}
+
+half4 main(float2 position) {
+    float4 sample = content.eval(position);
+    float coverage = sample.a;
+    if (coverage <= 0.0 && alphaCode >= 0.5) return half4(0.0);
+    float3 working = coverage > 0.0 ? sample.rgb / coverage : float3(0.0);
+    working = toneMap(working);
+    float maximum = transferCode < 3.0 ? referenceWhiteNits / 100.0 : peakNits / 100.0;
+    float3 mapped = gamutMap(fromWorking(working), maximum);
+    float3 encoded = encodeTransfer(mapped);
+    float outputAlpha = alphaCode < 0.5 ? 1.0 : coverage;
+    return half4(encoded * outputAlpha, outputAlpha);
+}

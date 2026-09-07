@@ -1,0 +1,5 @@
+uniform shader image;
+uniform float opacity;
+half4 main(float2 xy) {
+    return image.eval(xy) * half(opacity);
+}

@@ -1,0 +1,11 @@
+// Linear crossfade between source and destination.
+uniform shader from_tex;
+uniform shader to_tex;
+uniform float2 resolution;
+uniform float progress;
+
+half4 main(float2 xy) {
+    half4 a = from_tex.eval(xy);
+    half4 b = to_tex.eval(xy);
+    return mix(a, b, half(progress));
+}

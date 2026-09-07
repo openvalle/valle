@@ -1,0 +1,11 @@
+[alias]
+xtask = "run --package xtask --"
+
+[env]
+# The current Skia prebuilt archive lacks symbols required by Skottie.
+FORCE_SKIA_BUILD = "1"
+
+# Reserve 4 MiB for recursive Wasm layout and CSS parsing.
+# Setting RUSTFLAGS overrides these flags; preserve this stack size in custom configurations.
+[target.wasm32-unknown-unknown]
+rustflags = ["-C", "link-arg=-zstack-size=4194304"]

@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Catalog",
+  "type": "object",
+  "properties": {
+    "generated_by": {
+      "type": "string",
+      "default": ""
+    },
+    "models": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/CatalogModel"
+      }
+    },
+    "schema_version": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    }
+  },
+  "required": [
+    "schema_version",
+    "models"
+  ],
+  "$defs": {
+    "CatalogModel": {
+      "type": "object",
+      "properties": {
+        "display_name": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "latest": {
+          "type": "string"
+        },
+        "releases": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CatalogRelease"
+          }
+        },
+        "task": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "display_name",
+        "task",
+        "latest",
+        "releases"
+      ]
+    },
+    "CatalogRelease": {
+      "type": "object",
+      "properties": {
+        "manifest_path": {
+          "description": "Manifest location relative to the artifact repository. For direct upstream models the\nmanifest is supplied by Valle and this path anchors the artifact directory only.",
+          "type": "string"
+        },
+        "repository": {
+          "type": "string"
+        },
+        "revision": {
+          "description": "Immutable Hugging Face commit, never `main` or a moving branch.",
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "version",
+        "repository",
+        "revision",
+        "manifest_path"
+      ]
+    }
+  }
+}

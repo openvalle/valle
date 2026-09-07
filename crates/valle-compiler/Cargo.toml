@@ -1,0 +1,38 @@
+[package]
+name = "valle-compiler"
+description = "Timeline authoring and Motion JSX compilation."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+# OXC owns syntax and source spans; QuickJS executes preparation code.
+oxc = { workspace = true, features = [
+    "semantic",
+    "transformer",
+    "codegen",
+    "ast_visit",
+], optional = true }
+rquickjs = { workspace = true, optional = true }
+kurbo.workspace = true
+libm.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+valle-timeline.workspace = true
+valle-motion = { workspace = true, optional = true }
+valle-draw = { workspace = true, optional = true }
+
+[features]
+default = []
+jsx = ["dep:oxc", "dep:rquickjs"]
+motion = ["jsx", "dep:valle-motion", "dep:valle-draw"]
+
+[dev-dependencies]
+valle-motion.workspace = true
+tempfile.workspace = true
+

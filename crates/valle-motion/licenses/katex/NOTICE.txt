@@ -1,0 +1,13 @@
+MathFormula third-party notices
+
+RaTeX 0.1.14 (commit 08cae05377938391117913ca4f278e6a3ffb6a8a)
+provides LaTeX parsing and layout through ratex-types, ratex-font,
+ratex-lexer, ratex-parser, and ratex-layout.
+Source: https://github.com/erweixin/RaTeX
+License: RaTeX-MIT.txt
+
+The 19 unmodified KaTeX TrueType faces in ../../assets/fonts/katex/
+are licensed under the SIL Open Font License 1.1.
+Source: https://github.com/KaTeX/KaTeX
+License: OFL.txt
+Attribution: KaTeX-fonts-NOTICE.txt

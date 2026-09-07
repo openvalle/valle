@@ -1,0 +1,17 @@
+// Zoom the destination into its final scale from the center. Adapted from GL Transitions
+// simplezoom.
+uniform shader from_tex;
+uniform shader to_tex;
+uniform float2 resolution;
+uniform float progress;
+
+half4 main(float2 xy) {
+    float p = clamp(progress, 0.0, 1.0);
+    float2 uv = xy / resolution;
+    float scale = max(1.0 - p, 0.001);
+    float2 to_uv = (uv - 0.5) * scale + 0.5;
+    half4 a = from_tex.eval(xy);
+    half4 b = to_tex.eval(clamp(to_uv, 0.0, 1.0) * resolution);
+    float t = smoothstep(0.0, 0.8, p);
+    return mix(a, b, half(t));
+}

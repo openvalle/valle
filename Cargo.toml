@@ -1,0 +1,176 @@
+# Valle: a video creation and editing engine built for AI agents.
+[workspace]
+resolver = "3"
+members = [
+    "xtask",
+    "crates/valle-timeline",
+    "crates/valle-draw",
+    "crates/valle-motion",
+    "crates/valle-compiler",
+    "crates/valle-engine",
+    "crates/valle-media",
+    "crates/valle-render",
+    "crates/valle-project",
+    "crates/valle-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+rust-version = "1.96"
+repository = "https://github.com/openvalle/valle"
+publish = false
+
+[workspace.dependencies]
+anyhow = "1.0.104"
+base64 = "0.23.1"
+block2 = "0.6.2"
+clap = "4.6.6"
+ctrlc = "3.5.2"
+cosmic-text = "0.19"
+crossbeam-channel = "0.5.17"
+cssparser = "0.37.0"
+ffmpeg-next = { version = "9.0.0", default-features = false }
+fs2 = "0.4.3"
+getrandom = "0.4.3"
+hex = "0.4.3"
+hound = "3.5.1"
+image = { version = "0.25.10", default-features = false, features = ["jpeg", "png"] }
+js-sys = "0.3.105"
+kurbo = "0.13.1"
+libc = "0.2.189"
+libmimalloc-sys = "0.1.49"
+libloading = "0.9.0"
+mimalloc = "0.1.52"
+objc2 = "0.6.4"
+objc2-core-ml = "0.3.2"
+objc2-foundation = "0.3.2"
+objc2-metal = { version = "0.3.2", default-features = false }
+oxc = "0.148.0"
+ort = { version = "=2.0.0-rc.13", default-features = false, features = ["api-28", "ndarray", "std", "load-dynamic"] }
+png = "0.18.1"
+qwen-asr = "=0.11.0"
+reflink-copy = "0.1.30"
+reqwest = { version = "0.13.4", default-features = false, features = ["blocking", "rustls"] }
+rquickjs = "0.12.2"
+rusqlite = "0.40.2"
+rustfft = "6.4.1"
+semver = "1.0.28"
+serde = { version = "1.0.229", features = ["derive"] }
+# float_roundtrip is required for identical JSON float parsing in Rust and JavaScript.
+serde_json = { version = "1.0.151", features = ["float_roundtrip", "raw_value"] }
+serde_jcs = "=0.2.0"
+schemars = "=1.2.2"
+jsonschema = { version = "=0.55.0", default-features = false }
+sha2 = "0.11.0"
+skia-bindings = "0.153.3"
+skia-safe = "0.153.3"
+swash = "0.2.10"
+tempfile = "3.27.0"
+thiserror = "2.0.20"
+toml = "1.1.5"
+# Rust-only Serde decode constraints are checked by schema/round-trip tests, not TypeScript.
+ts-rs = { version = "12.0.1", features = ["no-serde-warnings"] }
+ttf-parser = "0.25.1"
+unicode-normalization = "0.1.25"
+url = "2.5.8"
+wasm-bindgen = "0.2.128"
+windows-sys = { version = "0.61.2", features = ["Win32_Storage_FileSystem"] }
+# Pin transcendental math: upgrades can change native and Wasm frame values.
+libm = "=0.2.16"
+# Use the pure Rust geometry core without triangulation or multithreading.
+geo = { version = "=0.33.1", default-features = false }
+valle-timeline = { path = "crates/valle-timeline" }
+valle-draw = { path = "crates/valle-draw" }
+valle-motion = { path = "crates/valle-motion" }
+valle-compiler = { path = "crates/valle-compiler" }
+valle-engine = { path = "crates/valle-engine" }
+valle-media = { path = "crates/valle-media" }
+valle-render = { path = "crates/valle-render" }
+valle-project = { path = "crates/valle-project", default-features = false }
+valle-cli = { path = "crates/valle-cli" }
+
+# Pin the shared layout engine to preserve rendering behavior.
+# Keep pre-0.24 line breaking until upstream preserves explicit newlines with its Chromium override.
+takumi-core = { version = "=0.23.1", default-features = false }
+# Use the pinned RaTeX parser and layout core without renderer or font embedding.
+ratex-types = { version = "=0.1.14", default-features = false }
+ratex-font = { version = "=0.1.14", default-features = false }
+ratex-lexer = { version = "=0.1.14", default-features = false }
+ratex-parser = { version = "=0.1.14", default-features = false }
+ratex-layout = { version = "=0.1.14", default-features = false }
+# Enable ICU dictionary segmentation for CJK through Cargo feature unification.
+parley = { version = "=0.11.1", default-features = false, features = ["complex-scripts"] }
+[profile.release]
+lto = "thin"
+strip = "symbols"
+
+# Optimize preview hot paths while retaining development assertions and symbols.
+[profile.dev.package.valle-timeline]
+opt-level = 3
+[profile.dev.package.valle-draw]
+opt-level = 3
+[profile.dev.package.valle-motion]
+opt-level = 3
+[profile.dev.package.valle-compiler]
+opt-level = 3
+[profile.dev.package.valle-engine]
+opt-level = 3
+[profile.dev.package.valle-media]
+opt-level = 3
+[profile.dev.package.valle-render]
+opt-level = 3
+[profile.dev.package.valle-project]
+opt-level = 3
+[profile.dev.package.valle-cli]
+opt-level = 3
+
+# Optimize dependencies that run inside each frame.
+[profile.dev.package.takumi-core]
+opt-level = 3
+[profile.dev.package.taffy]
+opt-level = 3
+[profile.dev.package.parley]
+opt-level = 3
+[profile.dev.package.harfrust]
+opt-level = 3
+[profile.dev.package.skrifa]
+opt-level = 3
+[profile.dev.package.serde_json]
+opt-level = 3
+[profile.dev.package.sha2]
+opt-level = 3
+
+[profile.test.package.valle-timeline]
+opt-level = 3
+[profile.test.package.valle-draw]
+opt-level = 3
+[profile.test.package.valle-motion]
+opt-level = 3
+[profile.test.package.valle-compiler]
+opt-level = 3
+[profile.test.package.valle-engine]
+opt-level = 3
+[profile.test.package.valle-media]
+opt-level = 3
+[profile.test.package.valle-render]
+opt-level = 3
+[profile.test.package.valle-project]
+opt-level = 3
+[profile.test.package.valle-cli]
+opt-level = 3
+[profile.test.package.takumi-core]
+opt-level = 3
+[profile.test.package.taffy]
+opt-level = 3
+[profile.test.package.parley]
+opt-level = 3
+[profile.test.package.harfrust]
+opt-level = 3
+[profile.test.package.skrifa]
+opt-level = 3
+[profile.test.package.serde_json]
+opt-level = 3
+[profile.test.package.sha2]
+opt-level = 3

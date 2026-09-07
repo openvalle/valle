@@ -1,0 +1,13 @@
+{
+  "name": "@valle/player",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@valle/player-core": "workspace:0.0.0",
+    "lit": "3.3.3"
+  }
+}

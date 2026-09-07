@@ -1,0 +1,16 @@
+// Horizontal wipe with compression on both sides. Adapted from GL Transitions crosswarp.
+uniform shader from_tex;
+uniform shader to_tex;
+uniform float2 resolution;
+uniform float progress;
+
+half4 main(float2 xy) {
+    float2 p = xy / resolution;
+    float x = clamp(progress, 0.0, 1.0);
+    x = smoothstep(0.0, 1.0, x * 2.0 + p.x - 1.0);
+    float2 from_uv = (p - 0.5) * (1.0 - x) + 0.5;
+    float2 to_uv = (p - 0.5) * x + 0.5;
+    half4 a = from_tex.eval(clamp(from_uv, 0.0, 1.0) * resolution);
+    half4 b = to_tex.eval(clamp(to_uv, 0.0, 1.0) * resolution);
+    return mix(a, b, half(x));
+}

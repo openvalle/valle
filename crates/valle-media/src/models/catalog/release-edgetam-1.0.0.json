@@ -1,0 +1,476 @@
+{
+  "schema_version": 1,
+  "model": {
+    "id": "edgetam",
+    "version": "1.0.0",
+    "display_name": "EdgeTAM",
+    "task": "video-object-segmentation",
+    "description": "Prompted object segmentation and mask propagation for video"
+  },
+  "license": {
+    "spdx": "Apache-2.0",
+    "redistribution": "allowed",
+    "files": [
+      {
+        "path": "card/LICENSE",
+        "bytes": 11357,
+        "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+      }
+    ],
+    "notes": [
+      "The selected EdgeTAM source and weight are Apache-2.0."
+    ]
+  },
+  "provenance": {
+    "repository": "https://github.com/facebookresearch/EdgeTAM",
+    "revision": "7711e012a30a2402c4eaab637bdb00a521302c91",
+    "weights": [
+      {
+        "id": "edgetam",
+        "source": "https://github.com/facebookresearch/EdgeTAM/tree/7711e012a30a2402c4eaab637bdb00a521302c91/checkpoints",
+        "bytes": 56116523,
+        "sha256": "ed2d4850b8792c239689b04315d23cc42a39eb5061389a4a9595e4e1e778ed24"
+      }
+    ],
+    "notes": [
+      "Export applies the included non-contiguous view-to-reshape patch before conversion."
+    ]
+  },
+  "release": {
+    "state": "ready",
+    "repository": "openvalle/valle-models"
+  },
+  "contract": {
+    "adapter": "edgetam-video-segmentation",
+    "version": 1,
+    "inputs": [
+      {
+        "name": "image",
+        "dtype": "f32",
+        "layout": "nchw",
+        "shape": [
+          1,
+          3,
+          1024,
+          1024
+        ],
+        "range": null,
+        "description": "RGB video frame"
+      },
+      {
+        "name": "coords",
+        "dtype": "f32",
+        "layout": "npc",
+        "shape": [
+          1,
+          3,
+          2
+        ],
+        "range": null,
+        "description": "Three fixed-protocol seed points"
+      },
+      {
+        "name": "labels",
+        "dtype": "i32",
+        "layout": "np",
+        "shape": [
+          1,
+          3
+        ],
+        "range": null,
+        "description": "Seed-point labels"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "mask",
+        "dtype": "f32",
+        "layout": "nchw",
+        "shape": [
+          1,
+          1,
+          1024,
+          1024
+        ],
+        "range": null,
+        "description": "Selected object mask"
+      }
+    ],
+    "preprocess": {
+      "color_space": "rgb",
+      "canvas": [
+        1024,
+        1024
+      ],
+      "prompt_protocol": "prompt_protocol.v1.json"
+    },
+    "postprocess": {
+      "stateful": true,
+      "host_contract": [
+        "memory-bank",
+        "pointer-queue",
+        "static-kv-slots",
+        "mask-selection",
+        "resize-to-source"
+      ]
+    }
+  },
+  "artifacts": [
+    {
+      "id": "onnx-fp32-pipeline",
+      "format": "onnx",
+      "precision": "fp32",
+      "entrypoint": "image_encoder.onnx",
+      "files": [
+        {
+          "path": "image_encoder.onnx",
+          "bytes": 19755470,
+          "sha256": "0d00500a851472cf8acabe1ebfec709e1d7982b1a3720f0c6a39810446c95d62"
+        },
+        {
+          "path": "memattn.onnx",
+          "bytes": 16344118,
+          "sha256": "750141ec101c2a8f72cbd6c56238724b065508343633e279df70e390a75db8f9"
+        },
+        {
+          "path": "decoder_p3.onnx",
+          "bytes": 21852984,
+          "sha256": "50281cb7f35e6c68ab6e362de0f0504a724ae4b74b6f547319daeb1bcfef3f45"
+        },
+        {
+          "path": "decoder_p1.onnx",
+          "bytes": 21852952,
+          "sha256": "815d8a4151be7e61b2be9978d886eee61d0aaa1c5db7a65cbf47afbcb65025dd"
+        },
+        {
+          "path": "memencode.onnx",
+          "bytes": 6672757,
+          "sha256": "c3eaf5fb047c001c5bc9296ea37ff484149732b168872ada684781e61416f362"
+        },
+        {
+          "path": "const_curr_pos.npy",
+          "bytes": 4194432,
+          "sha256": "bc8df34975e2216fd37829693362a2f42888287dec4a6e639387cfdf3705ab9b"
+        },
+        {
+          "path": "const_maskmem_pos.npy",
+          "bytes": 131200,
+          "sha256": "2f7b47f04e010ed817fe39b0a5e5ea5a12b986ca94843c4ea22b2721128ea855"
+        },
+        {
+          "path": "const_maskmem_tpos.npy",
+          "bytes": 1920,
+          "sha256": "150e7631ee1e0a258b9dbac747c18411748f07bf9c5ebb854fd2e71c4ad24d73"
+        },
+        {
+          "path": "const_no_mem_embed.npy",
+          "bytes": 1152,
+          "sha256": "191504dc42823381fd5445f16edb8290f217583a813570f8052f38b1dab223b8"
+        },
+        {
+          "path": "const_no_obj_ptr.npy",
+          "bytes": 1152,
+          "sha256": "1eaf62836fa7a7afb592bea5b2c043fee463cfd9a488c59440bded15982679fd"
+        },
+        {
+          "path": "prompt_protocol.v1.json",
+          "bytes": 866,
+          "sha256": "d7d35a8da48deb32b93c6b948fa33aa39595a556d74245d84ecd3d67a65170a1"
+        }
+      ],
+      "metadata": {
+        "opset": 17,
+        "components": [
+          "image_encoder",
+          "memattn",
+          "decoder_p3",
+          "decoder_p1",
+          "memencode"
+        ]
+      }
+    },
+    {
+      "id": "coreml-pipeline",
+      "format": "coreml-package",
+      "precision": "mixed",
+      "entrypoint": "coreml_image_encoder.mlpackage",
+      "files": [
+        {
+          "path": "coreml_image_encoder.mlpackage/Data/com.apple.CoreML/model.mlmodel",
+          "bytes": 217377,
+          "sha256": "5ba4470185a2d64689098fffdd6b2e4f1e51afb525e4b54afb276f2be8f20d8c"
+        },
+        {
+          "path": "coreml_image_encoder.mlpackage/Data/com.apple.CoreML/weights/weight.bin",
+          "bytes": 9818368,
+          "sha256": "b47c8018a0bee4d029d61261e2a0f5167ddfa4619206fe20f69ae6062b352e74"
+        },
+        {
+          "path": "coreml_image_encoder.mlpackage/Manifest.json",
+          "bytes": 617,
+          "sha256": "f2df3937ebaa4e877862fb481dcc1c852c0377d3b5bb5ac8ba81601d5f173c99"
+        },
+        {
+          "path": "coreml_memattn_hot.mlpackage/Data/com.apple.CoreML/model.mlmodel",
+          "bytes": 59778,
+          "sha256": "1b477993d98a022f634cf91b8c878782af551c2407f34bc4edcb6647bf7874b7"
+        },
+        {
+          "path": "coreml_memattn_hot.mlpackage/Data/com.apple.CoreML/weights/weight.bin",
+          "bytes": 12455744,
+          "sha256": "97d46c389cdf3487720684cf08d1c4e056de73a77e5a467ff4d1a1a23b692085"
+        },
+        {
+          "path": "coreml_memattn_hot.mlpackage/Manifest.json",
+          "bytes": 617,
+          "sha256": "6f74bb357766d7d185c262a35856830f9e65f6e94e3196832a96554c0cdde7c7"
+        },
+        {
+          "path": "coreml_memattn_warm.mlpackage/Data/com.apple.CoreML/model.mlmodel",
+          "bytes": 60573,
+          "sha256": "c1ae3b5e778261c0425491cb0eed124f93d12c9250dd8bcd70afcd53a05a04db"
+        },
+        {
+          "path": "coreml_memattn_warm.mlpackage/Data/com.apple.CoreML/weights/weight.bin",
+          "bytes": 11988736,
+          "sha256": "11d4dec312f671be3efe073ecf0378f9c934e264cb65ba5721161c09cdd7bc21"
+        },
+        {
+          "path": "coreml_memattn_warm.mlpackage/Manifest.json",
+          "bytes": 617,
+          "sha256": "e02c1867893e8f053871b17d6ebb3047dab64a0779e2dd473c9ebd4e91443d3d"
+        },
+        {
+          "path": "coreml_decoder_p3.mlpackage/Data/com.apple.CoreML/model.mlmodel",
+          "bytes": 116834,
+          "sha256": "acd0ceef053ae8b0dd0b4a85b9792cbaf784ca05392f4a491a44ba85f34f681b"
+        },
+        {
+          "path": "coreml_decoder_p3.mlpackage/Data/com.apple.CoreML/weights/weight.bin",
+          "bytes": 12982528,
+          "sha256": "dd10298022c08c9ed040d5f867053ac01b33bafa75b58eb41a0eefbb2cfdd82c"
+        },
+        {
+          "path": "coreml_decoder_p3.mlpackage/Manifest.json",
+          "bytes": 617,
+          "sha256": "42d71aaaa3bc884576e2de30cf5b20aca70b023f7d9922d4caf2cad340a987e2"
+        },
+        {
+          "path": "coreml_decoder_p1.mlpackage/Data/com.apple.CoreML/model.mlmodel",
+          "bytes": 116814,
+          "sha256": "ae768c147183cb8cb93ab6618aa4f64d1a3e240992f547cbf44f48dc7a93686e"
+        },
+        {
+          "path": "coreml_decoder_p1.mlpackage/Data/com.apple.CoreML/weights/weight.bin",
+          "bytes": 12982528,
+          "sha256": "dd10298022c08c9ed040d5f867053ac01b33bafa75b58eb41a0eefbb2cfdd82c"
+        },
+        {
+          "path": "coreml_decoder_p1.mlpackage/Manifest.json",
+          "bytes": 617,
+          "sha256": "d0ed8dc4898fc0da1bcfbf0ce4cacc8dedc64639526179e0a9d95b7d8814c4d7"
+        },
+        {
+          "path": "coreml_memencode.mlpackage/Data/com.apple.CoreML/model.mlmodel",
+          "bytes": 110278,
+          "sha256": "a808f399412d742d77e42a140a971b43e9d956c05bba698aa590e7abfeaa88fe"
+        },
+        {
+          "path": "coreml_memencode.mlpackage/Data/com.apple.CoreML/weights/weight.bin",
+          "bytes": 4348224,
+          "sha256": "795608844d518ff7610e47065198f3d46dfa1585d7a66000f408205beb1ca5f6"
+        },
+        {
+          "path": "coreml_memencode.mlpackage/Manifest.json",
+          "bytes": 617,
+          "sha256": "ff8b5a83c0a530e416f6ced23fbba6076e3df19fd12055a7c6b93b12c197a55a"
+        },
+        {
+          "path": "const_curr_pos.npy",
+          "bytes": 4194432,
+          "sha256": "bc8df34975e2216fd37829693362a2f42888287dec4a6e639387cfdf3705ab9b"
+        },
+        {
+          "path": "const_maskmem_pos.npy",
+          "bytes": 131200,
+          "sha256": "2f7b47f04e010ed817fe39b0a5e5ea5a12b986ca94843c4ea22b2721128ea855"
+        },
+        {
+          "path": "const_maskmem_tpos.npy",
+          "bytes": 1920,
+          "sha256": "150e7631ee1e0a258b9dbac747c18411748f07bf9c5ebb854fd2e71c4ad24d73"
+        },
+        {
+          "path": "const_no_mem_embed.npy",
+          "bytes": 1152,
+          "sha256": "191504dc42823381fd5445f16edb8290f217583a813570f8052f38b1dab223b8"
+        },
+        {
+          "path": "const_no_obj_ptr.npy",
+          "bytes": 1152,
+          "sha256": "1eaf62836fa7a7afb592bea5b2c043fee463cfd9a488c59440bded15982679fd"
+        },
+        {
+          "path": "prompt_protocol.v1.json",
+          "bytes": 866,
+          "sha256": "d7d35a8da48deb32b93c6b948fa33aa39595a556d74245d84ecd3d67a65170a1"
+        }
+      ],
+      "metadata": {
+        "components": [
+          "image_encoder",
+          "memattn_hot",
+          "memattn_warm",
+          "decoder_p3",
+          "decoder_p1",
+          "memencode"
+        ]
+      }
+    }
+  ],
+  "routes": [
+    {
+      "id": "coreml-macos-arm64",
+      "artifact": "coreml-pipeline",
+      "backend": "coreml",
+      "platforms": [
+        "macos"
+      ],
+      "architectures": [
+        "aarch64"
+      ],
+      "status": "verified",
+      "priority": 100,
+      "requirements": {
+        "minimum_os": "macOS 14",
+        "minimum_runtime": null
+      },
+      "options": {
+        "compute_units": "component-specific",
+        "pipeline_loading": "encoder-worker-concurrent-with-tracker",
+        "bounded_prefetch": 1
+      },
+      "notes": "The complete mixed CPU/ANE state machine passed parity, placement and fixed-prompt quality gates on Apple M2 Pro."
+    },
+    {
+      "id": "onnx-cpu-macos-arm64",
+      "artifact": "onnx-fp32-pipeline",
+      "backend": "onnx-cpu",
+      "platforms": [
+        "macos"
+      ],
+      "architectures": [
+        "aarch64"
+      ],
+      "status": "verified",
+      "priority": 10,
+      "requirements": {
+        "minimum_os": null,
+        "minimum_runtime": "ONNX Runtime 1.28.0"
+      },
+      "options": {
+        "pipeline_loading": "encoder-worker-concurrent-with-tracker",
+        "bounded_prefetch": 1,
+        "borrow_inputs": true,
+        "cache_full_memory_constants": true
+      },
+      "notes": "The five-graph ONNX pipeline and ort 2.0.0-rc.13 Rust host passed parity and performance tests on Apple M2 Pro."
+    },
+    {
+      "id": "onnx-cpu-macos-x86_64",
+      "artifact": "onnx-fp32-pipeline",
+      "backend": "onnx-cpu",
+      "platforms": [
+        "macos"
+      ],
+      "architectures": [
+        "x86_64"
+      ],
+      "status": "unverified",
+      "priority": 10,
+      "requirements": {
+        "minimum_os": null,
+        "minimum_runtime": "ONNX Runtime 1.28.0"
+      },
+      "options": {
+        "pipeline_loading": "encoder-worker-concurrent-with-tracker",
+        "bounded_prefetch": 1,
+        "borrow_inputs": true,
+        "cache_full_memory_constants": true
+      },
+      "notes": "The artifact is portable, but this host route has not been tested."
+    },
+    {
+      "id": "onnx-cpu-windows-x86_64",
+      "artifact": "onnx-fp32-pipeline",
+      "backend": "onnx-cpu",
+      "platforms": [
+        "windows"
+      ],
+      "architectures": [
+        "x86_64"
+      ],
+      "status": "unverified",
+      "priority": 10,
+      "requirements": {
+        "minimum_os": null,
+        "minimum_runtime": "ONNX Runtime 1.28.0"
+      },
+      "options": {
+        "pipeline_loading": "encoder-worker-concurrent-with-tracker",
+        "bounded_prefetch": 1,
+        "borrow_inputs": true,
+        "cache_full_memory_constants": true
+      },
+      "notes": "Promote only after the real-fixture Windows CI gate passes."
+    },
+    {
+      "id": "onnx-cpu-linux-x86_64",
+      "artifact": "onnx-fp32-pipeline",
+      "backend": "onnx-cpu",
+      "platforms": [
+        "linux"
+      ],
+      "architectures": [
+        "x86_64"
+      ],
+      "status": "unverified",
+      "priority": 10,
+      "requirements": {
+        "minimum_os": null,
+        "minimum_runtime": "ONNX Runtime 1.28.0"
+      },
+      "options": {
+        "pipeline_loading": "encoder-worker-concurrent-with-tracker",
+        "bounded_prefetch": 1,
+        "borrow_inputs": true,
+        "cache_full_memory_constants": true
+      },
+      "notes": "Promote only after the real-fixture Linux CI gate passes."
+    },
+    {
+      "id": "onnx-cpu-linux-aarch64",
+      "artifact": "onnx-fp32-pipeline",
+      "backend": "onnx-cpu",
+      "platforms": [
+        "linux"
+      ],
+      "architectures": [
+        "aarch64"
+      ],
+      "status": "unverified",
+      "priority": 10,
+      "requirements": {
+        "minimum_os": null,
+        "minimum_runtime": "ONNX Runtime 1.28.0"
+      },
+      "options": {
+        "pipeline_loading": "encoder-worker-concurrent-with-tracker",
+        "bounded_prefetch": 1,
+        "borrow_inputs": true,
+        "cache_full_memory_constants": true
+      },
+      "notes": "The graph is architecture-neutral; ONNX Runtime packaging remains unverified."
+    }
+  ]
+}

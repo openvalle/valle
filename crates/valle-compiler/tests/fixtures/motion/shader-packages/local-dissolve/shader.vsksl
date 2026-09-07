@@ -1,0 +1,13 @@
+half4 valle_main(float2 uv) {
+    half4 source = sampleContent(uv);
+    half4 noiseSample = sample_noise(uv);
+    float threshold = noiseSample.r;
+    float reveal = smoothstep(threshold - edgeWidth, threshold + edgeWidth, progress);
+    float edgeDistance = abs(progress - threshold);
+    float edge = 1.0 - smoothstep(edgeWidth, edgeWidth * 2.0, edgeDistance);
+    edge *= source.a > 0.0 ? 1.0 : 0.0;
+
+    half3 straightRgb = mix(source.rgb, half3(edgeColor.rgb), half(edge));
+    half alpha = source.a * half(max(reveal, edge * edgeColor.a));
+    return half4(straightRgb, alpha);
+}

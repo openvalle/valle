@@ -1,0 +1,13 @@
+node_modules/
+dist/
+coverage/
+.bun/
+
+packages/*/generated/
+packages/*/wasm/pkg/
+packages/*/wasm/pkg-web/
+packages/*/wasm/target/
+packages/*/wasm/generated/
+
+.dist-build-*/
+packages/engine/generated/.web-build-*/

@@ -1,0 +1,48 @@
+{
+  "manifestVersion": 1,
+  "name": "local-dissolve",
+  "version": 1,
+  "dialect": "valle-sksl",
+  "dialectVersion": 1,
+  "entry": "shader.vsksl",
+  "inputs": [
+    {
+      "name": "noise",
+      "required": true,
+      "sampling": "nearest"
+    }
+  ],
+  "uniforms": [
+    {
+      "name": "progress",
+      "type": "float",
+      "required": true,
+      "min": 0.0,
+      "max": 1.0
+    },
+    {
+      "name": "edgeWidth",
+      "type": "float",
+      "required": false,
+      "default": {
+        "kind": "float",
+        "value": 0.06
+      },
+      "min": 0.001,
+      "max": 0.25
+    },
+    {
+      "name": "edgeColor",
+      "type": "color",
+      "required": true
+    }
+  ],
+  "output": {
+    "colorSpace": "srgb",
+    "alphaMode": "premultiplied",
+    "allowTransparent": true
+  },
+  "budget": "local",
+  "sourceDigest": "sha256:b008dbfeda7d1749c659b4ec8703b12cf9ff6cecbc9fe0b47a91125c69ea5f5e",
+  "abiDigest": "sha256:b71636bc888998345d7f99e81b8a9ba627c89aabd71d68ade2989bb2f73d1a47"
+}

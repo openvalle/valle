@@ -1,0 +1,38 @@
+[package]
+name = "valle-motion"
+description = "Motion Artifacts, deterministic evaluation, layout, text, and DrawProgram emission."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+# Keep dependencies Wasm-compatible; compilation depends on Motion, never the reverse.
+valle-timeline.workspace = true
+valle-draw.workspace = true
+cssparser.workspace = true
+geo.workspace = true
+libm.workspace = true
+serde.workspace = true
+sha2.workspace = true
+hex.workspace = true
+serde_json.workspace = true
+ts-rs = { workspace = true, optional = true }
+takumi-core.workspace = true
+parley.workspace = true
+ratex-types.workspace = true
+ratex-font.workspace = true
+ratex-lexer.workspace = true
+ratex-parser.workspace = true
+ratex-layout.workspace = true
+thiserror.workspace = true
+ttf-parser.workspace = true
+
+[package.metadata.cargo-machete]
+ignored = ["parley"]
+
+[features]
+default = []
+ts = ["dep:ts-rs", "valle-draw/ts"]

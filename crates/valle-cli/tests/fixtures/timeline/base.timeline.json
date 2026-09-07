@@ -1,0 +1,22 @@
+{
+  "canvas": {
+    "width": 640,
+    "height": 360,
+    "fps": 30,
+    "background": "#000000ff"
+  },
+  "tracks": {
+    "visual": [
+      {
+        "clips": [
+          {
+            "start": 0,
+            "duration": 2,
+            "kind": "solid",
+            "color": "#000000ff"
+          }
+        ]
+      }
+    ]
+  }
+}
