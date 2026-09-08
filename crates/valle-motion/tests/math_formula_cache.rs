@@ -10,7 +10,7 @@ use valle_motion::math_formula::{
 #[test]
 fn second_emit_is_a_cache_hit() {
     let registry = FormulaFontRegistry::load_dir(
-        &PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets/fonts/katex"),
+        &PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/fonts/katex"),
     )
     .unwrap();
     let policy = AdmitPolicy::default();

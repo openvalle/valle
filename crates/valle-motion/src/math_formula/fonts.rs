@@ -120,25 +120,25 @@ pub const FORMULA_FACES: &[FormulaFace] = &[
 /// Locked TTF bytes for each [`FORMULA_FACES`] entry, same order. Product
 /// prepare and paint both consume this pack — never a filesystem path.
 const FORMULA_FONT_BYTES: &[&[u8]] = &[
-    include_bytes!("../../assets/fonts/katex/KaTeX_AMS-Regular.ttf"),
-    include_bytes!("../../assets/fonts/katex/KaTeX_Caligraphic-Regular.ttf"),
-    include_bytes!("../../assets/fonts/katex/KaTeX_Fraktur-Bold.ttf"),
-    include_bytes!("../../assets/fonts/katex/KaTeX_Fraktur-Regular.ttf"),
-    include_bytes!("../../assets/fonts/katex/KaTeX_Main-Bold.ttf"),
-    include_bytes!("../../assets/fonts/katex/KaTeX_Main-BoldItalic.ttf"),
-    include_bytes!("../../assets/fonts/katex/KaTeX_Main-Italic.ttf"),
-    include_bytes!("../../assets/fonts/katex/KaTeX_Main-Regular.ttf"),
-    include_bytes!("../../assets/fonts/katex/KaTeX_Math-BoldItalic.ttf"),
-    include_bytes!("../../assets/fonts/katex/KaTeX_Math-Italic.ttf"),
-    include_bytes!("../../assets/fonts/katex/KaTeX_SansSerif-Bold.ttf"),
-    include_bytes!("../../assets/fonts/katex/KaTeX_SansSerif-Italic.ttf"),
-    include_bytes!("../../assets/fonts/katex/KaTeX_SansSerif-Regular.ttf"),
-    include_bytes!("../../assets/fonts/katex/KaTeX_Script-Regular.ttf"),
-    include_bytes!("../../assets/fonts/katex/KaTeX_Size1-Regular.ttf"),
-    include_bytes!("../../assets/fonts/katex/KaTeX_Size2-Regular.ttf"),
-    include_bytes!("../../assets/fonts/katex/KaTeX_Size3-Regular.ttf"),
-    include_bytes!("../../assets/fonts/katex/KaTeX_Size4-Regular.ttf"),
-    include_bytes!("../../assets/fonts/katex/KaTeX_Typewriter-Regular.ttf"),
+    include_bytes!("../../../../assets/fonts/katex/KaTeX_AMS-Regular.ttf"),
+    include_bytes!("../../../../assets/fonts/katex/KaTeX_Caligraphic-Regular.ttf"),
+    include_bytes!("../../../../assets/fonts/katex/KaTeX_Fraktur-Bold.ttf"),
+    include_bytes!("../../../../assets/fonts/katex/KaTeX_Fraktur-Regular.ttf"),
+    include_bytes!("../../../../assets/fonts/katex/KaTeX_Main-Bold.ttf"),
+    include_bytes!("../../../../assets/fonts/katex/KaTeX_Main-BoldItalic.ttf"),
+    include_bytes!("../../../../assets/fonts/katex/KaTeX_Main-Italic.ttf"),
+    include_bytes!("../../../../assets/fonts/katex/KaTeX_Main-Regular.ttf"),
+    include_bytes!("../../../../assets/fonts/katex/KaTeX_Math-BoldItalic.ttf"),
+    include_bytes!("../../../../assets/fonts/katex/KaTeX_Math-Italic.ttf"),
+    include_bytes!("../../../../assets/fonts/katex/KaTeX_SansSerif-Bold.ttf"),
+    include_bytes!("../../../../assets/fonts/katex/KaTeX_SansSerif-Italic.ttf"),
+    include_bytes!("../../../../assets/fonts/katex/KaTeX_SansSerif-Regular.ttf"),
+    include_bytes!("../../../../assets/fonts/katex/KaTeX_Script-Regular.ttf"),
+    include_bytes!("../../../../assets/fonts/katex/KaTeX_Size1-Regular.ttf"),
+    include_bytes!("../../../../assets/fonts/katex/KaTeX_Size2-Regular.ttf"),
+    include_bytes!("../../../../assets/fonts/katex/KaTeX_Size3-Regular.ttf"),
+    include_bytes!("../../../../assets/fonts/katex/KaTeX_Size4-Regular.ttf"),
+    include_bytes!("../../../../assets/fonts/katex/KaTeX_Typewriter-Regular.ttf"),
 ];
 
 const _: () = assert!(FORMULA_FACES.len() == FORMULA_FONT_BYTES.len());
@@ -161,7 +161,7 @@ pub fn allowed_ratex_font_name(name: &str) -> bool {
 }
 
 pub fn formula_font_dir() -> &'static str {
-    "crates/valle-motion/assets/fonts/katex"
+    "assets/fonts/katex"
 }
 
 /// SHA-256 of face bytes as lowercase hex. Used to lock TTF identity on disk.

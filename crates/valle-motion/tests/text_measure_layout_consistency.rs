@@ -4,7 +4,7 @@ use takumi_core::resources::font::{FontResource, Fonts};
 use takumi_core::viewport::Viewport;
 use valle_motion::{MeasuredBox, TextMeasure, measure_text};
 
-const FONT: &[u8] = include_bytes!("../assets/fonts/noto/NotoSansCJKsc-Regular.otf");
+const FONT: &[u8] = include_bytes!("../../../assets/fonts/noto/NotoSansCJKsc-Regular.otf");
 
 fn fonts() -> Fonts {
     let mut fonts = Fonts::default();

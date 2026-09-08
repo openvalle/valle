@@ -11,7 +11,7 @@ fn repo_root() -> PathBuf {
 
 fn face_path(face: &FormulaFace) -> PathBuf {
     repo_root()
-        .join("crates/valle-motion/assets/fonts/katex")
+        .join("assets/fonts/katex")
         .join(face.file_name)
 }
 
@@ -38,7 +38,7 @@ fn locked_nineteen_faces_match_sha256_and_exclude_caligraphic_bold() {
     assert!(!names.iter().any(|name| name.contains("Caligraphic-Bold")));
     assert!(
         !repo_root()
-            .join("crates/valle-motion/assets/fonts/katex/KaTeX_Caligraphic-Bold.ttf")
+            .join("assets/fonts/katex/KaTeX_Caligraphic-Bold.ttf")
             .exists()
     );
 }

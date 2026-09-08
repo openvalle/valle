@@ -5,28 +5,28 @@ mod measure;
 /// Shared Noto Sans Regular fallback for deterministic measurement and rendering across all Motion
 /// hosts.
 pub const DEFAULT_MOTION_FONT: &[u8] =
-    include_bytes!("../../assets/fonts/noto/NotoSans-Regular.ttf");
+    include_bytes!("../../../../assets/fonts/noto/NotoSans-Regular.ttf");
 
 /// Default font family set: Noto Sans weights, KaTeX serif faces, Noto Sans Mono,
 /// symbol and math fonts, Noto Sans CJK SC, and Noto Color Emoji. Register real weight variants for CSS
 /// font selection; Noto supplies deterministic COLRv1 emoji paints. `DEFAULT_MOTION_FONT`
 /// remains the single-face fallback for measurement contracts.
 pub const DEFAULT_MOTION_FONT_WEIGHTS: &[&[u8]] = &[
-    include_bytes!("../../assets/fonts/noto/NotoSans-Regular.ttf"),
-    include_bytes!("../../assets/fonts/noto/NotoSans-Medium.ttf"),
-    include_bytes!("../../assets/fonts/noto/NotoSans-SemiBold.ttf"),
-    include_bytes!("../../assets/fonts/noto/NotoSans-Bold.ttf"),
-    include_bytes!("../../assets/fonts/noto/NotoSans-ExtraBold.ttf"),
-    include_bytes!("../../assets/fonts/katex/KaTeX_Main-Regular.ttf"),
-    include_bytes!("../../assets/fonts/katex/KaTeX_Main-Bold.ttf"),
-    include_bytes!("../../assets/fonts/katex/KaTeX_Main-Italic.ttf"),
-    include_bytes!("../../assets/fonts/katex/KaTeX_Main-BoldItalic.ttf"),
-    include_bytes!("../../assets/fonts/noto/NotoSansMono-Regular.ttf"),
-    include_bytes!("../../assets/fonts/noto/NotoSansSymbols-Regular.ttf"),
-    include_bytes!("../../assets/fonts/noto/NotoSansSymbols2-Regular.ttf"),
-    include_bytes!("../../assets/fonts/noto/NotoSansMath-Regular.ttf"),
-    include_bytes!("../../assets/fonts/noto/NotoSansCJKsc-Regular.otf"),
-    include_bytes!("../../assets/fonts/noto/Noto-COLRv1.ttf"),
+    include_bytes!("../../../../assets/fonts/noto/NotoSans-Regular.ttf"),
+    include_bytes!("../../../../assets/fonts/noto/NotoSans-Medium.ttf"),
+    include_bytes!("../../../../assets/fonts/noto/NotoSans-SemiBold.ttf"),
+    include_bytes!("../../../../assets/fonts/noto/NotoSans-Bold.ttf"),
+    include_bytes!("../../../../assets/fonts/noto/NotoSans-ExtraBold.ttf"),
+    include_bytes!("../../../../assets/fonts/katex/KaTeX_Main-Regular.ttf"),
+    include_bytes!("../../../../assets/fonts/katex/KaTeX_Main-Bold.ttf"),
+    include_bytes!("../../../../assets/fonts/katex/KaTeX_Main-Italic.ttf"),
+    include_bytes!("../../../../assets/fonts/katex/KaTeX_Main-BoldItalic.ttf"),
+    include_bytes!("../../../../assets/fonts/noto/NotoSansMono-Regular.ttf"),
+    include_bytes!("../../../../assets/fonts/noto/NotoSansSymbols-Regular.ttf"),
+    include_bytes!("../../../../assets/fonts/noto/NotoSansSymbols2-Regular.ttf"),
+    include_bytes!("../../../../assets/fonts/noto/NotoSansMath-Regular.ttf"),
+    include_bytes!("../../../../assets/fonts/noto/NotoSansCJKsc-Regular.otf"),
+    include_bytes!("../../../../assets/fonts/noto/Noto-COLRv1.ttf"),
 ];
 
 /// Stable file names for the default pack, same order as [`DEFAULT_MOTION_FONT_WEIGHTS`].

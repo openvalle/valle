@@ -8,7 +8,7 @@ from the KaTeX project: https://github.com/KaTeX/KaTeX
 These fonts are licensed under the SIL Open Font License, Version 1.1,
 separately from Valle's Apache-2.0 source license.
 
-Location: ../../assets/fonts/katex/
+Location: ./
 
 Copyright and license notice (verbatim from font metadata; each face uses the
 same copyright holders and OFL reference, and names its own Reserved Font Name

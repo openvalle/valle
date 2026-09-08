@@ -9,7 +9,7 @@ use valle_motion::math_formula::{
 };
 
 fn registry() -> FormulaFontRegistry {
-    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets/fonts/katex");
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/fonts/katex");
     FormulaFontRegistry::load_dir(&dir).expect("load 19 KaTeX faces")
 }
 

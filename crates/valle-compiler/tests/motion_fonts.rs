@@ -3,7 +3,7 @@
 use valle_compiler::motion::{MeasureEnv, compile_motion, compile_motion_with_env};
 use valle_motion::{ContentDigest, FONT_ASSET_CAPABILITY, MotionValue, ResourceRef, StyleValue};
 const FONT: &[u8] =
-    include_bytes!("../../valle-motion/assets/fonts/noto/NotoSansCJKsc-Regular.otf");
+    include_bytes!("../../../assets/fonts/noto/NotoSansCJKsc-Regular.otf");
 
 fn diagnostic_messages(source: &str) -> Vec<String> {
     compile_motion(source)

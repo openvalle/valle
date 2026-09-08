@@ -65,7 +65,7 @@ const DEFAULT_LINE_SPACING: f64 = 1.2;
 
 #[cfg(test)]
 const BUNDLED_FALLBACK_FONT: &[u8] =
-    include_bytes!("../../valle-motion/assets/fonts/noto/NotoSansCJKsc-Regular.otf");
+    include_bytes!("../../../assets/fonts/noto/NotoSansCJKsc-Regular.otf");
 
 /// Render-scoped deterministic font system.
 ///

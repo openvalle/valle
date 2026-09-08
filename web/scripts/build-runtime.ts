@@ -79,7 +79,7 @@ await withBuildDirectory(path.join(root, "dist"), async (dist) => {
     [path.join(canvasKitRoot, "bin", "full", "canvaskit.wasm"), "runtime/canvaskit/full/canvaskit.wasm"],
     [path.join(canvasKitRoot, "LICENSE"), "runtime/licenses/canvaskit.txt"],
     [path.join(mp4boxRoot, "LICENSE"), "runtime/licenses/mp4box.txt"],
-    [path.resolve(root, "..", "crates", "valle-motion", "assets", "fonts", "noto", "NotoSans-Regular.ttf"), "runtime/fonts/NotoSans-Regular.ttf"],
+    [path.resolve(root, "..", "assets", "fonts", "noto", "NotoSans-Regular.ttf"), "runtime/fonts/NotoSans-Regular.ttf"],
   ] as const) {
     const destination = path.join(dist, target);
     await mkdir(path.dirname(destination), { recursive: true });
@@ -88,7 +88,7 @@ await withBuildDirectory(path.join(root, "dist"), async (dist) => {
 
   // Preserve notices for fonts and adapted code embedded in the runtime.
   const licenseRoots = [
-    "crates/valle-motion/assets/fonts",
+    "assets/fonts",
     "crates/valle-motion/licenses",
     "crates/valle-draw/licenses",
   ];

@@ -4452,7 +4452,7 @@ mod compiled_canvas_tests {
     #[test]
     fn font_payload_axes_must_match_the_concrete_face() {
         let bytes: Arc<[u8]> = Arc::from(
-            &include_bytes!("../../valle-motion/assets/fonts/katex/KaTeX_Main-Regular.ttf")[..],
+            &include_bytes!("../../../assets/fonts/katex/KaTeX_Main-Regular.ttf")[..],
         );
         let digest = content_digest(&bytes);
         let descriptor = FontResourceDescriptorWire {

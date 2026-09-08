@@ -14,7 +14,7 @@ use valle_motion::{
 use valle_timeline::FrameRate;
 
 const FONT: &[u8] =
-    include_bytes!("../../valle-motion/assets/fonts/noto/NotoSansCJKsc-Regular.otf");
+    include_bytes!("../../../assets/fonts/noto/NotoSansCJKsc-Regular.otf");
 
 fn fonts() -> Fonts {
     let mut fonts = Fonts::default();

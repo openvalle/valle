@@ -51,7 +51,7 @@ const OTHER_KERNEL_DIGEST: &str =
     "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
 const FONT_DIGEST: &str = "sha256:d0332f52868370fd83ae7fa46470f90c8f2eab2fcf12bc4f88080b340c95a830";
 const FONT_BYTES: &[u8] =
-    include_bytes!("../../valle-motion/assets/fonts/katex/KaTeX_Main-Regular.ttf");
+    include_bytes!("../../../assets/fonts/katex/KaTeX_Main-Regular.ttf");
 
 fn constant(value: Value) -> Value {
     json!({"type": "constant", "value": value})

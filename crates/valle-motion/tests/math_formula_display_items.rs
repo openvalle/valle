@@ -10,7 +10,7 @@ use valle_motion::math_formula::{
 
 fn registry() -> FormulaFontRegistry {
     FormulaFontRegistry::load_dir(
-        &PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets/fonts/katex"),
+        &PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/fonts/katex"),
     )
     .unwrap()
 }

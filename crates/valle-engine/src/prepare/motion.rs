@@ -1358,7 +1358,7 @@ mod tests {
     use super::*;
 
     const DEPENDENCY_FONT: &[u8] =
-        include_bytes!("../../../valle-motion/assets/fonts/katex/KaTeX_AMS-Regular.ttf");
+        include_bytes!("../../../../assets/fonts/katex/KaTeX_AMS-Regular.ttf");
 
     fn emitted_font_request(
         fonts: &valle_motion::Fonts,

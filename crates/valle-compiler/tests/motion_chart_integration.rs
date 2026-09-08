@@ -16,7 +16,7 @@ use valle_timeline::FrameRate;
 
 const SOURCE: &str = include_str!("fixtures/motion/charts/chart-integration.motion.tsx");
 const FONT: &[u8] =
-    include_bytes!("../../valle-motion/assets/fonts/noto/NotoSansCJKsc-Regular.otf");
+    include_bytes!("../../../assets/fonts/noto/NotoSansCJKsc-Regular.otf");
 
 fn compiled() -> valle_compiler::motion::CompiledMotion {
     let hash = ContentDigest::of_bytes(FONT);

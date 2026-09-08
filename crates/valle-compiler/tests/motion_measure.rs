@@ -7,7 +7,7 @@ use valle_compiler::motion::{MeasureEnv, compile_motion, compile_motion_with_env
 use valle_motion::{Expr, MotionValue};
 
 const FONT: &[u8] =
-    include_bytes!("../../valle-motion/assets/fonts/noto/NotoSansCJKsc-Regular.otf");
+    include_bytes!("../../../assets/fonts/noto/NotoSansCJKsc-Regular.otf");
 
 fn env() -> MeasureEnv {
     MeasureEnv::new(&[FONT.to_vec()], (1920, 1080)).expect("font bundle builds a measure env")

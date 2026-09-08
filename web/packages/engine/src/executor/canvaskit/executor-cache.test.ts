@@ -37,7 +37,7 @@ describe("long-lived CanvasKit executor caches", () => {
     const executor = new CanvasKitExecutor(CanvasKit);
     const font = new Uint8Array(await Bun.file(resolve(
       import.meta.dir,
-      "../../../../../../crates/valle-motion/assets/fonts/noto/NotoSansCJKsc-Regular.otf",
+      "../../../../../../assets/fonts/noto/NotoSansCJKsc-Regular.otf",
     )).arrayBuffer());
     const shader = new TextEncoder().encode("half4 main(float2 xy) { return half4(1); }");
     try {

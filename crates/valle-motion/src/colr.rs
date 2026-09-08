@@ -310,7 +310,7 @@ impl OutlineBuilder for Outline {
 #[cfg(test)]
 mod tests {
     use super::*;
-    const FONT: &[u8] = include_bytes!("../assets/fonts/noto/Noto-COLRv1.ttf");
+    const FONT: &[u8] = include_bytes!("../../../assets/fonts/noto/Noto-COLRv1.ttf");
     #[test]
     fn every_bundled_noto_color_glyph_lowers_to_a_valid_program() {
         let face = Face::parse(FONT, 0).unwrap();
