@@ -1311,7 +1311,7 @@ impl Emitter<'_> {
         let source_ranges: Vec<Option<GlyphSource>> = resolved
             .runs
             .iter()
-            .map(|run| self.glyph_source(np, &run.glyph_run, &anchors))
+            .map(|run| self.glyph_source(np, &run.glyph_run, &anchors, &built.text))
             .collect();
         // Compute text-path arc length once and reuse placements for text and shadows.
         //
@@ -1624,6 +1624,7 @@ impl Emitter<'_> {
         np: &NodePaint,
         shaped: &ShapedRun,
         anchors: &[Result<SpanAnchor, ClusterReject>],
+        inline_text: &str,
     ) -> Option<GlyphSource> {
         // Empty runs emit no command or side-table entry; missing glyphs have a separate
         // diagnostic.
@@ -1659,6 +1660,34 @@ impl Emitter<'_> {
                 Some(GlyphSource { node, ranges })
             }
             Err(reject) => {
+                // Takumi matches repeated glyph IDs against the whole shaping run. An empty
+                // glyph can therefore point at a synthetic bidi marker instead of its space.
+                // Such a glyph has no pixels or authored source; never relax checks for ink.
+                if reject == ClusterReject::OutOfRun
+                    && !shaped.cluster_ranges.is_empty()
+                    && shaped.cluster_ranges.iter().all(|range| {
+                        inline_text.get(range.clone()).is_some_and(|text| {
+                            !text.is_empty()
+                                && text.chars().all(|c| {
+                                    matches!(c,
+                                '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+                                })
+                        })
+                    })
+                    && ttf_parser::Face::parse(shaped.font_data(), shaped.font_index).is_ok_and(
+                        |face| {
+                            shaped.glyphs.iter().all(|glyph| {
+                                let id = ttf_parser::GlyphId(glyph.id as u16);
+                                !face.is_color_glyph(id)
+                                    && face.glyph_bounding_box(id).is_none()
+                                    && face.glyph_raster_image(id, u16::MAX).is_none()
+                                    && face.glyph_svg_image(id).is_none()
+                            })
+                        },
+                    )
+                {
+                    return None;
+                }
                 self.unsupported(np, reject.reason());
                 None
             }
@@ -1769,6 +1798,14 @@ impl Emitter<'_> {
         source_ranges: Option<GlyphSource>,
         placements: Option<&[Option<Affine>]>,
     ) {
+        match crate::colr::emit_run(&mut self.out.recording, run, layout, shadow, placements) {
+            Ok(true) => return,
+            Err(error) => {
+                self.unsupported(np, error);
+                return;
+            }
+            Ok(false) => {}
+        }
         let shaped = &run.glyph_run;
         let size = shaped.font_size;
         let key = (shaped.font_id(), shaped.font_index, size.to_bits());

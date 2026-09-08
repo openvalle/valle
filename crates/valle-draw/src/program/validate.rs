@@ -1109,7 +1109,9 @@ fn derive_requirements(
             Paint::ConicGradient { .. } => {
                 capabilities.insert(crate::requirements::DrawCapability::GradientConic);
             }
-            Paint::LinearGradient { spread, .. } | Paint::RadialGradient { spread, .. }
+            Paint::LinearGradient { spread, .. }
+            | Paint::RadialGradient { spread, .. }
+            | Paint::TwoCircleGradient { spread, .. }
                 if *spread != super::SpreadMode::Pad =>
             {
                 capabilities.insert(crate::requirements::DrawCapability::GradientSpread);
@@ -1853,6 +1855,29 @@ fn validate_paint(paint: &Paint, index: usize) -> Result<usize, DrawProgramError
             validate_point(*radii, &format!("paints[{index}].radii"))?;
             if radii[0] <= 0.0 || radii[1] <= 0.0 {
                 return invalid(format!("paints[{index}].radii"), "must be positive");
+            }
+            validate_stops(stops, index)?;
+            Ok(stops.len())
+        }
+        Paint::TwoCircleGradient {
+            start,
+            start_radius,
+            end,
+            end_radius,
+            stops,
+            ..
+        } => {
+            validate_point(*start, &format!("paints[{index}].start"))?;
+            validate_point(*end, &format!("paints[{index}].end"))?;
+            if !start_radius.is_finite()
+                || !end_radius.is_finite()
+                || *start_radius < 0.0
+                || *end_radius < 0.0
+            {
+                return invalid(
+                    format!("paints[{index}].radii"),
+                    "must be finite and non-negative",
+                );
             }
             validate_stops(stops, index)?;
             Ok(stops.len())

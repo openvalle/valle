@@ -11,6 +11,7 @@ pub mod artifact;
 pub mod batch;
 pub mod builtin;
 pub mod canonical;
+mod colr;
 pub mod compute;
 pub mod context;
 pub mod controls;

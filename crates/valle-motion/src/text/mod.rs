@@ -8,8 +8,8 @@ pub const DEFAULT_MOTION_FONT: &[u8] =
     include_bytes!("../../assets/fonts/noto/NotoSans-Regular.ttf");
 
 /// Default font family set: Noto Sans weights, KaTeX serif faces, Noto Sans Mono,
-/// symbol and math fonts, Noto Sans CJK SC, and Twemoji Mozilla. Register real weight variants for CSS
-/// font selection; Twemoji supplies deterministic COLR/CPAL emoji layers. `DEFAULT_MOTION_FONT`
+/// symbol and math fonts, Noto Sans CJK SC, and Noto Color Emoji. Register real weight variants for CSS
+/// font selection; Noto supplies deterministic COLRv1 emoji paints. `DEFAULT_MOTION_FONT`
 /// remains the single-face fallback for measurement contracts.
 pub const DEFAULT_MOTION_FONT_WEIGHTS: &[&[u8]] = &[
     include_bytes!("../../assets/fonts/noto/NotoSans-Regular.ttf"),
@@ -26,7 +26,7 @@ pub const DEFAULT_MOTION_FONT_WEIGHTS: &[&[u8]] = &[
     include_bytes!("../../assets/fonts/noto/NotoSansSymbols2-Regular.ttf"),
     include_bytes!("../../assets/fonts/noto/NotoSansMath-Regular.ttf"),
     include_bytes!("../../assets/fonts/noto/NotoSansCJKsc-Regular.otf"),
-    include_bytes!("../../assets/fonts/twemoji/TwemojiMozilla.ttf"),
+    include_bytes!("../../assets/fonts/noto/Noto-COLRv1.ttf"),
 ];
 
 /// Stable file names for the default pack, same order as [`DEFAULT_MOTION_FONT_WEIGHTS`].
@@ -46,7 +46,7 @@ pub const DEFAULT_MOTION_FONT_FILES: &[&str] = &[
     "NotoSansSymbols2-Regular.ttf",
     "NotoSansMath-Regular.ttf",
     "NotoSansCJKsc-Regular.otf",
-    "TwemojiMozilla.ttf",
+    "Noto-COLRv1.ttf",
 ];
 
 /// Register the default Motion pack with CSS generic family aliases.
@@ -70,6 +70,7 @@ pub fn default_motion_font_resource(index: usize, bytes: Vec<u8>) -> FontResourc
     match index {
         0..=4 => resource.generic_family(GenericFamily::SANS_SERIF),
         9 => resource.generic_family(GenericFamily::MONOSPACE),
+        14 => resource.generic_family(GenericFamily::EMOJI),
         5..=8 => resource.generic_family(GenericFamily::SERIF),
         _ => resource,
     }

@@ -5,6 +5,8 @@ import type { CanvasKit } from "canvaskit-wasm";
 import {
   CANVASKIT_GLYPH_COVERAGE_PROFILE,
   CanvasKitExecutor,
+  makePaint,
+  applyClip,
 } from "./executor.ts";
 
 type CanvasKitInitializer = (options: {
@@ -56,4 +58,55 @@ describe("long-lived CanvasKit executor caches", () => {
       executor.dispose();
     }
   });
+});
+
+
+test("two-circle gradient keeps its offset focal point", async () => {
+  const ck = await CanvasKitInit({ locateFile: () => wasmPath });
+  const surface = ck.MakeSurface(24, 24)!;
+  const paint = makePaint(ck, { kind: "twoCircleGradient", value: {
+    start: [4, 12], startRadius: 0, end: [12, 12], endRadius: 12, spread: "pad",
+    stops: [
+      { offset: 0, color: { red: 1, green: 0, blue: 0, alpha: 1 } },
+      { offset: 1, color: { red: 0, green: 0, blue: 1, alpha: 1 } },
+    ],
+  }});
+  try {
+    surface.getCanvas().drawRect(ck.XYWHRect(0, 0, 24, 24), paint);
+    const image = surface.makeImageSnapshot();
+    try {
+      const pixels = image.readPixels(0, 0, {
+        width: 24, height: 24, colorType: ck.ColorType.RGBA_8888,
+        alphaType: ck.AlphaType.Unpremul, colorSpace: ck.ColorSpace.SRGB,
+      })!;
+      const focal = (12 * 24 + 4) * 4, edge = (12 * 24 + 23) * 4;
+      expect(pixels[focal]!).toBeGreaterThan(pixels[focal + 2]!);
+      expect(pixels[edge + 2]!).toBeGreaterThan(pixels[edge]!);
+      expect(pixels[focal + 3]).toBe(255);
+    } finally { image.delete(); }
+  } finally { paint.delete(); surface.delete(); }
+});
+
+
+test("transformed clip preserves device-space image coordinates", async () => {
+  const ck = await CanvasKitInit({ locateFile: () => wasmPath });
+  const surface = ck.MakeSurface(16, 16)!;
+  const paint = new ck.Paint();
+  paint.setColor(ck.RED);
+  try {
+    const draw = { paths: [{ verbs: ["moveTo", "lineTo", "lineTo", "close"],
+      points: [[0, 0], [8, 0], [0, 8]] }] } as Parameters<typeof applyClip>[2];
+    applyClip(ck, surface.getCanvas(), draw,
+      { kind: "path", value: { path: 0, fillRule: "nonZero" } },
+      [1, 0, 4, 0, -1, 12, 0, 0, 1]);
+    surface.getCanvas().drawRect(ck.XYWHRect(4, 4, 8, 8), paint);
+    const image = surface.makeImageSnapshot();
+    try {
+      const pixels = image.readPixels(0, 0, { width: 16, height: 16,
+        colorType: ck.ColorType.RGBA_8888, alphaType: ck.AlphaType.Unpremul,
+        colorSpace: ck.ColorSpace.SRGB })!;
+      expect(pixels[(10 * 16 + 5) * 4 + 3]).toBe(255);
+      expect(pixels[(2 * 16 + 5) * 4 + 3]).toBe(0);
+    } finally { image.delete(); }
+  } finally { paint.delete(); surface.delete(); }
 });

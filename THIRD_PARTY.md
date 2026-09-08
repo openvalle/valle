@@ -43,7 +43,7 @@ We thank the authors and maintainers of the projects below. This document covers
 | --- | --- | --- |
 | **KaTeX** | Nineteen TTF fonts used by the RaTeX adapter and formula regression references, without the KaTeX JavaScript runtime. | [NOTICE and licenses](crates/valle-motion/licenses/katex), [formula fixtures](crates/valle-motion/tests/fixtures) |
 | **Noto** | Text, symbol, mathematical, monospace, and Chinese fonts, including Noto Sans CJK SC. | [Fonts and OFL licenses](crates/valle-motion/assets/fonts/noto) |
-| **Twemoji / Twemoji Mozilla** | Emoji font; font code and artwork licenses are recorded separately. | [Font and licenses](crates/valle-motion/assets/fonts/twemoji) |
+| **Noto Color Emoji** | Unmodified COLRv1 emoji font, SIL Open Font License 1.1. | [Source and revision](crates/valle-motion/assets/fonts/noto/README.md), [license](crates/valle-motion/assets/fonts/noto/OFL-notoemoji.txt) |
 
 ## Models
 

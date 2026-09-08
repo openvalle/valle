@@ -525,6 +525,20 @@ pub struct RadialGradient {
     pub alpha: f64,
 }
 
+/// General radial gradient between two circles, in local coordinates.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TwoCircleGradient {
+    pub start: Point,
+    pub start_radius: f64,
+    pub end: Point,
+    pub end_radius: f64,
+    pub stops: Span,
+    pub spread: SpreadMode,
+    pub alpha: f64,
+}
+
 /// Conic gradient with clockwise degrees from the positive x axis. Translate CSS's top-origin angle
 /// by -90 degrees before recording.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -554,6 +568,7 @@ pub enum Paint {
     Solid(Rgba),
     Linear(LinearGradient),
     Radial(RadialGradient),
+    TwoCircle(TwoCircleGradient),
     Conic(ConicGradient),
 }
 
@@ -585,6 +600,7 @@ impl Paint {
             Paint::Solid(_) => None,
             Paint::Linear(g) => Some(g.stops),
             Paint::Radial(g) => Some(g.stops),
+            Paint::TwoCircle(g) => Some(g.stops),
             Paint::Conic(g) => Some(g.stops),
         }
     }
@@ -861,6 +877,8 @@ pub enum RecordCmd {
     // Grouping and transform state.
     /// Logical group without an offscreen surface, used for hierarchy and location.
     BeginGroup,
+    /// Exactly two child groups: alpha mask first, then content. Lowers to an ordinary Group mask.
+    BeginAlphaMask,
     BeginTransform {
         transform: Affine,
     },
@@ -1002,6 +1020,7 @@ impl RecordCmd {
     pub fn depth_delta(&self) -> i32 {
         match self {
             RecordCmd::BeginGroup
+            | RecordCmd::BeginAlphaMask
             | RecordCmd::BeginTransform { .. }
             | RecordCmd::BeginPerspective { .. }
             | RecordCmd::BeginOpacity { .. }
@@ -1253,6 +1272,15 @@ mod finite {
                     && g.radii.y > 0.0
                     && g.alpha.is_finite()
             }
+            Paint::TwoCircle(g) => {
+                point(&g.start)
+                    && point(&g.end)
+                    && g.start_radius.is_finite()
+                    && g.start_radius >= 0.0
+                    && g.end_radius.is_finite()
+                    && g.end_radius >= 0.0
+                    && g.alpha.is_finite()
+            }
             Paint::Conic(g) => {
                 point(&g.center)
                     && g.start_angle.is_finite()
@@ -1371,6 +1399,7 @@ mod finite {
                     && spread.is_finite()
             }
             RecordCmd::BeginGroup
+            | RecordCmd::BeginAlphaMask
             | RecordCmd::BeginClipPath { .. }
             | RecordCmd::BeginBlend { .. }
             | RecordCmd::BeginFilter { .. }

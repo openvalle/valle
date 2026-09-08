@@ -975,6 +975,37 @@ impl ProgramRuntime {
                 .ok_or_else(|| DrawError::Unsupported("radial gradient".into()))?;
                 result.set_shader(shader);
             }
+            Paint::TwoCircleGradient {
+                start,
+                start_radius,
+                end,
+                end_radius,
+                stops,
+                spread,
+            } => {
+                let (colors, positions) = gradient_parts(stops);
+                let colors = gradient::Colors::new(
+                    &colors,
+                    Some(&positions),
+                    tile_mode(*spread),
+                    Some(working_color_space().map_err(|e| DrawError::Surface(e.to_string()))?),
+                );
+                let gradient = gradient::Gradient::new(colors, gradient_interpolation());
+                let shader = gradient::shaders::two_point_conical_gradient(
+                    (
+                        SkPoint::new(start[0] as f32, start[1] as f32),
+                        *start_radius as f32,
+                    ),
+                    (
+                        SkPoint::new(end[0] as f32, end[1] as f32),
+                        *end_radius as f32,
+                    ),
+                    &gradient,
+                    None,
+                )
+                .ok_or_else(|| DrawError::Unsupported("two-circle gradient".into()))?;
+                result.set_shader(shader);
+            }
             Paint::ConicGradient {
                 center,
                 start_angle_degrees,
@@ -1441,10 +1472,9 @@ fn clip_image_into(
     let Some(input) = input else {
         return Ok(());
     };
-    draw_program_image_with_mode(surface, input, target_origin, SkBlendMode::Src, 1.0);
     let mut paint = SkPaint::default();
     paint.set_anti_alias(true);
-    paint.set_blend_mode(SkBlendMode::DstIn);
+    paint.set_blend_mode(SkBlendMode::Src);
     paint.set_color4f(Color4f::new(1.0, 1.0, 1.0, 1.0), None);
     let canvas = surface.canvas();
     canvas.save();
@@ -1452,6 +1482,7 @@ fn clip_image_into(
     canvas.concat(&matrix);
     draw_clip_shape(canvas, clip, paths, &paint)?;
     canvas.restore();
+    draw_program_image_with_mode(surface, input, target_origin, SkBlendMode::SrcIn, 1.0);
     Ok(())
 }
 
@@ -1953,6 +1984,53 @@ impl From<SurfaceError> for DrawError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn path_clip_clears_pixels_outside_the_outline() {
+        let mut source = skia_safe::surfaces::raster_n32_premul((8, 8)).unwrap();
+        source.canvas().clear(skia_safe::Color::RED);
+        let input = ProgramImage {
+            image: source.image_snapshot(),
+            roi: DeviceRect {
+                x: 0,
+                y: 0,
+                width: 8,
+                height: 8,
+            },
+        };
+        let mut output = skia_safe::surfaces::raster_n32_premul((8, 8)).unwrap();
+        let path = PathData {
+            verbs: vec![
+                PathVerb::MoveTo,
+                PathVerb::LineTo,
+                PathVerb::LineTo,
+                PathVerb::Close,
+            ],
+            points: vec![[0.0, 0.0], [8.0, 0.0], [0.0, 8.0]],
+        };
+        clip_image_into(
+            &mut output,
+            Some(&input),
+            &Clip::Path {
+                path: valle_draw::program::PathId::from_raw(0),
+                fill_rule: FillRule::NonZero,
+            },
+            Matrix::new_identity(),
+            &[path],
+            [0, 0],
+        )
+        .unwrap();
+        let info = skia_safe::ImageInfo::new(
+            (8, 8),
+            skia_safe::ColorType::RGBA8888,
+            skia_safe::AlphaType::Unpremul,
+            None,
+        );
+        let mut pixels = vec![0u8; 8 * 8 * 4];
+        assert!(output.read_pixels(&info, &mut pixels, 8 * 4, (0, 0)));
+        assert_eq!(pixels[(8 + 1) * 4 + 3], 255);
+        assert_eq!(pixels[(6 * 8 + 6) * 4 + 3], 0);
+    }
 
     #[test]
     fn program_filter_maps_similarity_into_device_space() {

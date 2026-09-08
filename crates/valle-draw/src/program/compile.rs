@@ -105,6 +105,7 @@ pub fn compile_recording_with_catalog(
 
 struct RecordingFrame {
     group: Group,
+    alpha_mask: bool,
 }
 
 struct RecordingCompiler<'a> {
@@ -159,6 +160,10 @@ impl<'a> RecordingCompiler<'a> {
         use recording::RecordCmd;
         match command {
             RecordCmd::BeginGroup => self.begin(Group::plain(Vec::new())),
+            RecordCmd::BeginAlphaMask => {
+                self.begin(Group::plain(Vec::new()));
+                self.stack.last_mut().unwrap().alpha_mask = true;
+            }
             RecordCmd::BeginTransform { transform } => {
                 let mut group = Group::plain(Vec::new());
                 group.transform = Transform2d::from_affine(Affine2d(transform.0));
@@ -197,6 +202,7 @@ impl<'a> RecordingCompiler<'a> {
                 let mut group = Group::plain(Vec::new());
                 group.opacity = *alpha as f32;
                 group.layer_bounds = *bounds;
+                group.isolated = true;
                 self.begin(group);
             }
             RecordCmd::BeginBlend { mode } => {
@@ -532,14 +538,29 @@ impl<'a> RecordingCompiler<'a> {
     }
 
     fn begin(&mut self, group: Group) {
-        self.stack.push(RecordingFrame { group });
+        self.stack.push(RecordingFrame {
+            group,
+            alpha_mask: false,
+        });
     }
 
     fn end(&mut self, command: usize) -> Result<(), ProgramRecordingError> {
-        let frame = self
+        let mut frame = self
             .stack
             .pop()
             .ok_or(ProgramRecordingError::UnexpectedEnd { command })?;
+        if frame.alpha_mask {
+            if frame.group.children.len() != 2 {
+                return Err(ProgramRecordingError::InvalidRecording(
+                    "alpha mask requires mask and content groups".into(),
+                ));
+            }
+            let source = frame.group.children.remove(0);
+            frame.group.mask = Some(Mask {
+                source,
+                mode: MaskMode::Alpha,
+            });
+        }
         let node = self.builder.push_node(Node::Group(frame.group));
         self.push_node(node);
         Ok(())
@@ -885,6 +906,14 @@ fn paint_of(
             radii: [gradient.radii.x, gradient.radii.y],
             stops: stops(gradient.stops, gradient.alpha as f32)?,
             spread: spread_mode(gradient.spread),
+        },
+        recording::Paint::TwoCircle(g) => Paint::TwoCircleGradient {
+            start: [g.start.x, g.start.y],
+            start_radius: g.start_radius,
+            end: [g.end.x, g.end.y],
+            end_radius: g.end_radius,
+            stops: stops(g.stops, g.alpha as f32)?,
+            spread: spread_mode(g.spread),
         },
         recording::Paint::Conic(gradient) => Paint::ConicGradient {
             center: [gradient.center.x, gradient.center.y],

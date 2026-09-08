@@ -2364,15 +2364,23 @@ function drawLuminanceMaskValue(CanvasKit: CanvasKit, canvas: Canvas, mask: Imag
   }
 }
 
-function applyClip(CanvasKit: CanvasKit, canvas: Canvas, draw: DrawProgramWire, clip: Wire, matrix: number[]): void {
-  canvas.concat(matrix);
-  if (clip.kind === "rect") canvas.clipRect(skRect(CanvasKit, rect(clip.value, "clip rect")), CanvasKit.ClipOp.Intersect, true);
-  else if (clip.kind === "roundRect") canvas.clipRRect(roundRect(CanvasKit, record(clip.value, "round clip")), CanvasKit.ClipOp.Intersect, true);
-  else if (clip.kind === "path") {
+export function applyClip(CanvasKit: CanvasKit, canvas: Canvas, draw: DrawProgramWire, clip: Wire, matrix: number[]): void {
+  // Clip geometry is local, while scheduled images are already in device space.
+  // Transform the path without changing the canvas matrix used to draw those images.
+  let builder: InstanceType<CanvasKit["PathBuilder"]>;
+  if (clip.kind === "path") {
     const value = record(clip.value, "path clip");
     const path = buildPath(CanvasKit, requiredIndex(draw.paths, value.path, "clip path"), String(value.fillRule));
-    try { canvas.clipPath(path, CanvasKit.ClipOp.Intersect, true); } finally { path.delete(); }
-  } else fail("unsupported_clip", `clip '${String(clip.kind)}' is not closed`);
+    try { builder = new CanvasKit.PathBuilder(path); } finally { path.delete(); }
+  } else {
+    builder = new CanvasKit.PathBuilder();
+    if (clip.kind === "rect") builder.addRect(skRect(CanvasKit, rect(clip.value, "clip rect")));
+    else if (clip.kind === "roundRect") builder.addRRect(roundRect(CanvasKit, record(clip.value, "round clip")));
+    else { builder.delete(); fail("unsupported_clip", `clip '${String(clip.kind)}' is not closed`); }
+  }
+  builder.transform(matrix);
+  const path = builder.detachAndDelete();
+  try { canvas.clipPath(path, CanvasKit.ClipOp.Intersect, true); } finally { path.delete(); }
 }
 
 function buildPath(CanvasKit: CanvasKit, wire: { verbs: string[]; points: Array<[number, number]> }, fillRule: string): Path {
@@ -2390,7 +2398,7 @@ function buildPath(CanvasKit: CanvasKit, wire: { verbs: string[]; points: Array<
   return builder.detachAndDelete();
 }
 
-function makePaint(CanvasKit: CanvasKit, raw: unknown): Paint {
+export function makePaint(CanvasKit: CanvasKit, raw: unknown): Paint {
   const wire = record(raw, "DrawProgram paint");
   const paint = new CanvasKit.Paint();
   paint.setAntiAlias(true);
@@ -2430,6 +2438,12 @@ function makePaint(CanvasKit: CanvasKit, raw: unknown): Paint {
         CanvasKit.Matrix.scaled(radii[0] / radius, radii[1] / radius, center[0], center[1]),
         1,
         CanvasKit.ColorSpace.SRGB,
+      );
+    } else if (wire.kind === "twoCircleGradient") {
+      shader = CanvasKit.Shader.MakeTwoPointConicalGradient(
+        pair(value.start, "gradient start"), finiteNumber(value.startRadius, "gradient start radius"),
+        pair(value.end, "gradient end"), finiteNumber(value.endRadius, "gradient end radius"),
+        colors, positions, mode, undefined, 1, CanvasKit.ColorSpace.SRGB,
       );
     } else if (wire.kind === "conicGradient") {
       const center = pair(value.center, "conic gradient center");

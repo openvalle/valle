@@ -126,6 +126,14 @@ pub enum Paint {
         stops: Vec<GradientStop>,
         spread: SpreadMode,
     },
+    TwoCircleGradient {
+        start: [f64; 2],
+        start_radius: f64,
+        end: [f64; 2],
+        end_radius: f64,
+        stops: Vec<GradientStop>,
+        spread: SpreadMode,
+    },
     ConicGradient {
         center: [f64; 2],
         start_angle_degrees: f64,
