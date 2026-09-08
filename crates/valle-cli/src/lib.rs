@@ -527,6 +527,26 @@ pub struct InterpolateArgs {
     pub json: bool,
 }
 
+/// Delivery controls independent of the logical Motion authoring canvas.
+#[derive(clap::Args, Debug, Clone, Default)]
+pub struct MotionRenderTuningArgs {
+    /// Concurrent frame renderers (1-8). Defaults: Raster at most 2; Metal 1.
+    #[arg(long, value_parser = clap::value_parser!(u8).range(1..=8))]
+    pub workers: Option<u8>,
+    /// Require hardware H.264 encoding. Fails if unavailable; no software fallback.
+    #[arg(long, conflicts_with = "frame")]
+    pub hardware_encode: bool,
+    /// Hardware encoder target bitrate in bits/second. Defaults to a resolution-based estimate.
+    #[arg(long, requires = "hardware_encode", conflicts_with = "frame", value_parser = clap::value_parser!(u32).range(1..))]
+    pub bitrate: Option<u32>,
+    /// Software H.264 encoder threads. Defaults to automatic selection.
+    #[arg(long, conflicts_with_all = ["hardware_encode", "frame"], value_parser = clap::value_parser!(u16).range(1..))]
+    pub encode_threads: Option<u16>,
+    /// Delivery dimensions; scales the logical --size canvas without changing layout.
+    #[arg(long, value_parser = parse_canvas_size)]
+    pub output_size: Option<(u32, u32)>,
+}
+
 /// `valle motion` artifact authoring commands.
 #[derive(Subcommand)]
 pub enum MotionAction {
@@ -557,6 +577,8 @@ pub enum MotionAction {
         /// Compositor backend. Auto uses an available Metal device on macOS, otherwise CPU Raster.
         #[arg(long, value_enum, default_value = "auto")]
         backend: MotionRenderBackend,
+        #[command(flatten)]
+        tuning: MotionRenderTuningArgs,
         /// Bind an asset control as name=path; may be repeated.
         #[arg(long = "asset", value_name = "NAME=PATH")]
         assets: Vec<String>,

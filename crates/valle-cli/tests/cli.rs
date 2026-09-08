@@ -826,6 +826,12 @@ export default function Demo(ctx) {
             "info",
             "--backend",
             "raster",
+            "--workers",
+            "4",
+            "--encode-threads",
+            "2",
+            "--output-size",
+            "320x180",
             "--duration",
             "0.3",
             "--fps",
@@ -847,6 +853,9 @@ export default function Demo(ctx) {
     assert!(stderr.contains("[libx264"), "{stderr}");
     assert!(stderr.contains("Qavg:"), "{stderr}");
     assert_eq!(raster_report["delivery"]["backend"], "raster");
+    assert_eq!(raster_report["delivery"]["width"], 320);
+    assert_eq!(raster_report["delivery"]["height"], 180);
+    assert!(stderr.contains("threads=2 "), "{stderr}");
     assert_eq!(raster_report["renderId"], report["renderId"]);
 }
 
@@ -1045,4 +1054,34 @@ fn timeline_renders_embedded_lottie_and_reports_frame_progress() {
             .chunks_exact(4)
             .any(|p| p[0] > 200 && p[1] < 30 && p[2] < 30)
     );
+}
+
+#[test]
+fn motion_render_rejects_invalid_delivery_options() {
+    for extra in [
+        vec!["--workers", "0"],
+        vec!["--workers", "9"],
+        vec!["--encode-threads", "0"],
+        vec!["--hardware-encode", "--frame", "0"],
+        vec!["--hardware-encode", "--encode-threads", "2"],
+        vec!["--bitrate", "1000000"],
+        vec!["--hardware-encode", "--bitrate", "0"],
+        vec!["--output-size", "0x1080"],
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let output = dir.path().join("out.mp4");
+        let result = valle()
+            .args(["motion", "render", "missing.motion.tsx", "-o"])
+            .arg(&output)
+            .args(&extra)
+            .output()
+            .unwrap();
+        assert_eq!(
+            result.status.code(),
+            Some(2),
+            "{extra:?}: {}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        assert!(!output.exists());
+    }
 }

@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
-use crate::{MotionAction, MotionCanvasArgs};
+use crate::{MotionAction, MotionCanvasArgs, MotionRenderTuningArgs};
 use anyhow::{Context, Result, anyhow, bail};
 use serde::Serialize;
 use valle_motion::{
@@ -39,6 +39,7 @@ pub fn run(action: MotionAction) -> Result<std::process::ExitCode> {
             input,
             output,
             backend,
+            tuning,
             assets,
             font,
             data,
@@ -56,6 +57,7 @@ pub fn run(action: MotionAction) -> Result<std::process::ExitCode> {
             resolve_canvas_size(canvas)?,
             frame,
             backend.into(),
+            tuning,
         ),
         MotionAction::Studio {
             input,
@@ -94,12 +96,16 @@ fn render(
     canvas: MotionViewport,
     frame: Option<i64>,
     backend: valle_render::executor::skia::SkiaBackendKind,
+    tuning: MotionRenderTuningArgs,
 ) -> Result<std::process::ExitCode> {
     use valle_engine::fixed_package::{fixed_package_files, open_verified_fixed_package};
     use valle_render::host::{
         NativeProject, NativeRenderOptions, NativeRenderer, NativeResourceCatalog,
     };
 
+    if let Some((width, height)) = tuning.output_size {
+        validate_pixel_size(MotionViewport::new(width, height), "output")?;
+    }
     super::fixed_render::require_new_output(output)?;
     let extension = if frame.is_some() { "png" } else { "mp4" };
     if !output
@@ -173,6 +179,11 @@ fn render(
         project,
         NativeRenderOptions {
             backend,
+            raster_workers: tuning.workers.map(usize::from),
+            hardware_encode: tuning.hardware_encode,
+            bitrate: tuning.bitrate.map(|value| value as usize),
+            encode_threads: tuning.encode_threads.map(usize::from),
+            output_size: tuning.output_size,
             progress: crate::output::render_progress(),
             ..NativeRenderOptions::default()
         },
