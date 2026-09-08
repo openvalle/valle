@@ -513,9 +513,7 @@ fn render_parallel(
             abort.store(true, Ordering::Release);
             // A worker may already be blocked on its one-slot channel. Drain every channel before
             // the scoped threads join so cancellation cannot deadlock the error path.
-            for receiver in &receivers {
-                while receiver.recv().is_ok() {}
-            }
+            drain_workers(&receivers, &mut first_error);
         }
     });
 
@@ -955,4 +953,52 @@ pub enum PipelineError {
     InvalidWorkerCount,
     #[error("raster workers produced frame {actual} while ordered delivery expected {expected}")]
     OutOfOrder { expected: usize, actual: usize },
+}
+
+/// Drain all producers before joining, retaining the real error if an aborted peer closed first.
+fn drain_workers<T>(
+    receivers: &[crossbeam_channel::Receiver<Result<T, PipelineError>>],
+    first_error: &mut Option<PipelineError>,
+) {
+    for receiver in receivers {
+        while let Ok(message) = receiver.recv() {
+            if let Err(error) = message
+                && matches!(first_error, Some(PipelineError::IncompleteEvidence))
+            {
+                *first_error = Some(error);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod worker_error_tests {
+    use super::*;
+
+    #[test]
+    fn aborted_peer_closing_first_does_not_hide_producer_error() {
+        let (peer, peer_rx) = crossbeam_channel::bounded::<Result<(), PipelineError>>(1);
+        let (producer, producer_rx) = crossbeam_channel::bounded(1);
+        drop(peer); // Earlier in frame order, this worker sees abort and exits.
+        producer.send(Err(PipelineError::Deadline)).unwrap();
+        drop(producer);
+        assert!(peer_rx.recv().is_err());
+        let mut error = Some(PipelineError::IncompleteEvidence);
+        drain_workers(&[peer_rx, producer_rx], &mut error);
+        assert!(matches!(error, Some(PipelineError::Deadline)));
+    }
+
+    #[test]
+    fn draining_blocked_producers_preserves_the_original_sink_error() {
+        let (sender, receiver) = crossbeam_channel::bounded(1);
+        std::thread::scope(|scope| {
+            scope.spawn(move || {
+                sender.send(Ok(())).unwrap();
+                sender.send(Err(PipelineError::Cancelled)).unwrap();
+            });
+            let mut error = Some(PipelineError::Sink("disk full".into()));
+            drain_workers(&[receiver], &mut error);
+            assert!(matches!(error, Some(PipelineError::Sink(ref text)) if text == "disk full"));
+        });
+    }
 }

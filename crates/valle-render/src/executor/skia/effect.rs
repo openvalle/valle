@@ -44,7 +44,7 @@ pub(crate) struct EffectRuntime {
     spotlight: Option<Arc<RuntimeEffect>>,
     extension_color_gain: Option<Arc<RuntimeEffect>>,
     chroma_key: Option<Arc<RuntimeEffect>>,
-    output_transform: Option<Arc<RuntimeEffect>>,
+    output_transform: Option<(OutputSpec, Arc<RuntimeEffect>)>,
     counters: EffectCacheCounters,
 }
 
@@ -127,15 +127,19 @@ impl EffectRuntime {
                     }
                 }
                 ExecutionPassKind::CopyConvert {
-                    operation: CopyOperation::OutputTransform { .. },
+                    operation: CopyOperation::OutputTransform { spec },
                     ..
                 } => {
-                    if self.output_transform.is_none() {
+                    if self
+                        .output_transform
+                        .as_ref()
+                        .is_some_and(|(cached, _)| cached == spec)
+                    {
+                        self.counters.hits = self.counters.hits.saturating_add(1);
+                    } else {
                         self.counters.misses = self.counters.misses.saturating_add(1);
                         self.output_transform =
-                            Some(Arc::new(compile(OUTPUT_TRANSFORM, "outputTransform")?));
-                    } else {
-                        self.counters.hits = self.counters.hits.saturating_add(1);
+                            Some((*spec, Arc::new(compile_output_transform(*spec)?)));
                     }
                 }
                 _ => {}
@@ -277,49 +281,11 @@ impl EffectRuntime {
                 "direct GPU output requires non-dithered eight-bit delivery".into(),
             ));
         }
-        let effect = self
+        let (admitted_spec, effect) = self
             .output_transform
             .as_ref()
             .ok_or_else(|| DrawError::Unsupported("outputTransform".into()))?;
-        let primaries = match spec.target().primaries {
-            ColorPrimaries::Rec709 => 0.0,
-            ColorPrimaries::DisplayP3 => 1.0,
-            ColorPrimaries::Rec2020 => 2.0,
-        };
-        let transfer = match spec.target().transfer {
-            TransferFunction::Linear => 0.0,
-            TransferFunction::Srgb => 1.0,
-            TransferFunction::Rec709 => 2.0,
-            TransferFunction::Pq => 3.0,
-            TransferFunction::Hlg => 4.0,
-        };
-        let tone_map = match spec.tone_map() {
-            ToneMap::None => 0.0,
-            ToneMap::ReinhardLuminance => 1.0,
-        };
-        let gamut_map = match spec.gamut_map() {
-            GamutMap::Clip => 0.0,
-            GamutMap::ChromaCompress => 1.0,
-        };
-        let alpha = match spec.alpha() {
-            OutputAlphaMode::Opaque => 0.0,
-            OutputAlphaMode::StraightCoverage => 1.0,
-            OutputAlphaMode::PremultipliedCoverage => 2.0,
-        };
-        let uniforms = [
-            primaries,
-            transfer,
-            tone_map,
-            gamut_map,
-            alpha,
-            f32::from(spec.reference_white().get()),
-            f32::from(spec.peak_luminance().get()),
-        ];
-        let mut bytes = Vec::with_capacity(uniforms.len() * 4);
-        for value in uniforms {
-            bytes.extend_from_slice(&value.to_ne_bytes());
-        }
-        if bytes.len() != effect.uniform_size() || effect.children().len() != 1 {
+        if *admitted_spec != spec || effect.uniform_size() != 0 || effect.children().len() != 1 {
             return Err(DrawError::Internal(
                 "outputTransform RuntimeEffect ABI mismatch".into(),
             ));
@@ -332,7 +298,7 @@ impl EffectRuntime {
             )
             .ok_or_else(|| DrawError::Unsupported("raw output image shader".into()))?;
         effect
-            .make_shader(Data::new_copy(&bytes), &[ChildPtr::Shader(child)], None)
+            .make_shader(Data::new_empty(), &[ChildPtr::Shader(child)], None)
             .ok_or_else(|| DrawError::Unsupported("outputTransform shader".into()))
     }
 
@@ -899,11 +865,78 @@ pub(crate) fn apply_filter_into(
     draw_filter(surface.canvas(), input, filter)
 }
 
+// OutputSpec is fixed for an admitted plan. Specialize the shared shader once so the CPU
+// raster pipeline does not execute uniform branches for formats this output never uses.
+fn compile_output_transform(spec: OutputSpec) -> Result<RuntimeEffect, DrawError> {
+    let primaries = match spec.target().primaries {
+        ColorPrimaries::Rec709 => 0.0,
+        ColorPrimaries::DisplayP3 => 1.0,
+        ColorPrimaries::Rec2020 => 2.0,
+    };
+    let transfer = match spec.target().transfer {
+        TransferFunction::Linear => 0.0,
+        TransferFunction::Srgb => 1.0,
+        TransferFunction::Rec709 => 2.0,
+        TransferFunction::Pq => 3.0,
+        TransferFunction::Hlg => 4.0,
+    };
+    let tone_map = match spec.tone_map() {
+        ToneMap::None => 0.0,
+        ToneMap::ReinhardLuminance => 1.0,
+    };
+    let gamut_map = match spec.gamut_map() {
+        GamutMap::Clip => 0.0,
+        GamutMap::ChromaCompress => 1.0,
+    };
+    let alpha = match spec.alpha() {
+        OutputAlphaMode::Opaque => 0.0,
+        OutputAlphaMode::StraightCoverage => 1.0,
+        OutputAlphaMode::PremultipliedCoverage => 2.0,
+    };
+    let uniforms = [
+        primaries,
+        transfer,
+        tone_map,
+        gamut_map,
+        alpha,
+        f32::from(spec.reference_white().get()),
+        f32::from(spec.peak_luminance().get()),
+    ];
+    let mut source = OUTPUT_TRANSFORM.to_owned();
+    for (name, value) in [
+        "primariesCode",
+        "transferCode",
+        "toneMapCode",
+        "gamutMapCode",
+        "alphaCode",
+        "referenceWhiteNits",
+        "peakNits",
+    ]
+    .into_iter()
+    .zip(uniforms)
+    {
+        source = source.replace(
+            &format!("uniform float {name};"),
+            &format!("const float {name} = {value:?};"),
+        );
+    }
+    compile(&source, "outputTransform")
+}
+
 fn draw_filter(
     canvas: &skia_safe::Canvas,
     input: &Image,
     filter: &Filter,
 ) -> Result<(), DrawError> {
+    if super::blur::draw(
+        canvas,
+        input,
+        skia_safe::IRect::from_size(input.dimensions()),
+        [0, 0],
+        filter,
+    )? {
+        return Ok(());
+    }
     let mut paint = Paint::default();
     paint.set_blend_mode(BlendMode::Src);
     if let Some(image_filter) = image_filter(filter)? {
@@ -1366,9 +1399,7 @@ mod tests {
         let expected = stage_output(&source, spec, &target_info).unwrap();
 
         let runtime = EffectRuntime {
-            output_transform: Some(Arc::new(
-                compile(OUTPUT_TRANSFORM, "outputTransform").unwrap(),
-            )),
+            output_transform: Some((spec, Arc::new(compile_output_transform(spec).unwrap()))),
             ..EffectRuntime::new()
         };
         let shader = runtime.output_shader(&source, spec).unwrap();

@@ -419,10 +419,17 @@ impl<'s> Compiler<'s> {
                 Some(value) => StyleValue::Static { value },
                 None => match self.fold_to_value(&property.value) {
                     Some(value) => StyleValue::Static { value },
-                    None => match self.lower_expr(&property.value) {
-                        Some(expr) => StyleValue::Expr { expr },
-                        None => continue,
-                    },
+                    None => {
+                        match if matches!(property_name.as_str(), "background" | "background-image")
+                        {
+                            self.lower_css_value_expression(&property.value)
+                        } else {
+                            self.lower_expr(&property.value)
+                        } {
+                            Some(expr) => StyleValue::Expr { expr },
+                            None => continue,
+                        }
+                    }
                 },
             };
             if property_name == "font-family" {

@@ -316,3 +316,54 @@ test("planner rejects every pending promise after a batch-level worker failure",
   })).toThrow("Product frame planner failed");
   pool.close();
 });
+
+
+test("a cancelled prefetch still supplies the template needed by the next seek", async () => {
+  type Batch = Extract<ProductFrameWorkerRequest, { type: "prepareBatch" }>;
+  const batches: Batch[] = [];
+  const worker = {
+    onmessage: null as ((event: MessageEvent<unknown>) => void) | null,
+    onerror: null as ((event: ErrorEvent) => void) | null,
+    postMessage(message: ProductFrameWorkerRequest) {
+      if (message.type === "configure") {
+        queueMicrotask(() => this.emit({ protocolVersion: PRODUCT_FRAME_WORKER_PROTOCOL_VERSION,
+          type: "configured", id: message.id, renderId: message.bootstrap.expectedRenderId }));
+      } else batches.push(message);
+    },
+    emit(message: ProductFrameWorkerResponse) {
+      this.onmessage?.({ data: message } as MessageEvent<unknown>);
+    },
+    complete(job: Batch["jobs"][number], planPacket: Uint8Array | null) {
+      const {key, renderId, epoch, frame, generation} = job.request;
+      this.emit({ protocolVersion: PRODUCT_FRAME_WORKER_PROTOCOL_VERSION, type: "requests", id: job.id,
+        stage: { key, renderId, epoch, frame, generation, requestPacket: new Uint8Array(),
+          inspectionJson: "{}", evaluatePrepareMs: 0, requestInspectMs: 0,
+          workerTurnGapMs: 0, previousReleaseMs: 0 } });
+      this.emit({ protocolVersion: PRODUCT_FRAME_WORKER_PROTOCOL_VERSION, type: "ready", id: job.id,
+        stage: { key, renderId, epoch, frame, generation, templateHash: RENDER_ID, planPacket,
+          bindingPacket: new Uint8Array(), schedulePacket: new Uint8Array(),
+          templateCacheHit: planPacket === null, lowerMs: 0, bindPacketsMs: 0, totalWorkerMs: 0 } });
+    },
+    terminate() {},
+  };
+  let generation=0n;
+  const pool=new ProductFramePlannerPool({workerUrl:"frame-worker.js",size:1,
+    workerFactory:()=>worker, allocateGeneration:()=>++generation});
+  const bootstrap=emptyProductEngineBootstrap("engine.js","engine.wasm","{}","{}","{}","{}");
+  bootstrap.expectedRenderId=RENDER_ID;
+  await pool.init(bootstrap);
+  try {
+    const input={frame:0,width:320,height:180,transparent:false,maxSurfaceBytes:1024n,maxFrameBytes:2048n};
+    const cancelled=pool.prefetch(input);
+    await Promise.resolve();
+    pool.advanceEpoch();
+    await expect(cancelled.ready).rejects.toThrow("epoch changed");
+    const template=Uint8Array.of(1,2,3);
+    worker.complete(batches[0]!.jobs[0]!,template);
+    const next=pool.prepare({...input,frame:15});
+    await Promise.resolve();
+    worker.complete(batches[1]!.jobs[0]!,null);
+    expect((await next.ready).planPacket).toEqual(template);
+    expect(pool.snapshot()).toMatchObject({completed:1,cancelled:1,errors:0});
+  } finally {pool.close();}
+});

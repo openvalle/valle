@@ -258,19 +258,26 @@ impl Group {
         }
     }
 
-    /// Returns true only when replacing this group with its ordered children is pixel-equivalent.
-    pub fn is_plain(&self) -> bool {
+    /// Whether this container only transforms its children, without a group pixel operation.
+    /// It can share a raster target only when its entire subtree is destination-independent;
+    /// in that case isolation and layer-bound metadata do not change the result.
+    pub fn is_transform_only(&self) -> bool {
         self.glass.is_none()
             && self.glass_foreground.is_none()
-            && self.transform == Transform2d::IDENTITY
             && self.clip.is_none()
             && self.filters.is_empty()
             && self.mask.is_none()
             && self.opacity == 1.0
             && self.internal_blend == BlendMode::Normal
-            && !self.isolated
             && self.backdrop.is_none()
             && self.shader.is_none()
+    }
+
+    /// Returns true only when replacing this group with its ordered children is pixel-equivalent.
+    pub fn is_plain(&self) -> bool {
+        self.is_transform_only()
+            && self.transform == Transform2d::IDENTITY
+            && !self.isolated
             && self.layer_bounds.is_none()
     }
 }

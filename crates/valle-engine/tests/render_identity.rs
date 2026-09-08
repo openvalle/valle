@@ -2944,3 +2944,76 @@ fn compiled_program_semantics_change_render_identity_but_execution_site_does_not
     assert_ne!(preview.render_id(), changed.render_id());
     assert_ne!(preview.render_id(), changed_background.render_id());
 }
+
+#[test]
+fn motion_backdrop_fractional_projection_keeps_canonical_sample_bounds() {
+    // Preserve the original TSX geometry and animation: frame 175 used to produce
+    // different rounded sample bounds in preparation and strict binding validation.
+    let artifact = Arc::new(
+        valle_compiler::motion::compile_motion(
+            r##"
+export default function Demo(ctx) {
+  const t = ctx.localFrame / 300;
+  return <Scene style={{ width: 1920, height: 1080, backgroundColor: "#0891b2" }}>
+    <View style={{ position: "absolute", left: 90, top: 190, width: 550, height: 350,
+      backgroundColor: "#ffffff22", backdropFilter: `blur(${4 + 4 * sin(t * 6.283185307)}px)` }} />
+  </Scene>;
+}
+"##,
+        )
+        .unwrap()
+        .artifact,
+    );
+    let mut document = motion_document("component:backdrop");
+    document["document"]["canvas"]["duration"] = json!("10/1");
+    let clip = &mut document["document"]["visual"]["tracks"][0]["items"][0];
+    clip["duration"] = json!("10/1");
+    clip["source"]["sourceDuration"] = json!("10/1");
+    clip["source"]["props"] = json!({});
+    clip["source"]["resources"] = json!({});
+    let manifest = manifest(json!({"component:backdrop": motion_entry(&artifact)}));
+    let bindings = ResourceBindings::new()
+        .with_binding(
+            "component:backdrop",
+            custom_motion_binding(&manifest, "component:backdrop", artifact, &[], 1),
+        )
+        .unwrap();
+    let render = open(
+        &timeline(&document),
+        &manifest,
+        &bindings,
+        &Capabilities::new().with_artifact_abi("valle.motion/artifact@1"),
+        &baseline_profile(),
+    )
+    .unwrap();
+    let mut compiler = render.frame_compiler();
+    for scale in [1, 2] {
+        let spec = valle_engine::frame::RenderSpec::new(
+            1920 * scale,
+            1080 * scale,
+            valle_engine::frame::RenderQuality::Preview,
+            valle_engine::resource::OutputSpec::srgb_preview(
+                valle_engine::resource::OutputBackground::opaque_srgb([0, 0, 0]),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        for frame in [174, 175, 176, 225] {
+            let prepared = compiler
+                .evaluate_prepare(render.render_id(), FrameKey::new(frame), spec)
+                .unwrap_or_else(|error| panic!("frame {frame}, scale {scale}: {error}"));
+            let output = prepared.prepared();
+            assert!(
+                output
+                    .frame
+                    .programs
+                    .iter()
+                    .any(|program| !program.destination_uses.is_empty()),
+                "fixture must exercise backdrop destination bindings"
+            );
+            output
+                .validate()
+                .unwrap_or_else(|error| panic!("frame {frame}, scale {scale}: {error}"));
+        }
+    }
+}

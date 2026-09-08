@@ -7,7 +7,10 @@ import {
   CanvasKitExecutor,
   makePaint,
   applyClip,
+  drawProgramNode,
 } from "./executor.ts";
+
+import { CanvasKitBuiltinRuntime } from "./builtin-runtime.ts";
 
 type CanvasKitInitializer = (options: {
   locateFile(file: string): string;
@@ -109,4 +112,50 @@ test("transformed clip preserves device-space image coordinates", async () => {
       expect(pixels[(2 * 16 + 5) * 4 + 3]).toBe(0);
     } finally { image.delete(); }
   } finally { paint.delete(); surface.delete(); }
+});
+
+
+test("RasterTree preserves nested transforms, translucent order and pixel boundaries", async () => {
+  const ck = await CanvasKitInit({ locateFile: () => wasmPath });
+  const surface = ck.MakeSurface(32, 32)!;
+  const builtins = new CanvasKitBuiltinRuntime(ck);
+  const identity = [1, 0, 0, 0, 1, 0, 0, 0, 1];
+  const group = (children: number[], transform: number[]) => ({ kind: "group", value: {
+    children, transform, filters: [], opacity: 1, internalBlend: "normal", isolated: true,
+  }});
+  const draw = {
+    nodes: [
+      group([1, 3], [2, 0, 3, 0, 2, 5, 0, 0, 1]),
+      group([2], identity),
+      { kind: "path", value: { path: 0, fill: 0, fillRule: "nonZero" } },
+      group([4], [1, 0, 4, 0, 1, 0, 0, 0, 1]),
+      { kind: "path", value: { path: 0, fill: 1, fillRule: "nonZero" } },
+    ],
+    paths: [{ verbs: ["moveTo", "lineTo", "lineTo", "lineTo", "close"],
+      points: [[0, 0], [8, 0], [8, 8], [0, 8]] }],
+    paints: [
+      { kind: "solid", value: { red: 1, green: 0, blue: 0, alpha: 1 } },
+      { kind: "solid", value: { red: 0, green: 0, blue: .5, alpha: .5 } },
+    ],
+  };
+  const admitted = { draw } as unknown as Parameters<typeof drawProgramNode>[3];
+  try {
+    surface.getCanvas().clear(ck.TRANSPARENT);
+    drawProgramNode(ck, builtins, surface.getCanvas(), admitted, 0, identity);
+    const image = surface.makeImageSnapshot();
+    try {
+      const pixels = image.readPixels(0, 0, { width: 32, height: 32,
+        colorType: ck.ColorType.RGBA_8888, alphaType: ck.AlphaType.Unpremul,
+        colorSpace: ck.ColorSpace.SRGB })!;
+      for (const [x, y, expected] of [
+        [4, 6, [255, 0, 0, 255]], [12, 6, [127, 0, 128, 255]],
+        [22, 6, [0, 0, 255, 128]], [2, 6, [0, 0, 0, 0]], [4, 22, [0, 0, 0, 0]],
+      ] as const) {
+        expected.forEach((value, channel) => expect(Math.abs(pixels[(y * 32 + x) * 4 + channel]! - value)).toBeLessThanOrEqual(1));
+      }
+    } finally { image.delete(); }
+    (draw.nodes[0] as ReturnType<typeof group>).value.opacity = .5;
+    expect(() => drawProgramNode(ck, builtins, surface.getCanvas(), admitted, 0, identity))
+      .toThrow("requires a separate pixel operation");
+  } finally { builtins.dispose(); surface.delete(); }
 });

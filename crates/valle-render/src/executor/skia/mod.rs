@@ -5,6 +5,7 @@
 //! artifacts and host scheduling never enter this module.
 
 mod blend;
+mod blur;
 mod cache;
 mod draw;
 mod effect;

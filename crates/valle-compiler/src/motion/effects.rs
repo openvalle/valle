@@ -26,9 +26,52 @@ impl<'s> Compiler<'s> {
                 }
             };
         }
-        let expr = self.lower_expr(expression)?;
+        let expr = self.lower_css_value_expression(expression)?;
         let _ = property;
         Some(StyleValue::Expr { expr })
+    }
+
+    /// CSS keywords such as `none` are strings here, not general Motion enum values.
+    pub(super) fn lower_css_value_expression(
+        &mut self,
+        expression: &Expression<'_>,
+    ) -> Option<ExprId> {
+        let expression = strip_parens(expression);
+        if let Some(text) = string_literal(expression) {
+            return Some(self.push(
+                Expr::Const {
+                    value: MotionValue::Str(text),
+                },
+                expression.span(),
+            ));
+        }
+        if let Expression::ConditionalExpression(branch) = expression {
+            if self.expr_arena.depth >= MAX_EXPR_NESTING {
+                self.illegal(
+                    DiagCode::GrammarForbidden,
+                    expression.span(),
+                    "CSS value branch nesting exceeds the expression budget",
+                );
+                return None;
+            }
+            self.expr_arena.depth += 1;
+            let result = (|| {
+                let condition = self.lower_expr(&branch.test)?;
+                let when_true = self.lower_css_value_expression(&branch.consequent)?;
+                let when_false = self.lower_css_value_expression(&branch.alternate)?;
+                Some(self.push(
+                    Expr::Select {
+                        condition,
+                        when_true,
+                        when_false,
+                    },
+                    expression.span(),
+                ))
+            })();
+            self.expr_arena.depth -= 1;
+            return result;
+        }
+        self.lower_expr(expression)
     }
 
     pub(super) fn diagnose_path_paint(

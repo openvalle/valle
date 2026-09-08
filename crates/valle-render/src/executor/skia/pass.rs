@@ -25,7 +25,7 @@ use super::{
     draw::{DrawError, ProgramRuntime, ProgramTerminal},
     effect::{EffectCacheCounters, EffectRuntime, apply_prepared_mask, straight_color},
     import::render_import,
-    output::{prefers_cached_output, stage_output, validate_target},
+    output::{prefers_cached_output, stage_output, stage_sdr_output, validate_target},
     surface::{
         PlanImage, SurfaceAllocationScope, SurfaceArena, SurfaceError, SurfaceFrame,
         SurfaceFrameReport, working_color_space, working_info,
@@ -431,9 +431,6 @@ impl AdmittedSkiaFrame<'_> {
                         .iter()
                         .filter_map(|slot| slot.extent())
                         .collect::<Vec<_>>();
-                    if self.program(*program)?.direct_raster() {
-                        local_extents.clear();
-                    }
                     let helper_index =
                         program_helper_extent(plan_program(self.bindings, *program)?, schedule)?
                             .map(|helper| {
@@ -475,9 +472,6 @@ impl AdmittedSkiaFrame<'_> {
                             .iter()
                             .filter_map(|slot| slot.extent())
                             .collect::<Vec<_>>();
-                        if self.program(*program)?.direct_raster() {
-                            local_extents.clear();
-                        }
                         let helper_index = program_helper_extent(
                             plan_program(self.bindings, *program)?,
                             schedule,
@@ -1441,7 +1435,11 @@ fn commit_output(
         && spec.bit_depth() == valle_engine::resource::OutputBitDepth::Eight
         && !prefers_cached_output(image)
     {
-        if !target.commit_shader(effects.output_shader(image, spec)?) {
+        if let Some(staging) = stage_sdr_output(image, spec, &target.image_info())? {
+            if !target.commit_pixels(staging.pixels(), staging.row_bytes()) {
+                return Err(SkiaExecuteError::TargetCommit);
+            }
+        } else if !target.commit_shader(effects.output_shader(image, spec)?) {
             return Err(SkiaExecuteError::TargetCommit);
         }
         return Ok(());

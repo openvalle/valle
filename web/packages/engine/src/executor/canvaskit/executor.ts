@@ -1014,6 +1014,10 @@ function executeProgram(
 }
 
 function directRasterPlan(draw: DrawProgramWire, localPlan: Wire): DirectRasterPlan | null {
+  const passes = array(localPlan.passes, "direct raster passes");
+  if (passes.length === 1 && record(record(passes[0], "pass").kind, "pass kind").kind === "rasterTree") {
+    return null;
+  }
   const destinationUses = array(draw.requirements.destinationUses, "DrawProgram destination uses");
   const resources = array(localPlan.resources, "direct raster resources").map((raw) =>
     record(raw, "direct raster resource"));
@@ -1428,14 +1432,16 @@ function executeProgramPass(
   }
 }
 
-function drawProgramNode(
+export function drawProgramNode(
   CanvasKit: CanvasKit,
   builtins: CanvasKitBuiltinRuntime,
   canvas: Canvas,
   admitted: AdmittedProgram,
   nodeId: number,
   matrix: number[],
+  depth = 0,
 ): void {
+  if (depth > 128) fail("program_schedule", "RasterTree exceeds the group depth limit");
   const node = record(admitted.draw.nodes[nodeId], `DrawProgram node ${nodeId}`);
   canvas.save();
   canvas.concat(matrix);
@@ -1448,7 +1454,21 @@ function drawProgramNode(
       case "shadow": drawShadowNode(CanvasKit, canvas, record(node.value, "shadow node")); break;
       case "runtimeShader": drawRuntimeShaderNode(CanvasKit, builtins, canvas, admitted, record(node.value, "runtime shader node")); break;
       case "scene3d": drawSceneNode(CanvasKit, builtins, canvas, admitted, record(node.value, "Scene3D node")); break;
-      case "group": fail("program_schedule", `group node ${nodeId} entered RasterNode`);
+      case "group": {
+        const group = record(node.value, "RasterTree group");
+        if (group.clip != null || group.mask != null || group.backdrop != null
+          || group.shader != null || group.glass != null || group.glassForeground != null
+          || array(group.filters, "RasterTree group filters").length !== 0
+          || group.opacity !== 1 || group.internalBlend !== "normal") {
+          fail("program_schedule", `group node ${nodeId} requires a separate pixel operation`);
+        }
+        const transform = numberArray(group.transform, 9, "RasterTree group transform");
+        for (const child of array(group.children, "RasterTree group children")) {
+          drawProgramNode(CanvasKit, builtins, canvas, admitted,
+            positiveIdOrZero(child, "RasterTree child"), transform, depth + 1);
+        }
+        break;
+      }
       default: fail("unsupported_node", `DrawProgram node '${String(node.kind)}' is not closed`);
     }
   } finally {

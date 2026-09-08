@@ -2904,29 +2904,12 @@ impl SceneArtifact {
                 if matches!(style.property.as_str(), "filter" | "backdrop-filter")
                     && let StyleValue::Expr { expr } = &style.value
                 {
-                    let valid = self
-                        .exprs
-                        .get(expr.0 as usize)
-                        .is_some_and(|value| match value {
-                            Expr::Template { parts } => parts.iter().all(|part| match part {
-                                TemplatePart::Text { .. } => true,
-                                TemplatePart::Expr { expr } => matches!(
-                                    expr_types.get(expr.0 as usize),
-                                    Some(Some(
-                                        ExprType::Number
-                                            | ExprType::Length
-                                            | ExprType::Angle
-                                            | ExprType::Color
-                                    ))
-                                ),
-                            }),
-                            _ => false,
-                        });
+                    let valid = css_expression_variants(*expr, &self.exprs, expr_types).is_some();
                     if !valid {
                         errors.push(ValidationError::new(
                             format!("{path}/styles/{style_index}/value"),
                             format!(
-                                "dynamic `{}` must be a fixed-structure template with Number, Length, Angle, or Color substitutions",
+                                "dynamic `{}` must use literal strings, typed templates, or finite conditional branches",
                                 style.property
                             ),
                         ));
@@ -3108,4 +3091,54 @@ impl core::fmt::Display for ValidationError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "{}: {}", self.path, self.message)
     }
+}
+
+/// Enumerate the syntax of finite CSS branches without executing frame expressions.
+/// Typed holes cannot inject arbitrary CSS tokens; concrete values are parsed at frame time.
+/// A visited set bounds traversal by the expression DAG, including shared branch subtrees.
+pub(crate) fn css_expression_variants(
+    root: ExprId,
+    exprs: &[Expr],
+    types: &[Option<ExprType>],
+) -> Option<Vec<String>> {
+    let mut pending = vec![root];
+    let mut visited = BTreeSet::new();
+    let mut variants = Vec::new();
+    while let Some(id) = pending.pop() {
+        if !visited.insert(id.0) {
+            continue;
+        }
+        match exprs.get(id.0 as usize)? {
+            Expr::Const {
+                value: MotionValue::Str(text),
+            } => variants.push(text.clone()),
+            Expr::Select {
+                when_true,
+                when_false,
+                ..
+            } => {
+                pending.extend([*when_true, *when_false]);
+            }
+            Expr::Template { parts } => {
+                let mut text = String::new();
+                for part in parts {
+                    match part {
+                        TemplatePart::Text { value } => text.push_str(value),
+                        TemplatePart::Expr { expr } => {
+                            text.push_str(match types.get(expr.0 as usize)? {
+                                Some(ExprType::Number) => "1",
+                                Some(ExprType::Length) => "1px",
+                                Some(ExprType::Angle) => "1deg",
+                                Some(ExprType::Color) => "#000000",
+                                _ => return None,
+                            })
+                        }
+                    }
+                }
+                variants.push(text);
+            }
+            _ => return None,
+        }
+    }
+    Some(variants)
 }

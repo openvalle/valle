@@ -3072,6 +3072,15 @@ fn declarations(
             StyleValue::Static { value } => value,
             StyleValue::Expr { expr } => value(values, *expr, at)?,
         };
+        if matches!(style.value, StyleValue::Expr { .. })
+            && matches!(style.property.as_str(), "background" | "background-image")
+            && !gradient_background_source(&style.property, &css_token(value))
+        {
+            return Err(LayoutError::NondeterministicSurface {
+                node: node.key.clone(),
+                surface: style.property.clone(),
+            });
+        }
         if !declarations.is_empty() {
             declarations.push_str("; ");
         }
@@ -3522,10 +3531,12 @@ fn admit_deterministic_surface(artifact: &SceneArtifact) -> Result<(), LayoutErr
         "mask-",
     ];
 
+    let expr_types =
+        crate::expr::validate_exprs(&artifact.exprs, &artifact.controls, &mut Vec::new()).types;
     for node in &artifact.nodes {
         for style in &node.styles {
             if matches!(style.property.as_str(), "background" | "background-image")
-                && !static_gradient_background(style)
+                && !gradient_background_binding(style, artifact, &expr_types)
             {
                 return Err(LayoutError::NondeterministicSurface {
                     node: node.key.clone(),
@@ -3554,17 +3565,31 @@ fn admit_deterministic_surface(artifact: &SceneArtifact) -> Result<(), LayoutErr
     Ok(())
 }
 
-/// Admit static CSS gradients whose geometry is represented by ProgramRecording. This is deliberately
-/// parsed through Takumi's public CSS value types, so malformed shorthands and `url(...)` cannot
-/// slip past a prefix check and turn into a silently missing paint. Non-sRGB color
-/// spaces stay closed until ProgramRecording carries an interpolation contract shared by both backends.
-fn static_gradient_background(style: &valle_motion::StyleBinding) -> bool {
-    let StyleValue::Static {
-        value: MotionValue::Str(source),
-    } = &style.value
-    else {
-        return false;
-    };
+/// Admit every finite branch using the same CSS parser as concrete frame values.
+fn gradient_background_binding(
+    style: &valle_motion::StyleBinding,
+    artifact: &SceneArtifact,
+    types: &[Option<crate::expr::ExprType>],
+) -> bool {
+    match &style.value {
+        StyleValue::Static {
+            value: MotionValue::Str(source) | MotionValue::Enum(source),
+        } => gradient_background_source(&style.property, source),
+        StyleValue::Expr { expr } => {
+            crate::artifact::css_expression_variants(*expr, &artifact.exprs, types).is_some_and(
+                |variants| {
+                    variants
+                        .iter()
+                        .all(|source| gradient_background_source(&style.property, source))
+                },
+            )
+        }
+        _ => false,
+    }
+}
+
+/// Keep URLs and unsupported interpolation spaces closed for both static and dynamic CSS.
+fn gradient_background_source(property: &str, source: &str) -> bool {
     // Takumi 0.23 assigns the same value to omitted interpolation and explicit Oklab.
     // Retain the source distinction: Valle's legacy gradients interpolate in sRGB.
     let mut legacy_defaults = legacy_gradient_defaults(source).into_iter();
@@ -3582,7 +3607,7 @@ fn static_gradient_background(style: &valle_motion::StyleBinding) -> bool {
         interpolation == srgb
             || (legacy && interpolation == takumi_core::style::ColorInterpolationMethod::default())
     };
-    match style.property.as_str() {
+    match property {
         "background-image" => BackgroundImages::from_css_str(source)
             .is_ok_and(|images| !images.is_empty() && images.iter().all(admitted)),
         "background" => Background::from_css_str(source).is_ok_and(|value| admitted(&value.image)),

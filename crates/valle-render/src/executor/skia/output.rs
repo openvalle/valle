@@ -119,7 +119,7 @@ pub(crate) fn stage_output(
             storage
         } else {
             let sample = transform_working_pixel(
-                canonical_premul(channels)?,
+                canonical_rgba(channels)?,
                 spec,
                 [(index % width) as u32, (index / width) as u32],
             )
@@ -138,6 +138,132 @@ pub(crate) fn stage_output(
         pixels,
         row_bytes: target_row_bytes,
     })
+}
+
+/// Batch SDR output: Skia converts the linear primaries, shared delivery math maps the gamut,
+/// then a bounded curve lookup replaces per-pixel transfer powers. No platform gamma defaults
+/// are involved; Skia's named Rec.709 transfer is a display EOTF, not our output OETF.
+pub(crate) fn stage_sdr_output(
+    image: &Image,
+    spec: OutputSpec,
+    target_info: &ImageInfo,
+) -> Result<Option<StagedOutput>, DrawError> {
+    use valle_engine::resource::ToneMap;
+    if spec.bit_depth() != OutputBitDepth::Eight
+        || spec.dither() != Dither::None
+        || spec.tone_map() != ToneMap::None
+        || !matches!(
+            spec.target().transfer,
+            TransferFunction::Linear | TransferFunction::Srgb | TransferFunction::Rec709
+        )
+    {
+        return Ok(None);
+    }
+    validate_target(spec, target_info)?;
+    if image.dimensions() != target_info.dimensions() {
+        return Err(DrawError::Surface("output extent mismatch".into()));
+    }
+    let primaries = match spec.target().primaries {
+        ColorPrimaries::Rec709 => named_primaries::CicpId::Rec709,
+        ColorPrimaries::DisplayP3 => named_primaries::CicpId::SMPTE_EG_432_1,
+        ColorPrimaries::Rec2020 => named_primaries::CicpId::Rec2020,
+    };
+    let linear = ColorSpace::new_cicp(primaries, named_transfer_fn::CicpId::Linear)
+        .ok_or_else(|| DrawError::Surface("unsupported linear output color space".into()))?;
+    let info = ImageInfo::new(
+        image.dimensions(),
+        ColorType::RGBAF32,
+        AlphaType::Unpremul,
+        Some(linear),
+    );
+    let width = image.width() as usize;
+    let mut samples = vec![0.0_f32; width * image.height() as usize * 4];
+    if !image.read_pixels(
+        &info,
+        &mut samples,
+        width * 16,
+        (0, 0),
+        CachingHint::Disallow,
+    ) {
+        return Err(DrawError::Surface("linear output conversion failed".into()));
+    }
+    let maximum = f32::from(spec.reference_white().get()) / 100.0;
+    let curve = transfer_lut(spec.target().transfer);
+    let row_bytes = target_info.min_row_bytes();
+    let mut pixels = Vec::with_capacity(target_info.compute_min_byte_size());
+    for pixel in samples.chunks_exact(4) {
+        let pixel = canonical_rgba([pixel[0], pixel[1], pixel[2], pixel[3]])?;
+        if spec.alpha() == OutputAlphaMode::Opaque && pixel[3] != 1.0 {
+            return Err(DrawError::Surface("opaque output has transparency".into()));
+        }
+        let mapped = valle_engine::compositor::delivery::map_output_gamut(
+            [pixel[0], pixel[1], pixel[2]],
+            spec.target().primaries,
+            maximum,
+            spec.gamut_map(),
+        )
+        .map_err(|error| DrawError::Surface(error.to_string()))?;
+        let coverage = if spec.alpha() == OutputAlphaMode::PremultipliedCoverage {
+            pixel[3]
+        } else {
+            1.0
+        };
+        let mut codes =
+            mapped.map(|value| (transfer_code(value / maximum, curve) * coverage).round() as u8);
+        if target_info.color_type() == ColorType::BGRA8888 {
+            codes.swap(0, 2);
+        }
+        pixels.extend_from_slice(&codes);
+        pixels.push((pixel[3] * 255.0).round() as u8);
+    }
+    Ok(Some(StagedOutput { pixels, row_bytes }))
+}
+
+// The bounded [0,1] SDR curve is shared across frames and output primaries/white levels.
+// Linear interpolation is within 0.07 of one 8-bit code (including Rec.709's join).
+// HDR, dither and higher bit depths retain the exact delivery implementation.
+fn transfer_lut(transfer: TransferFunction) -> Option<&'static [f32]> {
+    use std::sync::OnceLock;
+    static SRGB: OnceLock<Vec<f32>> = OnceLock::new();
+    static REC709: OnceLock<Vec<f32>> = OnceLock::new();
+    let cache = match transfer {
+        TransferFunction::Linear => return None,
+        TransferFunction::Srgb => &SRGB,
+        TransferFunction::Rec709 => &REC709,
+        _ => unreachable!("SDR output admitted a non-SDR transfer"),
+    };
+    Some(
+        cache
+            .get_or_init(|| {
+                (0..=4096)
+                    .map(|i| {
+                        let v = i as f64 / 4096.0;
+                        let encoded = if transfer == TransferFunction::Srgb {
+                            if v <= 0.0031308 {
+                                v * 12.92
+                            } else {
+                                1.055 * v.powf(1.0 / 2.4) - 0.055
+                            }
+                        } else if v <= 0.018 {
+                            v * 4.5
+                        } else {
+                            1.099 * v.powf(0.45) - 0.099
+                        };
+                        (encoded * 255.0) as f32
+                    })
+                    .collect()
+            })
+            .as_slice(),
+    )
+}
+
+fn transfer_code(value: f32, curve: Option<&[f32]>) -> f32 {
+    let Some(curve) = curve else {
+        return value * 255.0;
+    };
+    let position = value * 4096.0;
+    let index = (position as usize).min(4095);
+    curve[index] + (curve[index + 1] - curve[index]) * (position - index as f32)
 }
 
 pub(crate) fn validate_target(spec: OutputSpec, info: &ImageInfo) -> Result<(), DrawError> {
@@ -236,7 +362,7 @@ pub(crate) fn rgba8_target_info(
     Ok(info)
 }
 
-fn canonical_premul(mut value: [f32; 4]) -> Result<[f32; 4], DrawError> {
+fn canonical_rgba(mut value: [f32; 4]) -> Result<[f32; 4], DrawError> {
     if !value.iter().all(|channel| channel.is_finite()) {
         return Err(DrawError::Surface("non-finite working output".into()));
     }
@@ -327,6 +453,129 @@ mod tests {
     use valle_engine::resource::{
         GamutMap, OutputBackground, OutputColorEncoding, SignalLuminance, ToneMap,
     };
+
+    #[test]
+    fn sdr_curve_interpolation_stays_below_a_tenth_of_one_code() {
+        for transfer in [TransferFunction::Srgb, TransferFunction::Rec709] {
+            let lut = transfer_lut(transfer);
+            for i in 0..=262144 {
+                let value = i as f32 / 262144.0;
+                let v = f64::from(value);
+                let exact = if transfer == TransferFunction::Srgb {
+                    if v <= 0.0031308 {
+                        v * 12.92
+                    } else {
+                        1.055 * v.powf(1.0 / 2.4) - 0.055
+                    }
+                } else if v <= 0.018 {
+                    v * 4.5
+                } else {
+                    1.099 * v.powf(0.45) - 0.099
+                };
+                assert!((f64::from(transfer_code(value, lut)) - exact * 255.0).abs() < 0.07);
+            }
+        }
+    }
+
+    #[test]
+    fn native_sdr_output_matches_reference_for_gamut_alpha_and_luminance() {
+        use valle_engine::resource::LuminanceNits;
+        for primaries in [
+            ColorPrimaries::Rec709,
+            ColorPrimaries::DisplayP3,
+            ColorPrimaries::Rec2020,
+        ] {
+            for transfer in [
+                TransferFunction::Linear,
+                TransferFunction::Srgb,
+                TransferFunction::Rec709,
+            ] {
+                for alpha in [
+                    OutputAlphaMode::Opaque,
+                    OutputAlphaMode::StraightCoverage,
+                    OutputAlphaMode::PremultipliedCoverage,
+                ] {
+                    for gamut in [GamutMap::Clip, GamutMap::ChromaCompress] {
+                        for white in [100, 203] {
+                            let background = if alpha == OutputAlphaMode::Opaque {
+                                OutputBackground::opaque_srgb([0, 0, 0])
+                            } else {
+                                OutputBackground::Transparent
+                            };
+                            let nits = LuminanceNits::new(white).unwrap();
+                            let spec = OutputSpec::new(
+                                OutputColorEncoding {
+                                    primaries,
+                                    transfer,
+                                },
+                                alpha,
+                                background,
+                                ToneMap::None,
+                                gamut,
+                                Dither::None,
+                                OutputBitDepth::Eight,
+                                SignalLuminance::new(nits, nits).unwrap(),
+                            )
+                            .unwrap();
+                            let samples = (0..1024)
+                                .flat_map(|i| {
+                                    let a = if alpha == OutputAlphaMode::Opaque {
+                                        1.0
+                                    } else {
+                                        (i % 31) as f32 / 30.0
+                                    };
+                                    [
+                                        ((i % 257) as f32 / 100.0 - 0.3) * a,
+                                        ((i % 71) as f32 / 40.0) * a,
+                                        ((i % 19) as f32 / 10.0 - 0.1) * a,
+                                        a,
+                                    ]
+                                })
+                                .collect::<Vec<_>>();
+                            let bytes = samples
+                                .iter()
+                                .flat_map(|value| value.to_ne_bytes())
+                                .collect::<Vec<_>>();
+                            let info = ImageInfo::new(
+                                (32, 32),
+                                ColorType::RGBAF32,
+                                AlphaType::Premul,
+                                Some(working_color_space().unwrap()),
+                            );
+                            let image =
+                                images::raster_from_data(&info, Data::new_copy(&bytes), 32 * 16)
+                                    .unwrap();
+                            let target = rgba8_target_info(
+                                spec,
+                                valle_engine::resource::Extent2d::new(32, 32).unwrap(),
+                            )
+                            .unwrap();
+                            let actual = stage_sdr_output(&image, spec, &target).unwrap().unwrap();
+                            let expected = stage_output(&image, spec, &target).unwrap();
+                            let maximum = actual
+                                .pixels()
+                                .iter()
+                                .zip(expected.pixels())
+                                .map(|(a, b)| a.abs_diff(*b))
+                                .max()
+                                .unwrap();
+                            let mse = actual
+                                .pixels()
+                                .iter()
+                                .zip(expected.pixels())
+                                .map(|(a, b)| (f64::from(*a) - f64::from(*b)).powi(2))
+                                .sum::<f64>()
+                                / actual.pixels().len() as f64;
+                            assert!(
+                                maximum <= 2 && mse <= 0.65,
+                                "{spec:?}: max={maximum}, mse={mse}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn continuous_color_frames_keep_the_shader_path() {

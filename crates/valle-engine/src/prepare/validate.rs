@@ -133,9 +133,9 @@ impl BindingAdmission<'_> {
                     if prepared.bounds_reason == BoundsReason::ConservativeCameraTarget {
                         (root, root)
                     } else {
-                        super::bounds::program_rect_to_device(
+                        super::bounds::program_destination_to_device(
+                            required.sample_bounds,
                             required.output_bounds,
-                            required.operation.footprint(),
                             program.viewport,
                             layer.device_transform,
                             root,

@@ -204,11 +204,10 @@ pub enum ProgramPassKind {
         node: NodeId,
         output: ProgramResourceId,
     },
-    /// One destination-independent DrawProgram tree rendered directly into its terminal surface.
-    ///
-    /// Plain source-over hierarchy, transforms and clips do not need an SSA image after every
-    /// leaf. Keeping this decision in the backend-free plan makes the fusion explicit and shared
-    /// by Native and Web executors instead of hiding it as a backend shortcut.
+    /// Ordered, destination-independent subtrees sharing one raster target. Groups inside these
+    /// subtrees only transform their children; clips and other group pixel operations remain
+    /// separate passes. Native, Web and reference executors preserve nested transforms and
+    /// painter order without materializing an intermediate image for every leaf.
     RasterTree {
         roots: Vec<NodeId>,
         output: ProgramResourceId,
@@ -365,6 +364,7 @@ struct Compiler<'a> {
     resources: Vec<ProgramResource>,
     passes: Vec<ProgramPass>,
     next_destination: usize,
+    raster_subtrees: Vec<Option<bool>>,
 }
 
 impl<'a> Compiler<'a> {
@@ -374,37 +374,18 @@ impl<'a> Compiler<'a> {
             resources: Vec::new(),
             passes: Vec::new(),
             next_destination: 0,
+            raster_subtrees: vec![None; program.nodes().len()],
         }
     }
 
     fn compile(mut self) -> Result<ProgramPlan, ProgramPlanError> {
-        if self.direct_raster_tree() {
-            let mut bounds = LocalBounds::Empty;
-            for root in self.program.roots().iter().copied() {
-                bounds = union(bounds, self.node_bounds(root)?);
-            }
-            let output = self.resource(bounds, Transform2d::IDENTITY)?;
-            self.pass(
-                "root.rasterTree",
-                ProgramPassKind::RasterTree {
-                    roots: self.program.roots().to_vec(),
-                    output,
-                },
-            )?;
-            let plan = ProgramPlan {
-                resources: self.resources,
-                passes: self.passes,
-                output,
-            };
-            plan.validate_shape(0)?;
-            return Ok(plan);
-        }
-        let mut output = self.clear("root.clear", Transform2d::IDENTITY)?;
-        for (index, root) in self.program.roots().iter().copied().enumerate() {
-            let prefix = self.nonempty_prefix(&[output]);
-            let source = self.node(root, &prefix, true, Transform2d::IDENTITY, None)?;
-            output = self.source_over(source, output, format!("root[{index}].composite"))?;
-        }
+        let roots = self.program.roots();
+        let output = if roots.iter().all(|root| self.raster_subtree(*root)) {
+            self.raster_tree(roots, Transform2d::IDENTITY, "root.rasterTree")?
+        } else {
+            let clear = self.clear("root.clear", Transform2d::IDENTITY)?;
+            self.compose_nodes(roots, clear, &[], true, Transform2d::IDENTITY, None, "root")?
+        };
         if self.next_destination != self.program.requirements().destination_uses.len() {
             return self.invalid(
                 "destinationUses",
@@ -420,21 +401,91 @@ impl<'a> Compiler<'a> {
         Ok(plan)
     }
 
-    fn direct_raster_tree(&self) -> bool {
-        self.program.requirements().destination_uses.is_empty()
-            && self
-                .program
-                .roots()
-                .iter()
-                .copied()
-                .all(|root| self.direct_raster_node(root))
+    fn raster_subtree(&mut self, id: NodeId) -> bool {
+        let index = id.raw() as usize;
+        if let Some(eligible) = self.raster_subtrees[index] {
+            return eligible;
+        }
+        // DrawProgram validation already rejects cycles. Cache eligibility so revisiting a
+        // subtree while splitting sibling runs does not repeat a full descendant traversal.
+        let program = self.program;
+        let eligible = match &program.nodes()[index] {
+            Node::Group(group) => {
+                group.is_transform_only()
+                    && group
+                        .children
+                        .iter()
+                        .all(|child| self.raster_subtree(*child))
+            }
+            _ => true,
+        };
+        self.raster_subtrees[index] = Some(eligible);
+        eligible
     }
 
-    fn direct_raster_node(&self, id: NodeId) -> bool {
-        let Some(node) = self.program.nodes().get(id.raw() as usize) else {
-            return false;
-        };
-        !matches!(node, Node::Group(_))
+    fn raster_tree(
+        &mut self,
+        roots: &[NodeId],
+        local_to_program: Transform2d,
+        path: impl Into<String>,
+    ) -> Result<ProgramResourceId, ProgramPlanError> {
+        let mut bounds = LocalBounds::Empty;
+        for root in roots {
+            bounds = union(bounds, self.node_bounds(*root)?);
+        }
+        let output = self.resource(bounds, local_to_program)?;
+        self.pass(
+            path,
+            ProgramPassKind::RasterTree {
+                roots: roots.to_vec(),
+                output,
+            },
+        )?;
+        Ok(output)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn compose_nodes(
+        &mut self,
+        nodes: &[NodeId],
+        mut output: ProgramResourceId,
+        base_prefix: &[ProgramResourceId],
+        entry_is_external: bool,
+        local_to_program: Transform2d,
+        glass_owner_to_program: Option<Transform2d>,
+        path: &str,
+    ) -> Result<ProgramResourceId, ProgramPlanError> {
+        let mut index = 0;
+        while index < nodes.len() {
+            let start = index;
+            if self.raster_subtree(nodes[index]) {
+                index += 1;
+                while index < nodes.len() && self.raster_subtree(nodes[index]) {
+                    index += 1;
+                }
+            } else {
+                index += 1;
+            }
+            let source = if index - start > 1 {
+                self.raster_tree(
+                    &nodes[start..index],
+                    local_to_program,
+                    format!("{path}[{start}].rasterTree"),
+                )?
+            } else {
+                let mut prefix = base_prefix.to_vec();
+                prefix.extend(self.nonempty_prefix(&[output]));
+                self.node(
+                    nodes[start],
+                    &prefix,
+                    entry_is_external,
+                    local_to_program,
+                    glass_owner_to_program,
+                )?
+            };
+            output = self.source_over(source, output, format!("{path}[{start}].composite"))?;
+        }
+        Ok(output)
     }
 
     fn node(
@@ -455,6 +506,11 @@ impl<'a> Compiler<'a> {
                 reason: "node id is undefined".to_owned(),
             })?;
         match node {
+            Node::Group(_) if self.raster_subtree(id) => self.raster_tree(
+                &[id],
+                parent_to_program,
+                format!("node[{}].rasterTree", id.raw()),
+            ),
             Node::Group(group) => self.group(
                 id,
                 group,
@@ -589,22 +645,15 @@ impl<'a> Compiler<'a> {
             output = self.source_over(source, output, format!("{node_path}.backdrop.composite"))?;
         }
 
-        for (index, child) in group.children.iter().copied().enumerate() {
-            let mut prefix = base_prefix.clone();
-            prefix.extend(self.nonempty_prefix(&[output]));
-            let source = self.node(
-                child,
-                &prefix,
-                child_entry_is_external,
-                local_to_program,
-                child_glass_owner_to_program,
-            )?;
-            output = self.source_over(
-                source,
-                output,
-                format!("{node_path}.children[{index}].composite"),
-            )?;
-        }
+        output = self.compose_nodes(
+            &group.children,
+            output,
+            &base_prefix,
+            child_entry_is_external,
+            local_to_program,
+            child_glass_owner_to_program,
+            &format!("{node_path}.children"),
+        )?;
 
         if let Some(foreground) = group.glass_foreground.as_deref() {
             let owner_to_program =
@@ -1292,6 +1341,158 @@ mod tests {
                 program.geometry(lower).unwrap().output_bounds,
                 program.geometry(upper).unwrap().output_bounds,
             )
+        );
+    }
+
+    fn transformed_leaf(builder: &mut DrawProgramBuilder, x: f64) -> NodeId {
+        let leaf = rect_path(
+            builder,
+            Rect::new(0.0, 0.0, 2.0, 8.0),
+            LinearColor::new(0.25, 0.0, 0.0, 0.5),
+        );
+        let mut group = Group::plain(vec![leaf]);
+        group.transform = Transform2d([1.0, 0.0, x, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]);
+        builder.push_node(Node::Group(group))
+    }
+
+    #[test]
+    fn dense_transformed_tree_uses_one_pass_and_no_scratch_surfaces() {
+        use super::super::ProgramSchedule;
+        let mut builder = DrawProgramBuilder::new(Rect::new(0.0, 0.0, 2400.0, 18.0));
+        let children = (0..1200)
+            .map(|index| {
+                let leaf = rect_path(
+                    &mut builder,
+                    Rect::new(0.0, 0.0, 1.0, 8.0),
+                    LinearColor::new(0.25, 0.0, 0.0, 0.5),
+                );
+                let mut group = Group::plain(vec![leaf]);
+                group.transform =
+                    Transform2d([1.0, 0.0, f64::from(index), 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]);
+                group.isolated = index % 2 == 0;
+                builder.push_node(Node::Group(group))
+            })
+            .collect();
+        let mut outer = Group::plain(children);
+        outer.transform = Transform2d([2.0, 0.0, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 1.0]);
+        let root = builder.push_node(Node::Group(outer));
+        builder.add_root(root);
+        let program = builder.finish().unwrap();
+        let plan = ProgramPlan::derive(&program).unwrap();
+        assert_eq!(plan.passes().len(), 1);
+        assert_eq!(plan.resources().len(), 1);
+        assert!(
+            matches!(&plan.passes()[0].kind, ProgramPassKind::RasterTree { roots, .. }
+            if roots == program.roots())
+        );
+        assert_eq!(
+            plan.resources()[0].bounds,
+            LocalBounds::from_rect(Rect::new(0.0, 0.0, 2400.0, 16.0))
+        );
+        assert!(
+            ProgramSchedule::derive(&plan)
+                .unwrap()
+                .surface_slots()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn ordinary_runs_fuse_on_both_sides_and_inside_pixel_boundaries() {
+        let mut builder = DrawProgramBuilder::new(Rect::new(0.0, 0.0, 64.0, 18.0));
+        for x in [0.0, 2.0] {
+            let node = transformed_leaf(&mut builder, x);
+            builder.add_root(node);
+        }
+        let children = [4.0, 6.0]
+            .map(|x| transformed_leaf(&mut builder, x))
+            .to_vec();
+        let mut effect = Group::plain(children);
+        effect.clip = Some(Clip::Rect(Rect::new(4.5, 0.0, 3.0, 8.0)));
+        effect.filters.push(Filter::Blur {
+            sigma_x: 1.0,
+            sigma_y: 1.0,
+        });
+        effect.opacity = 0.5;
+        let node = builder.push_node(Node::Group(effect));
+        builder.add_root(node);
+        for x in [8.0, 10.0] {
+            let node = transformed_leaf(&mut builder, x);
+            builder.add_root(node);
+        }
+        let program = builder.finish().unwrap();
+        let plan = ProgramPlan::derive(&program).unwrap();
+        let operations = plan
+            .passes()
+            .iter()
+            .filter_map(|pass| match &pass.kind {
+                ProgramPassKind::RasterTree { roots, .. } => {
+                    assert_eq!(roots.len(), 2);
+                    Some("raster")
+                }
+                ProgramPassKind::ApplyClip { .. } => Some("clip"),
+                ProgramPassKind::ApplyFilter { .. } => Some("filter"),
+                ProgramPassKind::ApplyOpacity { .. } => Some("opacity"),
+                ProgramPassKind::ApplyTransform { .. } => {
+                    panic!("simple transforms belong in RasterTree")
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            operations,
+            ["raster", "raster", "clip", "filter", "opacity", "raster"]
+        );
+    }
+
+    #[test]
+    fn destination_reads_keep_the_fused_prefix_and_exclude_later_siblings() {
+        let mut builder = DrawProgramBuilder::new(Rect::new(0.0, 0.0, 64.0, 18.0));
+        for x in [0.0, 2.0] {
+            let node = transformed_leaf(&mut builder, x);
+            builder.add_root(node);
+        }
+        let mut group = Group::plain(Vec::new());
+        group.backdrop = Some(BackdropRead {
+            scope: BackdropScope::Current,
+            bounds: Rect::new(0.0, 0.0, 64.0, 18.0),
+            footprint: Insets::uniform(0.0),
+            sampling: SamplingMode::LinearClamp,
+            filters: Vec::new(),
+        });
+        let node = builder.push_node(Node::Group(group));
+        builder.add_root(node);
+        for x in [40.0, 42.0] {
+            let node = transformed_leaf(&mut builder, x);
+            builder.add_root(node);
+        }
+        let program = builder.finish().unwrap();
+        let plan = ProgramPlan::derive(&program).unwrap();
+        plan.validate_shape(1).unwrap();
+        let mut reads = 0;
+        for pass in plan.passes() {
+            if let ProgramPassKind::ReadDestination {
+                external,
+                local_inputs,
+                ..
+            } = &pass.kind
+            {
+                reads += 1;
+                assert!(external.is_some());
+                assert_eq!(local_inputs.len(), 1);
+                assert_eq!(
+                    plan.resources()[local_inputs[0].index()].bounds,
+                    LocalBounds::from_rect(Rect::new(0.0, 0.0, 4.0, 8.0))
+                );
+            }
+        }
+        assert_eq!(reads, 1);
+        assert_eq!(
+            plan.passes()
+                .iter()
+                .filter(|pass| matches!(pass.kind, ProgramPassKind::RasterTree { .. }))
+                .count(),
+            2
         );
     }
 

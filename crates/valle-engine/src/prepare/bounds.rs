@@ -6,10 +6,7 @@ use crate::frame::{
     ResolvedTransform,
 };
 
-use valle_draw::{
-    Rect,
-    requirements::{Insets, LocalBounds},
-};
+use valle_draw::{Rect, requirements::LocalBounds};
 
 pub const MAX_DEVICE_INTERMEDIATE_PIXELS: u64 = 256 * 1024 * 1024;
 pub(crate) const MAX_DEVICE_COORDINATE: f64 = 1_073_741_824.0;
@@ -615,29 +612,19 @@ pub(crate) fn layer_geometry(
     ))
 }
 
-pub(crate) fn program_rect_to_device(
-    rect: Rect,
-    footprint: Insets,
+/// Project the canonical program-derived rectangles. Never reconstruct sample bounds from
+/// output bounds: expanding before and after projection differs under transforms and rounding.
+pub(crate) fn program_destination_to_device(
+    sample: Rect,
+    output: Rect,
     viewport: Rect,
     transform: DeviceTransform,
     root: DeviceRect,
 ) -> Result<(DeviceRect, DeviceRect), BoundsError> {
-    let projected = project_local_rect_unclamped(rect, viewport, transform)?;
-    let output = projected_to_device(projected, root)?;
-    let scale = max_local_scale(transform, rect, viewport)?;
-    let sample = projected_to_device(
-        outset_projected(
-            projected,
-            [
-                f64::from(footprint.left) * scale,
-                f64::from(footprint.top) * scale,
-                f64::from(footprint.right) * scale,
-                f64::from(footprint.bottom) * scale,
-            ],
-        )?,
-        root,
-    )?;
-    Ok((sample, output))
+    Ok((
+        program_bounds_to_device(LocalBounds::from_rect(sample), viewport, transform, root)?,
+        program_bounds_to_device(LocalBounds::from_rect(output), viewport, transform, root)?,
+    ))
 }
 
 pub(crate) fn program_bounds_to_device(
@@ -1196,9 +1183,9 @@ mod tests {
         let transform = DeviceTransform::from_affine([64.0, 0.0, 0.0, 0.0, 48.0, 0.0]);
         assert_eq!(max_local_scale(transform, viewport, viewport).unwrap(), 1.0);
         assert_eq!(
-            program_rect_to_device(
+            program_destination_to_device(
+                Rect::new(6.0, 4.0, 28.0, 16.0),
                 Rect::new(8.0, 6.0, 24.0, 12.0),
-                Insets::uniform(2.0),
                 viewport,
                 transform,
                 DeviceRect::full(64, 48),

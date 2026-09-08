@@ -752,21 +752,14 @@ impl<'a> PrepareState<'a> {
             let (sample, output) = if reason == BoundsReason::ConservativeCameraTarget {
                 (root, root)
             } else {
-                let sample = bounds::program_bounds_to_device(
-                    valle_draw::requirements::LocalBounds::from_rect(usage.sample_bounds),
+                bounds::program_destination_to_device(
+                    usage.sample_bounds,
+                    usage.output_bounds,
                     viewport,
                     transform,
                     root,
                 )
-                .map_err(|error| PrepareError::at(&use_path, error))?;
-                let output = bounds::program_bounds_to_device(
-                    valle_draw::requirements::LocalBounds::from_rect(usage.output_bounds),
-                    viewport,
-                    transform,
-                    root,
-                )
-                .map_err(|error| PrepareError::at(&use_path, error))?;
-                (sample, output)
+                .map_err(|error| PrepareError::at(&use_path, error))?
             };
             let sample_bounds = self
                 .dynamic

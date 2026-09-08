@@ -64,7 +64,6 @@ pub(crate) struct ProgramRuntime {
     pub(crate) fonts: BTreeMap<(ContentDigest, u32), Typeface>,
     pub(crate) shaders: BTreeMap<String, Arc<RuntimeEffect>>,
     pub(crate) scenes: BTreeMap<ContentDigest, Image>,
-    direct_raster: bool,
     glass: Option<RuntimeEffect>,
     blend: Option<BlendRuntime>,
 }
@@ -248,20 +247,14 @@ impl ProgramRuntime {
             .then(admit_motion_glass_shader)
             .transpose()?;
 
-        let direct_raster = program.requirements().destination_uses.is_empty()
-            && program.nodes().iter().all(|node| match node {
-                Node::Group(group) => direct_raster_group(group),
-                _ => true,
-            });
         if std::env::var_os("VALLE_COMPOSITOR_TRACE_PASSES").is_some() {
             eprintln!(
-                "[valle program] nodes={} local-passes={} direct-raster={direct_raster}",
+                "[valle program] nodes={} local-passes={}",
                 program.nodes().len(),
                 plan.local_plan().passes().len()
             );
         }
         Ok(Self {
-            direct_raster,
             program,
             textures,
             fonts,
@@ -270,10 +263,6 @@ impl ProgramRuntime {
             glass,
             blend,
         })
-    }
-
-    pub(crate) fn direct_raster(&self) -> bool {
-        self.direct_raster
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -298,26 +287,6 @@ impl ProgramRuntime {
             .ok_or(DrawError::MissingProgramOutput)?;
         if output_roi.is_empty() {
             return Ok(PlanImage::transparent());
-        }
-        if self.direct_raster {
-            let target = program_target_mut(surfaces, terminal)?;
-            let origin = match terminal {
-                ProgramTerminal::Plan { roi, .. } => [roi.x, roi.y],
-                ProgramTerminal::Scratch(_) => [0, 0],
-            };
-            self.raster_nodes_into(
-                target,
-                plan,
-                self.program.roots(),
-                plan.local_plan().output(),
-                transform,
-                origin,
-            )?;
-            let image = snapshot_program_target(target, terminal, output_roi)?;
-            return Ok(match terminal {
-                ProgramTerminal::Plan { roi, .. } => PlanImage::new(image, roi),
-                ProgramTerminal::Scratch(_) => PlanImage::root(image, extent),
-            });
         }
         let destinations = destination_inputs
             .iter()
@@ -884,7 +853,7 @@ impl ProgramRuntime {
                     &SkPaint::default(),
                 );
             }
-            Node::Group(group) if self.direct_raster => {
+            Node::Group(group) if group.is_transform_only() => {
                 canvas.save();
                 canvas.concat(&sk_matrix(group.transform.0));
                 let result = group
@@ -1572,6 +1541,18 @@ fn apply_filter_program_into(
     let mut paint = SkPaint::default();
     paint.set_blend_mode(SkBlendMode::Src);
     let filter = program_filter_in_device_space(filter, local_to_device)?;
+    if super::blur::draw(
+        surface.canvas(),
+        &input.image,
+        IRect::from_xywh(0, 0, input.roi.width as i32, input.roi.height as i32),
+        [
+            input.roi.x - target_origin[0],
+            input.roi.y - target_origin[1],
+        ],
+        &filter,
+    )? {
+        return Ok(());
+    }
     if let Some(filter) = image_filter(&filter)? {
         paint.set_image_filter(filter);
     }
@@ -2029,20 +2010,6 @@ impl From<SurfaceError> for DrawError {
     }
 }
 
-// With no group-level pixel operation or destination reads, source-over is associative.
-// Keep transforms and painter order on the canvas instead of snapshotting every child.
-fn direct_raster_group(group: &valle_draw::program::Group) -> bool {
-    group.glass.is_none()
-        && group.glass_foreground.is_none()
-        && group.clip.is_none()
-        && group.filters.is_empty()
-        && group.mask.is_none()
-        && group.opacity == 1.0
-        && group.internal_blend == BlendMode::Normal
-        && group.backdrop.is_none()
-        && group.shader.is_none()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2086,7 +2053,6 @@ mod tests {
         builder.add_root(root);
         let runtime = ProgramRuntime {
             program: Arc::new(builder.finish().unwrap()),
-            direct_raster: true,
             textures: BTreeMap::new(),
             fonts: BTreeMap::new(),
             shaders: BTreeMap::new(),
@@ -2133,7 +2099,7 @@ mod tests {
     fn group_pixel_operations_keep_the_scheduled_path() {
         use valle_draw::program::Group;
         let plain = Group::plain(Vec::new());
-        assert!(direct_raster_group(&plain));
+        assert!(plain.is_transform_only());
         let mut opacity = plain.clone();
         opacity.opacity = 0.5;
         let mut clip = plain.clone();
@@ -2146,7 +2112,7 @@ mod tests {
         let mut blend = plain.clone();
         blend.internal_blend = BlendMode::Multiply;
         for group in [opacity, clip, filter, blend] {
-            assert!(!direct_raster_group(&group));
+            assert!(!group.is_transform_only());
         }
     }
 

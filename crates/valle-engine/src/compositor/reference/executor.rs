@@ -6,7 +6,7 @@ use valle_draw::{
     math::{exp, sqrt},
     program::{
         Clip, DrawProgram, FILTER_GAUSSIAN_SUPPORT_SIGMAS, Filter, GlyphRun, MaskMode, Node,
-        NodeId, Paint, PathData, PathVerb,
+        NodeId, Paint, PathData, PathVerb, Transform2d,
     },
     requirements::SamplingMode,
 };
@@ -688,22 +688,22 @@ fn preflight_program(
                     budget,
                 )?;
             }
-            ProgramPassKind::RasterTree { roots, output } => {
+            ProgramPassKind::RasterTree { output, .. } => {
                 let output_roi = bound_program_resource_roi(schedule, prepared.id, pass, *output)?;
-                let resource_transform = DeviceTransform::from_projective(
-                    program_resource_normalized_matrices(
+                for (node, local_to_program) in program.raster_tree(*output)? {
+                    let local_to_device = program_transform_to_device(
                         prepared,
-                        *output,
+                        *local_to_program,
                         program.viewport,
                         transform.matrix(),
-                    )?
-                    .0,
-                )
-                .map_err(|_| ReferenceExecuteError::InvalidSampleCoordinate)?;
-                for root in roots {
+                    )?;
+                    let resource_transform = DeviceTransform::from_projective(
+                        normalized_program_matrices(local_to_device, program.viewport)?.0,
+                    )
+                    .map_err(|_| ReferenceExecuteError::InvalidSampleCoordinate)?;
                     preflight_program_raster_operation(
                         program,
-                        program.node(*root)?,
+                        program.node(*node)?,
                         output_roi,
                         resource_transform,
                         extent,
@@ -979,12 +979,23 @@ struct ReferenceProgramRuntime {
     id: ProgramId,
     viewport: valle_draw::Rect,
     nodes: Vec<Option<ReferenceProgramOperation>>,
+    raster_trees: BTreeMap<ProgramResourceId, Vec<(NodeId, Transform2d)>>,
     clips: Vec<Option<ReferenceClip>>,
     filters: BTreeMap<(u32, u32), Filter>,
     masks: BTreeMap<u32, MaskMode>,
 }
 
 impl ReferenceProgramRuntime {
+    fn raster_tree(
+        &self,
+        output: ProgramResourceId,
+    ) -> Result<&[(NodeId, Transform2d)], ReferenceExecuteError> {
+        self.raster_trees
+            .get(&output)
+            .map(Vec::as_slice)
+            .ok_or(ReferenceExecuteError::InvalidProgram { program: self.id })
+    }
+
     fn node(&self, node: NodeId) -> Result<&ReferenceProgramOperation, ReferenceExecuteError> {
         self.nodes
             .get(node.raw() as usize)
@@ -1098,6 +1109,7 @@ fn prepare_reference_program(
         .collect::<Vec<_>>();
     let mut filters = BTreeMap::new();
     let mut masks = BTreeMap::new();
+    let mut raster_trees = BTreeMap::new();
     for local_pass in prepared.local_plan().passes() {
         match &local_pass.kind {
             ProgramPassKind::RasterNode { node, .. } => {
@@ -1111,18 +1123,19 @@ fn prepare_reference_program(
                     )?);
                 }
             }
-            ProgramPassKind::RasterTree { roots, .. } => {
-                for node in roots {
-                    let node_index = node.raw() as usize;
-                    let Some(slot) = nodes.get_mut(node_index) else {
-                        return Err(ReferenceExecuteError::InvalidProgram { program: id });
-                    };
+            ProgramPassKind::RasterTree { roots, output } => {
+                let local_to_program =
+                    prepared.local_plan().resources()[output.index()].local_to_program;
+                let draws = collect_reference_raster_tree(&program, roots, local_to_program, pass)?;
+                for (node, _) in &draws {
+                    let slot = &mut nodes[node.raw() as usize];
                     if slot.is_none() {
                         *slot = Some(prepare_reference_node_operation(
                             &program, prepared, bound, pass, id, *node, budget,
                         )?);
                     }
                 }
+                raster_trees.insert(*output, draws);
             }
             ProgramPassKind::ApplyClip { node, clip, .. } => {
                 let node_index = node.raw() as usize;
@@ -1239,10 +1252,45 @@ fn prepare_reference_program(
         id,
         viewport: program.viewport(),
         nodes,
+        raster_trees,
         clips,
         filters,
         masks,
     })
+}
+
+// Resolve hierarchy once at admission; the per-pixel loop only sees ordered leaf operations.
+fn collect_reference_raster_tree(
+    program: &DrawProgram,
+    roots: &[NodeId],
+    local_to_program: Transform2d,
+    pass: ExecutionPassId,
+) -> Result<Vec<(NodeId, Transform2d)>, ReferenceExecuteError> {
+    let mut pending = roots
+        .iter()
+        .rev()
+        .map(|node| (*node, local_to_program))
+        .collect::<Vec<_>>();
+    let mut draws = Vec::new();
+    while let Some((node, local_to_program)) = pending.pop() {
+        match program.nodes().get(node.raw() as usize) {
+            Some(Node::Group(group)) if group.is_transform_only() => {
+                let child_to_program = group.transform.then(local_to_program);
+                pending.extend(
+                    group
+                        .children
+                        .iter()
+                        .rev()
+                        .map(|child| (*child, child_to_program)),
+                );
+            }
+            Some(Node::Group(_)) | None => {
+                return Err(ReferenceExecuteError::UnsupportedPass { pass });
+            }
+            Some(_) => draws.push((node, local_to_program)),
+        }
+    }
+    Ok(draws)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2222,45 +2270,45 @@ fn raster_program<'program, 'object>(
                     operation.pixel(program.viewport, inverse, x, y)
                 })?;
             }
-            ProgramPassKind::RasterTree { roots, output } => {
-                let (_, inverse) = program_resource_normalized_matrices(
-                    prepared,
-                    *output,
-                    program.viewport,
-                    transform.matrix(),
-                )?;
-                let operations = roots
+            ProgramPassKind::RasterTree { output, .. } => {
+                let operations = program
+                    .raster_tree(*output)?
                     .iter()
-                    .map(
-                        |node| -> Result<ReferenceRasterOperation<'_, '_>, ReferenceExecuteError> {
-                            match program.node(*node)? {
-                                ReferenceProgramOperation::Fill(fill) => {
-                                    Ok(ReferenceRasterOperation::Fill(fill))
-                                }
-                                ReferenceProgramOperation::Image(image) => {
-                                    let source = bound
-                                        .get(image.slot)
-                                        .and_then(ReferenceExternalObject::visual_image)
-                                        .ok_or(
-                                            ReferenceExecuteError::InvalidProgramTextureSlot {
-                                                program: program.id,
-                                                slot: image.slot,
-                                            },
-                                        )?;
-                                    Ok(ReferenceRasterOperation::Image {
-                                        operation: image,
-                                        source,
-                                    })
+                    .map(|(node, local_to_program)| {
+                        let local_to_device = program_transform_to_device(
+                            prepared,
+                            *local_to_program,
+                            program.viewport,
+                            transform.matrix(),
+                        )?;
+                        let (_, inverse) =
+                            normalized_program_matrices(local_to_device, program.viewport)?;
+                        let operation = match program.node(*node)? {
+                            ReferenceProgramOperation::Fill(fill) => {
+                                ReferenceRasterOperation::Fill(fill)
+                            }
+                            ReferenceProgramOperation::Image(image) => {
+                                let source = bound
+                                    .get(image.slot)
+                                    .and_then(ReferenceExternalObject::visual_image)
+                                    .ok_or(ReferenceExecuteError::InvalidProgramTextureSlot {
+                                        program: program.id,
+                                        slot: image.slot,
+                                    })?;
+                                ReferenceRasterOperation::Image {
+                                    operation: image,
+                                    source,
                                 }
                             }
-                        },
-                    )
-                    .collect::<Result<Vec<_>, _>>()?;
+                        };
+                        Ok((operation, inverse))
+                    })
+                    .collect::<Result<Vec<_>, ReferenceExecuteError>>()?;
                 execution.write_resource(*output, |_, x, y| {
                     let mut pixel = PremulRgba32::TRANSPARENT;
-                    for operation in &operations {
+                    for (operation, inverse) in &operations {
                         pixel = operation
-                            .pixel(program.viewport, inverse, x, y)?
+                            .pixel(program.viewport, *inverse, x, y)?
                             .source_over(pixel)?;
                     }
                     Ok(pixel)
@@ -2720,8 +2768,16 @@ fn program_resource_normalized_matrices(
     viewport: valle_draw::Rect,
     normalized_program_to_device: [f64; 9],
 ) -> Result<([f64; 9], [f64; 9]), ReferenceExecuteError> {
-    let local_to_device =
-        program_resource_to_device(prepared, resource, viewport, normalized_program_to_device)?;
+    normalized_program_matrices(
+        program_resource_to_device(prepared, resource, viewport, normalized_program_to_device)?,
+        viewport,
+    )
+}
+
+fn normalized_program_matrices(
+    local_to_device: [f64; 9],
+    viewport: valle_draw::Rect,
+) -> Result<([f64; 9], [f64; 9]), ReferenceExecuteError> {
     let normalized_local_to_device = multiply_homography(
         local_to_device,
         [
@@ -4789,12 +4845,98 @@ mod tests {
     }
 
     #[test]
+    fn raster_tree_keeps_nested_coordinates_and_translucent_painter_order() {
+        use valle_draw::program::{DrawProgramBuilder, Group, LinearColor, PathNode};
+        let pass = ExecutionPassId::try_from(1).unwrap();
+        let viewport = Rect::new(0.0, 0.0, 32.0, 32.0);
+        let mut builder = DrawProgramBuilder::new(viewport);
+        let mut children = Vec::new();
+        for (x, color) in [
+            (0.0, LinearColor::new(1.0, 0.0, 0.0, 1.0)),
+            (4.0, LinearColor::new(0.0, 0.0, 0.5, 0.5)),
+        ] {
+            let paint = builder.push_paint(Paint::Solid(color));
+            let path = builder.push_path(PathData {
+                verbs: vec![
+                    PathVerb::MoveTo,
+                    PathVerb::LineTo,
+                    PathVerb::LineTo,
+                    PathVerb::LineTo,
+                    PathVerb::Close,
+                ],
+                points: vec![[0.0, 0.0], [8.0, 0.0], [8.0, 8.0], [0.0, 8.0]],
+            });
+            let leaf = builder.push_node(Node::Path(PathNode {
+                path,
+                fill_rule: Default::default(),
+                fill: Some(paint),
+                stroke: None,
+            }));
+            let mut group = Group::plain(vec![leaf]);
+            group.transform = Transform2d([1.0, 0.0, x, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]);
+            children.push(builder.push_node(Node::Group(group)));
+        }
+        let mut outer = Group::plain(children);
+        outer.transform = Transform2d([2.0, 0.0, 3.0, 0.0, 2.0, 5.0, 0.0, 0.0, 1.0]);
+        let root = builder.push_node(Node::Group(outer));
+        builder.add_root(root);
+        let program = builder.finish().unwrap();
+        let draws =
+            collect_reference_raster_tree(&program, program.roots(), Transform2d::IDENTITY, pass)
+                .unwrap();
+        let operations = draws
+            .iter()
+            .map(|(node, transform)| {
+                let Node::Path(node) = &program.nodes()[node.raw() as usize] else {
+                    panic!("leaf")
+                };
+                let segments =
+                    line_path_segments(&program.paths()[node.path.raw() as usize]).unwrap();
+                let fill = ReferenceFill {
+                    shapes: vec![ReferenceShape {
+                        bounds: line_segments_bounds(&segments).unwrap(),
+                        segments,
+                    }],
+                    color: solid_program_paint(&program, node.fill.unwrap(), pass).unwrap(),
+                };
+                (
+                    fill,
+                    normalized_program_matrices(transform.0, viewport)
+                        .unwrap()
+                        .1,
+                )
+            })
+            .collect::<Vec<_>>();
+        for (x, y, expected) in [
+            (4, 6, [1.0, 0.0, 0.0, 1.0]),
+            (12, 6, [0.5, 0.0, 0.5, 1.0]),
+            (22, 6, [0.0, 0.0, 0.5, 0.5]),
+            (2, 6, [0.0; 4]),
+            (4, 22, [0.0; 4]),
+        ] {
+            let mut pixel = PremulRgba32::TRANSPARENT;
+            for (fill, inverse) in &operations {
+                pixel = ReferenceRasterOperation::Fill(fill)
+                    .pixel(viewport, *inverse, x, y)
+                    .unwrap()
+                    .source_over(pixel)
+                    .unwrap();
+            }
+            assert!(
+                pixel.approx_eq(PremulRgba32::from_premultiplied(expected).unwrap(), 1e-6),
+                "pixel ({x}, {y}) = {pixel:?}"
+            );
+        }
+    }
+
+    #[test]
     fn fused_raster_tree_roots_consume_the_shared_coverage_budget_individually() {
         let pass = ExecutionPassId::try_from(1).unwrap();
         let program = ReferenceProgramRuntime {
             id: ProgramId::try_from(1).unwrap(),
             viewport: Rect::new(0.0, 0.0, 1.0, 1.0),
             nodes: Vec::new(),
+            raster_trees: BTreeMap::new(),
             clips: Vec::new(),
             filters: BTreeMap::new(),
             masks: BTreeMap::new(),

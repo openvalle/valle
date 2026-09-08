@@ -449,22 +449,24 @@ export class ProductFramePlannerPool {
       this.fail(new Error("Product frame ready stage identity drift"));
       return;
     }
+    // A worker sends each immutable template once. Cancellation only discards the frame;
+    // retain its template so subsequent seeks can consume bindings without another transfer.
+    const transferredPlan = message.stage.planPacket;
+    if (transferredPlan) {
+      const admittedPlan = transferredPlan.slice();
+      const templateKey = `${message.stage.renderId}:${message.stage.templateHash}`;
+      this.templatePackets.delete(templateKey);
+      this.templatePackets.set(templateKey, admittedPlan);
+      while (this.templatePackets.size > 64) {
+        const oldest = this.templatePackets.keys().next();
+        if (oldest.done) break;
+        this.templatePackets.delete(oldest.value);
+      }
+    }
     if (!task.cancelled) {
       if (!task.requestsCompleted) {
         this.fail(new Error("Product frame became ready before its resource request stage"));
         return;
-      }
-      const transferredPlan = message.stage.planPacket;
-      if (transferredPlan) {
-        const admittedPlan = transferredPlan.slice();
-        const templateKey = `${message.stage.renderId}:${message.stage.templateHash}`;
-        this.templatePackets.delete(templateKey);
-        this.templatePackets.set(templateKey, admittedPlan);
-        while (this.templatePackets.size > 64) {
-          const oldest = this.templatePackets.keys().next();
-          if (oldest.done) break;
-          this.templatePackets.delete(oldest.value);
-        }
       }
       const templateKey = `${message.stage.renderId}:${message.stage.templateHash}`;
       const planPacket = this.templatePackets.get(templateKey);
