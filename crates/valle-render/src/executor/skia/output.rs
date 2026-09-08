@@ -4,7 +4,9 @@ use skia_safe::{
 };
 use valle_engine::{
     compositor::delivery::{DeliveryStorage, transform_working_pixel},
-    resource::{ColorPrimaries, OutputAlphaMode, OutputBitDepth, OutputSpec, TransferFunction},
+    resource::{
+        ColorPrimaries, Dither, OutputAlphaMode, OutputBitDepth, OutputSpec, TransferFunction,
+    },
 };
 
 use super::{draw::DrawError, surface::working_color_space};
@@ -22,6 +24,38 @@ impl StagedOutput {
     pub(crate) const fn row_bytes(&self) -> usize {
         self.row_bytes
     }
+}
+
+// Sample the existing raster pixels without readback. Continuous-tone frames (gradients/video)
+// favor Skia's shader; flat-color graphics favor exact memoized conversion. This selects cost,
+// never a different color contract.
+pub(crate) fn prefers_cached_output(image: &Image) -> bool {
+    let Some(pixmap) = image.peek_pixels() else {
+        return false;
+    };
+    let Some(bytes) = pixmap.bytes() else {
+        return false;
+    };
+    let width = pixmap.width() as usize;
+    let height = pixmap.height() as usize;
+    let columns = width.min(32);
+    let rows = height.min(32);
+    let pixel_bytes = pixmap.info().bytes_per_pixel();
+    if columns == 0 || rows == 0 || pixel_bytes == 0 {
+        return false;
+    }
+    let mut colors = std::collections::HashSet::new();
+    for y in 0..rows {
+        for x in 0..columns {
+            let offset = ((2 * y + 1) * height / (2 * rows)) * pixmap.row_bytes()
+                + ((2 * x + 1) * width / (2 * columns)) * pixel_bytes;
+            colors.insert(&bytes[offset..offset + pixel_bytes]);
+            if colors.len() > columns * rows / 4 {
+                return false;
+            }
+        }
+    }
+    true
 }
 
 /// Materializes the terminal OutputSpec exactly. Skia color-space defaults are intentionally not
@@ -65,15 +99,37 @@ pub(crate) fn stage_output(
     }
 
     let mut pixels = Vec::with_capacity(target_info.compute_min_byte_size());
+    // Non-dithered conversion is position-independent. A small, frame-local cache avoids
+    // repeating transfer/gamut math for flat fills and text without approximating any pixels.
+    let mut cache = [None::<([u32; 4], DeliveryStorage)>; 1024];
     for (index, channels) in working.chunks_exact(4).enumerate() {
-        let channels = canonical_premul([channels[0], channels[1], channels[2], channels[3]])?;
-        let sample = transform_working_pixel(
-            channels,
-            spec,
-            [(index % width) as u32, (index / width) as u32],
-        )
-        .map_err(|error| DrawError::Surface(error.to_string()))?;
-        append_storage(&mut pixels, sample.storage, target_info.color_type(), spec)?;
+        let channels = [channels[0], channels[1], channels[2], channels[3]];
+        let key = channels.map(f32::to_bits);
+        let hash = key
+            .iter()
+            .fold(0_u32, |hash, bits| hash.rotate_left(5) ^ bits)
+            .wrapping_mul(0x9e3779b9);
+        let slot = (hash >> 22) as usize;
+        let cached = if spec.dither() == Dither::None {
+            cache[slot].filter(|(prior, _)| *prior == key)
+        } else {
+            None
+        };
+        let storage = if let Some((_, storage)) = cached {
+            storage
+        } else {
+            let sample = transform_working_pixel(
+                canonical_premul(channels)?,
+                spec,
+                [(index % width) as u32, (index / width) as u32],
+            )
+            .map_err(|error| DrawError::Surface(error.to_string()))?;
+            if spec.dither() == Dither::None {
+                cache[slot] = Some((key, sample.storage));
+            }
+            sample.storage
+        };
+        append_storage(&mut pixels, storage, target_info.color_type(), spec)?;
     }
     let target_row_bytes = width
         .checked_mul(target_info.color_type().bytes_per_pixel())
@@ -261,5 +317,85 @@ fn append_storage(
 fn append_u16s(output: &mut Vec<u8>, values: [u16; 4]) {
     for value in values {
         output.extend_from_slice(&value.to_le_bytes());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use skia_safe::{Data, images};
+    use valle_engine::resource::{
+        GamutMap, OutputBackground, OutputColorEncoding, SignalLuminance, ToneMap,
+    };
+
+    #[test]
+    fn continuous_color_frames_keep_the_shader_path() {
+        let info = ImageInfo::new((64, 64), ColorType::RGBA8888, AlphaType::Premul, None);
+        let flat = [32, 64, 128, 255].repeat(64 * 64);
+        let ramp = (0..64 * 64)
+            .flat_map(|i| [(i % 256) as u8, (i / 256) as u8, 0, 255])
+            .collect::<Vec<_>>();
+        for (bytes, expected) in [(flat, true), (ramp, false)] {
+            let image = images::raster_from_data(&info, Data::new_copy(&bytes), 64 * 4).unwrap();
+            assert_eq!(prefers_cached_output(&image), expected);
+        }
+    }
+
+    #[test]
+    fn cached_output_matches_per_pixel_math_including_collisions_and_dither() {
+        for dither in [Dither::None, Dither::Triangular { seed: 71 }] {
+            let spec = OutputSpec::new(
+                OutputColorEncoding::SRGB,
+                OutputAlphaMode::Opaque,
+                OutputBackground::opaque_srgb([0, 0, 0]),
+                ToneMap::None,
+                GamutMap::ChromaCompress,
+                dither,
+                OutputBitDepth::Eight,
+                SignalLuminance::SDR_100,
+            )
+            .unwrap();
+            let samples = (0..1024)
+                .map(|i| {
+                    if i % 3 == 0 {
+                        [0.18, 0.18, 0.18, 1.0]
+                    } else {
+                        [
+                            (i % 257) as f32 / 200.0,
+                            (i % 71) as f32 / 70.0,
+                            (i % 19) as f32 / 18.0,
+                            1.0,
+                        ]
+                    }
+                })
+                .collect::<Vec<_>>();
+            let data = samples
+                .iter()
+                .flatten()
+                .flat_map(|value| value.to_ne_bytes())
+                .collect::<Vec<_>>();
+            let info = ImageInfo::new(
+                (32, 32),
+                ColorType::RGBAF32,
+                AlphaType::Premul,
+                Some(working_color_space().unwrap()),
+            );
+            let image = images::raster_from_data(&info, Data::new_copy(&data), 32 * 16).unwrap();
+            let target =
+                rgba8_target_info(spec, valle_engine::resource::Extent2d::new(32, 32).unwrap())
+                    .unwrap();
+            let actual = stage_output(&image, spec, &target).unwrap();
+            let mut expected = Vec::new();
+            for (index, pixel) in samples.iter().enumerate() {
+                let sample = transform_working_pixel(
+                    *pixel,
+                    spec,
+                    [(index % 32) as u32, (index / 32) as u32],
+                )
+                .unwrap();
+                append_storage(&mut expected, sample.storage, target.color_type(), spec).unwrap();
+            }
+            assert_eq!(actual.pixels(), expected, "dither={dither:?}");
+        }
     }
 }

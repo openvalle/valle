@@ -742,6 +742,7 @@ impl SurfaceArena {
     pub(crate) fn metal() -> Result<Self, SurfaceError> {
         use objc2_metal::MTLDevice;
 
+        let started = std::env::var_os("VALLE_PERF").map(|_| std::time::Instant::now());
         let device = objc2_metal::MTLCreateSystemDefaultDevice()
             .ok_or(SurfaceError::MetalUnavailable("no Metal device"))?;
         let queue = device
@@ -772,6 +773,12 @@ impl SurfaceArena {
             return Err(SurfaceError::MetalUnavailable(
                 "cannot create CoreVideo Metal texture cache",
             ));
+        }
+        if let Some(started) = started {
+            eprintln!(
+                "[valle metal] initialize={:.3}ms",
+                started.elapsed().as_secs_f64() * 1000.0
+            );
         }
         Ok(Self {
             backend: SurfaceBackend::Metal {

@@ -15,7 +15,7 @@ use valle_engine::{
     prepare::{
         DeviceRect, DeviceTransform, DynamicBindingId, DynamicBindingKind, DynamicValue, ProgramId,
     },
-    resource::{Dither, Extent2d, OutputBitDepth},
+    resource::Extent2d,
 };
 
 use super::{
@@ -25,7 +25,7 @@ use super::{
     draw::{DrawError, ProgramRuntime, ProgramTerminal},
     effect::{EffectCacheCounters, EffectRuntime, apply_prepared_mask, straight_color},
     import::render_import,
-    output::{stage_output, validate_target},
+    output::{prefers_cached_output, stage_output, validate_target},
     surface::{
         PlanImage, SurfaceAllocationScope, SurfaceArena, SurfaceError, SurfaceFrame,
         SurfaceFrameReport, working_color_space, working_info,
@@ -431,6 +431,9 @@ impl AdmittedSkiaFrame<'_> {
                         .iter()
                         .filter_map(|slot| slot.extent())
                         .collect::<Vec<_>>();
+                    if self.program(*program)?.direct_raster() {
+                        local_extents.clear();
+                    }
                     let helper_index =
                         program_helper_extent(plan_program(self.bindings, *program)?, schedule)?
                             .map(|helper| {
@@ -472,6 +475,9 @@ impl AdmittedSkiaFrame<'_> {
                             .iter()
                             .filter_map(|slot| slot.extent())
                             .collect::<Vec<_>>();
+                        if self.program(*program)?.direct_raster() {
+                            local_extents.clear();
+                        }
                         let helper_index = program_helper_extent(
                             plan_program(self.bindings, *program)?,
                             schedule,
@@ -1409,11 +1415,6 @@ fn commit_output(
 ) -> Result<(), SkiaExecuteError> {
     let image = image.image().ok_or(SkiaExecuteError::MissingOutput)?;
     let spec = target.output();
-    // The admitted output kernel is the product path for every non-dithered 8-bit target, not
-    // merely a GPU-delivery shortcut. Running the same SkSL on Skia's raster pipeline keeps the
-    // terminal transform in optimized native code and avoids a per-pixel Rust reference walk.
-    // Higher-depth and dithered delivery retain the exact CPU materializer below until equivalent
-    // vector/GPU kernels are admitted for those contracts.
     if target.is_direct_gpu() {
         let shader = effects.output_shader(image, spec)?;
         if !target.commit_shader(shader) {
@@ -1421,33 +1422,26 @@ fn commit_output(
         }
         return Ok(());
     }
-    let mut use_output_shader =
-        spec.dither() == Dither::None && spec.bit_depth() == OutputBitDepth::Eight;
     #[cfg(all(target_os = "macos", feature = "native"))]
+    if surface_frame.backend_kind() == super::surface::SkiaBackendKind::Metal
+        && spec.dither() == valle_engine::resource::Dither::None
+        && spec.bit_depth() == valle_engine::resource::OutputBitDepth::Eight
+        // Metal cannot allocate a straight-alpha render target.
+        && spec.alpha() != valle_engine::resource::OutputAlphaMode::StraightCoverage
     {
-        // Ganesh Metal cannot allocate an unpremultiplied render target. Keep every working and
-        // effect pass on Metal, then use the exact CPU delivery materializer for straight-alpha
-        // sinks such as PNG instead of trying to render the output shader into an invalid surface.
-        if surface_frame.backend_kind() == super::surface::SkiaBackendKind::Metal
-            && spec.alpha() == valle_engine::resource::OutputAlphaMode::StraightCoverage
-        {
-            use_output_shader = false;
-        }
-    }
-    if use_output_shader {
         let shader = effects.output_shader(image, spec)?;
-        #[cfg(all(target_os = "macos", feature = "native"))]
-        if surface_frame.backend_kind() == super::surface::SkiaBackendKind::Metal {
-            let raster =
-                surface_frame.render_output_shader_to_raster(shader, &target.image_info())?;
-            if !target.commit_image(&raster) {
-                return Err(SkiaExecuteError::TargetCommit);
-            }
-            return Ok(());
+        let raster = surface_frame.render_output_shader_to_raster(shader, &target.image_info())?;
+        if !target.commit_image(&raster) {
+            return Err(SkiaExecuteError::TargetCommit);
         }
-        #[cfg(not(all(target_os = "macos", feature = "native")))]
-        let _ = surface_frame;
-        if !target.commit_shader(shader) {
+        return Ok(());
+    }
+    if surface_frame.backend_kind() == super::surface::SkiaBackendKind::Raster
+        && spec.dither() == valle_engine::resource::Dither::None
+        && spec.bit_depth() == valle_engine::resource::OutputBitDepth::Eight
+        && !prefers_cached_output(image)
+    {
+        if !target.commit_shader(effects.output_shader(image, spec)?) {
             return Err(SkiaExecuteError::TargetCommit);
         }
         return Ok(());

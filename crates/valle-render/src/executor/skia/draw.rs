@@ -64,6 +64,7 @@ pub(crate) struct ProgramRuntime {
     pub(crate) fonts: BTreeMap<(ContentDigest, u32), Typeface>,
     pub(crate) shaders: BTreeMap<String, Arc<RuntimeEffect>>,
     pub(crate) scenes: BTreeMap<ContentDigest, Image>,
+    direct_raster: bool,
     glass: Option<RuntimeEffect>,
     blend: Option<BlendRuntime>,
 }
@@ -247,7 +248,20 @@ impl ProgramRuntime {
             .then(admit_motion_glass_shader)
             .transpose()?;
 
+        let direct_raster = program.requirements().destination_uses.is_empty()
+            && program.nodes().iter().all(|node| match node {
+                Node::Group(group) => direct_raster_group(group),
+                _ => true,
+            });
+        if std::env::var_os("VALLE_COMPOSITOR_TRACE_PASSES").is_some() {
+            eprintln!(
+                "[valle program] nodes={} local-passes={} direct-raster={direct_raster}",
+                program.nodes().len(),
+                plan.local_plan().passes().len()
+            );
+        }
         Ok(Self {
+            direct_raster,
             program,
             textures,
             fonts,
@@ -256,6 +270,10 @@ impl ProgramRuntime {
             glass,
             blend,
         })
+    }
+
+    pub(crate) fn direct_raster(&self) -> bool {
+        self.direct_raster
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -280,6 +298,26 @@ impl ProgramRuntime {
             .ok_or(DrawError::MissingProgramOutput)?;
         if output_roi.is_empty() {
             return Ok(PlanImage::transparent());
+        }
+        if self.direct_raster {
+            let target = program_target_mut(surfaces, terminal)?;
+            let origin = match terminal {
+                ProgramTerminal::Plan { roi, .. } => [roi.x, roi.y],
+                ProgramTerminal::Scratch(_) => [0, 0],
+            };
+            self.raster_nodes_into(
+                target,
+                plan,
+                self.program.roots(),
+                plan.local_plan().output(),
+                transform,
+                origin,
+            )?;
+            let image = snapshot_program_target(target, terminal, output_roi)?;
+            return Ok(match terminal {
+                ProgramTerminal::Plan { roi, .. } => PlanImage::new(image, roi),
+                ProgramTerminal::Scratch(_) => PlanImage::root(image, extent),
+            });
         }
         let destinations = destination_inputs
             .iter()
@@ -845,6 +883,16 @@ impl ProgramRuntime {
                     SamplingOptions::new(FilterMode::Linear, MipmapMode::None),
                     &SkPaint::default(),
                 );
+            }
+            Node::Group(group) if self.direct_raster => {
+                canvas.save();
+                canvas.concat(&sk_matrix(group.transform.0));
+                let result = group
+                    .children
+                    .iter()
+                    .try_for_each(|child| self.raster_node(canvas, *child));
+                canvas.restore();
+                result?;
             }
             Node::Group(_) => return Err(DrawError::UnexpectedGroupRaster(node_id.raw())),
         }
@@ -1981,9 +2029,126 @@ impl From<SurfaceError> for DrawError {
     }
 }
 
+// With no group-level pixel operation or destination reads, source-over is associative.
+// Keep transforms and painter order on the canvas instead of snapshotting every child.
+fn direct_raster_group(group: &valle_draw::program::Group) -> bool {
+    group.glass.is_none()
+        && group.glass_foreground.is_none()
+        && group.clip.is_none()
+        && group.filters.is_empty()
+        && group.mask.is_none()
+        && group.opacity == 1.0
+        && group.internal_blend == BlendMode::Normal
+        && group.backdrop.is_none()
+        && group.shader.is_none()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn direct_tree_keeps_nested_transforms_and_translucent_painter_order() {
+        use valle_draw::program::{
+            Affine2d, DrawProgramBuilder, Group, LinearColor, PathNode, Transform2d,
+        };
+        let mut builder = DrawProgramBuilder::new(Rect::new(0.0, 0.0, 32.0, 32.0));
+        let mut roots = Vec::new();
+        for (offset, color) in [
+            (0.0, LinearColor::new(1.0, 0.0, 0.0, 1.0)),
+            (4.0, LinearColor::new(0.0, 0.0, 0.5, 0.5)),
+        ] {
+            let paint = builder.push_paint(Paint::Solid(color));
+            let path = builder.push_path(PathData {
+                verbs: vec![
+                    PathVerb::MoveTo,
+                    PathVerb::LineTo,
+                    PathVerb::LineTo,
+                    PathVerb::LineTo,
+                    PathVerb::Close,
+                ],
+                points: vec![[0.0, 0.0], [8.0, 0.0], [8.0, 8.0], [0.0, 8.0]],
+            });
+            let child = builder.push_node(Node::Path(PathNode {
+                path,
+                fill_rule: FillRule::NonZero,
+                fill: Some(paint),
+                stroke: None,
+            }));
+            let mut group = Group::plain(vec![child]);
+            group.transform = Transform2d::from_affine(Affine2d::translate(offset, 0.0));
+            roots.push(builder.push_node(Node::Group(group)));
+        }
+        let mut group = Group::plain(roots);
+        group.transform =
+            Transform2d::from_affine(Affine2d::scale(2.0, 2.0).then(Affine2d::translate(3.0, 5.0)));
+        let root = builder.push_node(Node::Group(group));
+        builder.add_root(root);
+        let runtime = ProgramRuntime {
+            program: Arc::new(builder.finish().unwrap()),
+            direct_raster: true,
+            textures: BTreeMap::new(),
+            fonts: BTreeMap::new(),
+            shaders: BTreeMap::new(),
+            scenes: BTreeMap::new(),
+            glass: None,
+            blend: None,
+        };
+        let info = ImageInfo::new(
+            (32, 32),
+            skia_safe::ColorType::RGBAF32,
+            skia_safe::AlphaType::Premul,
+            Some(working_color_space().unwrap()),
+        );
+        let mut actual = skia_safe::surfaces::raster(&info, None, None).unwrap();
+        actual.canvas().clear(Color4f::new(0.0, 0.0, 0.0, 0.0));
+        for root in runtime.program.roots() {
+            runtime.raster_node(actual.canvas(), *root).unwrap();
+        }
+        let mut bytes = vec![0_u8; 32 * 32 * 16];
+        assert!(actual.read_pixels(&info, &mut bytes, 32 * 16, (0, 0)));
+        let pixels = bytes
+            .chunks_exact(4)
+            .map(|bytes| f32::from_ne_bytes(bytes.try_into().unwrap()))
+            .collect::<Vec<_>>();
+        for (x, y, expected) in [
+            (4, 6, [1.0, 0.0, 0.0, 1.0]),
+            (12, 6, [0.5, 0.0, 0.5, 1.0]),
+            (22, 6, [0.0, 0.0, 0.5, 0.5]),
+            (2, 6, [0.0; 4]),
+            (4, 22, [0.0; 4]),
+        ] {
+            let start = (y * 32 + x) * 4;
+            for (actual, expected) in pixels[start..start + 4].iter().zip(expected) {
+                assert!(
+                    (actual - expected).abs() < 0.001,
+                    "pixel ({x}, {y}) = {:?}",
+                    &pixels[start..start + 4]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn group_pixel_operations_keep_the_scheduled_path() {
+        use valle_draw::program::Group;
+        let plain = Group::plain(Vec::new());
+        assert!(direct_raster_group(&plain));
+        let mut opacity = plain.clone();
+        opacity.opacity = 0.5;
+        let mut clip = plain.clone();
+        clip.clip = Some(Clip::Rect(Rect::new(0.0, 0.0, 8.0, 8.0)));
+        let mut filter = plain.clone();
+        filter.filters.push(Filter::Blur {
+            sigma_x: 1.0,
+            sigma_y: 1.0,
+        });
+        let mut blend = plain.clone();
+        blend.internal_blend = BlendMode::Multiply;
+        for group in [opacity, clip, filter, blend] {
+            assert!(!direct_raster_group(&group));
+        }
+    }
 
     #[test]
     fn path_clip_clears_pixels_outside_the_outline() {

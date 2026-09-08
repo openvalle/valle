@@ -1299,12 +1299,50 @@ mod tests {
 
     #[test]
     fn output_shader_tracks_the_exact_cpu_reference_within_two_codes() {
-        let samples = [
+        use valle_engine::resource::{OutputColorEncoding, SignalLuminance};
+        for target in [OutputColorEncoding::SRGB, OutputColorEncoding::REC709] {
+            for alpha in [
+                OutputAlphaMode::Opaque,
+                OutputAlphaMode::StraightCoverage,
+                OutputAlphaMode::PremultipliedCoverage,
+            ] {
+                for tone in [ToneMap::None, ToneMap::ReinhardLuminance] {
+                    for gamut in [GamutMap::Clip, GamutMap::ChromaCompress] {
+                        let background = if alpha == OutputAlphaMode::Opaque {
+                            OutputBackground::opaque_srgb([0, 0, 0])
+                        } else {
+                            OutputBackground::Transparent
+                        };
+                        let spec = OutputSpec::new(
+                            target,
+                            alpha,
+                            background,
+                            tone,
+                            gamut,
+                            Dither::None,
+                            OutputBitDepth::Eight,
+                            SignalLuminance::SDR_100,
+                        )
+                        .unwrap();
+                        assert_output_shader_matches_reference(spec);
+                    }
+                }
+            }
+        }
+    }
+
+    fn assert_output_shader_matches_reference(spec: OutputSpec) {
+        let mut samples = [
             [0.0_f32, 0.0, 0.0, 0.0],
             [0.18, 0.18, 0.18, 1.0],
             [1.2, 0.15, 0.04, 1.0],
             [0.10, 0.30, 0.05, 0.5],
         ];
+        if spec.alpha() == OutputAlphaMode::Opaque {
+            for sample in &mut samples {
+                sample[3] = 1.0;
+            }
+        }
         let mut source_bytes = Vec::with_capacity(samples.len() * 4 * size_of::<f32>());
         for sample in samples {
             for channel in sample {
@@ -1323,7 +1361,6 @@ mod tests {
             source_bytes.len(),
         )
         .unwrap();
-        let spec = OutputSpec::srgb_preview(OutputBackground::Transparent).unwrap();
         let target_info =
             rgba8_target_info(spec, Extent2d::new(samples.len() as u32, 1).unwrap()).unwrap();
         let expected = stage_output(&source, spec, &target_info).unwrap();

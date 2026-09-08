@@ -791,6 +791,23 @@ impl PipelineAccumulator {
         if add_usize(self.template_cache_hits, self.template_cache_misses)? != frames {
             return Err(PipelineError::IncompleteEvidence);
         }
+        if std::env::var_os("VALLE_PERF").is_some() {
+            eprintln!(
+                "[valle pipeline] frames={frames} workers={raster_workers} evaluate-prepare={:.3}ms fulfill-lower-wall={:.3}ms bind={:.3}ms execute={:.3}ms readback={:.3}ms gpu-wait={:.3}ms max-frame={:.3}ms template-hits={} template-misses={} scratch-allocations={} scratch-reuses={} max-scratch-bytes={}",
+                self.evaluate_prepare_us as f64 / 1000.0,
+                self.fulfill_lower_wall_us as f64 / 1000.0,
+                self.bind_us as f64 / 1000.0,
+                self.execute_us as f64 / 1000.0,
+                self.delivery_readback_us as f64 / 1000.0,
+                self.gpu_completion_wait_us as f64 / 1000.0,
+                self.maximum_frame_us as f64 / 1000.0,
+                self.template_cache_hits,
+                self.template_cache_misses,
+                self.scratch_surface_allocations,
+                self.scratch_surface_reuses,
+                self.maximum_scratch_bytes,
+            );
+        }
         Ok(PipelineReport {
             render_id: self.render_id.ok_or(PipelineError::IncompleteEvidence)?,
             frames,
