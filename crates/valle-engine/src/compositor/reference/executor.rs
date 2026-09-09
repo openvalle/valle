@@ -716,6 +716,50 @@ fn preflight_program(
                         budget,
                     )?;
                 }
+                for step in program.raster_tree(*output)? {
+                    if let ReferenceTreeStep::PopClip(node, local) = *step {
+                        reserve_raster_samples(
+                            pass,
+                            output_roi.pixels(),
+                            1,
+                            samples_per_pixel,
+                            &mut budget.coverage_samples,
+                        )?;
+                        if let ReferenceClip::Path(Some(shape)) = program.clip(node)? {
+                            let matrix = program_transform_to_device(
+                                prepared,
+                                local,
+                                program.viewport,
+                                transform.matrix(),
+                            )?;
+                            let normalized =
+                                normalized_program_matrices(matrix, program.viewport)?.0;
+                            let device = DeviceTransform::from_projective(normalized)
+                                .map_err(|_| ReferenceExecuteError::InvalidSampleCoordinate)?;
+                            reserve_raster_geometry_tests(
+                                pass,
+                                output_roi.pixels(),
+                                1,
+                                samples_per_pixel,
+                                &mut budget.geometry_tests,
+                            )?;
+                            let bounds = project_program_local_bounds(
+                                program.viewport,
+                                device,
+                                shape.bounds,
+                                extent,
+                            )?
+                            .intersect(output_roi);
+                            reserve_raster_geometry_tests(
+                                pass,
+                                bounds.pixels(),
+                                shape.segments.len() as u64,
+                                samples_per_pixel,
+                                &mut budget.geometry_tests,
+                            )?;
+                        }
+                    }
+                }
             }
             ProgramPassKind::Backdrop {
                 output, filters, ..
@@ -983,6 +1027,7 @@ enum ReferenceTreeStep {
     Draw(NodeId, Transform2d),
     PushOpacity,
     PopOpacity(f32),
+    PopClip(NodeId, Transform2d),
 }
 
 impl ReferenceTreeStep {
@@ -1155,6 +1200,20 @@ fn prepare_reference_program(
                         )?);
                     }
                 }
+                for step in &draws {
+                    if let ReferenceTreeStep::PopClip(node, _) = *step {
+                        let Node::Group(group) = &program.nodes()[node.raw() as usize] else {
+                            unreachable!()
+                        };
+                        clips[node.raw() as usize] = Some(prepare_reference_clip(
+                            &program,
+                            group.clip.as_ref().unwrap(),
+                            pass,
+                            id,
+                            &mut budget.outline_segments,
+                        )?);
+                    }
+                }
                 raster_trees.insert(*output, draws);
             }
             ProgramPassKind::ApplyClip { node, clip, .. } => {
@@ -1299,7 +1358,7 @@ fn collect_reference_raster_tree(
             continue;
         };
         match program.nodes().get(node.raw() as usize) {
-            Some(Node::Group(group)) if group.is_raster_group() => {
+            Some(Node::Group(group)) if group.is_raster_tree_group() => {
                 if group.opacity == 0.0 {
                     continue;
                 }
@@ -1308,6 +1367,10 @@ fn collect_reference_raster_tree(
                     pending.push(PopOpacity(group.opacity));
                 }
                 let child_to_program = group.transform.then(local_to_program);
+                if group.clip.is_some() {
+                    draws.push(PushOpacity);
+                    pending.push(PopClip(node, child_to_program));
+                }
                 pending.extend(
                     group
                         .children
@@ -2338,10 +2401,28 @@ fn raster_program<'program, 'object>(
                     })
                     .collect::<Result<Vec<_>, ReferenceExecuteError>>()?;
                 let steps = program.raster_tree(*output)?;
+                let clip_operations = steps
+                    .iter()
+                    .filter_map(|step| match *step {
+                        ReferenceTreeStep::PopClip(node, transform) => Some((node, transform)),
+                        _ => None,
+                    })
+                    .map(|(node, local)| {
+                        let matrix = program_transform_to_device(
+                            prepared,
+                            local,
+                            program.viewport,
+                            transform.matrix(),
+                        )?;
+                        let (_, inverse) = normalized_program_matrices(matrix, program.viewport)?;
+                        Ok((program.clip(node)?, inverse))
+                    })
+                    .collect::<Result<Vec<_>, ReferenceExecuteError>>()?;
                 let mut stack = Vec::new();
                 execution.write_resource(*output, |_, x, y| {
                     let mut pixel = PremulRgba32::TRANSPARENT;
                     let mut leaves = operations.iter();
+                    let mut clips = clip_operations.iter();
                     for step in steps {
                         match *step {
                             ReferenceTreeStep::Draw(..) => {
@@ -2353,6 +2434,14 @@ fn raster_program<'program, 'object>(
                             ReferenceTreeStep::PushOpacity => {
                                 stack.push(pixel);
                                 pixel = PremulRgba32::TRANSPARENT;
+                            }
+                            ReferenceTreeStep::PopClip(..) => {
+                                let (clip, inverse) = clips.next().expect("admitted clip");
+                                let coverage =
+                                    program_clip_coverage(clip, program.viewport, *inverse, x, y)?;
+                                pixel = pixel
+                                    .scale_coverage(coverage)?
+                                    .source_over(stack.pop().expect("balanced clip group"))?;
                             }
                             ReferenceTreeStep::PopOpacity(opacity) => {
                                 pixel = pixel

@@ -3361,6 +3361,34 @@ impl<'a> Resolver<'a> {
         }
     }
 
+    fn resource_budget_details(&self) -> BTreeMap<String, String> {
+        let mut images = 0;
+        let mut fonts = 0;
+        let mut components = 0;
+        let kinds = self.resources.iter().map(|resource| resource.kind).chain(
+            self.visiting
+                .iter()
+                .filter_map(|id| self.manifest.entries().get(id).map(resource_kind)),
+        );
+        for kind in kinds {
+            match kind {
+                ResourceKind::Image => images += 1,
+                ResourceKind::Font => fonts += 1,
+                ResourceKind::MotionArtifact => components += 1,
+                _ => {}
+            }
+        }
+        let actual = self.resources.len() + self.visiting.len();
+        details([
+            ("limit", self.limits.max_resources.to_string()),
+            ("actual", actual.to_string()),
+            ("images", images.to_string()),
+            ("fonts", fonts.to_string()),
+            ("components", components.to_string()),
+            ("other", (actual - images - fonts - components).to_string()),
+        ])
+    }
+
     fn resolve(
         &mut self,
         resource_id: &str,
@@ -3402,7 +3430,7 @@ impl<'a> Resolver<'a> {
                 path,
                 EngineOpenPhase::ResourceResolve,
                 Some(resource_id),
-                details([("limit", self.limits.max_resources.to_string())]),
+                self.resource_budget_details(),
             ));
             self.visiting.remove(resource_id);
             return None;

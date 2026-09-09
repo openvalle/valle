@@ -103,6 +103,38 @@ pub fn compile_recording_with_catalog(
     RecordingCompiler::new(viewport, recording, Some(catalog)).compile()
 }
 
+// These folds transfer fields without multiplying transforms or opacity. A clip remains
+// inside its parent's opacity layer; arbitrary effect order and clip intersections are not folded.
+fn merge_recording_groups(outer: &Group, inner: &Group) -> Option<Group> {
+    if outer.is_plain() {
+        return Some(inner.clone());
+    }
+    if outer.is_transform_only()
+        && !outer.isolated
+        && outer.layer_bounds.is_none()
+        && inner.transform == Transform2d::IDENTITY
+    {
+        let mut merged = inner.clone();
+        merged.transform = outer.transform;
+        return Some(merged);
+    }
+    if outer.is_raster_group()
+        && outer.transform == Transform2d::IDENTITY
+        && inner.is_raster_tree_group()
+        && inner.clip.is_some()
+        && inner.transform == Transform2d::IDENTITY
+        && inner.opacity == 1.0
+        && !inner.isolated
+        && inner.layer_bounds.is_none()
+    {
+        let mut merged = outer.clone();
+        merged.clip = inner.clip.clone();
+        merged.children = inner.children.clone();
+        return Some(merged);
+    }
+    None
+}
+
 struct RecordingFrame {
     group: Group,
     alpha_mask: bool,
@@ -561,9 +593,35 @@ impl<'a> RecordingCompiler<'a> {
                 mode: MaskMode::Alpha,
             });
         }
+        // Fold construction wrappers only when the child is the sole, last-owned node.
+        // Destination-reading subtrees retain every scope boundary.
+        if frame.group.children.len() == 1 && self.raster_scope(&frame.group.children) {
+            let child = frame.group.children[0];
+            if child.index() + 1 == self.builder.nodes.len()
+                && let Some(Some(Node::Group(inner))) = self.builder.nodes.last()
+                && let Some(merged) = merge_recording_groups(&frame.group, inner)
+            {
+                self.builder.nodes.pop();
+                frame.group = merged;
+            }
+        }
         let node = self.builder.push_node(Node::Group(frame.group));
         self.push_node(node);
         Ok(())
+    }
+
+    fn raster_scope(&self, children: &[NodeId]) -> bool {
+        let mut pending = children.to_vec();
+        while let Some(node) = pending.pop() {
+            match self.builder.nodes[node.index()].as_ref() {
+                Some(Node::Group(group)) if group.is_raster_tree_group() => {
+                    pending.extend(&group.children)
+                }
+                Some(Node::Group(_) | Node::RuntimeShader(_)) | None => return false,
+                _ => {}
+            }
+        }
+        true
     }
 
     fn push_node(&mut self, node: NodeId) {
@@ -1031,6 +1089,84 @@ fn rect_path(rect: Rect) -> PathData {
 mod tests {
     use super::{ProgramRecordingError, font_key};
     use crate::program::recording::FontFace;
+
+    #[test]
+    fn nested_transform_opacity_clip_wrappers_use_one_group_per_author_layer() {
+        use crate::program::{
+            Node, compile_recording,
+            recording::{Affine, Paint, ProgramRecording, RecordCmd},
+        };
+        use crate::{Point, Rect, Rgba};
+        let mut recording = ProgramRecording::new();
+        for _ in 0..96 {
+            recording.push(RecordCmd::BeginTransform {
+                transform: Affine::translate(0.01, 0.01),
+            });
+            recording.push(RecordCmd::BeginSaveLayer {
+                bounds: None,
+                alpha: 0.997,
+            });
+            recording.push(RecordCmd::BeginClipRect {
+                rect: Rect::new(0.0, 0.0, 16.0, 16.0),
+            });
+        }
+        let path = recording
+            .begin_path()
+            .move_to(Point::new(0.0, 0.0))
+            .line_to(Point::new(16.0, 0.0))
+            .line_to(Point::new(0.0, 16.0))
+            .close()
+            .finish();
+        recording.push(RecordCmd::Path {
+            path,
+            fill_rule: crate::program::recording::FillRule::NonZero,
+            fill: Some(Paint::Solid(Rgba::new(255, 0, 0, 255))),
+            stroke: None,
+        });
+        for _ in 0..96 * 3 {
+            recording.push(RecordCmd::End);
+        }
+        let program = compile_recording(Rect::new(0.0, 0.0, 32.0, 32.0), &recording).unwrap();
+        assert_eq!(
+            program
+                .nodes()
+                .iter()
+                .filter(|node| matches!(node, Node::Group(_)))
+                .count(),
+            96
+        );
+        for node in program.nodes() {
+            if let Node::Group(group) = node {
+                assert_eq!(group.opacity, 0.997_f32);
+                assert!(group.clip.is_some());
+                assert!(group.isolated);
+            }
+        }
+        program.validate().unwrap();
+    }
+
+    #[test]
+    fn group_folding_preserves_nested_opacity_and_clip_boundaries() {
+        use crate::Rect;
+        use crate::program::{Clip, Group, Transform2d};
+        let mut outer = Group::plain(Vec::new());
+        outer.opacity = 0.5;
+        let mut inner = outer.clone();
+        assert!(super::merge_recording_groups(&outer, &inner).is_none());
+        outer.clip = Some(Clip::Rect(Rect::new(0.0, 0.0, 8.0, 8.0)));
+        inner.opacity = 1.0;
+        inner.clip = outer.clip.clone();
+        assert!(super::merge_recording_groups(&outer, &inner).is_none());
+        inner.transform = Transform2d::IDENTITY;
+        inner.backdrop = Some(crate::program::BackdropRead {
+            scope: crate::program::BackdropScope::Current,
+            bounds: Rect::new(0.0, 0.0, 8.0, 8.0),
+            footprint: Default::default(),
+            sampling: crate::requirements::SamplingMode::LinearClamp,
+            filters: Vec::new(),
+        });
+        assert!(super::merge_recording_groups(&outer, &inner).is_none());
+    }
 
     fn face(family: impl Into<String>) -> FontFace {
         FontFace {

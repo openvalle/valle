@@ -167,8 +167,46 @@ test("RasterTree preserves nested transforms, translucent order and pixel bounda
         expected.forEach((value, channel) => expect(Math.abs(pixels[(6 * 32 + x) * 4 + channel]! - value)).toBeLessThanOrEqual(2));
       }
     } finally { faded.delete(); }
-    (draw.nodes[0] as any).value.clip = { kind: "rect" };
+    (draw.nodes[0] as any).value.mask = { source: 1, mode: "alpha" };
     expect(() => drawProgramNode(ck, builtins, surface.getCanvas(), admitted, 0, identity))
       .toThrow("requires a separate pixel operation");
   } finally { builtins.dispose(); surface.delete(); }
+});
+
+
+test("RasterTree clips overlapping children once after composition", async () => {
+  const ck = await CanvasKitInit({ locateFile: () => wasmPath });
+  const builtins = new CanvasKitBuiltinRuntime(ck);
+  const identity = [1, 0, 0, 0, 1, 0, 0, 0, 1];
+  const draw = { nodes: [
+    { kind: "group", value: { children: [1,2], transform: identity, filters: [], opacity: 1,
+      internalBlend: "normal", isolated: true,
+      clip: { kind: "rect", value: { x: 7.3, y: 3.7, width: 17.2, height: 22.6 } } } },
+    { kind: "path", value: { path: 0, fill: 0, fillRule: "nonZero" } },
+    { kind: "path", value: { path: 0, fill: 1, fillRule: "nonZero" } },
+  ], paths: [{ verbs: ["moveTo", "lineTo", "lineTo", "lineTo", "close"], points: [[0,0],[32,0],[32,32],[0,32]] }],
+  paints: [{ kind: "solid", value: { red: .8, green: 0, blue: 0, alpha: .8 } },
+           { kind: "solid", value: { red: 0, green: 0, blue: .6, alpha: .6 } }] };
+  const admitted = { draw } as unknown as Parameters<typeof drawProgramNode>[3];
+  const actual = ck.MakeSurface(32,32)!;
+  const source = ck.MakeSurface(32,32)!;
+  const expected = ck.MakeSurface(32,32)!;
+  try {
+    for (const surface of [actual, source, expected]) surface.getCanvas().clear(ck.TRANSPARENT);
+    drawProgramNode(ck,builtins,actual.getCanvas(),admitted,0,identity);
+    for (const id of [1,2]) drawProgramNode(ck,builtins,source.getCanvas(),admitted,id,identity);
+    const input = source.makeImageSnapshot();
+    try {
+      expected.getCanvas().clipRect(ck.XYWHRect(7.3,3.7,17.2,22.6),ck.ClipOp.Intersect,true);
+      expected.getCanvas().drawImage(input,0,0);
+    } finally { input.delete(); }
+    const pixels = (surface: typeof actual) => {
+      const image = surface.makeImageSnapshot();
+      try { return image.readPixels(0,0,{width:32,height:32,colorType:ck.ColorType.RGBA_8888,
+        alphaType:ck.AlphaType.Premul,colorSpace:ck.ColorSpace.SRGB})!; }
+      finally { image.delete(); }
+    };
+    const a = pixels(actual), b = pixels(expected);
+    for (let i=0;i<a.length;i++) expect(Math.abs(a[i]!-b[i]!)).toBeLessThanOrEqual(1);
+  } finally { actual.delete(); source.delete(); expected.delete(); builtins.dispose(); }
 });

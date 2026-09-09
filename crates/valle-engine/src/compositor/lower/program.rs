@@ -365,6 +365,7 @@ struct Compiler<'a> {
     passes: Vec<ProgramPass>,
     next_destination: usize,
     raster_subtrees: Vec<Option<bool>>,
+    raster_layer_depths: Vec<usize>,
 }
 
 impl<'a> Compiler<'a> {
@@ -375,6 +376,7 @@ impl<'a> Compiler<'a> {
             passes: Vec::new(),
             next_destination: 0,
             raster_subtrees: vec![None; program.nodes().len()],
+            raster_layer_depths: vec![0; program.nodes().len()],
         }
     }
 
@@ -411,11 +413,28 @@ impl<'a> Compiler<'a> {
         let program = self.program;
         let eligible = match &program.nodes()[index] {
             Node::Group(group) => {
-                group.is_raster_group()
+                if group.is_raster_tree_group()
                     && group
                         .children
                         .iter()
                         .all(|child| self.raster_subtree(*child))
+                {
+                    // Skia keeps saveLayer surfaces alive until their enclosing group restores.
+                    // Split deep trees into scheduled passes so nesting cannot retain one full
+                    // canvas per author layer. Sibling layers do not accumulate.
+                    let depth = group
+                        .children
+                        .iter()
+                        .map(|child| self.raster_layer_depths[child.raw() as usize])
+                        .max()
+                        .unwrap_or(0)
+                        + usize::from(group.opacity != 1.0)
+                        + usize::from(group.clip.is_some());
+                    self.raster_layer_depths[index] = depth;
+                    depth <= 8
+                } else {
+                    false
+                }
             }
             _ => true,
         };
@@ -1443,6 +1462,42 @@ mod tests {
             operations,
             ["raster", "raster", "clip", "filter", "opacity", "raster"]
         );
+    }
+
+    #[test]
+    fn deep_clips_split_before_retaining_more_than_eight_raster_layers() {
+        let mut builder = DrawProgramBuilder::new(Rect::new(0.0, 0.0, 32.0, 32.0));
+        let mut node = transformed_leaf(&mut builder, 0.0);
+        for _ in 0..24 {
+            let mut group = Group::plain(vec![node]);
+            group.clip = Some(Clip::Rect(Rect::new(0.5, 0.5, 24.0, 24.0)));
+            group.opacity = 0.8;
+            node = builder.push_node(Node::Group(group));
+        }
+        builder.add_root(node);
+        let program = builder.finish().unwrap();
+        let plan = ProgramPlan::derive(&program).unwrap();
+        assert!(plan.passes().len() > 1);
+        fn depth(program: &DrawProgram, id: NodeId) -> usize {
+            match &program.nodes()[id.raw() as usize] {
+                Node::Group(group) => {
+                    group
+                        .children
+                        .iter()
+                        .map(|id| depth(program, *id))
+                        .max()
+                        .unwrap_or(0)
+                        + usize::from(group.opacity != 1.0)
+                        + usize::from(group.clip.is_some())
+                }
+                _ => 0,
+            }
+        }
+        for pass in plan.passes() {
+            if let ProgramPassKind::RasterTree { roots, .. } = &pass.kind {
+                assert!(roots.iter().all(|root| depth(&program, *root) <= 8));
+            }
+        }
     }
 
     #[test]

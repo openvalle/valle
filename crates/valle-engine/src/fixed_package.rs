@@ -90,6 +90,7 @@ impl std::error::Error for FixedPackageOpenError {}
 
 const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
 pub const COMMON_PROFILE_KEY: &str = "common";
+const COMMON_RESOURCE_LIMIT: u32 = 256;
 /// One file presented to the fixed-package verifier.
 ///
 /// Paths are package-relative names. The verifier owns all path normalization,
@@ -799,13 +800,23 @@ fn decode_fixed_execution_profile(bytes: &[u8]) -> Result<ExecutionProfile, Stri
     if canonical != bytes {
         return Err("[execution_profile] profile must use canonical JCS bytes".to_owned());
     }
-    if profile != fixed_profile(COMMON_PROFILE_KEY)? {
+    // Existing packages retain their original, narrower admission budget.
+    if profile != fixed_profile(COMMON_PROFILE_KEY)?
+        && profile != fixed_profile_with_resource_limit(COMMON_PROFILE_KEY, 64)?
+    {
         return Err("[execution_profile] unsupported fixed execution policy".to_owned());
     }
     Ok(profile)
 }
 
 fn fixed_profile(profile_key: &str) -> Result<ExecutionProfile, String> {
+    fixed_profile_with_resource_limit(profile_key, COMMON_RESOURCE_LIMIT)
+}
+
+fn fixed_profile_with_resource_limit(
+    profile_key: &str,
+    max_resources: u32,
+) -> Result<ExecutionProfile, String> {
     if profile_key != COMMON_PROFILE_KEY {
         return Err(format!(
             "[execution_profile] unsupported profile key {profile_key:?}"
@@ -817,7 +828,7 @@ fn fixed_profile(profile_key: &str) -> Result<ExecutionProfile, String> {
         COMMON_AUDIO_ABI,
         "valle.motion/eval@1",
         crate::render::CAPTION_GLYPH_RUN_ABI,
-        ExecutionLimits::new(64, 8, 32).map_err(|error| error.to_string())?,
+        ExecutionLimits::new(max_resources, 8, 32).map_err(|error| error.to_string())?,
     )
     .map_err(|error| format!("[execution_profile] {error}"))
 }
@@ -1500,7 +1511,7 @@ mod tests {
             content_digest(profile_json.as_bytes())
         );
         assert!(profile_json.contains("\"numericAbi\":\"valle.numeric/common@1\""));
-        assert!(profile_json.contains("\"maxResources\":64"));
+        assert!(profile_json.contains("\"maxResources\":256"));
 
         let mut changed: Value = serde_json::from_str(profile_json).unwrap();
         changed["motionAbi"] = json!("valle.motion/eval@2");
@@ -1511,6 +1522,67 @@ mod tests {
             error.contains("unsupported fixed execution policy"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn fixed_package_preserves_preexisting_resource_budget() {
+        let (timeline, manifest, bundle, _) = empty_fixed_package_fixtures();
+        let profile = super::fixed_profile_with_resource_limit(COMMON_PROFILE_KEY, 64)
+            .unwrap()
+            .canonical_projection_bytes()
+            .unwrap();
+        let profile = String::from_utf8(profile).unwrap();
+        let files = fixed_package_files(&timeline, &manifest, &bundle, &profile);
+        let outer = canonical_fixed_package_manifest(&files).unwrap();
+        open_verified_fixed_package(&outer, &files).unwrap();
+    }
+
+    #[test]
+    fn fixed_package_resource_budget_accepts_256_and_rejects_257_images() {
+        let (timeline, manifest, bundle) = image_package_fixtures();
+        let mut timeline: Value = serde_json::from_str(&timeline).unwrap();
+        let mut manifest: Value = serde_json::from_str(&manifest).unwrap();
+        let mut bundle = bundle;
+        timeline["document"]["canvas"]["duration"] = json!("257/1");
+        let clip = timeline["document"]["visual"]["tracks"][0]["items"][0].clone();
+        let entry = manifest["entries"]["asset:hero"].clone();
+        let binding = bundle["bindings"]["asset:hero"].clone();
+        manifest["entries"] = json!({});
+        bundle["bindings"] = json!({});
+        timeline["document"]["visual"]["tracks"][0]["items"] = json!([]);
+        for index in 0..257 {
+            let id = format!("asset:image-{index}");
+            let mut item = clip.clone();
+            item["id"] = json!(format!("clip:{index}"));
+            item["source"]["resource"] = json!(id);
+            timeline["document"]["visual"]["tracks"][0]["items"]
+                .as_array_mut()
+                .unwrap()
+                .push(item);
+            manifest["entries"][&id] = entry.clone();
+            let mut value = binding.clone();
+            value["handle"] = json!(index + 1);
+            bundle["bindings"][&id] = value;
+            if index == 255 {
+                open_test_fixed_package(
+                    &timeline.to_string(),
+                    &manifest.to_string(),
+                    &bundle.to_string(),
+                    COMMON_PROFILE_KEY,
+                )
+                .unwrap();
+            }
+        }
+        let error = open_test_fixed_package(
+            &timeline.to_string(),
+            &manifest.to_string(),
+            &bundle.to_string(),
+            COMMON_PROFILE_KEY,
+        )
+        .unwrap_err();
+        assert!(error.contains("resource_budget_exceeded"), "{error}");
+        assert!(error.contains("\"actual\":\"257\""), "{error}");
+        assert!(error.contains("\"images\":\"257\""), "{error}");
     }
 
     #[test]

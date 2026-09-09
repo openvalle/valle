@@ -254,6 +254,9 @@ pub struct SkiaExecutionReport {
     pub programs: usize,
     pub program_cache_hits: u64,
     pub program_cache_misses: u64,
+    /// Current retained-program gauges for this executor, not frame deltas or process RSS.
+    pub program_cache_entries: usize,
+    pub program_cache_cost_bytes: usize,
     pub font_cache_hits: u64,
     pub font_cache_misses: u64,
     pub shader_cache_hits: u64,
@@ -819,6 +822,8 @@ impl AdmittedSkiaFrame<'_> {
             programs: self.programs.len(),
             program_cache_hits: self.cache_counters.program_hits,
             program_cache_misses: self.cache_counters.program_misses,
+            program_cache_entries: self.cache_counters.program_entries,
+            program_cache_cost_bytes: self.cache_counters.program_cost_bytes,
             font_cache_hits: self.cache_counters.font_hits,
             font_cache_misses: self.cache_counters.font_misses,
             shader_cache_hits: self.cache_counters.shader_hits,

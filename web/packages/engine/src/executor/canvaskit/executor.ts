@@ -1456,7 +1456,7 @@ export function drawProgramNode(
       case "scene3d": drawSceneNode(CanvasKit, builtins, canvas, admitted, record(node.value, "Scene3D node")); break;
       case "group": {
         const group = record(node.value, "RasterTree group");
-        if (group.clip != null || group.mask != null || group.backdrop != null
+        if (group.mask != null || group.backdrop != null
           || group.shader != null || group.glass != null || group.glassForeground != null
           || array(group.filters, "RasterTree group filters").length !== 0
           || group.internalBlend !== "normal") {
@@ -1470,12 +1470,22 @@ export function drawProgramNode(
           paint.setAlphaf(opacity);
           canvas.saveLayer(paint);
         }
+        canvas.save();
+        canvas.concat(transform);
+        let clipped = false;
         try {
+          if (group.clip != null) {
+            applyClip(CanvasKit, canvas, admitted.draw, record(group.clip, "RasterTree group clip"), IDENTITY_MATRIX);
+            canvas.saveLayer();
+            clipped = true;
+          }
           for (const child of array(group.children, "RasterTree group children")) {
             drawProgramNode(CanvasKit, builtins, canvas, admitted,
-              positiveIdOrZero(child, "RasterTree child"), transform, depth + 1);
+              positiveIdOrZero(child, "RasterTree child"), IDENTITY_MATRIX, depth + 1);
           }
         } finally {
+          if (clipped) canvas.restore();
+          canvas.restore();
           if (paint) { canvas.restore(); paint.delete(); }
         }
         break;

@@ -268,9 +268,14 @@ impl Group {
     /// Local painter-order group; opacity requires isolation of its children before restore.
     /// Destination reads, clips and other pixel operations retain explicit scheduled passes.
     pub fn is_raster_group(&self) -> bool {
+        self.clip.is_none() && self.is_raster_tree_group()
+    }
+
+    /// A destination-independent raster subtree. Clips are applied once to the flattened
+    /// children, using a separate coverage layer before the group's opacity is restored.
+    pub fn is_raster_tree_group(&self) -> bool {
         self.glass.is_none()
             && self.glass_foreground.is_none()
-            && self.clip.is_none()
             && self.filters.is_empty()
             && self.mask.is_none()
             && self.internal_blend == BlendMode::Normal

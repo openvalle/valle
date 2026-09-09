@@ -4635,6 +4635,7 @@ dependencies = [
  "valle-draw",
  "valle-engine",
  "valle-media",
+ "valle-motion",
 ]
 
 [[package]]

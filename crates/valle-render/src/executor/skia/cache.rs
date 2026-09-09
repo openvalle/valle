@@ -13,6 +13,7 @@ use valle_engine::{
 use super::{SkiaExternalObject, draw::DrawError};
 
 const PROGRAM_CACHE_LIMIT: usize = 256;
+const PROGRAM_CACHE_BYTES: usize = 32 * 1024 * 1024;
 const FONT_CACHE_LIMIT: usize = 256;
 const SHADER_CACHE_LIMIT: usize = 128;
 
@@ -20,6 +21,8 @@ const SHADER_CACHE_LIMIT: usize = 128;
 pub(crate) struct BackendCacheCounters {
     pub(crate) program_hits: u64,
     pub(crate) program_misses: u64,
+    pub(crate) program_entries: usize,
+    pub(crate) program_cost_bytes: usize,
     pub(crate) font_hits: u64,
     pub(crate) font_misses: u64,
     pub(crate) shader_hits: u64,
@@ -31,6 +34,8 @@ impl BackendCacheCounters {
         Self {
             program_hits: self.program_hits.saturating_sub(before.program_hits),
             program_misses: self.program_misses.saturating_sub(before.program_misses),
+            program_entries: self.program_entries,
+            program_cost_bytes: self.program_cost_bytes,
             font_hits: self.font_hits.saturating_sub(before.font_hits),
             font_misses: self.font_misses.saturating_sub(before.font_misses),
             shader_hits: self.shader_hits.saturating_sub(before.shader_hits),
@@ -49,12 +54,15 @@ struct CachedProgram {
 struct CacheEntry<V> {
     value: V,
     last_use: u64,
+    weight: usize,
 }
 
 #[derive(Debug)]
 struct BoundedCache<K, V> {
     values: BTreeMap<K, CacheEntry<V>>,
     maximum: usize,
+    maximum_weight: usize,
+    weight: usize,
     clock: u64,
 }
 
@@ -64,8 +72,15 @@ impl<K: Ord + Clone, V> BoundedCache<K, V> {
         Self {
             values: BTreeMap::new(),
             maximum,
+            maximum_weight: usize::MAX,
+            weight: 0,
             clock: 0,
         }
+    }
+
+    fn with_weight_limit(mut self, maximum: usize) -> Self {
+        self.maximum_weight = maximum;
+        self
     }
 
     fn get(&mut self, key: &K) -> Option<&V> {
@@ -76,22 +91,39 @@ impl<K: Ord + Clone, V> BoundedCache<K, V> {
     }
 
     fn insert(&mut self, key: K, value: V) {
+        self.insert_weighted(key, value, 1);
+    }
+
+    fn insert_weighted(&mut self, key: K, value: V, weight: usize) {
         self.clock = self.clock.saturating_add(1);
-        if !self.values.contains_key(&key) && self.values.len() >= self.maximum {
+        if let Some(previous) = self.values.remove(&key) {
+            self.weight -= previous.weight;
+        }
+        if weight > self.maximum_weight {
+            return;
+        }
+        while self.values.len() >= self.maximum
+            || self
+                .weight
+                .checked_add(weight)
+                .is_none_or(|total| total > self.maximum_weight)
+        {
             let oldest = self
                 .values
                 .iter()
                 .min_by_key(|(key, entry)| (entry.last_use, (*key).clone()))
                 .map(|(key, _)| key.clone());
             if let Some(oldest) = oldest {
-                self.values.remove(&oldest);
+                self.weight -= self.values.remove(&oldest).unwrap().weight;
             }
         }
+        self.weight += weight;
         self.values.insert(
             key,
             CacheEntry {
                 value,
                 last_use: self.clock,
+                weight,
             },
         );
     }
@@ -112,7 +144,7 @@ pub(crate) struct BackendCaches {
 impl BackendCaches {
     pub(crate) fn new() -> Self {
         Self {
-            programs: BoundedCache::new(PROGRAM_CACHE_LIMIT),
+            programs: BoundedCache::new(PROGRAM_CACHE_LIMIT).with_weight_limit(PROGRAM_CACHE_BYTES),
             fonts: BoundedCache::new(FONT_CACHE_LIMIT),
             shaders: BoundedCache::new(SHADER_CACHE_LIMIT),
             counters: BackendCacheCounters::default(),
@@ -120,8 +152,12 @@ impl BackendCaches {
         }
     }
 
-    pub(crate) const fn counters(&self) -> BackendCacheCounters {
-        self.counters
+    pub(crate) fn counters(&self) -> BackendCacheCounters {
+        BackendCacheCounters {
+            program_entries: self.programs.values.len(),
+            program_cost_bytes: self.programs.weight,
+            ..self.counters
+        }
     }
 
     pub(crate) fn program(&mut self, plan: &PlanProgram) -> Result<Arc<DrawProgram>, DrawError> {
@@ -141,12 +177,22 @@ impl BackendCaches {
             DrawProgram::from_packed(plan.packed())
                 .map_err(|error| DrawError::ProgramDecode(error.to_string()))?,
         );
-        self.programs.insert(
+        // Charge the packed payload plus decoded node/geometry slots. This is a bounded
+        // retained-program cost, not an assertion about allocator or process RSS.
+        let weight = plan
+            .packed()
+            .len()
+            .saturating_add(program.nodes().len().saturating_mul(
+                std::mem::size_of::<valle_draw::program::Node>()
+                    + std::mem::size_of::<valle_draw::program::NodeGeometry>(),
+            ));
+        self.programs.insert_weighted(
             *plan.content_hash(),
             CachedProgram {
                 packed_digest,
                 program: Arc::clone(&program),
             },
+            weight,
         );
         Ok(program)
     }
@@ -219,6 +265,28 @@ impl BackendCaches {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn byte_budget_evicts_cold_entries_and_bypasses_oversized_programs() {
+        let mut cache = BoundedCache::new(256).with_weight_limit(10);
+        cache.insert_weighted(1, "first", 4);
+        cache.insert_weighted(2, "second", 4);
+        assert_eq!(cache.get(&1), Some(&"first"));
+        cache.insert_weighted(3, "third", 5);
+        assert_eq!(cache.get(&2), None);
+        assert_eq!(cache.get(&1), Some(&"first"));
+        assert_eq!(cache.weight, 9);
+        cache.insert_weighted(3, "replacement", 2);
+        assert_eq!(cache.weight, 6);
+        cache.insert_weighted(4, "oversized", 11);
+        assert_eq!(cache.get(&4), None);
+        assert_eq!(cache.weight, 6);
+        for frame in 0..10_000 {
+            cache.insert_weighted(frame + 10, "dynamic program", 3);
+            assert!(cache.weight <= 10);
+            assert!(cache.values.len() <= 3);
+        }
+    }
 
     #[test]
     fn out_of_range_font_collection_index_returns_an_error() {

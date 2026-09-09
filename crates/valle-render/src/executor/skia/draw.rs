@@ -856,7 +856,7 @@ impl ProgramRuntime {
                     &SkPaint::default(),
                 );
             }
-            Node::Group(group) if group.is_raster_group() => {
+            Node::Group(group) if group.is_raster_tree_group() => {
                 if group.opacity == 0.0 {
                     return Ok(());
                 }
@@ -871,10 +871,19 @@ impl ProgramRuntime {
                     canvas.save_layer_alpha_f(bounds, group.opacity);
                 }
                 canvas.concat(&sk_matrix(group.transform.0));
+                if let Some(clip) = &group.clip {
+                    clip_canvas(canvas, clip, self.program.paths())?;
+                    // A new layer inherits the clip's bounds, not its edge coverage. Apply
+                    // coverage on restore, once after overlapping children have been painted.
+                    canvas.save_layer(&skia_safe::canvas::SaveLayerRec::default());
+                }
                 let result = group
                     .children
                     .iter()
                     .try_for_each(|child| self.raster_node(canvas, *child));
+                if group.clip.is_some() {
+                    canvas.restore();
+                }
                 canvas.restore();
                 result?;
             }
@@ -2231,6 +2240,135 @@ mod tests {
         blend.internal_blend = BlendMode::Multiply;
         for group in [opacity, clip, filter, blend] {
             assert!(!group.is_transform_only());
+        }
+    }
+
+    #[test]
+    fn raster_tree_clip_matches_clipping_the_completed_overlap() {
+        use valle_draw::program::{DrawProgramBuilder, Group, LinearColor, PathNode};
+        let viewport = Rect::new(0.0, 0.0, 32.0, 32.0);
+        for clip in [
+            Clip::Rect(Rect::new(7.3, 3.7, 17.2, 22.6)),
+            Clip::RoundRect(RoundRect {
+                rect: Rect::new(7.3, 3.7, 17.2, 22.6),
+                radii: [[6.5, 6.5]; 4],
+            }),
+        ] {
+            for opacity in [1.0, 0.63] {
+                let mut builder = DrawProgramBuilder::new(viewport);
+                let mut children = Vec::new();
+                for (x, color) in [
+                    (0.0, LinearColor::new(0.8, 0.0, 0.0, 0.8)),
+                    (8.0, LinearColor::new(0.0, 0.0, 0.6, 0.6)),
+                ] {
+                    let path = builder.push_path(PathData {
+                        verbs: vec![
+                            PathVerb::MoveTo,
+                            PathVerb::LineTo,
+                            PathVerb::LineTo,
+                            PathVerb::LineTo,
+                            PathVerb::Close,
+                        ],
+                        points: vec![[x, 0.0], [x + 24.0, 0.0], [x + 24.0, 32.0], [x, 32.0]],
+                    });
+                    let paint = builder.push_paint(Paint::Solid(color));
+                    children.push(builder.push_node(Node::Path(PathNode {
+                        path,
+                        fill_rule: FillRule::NonZero,
+                        fill: Some(paint),
+                        stroke: None,
+                    })));
+                }
+                let mut group = Group::plain(children.clone());
+                group.clip = Some(clip.clone());
+                group.opacity = opacity;
+                let root = builder.push_node(Node::Group(group));
+                builder.add_root(root);
+                let runtime = ProgramRuntime {
+                    program: Arc::new(builder.finish().unwrap()),
+                    textures: BTreeMap::new(),
+                    fonts: BTreeMap::new(),
+                    shaders: BTreeMap::new(),
+                    scenes: BTreeMap::new(),
+                    glass: None,
+                    blend: None,
+                };
+                let root = runtime.program.roots()[0];
+                let Node::Group(group) = &runtime.program.nodes()[root.raw() as usize] else {
+                    unreachable!()
+                };
+                let children = group.children.clone();
+                for color_type in [skia_safe::ColorType::RGBAF16, skia_safe::ColorType::RGBAF32] {
+                    let info = ImageInfo::new(
+                        (32, 32),
+                        color_type,
+                        skia_safe::AlphaType::Premul,
+                        Some(working_color_space().unwrap()),
+                    );
+                    let surface = || skia_safe::surfaces::raster(&info, None, None).unwrap();
+                    let mut actual = surface();
+                    clear_surface(&mut actual).unwrap();
+                    runtime.raster_node(actual.canvas(), root).unwrap();
+                    let mut source = surface();
+                    clear_surface(&mut source).unwrap();
+                    for child in &children {
+                        runtime.raster_node(source.canvas(), *child).unwrap();
+                    }
+                    let roi = DeviceRect::new(0, 0, 32, 32);
+                    let input = ProgramImage {
+                        image: source.image_snapshot(),
+                        roi,
+                    };
+                    let mut clipped = surface();
+                    clip_image_into(
+                        &mut clipped,
+                        Some(&input),
+                        &clip,
+                        Matrix::new_identity(),
+                        runtime.program.paths(),
+                        [0, 0],
+                    )
+                    .unwrap();
+                    let mut expected = surface();
+                    clear_surface(&mut expected).unwrap();
+                    draw_program_image_with_mode(
+                        &mut expected,
+                        &ProgramImage {
+                            image: clipped.image_snapshot(),
+                            roi,
+                        },
+                        [0, 0],
+                        SkBlendMode::SrcOver,
+                        opacity,
+                    );
+                    let read = info.with_color_type(skia_safe::ColorType::RGBAF32);
+                    let mut a = vec![0_f32; 32 * 32 * 4];
+                    let mut b = a.clone();
+                    assert!(actual.image_snapshot().read_pixels(
+                        &read,
+                        &mut a,
+                        32 * 16,
+                        (0, 0),
+                        skia_safe::image::CachingHint::Disallow
+                    ));
+                    assert!(expected.image_snapshot().read_pixels(
+                        &read,
+                        &mut b,
+                        32 * 16,
+                        (0, 0),
+                        skia_safe::image::CachingHint::Disallow
+                    ));
+                    let maximum = a
+                        .iter()
+                        .zip(&b)
+                        .map(|(a, b)| (a - b).abs())
+                        .fold(0_f32, f32::max);
+                    assert!(
+                        maximum <= 0.001,
+                        "clip {clip:?}, opacity {opacity}, {color_type:?}: {maximum}"
+                    );
+                }
+            }
         }
     }
 

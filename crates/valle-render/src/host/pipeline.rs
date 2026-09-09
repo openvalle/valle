@@ -91,6 +91,9 @@ pub struct PipelineReport {
     pub scene3d_composite_us: u64,
     pub program_cache_hits: u64,
     pub program_cache_misses: u64,
+    /// Largest per-worker cache observed; these are not summed across concurrent workers.
+    pub maximum_program_cache_entries: usize,
+    pub maximum_program_cache_cost_bytes: usize,
     pub font_cache_hits: u64,
     pub font_cache_misses: u64,
     pub shader_cache_hits: u64,
@@ -553,6 +556,8 @@ struct PipelineAccumulator {
     scene3d_composite_us: u64,
     program_cache_hits: u64,
     program_cache_misses: u64,
+    maximum_program_cache_entries: usize,
+    maximum_program_cache_cost_bytes: usize,
     font_cache_hits: u64,
     font_cache_misses: u64,
     shader_cache_hits: u64,
@@ -664,6 +669,12 @@ impl PipelineAccumulator {
         self.scene3d_upload_us = add_u64(self.scene3d_upload_us, scene3d.upload_us)?;
         self.scene3d_composite_us = add_u64(self.scene3d_composite_us, scene3d.composite_us)?;
         let execution = evidence.execution;
+        self.maximum_program_cache_entries = self
+            .maximum_program_cache_entries
+            .max(execution.program_cache_entries);
+        self.maximum_program_cache_cost_bytes = self
+            .maximum_program_cache_cost_bytes
+            .max(execution.program_cache_cost_bytes);
         self.program_cache_hits = add_u64(self.program_cache_hits, execution.program_cache_hits)?;
         self.program_cache_misses =
             add_u64(self.program_cache_misses, execution.program_cache_misses)?;
@@ -791,7 +802,7 @@ impl PipelineAccumulator {
         }
         if std::env::var_os("VALLE_PERF").is_some() {
             eprintln!(
-                "[valle pipeline] frames={frames} workers={raster_workers} evaluate-prepare={:.3}ms fulfill-lower-wall={:.3}ms bind={:.3}ms execute={:.3}ms readback={:.3}ms gpu-wait={:.3}ms max-frame={:.3}ms template-hits={} template-misses={} scratch-allocations={} scratch-reuses={} max-scratch-bytes={}",
+                "[valle pipeline] frames={frames} workers={raster_workers} evaluate-prepare={:.3}ms fulfill-lower-wall={:.3}ms bind={:.3}ms execute={:.3}ms readback={:.3}ms gpu-wait={:.3}ms max-frame={:.3}ms template-hits={} template-misses={} scratch-allocations={} scratch-reuses={} max-scratch-bytes={} max-program-cache-entries={} max-program-cache-cost-bytes={}",
                 self.evaluate_prepare_us as f64 / 1000.0,
                 self.fulfill_lower_wall_us as f64 / 1000.0,
                 self.bind_us as f64 / 1000.0,
@@ -804,6 +815,8 @@ impl PipelineAccumulator {
                 self.scratch_surface_allocations,
                 self.scratch_surface_reuses,
                 self.maximum_scratch_bytes,
+                self.maximum_program_cache_entries,
+                self.maximum_program_cache_cost_bytes,
             );
         }
         Ok(PipelineReport {
@@ -835,6 +848,8 @@ impl PipelineAccumulator {
             scene3d_composite_us: self.scene3d_composite_us,
             program_cache_hits: self.program_cache_hits,
             program_cache_misses: self.program_cache_misses,
+            maximum_program_cache_entries: self.maximum_program_cache_entries,
+            maximum_program_cache_cost_bytes: self.maximum_program_cache_cost_bytes,
             font_cache_hits: self.font_cache_hits,
             font_cache_misses: self.font_cache_misses,
             shader_cache_hits: self.shader_cache_hits,
