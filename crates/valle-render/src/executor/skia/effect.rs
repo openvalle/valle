@@ -1,9 +1,9 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use skia_safe::{
-    BlendMode, ClipOp, Color4f, ColorChannel, Data, Image, ImageFilter, ImageInfo, Matrix, Paint,
-    Rect as SkRect, RuntimeEffect, SamplingOptions, Shader, Surface, TileMode, color_filters,
-    image_filters, runtime_effect::ChildPtr, shaders,
+    BlendMode, ClipOp, Color4f, ColorChannel, Data, IRect, Image, ImageFilter, ImageInfo, Matrix,
+    Paint, Rect as SkRect, RuntimeEffect, SamplingOptions, Shader, Surface, TileMode,
+    color_filters, image_filters, runtime_effect::ChildPtr, shaders,
 };
 use valle_draw::program::{Filter, LinearColor};
 use valle_engine::{
@@ -928,21 +928,119 @@ fn draw_filter(
     input: &Image,
     filter: &Filter,
 ) -> Result<(), DrawError> {
-    if super::blur::draw(
+    draw_filters(
         canvas,
         input,
-        skia_safe::IRect::from_size(input.dimensions()),
+        IRect::from_size(input.dimensions()),
         [0, 0],
-        filter,
-    )? {
+        std::slice::from_ref(filter),
+    )
+}
+
+/// Shared filter dispatch for effects, DrawProgram filters and backdrop chains.
+/// Coordinates are device pixels; the source subset excludes unused pooled-surface pixels.
+pub(super) fn draw_filters(
+    canvas: &skia_safe::Canvas,
+    input: &Image,
+    source: IRect,
+    origin: [i32; 2],
+    filters: &[Filter],
+) -> Result<(), DrawError> {
+    if source.is_empty() {
         return Ok(());
+    }
+    if let [filter] = filters
+        && super::blur::draw(canvas, input, source, origin, filter)?
+    {
+        return Ok(());
+    }
+    // Materialize finite CPU chains only when they contain a fast spatial filter. GPU,
+    // wide-kernel and coordinate-dependent effects retain Skia's composed implementation.
+    let fast_chain = filters.len() > 1
+        && super::blur::is_raster_float(canvas, input)
+        && filters.iter().any(super::blur::supports)
+        && filters.iter().all(|filter| match filter {
+            Filter::Blur { .. } | Filter::DropShadow { .. } => super::blur::supports(filter),
+            Filter::ColorMatrix { matrix } => matrix[19] == 0.0,
+            Filter::NoiseDisplacement { .. } | Filter::VelocityBlur { .. } => false,
+            _ => true,
+        });
+    if fast_chain {
+        let mut image = input.clone();
+        let mut subset = source;
+        let mut position = origin;
+        for filter in &filters[..filters.len() - 1] {
+            let Some(effect) = image_filter(filter)? else {
+                continue;
+            };
+            // Keep the full intermediate support: clipping to the final panel here loses
+            // pixels that a later blur or offset shadow can bring back into view.
+            let bounds = effect.filter_bounds(
+                IRect::from_size(subset.size()),
+                &Matrix::new_identity(),
+                skia_safe::image_filter::MapDirection::Forward,
+                None,
+            );
+            let info = image.image_info().with_dimensions(bounds.size());
+            let mut surface = skia_safe::surfaces::raster(&info, None, None)
+                .ok_or_else(|| DrawError::Surface("filter chain allocation failed".into()))?;
+            surface.canvas().clear(Color4f::new(0.0, 0.0, 0.0, 0.0));
+            draw_filters(
+                surface.canvas(),
+                &image,
+                subset,
+                [-bounds.left, -bounds.top],
+                std::slice::from_ref(filter),
+            )?;
+            image = surface.image_snapshot();
+            subset = IRect::from_size(image.dimensions());
+            position[0] += bounds.left;
+            position[1] += bounds.top;
+        }
+        return draw_filters(
+            canvas,
+            &image,
+            subset,
+            position,
+            &filters[filters.len() - 1..],
+        );
+    }
+    draw_skia_filters(canvas, input, source, origin, filters)
+}
+
+fn draw_skia_filters(
+    canvas: &skia_safe::Canvas,
+    input: &Image,
+    source: IRect,
+    origin: [i32; 2],
+    filters: &[Filter],
+) -> Result<(), DrawError> {
+    let mut chain = None;
+    for filter in filters {
+        let Some(filter) = image_filter(filter)? else {
+            continue;
+        };
+        chain = Some(match chain {
+            Some(inner) => image_filters::compose(filter, inner)
+                .ok_or_else(|| DrawError::Unsupported("composed image filter".into()))?,
+            None => filter,
+        });
     }
     let mut paint = Paint::default();
     paint.set_blend_mode(BlendMode::Src);
-    if let Some(image_filter) = image_filter(filter)? {
-        paint.set_image_filter(image_filter);
-    }
-    canvas.draw_image(input, (0.0, 0.0), Some(&paint));
+    paint.set_image_filter(chain);
+    canvas.draw_image_rect_with_sampling_options(
+        input,
+        Some((&source.into(), skia_safe::canvas::SrcRectConstraint::Strict)),
+        SkRect::from_xywh(
+            origin[0] as f32,
+            origin[1] as f32,
+            source.width() as f32,
+            source.height() as f32,
+        ),
+        SamplingOptions::default(),
+        &paint,
+    );
     Ok(())
 }
 
@@ -1192,6 +1290,106 @@ mod tests {
     };
     use skia_safe::{AlphaType, ColorType, ImageInfo, images, surfaces};
     use valle_engine::resource::{Extent2d, OutputBackground};
+
+    #[test]
+    fn float_filter_chains_preserve_order_subset_clip_and_intermediate_support() {
+        let blur = |sigma| Filter::Blur {
+            sigma_x: sigma,
+            sigma_y: sigma,
+        };
+        let shadow = |offset| Filter::DropShadow {
+            sigma_x: 2.2,
+            sigma_y: 1.3,
+            offset,
+            color: LinearColor::new(0.2, 0.05, 0.1, 0.5),
+        };
+        let mut alpha_bias = diagonal(1.0, 1.0, 1.0, 0.0);
+        alpha_bias[19] = 0.2;
+        let cases = [
+            vec![],
+            vec![blur(0.0)],
+            vec![blur(1.3)],
+            vec![blur(28.0)],
+            vec![blur(1.3), Filter::Brightness { amount: 1.4 }, blur(2.7)],
+            vec![Filter::Contrast { amount: 1.4 }, blur(2.7)],
+            vec![blur(2.7), Filter::Contrast { amount: 1.4 }],
+            vec![blur(0.0), Filter::Opacity { amount: 0.5 }, blur(2.7)],
+            vec![shadow([-4.5, 6.25]), blur(2.0)],
+            // The first shadow is outside the final clip but contributes to the next shadow.
+            vec![shadow([32.0, -30.0]), shadow([-32.0, 30.0])],
+            vec![
+                blur(1.3),
+                Filter::ColorMatrix {
+                    matrix: Box::new(alpha_bias),
+                },
+            ],
+            vec![blur(33.0), Filter::Brightness { amount: 1.2 }],
+        ];
+        let pixels = (0..28 * 24)
+            .flat_map(|i| {
+                let a = (i % 7) as f32 / 6.0;
+                [1.2 * a, (i % 5) as f32 * 0.15 * a, -0.05 * a, a]
+            })
+            .flat_map(f32::to_ne_bytes)
+            .collect::<Vec<_>>();
+        let info = ImageInfo::new(
+            (28, 24),
+            ColorType::RGBAF32,
+            AlphaType::Premul,
+            Some(working_color_space().unwrap()),
+        );
+        let input = images::raster_from_data(&info, Data::new_copy(&pixels), 28 * 16).unwrap();
+        let source = IRect::from_xywh(3, 4, 19, 13);
+        for color_type in [ColorType::RGBAF16, ColorType::RGBAF32] {
+            let info = info.with_color_type(color_type);
+            let mut source_surface = surfaces::raster(&info, None, None).unwrap();
+            source_surface.canvas().draw_image(&input, (0, 0), None);
+            let input = source_surface.image_snapshot();
+            let info = info.with_dimensions((40, 36));
+            let read_info = info.with_color_type(ColorType::RGBAF32);
+            for origin in [[6, 7], [-3, 4]] {
+                for filters in &cases {
+                    let mut actual = surfaces::raster(&info, None, None).unwrap();
+                    let mut expected = surfaces::raster(&info, None, None).unwrap();
+                    for surface in [&mut actual, &mut expected] {
+                        surface.canvas().clear(Color4f::new(0.0, 0.0, 0.0, 0.0));
+                        surface.canvas().clip_rect(
+                            SkRect::from_xywh(2.0, 1.0, 35.0, 32.0),
+                            ClipOp::Intersect,
+                            false,
+                        );
+                    }
+                    draw_filters(actual.canvas(), &input, source, origin, filters).unwrap();
+                    draw_skia_filters(expected.canvas(), &input, source, origin, filters).unwrap();
+                    let mut a = vec![0.0_f32; 40 * 36 * 4];
+                    let mut b = a.clone();
+                    assert!(actual.image_snapshot().read_pixels(
+                        &read_info,
+                        &mut a,
+                        40 * 16,
+                        (0, 0),
+                        skia_safe::image::CachingHint::Disallow
+                    ));
+                    assert!(expected.image_snapshot().read_pixels(
+                        &read_info,
+                        &mut b,
+                        40 * 16,
+                        (0, 0),
+                        skia_safe::image::CachingHint::Disallow
+                    ));
+                    let delta = a
+                        .iter()
+                        .zip(&b)
+                        .map(|(a, b)| (a - b).abs())
+                        .fold(0.0_f32, f32::max);
+                    assert!(
+                        delta < 0.008,
+                        "{color_type:?} {origin:?} {filters:?}: delta={delta}"
+                    );
+                }
+            }
+        }
+    }
 
     fn premul_pixel_image(pixel: [f32; 4]) -> Image {
         let bytes = pixel

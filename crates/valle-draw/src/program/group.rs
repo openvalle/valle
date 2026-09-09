@@ -262,12 +262,17 @@ impl Group {
     /// It can share a raster target only when its entire subtree is destination-independent;
     /// in that case isolation and layer-bound metadata do not change the result.
     pub fn is_transform_only(&self) -> bool {
+        self.opacity == 1.0 && self.is_raster_group()
+    }
+
+    /// Local painter-order group; opacity requires isolation of its children before restore.
+    /// Destination reads, clips and other pixel operations retain explicit scheduled passes.
+    pub fn is_raster_group(&self) -> bool {
         self.glass.is_none()
             && self.glass_foreground.is_none()
             && self.clip.is_none()
             && self.filters.is_empty()
             && self.mask.is_none()
-            && self.opacity == 1.0
             && self.internal_blend == BlendMode::Normal
             && self.backdrop.is_none()
             && self.shader.is_none()

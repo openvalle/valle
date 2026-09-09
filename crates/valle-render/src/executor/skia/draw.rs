@@ -5,7 +5,7 @@ use skia_safe::{
     Image, ImageInfo, Matrix, MipmapMode, Paint as SkPaint, PaintCap, PaintJoin, PaintStyle,
     Path as SkPath, PathBuilder, PathEffect, PathFillType, Point as SkPoint, RRect, Rect as SkRect,
     RuntimeEffect, SamplingOptions, Shader, Surface, TextBlobBuilder, TileMode, Typeface,
-    canvas::PointMode, color_filters, gradient, image_filters, runtime_effect::ChildPtr,
+    canvas::PointMode, color_filters, gradient, runtime_effect::ChildPtr,
 };
 use thiserror::Error;
 use valle_draw::{
@@ -34,7 +34,7 @@ use super::{
     SkiaExternalObject,
     blend::BlendRuntime,
     cache::BackendCaches,
-    effect::{image_filter, straight_color},
+    effect::{draw_filters, straight_color},
     glass::{
         admit_motion_glass_shader, render_motion_glass_foreground_into, render_motion_glass_into,
     },
@@ -329,6 +329,12 @@ impl ProgramRuntime {
                     .or_insert(pass.id);
             }
         }
+        let mut retirements = BTreeMap::<_, Vec<_>>::new();
+        for (resource, last) in last_uses {
+            if resource != plan.local_plan().output() {
+                retirements.entry(last).or_default().push(resource);
+            }
+        }
         let mut resources = BTreeMap::<ProgramResourceId, Option<ProgramImage>>::new();
         let terminal_origin = match terminal {
             ProgramTerminal::Plan { roi, .. } => {
@@ -413,13 +419,10 @@ impl ProgramRuntime {
             if resources.insert(output, image).is_some() {
                 return Err(DrawError::DuplicateProgramResource(output.get()));
             }
-            for dead in last_uses
-                .iter()
-                .filter_map(|(resource, last)| (*last == pass.id).then_some(*resource))
-                .filter(|resource| *resource != plan.local_plan().output())
-                .collect::<Vec<_>>()
-            {
-                resources.remove(&dead);
+            if let Some(dead) = retirements.get(&pass.id) {
+                for resource in dead {
+                    resources.remove(resource);
+                }
             }
         }
 
@@ -853,8 +856,20 @@ impl ProgramRuntime {
                     &SkPaint::default(),
                 );
             }
-            Node::Group(group) if group.is_transform_only() => {
-                canvas.save();
+            Node::Group(group) if group.is_raster_group() => {
+                if group.opacity == 0.0 {
+                    return Ok(());
+                }
+                if group.opacity == 1.0 {
+                    canvas.save();
+                } else {
+                    let bounds = self
+                        .program
+                        .geometry(node_id)
+                        .and_then(|geometry| geometry.output_bounds.rect())
+                        .map(sk_rect);
+                    canvas.save_layer_alpha_f(bounds, group.opacity);
+                }
                 canvas.concat(&sk_matrix(group.transform.0));
                 let result = group
                     .children
@@ -1489,17 +1504,65 @@ fn clip_image_into(
     let Some(input) = input else {
         return Ok(());
     };
-    let mut paint = SkPaint::default();
-    paint.set_anti_alias(true);
-    paint.set_blend_mode(SkBlendMode::Src);
-    paint.set_color4f(Color4f::new(1.0, 1.0, 1.0, 1.0), None);
+    // Skia's transformed rrect/rect mask and raster-clip paths use different edge
+    // coverage algorithms. Keep the existing coverage for those transforms and GPU devices.
+    let mask_coverage = surface.canvas().peek_pixels().is_none()
+        || match clip {
+            Clip::Rect(_) => matrix.has_perspective(),
+            Clip::RoundRect(_) => !matrix.rect_stays_rect(),
+            Clip::Path { .. } => false,
+        };
+    if mask_coverage {
+        let outline = match clip {
+            Clip::Path {
+                path: id,
+                fill_rule,
+            } => Some(path(
+                paths
+                    .get(id.raw() as usize)
+                    .ok_or(DrawError::MissingPath(id.raw()))?,
+                *fill_rule,
+            )?),
+            _ => None,
+        };
+        let mut paint = SkPaint::default();
+        paint
+            .set_anti_alias(true)
+            .set_blend_mode(SkBlendMode::Src)
+            .set_color(skia_safe::Color::WHITE);
+        let canvas = surface.canvas();
+        canvas.save();
+        canvas.translate((-target_origin[0] as f32, -target_origin[1] as f32));
+        canvas.concat(&matrix);
+        match clip {
+            Clip::Rect(rect) => {
+                canvas.draw_rect(sk_rect(*rect), &paint);
+            }
+            Clip::RoundRect(rect) => {
+                canvas.draw_rrect(sk_rrect(*rect), &paint);
+            }
+            Clip::Path { .. } => {
+                canvas.draw_path(outline.as_ref().expect("path outline"), &paint);
+            }
+        }
+        canvas.restore();
+        draw_program_image_with_mode(surface, input, target_origin, SkBlendMode::SrcIn, 1.0);
+        return Ok(());
+    }
     let canvas = surface.canvas();
+    let saved_matrix = canvas.local_to_device();
     canvas.save();
     canvas.translate((-target_origin[0] as f32, -target_origin[1] as f32));
     canvas.concat(&matrix);
-    draw_clip_shape(canvas, clip, paths, &paint)?;
-    canvas.restore();
-    draw_program_image_with_mode(surface, input, target_origin, SkBlendMode::SrcIn, 1.0);
+    let result = clip_canvas(canvas, clip, paths);
+    canvas.set_matrix(&saved_matrix);
+    if result.is_ok() {
+        // The input already contains the complete group: apply coverage once, after
+        // composing overlapping children, just as the former mask + SrcIn path did.
+        draw_program_image_with_mode(surface, input, target_origin, SkBlendMode::SrcOver, 1.0);
+    }
+    surface.canvas().restore();
+    result?;
     Ok(())
 }
 
@@ -1537,27 +1600,8 @@ fn apply_filter_program_into(
     local_to_device: [f64; 9],
     target_origin: [i32; 2],
 ) -> Result<(), DrawError> {
-    clear_surface(surface)?;
-    let mut paint = SkPaint::default();
-    paint.set_blend_mode(SkBlendMode::Src);
     let filter = program_filter_in_device_space(filter, local_to_device)?;
-    if super::blur::draw(
-        surface.canvas(),
-        &input.image,
-        IRect::from_xywh(0, 0, input.roi.width as i32, input.roi.height as i32),
-        [
-            input.roi.x - target_origin[0],
-            input.roi.y - target_origin[1],
-        ],
-        &filter,
-    )? {
-        return Ok(());
-    }
-    if let Some(filter) = image_filter(&filter)? {
-        paint.set_image_filter(filter);
-    }
-    draw_program_image_with_paint(surface, input, target_origin, &paint);
-    Ok(())
+    apply_filter_chain_program_into(surface, input, std::slice::from_ref(&filter), target_origin)
 }
 
 fn apply_filter_chain_program_into(
@@ -1567,24 +1611,16 @@ fn apply_filter_chain_program_into(
     target_origin: [i32; 2],
 ) -> Result<(), DrawError> {
     clear_surface(surface)?;
-    let mut chain = None;
-    for filter in filters {
-        let Some(filter) = image_filter(filter)? else {
-            continue;
-        };
-        chain = Some(match chain {
-            Some(inner) => image_filters::compose(filter, inner)
-                .ok_or_else(|| DrawError::Unsupported("composed image filter".into()))?,
-            None => filter,
-        });
-    }
-    let mut paint = SkPaint::default();
-    paint.set_blend_mode(SkBlendMode::Src);
-    if let Some(filter) = chain {
-        paint.set_image_filter(filter);
-    }
-    draw_program_image_with_paint(surface, input, target_origin, &paint);
-    Ok(())
+    draw_filters(
+        surface.canvas(),
+        &input.image,
+        IRect::from_xywh(0, 0, input.roi.width as i32, input.roi.height as i32),
+        [
+            input.roi.x - target_origin[0],
+            input.roi.y - target_origin[1],
+        ],
+        filters,
+    )
 }
 
 /// Map the spatial part of a program-local filter into the materialized device ROI.
@@ -1673,18 +1709,17 @@ fn checked_device_filter_value(value: f64) -> Result<f32, DrawError> {
     Ok(value as f32)
 }
 
-fn draw_clip_shape(
+fn clip_canvas(
     canvas: &skia_safe::Canvas,
     clip: &Clip,
     paths: &[PathData],
-    paint: &SkPaint,
 ) -> Result<(), DrawError> {
     match clip {
         Clip::Rect(rect) => {
-            canvas.draw_rect(sk_rect(*rect), paint);
+            canvas.clip_rect(sk_rect(*rect), ClipOp::Intersect, true);
         }
         Clip::RoundRect(rect) => {
-            canvas.draw_rrect(sk_rrect(*rect), paint);
+            canvas.clip_rrect(sk_rrect(*rect), ClipOp::Intersect, true);
         }
         Clip::Path {
             path: id,
@@ -1693,7 +1728,7 @@ fn draw_clip_shape(
             let data = paths
                 .get(id.raw() as usize)
                 .ok_or(DrawError::MissingPath(id.raw()))?;
-            canvas.draw_path(&path(data, *fill_rule)?, paint);
+            canvas.clip_path(&path(data, *fill_rule)?, ClipOp::Intersect, true);
         }
     }
     Ok(())
@@ -2096,6 +2131,89 @@ mod tests {
     }
 
     #[test]
+    fn direct_tree_isolates_nested_group_opacity() {
+        use valle_draw::program::{
+            Affine2d, DrawProgramBuilder, Group, LinearColor, PathNode, Transform2d,
+        };
+        let mut builder = DrawProgramBuilder::new(Rect::new(0.0, 0.0, 32.0, 32.0));
+        let mut roots = Vec::new();
+        for (offset, color) in [
+            (0.0, LinearColor::new(1.0, 0.0, 0.0, 1.0)),
+            (4.0, LinearColor::new(0.0, 0.0, 0.5, 0.5)),
+        ] {
+            let paint = builder.push_paint(Paint::Solid(color));
+            let path = builder.push_path(PathData {
+                verbs: vec![
+                    PathVerb::MoveTo,
+                    PathVerb::LineTo,
+                    PathVerb::LineTo,
+                    PathVerb::LineTo,
+                    PathVerb::Close,
+                ],
+                points: vec![[0.0, 0.0], [8.0, 0.0], [8.0, 8.0], [0.0, 8.0]],
+            });
+            let child = builder.push_node(Node::Path(PathNode {
+                path,
+                fill_rule: FillRule::NonZero,
+                fill: Some(paint),
+                stroke: None,
+            }));
+            let mut group = Group::plain(vec![child]);
+            group.opacity = 0.5;
+            group.transform = Transform2d::from_affine(Affine2d::translate(offset, 0.0));
+            roots.push(builder.push_node(Node::Group(group)));
+        }
+        let mut group = Group::plain(roots);
+        group.opacity = 0.5;
+        group.transform =
+            Transform2d::from_affine(Affine2d::scale(2.0, 2.0).then(Affine2d::translate(3.0, 5.0)));
+        let root = builder.push_node(Node::Group(group));
+        builder.add_root(root);
+        let runtime = ProgramRuntime {
+            program: Arc::new(builder.finish().unwrap()),
+            textures: BTreeMap::new(),
+            fonts: BTreeMap::new(),
+            shaders: BTreeMap::new(),
+            scenes: BTreeMap::new(),
+            glass: None,
+            blend: None,
+        };
+        let info = ImageInfo::new(
+            (32, 32),
+            skia_safe::ColorType::RGBAF32,
+            skia_safe::AlphaType::Premul,
+            Some(working_color_space().unwrap()),
+        );
+        let mut actual = skia_safe::surfaces::raster(&info, None, None).unwrap();
+        actual.canvas().clear(Color4f::new(0.0, 0.0, 0.0, 0.0));
+        for root in runtime.program.roots() {
+            runtime.raster_node(actual.canvas(), *root).unwrap();
+        }
+        let mut bytes = vec![0_u8; 32 * 32 * 16];
+        assert!(actual.read_pixels(&info, &mut bytes, 32 * 16, (0, 0)));
+        let pixels = bytes
+            .chunks_exact(4)
+            .map(|bytes| f32::from_ne_bytes(bytes.try_into().unwrap()))
+            .collect::<Vec<_>>();
+        for (x, y, expected) in [
+            (4, 6, [0.25, 0.0, 0.0, 0.25]),
+            (12, 6, [0.1875, 0.0, 0.125, 0.3125]),
+            (22, 6, [0.0, 0.0, 0.125, 0.125]),
+            (2, 6, [0.0; 4]),
+            (4, 22, [0.0; 4]),
+        ] {
+            let start = (y * 32 + x) * 4;
+            for (actual, expected) in pixels[start..start + 4].iter().zip(expected) {
+                assert!(
+                    (actual - expected).abs() < 0.001,
+                    "pixel ({x}, {y}) = {:?}",
+                    &pixels[start..start + 4]
+                );
+            }
+        }
+    }
+
+    #[test]
     fn group_pixel_operations_keep_the_scheduled_path() {
         use valle_draw::program::Group;
         let plain = Group::plain(Vec::new());
@@ -2161,6 +2279,157 @@ mod tests {
         assert!(output.read_pixels(&info, &mut pixels, 8 * 4, (0, 0)));
         assert_eq!(pixels[(8 + 1) * 4 + 3], 255);
         assert_eq!(pixels[(6 * 8 + 6) * 4 + 3], 0);
+    }
+
+    #[test]
+    fn image_copies_exclude_unused_surface_capacity() {
+        let mut source = skia_safe::surfaces::raster_n32_premul((64, 64)).unwrap();
+        source.canvas().clear(skia_safe::Color::GREEN);
+        let mut paint = SkPaint::default();
+        paint.set_color(skia_safe::Color::RED);
+        source
+            .canvas()
+            .draw_rect(SkRect::from_xywh(0.0, 0.0, 20.0, 16.0), &paint);
+        let input = ProgramImage {
+            image: source.image_snapshot(),
+            roi: DeviceRect::new(7, 9, 20, 16),
+        };
+        let mut output = skia_safe::surfaces::raster_n32_premul((64, 64)).unwrap();
+        copy_optional_into(&mut output, Some(&input), [0, 0]).unwrap();
+        let info = ImageInfo::new(
+            (64, 64),
+            skia_safe::ColorType::RGBA8888,
+            skia_safe::AlphaType::Premul,
+            None,
+        );
+        let mut pixels = vec![0_u8; 64 * 64 * 4];
+        assert!(output.read_pixels(&info, &mut pixels, 64 * 4, (0, 0)));
+        for y in 0..64 {
+            for x in 0..64 {
+                let expected = if (7..27).contains(&x) && (9..25).contains(&y) {
+                    [255, 0, 0, 255]
+                } else {
+                    [0; 4]
+                };
+                assert_eq!(&pixels[(y * 64 + x) * 4..(y * 64 + x + 1) * 4], &expected);
+            }
+        }
+    }
+
+    #[test]
+    fn native_clip_preserves_transformed_group_coverage() {
+        use skia_safe::{AlphaType, ColorType};
+        let paths = [PathData {
+            verbs: vec![
+                PathVerb::MoveTo,
+                PathVerb::LineTo,
+                PathVerb::LineTo,
+                PathVerb::Close,
+            ],
+            points: vec![[4.0, 3.0], [22.0, 5.0], [7.0, 23.0]],
+        }];
+        let clips = [
+            Clip::Rect(Rect::new(4.0, 3.0, 18.0, 20.0)),
+            Clip::RoundRect(RoundRect {
+                rect: Rect::new(4.0, 3.0, 18.0, 20.0),
+                radii: [[5.0, 5.0]; 4],
+            }),
+            Clip::Path {
+                path: valle_draw::program::PathId::from_raw(0),
+                fill_rule: FillRule::NonZero,
+            },
+        ];
+        for color in [ColorType::RGBAF16, ColorType::RGBAF32] {
+            let info = ImageInfo::new(
+                (48, 48),
+                color,
+                AlphaType::Premul,
+                Some(working_color_space().unwrap()),
+            );
+            let mut source = skia_safe::surfaces::raster(&info, None, None).unwrap();
+            source.canvas().clear(Color4f::new(1.4, -0.1, 0.6, 0.65));
+            let input = ProgramImage {
+                image: source.image_snapshot(),
+                roi: DeviceRect {
+                    x: -2,
+                    y: 3,
+                    width: 48,
+                    height: 48,
+                },
+            };
+            for clip in &clips {
+                for matrix in [
+                    Matrix::new_identity(),
+                    Matrix::new_all(0.94, -0.34, 9.3, 0.34, 0.94, 2.7, 0.0, 0.0, 1.0),
+                    Matrix::new_all(1.0, 0.2, 1.0, 0.1, 1.0, 2.0, 0.001, 0.002, 1.0),
+                ] {
+                    let origin = [-2, 3];
+                    let mut actual = skia_safe::surfaces::raster(&info, None, None).unwrap();
+                    actual.canvas().clear(skia_safe::Color::GREEN);
+                    clip_image_into(&mut actual, Some(&input), clip, matrix, &paths, origin)
+                        .unwrap();
+                    let mut expected = skia_safe::surfaces::raster(&info, None, None).unwrap();
+                    expected.canvas().clear(skia_safe::Color::TRANSPARENT);
+                    let mut paint = SkPaint::default();
+                    paint
+                        .set_anti_alias(true)
+                        .set_blend_mode(SkBlendMode::Src)
+                        .set_color(skia_safe::Color::WHITE);
+                    let canvas = expected.canvas();
+                    canvas.save();
+                    canvas
+                        .translate((-origin[0] as f32, -origin[1] as f32))
+                        .concat(&matrix);
+                    match clip {
+                        Clip::Rect(rect) => {
+                            canvas.draw_rect(sk_rect(*rect), &paint);
+                        }
+                        Clip::RoundRect(rect) => {
+                            canvas.draw_rrect(sk_rrect(*rect), &paint);
+                        }
+                        Clip::Path {
+                            path: id,
+                            fill_rule,
+                        } => {
+                            canvas.draw_path(
+                                &path(&paths[id.raw() as usize], *fill_rule).unwrap(),
+                                &paint,
+                            );
+                        }
+                    }
+                    canvas.restore();
+                    draw_program_image_with_mode(
+                        &mut expected,
+                        &input,
+                        origin,
+                        SkBlendMode::SrcIn,
+                        1.0,
+                    );
+                    let read_info = info.with_color_type(ColorType::RGBAF32);
+                    let mut left = vec![0.0_f32; 48 * 48 * 4];
+                    let mut right = left.clone();
+                    for (surface, pixels) in [(&mut actual, &mut left), (&mut expected, &mut right)]
+                    {
+                        assert!(surface.image_snapshot().read_pixels(
+                            &read_info,
+                            pixels,
+                            48 * 16,
+                            (0, 0),
+                            skia_safe::image::CachingHint::Disallow
+                        ));
+                    }
+                    let error = left
+                        .iter()
+                        .zip(&right)
+                        .map(|(a, b)| (a - b).abs())
+                        .fold(0.0_f32, f32::max);
+                    assert!(
+                        error < 0.008,
+                        "clip={clip:?} matrix={matrix:?} color={color:?} error={error}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]

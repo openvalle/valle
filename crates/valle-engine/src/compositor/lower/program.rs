@@ -205,9 +205,9 @@ pub enum ProgramPassKind {
         output: ProgramResourceId,
     },
     /// Ordered, destination-independent subtrees sharing one raster target. Groups inside these
-    /// subtrees only transform their children; clips and other group pixel operations remain
-    /// separate passes. Native, Web and reference executors preserve nested transforms and
-    /// painter order without materializing an intermediate image for every leaf.
+    /// subtrees transform their children and isolate group opacity. Clips and other pixel
+    /// operations remain separate passes. Native, Web and reference executors preserve
+    /// nested transforms, group opacity and painter order within one destination.
     RasterTree {
         roots: Vec<NodeId>,
         output: ProgramResourceId,
@@ -411,7 +411,7 @@ impl<'a> Compiler<'a> {
         let program = self.program;
         let eligible = match &program.nodes()[index] {
             Node::Group(group) => {
-                group.is_transform_only()
+                group.is_raster_group()
                     && group
                         .children
                         .iter()

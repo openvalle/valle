@@ -1459,13 +1459,24 @@ export function drawProgramNode(
         if (group.clip != null || group.mask != null || group.backdrop != null
           || group.shader != null || group.glass != null || group.glassForeground != null
           || array(group.filters, "RasterTree group filters").length !== 0
-          || group.opacity !== 1 || group.internalBlend !== "normal") {
+          || group.internalBlend !== "normal") {
           fail("program_schedule", `group node ${nodeId} requires a separate pixel operation`);
         }
         const transform = numberArray(group.transform, 9, "RasterTree group transform");
-        for (const child of array(group.children, "RasterTree group children")) {
-          drawProgramNode(CanvasKit, builtins, canvas, admitted,
-            positiveIdOrZero(child, "RasterTree child"), transform, depth + 1);
+        const opacity = finiteNumber(group.opacity, "RasterTree group opacity");
+        if (opacity === 0) break;
+        const paint = opacity === 1 ? null : new CanvasKit.Paint();
+        if (paint) {
+          paint.setAlphaf(opacity);
+          canvas.saveLayer(paint);
+        }
+        try {
+          for (const child of array(group.children, "RasterTree group children")) {
+            drawProgramNode(CanvasKit, builtins, canvas, admitted,
+              positiveIdOrZero(child, "RasterTree child"), transform, depth + 1);
+          }
+        } finally {
+          if (paint) { canvas.restore(); paint.delete(); }
         }
         break;
       }

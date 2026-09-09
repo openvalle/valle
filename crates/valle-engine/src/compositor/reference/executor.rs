@@ -690,10 +690,14 @@ fn preflight_program(
             }
             ProgramPassKind::RasterTree { output, .. } => {
                 let output_roi = bound_program_resource_roi(schedule, prepared.id, pass, *output)?;
-                for (node, local_to_program) in program.raster_tree(*output)? {
+                for (node, local_to_program) in program
+                    .raster_tree(*output)?
+                    .iter()
+                    .filter_map(ReferenceTreeStep::draw)
+                {
                     let local_to_device = program_transform_to_device(
                         prepared,
-                        *local_to_program,
+                        local_to_program,
                         program.viewport,
                         transform.matrix(),
                     )?;
@@ -703,7 +707,7 @@ fn preflight_program(
                     .map_err(|_| ReferenceExecuteError::InvalidSampleCoordinate)?;
                     preflight_program_raster_operation(
                         program,
-                        program.node(*node)?,
+                        program.node(node)?,
                         output_roi,
                         resource_transform,
                         extent,
@@ -974,12 +978,28 @@ fn reserve_raster_geometry_tests(
     Ok(())
 }
 
+#[derive(Debug, Clone, Copy)]
+enum ReferenceTreeStep {
+    Draw(NodeId, Transform2d),
+    PushOpacity,
+    PopOpacity(f32),
+}
+
+impl ReferenceTreeStep {
+    fn draw(&self) -> Option<(NodeId, Transform2d)> {
+        match *self {
+            Self::Draw(node, transform) => Some((node, transform)),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug)]
 struct ReferenceProgramRuntime {
     id: ProgramId,
     viewport: valle_draw::Rect,
     nodes: Vec<Option<ReferenceProgramOperation>>,
-    raster_trees: BTreeMap<ProgramResourceId, Vec<(NodeId, Transform2d)>>,
+    raster_trees: BTreeMap<ProgramResourceId, Vec<ReferenceTreeStep>>,
     clips: Vec<Option<ReferenceClip>>,
     filters: BTreeMap<(u32, u32), Filter>,
     masks: BTreeMap<u32, MaskMode>,
@@ -989,7 +1009,7 @@ impl ReferenceProgramRuntime {
     fn raster_tree(
         &self,
         output: ProgramResourceId,
-    ) -> Result<&[(NodeId, Transform2d)], ReferenceExecuteError> {
+    ) -> Result<&[ReferenceTreeStep], ReferenceExecuteError> {
         self.raster_trees
             .get(&output)
             .map(Vec::as_slice)
@@ -1127,11 +1147,11 @@ fn prepare_reference_program(
                 let local_to_program =
                     prepared.local_plan().resources()[output.index()].local_to_program;
                 let draws = collect_reference_raster_tree(&program, roots, local_to_program, pass)?;
-                for (node, _) in &draws {
+                for (node, _) in draws.iter().filter_map(ReferenceTreeStep::draw) {
                     let slot = &mut nodes[node.raw() as usize];
                     if slot.is_none() {
                         *slot = Some(prepare_reference_node_operation(
-                            &program, prepared, bound, pass, id, *node, budget,
+                            &program, prepared, bound, pass, id, node, budget,
                         )?);
                     }
                 }
@@ -1259,35 +1279,47 @@ fn prepare_reference_program(
     })
 }
 
-// Resolve hierarchy once at admission; the per-pixel loop only sees ordered leaf operations.
+// Resolve transforms and opacity boundaries once; evaluate painter order per pixel.
 fn collect_reference_raster_tree(
     program: &DrawProgram,
     roots: &[NodeId],
     local_to_program: Transform2d,
     pass: ExecutionPassId,
-) -> Result<Vec<(NodeId, Transform2d)>, ReferenceExecuteError> {
+) -> Result<Vec<ReferenceTreeStep>, ReferenceExecuteError> {
+    use ReferenceTreeStep::*;
     let mut pending = roots
         .iter()
         .rev()
-        .map(|node| (*node, local_to_program))
+        .map(|node| Draw(*node, local_to_program))
         .collect::<Vec<_>>();
     let mut draws = Vec::new();
-    while let Some((node, local_to_program)) = pending.pop() {
+    while let Some(step) = pending.pop() {
+        let Draw(node, local_to_program) = step else {
+            draws.push(step);
+            continue;
+        };
         match program.nodes().get(node.raw() as usize) {
-            Some(Node::Group(group)) if group.is_transform_only() => {
+            Some(Node::Group(group)) if group.is_raster_group() => {
+                if group.opacity == 0.0 {
+                    continue;
+                }
+                if group.opacity != 1.0 {
+                    draws.push(PushOpacity);
+                    pending.push(PopOpacity(group.opacity));
+                }
                 let child_to_program = group.transform.then(local_to_program);
                 pending.extend(
                     group
                         .children
                         .iter()
                         .rev()
-                        .map(|child| (*child, child_to_program)),
+                        .map(|child| Draw(*child, child_to_program)),
                 );
             }
             Some(Node::Group(_)) | None => {
                 return Err(ReferenceExecuteError::UnsupportedPass { pass });
             }
-            Some(_) => draws.push((node, local_to_program)),
+            Some(_) => draws.push(step),
         }
     }
     Ok(draws)
@@ -2274,16 +2306,17 @@ fn raster_program<'program, 'object>(
                 let operations = program
                     .raster_tree(*output)?
                     .iter()
+                    .filter_map(ReferenceTreeStep::draw)
                     .map(|(node, local_to_program)| {
                         let local_to_device = program_transform_to_device(
                             prepared,
-                            *local_to_program,
+                            local_to_program,
                             program.viewport,
                             transform.matrix(),
                         )?;
                         let (_, inverse) =
                             normalized_program_matrices(local_to_device, program.viewport)?;
-                        let operation = match program.node(*node)? {
+                        let operation = match program.node(node)? {
                             ReferenceProgramOperation::Fill(fill) => {
                                 ReferenceRasterOperation::Fill(fill)
                             }
@@ -2304,12 +2337,29 @@ fn raster_program<'program, 'object>(
                         Ok((operation, inverse))
                     })
                     .collect::<Result<Vec<_>, ReferenceExecuteError>>()?;
+                let steps = program.raster_tree(*output)?;
+                let mut stack = Vec::new();
                 execution.write_resource(*output, |_, x, y| {
                     let mut pixel = PremulRgba32::TRANSPARENT;
-                    for (operation, inverse) in &operations {
-                        pixel = operation
-                            .pixel(program.viewport, *inverse, x, y)?
-                            .source_over(pixel)?;
+                    let mut leaves = operations.iter();
+                    for step in steps {
+                        match *step {
+                            ReferenceTreeStep::Draw(..) => {
+                                let (operation, inverse) = leaves.next().expect("admitted leaf");
+                                pixel = operation
+                                    .pixel(program.viewport, *inverse, x, y)?
+                                    .source_over(pixel)?;
+                            }
+                            ReferenceTreeStep::PushOpacity => {
+                                stack.push(pixel);
+                                pixel = PremulRgba32::TRANSPARENT;
+                            }
+                            ReferenceTreeStep::PopOpacity(opacity) => {
+                                pixel = pixel
+                                    .scale_coverage(opacity)?
+                                    .source_over(stack.pop().expect("balanced opacity group"))?;
+                            }
+                        }
                     }
                     Ok(pixel)
                 })?;
@@ -4886,6 +4936,7 @@ mod tests {
                 .unwrap();
         let operations = draws
             .iter()
+            .filter_map(ReferenceTreeStep::draw)
             .map(|(node, transform)| {
                 let Node::Path(node) = &program.nodes()[node.raw() as usize] else {
                     panic!("leaf")

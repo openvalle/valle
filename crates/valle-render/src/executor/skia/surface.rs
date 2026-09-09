@@ -1460,6 +1460,44 @@ impl<'arena> SurfaceFrame<'arena> {
         Ok(PlanImage::new(image, roi))
     }
 
+    /// Program image copies use strict logical ROIs. Bucket their backing capacity so
+    /// small animated bounds changes can reuse a surface; image kernels keep exact extents.
+    pub(crate) fn scratch_program<'frame>(
+        &'frame mut self,
+        extents: &[Extent2d],
+    ) -> Result<ScratchSurfaces<'frame, 'arena>, SurfaceError> {
+        // GPU image sampling retains exact backing extents; this reuse policy targets
+        // CPU allocation churn and its strict source-rectangle copies.
+        if !matches!(&self.arena.backend, SurfaceBackend::Raster) {
+            return self.scratch(extents);
+        }
+        let mut capacity = Vec::with_capacity(extents.len());
+        let mut bytes = self
+            .report
+            .physical_bytes
+            .checked_add(self.scratch_checked_out_bytes)
+            .ok_or(SurfaceError::ByteOverflow)?;
+        for extent in extents {
+            let width = extent.width().checked_add(31).map(|value| value / 32 * 32);
+            let height = extent.height().checked_add(31).map(|value| value / 32 * 32);
+            let Some((width, height)) = width.zip(height) else {
+                return self.scratch(extents);
+            };
+            let rounded = Extent2d::new(width, height).map_err(|_| SurfaceError::InvalidExtent)?;
+            let size = surface_bytes(rounded)?;
+            let Some(total) = bytes.checked_add(size) else {
+                return self.scratch(extents);
+            };
+            if size > self.max_surface_bytes || total > self.max_frame_bytes {
+                return self.scratch(extents);
+            }
+            bytes = total;
+            capacity.push(rounded);
+        }
+        // scratch accounts allocated capacity bytes and retains the existing bounded pool.
+        self.scratch(&capacity)
+    }
+
     pub(crate) fn scratch<'frame>(
         &'frame mut self,
         extents: &[Extent2d],
@@ -1824,4 +1862,76 @@ pub enum SurfaceError {
     SurfaceBudgetExceeded { required_bytes: u64, max_bytes: u64 },
     #[error("frame surfaces require {required_bytes} bytes, exceeding the {max_bytes}-byte limit")]
     FrameBudgetExceeded { required_bytes: u64, max_bytes: u64 },
+}
+
+#[cfg(test)]
+mod capacity_tests {
+    use super::*;
+
+    #[test]
+    fn program_capacity_reuses_nearby_sizes_and_honors_exact_budget_fallback() {
+        let mut arena = SurfaceArena::new();
+        let mut frame = SurfaceFrame {
+            arena: &mut arena,
+            assignments: BTreeMap::new(),
+            report: SurfaceFrameReport {
+                generation: 0,
+                generation_invalidations: 0,
+                plan_slots: 0,
+                logical_allocations: 0,
+                allocations: 0,
+                reuses: 0,
+                physical_bytes: 0,
+                logical_bytes: 0,
+                alias_saved_bytes: 0,
+                estimated_peak_bytes: 0,
+                pool_surfaces: 0,
+                pool_bytes: 0,
+                scratch_allocations: 0,
+                scratch_reuses: 0,
+                scratch_peak_surfaces: 0,
+                scratch_peak_bytes: 0,
+                scratch_pool_surfaces: 0,
+                scratch_pool_bytes: 0,
+                pool_evictions: 0,
+            },
+            scratch_allocations: 0,
+            scratch_reuses: 0,
+            scratch_checked_out_surfaces: 0,
+            scratch_checked_out_bytes: 0,
+            scratch_peak_surfaces: 0,
+            scratch_peak_bytes: 0,
+            max_surface_bytes: 65536,
+            max_frame_bytes: 65536,
+            pool_evictions: 0,
+        };
+        let small = Extent2d::new(33, 35).unwrap();
+        let nearby = Extent2d::new(36, 37).unwrap();
+        {
+            let mut scratch = frame.scratch_program(&[small]).unwrap();
+            assert_eq!(scratch.bytes, 64 * 64 * 8);
+            assert_eq!(scratch.surface_mut(0).unwrap().width(), 64);
+        }
+        {
+            let _scratch = frame.scratch_program(&[nearby]).unwrap();
+        }
+        assert_eq!(frame.scratch_allocations, 1);
+        assert_eq!(frame.scratch_reuses, 1);
+        assert_eq!(frame.scratch_peak_bytes, 64 * 64 * 8);
+        assert_eq!(frame.scratch_checked_out_bytes, 0);
+
+        frame.max_surface_bytes = surface_bytes(nearby).unwrap();
+        frame.max_frame_bytes = frame.max_surface_bytes;
+        {
+            let mut scratch = frame.scratch_program(&[nearby]).unwrap();
+            assert_eq!(scratch.bytes, 36 * 37 * 8);
+            assert_eq!(scratch.surface_mut(0).unwrap().width(), 36);
+        }
+        assert!(frame.arena.pool_bytes().unwrap() <= frame.max_frame_bytes);
+        frame.max_frame_bytes = surface_bytes(small).unwrap() - 1;
+        assert!(matches!(
+            frame.scratch_program(&[small]),
+            Err(SurfaceError::FrameBudgetExceeded { .. })
+        ));
+    }
 }

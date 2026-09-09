@@ -439,7 +439,13 @@ impl AdmittedSkiaFrame<'_> {
                                 index
                             });
                     let image = {
-                        let mut scratch = surface_frame.scratch(&local_extents)?;
+                        let roi_copies =
+                            program_uses_roi_copies(plan_program(self.bindings, *program)?);
+                        let mut scratch = if roi_copies {
+                            surface_frame.scratch_program(&local_extents)?
+                        } else {
+                            surface_frame.scratch(&local_extents)?
+                        };
                         self.program(*program)?.execute(
                             plan_program(self.bindings, *program)?,
                             schedule,
@@ -483,7 +489,13 @@ impl AdmittedSkiaFrame<'_> {
                         });
                         let terminal_index = local_extents.len();
                         local_extents.push(extent);
-                        let mut scratch = surface_frame.scratch(&local_extents)?;
+                        let roi_copies =
+                            program_uses_roi_copies(plan_program(self.bindings, *program)?);
+                        let mut scratch = if roi_copies {
+                            surface_frame.scratch_program(&local_extents)?
+                        } else {
+                            surface_frame.scratch(&local_extents)?
+                        };
                         self.program(*program)?.execute(
                             plan_program(self.bindings, *program)?,
                             schedule,
@@ -1073,6 +1085,23 @@ fn bound_resource_roi(
         .ok_or(SkiaExecuteError::InvalidPassOutput {
             resource: resource.get(),
         })
+}
+
+// These operations sample strict logical ROIs; shaders and image kernels keep exact
+// scratch extents because their sampling contracts can depend on image dimensions.
+fn program_uses_roi_copies(program: &PlanProgram) -> bool {
+    program.local_plan().passes().iter().all(|pass| {
+        matches!(
+            pass.kind,
+            ProgramPassKind::Clear { .. }
+                | ProgramPassKind::RasterNode { .. }
+                | ProgramPassKind::RasterTree { .. }
+                | ProgramPassKind::SourceOver { .. }
+                | ProgramPassKind::ApplyClip { .. }
+                | ProgramPassKind::ApplyOpacity { .. }
+                | ProgramPassKind::ApplyTransform { .. }
+        )
+    })
 }
 
 fn program_helper_extent(

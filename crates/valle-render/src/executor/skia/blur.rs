@@ -32,12 +32,7 @@ pub(super) fn draw(
         } => (*sigma_x, *sigma_y, Some((*offset, *color))),
         _ => return Ok(false),
     };
-    if !matches!(input.color_type(), ColorType::RGBAF16 | ColorType::RGBAF32)
-        || canvas.peek_pixels().is_none()
-        || input.peek_pixels().is_none()
-        || !canvas.local_to_device_as_3x3().is_identity()
-        || source.is_empty()
-    {
+    if !is_raster_float(canvas, input) || source.is_empty() {
         return Ok(false);
     }
     let Some(horizontal) = kernel(sigma_x) else {
@@ -125,6 +120,27 @@ pub(super) fn draw(
         );
     }
     Ok(true)
+}
+
+pub(super) fn is_raster_float(canvas: &Canvas, input: &Image) -> bool {
+    matches!(input.color_type(), ColorType::RGBAF16 | ColorType::RGBAF32)
+        && canvas.peek_pixels().is_some()
+        && input.peek_pixels().is_some()
+        && canvas.local_to_device_as_3x3().is_identity()
+}
+
+pub(super) fn supports(filter: &Filter) -> bool {
+    match filter {
+        Filter::Blur { sigma_x, sigma_y }
+        | Filter::DropShadow {
+            sigma_x, sigma_y, ..
+        } => [*sigma_x, *sigma_y].into_iter().all(|sigma| {
+            sigma.is_finite()
+                && sigma >= 0.0
+                && (sigma * FILTER_GAUSSIAN_SUPPORT_SIGMAS).ceil() <= MAX_DIRECT_RADIUS as f32
+        }),
+        _ => false,
+    }
 }
 
 fn kernel(sigma: f32) -> Option<Vec<f32>> {

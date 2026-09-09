@@ -155,6 +155,19 @@ test("RasterTree preserves nested transforms, translucent order and pixel bounda
       }
     } finally { image.delete(); }
     (draw.nodes[0] as ReturnType<typeof group>).value.opacity = .5;
+    surface.getCanvas().clear(ck.TRANSPARENT);
+    drawProgramNode(ck, builtins, surface.getCanvas(), admitted, 0, identity);
+    const faded = surface.makeImageSnapshot();
+    try {
+      const pixels = faded.readPixels(0, 0, { width: 32, height: 32,
+        colorType: ck.ColorType.RGBA_8888, alphaType: ck.AlphaType.Unpremul,
+        colorSpace: ck.ColorSpace.SRGB })!;
+      // The two overlapping children are flattened before applying the group alpha.
+      for (const [x, expected] of [[4, [255, 0, 0, 128]], [12, [127, 0, 128, 128]], [22, [0, 0, 255, 64]]] as const) {
+        expected.forEach((value, channel) => expect(Math.abs(pixels[(6 * 32 + x) * 4 + channel]! - value)).toBeLessThanOrEqual(2));
+      }
+    } finally { faded.delete(); }
+    (draw.nodes[0] as any).value.clip = { kind: "rect" };
     expect(() => drawProgramNode(ck, builtins, surface.getCanvas(), admitted, 0, identity))
       .toThrow("requires a separate pixel operation");
   } finally { builtins.dispose(); surface.delete(); }
