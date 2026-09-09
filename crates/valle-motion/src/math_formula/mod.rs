@@ -19,10 +19,12 @@ pub use classify::{
 pub use fonts::{
     FORMULA_ENGINE_ID, FORMULA_FONT_COUNT, FormulaFace, KATEX_GOLDEN_VERSION, RATEX_CORE_COMMIT,
     RATEX_CORE_VERSION, allowed_ratex_font_name, face_matches_lock, formula_faces,
-    formula_font_pack,
 };
 pub use registry::FormulaFontRegistry;
 
 /// Build-fingerprint identity for the formula layout engine. Independent of
 /// [`crate::LAYOUT_ENGINE_ID`] (Takumi) and `valle_draw::math`.
 pub const FORMULA_LAYOUT_ENGINE: &str = FORMULA_ENGINE_ID;
+
+#[cfg(not(target_arch = "wasm32"))]
+pub use fonts::formula_font_pack;

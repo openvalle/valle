@@ -513,14 +513,22 @@ fn install_compiled_motion_fonts(
     source: &EvaluatedSourceRef,
     path: &str,
 ) -> Result<motion::FixtureProgram, PrepareError> {
-    // These bytes are compiled into the binary/WASM module. Hash them once per instance, not
-    // once per frame (the default CJK face alone is over 16 MB).
+    // Font identities are shared metadata; Wasm obtains actual bytes from render resources.
     static DEFAULT_FONTS: std::sync::OnceLock<Vec<SemanticFont>> = std::sync::OnceLock::new();
     for font in DEFAULT_FONTS.get_or_init(|| {
         valle_motion::DEFAULT_MOTION_FONT_FILES
             .iter()
-            .zip(valle_motion::DEFAULT_MOTION_FONT_WEIGHTS)
-            .map(|(name, bytes)| SemanticFont::new(*name, ContentDigest::of_bytes(bytes), 0))
+            .map(|name| {
+                let spec = valle_motion::runtime_fonts::specs()
+                    .iter()
+                    .find(|spec| spec.name == *name)
+                    .expect("default font identity");
+                SemanticFont::new(
+                    *name,
+                    ContentDigest::from_hex(&spec.sha256).expect("default font digest"),
+                    0,
+                )
+            })
             .collect()
     }) {
         fixture = fixture.with_font(font.clone());

@@ -164,6 +164,8 @@ pub(crate) struct BatchContent {
 
 /// Inputs shared by expression evaluation and Takumi layout for one frame.
 pub struct LayoutOptions<'a> {
+    #[cfg(target_arch = "wasm32")]
+    pub formula_fonts: &'a crate::math_formula::FormulaFontRegistry,
     pub viewport: Viewport,
     pub fonts: &'a Fonts,
     pub styles: Option<&'a StyleCache>,

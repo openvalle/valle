@@ -119,28 +119,30 @@ pub const FORMULA_FACES: &[FormulaFace] = &[
 
 /// Locked TTF bytes for each [`FORMULA_FACES`] entry, same order. Product
 /// prepare and paint both consume this pack — never a filesystem path.
-const FORMULA_FONT_BYTES: &[&[u8]] = &[
-    include_bytes!("../../../../assets/fonts/katex/KaTeX_AMS-Regular.ttf"),
-    include_bytes!("../../../../assets/fonts/katex/KaTeX_Caligraphic-Regular.ttf"),
-    include_bytes!("../../../../assets/fonts/katex/KaTeX_Fraktur-Bold.ttf"),
-    include_bytes!("../../../../assets/fonts/katex/KaTeX_Fraktur-Regular.ttf"),
-    include_bytes!("../../../../assets/fonts/katex/KaTeX_Main-Bold.ttf"),
-    include_bytes!("../../../../assets/fonts/katex/KaTeX_Main-BoldItalic.ttf"),
-    include_bytes!("../../../../assets/fonts/katex/KaTeX_Main-Italic.ttf"),
-    include_bytes!("../../../../assets/fonts/katex/KaTeX_Main-Regular.ttf"),
-    include_bytes!("../../../../assets/fonts/katex/KaTeX_Math-BoldItalic.ttf"),
-    include_bytes!("../../../../assets/fonts/katex/KaTeX_Math-Italic.ttf"),
-    include_bytes!("../../../../assets/fonts/katex/KaTeX_SansSerif-Bold.ttf"),
-    include_bytes!("../../../../assets/fonts/katex/KaTeX_SansSerif-Italic.ttf"),
-    include_bytes!("../../../../assets/fonts/katex/KaTeX_SansSerif-Regular.ttf"),
-    include_bytes!("../../../../assets/fonts/katex/KaTeX_Script-Regular.ttf"),
-    include_bytes!("../../../../assets/fonts/katex/KaTeX_Size1-Regular.ttf"),
-    include_bytes!("../../../../assets/fonts/katex/KaTeX_Size2-Regular.ttf"),
-    include_bytes!("../../../../assets/fonts/katex/KaTeX_Size3-Regular.ttf"),
-    include_bytes!("../../../../assets/fonts/katex/KaTeX_Size4-Regular.ttf"),
-    include_bytes!("../../../../assets/fonts/katex/KaTeX_Typewriter-Regular.ttf"),
+#[cfg(not(target_arch = "wasm32"))]
+static FORMULA_FONT_BYTES: &[&[u8]] = &[
+    &crate::font_data::KATEX_KATEX_AMS_REGULAR_TTF,
+    &crate::font_data::KATEX_KATEX_CALIGRAPHIC_REGULAR_TTF,
+    &crate::font_data::KATEX_KATEX_FRAKTUR_BOLD_TTF,
+    &crate::font_data::KATEX_KATEX_FRAKTUR_REGULAR_TTF,
+    &crate::font_data::KATEX_KATEX_MAIN_BOLD_TTF,
+    &crate::font_data::KATEX_KATEX_MAIN_BOLDITALIC_TTF,
+    &crate::font_data::KATEX_KATEX_MAIN_ITALIC_TTF,
+    &crate::font_data::KATEX_KATEX_MAIN_REGULAR_TTF,
+    &crate::font_data::KATEX_KATEX_MATH_BOLDITALIC_TTF,
+    &crate::font_data::KATEX_KATEX_MATH_ITALIC_TTF,
+    &crate::font_data::KATEX_KATEX_SANSSERIF_BOLD_TTF,
+    &crate::font_data::KATEX_KATEX_SANSSERIF_ITALIC_TTF,
+    &crate::font_data::KATEX_KATEX_SANSSERIF_REGULAR_TTF,
+    &crate::font_data::KATEX_KATEX_SCRIPT_REGULAR_TTF,
+    &crate::font_data::KATEX_KATEX_SIZE1_REGULAR_TTF,
+    &crate::font_data::KATEX_KATEX_SIZE2_REGULAR_TTF,
+    &crate::font_data::KATEX_KATEX_SIZE3_REGULAR_TTF,
+    &crate::font_data::KATEX_KATEX_SIZE4_REGULAR_TTF,
+    &crate::font_data::KATEX_KATEX_TYPEWRITER_REGULAR_TTF,
 ];
 
+#[cfg(not(target_arch = "wasm32"))]
 const _: () = assert!(FORMULA_FACES.len() == FORMULA_FONT_BYTES.len());
 const _: () = assert!(FORMULA_FACES.len() == FORMULA_FONT_COUNT);
 
@@ -149,6 +151,7 @@ pub fn formula_faces() -> &'static [FormulaFace] {
 }
 
 /// Locked (face, TTF bytes) pairs. Hosts register the same bytes they prepare with.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn formula_font_pack() -> impl Iterator<Item = (FormulaFace, &'static [u8])> {
     FORMULA_FACES
         .iter()

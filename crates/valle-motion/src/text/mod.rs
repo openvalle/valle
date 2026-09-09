@@ -4,29 +4,30 @@ mod measure;
 
 /// Shared Noto Sans Regular fallback for deterministic measurement and rendering across all Motion
 /// hosts.
-pub const DEFAULT_MOTION_FONT: &[u8] =
-    include_bytes!("../../../../assets/fonts/noto/NotoSans-Regular.ttf");
+#[cfg(not(target_arch = "wasm32"))]
+pub static DEFAULT_MOTION_FONT: &[u8] = &crate::font_data::NOTO_NOTOSANS_REGULAR_TTF;
 
 /// Default font family set: Noto Sans weights, KaTeX serif faces, Noto Sans Mono,
 /// symbol and math fonts, Noto Sans CJK SC, and Noto Color Emoji. Register real weight variants for CSS
 /// font selection; Noto supplies deterministic COLRv1 emoji paints. `DEFAULT_MOTION_FONT`
 /// remains the single-face fallback for measurement contracts.
-pub const DEFAULT_MOTION_FONT_WEIGHTS: &[&[u8]] = &[
-    include_bytes!("../../../../assets/fonts/noto/NotoSans-Regular.ttf"),
-    include_bytes!("../../../../assets/fonts/noto/NotoSans-Medium.ttf"),
-    include_bytes!("../../../../assets/fonts/noto/NotoSans-SemiBold.ttf"),
-    include_bytes!("../../../../assets/fonts/noto/NotoSans-Bold.ttf"),
-    include_bytes!("../../../../assets/fonts/noto/NotoSans-ExtraBold.ttf"),
-    include_bytes!("../../../../assets/fonts/katex/KaTeX_Main-Regular.ttf"),
-    include_bytes!("../../../../assets/fonts/katex/KaTeX_Main-Bold.ttf"),
-    include_bytes!("../../../../assets/fonts/katex/KaTeX_Main-Italic.ttf"),
-    include_bytes!("../../../../assets/fonts/katex/KaTeX_Main-BoldItalic.ttf"),
-    include_bytes!("../../../../assets/fonts/noto/NotoSansMono-Regular.ttf"),
-    include_bytes!("../../../../assets/fonts/noto/NotoSansSymbols-Regular.ttf"),
-    include_bytes!("../../../../assets/fonts/noto/NotoSansSymbols2-Regular.ttf"),
-    include_bytes!("../../../../assets/fonts/noto/NotoSansMath-Regular.ttf"),
-    include_bytes!("../../../../assets/fonts/noto/NotoSansCJKsc-Regular.otf"),
-    include_bytes!("../../../../assets/fonts/noto/Noto-COLRv1.ttf"),
+#[cfg(not(target_arch = "wasm32"))]
+pub static DEFAULT_MOTION_FONT_WEIGHTS: &[&[u8]] = &[
+    &crate::font_data::NOTO_NOTOSANS_REGULAR_TTF,
+    &crate::font_data::NOTO_NOTOSANS_MEDIUM_TTF,
+    &crate::font_data::NOTO_NOTOSANS_SEMIBOLD_TTF,
+    &crate::font_data::NOTO_NOTOSANS_BOLD_TTF,
+    &crate::font_data::NOTO_NOTOSANS_EXTRABOLD_TTF,
+    &crate::font_data::KATEX_KATEX_MAIN_REGULAR_TTF,
+    &crate::font_data::KATEX_KATEX_MAIN_BOLD_TTF,
+    &crate::font_data::KATEX_KATEX_MAIN_ITALIC_TTF,
+    &crate::font_data::KATEX_KATEX_MAIN_BOLDITALIC_TTF,
+    &crate::font_data::NOTO_NOTOSANSMONO_REGULAR_TTF,
+    &crate::font_data::NOTO_NOTOSANSSYMBOLS_REGULAR_TTF,
+    &crate::font_data::NOTO_NOTOSANSSYMBOLS2_REGULAR_TTF,
+    &crate::font_data::NOTO_NOTOSANSMATH_REGULAR_TTF,
+    &crate::font_data::NOTO_NOTOSANSCJKSC_REGULAR_OTF,
+    &crate::font_data::NOTO_NOTO_COLRV1_TTF,
 ];
 
 /// Stable file names for the default pack, same order as [`DEFAULT_MOTION_FONT_WEIGHTS`].
@@ -50,14 +51,15 @@ pub const DEFAULT_MOTION_FONT_FILES: &[&str] = &[
 ];
 
 /// Register the default Motion pack with CSS generic family aliases.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn register_default_motion_fonts(
     fonts: &mut Fonts,
 ) -> Result<(), takumi_core::resources::font::FontError> {
     debug_assert_eq!(
-        DEFAULT_MOTION_FONT_WEIGHTS.len(),
+        default_motion_fonts().len(),
         DEFAULT_MOTION_FONT_FILES.len()
     );
-    for (index, bytes) in DEFAULT_MOTION_FONT_WEIGHTS.iter().enumerate() {
+    for (index, bytes) in default_motion_fonts().iter().enumerate() {
         fonts.register(default_motion_font_resource(index, bytes.to_vec()))?;
     }
     Ok(())
@@ -78,8 +80,9 @@ pub fn default_motion_font_resource(index: usize, bytes: Vec<u8>) -> FontResourc
 
 /// Host registration for unnamed font blobs. Default-pack bytes keep their CSS
 /// generic; everything else is an ordinary face.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn motion_font_resource(bytes: Vec<u8>) -> FontResource<'static> {
-    match DEFAULT_MOTION_FONT_WEIGHTS
+    match default_motion_fonts()
         .iter()
         .position(|pack| *pack == bytes.as_slice())
     {
@@ -91,3 +94,9 @@ pub fn motion_font_resource(bytes: Vec<u8>) -> FontResource<'static> {
 pub use measure::{MeasureError, MeasuredBox, TextMeasure, measure_text};
 
 pub use takumi_core::resources::font::{FontOverride, FontResource, Fonts, GenericFamily};
+
+/// Shared default bytes are only provided by Native hosts.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn default_motion_fonts() -> &'static [&'static [u8]] {
+    DEFAULT_MOTION_FONT_WEIGHTS
+}

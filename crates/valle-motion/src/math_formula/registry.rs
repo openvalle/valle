@@ -2,6 +2,7 @@
 
 use std::collections::BTreeMap;
 use std::path::Path;
+#[cfg(not(target_arch = "wasm32"))]
 use std::sync::OnceLock;
 
 use ratex_font::FontId;
@@ -99,8 +100,9 @@ impl FormulaFontRegistry {
         })
     }
 
-    /// Load the locked 19-face pack from embedded TTF bytes. Wasm-safe: no
-    /// `std::fs` and no `CARGO_MANIFEST_DIR`.
+    /// Load the locked 19-face pack from Native embedded bytes.
+    /// Browser layout uses the formula faces supplied by the render resources.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn load_embedded() -> Result<Self, AdmitError> {
         let mut registry = Self::new();
         for (face, bytes) in super::fonts::formula_font_pack() {
@@ -144,6 +146,7 @@ impl FormulaFontRegistry {
         Ok(u32::from(gid.0))
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn load_default() -> Result<&'static Self, AdmitError> {
         static REGISTRY: OnceLock<Result<FormulaFontRegistry, String>> = OnceLock::new();
         match REGISTRY.get_or_init(|| Self::load_embedded().map_err(|err| err.to_string())) {

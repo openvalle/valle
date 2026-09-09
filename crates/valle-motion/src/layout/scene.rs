@@ -2642,12 +2642,15 @@ fn prepare_formula_fragments(
         let NodeKind::MathFormula { latex, display, .. } = &node.kind else {
             continue;
         };
+        #[cfg(not(target_arch = "wasm32"))]
         let registry = crate::math_formula::FormulaFontRegistry::load_default().map_err(|err| {
             LayoutError::BadFormula {
                 node: node.key.clone(),
                 reason: err.to_string(),
             }
         })?;
+        #[cfg(target_arch = "wasm32")]
+        let registry = _opts.formula_fonts;
         let style = formula_style_from_node(node, values, at)?;
         let fragment = crate::math_formula::emit_formula(
             latex,

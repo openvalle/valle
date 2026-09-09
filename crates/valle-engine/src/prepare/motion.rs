@@ -34,7 +34,19 @@ pub(crate) struct BuiltMotionProgram {
 #[derive(Default)]
 pub(super) struct MotionFontCache {
     defaults: Option<valle_motion::Fonts>,
-    entries: VecDeque<(Vec<ContentDigest>, valle_motion::Fonts)>,
+    entries: VecDeque<(Vec<ContentDigest>, MotionFontSet)>,
+}
+
+pub(super) struct MotionFontSet {
+    text: valle_motion::Fonts,
+    #[cfg(target_arch = "wasm32")]
+    formulas: valle_motion::math_formula::FormulaFontRegistry,
+}
+impl std::ops::Deref for MotionFontSet {
+    type Target = valle_motion::Fonts;
+    fn deref(&self) -> &Self::Target {
+        &self.text
+    }
 }
 
 impl MotionFontCache {
@@ -43,14 +55,16 @@ impl MotionFontCache {
     pub(super) fn get(
         &mut self,
         dependencies: &[(ContentDigest, &[u8])],
-    ) -> Result<&valle_motion::Fonts, ProgramPrepareError> {
+    ) -> Result<&MotionFontSet, ProgramPrepareError> {
         let key: Vec<_> = dependencies.iter().map(|(digest, _)| *digest).collect();
         if let Some(index) = self.entries.iter().position(|(cached, _)| *cached == key) {
             let entry = self.entries.remove(index).expect("located font registry");
             self.entries.push_back(entry);
         } else {
             if self.defaults.is_none() {
+                #[allow(unused_mut)]
                 let mut fonts = valle_motion::Fonts::default();
+                #[cfg(not(target_arch = "wasm32"))]
                 valle_motion::register_default_motion_fonts(&mut fonts).map_err(|error| {
                     ProgramPrepareError::MotionLayout {
                         reason: error.to_string(),
@@ -63,13 +77,45 @@ impl MotionFontCache {
                 .as_ref()
                 .expect("registered default fonts")
                 .clone();
+            // Keep Native fallback priority even when resource bindings arrive in digest order.
+            #[cfg(target_arch = "wasm32")]
+            let mut ordered_dependencies = dependencies.to_vec();
+            #[cfg(target_arch = "wasm32")]
+            ordered_dependencies.sort_by_key(|(digest, _)| {
+                valle_motion::runtime_fonts::default_index(digest).unwrap_or(usize::MAX)
+            });
+            #[cfg(target_arch = "wasm32")]
+            let dependencies = ordered_dependencies.as_slice();
             for (digest, bytes) in dependencies {
                 register_motion_dependency_font(&mut fonts, bytes, digest)?;
             }
             if self.entries.len() == Self::CAPACITY {
                 self.entries.pop_front();
             }
-            self.entries.push_back((key, fonts));
+            #[cfg(target_arch = "wasm32")]
+            let mut formulas = valle_motion::math_formula::FormulaFontRegistry::new();
+            #[cfg(target_arch = "wasm32")]
+            for (digest, bytes) in dependencies {
+                let hash = digest.as_hex();
+                if let Some(face) = valle_motion::math_formula::formula_faces()
+                    .iter()
+                    .find(|face| face.sha256_hex == hash)
+                {
+                    formulas.insert(*face, bytes.to_vec()).map_err(|error| {
+                        ProgramPrepareError::MotionLayout {
+                            reason: error.to_string(),
+                        }
+                    })?;
+                }
+            }
+            self.entries.push_back((
+                key,
+                MotionFontSet {
+                    text: fonts,
+                    #[cfg(target_arch = "wasm32")]
+                    formulas,
+                },
+            ));
         }
         Ok(&self.entries.back().expect("cached font registry").1)
     }
@@ -84,7 +130,7 @@ pub(crate) struct CompiledMotionProgramContext<'a> {
     pub fps: FrameRate,
     pub styles: &'a valle_motion::StyleCache,
     pub faces: &'a valle_motion::FaceCache,
-    pub fonts: &'a valle_motion::Fonts,
+    pub fonts: &'a MotionFontSet,
     pub program_to_device: super::DeviceTransform,
     pub clip_id: &'a str,
     pub render_seed: u32,
@@ -143,6 +189,8 @@ pub(crate) fn build_compiled_motion_program(
             context.viewport.height(),
         )),
         fonts: context.fonts,
+        #[cfg(target_arch = "wasm32")]
+        formula_fonts: &context.fonts.formulas,
         styles: Some(context.styles),
     };
     let mut tree = valle_motion::build_tree(
@@ -208,9 +256,19 @@ fn register_motion_dependency_font(
     bytes: &[u8],
     digest: &ContentDigest,
 ) -> Result<(), ProgramPrepareError> {
-    let is_default = valle_motion::DEFAULT_MOTION_FONT_WEIGHTS
-        .iter()
-        .any(|default| *default == bytes);
+    let default_index = valle_motion::runtime_fonts::default_index(digest);
+    let is_default = default_index.is_some();
+    #[cfg(target_arch = "wasm32")]
+    if let Some(index) = default_index {
+        fonts
+            .register(valle_motion::default_motion_font_resource(
+                index,
+                bytes.to_vec(),
+            ))
+            .map_err(|error| ProgramPrepareError::MotionLayout {
+                reason: error.to_string(),
+            })?;
+    }
     if !is_default {
         // Preserve the font's own name-table family for artifacts that author that family
         // directly. Takumi deduplicates by content + family, so the content-addressed alias below
@@ -1421,7 +1479,7 @@ export default function Card() {{
 
         // Visit enough distinct dependency sets to evict the initial set, as hot reload or
         // alternating clips can do. Every set must resolve its own immutable font bytes.
-        for bytes in valle_motion::DEFAULT_MOTION_FONT_WEIGHTS.iter().take(5) {
+        for bytes in valle_motion::default_motion_fonts().iter().take(5) {
             let replacement = ContentDigest::of_bytes(bytes);
             let fonts = cache.get(&[(replacement, bytes)]).unwrap();
             let request =
@@ -1442,7 +1500,7 @@ export default function Card() {{
     #[test]
     fn dependency_font_keeps_internal_family_and_content_addressed_alias() {
         assert!(
-            valle_motion::DEFAULT_MOTION_FONT_WEIGHTS
+            valle_motion::default_motion_fonts()
                 .iter()
                 .all(|default| *default != DEPENDENCY_FONT),
             "fixture must exercise the non-default dependency path"
