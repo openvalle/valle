@@ -80,10 +80,10 @@ pub fn tune_process_allocators() {
     name = "valle",
     version,
     about = "Valle: a video creation and editing engine built for AI agents",
-    after_help = "Examples:\n  valle motion render intro.motion.tsx -o intro.mp4\n  valle timeline render timeline.json --frame 0 -o cover.png\n  valle project render demo -o demo.mp4\n  valle --json models list"
+    after_help = "Examples:\n  valle motion check examples/hello.motion.tsx\n  valle timeline render examples/timeline.json -o timeline.mp4\n  valle project create demo --timeline examples/timeline.json\n  valle assets add cover.png --tag demo\n  valle models install dpdfnet\n  valle media enhance speech.wav -o clean.wav\n\nUse --json for one result or --events for NDJSON progress and a final report.\nSee docs/cli.md for workflows, output contracts, and model prerequisites."
 )]
 pub struct Cli {
-    /// Emit a single machine-readable result.
+    /// Emit one JSON result. Studio emits readiness and keeps serving.
     #[arg(long, global = true, conflicts_with = "events")]
     pub json: bool,
     /// Emit progress and results as NDJSON.
@@ -962,7 +962,8 @@ pub enum ModelsAction {
         #[arg(skip)]
         json: bool,
     },
-    /// Verify installed artifact hashes without network access.
+    /// Verify catalog artifact hashes offline. Uninstalled variants are reported as missing;
+    /// use --artifact to verify just the variant returned by install.
     Verify {
         /// Model id shown by `valle models list`.
         id: String,
@@ -1178,22 +1179,28 @@ fn dispatch_media(action: MediaAction) -> Result<std::process::ExitCode> {
 /// Parse CLI arguments, dispatch the command, and render errors consistently.
 pub fn run() -> std::process::ExitCode {
     let argv = std::env::args_os().collect::<Vec<_>>();
-    let media_json = argv
-        .iter()
-        .any(|value| value == "--json" || value == "--events");
-    output::init(
-        argv.iter().any(|v| v == "--json"),
-        argv.iter().any(|v| v == "--events"),
-    );
     let cli = match Cli::try_parse_from(&argv) {
         Ok(cli) => cli,
         Err(error)
-            if media_json
+            if argv
+                .iter()
+                .take_while(|v| *v != "--")
+                .any(|v| v == "--json" || v == "--events")
                 && !matches!(
                     error.kind(),
                     clap::error::ErrorKind::DisplayHelp | clap::error::ErrorKind::DisplayVersion
                 ) =>
         {
+            // On successful parsing, only clap decides which tokens are flags. For parse errors,
+            // honor output flags before `--`, which makes subsequent tokens positional values.
+            output::init(
+                argv.iter()
+                    .take_while(|v| *v != "--")
+                    .any(|v| v == "--json"),
+                argv.iter()
+                    .take_while(|v| *v != "--")
+                    .any(|v| v == "--events"),
+            );
             let summary = error
                 .to_string()
                 .lines()
@@ -1203,7 +1210,10 @@ pub fn run() -> std::process::ExitCode {
                 .trim_start_matches("error:")
                 .trim()
                 .to_owned();
-            output::error(&format!("invalid command-line arguments: {summary}"));
+            output::error_with_code(
+                "invalid_arguments",
+                &format!("invalid command-line arguments: {summary}"),
+            );
             return std::process::ExitCode::from(2);
         }
         Err(error) => {

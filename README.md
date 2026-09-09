@@ -10,7 +10,7 @@ A video creation and editing engine built for AI agents.
 
 - [Rust via rustup](https://rustup.rs/). `rust-toolchain.toml` selects Rust **1.96.0** and the `wasm32-unknown-unknown` target.
 - [Bun](https://bun.com/docs/installation) **1.4.2**.
-- **FFmpeg development headers and shared libraries**: `libavcodec`, `libavformat`, `libavutil`, `libswscale`, and `libswresample`. Tested with FFmpeg **8.1.1**. Installing only a standalone `ffmpeg` executable is insufficient.
+- **FFmpeg development headers and shared libraries**: `libavcodec`, `libavformat`, `libavutil`, `libswscale`, and `libswresample`. Locally validated with FFmpeg **9.0.1** on macOS. Installing only a standalone `ffmpeg` executable is insufficient.
 - Native build tools: C/C++ compiler, LLVM/libclang, `pkg-config`, CMake, Python 3, Ninja, Git, curl, and tar. See [rust-skia build requirements](https://github.com/rust-skia/rust-skia#building).
 
 The setup below targets **macOS**; setup on other platforms still needs validation. Install Rust and Bun above, then install the native dependencies with [Homebrew](https://brew.sh/):
@@ -35,39 +35,31 @@ The first build needs network access and can take a while. Cargo is configured t
 
 For CLI-only development, use `cargo build -p valle-cli`. Studio also needs the Web resources produced by the full build above.
 
-Create `hello.motion.tsx` in the repository root:
+## Use the CLI
 
-```tsx
-export default function Hello(ctx) {
-  const opacity = interpolate(ctx.hold.progress, [0, 0.6], [0, 1]);
+| Command | Capability |
+| --- | --- |
+| `motion` | Author JSX, check, preview in Studio, render video or frames |
+| `timeline` | Validate and render timeline JSON |
+| `project` | Save timeline revisions, apply edits, restore, preview and render |
+| `assets` | Import, organize, annotate and search local media |
+| `media` | Transcribe, matte, enhance, separate, detect shots, segment, inpaint, upscale and interpolate |
+| `models` | List, install and verify local model weights |
 
-  return (
-    <Scene className="relative h-full w-full flex flex-col items-center justify-center"
-      style={{ backgroundColor: "#102030" }}>
-      <Text style={{ fontSize: 80, fontWeight: 700, color: "#ffffff", opacity }}>
-        Hello, Valle!
-      </Text>
-      <Text style={{ marginTop: 20, fontSize: 28, color: "#94a3b8", opacity }}>
-        Create with code. Bring it to life.
-      </Text>
-    </Scene>
-  );
-}
-```
+See the [CLI guide](docs/cli.md) for workflows across all six groups, model/runtime
+requirements, JSON results, progress events and exit codes. Each command also has `--help`.
 
-Start Studio and open the URL printed in the terminal:
+Try the checked-in examples (no model downloads needed):
 
 ```sh
-./dist/bin/valle motion studio hello.motion.tsx
+./dist/bin/valle motion check examples/hello.motion.tsx
+./dist/bin/valle motion render examples/hello.motion.tsx --duration 3 --size 640x360 -o hello.mp4 --events
+./dist/bin/valle timeline check examples/timeline.json
+./dist/bin/valle timeline render examples/timeline.json -o timeline.mp4 --events
+./dist/bin/valle motion studio examples/hello.motion.tsx --size 640x360
 ```
 
-Or render a video or a single frame:
-
-```sh
-./dist/bin/valle motion render hello.motion.tsx --duration 3 --size 1280x720 -o hello.mp4
-./dist/bin/valle motion render hello.motion.tsx --frame 30 --size 1280x720 -o hello.png
-```
-
-Output files must not already exist. This example needs no model downloads; AI media tools require their corresponding models and, where applicable, ONNX Runtime.
+Output files must be new. Use `--json` for one machine-readable result or `--events`
+for NDJSON progress and a final report. Studio keeps serving after its readiness message.
 
 Licensed under [Apache-2.0](LICENSE). See [third-party acknowledgements](THIRD_PARTY.md) for dependencies and references.

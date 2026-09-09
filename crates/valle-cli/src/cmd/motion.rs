@@ -280,6 +280,8 @@ fn studio(request: StudioRequest) -> Result<std::process::ExitCode> {
         port: addr.port(),
         runtime_version: runtime.manifest.runtime_version.clone(),
         runtime_source: runtime.source.as_str().to_owned(),
+        project_id: None,
+        revision: None,
     });
     eprintln!(
         "motion studio: {url} (input {}; Ctrl-C to stop)",
@@ -300,10 +302,7 @@ fn check(
     let font_blobs = load_fonts(&[])?;
     match compile_and_prepare(input, asset_specs, &font_blobs, canvas_size, data)? {
         Ok(prepared) => {
-            if let Err(error) = line_box_emit_smoke(&prepared, &font_blobs) {
-                eprintln!("error: {error}");
-                return Ok(std::process::ExitCode::FAILURE);
-            }
+            line_box_emit_smoke(&prepared, &font_blobs)?;
             let artifact = &prepared.compiled.artifact;
             crate::output::emit(
                 serde_json::json!({"status":"ok","component":artifact.component,"nodes":artifact.nodes.len(),"expressions":artifact.exprs.len()}),
@@ -784,6 +783,18 @@ fn compile_and_prepare(
     )? {
         Ok(compiled) => compiled,
         Err(diagnostics) => {
+            if crate::output::machine() {
+                crate::output::emit(serde_json::json!({
+                    "status": "error",
+                    "error": {
+                        "code": "motion_compile_failed",
+                        "message": "Motion compilation failed",
+                        "input": input,
+                        "diagnostics": diagnostics,
+                    },
+                }));
+                return Ok(Err(()));
+            }
             eprintln!("{}: {} diagnostic(s)", input.display(), diagnostics.len());
             for diagnostic in diagnostics {
                 let diagnostic_path = diagnostic
@@ -802,9 +813,6 @@ fn compile_and_prepare(
                     diagnostic.code,
                     diagnostic.message
                 );
-            }
-            if crate::output::machine() {
-                crate::output::error("Motion compilation failed; see diagnostics on stderr");
             }
             return Ok(Err(()));
         }

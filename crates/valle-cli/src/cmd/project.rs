@@ -142,13 +142,24 @@ pub(crate) fn run(json_output: bool, action: ProjectAction) -> Result<ExitCode> 
             });
             let (server, addr) = crate::webhost::bind(port)?;
             let url = format!("http://{addr}/studio?project={project_id}");
-            if json_output {
+            if crate::output::events() {
+                crate::events::emit(crate::events::EventKind::Ready {
+                    url: url.clone(),
+                    port: addr.port(),
+                    runtime_version: runtime.manifest.runtime_version.clone(),
+                    runtime_source: runtime.source.as_str().to_owned(),
+                    project_id: Some(project_id.to_string()),
+                    revision: Some(initial_revision),
+                });
+            } else if json_output {
                 crate::output::emit(json!({
                     "status": "ready",
                     "url": url,
                     "port": addr.port(),
                     "projectId": project_id,
                     "revision": state.project.as_ref().map(|project| project.initial_revision),
+                    "runtime_version": runtime.manifest.runtime_version,
+                    "runtime_source": runtime.source.as_str(),
                 }));
                 std::io::stdout().flush()?;
             } else {

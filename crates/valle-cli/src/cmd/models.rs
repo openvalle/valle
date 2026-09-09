@@ -72,8 +72,10 @@ pub(crate) fn run_install(
 ) -> Result<ExitCode> {
     let manager = product_install_manager();
     let mut progress = |message: &str| {
-        if !json {
-            eprintln!("{message}");
+        if !json || crate::output::events() {
+            crate::events::emit(crate::events::EventKind::ModelsProgress {
+                message: message.to_owned(),
+            });
         }
     };
     match manager.install(

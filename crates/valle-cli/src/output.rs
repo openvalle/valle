@@ -27,12 +27,15 @@ pub(crate) fn emit(value: Value) {
     if events() {
         crate::events::emit(crate::events::EventKind::Report(value));
     } else {
-        println!("{value}");
+        crate::events::stdout_line(&value.to_string());
     }
 }
 pub(crate) fn error(message: &str) {
+    error_with_code("command_failed", message);
+}
+pub(crate) fn error_with_code(code: &str, message: &str) {
     if machine() {
-        emit(json!({"status":"error","error":{"code":"command_failed","message":message}}));
+        emit(json!({"status":"error","error":{"code":code,"message":message}}));
     } else {
         eprintln!("error: {message}");
     }

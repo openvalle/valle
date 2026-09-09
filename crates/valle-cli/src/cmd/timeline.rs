@@ -312,6 +312,11 @@ pub(super) fn render_document(
         NativeProject::from_render(opened.engine_render(), Arc::new(catalog)),
         NativeRenderOptions {
             backend: valle_render::executor::skia::SkiaBackendKind::Raster,
+            background: valle_engine::resource::OutputBackground::AuthorSrgbStraight {
+                color: valle_engine::resource::AuthorSrgbStraight(
+                    opened.engine_render().canvas().background_rgba(),
+                ),
+            },
             progress: crate::output::render_progress(),
             ..NativeRenderOptions::default()
         },

@@ -23,9 +23,7 @@ impl TerminalProgress {
 impl ProgressSink for TerminalProgress {
     fn event(&mut self, event: ToolEvent) {
         if crate::output::events() {
-            crate::events::emit(crate::events::EventKind::AnalyzeProgress {
-                message: format!("{:?}: {:?}/{:?}", event.phase, event.completed, event.total),
-            });
+            crate::events::emit(crate::events::EventKind::MediaProgress(event));
             return;
         }
         if !self.enabled {

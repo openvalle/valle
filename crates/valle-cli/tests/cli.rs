@@ -322,7 +322,7 @@ fn media_argument_errors_honor_the_json_channel_contract() {
     assert!(json.stderr.is_empty(), "JSON parse failure leaked stderr");
     let envelope: Value = serde_json::from_slice(&json.stdout).expect("media error envelope");
     assert_eq!(envelope["status"], "error");
-    assert_eq!(envelope["error"]["code"], "command_failed");
+    assert_eq!(envelope["error"]["code"], "invalid_arguments");
 
     let human = valle()
         .args(["media", "upscale", "unused.png", "--scale", "3"])
@@ -1083,5 +1083,190 @@ fn motion_render_rejects_invalid_delivery_options() {
             String::from_utf8_lossy(&result.stderr)
         );
         assert!(!output.exists());
+    }
+}
+
+#[test]
+fn machine_parse_errors_are_consistent_across_domains() {
+    for domain in ["motion", "timeline", "project", "assets", "media", "models"] {
+        for mode in ["--json", "--events"] {
+            // Global flags work before the domain and after the subcommand.
+            for args in [vec![mode, domain, "unknown"], vec![domain, "unknown", mode]] {
+                let out = valle().args(&args).output().unwrap();
+                assert_eq!(out.status.code(), Some(2), "{args:?}");
+                assert!(out.stderr.is_empty(), "{args:?}: {:?}", out.stderr);
+                let value: Value = serde_json::from_slice(&out.stdout).unwrap();
+                let report = if mode == "--events" {
+                    assert_eq!(value["type"], "report");
+                    assert_eq!(value["level"], "error");
+                    &value["data"]
+                } else {
+                    &value
+                };
+                assert_eq!(report["error"]["code"], "invalid_arguments");
+            }
+        }
+    }
+}
+
+#[test]
+fn positional_output_flag_names_do_not_change_output_mode() {
+    for flag in ["--json", "--events"] {
+        let home = tempfile::tempdir().unwrap();
+        let out = valle()
+            .args(["assets", "search", "--", flag])
+            .env("VALLE_HOME", home.path())
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{:?}", out.stderr);
+        assert_eq!(
+            String::from_utf8(out.stdout).unwrap().trim(),
+            "(no matches)"
+        );
+    }
+}
+
+#[test]
+fn motion_compile_errors_include_source_diagnostics_in_machine_output() {
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join("broken.motion.tsx");
+    std::fs::write(
+        &input,
+        "export default function Broken(ctx) { return <Scene><Unknown /></Scene>; }",
+    )
+    .unwrap();
+    for mode in ["--json", "--events"] {
+        for action in ["check", "render"] {
+            let mut cmd = valle();
+            cmd.args(["motion", action]).arg(&input).arg(mode);
+            if action == "render" {
+                cmd.arg("-o").arg(dir.path().join("out.mp4"));
+            }
+            let out = cmd.output().unwrap();
+            assert_eq!(out.status.code(), Some(1));
+            assert!(
+                out.stderr.is_empty(),
+                "{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            let value: Value = serde_json::from_slice(&out.stdout).unwrap();
+            let report = if mode == "--events" {
+                &value["data"]
+            } else {
+                &value
+            };
+            assert_eq!(report["error"]["code"], "motion_compile_failed", "{report}");
+            let diagnostic = &report["error"]["diagnostics"][0];
+            assert!(diagnostic["message"].is_string(), "{report}");
+            assert!(diagnostic["span"]["line"].is_number(), "{report}");
+        }
+    }
+}
+
+#[test]
+fn timeline_and_project_delivery_preserve_authored_background() {
+    let dir = tempfile::tempdir().unwrap();
+    for (index, (background, expected)) in [
+        ("#102030ff", [16_u8, 32, 48, 255]),
+        ("#00000000", [0_u8, 0, 0, 0]),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let input = dir.path().join(format!("{index}.json"));
+        std::fs::write(
+            &input,
+            serde_json::json!({
+                "canvas": {"width":160,"height":90,"fps":10,"background":background},
+                "tracks":{"visual":[{"clips":[
+                    {"kind":"solid","color":"#ffffffff","start":0.2,"duration":0.1}
+                ]}]}
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let invoke = |args: Vec<String>, success: bool| {
+            let out = valle()
+                .args(args)
+                .arg("--json")
+                .env("VALLE_HOME", dir.path().join("home"))
+                .output()
+                .unwrap();
+            assert_eq!(
+                out.status.success(),
+                success,
+                "{} {}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            );
+            serde_json::from_slice::<Value>(&out.stdout).unwrap()
+        };
+        let preview = dir.path().join(format!("{index}.png"));
+        invoke(
+            vec![
+                "timeline".into(),
+                "render".into(),
+                input.display().to_string(),
+                "--frame".into(),
+                "0".into(),
+                "-o".into(),
+                preview.display().to_string(),
+            ],
+            true,
+        );
+        let pixels = valle_media::codec::read_rgba_png(&preview).unwrap();
+        assert!(pixels.data.chunks_exact(4).all(|p| {
+            p.iter()
+                .zip(expected)
+                .all(|(actual, expected)| actual.abs_diff(expected) <= 1)
+        }));
+        let id = format!("background-{index}");
+        invoke(
+            vec![
+                "project".into(),
+                "create".into(),
+                id.clone(),
+                "--timeline".into(),
+                input.display().to_string(),
+            ],
+            true,
+        );
+        let project_preview = dir.path().join(format!("project-{index}.png"));
+        invoke(
+            vec![
+                "project".into(),
+                "render".into(),
+                id,
+                "--frame".into(),
+                "0".into(),
+                "-o".into(),
+                project_preview.display().to_string(),
+            ],
+            true,
+        );
+        assert_eq!(
+            std::fs::read(&preview).unwrap(),
+            std::fs::read(project_preview).unwrap()
+        );
+        let video = dir.path().join(format!("{index}.mp4"));
+        let result = invoke(
+            vec![
+                "timeline".into(),
+                "render".into(),
+                input.display().to_string(),
+                "-o".into(),
+                video.display().to_string(),
+            ],
+            index == 0,
+        );
+        if index == 1 {
+            assert!(
+                result["error"]["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains("opaque background")
+            );
+            assert!(!video.exists());
+        }
     }
 }

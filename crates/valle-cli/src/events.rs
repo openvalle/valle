@@ -34,6 +34,7 @@ pub(crate) fn mode() -> Mode {
 pub(crate) enum Level {
     Info,
     Warn,
+    Error,
 }
 
 /// Typed events form the machine-readable contract; log messages are informational.
@@ -48,6 +49,10 @@ pub(crate) enum EventKind {
         port: u16,
         runtime_version: String,
         runtime_source: String,
+        #[serde(rename = "projectId", skip_serializing_if = "Option::is_none")]
+        project_id: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        revision: Option<u64>,
     },
     /// Motion source hot reload completed and config advanced.
     #[serde(rename = "reload")]
@@ -71,6 +76,11 @@ pub(crate) enum EventKind {
     /// Analysis progress forwarded from the kernel.
     #[serde(rename = "analyze.progress")]
     AnalyzeProgress { message: String },
+    /// Preserve the media kernel's phase, counts, and optional message.
+    #[serde(rename = "media.progress")]
+    MediaProgress(valle_media::tools::ToolEvent),
+    #[serde(rename = "models.progress")]
+    ModelsProgress { message: String },
     #[serde(rename = "render.progress")]
     RenderProgress { completed: usize, total: usize },
 }
@@ -79,6 +89,7 @@ impl EventKind {
     /// Derive envelope severity from the event.
     fn level(&self) -> Level {
         match self {
+            EventKind::Report(value) if value["status"] == "error" => Level::Error,
             EventKind::BrowserReport { status, .. } if status != "ok" => Level::Warn,
             _ => Level::Info,
         }
@@ -87,7 +98,9 @@ impl EventKind {
     /// Render an optional human-readable stderr line. Service events remain exclusive to NDJSON.
     fn human(&self) -> Option<String> {
         match self {
-            EventKind::AnalyzeProgress { message } => Some(message.clone()),
+            EventKind::AnalyzeProgress { message } | EventKind::ModelsProgress { message } => {
+                Some(message.clone())
+            }
             _ => None,
         }
     }
@@ -132,9 +145,13 @@ pub(crate) fn stdout_line(line: &str) {
 pub(crate) fn emit(event: EventKind) {
     match mode() {
         Mode::Ndjson => {
+            // Allocate the sequence while holding stdout so concurrent producers cannot write
+            // higher sequence numbers before lower ones.
+            let mut out = std::io::stdout().lock();
             let line = envelope_line(&event, ts_ms_now(), SEQ.fetch_add(1, Ordering::Relaxed));
             if !line.is_empty() {
-                stdout_line(&line);
+                let _ = writeln!(out, "{line}");
+                let _ = out.flush();
             }
         }
         Mode::Human => {
@@ -159,6 +176,8 @@ mod tests {
                 port: 7777,
                 runtime_version: "1.2.3".into(),
                 runtime_source: "dev-dir".into(),
+                project_id: None,
+                revision: None,
             },
             1_752_812_345_678,
             3,
@@ -187,6 +206,23 @@ mod tests {
         assert!(!line.contains('\n'), "{line}");
     }
 
+    #[test]
+    fn media_progress_preserves_kernel_fields() {
+        let mut progress =
+            valle_media::tools::ToolEvent::count(valle_media::tools::ToolPhase::Inferencing, 3, 10);
+        progress.message = Some("frame 3".into());
+        let value: Value =
+            serde_json::from_str(&envelope_line(&EventKind::MediaProgress(progress), 0, 0))
+                .unwrap();
+        assert_eq!(value["type"], "media.progress");
+        assert_eq!(
+            value["data"],
+            serde_json::json!({
+                "phase": "inferencing", "completed": 3, "total": 10, "message": "frame 3",
+            })
+        );
+    }
+
     /// Level is derived from browser status and typed log severity.
     #[test]
     fn level_derivation() {
@@ -200,6 +236,10 @@ mod tests {
         };
         assert_eq!(report("ok").level(), Level::Info);
         assert_eq!(report("error").level(), Level::Warn);
+        assert_eq!(
+            EventKind::Report(serde_json::json!({"status":"error"})).level(),
+            Level::Error
+        );
     }
 
     /// Sequence numbers increase within the process.
