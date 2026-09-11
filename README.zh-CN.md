@@ -81,10 +81,13 @@ macOS 包要求 macOS 15+，采用 ad-hoc 签名，未经过 Apple 公证。Linu
 | `assets` | 导入、整理、标注和检索本地素材 |
 | `media` | 转写、抠像、降噪、分轨、镜头检测、分割、修复、超分和插帧 |
 | `models` | 列出、安装和校验本地模型权重 |
+| `docs` | 离线读取二进制内嵌的指南 |
 
 [CLI 使用指南](docs/cli.md)覆盖六个命令域的工作流、模型与运行库依赖、JSON 结果、进度事件和退出码。每个命令都可以通过 `--help` 查看参数。
 
-[Motion 编写手册](docs/motion.md)完整说明 JSX、组件、CSS、动画、资源绑定和可运行示例。[Timeline 编写手册](docs/timeline.md)说明片段时间、轨道、音频、字幕和 Motion 集成。[Media 处理手册](docs/media.md)说明九种处理操作的模型、输入输出格式和组合用法。
+[Motion 编写手册](docs/motion.md)完整说明 JSX、组件、CSS、动画、资源绑定和可运行示例。[Timeline 编写手册](docs/timeline.md)说明片段时间、轨道、音频、字幕和 Motion 集成。[Media 处理手册](docs/media.md)说明九种处理操作的模型、输入输出格式和组合用法。[Project 手册](docs/project.md)说明版本历史和保存流程，[Assets 手册](docs/assets.md)说明导入、标注、检索和维护。
+
+运行 `valle docs` 列出当前二进制内嵌的文档，再用 `valle docs motion`（或 `timeline`、`media`、`project`、`assets`、`cli`）离线读取。
 
 面向 AI Agent 的 [Valle skill](skills/valle/SKILL.md)用一个文件说明命令选择、输入编写、项目版本和结果处理。
 

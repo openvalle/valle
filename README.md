@@ -83,6 +83,7 @@ The macOS workflow requires `MACOS_CERT_P12_BASE64`, `MACOS_CERT_PASSWORD`, `MAC
 | `assets` | Import, organize, annotate and search local media |
 | `media` | Transcribe, matte, enhance, separate, detect shots, segment, inpaint, upscale and interpolate |
 | `models` | List, install and verify local model weights |
+| `docs` | Read bundled guides offline |
 
 See the [CLI guide](docs/cli.md) for workflows across all six groups, model/runtime
 requirements, JSON results, progress events and exit codes. Each command also has `--help`.
@@ -91,7 +92,13 @@ The [Motion authoring reference](docs/motion.md) covers JSX, components, CSS,
 animation, resources and complete examples. The [Timeline authoring reference](docs/timeline.md)
 covers clip timing, tracks, audio, captions and Motion integration. The
 [Media processing reference](docs/media.md) covers models, input/output formats
-and workflows for all nine processing operations.
+and workflows for all nine processing operations. The [Project guide](docs/project.md)
+covers revision history and saves; the [Assets guide](docs/assets.md) covers import,
+annotation, search and maintenance.
+
+Run `valle docs` to list the guides embedded in your executable, then
+`valle docs motion` (or `timeline`, `media`, `project`, `assets`, `cli`)
+to read one offline.
 
 For AI agents, the [Valle skill](skills/valle/SKILL.md) covers command selection,
 authoring inputs, project revisions and result handling in one file.

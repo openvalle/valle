@@ -83,7 +83,7 @@ pub fn tune_process_allocators() {
     name = "valle",
     version,
     about = "Valle: a video creation and editing engine built for AI agents",
-    after_help = "Examples:\n  valle motion check examples/hello.motion.tsx\n  valle timeline render examples/timeline.json -o timeline.mp4\n  valle project create demo --timeline examples/timeline.json\n  valle assets add cover.png --tag demo\n  valle models install dpdfnet\n  valle media enhance speech.wav -o clean.wav\n\nUse --json for one result or --events for NDJSON progress and a final report.\nSee docs/cli.md for workflows, output contracts, and model prerequisites."
+    after_help = "Examples:\n  valle motion check examples/hello.motion.tsx\n  valle timeline render examples/timeline.json -o timeline.mp4\n  valle project create demo --timeline examples/timeline.json\n  valle assets add cover.png --tag demo\n  valle models install dpdfnet\n  valle media enhance speech.wav -o clean.wav\n\nUse --json for one result or --events for NDJSON progress and a final report.\nRun `valle docs` for bundled guides, or `valle docs cli` for workflows and output contracts."
 )]
 pub struct Cli {
     /// Emit one JSON result. Studio emits readiness and keeps serving.
@@ -126,6 +126,11 @@ impl From<FfmpegLogLevelArg> for valle_media::codec::ffi::FfmpegLogLevel {
 pub enum Cmd {
     /// Show bundled licenses, acknowledgements, and dependency source download links.
     Licenses,
+    /// Read bundled guides offline; omit TOPIC to list available documentation.
+    Docs {
+        #[arg(value_parser = clap::builder::PossibleValuesParser::new(cmd::docs::topics()))]
+        topic: Option<String>,
+    },
     /// Check or render Motion JSX, or open Studio.
     Motion {
         #[command(subcommand)]
@@ -1072,6 +1077,7 @@ pub fn dispatch(cmd: Cmd) -> Result<std::process::ExitCode> {
             }
             Ok(std::process::ExitCode::SUCCESS)
         }
+        Cmd::Docs { topic } => cmd::docs::run(topic.as_deref()),
         Cmd::Motion { action } => cmd::motion::run(action),
         Cmd::Timeline { action } => cmd::timeline::run(action),
         Cmd::Media { action } => dispatch_media(action),

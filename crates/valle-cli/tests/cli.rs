@@ -29,7 +29,9 @@ fn root_surface_exposes_only_timeline_authoring_and_non_timeline_tools() {
     assert!(output.status.success());
     let help = String::from_utf8(output.stdout).expect("UTF-8 help");
 
-    for command in ["timeline", "motion", "project", "assets", "models", "media"] {
+    for command in [
+        "docs", "timeline", "motion", "project", "assets", "models", "media",
+    ] {
         assert!(help.contains(command), "missing `{command}` in:\n{help}");
     }
     for compatibility_alias in ["transcribe", "matte"] {

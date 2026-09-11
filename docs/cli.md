@@ -1,7 +1,9 @@
 # CLI guide
 
-Valle has six command groups. Run commands below from the repository root after
-building with `cargo xtask build --release`. See [build requirements](../README.md#requirements).
+Valle has six workflow groups, plus `docs` for bundled guides and `licenses` for
+dependency notices. Commands below use `valle` on PATH. A packaged executable needs
+no source checkout; for a source build, use `cargo xtask build --release` and see
+[build requirements](../README.md#requirements).
 
 | Group | Use it for | First command |
 | --- | --- | --- |
@@ -12,8 +14,9 @@ building with `cargo xtask build --release`. See [build requirements](../README.
 | `media` | Process individual media files with local models | `valle media enhance speech.wav -o clean.wav` |
 | `models` | Discover, install and verify model weights | `valle models list` |
 
-In the examples, `valle` means the executable at `dist/bin/valle`. Add it to PATH
-for this shell, and create an isolated demo directory:
+For a source build, add `dist/bin/valle` to PATH from the repository root. Skip the
+first line if your installed executable is already on PATH. Create an isolated
+demo directory for the examples:
 
 ```sh
 export PATH="$PWD/dist/bin:$PATH"
@@ -25,6 +28,34 @@ export VALLE_HOME="$demo_dir/library"
 It does not relocate model weights. `VALLE_MODEL_CACHE` selects the model directory;
 otherwise models use the platform cache directory, or `$VALLE_CACHE_DIR/models`.
 Each demo uses new output paths. Keep `demo_dir` for the following sections.
+
+## Read bundled documentation
+
+```sh
+valle docs
+valle docs cli
+valle docs motion
+valle docs timeline
+valle docs media
+valle docs project
+valle docs assets
+valle docs motion > motion.md
+valle docs project --json
+```
+
+`docs` without a topic lists the bundled guides. With a topic it writes the original
+Markdown to stdout, including examples and tables. Use a pager such as
+`valle docs motion | less` where available, or redirect to a file. Documentation is
+embedded at build time and follows the installed binary; it needs no checkout,
+network, FFmpeg, model weights or runtime extraction. Related guides can be read
+through their topic names; Markdown source links are preserved as authored.
+Model setup is covered in the Media and CLI guides.
+
+`docs --json` returns `status`, executable `version` and `topics` (each with
+`topic` and `title`). `docs TOPIC --json` returns `status`, `version`, `topic`,
+`title`, `format: "markdown"` and the complete `content` string. `--events`
+wraps the same result in one final `report` event. Unknown topics are argument
+errors (exit 2); help lists the accepted names. `docs --help` remains plain text.
 
 ## Motion: JSX to video
 
@@ -103,6 +134,9 @@ invalid source ranges; it does not test every frame or encoder.
 
 ## Project: versioned timeline editing
 
+See the [Project editing reference](project.md), also available through
+`valle docs project`, for revision handling, resource storage and Studio workflows.
+
 ```sh
 valle project create demo --timeline examples/timeline.json --json
 valle project show demo -o "$demo_dir/edited.timeline.json" --json
@@ -134,6 +168,9 @@ Referenced files must remain available. Public timeline JSON has no version fiel
 project revision numbers describe saved edits.
 
 ## Assets: import, annotate and find media
+
+See the [Asset library reference](assets.md), also available through
+`valle docs assets`, for import modes, annotations, entities, analysis and maintenance.
 
 Use the PNG rendered in the Motion example:
 
@@ -248,6 +285,7 @@ The transport is shared; result payloads retain domain-specific information:
 | Assets | `ok`, `data`, `error`, `warnings`; batch import can contain failed items |
 | Media | `format: "valle.media-run"`, `formatVersion: 1`, `status`, `result`, `report`, `warnings`, `error` |
 | Models | List array, install result, or verification report; inspect artifact `state` and exit code |
+| Docs | `status: "ok"`, executable `version`, plus `topics` or the selected Markdown `content` |
 
 Always check the process exit code. A JSON object or the arrival of `report` alone
 does not mean success. Argument errors use `error.code: "invalid_arguments"`;

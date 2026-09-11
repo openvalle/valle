@@ -2,6 +2,7 @@
 
 pub mod assets;
 pub mod assets_analyzers;
+pub(crate) mod docs;
 pub mod enhance;
 
 pub mod fixed_render;

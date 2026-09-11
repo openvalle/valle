@@ -10,8 +10,12 @@ Use the user's installed Valle executable. Otherwise look for `valle` on PATH or
 without a source checkout, Rust, or Bun. Check its `--version` and use subcommand
 `--help` when an option is uncertain. Uppercase arguments below are task-specific values.
 
-For details beyond this entrypoint, read the checkout's `docs/cli.md` or the
-[CLI guide](https://github.com/openvalle/valle/blob/main/docs/cli.md) as needed.
+For details, prefer `valle docs TOPIC` so documentation matches the installed
+executable. `valle docs` lists `cli`, `motion`, `timeline`, `media`, `project` and
+`assets`; the selected guide is Markdown on stdout. For older binaries
+without `docs`, use the corresponding checkout guide or the links below, checking
+that its options match the installed version. The general reference is
+[docs/cli.md](https://github.com/openvalle/valle/blob/main/docs/cli.md).
 
 ## Choose the command
 
@@ -131,7 +135,8 @@ Resolve local resource paths relative to the timeline file. Validate with
 `--frame N -o frame.png` selects a frame. MP4 requires an opaque canvas background;
 PNG can preserve transparency. Motion's tuning flags are not exposed on Timeline/Project render.
 
-For an existing project:
+For project revision, save, restore and resource-storage details, read
+`valle docs project` or the checkout's `docs/project.md`. For an existing project:
 
 ```sh
 valle project show PROJECT_ID -o edit.timeline.json --json
@@ -149,6 +154,9 @@ erasing history. Imported relative resource paths become absolute; their files
 must remain available.
 
 ## Work with Assets and Media
+
+For import modes, annotations, entities, search, analysis and maintenance, read
+`valle docs assets` or the checkout's `docs/assets.md`.
 
 Import selected files with `assets add FILE --mode copy --json`. Repeated imports
 reuse the content ID. Read IDs from `data.items[].content_digest`; pass a full ID
