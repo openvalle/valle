@@ -84,6 +84,10 @@ macOS 包要求 macOS 15+，采用 ad-hoc 签名，未经过 Apple 公证。Linu
 
 [CLI 使用指南](docs/cli.md)覆盖六个命令域的工作流、模型与运行库依赖、JSON 结果、进度事件和退出码。每个命令都可以通过 `--help` 查看参数。
 
+[Motion 编写手册](docs/motion.md)完整说明 JSX、组件、CSS、动画、资源绑定和可运行示例。[Timeline 编写手册](docs/timeline.md)说明片段时间、轨道、音频、字幕和 Motion 集成。
+
+面向 AI Agent 的 [Valle skill](skills/valle/SKILL.md)用一个文件说明命令选择、输入编写、项目版本和结果处理。
+
 直接运行仓库中的示例，无需下载模型：
 
 ```sh

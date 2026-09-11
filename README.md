@@ -87,6 +87,13 @@ The macOS workflow requires `MACOS_CERT_P12_BASE64`, `MACOS_CERT_PASSWORD`, `MAC
 See the [CLI guide](docs/cli.md) for workflows across all six groups, model/runtime
 requirements, JSON results, progress events and exit codes. Each command also has `--help`.
 
+The [Motion authoring reference](docs/motion.md) covers JSX, components, CSS,
+animation, resources and complete examples. The [Timeline authoring reference](docs/timeline.md)
+covers clip timing, tracks, audio, captions and Motion integration.
+
+For AI agents, the [Valle skill](skills/valle/SKILL.md) covers command selection,
+authoring inputs, project revisions and result handling in one file.
+
 Try the checked-in examples (no model downloads needed):
 
 ```sh

@@ -28,6 +28,9 @@ Each demo uses new output paths. Keep `demo_dir` for the following sections.
 
 ## Motion: JSX to video
 
+See the [Motion authoring reference](motion.md) for supported JSX, components, CSS,
+animation helpers, assets and complete scene examples.
+
 ```sh
 valle motion check examples/hello.motion.tsx --size 640x360
 valle motion render examples/hello.motion.tsx \
@@ -47,6 +50,9 @@ render writes `.mp4`. `--size` sets the logical layout canvas; `--output-size`
 changes delivery dimensions. Motion accepts rational frame rates such as
 `--fps 30000/1001`. Bind declared asset controls with repeated `--asset name=path`,
 prepared data with `--data file.json`, and extra fonts with repeated `--font path`.
+Use `--props props.json` for constant prop values and `--cues cues.json` for Timeline
+source-range cue bindings. `check` accepts the same bindings, fonts, duration and FPS,
+and validates one Native Raster frame (`--frame 0` by default).
 
 For video delivery, `--workers 1..8`, `--encode-threads N`, or `--hardware-encode`
 control execution. `--bitrate` requires hardware encoding. `--backend auto`
@@ -54,6 +60,9 @@ selects an available Metal device on macOS and otherwise Raster; `--backend rast
 explicitly selects CPU composition. See `valle motion render --help` for constraints.
 
 ## Timeline: edit a document and render it
+
+See the [Timeline authoring reference](timeline.md) for the JSON format, time and
+track rules, footage/audio, captions, keyframes and Motion integration.
 
 The [example timeline](../examples/timeline.json) cuts from blue to teal after
 1.5 seconds. It is self-contained and needs no model weights or external assets.
@@ -69,7 +78,9 @@ frames preserve transparency; MP4 delivery requires an opaque canvas background.
 Project render currently expose `-o` and `--frame`; Motion's delivery tuning flags
 are not exposed on those commands.
 
-For actual footage, declare named resources and refer to them from clips:
+For actual footage, declare named resources and refer to them from clips. Video
+clips play source audio by default; `gain: 0` mutes, `gain: 1` preserves the original
+level and larger values amplify. Missing source audio stays silent:
 
 ```json
 {
@@ -86,8 +97,9 @@ For actual footage, declare named resources and refer to them from clips:
 Save that document beside `hello.mp4`. Relative resource paths resolve beside the
 timeline file, independent of the current working directory. A Motion clip uses
 `"kind": "motion", "component": "title"`, with `"title": "hello.motion.tsx"` in
-`resources`. `timeline check` validates the document; rendering also opens and
-prepares resources, so a successful check does not prove that all files are available.
+`resources`. `timeline check` validates the document, prepares used resources and
+opens the same verified package as rendering. It reports missing used files and
+invalid source ranges; it does not test every frame or encoder.
 
 ## Project: versioned timeline editing
 
