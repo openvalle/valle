@@ -19,7 +19,7 @@ fn fake_runtime() -> PathBuf {
     let root = temp_dir("valle_wrt");
     let html_path = "apps/preview/index.html";
     let js_path = "apps/preview/app.js";
-    let specs: [(&str, &str, &str, &[u8], Option<&str>); 10] = [
+    let specs: [(&str, &str, &str, &[u8], Option<&str>); 8] = [
         (
             "html",
             "html",
@@ -41,20 +41,6 @@ fn fake_runtime() -> PathBuf {
             valle_cli::webruntime::ENGINE_WASM_PATH,
             b"engine wasm",
             Some("engine-core"),
-        ),
-        (
-            "canvas-base-glue",
-            "glue",
-            valle_cli::webruntime::CANVASKIT_BASE_GLUE_PATH,
-            b"canvas base glue",
-            Some("canvaskit-base"),
-        ),
-        (
-            "canvas-base-wasm",
-            "wasm",
-            valle_cli::webruntime::CANVASKIT_BASE_WASM_PATH,
-            b"canvas base wasm",
-            Some("canvaskit-base"),
         ),
         (
             "canvas-full-glue",
@@ -94,7 +80,7 @@ fn fake_runtime() -> PathBuf {
         &root,
         "runtime/manifests/fixture.json",
         &serde_json::to_vec_pretty(&serde_json::json!({
-            "schemaVersion": 1,
+            "schemaVersion": 2,
             "package": "fixture",
             "assets": assets.clone(),
         }))
@@ -104,7 +90,7 @@ fn fake_runtime() -> PathBuf {
         &root,
         valle_cli::webruntime::BUILD_MANIFEST_FILE,
         &serde_json::to_vec_pretty(&serde_json::json!({
-            "schemaVersion": 1,
+            "schemaVersion": 2,
             "runtimeVersion": env!("CARGO_PKG_VERSION"),
             "protocolVersion": valle_cli::webruntime::PROTOCOL_VERSION,
             "packages": [{"id": "fixture", "manifest": "runtime/manifests/fixture.json"}],
@@ -114,11 +100,6 @@ fn fake_runtime() -> PathBuf {
                     "id": "engine-core",
                     "glue": valle_cli::webruntime::ENGINE_GLUE_PATH,
                     "wasm": [valle_cli::webruntime::ENGINE_WASM_PATH]
-                },
-                {
-                    "id": "canvaskit-base",
-                    "glue": valle_cli::webruntime::CANVASKIT_BASE_GLUE_PATH,
-                    "wasm": [valle_cli::webruntime::CANVASKIT_BASE_WASM_PATH]
                 },
                 {
                     "id": "canvaskit-full",
@@ -162,33 +143,21 @@ fn write(root: &Path, relative: &str, bytes: &[u8]) {
 }
 
 #[test]
-fn packaged_resources_resolve_without_installation() {
+fn explicit_development_resources_resolve_without_installation() {
     let source = fake_runtime();
-    let bundle = temp_dir("valle-runtime-bundle");
-    valle_cli::webruntime::pack(&source, &bundle).unwrap();
-    let cache = temp_dir("valle-unused-cache");
-    let runtime = valle_cli::webruntime::resolve(Some(&bundle), &cache).unwrap();
+    let runtime = valle_cli::webruntime::resolve(Some(&source)).unwrap();
     assert_eq!(runtime.source.as_str(), "dev-dir");
-    assert_eq!(std::fs::read_dir(cache).unwrap().count(), 0);
 }
 
 #[test]
-fn bundle_requires_a_manifest() {
+fn explicit_directory_requires_a_manifest() {
     let source = temp_dir("valle-empty-runtime");
-    let bundle = temp_dir("valle-rejected-runtime");
-    assert!(valle_cli::webruntime::pack(&source, &bundle).is_err());
+    assert!(valle_cli::webruntime::resolve(Some(&source)).is_err());
 }
 
 #[test]
 fn resolving_tampered_resources_fails_closed() {
     let source = fake_runtime();
-    let bundle = temp_dir("valle-tampered-runtime");
-    valle_cli::webruntime::pack(&source, &bundle).unwrap();
-    let manifest: serde_json::Value = serde_json::from_slice(
-        &std::fs::read(bundle.join(valle_cli::webruntime::BUILD_MANIFEST_FILE)).unwrap(),
-    )
-    .unwrap();
-    let relative = manifest["assets"][0]["path"].as_str().unwrap();
-    std::fs::write(bundle.join(relative), b"tampered").unwrap();
-    assert!(valle_cli::webruntime::resolve(Some(&bundle), &temp_dir("unused-cache")).is_err());
+    std::fs::write(source.join("apps/preview/app.js"), b"tampered").unwrap();
+    assert!(valle_cli::webruntime::resolve(Some(&source)).is_err());
 }

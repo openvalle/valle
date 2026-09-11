@@ -144,7 +144,7 @@ pub fn run(
         transaction.staging_path(),
         metadata.width,
         metadata.height,
-        ffmpeg_next::Rational(1, request.fps as i32),
+        crate::codec::TimeBase(1, request.fps as i32),
         request.fps,
         1,
         source_had_audio,
@@ -597,7 +597,7 @@ fn has_extension(path: &std::path::Path, wanted: &str) -> bool {
         .is_some_and(|extension| extension.eq_ignore_ascii_case(wanted))
 }
 
-fn pts_seconds(pts: i64, time_base: ffmpeg_next::Rational) -> f64 {
+fn pts_seconds(pts: i64, time_base: crate::codec::TimeBase) -> f64 {
     pts as f64 * time_base.numerator() as f64 / time_base.denominator() as f64
 }
 

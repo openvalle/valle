@@ -113,7 +113,7 @@ fn make_runtime(root: &Path) -> PathBuf {
     let html_path = "runtime/apps/studio.html";
     let html = b"<!doctype html><title>Studio acceptance</title>";
     let js_path = "runtime/apps/studio.js";
-    let specs: [(&str, &str, &str, &[u8], Option<&str>); 10] = [
+    let specs: [(&str, &str, &str, &[u8], Option<&str>); 8] = [
         ("studio-html", "html", html_path, html, None),
         ("studio-js", "app", js_path, b"void 0", None),
         (
@@ -129,20 +129,6 @@ fn make_runtime(root: &Path) -> PathBuf {
             valle_cli::webruntime::ENGINE_WASM_PATH,
             b"engine wasm",
             Some("engine-core"),
-        ),
-        (
-            "canvas-base-glue",
-            "glue",
-            valle_cli::webruntime::CANVASKIT_BASE_GLUE_PATH,
-            b"canvas base glue",
-            Some("canvaskit-base"),
-        ),
-        (
-            "canvas-base-wasm",
-            "wasm",
-            valle_cli::webruntime::CANVASKIT_BASE_WASM_PATH,
-            b"canvas base wasm",
-            Some("canvaskit-base"),
         ),
         (
             "canvas-full-glue",
@@ -197,7 +183,7 @@ fn make_runtime(root: &Path) -> PathBuf {
     fs::write(
         &package_path,
         serde_json::to_vec(&json!({
-            "schemaVersion":1,
+            "schemaVersion":2,
             "package":"acceptance",
             "assets":assets.clone()
         }))
@@ -207,7 +193,7 @@ fn make_runtime(root: &Path) -> PathBuf {
     fs::write(
         runtime.join("runtime/manifest.json"),
         serde_json::to_vec(&json!({
-            "schemaVersion":1,
+            "schemaVersion":2,
             "runtimeVersion":env!("CARGO_PKG_VERSION"),
             "protocolVersion":valle_cli::webruntime::PROTOCOL_VERSION,
             "packages":[{"id":"acceptance","manifest":"runtime/manifests/acceptance.json"}],
@@ -217,11 +203,6 @@ fn make_runtime(root: &Path) -> PathBuf {
                     "id":"engine-core",
                     "glue":valle_cli::webruntime::ENGINE_GLUE_PATH,
                     "wasm":[valle_cli::webruntime::ENGINE_WASM_PATH]
-                },
-                {
-                    "id":"canvaskit-base",
-                    "glue":valle_cli::webruntime::CANVASKIT_BASE_GLUE_PATH,
-                    "wasm":[valle_cli::webruntime::CANVASKIT_BASE_WASM_PATH]
                 },
                 {
                     "id":"canvaskit-full",
@@ -419,8 +400,6 @@ fn run_project_studio_authoring_browser(home: &Path) -> Option<Value> {
     for name in [
         "engineGlue",
         "engineWasm",
-        "canvasKitBaseGlue",
-        "canvasKitBaseWasm",
         "canvasKitFullGlue",
         "canvasKitFullWasm",
         "defaultSansFont",

@@ -31,7 +31,7 @@ ctrlc = "3.5.2"
 cosmic-text = "0.19"
 crossbeam-channel = "0.5.17"
 cssparser = "0.37.0"
-ffmpeg-next = { version = "9.0.0", default-features = false }
+valle-ffmpeg = { version = "0.1.0", default-features = false }
 fs2 = "0.4.3"
 getrandom = "0.4.3"
 hex = "0.4.3"
@@ -50,7 +50,7 @@ objc2-metal = { version = "0.3.2", default-features = false }
 oxc = "0.148.0"
 ort = { version = "=2.0.0-rc.13", default-features = false, features = ["api-28", "ndarray", "std", "load-dynamic"] }
 png = "0.18.1"
-qwen-asr = "=0.11.0"
+qwen-asr = { version = "=0.11.0", default-features = false }
 reflink-copy = "0.1.30"
 reqwest = { version = "0.13.4", default-features = false, features = ["blocking", "rustls"] }
 rquickjs = "0.12.2"

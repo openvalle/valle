@@ -1,0 +1,142 @@
+name: Package Linux x86_64
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: package-linux-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  package:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    env:
+      CARGO_BUILD_JOBS: '2'
+      CARGO_NET_RETRY: '3'
+      FORCE_SKIA_BUILD: '1'
+      CC: clang-18
+      CXX: clang++-18
+    steps:
+      - name: Set cache and log directories
+        id: environment
+        run: |
+          echo "BUN_INSTALL_CACHE_DIR=$RUNNER_TEMP/valle-bun-cache" >> "$GITHUB_ENV"
+          echo "PACKAGE_LOGS=$RUNNER_TEMP/valle-package-logs" >> "$GITHUB_ENV"
+          echo "image=$ImageVersion" >> "$GITHUB_OUTPUT"
+          mkdir -p "$RUNNER_TEMP/valle-package-logs"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: web/package.json
+      - name: Cache build dependencies
+        id: dependencies
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          key: ubuntu-24.04-${{ runner.arch }}-${{ steps.environment.outputs.image }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml', '.cargo/config.toml', 'web/bun.lock', 'web/package.json') }}
+          restore-keys: ubuntu-24.04-${{ runner.arch }}-${{ steps.environment.outputs.image }}-
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/debug
+            target/release
+            target/wasm32-unknown-unknown
+            target/tools
+            ${{ env.BUN_INSTALL_CACHE_DIR }}
+      - name: Prepare build tools
+        run: |
+          test "$(uname -m)" = x86_64
+          sudo apt-get update 2>&1 | tee "$PACKAGE_LOGS/install.log"
+          sudo apt-get install -y clang-18 llvm-18 libclang-18-dev cmake ninja-build pkg-config python3 curl libfontconfig1-dev libfreetype6-dev libopenblas-dev 2>&1 | tee -a "$PACKAGE_LOGS/install.log"
+          echo "LIBCLANG_PATH=$(llvm-config-18 --libdir)" >> "$GITHUB_ENV"
+          rustup show
+      - name: Record build environment
+        run: |
+          {
+            uname -a
+            ldd --version
+            clang-18 --version
+            rustc -vV
+            python3 --version
+            bun --version
+            cmake --version
+            ninja --version
+          } | tee "$PACKAGE_LOGS/toolchain.txt"
+      - name: Check packaging tool
+        run: cargo test --locked -p xtask 2>&1 | tee "$PACKAGE_LOGS/xtask-tests.log"
+      - name: Build and verify single executable
+        run: cargo xtask package 2>&1 | tee "$PACKAGE_LOGS/package.log"
+      - name: Record and verify startup libraries
+        run: |
+          file ./dist/bin/valle | tee "$PACKAGE_LOGS/executable.txt"
+          ldd ./dist/bin/valle | tee "$PACKAGE_LOGS/startup-libraries.txt"
+          if grep -E 'not found|libav(codec|format|util)|libsw(scale|resample)' "$PACKAGE_LOGS/startup-libraries.txt"; then exit 1; fi
+      - name: Test Web runtime contracts
+        working-directory: web
+        run: |
+          bun run typecheck 2>&1 | tee "$PACKAGE_LOGS/web-typecheck.log"
+          bun test scripts/runtime-manifest.test.ts packages/player-core/src/runtime-assets.test.ts apps/studio/src/host.test.ts apps/studio/src/timeline-workspace-runtime.test.ts packages/player/src/controller.test.ts 2>&1 | tee "$PACKAGE_LOGS/web-tests.log"
+      - name: Test native Web and runtime contracts
+        env:
+          VALLE_EMBED_WEB_DIR: ${{ github.workspace }}/web/dist
+          VALLE_EMBED_NOTICES: ${{ github.workspace }}/target/distribution-notices.txt
+        run: cargo test --locked --release -p valle-cli --features embedded-runtime --test web_runtime --test ffmpeg_runtime -- --test-threads=1 2>&1 | tee "$PACKAGE_LOGS/cli-tests.log"
+      - name: Archive executable and verify extraction
+        working-directory: target/package
+        run: |
+          binary=valle
+          version="$(./valle --version)"
+          archive="valle-v${version#valle }-linux-x86_64.tar.gz"
+          tar -czf "$archive" "$binary" SHA256SUMS
+          sha256sum "$archive" > "$archive.sha256"
+          extracted="$(mktemp -d "$RUNNER_TEMP/valle-package.XXXXXX")"
+          tar -xzf "$archive" -C "$extracted"
+          cmp SHA256SUMS "$extracted/SHA256SUMS"
+          (cd "$extracted" && sha256sum -c SHA256SUMS)
+          test -x "$extracted/$binary"
+          "$extracted/$binary" --version
+      - name: Verify download checksum
+        working-directory: target/package
+        run: |
+          sha256sum -c SHA256SUMS | tee "$PACKAGE_LOGS/checksum.log"
+          sha256sum -c ./*.tar.gz.sha256 | tee -a "$PACKAGE_LOGS/checksum.log"
+      - name: Upload executable archive and checksum
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: valle-linux-x86_64-${{ github.sha }}
+          path: |
+            target/package/valle-*-linux-x86_64.tar.gz
+            target/package/valle-*-linux-x86_64.tar.gz.sha256
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+      - name: Save build dependencies even after a failed build
+        if: always() && steps.dependencies.outcome == 'success' && steps.dependencies.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          key: ${{ steps.dependencies.outputs.cache-primary-key }}
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/debug
+            target/release
+            target/wasm32-unknown-unknown
+            target/tools
+            ${{ env.BUN_INSTALL_CACHE_DIR }}
+      - name: Upload build and test diagnostics
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: valle-package-diagnostics-linux-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ env.PACKAGE_LOGS }}
+          if-no-files-found: warn
+          retention-days: 14

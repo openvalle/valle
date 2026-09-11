@@ -30,7 +30,6 @@ const config: TimelineWorkspaceRuntimeConfig = {
   runtimeAssets: {
     engine: { glue: "engine.js", wasm: "engine.wasm" },
     canvasKit: {
-      base: { glue: "canvaskit.js", wasm: "canvaskit.wasm" },
       full: { glue: "canvaskit-full.js", wasm: "canvaskit-full.wasm" },
     },
     fonts: { defaultSans: "default-sans.ttf" },

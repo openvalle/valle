@@ -1,17 +1,12 @@
-//! Pack, verify, install, and resolve web runtime assets separately from the CLI binary. An
-//! explicit directory takes precedence over the versioned cache. Manifests define the complete
-//! asset allowlist, hashes, and protocol version; reject missing or inconsistent assets and report
-//! recovery commands. Never upgrade implicitly.
+//! Verify explicitly supplied development assets or serve the Web runtime embedded in Valle.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs::{File, OpenOptions};
-use std::io::{Read, Write};
+use std::fs::OpenOptions;
+use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use anyhow::{Context, Result, bail};
-use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -22,23 +17,20 @@ pub const PROTOCOL_VERSION: u32 =
 pub const RUNTIME_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Dependency metadata shares the Web package's exact CanvasKit pin.
 fn canvaskit_version() -> String {
-    let package: serde_json::Value = serde_json::from_str(include_str!(
-        "../../../web/packages/player-core/package.json"
-    ))
-    .expect("checked-in player-core package.json must be valid JSON");
-    package["dependencies"]["canvaskit-wasm"]
+    let package: serde_json::Value =
+        serde_json::from_str(include_str!("../../../web/package.json"))
+            .expect("checked-in Web package.json must be valid JSON");
+    package["workspaces"]["catalog"]["canvaskit-wasm"]
         .as_str()
-        .expect("player-core must pin canvaskit-wasm")
+        .expect("Web catalog must pin canvaskit-wasm")
         .to_owned()
 }
 /// Aggregate manifest relative to the web build root.
 pub const BUILD_MANIFEST_FILE: &str = "runtime/manifest.json";
 pub const ENGINE_GLUE_PATH: &str = "runtime/engine/valle_engine.js";
 pub const ENGINE_WASM_PATH: &str = "runtime/engine/valle_engine_bg.wasm";
-pub const CANVASKIT_BASE_GLUE_PATH: &str = "runtime/canvaskit/base/canvaskit.js";
-pub const CANVASKIT_BASE_WASM_PATH: &str = "runtime/canvaskit/base/canvaskit.wasm";
-pub const CANVASKIT_FULL_GLUE_PATH: &str = "runtime/canvaskit/full/canvaskit.js";
-pub const CANVASKIT_FULL_WASM_PATH: &str = "runtime/canvaskit/full/canvaskit.wasm";
+pub const CANVASKIT_FULL_GLUE_PATH: &str = "runtime/canvaskit/canvaskit.js";
+pub const CANVASKIT_FULL_WASM_PATH: &str = "runtime/canvaskit/canvaskit.wasm";
 pub const DEFAULT_SANS_FONT_PATH: &str = "runtime/fonts/NotoSans-Regular.ttf";
 pub const PRODUCT_FRAME_WORKER_PATH: &str = "runtime/workers/product-frame.js";
 
@@ -47,7 +39,6 @@ pub fn runtime_assets_json() -> serde_json::Value {
     serde_json::json!({
         "engine": { "glue": ENGINE_GLUE_PATH, "wasm": ENGINE_WASM_PATH },
         "canvasKit": {
-            "base": { "glue": CANVASKIT_BASE_GLUE_PATH, "wasm": CANVASKIT_BASE_WASM_PATH },
             "full": { "glue": CANVASKIT_FULL_GLUE_PATH, "wasm": CANVASKIT_FULL_WASM_PATH }
         },
         "fonts": { "defaultSans": DEFAULT_SANS_FONT_PATH },
@@ -108,7 +99,6 @@ struct BuildGlueWasmBinding {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct BuildCanvasKitBindings {
-    base: BuildGlueWasmBinding,
     full: BuildGlueWasmBinding,
 }
 
@@ -181,25 +171,22 @@ struct BuildPackageManifest {
 /// Runtime resolution sources in priority order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RuntimeSource {
-    /// Explicit runtime directory; validation failure does not fall back to the cache.
+    /// Explicit development directory; invalid assets never fall back to the embedded runtime.
     DevDir,
-    /// Installed runtime under the versioned user cache.
-    Cache,
-    Distribution,
+    /// Assets compiled into the executable.
+    Embedded,
 }
 
 impl RuntimeSource {
     pub fn as_str(self) -> &'static str {
         match self {
             RuntimeSource::DevDir => "dev-dir",
-            RuntimeSource::Cache => "cache",
-            RuntimeSource::Distribution => "distribution",
+            RuntimeSource::Embedded => "embedded",
         }
     }
 }
 
 pub struct ResolvedRuntime {
-    pub dir: PathBuf,
     pub source: RuntimeSource,
     pub manifest: RuntimeManifest,
     /// Map public URLs to runtime files within the build tree.
@@ -211,15 +198,13 @@ pub struct ResolvedRuntime {
 impl std::fmt::Debug for ResolvedRuntime {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ResolvedRuntime")
-            .field("dir", &self.dir)
             .field("source", &self.source)
             .field("file_count", &self.frozen_files.len())
             .finish()
     }
 }
 
-/// Verified manifest and asset bytes captured once. Staging consumes this snapshot to prevent
-/// source replacement between verification and publication.
+/// Verified manifest and asset bytes captured once before serving.
 #[derive(Debug, PartialEq, Eq)]
 struct VerifiedBuild {
     manifest: RuntimeManifest,
@@ -240,45 +225,13 @@ pub enum HostedFile {
     LocalPath(PathBuf),
 }
 
-struct PublishLock(File);
-
-impl Drop for PublishLock {
-    fn drop(&mut self) {
-        let _ = FileExt::unlock(&self.0);
-    }
-}
-
-struct StagingDir(PathBuf);
-
-impl StagingDir {
-    fn path(&self) -> &Path {
-        &self.0
-    }
-}
-
-impl Drop for StagingDir {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
-}
-
 impl ResolvedRuntime {
     /// Map manifest assets and public routes to hosted content.
     pub fn serving_map(&self) -> BTreeMap<String, HostedFile> {
         let mut files: BTreeMap<_, _> = self
-            .manifest
-            .files
+            .frozen_files
             .iter()
-            .map(|file| {
-                let bytes = self
-                    .frozen_files
-                    .get(&file.path)
-                    .expect("verified runtime must freeze every manifest asset");
-                (
-                    file.path.clone(),
-                    HostedFile::VerifiedRuntime(Arc::clone(bytes)),
-                )
-            })
+            .map(|(path, bytes)| (path.clone(), HostedFile::VerifiedRuntime(Arc::clone(bytes))))
             .collect();
         for (route, target) in &self.aliases {
             let bytes = self
@@ -294,29 +247,6 @@ impl ResolvedRuntime {
     }
 }
 
-/// Package the verified web/dist manifest and all referenced assets.
-pub fn pack(source: &Path, out: &Path) -> Result<RuntimeManifest> {
-    if !source.join(BUILD_MANIFEST_FILE).is_file() {
-        bail!(
-            "{} has no {}; build it first with `cd web && bun run build`",
-            source.display(),
-            BUILD_MANIFEST_FILE
-        );
-    }
-    let verified = verify_build(source)
-        .with_context(|| format!("verifying web build at {}", source.display()))?;
-    let parent = publish_parent(out)?;
-    std::fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
-    let _lock = lock_publish_target(out)?;
-    recover_interrupted_publish(out)?;
-    ensure_empty_or_missing_output(out)?;
-    let staging = unique_staging_dir(parent, "pack")?;
-    write_verified_build(&verified, staging.path())?;
-    verify_staged_build(staging.path(), &verified)?;
-    replace_installed_runtime(staging.path(), out)?;
-    Ok(verified.manifest)
-}
-
 /// Verify the full asset graph rooted at dist/runtime/manifest.json.
 fn verify_build(dir: &Path) -> Result<VerifiedBuild> {
     let root = std::fs::canonicalize(dir)
@@ -324,11 +254,14 @@ fn verify_build(dir: &Path) -> Result<VerifiedBuild> {
     if !std::fs::metadata(&root)?.is_dir() {
         bail!("web runtime root is not a directory: {}", dir.display());
     }
-    let manifest_path = root.join(BUILD_MANIFEST_FILE);
-    let root_bytes = read_regular_runtime_file(&root, BUILD_MANIFEST_FILE)?;
-    let build: BuildManifest = serde_json::from_slice(&root_bytes)
-        .with_context(|| format!("parsing {}", manifest_path.display()))?;
-    if build.schema_version != 1 {
+    verify_files(|relative| read_regular_runtime_file(&root, relative))
+}
+
+fn verify_files(read: impl Fn(&str) -> Result<Vec<u8>>) -> Result<VerifiedBuild> {
+    let root_bytes = read(BUILD_MANIFEST_FILE).context("reading Web runtime manifest")?;
+    let build: BuildManifest =
+        serde_json::from_slice(&root_bytes).context("parsing Web runtime manifest")?;
+    if build.schema_version != 2 {
         bail!(
             "unsupported web runtime manifest schema {}",
             build.schema_version
@@ -360,12 +293,11 @@ fn verify_build(dir: &Path) -> Result<VerifiedBuild> {
                 file.path
             );
         }
-        let asset = root.join(&file.path);
-        let data = read_regular_runtime_file(&root, &file.path)?;
+        let data = read(&file.path)?;
         if data.len() as u64 != file.bytes || sha256_hex(&data) != file.sha256 {
             bail!(
                 "web runtime file corrupted: {} (sha256 mismatch)",
-                asset.display()
+                file.path
             );
         }
         frozen_files.push(FrozenRuntimeFile {
@@ -463,18 +395,6 @@ fn verify_build(dir: &Path) -> Result<VerifiedBuild> {
             Some("engine-core"),
         ),
         (
-            build.runtime_assets.canvas_kit.base.glue.as_str(),
-            CANVASKIT_BASE_GLUE_PATH,
-            "glue",
-            Some("canvaskit-base"),
-        ),
-        (
-            build.runtime_assets.canvas_kit.base.wasm.as_str(),
-            CANVASKIT_BASE_WASM_PATH,
-            "wasm",
-            Some("canvaskit-base"),
-        ),
-        (
             build.runtime_assets.canvas_kit.full.glue.as_str(),
             CANVASKIT_FULL_GLUE_PATH,
             "glue",
@@ -541,10 +461,9 @@ fn verify_build(dir: &Path) -> Result<VerifiedBuild> {
                 package_ref.manifest
             );
         }
-        let package_path = root.join(&package_ref.manifest);
-        let package_bytes = read_regular_runtime_file(&root, &package_ref.manifest)?;
+        let package_bytes = read(&package_ref.manifest)?;
         let package: BuildPackageManifest = serde_json::from_slice(&package_bytes)
-            .with_context(|| format!("parsing {}", package_path.display()))?;
+            .with_context(|| format!("parsing {}", package_ref.manifest))?;
         if package.schema_version != build.schema_version || package.package != package_ref.id {
             bail!(
                 "web package manifest identity drift: {}",
@@ -707,8 +626,7 @@ fn read_regular_runtime_file(root: &Path, relative: &str) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
-/// Require a safe single path component in Cargo SemVer form. Reject aliases such as v1.2.3 to keep
-/// one cache identity per version.
+/// Require a canonical Cargo SemVer identity for the host/runtime handshake.
 fn ensure_safe_runtime_version(value: &str) -> Result<()> {
     let path = Path::new(value);
     let mut components = path.components();
@@ -787,6 +705,9 @@ const fn parse_protocol_version(source: &str) -> u32 {
             };
         } else if byte == b'\n' && index + 1 == bytes.len() {
             break;
+        } else if byte == b'\r' && index + 2 == bytes.len() && bytes[index + 1] == b'\n' {
+            // Git may check out the shared version file with CRLF on Windows.
+            break;
         } else {
             panic!("runtime protocol version must be decimal digits with an optional newline");
         }
@@ -798,402 +719,41 @@ const fn parse_protocol_version(source: &str) -> u32 {
     value
 }
 
-fn runtime_slot(cache_root: &Path, runtime_version: &str) -> Result<PathBuf> {
-    ensure_safe_runtime_version(runtime_version)?;
-    Ok(cache_root.join(runtime_version))
-}
-
-/// Verify and install a packed bundle into its version slot using staging and atomic rename.
-pub fn install(from: &Path, cache_root: &Path) -> Result<PathBuf> {
-    let verified = verify_build(from)
-        .with_context(|| format!("verifying web bundle at {}", from.display()))?;
-    let target = runtime_slot(cache_root, &verified.manifest.runtime_version)?;
-    std::fs::create_dir_all(cache_root)
-        .with_context(|| format!("creating {}", cache_root.display()))?;
-    let _lock = lock_publish_target(&target)?;
-    recover_interrupted_publish(&target)?;
-    if path_exists(&target)? {
-        if let Ok(installed) = verify_build(&target) {
-            if installed == verified {
-                return Ok(target);
-            }
-            bail!(
-                "web runtime version collision: {} already contains a different verified bundle",
-                verified.manifest.runtime_version
-            );
-        }
-    }
-    let staging = unique_staging_dir(cache_root, &verified.manifest.runtime_version)?;
-    write_verified_build(&verified, staging.path())?;
-    verify_staged_build(staging.path(), &verified)?;
-    replace_installed_runtime(staging.path(), &target)?;
-    Ok(target)
-}
-
-fn publish_parent(target: &Path) -> Result<&Path> {
-    if target.file_name().is_none() {
-        bail!("web runtime output has no file name: {}", target.display());
-    }
-    target
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-        .or(Some(Path::new(".")))
-        .ok_or_else(|| anyhow::anyhow!("web runtime output has no parent: {}", target.display()))
-}
-
-fn lock_publish_target(target: &Path) -> Result<PublishLock> {
-    let parent = publish_parent(target)?;
-    let canonical_parent = std::fs::canonicalize(parent)
-        .with_context(|| format!("canonicalizing publish parent {}", parent.display()))?;
-    let identity_path = canonical_parent.join(
-        target
-            .file_name()
-            .expect("publish_parent rejected paths without a file name"),
-    );
-    let identity = sha256_hex(identity_path.as_os_str().to_string_lossy().as_bytes());
-    let lock_path = parent.join(format!(".valle-runtime-publish-{identity}.lock"));
-    let file = OpenOptions::new()
-        .create(true)
-        .read(true)
-        .write(true)
-        .open(&lock_path)
-        .with_context(|| format!("opening web runtime publish lock {}", lock_path.display()))?;
-    file.lock_exclusive()
-        .with_context(|| format!("locking web runtime publish target {}", target.display()))?;
-    Ok(PublishLock(file))
-}
-
-fn publish_target_identity(target: &Path) -> Result<String> {
-    let parent = publish_parent(target)?;
-    let canonical_parent = std::fs::canonicalize(parent)
-        .with_context(|| format!("canonicalizing publish parent {}", parent.display()))?;
-    let identity_path = canonical_parent.join(
-        target
-            .file_name()
-            .expect("publish_parent rejected paths without a file name"),
-    );
-    Ok(sha256_hex(
-        identity_path.as_os_str().to_string_lossy().as_bytes(),
-    ))
-}
-
-fn backup_path(target: &Path) -> Result<PathBuf> {
-    Ok(publish_parent(target)?.join(format!(
-        ".valle-runtime-backup-{}",
-        publish_target_identity(target)?
-    )))
-}
-
-fn path_exists(path: &Path) -> Result<bool> {
-    match std::fs::symlink_metadata(path) {
-        Ok(_) => Ok(true),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
-        Err(error) => Err(error).with_context(|| format!("inspecting {}", path.display())),
-    }
-}
-
-fn ensure_empty_or_missing_output(out: &Path) -> Result<()> {
-    let metadata = match std::fs::symlink_metadata(out) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => return Err(error).with_context(|| format!("inspecting {}", out.display())),
-    };
-    if !metadata.file_type().is_dir() {
-        bail!("web runtime output is not a directory: {}", out.display());
-    }
-    if std::fs::read_dir(out)
-        .with_context(|| format!("reading {}", out.display()))?
-        .next()
-        .is_some()
-    {
-        bail!(
-            "web runtime output must be empty or absent: {}",
-            out.display()
-        );
-    }
-    Ok(())
-}
-
-fn unique_staging_dir(parent: &Path, tag: &str) -> Result<StagingDir> {
-    ensure_safe_runtime_path(tag)?;
-    for _ in 0..128 {
-        let path = unique_sibling_path(parent, &format!("staging-{tag}"));
-        match std::fs::create_dir(&path) {
-            Ok(()) => return Ok(StagingDir(path)),
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(error) => {
-                return Err(error).with_context(|| format!("creating {}", path.display()));
-            }
-        }
-    }
-    bail!("could not allocate a unique web runtime staging directory")
-}
-
-fn unique_sibling_path(parent: &Path, tag: &str) -> PathBuf {
-    static NEXT_UNIQUE: AtomicU64 = AtomicU64::new(0);
-    let sequence = NEXT_UNIQUE.fetch_add(1, Ordering::Relaxed);
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |duration| duration.as_nanos());
-    parent.join(format!(
-        ".valle-{tag}-{}-{nanos}-{sequence}",
-        std::process::id()
-    ))
-}
-
-fn replace_installed_runtime(staging: &Path, target: &Path) -> Result<()> {
-    recover_interrupted_publish(target)?;
-    let parent = publish_parent(target)?;
-    if !path_exists(target)? {
-        std::fs::rename(staging, target)
-            .with_context(|| format!("moving {} → {}", staging.display(), target.display()))?;
-        sync_directory(parent)?;
-        return Ok(());
-    }
-    if !std::fs::symlink_metadata(target)?.file_type().is_dir() {
-        bail!(
-            "web runtime target is not a directory: {}",
-            target.display()
-        );
-    }
-    let backup = backup_path(target)?;
-    if path_exists(&backup)? {
-        bail!(
-            "web runtime backup still exists after recovery: {}",
-            backup.display()
-        );
-    }
-    std::fs::rename(target, &backup).with_context(|| {
-        format!(
-            "moving last-good web runtime {} → {}",
-            target.display(),
-            backup.display()
+/// Explicit development assets override embedded assets. No cache or installation is needed.
+pub fn resolve(explicit: Option<&Path>) -> Result<ResolvedRuntime> {
+    let (source, verified) = if let Some(dir) = explicit {
+        (
+            RuntimeSource::DevDir,
+            verify_build(dir)
+                .with_context(|| format!("verifying Studio resources {}", dir.display()))?,
         )
-    })?;
-    sync_directory(parent)?;
-    if let Err(publish_error) = std::fs::rename(staging, target) {
-        if let Err(rollback_error) = std::fs::rename(&backup, target) {
-            return Err(anyhow::anyhow!(publish_error)).context(format!(
-                "publishing {} failed and restoring last-good {} also failed: {rollback_error}",
-                staging.display(),
-                target.display()
-            ));
-        }
-        sync_directory(parent).with_context(|| {
-            format!(
-                "restored last-good {} but failed to sync its parent",
-                target.display()
-            )
-        })?;
-        return Err(anyhow::anyhow!(publish_error)).with_context(|| {
-            format!(
-                "publishing {} failed; restored last-good {}",
-                staging.display(),
-                target.display()
-            )
-        });
-    }
-    sync_directory(parent)?;
-    remove_runtime_tree(&backup)?;
-    sync_directory(parent)?;
-    Ok(())
-}
-
-/// Recover interrupted publication under the target lock. The backup name uniquely identifies the
-/// publication target.
-fn recover_interrupted_publish(target: &Path) -> Result<()> {
-    let backup = backup_path(target)?;
-    let target_exists = path_exists(target)?;
-    let backup_exists = path_exists(&backup)?;
-    if !backup_exists {
-        return Ok(());
-    }
-    if !std::fs::symlink_metadata(&backup)?.file_type().is_dir() {
-        bail!(
-            "web runtime recovery backup is not a directory: {}",
-            backup.display()
-        );
-    }
-    let parent = publish_parent(target)?;
-    if !target_exists {
-        std::fs::rename(&backup, target).with_context(|| {
-            format!(
-                "restoring interrupted web runtime publish {} → {}",
-                backup.display(),
-                target.display()
-            )
-        })?;
-        sync_directory(parent)?;
-        return Ok(());
-    }
-    if !std::fs::symlink_metadata(target)?.file_type().is_dir() {
-        bail!(
-            "web runtime target is not a directory during recovery: {}",
-            target.display()
-        );
-    }
-
-    if let Ok(target_build) = verify_build(target) {
-        if let Ok(backup_build) = verify_build(&backup) {
-            if target_build != backup_build {
-                bail!(
-                    "ambiguous web runtime recovery: target and backup are different verified bundles ({}, {})",
-                    target.display(),
-                    backup.display()
-                );
-            }
-        }
-        remove_runtime_tree(&backup)?;
-        sync_directory(parent)?;
-        return Ok(());
-    }
-
-    // A published-but-invalid target cannot displace the durable last-good backup.
-    remove_runtime_tree(target)?;
-    sync_directory(parent)?;
-    std::fs::rename(&backup, target).with_context(|| {
-        format!(
-            "restoring last-good web runtime {} → {}",
-            backup.display(),
-            target.display()
-        )
-    })?;
-    sync_directory(parent)?;
-    Ok(())
-}
-
-fn remove_runtime_tree(path: &Path) -> Result<()> {
-    let metadata = std::fs::symlink_metadata(path)
-        .with_context(|| format!("inspecting web runtime tree {}", path.display()))?;
-    if !metadata.file_type().is_dir() || metadata.file_type().is_symlink() {
-        bail!(
-            "refusing to remove non-directory runtime tree: {}",
-            path.display()
-        );
-    }
-    std::fs::remove_dir_all(path)
-        .with_context(|| format!("removing web runtime tree {}", path.display()))
-}
-
-fn write_verified_build(verified: &VerifiedBuild, to: &Path) -> Result<()> {
-    for file in &verified.files {
-        write_frozen_runtime_file(to, &file.relative, &file.bytes)?;
-    }
-    sync_directory_tree(to)?;
-    Ok(())
-}
-
-fn write_frozen_runtime_file(to: &Path, relative: &str, bytes: &[u8]) -> Result<()> {
-    ensure_safe_runtime_path(relative)?;
-    let dst = to.join(relative);
-    if let Some(parent) = dst.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("creating {}", parent.display()))?;
-    }
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&dst)
-        .with_context(|| format!("creating frozen web runtime file {}", dst.display()))?;
-    file.write_all(bytes)
-        .with_context(|| format!("writing frozen web runtime file {}", dst.display()))?;
-    file.sync_all()
-        .with_context(|| format!("syncing frozen web runtime file {}", dst.display()))?;
-    Ok(())
-}
-
-fn verify_staged_build(staging: &Path, expected: &VerifiedBuild) -> Result<()> {
-    let actual = verify_build(staging)
-        .with_context(|| format!("verifying staged web runtime {}", staging.display()))?;
-    if &actual != expected {
-        bail!("staged web runtime identity drifted before publish")
-    }
-    Ok(())
-}
-
-fn sync_directory_tree(root: &Path) -> Result<()> {
-    for entry in
-        std::fs::read_dir(root).with_context(|| format!("reading directory {}", root.display()))?
-    {
-        let entry = entry?;
-        let file_type = entry.file_type()?;
-        if file_type.is_symlink() {
-            bail!(
-                "web runtime staging contains a symlink: {}",
-                entry.path().display()
-            );
-        }
-        if file_type.is_dir() {
-            sync_directory_tree(&entry.path())?;
-        }
-    }
-    sync_directory(root)
-}
-
-fn sync_directory(path: &Path) -> Result<()> {
-    #[cfg(unix)]
-    {
-        File::open(path)
-            .with_context(|| format!("opening directory {} for sync", path.display()))?
-            .sync_all()
-            .with_context(|| format!("syncing directory {}", path.display()))?;
-    }
-    #[cfg(not(unix))]
-    let _ = path;
-    Ok(())
-}
-
-/// Resolve explicit development assets or resources shipped beside the executable.
-pub fn resolve(explicit: Option<&Path>, _cache_root: &Path) -> Result<ResolvedRuntime> {
-    let (dir, source) = if let Some(dir) = explicit {
-        (dir.to_path_buf(), RuntimeSource::DevDir)
     } else {
-        let exe = std::env::current_exe().context("locating Valle executable")?;
-        let shipped = exe
-            .parent()
-            .and_then(Path::parent)
-            .map(|root| root.join("share/valle/web"));
-        if let Some(dir) = shipped.filter(|dir| dir.is_dir()) {
-            (dir, RuntimeSource::Distribution)
-        } else {
-            let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../web/dist");
-            // Repository fallback is only for a binary built into this checkout's target tree.
-            let target = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target");
-            let in_checkout = target
-                .canonicalize()
-                .ok()
-                .is_some_and(|target| exe.starts_with(target));
-            if in_checkout && dev.is_dir() {
-                (dev, RuntimeSource::DevDir)
-            } else {
-                bail!(
-                    "Studio resources are missing. Build the distribution with `cargo xtask build`; for development use --web-assets-dir with a built web/dist directory"
-                );
-            }
+        if crate::embedded::WEB_FILES.is_empty() {
+            bail!(
+                "This development build has no embedded Studio resources. Run `cargo xtask build` or pass --web-assets-dir with a built web/dist directory"
+            );
         }
+        (
+            RuntimeSource::Embedded,
+            verify_files(|relative| {
+                crate::embedded::WEB_FILES
+                    .iter()
+                    .find(|(path, _)| *path == relative)
+                    .map(|(_, bytes)| bytes.to_vec())
+                    .ok_or_else(|| anyhow::anyhow!("embedded Web asset missing: {relative}"))
+            })?,
+        )
     };
-    if !dir.join(BUILD_MANIFEST_FILE).is_file() {
-        bail!(
-            "Studio resource manifest missing in {}; build Studio resources first",
-            dir.display()
-        );
-    }
-    let verified = verify_build(&dir)
-        .with_context(|| format!("verifying Studio resources {}", dir.display()))?;
     if verified.manifest.runtime_version != RUNTIME_VERSION {
         bail!(
             "Studio resource version {} does not match CLI {RUNTIME_VERSION}; rebuild them together",
             verified.manifest.runtime_version
         );
     }
-    resolved_runtime(dir, source, verified)
+    resolved_runtime(source, verified)
 }
 
-fn resolved_runtime(
-    dir: PathBuf,
-    source: RuntimeSource,
-    verified: VerifiedBuild,
-) -> Result<ResolvedRuntime> {
+fn resolved_runtime(source: RuntimeSource, verified: VerifiedBuild) -> Result<ResolvedRuntime> {
     let mut all_files = BTreeMap::new();
     for file in verified.files {
         if all_files
@@ -1203,33 +763,12 @@ fn resolved_runtime(
             bail!("verified web runtime repeats file '{}'", file.relative);
         }
     }
-    let mut frozen_files = BTreeMap::new();
-    for file in &verified.manifest.files {
-        let bytes = all_files.remove(&file.path).ok_or_else(|| {
-            anyhow::anyhow!("verified web runtime did not freeze '{}'", file.path)
-        })?;
-        frozen_files.insert(file.path.clone(), bytes);
-    }
     Ok(ResolvedRuntime {
-        dir,
         source,
         manifest: verified.manifest,
         aliases: verified.aliases,
-        frozen_files,
+        frozen_files: all_files,
     })
-}
-
-/// Runtime cache under `$VALLE_CACHE_DIR` or `~/.cache/valle`.
-pub fn default_cache_root() -> Result<PathBuf> {
-    if let Some(root) = std::env::var_os("VALLE_CACHE_DIR") {
-        return Ok(PathBuf::from(root).join("web-runtime"));
-    }
-    let home = std::env::var_os("HOME")
-        .ok_or_else(|| anyhow::anyhow!("HOME not set; pass VALLE_CACHE_DIR"))?;
-    Ok(PathBuf::from(home)
-        .join(".cache")
-        .join("valle")
-        .join("web-runtime"))
 }
 
 fn sha256_hex(data: &[u8]) -> String {
@@ -1241,6 +780,38 @@ fn sha256_hex(data: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn protocol_version_accepts_lf_and_crlf_in_const_evaluation() {
+        const VERSIONS: [u32; 3] = [
+            parse_protocol_version("42"),
+            parse_protocol_version("42\n"),
+            parse_protocol_version("42\r\n"),
+        ];
+        assert_eq!(VERSIONS, [42; 3]);
+        assert_eq!(parse_protocol_version("4294967295\r\n"), u32::MAX);
+    }
+
+    #[test]
+    fn protocol_version_rejects_invalid_content() {
+        for source in [
+            "",
+            "\n",
+            "\r\n",
+            "1\r",
+            "1\r\n2",
+            "1\n\n",
+            " 1",
+            "1 ",
+            "a",
+            "4294967296",
+        ] {
+            assert!(
+                std::panic::catch_unwind(|| parse_protocol_version(source)).is_err(),
+                "accepted {source:?}"
+            );
+        }
+    }
 
     fn temp_dir(prefix: &str) -> PathBuf {
         // Use an atomic counter to make temporary paths unique across concurrent tests.
@@ -1260,7 +831,7 @@ mod tests {
         let dist = temp_dir("valle_webruntime_source");
         let html_path = "apps/preview/index.html";
         let chunk_path = "apps/preview/chunk-test.js";
-        let specs: [(&str, &str, &str, &[u8], Option<&str>); 10] = [
+        let specs: [(&str, &str, &str, &[u8], Option<&str>); 8] = [
             (
                 "html",
                 "html",
@@ -1282,20 +853,6 @@ mod tests {
                 ENGINE_WASM_PATH,
                 b"engine wasm",
                 Some("engine-core"),
-            ),
-            (
-                "canvas-base-glue",
-                "glue",
-                CANVASKIT_BASE_GLUE_PATH,
-                b"canvas base glue",
-                Some("canvaskit-base"),
-            ),
-            (
-                "canvas-base-wasm",
-                "wasm",
-                CANVASKIT_BASE_WASM_PATH,
-                b"canvas base wasm",
-                Some("canvaskit-base"),
             ),
             (
                 "canvas-full-glue",
@@ -1344,7 +901,7 @@ mod tests {
         std::fs::write(
             package_path,
             serde_json::to_vec_pretty(&serde_json::json!({
-                "schemaVersion": 1,
+                "schemaVersion": 2,
                 "package": "fixture",
                 "assets": assets.clone(),
             }))
@@ -1352,14 +909,13 @@ mod tests {
         )
         .unwrap();
         let manifest = serde_json::json!({
-            "schemaVersion": 1,
+            "schemaVersion": 2,
             "runtimeVersion": RUNTIME_VERSION,
             "protocolVersion": PROTOCOL_VERSION,
             "packages": [{ "id": "fixture", "manifest": "runtime/manifests/fixture.json" }],
             "assets": assets,
             "assetGroups": [
                 { "id": "engine-core", "glue": ENGINE_GLUE_PATH, "wasm": [ENGINE_WASM_PATH] },
-                { "id": "canvaskit-base", "glue": CANVASKIT_BASE_GLUE_PATH, "wasm": [CANVASKIT_BASE_WASM_PATH] },
                 { "id": "canvaskit-full", "glue": CANVASKIT_FULL_GLUE_PATH, "wasm": [CANVASKIT_FULL_WASM_PATH] },
             ],
             "workers": [{ "id": "product-frame", "path": PRODUCT_FRAME_WORKER_PATH }],
@@ -1371,172 +927,6 @@ mod tests {
         std::fs::create_dir_all(manifest_path.parent().unwrap()).unwrap();
         std::fs::write(manifest_path, serde_json::to_vec_pretty(&manifest).unwrap()).unwrap();
         dist
-    }
-
-    fn rewrite_fake_chunk(source: &Path, changed: &[u8]) {
-        std::fs::write(source.join("apps/preview/chunk-test.js"), changed).unwrap();
-        let root_path = source.join(BUILD_MANIFEST_FILE);
-        let package_path = source.join("runtime/manifests/fixture.json");
-        for path in [&root_path, &package_path] {
-            let mut value: serde_json::Value =
-                serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
-            let asset = value["assets"]
-                .as_array_mut()
-                .unwrap()
-                .iter_mut()
-                .find(|asset| asset["id"] == "chunk")
-                .unwrap();
-            asset["bytes"] = serde_json::json!(changed.len());
-            asset["sha256"] = serde_json::json!(sha256_hex(changed));
-            std::fs::write(path, serde_json::to_vec_pretty(&value).unwrap()).unwrap();
-        }
-    }
-
-    fn spawn_install_helper(source: &Path, cache_root: &Path) -> std::process::Child {
-        std::process::Command::new(std::env::current_exe().unwrap())
-            .arg("webruntime::tests::install_process_helper")
-            .arg("--exact")
-            .arg("--nocapture")
-            .env("VALLE_WEBRUNTIME_TEST_INSTALL_SOURCE", source)
-            .env("VALLE_WEBRUNTIME_TEST_INSTALL_CACHE", cache_root)
-            .spawn()
-            .unwrap()
-    }
-
-    #[test]
-    fn install_process_helper() {
-        let Some(source) = std::env::var_os("VALLE_WEBRUNTIME_TEST_INSTALL_SOURCE") else {
-            return;
-        };
-        let cache_root = std::env::var_os("VALLE_WEBRUNTIME_TEST_INSTALL_CACHE").unwrap();
-        install(Path::new(&source), Path::new(&cache_root)).unwrap();
-    }
-
-    #[test]
-    fn manifest_pack_install_and_cache_roundtrip() {
-        let source = fake_runtime();
-        let bundle = temp_dir("valle_webruntime_bundle");
-        let cache_root = temp_dir("valle_webruntime_cache");
-
-        let packed = pack(&source, &bundle).unwrap();
-        assert_eq!(packed.name, "valle-web-runtime");
-        assert!(bundle.join(BUILD_MANIFEST_FILE).is_file());
-        assert_eq!(
-            resolve(Some(&bundle), &cache_root).unwrap().source,
-            RuntimeSource::DevDir
-        );
-
-        install(&bundle, &cache_root).unwrap();
-        let cached = resolve(Some(&cache_root.join(RUNTIME_VERSION)), &cache_root).unwrap();
-        assert_eq!(cached.source, RuntimeSource::DevDir);
-        let serving = cached.serving_map();
-        let HostedFile::VerifiedRuntime(demo) = serving.get("preview.html").unwrap() else {
-            panic!("runtime route was not frozen at resolve")
-        };
-        assert_eq!(demo.as_ref(), b"<script src=\"./chunk-test.js\"></script>");
-
-        std::fs::write(cached.dir.join("apps/preview/chunk-test.js"), "tampered").unwrap();
-        let HostedFile::VerifiedRuntime(chunk) = serving.get("chunk-test.js").unwrap() else {
-            panic!("runtime route was not frozen at resolve")
-        };
-        assert_eq!(chunk.as_ref(), b"console.log('runtime')");
-        let err = resolve(Some(&cache_root.join(RUNTIME_VERSION)), &cache_root).unwrap_err();
-        assert!(format!("{err:#}").contains("sha256 mismatch"), "{err:#}");
-    }
-
-    #[test]
-    fn install_is_cross_process_serialized_and_converges_on_one_valid_slot() {
-        let source = fake_runtime();
-        let cache_root = temp_dir("valle_webruntime_process_lock_cache");
-        let target = runtime_slot(&cache_root, RUNTIME_VERSION).unwrap();
-        let held_lock = lock_publish_target(&target).unwrap();
-        let mut children: Vec<_> = (0..3)
-            .map(|_| spawn_install_helper(&source, &cache_root))
-            .collect();
-
-        std::thread::sleep(std::time::Duration::from_millis(200));
-        for child in &mut children {
-            assert!(
-                child.try_wait().unwrap().is_none(),
-                "child install bypassed the slot lock"
-            );
-        }
-        drop(held_lock);
-
-        for mut child in children {
-            assert!(child.wait().unwrap().success());
-        }
-        let resolved = resolve(Some(&cache_root.join(RUNTIME_VERSION)), &cache_root).unwrap();
-        assert_eq!(resolved.source, RuntimeSource::DevDir);
-        let leftovers: Vec<_> = std::fs::read_dir(&cache_root)
-            .unwrap()
-            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
-            .filter(|name| name.contains("staging") || name.contains("backup"))
-            .collect();
-        assert!(leftovers.is_empty(), "stale publish dirs: {leftovers:?}");
-    }
-
-    #[test]
-    fn verified_copy_closure_does_not_reread_swapped_source() {
-        let source = fake_runtime();
-        let verified = verify_build(&source).unwrap();
-        let original_chunk = std::fs::read(source.join("apps/preview/chunk-test.js")).unwrap();
-
-        std::fs::write(
-            source.join("apps/preview/chunk-test.js"),
-            b"swapped-after-verify",
-        )
-        .unwrap();
-        let manifest_path = source.join(BUILD_MANIFEST_FILE);
-        let mut swapped_manifest: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
-        swapped_manifest["engineVersion"] = serde_json::json!("untrusted");
-        std::fs::write(
-            &manifest_path,
-            serde_json::to_vec_pretty(&swapped_manifest).unwrap(),
-        )
-        .unwrap();
-
-        let staging = temp_dir("valle_webruntime_frozen_staging");
-        write_verified_build(&verified, &staging).unwrap();
-        verify_staged_build(&staging, &verified).unwrap();
-        assert_eq!(
-            std::fs::read(staging.join("apps/preview/chunk-test.js")).unwrap(),
-            original_chunk
-        );
-        let staged_root: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(staging.join(BUILD_MANIFEST_FILE)).unwrap())
-                .unwrap();
-        assert!(staged_root.get("engineVersion").is_none());
-    }
-
-    #[test]
-    fn failed_publish_restores_last_good_target() {
-        let parent = temp_dir("valle_webruntime_rollback");
-        let target = parent.join("runtime");
-        std::fs::create_dir(&target).unwrap();
-        std::fs::write(target.join("last-good"), b"preserved").unwrap();
-        let missing_staging = parent.join("missing-staging");
-
-        let err = replace_installed_runtime(&missing_staging, &target).unwrap_err();
-        assert!(format!("{err:#}").contains("restored last-good"), "{err:#}");
-        assert_eq!(
-            std::fs::read(target.join("last-good")).unwrap(),
-            b"preserved"
-        );
-        assert!(!missing_staging.exists());
-    }
-
-    #[test]
-    fn pack_rejects_nonempty_output_without_touching_it() {
-        let source = fake_runtime();
-        let out = temp_dir("valle_webruntime_nonempty_pack");
-        std::fs::write(out.join("keep-me"), b"last-good").unwrap();
-
-        let err = pack(&source, &out).unwrap_err();
-        assert!(format!("{err:#}").contains("must be empty or absent"));
-        assert_eq!(std::fs::read(out.join("keep-me")).unwrap(), b"last-good");
-        assert!(!out.join(BUILD_MANIFEST_FILE).exists());
     }
 
     #[test]
@@ -1598,7 +988,7 @@ mod tests {
         let wrong_path_manifest = wrong_path.join(BUILD_MANIFEST_FILE);
         let mut value: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&wrong_path_manifest).unwrap()).unwrap();
-        value["runtimeAssets"]["engine"]["glue"] = serde_json::json!(CANVASKIT_BASE_GLUE_PATH);
+        value["runtimeAssets"]["engine"]["glue"] = serde_json::json!(CANVASKIT_FULL_GLUE_PATH);
         std::fs::write(
             &wrong_path_manifest,
             serde_json::to_vec_pretty(&value).unwrap(),
@@ -1682,59 +1072,6 @@ mod tests {
         assert!(format!("{err:#}").contains("conflicts with a host route"));
     }
 
-    #[test]
-    fn one_runtime_version_cannot_be_replaced_by_different_verified_bytes() {
-        let first = fake_runtime();
-        let second = fake_runtime();
-        let cache_root = temp_dir("valle_webruntime_version_collision");
-        let target = install(&first, &cache_root).unwrap();
-        let original = std::fs::read(target.join("apps/preview/chunk-test.js")).unwrap();
-
-        let changed = b"console.log('different release')";
-        rewrite_fake_chunk(&second, changed);
-
-        let err = install(&second, &cache_root).unwrap_err();
-        assert!(format!("{err:#}").contains("version collision"), "{err:#}");
-        assert_eq!(
-            std::fs::read(target.join("apps/preview/chunk-test.js")).unwrap(),
-            original
-        );
-    }
-
-    #[test]
-    fn resolve_recovers_the_deterministic_last_good_backup() {
-        let source = fake_runtime();
-        let cache_root = temp_dir("valle_webruntime_recovery");
-        let target = install(&source, &cache_root).unwrap();
-        let backup = backup_path(&target).unwrap();
-        std::fs::rename(&target, &backup).unwrap();
-        sync_directory(&cache_root).unwrap();
-
-        recover_interrupted_publish(&target).unwrap();
-        let resolved = resolve(Some(&target), &cache_root).unwrap();
-        assert_eq!(resolved.source, RuntimeSource::DevDir);
-        assert!(target.is_dir());
-        assert!(!backup.exists());
-    }
-
-    #[test]
-    fn recovery_keeps_both_different_verified_bundles_for_explicit_resolution() {
-        let target_source = fake_runtime();
-        let backup_source = fake_runtime();
-        rewrite_fake_chunk(&backup_source, b"console.log('other verified release')");
-        let cache_root = temp_dir("valle_webruntime_ambiguous_recovery");
-        let target = install(&target_source, &cache_root).unwrap();
-        let backup = backup_path(&target).unwrap();
-        std::fs::create_dir(&backup).unwrap();
-        let backup_build = verify_build(&backup_source).unwrap();
-        write_verified_build(&backup_build, &backup).unwrap();
-
-        let err = recover_interrupted_publish(&target).unwrap_err();
-        assert!(format!("{err:#}").contains("ambiguous web runtime recovery"));
-        assert!(target.is_dir());
-        assert!(backup.is_dir());
-    }
-
     #[cfg(unix)]
     #[test]
     fn bundle_admission_rejects_symlinks_and_noncanonical_paths() {
@@ -1788,8 +1125,7 @@ mod tests {
         let manifest: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
 
-        let cache_root = temp_dir("valle_webruntime_cache");
-        let hit = resolve(Some(&dist), &cache_root).unwrap();
+        let hit = resolve(Some(&dist)).unwrap();
         assert_eq!(hit.source, RuntimeSource::DevDir);
         assert_eq!(hit.manifest.name, "valle-web-runtime");
         let map = hit.serving_map();
@@ -1803,14 +1139,14 @@ mod tests {
         assert_eq!(chunk_bytes.as_ref(), chunk);
 
         std::fs::write(dist.join(chunk_path), "tampered").unwrap();
-        let err = resolve(Some(&dist), &cache_root).unwrap_err();
+        let err = resolve(Some(&dist)).unwrap_err();
         assert!(format!("{err:#}").contains("sha256 mismatch"), "{err:#}");
 
         std::fs::write(dist.join(chunk_path), chunk).unwrap();
         let mut invalid = manifest.clone();
         invalid["assets"][1]["license"] = serde_json::json!("");
         std::fs::write(&manifest_path, serde_json::to_vec_pretty(&invalid).unwrap()).unwrap();
-        let err = resolve(Some(&dist), &cache_root).unwrap_err();
+        let err = resolve(Some(&dist)).unwrap_err();
         assert!(
             format!("{err:#}").contains("requires owner and license"),
             "{err:#}"
@@ -1819,7 +1155,7 @@ mod tests {
         let mut invalid = manifest.clone();
         invalid["workers"] = serde_json::json!([{ "id": "bad", "path": chunk_path }]);
         std::fs::write(&manifest_path, serde_json::to_vec_pretty(&invalid).unwrap()).unwrap();
-        let err = resolve(Some(&dist), &cache_root).unwrap_err();
+        let err = resolve(Some(&dist)).unwrap_err();
         assert!(
             format!("{err:#}").contains("outside the worker closure"),
             "{err:#}"
@@ -1832,7 +1168,7 @@ mod tests {
             "wasm": [chunk_path],
         }]);
         std::fs::write(&manifest_path, serde_json::to_vec_pretty(&invalid).unwrap()).unwrap();
-        let err = resolve(Some(&dist), &cache_root).unwrap_err();
+        let err = resolve(Some(&dist)).unwrap_err();
         assert!(format!("{err:#}").contains("does not own"), "{err:#}");
     }
 
@@ -1840,9 +1176,7 @@ mod tests {
     fn resolve_rejects_dir_without_manifest() {
         let junk = temp_dir("valle_webruntime_junk");
         std::fs::write(junk.join("random.txt"), "x").unwrap();
-        let cache_root = temp_dir("valle_webruntime_cache_junk");
-        let err = resolve(Some(&junk), &cache_root).unwrap_err();
-        assert!(format!("{err:#}").contains("manifest"), "{err:#}");
+        let err = resolve(Some(&junk)).unwrap_err();
         assert!(format!("{err:#}").contains("manifest"), "{err:#}");
     }
 
@@ -1878,77 +1212,50 @@ mod tests {
     }
 
     #[test]
-    fn install_rejects_unsafe_runtime_version_before_creating_a_slot() {
-        let source = fake_runtime();
-        let cache_root = temp_dir("valle_webruntime_unsafe_version_cache");
-        let manifest_path = source.join(BUILD_MANIFEST_FILE);
-        let mut manifest: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
-        manifest["runtimeVersion"] = serde_json::json!("../escaped");
-        std::fs::write(
-            &manifest_path,
-            serde_json::to_vec_pretty(&manifest).unwrap(),
-        )
-        .unwrap();
-
-        let err = install(&source, &cache_root).unwrap_err();
-        assert!(
-            format!("{err:#}").contains("unsafe web runtime version"),
-            "{err:#}"
-        );
-        assert!(std::fs::read_dir(&cache_root).unwrap().next().is_none());
+    fn verified_assets_remain_frozen_after_development_files_change() {
+        let dir = fake_runtime();
+        let runtime = resolve(Some(&dir)).unwrap();
+        std::fs::write(dir.join("apps/preview/chunk-test.js"), "tampered").unwrap();
+        let files = runtime.serving_map();
+        let HostedFile::VerifiedRuntime(bytes) = &files["chunk-test.js"] else {
+            panic!()
+        };
+        assert_eq!(bytes.as_ref(), b"console.log('runtime')");
+        assert!(resolve(Some(&dir)).is_err());
     }
 
     #[test]
-    fn resolve_rejects_cached_slot_identity_mismatch() {
-        let source = fake_runtime();
-        let cache_root = temp_dir("valle_webruntime_slot_mismatch_cache");
-        let installed = install(&source, &cache_root).unwrap();
-        let manifest_path = installed.join(BUILD_MANIFEST_FILE);
-        let mut manifest: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
-        manifest["runtimeVersion"] = serde_json::json!("9.9.9");
-        std::fs::write(
-            &manifest_path,
-            serde_json::to_vec_pretty(&manifest).unwrap(),
-        )
-        .unwrap();
-
-        let err = resolve(Some(&cache_root.join(RUNTIME_VERSION)), &cache_root).unwrap_err();
-        assert!(format!("{err:#}").contains("does not match CLI"), "{err:#}");
+    fn rejects_mismatched_runtime_and_protocol_versions() {
+        for (field, value) in [
+            ("runtimeVersion", serde_json::json!("9.9.9")),
+            ("protocolVersion", serde_json::json!(PROTOCOL_VERSION + 1)),
+        ] {
+            let dir = fake_runtime();
+            let path = dir.join(BUILD_MANIFEST_FILE);
+            let mut manifest: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            manifest[field] = value;
+            std::fs::write(path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+            assert!(resolve(Some(&dir)).is_err());
+        }
     }
 
+    #[cfg(feature = "embedded-runtime")]
     #[test]
-    fn resolve_rejects_wrong_protocol_even_when_semver_matches() {
-        let source = fake_runtime();
-        let cache_root = temp_dir("valle_webruntime_protocol_mismatch_cache");
-        let installed = install(&source, &cache_root).unwrap();
-        let manifest_path = source.join(BUILD_MANIFEST_FILE);
-        let mut manifest: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
-        assert_eq!(manifest["runtimeVersion"], RUNTIME_VERSION);
-        manifest["protocolVersion"] = serde_json::json!(PROTOCOL_VERSION + 1);
-        std::fs::write(
-            &manifest_path,
-            serde_json::to_vec_pretty(&manifest).unwrap(),
-        )
-        .unwrap();
-
-        let err = resolve(Some(&source), &cache_root).unwrap_err();
-        assert!(
-            format!("{err:#}").contains("web runtime protocol mismatch"),
-            "{err:#}"
-        );
-
-        std::fs::write(
-            installed.join(BUILD_MANIFEST_FILE),
-            serde_json::to_vec_pretty(&manifest).unwrap(),
-        )
-        .unwrap();
-        let err = resolve(Some(&cache_root.join(RUNTIME_VERSION)), &cache_root).unwrap_err();
-        assert!(
-            format!("{err:#}").contains("web runtime protocol mismatch"),
-            "{err:#}"
-        );
+    fn embedded_runtime_is_complete_and_explicit_errors_do_not_fall_back() {
+        let runtime = resolve(None).unwrap();
+        assert_eq!(runtime.source, RuntimeSource::Embedded);
+        let files = runtime.serving_map();
+        for path in [
+            ENGINE_WASM_PATH,
+            CANVASKIT_FULL_WASM_PATH,
+            DEFAULT_SANS_FONT_PATH,
+        ] {
+            let HostedFile::VerifiedRuntime(bytes) = &files[path] else {
+                panic!()
+            };
+            assert!(!bytes.is_empty());
+        }
+        assert!(resolve(Some(Path::new("/nonexistent-valle-web-directory"))).is_err());
     }
 }

@@ -204,10 +204,6 @@ export function playerRuntimeAssetsFromStudioBoot(boot: StudioBoot): PlayerRunti
       wasm: required("engineWasm"),
     },
     canvasKit: {
-      base: {
-        glue: required("canvasKitBaseGlue"),
-        wasm: required("canvasKitBaseWasm"),
-      },
       full: {
         glue: required("canvasKitFullGlue"),
         wasm: required("canvasKitFullWasm"),

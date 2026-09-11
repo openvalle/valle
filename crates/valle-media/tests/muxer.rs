@@ -104,7 +104,6 @@ fn muxer_keeps_all_frames_at_fractional_second_boundary() {
 
 #[test]
 fn timestamped_muxer_preserves_vfr_presentation_spacing() {
-    use ffmpeg_next as ff;
     use valle_media::codec::{Muxer, VideoFrameTransport, probe_av};
 
     let temp = tempfile::tempdir().expect("temp dir");
@@ -115,7 +114,7 @@ fn timestamped_muxer_preserves_vfr_presentation_spacing() {
             &out,
             64,
             48,
-            ff::Rational(1, 1_000),
+            valle_media::codec::TimeBase(1, 1_000),
             25,
             1,
             None,
@@ -158,7 +157,6 @@ fn timestamped_muxer_preserves_vfr_presentation_spacing() {
 
 #[test]
 fn timestamped_muxer_preserves_cfr_final_frame_duration_without_audio() {
-    use ffmpeg_next as ff;
     use valle_media::codec::{Muxer, VideoFrameTransport, probe_av};
 
     let temp = tempfile::tempdir().expect("temp dir");
@@ -168,7 +166,7 @@ fn timestamped_muxer_preserves_cfr_final_frame_duration_without_audio() {
             &out,
             64,
             48,
-            ff::Rational(1, 4),
+            valle_media::codec::TimeBase(1, 4),
             4,
             1,
             false,
@@ -200,45 +198,60 @@ fn timestamped_muxer_preserves_cfr_final_frame_duration_without_audio() {
     );
 }
 
-fn decoded_video_pts(path: &std::path::Path) -> (Vec<i64>, ffmpeg_next::Rational) {
-    use ffmpeg_next as ff;
+fn decoded_video_pts(path: &std::path::Path) -> (Vec<i64>, valle_media::codec::TimeBase) {
+    // Decode with the same ABI selected by Valle; preserve the independent decoded-frame check.
+    macro_rules! decode {
+        ($ff:path) => {{
+            use $ff as ff;
+            fn receive_video_pts(decoder: &mut ff::decoder::Video, output: &mut Vec<i64>) {
+                let mut frame = ff::frame::Video::empty();
+                while decoder.receive_frame(&mut frame).is_ok() {
+                    output.push(
+                        frame
+                            .timestamp()
+                            .or_else(|| frame.pts())
+                            .expect("decoded video frame PTS"),
+                    );
+                }
+            }
 
-    ff::init().expect("initialize libav");
-    let mut input = ff::format::input(path).expect("open encoded VFR output");
-    let stream = input
-        .streams()
-        .best(ff::media::Type::Video)
-        .expect("video stream");
-    let stream_index = stream.index();
-    let time_base = stream.time_base();
-    let parameters = stream.parameters();
-    let mut decoder = ff::codec::context::Context::from_parameters(parameters)
-        .expect("video codec context")
-        .decoder()
-        .video()
-        .expect("video decoder");
-    let mut timestamps = Vec::new();
-    for (stream, packet) in input.packets() {
-        if stream.index() != stream_index {
-            continue;
-        }
-        decoder.send_packet(&packet).expect("send video packet");
-        receive_video_pts(&mut decoder, &mut timestamps);
+            ff::init().expect("initialize libav");
+            let mut input = ff::format::input(path).expect("open encoded VFR output");
+            let stream = input
+                .streams()
+                .best(ff::media::Type::Video)
+                .expect("video stream");
+            let stream_index = stream.index();
+            let time_base = stream.time_base();
+            let parameters = stream.parameters();
+            let mut decoder = ff::codec::context::Context::from_parameters(parameters)
+                .expect("video codec context")
+                .decoder()
+                .video()
+                .expect("video decoder");
+            let mut timestamps = Vec::new();
+            for (stream, packet) in input.packets() {
+                if stream.index() != stream_index {
+                    continue;
+                }
+                decoder.send_packet(&packet).expect("send video packet");
+                receive_video_pts(&mut decoder, &mut timestamps);
+            }
+            decoder.send_eof().expect("flush video decoder");
+            receive_video_pts(&mut decoder, &mut timestamps);
+            (
+                timestamps,
+                valle_media::codec::TimeBase(time_base.0, time_base.1),
+            )
+        }};
     }
-    decoder.send_eof().expect("flush video decoder");
-    receive_video_pts(&mut decoder, &mut timestamps);
-    (timestamps, time_base)
-}
-
-fn receive_video_pts(decoder: &mut ffmpeg_next::decoder::Video, output: &mut Vec<i64>) {
-    let mut frame = ffmpeg_next::frame::Video::empty();
-    while decoder.receive_frame(&mut frame).is_ok() {
-        output.push(
-            frame
-                .timestamp()
-                .or_else(|| frame.pts())
-                .expect("decoded video frame PTS"),
-        );
+    let capabilities =
+        valle_media::codec::ffi::ffmpeg_capabilities().expect("selected media runtime");
+    match capabilities["ffmpegMajor"].as_u64().unwrap() {
+        7 => decode!(valle_ffmpeg::backend::v7),
+        8 => decode!(valle_ffmpeg::backend::v8),
+        9 => decode!(valle_ffmpeg::backend::v9),
+        other => panic!("unexpected FFmpeg adapter {other}"),
     }
 }
 

@@ -1,7 +1,6 @@
 export interface PlayerRuntimeAssets {
   engine: { glue: string; wasm: string };
   canvasKit: {
-    base: { glue: string; wasm: string };
     full: { glue: string; wasm: string };
   };
   fonts: { defaultSans: string };
@@ -11,7 +10,6 @@ export interface PlayerRuntimeAssets {
 type RuntimeAssetsInput = {
   engine?: Partial<PlayerRuntimeAssets["engine"]>;
   canvasKit?: {
-    base?: Partial<PlayerRuntimeAssets["canvasKit"]["base"]>;
     full?: Partial<PlayerRuntimeAssets["canvasKit"]["full"]>;
   };
   fonts?: Partial<PlayerRuntimeAssets["fonts"]>;
@@ -23,8 +21,6 @@ type RuntimeAssetReader = (assets: RuntimeAssetsInput) => unknown;
 const REQUIRED_URLS: ReadonlyArray<readonly [string, RuntimeAssetReader]> = [
   ["engine.glue", (assets) => assets.engine?.glue],
   ["engine.wasm", (assets) => assets.engine?.wasm],
-  ["canvasKit.base.glue", (assets) => assets.canvasKit?.base?.glue],
-  ["canvasKit.base.wasm", (assets) => assets.canvasKit?.base?.wasm],
   ["canvasKit.full.glue", (assets) => assets.canvasKit?.full?.glue],
   ["canvasKit.full.wasm", (assets) => assets.canvasKit?.full?.wasm],
   ["fonts.defaultSans", (assets) => assets.fonts?.defaultSans],
@@ -57,10 +53,6 @@ export function resolvePlayerRuntimeAssets(
       wasm: resolve(assets.engine.wasm),
     },
     canvasKit: {
-      base: {
-        glue: resolve(assets.canvasKit.base.glue),
-        wasm: resolve(assets.canvasKit.base.wasm),
-      },
       full: {
         glue: resolve(assets.canvasKit.full.glue),
         wasm: resolve(assets.canvasKit.full.wasm),

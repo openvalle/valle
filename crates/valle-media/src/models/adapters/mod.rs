@@ -3,7 +3,7 @@
 #[cfg(feature = "tool-matte")]
 pub(crate) mod birefnet;
 
-#[cfg(feature = "tool-transcribe")]
+#[cfg(all(feature = "tool-transcribe", not(target_os = "windows")))]
 pub(crate) mod qwen_asr;
 
 #[cfg(feature = "model-dpdfnet-onnx")]

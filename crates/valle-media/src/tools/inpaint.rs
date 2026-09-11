@@ -1186,7 +1186,7 @@ mod tests {
         let frame = MatchedVideoFrame {
             pts: 0,
             source_absolute_pts: 225_000,
-            time_base: ffmpeg_next::Rational(1, 90_000),
+            time_base: crate::codec::TimeBase(1, 90_000),
             duration_ticks: Some(3_000),
             source: RgbaFrame::new(2, 2),
             mask: Gray8Frame::new(2, 2),

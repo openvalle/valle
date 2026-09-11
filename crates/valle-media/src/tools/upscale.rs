@@ -10,8 +10,8 @@ use std::{
     time::Instant,
 };
 
+use crate::codec::TimeBase as Rational;
 use crate::models::inference::realesrgan::TileConfig;
-use ffmpeg_next::Rational;
 use serde::{Deserialize, Serialize};
 
 use crate::{

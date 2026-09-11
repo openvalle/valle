@@ -92,7 +92,6 @@ const options = {
     schemaVersion: 1,
     engine: { glue: "engine.js", wasm: "engine.wasm" },
     canvasKit: {
-      base: { glue: "base.js", wasm: "base.wasm" },
       full: { glue: "full.js", wasm: "full.wasm" },
     },
   },

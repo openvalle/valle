@@ -1,0 +1,255 @@
+name: Package macOS arm64
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: package-macos-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  package:
+    if: github.repository == 'openvalle/valle' && github.ref == 'refs/heads/main'
+    runs-on: macos-15
+    timeout-minutes: 240
+    env:
+      MACOSX_DEPLOYMENT_TARGET: '15.0'
+      CARGO_BUILD_JOBS: '2'
+      CARGO_NET_RETRY: '3'
+      FORCE_SKIA_BUILD: '1'
+      HOMEBREW_NO_ANALYTICS: '1'
+      HOMEBREW_NO_AUTO_UPDATE: '1'
+      HOMEBREW_NO_INSTALL_CLEANUP: '1'
+    steps:
+      - name: Set cache and log directories
+        id: environment
+        run: |
+          echo "HOMEBREW_CACHE=$RUNNER_TEMP/valle-homebrew-cache" >> "$GITHUB_ENV"
+          echo "BUN_INSTALL_CACHE_DIR=$RUNNER_TEMP/valle-bun-cache" >> "$GITHUB_ENV"
+          echo "PACKAGE_LOGS=$RUNNER_TEMP/valle-package-logs" >> "$GITHUB_ENV"
+          echo "image=$ImageVersion" >> "$GITHUB_OUTPUT"
+          mkdir -p "$RUNNER_TEMP/valle-package-logs"
+      - name: Check signing and notarization credentials
+        env:
+          MACOS_CERT_P12_BASE64: ${{ secrets.MACOS_CERT_P12_BASE64 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          MACOS_SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+          APPLE_API_KEY_P8_BASE64: ${{ secrets.APPLE_API_KEY_P8_BASE64 }}
+        run: |
+          for name in MACOS_CERT_P12_BASE64 MACOS_CERT_PASSWORD MACOS_SIGN_IDENTITY APPLE_API_KEY_ID APPLE_API_ISSUER_ID APPLE_API_KEY_P8_BASE64; do
+            if [ -z "${!name}" ]; then echo "::error::Missing secret: $name"; exit 1; fi
+          done
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: web/package.json
+      - name: Cache build dependencies
+        id: dependencies
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          key: macos-15-${{ runner.arch }}-${{ steps.environment.outputs.image }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml', '.cargo/config.toml', 'web/bun.lock', 'web/package.json') }}
+          restore-keys: macos-15-${{ runner.arch }}-${{ steps.environment.outputs.image }}-
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/debug
+            target/release
+            target/wasm32-unknown-unknown
+            target/tools
+            ${{ env.BUN_INSTALL_CACHE_DIR }}
+            ${{ env.HOMEBREW_CACHE }}/downloads
+      - name: Prepare build tools
+        run: |
+          test "$(uname -m)" = arm64
+          for attempt in 1 2 3; do
+            if brew install pkgconf llvm cmake ninja python ffmpeg ffmpeg@8 ffmpeg@7 2>&1 | tee -a "$PACKAGE_LOGS/install.log"; then break; fi
+            if [ "$attempt" = 3 ]; then exit 1; fi
+            sleep $((attempt * 5))
+          done
+          echo "VALLE_TEST_FFMPEG7_DIR=$(brew --prefix ffmpeg@7)/lib" >> "$GITHUB_ENV"
+          echo "VALLE_TEST_FFMPEG8_DIR=$(brew --prefix ffmpeg@8)/lib" >> "$GITHUB_ENV"
+          echo "VALLE_TEST_FFMPEG9_DIR=$(brew --prefix ffmpeg)/lib" >> "$GITHUB_ENV"
+          echo "LIBCLANG_PATH=$(brew --prefix llvm)/lib" >> "$GITHUB_ENV"
+          echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
+          rustup show
+          for major in 7 8 9; do
+            formula="ffmpeg@$major"
+            if [ "$major" = 9 ]; then formula=ffmpeg; fi
+            "$(brew --prefix "$formula")/bin/ffmpeg" -version > "$PACKAGE_LOGS/ffmpeg-cli-$major.txt"
+            grep -E "^ffmpeg version ${major}[. ]" "$PACKAGE_LOGS/ffmpeg-cli-$major.txt"
+          done
+      - name: Record build environment
+        run: |
+          {
+            sw_vers
+            uname -m
+            xcodebuild -version
+            xcrun --show-sdk-path
+            xcrun --show-sdk-version
+            xcrun clang --version
+            rustc -vV
+            python3 --version
+            bun --version
+            brew list --versions pkgconf llvm cmake ninja
+          } | tee "$PACKAGE_LOGS/toolchain.txt"
+          brew list --versions > "$PACKAGE_LOGS/homebrew-installed.txt"
+          sysctl hw.memsize hw.ncpu > "$PACKAGE_LOGS/runner-resources.txt"
+      - name: Check packaging tool
+        run: cargo test --locked -p xtask 2>&1 | tee "$PACKAGE_LOGS/xtask-tests.log"
+      # Local packaging uses ad-hoc signing. Sign the final artifact after the build tests.
+      - name: Build and verify single executable
+        run: cargo xtask package --min-macos 15.0 2>&1 | tee "$PACKAGE_LOGS/package.log"
+      - name: Record installed FFmpeg capabilities
+        run: |
+          for major in 7 8 9; do
+            variable="VALLE_TEST_FFMPEG${major}_DIR"
+            ./dist/bin/valle --ffmpeg-dir "${!variable}" --json media capabilities > "$PACKAGE_LOGS/ffmpeg-$major.json"
+          done
+      - name: Test Web runtime contracts
+        working-directory: web
+        run: |
+          bun run typecheck 2>&1 | tee "$PACKAGE_LOGS/web-typecheck.log"
+          bun test scripts/runtime-manifest.test.ts packages/player-core/src/runtime-assets.test.ts apps/studio/src/host.test.ts apps/studio/src/timeline-workspace-runtime.test.ts packages/player/src/controller.test.ts 2>&1 | tee "$PACKAGE_LOGS/web-tests.log"
+      - name: Test native Web and runtime contracts
+        env:
+          VALLE_EMBED_WEB_DIR: ${{ github.workspace }}/web/dist
+          VALLE_EMBED_NOTICES: ${{ github.workspace }}/target/distribution-notices.txt
+        run: |
+          cargo test --locked --release -p valle-cli --features embedded-runtime --lib --test web_runtime --test edit_timeline_consistency --test ffmpeg_runtime -- --include-ignored --test-threads=1 2>&1 | tee "$PACKAGE_LOGS/cli-tests.log"
+      - name: Test media with each installed ABI
+        run: |
+          for major in 7 8 9; do
+            variable="VALLE_TEST_FFMPEG${major}_DIR"
+            VALLE_FFMPEG_DIR="${!variable}" cargo test --locked --release -p valle-media --features libav --lib --test codec_roundtrip --test muxer --test no_ffmpeg_cli -- --test-threads=1 2>&1 | tee "$PACKAGE_LOGS/media-$major.log"
+          done
+      - name: Import Developer ID Application certificate
+        uses: apple-actions/import-codesign-certs@5142e029c445c10ffc7149d172e540235a065466 # v7.0.0
+        with:
+          p12-file-base64: ${{ secrets.MACOS_CERT_P12_BASE64 }}
+          p12-password: ${{ secrets.MACOS_CERT_PASSWORD }}
+      - name: Sign the final executable
+        working-directory: target/package
+        env:
+          MACOS_SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+        run: |
+          binary=valle
+          # Allow user-installed FFmpeg and inference libraries under Hardened Runtime.
+          entitlements="$RUNNER_TEMP/valle-entitlements.plist"
+          cat > "$entitlements" <<'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <plist version="1.0"><dict>
+            <key>com.apple.security.cs.disable-library-validation</key><true/>
+          </dict></plist>
+          PLIST
+          codesign --force --timestamp --options runtime --identifier org.openvalle.valle \
+            --entitlements "$entitlements" --sign "$MACOS_SIGN_IDENTITY" "$binary"
+          codesign --verify --strict --verbose=2 "$binary"
+          shasum -a 256 "$binary" > SHA256SUMS
+          echo "VALLE_TEST_BINARY=$PWD/$binary" >> "$GITHUB_ENV"
+          version="$(./valle --version)"
+          echo "VALLE_PACKAGE_VERSION=${version#valle }" >> "$GITHUB_ENV"
+      - name: Verify the signed executable and external FFmpeg libraries
+        env:
+          VALLE_EMBED_WEB_DIR: ${{ github.workspace }}/web/dist
+          VALLE_EMBED_NOTICES: ${{ github.workspace }}/target/distribution-notices.txt
+        run: |
+          cargo xtask verify-package "$VALLE_TEST_BINARY" 2>&1 | tee "$PACKAGE_LOGS/signed-package.log"
+          cargo test --locked --release -p valle-cli --features embedded-runtime --test ffmpeg_versions one_binary_renders_with_all_ffmpeg_abis -- --ignored --test-threads=1 2>&1 | tee "$PACKAGE_LOGS/cli-versions.log"
+          cargo test --locked --release -p valle-cli --features embedded-runtime --test ffmpeg_versions rejects_mixed_installations -- --ignored --test-threads=1 2>&1 | tee "$PACKAGE_LOGS/mixed-libraries.log"
+      - name: Notarize and require acceptance
+        id: notarization
+        timeout-minutes: 70
+        env:
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+          APPLE_API_KEY_P8_BASE64: ${{ secrets.APPLE_API_KEY_P8_BASE64 }}
+        run: |
+          umask 077
+          notary_dir="$(mktemp -d "$RUNNER_TEMP/valle-notary.XXXXXX")"
+          trap 'rm -rf "$notary_dir"' EXIT
+          printf '%s' "$APPLE_API_KEY_P8_BASE64" | tr -d '[:space:]' | base64 --decode > "$notary_dir/AuthKey.p8"
+          unset APPLE_API_KEY_P8_BASE64
+          auth=(--key "$notary_dir/AuthKey.p8" --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER_ID")
+          ditto -c -k --keepParent "$VALLE_TEST_BINARY" "$notary_dir/notarize.zip"
+          xcrun notarytool submit "$notary_dir/notarize.zip" "${auth[@]}" --output-format json \
+            > "$PACKAGE_LOGS/notary-submission.json"
+          submission_id="$(jq -er '.id' "$PACKAGE_LOGS/notary-submission.json")"
+          echo "Submitted notarization: $submission_id"
+          xcrun notarytool wait "$submission_id" "${auth[@]}" --timeout 60m --output-format json \
+            | tee "$PACKAGE_LOGS/notary-status.json"
+          jq -e '.status == "Accepted"' "$PACKAGE_LOGS/notary-status.json"
+          echo 'status=Accepted' >> "$GITHUB_OUTPUT"
+      - name: Archive executable
+        working-directory: target/package
+        run: |
+          binary="$(basename "$VALLE_TEST_BINARY")"
+          archive="valle-v${VALLE_PACKAGE_VERSION}-darwin-arm64.tar.gz"
+          COPYFILE_DISABLE=1 tar -czf "$archive" "$binary" SHA256SUMS
+          shasum -a 256 "$archive" > "$archive.sha256"
+      - name: Upload executable archive and checksum
+        if: success() && steps.notarization.outputs.status == 'Accepted'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: valle-darwin-arm64-${{ github.sha }}
+          path: |
+            target/package/valle-*-darwin-arm64.tar.gz
+            target/package/valle-*-darwin-arm64.tar.gz.sha256
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+      - name: Save build dependencies even after a failed build
+        if: always() && steps.dependencies.outcome == 'success' && steps.dependencies.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          key: ${{ steps.dependencies.outputs.cache-primary-key }}
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/debug
+            target/release
+            target/wasm32-unknown-unknown
+            target/tools
+            ${{ env.BUN_INSTALL_CACHE_DIR }}
+            ${{ env.HOMEBREW_CACHE }}/downloads
+      - name: Record diagnostics and run summary
+        if: always()
+        continue-on-error: true
+        env:
+          RUN_STATUS: ${{ job.status }}
+          CACHE_HIT: ${{ steps.dependencies.outputs.cache-hit }}
+        run: |
+          mkdir -p "$PACKAGE_LOGS"
+          df -h > "$PACKAGE_LOGS/disk.txt"
+          du -sh target/release target/wasm32-unknown-unknown "$BUN_INSTALL_CACHE_DIR" "$HOMEBREW_CACHE" > "$PACKAGE_LOGS/cache-sizes.txt" 2>&1 || true
+          for log in target/release/build/skia-bindings-*/output target/release/build/skia-bindings-*/stderr; do
+            if [ -f "$log" ]; then cp "$log" "$PACKAGE_LOGS/$(basename "$(dirname "$log")")-$(basename "$log").txt"; fi
+          done
+          {
+            echo '### macOS arm64 package'
+            echo "Status: $RUN_STATUS"
+            echo "Commit: $GITHUB_SHA"
+            echo ''
+            echo "Dependency cache hit: ${CACHE_HIT:-unavailable}"
+            if [ -f "$PACKAGE_LOGS/notary-status.json" ]; then
+              jq -r '"Notarization: \(.status) (\(.id))"' "$PACKAGE_LOGS/notary-status.json"
+            fi
+          } | tee "$PACKAGE_LOGS/summary.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload build and test diagnostics
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: valle-package-diagnostics-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ env.PACKAGE_LOGS }}
+          if-no-files-found: warn
+          retention-days: 14

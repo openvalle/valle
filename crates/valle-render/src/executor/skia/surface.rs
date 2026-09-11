@@ -1291,7 +1291,6 @@ pub(crate) struct SurfaceFrame<'a> {
 }
 
 impl<'arena> SurfaceFrame<'arena> {
-    #[cfg(all(target_os = "macos", feature = "native"))]
     pub(crate) const fn backend_kind(&self) -> SkiaBackendKind {
         self.arena.backend_kind()
     }

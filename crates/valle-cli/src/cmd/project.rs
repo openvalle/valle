@@ -115,8 +115,8 @@ pub(crate) fn run(json_output: bool, action: ProjectAction) -> Result<ExitCode> 
                 .context("reading Project Studio initial revision")?;
             let initial_revision = snapshot.revision().revision;
             let token = project_studio_token()?;
-            let cache_root = crate::webruntime::default_cache_root()?;
-            let runtime = crate::webruntime::resolve(web_assets_dir.as_deref(), &cache_root)?;
+
+            let runtime = crate::webruntime::resolve(web_assets_dir.as_deref())?;
             let config = serde_json::json!({
                 "runtimeAssets": crate::webruntime::runtime_assets_json()
             })

@@ -71,6 +71,7 @@ fn media_surface_owns_file_level_model_tools() {
     assert_eq!(
         listed_help_commands(&help),
         [
+            "capabilities",
             "transcribe",
             "matte",
             "enhance",
@@ -82,7 +83,7 @@ fn media_surface_owns_file_level_model_tools() {
             "interpolate",
             "help",
         ],
-        "the public media surface must contain exactly the nine designed tools"
+        "the public media surface contains runtime diagnostics and the nine designed tools"
     );
 
     let transcribe = valle()
@@ -476,7 +477,7 @@ fn model_verify_reports_missing_artifacts_without_network() {
 #[test]
 fn media_invalid_input_uses_exit_two_and_keeps_json_stderr_empty() {
     let output = valle()
-        .args(["media", "transcribe", "definitely-missing.wav", "--json"])
+        .args(["media", "enhance", "definitely-missing.wav", "--json"])
         .output()
         .expect("reject missing media input");
     assert_eq!(output.status.code(), Some(2));
@@ -485,6 +486,7 @@ fn media_invalid_input_uses_exit_two_and_keeps_json_stderr_empty() {
     assert_eq!(envelope["error"]["code"], "invalid_input");
 }
 
+#[cfg(not(target_os = "windows"))]
 #[test]
 fn transcribe_rejects_explicit_non_native_backend_without_resolving_a_model() {
     let temporary = tempfile::tempdir().unwrap();
@@ -507,6 +509,7 @@ fn transcribe_rejects_explicit_non_native_backend_without_resolving_a_model() {
     assert_eq!(envelope["error"]["hint"], "use --backend auto");
 }
 
+#[cfg(not(target_os = "windows"))]
 #[test]
 fn transcribe_requires_installation_even_if_a_legacy_directory_exists() {
     let temporary = tempfile::tempdir().unwrap();
@@ -535,6 +538,7 @@ fn transcribe_requires_installation_even_if_a_legacy_directory_exists() {
     );
 }
 
+#[cfg(not(target_os = "windows"))]
 #[test]
 fn media_report_cannot_replace_the_primary_output() {
     let temporary = tempfile::tempdir().unwrap();

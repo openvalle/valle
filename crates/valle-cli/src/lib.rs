@@ -3,6 +3,9 @@
 
 pub mod cmd;
 mod events;
+mod embedded {
+    include!(concat!(env!("OUT_DIR"), "/embedded.rs"));
+}
 mod output;
 mod webhost;
 pub mod webruntime;
@@ -92,6 +95,9 @@ pub struct Cli {
     /// FFmpeg diagnostics written to stderr. Info includes encoder parameters and statistics.
     #[arg(long, global = true, value_enum, default_value = "error")]
     pub ffmpeg_log_level: FfmpegLogLevelArg,
+    /// User-installed FFmpeg shared-library directory or prefix (also VALLE_FFMPEG_DIR).
+    #[arg(long, global = true)]
+    pub ffmpeg_dir: Option<std::path::PathBuf>,
     #[command(subcommand)]
     pub cmd: Cmd,
 }
@@ -118,6 +124,8 @@ impl From<FfmpegLogLevelArg> for valle_media::codec::ffi::FfmpegLogLevel {
 /// Public authoring and media commands.
 #[derive(Subcommand)]
 pub enum Cmd {
+    /// Show bundled licenses, acknowledgements, and dependency source download links.
+    Licenses,
     /// Check or render Motion JSX, or open Studio.
     Motion {
         #[command(subcommand)]
@@ -162,7 +170,11 @@ pub enum Cmd {
 /// File-level offline tools exposed under `valle media <tool>`.
 #[derive(Subcommand)]
 pub enum MediaAction {
+    /// Inspect user-installed FFmpeg libraries, versions, registered codecs and hardware support.
+    Capabilities,
     /// Transcribe audio or video into a standalone word-level transcript.
+    ///
+    /// ASR and forced alignment are currently unavailable on Windows.
     Transcribe {
         #[command(flatten)]
         args: TranscribeArgs,
@@ -1021,6 +1033,19 @@ pub enum TimelineAction {
 /// Dispatch one public command.
 pub fn dispatch(cmd: Cmd) -> Result<std::process::ExitCode> {
     match cmd {
+        Cmd::Licenses => {
+            if output::machine() {
+                output::emit(
+                    serde_json::json!({"status": "ok", "complete": cfg!(feature = "embedded-runtime"), "text": embedded::NOTICES}),
+                );
+            } else {
+                use std::io::Write;
+                std::io::stdout()
+                    .lock()
+                    .write_all(embedded::NOTICES.as_bytes())?;
+            }
+            Ok(std::process::ExitCode::SUCCESS)
+        }
         Cmd::Motion { action } => cmd::motion::run(action),
         Cmd::Timeline { action } => cmd::timeline::run(action),
         Cmd::Media { action } => dispatch_media(action),
@@ -1068,6 +1093,10 @@ pub fn dispatch(cmd: Cmd) -> Result<std::process::ExitCode> {
 
 fn dispatch_media(action: MediaAction) -> Result<std::process::ExitCode> {
     match action {
+        MediaAction::Capabilities => {
+            output::emit(valle_media::codec::ffi::ffmpeg_capabilities()?);
+            Ok(std::process::ExitCode::SUCCESS)
+        }
         MediaAction::Matte { args } => cmd::matte::run(
             &args.input,
             args.output,
@@ -1080,6 +1109,15 @@ fn dispatch_media(action: MediaAction) -> Result<std::process::ExitCode> {
             args.report,
             args.json || output::machine(),
         ),
+        #[cfg(target_os = "windows")]
+        MediaAction::Transcribe { args } => cmd::media::render_error(
+            &valle_media::tools::ToolError::new(
+                valle_media::tools::ToolErrorCode::UnsupportedAdapter,
+                "ASR and forced alignment are not supported on Windows yet",
+            ),
+            args.json || output::machine(),
+        ),
+        #[cfg(not(target_os = "windows"))]
         MediaAction::Transcribe { args } => cmd::transcribe::run(
             &args.input,
             args.output,
@@ -1226,6 +1264,12 @@ pub fn run() -> std::process::ExitCode {
     };
     output::init(cli.json, cli.events);
     valle_media::codec::ffi::set_ffmpeg_log_level(cli.ffmpeg_log_level.into());
+    if let Some(directory) = cli.ffmpeg_dir
+        && let Err(error) = valle_media::codec::ffi::set_ffmpeg_directory(directory)
+    {
+        output::error(&format!("{error:#}"));
+        return std::process::ExitCode::FAILURE;
+    }
     match dispatch(cli.cmd) {
         Ok(code) => code,
         Err(e) => {

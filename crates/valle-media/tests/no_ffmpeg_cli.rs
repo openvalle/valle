@@ -38,3 +38,38 @@ fn no_ffmpeg_cli_shellout_anywhere() {
         hits.join("\n")
     );
 }
+#[test]
+fn native_ffmpeg_imports_stay_inside_the_version_adapters() {
+    fn visit(dir: &Path, adapter: &Path, hits: &mut Vec<String>) {
+        if dir == adapter {
+            return;
+        }
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                visit(&path, adapter, hits);
+            } else if path.extension().is_some_and(|ext| ext == "rs") {
+                let source = std::fs::read_to_string(&path).unwrap();
+                if source.contains("valle_ffmpeg")
+                    || source.contains("ffmpeg_next")
+                    || source.contains("ffmpeg_sys_next")
+                {
+                    hits.push(path.display().to_string());
+                }
+            }
+        }
+    }
+    let media = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let adapter = media.join("src/codec/backend");
+    let mut hits = Vec::new();
+    for entry in std::fs::read_dir(media.parent().unwrap()).unwrap() {
+        let source = entry.unwrap().path().join("src");
+        if source.is_dir() {
+            visit(&source, &adapter, &mut hits);
+        }
+    }
+    assert!(
+        hits.is_empty(),
+        "native FFmpeg imports escaped the ABI boundary: {hits:#?}"
+    );
+}

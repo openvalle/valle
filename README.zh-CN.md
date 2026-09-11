@@ -10,17 +10,15 @@
 
 - 通过 [rustup](https://rustup.rs/) 安装 Rust。仓库的 `rust-toolchain.toml` 指定 **Rust 1.96.0** 和 `wasm32-unknown-unknown` 目标。
 - [Bun](https://bun.com/docs/installation) **1.4.2**。
-- **FFmpeg 开发头文件及动态库**：`libavcodec`、`libavformat`、`libavutil`、`libswscale`、`libswresample`。已在 macOS 使用 **FFmpeg 9.0.1** 本地验证，只有独立的 `ffmpeg` 可执行文件不够。
-- 原生构建工具：C/C++ 编译器、LLVM/libclang、`pkg-config`、CMake、Python 3、Ninja、Git、curl、tar。参见 [rust-skia 构建要求](https://github.com/rust-skia/rust-skia#building)。
+- 原生构建工具：C/C++ 编译器、LLVM/libclang、`pkg-config`、CMake、Meson、Make、Perl、Python 3、Ninja、Git、curl、tar（x86_64 还需要 NASM）。参见 [rust-skia 构建要求](https://github.com/rust-skia/rust-skia#building)。
 
-以下以 **macOS** 为例，其他平台的环境配置仍待验证。先安装上述 Rust 和 Bun，再通过 [Homebrew](https://brew.sh/) 安装原生依赖：
+以下以 **macOS** 为例，Linux 和 Windows 构建环境见对应的[打包工作流](.github/workflows)。先安装上述 Rust 和 Bun，再通过 [Homebrew](https://brew.sh/) 安装原生依赖：
 
 ```sh
 xcode-select --install # 尚未安装 Command Line Tools 时执行
-brew install ffmpeg pkgconf llvm cmake ninja python
+brew install pkgconf llvm cmake ninja meson python
 export PATH="$(brew --prefix llvm)/bin:$PATH"
 export LIBCLANG_PATH="$(brew --prefix llvm)/lib"
-export PKG_CONFIG_PATH="$(brew --prefix ffmpeg)/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
 ```
 
 ## 构建与运行
@@ -31,9 +29,47 @@ cd valle
 cargo xtask build
 ```
 
-首次构建需要联网，耗时可能较长。Cargo 已配置为从源码构建 Skia，以提供 CLI 所需的 Skottie 支持。Rust `xtask` 会安装 Web 依赖、构建 Wasm 和 CLI，并将结果放入 `dist/`。使用 `cargo xtask build --release` 进行发布构建。运行 CLI 时也需要系统提供 FFmpeg 动态库。
+首次构建需要联网，耗时可能较长。Cargo 从源码构建 Skia，以提供 Skottie 支持。已发布的 `valle-ffmpeg` 和 `valle-ffmpeg-sys` crate 包含固定的 FFmpeg 7.0/8.0/9.0 公共头文件；构建需要 libclang，无需安装 FFmpeg 或额外检出其他仓库。
 
-仅开发 CLI 时，可以使用 `cargo build -p valle-cli`。Studio 还需要上述完整构建生成的 Web 资源。
+`cargo xtask build` 生成可执行文件 **`dist/bin/valle`**（Windows 为 `dist/bin/valle.exe`），内嵌 Studio Web 资源、CanvasKit full、字体和依赖声明。使用 `cargo xtask build --release` 进行优化构建。仅开发 CLI 时，`cargo build -p valle-cli` 会跳过这些内嵌资源；启动 Studio 时需传入 `--web-assets-dir /absolute/path/to/web/dist`。
+
+FFmpeg 是可选的运行时依赖，不随 Valle 分发。媒体操作需要安装 FFmpeg 7.x、8.x 或 9.x **动态库**（macOS 可用 `brew install ffmpeg`）。Motion 检查、纯 Motion PNG 渲染及 Studio 启动无需 FFmpeg。运行 `./dist/bin/valle media capabilities` 检查安装情况；自定义路径和兼容规则见 [CLI 运行时说明](docs/cli.md#runtime-notes)。
+
+## 打包
+
+在需要分发的目标平台上构建：
+
+```sh
+# macOS arm64
+cargo xtask package --min-macos 15.0
+# Linux x86_64 或 Windows x86_64（MSVC）
+cargo xtask package
+```
+
+命令在 FFmpeg 不可用的条件下验证启动、内嵌资源及 Motion/PNG/Studio，然后在 `target/package/` 生成可执行文件和 `SHA256SUMS`；macOS 可执行文件还会签名。GitHub Actions 负责生成分发压缩包及其 `.sha256` 校验文件，并检查解压后的文件完整性、程序启动和 macOS/Linux 执行权限。每个压缩包仅包含可执行文件和 `SHA256SUMS`。
+
+| Actions 工作流 | 分发压缩包 | 包内可执行文件 |
+| --- | --- | --- |
+| Package macOS arm64 | `valle-vVERSION-darwin-arm64.tar.gz` | `valle-vVERSION-darwin-arm64` |
+| Package Linux x86_64 | `valle-vVERSION-linux-x86_64.tar.gz` | `valle-vVERSION-linux-x86_64` |
+| Package Windows x86_64 | `valle-vVERSION-windows-x86_64.zip` | `valle-vVERSION-windows-x86_64.exe` |
+
+在 **Actions → 对应工作流 → Run workflow** 手动触发。工作流上传压缩包及校验文件，产物保留 30 天，构建和测试日志单独保存，不会自动发布 GitHub Release。macOS 保留 FFmpeg 7/8/9 软件测试，打包流程不再要求 GPU 硬件测试。
+
+先解压 GitHub 下载的 artifact，再解压里面的分发包。`.tar.gz` 会保留 macOS/Linux 的执行权限，无需再运行 `chmod`。macOS 示例：
+
+```sh
+shasum -a 256 -c valle-vVERSION-darwin-arm64.tar.gz.sha256
+tar -xzf valle-vVERSION-darwin-arm64.tar.gz
+shasum -a 256 -c SHA256SUMS
+./valle-vVERSION-darwin-arm64 --help
+```
+
+Linux 将命令换成 `sha256sum -c`，文件名换成 Linux 版本。Windows 解压内层 ZIP 后，在 PowerShell 运行 `.\valle-vVERSION-windows-x86_64.exe --help`；可用 `Get-FileHash -Algorithm SHA256` 对照校验文件。已安装构建工具时，三个平台均可用 `cargo xtask verify-package /absolute/path/to/EXECUTABLE` 重新验证运行时。
+
+macOS 包要求 macOS 15+，采用 ad-hoc 签名，未经过 Apple 公证。Linux 包在 Ubuntu 24.04（glibc 2.39）上构建，依赖系统 C/C++ 库、Fontconfig、FreeType 和 OpenBLAS；Ubuntu 可安装 `libfontconfig1 libfreetype6 libopenblas0-pthread`。Windows 使用 MSVC 构建，可能需要 x64 Visual C++ Redistributable；ASR 使用自带计算实现，无需外部 BLAS。FFmpeg 和模型运行时仍为单独安装的可选依赖。
+
+`valle licenses`（或 `valle --json licenses`）可查看内嵌声明和依赖对应版本的源码链接。源码单独提供；分发前需公开该构建对应的 Valle 源码提交。参见[第三方依赖声明](THIRD_PARTY.md#binary-distribution-notices)。
 
 ## 使用 CLI
 

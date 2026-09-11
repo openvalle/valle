@@ -1,7 +1,7 @@
 import { mkdir, readdir } from "node:fs/promises";
 import path from "node:path";
 
-export const RUNTIME_MANIFEST_SCHEMA_VERSION = 1 as const;
+export const RUNTIME_MANIFEST_SCHEMA_VERSION = 2 as const;
 
 export interface RuntimeAsset {
   id: string;
@@ -34,7 +34,6 @@ export interface RootRuntimeManifest {
   runtimeAssets: {
     engine: { glue: string; wasm: string };
     canvasKit: {
-      base: { glue: string; wasm: string };
       full: { glue: string; wasm: string };
     };
     fonts: { defaultSans: string };
@@ -87,10 +86,8 @@ export async function emitRuntimeManifests(
     .filter((file) => !claimedAppScripts.has(file));
   const playerCore = await manifestOf(dist, "player-core", [
     spec("product-frame-worker", "worker", "runtime/workers/product-frame.js", "Apache-2.0"),
-    spec("canvaskit-base-glue", "glue", "runtime/canvaskit/base/canvaskit.js", "BSD-3-Clause", "canvaskit-base", `npm:canvaskit-wasm@${dependencyVersions.canvasKit}`),
-    spec("canvaskit-base-wasm", "wasm", "runtime/canvaskit/base/canvaskit.wasm", "BSD-3-Clause", "canvaskit-base", `npm:canvaskit-wasm@${dependencyVersions.canvasKit}`),
-    spec("canvaskit-full-glue", "glue", "runtime/canvaskit/full/canvaskit.js", "BSD-3-Clause", "canvaskit-full", `npm:canvaskit-wasm@${dependencyVersions.canvasKit}`),
-    spec("canvaskit-full-wasm", "wasm", "runtime/canvaskit/full/canvaskit.wasm", "BSD-3-Clause", "canvaskit-full", `npm:canvaskit-wasm@${dependencyVersions.canvasKit}`),
+    spec("canvaskit-full-glue", "glue", "runtime/canvaskit/canvaskit.js", "BSD-3-Clause", "canvaskit-full", `npm:canvaskit-wasm@${dependencyVersions.canvasKit}`),
+    spec("canvaskit-full-wasm", "wasm", "runtime/canvaskit/canvaskit.wasm", "BSD-3-Clause", "canvaskit-full", `npm:canvaskit-wasm@${dependencyVersions.canvasKit}`),
     spec("default-sans", "font", "runtime/fonts/NotoSans-Regular.ttf", "OFL-1.1", undefined, "https://github.com/notofonts/latin-greek-cyrillic"),
     spec("canvaskit-license", "license", "runtime/licenses/canvaskit.txt", "BSD-3-Clause", undefined, `npm:canvaskit-wasm@${dependencyVersions.canvasKit}`),
     spec("mp4box-license", "license", "runtime/licenses/mp4box.txt", "BSD-3-Clause", undefined, `npm:mp4box@${dependencyVersions.mp4box}`),
@@ -115,8 +112,7 @@ export async function emitRuntimeManifests(
     assets,
     assetGroups: [
       { id: "engine-core", glue: "runtime/engine/valle_engine.js", wasm: ["runtime/engine/valle_engine_bg.wasm"] },
-      { id: "canvaskit-base", glue: "runtime/canvaskit/base/canvaskit.js", wasm: ["runtime/canvaskit/base/canvaskit.wasm"] },
-      { id: "canvaskit-full", glue: "runtime/canvaskit/full/canvaskit.js", wasm: ["runtime/canvaskit/full/canvaskit.wasm"] },
+      { id: "canvaskit-full", glue: "runtime/canvaskit/canvaskit.js", wasm: ["runtime/canvaskit/canvaskit.wasm"] },
     ],
     workers: [{ id: "product-frame", path: "runtime/workers/product-frame.js" }],
     apps: [
@@ -128,8 +124,7 @@ export async function emitRuntimeManifests(
     runtimeAssets: {
       engine: { glue: "runtime/engine/valle_engine.js", wasm: "runtime/engine/valle_engine_bg.wasm" },
       canvasKit: {
-        base: { glue: "runtime/canvaskit/base/canvaskit.js", wasm: "runtime/canvaskit/base/canvaskit.wasm" },
-        full: { glue: "runtime/canvaskit/full/canvaskit.js", wasm: "runtime/canvaskit/full/canvaskit.wasm" },
+        full: { glue: "runtime/canvaskit/canvaskit.js", wasm: "runtime/canvaskit/canvaskit.wasm" },
       },
       fonts: { defaultSans: "runtime/fonts/NotoSans-Regular.ttf" },
       workers: { productFrame: "runtime/workers/product-frame.js" },
@@ -232,8 +227,6 @@ function flattenRuntimeAssets(value: RootRuntimeManifest["runtimeAssets"]): stri
   return [
     value.engine.glue,
     value.engine.wasm,
-    value.canvasKit.base.glue,
-    value.canvasKit.base.wasm,
     value.canvasKit.full.glue,
     value.canvasKit.full.wasm,
     value.fonts.defaultSans,

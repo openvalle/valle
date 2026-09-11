@@ -6,7 +6,6 @@ import { resolvePlayerRuntimeAssets } from "@valle/player-core/runtime-assets";
 const runtimeAssets = {
   engine: { glue: "engine/engine.js", wasm: "engine/engine.wasm" },
   canvasKit: {
-    base: { glue: "canvaskit/base.js", wasm: "canvaskit/base.wasm" },
     full: { glue: "canvaskit/full.js", wasm: "canvaskit/full.wasm" },
   },
   fonts: { defaultSans: "fonts/NotoSans-Regular.ttf" },
@@ -21,10 +20,6 @@ describe("player runtime asset map", () => {
         wasm: "https://example.test/runtime/engine/engine.wasm",
       },
       canvasKit: {
-        base: {
-          glue: "https://example.test/runtime/canvaskit/base.js",
-          wasm: "https://example.test/runtime/canvaskit/base.wasm",
-        },
         full: {
           glue: "https://example.test/runtime/canvaskit/full.js",
           wasm: "https://example.test/runtime/canvaskit/full.wasm",

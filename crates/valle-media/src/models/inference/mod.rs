@@ -14,7 +14,7 @@ pub mod lama;
 pub mod modnet;
 #[cfg(feature = "model-omnishotcut-onnx")]
 pub mod omnishotcut;
-#[cfg(feature = "model-qwen-native")]
+#[cfg(all(feature = "model-qwen-native", not(target_os = "windows")))]
 pub mod qwen_asr;
 #[cfg(feature = "model-realesrgan-onnx")]
 pub mod realesrgan;

@@ -13,13 +13,12 @@ anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 png.workspace = true
-ffmpeg-next = { workspace = true, features = ["codec", "format", "software-scaling", "software-resampling"], optional = true }
+valle-ffmpeg = { workspace = true, features = ["codec", "format", "software-scaling", "software-resampling"], optional = true }
 fs2 = { workspace = true, optional = true }
 hex = { workspace = true, optional = true }
 image = { workspace = true, optional = true }
 libloading = { workspace = true, optional = true }
 ort = { workspace = true, optional = true }
-qwen-asr = { workspace = true, optional = true }
 reqwest = { workspace = true, optional = true }
 rustfft = { workspace = true, optional = true }
 schemars = { workspace = true, optional = true }
@@ -36,13 +35,17 @@ objc2-foundation = { workspace = true, optional = true }
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-sys.workspace = true
 
+# Native ASR and forced alignment are not supported on Windows yet.
+[target.'cfg(not(target_os = "windows"))'.dependencies]
+qwen-asr = { workspace = true, optional = true, features = ["blas", "vdsp"] }
+
 [dev-dependencies]
 hound.workspace = true
 tempfile.workspace = true
 
 [features]
 default = []
-libav = ["dep:ffmpeg-next"]
+libav = ["dep:valle-ffmpeg"]
 model-store = [
   "dep:fs2",
   "dep:hex",

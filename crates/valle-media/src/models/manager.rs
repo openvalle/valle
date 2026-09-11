@@ -26,7 +26,11 @@ pub struct ModelManager {
     models_root: PathBuf,
     #[cfg(feature = "model-store")]
     install_capability_policy: InstallCapabilityPolicy,
-    #[cfg(all(feature = "model-store", feature = "model-qwen-native"))]
+    #[cfg(all(
+        feature = "model-store",
+        feature = "model-qwen-native",
+        not(target_os = "windows")
+    ))]
     legacy_models_root: PathBuf,
     #[cfg(feature = "model-store")]
     catalog: CatalogRepository,
@@ -48,7 +52,11 @@ impl ModelManager {
         Self {
             #[cfg(feature = "model-store")]
             install_capability_policy: InstallCapabilityPolicy::ArtifactManagement,
-            #[cfg(all(feature = "model-store", feature = "model-qwen-native"))]
+            #[cfg(all(
+                feature = "model-store",
+                feature = "model-qwen-native",
+                not(target_os = "windows")
+            ))]
             legacy_models_root: legacy_cache_migration::models_root(),
             #[cfg(feature = "model-store")]
             catalog: CatalogRepository::new(models_root.clone()),
@@ -64,7 +72,11 @@ impl ModelManager {
             install_capability_policy: InstallCapabilityPolicy::ArtifactManagement,
             #[cfg(feature = "model-store")]
             catalog: CatalogRepository::new(models_root.clone()),
-            #[cfg(all(feature = "model-store", feature = "model-qwen-native"))]
+            #[cfg(all(
+                feature = "model-store",
+                feature = "model-qwen-native",
+                not(target_os = "windows")
+            ))]
             legacy_models_root: models_root.clone(),
             models_root,
         }
@@ -77,7 +89,7 @@ impl ModelManager {
         Self {
             install_capability_policy: InstallCapabilityPolicy::ArtifactManagement,
             catalog: CatalogRepository::with_source(models_root.clone(), source),
-            #[cfg(feature = "model-qwen-native")]
+            #[cfg(all(feature = "model-qwen-native", not(target_os = "windows")))]
             legacy_models_root: models_root.clone(),
             models_root,
         }
@@ -116,7 +128,7 @@ impl ModelManager {
             ),
             feature = "model-realesrgan-onnx",
             feature = "model-rife-onnx",
-            feature = "model-qwen-native",
+            all(feature = "model-qwen-native", not(target_os = "windows")),
             all(feature = "model-coreml", target_os = "macos")
         ))
     }
@@ -210,7 +222,7 @@ impl ModelManager {
                 route.artifact,
                 route.backend
             ));
-            #[cfg(feature = "model-qwen-native")]
+            #[cfg(all(feature = "model-qwen-native", not(target_os = "windows")))]
             if let Some(migrated) =
                 self.migrate_legacy_qwen(&bundle, &fetched, route, artifact, progress)?
             {
@@ -255,7 +267,11 @@ impl ModelManager {
     /// Import a complete Phase-0 Qwen cache into its immutable artifact slot before considering
     /// any large download. The published manifest remains the sole source of file hashes and
     /// release identity; the old cache is only a migration source and is never a runtime route.
-    #[cfg(all(feature = "model-store", feature = "model-qwen-native"))]
+    #[cfg(all(
+        feature = "model-store",
+        feature = "model-qwen-native",
+        not(target_os = "windows")
+    ))]
     fn migrate_legacy_qwen(
         &self,
         bundle: &ReleaseBundle,
@@ -695,7 +711,7 @@ fn adapter_available(adapter: &str, version: u32, backend: Backend) -> bool {
         | ("modnet-image-matting", 1, Backend::Coreml) => true,
         #[cfg(feature = "model-modnet-onnx")]
         ("modnet-image-matting", 1, Backend::OnnxCpu) => true,
-        #[cfg(feature = "model-qwen-native")]
+        #[cfg(all(feature = "model-qwen-native", not(target_os = "windows")))]
         ("qwen3-asr-transcription", 1, Backend::NativeCpu)
         | ("qwen3-forced-alignment", 1, Backend::NativeCpu) => true,
         #[cfg(feature = "model-dpdfnet-onnx")]

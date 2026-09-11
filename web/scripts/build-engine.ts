@@ -52,7 +52,11 @@ else {
   };
   const target = targets[`${process.platform}-${process.arch}`];
   if (!target) throw new Error(`Install wasm-bindgen-cli ${version} on PATH for ${process.platform}-${process.arch}`);
-  const tar = Bun.which("tar");
+  // Git's GNU tar treats a Windows drive letter as a remote archive host.
+  const systemRoot = process.env.SystemRoot ?? process.env.WINDIR;
+  const tar = process.platform === "win32"
+    ? systemRoot && path.join(systemRoot, "System32", "tar.exe")
+    : Bun.which("tar");
   if (!tar) throw new Error("tar is required to extract the wasm-bindgen release");
   console.log(`Downloading wasm-bindgen-cli ${version} for ${target}`);
   const release = `wasm-bindgen-${version}-${target}`;

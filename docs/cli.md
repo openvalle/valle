@@ -40,7 +40,7 @@ valle motion studio examples/hello.motion.tsx --size 640x360 --duration 3
 ```
 
 Studio prints a local URL and keeps running; stop it with Ctrl-C. `--port 0` asks
-the OS for a free port. Studio requires the Web resources from a full build.
+the OS for a free port. Studio uses the Web resources embedded by `cargo xtask build`. `valle licenses` displays the embedded dependency notices and source links.
 
 `--frame` selects a zero-based frame and requires a `.png` output. Without it,
 render writes `.mp4`. `--size` sets the logical layout canvas; `--output-size`
@@ -192,7 +192,7 @@ allows `--overwrite`.
 
 Important input/output details:
 
-- Transcription uses the native CPU route and accepts `--backend auto` only.
+- Transcription and forced alignment currently support macOS and Linux only; Windows is not yet supported. Transcription uses the native CPU route and accepts `--backend auto` only.
   `--text-only` skips alignment and only needs the ASR model. It cannot be
   combined with `-o`; with `--json` the text is inside the run result.
 - Matting can use ONNX or macOS CoreML; the other listed non-ASR tools currently
@@ -271,11 +271,42 @@ Keep stdout and stderr separate when parsing events.
 
 ## Runtime notes
 
-Current runtime limitation: the CLI still links to FFmpeg shared libraries.
-Matching libraries are needed at process startup, even for `--help` or offline
-metadata commands. A standalone `ffmpeg` executable does not satisfy that need.
+FFmpeg 7.x, 8.x and 9.x shared libraries are loaded on the first media operation.
+Help, source checking, pure Motion PNG rendering and Studio startup work without
+FFmpeg. A standalone/static `ffmpeg` executable does not supply these libraries.
 
-After upgrading FFmpeg, re-export `PKG_CONFIG_PATH` from the build instructions
-and rebuild. If the linker still refers to a removed Cellar version, run
-`cargo clean -p ffmpeg-sys-next` before rebuilding to discard its cached library
-paths and generated bindings.
+On macOS, install a shared-library build with Homebrew:
+
+```sh
+brew install ffmpeg
+valle media capabilities
+
+# Select a custom installation (the CLI flag takes precedence over the environment):
+export VALLE_FFMPEG_DIR=/absolute/path/to/ffmpeg/lib
+valle --ffmpeg-dir /absolute/path/to/ffmpeg/lib media capabilities
+```
+
+A library directory or installation prefix is accepted. An explicit path is
+authoritative: an invalid installation returns an error without falling back to
+another one. Setting the path alone does not load FFmpeg. A failed load can be
+retried after installing or fixing the libraries; after a successful load, restart
+Valle to select a different installation.
+
+On macOS, automatic discovery searches Homebrew `ffmpeg`, `ffmpeg@8` and `ffmpeg@7`
+under `/opt/homebrew/opt` and `/usr/local/opt`, plus `/opt/local/lib` and
+`/usr/local/lib`. Directories are searched in order; within each directory the
+loader tries FFmpeg 9, then 8, then 7. Windows uses versioned DLL names and absolute
+PATH entries; Linux uses common library directories and versioned system-loader
+names. Install each FFmpeg library set with all of its dependencies.
+
+The loader validates architecture, matching library ABI majors, minimum versions
+and required symbols before use. The header baselines are FFmpeg 7.0, 8.0 and 9.0;
+later compatible versions within each ABI are accepted. Libraries from different
+installations must not be mixed. One process retains its selected ABI until exit.
+
+`valle media capabilities` reports the selected major, actual library paths and
+versions, registered codecs and a real H.264 VideoToolbox availability probe.
+Software H.264 export requires `libx264` for its CRF/preset controls. Use
+`--hardware-encode` to request hardware encoding explicitly; an unavailable
+hardware encoder returns an error without falling back to software. Codec
+registration alone does not guarantee hardware availability on the current device.

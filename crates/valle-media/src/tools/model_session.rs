@@ -7,7 +7,7 @@
 
 use anyhow::Error;
 
-#[cfg(feature = "tool-transcribe")]
+#[cfg(all(feature = "tool-transcribe", not(target_os = "windows")))]
 use crate::models::ResolvedModelCandidates;
 #[cfg(any(
     feature = "tool-enhance",
@@ -63,7 +63,7 @@ impl ModelSessionCandidates {
         })
     }
 
-    #[cfg(feature = "tool-transcribe")]
+    #[cfg(all(feature = "tool-transcribe", not(target_os = "windows")))]
     pub(crate) fn from_resolved(
         preference: RunBackendPreference,
         candidates: ResolvedModelCandidates,

@@ -22,10 +22,8 @@ const runtime = {
   assetUrls: {
     engineGlue: "/runtime/engine/valle_engine.js",
     engineWasm: "/runtime/engine/valle_engine_bg.wasm",
-    canvasKitBaseGlue: "/runtime/canvaskit/base/canvaskit.js",
-    canvasKitBaseWasm: "/runtime/canvaskit/base/canvaskit.wasm",
-    canvasKitFullGlue: "/runtime/canvaskit/full/canvaskit.js",
-    canvasKitFullWasm: "/runtime/canvaskit/full/canvaskit.wasm",
+    canvasKitFullGlue: "/runtime/canvaskit/canvaskit.js",
+    canvasKitFullWasm: "/runtime/canvaskit/canvaskit.wasm",
     defaultSansFont: "/runtime/fonts/NotoSans-Regular.ttf",
     productFrameWorker: "/runtime/workers/product-frame.js",
   },
@@ -346,10 +344,6 @@ describe("Studio host adapters", () => {
             wasm: runtime.assetUrls.engineWasm,
           },
           canvasKit: {
-            base: {
-              glue: runtime.assetUrls.canvasKitBaseGlue,
-              wasm: runtime.assetUrls.canvasKitBaseWasm,
-            },
             full: {
               glue: runtime.assetUrls.canvasKitFullGlue,
               wasm: runtime.assetUrls.canvasKitFullWasm,

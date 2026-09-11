@@ -61,3 +61,21 @@ pub use flac::{
 };
 #[cfg(feature = "libav")]
 pub use muxer::{AudioMuxer, Muxer, RgbaToYuv, YuvFrame, hw_h264_available};
+
+mod time_base;
+pub use time_base::TimeBase;
+#[cfg(feature = "libav")]
+pub(crate) mod backend;
+
+#[cfg(feature = "tool-segment")]
+pub(crate) mod mask;
+
+#[cfg(any(
+    feature = "tool-inpaint",
+    feature = "tool-interpolate",
+    feature = "tool-matte",
+    feature = "tool-segment",
+    feature = "tool-shots",
+    feature = "tool-upscale"
+))]
+pub(crate) mod sequence;

@@ -15,7 +15,7 @@ use std::{
     time::Instant,
 };
 
-use ffmpeg_next::Rational;
+use crate::codec::TimeBase as Rational;
 use serde::{Deserialize, Serialize};
 
 use crate::{

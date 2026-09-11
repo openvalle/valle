@@ -96,8 +96,6 @@ fn project_boot(project: &ProjectStudioCtx, config_json: &str) -> Result<String>
     for (name, pointer) in [
         ("engineGlue", "/engine/glue"),
         ("engineWasm", "/engine/wasm"),
-        ("canvasKitBaseGlue", "/canvasKit/base/glue"),
-        ("canvasKitBaseWasm", "/canvasKit/base/wasm"),
         ("canvasKitFullGlue", "/canvasKit/full/glue"),
         ("canvasKitFullWasm", "/canvasKit/full/wasm"),
         ("defaultSansFont", "/fonts/defaultSans"),
@@ -169,8 +167,6 @@ fn studio_boot_from_config(config_json: &str) -> Result<String> {
     for (name, pointer) in [
         ("engineGlue", "/engine/glue"),
         ("engineWasm", "/engine/wasm"),
-        ("canvasKitBaseGlue", "/canvasKit/base/glue"),
-        ("canvasKitBaseWasm", "/canvasKit/base/wasm"),
         ("canvasKitFullGlue", "/canvasKit/full/glue"),
         ("canvasKitFullWasm", "/canvasKit/full/wasm"),
         ("defaultSansFont", "/fonts/defaultSans"),

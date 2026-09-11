@@ -5,11 +5,11 @@
 //! `ModelManager::install` locate old bytes so the model store can verify and import them without
 //! downloading the multi-gigabyte weights again.
 
-#[cfg(feature = "model-qwen-native")]
+#[cfg(all(feature = "model-qwen-native", not(target_os = "windows")))]
 use std::path::Path;
 use std::path::PathBuf;
 
-#[cfg(feature = "model-qwen-native")]
+#[cfg(all(feature = "model-qwen-native", not(target_os = "windows")))]
 const MIGRATABLE_QWEN_MODELS: &[&str] = &["qwen3-asr-0.6b", "qwen3-aligner-0.6b"];
 
 /// Root used by Valle before the platform-native model store was introduced.
@@ -30,7 +30,7 @@ pub(super) fn models_root() -> PathBuf {
 }
 
 /// Return an existing old-style directory only for a known Qwen model.
-#[cfg(feature = "model-qwen-native")]
+#[cfg(all(feature = "model-qwen-native", not(target_os = "windows")))]
 pub(super) fn migration_source(root: &Path, model_id: &str) -> Option<PathBuf> {
     if !MIGRATABLE_QWEN_MODELS.contains(&model_id) {
         return None;
@@ -39,7 +39,7 @@ pub(super) fn migration_source(root: &Path, model_id: &str) -> Option<PathBuf> {
     directory.is_dir().then_some(directory)
 }
 
-#[cfg(all(test, feature = "model-qwen-native"))]
+#[cfg(all(test, feature = "model-qwen-native", not(target_os = "windows")))]
 mod tests {
     use super::*;
 

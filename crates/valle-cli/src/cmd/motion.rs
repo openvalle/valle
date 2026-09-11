@@ -218,8 +218,8 @@ struct StudioRequest {
 
 fn studio(request: StudioRequest) -> Result<std::process::ExitCode> {
     validate_studio_request(&request)?;
-    let cache_root = crate::webruntime::default_cache_root()?;
-    let runtime = crate::webruntime::resolve(request.web_assets_dir.as_deref(), &cache_root)?;
+
+    let runtime = crate::webruntime::resolve(request.web_assets_dir.as_deref())?;
     let generation = Arc::new(AtomicU64::new(1));
     let config = studio_state_json(&request, 1)?;
 
@@ -231,7 +231,7 @@ fn studio(request: StudioRequest) -> Result<std::process::ExitCode> {
     for (index, path) in request.fonts.iter().enumerate() {
         local_runtime_files.insert(format!("motion-fonts/{index}"), path.clone());
     }
-    install_motion_runtime_font_files(&mut local_runtime_files, &cache_root)?;
+    mount_motion_runtime_fonts(&mut runtime_files)?;
     for (route, path) in local_runtime_files {
         if let Some(crate::webruntime::HostedFile::VerifiedRuntime(runtime_bytes)) =
             runtime_files.get(&route)
@@ -1208,59 +1208,27 @@ fn deduplicate_font_blobs(blobs: &mut Vec<Vec<u8>>) {
     blobs.retain(|bytes| identities.insert(ContentDigest::of_bytes(bytes)));
 }
 
-pub(crate) fn install_default_motion_font_files(
-    files: &mut BTreeMap<String, PathBuf>,
-    cache_root: &Path,
+/// Serve every built-in Motion and formula font from memory, sharing the native font bytes.
+fn mount_motion_runtime_fonts(
+    files: &mut BTreeMap<String, crate::webruntime::HostedFile>,
 ) -> Result<()> {
-    let dir = cache_root.join("default-motion-fonts");
-    std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
-    for (bytes, name) in valle_motion::DEFAULT_MOTION_FONT_WEIGHTS
+    use crate::webruntime::HostedFile;
+    let default = valle_motion::DEFAULT_MOTION_FONT_FILES
         .iter()
-        .zip(valle_motion::DEFAULT_MOTION_FONT_FILES)
-    {
-        let path = dir.join(name);
-        let stale = path
-            .metadata()
-            .map(|meta| meta.len() as usize != bytes.len())
-            .unwrap_or(true);
-        if stale {
-            std::fs::write(&path, bytes).with_context(|| format!("writing {}", path.display()))?;
+        .zip(valle_motion::DEFAULT_MOTION_FONT_WEIGHTS.iter())
+        .map(|(name, bytes)| (format!("runtime/fonts/{name}"), *bytes));
+    let formula = valle_motion::math_formula::formula_font_pack()
+        .into_iter()
+        .map(|(face, bytes)| (format!("runtime/fonts/katex/{}", face.file_name), bytes));
+    for (route, bytes) in default.chain(formula) {
+        if let Some(file) = files.get(&route) {
+            if !matches!(file, HostedFile::VerifiedRuntime(existing) if existing.as_ref() == bytes)
+            {
+                bail!("built-in font conflicts with Web runtime asset: {route}");
+            }
+        } else {
+            files.insert(route, HostedFile::VerifiedRuntime(Arc::from(bytes)));
         }
-        files.insert(format!("runtime/fonts/{name}"), path);
-    }
-    Ok(())
-}
-
-/// Mount the complete built-in Motion font closure for every browser host.
-///
-/// Keeping this as one operation is intentional: render and Studio use the same Motion
-/// configuration. A host that exposes only the base runtime font can
-/// pass startup validation and still fail later when a real weight, fallback face or formula is
-/// first requested.
-pub(crate) fn install_motion_runtime_font_files(
-    files: &mut BTreeMap<String, PathBuf>,
-    cache_root: &Path,
-) -> Result<()> {
-    install_default_motion_font_files(files, cache_root)?;
-    install_formula_font_files(files, cache_root)
-}
-
-pub(crate) fn install_formula_font_files(
-    files: &mut BTreeMap<String, PathBuf>,
-    cache_root: &Path,
-) -> Result<()> {
-    let dir = cache_root.join("formula-fonts");
-    std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
-    for (face, bytes) in valle_motion::math_formula::formula_font_pack() {
-        let path = dir.join(face.file_name);
-        let stale = path
-            .metadata()
-            .map(|meta| meta.len() as usize != bytes.len())
-            .unwrap_or(true);
-        if stale {
-            std::fs::write(&path, bytes).with_context(|| format!("writing {}", path.display()))?;
-        }
-        files.insert(format!("runtime/fonts/katex/{}", face.file_name), path);
     }
     Ok(())
 }

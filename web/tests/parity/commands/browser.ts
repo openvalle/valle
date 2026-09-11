@@ -175,8 +175,6 @@ async function handleRequest(request: any, state: any) {
                     assetUrls: {
                         engineGlue: RUNTIME_MANIFEST.runtimeAssets.engine.glue,
                         engineWasm: RUNTIME_MANIFEST.runtimeAssets.engine.wasm,
-                        canvasKitBaseGlue: RUNTIME_MANIFEST.runtimeAssets.canvasKit.base.glue,
-                        canvasKitBaseWasm: RUNTIME_MANIFEST.runtimeAssets.canvasKit.base.wasm,
                         canvasKitFullGlue: RUNTIME_MANIFEST.runtimeAssets.canvasKit.full.glue,
                         canvasKitFullWasm: RUNTIME_MANIFEST.runtimeAssets.canvasKit.full.wasm,
                     },

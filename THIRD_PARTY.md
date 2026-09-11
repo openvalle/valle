@@ -28,7 +28,8 @@ We thank the authors and maintainers of the projects below. This document covers
 | **RaTeX** | LaTeX parsing, font metrics, and formula layout, with Valle's drawing adapter. |
 | **Skia / skia-safe / Skottie / CanvasKit** | Native and Web drawing, compositing, effects, and Lottie rendering. |
 | **OXC / QuickJS / rquickjs** | Motion source parsing, transforms, and preparation-stage JavaScript execution. |
-| **FFmpeg / ffmpeg-next / MP4Box.js** | Native media processing and browser MP4 demuxing; browser decoding uses WebCodecs. |
+| **FFmpeg / valle-ffmpeg / valle-ffmpeg-sys / MP4Box.js** | User-installed native media libraries are loaded on demand. The `valle-ffmpeg` and `valle-ffmpeg-sys` crates are maintained in [openvalle/ffmpeg-rs](https://github.com/openvalle/ffmpeg-rs), derived from the WTFPL-licensed `ffmpeg-next`/`ffmpeg-sys-next` 9.0.0 sources. They include typed FFmpeg 7/8/9 runtime adapters and pinned public headers with their upstream LGPL notices. Source hashes and changes are recorded in that repository and each published crate NOTICE. No FFmpeg libraries or codec binaries are shipped. Browser MP4 demuxing uses MP4Box.js and decoding uses WebCodecs. |
+| **x264 / x265 / libvpx / SVT-AV1 / dav1d / LAME / Opus** | Optional codecs in user-provided FFmpeg installations; not bundled. |
 | **ONNX Runtime / ort / qwen-asr** | Model inference and speech recognition. |
 | **Apple CoreML / Metal / objc2** | macOS inference and graphics integration, including platform APIs and Rust bindings. |
 | **geo / kurbo / libm / image / png / RustFFT** | Geometry, paths, deterministic math, image processing, and signal processing. |
@@ -52,3 +53,10 @@ Current integrations include **BiRefNet, MODNet, Demucs, DPDFNet, EdgeTAM, LaMa,
 See the [model release manifests](crates/valle-media/src/models/catalog) for upstream sources, versions, artifact hashes, and licenses, and the [NOTICE](crates/valle-media/licenses/NOTICE.txt) for integration code provenance. Model code, weights, and conversion artifacts are governed by their respective notices.
 
 When adding or updating third-party content, update the dependency manifests, attribution, and original copyright and license files together.
+
+## Binary distribution notices
+
+`valle licenses` displays the texts and versioned source links embedded by `cargo xtask build`.
+[`xtask/license-supplements.json`](xtask/license-supplements.json) preserves upstream notices omitted from published package
+archives, with exact package versions and retrieval URLs. Update these entries when their pinned
+dependencies change. It contains license text only, not dependency implementations or source archives.
