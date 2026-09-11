@@ -1299,13 +1299,12 @@ impl Emitter<'_> {
         let empty = resolved.runs.iter().all(|r| r.glyph_run.glyphs.is_empty());
         if empty {
             // Use the same text predicate for emission and missing-glyph reporting.
-            if has_own_text(node)
-                || node.has_anonymous_text_item_child()
-                || node.should_create_inline_layout()
-            {
+            // An inline formatting context can contain only replaced images. It has no
+            // glyphs to shape and must not be reported as a missing font.
+            if has_own_text(node) || node.has_anonymous_text_item_child() {
                 self.unsupported(np, "text produced no glyphs (no usable font?)");
             }
-            return;
+            // Continue to the inline replaced-image boxes even when there are no glyph runs.
         }
         // Compute source ranges once per glyph run and share them between text and shadow layers.
         let source_ranges: Vec<Option<GlyphSource>> = resolved
@@ -2097,6 +2096,9 @@ impl Emitter<'_> {
         }
         for (index, geometry) in layers {
             let image = &images[index];
+            if matches!(image, takumi_core::style::BackgroundImage::None) {
+                continue;
+            }
             for &y in &geometry.ys {
                 for &x in &geometry.xs {
                     let tile = Rect::new(

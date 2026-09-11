@@ -8,6 +8,26 @@ impl<'s> Compiler<'s> {
         element: &'s JSXElement<'s>,
         path: &str,
     ) -> Option<PendingNode> {
+        let list_depth = self.list_depth;
+        if list_depth > 0 && !element.opening_element.attributes.iter().any(|attribute| {
+            matches!(attribute, JSXAttributeItem::Attribute(attribute)
+                if matches!(&attribute.name, JSXAttributeName::Identifier(name) if name.name == "key"))
+        }) {
+            self.illegal(DiagCode::GrammarForbidden, element.opening_element.span(),
+                "every data-driven list item must declare a prepare-time stable `key`");
+        }
+        self.list_depth = 0;
+        let result = self.lower_jsx_node(element, path, list_depth > 0);
+        self.list_depth = list_depth;
+        result
+    }
+
+    fn lower_jsx_node(
+        &mut self,
+        element: &'s JSXElement<'s>,
+        path: &str,
+        list_root: bool,
+    ) -> Option<PendingNode> {
         let tag = match &element.opening_element.name {
             JSXElementName::Identifier(id) => id.name.to_string(),
             JSXElementName::IdentifierReference(id) => id.name.to_string(),
@@ -57,9 +77,9 @@ impl<'s> Compiler<'s> {
             "GeometryBatch" => ("geometry-batch", None),
             "ShaderLayer" => ("shader-layer", None),
             "Scene3D" => ("scene3d", None),
-            "Image" | "img" => ("image", None),
+            "Image" | "img" => ("image", Some("block")),
             "MathFormula" => ("math-formula", None),
-            "Video" | "video" => ("video", None),
+            "Video" | "video" => ("video", Some("block")),
             "Clip" => ("clip", None),
             "Mask" => ("mask", None),
             "MaskSource" => ("mask-source", None),
@@ -704,14 +724,9 @@ impl<'s> Compiler<'s> {
                 path_d = self.lower_svg_shape(shape, &shape_numbers, shape_points, element.span());
             }
         }
-        if self.list_depth > 0 && key.is_none() {
-            self.illegal(
-                DiagCode::GrammarForbidden,
-                element.opening_element.span(),
-                "every data-driven list item must declare a prepare-time stable `key`",
-            );
-        }
         let key = self.scoped_key(&key.unwrap_or_else(|| path.to_string()));
+        // Static descendants are stable when keyed list items are reordered.
+        let path = if list_root { key.as_str() } else { path };
         if !self.keys.insert(key.clone()) {
             self.illegal(
                 DiagCode::ArtifactInvalid,

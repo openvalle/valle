@@ -1023,6 +1023,9 @@ fn adapt_transform_with_fit(
             "compiled layer transform is invalid",
         ));
     }
+    let [source_width, source_height] = layer
+        .size()
+        .unwrap_or([f64::from(source_width), f64::from(source_height)]);
     let rotation = layer.rotation();
     let (sin, cos) = rotation.sin_cos();
     let local_x = (0.5 - anchor_x) * f64::from(source_width) * scale_x;

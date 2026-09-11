@@ -911,6 +911,7 @@ enum AdmittedMask {
 
 #[derive(Debug, Clone)]
 struct AdmittedVisualLayer {
+    size: Option<AdmittedParam<[f64; 2]>>,
     position: AdmittedParam<[f64; 2]>,
     scale: AdmittedParam<[f64; 2]>,
     rotation: AdmittedParam<f64>,
@@ -1185,8 +1186,9 @@ fn admit_timeline_programs(
         resources,
         diagnostics,
     )?;
+    let audio_composition = with_video_audio(document, resource_targets, resources, diagnostics)?;
     let audio = admit_audio_program(
-        &document.audio,
+        &audio_composition,
         canvas,
         resource_targets,
         resources,
@@ -1670,6 +1672,14 @@ fn admit_visual_layer(
         .collect();
     let footprint = combined_visual_footprint(&filters, kernels, &path, diagnostics);
     AdmittedVisualLayer {
+        size: transform.size.as_ref().map(|size| {
+            admit_param(
+                size,
+                AdmittedOwnerClock::VisualClipLocal,
+                &format!("{path}/transform/size"),
+                diagnostics,
+            )
+        }),
         position: admit_param(
             &transform.position,
             AdmittedOwnerClock::VisualClipLocal,
@@ -2205,9 +2215,10 @@ fn motion_json_matches_artifact_control(value: &JsonValue, control: &ControlType
                 && min.is_none_or(|min| value >= min)
                 && max.is_none_or(|max| value <= max)
         }),
-        ControlType::Length | ControlType::Angle => finite_number(value),
+        ControlType::Length | ControlType::Angle => motion_scalar_value(value, control).is_some(),
         ControlType::Point => finite_array(value, 2),
-        ControlType::Color | ControlType::Rect => finite_array(value, 4),
+        ControlType::Color => motion_color_value(value).is_some(),
+        ControlType::Rect => finite_array(value, 4),
         ControlType::Bool => value.is_boolean(),
         ControlType::String | ControlType::NodeTarget => value.is_string(),
         ControlType::Select { values } => value
@@ -2225,7 +2236,7 @@ fn admit_motion_param(
 ) -> Option<AdmittedMotionParam> {
     match control {
         ControlType::Number { .. } | ControlType::Length | ControlType::Angle => {
-            admit_motion_typed_param(param, JsonValue::as_f64)
+            admit_motion_typed_param(param, |value| motion_scalar_value(value, control))
                 .map(|param| AdmittedMotionParam::Scalar { param })
                 .or_else(|| motion_param_type_error(path, diagnostics))
         }
@@ -2236,7 +2247,10 @@ fn admit_motion_param(
         })
         .map(|param| AdmittedMotionParam::Vec2 { param })
         .or_else(|| motion_param_type_error(path, diagnostics)),
-        ControlType::Color | ControlType::Rect => admit_motion_typed_param(param, |value| {
+        ControlType::Color => admit_motion_typed_param(param, motion_color_value)
+            .map(|param| AdmittedMotionParam::Vec4 { param })
+            .or_else(|| motion_param_type_error(path, diagnostics)),
+        ControlType::Rect => admit_motion_typed_param(param, |value| {
             let values = value.as_array()?;
             Some([
                 values.first()?.as_f64()?,
@@ -2887,6 +2901,7 @@ fn admit_audio_program(
                         &format!("{path}/source/resource"),
                         diagnostics,
                     );
+                    let target = video_audio_target(resources, target).unwrap_or(target);
                     let (channel_map, source_sample_rate, source_sample_count) =
                         validate_audio_descriptor(
                             resources,
@@ -3478,4 +3493,120 @@ mod tests {
             compile_with(&changed_numeric_abi).render_id()
         );
     }
+}
+
+/// Resolve the selected audio stream carried by a video resource's verified dependency.
+fn video_audio_target(resources: &[ResolvedResource], target: u32) -> Option<u32> {
+    let resource = resources.get(target as usize)?;
+    if resource.kind != ResourceKind::Video {
+        return None;
+    }
+    resource
+        .dependencies
+        .iter()
+        .find(|d| d.role == "audio")
+        .map(|d| d.target)
+}
+
+fn with_video_audio(
+    document: &TimelineDocument,
+    targets: &BTreeMap<String, u32>,
+    resources: &[ResolvedResource],
+    diagnostics: &mut Vec<EngineOpenDiagnostic>,
+) -> Option<AudioComposition> {
+    let mut audio = document.audio.clone();
+    for track in &document.visual.tracks {
+        let mut cursor = RationalTime::ZERO;
+        for item in &track.items {
+            match item {
+                VisualItem::Clip(clip) => {
+                    if let VisualSource::Video(video) = &clip.source {
+                        let target = targets.get(video.resource.as_str()).copied();
+                        let audio_target =
+                            target.and_then(|target| video_audio_target(resources, target));
+                        if let Some(target) = audio_target {
+                            let mut duration = clip.duration;
+                            if video.end_behavior != MediaEndBehavior::Loop {
+                                let available = audio_resource_duration(resources, target)
+                                    .and_then(|end| end.checked_sub(video.source_start).ok())
+                                    .and_then(|time| time.into_exact().checked_div(video.rate.into_exact()).ok())
+                                    .map(RationalTime::from_exact);
+                                duration = available.unwrap_or(RationalTime::ZERO).min(duration);
+                            }
+                            if duration <= RationalTime::ZERO {
+                                cursor = cursor.checked_add(clip.duration).ok()?;
+                                continue;
+                            }
+                            let mut items = Vec::new();
+                            if cursor > RationalTime::ZERO {
+                                items.push(AudioItem::Gap(Gap { id: format!("{}:audio-gap", clip.id), duration: cursor }));
+                            }
+                            items.push(AudioItem::Clip(AudioClip {
+                                id: format!("{}:audio", clip.id), duration,
+                                source: AudioSource::Media(AudioMediaSource {
+                                    resource: resources[target as usize].resource_id.clone(),
+                                    source_start: video.source_start, rate: video.rate,
+                                    // The last video frame may hold, but its final audio sample must not.
+                                    end_behavior: match video.end_behavior {
+                                        MediaEndBehavior::Loop => MediaEndBehavior::Loop,
+                                        _ => MediaEndBehavior::Error,
+                                    },
+                                }),
+                                gain: video.gain.clone().unwrap_or(Param::Constant(ConstantParam { value: 1.0 })),
+                                pan: Param::Constant(ConstantParam { value: 0.0 }), effects: Vec::new(),
+                            }));
+                            audio.tracks.push(AudioTrack { id: format!("{}:audio", clip.id), items });
+                        } else if target.is_some_and(|target| matches!(&resources[target as usize].facts,
+                            VerifiedResourceFacts::Video { descriptor, .. } if descriptor.audio_stream.is_some())) {
+                            diagnostics.push(admit_fault(&format!("/document/visual/{}/source", clip.id), "video-audio-dependency-missing"));
+                        }
+                    }
+                    cursor = cursor.checked_add(clip.duration).ok()?;
+                }
+                VisualItem::Gap(gap) => cursor = cursor.checked_add(gap.duration).ok()?,
+                VisualItem::Transition(_) => {}
+            }
+        }
+    }
+    Some(audio)
+}
+
+fn motion_scalar_value(value: &JsonValue, control: &ControlType) -> Option<f64> {
+    value
+        .as_f64()
+        .filter(|value| value.is_finite())
+        .or_else(|| {
+            let source = value.as_str()?;
+            match control {
+                ControlType::Length => valle_motion::value::Length::parse(source)
+                    .filter(|length| length.unit == valle_motion::value::LengthUnit::Px)
+                    .map(|length| length.value),
+                ControlType::Angle => {
+                    valle_motion::value::Angle::parse(source).map(|angle| angle.as_degrees())
+                }
+                _ => None,
+            }
+        })
+        .filter(|value| value.is_finite())
+}
+
+fn motion_color_value(value: &JsonValue) -> Option<[f64; 4]> {
+    if let Some(source) = value.as_str() {
+        let color = valle_draw::Rgba::parse(source)?;
+        return Some([color.r, color.g, color.b, color.a].map(f64::from));
+    }
+    let values = value.as_array()?;
+    if values.len() != 4 {
+        return None;
+    }
+    let result = [
+        values[0].as_f64()?,
+        values[1].as_f64()?,
+        values[2].as_f64()?,
+        values[3].as_f64()?,
+    ];
+    result
+        .iter()
+        .all(|value| value.is_finite() && (0.0..=255.0).contains(value))
+        .then_some(result)
 }

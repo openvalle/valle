@@ -1816,6 +1816,7 @@ enum CompiledMask {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct CompiledVisualLayer {
+    size: Option<CompiledParam<[f64; 2]>>,
     position: CompiledParam<[f64; 2]>,
     scale: CompiledParam<[f64; 2]>,
     rotation: CompiledParam<f64>,
@@ -2800,6 +2801,7 @@ impl EvaluatedSourceRef {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct EvaluatedVisualLayer {
+    size: Option<[f64; 2]>,
     position: [f64; 2],
     scale: [f64; 2],
     rotation: f64,
@@ -2825,6 +2827,9 @@ pub enum EvaluatedVisualMask {
 }
 
 impl EvaluatedVisualLayer {
+    pub const fn size(&self) -> Option<[f64; 2]> {
+        self.size
+    }
     pub const fn position(&self) -> [f64; 2] {
         self.position
     }
@@ -4479,9 +4484,8 @@ mod compiled_canvas_tests {
 
     #[test]
     fn font_payload_axes_must_match_the_concrete_face() {
-        let bytes: Arc<[u8]> = Arc::from(
-            &include_bytes!("../../../assets/fonts/katex/KaTeX_Main-Regular.ttf")[..],
-        );
+        let bytes: Arc<[u8]> =
+            Arc::from(&include_bytes!("../../../assets/fonts/katex/KaTeX_Main-Regular.ttf")[..]);
         let digest = content_digest(&bytes);
         let descriptor = FontResourceDescriptorWire {
             face_index: 0,

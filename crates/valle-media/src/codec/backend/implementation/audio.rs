@@ -628,3 +628,18 @@ pub(crate) mod tests {
         assert_eq!(stream.total_frames(), Some(expected_frames as u64));
     }
 }
+
+pub fn probe_audio_stream(path: &Path) -> Result<Option<crate::codec::audio::AudioStreamInfo>> {
+    ffmpeg_init()?;
+    let input = format::input(path)?;
+    let Some(stream) = input.streams().best(media::Type::Audio) else {
+        return Ok(None);
+    };
+    let decoder = codec::context::Context::from_parameters(stream.parameters())?
+        .decoder()
+        .audio()?;
+    Ok(Some(crate::codec::audio::AudioStreamInfo {
+        stream: u32::try_from(stream.index())?,
+        channels: decoder.channels(),
+    }))
+}

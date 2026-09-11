@@ -342,6 +342,8 @@ pub struct VisualLayerWire {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct LayerTransformWire {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<ParamWire<Vec2>>,
     pub position: ParamWire<Vec2>,
     pub scale: ParamWire<Vec2>,
     pub rotation: ParamWire<f64>,
@@ -409,9 +411,11 @@ pub enum VisualSourceWire {
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct VideoSourceWire {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gain: Option<ParamWire<f64>>,
     pub resource: ResourceId,
     pub source_start: ExactRational,
     pub rate: ExactRational,

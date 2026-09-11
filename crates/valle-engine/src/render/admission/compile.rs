@@ -242,6 +242,7 @@ pub(super) fn compile_admitted_timeline(
 
     fn compile_visual_layer(layer: AdmittedVisualLayer) -> CompiledVisualLayer {
         CompiledVisualLayer {
+            size: layer.size.map(compile_param),
             position: compile_param(layer.position),
             scale: compile_param(layer.scale),
             rotation: compile_param(layer.rotation),

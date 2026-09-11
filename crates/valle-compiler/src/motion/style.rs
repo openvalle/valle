@@ -413,6 +413,18 @@ impl<'s> Compiler<'s> {
                 }
                 saw_motion_path_component = true;
             }
+            if !matches!(
+                property_name.as_str(),
+                "rotate-x" | "rotate-y" | "perspective" | "paper-grain" | "contact-shadow"
+            ) && !valle_motion::layout::supports_css_property(&property_name)
+            {
+                self.illegal(
+                    DiagCode::GrammarForbidden,
+                    property.key.span(),
+                    format!("unknown or unsupported style property `{name}`"),
+                );
+                continue;
+            }
             // Try literals, then compile-time folding, then runtime lowering. Folded values must
             // become Static entries without redundant arena nodes.
             let mut value = match static_motion_value(&property.value) {

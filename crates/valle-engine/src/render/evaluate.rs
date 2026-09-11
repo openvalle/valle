@@ -245,6 +245,7 @@ fn evaluate_visual_layer(
         },
     });
     Ok(EvaluatedVisualLayer {
+        size: clip.layer.size.as_ref().map(|size| size.evaluate(clocks)),
         position: clip.layer.position.evaluate(clocks),
         scale: clip.layer.scale.evaluate(clocks),
         rotation: clip.layer.rotation.evaluate(clocks),

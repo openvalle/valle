@@ -11,8 +11,8 @@ use crate::{
     wire::timeline::{
         EasingWire, JsonObject, TimelineAdjustmentWire, TimelineCaptionBehaviorWire,
         TimelineCaptionClipWire, TimelineCaptionLayoutWire, TimelineCaptionPresentationWire,
-        TimelineDisplayPresetWire, TimelineParamWire, TimelineTextRunWire, TimelineVisualClipWire,
-        TimelineVisualSourceWire, TimelineWire,
+        TimelineParamWire, TimelineTextRunWire, TimelineVisualClipWire, TimelineVisualSourceWire,
+        TimelineWire,
     },
 };
 
@@ -34,8 +34,8 @@ pub enum TimelineDecodeError {
         issue: TimelineJsonIssue,
         path: String,
     },
-    #[error("document does not match Timeline timeline shape")]
-    InvalidShape,
+    #[error("invalid Timeline: {message}")]
+    InvalidShape { message: String },
     #[error(transparent)]
     InvalidTimeline(#[from] TimelineValidationReport),
 }
@@ -54,11 +54,27 @@ pub struct TimelineDiagnostic {
     pub details: JsonObject,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, thiserror::Error)]
-#[error("Timeline timeline validation failed")]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct TimelineValidationReport {
     pub diagnostics: Vec<TimelineDiagnostic>,
 }
+
+impl std::fmt::Display for TimelineValidationReport {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Timeline validation failed")?;
+        for diagnostic in &self.diagnostics {
+            write!(
+                f,
+                "; {}: {} ({})",
+                diagnostic.path,
+                diagnostic.code,
+                serde_json::json!(diagnostic.details)
+            )?;
+        }
+        Ok(())
+    }
+}
+impl std::error::Error for TimelineValidationReport {}
 
 /// Shape-checked, normalized public Timeline state.
 #[derive(Debug, Clone, PartialEq)]
@@ -97,8 +113,12 @@ pub fn decode_timeline(json: &str) -> Result<Timeline, TimelineDecodeError> {
     parse_strict(json.as_bytes()).map_err(map_json_error)?;
     // Decode the original source so TimelineTimeWire sees the exact decimal token
     // before applying deterministic half-away-from-zero q6 normalization.
-    let wire = serde_json::from_str::<TimelineWire>(json)
-        .map_err(|_| TimelineDecodeError::InvalidShape)?;
+    let wire: TimelineWire = serde_path_to_error::deserialize(
+        &mut serde_json::Deserializer::from_str(json),
+    )
+    .map_err(|error| TimelineDecodeError::InvalidShape {
+        message: error.to_string(),
+    })?;
     Timeline::from_wire(wire).map_err(TimelineDecodeError::InvalidTimeline)
 }
 
@@ -260,6 +280,10 @@ impl TimelineValidator {
         }
         normalize_param(&mut clip.position, &format!("{path}/position"), self);
         normalize_param(&mut clip.scale, &format!("{path}/scale"), self);
+        normalize_param(&mut clip.size, &format!("{path}/size"), self);
+        if let TimelineVisualSourceWire::Video { gain, .. } = &mut clip.source {
+            normalize_param(gain, &format!("{path}/gain"), self);
+        }
         normalize_param(&mut clip.rotation, &format!("{path}/rotation"), self);
         if let Some(anchor) = &mut clip.anchor {
             normalize_array(anchor, &format!("{path}/anchor"), self);
@@ -358,7 +382,7 @@ impl TimelineValidator {
                 json!({ "required": "presets or presentation, not both" }),
             );
         }
-        if let Some(TimelineDisplayPresetWire::Options(options)) = &mut clip.display {
+        if let Some(options) = &mut clip.display {
             normalize_closed(&mut options.rate, &format!("{path}/display/rate"), self);
         }
         if let Some(presentation) = &mut clip.presentation {

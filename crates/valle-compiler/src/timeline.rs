@@ -55,7 +55,7 @@ pub enum CompileTimelineError {
         #[source]
         source: CaptionPresetError,
     },
-    #[error("normalized Timeline violates canonical local invariants")]
+    #[error("normalized Timeline violates local invariants: {0}")]
     InvalidCanonical(LocalInvariantReport),
 }
 
@@ -176,6 +176,11 @@ impl TimelineNormalizer {
             )?;
             let layer = document::VisualLayerWire {
                 transform: document::LayerTransformWire {
+                    size: Some(
+                        clip.size
+                            .map(|value| timeline_param_to_canonical(value, &clip_id, "size"))
+                            .unwrap_or_else(|| constant(self.canvas_size.map(f64::from))),
+                    ),
                     position: clip
                         .position
                         .map(|value| timeline_param_to_canonical(value, &clip_id, "position"))
@@ -186,7 +191,13 @@ impl TimelineNormalizer {
                         .unwrap_or_else(|| constant([1.0, 1.0])),
                     rotation: clip
                         .rotation
-                        .map(|value| timeline_param_to_canonical(value, &clip_id, "rotation"))
+                        .map(|value| {
+                            timeline_param_to_canonical(
+                                map_param(value, f64::to_radians),
+                                &clip_id,
+                                "rotation",
+                            )
+                        })
                         .unwrap_or_else(|| constant(0.0)),
                     anchor: clip.anchor.unwrap_or([0.5, 0.5]),
                 },
@@ -226,11 +237,19 @@ impl TimelineNormalizer {
         Ok(match source {
             timeline::TimelineVisualSourceWire::Video {
                 src,
+                gain,
                 trim_start,
                 rate,
                 end,
                 fit,
             } => document::VisualSourceWire::Video(document::VideoSourceWire {
+                gain: gain.map(|value| {
+                    timeline_param_to_canonical(
+                        value,
+                        &clip_id("visual", track_index, clip_index),
+                        "gain",
+                    )
+                }),
                 resource: self.resolve(&src, &source_path)?,
                 source_start: trim_start.as_ref().map_or(ExactRational::ZERO, exact_time),
                 rate: rate.as_ref().map_or(ExactRational::ONE, exact_time),
@@ -841,7 +860,9 @@ fn timeline_presentation_to_canonical(
             .unwrap_or_else(|| constant(1.0)),
         rotation: value
             .rotation
-            .map(|value| timeline_param_to_canonical(value, owner_id, "rotation"))
+            .map(|value| {
+                timeline_param_to_canonical(map_param(value, f64::to_radians), owner_id, "rotation")
+            })
             .unwrap_or_else(|| constant(0.0)),
         clip_inset: value
             .clip_inset
@@ -1030,23 +1051,11 @@ fn constant<T>(value: T) -> document::ParamWire<T> {
 }
 
 fn enter_preset(value: timeline::TimelineEnterPresetWire) -> TimedCaptionPreset {
-    let (preset, duration) = match value {
-        timeline::TimelineEnterPresetWire::Name(name) => (name.into(), None),
-        timeline::TimelineEnterPresetWire::Options(options) => {
-            (options.preset.into(), options.duration)
-        }
-    };
-    timed_preset(preset, duration)
+    timed_preset(value.preset.into(), value.duration)
 }
 
 fn exit_preset(value: timeline::TimelineExitPresetWire) -> TimedCaptionPreset {
-    let (preset, duration) = match value {
-        timeline::TimelineExitPresetWire::Name(name) => (name.into(), None),
-        timeline::TimelineExitPresetWire::Options(options) => {
-            (options.preset.into(), options.duration)
-        }
-    };
-    timed_preset(preset, duration)
+    timed_preset(value.preset.into(), value.duration)
 }
 
 fn timed_preset(
@@ -1066,16 +1075,38 @@ fn timed_preset(
 }
 
 fn display_preset(value: timeline::TimelineDisplayPresetWire) -> DisplayCaptionPreset {
-    let (preset, rate) = match value {
-        timeline::TimelineDisplayPresetWire::Name(name) => (name.into(), None),
-        timeline::TimelineDisplayPresetWire::Options(options) => {
-            (options.preset.into(), options.rate)
-        }
-    };
+    let preset: CaptionPreset = value.preset.into();
+    let rate = value.rate;
     DisplayCaptionPreset {
         preset,
         rate: rate
             .or_else(|| preset.descriptor().recommended_rate)
             .unwrap_or(1.0),
+    }
+}
+
+fn map_param<T, U>(
+    value: timeline::TimelineParamWire<T>,
+    map: impl Fn(T) -> U,
+) -> timeline::TimelineParamWire<U> {
+    match value {
+        timeline::TimelineParamWire::Value(value) => timeline::TimelineParamWire::Value(map(value)),
+        timeline::TimelineParamWire::Curve(curve) => {
+            timeline::TimelineParamWire::Curve(timeline::TimelineCurveWire {
+                interpolation: curve.interpolation,
+                keyframes: curve
+                    .keyframes
+                    .into_iter()
+                    .map(|keyframe| match keyframe {
+                        timeline::TimelineKeyframeWire::Plain((time, value)) => {
+                            timeline::TimelineKeyframeWire::Plain((time, map(value)))
+                        }
+                        timeline::TimelineKeyframeWire::Eased((time, value, easing)) => {
+                            timeline::TimelineKeyframeWire::Eased((time, map(value), easing))
+                        }
+                    })
+                    .collect(),
+            })
+        }
     }
 }

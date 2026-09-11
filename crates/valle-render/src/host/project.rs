@@ -73,7 +73,8 @@ impl NativeProject {
     ) -> Result<super::FrameRunner<NativeResourceProvider>, super::FrameRenderError> {
         super::FrameRunner::for_backend(
             self.render.clone(),
-            NativeResourceProvider::new(Arc::clone(&self.catalog)),
+            NativeResourceProvider::new(Arc::clone(&self.catalog))
+                .with_render_resources(self.compiled()),
             backend,
         )
     }

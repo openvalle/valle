@@ -8,12 +8,12 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
-use crate::{MotionAction, MotionCanvasArgs, MotionRenderTuningArgs};
+use crate::{MotionAction, MotionBindingArgs, MotionCanvasArgs, MotionRenderTuningArgs};
 use anyhow::{Context, Result, anyhow, bail};
 use serde::Serialize;
 use valle_motion::{
     ArtifactEnvelope, BuildFingerprint, ContentDigest, CueWindow, MotionViewport, NodeKind,
-    ResourceRef, canonical_bytes, motion_context_at, phase_windows, resolve_props,
+    ResourceRef, canonical_bytes,
 };
 use valle_timeline::internal::quantize::quantize_frame_boundary;
 use valle_timeline::{
@@ -26,14 +26,31 @@ pub fn run(action: MotionAction) -> Result<std::process::ExitCode> {
         MotionAction::Check {
             input,
             assets,
+            bindings,
             data,
             canvas,
-        } => check(
-            &input,
-            &assets,
-            data.as_deref(),
-            resolve_canvas_size(canvas)?,
-        ),
+            font,
+            duration,
+            fps,
+            frame,
+        } => {
+            let temp = tempfile::tempdir()?;
+            render(
+                &input,
+                &temp.path().join("check.png"),
+                &assets,
+                &font,
+                data.as_deref(),
+                &bindings,
+                parse_duration(&duration)?,
+                parse_fps(&fps)?,
+                resolve_canvas_size(canvas)?,
+                Some(frame),
+                valle_render::executor::skia::SkiaBackendKind::Raster,
+                MotionRenderTuningArgs::default(),
+                true,
+            )
+        }
         MotionAction::Render {
             frame,
             input,
@@ -41,6 +58,7 @@ pub fn run(action: MotionAction) -> Result<std::process::ExitCode> {
             backend,
             tuning,
             assets,
+            bindings,
             font,
             data,
             duration,
@@ -52,16 +70,19 @@ pub fn run(action: MotionAction) -> Result<std::process::ExitCode> {
             &assets,
             &font,
             data.as_deref(),
+            &bindings,
             parse_duration(&duration)?,
             parse_fps(&fps)?,
             resolve_canvas_size(canvas)?,
             frame,
             backend.into(),
             tuning,
+            false,
         ),
         MotionAction::Studio {
             input,
             assets,
+            bindings,
             font,
             data,
             web_assets_dir,
@@ -72,6 +93,7 @@ pub fn run(action: MotionAction) -> Result<std::process::ExitCode> {
         } => studio(StudioRequest {
             input,
             asset_specs: assets,
+            bindings,
             fonts: font,
             data,
             web_assets_dir,
@@ -91,12 +113,14 @@ fn render(
     asset_specs: &[String],
     font_paths: &[PathBuf],
     data: Option<&Path>,
+    bindings: &MotionBindingArgs,
     duration: RationalTime,
     fps: FrameRate,
     canvas: MotionViewport,
     frame: Option<i64>,
     backend: valle_render::executor::skia::SkiaBackendKind,
     tuning: MotionRenderTuningArgs,
+    checking: bool,
 ) -> Result<std::process::ExitCode> {
     use valle_engine::fixed_package::{fixed_package_files, open_verified_fixed_package};
     use valle_render::host::{
@@ -114,34 +138,16 @@ fn render(
     {
         bail!("output must have an .{extension} extension");
     }
-    let frames = duration_frames(duration, fps)?;
+    duration_frames(duration, fps)?;
     let explicit_fonts = read_font_files(font_paths)?;
     let fonts = authoring_font_blobs(&explicit_fonts);
-    let prepared = match compile_and_prepare(input, asset_specs, &fonts, canvas, data)? {
+    let prepared = match compile_and_prepare(input, asset_specs, &fonts, canvas, data, true)? {
         Ok(prepared) => prepared,
         Err(()) => return Ok(std::process::ExitCode::FAILURE),
     };
     let artifact = &prepared.compiled.artifact;
-    let cue_end = frames
-        .saturating_sub(artifact.controls.phase_spec().exit_frames)
-        .max(1)
-        .min(frames);
-    let cues = artifact
-        .controls
-        .cues
-        .keys()
-        .map(|name| {
-            (
-                name.clone(),
-                CueWindow {
-                    start_frame: 0,
-                    end_frame: cue_end,
-                    enter_frames: 0,
-                    exit_frames: 0,
-                },
-            )
-        })
-        .collect();
+    let cues = read_cue_bindings(bindings.cues.as_deref(), fps)?;
+    let props = read_prop_bindings(bindings.props.as_deref())?;
     let font_blobs = fixed_package_font_blobs(artifact, &explicit_fonts)?;
     let package = super::motion_package::build_standalone_motion_package(
         super::motion_package::StandaloneMotionPackageInput {
@@ -150,6 +156,7 @@ fn render(
             font_blobs: &font_blobs,
             shaders: &prepared.shaders,
             cue_bindings: &cues,
+            prop_bindings: &props,
             duration,
             frame_rate: fps,
             canvas: canvas.tuple(),
@@ -194,12 +201,19 @@ fn render(
         }
         None => renderer.export_mp4(output)?,
     };
-    super::fixed_render::print_delivery_report(
-        &opened,
-        if frame.is_some() { "preview" } else { "export" },
-        output,
-        &summary,
-    )?;
+    if checking {
+        crate::output::emit(
+            serde_json::json!({"status":"ok", "component":artifact.component,
+            "nodes":artifact.nodes.len(), "expressions":artifact.exprs.len(), "frame":frame.unwrap_or(0)}),
+        );
+    } else {
+        super::fixed_render::print_delivery_report(
+            &opened,
+            if frame.is_some() { "preview" } else { "export" },
+            output,
+            &summary,
+        )?;
+    }
     Ok(std::process::ExitCode::SUCCESS)
 }
 
@@ -207,6 +221,7 @@ fn render(
 struct StudioRequest {
     input: PathBuf,
     asset_specs: Vec<String>,
+    bindings: MotionBindingArgs,
     fonts: Vec<PathBuf>,
     data: Option<PathBuf>,
     web_assets_dir: Option<PathBuf>,
@@ -291,28 +306,6 @@ fn studio(request: StudioRequest) -> Result<std::process::ExitCode> {
     Ok(std::process::ExitCode::SUCCESS)
 }
 
-fn check(
-    input: &Path,
-    asset_specs: &[String],
-    data: Option<&Path>,
-    canvas_size: MotionViewport,
-) -> Result<std::process::ExitCode> {
-    // Use deterministic fallback fonts and a shared canvas so relative-unit measurements agree
-    // across check, render, and Studio.
-    let font_blobs = load_fonts(&[])?;
-    match compile_and_prepare(input, asset_specs, &font_blobs, canvas_size, data)? {
-        Ok(prepared) => {
-            line_box_emit_smoke(&prepared, &font_blobs)?;
-            let artifact = &prepared.compiled.artifact;
-            crate::output::emit(
-                serde_json::json!({"status":"ok","component":artifact.component,"nodes":artifact.nodes.len(),"expressions":artifact.exprs.len()}),
-            );
-            Ok(std::process::ExitCode::SUCCESS)
-        }
-        Err(()) => Ok(std::process::ExitCode::FAILURE),
-    }
-}
-
 #[derive(Debug, Clone)]
 pub(super) struct BoundAsset {
     pub(super) path: PathBuf,
@@ -323,7 +316,6 @@ pub(super) struct BoundAsset {
 pub(super) struct PreparedInput {
     pub(super) compiled: valle_compiler::motion::CompiledMotion,
     data_binding: Option<valle_compiler::motion::PrepareDataBinding>,
-    prepared: valle_motion::PreparedScene,
     pub(super) assets: BTreeMap<String, BoundAsset>,
     pub(super) shaders: valle_motion::shader::ShaderRegistry,
     canvas_size: MotionViewport,
@@ -445,7 +437,7 @@ fn studio_state_json(request: &StudioRequest, generation: u64) -> Result<String>
             &anyhow!(format!("{errors:?}")),
         );
     }
-    let prepared_scene = match valle_motion::prepare_scene(&compiled.artifact) {
+    let _prepared_scene = match valle_motion::prepare_scene(&compiled.artifact) {
         Ok(prepared) => prepared,
         Err(error) => {
             return studio_runtime_error_json(
@@ -459,7 +451,6 @@ fn studio_state_json(request: &StudioRequest, generation: u64) -> Result<String>
     let prepared = PreparedInput {
         compiled,
         data_binding,
-        prepared: prepared_scene,
         assets,
         shaders,
         canvas_size: request.canvas_size,
@@ -473,28 +464,8 @@ fn studio_state_json(request: &StudioRequest, generation: u64) -> Result<String>
         ContentDigest::of_bytes(&canonical_bytes(&prepared.compiled.artifact)?).to_wire();
     let duration_frames = duration_frames(request.duration, request.fps)?;
     let timing = prepared.compiled.artifact.controls.phase_spec();
-    let default_cue_end = duration_frames
-        .saturating_sub(timing.exit_frames)
-        .max(1)
-        .min(duration_frames);
-    let cue_bindings = prepared
-        .compiled
-        .artifact
-        .controls
-        .cues
-        .keys()
-        .map(|name| {
-            (
-                name.clone(),
-                CueWindow {
-                    start_frame: 0,
-                    end_frame: default_cue_end,
-                    enter_frames: 0,
-                    exit_frames: 0,
-                },
-            )
-        })
-        .collect::<BTreeMap<_, _>>();
+    let cue_bindings = read_cue_bindings(request.bindings.cues.as_deref(), request.fps)?;
+    let props = read_prop_bindings(request.bindings.props.as_deref())?;
     let studio_cue_bindings = cue_bindings
         .iter()
         .map(|(name, cue)| {
@@ -523,6 +494,7 @@ fn studio_state_json(request: &StudioRequest, generation: u64) -> Result<String>
             font_blobs: &runtime_font_blobs,
             shaders: &prepared.shaders,
             cue_bindings: &cue_bindings,
+            prop_bindings: &props,
             duration: request.duration,
             frame_rate,
             canvas: request.canvas_size.tuple(),
@@ -694,6 +666,8 @@ fn motion_watch_paths(request: &StudioRequest) -> Vec<PathBuf> {
         motion_module_paths(&request.input).unwrap_or_else(|_| vec![request.input.clone()]);
     paths.extend(request.fonts.iter().cloned());
     paths.extend(request.data.iter().cloned());
+    paths.extend(request.bindings.props.iter().cloned());
+    paths.extend(request.bindings.cues.iter().cloned());
     paths.extend(
         request
             .asset_specs
@@ -758,6 +732,7 @@ fn compile_and_prepare(
     font_blobs: &[Vec<u8>],
     canvas_size: MotionViewport,
     data: Option<&Path>,
+    emit_diagnostics: bool,
 ) -> Result<Result<PreparedInput, ()>> {
     let perf = perf_enabled();
     let compile_started = perf.then(Instant::now);
@@ -783,6 +758,20 @@ fn compile_and_prepare(
     )? {
         Ok(compiled) => compiled,
         Err(diagnostics) => {
+            if !emit_diagnostics {
+                bail!(
+                    "{}: {}",
+                    input.display(),
+                    diagnostics
+                        .iter()
+                        .map(|diagnostic| format!(
+                            "{}:{}: {}",
+                            diagnostic.span.line, diagnostic.span.column, diagnostic.message
+                        ))
+                        .collect::<Vec<_>>()
+                        .join("; ")
+                );
+            }
             if crate::output::machine() {
                 crate::output::emit(serde_json::json!({
                     "status": "error",
@@ -828,7 +817,7 @@ fn compile_and_prepare(
         })?;
     let compile_elapsed = compile_started.map(|started| started.elapsed());
     let prepare_started = perf.then(Instant::now);
-    let prepared = valle_motion::prepare_scene(&compiled.artifact).map_err(|error| {
+    valle_motion::prepare_scene(&compiled.artifact).map_err(|error| {
         anyhow!("compiler produced a scene that failed capability admission: {error}")
     })?;
     if let (Some(compile), Some(prepare_started)) = (compile_elapsed, prepare_started) {
@@ -841,7 +830,6 @@ fn compile_and_prepare(
     Ok(Ok(PreparedInput {
         compiled,
         data_binding,
-        prepared,
         assets,
         shaders,
         canvas_size,
@@ -1025,84 +1013,6 @@ fn parse_fps(value: &str) -> Result<FrameRate> {
 
 /// Check frame-zero layout and emission so compilation cannot silently accept text that produces no
 /// glyphs.
-fn line_box_emit_smoke(prepared: &PreparedInput, font_blobs: &[Vec<u8>]) -> Result<()> {
-    use valle_motion::{
-        CueSchedule, Fonts, LayoutOptions, Viewport, build_tree, default_font_naming, emit,
-    };
-
-    let artifact = &prepared.compiled.artifact;
-    let props = resolve_props(&artifact.controls, &BTreeMap::new())
-        .map_err(|error| anyhow!("line-box smoke props: {error}"))?;
-    let fps = FrameRate::new(30, 1).expect("30 fps is valid");
-    let windows = phase_windows(&artifact.controls.phase_spec(), 30);
-    let ctx = motion_context_at(0, &windows, fps)
-        .ok_or_else(|| anyhow!("line-box smoke context: no frame 0"))?;
-    // `motion check` validates a component, not a Timeline instance, so it has no external signal
-    // bindings. Optional cues retain their product default (inactive); required cues get a
-    // deterministic one-frame window solely so layout can visit every authored expression.
-    let required_cues = artifact
-        .controls
-        .cues
-        .iter()
-        .filter(|(_, control)| control.required)
-        .map(|(name, _)| {
-            (
-                name.clone(),
-                CueWindow {
-                    start_frame: 0,
-                    end_frame: 1,
-                    enter_frames: 0,
-                    exit_frames: 0,
-                },
-            )
-        })
-        .collect::<BTreeMap<_, _>>();
-    let cues = CueSchedule::resolve(&artifact.controls, &required_cues)
-        .map_err(|error| anyhow!("line-box smoke cues: {error}"))?;
-    let signals = cues.sample(0, fps);
-    let mut fonts = Fonts::default();
-    valle_motion::register_default_motion_fonts(&mut fonts)
-        .map_err(|error| anyhow!("line-box smoke font: {error}"))?;
-    for bytes in font_blobs {
-        if valle_motion::DEFAULT_MOTION_FONT_WEIGHTS
-            .iter()
-            .any(|pack| *pack == bytes.as_slice())
-        {
-            continue;
-        }
-        fonts
-            .register(valle_motion::FontResource::new(bytes.clone()))
-            .map_err(|error| anyhow!("line-box smoke font: {error}"))?;
-    }
-    let tree = build_tree(
-        &prepared.prepared,
-        &ctx,
-        &props,
-        &signals,
-        &LayoutOptions {
-            viewport: Viewport::new(prepared.canvas_size.tuple()),
-            fonts: &fonts,
-            styles: None,
-        },
-    )
-    .map_err(|error| anyhow!("line-box smoke layout: {error}"))?;
-    let report = emit(&tree, &default_font_naming)
-        .map_err(|error| anyhow!("line-box smoke emit: {error}"))?;
-    let empty = report
-        .unsupported
-        .iter()
-        .filter(|(_, what)| what.contains("produced no glyphs"))
-        .map(|(key, what)| format!("{key}: {what}"))
-        .collect::<Vec<_>>();
-    if !empty.is_empty() {
-        bail!(
-            "line-box smoke: text produced no glyphs at frame 0 ({})",
-            empty.join("; ")
-        );
-    }
-    Ok(())
-}
-
 fn load_fonts(paths: &[PathBuf]) -> Result<Vec<Vec<u8>>> {
     let explicit = read_font_files(paths)?;
     Ok(authoring_font_blobs(&explicit))
@@ -1242,6 +1152,50 @@ pub(super) fn compile_timeline_component(
         width: canvas.0,
         height: canvas.1,
     };
-    compile_and_prepare(input, assets, &load_fonts(&[])?, size, None)?
+    compile_and_prepare(input, assets, &load_fonts(&[])?, size, None, false)?
         .map_err(|_| anyhow!("Motion component compilation failed"))
+}
+
+fn read_prop_bindings(path: Option<&Path>) -> Result<BTreeMap<String, serde_json::Value>> {
+    path.map(|path| {
+        serde_json::from_str(&super::read(path)?).context("decode Motion --props object")
+    })
+    .transpose()
+    .map(Option::unwrap_or_default)
+}
+
+fn read_cue_bindings(path: Option<&Path>, fps: FrameRate) -> Result<BTreeMap<String, CueWindow>> {
+    use valle_timeline::wire::timeline::TimelineMotionCueBindingWire;
+    let Some(path) = path else {
+        return Ok(BTreeMap::new());
+    };
+    let bindings: BTreeMap<String, TimelineMotionCueBindingWire> =
+        serde_json::from_str(&super::read(path)?)
+            .context("decode Motion --cues source-range bindings")?;
+    let frame = |time: TimelineTimeWire| -> Result<u32> {
+        Ok(u32::try_from(quantize_frame_boundary(
+            RationalTime::from_exact(time.to_exact()),
+            fps,
+        )?)?)
+    };
+    bindings
+        .into_iter()
+        .map(|(name, cue)| {
+            let TimelineMotionCueBindingWire::SourceRange {
+                start,
+                end,
+                enter_duration,
+                exit_duration,
+            } = cue;
+            Ok((
+                name,
+                CueWindow {
+                    start_frame: frame(start)?,
+                    end_frame: frame(end)?,
+                    enter_frames: enter_duration.map(frame).transpose()?.unwrap_or(0),
+                    exit_frames: exit_duration.map(frame).transpose()?.unwrap_or(0),
+                },
+            ))
+        })
+        .collect()
 }

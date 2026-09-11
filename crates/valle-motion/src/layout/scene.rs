@@ -2923,7 +2923,24 @@ fn projected_nodes_of(
     }
 
     if !template.class_names.is_empty() {
-        let joined = template.class_names.join(" ");
+        // Replaced media are atomic inline boxes. Use Takumi's atomic box measurement
+        // so explicit CSS dimensions work without loading host-owned image pixels.
+        let joined = template
+            .class_names
+            .iter()
+            .map(|name| {
+                if matches!(
+                    template.kind,
+                    NodeKind::Image { .. } | NodeKind::Video { .. }
+                ) && name == "inline"
+                {
+                    "inline-block"
+                } else {
+                    name.as_str()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
         let tw = takumi_core::style::TailwindValues::from_str(&joined)
             .unwrap_or_else(|_| unreachable!("Takumi TailwindValues::from_str is infallible"));
         node = node.with_tw(tw).with_class_name(joined);
@@ -3104,6 +3121,12 @@ fn declarations(
             declarations.push_str(" + ");
             declarations.push_str(&angle_offset.to_string());
             declarations.push_str("deg)");
+        } else if style.property == "display"
+            && matches!(node.kind, NodeKind::Image { .. } | NodeKind::Video { .. })
+            && css_token(value) == "inline"
+        {
+            // Atomic inline layout honors the authored media box without a pixel decoder.
+            declarations.push_str("inline-block");
         } else {
             declarations.push_str(&css_token(value));
         }
@@ -3575,6 +3598,15 @@ fn gradient_background_binding(
     types: &[Option<crate::expr::ExprType>],
 ) -> bool {
     match &style.value {
+        StyleValue::Static {
+            value: MotionValue::Color(_),
+        } if style.property == "background" => true,
+        StyleValue::Expr { expr }
+            if style.property == "background"
+                && types.get(expr.0 as usize) == Some(&Some(crate::expr::ExprType::Color)) =>
+        {
+            true
+        }
         StyleValue::Static {
             value: MotionValue::Str(source) | MotionValue::Enum(source),
         } => gradient_background_source(&style.property, source),

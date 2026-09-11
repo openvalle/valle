@@ -450,7 +450,18 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
       } else {
         rows.push({ kind: "value", label: "opacity", value: "curve-driven (read only)" });
       }
-      const { position, scale, rotation } = visual.layer.transform;
+      if (visual.source.type === "video") {
+        const gain = visual.source.gain;
+        if (!gain || gain.type === "constant") rows.push({ kind: "number", key: "source:gain", label: "volume", value: gain?.value ?? 1, min: 0, step: 0.1 });
+        else rows.push({ kind: "value", label: "volume", value: "curve-driven (read only)" });
+      }
+      const { position, scale, rotation, size } = visual.layer.transform;
+      if (size?.type === "constant") {
+        rows.push(
+          { kind: "number", key: "layer:size-x", label: "width (px)", value: size.value[0], min: 1, step: 1 },
+          { kind: "number", key: "layer:size-y", label: "height (px)", value: size.value[1], min: 1, step: 1 },
+        );
+      } else if (size) rows.push({ kind: "value", label: "size", value: "curve-driven (read only)" });
       if (position.type === "constant") {
         rows.push(
           { kind: "number", key: "layer:position-x", label: "position x", value: position.value[0], step: 0.001 },
@@ -464,7 +475,7 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
         );
       } else rows.push({ kind: "value", label: "scale", value: "curve-driven (read only)" });
       if (rotation.type === "constant") {
-        rows.push({ kind: "number", key: "layer:rotation", label: "rotation", value: rotation.value, step: 0.1 });
+        rows.push({ kind: "number", key: "layer:rotation", label: "rotation (degrees)", value: rotation.value * 180 / Math.PI, step: 1 });
       } else rows.push({ kind: "value", label: "rotation", value: "curve-driven (read only)" });
       if (visual.source.type === "motion") motionSource = visual.source.component;
       sections.push({ title: "visual clip", rows });
@@ -586,6 +597,12 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
           target.clip.color = String(value);
           return;
         }
+        if (visual?.source.type === "video" && key === "source:gain") {
+          if (target.band !== "visual" || target.clip.kind !== "video") throw new Error("selected source is not a video");
+          if (visual.source.gain && visual.source.gain.type !== "constant") throw new Error("curve-driven gain is not directly editable");
+          target.clip.gain = Number(value);
+          return;
+        }
         if (visual && key === "layer:opacity") {
           if (target.band !== "visual") throw new Error("selected item is not a visual clip");
           if (visual.layer.opacity.type !== "constant") throw new Error("curve-driven opacity is not directly editable");
@@ -600,16 +617,15 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
             target.clip.rotation = Number(value);
             return;
           }
-          const transformParam = key.includes("position") ? transform.position : transform.scale;
-          if (transformParam.type !== "constant") throw new Error("curve-driven vector is not directly editable");
-          const field = key.includes("position") ? "position" : "scale";
-          const authored = field === "position" ? target.clip.position : target.clip.scale;
+          const field = key.includes("position") ? "position" : key.includes("size") ? "size" : "scale";
+          const transformParam = transform[field];
+          if (!transformParam || transformParam.type !== "constant") throw new Error("curve-driven vector is not directly editable");
+          const authored = target.clip[field];
           const current: [number, number] = Array.isArray(authored)
             ? [Number(authored[0]), Number(authored[1])]
             : [transformParam.value[0], transformParam.value[1]];
           current[key.endsWith("-x") ? 0 : 1] = Number(value);
-          if (field === "position") target.clip.position = current;
-          else target.clip.scale = current;
+          target.clip[field] = current;
           return;
         }
         if (audio && (key === "audio:gain" || key === "audio:pan")) {

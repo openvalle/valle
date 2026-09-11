@@ -1139,13 +1139,6 @@ impl<'s> Compiler<'s> {
                 );
             }
         }
-        if self.list_depth > 0 && instance_key.is_none() {
-            self.illegal(
-                DiagCode::GrammarForbidden,
-                element.opening_element.span(),
-                "every component expanded from a data list needs a stable `key`",
-            );
-        }
         let instance_key = instance_key.unwrap_or_else(|| path.to_string());
         let caller_prefix = self.key_prefix.clone();
         let component_prefix = self.scoped_key(&instance_key);

@@ -252,7 +252,7 @@
             "gain": {
               "anyOf": [
                 {
-                  "$ref": "#/$defs/TimelineParamWire3"
+                  "$ref": "#/$defs/TimelineParamWire"
                 },
                 {
                   "type": "null"
@@ -262,7 +262,7 @@
             "pan": {
               "anyOf": [
                 {
-                  "$ref": "#/$defs/TimelineParamWire3"
+                  "$ref": "#/$defs/TimelineParamWire"
                 },
                 {
                   "type": "null"
@@ -516,7 +516,7 @@
             "blur": {
               "anyOf": [
                 {
-                  "$ref": "#/$defs/TimelineParamWire3"
+                  "$ref": "#/$defs/TimelineParamWire"
                 },
                 {
                   "type": "null"
@@ -536,7 +536,7 @@
             "opacity": {
               "anyOf": [
                 {
-                  "$ref": "#/$defs/TimelineParamWire3"
+                  "$ref": "#/$defs/TimelineParamWire"
                 },
                 {
                   "type": "null"
@@ -546,7 +546,7 @@
             "rotation": {
               "anyOf": [
                 {
-                  "$ref": "#/$defs/TimelineParamWire3"
+                  "$ref": "#/$defs/TimelineParamWire"
                 },
                 {
                   "type": "null"
@@ -556,7 +556,7 @@
             "scale": {
               "anyOf": [
                 {
-                  "$ref": "#/$defs/TimelineParamWire3"
+                  "$ref": "#/$defs/TimelineParamWire"
                 },
                 {
                   "type": "null"
@@ -566,7 +566,7 @@
             "translation": {
               "anyOf": [
                 {
-                  "$ref": "#/$defs/TimelineParamWire2"
+                  "$ref": "#/$defs/TimelineParamWire3"
                 },
                 {
                   "type": "null"
@@ -769,7 +769,7 @@
           ],
           "type": "object"
         },
-        "TimelineDisplayPresetOptionsWire": {
+        "TimelineDisplayPresetWire": {
           "additionalProperties": false,
           "properties": {
             "preset": {
@@ -788,49 +788,7 @@
           ],
           "type": "object"
         },
-        "TimelineDisplayPresetWire": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/DisplayCaptionPresetName"
-            },
-            {
-              "$ref": "#/$defs/TimelineDisplayPresetOptionsWire"
-            }
-          ]
-        },
-        "TimelineEnterPresetOptionsWire": {
-          "additionalProperties": false,
-          "properties": {
-            "duration": {
-              "anyOf": [
-                {
-                  "$ref": "#/$defs/TimelineTimeWire"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "preset": {
-              "$ref": "#/$defs/EnterCaptionPresetName"
-            }
-          },
-          "required": [
-            "preset"
-          ],
-          "type": "object"
-        },
         "TimelineEnterPresetWire": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/EnterCaptionPresetName"
-            },
-            {
-              "$ref": "#/$defs/TimelineEnterPresetOptionsWire"
-            }
-          ]
-        },
-        "TimelineExitPresetOptionsWire": {
           "additionalProperties": false,
           "properties": {
             "duration": {
@@ -844,7 +802,7 @@
               ]
             },
             "preset": {
-              "$ref": "#/$defs/ExitCaptionPresetName"
+              "$ref": "#/$defs/EnterCaptionPresetName"
             }
           },
           "required": [
@@ -853,14 +811,26 @@
           "type": "object"
         },
         "TimelineExitPresetWire": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ExitCaptionPresetName"
+          "additionalProperties": false,
+          "properties": {
+            "duration": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/TimelineTimeWire"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
-            {
-              "$ref": "#/$defs/TimelineExitPresetOptionsWire"
+            "preset": {
+              "$ref": "#/$defs/ExitCaptionPresetName"
             }
-          ]
+          },
+          "required": [
+            "preset"
+          ],
+          "type": "object"
         },
         "TimelineFrameRateWire": {
           "oneOf": [
@@ -875,6 +845,42 @@
           ]
         },
         "TimelineKeyframeWire": {
+          "anyOf": [
+            {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "$ref": "#/$defs/TimelineTimeWire"
+                },
+                {
+                  "format": "double",
+                  "type": "number"
+                }
+              ],
+              "type": "array"
+            },
+            {
+              "maxItems": 3,
+              "minItems": 3,
+              "prefixItems": [
+                {
+                  "$ref": "#/$defs/TimelineTimeWire"
+                },
+                {
+                  "format": "double",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EasingWire"
+                }
+              ],
+              "type": "array"
+            }
+          ],
+          "description": "Compact `[time, value]` or `[time, value, easing]` keyframe."
+        },
+        "TimelineKeyframeWire2": {
           "anyOf": [
             {
               "maxItems": 2,
@@ -904,52 +910,6 @@
           ],
           "description": "Compact `[time, value]` or `[time, value, easing]` keyframe."
         },
-        "TimelineKeyframeWire2": {
-          "anyOf": [
-            {
-              "maxItems": 2,
-              "minItems": 2,
-              "prefixItems": [
-                {
-                  "$ref": "#/$defs/TimelineTimeWire"
-                },
-                {
-                  "items": {
-                    "format": "double",
-                    "type": "number"
-                  },
-                  "maxItems": 2,
-                  "minItems": 2,
-                  "type": "array"
-                }
-              ],
-              "type": "array"
-            },
-            {
-              "maxItems": 3,
-              "minItems": 3,
-              "prefixItems": [
-                {
-                  "$ref": "#/$defs/TimelineTimeWire"
-                },
-                {
-                  "items": {
-                    "format": "double",
-                    "type": "number"
-                  },
-                  "maxItems": 2,
-                  "minItems": 2,
-                  "type": "array"
-                },
-                {
-                  "$ref": "#/$defs/EasingWire"
-                }
-              ],
-              "type": "array"
-            }
-          ],
-          "description": "Compact `[time, value]` or `[time, value, easing]` keyframe."
-        },
         "TimelineKeyframeWire3": {
           "anyOf": [
             {
@@ -960,8 +920,13 @@
                   "$ref": "#/$defs/TimelineTimeWire"
                 },
                 {
-                  "format": "double",
-                  "type": "number"
+                  "items": {
+                    "format": "double",
+                    "type": "number"
+                  },
+                  "maxItems": 2,
+                  "minItems": 2,
+                  "type": "array"
                 }
               ],
               "type": "array"
@@ -974,8 +939,13 @@
                   "$ref": "#/$defs/TimelineTimeWire"
                 },
                 {
-                  "format": "double",
-                  "type": "number"
+                  "items": {
+                    "format": "double",
+                    "type": "number"
+                  },
+                  "maxItems": 2,
+                  "minItems": 2,
+                  "type": "array"
                 },
                 {
                   "$ref": "#/$defs/EasingWire"
@@ -1108,7 +1078,10 @@
             {
               "$ref": "#/$defs/TimelineCurveWire"
             },
-            true
+            {
+              "format": "double",
+              "type": "number"
+            }
           ],
           "description": "Constants are written directly. Only animated values use the explicit\n`{\"keyframes\":[...]}` object."
         },
@@ -1117,15 +1090,7 @@
             {
               "$ref": "#/$defs/TimelineCurveWire2"
             },
-            {
-              "items": {
-                "format": "double",
-                "type": "number"
-              },
-              "maxItems": 2,
-              "minItems": 2,
-              "type": "array"
-            }
+            true
           ],
           "description": "Constants are written directly. Only animated values use the explicit\n`{\"keyframes\":[...]}` object."
         },
@@ -1135,8 +1100,13 @@
               "$ref": "#/$defs/TimelineCurveWire3"
             },
             {
-              "format": "double",
-              "type": "number"
+              "items": {
+                "format": "double",
+                "type": "number"
+              },
+              "maxItems": 2,
+              "minItems": 2,
+              "type": "array"
             }
           ],
           "description": "Constants are written directly. Only animated values use the explicit\n`{\"keyframes\":[...]}` object."
@@ -1263,6 +1233,17 @@
                       "type": "null"
                     }
                   ]
+                },
+                "gain": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/TimelineParamWire"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "Source audio amplitude multiplier; 0 mutes, 1 preserves original sound."
                 },
                 "kind": {
                   "const": "video",
@@ -1417,7 +1398,7 @@
                 },
                 "props": {
                   "additionalProperties": {
-                    "$ref": "#/$defs/TimelineParamWire"
+                    "$ref": "#/$defs/TimelineParamWire2"
                   },
                   "type": "object"
                 },
@@ -1510,7 +1491,7 @@
             "opacity": {
               "anyOf": [
                 {
-                  "$ref": "#/$defs/TimelineParamWire3"
+                  "$ref": "#/$defs/TimelineParamWire"
                 },
                 {
                   "type": "null"
@@ -1520,7 +1501,7 @@
             "position": {
               "anyOf": [
                 {
-                  "$ref": "#/$defs/TimelineParamWire2"
+                  "$ref": "#/$defs/TimelineParamWire3"
                 },
                 {
                   "type": "null"
@@ -1530,7 +1511,7 @@
             "rotation": {
               "anyOf": [
                 {
-                  "$ref": "#/$defs/TimelineParamWire3"
+                  "$ref": "#/$defs/TimelineParamWire"
                 },
                 {
                   "type": "null"
@@ -1540,12 +1521,23 @@
             "scale": {
               "anyOf": [
                 {
-                  "$ref": "#/$defs/TimelineParamWire2"
+                  "$ref": "#/$defs/TimelineParamWire3"
                 },
                 {
                   "type": "null"
                 }
               ]
+            },
+            "size": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/TimelineParamWire3"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Target rectangle in canvas pixels; defaults to the canvas size."
             },
             "start": {
               "$ref": "#/$defs/TimelineTimeWire"
@@ -1985,7 +1977,7 @@
             "gain": {
               "anyOf": [
                 {
-                  "$ref": "#/$defs/TimelineParamWire3"
+                  "$ref": "#/$defs/TimelineParamWire"
                 },
                 {
                   "type": "null"
@@ -1995,7 +1987,7 @@
             "pan": {
               "anyOf": [
                 {
-                  "$ref": "#/$defs/TimelineParamWire3"
+                  "$ref": "#/$defs/TimelineParamWire"
                 },
                 {
                   "type": "null"
@@ -2249,7 +2241,7 @@
             "blur": {
               "anyOf": [
                 {
-                  "$ref": "#/$defs/TimelineParamWire3"
+                  "$ref": "#/$defs/TimelineParamWire"
                 },
                 {
                   "type": "null"
@@ -2269,7 +2261,7 @@
             "opacity": {
               "anyOf": [
                 {
-                  "$ref": "#/$defs/TimelineParamWire3"
+                  "$ref": "#/$defs/TimelineParamWire"
                 },
                 {
                   "type": "null"
@@ -2279,7 +2271,7 @@
             "rotation": {
               "anyOf": [
                 {
-                  "$ref": "#/$defs/TimelineParamWire3"
+                  "$ref": "#/$defs/TimelineParamWire"
                 },
                 {
                   "type": "null"
@@ -2289,7 +2281,7 @@
             "scale": {
               "anyOf": [
                 {
-                  "$ref": "#/$defs/TimelineParamWire3"
+                  "$ref": "#/$defs/TimelineParamWire"
                 },
                 {
                   "type": "null"
@@ -2299,7 +2291,7 @@
             "translation": {
               "anyOf": [
                 {
-                  "$ref": "#/$defs/TimelineParamWire2"
+                  "$ref": "#/$defs/TimelineParamWire3"
                 },
                 {
                   "type": "null"
@@ -2502,7 +2494,7 @@
           ],
           "type": "object"
         },
-        "TimelineDisplayPresetOptionsWire": {
+        "TimelineDisplayPresetWire": {
           "additionalProperties": false,
           "properties": {
             "preset": {
@@ -2521,49 +2513,7 @@
           ],
           "type": "object"
         },
-        "TimelineDisplayPresetWire": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/DisplayCaptionPresetName"
-            },
-            {
-              "$ref": "#/$defs/TimelineDisplayPresetOptionsWire"
-            }
-          ]
-        },
-        "TimelineEnterPresetOptionsWire": {
-          "additionalProperties": false,
-          "properties": {
-            "duration": {
-              "anyOf": [
-                {
-                  "$ref": "#/$defs/TimelineTimeWire"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "preset": {
-              "$ref": "#/$defs/EnterCaptionPresetName"
-            }
-          },
-          "required": [
-            "preset"
-          ],
-          "type": "object"
-        },
         "TimelineEnterPresetWire": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/EnterCaptionPresetName"
-            },
-            {
-              "$ref": "#/$defs/TimelineEnterPresetOptionsWire"
-            }
-          ]
-        },
-        "TimelineExitPresetOptionsWire": {
           "additionalProperties": false,
           "properties": {
             "duration": {
@@ -2577,7 +2527,7 @@
               ]
             },
             "preset": {
-              "$ref": "#/$defs/ExitCaptionPresetName"
+              "$ref": "#/$defs/EnterCaptionPresetName"
             }
           },
           "required": [
@@ -2586,14 +2536,26 @@
           "type": "object"
         },
         "TimelineExitPresetWire": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ExitCaptionPresetName"
+          "additionalProperties": false,
+          "properties": {
+            "duration": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/TimelineTimeWire"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
-            {
-              "$ref": "#/$defs/TimelineExitPresetOptionsWire"
+            "preset": {
+              "$ref": "#/$defs/ExitCaptionPresetName"
             }
-          ]
+          },
+          "required": [
+            "preset"
+          ],
+          "type": "object"
         },
         "TimelineFrameRateWire": {
           "oneOf": [
@@ -2608,6 +2570,42 @@
           ]
         },
         "TimelineKeyframeWire": {
+          "anyOf": [
+            {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "$ref": "#/$defs/TimelineTimeWire"
+                },
+                {
+                  "format": "double",
+                  "type": "number"
+                }
+              ],
+              "type": "array"
+            },
+            {
+              "maxItems": 3,
+              "minItems": 3,
+              "prefixItems": [
+                {
+                  "$ref": "#/$defs/TimelineTimeWire"
+                },
+                {
+                  "format": "double",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EasingWire"
+                }
+              ],
+              "type": "array"
+            }
+          ],
+          "description": "Compact `[time, value]` or `[time, value, easing]` keyframe."
+        },
+        "TimelineKeyframeWire2": {
           "anyOf": [
             {
               "maxItems": 2,
@@ -2637,52 +2635,6 @@
           ],
           "description": "Compact `[time, value]` or `[time, value, easing]` keyframe."
         },
-        "TimelineKeyframeWire2": {
-          "anyOf": [
-            {
-              "maxItems": 2,
-              "minItems": 2,
-              "prefixItems": [
-                {
-                  "$ref": "#/$defs/TimelineTimeWire"
-                },
-                {
-                  "items": {
-                    "format": "double",
-                    "type": "number"
-                  },
-                  "maxItems": 2,
-                  "minItems": 2,
-                  "type": "array"
-                }
-              ],
-              "type": "array"
-            },
-            {
-              "maxItems": 3,
-              "minItems": 3,
-              "prefixItems": [
-                {
-                  "$ref": "#/$defs/TimelineTimeWire"
-                },
-                {
-                  "items": {
-                    "format": "double",
-                    "type": "number"
-                  },
-                  "maxItems": 2,
-                  "minItems": 2,
-                  "type": "array"
-                },
-                {
-                  "$ref": "#/$defs/EasingWire"
-                }
-              ],
-              "type": "array"
-            }
-          ],
-          "description": "Compact `[time, value]` or `[time, value, easing]` keyframe."
-        },
         "TimelineKeyframeWire3": {
           "anyOf": [
             {
@@ -2693,8 +2645,13 @@
                   "$ref": "#/$defs/TimelineTimeWire"
                 },
                 {
-                  "format": "double",
-                  "type": "number"
+                  "items": {
+                    "format": "double",
+                    "type": "number"
+                  },
+                  "maxItems": 2,
+                  "minItems": 2,
+                  "type": "array"
                 }
               ],
               "type": "array"
@@ -2707,8 +2664,13 @@
                   "$ref": "#/$defs/TimelineTimeWire"
                 },
                 {
-                  "format": "double",
-                  "type": "number"
+                  "items": {
+                    "format": "double",
+                    "type": "number"
+                  },
+                  "maxItems": 2,
+                  "minItems": 2,
+                  "type": "array"
                 },
                 {
                   "$ref": "#/$defs/EasingWire"
@@ -2841,7 +2803,10 @@
             {
               "$ref": "#/$defs/TimelineCurveWire"
             },
-            true
+            {
+              "format": "double",
+              "type": "number"
+            }
           ],
           "description": "Constants are written directly. Only animated values use the explicit\n`{\"keyframes\":[...]}` object."
         },
@@ -2850,15 +2815,7 @@
             {
               "$ref": "#/$defs/TimelineCurveWire2"
             },
-            {
-              "items": {
-                "format": "double",
-                "type": "number"
-              },
-              "maxItems": 2,
-              "minItems": 2,
-              "type": "array"
-            }
+            true
           ],
           "description": "Constants are written directly. Only animated values use the explicit\n`{\"keyframes\":[...]}` object."
         },
@@ -2868,8 +2825,13 @@
               "$ref": "#/$defs/TimelineCurveWire3"
             },
             {
-              "format": "double",
-              "type": "number"
+              "items": {
+                "format": "double",
+                "type": "number"
+              },
+              "maxItems": 2,
+              "minItems": 2,
+              "type": "array"
             }
           ],
           "description": "Constants are written directly. Only animated values use the explicit\n`{\"keyframes\":[...]}` object."
@@ -2996,6 +2958,17 @@
                       "type": "null"
                     }
                   ]
+                },
+                "gain": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/TimelineParamWire"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "Source audio amplitude multiplier; 0 mutes, 1 preserves original sound."
                 },
                 "kind": {
                   "const": "video",
@@ -3150,7 +3123,7 @@
                 },
                 "props": {
                   "additionalProperties": {
-                    "$ref": "#/$defs/TimelineParamWire"
+                    "$ref": "#/$defs/TimelineParamWire2"
                   },
                   "type": "object"
                 },
@@ -3243,7 +3216,7 @@
             "opacity": {
               "anyOf": [
                 {
-                  "$ref": "#/$defs/TimelineParamWire3"
+                  "$ref": "#/$defs/TimelineParamWire"
                 },
                 {
                   "type": "null"
@@ -3253,7 +3226,7 @@
             "position": {
               "anyOf": [
                 {
-                  "$ref": "#/$defs/TimelineParamWire2"
+                  "$ref": "#/$defs/TimelineParamWire3"
                 },
                 {
                   "type": "null"
@@ -3263,7 +3236,7 @@
             "rotation": {
               "anyOf": [
                 {
-                  "$ref": "#/$defs/TimelineParamWire3"
+                  "$ref": "#/$defs/TimelineParamWire"
                 },
                 {
                   "type": "null"
@@ -3273,12 +3246,23 @@
             "scale": {
               "anyOf": [
                 {
-                  "$ref": "#/$defs/TimelineParamWire2"
+                  "$ref": "#/$defs/TimelineParamWire3"
                 },
                 {
                   "type": "null"
                 }
               ]
+            },
+            "size": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/TimelineParamWire3"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Target rectangle in canvas pixels; defaults to the canvas size."
             },
             "start": {
               "$ref": "#/$defs/TimelineTimeWire"

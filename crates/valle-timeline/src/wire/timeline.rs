@@ -597,6 +597,9 @@ pub struct TimelineVisualClipWire {
     pub position: Option<TimelineParamWire<[f64; 2]>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scale: Option<TimelineParamWire<[f64; 2]>>,
+    /// Target rectangle in canvas pixels; defaults to the canvas size.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<TimelineParamWire<[f64; 2]>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rotation: Option<TimelineParamWire<f64>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -618,6 +621,7 @@ impl<'de> Deserialize<'de> for TimelineVisualClipWire {
         let duration = required_raw(&mut fields, "duration").map_err(de::Error::custom)?;
         let position = take_raw(&mut fields, "position").map_err(de::Error::custom)?;
         let scale = take_raw(&mut fields, "scale").map_err(de::Error::custom)?;
+        let size = take_raw(&mut fields, "size").map_err(de::Error::custom)?;
         let rotation = take_raw(&mut fields, "rotation").map_err(de::Error::custom)?;
         let anchor = take_raw(&mut fields, "anchor").map_err(de::Error::custom)?;
         let opacity = take_raw(&mut fields, "opacity").map_err(de::Error::custom)?;
@@ -629,6 +633,7 @@ impl<'de> Deserialize<'de> for TimelineVisualClipWire {
             source,
             position,
             scale,
+            size,
             rotation,
             anchor,
             opacity,
@@ -657,6 +662,9 @@ impl<'de> Deserialize<'de> for TimelineVisualClipWire {
 pub enum TimelineVisualSourceWire {
     Video {
         src: String,
+        /// Source audio amplitude multiplier; 0 mutes, 1 preserves original sound.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        gain: Option<TimelineParamWire<f64>>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         trim_start: Option<TimelineTimeWire>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -965,16 +973,8 @@ pub struct TimelineCaptionPresentationWire {
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum TimelineEnterPresetWire {
-    Name(EnterCaptionPresetName),
-    Options(TimelineEnterPresetOptionsWire),
-}
-
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct TimelineEnterPresetOptionsWire {
+pub struct TimelineEnterPresetWire {
     pub preset: EnterCaptionPresetName,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub duration: Option<TimelineTimeWire>,
@@ -982,16 +982,8 @@ pub struct TimelineEnterPresetOptionsWire {
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum TimelineDisplayPresetWire {
-    Name(DisplayCaptionPresetName),
-    Options(TimelineDisplayPresetOptionsWire),
-}
-
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct TimelineDisplayPresetOptionsWire {
+pub struct TimelineDisplayPresetWire {
     pub preset: DisplayCaptionPresetName,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rate: Option<f64>,
@@ -999,16 +991,8 @@ pub struct TimelineDisplayPresetOptionsWire {
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum TimelineExitPresetWire {
-    Name(ExitCaptionPresetName),
-    Options(TimelineExitPresetOptionsWire),
-}
-
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct TimelineExitPresetOptionsWire {
+pub struct TimelineExitPresetWire {
     pub preset: ExitCaptionPresetName,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub duration: Option<TimelineTimeWire>,
@@ -1018,8 +1002,9 @@ fn raw_object(raw: &str) -> Result<BTreeMap<String, Box<RawValue>>, String> {
     serde_json::from_str(raw).map_err(|error| error.to_string())
 }
 
-fn decode_raw<T: DeserializeOwned>(raw: &RawValue) -> serde_json::Result<T> {
-    serde_json::from_str(raw.get())
+fn decode_raw<T: DeserializeOwned>(raw: &RawValue) -> Result<T, String> {
+    let mut decoder = serde_json::Deserializer::from_str(raw.get());
+    serde_path_to_error::deserialize(&mut decoder).map_err(|error| error.to_string())
 }
 
 fn take_raw<T: DeserializeOwned>(
@@ -1028,7 +1013,7 @@ fn take_raw<T: DeserializeOwned>(
 ) -> Result<Option<T>, String> {
     fields
         .remove(name)
-        .map(|raw| decode_raw(&raw).map_err(|error| error.to_string()))
+        .map(|raw| decode_raw(&raw).map_err(|error| format!("{name}: {error}")))
         .transpose()
 }
 
@@ -1067,6 +1052,7 @@ fn parse_visual_source(
     let source = match kind.as_str() {
         "video" => TimelineVisualSourceWire::Video {
             src: required_raw(fields, "src")?,
+            gain: take_raw(fields, "gain")?,
             trim_start: take_raw(fields, "trimStart")?,
             rate: take_raw(fields, "rate")?,
             end: take_raw(fields, "end")?,

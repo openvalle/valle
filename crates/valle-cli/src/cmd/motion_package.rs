@@ -47,6 +47,7 @@ pub(super) struct StandaloneMotionPackageInput<'a> {
     pub font_blobs: &'a [Vec<u8>],
     pub shaders: &'a ShaderRegistry,
     pub cue_bindings: &'a BTreeMap<String, CueWindow>,
+    pub prop_bindings: &'a BTreeMap<String, Value>,
     pub duration: RationalTime,
     pub frame_rate: FrameRate,
     pub canvas: (u32, u32),
@@ -177,7 +178,7 @@ fn build_timeline(
     resource_ids: &BTreeMap<String, String>,
     artifact_digest: &ContentDigest,
 ) -> Result<CanonicalTimeline> {
-    let props = authored_default_props(input.artifact)?;
+    let props = authored_default_props(input.artifact, input.prop_bindings)?;
     let cues = input
         .cue_bindings
         .iter()
@@ -258,12 +259,24 @@ fn standalone_motion_layer() -> Value {
     })
 }
 
-fn authored_default_props(artifact: &SceneArtifact) -> Result<BTreeMap<String, Value>> {
+fn authored_default_props(
+    artifact: &SceneArtifact,
+    bindings: &BTreeMap<String, Value>,
+) -> Result<BTreeMap<String, Value>> {
+    for name in bindings.keys() {
+        if !artifact.controls.props.contains_key(name) {
+            bail!("unknown Motion prop `{name}`");
+        }
+    }
     let mut props = BTreeMap::new();
     for (name, control) in &artifact.controls.props {
+        if let Some(value) = bindings.get(name) {
+            props.insert(name.clone(), json!({"type":"constant", "value":value}));
+            continue;
+        }
         let Some(default) = &control.default else {
             if control.required {
-                bail!("required Motion prop `{name}` has no default for standalone preview");
+                bail!("required Motion prop `{name}` has no binding or default");
             }
             continue;
         };
@@ -555,6 +568,8 @@ fn font_descriptor(bytes: &[u8]) -> Result<FontResourceDescriptorWire> {
 }
 
 struct DecodedAudioCorpus {
+    channels: u16,
+    stream: u32,
     sample_count: i64,
     digest: ContentDigest,
 }
@@ -572,30 +587,53 @@ fn analyzed_audio_descriptor(decoded: &DecodedAudioCorpus) -> Result<AudioResour
     );
     index_fact.extend_from_slice(STANDALONE_AUDIO_PRESENTATION_INDEX_DOMAIN);
     index_fact.extend_from_slice(&48_000_u32.to_le_bytes());
-    index_fact.extend_from_slice(&1_u16.to_le_bytes());
-    index_fact.extend_from_slice(&0_u32.to_le_bytes());
+    index_fact.extend_from_slice(&decoded.channels.to_le_bytes());
+    index_fact.extend_from_slice(&decoded.stream.to_le_bytes());
     index_fact.extend_from_slice(&decoded.sample_count.to_le_bytes());
     Ok(AudioResourceDescriptorWire {
         duration,
         time_base: ExactRational::new(1, 48_000)?,
         presentation_index_digest: motion_digest(&index_fact),
         sample_rate: 48_000,
-        channel_layout: AudioChannelLayoutWire::Mono,
-        audio_stream: 0,
+        channel_layout: if decoded.channels == 1 {
+            AudioChannelLayoutWire::Mono
+        } else {
+            AudioChannelLayoutWire::Stereo
+        },
+        audio_stream: decoded.stream,
     })
 }
 
 fn decode_audio_corpus(asset: &BoundAsset) -> Result<DecodedAudioCorpus> {
-    let samples = valle_media::codec::decode_audio_mono_f32(&asset.path, 48_000)
-        .with_context(|| format!("decode common-profile PCM from {}", asset.path.display()))?;
-    let sample_count = i64::try_from(samples.len())
+    let info = valle_media::codec::audio::probe_audio_stream(&asset.path)?
+        .ok_or_else(|| anyhow!("no audio stream in {}", asset.path.display()))?;
+    if !matches!(info.channels, 1 | 2) {
+        bail!(
+            "audio requires mono or stereo; {} has {} channels",
+            asset.path.display(),
+            info.channels
+        );
+    }
+    let mut decoder =
+        valle_media::codec::LibavAudioStream::open(&asset.path, 48_000, info.channels)?;
+    let mut samples = Vec::new();
+    loop {
+        let block = decoder.read(48_000)?;
+        if block.samples.is_empty() {
+            break;
+        }
+        samples.extend_from_slice(&block.samples);
+    }
+    let sample_count = i64::try_from(samples.len() / usize::from(info.channels))
         .map_err(|_| anyhow!("decoded common-profile PCM exceeds the exact time domain"))?;
     if sample_count == 0 {
         bail!("decoded common-profile PCM must contain at least one sample");
     }
-    let digest = valle_engine::render::common_audio_pcm_digest(48_000, 1, &samples)
+    let digest = valle_engine::render::common_audio_pcm_digest(48_000, info.channels, &samples)
         .map_err(|error| anyhow!("hash common-profile decoded PCM: {error}"))?;
     Ok(DecodedAudioCorpus {
+        channels: info.channels,
+        stream: info.stream,
         sample_count,
         digest,
     })
@@ -676,6 +714,8 @@ mod tests {
     #[test]
     fn audio_descriptor_duration_is_the_exact_decoded_pcm_sample_count() {
         let decoded = DecodedAudioCorpus {
+            channels: 1,
+            stream: 0,
             sample_count: 48_001,
             digest: common_audio_pcm_digest(48_000, 1, &vec![0.0; 48_001]).unwrap(),
         };
@@ -690,6 +730,8 @@ mod tests {
         assert_ne!(descriptor.presentation_index_digest, decoded.digest);
 
         let next = analyzed_audio_descriptor(&DecodedAudioCorpus {
+            channels: 1,
+            stream: 0,
             sample_count: 48_002,
             digest: decoded.digest,
         })

@@ -569,9 +569,21 @@ pub enum MotionAction {
         /// Bind an asset control as name=path; may be repeated.
         #[arg(long = "asset", value_name = "NAME=PATH")]
         assets: Vec<String>,
+        #[command(flatten)]
+        bindings: MotionBindingArgs,
         /// JSON object bound to `controls.data` during prepare.
         #[arg(long, value_name = "PATH")]
         data: Option<PathBuf>,
+        /// Fonts used by actual rendering; may be repeated.
+        #[arg(long)]
+        font: Vec<PathBuf>,
+        #[arg(long, default_value = "5")]
+        duration: String,
+        #[arg(long, default_value = "30")]
+        fps: String,
+        /// Validate this exact frame through the native raster renderer.
+        #[arg(long, default_value_t = 0)]
+        frame: i64,
         /// Logical canvas shared by compilation, measurement, and validation.
         #[command(flatten)]
         canvas: MotionCanvasArgs,
@@ -597,6 +609,8 @@ pub enum MotionAction {
         /// Add a font alongside the deterministic default fonts; may be repeated.
         #[arg(long)]
         font: Vec<PathBuf>,
+        #[command(flatten)]
+        bindings: MotionBindingArgs,
         /// JSON object bound to controls.data during prepare.
         #[arg(long, value_name = "PATH")]
         data: Option<PathBuf>,
@@ -620,6 +634,8 @@ pub enum MotionAction {
         /// repeated.
         #[arg(long)]
         font: Vec<PathBuf>,
+        #[command(flatten)]
+        bindings: MotionBindingArgs,
         /// JSON object bound to `controls.data`; Studio watches it for re-prepare.
         #[arg(long, value_name = "PATH")]
         data: Option<PathBuf>,
@@ -637,6 +653,16 @@ pub enum MotionAction {
         #[command(flatten)]
         canvas: MotionCanvasArgs,
     },
+}
+
+#[derive(clap::Args, Clone, Debug, Default)]
+pub struct MotionBindingArgs {
+    /// JSON object of constant Motion prop values.
+    #[arg(long, value_name = "PATH")]
+    props: Option<PathBuf>,
+    /// JSON object of Timeline source-range cue bindings, in seconds.
+    #[arg(long, value_name = "PATH")]
+    cues: Option<PathBuf>,
 }
 
 #[derive(Clone, Copy, clap::ValueEnum)]

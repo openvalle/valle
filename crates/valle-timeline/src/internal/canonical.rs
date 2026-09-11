@@ -57,6 +57,24 @@ pub struct LocalInvariantReport {
     pub diagnostics: Vec<ContractDiagnostic>,
 }
 
+impl std::fmt::Display for LocalInvariantReport {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for (index, diagnostic) in self.diagnostics.iter().enumerate() {
+            if index > 0 {
+                write!(f, "; ")?;
+            }
+            write!(
+                f,
+                "{}: {} ({})",
+                diagnostic.path,
+                diagnostic.code,
+                serde_json::json!(diagnostic.details)
+            )?;
+        }
+        Ok(())
+    }
+}
+
 impl LocalInvariantReport {
     pub fn is_empty(&self) -> bool {
         self.diagnostics.is_empty()
@@ -160,6 +178,14 @@ fn quantize_document_scalars(document: &mut TimelineDocumentWire) {
                 continue;
             };
             quantize_visual_layer(&mut clip.layer);
+            if let Some(size) = &mut clip.layer.transform.size {
+                quantize_param(size, quantize_components);
+            }
+            if let VisualSourceWire::Video(source) = &mut clip.source {
+                if let Some(gain) = &mut source.gain {
+                    quantize_param(gain, quantize_scalar);
+                }
+            }
             if let VisualSourceWire::Motion(motion) = &mut clip.source {
                 for param in motion.props.values_mut() {
                     quantize_param(param, quantize_json_numbers);
@@ -536,6 +562,15 @@ impl<'a> Validator<'a> {
         self.validate_layer(&clip.layer, clip.duration, &format!("{path}/layer"));
         match &clip.source {
             VisualSourceWire::Video(source) => {
+                if let Some(gain) = &source.gain {
+                    self.validate_scalar_param(
+                        gain,
+                        clip.duration,
+                        &format!("{path}/source/gain"),
+                        |value| value >= 0.0,
+                        "gain_negative",
+                    );
+                }
                 self.validate_resource_id(&source.resource, &format!("{path}/source/resource"));
                 self.require_non_negative(
                     source.source_start,
@@ -724,6 +759,15 @@ impl<'a> Validator<'a> {
     }
 
     fn validate_layer(&mut self, layer: &VisualLayerWire, owner: ExactRational, path: &str) {
+        if let Some(size) = &layer.transform.size {
+            self.validate_vec2_param(
+                size,
+                owner,
+                &format!("{path}/transform/size"),
+                |v| v[0] > 0.0 && v[1] > 0.0,
+                "size_non_positive",
+            );
+        }
         self.validate_vec2_param(
             &layer.transform.position,
             owner,

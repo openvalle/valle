@@ -59,6 +59,7 @@ rustfft = "6.4.1"
 semver = "1.0.28"
 serde = { version = "1.0.229", features = ["derive"] }
 # float_roundtrip is required for identical JSON float parsing in Rust and JavaScript.
+serde_path_to_error = "0.1.20"
 serde_json = { version = "1.0.151", features = ["float_roundtrip", "raw_value"] }
 serde_jcs = "=0.2.0"
 schemars = "=1.2.2"

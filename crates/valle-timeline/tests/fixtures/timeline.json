@@ -24,8 +24,8 @@
         "start": 1.4,
         "duration": 2.2,
         "text": "A programmable video editing engine",
-        "enter": "slide-up",
-        "exit": "fade"
+        "enter": { "preset": "slide-up" },
+        "exit": { "preset": "fade" }
       }]
     }],
     "adjustment": [{

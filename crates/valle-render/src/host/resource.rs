@@ -288,6 +288,7 @@ struct ResourceCacheCounters {
 /// frame workers; immutable source bytes and the Engine render remain shared.
 pub struct NativeResourceProvider {
     catalog: Arc<NativeResourceCatalog>,
+    runtime_shaders: BTreeMap<(ContentDigest, ContentDigest), Arc<[u8]>>,
     objects: NativeResourceObjectCache,
     cache_generation: u64,
     cache_invalidations: u64,
@@ -315,6 +316,7 @@ impl NativeResourceProvider {
     ) -> Self {
         Self {
             catalog,
+            runtime_shaders: BTreeMap::new(),
             objects: NativeResourceObjectCache::new(limits),
             cache_generation: 1,
             cache_invalidations: 0,
@@ -330,6 +332,23 @@ impl NativeResourceProvider {
             #[cfg(feature = "lottie")]
             lottie: BTreeMap::new(),
         }
+    }
+
+    /// Freeze backend payloads from the admitted render. Shader package identity is not the
+    /// digest of generated SkSL; the engine has already verified and lowered the package.
+    pub fn with_render_resources(mut self, render: &valle_engine::render::CompiledRender) -> Self {
+        for resource in render.execution_resources() {
+            if resource.kind() == valle_engine::render::CompiledExecutionResourceKind::RuntimeShader
+            {
+                if let Some(abi) = resource.abi_digest() {
+                    self.runtime_shaders.insert(
+                        (*resource.content_digest(), *abi),
+                        Arc::from(resource.bytes()),
+                    );
+                }
+            }
+        }
+        self
     }
 
     pub fn catalog(&self) -> &Arc<NativeResourceCatalog> {
@@ -711,13 +730,14 @@ impl NativeResourceProvider {
                     });
                 };
                 let digest = request.key().content.clone();
-                let source = self.source(digest.clone()).map_err(|_| {
-                    NativeResourceError::MissingShader {
+                let bytes = self
+                    .runtime_shaders
+                    .get(&(digest, *abi_digest))
+                    .cloned()
+                    .ok_or_else(|| NativeResourceError::MissingShader {
                         content: digest.to_string(),
                         abi: abi_digest.to_string(),
-                    }
-                })?;
-                let bytes = self.source_bytes(&digest, &source)?;
+                    })?;
                 Ok(SkiaExternalObject::runtime_shader(
                     request.key().clone(),
                     digest,

@@ -290,6 +290,7 @@ pub struct VisualLayer {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct LayerTransform {
+    pub size: Option<Param<Vec2>>,
     pub position: Param<Vec2>,
     pub scale: Param<Vec2>,
     pub rotation: Param<f64>,
@@ -347,8 +348,9 @@ pub enum VisualSource {
     Solid(SolidSource),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct VideoSource {
+    pub gain: Option<Param<f64>>,
     pub resource: ResourceId,
     pub source_start: RationalTime,
     pub rate: RationalRate,
@@ -1014,6 +1016,11 @@ fn visual_layer_from_wire(
 ) -> Result<VisualLayer, DocumentConversionError> {
     Ok(VisualLayer {
         transform: LayerTransform {
+            size: layer
+                .transform
+                .size
+                .map(|size| param_from_wire(size, identity))
+                .transpose()?,
             position: param_from_wire(layer.transform.position, identity)?,
             scale: param_from_wire(layer.transform.scale, identity)?,
             rotation: param_from_wire(layer.transform.rotation, identity)?,
@@ -1039,6 +1046,10 @@ fn visual_layer_from_wire(
 fn visual_layer_into_wire(layer: VisualLayer) -> wire::VisualLayerWire {
     wire::VisualLayerWire {
         transform: wire::LayerTransformWire {
+            size: layer
+                .transform
+                .size
+                .map(|size| param_into_wire(size, std::convert::identity)),
             position: param_into_wire(layer.transform.position, std::convert::identity),
             scale: param_into_wire(layer.transform.scale, std::convert::identity),
             rotation: param_into_wire(layer.transform.rotation, std::convert::identity),
@@ -1158,6 +1169,10 @@ fn visual_source_from_wire(
 ) -> Result<VisualSource, DocumentConversionError> {
     match source {
         wire::VisualSourceWire::Video(source) => Ok(VisualSource::Video(VideoSource {
+            gain: source
+                .gain
+                .map(|gain| param_from_wire(gain, identity))
+                .transpose()?,
             resource: source.resource,
             source_start: RationalTime::from_exact(source.source_start),
             rate: RationalRate::from_exact(source.rate)
@@ -1215,6 +1230,9 @@ fn visual_source_from_wire(
 fn visual_source_into_wire(source: VisualSource) -> wire::VisualSourceWire {
     match source {
         VisualSource::Video(source) => wire::VisualSourceWire::Video(wire::VideoSourceWire {
+            gain: source
+                .gain
+                .map(|gain| param_into_wire(gain, std::convert::identity)),
             resource: source.resource,
             source_start: source.source_start.into_exact(),
             rate: source.rate.into_exact(),

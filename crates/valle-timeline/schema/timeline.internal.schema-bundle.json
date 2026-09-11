@@ -1409,6 +1409,16 @@
             },
             "scale": {
               "$ref": "#/$defs/ParamWire"
+            },
+            "size": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ParamWire"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             }
           },
           "required": [
@@ -2151,6 +2161,16 @@
               "properties": {
                 "endBehavior": {
                   "$ref": "#/$defs/MediaEndBehaviorWire"
+                },
+                "gain": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/ParamWire2"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
                 },
                 "rate": {
                   "$ref": "#/$defs/ExactRational"

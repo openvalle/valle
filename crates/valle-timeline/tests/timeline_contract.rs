@@ -184,7 +184,7 @@ fn motion_runtime_data_is_not_part_of_timeline() {
     });
     assert!(matches!(
         decode_timeline(&serde_json::to_string(&value).unwrap()),
-        Err(TimelineDecodeError::InvalidShape)
+        Err(TimelineDecodeError::InvalidShape { .. })
     ));
 }
 
@@ -326,21 +326,21 @@ fn strict_json_unsupported_shape_fps_and_flattened_source_are_closed() {
     let unsupported_version = solid_with_curve().replacen("{", "{\"version\":2,", 1);
     assert!(matches!(
         decode_timeline(&unsupported_version),
-        Err(TimelineDecodeError::InvalidShape)
+        Err(TimelineDecodeError::InvalidShape { .. })
     ));
     let mut unsupported_track_type: serde_json::Value =
         serde_json::from_str(&solid_with_curve()).unwrap();
     unsupported_track_type["tracks"]["visual"][0]["type"] = json!("visual");
     assert!(matches!(
         decode_timeline(&serde_json::to_string(&unsupported_track_type).unwrap()),
-        Err(TimelineDecodeError::InvalidShape)
+        Err(TimelineDecodeError::InvalidShape { .. })
     ));
     let mut unsupported_track_type_name: serde_json::Value =
         serde_json::from_str(&solid_with_curve()).unwrap();
     unsupported_track_type_name["tracks"]["visual"][0]["trackType"] = json!("visual");
     assert!(matches!(
         decode_timeline(&serde_json::to_string(&unsupported_track_type_name).unwrap()),
-        Err(TimelineDecodeError::InvalidShape)
+        Err(TimelineDecodeError::InvalidShape { .. })
     ));
     let unsupported_track_list = serde_json::to_string(&json!({
         "canvas": { "width": 1920, "height": 1080, "fps": 30 },
@@ -349,7 +349,7 @@ fn strict_json_unsupported_shape_fps_and_flattened_source_are_closed() {
     .unwrap();
     assert!(matches!(
         decode_timeline(&unsupported_track_list),
-        Err(TimelineDecodeError::InvalidShape)
+        Err(TimelineDecodeError::InvalidShape { .. })
     ));
     for unsupported_slot in ["subtitle", "subtitles", "effect"] {
         let unsupported = serde_json::to_string(&json!({
@@ -359,19 +359,19 @@ fn strict_json_unsupported_shape_fps_and_flattened_source_are_closed() {
         .unwrap();
         assert!(matches!(
             decode_timeline(&unsupported),
-            Err(TimelineDecodeError::InvalidShape)
+            Err(TimelineDecodeError::InvalidShape { .. })
         ));
     }
     let noncanonical_fps = solid_with_curve().replace("30000/1001", "60000/2002");
     assert!(matches!(
         decode_timeline(&noncanonical_fps),
-        Err(TimelineDecodeError::InvalidShape)
+        Err(TimelineDecodeError::InvalidShape { .. })
     ));
     let unknown =
         solid_with_curve().replace("\"kind\":\"solid\"", "\"kind\":\"solid\",\"bogus\":true");
     assert!(matches!(
         decode_timeline(&unknown),
-        Err(TimelineDecodeError::InvalidShape)
+        Err(TimelineDecodeError::InvalidShape { .. })
     ));
     let wrong_variant_field = solid_with_curve().replace(
         "\"kind\":\"solid\"",
@@ -379,7 +379,7 @@ fn strict_json_unsupported_shape_fps_and_flattened_source_are_closed() {
     );
     assert!(matches!(
         decode_timeline(&wrong_variant_field),
-        Err(TimelineDecodeError::InvalidShape)
+        Err(TimelineDecodeError::InvalidShape { .. })
     ));
 
     let decimal_fps = solid_with_curve().replace("\"30000/1001\"", "29.97002997003");
@@ -424,7 +424,7 @@ fn resources_caption_content_and_adjustment_range_are_validated() {
     assert!(matches!(
         decode_timeline(&caption(
             json!({ "text": "hello" }),
-            json!({ "enter": "fade", "presentation": { "opacity": 0.5 } }),
+            json!({ "enter": { "preset": "fade" }, "presentation": { "opacity": 0.5 } }),
         )),
         Err(TimelineDecodeError::InvalidTimeline(ref report))
             if report.diagnostics.iter().any(|item| item.code == "preset_presentation_conflict")
@@ -437,7 +437,7 @@ fn resources_caption_content_and_adjustment_range_are_validated() {
     ] {
         assert!(matches!(
             decode_timeline(&caption(json!({ "text": "hello" }), effects)),
-            Err(TimelineDecodeError::InvalidShape)
+            Err(TimelineDecodeError::InvalidShape { .. })
         ));
     }
     assert!(matches!(
@@ -445,7 +445,7 @@ fn resources_caption_content_and_adjustment_range_are_validated() {
             json!({ "runs": [{ "text": "hello", "fontWeight": 700 }] }),
             json!({}),
         )),
-        Err(TimelineDecodeError::InvalidShape)
+        Err(TimelineDecodeError::InvalidShape { .. })
     ));
 
     let invalid_temperature = serde_json::to_string(&json!({
@@ -522,7 +522,7 @@ fn karaoke_consumes_inline_timed_runs_not_words_sidecars() {
     );
     assert!(matches!(
         decode_timeline(&unsupported_words),
-        Err(TimelineDecodeError::InvalidShape)
+        Err(TimelineDecodeError::InvalidShape { .. })
     ));
 }
 
@@ -560,4 +560,29 @@ fn from_wire_revalidates_and_normalizes_programmatic_inputs() {
         Timeline::from_wire(invalid_fps),
         Err(ref report) if report.diagnostics.iter().any(|item| item.code == "invalid_frame_rate")
     ));
+}
+
+#[test]
+fn caption_presets_are_objects_with_exact_optional_duration() {
+    let make = |preset| caption(json!({"text":"Hello"}), json!({"enter":preset}));
+    for value in [
+        serde_json::json!({"preset":"fade"}),
+        serde_json::json!({"preset":"fade","duration":0.3}),
+    ] {
+        let timeline = decode_timeline(&make(value)).unwrap();
+        let encoded = valle_timeline::timeline_bytes(&timeline).unwrap();
+        assert_eq!(
+            decode_timeline(std::str::from_utf8(&encoded).unwrap()).unwrap(),
+            timeline
+        );
+    }
+    assert!(decode_timeline(&make(serde_json::json!("fade"))).is_err());
+}
+
+#[test]
+fn malformed_clip_reports_the_field_and_its_parent_path() {
+    let error = decode_timeline(r#"{"canvas":{"width":320,"height":180,"fps":30},"tracks":{"visual":[{"clips":[{"kind":"solid","color":"red","start":0,"duration":1,"opactiy":0.5}]}]}}"#).unwrap_err().to_string();
+    for part in ["tracks", "visual[0]", "clips", "opactiy"] {
+        assert!(error.contains(part), "missing {part}: {error}");
+    }
 }

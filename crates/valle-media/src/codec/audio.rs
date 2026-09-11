@@ -101,3 +101,18 @@ impl AudioSource for LibavAudioSource {
         }
     }
 }
+
+/// Selected native audio stream, before resampling or channel mapping.
+#[derive(Debug, Clone, Copy)]
+pub struct AudioStreamInfo {
+    pub stream: u32,
+    pub channels: u16,
+}
+
+pub fn probe_audio_stream(path: &Path) -> Result<Option<AudioStreamInfo>> {
+    match backend::version()? {
+        Version::V7 => backend::v7::audio::probe_audio_stream(path),
+        Version::V8 => backend::v8::audio::probe_audio_stream(path),
+        Version::V9 => backend::v9::audio::probe_audio_stream(path),
+    }
+}

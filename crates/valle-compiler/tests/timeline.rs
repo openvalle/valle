@@ -165,7 +165,7 @@ fn compact_caption_preset_expands_but_custom_presentation_remains_an_escape_hatc
         "tracks": {
             "caption": [{
                 "style": {"font": "font"},
-                "clips": [{"start": 0, "duration": 2, "text": "hello", "enter": "slide-up"}]
+                "clips": [{"start": 0, "duration": 2, "text": "hello", "enter": { "preset": "slide-up" }}]
             }]
         }
     }));
@@ -194,7 +194,7 @@ fn compact_caption_preset_expands_but_custom_presentation_remains_an_escape_hatc
                     "start": 0,
                     "duration": 2,
                     "text": "hello",
-                    "enter": "fade",
+                    "enter": { "preset": "fade" },
                     "presentation": {"opacity": 0.5}
                 }]
             }]
@@ -311,4 +311,30 @@ fn motion_resources_and_inline_karaoke_timings_lower_to_canonical_data() {
         caption.runs[1].timing.as_ref().unwrap().end.to_string(),
         "1/1"
     );
+}
+
+#[test]
+fn visual_video_volume_and_pixel_size_survive_lowering_and_angles_are_degrees() {
+    let timeline = compile_timeline(decode(json!({
+        "canvas":{"width":640,"height":360,"fps":30}, "resources":{"v":"v.mp4"},
+        "tracks":{"visual":[{"clips":[{"kind":"video","src":"v","start":0,"duration":2,
+          "gain":{"keyframes":[[0,0],[1,2]]}, "size":[320,180], "rotation":90}]}]}
+    })))
+    .unwrap();
+    let wire = serde_json::to_value(timeline.to_wire()).unwrap();
+    let clip = &wire["document"]["visual"]["tracks"][0]["items"][0];
+    assert_eq!(
+        clip["layer"]["transform"]["size"]["value"],
+        json!([320.0, 180.0])
+    );
+    let angle = clip["layer"]["transform"]["rotation"]["value"]
+        .as_f64()
+        .unwrap();
+    assert!((angle - std::f64::consts::FRAC_PI_2).abs() < 0.000001);
+    assert_eq!(clip["source"]["gain"]["keyframes"][1]["value"], json!(2.0));
+    for (field, value) in [("gain", json!(-1)), ("size", json!([0, 180]))] {
+        let mut source = json!({"canvas":{"width":320,"height":180,"fps":30},"resources":{"v":"v.mp4"},"tracks":{"visual":[{"clips":[{"kind":"video","src":"v","start":0,"duration":1}]}]}});
+        source["tracks"]["visual"][0]["clips"][0][field] = value;
+        assert!(compile_timeline(decode(source)).is_err());
+    }
 }

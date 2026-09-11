@@ -16,7 +16,14 @@ pub fn run(action: TimelineAction) -> Result<std::process::ExitCode> {
     match action {
         TimelineAction::Check { input } => {
             let timeline = decode_timeline(&super::read(&input)?)?;
-            valle_compiler::compile_timeline(timeline)?;
+            let temp = tempfile::tempdir()?;
+            render_document_impl(
+                timeline,
+                input.parent().unwrap_or(Path::new(".")),
+                &temp.path().join("check.png"),
+                Some(0),
+                true,
+            )?;
             crate::output::emit(serde_json::json!({"status":"ok", "input":input}));
             Ok(std::process::ExitCode::SUCCESS)
         }
@@ -42,6 +49,16 @@ pub(super) fn render_document(
     output: &Path,
     frame: Option<i64>,
 ) -> Result<std::process::ExitCode> {
+    render_document_impl(timeline, base, output, frame, false)
+}
+
+fn render_document_impl(
+    timeline: Timeline,
+    base: &Path,
+    output: &Path,
+    frame: Option<i64>,
+    checking: bool,
+) -> Result<std::process::ExitCode> {
     super::fixed_render::require_new_output(output)?;
     let extension = if frame.is_some() { "png" } else { "mp4" };
     if !output
@@ -50,13 +67,20 @@ pub(super) fn render_document(
     {
         bail!("output must have an .{extension} extension");
     }
-    let doc: serde_json::Value = serde_json::from_slice(&timeline_bytes(&timeline)?)?;
+    let mut doc: serde_json::Value = serde_json::from_slice(&timeline_bytes(&timeline)?)?;
+    prepare_motion_instances(&mut doc)?;
+    let timeline = decode_timeline(&serde_json::to_string(&doc)?)?;
     let canonical = encode_canonical(&valle_compiler::compile_timeline(timeline)?)?;
     let frozen = tempfile::tempdir().context("creating immutable render resources")?;
     let mut resources = super::motion_package::FixedResources::new();
     let mut catalog = NativeResourceCatalog::new();
     if let Some(locators) = doc["resources"].as_object() {
-        let mut ordered: Vec<_> = locators.iter().collect();
+        let mut used = std::collections::BTreeSet::new();
+        collect_used_resources(&doc["tracks"], &mut used);
+        let mut ordered: Vec<_> = locators
+            .iter()
+            .filter(|(name, _)| used.contains(name.as_str()))
+            .collect();
         ordered.sort_by_key(|(name, _)| motion_component(&doc, name).is_none());
         let mut motion_asset_kinds = std::collections::BTreeMap::new();
         for (name, locator) in ordered {
@@ -72,7 +96,6 @@ pub(super) fn render_document(
             let id = format!("resource:{name}");
             if motion_component(&doc, name).is_some() {
                 let clip = motion_component(&doc, name).unwrap();
-                require_consistent_motion_bindings(&doc, name, &clip["resources"])?;
                 let mut specs = Vec::new();
                 let mut deps = Vec::new();
                 if let Some(bindings) = clip["resources"].as_object() {
@@ -251,6 +274,16 @@ pub(super) fn render_document(
             };
             if kind == AssetKind::Video {
                 let probe = valle_media::codec::decode::probe_video_presentation(&path)?;
+                let audio = valle_media::codec::audio::probe_audio_stream(&path)?;
+                let mut deps = Vec::new();
+                if audio.is_some() {
+                    let audio_id = format!("{id}:audio");
+                    resources.add_asset(&audio_id, AssetKind::Audio, &asset)?;
+                    deps.push(super::motion_package::FixedResourceDependency {
+                        role: "audio".into(),
+                        resource_id: audio_id,
+                    });
+                }
                 use valle_timeline::internal::wire::resource::*;
                 let descriptor = VideoResourceDescriptorWire {
                     duration: valle_timeline::RationalTime::new(
@@ -277,7 +310,7 @@ pub(super) fn render_document(
                         full_range: true,
                     },
                     video_stream: probe.stream,
-                    audio_stream: None,
+                    audio_stream: audio.map(|audio| audio.stream),
                 };
                 resources.add(
                     &id,
@@ -289,7 +322,7 @@ pub(super) fn render_document(
                         descriptor,
                         temporal_footprint: Default::default(),
                     },
-                    Vec::new(),
+                    deps,
                 )?;
             } else {
                 resources.add_asset(&id, kind, &asset)?;
@@ -321,6 +354,9 @@ pub(super) fn render_document(
             ..NativeRenderOptions::default()
         },
     );
+    if checking {
+        return Ok(std::process::ExitCode::SUCCESS);
+    }
     let summary = match frame {
         Some(f) => renderer.preview_frame_key(valle_engine::render::FrameKey::new(f), output)?,
         None => renderer.export_mp4(output)?,
@@ -387,31 +423,70 @@ fn has_visual_source(value: &serde_json::Value, name: &str, kind: &str) -> bool 
     }
 }
 
-fn require_consistent_motion_bindings(
+/// Compilation captures bound resource facts; vary the artifact by its actual preparation inputs.
+fn prepare_motion_instances(doc: &mut serde_json::Value) -> Result<()> {
+    let mut locators = doc["resources"].as_object().cloned().unwrap_or_default();
+    let original = locators.clone();
+    if let Some(tracks) = doc["tracks"]["visual"].as_array_mut() {
+        for track in tracks {
+            if let Some(clips) = track["clips"].as_array_mut() {
+                for clip in clips {
+                    if clip["kind"] != "motion" {
+                        continue;
+                    }
+                    let name = clip["component"]
+                        .as_str()
+                        .ok_or_else(|| anyhow!("missing Motion component"))?;
+                    let locator = original
+                        .get(name)
+                        .ok_or_else(|| anyhow!("missing Motion component {name}"))?;
+                    let inputs = serde_json::json!([locator, clip["resources"]]);
+                    let digest = ContentDigest::of_bytes(&serde_json::to_vec(&inputs)?);
+                    let key = format!("motion-{}", &digest.as_hex()[..56]);
+                    if original.contains_key(&key) {
+                        bail!("resource alias {key} collides with a prepared Motion instance");
+                    }
+                    locators.insert(key.clone(), locator.clone());
+                    clip["component"] = key.into();
+                }
+            }
+        }
+    }
+    doc["resources"] = locators.into();
+    Ok(())
+}
+
+fn collect_used_resources(
     value: &serde_json::Value,
-    name: &str,
-    bindings: &serde_json::Value,
-) -> Result<()> {
+    used: &mut std::collections::BTreeSet<String>,
+) {
     match value {
         serde_json::Value::Object(map) => {
-            if map.get("kind").and_then(|v| v.as_str()) == Some("motion")
-                && map.get("component").and_then(|v| v.as_str()) == Some(name)
-                && &value["resources"] != bindings
-            {
-                bail!(
-                    "Motion component {name} has different resource bindings across clips; declare separate resource aliases for each binding set"
-                );
+            for field in ["src", "component", "font"] {
+                if let Some(name) = map.get(field).and_then(|v| v.as_str()) {
+                    used.insert(name.to_owned());
+                }
             }
-            for child in map.values() {
-                require_consistent_motion_bindings(child, name, bindings)?;
+            if map.get("kind").and_then(|v| v.as_str()) == Some("motion") {
+                if let Some(bindings) = map.get("resources").and_then(|v| v.as_object()) {
+                    used.extend(
+                        bindings
+                            .values()
+                            .filter_map(|v| v.as_str().map(str::to_owned)),
+                    );
+                }
+            }
+            for (key, child) in map {
+                if key != "props" {
+                    collect_used_resources(child, used);
+                }
             }
         }
         serde_json::Value::Array(values) => {
             for child in values {
-                require_consistent_motion_bindings(child, name, bindings)?;
+                collect_used_resources(child, used);
             }
         }
         _ => {}
     }
-    Ok(())
 }
