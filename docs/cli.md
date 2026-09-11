@@ -165,6 +165,9 @@ attach their analyses to the asset library.
 
 ## Models and Media: local file processing
 
+See the [Media processing reference](media.md) for each operation's options,
+prompt/mask/shot-list formats, audio behavior and Timeline integration.
+
 List and verify are offline. Only `models install` downloads weights:
 
 ```sh

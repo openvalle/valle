@@ -176,9 +176,12 @@ Use `media enhance input.wav -o clean.wav --events` for speech enhancement, for
 example. Add `--report run.json` when a persisted processing report is useful.
 Transcription defaults to word timing and needs both ASR and alignment models;
 `--text-only` skips alignment and cannot be combined with `-o`. ASR currently runs
-on macOS/Linux with `--backend auto`. For less common Media operations, read the
-CLI guide for mask formats, required prompts, output restrictions and model IDs
-before constructing inputs.
+on macOS/Linux with `--backend auto`. Before constructing Media inputs, read the
+relevant operation in the checkout's `docs/media.md` or the
+[Media processing reference](https://github.com/openvalle/valle/blob/main/docs/media.md).
+It covers model choices, prompt/mask/shot-list formats, output timing and audio
+behavior, and integration with Timeline/Motion. Use its primary artifact formats
+when chaining operations; a run report is not a shot list or transcript.
 
 Deliver the requested artifact paths and relevant result details. Distinguish
 completed processing from a missing dependency, a started Studio, or an untested

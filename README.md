@@ -89,7 +89,9 @@ requirements, JSON results, progress events and exit codes. Each command also ha
 
 The [Motion authoring reference](docs/motion.md) covers JSX, components, CSS,
 animation, resources and complete examples. The [Timeline authoring reference](docs/timeline.md)
-covers clip timing, tracks, audio, captions and Motion integration.
+covers clip timing, tracks, audio, captions and Motion integration. The
+[Media processing reference](docs/media.md) covers models, input/output formats
+and workflows for all nine processing operations.
 
 For AI agents, the [Valle skill](skills/valle/SKILL.md) covers command selection,
 authoring inputs, project revisions and result handling in one file.
