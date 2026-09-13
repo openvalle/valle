@@ -19,6 +19,12 @@ pub const MAX_GEOMETRY_TRAJECTORY_FRAMES: usize = 18_000;
 pub const PATH_CURVE_STEPS: usize = 16;
 /// Exact-version number of cubic segments emitted by [`PathData::arc`].
 pub const PATH_ARC_SEGMENTS: usize = 4;
+/// Frozen sector table: inner-start corner, start radial, outer-start corner, outer arc,
+/// outer-end corner, end radial, inner-end corner, inner arc, close. Degenerate radii and
+/// corners keep these commands and this point count.
+pub const PATH_SECTOR_ARC_SEGMENTS: usize = PATH_ARC_SEGMENTS;
+pub const PATH_SECTOR_VERBS: usize = 8 + 2 * PATH_SECTOR_ARC_SEGMENTS;
+pub const PATH_SECTOR_POINTS: usize = 15 + 6 * PATH_SECTOR_ARC_SEGMENTS;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
@@ -180,24 +186,197 @@ impl PathData {
         Self::new(verbs, points)
     }
 
-    /// Close one flattened line/curve against a horizontal baseline.
+    /// Close an open single-contour path against a horizontal baseline, keeping Line/Quad/Cubic
+    /// verbs so a filled area shares the stroke's curve.
     pub fn area(&self, baseline_y: f64) -> Result<Self, GeometryError> {
         if !baseline_y.is_finite() {
             return Err(GeometryError::NonFinite);
         }
-        let flattened = FlattenedPath::from_path(self)?;
-        if flattened.contours.len() != 1 || flattened.contours[0].points.len() < 2 {
-            return Err(GeometryError::SingleContourRequired);
-        }
-        let contour = &flattened.contours[0].points;
-        let mut points = Vec::with_capacity(contour.len() + 2);
-        points.push(Point::new(contour[0].x, baseline_y));
-        points.extend(contour.iter().copied());
-        points.push(Point::new(contour[contour.len() - 1].x, baseline_y));
-        let mut verbs = Vec::with_capacity(points.len() + 1);
+        let (first, last, rest) = open_contour(self)?;
+        let mut verbs = Vec::with_capacity(self.verbs.len() + 3);
+        let mut points = Vec::with_capacity(self.points.len() + 2);
         verbs.push(PathVerb::Move);
-        verbs.extend(std::iter::repeat_n(PathVerb::Line, points.len() - 1));
+        points.push(Point::new(first.x, baseline_y));
+        verbs.push(PathVerb::Line);
+        points.push(first);
+        verbs.extend(rest);
+        points.extend(self.points.iter().copied().skip(1));
+        verbs.push(PathVerb::Line);
+        points.push(Point::new(last.x, baseline_y));
         verbs.push(PathVerb::Close);
+        Self::new(verbs, points)
+    }
+
+    /// Join two aligned open contours into a closed band: upper forward, lower reversed.
+    pub fn area_band(upper: &Self, lower: &Self) -> Result<Self, GeometryError> {
+        let (upper_start, _upper_end, upper_rest) = open_contour(upper)?;
+        let (lower_start, lower_end, lower_rest) = open_contour(lower)?;
+        if upper_rest != lower_rest {
+            return Err(GeometryError::AreaBandMismatch);
+        }
+        let upper_nodes = on_curve_nodes(upper)?;
+        let lower_nodes = on_curve_nodes(lower)?;
+        if upper_nodes.len() != lower_nodes.len()
+            || !strictly_increasing_x(&upper_nodes)
+            || !strictly_increasing_x(&lower_nodes)
+            || upper_nodes
+                .iter()
+                .zip(&lower_nodes)
+                .any(|(upper, lower)| upper.x != lower.x)
+        {
+            return Err(GeometryError::AreaBandMismatch);
+        }
+        let reversed = reverse_open_segments(lower_start, &lower.points[1..], &lower_rest)?;
+        let mut verbs = Vec::with_capacity(upper.verbs.len() + lower.verbs.len());
+        let mut points = Vec::with_capacity(upper.points.len() + lower.points.len());
+        verbs.push(PathVerb::Move);
+        points.push(upper_start);
+        verbs.extend(upper_rest);
+        points.extend(upper.points.iter().copied().skip(1));
+        verbs.push(PathVerb::Line);
+        points.push(lower_end);
+        verbs.extend(reversed.verbs);
+        points.extend(reversed.points);
+        verbs.push(PathVerb::Close);
+        Self::new(verbs, points)
+    }
+
+    /// Filled annular sector with a frozen verb/point table. Angles are radians, zero on +X,
+    /// positive clockwise. Interpolation must happen on these parameters, not on cubic controls.
+    pub fn sector(
+        center: Point,
+        inner: f64,
+        outer: f64,
+        start: f64,
+        end: f64,
+        corner_radius: f64,
+    ) -> Result<Self, GeometryError> {
+        if ![center.x, center.y, inner, outer, start, end, corner_radius]
+            .iter()
+            .all(|value| value.is_finite())
+            || inner < 0.0
+            || outer < inner
+            || corner_radius < 0.0
+        {
+            return Err(GeometryError::InvalidSector);
+        }
+        let sweep = end - start;
+        if sweep.abs() > core::f64::consts::TAU {
+            return Err(GeometryError::InvalidSector);
+        }
+        let s = if sweep < 0.0 { -1.0 } else { 1.0 };
+        let half = sweep.abs() / 2.0;
+        let sh = if half >= core::f64::consts::FRAC_PI_2 {
+            1.0
+        } else {
+            valle_draw::math::sin(half).max(0.0)
+        };
+        let thickness = outer - inner;
+        // Limit rounding by both the visible wedge and the remaining gap. As the gap closes,
+        // corners collapse continuously, leaving a complete circle with the same verb table.
+        let corner_span = sweep.abs().min(core::f64::consts::TAU - sweep.abs());
+        let corner_sin = valle_draw::math::sin(corner_span / 2.0);
+        let cr = corner_radius
+            .min(thickness / 2.0)
+            .min(outer * (corner_sin / (1.0 + corner_sin)));
+        // The inner corners may meet before the outer ones. Shrinking the hole must only
+        // shrink its own corners, otherwise the outer boundary jumps at inner == 0.
+        let inner_cr = if inner == 0.0 {
+            0.0
+        } else if sh < 1.0 {
+            cr.min(inner * (sh / (1.0 - sh)))
+        } else {
+            cr
+        };
+        let outer_ro = (outer - cr).max(0.0);
+        let inner_ri = inner + inner_cr;
+        let d_out = if cr > 0.0 && outer_ro > 0.0 {
+            valle_draw::math::asin((cr / outer_ro).clamp(-1.0, 1.0))
+        } else {
+            0.0
+        };
+        let d_in = if inner_cr > 0.0 && inner_ri > 0.0 {
+            valle_draw::math::asin((inner_cr / inner_ri).clamp(-1.0, 1.0))
+        } else {
+            0.0
+        };
+        let foot_out = if cr > 0.0 {
+            valle_draw::math::sqrt((outer_ro * outer_ro - cr * cr).max(0.0))
+        } else {
+            outer
+        };
+        let foot_in = if inner_cr > 0.0 {
+            valle_draw::math::sqrt((inner_ri * inner_ri - inner_cr * inner_cr).max(0.0))
+        } else {
+            inner
+        };
+        let at = |radius: f64, angle: f64| polar(center, radius, angle);
+        let ci0 = at(inner_ri, start + s * d_in);
+        let ci1 = at(inner_ri, end - s * d_in);
+        let co0 = at(outer_ro, start + s * d_out);
+        let co1 = at(outer_ro, end - s * d_out);
+        let mut verbs = Vec::with_capacity(PATH_SECTOR_VERBS);
+        let mut points = Vec::with_capacity(PATH_SECTOR_POINTS);
+        let inner_start = at(inner, start + s * d_in);
+        verbs.push(PathVerb::Move);
+        points.push(inner_start);
+        append_corner_cubic(
+            &mut verbs,
+            &mut points,
+            ci0,
+            inner_cr,
+            start + s * d_in + core::f64::consts::PI,
+            start - s * core::f64::consts::FRAC_PI_2,
+        );
+        verbs.push(PathVerb::Line);
+        points.push(at(foot_out, start));
+        append_corner_cubic(
+            &mut verbs,
+            &mut points,
+            co0,
+            cr,
+            start - s * core::f64::consts::FRAC_PI_2,
+            start + s * d_out,
+        );
+        append_arc_cubics(
+            &mut verbs,
+            &mut points,
+            center,
+            outer,
+            start + s * d_out,
+            end - s * d_out,
+            PATH_SECTOR_ARC_SEGMENTS,
+        );
+        append_corner_cubic(
+            &mut verbs,
+            &mut points,
+            co1,
+            cr,
+            end - s * d_out,
+            end + s * core::f64::consts::FRAC_PI_2,
+        );
+        verbs.push(PathVerb::Line);
+        points.push(at(foot_in, end));
+        append_corner_cubic(
+            &mut verbs,
+            &mut points,
+            ci1,
+            inner_cr,
+            end + s * core::f64::consts::FRAC_PI_2,
+            end - s * d_in + core::f64::consts::PI,
+        );
+        append_arc_cubics(
+            &mut verbs,
+            &mut points,
+            center,
+            inner,
+            end - s * d_in,
+            start + s * d_in,
+            PATH_SECTOR_ARC_SEGMENTS,
+        );
+        verbs.push(PathVerb::Close);
+        debug_assert_eq!(verbs.len(), PATH_SECTOR_VERBS);
+        debug_assert_eq!(points.len(), PATH_SECTOR_POINTS);
         Self::new(verbs, points)
     }
 
@@ -358,9 +537,11 @@ pub enum GeometryError {
     TopologyMismatch,
     BadTrajectory,
     InvalidArc,
+    InvalidSector,
     SingleContourRequired,
     ClosedContourRequired,
     DegenerateContour,
+    AreaBandMismatch,
 }
 
 impl core::fmt::Display for GeometryError {
@@ -387,6 +568,9 @@ impl core::fmt::Display for GeometryError {
             GeometryError::InvalidArc => {
                 f.write_str("arc needs a positive radius and a sweep no larger than one turn")
             }
+            GeometryError::InvalidSector => f.write_str(
+                "sector needs finite inner/outer radii with 0 <= inner <= outer, a non-negative corner radius, and a sweep of at most one turn",
+            ),
             GeometryError::SingleContourRequired => {
                 f.write_str("geometry operation requires exactly one contour")
             }
@@ -394,6 +578,9 @@ impl core::fmt::Display for GeometryError {
                 f.write_str("path boolean requires one closed contour per operand")
             }
             GeometryError::DegenerateContour => f.write_str("geometry contour is degenerate"),
+            GeometryError::AreaBandMismatch => f.write_str(
+                "areaBand needs two open single-contour paths with matching segment structure and strictly increasing X nodes",
+            ),
         }
     }
 }
@@ -1010,6 +1197,172 @@ fn distance(from: Point, to: Point) -> f64 {
     valle_draw::math::sqrt(dx * dx + dy * dy)
 }
 
+fn polar(center: Point, radius: f64, angle: f64) -> Point {
+    let (sin, cos) = valle_draw::math::sin_cos(angle);
+    Point::new(center.x + radius * cos, center.y + radius * sin)
+}
+
+fn wrap_delta(from: f64, to: f64) -> f64 {
+    let mut delta = to - from;
+    while delta > core::f64::consts::PI {
+        delta -= core::f64::consts::TAU;
+    }
+    while delta < -core::f64::consts::PI {
+        delta += core::f64::consts::TAU;
+    }
+    delta
+}
+
+fn append_arc_cubics(
+    verbs: &mut Vec<PathVerb>,
+    points: &mut Vec<Point>,
+    center: Point,
+    radius: f64,
+    from: f64,
+    to: f64,
+    segments: usize,
+) {
+    let radius = radius.max(0.0);
+    let step = (to - from) / segments as f64;
+    for segment in 0..segments {
+        let a0 = from + step * segment as f64;
+        let a1 = a0 + step;
+        let k = 4.0 / 3.0 * valle_draw::math::tan(step / 4.0) * radius;
+        let (s0, c0) = valle_draw::math::sin_cos(a0);
+        let (s1, c1) = valle_draw::math::sin_cos(a1);
+        points.push(Point::new(
+            center.x + radius * c0 - k * s0,
+            center.y + radius * s0 + k * c0,
+        ));
+        points.push(Point::new(
+            center.x + radius * c1 + k * s1,
+            center.y + radius * s1 - k * c1,
+        ));
+        points.push(polar(center, radius, a1));
+        verbs.push(PathVerb::Cubic);
+    }
+}
+
+fn append_corner_cubic(
+    verbs: &mut Vec<PathVerb>,
+    points: &mut Vec<Point>,
+    corner: Point,
+    radius: f64,
+    from: f64,
+    to: f64,
+) {
+    if radius <= 0.0 {
+        points.extend([corner, corner, corner]);
+        verbs.push(PathVerb::Cubic);
+        return;
+    }
+    let end = from + wrap_delta(from, to);
+    append_arc_cubics(verbs, points, corner, radius, from, end, 1);
+}
+
+fn open_contour(path: &PathData) -> Result<(Point, Point, Vec<PathVerb>), GeometryError> {
+    path.validate()?;
+    if path.verbs.first() != Some(&PathVerb::Move)
+        || path.verbs.iter().any(|verb| *verb == PathVerb::Close)
+        || path
+            .verbs
+            .iter()
+            .filter(|verb| **verb == PathVerb::Move)
+            .count()
+            != 1
+        || path.points.len() < 2
+    {
+        return Err(GeometryError::SingleContourRequired);
+    }
+    Ok((
+        path.points[0],
+        *path.points.last().expect("open contour has an end point"),
+        path.verbs[1..].to_vec(),
+    ))
+}
+
+fn on_curve_nodes(path: &PathData) -> Result<Vec<Point>, GeometryError> {
+    let mut index = 0usize;
+    let mut nodes = Vec::new();
+    for verb in &path.verbs {
+        match verb {
+            PathVerb::Move | PathVerb::Line => {
+                nodes.push(path.points[index]);
+                index += 1;
+            }
+            PathVerb::Quad => {
+                index += 1;
+                nodes.push(path.points[index]);
+                index += 1;
+            }
+            PathVerb::Cubic => {
+                index += 2;
+                nodes.push(path.points[index]);
+                index += 1;
+            }
+            PathVerb::Close => return Err(GeometryError::AreaBandMismatch),
+        }
+    }
+    Ok(nodes)
+}
+
+fn strictly_increasing_x(nodes: &[Point]) -> bool {
+    nodes
+        .windows(2)
+        .all(|pair| pair[0].x.is_finite() && pair[1].x.is_finite() && pair[1].x > pair[0].x)
+}
+
+struct ReversedOpen {
+    verbs: Vec<PathVerb>,
+    points: Vec<Point>,
+}
+
+fn reverse_open_segments(
+    start: Point,
+    rest_points: &[Point],
+    rest_verbs: &[PathVerb],
+) -> Result<ReversedOpen, GeometryError> {
+    let mut nodes = vec![start];
+    let mut index = 0usize;
+    let mut segments = Vec::new();
+    for verb in rest_verbs {
+        let count = verb.point_count();
+        let slice = rest_points
+            .get(index..index + count)
+            .ok_or(GeometryError::AreaBandMismatch)?;
+        nodes.push(*slice.last().expect("segment ends on a point"));
+        segments.push((*verb, slice.to_vec()));
+        index += count;
+    }
+    if index != rest_points.len() {
+        return Err(GeometryError::AreaBandMismatch);
+    }
+    let mut verbs = Vec::new();
+    let mut points = Vec::new();
+    for (segment_index, (verb, segment_points)) in segments.into_iter().enumerate().rev() {
+        let dest = nodes[segment_index];
+        match verb {
+            PathVerb::Line => {
+                verbs.push(PathVerb::Line);
+                points.push(dest);
+            }
+            PathVerb::Quad => {
+                verbs.push(PathVerb::Quad);
+                points.push(segment_points[0]);
+                points.push(dest);
+            }
+            PathVerb::Cubic => {
+                verbs.push(PathVerb::Cubic);
+                points.push(segment_points[1]);
+                points.push(segment_points[0]);
+                points.push(dest);
+            }
+            PathVerb::Move | PathVerb::Close => return Err(GeometryError::AreaBandMismatch),
+        }
+    }
+    Ok(ReversedOpen { verbs, points })
+}
+
 fn lerp(from: f64, to: f64, progress: f64) -> f64 {
     from + (to - from) * progress
 }
@@ -1176,6 +1529,249 @@ mod tests {
         assert_eq!(arc.verbs.len(), PATH_ARC_SEGMENTS + 1);
         assert_eq!(arc.points.len(), 1 + PATH_ARC_SEGMENTS * 3);
         assert!((arc.points.last().unwrap().x + 10.0).abs() < 1e-12);
+    }
+
+    fn sector_verbs() -> Vec<PathVerb> {
+        let mut verbs = vec![
+            PathVerb::Move,
+            PathVerb::Cubic,
+            PathVerb::Line,
+            PathVerb::Cubic,
+        ];
+        verbs.extend(std::iter::repeat_n(
+            PathVerb::Cubic,
+            PATH_SECTOR_ARC_SEGMENTS,
+        ));
+        verbs.extend([PathVerb::Cubic, PathVerb::Line, PathVerb::Cubic]);
+        verbs.extend(std::iter::repeat_n(
+            PathVerb::Cubic,
+            PATH_SECTOR_ARC_SEGMENTS,
+        ));
+        verbs.push(PathVerb::Close);
+        verbs
+    }
+
+    #[test]
+    fn sector_keeps_one_verb_table_across_degeneracies() {
+        let center = Point::new(40.0, 50.0);
+        let expected = sector_verbs();
+        assert_eq!(expected.len(), PATH_SECTOR_VERBS);
+        let cases = [
+            PathData::sector(center, 0.0, 20.0, 0.0, 1.2, 0.0).unwrap(),
+            PathData::sector(center, 8.0, 20.0, 0.0, 1.2, 4.0).unwrap(),
+            PathData::sector(center, 8.0, 20.0, 0.0, 0.0, 4.0).unwrap(),
+            PathData::sector(center, 8.0, 8.0, 0.0, 1.2, 0.0).unwrap(),
+            PathData::sector(center, 0.0, 20.0, 0.0, core::f64::consts::TAU, 0.0).unwrap(),
+            PathData::sector(center, 6.0, 20.0, 0.0, core::f64::consts::TAU, 3.0).unwrap(),
+            PathData::sector(center, 0.0, 0.0, 0.2, 1.1, 0.0).unwrap(),
+            PathData::sector(center, 4.0, 18.0, 1.1, 0.2, 2.0).unwrap(),
+        ];
+        for path in &cases {
+            assert_eq!(path.verbs, expected);
+            assert_eq!(path.points.len(), PATH_SECTOR_POINTS);
+            assert!(
+                path.points
+                    .iter()
+                    .all(|point| point.x.is_finite() && point.y.is_finite())
+            );
+        }
+        assert!(cases[0].has_same_topology(&cases[1]));
+        assert!(cases[0].has_same_topology(&cases[4]));
+        let pie = &cases[0];
+        assert_eq!(pie.points[0], center);
+        let ring = &cases[1];
+        let hole = ring.points[0];
+        let dx = hole.x - center.x;
+        let dy = hole.y - center.y;
+        let inner = (dx * dx + dy * dy).sqrt();
+        assert!((inner - 8.0).abs() < 1e-6, "{inner}");
+    }
+
+    #[test]
+    fn area_keeps_cubic_verbs_from_the_source_curve() {
+        let curve = PathData::cubic(
+            Point::new(0.0, 4.0),
+            Point::new(4.0, 0.0),
+            Point::new(8.0, 8.0),
+            Point::new(12.0, 4.0),
+        )
+        .unwrap();
+        let area = curve.area(10.0).unwrap();
+        assert_eq!(
+            area.verbs,
+            vec![
+                PathVerb::Move,
+                PathVerb::Line,
+                PathVerb::Cubic,
+                PathVerb::Line,
+                PathVerb::Close,
+            ]
+        );
+        assert_eq!(area.points[0], Point::new(0.0, 10.0));
+        assert_eq!(area.points[1], Point::new(0.0, 4.0));
+        assert_eq!(area.points[2], Point::new(4.0, 0.0));
+        assert_eq!(area.points[3], Point::new(8.0, 8.0));
+        assert_eq!(area.points[4], Point::new(12.0, 4.0));
+        assert_eq!(area.points[5], Point::new(12.0, 10.0));
+        let trimmed = area.trim(0.0, 0.4).unwrap();
+        let trimmed_end = trimmed.point_at(1.0).unwrap();
+        let sampled = area.point_at(0.4).unwrap();
+        assert!((trimmed_end.x - sampled.x).abs() < 1e-12);
+        assert!((trimmed_end.y - sampled.y).abs() < 1e-12);
+    }
+
+    #[test]
+    fn rounded_sectors_are_continuous_at_animation_boundaries() {
+        let epsilon = 1e-6;
+        let tau = core::f64::consts::TAU;
+        for direction in [-1.0, 1.0] {
+            for start in [0.0, -core::f64::consts::FRAC_PI_2] {
+                // (inner, outer, sweep, corner): holes, thickness, sweeps and corners can
+                // all reach zero during an ordinary animation without changing the outline.
+                for (from, to) in [
+                    ((0.0, 100.0, 0.2, 10.0), (epsilon, 100.0, 0.2, 10.0)),
+                    ((0.0, 100.0, 1.5, 10.0), (epsilon, 100.0, 1.5, 10.0)),
+                    ((0.0, 100.0, 4.5, 10.0), (epsilon, 100.0, 4.5, 10.0)),
+                    ((50.0, 50.0, 1.5, 10.0), (50.0, 50.0 + epsilon, 1.5, 10.0)),
+                    ((50.0, 100.0, 0.0, 10.0), (50.0, 100.0, epsilon, 10.0)),
+                    ((50.0, 100.0, tau, 10.0), (50.0, 100.0, tau - epsilon, 10.0)),
+                    ((0.0, 100.0, tau, 10.0), (0.0, 100.0, tau - epsilon, 10.0)),
+                    ((50.0, 100.0, 1.5, 0.0), (50.0, 100.0, 1.5, epsilon)),
+                ] {
+                    let make = |(inner, outer, sweep, corner)| {
+                        PathData::sector(
+                            Point::new(0.0, 0.0),
+                            inner,
+                            outer,
+                            start,
+                            start + direction * sweep,
+                            corner,
+                        )
+                        .unwrap()
+                    };
+                    let a = make(from);
+                    let b = make(to);
+                    assert!(a.has_same_topology(&b));
+                    let displacement = a
+                        .points
+                        .iter()
+                        .zip(&b.points)
+                        .map(|(a, b)| distance(*a, *b))
+                        .fold(0.0, f64::max);
+                    assert!(
+                        displacement < 0.01,
+                        "jump of {displacement}: {from:?} -> {to:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn rounded_full_turn_has_no_seam_notch_and_preserves_the_hole() {
+        use geo::Contains;
+        for inner in [0.0, 50.0] {
+            for direction in [-1.0, 1.0] {
+                let make = |corner| {
+                    PathData::sector(
+                        Point::new(0.0, 0.0),
+                        inner,
+                        100.0,
+                        0.0,
+                        direction * core::f64::consts::TAU,
+                        corner,
+                    )
+                    .unwrap()
+                };
+                let rounded = make(10.0);
+                assert_eq!(rounded, make(0.0));
+                let polygon = single_polygon(&rounded).unwrap();
+                for y in [-0.1, 0.1] {
+                    assert!(polygon.contains(&geo::Point::new(95.0, y)));
+                    assert!(polygon.contains(&geo::Point::new(51.0, y)));
+                }
+                if inner > 0.0 {
+                    assert!(!polygon.contains(&geo::Point::new(1.0, 1.0)));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn area_band_reverses_cubic_controls_and_rejects_misaligned_inputs() {
+        let upper = PathData::cubic(
+            Point::new(0.0, 2.0),
+            Point::new(4.0, 0.0),
+            Point::new(8.0, 0.0),
+            Point::new(12.0, 2.0),
+        )
+        .unwrap();
+        let lower = PathData::cubic(
+            Point::new(0.0, 8.0),
+            Point::new(4.0, 10.0),
+            Point::new(8.0, 10.0),
+            Point::new(12.0, 8.0),
+        )
+        .unwrap();
+        let band = PathData::area_band(&upper, &lower).unwrap();
+        assert_eq!(
+            band.verbs,
+            vec![
+                PathVerb::Move,
+                PathVerb::Cubic,
+                PathVerb::Line,
+                PathVerb::Cubic,
+                PathVerb::Close,
+            ]
+        );
+        assert_eq!(band.points[0], Point::new(0.0, 2.0));
+        assert_eq!(band.points[4], Point::new(12.0, 8.0));
+        assert_eq!(band.points[5], Point::new(8.0, 10.0));
+        assert_eq!(band.points[6], Point::new(4.0, 10.0));
+        assert_eq!(band.points[7], Point::new(0.0, 8.0));
+        let flat = PathData::line(vec![
+            Point::new(0.0, 2.0),
+            Point::new(6.0, 2.0),
+            Point::new(12.0, 2.0),
+        ])
+        .unwrap();
+        assert_eq!(
+            PathData::area_band(&upper, &flat),
+            Err(GeometryError::AreaBandMismatch)
+        );
+        let decreasing = PathData::line(vec![Point::new(12.0, 2.0), Point::new(0.0, 2.0)]).unwrap();
+        assert_eq!(
+            PathData::area_band(&decreasing, &decreasing),
+            Err(GeometryError::AreaBandMismatch)
+        );
+        let shifted = PathData::line(vec![
+            Point::new(100.0, 4.0),
+            Point::new(106.0, 4.0),
+            Point::new(112.0, 4.0),
+        ])
+        .unwrap();
+        let middle_shifted = PathData::line(vec![
+            Point::new(0.0, 4.0),
+            Point::new(7.0, 4.0),
+            Point::new(12.0, 4.0),
+        ])
+        .unwrap();
+        for lower in [&shifted, &middle_shifted] {
+            assert_eq!(
+                PathData::area_band(&flat, lower),
+                Err(GeometryError::AreaBandMismatch)
+            );
+        }
+        let mut shifted_curve = lower.clone();
+        shifted_curve.points.last_mut().unwrap().x += 1.0;
+        assert_eq!(
+            PathData::area_band(&upper, &shifted_curve),
+            Err(GeometryError::AreaBandMismatch)
+        );
+        assert!(
+            PathData::area_band(&upper, &upper).is_ok(),
+            "zero bandwidth is an animation endpoint"
+        );
     }
 
     #[test]

@@ -758,6 +758,158 @@ impl<'s> Compiler<'s> {
         Some(self.push(Expr::PathArea { path, baseline }, span))
     }
 
+    pub(super) fn lower_sector(
+        &mut self,
+        arguments: &[Argument<'_>],
+        span: Span,
+    ) -> Option<ExprId> {
+        let [argument] = arguments else {
+            self.illegal(
+                DiagCode::GrammarForbidden,
+                span,
+                "sector({ center, inner?, outer, start, end, cornerRadius? }) requires one options object",
+            );
+            return None;
+        };
+        let Some(Expression::ObjectExpression(object)) = argument.as_expression().map(strip_parens)
+        else {
+            self.illegal(
+                DiagCode::GrammarForbidden,
+                argument.span(),
+                "sector takes an options object",
+            );
+            return None;
+        };
+        let mut center = None;
+        let mut inner = None;
+        let mut outer = None;
+        let mut start = None;
+        let mut end = None;
+        let mut corner_radius = None;
+        for property in &object.properties {
+            let ObjectPropertyKind::ObjectProperty(property) = property else {
+                self.illegal(
+                    DiagCode::GrammarForbidden,
+                    property.span(),
+                    "sector options cannot spread",
+                );
+                return None;
+            };
+            let Some(name) = static_property_name(&property.key) else {
+                self.illegal(
+                    DiagCode::GrammarForbidden,
+                    property.span(),
+                    "sector option names must be static identifiers",
+                );
+                return None;
+            };
+            match name.as_str() {
+                "center" => center = self.lower_expr(&property.value),
+                "inner" => inner = self.lower_expr(&property.value),
+                "outer" => outer = self.lower_expr(&property.value),
+                "start" => start = self.lower_expr(&property.value),
+                "end" => end = self.lower_expr(&property.value),
+                "cornerRadius" => corner_radius = self.lower_expr(&property.value),
+                other => {
+                    self.illegal(
+                        DiagCode::GrammarForbidden,
+                        property.span(),
+                        format!("unknown sector field `{other}`"),
+                    );
+                    return None;
+                }
+            }
+        }
+        let (Some(center), Some(outer), Some(start), Some(end)) = (center, outer, start, end)
+        else {
+            self.illegal(
+                DiagCode::GrammarForbidden,
+                span,
+                "sector requires center, outer, start and end",
+            );
+            return None;
+        };
+        let inner = inner.unwrap_or_else(|| {
+            self.push(
+                Expr::Const {
+                    value: MotionValue::Number(0.0),
+                },
+                span,
+            )
+        });
+        let corner_radius = corner_radius.unwrap_or_else(|| {
+            self.push(
+                Expr::Const {
+                    value: MotionValue::Number(0.0),
+                },
+                span,
+            )
+        });
+        if let (Some(inner_value), Some(outer_value)) =
+            (self.const_number(inner), self.const_number(outer))
+            && (inner_value < 0.0 || outer_value < inner_value)
+        {
+            self.illegal(
+                DiagCode::BuiltinRejected,
+                span,
+                "sector needs 0 <= inner <= outer",
+            );
+            return None;
+        }
+        Some(self.push(
+            Expr::PathSector {
+                center,
+                inner,
+                outer,
+                start,
+                end,
+                corner_radius,
+            },
+            span,
+        ))
+    }
+
+    fn const_number(&self, id: ExprId) -> Option<f64> {
+        match self.expr_arena.values.get(id.0 as usize) {
+            Some(Expr::Const {
+                value: MotionValue::Number(value),
+            }) if value.is_finite() => Some(*value),
+            _ => None,
+        }
+    }
+
+    pub(super) fn lower_area_band(
+        &mut self,
+        arguments: &[Argument<'_>],
+        span: Span,
+    ) -> Option<ExprId> {
+        if arguments.len() != 2 {
+            self.illegal(
+                DiagCode::GrammarForbidden,
+                span,
+                "areaBand(upper, lower) requires exactly two PathData arguments",
+            );
+            return None;
+        }
+        let upper = self.lower_expr(arguments[0].as_expression()?)?;
+        let lower = self.lower_expr(arguments[1].as_expression()?)?;
+        if let (Some(MotionValue::PathData(upper_path)), Some(MotionValue::PathData(lower_path))) =
+            (self.const_path(upper), self.const_path(lower))
+            && let Err(error) = PathData::area_band(&upper_path, &lower_path)
+        {
+            self.illegal(DiagCode::BuiltinRejected, span, error.to_string());
+            return None;
+        }
+        Some(self.push(Expr::PathAreaBand { upper, lower }, span))
+    }
+
+    fn const_path(&self, id: ExprId) -> Option<MotionValue> {
+        match self.expr_arena.values.get(id.0 as usize) {
+            Some(Expr::Const { value }) => Some(value.clone()),
+            _ => None,
+        }
+    }
+
     pub(super) fn lower_offset_path(
         &mut self,
         arguments: &[Argument<'_>],

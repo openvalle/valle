@@ -6,8 +6,7 @@ use valle_motion::{FontResource, Fonts, LayoutOptions, Viewport, build_tree, pre
 use valle_motion::{ResolvedSignals, motion_context_at, phase_windows, resolve_props};
 use valle_timeline::FrameRate;
 
-const FONT: &[u8] =
-    include_bytes!("../../../assets/fonts/noto/NotoSansCJKsc-Regular.otf");
+const FONT: &[u8] = include_bytes!("../../../assets/fonts/noto/NotoSansCJKsc-Regular.otf");
 
 fn fonts() -> Fonts {
     let mut fonts = Fonts::default();

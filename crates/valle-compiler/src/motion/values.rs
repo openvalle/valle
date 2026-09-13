@@ -136,6 +136,35 @@ pub(super) fn motion_value_from_json(value: &serde_json::Value) -> Option<Motion
                     .ok()
                     .map(MotionValue::PathData)
             }
+            "pathSector" => {
+                let MotionValue::Point(center) = motion_value_from_json(object.get("center")?)?
+                else {
+                    return None;
+                };
+                PathData::sector(
+                    center,
+                    object.get("inner")?.as_f64()?,
+                    object.get("outer")?.as_f64()?,
+                    object.get("start")?.as_f64()?,
+                    object.get("end")?.as_f64()?,
+                    object.get("cornerRadius")?.as_f64()?,
+                )
+                .ok()
+                .map(MotionValue::PathData)
+            }
+            "pathAreaBand" => {
+                let MotionValue::PathData(upper) = motion_value_from_json(object.get("upper")?)?
+                else {
+                    return None;
+                };
+                let MotionValue::PathData(lower) = motion_value_from_json(object.get("lower")?)?
+                else {
+                    return None;
+                };
+                PathData::area_band(&upper, &lower)
+                    .ok()
+                    .map(MotionValue::PathData)
+            }
             "pathOffset" => {
                 let MotionValue::PathData(path) = motion_value_from_json(object.get("input")?)?
                 else {
@@ -279,7 +308,10 @@ pub(super) fn expr_path_topology(expr: ExprId, exprs: &[Expr]) -> PathTopology {
     match node {
         Expr::PathLine { .. } | Expr::PathCubic { .. } => PathTopology::Open,
         Expr::PathTemplate { verbs, .. } => verbs_topology(verbs),
-        Expr::PathArc { .. } | Expr::PathArea { .. } => PathTopology::Closed,
+        Expr::PathArc { .. }
+        | Expr::PathArea { .. }
+        | Expr::PathSector { .. }
+        | Expr::PathAreaBand { .. } => PathTopology::Closed,
         Expr::PathOffset { path, .. }
         | Expr::PathMorph { from: path, .. }
         | Expr::PathPointAt { path, .. } => expr_path_topology(*path, exprs),

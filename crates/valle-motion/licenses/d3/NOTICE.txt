@@ -4,6 +4,12 @@ src/compute/scale.rs adapts tick generation, nice bounds, and band-scale
 semantics from d3-array and d3-scale, implemented in Rust with Valle's
 shared deterministic math. The ISC notices are preserved alongside this file.
 
+src/compute/pie.rs and src/compute/curve.rs adapt pie angle allocation and
+monotone-X cubic generation from d3-shape. src/geometry.rs PathData::sector
+uses a frozen verb table derived from d3-shape annular-sector geometry so
+inner radius, corner radius, and sweep can animate without changing topology.
+
 Sources:
 https://github.com/d3/d3-array
 https://github.com/d3/d3-scale
+https://github.com/d3/d3-shape

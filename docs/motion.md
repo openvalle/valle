@@ -881,7 +881,9 @@ for accepted and rejected extensions.
 | `line(points)` | Open polyline from typed points |
 | `cubic(from,control1,control2,to)` | Cubic Bézier path |
 | `arc(center,radius,startAngle,endAngle)` | Positive radius, angles in radians, sweep at most TAU |
-| `area(input,baseline)` | Close a supported input path to a baseline |
+| `sector({ center, inner?, outer, start, end, cornerRadius? })` | Filled annular sector; frozen 16-command / 39-point table; inner and corner radius default 0; sweep at most TAU |
+| `area(input,baseline)` | Close one open contour to a horizontal baseline, keeping Line/Quad/Cubic verbs |
+| `areaBand(upper,lower)` | Close two aligned open contours (matching segments, strictly increasing X) |
 | `offsetPath(input,distance)` | Geometric path offset |
 | `boolean(left,right,op)` | Path union/intersection/difference/xor; both inputs must satisfy geometry admission |
 | `morphPath(from,to,progress)` | Interpolate compatible path topology |
@@ -1118,12 +1120,30 @@ Animate the resulting ordinary View/Text/Path nodes afterward.
 | `scaleLinear({ domain:[a,b], range:[x,y] })` | `.map(value)`, `.invert(value)`, `.ticks(count)` |
 | `scaleBand({ range:[a,b], count, paddingInner?, paddingOuter?, align? })` | `.band(index)` pair, `.center(index)`, `.step()`, `.bandwidth()` |
 | `scalePoint({ range:[a,b], count })` | `.at(index)`, `.step()` |
+| `scaleSequential({ domain:[min,max], colors })` | `.map(value)` continuous mix through at least two CSS colors; out-of-range clamps |
+| `scaleQuantize({ domain:[min,max], colors })` | `.map(value)` equal bins, one or more colors; edges belong to the right bin, max uses the last color |
 | `stack(values,{ offset }?)` | Stacked intervals; default offset `zero` |
+| `pie(values,{ startAngle?, endAngle?, padAngle? })` | Input-order slices `{ index, value, startAngle, endAngle, midAngle, fraction }`; zeros keep a zero sweep; no implicit sort |
+| `curve(points,{ type: "monotoneX" })` | Prepare-time monotone cubic through strictly increasing-X points; one cubic per pair; gaps fail |
 | `geoProject({ points, projection?, width, height, padding? })` | Batch projection/fitting of geographic coordinates |
 | `geoPath({ polygons, projection?, width, height, padding?, clip? })` | Projected polygon paths |
 | `placeLabels(candidates,{ bounds, padding? })` | Deterministic placement of label candidates |
 | `graphLayout({ sizes, edges, nodeGap?, rankGap? })` | Graph ranks, rows, back edges and node centers |
 | `seededRandom(seed,count,range)` | Prepared pseudorandom values with explicit seed |
+
+`pie` keeps input order and zero-value slots; do not sort slices. Grow a wedge by
+interpolating `sector` start/end/inner/outer/cornerRadius, then constructing the
+path; do not morph cubic controls of two arcs. `sector` always emits the same
+commands so a hole stays unfilled under the default nonzero fill rule. `curve`
+fits once at prepare time; reveal with `trimEnd` or `morphPath` between two
+prepared curves of the same point count. Grouped bars use two nested `scaleBand`
+calls; polar positions use `point` plus `sin`/`cos`.
+
+Inner and outer sector corners are limited independently. Corners shrink with the
+remaining angular gap as a sector closes into a full circle. `areaBand` requires
+matching X coordinates at every corresponding boundary node; it does not align
+data automatically. `pie` rejects a non-finite value sum and normalizes values
+before multiplying by the angular span.
 
 Scale and layout calls take prepare-time inputs. To animate a scale-mapped value,
 map the data once and multiply by a frame-dependent reveal, as in the bars example.
@@ -1141,6 +1161,7 @@ placing its label; hidden candidates still need stable scene keys.
 
 Detailed data shapes and executable compositions are in the
 [chart fixtures](../crates/valle-compiler/tests/fixtures/motion/charts),
+including donut share, smooth area, stacked area, and heatmap/gauge films,
 [map fixture](../crates/valle-compiler/tests/fixtures/motion/maps/map-atlas.motion.tsx)
 and [data dashboard](../crates/valle-compiler/tests/fixtures/motion/modules/data-dashboard/dashboard.motion.tsx).
 Valle exposes these lower-level builders; it does not currently provide a general
@@ -1533,6 +1554,10 @@ Existing examples provide larger compositions without duplicating them here:
 | Repeaters/trails | [modifier logo echo](../crates/valle-compiler/tests/fixtures/motion/animation/modifier-logo-echo.motion.tsx) |
 | Animated geometry | [path formation](../crates/valle-compiler/tests/fixtures/motion/animation/path-formation.motion.tsx) |
 | Data, modules and themes | [data dashboard](../crates/valle-compiler/tests/fixtures/motion/modules/data-dashboard/dashboard.motion.tsx) |
+| Donut share (pie / sector) | [donut-share](../crates/valle-compiler/tests/fixtures/motion/charts/donut-share.motion.tsx) |
+| Smooth area (monotone curve) | [smooth-area](../crates/valle-compiler/tests/fixtures/motion/charts/smooth-area.motion.tsx) |
+| Stacked area (`areaBand`) | [stacked-area](../crates/valle-compiler/tests/fixtures/motion/charts/stacked-area.motion.tsx) |
+| Heatmap and gauge | [heatmap-gauge](../crates/valle-compiler/tests/fixtures/motion/charts/heatmap-gauge.motion.tsx) |
 
 For maintainers, changes to the public surface should update this guide together
 with a meaningful example/test. Source owners:

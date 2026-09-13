@@ -416,6 +416,8 @@ fn reads_runtime_inputs(expr: &Expr) -> bool {
         | Expr::PathCubic { .. }
         | Expr::PathArc { .. }
         | Expr::PathArea { .. }
+        | Expr::PathSector { .. }
+        | Expr::PathAreaBand { .. }
         | Expr::PathOffset { .. }
         | Expr::PathMorph { .. }
         | Expr::PathPointAt { .. }
@@ -647,6 +649,29 @@ fn eval_one(
             .area(as_number(at, "area", child(*baseline)?)?)
             .map(MotionValue::PathData)
             .map_err(|reason| EvalError::BadGeometry { at, reason }),
+        Expr::PathSector {
+            center,
+            inner,
+            outer,
+            start,
+            end,
+            corner_radius,
+        } => PathData::sector(
+            *as_point(at, "sector", child(*center)?)?,
+            as_number(at, "sector", child(*inner)?)?,
+            as_number(at, "sector", child(*outer)?)?,
+            as_number(at, "sector", child(*start)?)?,
+            as_number(at, "sector", child(*end)?)?,
+            as_number(at, "sector", child(*corner_radius)?)?,
+        )
+        .map(MotionValue::PathData)
+        .map_err(|reason| EvalError::BadGeometry { at, reason }),
+        Expr::PathAreaBand { upper, lower } => PathData::area_band(
+            as_path(at, "areaBand", child(*upper)?)?,
+            as_path(at, "areaBand", child(*lower)?)?,
+        )
+        .map(MotionValue::PathData)
+        .map_err(|reason| EvalError::BadGeometry { at, reason }),
         Expr::PathOffset { path, distance } => as_path(at, "offsetPath", child(*path)?)?
             .offset_path(as_number(at, "offsetPath", child(*distance)?)?)
             .map(MotionValue::PathData)

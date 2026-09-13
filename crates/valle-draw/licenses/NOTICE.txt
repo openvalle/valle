@@ -1,6 +1,8 @@
 Drawing and shader attribution
 
-src/draw.rs adapts rounded-sector geometry from d3-shape in Rust.
+src/draw.rs adapts rounded-sector geometry from d3-shape in Rust. Motion
+animation sectors live in valle-motion PathData::sector with a frozen verb
+table; they do not call these topology-switching Draw branches.
 Source: https://github.com/d3/d3-shape
 License: d3-shape-ISC.txt
 

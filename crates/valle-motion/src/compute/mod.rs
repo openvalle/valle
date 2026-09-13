@@ -12,7 +12,11 @@ pub const AUTHOR_SURFACE: &[&str] = &[
     "scaleLinear",
     "scaleBand",
     "scalePoint",
+    "scaleSequential",
+    "scaleQuantize",
     "stack",
+    "pie",
+    "curve",
     "geoProject",
     "geoPath",
     "graphLayout",
@@ -23,10 +27,12 @@ pub const AUTHOR_SURFACE: &[&str] = &[
 ];
 
 pub mod bridge;
+pub mod curve;
 pub mod geo;
 pub mod geo_path;
 pub mod graph;
 pub mod label;
 pub mod noise;
+pub mod pie;
 pub mod scale;
 pub mod stack;

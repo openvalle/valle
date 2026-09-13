@@ -253,6 +253,68 @@ impl PointScale {
     }
 }
 
+/// Mix every RGBA channel with the same rounding as [`valle_draw::Rgba::mix`].
+fn mix_rgba(from: valle_draw::Rgba, to: valle_draw::Rgba, t: f64) -> valle_draw::Rgba {
+    let t = t.clamp(0.0, 1.0);
+    let m = |a: u8, b: u8| (a as f64 + (b as f64 - a as f64) * t).round() as u8;
+    valle_draw::Rgba::new(
+        m(from.r, to.r),
+        m(from.g, to.g),
+        m(from.b, to.b),
+        m(from.a, to.a),
+    )
+}
+
+fn unit_t(domain: (f64, f64), value: f64) -> Result<f64, String> {
+    let (min, max) = domain;
+    if !min.is_finite() || !max.is_finite() || min >= max {
+        return Err("color scale domain must be finite with min < max".into());
+    }
+    if !value.is_finite() {
+        return Err("color scale value must be finite".into());
+    }
+    Ok(((value - min) / (max - min)).clamp(0.0, 1.0))
+}
+
+/// Continuous equal-stop interpolation through at least two colors. Out-of-range values clamp.
+pub fn sequential_map(
+    domain: (f64, f64),
+    colors: &[valle_draw::Rgba],
+    value: f64,
+) -> Result<valle_draw::Rgba, String> {
+    if colors.len() < 2 {
+        return Err("scaleSequential needs at least two colors".into());
+    }
+    let t = unit_t(domain, value)?;
+    let last = colors.len() - 1;
+    let pos = t * last as f64;
+    let index = pos.floor() as usize;
+    if index >= last {
+        return Ok(colors[last]);
+    }
+    Ok(mix_rgba(
+        colors[index],
+        colors[index + 1],
+        pos - index as f64,
+    ))
+}
+
+/// Equal-width bins, one color each. Bin edges belong to the right bin; the domain max uses the last color.
+pub fn quantize_map(
+    domain: (f64, f64),
+    colors: &[valle_draw::Rgba],
+    value: f64,
+) -> Result<valle_draw::Rgba, String> {
+    if colors.is_empty() {
+        return Err("scaleQuantize needs at least one color".into());
+    }
+    let t = unit_t(domain, value)?;
+    if t >= 1.0 {
+        return Ok(*colors.last().expect("non-empty color list"));
+    }
+    Ok(colors[(t * colors.len() as f64).floor() as usize])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -379,5 +441,42 @@ mod tests {
         let one = PointScale::new((0.0, 300.0), 1);
         assert_eq!(one.at(0), 150.0);
         assert_eq!(one.step(), 0.0);
+    }
+
+    #[test]
+    fn sequential_and_quantize_use_existing_color_mix_and_clamp() {
+        let black = valle_draw::Rgba::rgb(0, 0, 0);
+        let white = valle_draw::Rgba::rgb(255, 255, 255);
+        let red = valle_draw::Rgba::rgb(255, 0, 0);
+        assert_eq!(
+            sequential_map((0.0, 10.0), &[black, white], 0.0).unwrap(),
+            black
+        );
+        assert_eq!(
+            sequential_map((0.0, 10.0), &[black, white], 10.0).unwrap(),
+            white
+        );
+        assert_eq!(
+            sequential_map((0.0, 10.0), &[black, white], 5.0).unwrap(),
+            black.mix(white, 0.5)
+        );
+        assert_eq!(
+            sequential_map((0.0, 10.0), &[black, white], -4.0).unwrap(),
+            black
+        );
+        assert_eq!(
+            sequential_map((0.0, 10.0), &[black, white], 99.0).unwrap(),
+            white
+        );
+        let bins = [black, red, white];
+        assert_eq!(quantize_map((0.0, 3.0), &bins, 0.0).unwrap(), black);
+        assert_eq!(quantize_map((0.0, 3.0), &bins, 1.0).unwrap(), red);
+        assert_eq!(quantize_map((0.0, 3.0), &bins, 2.0).unwrap(), white);
+        assert_eq!(quantize_map((0.0, 3.0), &bins, 3.0).unwrap(), white);
+        assert_eq!(quantize_map((0.0, 3.0), &bins, -1.0).unwrap(), black);
+        let clear = valle_draw::Rgba::new(255, 0, 0, 0);
+        assert_eq!(sequential_map((0.0, 1.0), &[clear, red], 0.0).unwrap().a, 0);
+        assert!(sequential_map((0.0, 1.0), &[black], 0.5).is_err());
+        assert!(quantize_map((1.0, 0.0), &bins, 0.5).is_err());
     }
 }

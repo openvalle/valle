@@ -15,8 +15,7 @@ use valle_motion::{
 use valle_timeline::FrameRate;
 
 const SOURCE: &str = include_str!("fixtures/motion/maps/map-atlas.motion.tsx");
-const FONT: &[u8] =
-    include_bytes!("../../../assets/fonts/noto/NotoSansCJKsc-Regular.otf");
+const FONT: &[u8] = include_bytes!("../../../assets/fonts/noto/NotoSansCJKsc-Regular.otf");
 
 fn compile(source: &str) -> valle_compiler::motion::CompiledMotion {
     let measure = MeasureEnv::new_with_aliases(

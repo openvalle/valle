@@ -124,6 +124,8 @@ fn motion_seek_pixels_survive_warm_caches_eviction_and_surface_reset() {
         VisualFootprint,
     };
     let artifact = Arc::new(valle_compiler::motion::compile_motion(r##"
+const UPPER = curve([point(3,35),point(16,28),point(30,33),point(45,27)]);
+const LOWER = curve([point(3,44),point(16,40),point(30,44),point(45,39)]);
 export default function Demo(ctx) {
   const f = ctx.localFrame;
   return <Scene style={{width:48,height:48,backgroundColor:'#14213d'}}>
@@ -131,6 +133,9 @@ export default function Demo(ctx) {
       <View style={{position:'absolute',left:f / 60,top:0,width:32,height:30,backgroundColor:'#fca311'}} />
       <View style={{position:'absolute',left:12,top:8,width:30,height:30,backgroundColor:'#00aaff88'}} />
     </View>
+    <Path d={sector({center:point(16,16),inner:interpolate(f,[0,180],[0,6]),outer:12,start:0,end:interpolate(f,[0,359],[0,TAU]),cornerRadius:3})} fill="#ffbb33"/>
+    <Path d={areaBand(morphPath(LOWER,UPPER,interpolate(f,[0,359],[0,1])),LOWER)} fill="#2266aa"/>
+    <Path d={UPPER} fill="none" stroke="#66ddff" strokeWidth="2" trimEnd={interpolate(f,[0,359],[0,1])}/>
   </Scene>;
 }
 "##).unwrap().artifact);
@@ -194,10 +199,16 @@ export default function Demo(ctx) {
         OutputSpec::srgb_preview(OutputBackground::opaque_srgb([0, 0, 0])).unwrap(),
     )
     .unwrap();
-    let mut runner = project.frame_runner(SkiaBackendKind::Raster).unwrap();
+    let backend = match std::env::var("VALLE_TEST_NATIVE_BACKEND").as_deref() {
+        #[cfg(target_os = "macos")]
+        Ok("metal") => SkiaBackendKind::Metal,
+        Ok("raster") | Err(_) => SkiaBackendKind::Raster,
+        Ok(value) => panic!("unsupported test backend {value}"),
+    };
+    let mut runner = project.frame_runner(backend).unwrap();
     let mut baseline = std::collections::BTreeMap::new();
     for frame in [0, 45, 359, 120] {
-        let mut cold = project.frame_runner(SkiaBackendKind::Raster).unwrap();
+        let mut cold = project.frame_runner(backend).unwrap();
         baseline.insert(
             frame,
             cold.render_rgba8(FrameKey::new(frame), spec)

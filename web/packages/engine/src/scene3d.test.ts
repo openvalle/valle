@@ -12,6 +12,13 @@ const cli = join(root, "target/debug/valle");
 const nativeBackend = process.env.VALLE_TEST_NATIVE_BACKEND ?? "raster";
 if (nativeBackend !== "raster" && nativeBackend !== "metal") throw new Error("unsupported test backend");
 
+function concatBytes(...chunks: Uint8Array[]): Uint8Array {
+  const bytes = new Uint8Array(chunks.reduce((size, chunk) => size + chunk.length, 0));
+  let offset = 0;
+  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.length; }
+  return bytes;
+}
+
 test("project environments and models survive frozen-package reopen and arbitrary frame access", async () => {
   const { default: CanvasKitInit } = await import("canvaskit-wasm/full") as unknown as {
     default: (options: { locateFile(file: string): string }) => Promise<CanvasKit>;
@@ -32,9 +39,9 @@ test("project environments and models survive frozen-package reopen and arbitrar
       await copyFile(join(root, "crates/valle-motion/tests/fixtures/scene3d", unlit || kind === "mask" ? "triangle.glb" : "pbr.glb"),join(dir,"model.glb"));
       if (kind === "hierarchy" || kind === "mask") {
         const bytes = await readFile(join(dir,"model.glb"));
-        const jsonLength = bytes.readUInt32LE(12);
-        const model = JSON.parse(bytes.subarray(20,20+jsonLength).toString());
-        let bin = bytes.subarray(28+jsonLength,28+jsonLength+model.buffers[0].byteLength);
+        const jsonLength = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint32(12, true);
+        const model = JSON.parse(new TextDecoder().decode(bytes.subarray(20,20+jsonLength)));
+        let bin: Uint8Array = bytes.subarray(28+jsonLength,28+jsonLength+model.buffers[0].byteLength);
         if (kind === "hierarchy") {
         model.nodes = [
           {children:[2],scale:[1.2,0.8,1]},
@@ -46,9 +53,9 @@ test("project environments and models survive frozen-package reopen and arbitrar
           const image = ck.MakeImage({...info,width:2,height:1},new Uint8Array([255,255,255,0,255,255,255,255]),8)!;
           let png: Uint8Array;
           try { png=Uint8Array.from(image.encodeToBytes()!); } finally {image.delete();}
-          const padding = Buffer.alloc((4-bin.length%4)%4);
+          const padding = new Uint8Array((4-bin.length%4)%4);
           const offset = bin.length+padding.length;
-          bin = Buffer.concat([bin,padding,png]);
+          bin = concatBytes(bin,padding,png);
           model.images=[{bufferView:model.bufferViews.length,mimeType:"image/png"}];
           model.bufferViews.push({buffer:0,byteOffset:offset,byteLength:png.length});
           model.textures=[{source:0,sampler:0}];
@@ -65,17 +72,19 @@ test("project environments and models survive frozen-package reopen and arbitrar
         }
         model.buffers[0].byteLength=bin.length;
         // Freeze hierarchy data into the same ordinary GLB asset path used by every model.
-        const json = Buffer.from(JSON.stringify(model));
-        const padded = Buffer.alloc(Math.ceil(json.length/4)*4,0x20); json.copy(padded);
-        const binPadding = Buffer.alloc((4-bin.length%4)%4);
-        const binHeader = Buffer.alloc(8);
-        binHeader.writeUInt32LE(bin.length+binPadding.length,0); binHeader.writeUInt32LE(0x004e4942,4);
-        const binChunk = Buffer.concat([binHeader,bin,binPadding]);
-        const header = Buffer.alloc(20);
-        header.writeUInt32LE(0x46546c67,0); header.writeUInt32LE(2,4);
-        header.writeUInt32LE(20+padded.length+binChunk.length,8);
-        header.writeUInt32LE(padded.length,12); header.writeUInt32LE(0x4e4f534a,16);
-        await writeFile(join(dir,"model.glb"),Buffer.concat([header,padded,binChunk]));
+        const json = new TextEncoder().encode(JSON.stringify(model));
+        const padded = new Uint8Array(Math.ceil(json.length/4)*4).fill(0x20); padded.set(json);
+        const binPadding = new Uint8Array((4-bin.length%4)%4);
+        const binHeader = new Uint8Array(8);
+        const binView = new DataView(binHeader.buffer);
+        binView.setUint32(0,bin.length+binPadding.length,true); binView.setUint32(4,0x004e4942,true);
+        const binChunk = concatBytes(binHeader,bin,binPadding);
+        const header = new Uint8Array(20);
+        const headerView = new DataView(header.buffer);
+        headerView.setUint32(0,0x46546c67,true); headerView.setUint32(4,2,true);
+        headerView.setUint32(8,20+padded.length+binChunk.length,true);
+        headerView.setUint32(12,padded.length,true); headerView.setUint32(16,0x4e4f534a,true);
+        await writeFile(join(dir,"model.glb"),concatBytes(header,padded,binChunk));
       }
       const pixels = new Uint8Array(16*8*4);
       for (let i=0;i<128;i++) pixels.set(i%16<8 ? [255,32,0,255] : [0,32,255,255],i*4);

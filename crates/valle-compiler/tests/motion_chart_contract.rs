@@ -7,6 +7,11 @@ use valle_motion::{ARTIFACT_FORMAT_VERSION, NodeKind};
 const CONTRACT: &str = include_str!("fixtures/motion/charts/chart-contract.motion.tsx");
 const LINE_CHART: &str = include_str!("fixtures/motion/charts/line-chart.motion.tsx");
 const STACKED_BARS: &str = include_str!("fixtures/motion/charts/stacked-bars.motion.tsx");
+const ENGINE: &str = include_str!("fixtures/motion/charts/chart-engine.motion.tsx");
+const DONUT: &str = include_str!("fixtures/motion/charts/donut-share.motion.tsx");
+const SMOOTH: &str = include_str!("fixtures/motion/charts/smooth-area.motion.tsx");
+const STACKED_AREA: &str = include_str!("fixtures/motion/charts/stacked-area.motion.tsx");
+const HEATMAP: &str = include_str!("fixtures/motion/charts/heatmap-gauge.motion.tsx");
 
 #[test]
 fn chart_source_package_examples_compile_from_the_public_surface() {
@@ -14,6 +19,11 @@ fn chart_source_package_examples_compile_from_the_public_surface() {
         ("contract", CONTRACT),
         ("line-chart", LINE_CHART),
         ("stacked-bars", STACKED_BARS),
+        ("engine", ENGINE),
+        ("donut-share", DONUT),
+        ("smooth-area", SMOOTH),
+        ("stacked-area", STACKED_AREA),
+        ("heatmap-gauge", HEATMAP),
     ] {
         let compiled = compile_motion(source)
             .unwrap_or_else(|diagnostics| panic!("{name} must compile: {diagnostics:#?}"));
@@ -21,11 +31,40 @@ fn chart_source_package_examples_compile_from_the_public_surface() {
             .artifact
             .validate()
             .expect("valid package artifact");
+        let minimum = if name == "engine" { 12 } else { 16 };
         assert!(
-            compiled.artifact.nodes.len() >= 20,
-            "{name} is only a toy probe"
+            compiled.artifact.nodes.len() >= minimum,
+            "{name} is only a toy probe ({})",
+            compiled.artifact.nodes.len()
         );
     }
+}
+
+#[test]
+fn chart_engine_combination_stays_ordinary_nodes_and_format_one() {
+    let compiled = compile_motion(ENGINE).expect("chart engine combination compiles");
+    compiled
+        .artifact
+        .validate()
+        .expect("chart engine artifact validates");
+    assert_eq!(compiled.artifact.format_version, ARTIFACT_FORMAT_VERSION);
+    assert_eq!(ARTIFACT_FORMAT_VERSION, 1);
+    assert!(
+        compiled
+            .artifact
+            .nodes
+            .iter()
+            .any(|node| { matches!(&node.kind, NodeKind::Path { .. }) })
+    );
+    assert!(compiled.artifact.nodes.iter().all(|node| {
+        matches!(
+            node.kind,
+            NodeKind::Group | NodeKind::Box | NodeKind::Text { .. } | NodeKind::Path { .. }
+        )
+    }));
+    assert!(ENGINE.contains("scaleBand"));
+    assert!(ENGINE.contains("Math.cos"));
+    assert!(!ENGINE.contains("groupBand"));
 }
 
 #[test]

@@ -250,6 +250,18 @@ pub enum Expr {
         path: ExprId,
         baseline: ExprId,
     },
+    PathSector {
+        center: ExprId,
+        inner: ExprId,
+        outer: ExprId,
+        start: ExprId,
+        end: ExprId,
+        corner_radius: ExprId,
+    },
+    PathAreaBand {
+        upper: ExprId,
+        lower: ExprId,
+    },
     PathOffset {
         path: ExprId,
         distance: ExprId,
@@ -461,6 +473,15 @@ impl Expr {
                 end_angle,
             } => vec![*center, *radius, *start_angle, *end_angle],
             Expr::PathArea { path, baseline } => vec![*path, *baseline],
+            Expr::PathSector {
+                center,
+                inner,
+                outer,
+                start,
+                end,
+                corner_radius,
+            } => vec![*center, *inner, *outer, *start, *end, *corner_radius],
+            Expr::PathAreaBand { upper, lower } => vec![*upper, *lower],
             Expr::PathOffset { path, distance } => vec![*path, *distance],
             Expr::PathMorph { from, to, progress } => vec![*from, *to, *progress],
             Expr::PathPointAt { path, progress }
@@ -764,12 +785,50 @@ pub(crate) fn validate_exprs(
             } => {
                 if child(*input) != Some(ExprType::PathData)
                     || child(*baseline) != Some(ExprType::Number)
-                    || path_flattened_point_bound(exprs, *input).saturating_add(2)
-                        > MAX_FRAME_GEOMETRY_POINTS
+                    || path_point_bound(exprs, *input).saturating_add(2) > MAX_FRAME_GEOMETRY_POINTS
                 {
                     errors.push(ValidationError::new(
                         path,
                         "area requires a bounded PathData and numeric baseline within the per-frame geometry budget",
+                    ));
+                    None
+                } else {
+                    Some(ExprType::PathData)
+                }
+            }
+            Expr::PathSector {
+                center,
+                inner,
+                outer,
+                start,
+                end,
+                corner_radius,
+            } => {
+                if child(*center) != Some(ExprType::Point)
+                    || [*inner, *outer, *start, *end, *corner_radius]
+                        .into_iter()
+                        .any(|number| child(number) != Some(ExprType::Number))
+                    || crate::geometry::PATH_SECTOR_POINTS > MAX_FRAME_GEOMETRY_POINTS
+                {
+                    errors.push(ValidationError::new(
+                        path,
+                        "sector requires Point center and numeric inner/outer/start/end/cornerRadius",
+                    ));
+                    None
+                } else {
+                    Some(ExprType::PathData)
+                }
+            }
+            Expr::PathAreaBand { upper, lower } => {
+                if child(*upper) != Some(ExprType::PathData)
+                    || child(*lower) != Some(ExprType::PathData)
+                    || path_point_bound(exprs, *upper)
+                        .saturating_add(path_point_bound(exprs, *lower))
+                        > MAX_FRAME_GEOMETRY_POINTS
+                {
+                    errors.push(ValidationError::new(
+                        path,
+                        "areaBand requires two bounded PathData values within the per-frame geometry budget",
                     ));
                     None
                 } else {
@@ -1258,8 +1317,10 @@ fn path_point_bound(exprs: &[Expr], id: ExprId) -> usize {
         Some(Expr::PathTemplate { points, .. }) => points.len(),
         Some(Expr::PathCubic { .. }) => 4,
         Some(Expr::PathArc { .. }) => 1 + crate::geometry::PATH_ARC_SEGMENTS * 3,
-        Some(Expr::PathArea { path, .. }) => {
-            path_flattened_point_bound(exprs, *path).saturating_add(2)
+        Some(Expr::PathSector { .. }) => crate::geometry::PATH_SECTOR_POINTS,
+        Some(Expr::PathArea { path, .. }) => path_point_bound(exprs, *path).saturating_add(2),
+        Some(Expr::PathAreaBand { upper, lower }) => {
+            path_point_bound(exprs, *upper).saturating_add(path_point_bound(exprs, *lower))
         }
         Some(Expr::PathOffset { path, .. }) => path_flattened_point_bound(exprs, *path),
         Some(Expr::PathTrajectory { frames, .. }) => frames
@@ -1314,9 +1375,14 @@ fn path_flattened_point_bound(exprs: &[Expr], id: ExprId) -> usize {
             })
             .max()
             .unwrap_or(0),
+        Some(Expr::PathSector { .. }) => {
+            crate::geometry::PATH_SECTOR_VERBS.saturating_mul(crate::geometry::PATH_CURVE_STEPS)
+        }
         Some(Expr::PathArea { path, .. }) => {
             path_flattened_point_bound(exprs, *path).saturating_add(2)
         }
+        Some(Expr::PathAreaBand { upper, lower }) => path_flattened_point_bound(exprs, *upper)
+            .saturating_add(path_flattened_point_bound(exprs, *lower)),
         Some(Expr::PathOffset { path, .. }) => path_flattened_point_bound(exprs, *path),
         _ => MAX_FRAME_GEOMETRY_POINTS.saturating_mul(crate::geometry::PATH_CURVE_STEPS),
     }
@@ -1351,6 +1417,19 @@ fn frame_invariant(exprs: &[Expr], id: ExprId) -> bool {
         Some(Expr::PathArea { path, baseline }) => {
             frame_invariant(exprs, *path) && frame_invariant(exprs, *baseline)
         }
+        Some(Expr::PathSector {
+            center,
+            inner,
+            outer,
+            start,
+            end,
+            corner_radius,
+        }) => [*center, *inner, *outer, *start, *end, *corner_radius]
+            .into_iter()
+            .all(|input| frame_invariant(exprs, input)),
+        Some(Expr::PathAreaBand { upper, lower }) => {
+            frame_invariant(exprs, *upper) && frame_invariant(exprs, *lower)
+        }
         Some(Expr::PathOffset { path, distance }) => {
             frame_invariant(exprs, *path) && frame_invariant(exprs, *distance)
         }
@@ -1371,6 +1450,8 @@ pub fn geometry_eval_policy(exprs: &[Expr], id: ExprId) -> Option<GeometryEvalPo
         | Expr::PathCubic { .. }
         | Expr::PathArc { .. }
         | Expr::PathArea { .. }
+        | Expr::PathSector { .. }
+        | Expr::PathAreaBand { .. }
         | Expr::PathOffset { .. }
         | Expr::Interpolate { .. }
         | Expr::Select { .. } => GeometryEvalPolicy::FrameExpr,

@@ -10,9 +10,7 @@ fn repo_root() -> PathBuf {
 }
 
 fn face_path(face: &FormulaFace) -> PathBuf {
-    repo_root()
-        .join("assets/fonts/katex")
-        .join(face.file_name)
+    repo_root().join("assets/fonts/katex").join(face.file_name)
 }
 
 #[test]

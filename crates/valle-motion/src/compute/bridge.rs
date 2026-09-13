@@ -5,7 +5,7 @@
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::{geo, geo_path, graph, label, noise, scale, stack};
+use super::{curve, geo, geo_path, graph, label, noise, pie, scale, stack};
 
 #[derive(Deserialize)]
 struct Request {
@@ -27,7 +27,11 @@ pub const OPS: &[&str] = &[
     "band.bandwidth",
     "point.at",
     "point.step",
+    "sequential.map",
+    "quantize.map",
     "stack",
+    "pie",
+    "curve",
     "geo.project",
     "geo.path",
     "graph.layout",
@@ -120,7 +124,25 @@ fn run(request: &str) -> Result<Value, String> {
         "band.bandwidth" => Ok(json!(band(args)?.bandwidth())),
         "point.at" => Ok(json!(point(args)?.at(index(args)?))),
         "point.step" => Ok(json!(point(args)?.step())),
+        "sequential.map" => Ok(json!(
+            scale::sequential_map(
+                pair(args, "domain")?,
+                &colors(args)?,
+                number(args, "value")?
+            )?
+            .to_hex()
+        )),
+        "quantize.map" => Ok(json!(
+            scale::quantize_map(
+                pair(args, "domain")?,
+                &colors(args)?,
+                number(args, "value")?
+            )?
+            .to_hex()
+        )),
         "stack" => stack_values(args),
+        "pie" => pie_values(args),
+        "curve" => curve_values(args),
         "geo.project" => geo_project(args),
         "geo.path" => geo_path(args),
         "graph.layout" => graph_layout(args),
@@ -635,6 +657,72 @@ fn graph_layout(args: &Value) -> Result<Value, String> {
 
 fn point(args: &Value) -> Result<scale::PointScale, String> {
     Ok(scale::PointScale::new(pair(args, "range")?, count(args)?))
+}
+
+fn colors(args: &Value) -> Result<Vec<valle_draw::Rgba>, String> {
+    let Some(Value::Array(items)) = args.get("colors") else {
+        return Err("`colors` must be an array of CSS color strings".into());
+    };
+    items
+        .iter()
+        .map(|item| {
+            item.as_str()
+                .and_then(valle_draw::Rgba::parse)
+                .ok_or_else(|| "`colors` must contain CSS color strings".to_string())
+        })
+        .collect()
+}
+
+fn pie_values(args: &Value) -> Result<Value, String> {
+    let values = numbers(args, "values")?;
+    let start = args
+        .get("startAngle")
+        .and_then(Value::as_f64)
+        .unwrap_or(0.0);
+    let end = args
+        .get("endAngle")
+        .and_then(Value::as_f64)
+        .unwrap_or(core::f64::consts::TAU);
+    let pad = args.get("padAngle").and_then(Value::as_f64).unwrap_or(0.0);
+    pie::pie(&values, start, end, pad).map(|slices| json!(slices))
+}
+
+fn curve_values(args: &Value) -> Result<Value, String> {
+    let kind = args
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or("monotoneX");
+    if kind != "monotoneX" {
+        return Err("curve type must be monotoneX".into());
+    }
+    let Some(Value::Array(items)) = args.get("points") else {
+        return Err("`points` must be an array of points".into());
+    };
+    let mut points = Vec::with_capacity(items.len());
+    for item in items {
+        let point = match item {
+            Value::Array(pair) => {
+                let [x, y] = pair.as_slice() else {
+                    return Err("curve points must have exactly two numbers".into());
+                };
+                let (Some(x), Some(y)) = (x.as_f64(), y.as_f64()) else {
+                    return Err("curve coordinates must be numbers".into());
+                };
+                valle_draw::Point::new(x, y)
+            }
+            Value::Object(fields) => {
+                let x = fields.get("x").and_then(Value::as_f64);
+                let y = fields.get("y").and_then(Value::as_f64);
+                let (Some(x), Some(y)) = (x, y) else {
+                    return Err("curve points must be Point values".into());
+                };
+                valle_draw::Point::new(x, y)
+            }
+            _ => return Err("curve points must be Point values".into()),
+        };
+        points.push(point);
+    }
+    Ok(json!(curve::monotone_x(&points)?.to_svg_path()))
 }
 
 fn stack_values(args: &Value) -> Result<Value, String> {

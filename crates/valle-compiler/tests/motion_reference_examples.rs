@@ -6,8 +6,7 @@ use valle_motion::{
     RICH_TEXT_CAPABILITY, ResourceRef,
 };
 
-const FONT: &[u8] =
-    include_bytes!("../../../assets/fonts/noto/NotoSansCJKsc-Regular.otf");
+const FONT: &[u8] = include_bytes!("../../../assets/fonts/noto/NotoSansCJKsc-Regular.otf");
 const BRAND: &str = include_str!("fixtures/motion/authoring/project-font-brand.motion.tsx");
 const TOUR: &str = include_str!("fixtures/motion/authoring/sequence-product-tour.motion.tsx");
 const DASHBOARD: &str = include_str!("fixtures/motion/authoring/procedural-dashboard.motion.tsx");

@@ -46,6 +46,16 @@ const arc = (center, radius, startAngle, endAngle) => __typed({
   __valleType: "pathArc", center, radius, startAngle, endAngle,
 });
 const area = (input, baseline) => __typed({ __valleType: "pathArea", input, baseline });
+const sector = (options = {}) => __typed({
+  __valleType: "pathSector",
+  center: options.center,
+  inner: options.inner ?? 0,
+  outer: options.outer,
+  start: options.start,
+  end: options.end,
+  cornerRadius: options.cornerRadius ?? 0,
+});
+const areaBand = (upper, lower) => __typed({ __valleType: "pathAreaBand", upper, lower });
 const offsetPath = (input, distance) => __typed({ __valleType: "pathOffset", input, distance });
 const displacement = (seed, frequency, scale, options = {}) => __typed({
   __valleType: "nodeDisplacement", seed, frequency, scale, options,

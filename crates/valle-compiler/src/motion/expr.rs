@@ -83,9 +83,19 @@ impl<'s> Compiler<'s> {
         if !typed_template
             && !deterministic_math_alias
             && let Some(value) = self.eval_static(expression)
-            && let Some(value) = motion_value_from_json(&value)
         {
-            return Some(self.push(Expr::Const { value }, expression.span()));
+            if let Some(value) = motion_value_from_json(&value) {
+                return Some(self.push(Expr::Const { value }, expression.span()));
+            }
+            if value.get("__valleType").and_then(serde_json::Value::as_str) == Some("pathAreaBand")
+            {
+                self.illegal(
+                    DiagCode::BuiltinRejected,
+                    expression.span(),
+                    valle_motion::GeometryError::AreaBandMismatch.to_string(),
+                );
+                return None;
+            }
         }
         let expr = match expression {
             Expression::NumericLiteral(value) => Expr::Const {
@@ -448,6 +458,8 @@ impl<'s> Compiler<'s> {
                     "cubic" => return self.lower_cubic(&call.arguments, call.span()),
                     "arc" => return self.lower_arc(&call.arguments, call.span()),
                     "area" => return self.lower_area(&call.arguments, call.span()),
+                    "sector" => return self.lower_sector(&call.arguments, call.span()),
+                    "areaBand" => return self.lower_area_band(&call.arguments, call.span()),
                     "offsetPath" => {
                         return self.lower_offset_path(&call.arguments, call.span());
                     }

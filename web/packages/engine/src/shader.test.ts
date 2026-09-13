@@ -20,18 +20,28 @@ const { default: CanvasKitInit } = await import("canvaskit-wasm/full") as unknow
 };
 
 // Generate a tiny PNG directly so image encoders cannot premultiply away transparent RGB.
-function numericPng(values: number[], bits: 8 | 16): Buffer {
-  const chunk = (type: string, bytes: Buffer) => {
-    const data = Buffer.concat([Buffer.from(type), bytes]);
-    const size = Buffer.alloc(4), crc = Buffer.alloc(4);
-    size.writeUInt32BE(bytes.length); crc.writeUInt32BE(crc32(data));
-    return Buffer.concat([size, data, crc]);
+function numericPng(values: number[], bits: 8 | 16): Uint8Array {
+  const concat = (...chunks: Uint8Array[]) => {
+    const bytes = new Uint8Array(chunks.reduce((size, chunk) => size + chunk.length, 0));
+    let offset = 0;
+    for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.length; }
+    return bytes;
   };
-  const header = Buffer.alloc(13); header.writeUInt32BE(2, 0); header.writeUInt32BE(1, 4);
+  const chunk = (type: string, bytes: Uint8Array) => {
+    const data = concat(new TextEncoder().encode(type), bytes);
+    const size = new Uint8Array(4), crc = new Uint8Array(4);
+    new DataView(size.buffer).setUint32(0, bytes.length);
+    new DataView(crc.buffer).setUint32(0, crc32(data));
+    return concat(size, data, crc);
+  };
+  const header = new Uint8Array(13);
+  const headerView = new DataView(header.buffer);
+  headerView.setUint32(0, 2); headerView.setUint32(4, 1);
   header[8] = bits; header[9] = 6;
-  const pixels = Buffer.alloc(1 + values.length * bits / 8);
-  values.forEach((v, i) => bits === 16 ? pixels.writeUInt16BE(v, 1 + i * 2) : pixels[1 + i] = v);
-  return Buffer.concat([Buffer.from([137,80,78,71,13,10,26,10]), chunk("IHDR", header), chunk("IDAT", deflateSync(pixels)), chunk("IEND", Buffer.alloc(0))]);
+  const pixels = new Uint8Array(1 + values.length * bits / 8);
+  const pixelView = new DataView(pixels.buffer);
+  values.forEach((v, i) => bits === 16 ? pixelView.setUint16(1 + i * 2, v) : pixels[1 + i] = v);
+  return concat(new Uint8Array([137,80,78,71,13,10,26,10]), chunk("IHDR", header), chunk("IDAT", deflateSync(pixels)), chunk("IEND", new Uint8Array(0)));
 }
 
 type Edge = readonly [number, number, number, number];

@@ -50,8 +50,7 @@ const KERNEL_DIGEST: &str =
 const OTHER_KERNEL_DIGEST: &str =
     "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
 const FONT_DIGEST: &str = "sha256:d0332f52868370fd83ae7fa46470f90c8f2eab2fcf12bc4f88080b340c95a830";
-const FONT_BYTES: &[u8] =
-    include_bytes!("../../../assets/fonts/katex/KaTeX_Main-Regular.ttf");
+const FONT_BYTES: &[u8] = include_bytes!("../../../assets/fonts/katex/KaTeX_Main-Regular.ttf");
 
 fn constant(value: Value) -> Value {
     json!({"type": "constant", "value": value})
@@ -528,6 +527,9 @@ fn verified_facts(entry: &ResourceEntryWire) -> VerifiedResourceFacts {
         ResourceEntryWire::MotionArtifact { .. } => {
             panic!("Motion bindings require an executable SceneArtifact")
         }
+        ResourceEntryWire::Model3d { .. } | ResourceEntryWire::Environment { .. } => {
+            panic!("Scene3D bindings require verified model or environment bytes")
+        }
         ResourceEntryWire::Shader {
             abi, descriptor, ..
         } => VerifiedResourceFacts::Shader {
@@ -608,6 +610,8 @@ fn entry_digest(entry: &ResourceEntryWire) -> &ContentDigest {
         | ResourceEntryWire::Lottie { digest, .. }
         | ResourceEntryWire::Font { digest, .. }
         | ResourceEntryWire::MotionArtifact { digest, .. }
+        | ResourceEntryWire::Model3d { digest, .. }
+        | ResourceEntryWire::Environment { digest, .. }
         | ResourceEntryWire::Shader { digest, .. } => digest,
     }
 }

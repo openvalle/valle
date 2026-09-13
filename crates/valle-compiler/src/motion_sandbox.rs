@@ -488,7 +488,13 @@ impl Sandbox {
 }
 
 /// Allowlist constructors when rebuilding scale objects from serialized data.
-const SCALE_CONSTRUCTORS: &[&str] = &["scaleLinear", "scaleBand", "scalePoint"];
+const SCALE_CONSTRUCTORS: &[&str] = &[
+    "scaleLinear",
+    "scaleBand",
+    "scalePoint",
+    "scaleSequential",
+    "scaleQuantize",
+];
 
 /// Rebind a value as a JS const. Reconstruct scale methods through allowlisted constructors. Inject
 /// values through JSON.parse so __proto__ stays an own property rather than changing the object
@@ -603,6 +609,47 @@ globalThis.scalePoint = (options = {}) => {
     at: (index) => call("point.at", { ...base, index }),
     step: () => call("point.step", base),
   };
+};
+
+globalThis.scaleSequential = (options = {}) => {
+  const domain = options.domain;
+  const colors = options.colors;
+  return {
+    __valleScale: "scaleSequential",
+    domain, colors,
+    map: (value) => call("sequential.map", { domain, colors, value }),
+  };
+};
+globalThis.scaleQuantize = (options = {}) => {
+  const domain = options.domain;
+  const colors = options.colors;
+  return {
+    __valleScale: "scaleQuantize",
+    domain, colors,
+    map: (value) => call("quantize.map", { domain, colors, value }),
+  };
+};
+
+globalThis.pie = (values, options = {}) => call("pie", {
+  values,
+  startAngle: options.startAngle ?? 0,
+  endAngle: options.endAngle ?? globalThis.TAU,
+  padAngle: options.padAngle ?? 0,
+});
+globalThis.curve = (points, options = {}) => {
+  const payload = (points ?? []).map((point) => {
+    if (point && typeof point === "object" && "x" in point && "y" in point) {
+      return [point.x, point.y];
+    }
+    if (Array.isArray(point) && point.length === 2) {
+      return point;
+    }
+    throw new Error("valle:compute:curve points must be Point values");
+  });
+  return __typed({
+    __valleType: "pathData",
+    d: call("curve", { points: payload, type: options.type ?? "monotoneX" }),
+  });
 };
 
 // Project the entire coordinate batch together so all points share projection parameters and
