@@ -142,20 +142,11 @@ fn render_document_impl(
                         }
                     }
                 }
-                for (i, bytes) in valle_motion::DEFAULT_MOTION_FONT_WEIGHTS.iter().enumerate() {
-                    let font_id = format!("font:{name}:{i}");
-                    resources.add_font(&font_id, bytes)?;
+                let font_blobs = super::motion::fixed_package_font_blobs(&artifact, &[])?;
+                for (i, bytes) in font_blobs.iter().enumerate() {
+                    let font_id = resources.intern_font(bytes)?;
                     deps.push(super::motion_package::FixedResourceDependency {
                         role: format!("font:{i}"),
-                        resource_id: font_id,
-                    });
-                    catalog.insert_bytes(ContentDigest::of_bytes(bytes), bytes.to_vec())?;
-                }
-                for (i, (_, bytes)) in valle_motion::math_formula::formula_font_pack().enumerate() {
-                    let font_id = format!("font:{name}:formula:{i}");
-                    resources.add_font(&font_id, bytes)?;
-                    deps.push(super::motion_package::FixedResourceDependency {
-                        role: format!("formula:{i}"),
                         resource_id: font_id,
                     });
                     catalog.insert_bytes(ContentDigest::of_bytes(bytes), bytes.to_vec())?;

@@ -40,6 +40,66 @@ fn pixel(dir: &Path, name: &str, x: usize, y: usize) -> Vec<u8> {
 }
 
 #[test]
+fn multiple_motion_components_share_fonts_and_keep_later_formula_dependencies() {
+    let temp = tempfile::tempdir().unwrap();
+    let dir = temp.path();
+    let mut resources = serde_json::Map::new();
+    let mut clips = Vec::new();
+    for index in 0..8 {
+        let name = format!("card{index}");
+        let file = format!("{name}.motion.tsx");
+        std::fs::write(dir.join(&file), format!(r##"
+export default function Card(ctx) {{return <Scene style={{{{width:160,height:96}}}}>
+  <Text style={{{{fontSize:20,color:"#ffffff"}}}}>Card {index}</Text>
+  <MathFormula latex="\\frac{{1}}{{2}}" style={{{{position:"absolute",left:8,top:40,fontSize:24,color:"#ffffff",opacity:ctx.localFrame > 0 ? 1 : 0}}}} />
+</Scene>;}}
+"##)).unwrap();
+        resources.insert(name.clone(), json!(file));
+        clips.push(json!({"kind":"motion","component":name,"start":index,"duration":1}));
+    }
+    put(
+        dir,
+        "cards.json",
+        json!({"canvas":{"width":160,"height":96,"fps":10,"background":"#000000"},
+        "resources":resources,"tracks":{"visual":[{"clips":clips}]}}),
+    );
+    success(run(dir, &["timeline", "check", "cards.json"]));
+    for (frame, file) in [
+        (71, "later.png"),
+        (0, "initial.png"),
+        (1, "formula.png"),
+        (71, "repeat.png"),
+    ] {
+        success(run(
+            dir,
+            &[
+                "timeline",
+                "render",
+                "cards.json",
+                "--frame",
+                &frame.to_string(),
+                "-o",
+                file,
+            ],
+        ));
+    }
+    let load = |name: &str| valle_media::codec::read_rgba_png(&dir.join(name)).unwrap();
+    assert_eq!(load("later.png").data, load("repeat.png").data);
+    let formula_ink = |name: &str| {
+        let frame = load(name);
+        frame
+            .data
+            .chunks_exact(4)
+            .enumerate()
+            .filter(|(i, p)| i / frame.width as usize >= 40 && p[0] > 128)
+            .count()
+    };
+    assert_eq!(formula_ink("initial.png"), 0);
+    assert!(formula_ink("formula.png") > 20);
+    assert!(formula_ink("later.png") > 20);
+}
+
+#[test]
 fn motion_video_offsets_and_rates_select_the_numbered_source_frame() {
     let temp = tempfile::tempdir().unwrap();
     let dir = temp.path();

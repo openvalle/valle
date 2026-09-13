@@ -1041,7 +1041,7 @@ fn authoring_font_blobs(explicit: &[Vec<u8>]) -> Vec<Vec<u8>> {
     blobs
 }
 
-fn fixed_package_font_blobs(
+pub(super) fn fixed_package_font_blobs(
     artifact: &valle_motion::SceneArtifact,
     explicit: &[Vec<u8>],
 ) -> Result<Vec<Vec<u8>>> {

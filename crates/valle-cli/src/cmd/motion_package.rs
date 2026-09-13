@@ -92,8 +92,7 @@ pub(super) fn build_standalone_motion_package(
     }
 
     for (index, bytes) in input.font_blobs.iter().enumerate() {
-        let resource_id = format!("font:standalone-{index}");
-        resources.add_font(&resource_id, bytes)?;
+        let resource_id = resources.intern_font(bytes)?;
         component_dependencies.push(FixedResourceDependency {
             role: format!("font:{index}"),
             resource_id,
@@ -441,8 +440,15 @@ impl FixedResources {
         }
     }
 
-    pub(super) fn add_font(&mut self, resource_id: &str, bytes: &[u8]) -> Result<()> {
-        self.add_font_with_digest(resource_id, motion_digest(bytes), bytes)
+    /// Share dependency fonts across Motion components without changing each component's
+    /// ordered font roles. Font descriptors currently admit face index zero only.
+    pub(super) fn intern_font(&mut self, bytes: &[u8]) -> Result<String> {
+        let digest = motion_digest(bytes);
+        let resource_id = format!("font:{}:0", digest.as_hex());
+        if !self.entries.contains_key(&resource_id) {
+            self.add_font_with_digest(&resource_id, digest, bytes)?;
+        }
+        Ok(resource_id)
     }
 
     fn add_font_with_digest(
@@ -655,6 +661,47 @@ fn entry_digest(entry: &ResourceEntryWire) -> &ContentDigest {
 mod tests {
     use super::*;
     use valle_engine::render::common_audio_pcm_digest;
+
+    #[test]
+    fn dependency_fonts_share_one_resource_and_preserve_distinct_faces() {
+        let mut resources = FixedResources::new();
+        let regular = valle_motion::DEFAULT_MOTION_FONT_WEIGHTS[0];
+        let other = valle_motion::DEFAULT_MOTION_FONT_WEIGHTS[1];
+        let first = resources.intern_font(regular).unwrap();
+        for _ in 0..32 {
+            assert_eq!(resources.intern_font(regular).unwrap(), first);
+        }
+        assert_eq!(resources.entries.len(), 1);
+        let second = resources.intern_font(other).unwrap();
+        assert_ne!(first, second);
+        assert_eq!(resources.entries.len(), 2);
+        let mut reverse = FixedResources::new();
+        assert_eq!(reverse.intern_font(other).unwrap(), second);
+        assert_eq!(reverse.intern_font(regular).unwrap(), first);
+        assert_eq!(resources.entries, reverse.entries);
+    }
+
+    #[test]
+    fn font_closure_includes_later_formulas_but_not_unused_formula_faces() {
+        let plain = valle_compiler::motion::compile_motion(
+            r#"export default function T(){return <Text>Hello</Text>; }"#,
+        )
+        .unwrap()
+        .artifact;
+        let later = valle_compiler::motion::compile_motion(
+            r##"export default function T(ctx){return <Scene>
+                <MathFormula latex="\\frac{1}{2}" style={{opacity:ctx.seconds > 1 ? 1 : 0}} />
+            </Scene>; }"##,
+        )
+        .unwrap()
+        .artifact;
+        let plain_fonts = super::super::motion::fixed_package_font_blobs(&plain, &[]).unwrap();
+        let formula_fonts = super::super::motion::fixed_package_font_blobs(&later, &[]).unwrap();
+        let all_formula_count = valle_motion::math_formula::formula_font_pack().count();
+        assert!(formula_fonts.len() > plain_fonts.len());
+        assert!(formula_fonts.len() < plain_fonts.len() + all_formula_count);
+        assert_eq!(&formula_fonts[..plain_fonts.len()], plain_fonts.as_slice());
+    }
 
     #[test]
     fn standalone_timeline_centers_the_full_canvas_motion_source() {
