@@ -93,6 +93,7 @@ pub enum OutputAlphaMode {
 pub enum OperatorColorDomain {
     WorkingLinear,
     PerceptualSrgb,
+    LinearSrgb,
     AssetEncoded(TransferFunction),
 }
 

@@ -17,6 +17,7 @@ use super::{
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum ResourceInterpretation {
+    DataTexture {},
     Visual {
         interpretation: VisualInterpretation,
     },
@@ -40,6 +41,7 @@ pub enum ResourceInterpretation {
 #[derive(Debug, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
 enum ResourceInterpretationWire {
+    DataTexture {},
     Visual {
         interpretation: VisualInterpretation,
     },
@@ -67,6 +69,7 @@ impl<'de> Deserialize<'de> for ResourceInterpretation {
     {
         Ok(
             match ResourceInterpretationWire::deserialize(deserializer)? {
+                ResourceInterpretationWire::DataTexture {} => Self::DataTexture {},
                 ResourceInterpretationWire::Visual { interpretation } => {
                     Self::Visual { interpretation }
                 }
@@ -337,6 +340,9 @@ pub fn admitted_visual_pixel_layout(
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum ExternalResourceDesc {
+    DataTexture {
+        extent: Extent2d,
+    },
     VisualFrame {
         extent: Extent2d,
         pixel_layout: ExternalPixelLayout,
@@ -354,6 +360,9 @@ pub enum ExternalResourceDesc {
 #[derive(Debug, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
 enum ExternalResourceDescWire {
+    DataTexture {
+        extent: Extent2d,
+    },
     VisualFrame {
         extent: Extent2d,
         pixel_layout: ExternalPixelLayout,
@@ -374,6 +383,7 @@ impl<'de> Deserialize<'de> for ExternalResourceDesc {
         D: serde::Deserializer<'de>,
     {
         Ok(match ExternalResourceDescWire::deserialize(deserializer)? {
+            ExternalResourceDescWire::DataTexture { extent } => Self::DataTexture { extent },
             ExternalResourceDescWire::VisualFrame {
                 extent,
                 pixel_layout,
@@ -616,6 +626,13 @@ fn request_shape_matches(
 ) -> bool {
     match (interpretation, sample, expected, payload) {
         (
+            ResourceInterpretation::DataTexture {},
+            ResourceSample::Static,
+            ExternalResourceDesc::DataTexture { extent },
+            None,
+        ) => valle_motion::shader::data_texture_storage_bytes(extent.width(), extent.height())
+            .is_ok(),
+        (
             ResourceInterpretation::Visual { .. },
             ResourceSample::Static | ResourceSample::SourceTime(_),
             ExternalResourceDesc::VisualFrame { .. },
@@ -791,6 +808,51 @@ mod tests {
         })
         .unwrap();
         assert_eq!(value["kind"], "scene3dFrame");
+        assert_eq!(value["canonical_request"], serde_json::json!([1, 2, 3]));
         assert!(value.get("contract").is_none());
+    }
+    #[test]
+    fn data_texture_requests_are_static_bounded_and_distinct_from_color() {
+        let visual = request(1, PixelOrientation::Identity);
+        let data_key =
+            ResourceKey::new(visual.key().content, ResourceInterpretation::DataTexture {});
+        let desc = ExternalResourceDesc::DataTexture {
+            extent: Extent2d::new(16, 9).unwrap(),
+        };
+        let data = ResourceRequest::new(
+            ExternalHandleId::try_from(2).unwrap(),
+            data_key.clone(),
+            ResourceSample::Static,
+            desc.clone(),
+        )
+        .unwrap();
+        assert_ne!(
+            data.cache_identity().unwrap(),
+            visual.cache_identity().unwrap()
+        );
+        assert_eq!(
+            serde_json::from_slice::<ResourceRequest>(&serde_json::to_vec(&data).unwrap()).unwrap(),
+            data
+        );
+        assert!(
+            ResourceRequest::new(
+                data.handle(),
+                data_key.clone(),
+                ResourceSample::SourceTime(RationalTime::new(0, 1).unwrap()),
+                desc
+            )
+            .is_err()
+        );
+        assert!(
+            ResourceRequest::new(
+                data.handle(),
+                data_key,
+                ResourceSample::Static,
+                ExternalResourceDesc::DataTexture {
+                    extent: Extent2d::new(4096, 4096).unwrap()
+                }
+            )
+            .is_err()
+        );
     }
 }

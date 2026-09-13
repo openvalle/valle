@@ -1,0 +1,23 @@
+// Shader color values use linear sRGB and straight alpha. Engine surfaces use
+// linear Rec.2020 and premultiplied alpha. These matrices never clip HDR RGB.
+float3 valle_linear_srgb_to_working(float3 s) {
+    return float3(
+        dot(s, float3(0.627403895934699, 0.329283038377884, 0.043313065687417)),
+        dot(s, float3(0.069097289358232, 0.919540395075459, 0.011362315566309)),
+        dot(s, float3(0.016391438875151, 0.088013307877226, 0.895595253247623)));
+}
+float3 valle_working_to_linear_srgb(float3 c) {
+    return float3(
+        dot(c, float3(1.660491002108435, -0.587641138788550, -0.072849863319885)),
+        dot(c, float3(-0.124550474521591, 1.132899897125960, -0.008349422604370)),
+        dot(c, float3(-0.018150763354905, -0.100578898008007, 1.118729661362913)));
+}
+// Explicit transfer functions, sign-preserving outside the display range.
+float3 valle_decode_srgb(float3 encoded) {
+    float3 c = abs(encoded);
+    return sign(encoded) * mix(c / 12.92, pow((c + 0.055) / 1.055, float3(2.4)), step(float3(0.04045), c));
+}
+float3 valle_encode_srgb(float3 linear) {
+    float3 c = abs(linear);
+    return sign(linear) * mix(c * 12.92, 1.055 * pow(c, float3(1.0 / 2.4)) - 0.055, step(float3(0.0031308), c));
+}

@@ -57,6 +57,10 @@ pub enum LayoutError {
         node: String,
         reason: String,
     },
+    BadShader {
+        node: String,
+        reason: String,
+    },
     BadScene3D {
         node: String,
         reason: String,
@@ -107,6 +111,9 @@ impl core::fmt::Display for LayoutError {
             }
             LayoutError::BadMask { node, reason } => {
                 write!(f, "node `{node}`: bad mask ({reason})")
+            }
+            LayoutError::BadShader { node, reason } => {
+                write!(f, "node `{node}`: bad Shader parameter ({reason})")
             }
             LayoutError::BadScene3D { node, reason } => {
                 write!(f, "node `{node}`: bad Scene3D frame ({reason})")
@@ -432,6 +439,61 @@ pub fn build_tree(
                                     value: [value.x as f32, value.y as f32],
                                 }
                             }
+                            ShaderUniformValue::Float3 { value } => {
+                                let mut components = [0.0f32; 3];
+                                for (slot, component) in components.iter_mut().zip(value) {
+                                    *slot =
+                                        number_value(component, &values, at, "shader component")?
+                                            as f32;
+                                }
+                                valle_draw::program::recording::ShaderUniformValue::Float3 {
+                                    value: components,
+                                }
+                            }
+                            ShaderUniformValue::Float4 { value } => {
+                                let mut components = [0.0f32; 4];
+                                for (slot, component) in components.iter_mut().zip(value) {
+                                    *slot =
+                                        number_value(component, &values, at, "shader component")?
+                                            as f32;
+                                }
+                                valle_draw::program::recording::ShaderUniformValue::Float4 {
+                                    value: components,
+                                }
+                            }
+                            ShaderUniformValue::Float2x2 { value } => {
+                                let mut components = [0.0f32; 4];
+                                for (slot, component) in components.iter_mut().zip(value) {
+                                    *slot =
+                                        number_value(component, &values, at, "shader component")?
+                                            as f32;
+                                }
+                                valle_draw::program::recording::ShaderUniformValue::Float2x2 {
+                                    value: components,
+                                }
+                            }
+                            ShaderUniformValue::Float3x3 { value } => {
+                                let mut components = [0.0f32; 9];
+                                for (slot, component) in components.iter_mut().zip(value) {
+                                    *slot =
+                                        number_value(component, &values, at, "shader component")?
+                                            as f32;
+                                }
+                                valle_draw::program::recording::ShaderUniformValue::Float3x3 {
+                                    value: components,
+                                }
+                            }
+                            ShaderUniformValue::Float4x4 { value } => {
+                                let mut components = [0.0f32; 16];
+                                for (slot, component) in components.iter_mut().zip(value) {
+                                    *slot =
+                                        number_value(component, &values, at, "shader component")?
+                                            as f32;
+                                }
+                                valle_draw::program::recording::ShaderUniformValue::Float4x4 {
+                                    value: components,
+                                }
+                            }
                             ShaderUniformValue::Color { value } => {
                                 let value = color_value(value, &values, at)?;
                                 valle_draw::program::recording::ShaderUniformValue::Color {
@@ -461,6 +523,21 @@ pub fn build_tree(
                                 valle_draw::program::recording::ShaderUniformValue::Bool { value }
                             }
                         };
+                        for component in value.components() {
+                            if !component.is_finite()
+                                || binding
+                                    .range
+                                    .is_some_and(|[min, max]| *component < min || *component > max)
+                            {
+                                return Err(LayoutError::BadShader {
+                                    node: node.key.clone(),
+                                    reason: format!(
+                                        "uniform `{}` is non-finite or outside its declared range",
+                                        binding.name
+                                    ),
+                                });
+                            }
+                        }
                         Ok(valle_draw::program::recording::ShaderUniformBinding {
                             name: binding.name.clone(),
                             value,
@@ -471,6 +548,8 @@ pub fn build_tree(
                     node.key.clone(),
                     crate::layout::bridge::ResolvedShaderLayer {
                         program: valle_draw::program::recording::ShaderProgram {
+                            work_per_pixel: program.work_per_pixel,
+                            padding: program.padding,
                             uri: program.uri.clone(),
                             content_hash: valle_draw::requirements::DigestBytes::from_bytes(
                                 *program.content_hash.as_bytes(),
@@ -480,10 +559,7 @@ pub fn build_tree(
                             ),
                         },
                         uniforms,
-                        inputs: inputs
-                            .iter()
-                            .map(|input| (input.name.clone(), input.source.clone()))
-                            .collect(),
+                        inputs: inputs.clone(),
                     },
                 );
             }
@@ -2812,6 +2888,7 @@ fn projected_nodes_of(
         // Video shares image layout and emission; the video side table supplies the frame time.
         NodeKind::Video { source, .. } => Node::image(source.clone()),
     };
+    let mut preset = String::new();
     if matches!(
         template.kind,
         NodeKind::Group
@@ -2824,14 +2901,7 @@ fn projected_nodes_of(
             | NodeKind::Glass(_)
             | NodeKind::Scene3D { .. }
     ) {
-        let preset = "display: block";
-        node = node.with_preset(parse_style(cache, preset).map_err(|reason| {
-            LayoutError::BadStyle {
-                node: template.key.clone(),
-                declarations: preset.into(),
-                reason,
-            }
-        })?);
+        preset.push_str("display: block;");
     }
     // Clip and Mask must create stacking contexts so their begin/end groups enclose descendants.
     //
@@ -2852,13 +2922,7 @@ fn projected_nodes_of(
             | NodeKind::Glass(_)
     ) || is_mask_source
     {
-        node = node.with_preset(parse_style(cache, "isolation: isolate").map_err(|reason| {
-            LayoutError::BadStyle {
-                node: template.key.clone(),
-                declarations: "isolation: isolate".into(),
-                reason,
-            }
-        })?);
+        preset.push_str("isolation: isolate;");
     }
     // Advanced filters require a stacking context so BeginFilter encloses the full subtree.
     if template.styles.iter().any(|style| {
@@ -2876,13 +2940,7 @@ fn projected_nodes_of(
                     | "contact-shadow"
             )
     }) {
-        node = node.with_preset(parse_style(cache, "isolation: isolate").map_err(|reason| {
-            LayoutError::BadStyle {
-                node: template.key.clone(),
-                declarations: "isolation: isolate".into(),
-                reason,
-            }
-        })?);
+        preset.push_str("isolation: isolate;");
     }
     // Text along a path defaults to one line. Wrapping would restart glyph positions at the path
     // origin and overlap earlier glyphs.
@@ -2897,26 +2955,23 @@ fn projected_nodes_of(
                 reason: "formula fragment missing after prepare".into(),
             })?;
         let total_h = fragment.height + fragment.depth;
-        // One preset: with_preset replaces the whole layer, so display/isolation
-        // cannot be applied in earlier calls.
-        let decl = format!(
-            "display: block; isolation: isolate; width: {}px; height: {}px",
+        preset.push_str(&format!(
+            "display: block; isolation: isolate; width: {}px; height: {}px;",
             fragment.width.max(0.0),
             total_h.max(0.0)
-        );
-        node = node.with_preset(parse_style(cache, &decl).map_err(|reason| {
-            LayoutError::BadStyle {
-                node: template.key.clone(),
-                declarations: decl.clone(),
-                reason,
-            }
-        })?);
+        ));
     }
     if matches!(template.kind, NodeKind::Text { path: Some(_), .. }) {
-        node = node.with_preset(parse_style(cache, "white-space: nowrap").map_err(|reason| {
+        preset.push_str("white-space: nowrap;");
+    }
+
+    // Takumi replaces the entire preset layer. Apply the collected defaults once so
+    // isolation and other semantic properties cannot erase the node's display mode.
+    if !preset.is_empty() {
+        node = node.with_preset(parse_style(cache, &preset).map_err(|reason| {
             LayoutError::BadStyle {
                 node: template.key.clone(),
-                declarations: "white-space: nowrap".into(),
+                declarations: preset.clone(),
                 reason,
             }
         })?);

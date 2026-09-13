@@ -274,6 +274,7 @@ fn write_resource_kind(writer: &mut StructureHash, kind: &GraphResourceKind) {
 fn write_resource_key(writer: &mut StructureHash, key: &ResourceKey) {
     writer.fixed(key.content.as_bytes());
     match &key.interpretation {
+        ResourceInterpretation::DataTexture {} => writer.tag(5),
         ResourceInterpretation::Visual { interpretation } => {
             writer.tag(0);
             write_visual_interpretation(writer, *interpretation);
@@ -292,6 +293,7 @@ fn write_resource_key(writer: &mut StructureHash, key: &ResourceKey) {
             match color_domain {
                 OperatorColorDomain::WorkingLinear => writer.tag(0),
                 OperatorColorDomain::PerceptualSrgb => writer.tag(1),
+                OperatorColorDomain::LinearSrgb => writer.tag(3),
                 OperatorColorDomain::AssetEncoded(transfer) => {
                     writer.tag(2);
                     write_transfer(writer, *transfer);
@@ -384,6 +386,11 @@ fn write_transfer(writer: &mut StructureHash, value: TransferFunction) {
 
 fn write_external_desc(writer: &mut StructureHash, value: &ExternalResourceDesc) {
     match value {
+        ExternalResourceDesc::DataTexture { extent } => {
+            writer.tag(5);
+            writer.u32(extent.width());
+            writer.u32(extent.height());
+        }
         ExternalResourceDesc::VisualFrame {
             extent,
             pixel_layout,

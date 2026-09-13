@@ -559,3 +559,99 @@ fn unknown_fields_are_rejected_at_top_level_and_nested_unions() {
     changed["artifact"]["exprs"][11]["input"]["unexpected"] = serde_json::json!(true);
     assert!(serde_json::from_value::<ArtifactEnvelope>(changed).is_err());
 }
+
+#[test]
+fn shader_artifact_metadata_is_checked_against_its_admitted_dependency() {
+    use valle_motion::shader::{
+        BudgetClass, OutputContract, ShaderManifest, ShaderPackage, ShaderUniform, UniformType,
+    };
+    use valle_motion::{
+        SHADER_LAYER_CAPABILITY, ShaderProgramRef, ShaderUniformBinding, ShaderUniformValue,
+    };
+    let package = ShaderPackage::compile(
+        ShaderManifest {
+            name: "contract-probe".into(),
+            entry: "source.vsksl".into(),
+            inputs: vec![valle_motion::shader::ShaderInput {
+                name: "optional".into(),
+                kind: valle_motion::shader::InputKind::Data,
+                required: false,
+                sampling: valle_motion::shader::InputSampling::Nearest,
+                wrap: valle_motion::shader::InputWrap::Clamp,
+            }],
+            uniforms: vec![ShaderUniform {
+                name: "gain".into(),
+                uniform_type: UniformType::Float,
+                required: true,
+                default: None,
+                min: Some(0.0),
+                max: Some(1.0),
+            }],
+            output: OutputContract {
+                padding: [2, 3, 4, 5],
+                ..OutputContract::default()
+            },
+            budget: BudgetClass::Local,
+        },
+        b"float4 valle_main(float2 uv) { return sampleContent(uv) * gain; }",
+    )
+    .unwrap();
+    let mut artifact = envelope().artifact;
+    artifact.capability_set = CapabilitySet::new(
+        artifact
+            .capability_set
+            .names
+            .iter()
+            .cloned()
+            .chain([SHADER_LAYER_CAPABILITY.into()]),
+    );
+    artifact.nodes[1].kind = NodeKind::ShaderLayer {
+        program: ShaderProgramRef {
+            work_per_pixel: package.work_per_pixel(),
+            uri: package.uri().to_string(),
+            content_hash: package.content_hash,
+            abi_hash: package.abi_hash,
+            padding: package.manifest.output.padding,
+        },
+        uniforms: vec![ShaderUniformBinding {
+            name: "gain".into(),
+            value: ShaderUniformValue::Float {
+                value: NumberValue::Static { value: 0.5 },
+            },
+            range: Some([0.0, 1.0]),
+        }],
+        inputs: vec![valle_motion::ShaderTextureInput {
+            name: "optional".into(),
+            kind: valle_motion::shader::InputKind::Data,
+            source: None,
+            sampling: valle_motion::shader::InputSampling::Nearest,
+            wrap: valle_motion::shader::InputWrap::Clamp,
+        }],
+    };
+    artifact
+        .validate_shader_packages(|_| Some(&package))
+        .unwrap();
+    assert!(artifact.validate_shader_packages(|_| None).is_err());
+    if let NodeKind::ShaderLayer {
+        program,
+        uniforms,
+        inputs,
+    } = &mut artifact.nodes[1].kind
+    {
+        inputs.clear();
+        program.work_per_pixel.operations = 0;
+        program.padding = [0; 4];
+        uniforms[0].range = Some([0.0, 10.0]);
+    }
+    let errors = artifact
+        .validate_shader_packages(|_| Some(&package))
+        .unwrap_err();
+    assert!(errors.iter().any(|error| error.path.ends_with("/padding")));
+    assert!(errors.iter().any(|error| error.path.ends_with("/range")));
+    assert!(errors.iter().any(|error| error.path.ends_with("/inputs")));
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.path.ends_with("/workPerPixel"))
+    );
+}

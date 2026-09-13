@@ -85,9 +85,15 @@ fn lower_render_graph_impl(
         }
     }
     let estimated_peak_surface_bytes = peak_surface_bytes(&surface_slots, passes.len())?;
-    if estimated_peak_surface_bytes > capabilities.max_frame_bytes() {
+    let required_bytes = estimated_peak_surface_bytes
+        .checked_add(bindings.layout.data_texture_bytes())
+        .ok_or(LowerError::FrameBudgetExceeded {
+            required_bytes: u64::MAX,
+            max_bytes: capabilities.max_frame_bytes(),
+        })?;
+    if required_bytes > capabilities.max_frame_bytes() {
         return Err(LowerError::FrameBudgetExceeded {
-            required_bytes: estimated_peak_surface_bytes,
+            required_bytes,
             max_bytes: capabilities.max_frame_bytes(),
         });
     }
@@ -143,6 +149,24 @@ fn admit_capabilities(
     for resource in &graph.resources {
         if let Some(texture) = &resource.texture {
             admit_texture(resource.id, texture, capabilities)?;
+        }
+        if let GraphResourceKind::ExternalResource {
+            expected: ExternalResourceDesc::DataTexture { extent },
+            ..
+        } = resource.kind
+        {
+            let packed = Extent2d::new(extent.width() * 2, extent.height() * 4)
+                .expect("data texture extents were bounded during request admission");
+            require_extent(packed, capabilities.max_extent(), &resource.semantic_path)?;
+            let bytes = u64::from(extent.width())
+                * u64::from(extent.height())
+                * valle_motion::shader::DATA_TEXTURE_BYTES_PER_PIXEL;
+            if bytes > capabilities.max_surface_bytes() {
+                return Err(LowerError::FrameBudgetExceeded {
+                    required_bytes: bytes,
+                    max_bytes: capabilities.max_surface_bytes(),
+                });
+            }
         }
         if let GraphResourceKind::ExternalResource {
             expected:

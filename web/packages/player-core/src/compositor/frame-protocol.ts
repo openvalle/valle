@@ -22,7 +22,7 @@ export interface ProductEngineWire {
   compiled_execution_resources_json(renderId: string): string;
   compiled_resource_bytes(
     renderId: string,
-    kind: "font-bytes" | "runtime-shader",
+    kind: "font-bytes" | "model3d-bytes" | "runtime-shader",
     contentDigest: string,
     abiDigest?: string | null,
   ): Uint8Array;

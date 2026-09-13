@@ -453,7 +453,7 @@ impl Scene3DFrameRequest {
 pub(crate) struct ResolvedShaderLayer {
     pub(crate) program: valle_draw::program::recording::ShaderProgram,
     pub(crate) uniforms: Vec<valle_draw::program::recording::ShaderUniformBinding>,
-    pub(crate) inputs: Vec<(String, String)>,
+    pub(crate) inputs: Vec<crate::ShaderTextureInput>,
 }
 
 /// Frame request for one video node.

@@ -5,28 +5,23 @@ use serde::{Deserialize, Deserializer, Serialize, de};
 use valle_timeline::internal::ContentDigest;
 
 use super::canonical::canonical_bytes;
-use super::manifest::{validate_package_name, validate_value};
+use super::manifest::validate_value;
 use super::{
-    DialectReport, ShaderAbi, ShaderInput, ShaderManifest, ShaderUniform, UniformType,
-    UniformValue, lower_to_sksl, validate_dialect,
+    DialectReport, ShaderAbi, ShaderInput, ShaderManifest, ShaderUniform, UniformType, UniformValue,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum DiagnosticCode {
     ManifestParse,
-    ManifestVersion,
     ManifestInvalid,
     InvalidUri,
     Identifier,
     DuplicateName,
-    DialectVersion,
     DialectViolation,
     OutputContract,
     BudgetExceeded,
     SourceEncoding,
-    SourceDigest,
-    AbiDigest,
     UniformMissing,
     UniformUnknown,
     UniformType,
@@ -66,8 +61,7 @@ impl std::error::Error for ShaderDiagnostic {}
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ShaderUri {
-    pub name: String,
-    pub version: u32,
+    pub digest: ContentDigest,
 }
 
 impl Serialize for ShaderUri {
@@ -85,7 +79,7 @@ impl<'de> Deserialize<'de> for ShaderUri {
 
 impl core::fmt::Display for ShaderUri {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(formatter, "shader://{}@{}", self.name, self.version)
+        write!(formatter, "shader://{}", self.digest.as_hex())
     }
 }
 
@@ -96,20 +90,11 @@ impl FromStr for ShaderUri {
         let Some(rest) = value.strip_prefix("shader://") else {
             return Err(invalid_uri(value));
         };
-        let Some((name, version_text)) = rest.rsplit_once('@') else {
-            return Err(invalid_uri(value));
-        };
-        validate_package_name(name, "source").map_err(|_| invalid_uri(value))?;
-        let version = version_text
-            .parse::<u32>()
-            .map_err(|_| invalid_uri(value))?;
-        if version == 0 || version.to_string() != version_text {
+        let digest = ContentDigest::from_hex(rest).map_err(|_| invalid_uri(value))?;
+        if digest.as_hex() != rest {
             return Err(invalid_uri(value));
         }
-        Ok(Self {
-            name: name.to_owned(),
-            version,
-        })
+        Ok(Self { digest })
     }
 }
 
@@ -131,6 +116,16 @@ pub struct ShaderPackage {
     pub dialect_report: DialectReport,
     pub canonical_manifest: Vec<u8>,
     pub content_hash: ContentDigest,
+    pub source_hash: ContentDigest,
+    pub abi_hash: ContentDigest,
+}
+
+/// Portable author source and its contract. Generated backend code is never trusted input.
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct FrozenShader {
+    manifest: ShaderManifest,
+    source: String,
 }
 
 /// Backend-neutral runtime record exported by the single Rust admission path.
@@ -150,9 +145,33 @@ pub struct ShaderRuntimeRecord {
 }
 
 impl ShaderPackage {
+    pub fn work_per_pixel(&self) -> valle_draw::requirements::ShaderWork {
+        valle_draw::requirements::ShaderWork {
+            // Account for helper dispatch and the fixed finite/color/alpha output adapter.
+            operations: (self.dialect_report.operations_per_pixel
+                + self.dialect_report.calls_per_pixel
+                + 32) as u64,
+            samples: self.dialect_report.samples_per_pixel as u64,
+        }
+    }
+
+    pub fn from_frozen(bytes: &[u8]) -> Result<Self, ShaderDiagnostic> {
+        let frozen: FrozenShader = serde_json::from_slice(bytes).map_err(|error| {
+            ShaderDiagnostic::new(DiagnosticCode::ManifestParse, "shader", error.to_string())
+        })?;
+        Self::compile(frozen.manifest, frozen.source.as_bytes())
+    }
+
+    pub fn frozen_bytes(&self) -> Result<Vec<u8>, ShaderDiagnostic> {
+        canonical_bytes(&FrozenShader {
+            manifest: self.manifest.clone(),
+            source: self.source.clone(),
+        })
+    }
+
     pub fn admit(manifest_bytes: &[u8], source_bytes: &[u8]) -> Result<Self, ShaderDiagnostic> {
         let manifest = ShaderManifest::parse(manifest_bytes)?;
-        Self::admit_manifest(manifest, source_bytes)
+        Self::compile(manifest, source_bytes)
     }
 
     /// Admit a package while leaving byte discovery to the host. The manifest is parsed exactly
@@ -169,10 +188,10 @@ impl ShaderPackage {
         let source_bytes = resolver(&manifest.entry).map_err(|message| {
             ShaderDiagnostic::new(DiagnosticCode::ManifestInvalid, "entry", message)
         })?;
-        Self::admit_manifest(manifest, &source_bytes)
+        Self::compile(manifest, &source_bytes)
     }
 
-    fn admit_manifest(
+    pub fn compile(
         manifest: ShaderManifest,
         source_bytes: &[u8],
     ) -> Result<Self, ShaderDiagnostic> {
@@ -184,35 +203,15 @@ impl ShaderPackage {
                 format!("shader source is not UTF-8: {error}"),
             )
         })?;
-        let actual_source_digest = ContentDigest::of_bytes(source_bytes);
-        if actual_source_digest != manifest.source_digest {
-            return Err(ShaderDiagnostic::new(
-                DiagnosticCode::SourceDigest,
-                "sourceDigest",
-                format!(
-                    "declared {} does not match source {}",
-                    manifest.source_digest, actual_source_digest
-                ),
-            ));
-        }
+        let source_hash = ContentDigest::of_bytes(source_bytes);
         let abi = manifest.abi()?;
-        let actual_abi_digest = abi.digest()?;
-        if actual_abi_digest != manifest.abi_digest {
-            return Err(ShaderDiagnostic::new(
-                DiagnosticCode::AbiDigest,
-                "abiDigest",
-                format!(
-                    "declared {} does not match ABI {}",
-                    manifest.abi_digest, actual_abi_digest
-                ),
-            ));
-        }
-        let dialect_report = validate_dialect(&manifest, source)?;
-        let generated_sksl = lower_to_sksl(&manifest, source)?;
+        let abi_hash = abi.digest()?;
+        let (dialect_report, generated_sksl) = super::dialect::compile_dialect(&manifest, source)?;
         let canonical_manifest = manifest.canonical_bytes()?;
-        let mut package_bytes = canonical_manifest.clone();
-        package_bytes.push(b'\n');
-        package_bytes.extend_from_slice(source_bytes);
+        let package_bytes = canonical_bytes(&FrozenShader {
+            manifest: manifest.clone(),
+            source: source.to_owned(),
+        })?;
         let content_hash = ContentDigest::of_bytes(&package_bytes);
         Ok(Self {
             manifest,
@@ -222,6 +221,8 @@ impl ShaderPackage {
             dialect_report,
             canonical_manifest,
             content_hash,
+            source_hash,
+            abi_hash,
         })
     }
 
@@ -229,7 +230,7 @@ impl ShaderPackage {
         ShaderRuntimeRecord {
             uri: self.uri().to_string(),
             content_hash: self.content_hash,
-            abi_hash: self.manifest.abi_digest,
+            abi_hash: self.abi_hash,
             generated_sksl: self.generated_sksl.clone(),
             inputs: self.manifest.inputs.clone(),
             uniforms: self.manifest.uniforms.clone(),
@@ -239,13 +240,12 @@ impl ShaderPackage {
 
     pub fn uri(&self) -> ShaderUri {
         ShaderUri {
-            name: self.manifest.name.clone(),
-            version: self.manifest.version,
+            digest: self.content_hash,
         }
     }
 
     pub fn validate_uri(&self, uri: &ShaderUri) -> Result<(), ShaderDiagnostic> {
-        if uri.name == self.manifest.name && uri.version == self.manifest.version {
+        if uri.digest == self.content_hash {
             Ok(())
         } else {
             Err(ShaderDiagnostic::new(
@@ -257,8 +257,9 @@ impl ShaderPackage {
     }
 
     pub fn validate_layer_pixels(&self, width: u32, height: u32) -> Result<u64, ShaderDiagnostic> {
-        let pixels = u64::from(width)
-            .checked_mul(u64::from(height))
+        let [left, top, right, bottom] = self.manifest.output.padding.map(u64::from);
+        let pixels = (u64::from(width) + left + right)
+            .checked_mul(u64::from(height) + top + bottom)
             .ok_or_else(|| {
                 ShaderDiagnostic::new(
                     DiagnosticCode::LayerBounds,
@@ -282,6 +283,7 @@ impl ShaderPackage {
     pub fn pack_uniforms(
         &self,
         resolution: [f32; 2],
+        input_dimensions: &BTreeMap<String, [u32; 2]>,
         bindings: &UniformBindings,
     ) -> Result<Vec<u8>, ShaderDiagnostic> {
         if resolution
@@ -316,6 +318,39 @@ impl ShaderPackage {
         for value in resolution {
             bytes.extend_from_slice(&value.to_le_bytes());
         }
+        if input_dimensions
+            .keys()
+            .any(|name| !self.manifest.inputs.iter().any(|input| &input.name == name))
+        {
+            return Err(ShaderDiagnostic::new(
+                DiagnosticCode::UniformUnknown,
+                "inputDimensions",
+                "dimensions reference an undeclared texture",
+            ));
+        }
+        for input in &self.manifest.inputs {
+            let size = input_dimensions
+                .get(&input.name)
+                .copied()
+                .or_else(|| (!input.required).then_some([1, 1]))
+                .ok_or_else(|| {
+                    ShaderDiagnostic::new(
+                        DiagnosticCode::UniformMissing,
+                        "inputDimensions",
+                        format!("missing dimensions for {}", input.name),
+                    )
+                })?;
+            if size.contains(&0) {
+                return Err(ShaderDiagnostic::new(
+                    DiagnosticCode::UniformRange,
+                    "inputDimensions",
+                    "texture dimensions must be positive",
+                ));
+            }
+            for component in size {
+                bytes.extend_from_slice(&(component as f32).to_le_bytes());
+            }
+        }
         for uniform in &self.manifest.uniforms {
             let value = bindings
                 .0
@@ -345,7 +380,16 @@ impl ShaderPackage {
                 uniform.max,
                 &format!("uniforms.{}", uniform.name),
             )?;
-            pack_value(&mut bytes, value, uniform.uniform_type);
+            if let UniformValue::Color(rgba) = value {
+                let straight = valle_draw::program::decode_srgb_straight(*rgba);
+                pack_value(
+                    &mut bytes,
+                    &UniformValue::Color(straight),
+                    uniform.uniform_type,
+                );
+            } else {
+                pack_value(&mut bytes, value, uniform.uniform_type);
+            }
         }
         debug_assert_eq!(bytes.len(), self.abi.scalar_count as usize * 4);
         Ok(bytes)
@@ -363,8 +407,8 @@ impl ShaderPackage {
         canonical_bytes(&LockRecord {
             uri: self.uri().to_string(),
             content_hash: &self.content_hash,
-            abi_hash: &self.manifest.abi_digest,
-            source_hash: &self.manifest.source_digest,
+            abi_hash: &self.abi_hash,
+            source_hash: &self.source_hash,
         })
     }
 }
@@ -375,6 +419,31 @@ fn pack_value(bytes: &mut Vec<u8>, value: &UniformValue, uniform_type: UniformTy
             bytes.extend_from_slice(&value.to_le_bytes())
         }
         (UniformValue::Float2(values), UniformType::Float2) => {
+            for value in values {
+                bytes.extend_from_slice(&value.to_le_bytes());
+            }
+        }
+        (UniformValue::Float3(values), UniformType::Float3) => {
+            for value in values {
+                bytes.extend_from_slice(&value.to_le_bytes());
+            }
+        }
+        (UniformValue::Float4(values), UniformType::Float4) => {
+            for value in values {
+                bytes.extend_from_slice(&value.to_le_bytes());
+            }
+        }
+        (UniformValue::Float2x2(values), UniformType::Float2x2) => {
+            for value in values {
+                bytes.extend_from_slice(&value.to_le_bytes());
+            }
+        }
+        (UniformValue::Float3x3(values), UniformType::Float3x3) => {
+            for value in values {
+                bytes.extend_from_slice(&value.to_le_bytes());
+            }
+        }
+        (UniformValue::Float4x4(values), UniformType::Float4x4) => {
             for value in values {
                 bytes.extend_from_slice(&value.to_le_bytes());
             }
@@ -395,6 +464,6 @@ fn invalid_uri(value: &str) -> ShaderDiagnostic {
     ShaderDiagnostic::new(
         DiagnosticCode::InvalidUri,
         "source",
-        format!("invalid shader URI `{value}`; expected shader://lower-kebab@positive-version"),
+        format!("invalid shader URI `{value}`; expected shader://<content-hash>"),
     )
 }

@@ -154,7 +154,6 @@ fn render(
             artifact,
             assets: &prepared.assets,
             font_blobs: &font_blobs,
-            shaders: &prepared.shaders,
             cue_bindings: &cues,
             prop_bindings: &props,
             duration,
@@ -394,7 +393,7 @@ struct FingerprintInputs<'a> {
 fn studio_state_json(request: &StudioRequest, generation: u64) -> Result<String> {
     let module_graph = load_motion_module_graph(&request.input)?;
     let assets = load_assets(&request.asset_specs)?;
-    let shaders = valle_compiler::load_shader_registry(&[], request.input.parent())?;
+    let shaders = shader_registry(&assets)?;
     let resources = assets
         .iter()
         .map(|(control, asset)| ResourceRef {
@@ -492,7 +491,6 @@ fn studio_state_json(request: &StudioRequest, generation: u64) -> Result<String>
             // Formula faces are needed only when RaTeX glyph runs are merged into the final
             // ProgramRecording; ordinary Motion packages keep the smaller default closure.
             font_blobs: &runtime_font_blobs,
-            shaders: &prepared.shaders,
             cue_bindings: &cue_bindings,
             prop_bindings: &props,
             duration: request.duration,
@@ -674,18 +672,21 @@ fn motion_watch_paths(request: &StudioRequest) -> Vec<PathBuf> {
             .iter()
             .filter_map(|spec| spec.split_once('=').map(|(_, path)| PathBuf::from(path))),
     );
-    if let Some(root) = request.input.parent().map(|path| path.join("shaders")) {
-        let mut packages = std::fs::read_dir(root)
-            .into_iter()
-            .flatten()
-            .flatten()
-            .map(|entry| entry.path())
-            .filter(|path| path.is_dir())
-            .collect::<Vec<_>>();
-        packages.sort();
-        for package in packages {
-            paths.push(package.join("manifest.json"));
-            paths.push(package.join("shader.vsksl"));
+    for spec in &request.asset_specs {
+        if let Some((_, path)) = spec.split_once('=') {
+            if path.ends_with(".shader.json") {
+                let path = Path::new(path);
+                if let Ok(bytes) = std::fs::read(path)
+                    && let Ok(manifest) = valle_motion::shader::ShaderManifest::parse(&bytes)
+                    && manifest.validate_shape().is_ok()
+                {
+                    paths.push(
+                        path.parent()
+                            .unwrap_or_else(|| Path::new("."))
+                            .join(manifest.entry),
+                    );
+                }
+            }
         }
     }
     paths.sort();
@@ -738,7 +739,7 @@ fn compile_and_prepare(
     let compile_started = perf.then(Instant::now);
     let module_graph = load_motion_module_graph(input)?;
     let assets = load_assets(asset_specs)?;
-    let shaders = valle_compiler::load_shader_registry(&[], input.parent())?;
+    let shaders = shader_registry(&assets)?;
     let resources = assets
         .iter()
         .map(|(control, asset)| ResourceRef {
@@ -855,18 +856,37 @@ fn load_assets(specs: &[String]) -> Result<BTreeMap<String, BoundAsset>> {
         if assets.contains_key(name) {
             bail!("asset control `{name}` is bound more than once");
         }
-        let bytes =
-            std::fs::read(path).with_context(|| format!("reading asset `{name}` at {path}"))?;
-        assets.insert(
-            name.to_string(),
-            BoundAsset {
-                path: PathBuf::from(path),
-                hash: ContentDigest::of_bytes(&bytes),
-                bytes,
-            },
-        );
+        assets.insert(name.to_string(), load_asset(Path::new(path))?);
     }
     Ok(assets)
+}
+
+pub(super) fn load_asset(path: &Path) -> Result<BoundAsset> {
+    let bytes = if path.to_string_lossy().ends_with(".shader.json") {
+        valle_compiler::load_shader_asset(path)?.frozen_bytes()?
+    } else {
+        std::fs::read(path).with_context(|| format!("reading asset {}", path.display()))?
+    };
+    Ok(BoundAsset {
+        path: path.to_owned(),
+        hash: ContentDigest::of_bytes(&bytes),
+        bytes,
+    })
+}
+
+fn shader_registry(
+    assets: &BTreeMap<String, BoundAsset>,
+) -> Result<valle_motion::shader::ShaderRegistry> {
+    let mut registry = valle_motion::shader::ShaderRegistry::new();
+    for (control, asset) in assets {
+        if asset.path.to_string_lossy().ends_with(".shader.json") {
+            registry.register_asset(
+                control,
+                valle_motion::shader::ShaderPackage::from_frozen(&asset.bytes)?,
+            )?;
+        }
+    }
+    Ok(registry)
 }
 
 fn load_prepare_data(

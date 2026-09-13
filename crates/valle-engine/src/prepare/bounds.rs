@@ -636,6 +636,19 @@ pub(crate) fn program_bounds_to_device(
     projected_to_device(project_local_bounds(bounds, viewport, transform)?, root)
 }
 
+/// Sampling kernels can read pixels outside the final output. Preserve their complete
+/// finite input projection; the local surface allocator still enforces extent and byte limits.
+pub(crate) fn program_bounds_to_device_unclipped(
+    bounds: LocalBounds,
+    viewport: Rect,
+    transform: DeviceTransform,
+) -> Result<DeviceRect, BoundsError> {
+    let Some(bounds) = project_local_bounds(bounds, viewport, transform)? else {
+        return Ok(DeviceRect::new(0, 0, 0, 0));
+    };
+    rounded_device_rect(bounds.left, bounds.top, bounds.right, bounds.bottom)
+}
+
 fn project_local_bounds(
     bounds: LocalBounds,
     viewport: Rect,
@@ -961,6 +974,17 @@ fn rect_from_edges(
     let top = top.floor().max(f64::from(root.y)).min(root_bottom);
     let right = right.ceil().max(f64::from(root.x)).min(root_right);
     let bottom = bottom.ceil().max(f64::from(root.y)).min(root_bottom);
+    rounded_device_rect(left, top, right, bottom)
+}
+
+fn rounded_device_rect(
+    left: f64,
+    top: f64,
+    right: f64,
+    bottom: f64,
+) -> Result<DeviceRect, BoundsError> {
+    validate_device_edges(left, top, right, bottom)?;
+    let (left, top, right, bottom) = (left.floor(), top.floor(), right.ceil(), bottom.ceil());
     if right <= left || bottom <= top {
         return Ok(DeviceRect::new(0, 0, 0, 0));
     }

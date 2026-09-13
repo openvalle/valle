@@ -190,6 +190,37 @@ test("Web common-profile mixer matches the Native fixed PCM bits and chunk/seek 
   expect([...seek.right]).toEqual([...whole.right.slice(2)]);
 });
 
+test("Shader data textures use verified bytes and raw storage dimensions", async () => {
+  const encoded = new Uint8Array([1, 2, 3]);
+  const pixels = new Uint8Array(16);
+  const image = { delete() {} };
+  const player = Object.create(BrowserValleWebPlayer.prototype) as any;
+  const digest = SCENE_DIGEST.slice("sha256:".length);
+  const asset = { type: "image" };
+  Object.assign(player, {
+    assetByDigest: new Map([[digest, asset]]),
+    async fetchAssetBytes(actual: unknown, expected: string) {
+      expect(actual).toBe(asset); expect(expected).toBe(digest); return encoded;
+    },
+    engine: { decode_shader_data_texture(actual: string, bytes: Uint8Array, w: number, h: number) {
+      expect([actual, bytes, w, h]).toEqual([SCENE_DIGEST, encoded, 2, 1]); return pixels;
+    } },
+    CanvasKit: {
+      ColorType: { Alpha_8: 1 }, AlphaType: { Premul: 2 }, ColorSpace: { SRGB: 3 },
+      MakeImage(info: unknown, bytes: Uint8Array, rowBytes: number) {
+        expect(info).toEqual({ width: 4, height: 4, colorType: 1, alphaType: 2, colorSpace: 3 });
+        expect(bytes.byteLength).toBe(16); expect(rowBytes).toBe(4); return image;
+      },
+    },
+  });
+  const produced = await player.fulfillRequestUncached({
+    key: { content: SCENE_DIGEST, interpretation: { kind: "dataTexture" } },
+    expected: { kind: "dataTexture", extent: { width: 2, height: 1 } }, sample: { kind: "static" },
+  }, false);
+  expect(produced.object).toMatchObject({ kind: "dataTexture", image });
+  expect(produced.bytes).toBe(16);
+});
+
 test("Scene3D keeps canonical ContentDigest wires at every WASM boundary", async () => {
   const calls: Array<[string, string]> = [];
   const image = { delete() {} };
@@ -340,4 +371,15 @@ test("failed render-package staging preserves the last-good runtime", async () =
     executorDisposed: 0,
     resumed: 1,
   });
+});
+
+test("runtime shader fulfillment reads the Rust resource interpretation fields", async () => {
+  const bytes = Uint8Array.from([1, 2, 3]);
+  const player = Object.create(BrowserValleWebPlayer.prototype) as any;
+  player.shaderBytes = new Map([[`${SCENE_DIGEST.slice(7)}:${TOPOLOGY_DIGEST.slice(7)}`, bytes]]);
+  const produced = await player.fulfillRequestUncached({
+    key: {content: SCENE_DIGEST, interpretation: {kind: "runtimeShader", abi_digest: TOPOLOGY_DIGEST}},
+    expected: {kind: "runtimeShader"},
+  }, false);
+  expect(produced.object.bytes).toBe(bytes);
 });

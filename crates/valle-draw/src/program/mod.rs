@@ -30,8 +30,8 @@ pub use glass::{
 };
 pub use group::{
     BackdropRead, BackdropScope, BlendMode, Clip, FILTER_GAUSSIAN_SUPPORT_SIGMAS, FillRule, Filter,
-    Group, Mask, MaskMode, RoundRect, ShaderLayer, ShaderTextureBinding, ShaderUniformBinding,
-    ShaderUniformValue,
+    Group, MAX_SHADER_LAYER_PIXELS, Mask, MaskMode, RoundRect, ShaderLayer, ShaderTextureBinding,
+    ShaderUniformBinding, ShaderUniformValue,
 };
 pub use node::{
     BatchGeometry, BatchInstance, GeometryBatchNode, Glyph, GlyphRun, ImageNode, Node, PathNode,
@@ -257,3 +257,5 @@ mod tests {
         ));
     }
 }
+
+pub use paint::decode_srgb_straight;

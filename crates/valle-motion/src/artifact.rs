@@ -346,9 +346,11 @@ pub enum BoolValue {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ShaderProgramRef {
+    pub work_per_pixel: valle_draw::requirements::ShaderWork,
     pub uri: String,
     pub content_hash: ContentDigest,
     pub abi_hash: ContentDigest,
+    pub padding: [u32; 4],
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -361,6 +363,12 @@ pub struct ShaderProgramRef {
 pub enum ShaderUniformValue {
     Float { value: NumberValue },
     Float2 { value: PointValue },
+    Float3 { value: [NumberValue; 3] },
+    Float4 { value: [NumberValue; 4] },
+    Float2x2 { value: [NumberValue; 4] },
+    Float3x3 { value: [NumberValue; 9] },
+    Float4x4 { value: [NumberValue; 16] },
+
     Color { value: ColorValue },
     Bool { value: BoolValue },
 }
@@ -370,13 +378,17 @@ pub enum ShaderUniformValue {
 pub struct ShaderUniformBinding {
     pub name: String,
     pub value: ShaderUniformValue,
+    pub range: Option<[f32; 2]>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ShaderTextureInput {
+    pub kind: crate::shader::InputKind,
     pub name: String,
-    pub source: String,
+    pub source: Option<String>,
+    pub sampling: crate::shader::InputSampling,
+    pub wrap: crate::shader::InputWrap,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -969,6 +981,31 @@ impl SceneNode {
                     match &uniform.value {
                         ShaderUniformValue::Float { value } => number(path, value, &mut refs),
                         ShaderUniformValue::Float2 { value } => point(path, value, &mut refs),
+                        ShaderUniformValue::Float3 { value } => {
+                            for (i, component) in value.iter().enumerate() {
+                                number(format!("{path}/{i}"), component, &mut refs);
+                            }
+                        }
+                        ShaderUniformValue::Float4 { value } => {
+                            for (i, component) in value.iter().enumerate() {
+                                number(format!("{path}/{i}"), component, &mut refs);
+                            }
+                        }
+                        ShaderUniformValue::Float2x2 { value } => {
+                            for (i, component) in value.iter().enumerate() {
+                                number(format!("{path}/{i}"), component, &mut refs);
+                            }
+                        }
+                        ShaderUniformValue::Float3x3 { value } => {
+                            for (i, component) in value.iter().enumerate() {
+                                number(format!("{path}/{i}"), component, &mut refs);
+                            }
+                        }
+                        ShaderUniformValue::Float4x4 { value } => {
+                            for (i, component) in value.iter().enumerate() {
+                                number(format!("{path}/{i}"), component, &mut refs);
+                            }
+                        }
                         ShaderUniformValue::Color { value } => color(path, value, &mut refs),
                         ShaderUniformValue::Bool {
                             value: BoolValue::Expr { expr },
@@ -1182,6 +1219,14 @@ impl SceneArtifact {
         &self,
         registry: &crate::shader::ShaderRegistry,
     ) -> Result<(), Vec<ValidationError>> {
+        self.validate_shader_packages(|uri| registry.get(uri))
+    }
+
+    /// Validate against already admitted dependency packages without copying their source/AST.
+    pub fn validate_shader_packages<'a>(
+        &self,
+        mut resolve: impl FnMut(&str) -> Option<&'a crate::shader::ShaderPackage>,
+    ) -> Result<(), Vec<ValidationError>> {
         let mut errors = self.validate().err().unwrap_or_default();
         for (node_at, node) in self.nodes.iter().enumerate() {
             let NodeKind::ShaderLayer {
@@ -1203,12 +1248,12 @@ impl SceneArtifact {
                     continue;
                 }
             };
-            let package = match registry.resolve(&uri) {
-                Ok(package) => package,
-                Err(error) => {
+            let package = match resolve(&uri.to_string()) {
+                Some(package) => package,
+                None => {
                     errors.push(ValidationError::new(
                         format!("{base}/program/uri"),
-                        error.to_string(),
+                        "shader package is missing from the admitted dependencies",
                     ));
                     continue;
                 }
@@ -1222,13 +1267,25 @@ impl SceneArtifact {
                     ),
                 ));
             }
-            if program.abi_hash != package.manifest.abi_digest {
+            if program.abi_hash != package.abi_hash {
                 errors.push(ValidationError::new(
                     format!("{base}/program/abiHash"),
                     format!(
                         "artifact pins {}, registry resolves {}",
-                        program.abi_hash, package.manifest.abi_digest
+                        program.abi_hash, package.abi_hash
                     ),
+                ));
+            }
+            if program.work_per_pixel != package.work_per_pixel() {
+                errors.push(ValidationError::new(
+                    format!("{base}/program/workPerPixel"),
+                    "shader work estimate differs from its admitted source",
+                ));
+            }
+            if program.padding != package.manifest.output.padding {
+                errors.push(ValidationError::new(
+                    format!("{base}/program/padding"),
+                    "shader padding differs from the admitted package",
                 ));
             }
 
@@ -1245,6 +1302,11 @@ impl SceneArtifact {
                 let actual_type = match binding.value {
                     ShaderUniformValue::Float { .. } => crate::shader::UniformType::Float,
                     ShaderUniformValue::Float2 { .. } => crate::shader::UniformType::Float2,
+                    ShaderUniformValue::Float3 { .. } => crate::shader::UniformType::Float3,
+                    ShaderUniformValue::Float4 { .. } => crate::shader::UniformType::Float4,
+                    ShaderUniformValue::Float2x2 { .. } => crate::shader::UniformType::Float2x2,
+                    ShaderUniformValue::Float3x3 { .. } => crate::shader::UniformType::Float3x3,
+                    ShaderUniformValue::Float4x4 { .. } => crate::shader::UniformType::Float4x4,
                     ShaderUniformValue::Color { .. } => crate::shader::UniformType::Color,
                     ShaderUniformValue::Bool { .. } => crate::shader::UniformType::Bool,
                 };
@@ -1254,6 +1316,15 @@ impl SceneArtifact {
                         format!(
                             "expected ABI slot `{}` ({:?}), got `{}` ({actual_type:?})",
                             declared.name, declared.uniform_type, binding.name
+                        ),
+                    ));
+                }
+                if binding.range != declared.min.zip(declared.max).map(|(min, max)| [min, max]) {
+                    errors.push(ValidationError::new(
+                        format!("{base}/uniforms/{slot}/range"),
+                        format!(
+                            "uniform `{}` range differs from its admitted package",
+                            declared.name
                         ),
                     ));
                 }
@@ -1267,6 +1338,66 @@ impl SceneArtifact {
                         value.x as f32,
                         value.y as f32,
                     ])),
+                    ShaderUniformValue::Float3 { value } => {
+                        let values = value
+                            .iter()
+                            .map(|component| match component {
+                                NumberValue::Static { value } => Some(*value as f32),
+                                _ => None,
+                            })
+                            .collect::<Option<Vec<_>>>();
+                        values.map(|values| {
+                            crate::shader::UniformValue::Float3(values.try_into().unwrap())
+                        })
+                    }
+                    ShaderUniformValue::Float4 { value } => {
+                        let values = value
+                            .iter()
+                            .map(|component| match component {
+                                NumberValue::Static { value } => Some(*value as f32),
+                                _ => None,
+                            })
+                            .collect::<Option<Vec<_>>>();
+                        values.map(|values| {
+                            crate::shader::UniformValue::Float4(values.try_into().unwrap())
+                        })
+                    }
+                    ShaderUniformValue::Float2x2 { value } => {
+                        let values = value
+                            .iter()
+                            .map(|component| match component {
+                                NumberValue::Static { value } => Some(*value as f32),
+                                _ => None,
+                            })
+                            .collect::<Option<Vec<_>>>();
+                        values.map(|values| {
+                            crate::shader::UniformValue::Float2x2(values.try_into().unwrap())
+                        })
+                    }
+                    ShaderUniformValue::Float3x3 { value } => {
+                        let values = value
+                            .iter()
+                            .map(|component| match component {
+                                NumberValue::Static { value } => Some(*value as f32),
+                                _ => None,
+                            })
+                            .collect::<Option<Vec<_>>>();
+                        values.map(|values| {
+                            crate::shader::UniformValue::Float3x3(values.try_into().unwrap())
+                        })
+                    }
+                    ShaderUniformValue::Float4x4 { value } => {
+                        let values = value
+                            .iter()
+                            .map(|component| match component {
+                                NumberValue::Static { value } => Some(*value as f32),
+                                _ => None,
+                            })
+                            .collect::<Option<Vec<_>>>();
+                        values.map(|values| {
+                            crate::shader::UniformValue::Float4x4(values.try_into().unwrap())
+                        })
+                    }
                     ShaderUniformValue::Color {
                         value: ColorValue::Static { value },
                     } => Some(crate::shader::UniformValue::Color([
@@ -1290,12 +1421,12 @@ impl SceneArtifact {
                 }
             }
 
-            let authored = inputs
-                .iter()
-                .map(|input| input.name.as_str())
-                .collect::<BTreeSet<_>>();
             for declared in &package.manifest.inputs {
-                if declared.required && !authored.contains(declared.name.as_str()) {
+                if declared.required
+                    && !inputs
+                        .iter()
+                        .any(|input| input.name == declared.name && input.source.is_some())
+                {
                     errors.push(ValidationError::new(
                         format!("{base}/inputs"),
                         format!("missing required texture input `{}`", declared.name),
@@ -1303,15 +1434,18 @@ impl SceneArtifact {
                 }
             }
             for (slot, input) in inputs.iter().enumerate() {
-                if !package
-                    .manifest
-                    .inputs
-                    .iter()
-                    .any(|declared| declared.name == input.name)
-                {
+                if !package.manifest.inputs.iter().any(|declared| {
+                    declared.name == input.name
+                        && declared.kind == input.kind
+                        && declared.sampling == input.sampling
+                        && declared.wrap == input.wrap
+                }) {
                     errors.push(ValidationError::new(
                         format!("{base}/inputs/{slot}/name"),
-                        format!("manifest has no texture input `{}`", input.name),
+                        format!(
+                            "texture `{}` does not match its declared name/sampling/wrap",
+                            input.name
+                        ),
                     ));
                 }
             }
@@ -1319,7 +1453,6 @@ impl SceneArtifact {
                 .manifest
                 .inputs
                 .iter()
-                .filter(|declared| authored.contains(declared.name.as_str()))
                 .map(|declared| declared.name.as_str())
                 .collect::<Vec<_>>();
             let actual_order = inputs
@@ -2423,16 +2556,9 @@ impl SceneArtifact {
                 if program.uri.parse::<crate::shader::ShaderUri>().is_err() {
                     errors.push(ValidationError::new(
                         format!("{path}/kind/program/uri"),
-                        "shader program must use canonical shader://<name>@<positive-version>",
+                        "shader program must use canonical shader://<content-hash>",
                     ));
                 }
-                if node.children.start == node.children.end {
-                    errors.push(ValidationError::new(
-                        format!("{path}/children"),
-                        "ShaderLayer needs at least one child for its implicit content texture",
-                    ));
-                }
-
                 let mut uniform_names = BTreeSet::new();
                 let mut scalar_count = 2usize; // system `resolution` float2
                 for (uniform_at, uniform) in uniforms.iter().enumerate() {
@@ -2442,6 +2568,14 @@ impl SceneArtifact {
                             "shader uniform names must be non-empty and unique",
                         ));
                     }
+                    if let Some([min, max]) = uniform.range {
+                        if !min.is_finite() || !max.is_finite() || min > max {
+                            errors.push(ValidationError::new(
+                                format!("{path}/kind/uniforms/{uniform_at}/range"),
+                                "uniform range must be finite and ordered",
+                            ));
+                        }
+                    }
                     let valid = match &uniform.value {
                         ShaderUniformValue::Float { value } => {
                             scalar_count += 1;
@@ -2450,6 +2584,36 @@ impl SceneArtifact {
                         ShaderUniformValue::Float2 { value } => {
                             scalar_count += 2;
                             point_value_valid(value, expr_types)
+                        }
+                        ShaderUniformValue::Float3 { value } => {
+                            scalar_count += 3;
+                            value
+                                .iter()
+                                .all(|component| scalar_value_valid(component, expr_types))
+                        }
+                        ShaderUniformValue::Float4 { value } => {
+                            scalar_count += 4;
+                            value
+                                .iter()
+                                .all(|component| scalar_value_valid(component, expr_types))
+                        }
+                        ShaderUniformValue::Float2x2 { value } => {
+                            scalar_count += 4;
+                            value
+                                .iter()
+                                .all(|component| scalar_value_valid(component, expr_types))
+                        }
+                        ShaderUniformValue::Float3x3 { value } => {
+                            scalar_count += 9;
+                            value
+                                .iter()
+                                .all(|component| scalar_value_valid(component, expr_types))
+                        }
+                        ShaderUniformValue::Float4x4 { value } => {
+                            scalar_count += 16;
+                            value
+                                .iter()
+                                .all(|component| scalar_value_valid(component, expr_types))
                         }
                         ShaderUniformValue::Color { value } => {
                             scalar_count += 4;
@@ -2503,7 +2667,10 @@ impl SceneArtifact {
                             "shader input names must be non-empty and unique",
                         ));
                     }
-                    let control = input.source.strip_prefix("asset://");
+                    let Some(source) = &input.source else {
+                        continue;
+                    };
+                    let control = source.strip_prefix("asset://");
                     let valid_image = control
                         .and_then(|name| self.controls.assets.get(name))
                         .is_some_and(|asset| asset.kind == crate::controls::AssetKind::Image);

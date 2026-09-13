@@ -563,15 +563,16 @@ fn install_compiled_motion_shaders(
             )
         })?;
         let digest = package.content_hash;
-        let abi_digest = package.manifest.abi_digest;
+        let abi_digest = package.abi_hash;
         fixture = fixture.with_structure(SemanticStructure::new(
             package.uri().to_string(),
             digest,
             StructureDescriptor::RuntimeShader {
+                work_per_pixel: package.work_per_pixel(),
                 abi_digest,
-                color_domain: OperatorColorDomain::PerceptualSrgb,
+                color_domain: OperatorColorDomain::LinearSrgb,
                 alpha_behavior: OperatorAlphaBehavior::RewritesCoverage,
-                footprint: StructureFootprint::Local,
+                footprint: StructureFootprint::Unbounded,
             },
         ));
     }

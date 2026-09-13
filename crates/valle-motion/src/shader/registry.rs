@@ -9,6 +9,7 @@ use super::{ShaderPackage, ShaderUri};
 #[derive(Debug, Clone, Default)]
 pub struct ShaderRegistry {
     packages: BTreeMap<String, ShaderPackage>,
+    assets: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -40,7 +41,7 @@ impl ShaderRegistry {
         let uri = package.uri().to_string();
         if let Some(existing) = self.packages.get(&uri) {
             if existing.content_hash == package.content_hash
-                && existing.manifest.abi_digest == package.manifest.abi_digest
+                && existing.abi_hash == package.abi_hash
             {
                 return Ok(());
             }
@@ -49,14 +50,43 @@ impl ShaderRegistry {
                 message: format!(
                     "URI is already pinned to content {} / ABI {}, not content {} / ABI {}",
                     existing.content_hash,
-                    existing.manifest.abi_digest,
+                    existing.abi_hash,
                     package.content_hash,
-                    package.manifest.abi_digest
+                    package.abi_hash
                 ),
             });
         }
         self.packages.insert(uri, package);
         Ok(())
+    }
+
+    /// Bind an author's asset control to an already frozen package. The compiler records the
+    /// package identity in its output, so asset aliases never become mutable runtime lookups.
+    pub fn register_asset(
+        &mut self,
+        control: &str,
+        package: ShaderPackage,
+    ) -> Result<(), ShaderRegistryError> {
+        let uri = package.uri().to_string();
+        if self
+            .assets
+            .get(control)
+            .is_some_and(|existing| existing != &uri)
+        {
+            return Err(ShaderRegistryError {
+                uri: format!("asset://{control}"),
+                message: "asset control is already bound to another shader".into(),
+            });
+        }
+        self.register(package)?;
+        self.assets.insert(control.to_owned(), uri);
+        Ok(())
+    }
+
+    pub fn asset(&self, control: &str) -> Option<&ShaderPackage> {
+        self.assets
+            .get(control)
+            .and_then(|uri| self.packages.get(uri))
     }
 
     pub fn resolve(&self, uri: &ShaderUri) -> Result<&ShaderPackage, ShaderRegistryError> {

@@ -1,7 +1,8 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Serialize;
 use thiserror::Error;
+use valle_draw::requirements::ShaderWork;
 
 use crate::{
     compositor::graph::{GraphOrigin, GraphRoi},
@@ -168,6 +169,7 @@ impl BoundProgramSurfaceSlot {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BoundProgramSchedule {
+    shader_work: ShaderWork,
     program: ProgramId,
     execution_pass: ExecutionPassId,
     bounds_reason: BoundsReason,
@@ -177,6 +179,9 @@ pub struct BoundProgramSchedule {
 }
 
 impl BoundProgramSchedule {
+    pub fn shader_work(&self) -> ShaderWork {
+        self.shader_work
+    }
     pub const fn program(&self) -> ProgramId {
         self.program
     }
@@ -209,6 +214,7 @@ impl BoundProgramSchedule {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BoundProgramSchedules {
+    shader_work: ShaderWork,
     template_hash: ContentDigest,
     binding_hash: ContentDigest,
     capability_fingerprint: ContentDigest,
@@ -220,6 +226,9 @@ pub struct BoundProgramSchedules {
 }
 
 impl BoundProgramSchedules {
+    pub fn shader_work(&self) -> ShaderWork {
+        self.shader_work
+    }
     pub const fn template_hash(&self) -> &ContentDigest {
         &self.template_hash
     }
@@ -363,6 +372,22 @@ impl RenderPlanTemplate {
             );
         }
 
+        let mut shader_work = ShaderWork::default();
+        for program in &programs {
+            shader_work.add_pixels(program.shader_work, 1);
+        }
+        let limits = valle_motion::shader::SHADER_LIMITS;
+        if shader_work.operations > limits.frame_operations
+            || shader_work.samples > limits.frame_samples
+        {
+            return Err(ProgramBindingError::ShaderBudgetExceeded {
+                operations: shader_work.operations,
+                samples: shader_work.samples,
+                max_operations: limits.frame_operations,
+                max_samples: limits.frame_samples,
+            });
+        }
+
         let outer_active = outer_surface_bytes_by_pass(self, &surface_slots)?;
         let outer_peak_surface_bytes = outer_active.iter().copied().max().unwrap_or(0);
         let mut combined = outer_active;
@@ -378,14 +403,18 @@ impl RenderPlanTemplate {
                 .ok_or(ProgramBindingError::ByteEstimateOverflow)?;
         }
         let estimated_peak_surface_bytes = combined.into_iter().max().unwrap_or(0);
-        if estimated_peak_surface_bytes > capabilities.max_frame_bytes() {
+        let required_bytes = estimated_peak_surface_bytes
+            .checked_add(self.binding_layout().data_texture_bytes())
+            .ok_or(ProgramBindingError::ByteEstimateOverflow)?;
+        if required_bytes > capabilities.max_frame_bytes() {
             return Err(ProgramBindingError::FrameBudgetExceeded {
-                required_bytes: estimated_peak_surface_bytes,
+                required_bytes,
                 max_bytes: capabilities.max_frame_bytes(),
             });
         }
 
         Ok(BoundProgramSchedules {
+            shader_work,
             template_hash,
             binding_hash,
             capability_fingerprint,
@@ -547,6 +576,19 @@ fn bind_program(
     let destination_rois =
         resolve_destination_rois(program, bounds_reason, transform, root, bindings)?;
 
+    // Shader UVs can address any part of the content. Retain every predecessor's full
+    // region, including nested effects, instead of clipping their pixels to the viewport.
+    // The final program output and external destination reads keep their output ROI.
+    let mut full_inputs = BTreeSet::new();
+    for pass in program.local_plan().passes().iter().rev() {
+        if let ProgramPassKind::ApplyShader { input, .. } = pass.kind {
+            full_inputs.insert(input);
+        }
+        if full_inputs.contains(&pass.kind.output()) {
+            full_inputs.extend(pass.kind.reads());
+        }
+    }
+
     let mut resources = Vec::with_capacity(program.local_plan().resources().len());
     for resource in program.local_plan().resources() {
         let storage = program
@@ -558,6 +600,13 @@ fn bind_program(
             })?;
         let device_roi = if matches!(storage, ProgramStorageKind::Transparent {}) {
             DeviceRect::new(0, 0, 0, 0)
+        } else if full_inputs.contains(&resource.id) && !destination_rois.contains_key(&resource.id)
+        {
+            crate::prepare::bounds::program_bounds_to_device_unclipped(
+                resource_bounds_in_program(resource, &program.semantic_path)?,
+                program.viewport,
+                transform,
+            )?
         } else if bounds_reason == BoundsReason::ConservativeCameraTarget {
             root
         } else if let Some(destination) = destination_rois.get(&resource.id) {
@@ -570,7 +619,9 @@ fn bind_program(
                 root,
             )?
         };
-        validate_rect_in_root(device_roi, root, &program.semantic_path)?;
+        if !full_inputs.contains(&resource.id) {
+            validate_rect_in_root(device_roi, root, &program.semantic_path)?;
+        }
         resources.push(BoundProgramResource {
             resource: resource.id,
             device_roi,
@@ -654,7 +705,19 @@ fn bind_program(
         });
     }
 
+    let mut shader_work = ShaderWork::default();
+    for pass in program.local_plan().passes() {
+        let output = resources.get(pass.kind.output().index()).ok_or_else(|| {
+            ProgramBindingError::InvalidContract {
+                path: pass.semantic_path.clone(),
+                reason: "shader output resource is missing".into(),
+            }
+        })?;
+        let pixels = u64::from(output.device_roi.width) * u64::from(output.device_roi.height);
+        shader_work.add_pixels(pass.shader_work_per_pixel, pixels);
+    }
     Ok(BoundProgramSchedule {
+        shader_work,
         program: program.id,
         execution_pass,
         bounds_reason,
@@ -1009,6 +1072,15 @@ pub enum ProgramBindingError {
     },
     #[error("bound frame requires {required_bytes} surface bytes, exceeding {max_bytes}")]
     FrameBudgetExceeded { required_bytes: u64, max_bytes: u64 },
+    #[error(
+        "frame Shader work requires {operations} operations and {samples} samples; limits are {max_operations} operations and {max_samples} samples"
+    )]
+    ShaderBudgetExceeded {
+        operations: u64,
+        samples: u64,
+        max_operations: u64,
+        max_samples: u64,
+    },
     #[error("bound program surface byte estimate overflow")]
     ByteEstimateOverflow,
 }

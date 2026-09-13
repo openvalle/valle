@@ -23,12 +23,12 @@ use super::{
     blend::BlendRuntime,
     cache::{BackendCacheCounters, BackendCaches},
     draw::{DrawError, ProgramRuntime, ProgramTerminal},
-    effect::{EffectCacheCounters, EffectRuntime, apply_prepared_mask, straight_color},
+    effect::{EffectCacheCounters, EffectRuntime, apply_prepared_mask, set_working_color},
     import::render_import,
     output::{prefers_cached_output, stage_output, stage_sdr_output, validate_target},
     surface::{
         PlanImage, SurfaceAllocationScope, SurfaceArena, SurfaceError, SurfaceFrame,
-        SurfaceFrameReport, working_color_space, working_info,
+        SurfaceFrameReport, working_info,
     },
 };
 
@@ -242,7 +242,8 @@ fn admit_skia_frame_with_effects<'a>(
         cache_counters: caches.counters().since(cache_before),
         effect_cache_counters,
         max_surface_bytes: capabilities.max_surface_bytes(),
-        max_frame_bytes: capabilities.max_frame_bytes(),
+        max_frame_bytes: capabilities.max_frame_bytes()
+            - template.binding_layout().data_texture_bytes(),
     })
 }
 
@@ -1035,6 +1036,9 @@ fn preflight_executor_surface_budget(
             .ok_or(SurfaceError::ByteOverflow)?;
         peak = peak.max(required);
     }
+    let peak = peak
+        .checked_add(template.binding_layout().data_texture_bytes())
+        .ok_or(SurfaceError::ByteOverflow)?;
     if peak > capabilities.max_frame_bytes() {
         return Err(SurfaceError::FrameBudgetExceeded {
             required_bytes: peak,
@@ -1340,16 +1344,15 @@ fn backdrop_bounds(
 fn draw_solid(surface: &mut Surface, color: [f32; 4]) -> Result<(), SkiaExecuteError> {
     let mut paint = Paint::default();
     paint.set_blend_mode(BlendMode::Src);
-    let space = working_color_space()?;
-    paint.set_color4f(
-        straight_color(valle_draw::program::LinearColor {
+    set_working_color(
+        &mut paint,
+        valle_draw::program::LinearColor {
             red: color[0],
             green: color[1],
             blue: color[2],
             alpha: color[3],
-        }),
-        &space,
-    );
+        },
+    )?;
     surface.canvas().draw_paint(&paint);
     Ok(())
 }

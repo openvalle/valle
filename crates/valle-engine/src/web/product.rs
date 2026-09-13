@@ -637,6 +637,19 @@ impl ProductEngine {
         Ok(id)
     }
 
+    /// Shared raw-channel decoder; output is eight numeric byte planes in Alpha8 storage.
+    pub fn decode_shader_data_texture(
+        &self,
+        digest: &str,
+        encoded: &[u8],
+        width: u32,
+        height: u32,
+    ) -> Result<Vec<u8>, JsError> {
+        verified_content_digest(digest, encoded, "data_texture_digest")?;
+        valle_motion::shader::decode_data_texture(encoded, width, height)
+            .map_err(|error| js_error("data_texture", error))
+    }
+
     /// Complete batch of resources for this frame. The host may begin asynchronous fulfillment
     /// immediately, while WASM lowers the same ticket in parallel.
     pub fn resource_requests(&self, ticket: u32) -> Result<Vec<u8>, JsError> {

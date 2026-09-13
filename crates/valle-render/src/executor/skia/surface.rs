@@ -1868,6 +1868,61 @@ mod capacity_tests {
     use super::*;
 
     #[test]
+    fn solid_working_colors_keep_float_precision_and_repeat_exactly() {
+        use valle_draw::program::LinearColor;
+        let mut arena = match std::env::var("VALLE_TEST_NATIVE_BACKEND").as_deref() {
+            Err(std::env::VarError::NotPresent) | Ok("raster") => SurfaceArena::new(),
+            #[cfg(all(target_os = "macos", feature = "native"))]
+            Ok("metal") => SurfaceArena::metal().unwrap(),
+            other => panic!("unsupported test backend: {other:?}"),
+        };
+        let info = working_info(Extent2d::new(16, 16).unwrap()).unwrap();
+        let mut surface = arena.create_surface(&info).unwrap();
+        let read_info = ImageInfo::new(
+            (16, 16),
+            ColorType::RGBAF32,
+            AlphaType::Premul,
+            Some(working_color_space().unwrap()),
+        );
+        let colors = [
+            LinearColor::from_srgb_straight([1.0, 0.0, 0.0, 1.0]),
+            LinearColor::from_srgb_straight([0.0, 0.0, 1.0, 1.0]),
+            LinearColor::from_srgb_straight([0.25, 0.5, 0.125, 0.4]),
+            LinearColor::new(2.0, 0.17, -0.03, 0.5),
+        ];
+        let mut baseline = BTreeMap::new();
+        for index in [2, 0, 3, 1, 2, 0] {
+            let color = colors[index];
+            let mut paint = skia_safe::Paint::default();
+            paint.set_anti_alias(true);
+            paint.set_blend_mode(skia_safe::BlendMode::Src);
+            super::super::effect::set_working_color(&mut paint, color).unwrap();
+            surface.canvas().clear(skia_safe::Color::TRANSPARENT);
+            surface
+                .canvas()
+                .draw_rect(skia_safe::Rect::from_xywh(1.0, 1.0, 14.0, 14.0), &paint);
+            let mut bytes = vec![0u8; 16 * 16 * 16];
+            assert!(surface.read_pixels(&read_info, &mut bytes, 16 * 16, (0, 0)));
+            let center = (8 * 16 + 8) * 16;
+            for (actual, expected) in bytes[center..center + 16].chunks_exact(4).zip([
+                color.red,
+                color.green,
+                color.blue,
+                color.alpha,
+            ]) {
+                let actual = f32::from_ne_bytes(actual.try_into().unwrap());
+                assert!(
+                    (actual - expected).abs() <= 0.0005,
+                    "color={index}: {actual} != {expected}; solid paint must retain F16 precision"
+                );
+            }
+            if let Some(prior) = baseline.insert(index, bytes.clone()) {
+                assert_eq!(bytes, prior, "solid paint depends on preceding colors");
+            }
+        }
+    }
+
+    #[test]
     fn program_capacity_reuses_nearby_sizes_and_honors_exact_budget_fallback() {
         let mut arena = SurfaceArena::new();
         let mut frame = SurfaceFrame {

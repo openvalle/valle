@@ -96,6 +96,7 @@ impl EffectRuntime {
         template: &RenderPlanTemplate,
         bindings: &RenderBindings,
     ) -> Result<(), DrawError> {
+        working_color_effect()?;
         for pass in template.passes() {
             match &pass.kind {
                 ExecutionPassKind::DispatchKernel {
@@ -1149,6 +1150,45 @@ pub(crate) fn image_filter(filter: &Filter) -> Result<Option<ImageFilter>, DrawE
     result
         .map(Some)
         .ok_or_else(|| DrawError::Unsupported(format!("Skia filter {filter:?}")))
+}
+
+/// Keep working-linear premultiplied color in float uniforms. Ganesh can otherwise
+/// quantize a solid paint to 8-bit vertex colors before writing the F16 surface.
+pub(crate) fn set_working_color(paint: &mut Paint, color: LinearColor) -> Result<(), DrawError> {
+    let effect = working_color_effect()?;
+    let mut bytes = [0u8; 16];
+    for (slot, value) in
+        bytes
+            .chunks_exact_mut(4)
+            .zip([color.red, color.green, color.blue, color.alpha])
+    {
+        slot.copy_from_slice(&value.to_ne_bytes());
+    }
+    let shader = effect
+        .make_shader(Data::new_copy(&bytes), &[], None)
+        .ok_or_else(|| DrawError::Unsupported("working color shader instantiation".into()))?;
+    paint.set_color(skia_safe::Color::WHITE);
+    paint.set_shader(shader);
+    Ok(())
+}
+
+fn working_color_effect() -> Result<RuntimeEffect, DrawError> {
+    thread_local! {
+        // Prepare once per execution thread during admission. Only the immutable
+        // program is cached; no color or frame state is retained here.
+        static EFFECT: Result<RuntimeEffect, String> = RuntimeEffect::make_for_shader(
+            "uniform float4 color; half4 main(float2 xy) { return half4(color); }", None,
+        );
+    }
+    EFFECT.with(|effect| {
+        effect
+            .as_ref()
+            .cloned()
+            .map_err(|message| DrawError::ShaderCompile {
+                uri: "working-color".into(),
+                message: message.clone(),
+            })
+    })
 }
 
 pub(crate) fn straight_color(color: LinearColor) -> Color4f {

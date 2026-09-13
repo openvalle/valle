@@ -1199,7 +1199,7 @@ impl<'s> Compiler<'s> {
                 self.illegal(
                     DiagCode::GrammarForbidden,
                     element.span(),
-                    "ShaderLayer requires a static source=\"shader://<name>@<version>\"",
+                    "ShaderLayer requires a static source=\"asset://<shader-control>\"",
                 );
                 return None;
             };

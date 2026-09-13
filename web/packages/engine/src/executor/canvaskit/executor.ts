@@ -45,7 +45,7 @@ const IDENTITY_MATRIX = [1, 0, 0, 0, 1, 0, 0, 0, 1];
 export interface CanvasKitExternalObject {
   /** Exact ResourceKey from the request fulfilled for this handle. */
   readonly key: PackedValue;
-  readonly kind: "visual" | "font" | "runtimeShader" | "scene3d";
+  readonly kind: "visual" | "dataTexture" | "font" | "runtimeShader" | "scene3d";
   readonly image?: Image;
   readonly bytes?: Uint8Array;
 }
@@ -498,6 +498,17 @@ async function executeCanvasKitFrame(
     const object = objectTable.objects.get(externalIds[index]!);
     if (!object) fail("missing_external", `external handle ${externalIds[index]} is absent`);
     if (!deepEqual(object.key, slot.key)) fail("external_contract", `external slot ${slotId} key mismatch`);
+    const expected = record(slot.expected, "external descriptor");
+    if (expected.kind === "dataTexture") {
+      const size = record(expected.extent, "data texture extent");
+      const width = positiveId(size.width, "data texture width"), height = positiveId(size.height, "data texture height");
+      if (width > 4096 || height > 4096 || width * height * 8 > 64 * 1024 * 1024
+        || object.kind !== "dataTexture" || !object.image
+        || object.image.width() !== width * 2 || object.image.height() !== height * 4
+        || object.image.getImageInfo().colorType !== CanvasKit.ColorType.Alpha_8) {
+        fail("external_contract", "data texture storage does not match its admitted descriptor");
+      }
+    } else if (object.kind === "dataTexture") fail("external_contract", "data texture has a non-data descriptor");
     externalBySlot.set(slotId, object);
   }
 
@@ -537,12 +548,24 @@ async function executeCanvasKitFrame(
   const rootBytes = BigInt(extent.width) * BigInt(extent.height) * 8n;
   const maxSurfaceBytes = target.maxSurfaceBytes ?? maxBigInt(rootBytes, 64n * 1024n * 1024n);
   const maxFrameBytes = target.maxFrameBytes ?? maxBigInt(maxSurfaceBytes * 16n, 512n * 1024n * 1024n);
+  let dataTextureBytes = 0n;
+  for (const raw of externalSlots) {
+    const expected = record(record(raw, "external slot").expected, "external descriptor");
+    if (expected.kind !== "dataTexture") continue;
+    const size = record(expected.extent, "data texture extent");
+    const bytes = BigInt(positiveId(size.width, "data texture width")) * BigInt(positiveId(size.height, "data texture height")) * 8n;
+    if (bytes > maxSurfaceBytes) fail("resource_budget", "data texture exceeds the surface byte budget");
+    dataTextureBytes += bytes;
+  }
+  if (dataTextureBytes + BigInt(positiveIdOrZero(schedule.estimatedPeakSurfaceBytes, "frame surface bytes")) > maxFrameBytes) {
+    fail("resource_budget", "data textures and working surfaces exceed the frame byte budget");
+  }
   const arena = executor.arena(
     target.directContext ?? null,
     extent.width,
     extent.height,
     maxSurfaceBytes,
-    maxFrameBytes,
+    maxFrameBytes - dataTextureBytes,
   );
   const resources = new Map<number, ImageValue>();
   const surfaceSlotByResource = boundSchedule.slotByResource;
@@ -1410,7 +1433,7 @@ function executeProgramPass(
       drawImageValue(CanvasKit, canvas, programValue(values, kind.input), finiteNumber(kind.opacity, "program opacity"), "src");
       return;
     case "applyShader":
-      applyProgramShader(CanvasKit, builtins, canvas, admitted, programValue(values, kind.input), record(kind.shader, "program shader"));
+      applyProgramShader(CanvasKit, builtins, canvas, admitted, programValue(values, kind.input), record(kind.shader, "program shader"), programMatrix(admitted, localPlan, kind.output, device));
       return;
     case "applyTransform":
       drawImageValue(CanvasKit, canvas, programValue(values, kind.input), 1, "src");
@@ -1677,7 +1700,7 @@ function drawRuntimeShaderNode(CanvasKit: CanvasKit, builtins: CanvasKitBuiltinR
   const shader = record(node.shader, "runtime shader key");
   const effect = required(admitted.shaders, String(shader.uri), "runtime shader");
   const bounds = rect(node.bounds, "runtime shader bounds");
-  const runtime = instantiateRuntimeShader(CanvasKit, builtins, effect, array(node.uniforms, "shader uniforms"), array(node.textures, "shader textures"), admitted, null);
+  const runtime = instantiateRuntimeShader(CanvasKit, builtins, effect, bounds, array(node.uniforms, "shader uniforms"), array(node.textures, "shader textures"), admitted, null);
   const paint = new CanvasKit.Paint();
   try { paint.setShader(runtime); canvas.drawRect(skRect(CanvasKit, bounds), paint); }
   finally { paint.delete(); runtime.delete(); }
@@ -1705,50 +1728,109 @@ function drawSceneNode(CanvasKit: CanvasKit, builtins: CanvasKitBuiltinRuntime, 
   } finally { paint.delete(); shader.delete(); }
 }
 
-function applyProgramShader(CanvasKit: CanvasKit, builtins: CanvasKitBuiltinRuntime, canvas: Canvas, admitted: AdmittedProgram, input: ImageValue, shaderWire: Wire): void {
+function applyProgramShader(CanvasKit: CanvasKit, builtins: CanvasKitBuiltinRuntime, canvas: Canvas, admitted: AdmittedProgram, input: ImageValue, shaderWire: Wire, ownerToDevice: number[]): void {
   const key = record(shaderWire.shader, "group shader key");
   const effect = required(admitted.shaders, String(key.uri), "group shader");
-  const runtime = instantiateRuntimeShader(CanvasKit, builtins, effect, array(shaderWire.uniforms, "group uniforms"), array(shaderWire.textures, "group textures"), admitted, input);
+  const runtime = instantiateRuntimeShader(CanvasKit, builtins, effect, rect(shaderWire.bounds, "group shader bounds"), array(shaderWire.uniforms, "group uniforms"), array(shaderWire.textures, "group textures"), admitted, input, ownerToDevice);
   const paint = new CanvasKit.Paint();
-  try { paint.setShader(runtime); canvas.drawRect(skRect(CanvasKit, rect(shaderWire.bounds, "group shader bounds")), paint); }
-  finally { paint.delete(); runtime.delete(); }
+  const bounds = rect(shaderWire.bounds, "group shader bounds");
+  const padding = numberArray(shaderWire.padding, 4, "shader padding");
+  if (padding.some(v => !Number.isSafeInteger(v) || v < 0)) fail("shader_bounds", "shader padding must contain non-negative integers");
+  const output = { x: bounds.x - padding[0]!, y: bounds.y - padding[1]!,
+    width: bounds.width + padding[0]! + padding[2]!, height: bounds.height + padding[1]! + padding[3]! };
+  canvas.save();
+  try {
+    canvas.concat(ownerToDevice);
+    paint.setShader(runtime);
+    canvas.drawRect(skRect(CanvasKit, output), paint);
+  } finally { canvas.restore(); paint.delete(); runtime.delete(); }
 }
 
 function instantiateRuntimeShader(
   CanvasKit: CanvasKit,
   builtins: CanvasKitBuiltinRuntime,
   effect: RuntimeEffect,
+  bounds: RectWire,
   uniforms: unknown[],
   textures: unknown[],
   admitted: AdmittedProgram,
   content: ImageValue | null,
+  ownerToDevice: number[] = IDENTITY_MATRIX,
 ): Shader {
-  const scalars: number[] = [];
+  const values = new Map<string, number[]>([["resolution", [bounds.width, bounds.height]]]);
   for (const raw of uniforms) {
     const binding = record(raw, "shader uniform");
     const value = record(binding.value, "shader uniform value");
+    const scalars: number[] = [];
     if (value.kind === "float") scalars.push(finiteNumber(value.value, "shader float"));
     else if (value.kind === "float2") scalars.push(...pair(value.value, "shader float2"));
+    else if (["float3", "float4", "float2x2", "float3x3", "float4x4"].includes(String(value.kind))) {
+      const widths: Record<string, number> = { float3: 3, float4: 4, float2x2: 4, float3x3: 9, float4x4: 16 };
+      const components = array(value.value, "shader components");
+      if (components.length !== widths[String(value.kind)]) fail("shader_abi", "shader component count mismatch");
+      scalars.push(...components.map((v) => finiteNumber(v, "shader component")));
+    }
     else if (value.kind === "color") {
-      const color = record(value.value, "shader color");
-      scalars.push(finiteNumber(color.red, "red"), finiteNumber(color.green, "green"), finiteNumber(color.blue, "blue"), finiteNumber(color.alpha, "alpha"));
+      const components = array(value.value, "shader linear sRGB color");
+      if (components.length !== 4) fail("shader_abi", "shader color requires four components");
+      scalars.push(...components.map((v) => finiteNumber(v, "shader color component")));
     } else if (value.kind === "bool") scalars.push(value.value === true ? 1 : 0);
     else fail("shader_abi", `unknown shader uniform kind '${String(value.kind)}'`);
+    const name = value.kind === "bool" ? `valle_uniform_${String(binding.name)}` : String(binding.name);
+    if (values.has(name)) fail("shader_abi", `duplicate shader uniform '${name}'`);
+    values.set(name, scalars);
   }
+  for (const raw of textures) {
+    const binding = record(raw, "shader texture binding");
+    const name = `valle_size_${String(binding.name)}`;
+    if (values.has(name)) fail("shader_abi", `duplicate shader texture '${String(binding.name)}'`);
+    if (binding.texture === null) { values.set(name, [1, 1]); continue; }
+    const object = resolveProgramTexture(admitted.textures, record(binding.texture, "shader texture key"), "shader texture");
+    if (!object.image) fail("shader_abi", "shader texture needs an image");
+    const data = object.kind === "dataTexture";
+    values.set(name, [object.image.width() / (data ? 2 : 1), object.image.height() / (data ? 4 : 1)]);
+  }
+  const scalars = new Float32Array(effect.getUniformFloatCount());
+  for (let i = 0; i < effect.getUniformCount(); i++) {
+    const name = effect.getUniformName(i);
+    const uniform = effect.getUniform(i);
+    const value = values.get(name);
+    if (!value || value.length !== uniform.columns * uniform.rows) fail("shader_abi", `missing or mismatched shader uniform '${name}'`);
+    scalars.set(value, uniform.slot);
+    values.delete(name);
+  }
+  if (values.size) fail("shader_abi", "shader has undeclared uniform bindings");
   const children: Shader[] = [];
   try {
-    if (content?.image) children.push(imageValueShader(CanvasKit, content, "linearClamp"));
+    if (content?.image) {
+      const deviceToOwner = inverse3(ownerToDevice);
+      if (!deviceToOwner) fail("shader_transform", "shader owner transform is not invertible");
+      const imageToShader = mul3(
+        [1, 0, -bounds.x, 0, 1, -bounds.y, 0, 0, 1],
+        mul3(deviceToOwner, [1, 0, content.roi.x, 0, 1, content.roi.y, 0, 0, 1]),
+      );
+      const child = content.image.makeShaderOptions(CanvasKit.TileMode.Decal, CanvasKit.TileMode.Decal,
+        CanvasKit.FilterMode.Linear, CanvasKit.MipmapMode.None, imageToShader);
+      if (!child) fail("shader_transform", "content image cannot become a shader child");
+      children.push(child);
+    } else children.push(CanvasKit.Shader.MakeColor(CanvasKit.TRANSPARENT, CanvasKit.ColorSpace.SRGB));
     for (const raw of textures) {
       const binding = record(raw, "shader texture binding");
+      if (binding.texture === null) {
+        children.push(CanvasKit.Shader.MakeColor(CanvasKit.TRANSPARENT, CanvasKit.ColorSpace.SRGB));
+        continue;
+      }
       const texture = record(binding.texture, "shader texture key");
       children.push(normalizedExternalShader(
         CanvasKit,
         builtins,
         resolveProgramTexture(admitted.textures, texture, "shader texture"),
-        String(binding.sampling),
+        // Decode each texel before the shared shader performs linear interpolation.
+        "nearestClamp",
+        String(binding.wrap),
       ));
     }
-    const shader = effect.makeShaderWithChildren(Float32Array.from(scalars), children);
+    const shader = effect.makeShaderWithChildren(scalars, children, [1, 0, bounds.x, 0, 1, bounds.y, 0, 0, 1]);
     if (!shader) fail("shader_abi", "RuntimeEffect child/uniform ABI mismatch");
     return shader;
   } finally {
@@ -2932,6 +3014,7 @@ function admitBoundProgramSchedules(
   activeBytes: bigint[],
 ): Map<number, BoundProgramRuntimeSchedule> {
   const result = new Map<number, BoundProgramRuntimeSchedule>();
+  let frameOperations = 0n, frameSamples = 0n;
   const programLayouts = array(plan.programs, "plan.programs");
   const boundPrograms = array(schedule.programs, "schedule.programs");
   if (programLayouts.length !== framePrograms.length || framePrograms.length !== boundPrograms.length) {
@@ -2988,6 +3071,19 @@ function admitBoundProgramSchedules(
     }
 
     const device = dynamicTransform(dynamic, execution.kind.transform);
+    const fullInputs = new Set<number>();
+    for (const raw of [...array(localPlan.passes, "program local passes")].reverse()) {
+      const kind = record(record(raw, "program local pass").kind, "program local pass kind");
+      if (kind.kind === "applyShader") fullInputs.add(positiveId(kind.input, "shader input"));
+      if (fullInputs.has(positiveId(kind.output, "program output"))) {
+        for (const field of ["input", "source", "destination", "mask"]) {
+          if (kind[field] != null) fullInputs.add(positiveId(kind[field], `program ${field}`));
+        }
+        if (kind.localInputs != null) for (const input of array(kind.localInputs, "program local inputs")) {
+          fullInputs.add(positiveId(input, "program local input"));
+        }
+      }
+    }
     const resourceRois = new Map<number, DeviceRoi>();
     const localResources = array(localPlan.resources, "program local resources");
     const boundResources = array(bound.resources, "bound program resources");
@@ -2999,15 +3095,18 @@ function admitBoundProgramSchedules(
       const resourceId = positiveId(resource.id, "program resource id");
       if (resourceId !== resourceIndex + 1) fail("program_schedule", `program ${id} resource IDs are not canonical`);
       const storage = required(storageByResource, resourceId, "program storage");
+      const fullInput = fullInputs.has(resourceId);
       const expected = storage.kind === "transparent"
         ? emptyRoi()
-        : String(execution.kind.boundsReason) === "conservativeCameraTarget"
+        : fullInput && !destinationRois.has(resourceId)
+          ? projectProgramResource(program, resource, device, extent, true)
+          : String(execution.kind.boundsReason) === "conservativeCameraTarget"
           ? { x: 0, y: 0, ...extent }
           : destinationRois.get(resourceId)
             ?? projectProgramResource(program, resource, device, extent);
       const actual = record(boundResources[resourceIndex], "bound program resource");
       if (positiveId(actual.resource, "bound program resource id") !== resourceId
-        || !sameRoi(deviceRoi(record(actual.deviceRoi, "bound program device ROI"), extent), expected)) {
+        || !sameRoi(deviceRoi(record(actual.deviceRoi, "bound program device ROI"), extent, fullInput), expected)) {
         fail("program_schedule", `program ${id} resource ${resourceId} ROI is not the exact plan/binding projection`);
       }
       resourceRois.set(resourceId, expected);
@@ -3039,7 +3138,7 @@ function admitBoundProgramSchedules(
         if (positiveId(actual.resource, "bound program allocation resource") !== resource
           || String(actual.reason) !== String(allocation.reason)
           || !deepEqual(actual.interval, allocation.interval)
-          || !sameRoi(deviceRoi(record(actual.deviceRoi, "bound program allocation ROI"), extent), roi)) {
+          || !sameRoi(deviceRoi(record(actual.deviceRoi, "bound program allocation ROI"), extent, fullInputs.has(resource)), roi)) {
           fail("program_schedule", `program ${id} slot ${slotId} allocation ${allocationIndex} diverges`);
         }
         if (slotByResource.has(resource)) {
@@ -3067,6 +3166,22 @@ function admitBoundProgramSchedules(
     if (BigInt(positiveIdOrZero(bound.estimatedSurfaceBytes, "bound program bytes")) !== estimatedSurfaceBytes) {
       fail("program_schedule", `program ${id} total surface byte estimate mismatch`);
     }
+    let operations = 0n, samples = 0n;
+    for (const rawPass of array(localPlan.passes, "program local passes")) {
+      const pass = record(rawPass, "program pass");
+      const kind = record(pass.kind, "program pass kind");
+      const cost = record(pass.shaderWorkPerPixel, "shader work per pixel");
+      const roi = required(resourceRois, positiveId(kind.output, "program output"), "program output ROI");
+      const pixels = BigInt(roi.width) * BigInt(roi.height);
+      operations += BigInt(positiveIdOrZero(cost.operations, "shader operations")) * pixels;
+      samples += BigInt(positiveIdOrZero(cost.samples, "shader samples")) * pixels;
+    }
+    const actualWork = record(bound.shaderWork, "bound program shader work");
+    if (BigInt(positiveIdOrZero(actualWork.operations, "bound shader operations")) !== operations
+      || BigInt(positiveIdOrZero(actualWork.samples, "bound shader samples")) !== samples) {
+      fail("shader_budget", "program Shader work differs from its exact pass/ROI projection");
+    }
+    frameOperations += operations; frameSamples += samples;
     const active = activeBytes[execution.pass - 1];
     if (active === undefined) fail("program_schedule", `program ${id} execution pass is out of range`);
     activeBytes[execution.pass - 1] = active + estimatedSurfaceBytes;
@@ -3076,6 +3191,11 @@ function admitBoundProgramSchedules(
   if (executionByProgram.size !== result.size) {
     fail("program_schedule", "every program must have exactly one bound execution schedule");
   }
+  const actualWork = record(schedule.shaderWork, "bound frame shader work");
+  if (BigInt(positiveIdOrZero(actualWork.operations, "frame shader operations")) !== frameOperations
+    || BigInt(positiveIdOrZero(actualWork.samples, "frame shader samples")) !== frameSamples) {
+    fail("shader_budget", "frame Shader work is not the sum of its programs");
+  }
   return result;
 }
 
@@ -3084,6 +3204,7 @@ function projectProgramResource(
   resource: Wire,
   device: number[],
   extent: { width: number; height: number },
+  unclipped = false,
 ): DeviceRoi {
   const bounds = record(resource.bounds, "program resource bounds");
   if (bounds.kind === "empty") return emptyRoi();
@@ -3094,6 +3215,7 @@ function projectProgramResource(
     numberArray(resource.localToProgram, 9, "program localToProgram"),
     device,
     extent,
+    unclipped,
   );
 }
 
@@ -3111,6 +3233,7 @@ export function projectProgramResourceRoi(
   localToProgram: number[],
   device: number[],
   extent: { width: number; height: number },
+  unclipped = false,
 ): DeviceRoi {
   if (viewport.width <= 0 || viewport.height <= 0) fail("program_schedule", "program viewport is empty");
   if (value.width <= 0 || value.height <= 0) return emptyRoi();
@@ -3136,10 +3259,14 @@ export function projectProgramResourceRoi(
   ];
   validateProjectionDomain(device, corners, 1e-12, "program device resource");
   const points = corners.map((corner) => projectValidated(device, corner));
-  const left = Math.max(0, Math.min(extent.width, Math.floor(Math.min(...points.map((point) => point[0])))));
-  const top = Math.max(0, Math.min(extent.height, Math.floor(Math.min(...points.map((point) => point[1])))));
-  const right = Math.max(0, Math.min(extent.width, Math.ceil(Math.max(...points.map((point) => point[0])))));
-  const bottom = Math.max(0, Math.min(extent.height, Math.ceil(Math.max(...points.map((point) => point[1])))));
+  if (points.some(point => point.some(v => Math.abs(v) > 1_073_741_824))) {
+    fail("program_schedule", "program projection exceeds the device coordinate budget");
+  }
+  const clip = (v: number, limit: number) => unclipped ? v : Math.max(0, Math.min(limit, v));
+  const left = clip(Math.floor(Math.min(...points.map((point) => point[0]))), extent.width);
+  const top = clip(Math.floor(Math.min(...points.map((point) => point[1]))), extent.height);
+  const right = clip(Math.ceil(Math.max(...points.map((point) => point[0]))), extent.width);
+  const bottom = clip(Math.ceil(Math.max(...points.map((point) => point[1]))), extent.height);
   return right <= left || bottom <= top
     ? emptyRoi()
     : { x: left, y: top, width: right - left, height: bottom - top };
@@ -3179,14 +3306,17 @@ function emptyRoi(): DeviceRoi {
   return { x: 0, y: 0, width: 0, height: 0 };
 }
 
-function deviceRoi(value: Wire, extent: { width: number; height: number }): DeviceRoi {
+function deviceRoi(value: Wire, extent: { width: number; height: number }, unclipped = false): DeviceRoi {
   const roi = {
-    x: positiveIdOrZero(value.x, "ROI x"),
-    y: positiveIdOrZero(value.y, "ROI y"),
+    x: finiteNumber(value.x, "ROI x"),
+    y: finiteNumber(value.y, "ROI y"),
     width: positiveIdOrZero(value.width, "ROI width"),
     height: positiveIdOrZero(value.height, "ROI height"),
   };
-  if (roi.x + roi.width > extent.width || roi.y + roi.height > extent.height) {
+  if (![roi.x, roi.y, roi.x + roi.width, roi.y + roi.height].every(v => Number.isSafeInteger(v) && Math.abs(v) <= 1_073_741_824)) {
+    fail("bound_schedule", "ROI exceeds the device coordinate budget");
+  }
+  if (!unclipped && (roi.x < 0 || roi.y < 0 || roi.x + roi.width > extent.width || roi.y + roi.height > extent.height)) {
     fail("bound_schedule", "ROI escapes the render root");
   }
   if ((roi.width === 0 || roi.height === 0) && !sameRoi(roi, { x: 0, y: 0, width: 0, height: 0 })) {
@@ -3797,8 +3927,8 @@ function blendMode(CanvasKit: CanvasKit, mode: string): BlendMode {
   return (CanvasKit.BlendMode as unknown as Record<string, BlendMode>)[name]!;
 }
 
-function imageShader(CanvasKit: CanvasKit, image: Image, sampling: string): Shader {
-  const shader = image.makeShaderOptions(CanvasKit.TileMode.Clamp, CanvasKit.TileMode.Clamp, sampling === "nearestClamp" ? CanvasKit.FilterMode.Nearest : CanvasKit.FilterMode.Linear, CanvasKit.MipmapMode.None);
+function imageShader(CanvasKit: CanvasKit, image: Image, sampling: string, wrap = "pad"): Shader {
+  const shader = image.makeShaderOptions(tileMode(CanvasKit, wrap), tileMode(CanvasKit, wrap), sampling === "nearestClamp" ? CanvasKit.FilterMode.Nearest : CanvasKit.FilterMode.Linear, CanvasKit.MipmapMode.None);
   if (!shader) fail("image_shader", "image cannot become a shader child");
   return shader;
 }
@@ -3834,8 +3964,13 @@ function normalizedExternalShader(
   builtins: CanvasKitBuiltinRuntime,
   object: CanvasKitExternalObject,
   sampling = "linearClamp",
+  wrap = "pad",
 ): Shader {
   if (!object.image) fail("external_type", "normalized external shader needs an image");
+  if (object.kind === "dataTexture") {
+    // Generated sampling wraps logical coordinates before selecting each numeric plane.
+    return imageShader(CanvasKit, object.image, "nearestClamp", "pad");
+  }
   let primaries = "rec709";
   let transfer = "srgb";
   let referenceWhite = 100;
@@ -3854,7 +3989,7 @@ function normalizedExternalShader(
   } else if (object.kind !== "scene3d") {
     fail("external_type", "only visual and Scene3D images enter the working color domain");
   }
-  const child = imageShader(CanvasKit, object.image, sampling);
+  const child = imageShader(CanvasKit, object.image, sampling, wrap);
   try {
     return builtins.shader(
       "normalizeInput",
@@ -3928,8 +4063,9 @@ export function admitProgramTextures(
       fail("texture_contract", "program texture binding order/key is not canonical");
     }
     const object = required(objects, positiveId(binding.slot, "texture slot"), "texture slot");
-    if (object.kind !== "visual" || !object.image) {
-      fail("texture_contract", `texture '${String(binding.key)}' is not visual`);
+    const expectedKind = requirement.colorDomain === "data" ? "dataTexture" : "visual";
+    if (object.kind !== expectedKind || !object.image) {
+      fail("texture_contract", `texture '${String(binding.key)}' has the wrong interpretation`);
     }
     const identity = textureIdentity(requirement);
     if (textures.has(identity)) {
@@ -3966,7 +4102,7 @@ function textureIdentity(texture: Wire): string {
   } else {
     fail("texture_contract", `texture kind '${kind}' is outside the closed set`);
   }
-  return `${String(texture.key)}\u0000${sample === null || sample === undefined ? "static" : String(sample)}`;
+  return `${String(texture.key)}\u0000${String(texture.colorDomain)}\u0000${sample === null || sample === undefined ? "static" : String(sample)}`;
 }
 function deepEqual(left: unknown, right: unknown): boolean {
   if (left === right) return true;

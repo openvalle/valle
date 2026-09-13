@@ -211,6 +211,11 @@ fn external_contract_matches(
     interpretation: &ResourceInterpretation,
     expected: &ExternalResourceDesc,
 ) -> bool {
+    if let ExternalResourceDesc::DataTexture { extent } = expected {
+        return matches!(interpretation, ResourceInterpretation::DataTexture {})
+            && valle_motion::shader::data_texture_storage_bytes(extent.width(), extent.height())
+                .is_ok();
+    }
     matches!(
         (interpretation, expected),
         (
@@ -797,15 +802,26 @@ fn expected_program_inputs(
     program: &PreparedProgram,
 ) -> Result<Vec<ResourceId>, GraphValidationError> {
     let mut result = Vec::new();
-    for binding in &program.resources.textures {
+    for (index, binding) in program.resources.textures.iter().enumerate() {
+        let requirement = program
+            .requirements
+            .external_textures
+            .get(index)
+            .ok_or_else(|| invalid(&program.semantic_path, "texture binding has no requirement"))?;
         let (id, key, expected) =
             external_for_handle(graph, binding.handle, &program.semantic_path)?;
-        if !matches!(key.interpretation, ResourceInterpretation::Visual { .. })
-            || !matches!(expected, ExternalResourceDesc::VisualFrame { .. })
-        {
+        let correct_kind =
+            if requirement.color_domain == valle_draw::requirements::ColorDomain::Data {
+                matches!(key.interpretation, ResourceInterpretation::DataTexture {})
+                    && matches!(expected, ExternalResourceDesc::DataTexture { .. })
+            } else {
+                matches!(key.interpretation, ResourceInterpretation::Visual { .. })
+                    && matches!(expected, ExternalResourceDesc::VisualFrame { .. })
+            };
+        if !correct_kind {
             return Err(invalid(
                 &program.semantic_path,
-                "program texture handle is not a visual external resource",
+                "program texture handle does not match its required interpretation",
             ));
         }
         result.push(id);

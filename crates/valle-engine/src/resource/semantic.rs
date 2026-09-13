@@ -620,6 +620,7 @@ pub enum StructureDescriptor {
         duration: RationalTime,
     },
     RuntimeShader {
+        work_per_pixel: valle_draw::requirements::ShaderWork,
         abi_digest: ContentDigest,
         color_domain: OperatorColorDomain,
         alpha_behavior: OperatorAlphaBehavior,
@@ -801,7 +802,7 @@ impl SemanticResourceSnapshot {
         abi_hash: &ContentDigest,
     ) -> Option<valle_motion::shader::ShaderRuntimeRecord> {
         let package = self.shaders.get(uri)?;
-        (package.content_hash == *content_hash && package.manifest.abi_digest == *abi_hash)
+        (package.content_hash == *content_hash && package.abi_hash == *abi_hash)
             .then(|| package.runtime_record())
     }
 
@@ -814,7 +815,7 @@ impl SemanticResourceSnapshot {
         abi_hash: &ContentDigest,
     ) -> Option<valle_motion::shader::ShaderRuntimeRecord> {
         self.shaders.packages().find_map(|package| {
-            (package.content_hash == *content_hash && package.manifest.abi_digest == *abi_hash)
+            (package.content_hash == *content_hash && package.abi_hash == *abi_hash)
                 .then(|| package.runtime_record())
         })
     }
@@ -1101,21 +1102,20 @@ impl SnapshotBuilder {
 
 fn semantic_runtime_shader(package: &valle_motion::shader::ShaderPackage) -> SemanticStructure {
     let digest = package.content_hash;
-    let abi_digest = package.manifest.abi_digest;
-    let footprint = match package.manifest.budget {
-        valle_motion::shader::BudgetClass::Local => StructureFootprint::Local,
-    };
+    let abi_digest = package.abi_hash;
     SemanticStructure::new(
         package.uri().to_string(),
         digest,
         StructureDescriptor::RuntimeShader {
+            work_per_pixel: package.work_per_pixel(),
             abi_digest,
-            // Valle-SkSL v1 admits only sRGB author math and always writes a complete output
+            // Shader math uses linear sRGB and always writes a complete output
             // pixel (including coverage, or forced opaque coverage). These are package contract
             // facts, not executor guesses from generated SkSL text.
-            color_domain: OperatorColorDomain::PerceptualSrgb,
+            color_domain: OperatorColorDomain::LinearSrgb,
             alpha_behavior: OperatorAlphaBehavior::RewritesCoverage,
-            footprint,
+            // Arbitrary UVs require the complete input; output bounds remain explicit.
+            footprint: StructureFootprint::Unbounded,
         },
     )
 }
@@ -1198,27 +1198,17 @@ mod tests {
 
     fn identity_shader_registry() -> valle_motion::shader::ShaderRegistry {
         use valle_motion::shader::{
-            BudgetClass, DIALECT_ID, DIALECT_VERSION, OutputContract, SHADER_MANIFEST_VERSION,
-            ShaderManifest, ShaderPackage, ShaderRegistry,
+            BudgetClass, OutputContract, ShaderManifest, ShaderPackage, ShaderRegistry,
         };
 
-        let placeholder = ContentDigest::of_bytes(b"");
         let manifest = ShaderManifest {
-            manifest_version: SHADER_MANIFEST_VERSION,
             name: "identity".into(),
-            version: 1,
-            dialect: DIALECT_ID.into(),
-            dialect_version: DIALECT_VERSION,
             entry: "shader.vsksl".into(),
             inputs: Vec::new(),
             uniforms: Vec::new(),
             output: OutputContract::default(),
             budget: BudgetClass::Local,
-            source_digest: placeholder,
-            abi_digest: placeholder,
-        }
-        .seal(IDENTITY_SHADER)
-        .unwrap();
+        };
         let package =
             ShaderPackage::admit(&serde_json::to_vec(&manifest).unwrap(), IDENTITY_SHADER).unwrap();
         let mut registry = ShaderRegistry::new();
@@ -1285,29 +1275,31 @@ mod tests {
     #[test]
     fn shader_registry_is_frozen_as_render_level_semantic_structures() {
         let registry = identity_shader_registry();
-        let package = registry.get("shader://identity@1").unwrap();
+        let package = registry.packages().next().unwrap();
+        let uri = package.uri().to_string();
         let content_hash = package.content_hash;
-        let abi_hash = package.manifest.abi_digest;
+        let abi_hash = package.abi_hash;
         let snapshot = SnapshotBuilder::new()
             .shader_registry(registry)
             .finish()
             .unwrap();
 
-        let structure = snapshot.structure("shader://identity@1").unwrap();
+        let structure = snapshot.structure(&uri).unwrap();
         assert_eq!(structure.digest, content_hash);
         assert!(matches!(
             &structure.descriptor,
             StructureDescriptor::RuntimeShader {
                 abi_digest,
-                color_domain: OperatorColorDomain::PerceptualSrgb,
+                color_domain: OperatorColorDomain::LinearSrgb,
                 alpha_behavior: OperatorAlphaBehavior::RewritesCoverage,
-                footprint: StructureFootprint::Local,
+                footprint: StructureFootprint::Unbounded,
+                ..
             } if *abi_digest == abi_hash
         ));
         assert_eq!(snapshot.shaders().len(), 1);
         assert!(
             snapshot
-                .runtime_shader_record("shader://identity@1", &content_hash, &abi_hash)
+                .runtime_shader_record(&uri, &content_hash, &abi_hash)
                 .is_some()
         );
         assert!(

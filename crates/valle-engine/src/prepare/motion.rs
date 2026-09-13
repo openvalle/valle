@@ -1201,7 +1201,11 @@ pub(crate) fn prepare_program(
             ResourceSample::Static
         };
         let path = format!("{}.texture[{}]", context.semantic_path, texture.key);
-        let handle = requests.asset(asset, sample, &path)?;
+        let handle = if texture.color_domain == valle_draw::requirements::ColorDomain::Data {
+            requests.data_texture(asset, &path)?
+        } else {
+            requests.asset(asset, sample, &path)?
+        };
         bindings.textures.push(ProgramTextureBinding {
             key: texture.key.clone(),
             handle,
@@ -1324,14 +1328,22 @@ fn validate_shader(
     requirement: &RuntimeShaderKey,
     structure: &SemanticStructure,
 ) -> Result<(), ProgramPrepareError> {
-    let StructureDescriptor::RuntimeShader { abi_digest, .. } = &structure.descriptor else {
+    let StructureDescriptor::RuntimeShader {
+        abi_digest,
+        work_per_pixel,
+        ..
+    } = &structure.descriptor
+    else {
         return Err(ProgramPrepareError::StructureKindMismatch {
             key: structure.key.clone(),
         });
     };
     let content_digest = ContentDigest::from_bytes(requirement.content_hash.into_bytes());
     let required_abi = ContentDigest::from_bytes(requirement.abi_hash.into_bytes());
-    if structure.digest != content_digest || *abi_digest != required_abi {
+    if structure.digest != content_digest
+        || *abi_digest != required_abi
+        || *work_per_pixel != requirement.work_per_pixel
+    {
         return Err(ProgramPrepareError::StructureDigestMismatch {
             key: structure.key.clone(),
         });

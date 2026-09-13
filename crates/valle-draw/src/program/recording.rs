@@ -791,6 +791,8 @@ id_newtype!(
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ShaderProgram {
+    pub work_per_pixel: crate::requirements::ShaderWork,
+    pub padding: [u32; 4],
     pub uri: String,
     #[cfg_attr(feature = "ts", ts(type = "string"))]
     pub content_hash: DigestBytes,
@@ -810,8 +812,30 @@ pub struct ShaderProgram {
 pub enum ShaderUniformValue {
     Float { value: f32 },
     Float2 { value: [f32; 2] },
+    Float3 { value: [f32; 3] },
+    Float4 { value: [f32; 4] },
+    Float2x2 { value: [f32; 4] },
+    Float3x3 { value: [f32; 9] },
+    Float4x4 { value: [f32; 16] },
+
     Color { value: [f32; 4] },
     Bool { value: bool },
+}
+
+impl ShaderUniformValue {
+    pub fn components(&self) -> &[f32] {
+        match self {
+            Self::Float { value } => core::slice::from_ref(value),
+            Self::Float2 { value } => value,
+            Self::Float3 { value } => value,
+            Self::Float4 { value } => value,
+            Self::Float2x2 { value } => value,
+            Self::Float3x3 { value } => value,
+            Self::Float4x4 { value } => value,
+            Self::Color { value } => value,
+            Self::Bool { .. } => &[],
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -827,8 +851,11 @@ pub struct ShaderUniformBinding {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ShaderTextureInput {
+    pub data: bool,
     pub name: String,
-    pub image: ImageId,
+    pub image: Option<ImageId>,
+    pub sampling: crate::requirements::SamplingMode,
+    pub wrap: super::SpreadMode,
 }
 
 /// Glyph-run source location anchored to a Scene node and byte offsets in that node's own text,
@@ -1715,6 +1742,11 @@ impl ProgramRecording {
             .position(|binding| match &binding.value {
                 ShaderUniformValue::Float { value } => !value.is_finite(),
                 ShaderUniformValue::Float2 { value } => value.iter().any(|v| !v.is_finite()),
+                ShaderUniformValue::Float3 { value } => value.iter().any(|v| !v.is_finite()),
+                ShaderUniformValue::Float4 { value } => value.iter().any(|v| !v.is_finite()),
+                ShaderUniformValue::Float2x2 { value } => value.iter().any(|v| !v.is_finite()),
+                ShaderUniformValue::Float3x3 { value } => value.iter().any(|v| !v.is_finite()),
+                ShaderUniformValue::Float4x4 { value } => value.iter().any(|v| !v.is_finite()),
                 ShaderUniformValue::Color { value } => value.iter().any(|v| !v.is_finite()),
                 ShaderUniformValue::Bool { .. } => false,
             })
@@ -1790,7 +1822,9 @@ impl ProgramRecording {
                     });
                 }
                 for input in &self.shader_inputs[inputs.range()] {
-                    self.check_id(at, "images", input.image.0, self.images.len())?;
+                    if let Some(image) = input.image {
+                        self.check_id(at, "images", image.0, self.images.len())?;
+                    }
                 }
                 Ok(())
             }
@@ -2192,7 +2226,12 @@ mod tests {
         d.intern_filters(&[FilterOp::Blur { sigma: 1.0 }]);
         d.intern_stops(&[(0.0, Rgba::rgb(0, 0, 0))]);
         d.intern_shader_program(ShaderProgram {
-            uri: "shader://clear-probe@1".into(),
+            work_per_pixel: crate::requirements::ShaderWork {
+                operations: 1,
+                samples: 1,
+            },
+            padding: [0; 4],
+            uri: "shader://clear-probe".into(),
             content_hash: DigestBytes::from_bytes([0x11; 32]),
             abi_hash: DigestBytes::from_bytes([0x22; 32]),
         });
@@ -2201,8 +2240,11 @@ mod tests {
             value: ShaderUniformValue::Float { value: 0.5 },
         }]);
         d.intern_shader_inputs(&[ShaderTextureInput {
+            data: false,
+            sampling: crate::requirements::SamplingMode::LinearClamp,
+            wrap: super::super::SpreadMode::Pad,
             name: "noise".into(),
-            image: ImageId(0),
+            image: Some(ImageId(0)),
         }]);
 
         d.clear();

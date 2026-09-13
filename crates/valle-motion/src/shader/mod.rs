@@ -5,17 +5,18 @@
 //! order, dialect restrictions and diagnostics cannot drift between Native and Web.
 
 mod canonical;
+mod data;
 mod dialect;
 mod manifest;
 mod package;
 mod registry;
 
 pub use crate::ContentDigest;
-pub use dialect::{DialectReport, lower_to_sksl, validate_dialect};
+pub use dialect::{DialectReport, SHADER_LIMITS, ShaderLimits, lower_to_sksl, validate_dialect};
 pub use manifest::{
-    ALPHA_MODE, AbiChild, AbiUniform, BudgetClass, COLOR_SPACE, DIALECT_ID, DIALECT_VERSION,
-    InputSampling, MAX_LAYER_PIXELS, MAX_SAMPLES_PER_PIXEL, MAX_SOURCE_BYTES, MAX_TEXTURE_INPUTS,
-    MAX_UNIFORM_SCALARS, OutputContract, SHADER_MANIFEST_VERSION, ShaderAbi, ShaderInput,
+    ALPHA_MODE, AbiChild, AbiUniform, BudgetClass, COLOR_SPACE, DIALECT_ID, InputKind,
+    InputSampling, InputWrap, MAX_LAYER_PIXELS, MAX_SAMPLES_PER_PIXEL, MAX_SOURCE_BYTES,
+    MAX_TEXTURE_INPUTS, MAX_UNIFORM_SCALARS, OutputContract, ShaderAbi, ShaderInput,
     ShaderManifest, ShaderUniform, UniformType, UniformValue,
 };
 pub use package::{
@@ -23,3 +24,8 @@ pub use package::{
     UniformBindings,
 };
 pub use registry::{ShaderRegistry, ShaderRegistryError};
+
+pub use data::{
+    DATA_TEXTURE_BYTES_PER_PIXEL, MAX_DATA_TEXTURE_BYTES, data_texture_storage_bytes,
+    decode_data_texture,
+};

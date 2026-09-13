@@ -11,8 +11,8 @@ use valle_engine::prepare::{
 
 use super::{
     draw::DrawError,
-    effect::{EffectRuntime, apply_filter_into, straight_color},
-    surface::{ScratchSurfaces, working_color_space},
+    effect::{EffectRuntime, apply_filter_into, set_working_color},
+    surface::ScratchSurfaces,
 };
 
 pub(crate) fn render_import(
@@ -155,16 +155,15 @@ fn draw_color_backdrop(
     canvas.concat(&matrix(transform.matrix()));
     let mut paint = Paint::default();
     paint.set_anti_alias(true);
-    let space = working_color_space().map_err(|error| DrawError::Surface(error.to_string()))?;
-    paint.set_color4f(
-        straight_color(valle_draw::program::LinearColor {
+    set_working_color(
+        &mut paint,
+        valle_draw::program::LinearColor {
             red: color[0],
             green: color[1],
             blue: color[2],
             alpha: color[3],
-        }),
-        &space,
-    );
+        },
+    )?;
     canvas.draw_rect(SkRect::from_xywh(0.0, 0.0, 1.0, 1.0), &paint);
     canvas.restore();
     Ok(())

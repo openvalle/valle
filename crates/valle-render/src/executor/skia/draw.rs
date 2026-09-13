@@ -1,8 +1,8 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use skia_safe::{
-    BlendMode as SkBlendMode, ClipOp, Color4f, CubicResampler, Data, FilterMode, Font, IRect,
-    Image, ImageInfo, Matrix, MipmapMode, Paint as SkPaint, PaintCap, PaintJoin, PaintStyle,
+    BlendMode as SkBlendMode, ClipOp, Color, Color4f, CubicResampler, Data, FilterMode, Font,
+    IRect, Image, ImageInfo, Matrix, MipmapMode, Paint as SkPaint, PaintCap, PaintJoin, PaintStyle,
     Path as SkPath, PathBuilder, PathEffect, PathFillType, Point as SkPoint, RRect, Rect as SkRect,
     RuntimeEffect, SamplingOptions, Shader, Surface, TextBlobBuilder, TileMode, Typeface,
     canvas::PointMode, color_filters, gradient, runtime_effect::ChildPtr,
@@ -34,7 +34,7 @@ use super::{
     SkiaExternalObject,
     blend::BlendRuntime,
     cache::BackendCaches,
-    effect::{draw_filters, straight_color},
+    effect::{draw_filters, set_working_color, straight_color},
     glass::{
         admit_motion_glass_shader, render_motion_glass_foreground_into, render_motion_glass_into,
     },
@@ -71,7 +71,8 @@ pub(crate) struct ProgramRuntime {
 #[derive(Debug, Clone)]
 pub(crate) struct ProgramTexture {
     image: Image,
-    interpretation: VisualInterpretation,
+    interpretation: Option<VisualInterpretation>,
+    size: [u32; 2],
 }
 
 impl core::fmt::Debug for ProgramRuntime {
@@ -116,20 +117,42 @@ impl ProgramRuntime {
             let object = bound
                 .get(slot)
                 .ok_or_else(|| DrawError::MissingTexture(requirement.key.clone()))?;
-            let ResourceInterpretation::Visual { interpretation } = object.key().interpretation
-            else {
-                return Err(DrawError::MissingTexture(requirement.key.clone()));
-            };
-            let image = object
-                .visual_image()
-                .ok_or_else(|| DrawError::MissingTexture(requirement.key.clone()))?
-                .clone();
+            let (image, interpretation, size) =
+                match (&object.key().interpretation, requirement.color_domain) {
+                    (
+                        ResourceInterpretation::DataTexture {},
+                        valle_draw::requirements::ColorDomain::Data,
+                    ) => {
+                        let image = object
+                            .data_image()
+                            .ok_or_else(|| DrawError::MissingTexture(requirement.key.clone()))?;
+                        (
+                            image.clone(),
+                            None,
+                            [image.width() as u32 / 2, image.height() as u32 / 4],
+                        )
+                    }
+                    (ResourceInterpretation::Visual { interpretation }, domain)
+                        if domain != valle_draw::requirements::ColorDomain::Data =>
+                    {
+                        let image = object
+                            .visual_image()
+                            .ok_or_else(|| DrawError::MissingTexture(requirement.key.clone()))?;
+                        (
+                            image.clone(),
+                            Some(*interpretation),
+                            [image.width() as u32, image.height() as u32],
+                        )
+                    }
+                    _ => return Err(DrawError::MissingTexture(requirement.key.clone())),
+                };
             if textures
                 .insert(
                     requirement.clone(),
                     ProgramTexture {
                         image,
                         interpretation,
+                        size,
                     },
                 )
                 .is_some()
@@ -757,6 +780,7 @@ impl ProgramRuntime {
             .nodes()
             .get(node_id.raw() as usize)
             .ok_or(DrawError::MissingNode(node_id.raw()))?;
+
         match node {
             Node::Path(node) => {
                 let path = path(
@@ -779,8 +803,6 @@ impl ProgramRuntime {
             Node::GeometryBatch(batch) => {
                 let mut paint = SkPaint::default();
                 paint.set_anti_alias(true);
-                let space =
-                    working_color_space().map_err(|error| DrawError::Surface(error.to_string()))?;
                 if batch.geometry == BatchGeometry::Circle
                     && let Some(first) = batch.instances.first()
                     && batch.instances.iter().all(|instance| {
@@ -794,14 +816,14 @@ impl ProgramRuntime {
                             SkPoint::new(instance.position[0] as f32, instance.position[1] as f32)
                         })
                         .collect::<Vec<_>>();
-                    paint.set_color4f(straight_color(first.color), &space);
+                    set_working_color(&mut paint, first.color)?;
                     paint.set_stroke_cap(PaintCap::Round);
                     paint.set_stroke_width(first.size[0].min(first.size[1]) as f32);
                     canvas.draw_points(PointMode::Points, &points, &paint);
                     return Ok(());
                 }
                 for instance in &batch.instances {
-                    paint.set_color4f(straight_color(instance.color), &space);
+                    set_working_color(&mut paint, instance.color)?;
                     match batch.geometry {
                         BatchGeometry::Circle => canvas.draw_circle(
                             SkPoint::new(instance.position[0] as f32, instance.position[1] as f32),
@@ -828,7 +850,7 @@ impl ProgramRuntime {
                 draw_program_texture(canvas, texture, node)?;
             }
             Node::GlyphRun(run) => self.draw_glyph_run(canvas, run)?,
-            Node::Shadow(shadow) => draw_shadow(canvas, shadow),
+            Node::Shadow(shadow) => draw_shadow(canvas, shadow)?,
             Node::RuntimeShader(node) => {
                 if let Some(runtime) = self.runtime_shader(
                     None,
@@ -953,9 +975,7 @@ impl ProgramRuntime {
         result.set_anti_alias(true);
         match paint {
             Paint::Solid(color) => {
-                let space =
-                    working_color_space().map_err(|error| DrawError::Surface(error.to_string()))?;
-                result.set_color4f(straight_color(*color), &space);
+                set_working_color(&mut result, *color)?;
             }
             Paint::LinearGradient {
                 start,
@@ -1151,16 +1171,28 @@ impl ProgramRuntime {
         _info: &ImageInfo,
         target_origin: [i32; 2],
     ) -> Result<(), DrawError> {
-        let Some(input) = input else {
-            return clear_surface(surface);
-        };
+        let device_to_owner = matrix.invert().ok_or_else(|| {
+            DrawError::Unsupported("shader owner transform is not invertible".into())
+        })?;
+        let content = input.map(|input| {
+            // A content snapshot is in device pixels. The runtime entry and its child
+            // evaluations use pixels relative to the shader's local border box.
+            let image_to_shader = Matrix::concat(
+                &Matrix::translate((-shader.bounds.x as f32, -shader.bounds.y as f32)),
+                &Matrix::concat(
+                    &device_to_owner,
+                    &Matrix::translate((input.roi.x as f32, input.roi.y as f32)),
+                ),
+            );
+            (&input.image, image_to_shader)
+        });
         let canvas = surface.canvas();
         canvas.clear(Color4f::new(0.0, 0.0, 0.0, 0.0));
         canvas.save();
         canvas.translate((-target_origin[0] as f32, -target_origin[1] as f32));
         canvas.concat(&matrix);
         if let Some(runtime) = self.runtime_shader(
-            Some(&input.image),
+            content,
             &shader.shader.uri,
             shader.bounds,
             &shader.uniforms,
@@ -1168,7 +1200,7 @@ impl ProgramRuntime {
         )? {
             let mut paint = SkPaint::default();
             paint.set_shader(runtime);
-            canvas.draw_rect(sk_rect(shader.bounds), &paint);
+            canvas.draw_rect(sk_rect(shader.output_bounds()), &paint);
         }
         canvas.restore();
         Ok(())
@@ -1176,7 +1208,7 @@ impl ProgramRuntime {
 
     fn runtime_shader(
         &self,
-        content: Option<&Image>,
+        content: Option<(&Image, Matrix)>,
         uri: &str,
         bounds: Rect,
         uniforms: &[ShaderUniformBinding],
@@ -1186,15 +1218,22 @@ impl ProgramRuntime {
             .shaders
             .get(uri)
             .ok_or_else(|| DrawError::MissingShader(uri.to_owned()))?;
-        let data = shader_uniforms(effect, bounds, uniforms)?;
+        let data = shader_uniforms(effect, bounds, uniforms, textures, &self.textures)?;
         let mut children = Vec::with_capacity(effect.children().len());
         for child in effect.children() {
             if child.name() == "content" && content.is_none() {
-                children.push(ChildPtr::Shader(skia_safe::shaders::empty()));
+                // An empty shader aborts the raster pipeline when sampled. Missing inputs must
+                // evaluate to zero and let the parent shader continue computing its output.
+                children.push(ChildPtr::Shader(skia_safe::shaders::color(
+                    Color::TRANSPARENT,
+                )));
                 continue;
             }
             let image = if child.name() == "content" {
-                content.expect("content presence was handled above")
+                content
+                    .as_ref()
+                    .expect("content presence was handled above")
+                    .0
             } else {
                 let texture = textures
                     .iter()
@@ -1203,10 +1242,16 @@ impl ProgramRuntime {
                         uri: uri.to_owned(),
                         child: child.name().to_owned(),
                     })?;
+                let Some(texture) = &texture.texture else {
+                    children.push(ChildPtr::Shader(skia_safe::shaders::color(
+                        Color::TRANSPARENT,
+                    )));
+                    continue;
+                };
                 &self
                     .textures
-                    .get(&texture.texture)
-                    .ok_or_else(|| DrawError::MissingTexture(texture.texture.key.clone()))?
+                    .get(texture)
+                    .ok_or_else(|| DrawError::MissingTexture(texture.key.clone()))?
                     .image
             };
             let mode = textures
@@ -1214,17 +1259,23 @@ impl ProgramRuntime {
                 .find(|texture| texture.name == child.name())
                 .map_or(
                     SamplingOptions::new(FilterMode::Linear, MipmapMode::None),
-                    |texture| sampling(texture.sampling),
+                    // The shared shader code filters individual working-linear texels.
+                    |_| SamplingOptions::new(FilterMode::Nearest, MipmapMode::None),
                 );
-            let shader = image
-                .to_shader((TileMode::Clamp, TileMode::Clamp), mode, None)
-                .ok_or_else(|| DrawError::ShaderChild {
+            let wrap = textures
+                .iter()
+                .find(|texture| texture.name == child.name())
+                .map_or(TileMode::Decal, |texture| tile_mode(texture.wrap));
+            let local = (child.name() == "content").then(|| &content.as_ref().unwrap().1);
+            let shader = image.to_shader((wrap, wrap), mode, local).ok_or_else(|| {
+                DrawError::ShaderChild {
                     uri: uri.to_owned(),
                     child: child.name().to_owned(),
-                })?;
+                }
+            })?;
             children.push(ChildPtr::Shader(shader));
         }
-        let local = Matrix::translate((-bounds.x as f32, -bounds.y as f32));
+        let local = Matrix::translate((bounds.x as f32, bounds.y as f32));
         Ok(effect.make_shader(Data::new_copy(&data), &children, Some(&local)))
     }
 }
@@ -1245,8 +1296,13 @@ fn draw_program_texture(
         texture_from_content,
         input_sample_bounds,
         ..
-    } = ExternalSample::from_display_rect(node.src, texture.interpretation)
-        .map_err(|error| DrawError::Unsupported(error.to_string()))?
+    } = ExternalSample::from_display_rect(
+        node.src,
+        texture.interpretation.ok_or_else(|| {
+            DrawError::Unsupported("data texture cannot be drawn as an image".into())
+        })?,
+    )
+    .map_err(|error| DrawError::Unsupported(error.to_string()))?
     else {
         return Ok(());
     };
@@ -1353,7 +1409,7 @@ fn preflight_shader_instance(
     let effect = shaders
         .get(uri)
         .ok_or_else(|| DrawError::MissingShader(uri.to_owned()))?;
-    let _ = shader_uniforms(effect, bounds, uniforms)?;
+    let _ = shader_uniforms(effect, bounds, uniforms, texture_bindings, textures)?;
     let mut bound_children = 0_usize;
     for child in effect.children() {
         if child.name() == "content" {
@@ -1367,8 +1423,10 @@ fn preflight_shader_instance(
                 uri: uri.to_owned(),
                 child: child.name().to_owned(),
             })?;
-        if !textures.contains_key(&binding.texture) {
-            return Err(DrawError::MissingTexture(binding.texture.key.clone()));
+        if let Some(texture) = &binding.texture
+            && !textures.contains_key(texture)
+        {
+            return Err(DrawError::MissingTexture(texture.key.clone()));
         }
         bound_children += 1;
     }
@@ -1815,11 +1873,13 @@ fn gradient_interpolation() -> gradient::Interpolation {
     }
 }
 
-fn draw_shadow(canvas: &skia_safe::Canvas, shadow: &valle_draw::program::ShadowNode) {
+fn draw_shadow(
+    canvas: &skia_safe::Canvas,
+    shadow: &valle_draw::program::ShadowNode,
+) -> Result<(), DrawError> {
     let mut paint = SkPaint::default();
     paint.set_anti_alias(true);
-    let space = working_color_space().ok();
-    paint.set_color4f(straight_color(shadow.color), space.as_ref());
+    set_working_color(&mut paint, shadow.color)?;
     if shadow.sigma_x > 0.0 || shadow.sigma_y > 0.0 {
         paint.set_mask_filter(skia_safe::MaskFilter::blur(
             skia_safe::BlurStyle::Normal,
@@ -1845,12 +1905,15 @@ fn draw_shadow(canvas: &skia_safe::Canvas, shadow: &valle_draw::program::ShadowN
     } else {
         canvas.draw_rrect(sk_rrect(shape), &paint);
     }
+    Ok(())
 }
 
 fn shader_uniforms(
     effect: &RuntimeEffect,
     bounds: Rect,
     bindings: &[ShaderUniformBinding],
+    texture_bindings: &[ShaderTextureBinding],
+    textures: &BTreeMap<ExternalTexture, ProgramTexture>,
 ) -> Result<Vec<u8>, DrawError> {
     let mut data = vec![0_u8; effect.uniform_size()];
     let resolution = effect
@@ -1861,6 +1924,28 @@ fn shader_uniforms(
         resolution.offset(),
         &[bounds.width as f32, bounds.height as f32],
     )?;
+    for binding in texture_bindings {
+        let name = format!("valle_size_{}", binding.name);
+        let uniform = effect
+            .find_uniform(&name)
+            .ok_or_else(|| DrawError::ShaderUniform(name.clone()))?;
+        if uniform.size_in_bytes() != 8 {
+            return Err(DrawError::ShaderUniform(name));
+        }
+        let size = if let Some(texture) = &binding.texture {
+            textures
+                .get(texture)
+                .ok_or_else(|| DrawError::MissingTexture(texture.key.clone()))?
+                .size
+        } else {
+            [1, 1]
+        };
+        write_f32s(
+            &mut data,
+            uniform.offset(),
+            &[size[0] as f32, size[1] as f32],
+        )?;
+    }
     for binding in bindings {
         let backend_name = if matches!(binding.value, ShaderUniformValue::Bool(_)) {
             format!("valle_uniform_{}", binding.name)
@@ -1873,10 +1958,12 @@ fn shader_uniforms(
         let values = match binding.value {
             ShaderUniformValue::Float(value) => vec![value],
             ShaderUniformValue::Float2(value) => value.to_vec(),
-            ShaderUniformValue::Color(color) => {
-                let color = straight_color(color);
-                vec![color.r, color.g, color.b, color.a]
-            }
+            ShaderUniformValue::Float3(value) => value.to_vec(),
+            ShaderUniformValue::Float4(value) => value.to_vec(),
+            ShaderUniformValue::Float2x2(value) => value.to_vec(),
+            ShaderUniformValue::Float3x3(value) => value.to_vec(),
+            ShaderUniformValue::Float4x4(value) => value.to_vec(),
+            ShaderUniformValue::Color(color) => color.to_vec(),
             ShaderUniformValue::Bool(value) => vec![f32::from(value)],
         };
         if uniform.size_in_bytes() != values.len() * 4 {
@@ -1889,7 +1976,7 @@ fn shader_uniforms(
         .iter()
         .filter(|uniform| uniform.name() != "resolution")
         .count()
-        != bindings.len()
+        != bindings.len() + texture_bindings.len()
     {
         return Err(DrawError::ShaderUniformLayout);
     }
@@ -2147,6 +2234,67 @@ mod tests {
         assert_eq!(ink(&thin), 4.0 * 24.0);
         assert_eq!(ink(&thick), 12.0 * 24.0);
         assert_eq!(render(4.0), thin);
+    }
+
+    #[test]
+    fn emitted_rounded_border_keeps_its_ink() {
+        let artifact = valle_compiler::motion::compile_motion(r##"export default function Border(){return <Scene style={{width:1920,height:1080,backgroundColor:"#000000"}}><View style={{position:"absolute",left:64,top:64,width:1792,height:952,borderRadius:24,borderStyle:"solid",borderWidth:2,borderColor:"#ffffff33",backgroundColor:"transparent"}} /></Scene>;}"##).unwrap().artifact;
+        let prepared = valle_motion::prepare_scene(&artifact).unwrap();
+        let props = valle_motion::resolve_props(&artifact.controls, &BTreeMap::new()).unwrap();
+        let windows = valle_motion::phase_windows(&artifact.controls.phase_spec(), 30);
+        let ctx =
+            valle_motion::motion_context_at(0, &windows, serde_json::from_str("\"30/1\"").unwrap())
+                .unwrap();
+        let fonts = valle_motion::Fonts::default();
+        let tree = valle_motion::build_tree(
+            &prepared,
+            &ctx,
+            &props,
+            &valle_motion::ResolvedSignals::default(),
+            &valle_motion::LayoutOptions {
+                viewport: valle_motion::Viewport::new((1920, 1080)),
+                fonts: &fonts,
+                styles: None,
+            },
+        )
+        .unwrap();
+        let report = valle_motion::emit(&tree, &valle_motion::default_font_naming).unwrap();
+        let runtime = ProgramRuntime {
+            program: Arc::new(report.program),
+            textures: BTreeMap::new(),
+            fonts: BTreeMap::new(),
+            shaders: BTreeMap::new(),
+            scenes: BTreeMap::new(),
+            glass: None,
+            blend: None,
+        };
+        let info = ImageInfo::new(
+            (1920, 1080),
+            skia_safe::ColorType::RGBAF32,
+            skia_safe::AlphaType::Premul,
+            Some(working_color_space().unwrap()),
+        );
+        let mut surface = skia_safe::surfaces::raster(&info, None, None).unwrap();
+        for root in runtime.program.roots() {
+            runtime.raster_node(surface.canvas(), *root).unwrap();
+        }
+        let mut bytes = vec![0u8; 1920 * 1080 * 16];
+        assert!(surface.read_pixels(&info, &mut bytes, 1920 * 16, (0, 0)));
+        let red = |x: usize, y: usize| {
+            f32::from_ne_bytes(
+                bytes[(y * 1920 + x) * 16..(y * 1920 + x) * 16 + 4]
+                    .try_into()
+                    .unwrap(),
+            )
+        };
+        for (x, y) in [(65, 540), (960, 65), (1854, 540), (960, 1014)] {
+            assert!(
+                (red(x, y) - 0.2).abs() < 0.001,
+                "border ({x},{y}) red={}",
+                red(x, y)
+            );
+        }
+        assert_eq!(red(960, 540), 0.0);
     }
 
     #[test]

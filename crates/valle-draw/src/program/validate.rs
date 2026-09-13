@@ -302,6 +302,12 @@ fn validate_raw(
             }
             Node::Image(image) => {
                 validate_texture(&image.texture, &format!("node[{index}].texture"))?;
+                if image.texture.color_domain == ColorDomain::Data {
+                    return invalid(
+                        format!("node[{index}].texture"),
+                        "data textures are only valid as Shader inputs",
+                    );
+                }
                 validate_normalized_rect(image.src, &format!("node[{index}].src"))?;
                 validate_rect(image.dst, &format!("node[{index}].dst"))?;
                 validate_unit(image.opacity, &format!("node[{index}].opacity"))?;
@@ -377,12 +383,6 @@ fn validate_raw(
                 shader_bindings = shader_bindings
                     .saturating_add(shader.uniforms.len())
                     .saturating_add(shader.textures.len());
-                for (texture_index, texture) in shader.textures.iter().enumerate() {
-                    validate_texture(
-                        &texture.texture,
-                        &format!("node[{index}].textures[{texture_index}].texture"),
-                    )?;
-                }
             }
             Node::Scene3d(scene) => {
                 validate_rect(scene.bounds, &format!("node[{index}].bounds"))?;
@@ -785,6 +785,12 @@ fn validate_filter(filter: &Filter, location: &str) -> Result<(), DrawProgramErr
 fn validate_shader_layer(shader: &ShaderLayer, location: &str) -> Result<(), DrawProgramError> {
     validate_key(&shader.shader.uri, &format!("{location}.shader.uri"))?;
     validate_rect(shader.bounds, &format!("{location}.bounds"))?;
+    let pixels = bounds_pixels(LocalBounds::from_rect(shader.output_bounds()))?;
+    budget(
+        "shader layer pixels including padding",
+        usize::try_from(pixels).unwrap_or(usize::MAX),
+        super::MAX_SHADER_LAYER_PIXELS as usize,
+    )?;
     validate_shader_bindings(&shader.uniforms, &shader.textures, location)
 }
 
@@ -810,8 +816,56 @@ fn validate_shader_bindings(
                 finite_f32(value[0], &format!("{location}.uniforms[{index}].value[0]"))?;
                 finite_f32(value[1], &format!("{location}.uniforms[{index}].value[1]"))?;
             }
+            ShaderUniformValue::Float3(value) => {
+                for (component, value) in value.into_iter().enumerate() {
+                    finite_f32(
+                        value,
+                        &format!("{location}.uniforms[{index}].value[{component}]"),
+                    )?;
+                }
+            }
+            ShaderUniformValue::Float4(value) => {
+                for (component, value) in value.into_iter().enumerate() {
+                    finite_f32(
+                        value,
+                        &format!("{location}.uniforms[{index}].value[{component}]"),
+                    )?;
+                }
+            }
+            ShaderUniformValue::Float2x2(value) => {
+                for (component, value) in value.into_iter().enumerate() {
+                    finite_f32(
+                        value,
+                        &format!("{location}.uniforms[{index}].value[{component}]"),
+                    )?;
+                }
+            }
+            ShaderUniformValue::Float3x3(value) => {
+                for (component, value) in value.into_iter().enumerate() {
+                    finite_f32(
+                        value,
+                        &format!("{location}.uniforms[{index}].value[{component}]"),
+                    )?;
+                }
+            }
+            ShaderUniformValue::Float4x4(value) => {
+                for (component, value) in value.into_iter().enumerate() {
+                    finite_f32(
+                        value,
+                        &format!("{location}.uniforms[{index}].value[{component}]"),
+                    )?;
+                }
+            }
             ShaderUniformValue::Color(color) => {
-                validate_color(color, &format!("{location}.uniforms[{index}].value"))?
+                for channel in color {
+                    finite_f32(channel, &format!("{location}.uniforms[{index}].value"))?;
+                }
+                if !(0.0..=1.0).contains(&color[3]) {
+                    return invalid(
+                        format!("{location}.uniforms[{index}].value"),
+                        "shader color alpha must be in 0..=1",
+                    );
+                }
             }
             ShaderUniformValue::Bool(_) => {}
         }
@@ -824,10 +878,9 @@ fn validate_shader_bindings(
                 "binding names must be unique across uniforms and textures",
             );
         }
-        validate_texture(
-            &texture.texture,
-            &format!("{location}.textures[{index}].texture"),
-        )?;
+        if let Some(texture) = &texture.texture {
+            validate_texture(texture, &format!("{location}.textures[{index}].texture"))?;
+        }
     }
     Ok(())
 }
@@ -992,8 +1045,8 @@ fn derive_requirements(
     node_geometry: &[NodeGeometry],
 ) -> Result<DrawRequirements, DrawProgramError> {
     let mut requirements = DrawRequirements::default();
-    let mut textures = BTreeMap::<(String, Option<i64>), ExternalTexture>::new();
-    let mut texture_formats = BTreeMap::<String, (TextureKind, ColorDomain, AlphaMode)>::new();
+    let mut textures = BTreeMap::<(String, Option<i64>, ColorDomain), ExternalTexture>::new();
+    let mut texture_formats = BTreeMap::<(String, ColorDomain), (TextureKind, AlphaMode)>::new();
     let mut fonts = BTreeSet::new();
     let mut shaders = BTreeMap::new();
     let mut scenes = BTreeSet::new();
@@ -1052,10 +1105,14 @@ fn derive_requirements(
                 }
                 if let Some(shader) = &group.shader {
                     insert_shader_requirement(&mut shaders, &shader.shader)?;
-                    for texture in &shader.textures {
-                        insert_texture(&mut textures, &mut texture_formats, &texture.texture)?;
-                        color_domains.insert(texture.texture.color_domain);
-                        alpha_modes.insert(texture.texture.alpha);
+                    for texture in shader
+                        .textures
+                        .iter()
+                        .filter_map(|binding| binding.texture.as_ref())
+                    {
+                        insert_texture(&mut textures, &mut texture_formats, texture)?;
+                        color_domains.insert(texture.color_domain);
+                        alpha_modes.insert(texture.alpha);
                     }
                     capabilities.insert(crate::requirements::DrawCapability::GroupShader);
                 }
@@ -1085,10 +1142,14 @@ fn derive_requirements(
             }
             Node::RuntimeShader(shader) => {
                 insert_shader_requirement(&mut shaders, &shader.shader)?;
-                for texture in &shader.textures {
-                    insert_texture(&mut textures, &mut texture_formats, &texture.texture)?;
-                    color_domains.insert(texture.texture.color_domain);
-                    alpha_modes.insert(texture.texture.alpha);
+                for texture in shader
+                    .textures
+                    .iter()
+                    .filter_map(|binding| binding.texture.as_ref())
+                {
+                    insert_texture(&mut textures, &mut texture_formats, texture)?;
+                    color_domains.insert(texture.color_domain);
+                    alpha_modes.insert(texture.alpha);
                 }
                 capabilities.insert(crate::requirements::DrawCapability::RuntimeShader);
             }
@@ -1166,6 +1227,9 @@ fn insert_shader_requirement(
     shaders: &mut BTreeMap<String, crate::requirements::RuntimeShaderKey>,
     shader: &crate::requirements::RuntimeShaderKey,
 ) -> Result<(), DrawProgramError> {
+    if shader.work_per_pixel.operations == 0 {
+        return invalid("shader.workPerPixel", "shader work must include the output adapter");
+    }
     if let Some(existing) = shaders.insert(shader.uri.clone(), shader.clone())
         && existing != *shader
     {
@@ -1514,11 +1578,8 @@ fn derive_node_geometry(
                 result.output_bounds = LocalBounds::Empty;
             }
             if let Some(shader) = &group.shader {
-                result.output_bounds = if result.output_bounds.rect().is_some() {
-                    LocalBounds::from_rect(shader.bounds)
-                } else {
-                    LocalBounds::Empty
-                };
+                // A shader can generate pixels even when its content is transparent.
+                result.output_bounds = LocalBounds::from_rect(shader.output_bounds());
                 peak_local_pixels = peak_local_pixels.max(bounds_pixels(result.output_bounds)?);
             }
             if group.transform != Transform2d::IDENTITY {
@@ -1775,13 +1836,13 @@ fn filter_footprint(filter: &Filter) -> Insets {
 }
 
 fn insert_texture(
-    textures: &mut BTreeMap<(String, Option<i64>), ExternalTexture>,
-    formats: &mut BTreeMap<String, (TextureKind, ColorDomain, AlphaMode)>,
+    textures: &mut BTreeMap<(String, Option<i64>, ColorDomain), ExternalTexture>,
+    formats: &mut BTreeMap<(String, ColorDomain), (TextureKind, AlphaMode)>,
     texture: &ExternalTexture,
 ) -> Result<(), DrawProgramError> {
-    let format = (texture.kind, texture.color_domain, texture.alpha);
+    let format = (texture.kind, texture.alpha);
     if formats
-        .insert(texture.key.clone(), format)
+        .insert((texture.key.clone(), texture.color_domain), format)
         .is_some_and(|existing| existing != format)
     {
         return Err(DrawProgramError::ConflictingRequirement {
@@ -1789,7 +1850,11 @@ fn insert_texture(
             key: texture.key.clone(),
         });
     }
-    let identity = (texture.key.clone(), texture.sample_time_micros);
+    let identity = (
+        texture.key.clone(),
+        texture.sample_time_micros,
+        texture.color_domain,
+    );
     if let Some(existing) = textures.insert(identity, texture.clone())
         && existing != *texture
     {
@@ -1961,6 +2026,14 @@ fn validate_color(color: LinearColor, location: &str) -> Result<(), DrawProgramE
 
 fn validate_texture(texture: &ExternalTexture, location: &str) -> Result<(), DrawProgramError> {
     validate_key(&texture.key, &format!("{location}.key"))?;
+    if texture.color_domain == ColorDomain::Data
+        && (texture.kind != TextureKind::Image || texture.alpha != AlphaMode::Straight)
+    {
+        return invalid(
+            location,
+            "data textures require static image channels with straight alpha",
+        );
+    }
     match (texture.kind, texture.sample_time_micros) {
         (TextureKind::Video, None) => {
             return invalid(

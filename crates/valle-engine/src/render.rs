@@ -276,6 +276,7 @@ fn artifact_asset_kind(kind: AssetKind) -> Option<ResourceKind> {
         AssetKind::Font => Some(ResourceKind::Font),
         // Timeline has no model-3d ResourceManifest kind.
         AssetKind::Model3d => None,
+        AssetKind::Shader => Some(ResourceKind::Shader),
     }
 }
 
@@ -2721,7 +2722,7 @@ fn compiled_execution_resource_ref(
                 resource_id: &resource.resource_id,
                 kind: CompiledExecutionResourceKind::RuntimeShader,
                 content_digest: &resource.digest,
-                abi_digest: Some(&package.manifest.abi_digest),
+                abi_digest: Some(&package.abi_hash),
                 bytes: package.generated_sksl.as_bytes(),
             })
         }
@@ -3560,6 +3561,28 @@ impl<'a> Resolver<'a> {
             }
         }
         if let VerifiedResourceFacts::MotionArtifact { artifact, .. } = binding.facts() {
+            if let Err(errors) = artifact.validate_shader_packages(|uri| {
+                dependencies.iter().find_map(|dependency| {
+                    match &self.resources.get(dependency.target as usize)?.execution {
+                        ResolvedExecutionPayload::Shader(package)
+                            if package.uri().to_string() == uri =>
+                        {
+                            Some(package.as_ref())
+                        }
+                        _ => None,
+                    }
+                })
+            }) {
+                self.diagnostics.push(diagnostic(
+                    EngineOpenDiagnosticCode::MotionArtifactPayloadMismatch,
+                    format!("{path}/verifiedFacts/artifact"),
+                    EngineOpenPhase::ResourceResolve,
+                    Some(resource_id),
+                    details([("reason", format!("shader-package-contract:{errors:?}"))]),
+                ));
+                self.visiting.remove(resource_id);
+                return None;
+            }
             for artifact_ref in &artifact.resource_refs {
                 let matched = dependencies.iter().any(|dependency| {
                     if dependency.role != artifact_ref.control {
@@ -4190,7 +4213,7 @@ fn verify_execution_payload(
                 )
             })?;
             let package_digest = package.content_hash;
-            let abi_digest = package.manifest.abi_digest;
+            let abi_digest = package.abi_hash;
             if &package_digest != digest {
                 return Err((
                     EngineOpenDiagnosticCode::ShaderPayloadMismatch,

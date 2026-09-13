@@ -1254,44 +1254,100 @@ asset and renderer contract.
 
 ### ShaderLayer
 
-Use an admitted local package, not inline GLSL or arbitrary SkSL. The CLI discovers
-`shaders/<package>/manifest.json` and the declared source file beside the entry
-Motion file. The manifest fixes package name/version, dialect, input textures,
-uniform types/defaults/ranges, output alpha/color contract and source/ABI digests.
-Missing packages, mismatched digests and unknown/incorrect bindings fail admission.
-
-Shader source bytes are registered with the native render package. This example
-can be checked and rendered using the same `--asset noise=...` binding.
-
-`source="shader://package-name@1"` selects the package. `inputs={{ name:
-"asset://image" }}` binds declared textures; `uniforms={{ name: value }}` supplies
-typed values. Texture identity is static; admitted uniform values can animate.
-Children supply the content sampled by the shader. Required inputs/uniforms must
-be present, and optional values follow manifest defaults.
-
-The repository includes a complete
-[local-dissolve package](../crates/valle-compiler/tests/fixtures/motion/shader-packages/local-dissolve)
-and [package contract tests](../crates/valle-motion/tests/shader_package_contract.rs).
-Copy the entire package to a source project's `shaders/local-dissolve/` directory;
-its manifest and source must stay in sync. Save the following as
-`dissolve.motion.tsx` and bind an image as `noise` (the package is required):
+Bind a `.shader.json` descriptor through an `asset({ kind: "shader" })` control.
+Its `entry` is a relative `.vsksl` source path. The compiler validates and freezes
+both files, computes their content and ABI hashes, and includes them in the render
+package. Author files declare inputs, uniform types/defaults/ranges, and the
+output contract; they carry no versions or hand-maintained hashes.
 
 ```tsx
 export const controls = defineControls({
-  assets: { noise: asset({ kind: "image", required: true }) },
+  assets: {
+    effect: asset({ kind: "shader", required: true }),
+    noise: asset({ kind: "image", required: true }),
+  },
 });
 export default function Dissolve(ctx) {
   return (
-    <Scene className="relative h-full w-full" style={{ backgroundColor: "#0f172a" }}>
-      <ShaderLayer source="shader://local-dissolve@1" inputs={{ noise: "asset://noise" }}
+    <Scene>
+      <ShaderLayer source="asset://effect" inputs={{ noise: "asset://noise" }}
         uniforms={{ progress: ctx.progress, edgeWidth: 0.06, edgeColor: "#38bdf8" }}
-        style={{ position: "absolute", left: 60, top: 80, width: 520, height: 200 }}>
-        <Text style={{ fontSize: 48, color: "#ffffff" }}>A shader reveal</Text>
+        style={{ width: 520, height: 200 }}>
+        <View style={{ width: 520, height: 200, backgroundColor: "#ffffff" }} />
       </ShaderLayer>
     </Scene>
   );
 }
 ```
+
+For the [local-dissolve descriptor](../crates/valle-compiler/tests/fixtures/motion/shader-packages/local-dissolve/manifest.json),
+copy the descriptor as `effect.shader.json` and keep its source beside it. Render
+with `--asset effect=effect.shader.json --asset noise=noise.png`. Timeline uses the
+same asset controls through the clip's `resources` mapping.
+
+Shader source defines `float4 valle_main(float2 uv)` (`half4` is accepted as a
+float alias). UV is local to the layer and normalized; `resolution` gives the
+layer's pixel size. The typed language supports local variables and constants,
+blocks, `if/else`, helpers in any definition order, scalar/vector arithmetic,
+boolean and integer values, and square 2×2/3×3/4×4 matrices. Functions return a
+value on every path. Texture access uses `sampleContent(uv)` and declared
+`sample_<input>(uv)` helpers. Each declared input has its own dimensions,
+`sampling: "nearest" | "linear"`, and `wrap: "clamp" | "repeat" | "mirror"`
+(default clamp). Linear filtering interpolates premultiplied linear texels before
+returning a straight color; it counts four texel reads toward the sampling budget.
+
+Set an input's `kind` to `"color"` (the default) or `"data"`. Color inputs follow
+these color/alpha rules. Data inputs decode PNG/JPEG channels as normalized numbers,
+including 16-bit PNG values and RGB under zero alpha. They ignore color profiles,
+transfer functions and orientation metadata; linear filtering interpolates each
+channel independently. The same image can be bound once as color and once as data;
+those interpretations have separate resource identities and decode caches.
+
+Data inputs use a shared byte-plane representation to preserve numeric values
+through both backends' shader interfaces. Nearest sampling costs eight texel reads;
+linear sampling costs 32. Their storage is eight bytes per source pixel, limited
+to 64 MiB and 4096 pixels per source edge. Storage is reserved together with all
+intermediate surfaces against the frame memory limit, including on cached frames.
+
+Content coordinates follow the layer through translation, rotation and scaling.
+The complete subtree is available for sampling, including pixels outside the final
+viewport. Sampling outside the content returns transparent pixels. A layer can
+also omit children and generate pixels entirely from its shader.
+
+For output beyond the border box, set `output.padding: [left, top, right, bottom]`
+in the descriptor (non-negative integer local pixels; default `[0, 0, 0, 0]`).
+Padding expands the output rectangle without changing `resolution` or the UV
+origin. Both padded area and full input surfaces count toward allocation budgets;
+the final viewport and explicit ancestor clips still clip the output. Each local
+shader output, including padding, is limited to 2,073,600 pixels.
+
+`for (int i = start; i < end; i += step)` also supports `<=`, `>`, `>=`, `++`,
+`--`, and `-=`. Bounds and step are compile-time integers. Nested loops are
+allowed; their counters are read-only inside the body. Recursion, dynamic loops,
+mutable globals, external I/O, and dynamic indexing are rejected with a source
+location. Vector/matrix indices must be constant and in range.
+
+Uniforms support `float`, `float2`, `float3`, `float4`, `float2x2`, `float3x3`,
+`float4x4`, `color`, and `bool`. Matrices are flat column-major arrays; each
+numeric component can be a frame expression. Numeric ranges and finite values
+are checked after frame evaluation, before drawing. Time and randomness come
+from explicit frame uniforms and seeds.
+
+Color calculations use **linear sRGB with straight alpha**. The descriptor's
+output is `{ colorSpace: "linear-srgb", alphaMode: "straight", allowTransparent: true }`.
+`color` uniforms decode author colors; vector uniforms preserve numbers.
+`srgbToLinear(float3)` and `linearToSrgb(float3)` provide explicit transfer
+functions. The output boundary converts once to premultiplied linear Rec.2020;
+RGB is not clipped to the display range. Zero division and zero normalization
+return zero. Invalid square-root/log inputs and negative-base powers return
+zero; non-finite output channels become zero and alpha is clamped to [0, 1].
+
+Host limits are centralized in `shader/dialect.rs`: 32 KiB source, 32 functions,
+16 nested calls, 256 iterations per loop, 4096 scalar operations, 64 texture
+samples, and 256 expanded calls per pixel. Branches use the maximum path cost;
+loops and helper calls include their expanded cost. See the
+[contract tests](../crates/valle-motion/tests/shader_package_contract.rs) for
+accepted programs and rejection cases.
 
 ## Troubleshooting and limits
 

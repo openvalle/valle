@@ -310,16 +310,30 @@ impl<'a> RecordingCompiler<'a> {
                     })?
                     .iter()
                     .map(|input| {
+                        let texture = input
+                            .image
+                            .map(|image| {
+                                let mut texture = self.image_texture(command_index, image)?;
+                                if input.data {
+                                    texture.color_domain = ColorDomain::Data;
+                                    texture.alpha = AlphaMode::Straight;
+                                }
+                                Ok::<_, ProgramRecordingError>(texture)
+                            })
+                            .transpose()?;
                         Ok(ShaderTextureBinding {
                             name: input.name.clone(),
-                            texture: self.image_texture(command_index, input.image)?,
-                            sampling: SamplingMode::LinearClamp,
+                            texture,
+                            sampling: input.sampling,
+                            wrap: input.wrap,
                         })
                     })
                     .collect::<Result<Vec<_>, ProgramRecordingError>>()?;
                 let mut group = Group::plain(Vec::new());
                 group.shader = Some(ShaderLayer {
+                    padding: program.padding,
                     shader: RuntimeShaderKey {
+                        work_per_pixel: program.work_per_pixel,
                         uri: program.uri.clone(),
                         content_hash: program.content_hash,
                         abi_hash: program.abi_hash,
@@ -1060,8 +1074,19 @@ fn shader_uniform(value: &recording::ShaderUniformBinding) -> ShaderUniformBindi
         value: match value.value {
             recording::ShaderUniformValue::Float { value } => ShaderUniformValue::Float(value),
             recording::ShaderUniformValue::Float2 { value } => ShaderUniformValue::Float2(value),
+            recording::ShaderUniformValue::Float3 { value } => ShaderUniformValue::Float3(value),
+            recording::ShaderUniformValue::Float4 { value } => ShaderUniformValue::Float4(value),
+            recording::ShaderUniformValue::Float2x2 { value } => {
+                ShaderUniformValue::Float2x2(value)
+            }
+            recording::ShaderUniformValue::Float3x3 { value } => {
+                ShaderUniformValue::Float3x3(value)
+            }
+            recording::ShaderUniformValue::Float4x4 { value } => {
+                ShaderUniformValue::Float4x4(value)
+            }
             recording::ShaderUniformValue::Color { value } => {
-                ShaderUniformValue::Color(LinearColor::from_srgb_straight(value))
+                ShaderUniformValue::Color(super::decode_srgb_straight(value))
             }
             recording::ShaderUniformValue::Bool { value } => ShaderUniformValue::Bool(value),
         },

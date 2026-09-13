@@ -107,21 +107,26 @@ fn fixture(reverse_arena_insertion: bool) -> DrawProgram {
     });
     let shader = Node::RuntimeShader(RuntimeShaderNode {
         shader: RuntimeShaderKey {
-            uri: "shader://glass/rim@1".into(),
+            work_per_pixel: valle_draw::requirements::ShaderWork {
+                operations: 1,
+                samples: 1,
+            },
+            uri: format!("shader://{}", "22".repeat(32)),
             content_hash: DigestBytes::from_bytes([0x22; 32]),
             abi_hash: DigestBytes::from_bytes([0x33; 32]),
         },
         bounds: Rect::new(0.0, 0.0, 64.0, 48.0),
         uniforms: Vec::new(),
         textures: vec![ShaderTextureBinding {
+            wrap: valle_draw::program::SpreadMode::Pad,
             name: "noise".into(),
-            texture: ExternalTexture {
+            texture: Some(ExternalTexture {
                 key: "asset:test-noise".into(),
                 kind: TextureKind::Image,
                 color_domain: ColorDomain::LinearRec2020,
                 alpha: AlphaMode::Premultiplied,
                 sample_time_micros: None,
-            },
+            }),
             sampling: SamplingMode::LinearClamp,
         }],
     });
@@ -918,4 +923,30 @@ fn path_grammar_is_closed_instead_of_backend_defined() {
         builder.finish(),
         Err(DrawProgramError::InvalidValue { .. })
     ));
+}
+
+#[test]
+fn shader_output_budget_includes_padding_even_without_content() {
+    for (padding, accepted) in [([0; 4], true), ([1; 4], false), ([u32::MAX; 4], false)] {
+        let mut builder = builder();
+        let mut group = Group::plain(vec![]);
+        group.shader = Some(valle_draw::program::ShaderLayer {
+            shader: RuntimeShaderKey {
+                work_per_pixel: valle_draw::requirements::ShaderWork {
+                    operations: 1,
+                    samples: 1,
+                },
+                uri: format!("shader://{}", "22".repeat(32)),
+                content_hash: DigestBytes::from_bytes([0x22; 32]),
+                abi_hash: DigestBytes::from_bytes([0x33; 32]),
+            },
+            bounds: Rect::new(0.0, 0.0, 1920.0, 1080.0),
+            padding,
+            uniforms: vec![],
+            textures: vec![],
+        });
+        let root = builder.push_node(Node::Group(group));
+        builder.add_root(root);
+        assert_eq!(builder.finish().is_ok(), accepted, "padding={padding:?}");
+    }
 }

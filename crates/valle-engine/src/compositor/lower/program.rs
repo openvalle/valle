@@ -184,6 +184,7 @@ pub enum ProgramDestinationKind {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProgramPass {
+    pub shader_work_per_pixel: valle_draw::requirements::ShaderWork,
     pub id: ProgramPassId,
     pub semantic_path: String,
     pub kind: ProgramPassKind,
@@ -436,6 +437,8 @@ impl<'a> Compiler<'a> {
                     false
                 }
             }
+            // Shader work gets its own exact output region and cost-bearing pass.
+            Node::RuntimeShader(_) => false,
             _ => true,
         };
         self.raster_subtrees[index] = Some(eligible);
@@ -794,11 +797,7 @@ impl<'a> Compiler<'a> {
         }
 
         if let Some(shader) = &group.shader {
-            let bounds = if self.bounds(output).rect().is_some() {
-                LocalBounds::from_rect(shader.bounds)
-            } else {
-                LocalBounds::Empty
-            };
+            let bounds = LocalBounds::from_rect(shader.output_bounds());
             let shaded = self.resource(bounds, local_to_program)?;
             self.pass(
                 format!("{node_path}.shader"),
@@ -995,7 +994,18 @@ impl<'a> Compiler<'a> {
         kind: ProgramPassKind,
     ) -> Result<ProgramPassId, ProgramPlanError> {
         let id = ProgramPassId::from_index(self.passes.len())?;
+        let shader_work_per_pixel = match &kind {
+            ProgramPassKind::ApplyShader { shader, .. } => shader.shader.work_per_pixel,
+            ProgramPassKind::RasterNode { node, .. } => {
+                match &self.program.nodes()[node.raw() as usize] {
+                    Node::RuntimeShader(shader) => shader.shader.work_per_pixel,
+                    _ => Default::default(),
+                }
+            }
+            _ => Default::default(),
+        };
         self.passes.push(ProgramPass {
+            shader_work_per_pixel,
             id,
             semantic_path: semantic_path.into(),
             kind,

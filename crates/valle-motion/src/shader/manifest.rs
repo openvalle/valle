@@ -7,19 +7,17 @@ use crate::ContentDigest;
 
 use super::{DiagnosticCode, ShaderDiagnostic};
 
-pub const SHADER_MANIFEST_VERSION: u32 = 1;
 pub const DIALECT_ID: &str = "valle-sksl";
-pub const DIALECT_VERSION: u32 = 1;
-pub const COLOR_SPACE: &str = "srgb";
-pub const ALPHA_MODE: &str = "premultiplied";
+pub const COLOR_SPACE: &str = "linear-srgb";
+pub const ALPHA_MODE: &str = "straight";
 
 // Bound shader source size, sampling, and local surface allocation. A local ShaderLayer must not
 // silently allocate a full-canvas surface.
-pub const MAX_SOURCE_BYTES: usize = 4 * 1024;
+pub const MAX_SOURCE_BYTES: usize = super::dialect::SHADER_LIMITS.source_bytes;
 pub const MAX_TEXTURE_INPUTS: usize = 3; // plus the implicit `content` child = 4 total
-pub const MAX_SAMPLES_PER_PIXEL: usize = 8;
+pub const MAX_SAMPLES_PER_PIXEL: usize = super::dialect::SHADER_LIMITS.samples_per_pixel;
 pub const MAX_UNIFORM_SCALARS: usize = 64;
-pub const MAX_LAYER_PIXELS: u64 = 1920 * 1080;
+pub const MAX_LAYER_PIXELS: u64 = valle_draw::program::MAX_SHADER_LAYER_PIXELS;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -34,11 +32,52 @@ pub enum InputSampling {
     Linear,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum InputKind {
+    #[default]
+    Color,
+    Data,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum InputWrap {
+    #[default]
+    Clamp,
+    Repeat,
+    Mirror,
+}
+
+impl InputWrap {
+    pub fn spread(self) -> valle_draw::program::SpreadMode {
+        match self {
+            Self::Clamp => valle_draw::program::SpreadMode::Pad,
+            Self::Repeat => valle_draw::program::SpreadMode::Repeat,
+            Self::Mirror => valle_draw::program::SpreadMode::Reflect,
+        }
+    }
+}
+
+impl InputSampling {
+    pub fn mode(self) -> valle_draw::requirements::SamplingMode {
+        match self {
+            Self::Nearest => valle_draw::requirements::SamplingMode::NearestClamp,
+            Self::Linear => valle_draw::requirements::SamplingMode::LinearClamp,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum UniformType {
     Float,
     Float2,
+    Float3,
+    Float4,
+    Float2x2,
+    Float3x3,
+    Float4x4,
     Color,
     Bool,
 }
@@ -48,6 +87,12 @@ impl UniformType {
         match self {
             Self::Float | Self::Bool => 1,
             Self::Float2 => 2,
+            Self::Float3 => 3,
+            Self::Float4 => 4,
+            Self::Float2x2 => 4,
+            Self::Float3x3 => 9,
+            Self::Float4x4 => 16,
+
             Self::Color => 4,
         }
     }
@@ -56,6 +101,12 @@ impl UniformType {
         match self {
             Self::Float => "float",
             Self::Float2 => "float2",
+            Self::Float3 => "float3",
+            Self::Float4 => "float4",
+            Self::Float2x2 => "float2x2",
+            Self::Float3x3 => "float3x3",
+            Self::Float4x4 => "float4x4",
+
             Self::Color => "float4",
             // RuntimeEffect rejects `uniform bool`. The ABI stores bool as f32 0/1 and lowering
             // rewrites the author identifier to a comparison against this private float slot.
@@ -69,6 +120,12 @@ impl UniformType {
 pub enum UniformValue {
     Float(f32),
     Float2([f32; 2]),
+    Float3([f32; 3]),
+    Float4([f32; 4]),
+    Float2x2([f32; 4]),
+    Float3x3([f32; 9]),
+    Float4x4([f32; 16]),
+
     Color([f32; 4]),
     Bool(bool),
 }
@@ -78,6 +135,12 @@ impl UniformValue {
         match self {
             Self::Float(_) => UniformType::Float,
             Self::Float2(_) => UniformType::Float2,
+            Self::Float3(_) => UniformType::Float3,
+            Self::Float4(_) => UniformType::Float4,
+            Self::Float2x2(_) => UniformType::Float2x2,
+            Self::Float3x3(_) => UniformType::Float3x3,
+            Self::Float4x4(_) => UniformType::Float4x4,
+
             Self::Color(_) => UniformType::Color,
             Self::Bool(_) => UniformType::Bool,
         }
@@ -87,6 +150,12 @@ impl UniformValue {
         match self {
             Self::Float(value) => core::slice::from_ref(value),
             Self::Float2(values) => values,
+            Self::Float3(values) => values,
+            Self::Float4(values) => values,
+            Self::Float2x2(values) => values,
+            Self::Float3x3(values) => values,
+            Self::Float4x4(values) => values,
+
             Self::Color(values) => values,
             Self::Bool(_) => &[],
         }
@@ -121,9 +190,13 @@ impl ShaderUniform {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ShaderInput {
+    #[serde(default)]
+    pub kind: InputKind,
     pub name: String,
     pub required: bool,
     pub sampling: InputSampling,
+    #[serde(default)]
+    pub wrap: InputWrap,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -147,6 +220,9 @@ pub struct OutputContract {
     pub color_space: String,
     pub alpha_mode: String,
     pub allow_transparent: bool,
+    /// Static local pixel outsets, in left/top/right/bottom order.
+    #[serde(default)]
+    pub padding: [u32; 4],
 }
 
 impl Default for OutputContract {
@@ -155,6 +231,7 @@ impl Default for OutputContract {
             color_space: COLOR_SPACE.into(),
             alpha_mode: ALPHA_MODE.into(),
             allow_transparent: true,
+            padding: [0; 4],
         }
     }
 }
@@ -162,11 +239,7 @@ impl Default for OutputContract {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ShaderManifest {
-    pub manifest_version: u32,
     pub name: String,
-    pub version: u32,
-    pub dialect: String,
-    pub dialect_version: u32,
     pub entry: String,
     #[serde(default)]
     pub inputs: Vec<ShaderInput>,
@@ -174,16 +247,17 @@ pub struct ShaderManifest {
     pub uniforms: Vec<ShaderUniform>,
     pub output: OutputContract,
     pub budget: BudgetClass,
-    pub source_digest: ContentDigest,
-    pub abi_digest: ContentDigest,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AbiChild {
+    pub kind: InputKind,
     pub name: String,
     pub required: bool,
     pub sampling: InputSampling,
+    #[serde(default)]
+    pub wrap: InputWrap,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -219,24 +293,6 @@ impl ShaderAbi {
 }
 
 impl ShaderManifest {
-    /// Fill the content-derived fields for a newly authored manifest. The returned manifest still
-    /// has to pass [`super::ShaderPackage::admit`]; sealing is a deterministic authoring helper,
-    /// not a trusted bypass.
-    pub fn seal(mut self, source: &[u8]) -> Result<Self, ShaderDiagnostic> {
-        self.validate_shape()?;
-        let source_text = core::str::from_utf8(source).map_err(|error| {
-            ShaderDiagnostic::new(
-                DiagnosticCode::SourceEncoding,
-                "source",
-                format!("shader source is not UTF-8: {error}"),
-            )
-        })?;
-        super::validate_dialect(&self, source_text)?;
-        self.source_digest = ContentDigest::of_bytes(source);
-        self.abi_digest = self.abi()?.digest()?;
-        Ok(self)
-    }
-
     pub fn parse(bytes: &[u8]) -> Result<Self, ShaderDiagnostic> {
         serde_json::from_slice(bytes).map_err(|error| {
             ShaderDiagnostic::new(
@@ -255,14 +311,18 @@ impl ShaderManifest {
     pub fn abi(&self) -> Result<ShaderAbi, ShaderDiagnostic> {
         self.validate_shape()?;
         let mut children = vec![AbiChild {
+            kind: InputKind::Color,
             name: "content".into(),
             required: true,
             sampling: InputSampling::Linear,
+            wrap: InputWrap::Clamp,
         }];
         children.extend(self.inputs.iter().map(|input| AbiChild {
+            kind: input.kind,
             name: input.name.clone(),
             required: input.required,
             sampling: input.sampling,
+            wrap: input.wrap,
         }));
 
         let mut scalar_offset = 0_u32;
@@ -274,6 +334,16 @@ impl ShaderManifest {
             system: true,
         }];
         scalar_offset += 2;
+        for input in &self.inputs {
+            uniforms.push(AbiUniform {
+                name: format!("valle_size_{}", input.name),
+                uniform_type: UniformType::Float2,
+                scalar_offset,
+                scalar_width: 2,
+                system: true,
+            });
+            scalar_offset += 2;
+        }
         for uniform in &self.uniforms {
             let width = uniform.uniform_type.scalar_width() as u32;
             uniforms.push(AbiUniform {
@@ -296,43 +366,38 @@ impl ShaderManifest {
     }
 
     pub fn validate_shape(&self) -> Result<(), ShaderDiagnostic> {
-        if self.manifest_version != SHADER_MANIFEST_VERSION {
-            return Err(ShaderDiagnostic::new(
-                DiagnosticCode::ManifestVersion,
-                "manifestVersion",
-                format!(
-                    "shader manifest version {} does not match {SHADER_MANIFEST_VERSION}",
-                    self.manifest_version
-                ),
-            ));
-        }
-        if self.version == 0 {
-            return Err(ShaderDiagnostic::new(
-                DiagnosticCode::ManifestInvalid,
-                "version",
-                "shader package version must be positive",
-            ));
-        }
         validate_package_name(&self.name, "name")?;
-        if self.dialect != DIALECT_ID || self.dialect_version != DIALECT_VERSION {
-            return Err(ShaderDiagnostic::new(
-                DiagnosticCode::DialectVersion,
-                "dialect",
-                format!("only {DIALECT_ID}@{DIALECT_VERSION} is supported"),
-            ));
-        }
-        if self.entry != "shader.vsksl" {
+        if !self.entry.ends_with(".vsksl")
+            || self.entry.len() > 256
+            || self.entry.contains('\\')
+            || self.entry.contains(':')
+            || self
+                .entry
+                .split('/')
+                .any(|part| part.is_empty() || part == "." || part == "..")
+        {
             return Err(ShaderDiagnostic::new(
                 DiagnosticCode::ManifestInvalid,
                 "entry",
-                "v1 entry must be the package-relative path shader.vsksl",
+                "entry must be a relative .vsksl path with no empty or parent components",
             ));
         }
         if self.output.color_space != COLOR_SPACE || self.output.alpha_mode != ALPHA_MODE {
             return Err(ShaderDiagnostic::new(
                 DiagnosticCode::OutputContract,
                 "output",
-                format!("v1 output must be {COLOR_SPACE}/{ALPHA_MODE}"),
+                format!("output must be {COLOR_SPACE}/{ALPHA_MODE}"),
+            ));
+        }
+        let [left, top, right, bottom] = self.output.padding.map(u64::from);
+        if (1 + left + right)
+            .checked_mul(1 + top + bottom)
+            .is_none_or(|area| area > MAX_LAYER_PIXELS)
+        {
+            return Err(ShaderDiagnostic::new(
+                DiagnosticCode::BudgetExceeded,
+                "output.padding",
+                "padding exceeds the layer pixel budget even for a 1x1 layer",
             ));
         }
         if self.inputs.len() > MAX_TEXTURE_INPUTS {
@@ -340,7 +405,7 @@ impl ShaderManifest {
                 DiagnosticCode::BudgetExceeded,
                 "inputs",
                 format!(
-                    "{} declared textures exceed the v1 limit {MAX_TEXTURE_INPUTS}",
+                    "{} declared textures exceed the limit {MAX_TEXTURE_INPUTS}",
                     self.inputs.len()
                 ),
             ));
@@ -356,7 +421,7 @@ impl ShaderManifest {
             }
         }
 
-        let mut scalar_count = 2_usize;
+        let mut scalar_count = 2_usize + self.inputs.len() * 2;
         for (index, uniform) in self.uniforms.iter().enumerate() {
             let path = format!("uniforms[{index}]");
             validate_identifier(&uniform.name, &format!("{path}.name"))?;
@@ -370,7 +435,7 @@ impl ShaderManifest {
             return Err(ShaderDiagnostic::new(
                 DiagnosticCode::BudgetExceeded,
                 "uniforms",
-                format!("{scalar_count} ABI scalars exceed the v1 limit {MAX_UNIFORM_SCALARS}"),
+                format!("{scalar_count} ABI scalars exceed the limit {MAX_UNIFORM_SCALARS}"),
             ));
         }
         Ok(())
@@ -413,7 +478,7 @@ fn validate_uniform(uniform: &ShaderUniform, path: &str) -> Result<(), ShaderDia
             return Err(ShaderDiagnostic::new(
                 DiagnosticCode::UniformRange,
                 path,
-                "float and float2 uniforms require finite min and max",
+                "numeric uniforms require finite min and max",
             ));
         };
         if !min.is_finite() || !max.is_finite() || min > max {
@@ -523,6 +588,12 @@ pub(crate) fn validate_identifier(name: &str, path: &str) -> Result<(), ShaderDi
             .is_some_and(|byte| byte.is_ascii_alphabetic() || byte == b'_')
         && bytes.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
         && !reserved.contains(&name)
+        && !super::dialect::builtin_names().contains(&name)
+        && ![
+            "float", "float2", "float3", "float4", "float2x2", "float3x3", "float4x4", "int",
+            "bool",
+        ]
+        .contains(&name)
         && !name.starts_with("sk_")
         && !name.starts_with("valle_")
         && !name.starts_with("sample_");

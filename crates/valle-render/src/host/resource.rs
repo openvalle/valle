@@ -701,6 +701,16 @@ impl NativeResourceProvider {
                 extent,
                 pixel_layout,
             } => self.fulfill_visual(request, *extent, *pixel_layout),
+            ExternalResourceDesc::DataTexture { extent } => {
+                let digest = request.key().content;
+                let source = self.source(digest)?;
+                let bytes = self.source_bytes(&digest, &source)?;
+                Ok(SkiaExternalObject::data_texture_encoded(
+                    request.key().clone(),
+                    *extent,
+                    &bytes,
+                )?)
+            }
             ExternalResourceDesc::FontBytes => {
                 let ResourceInterpretation::FontFace { face_index } = request.key().interpretation
                 else {

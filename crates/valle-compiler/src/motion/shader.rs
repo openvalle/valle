@@ -10,44 +10,60 @@ impl<'s> Compiler<'s> {
         uniforms_object: Option<&'s ObjectExpression<'s>>,
         span: Span,
     ) -> Option<NodeKind> {
-        let uri = source
-            .parse::<valle_motion::shader::ShaderUri>()
-            .unwrap_or_else(|error| {
-                self.illegal(
-                    DiagCode::GrammarForbidden,
-                    span,
-                    format!("invalid ShaderLayer source: {error}"),
-                );
-                // A sentinel keeps this branch expression-shaped; diagnostics make the result fail.
-                "shader://invalid@1".parse().expect("sentinel URI")
-            });
-        if source != uri.to_string() {
+        let Some(control) = source.strip_prefix("asset://") else {
+            self.illegal(
+                DiagCode::GrammarForbidden,
+                span,
+                "ShaderLayer source must use asset://<shader-control>",
+            );
+            return None;
+        };
+        if !self
+            .controls
+            .assets
+            .get(control)
+            .is_some_and(|asset| asset.kind == AssetKind::Shader)
+        {
+            self.illegal(
+                DiagCode::GrammarForbidden,
+                span,
+                format!("ShaderLayer source `{control}` must be a declared shader asset"),
+            );
             return None;
         }
-        let Some(registry) = self.shader_registry.as_ref() else {
+        let Some(package) = self
+            .shader_registry
+            .as_ref()
+            .and_then(|registry| registry.asset(control))
+        else {
             self.unsupported(
                 span,
                 format!(
-                    "ShaderLayer package `{source}` is not available: this compile entrypoint has \
-                     no ShaderRegistryEnv"
+                    "shader asset `{control}` is not bound to an admitted .shader.json descriptor"
                 ),
             );
             return None;
         };
-        let package = match registry.resolve(&uri) {
-            Ok(package) => package,
-            Err(error) => {
-                self.unsupported(span, error.to_string());
-                return None;
-            }
-        };
+        if !self.resource_refs.iter().any(|resource| {
+            resource.control == control && resource.content_hash == package.content_hash
+        }) {
+            self.illegal(
+                DiagCode::GrammarForbidden,
+                span,
+                format!("shader asset `{control}` does not match its frozen resource binding"),
+            );
+            return None;
+        }
+        let uri = package.uri();
         // Clone the manifest contract before lowering expressions, which mutates `self`.
         let manifest_inputs = package.manifest.inputs.clone();
         let manifest_uniforms = package.manifest.uniforms.clone();
         let program = ShaderProgramRef {
+            work_per_pixel: package.work_per_pixel(),
             uri: uri.to_string(),
             content_hash: package.content_hash,
-            abi_hash: package.manifest.abi_digest,
+            abi_hash: package.abi_hash,
+            padding: package.manifest.output.padding,
         };
 
         let authored_inputs = self.shader_object_values(inputs_object, "ShaderLayer inputs")?;
@@ -78,6 +94,13 @@ impl<'s> Compiler<'s> {
                         ),
                     );
                 }
+                inputs.push(ShaderTextureInput {
+                    kind: input.kind,
+                    name: input.name.clone(),
+                    source: None,
+                    sampling: input.sampling,
+                    wrap: input.wrap,
+                });
                 continue;
             };
             let Some(serde_json::Value::String(asset)) = self.eval_static(expression) else {
@@ -143,8 +166,11 @@ impl<'s> Compiler<'s> {
                 continue;
             }
             inputs.push(ShaderTextureInput {
+                kind: input.kind,
+                sampling: input.sampling,
+                wrap: input.wrap,
                 name: input.name.clone(),
-                source: asset,
+                source: Some(asset),
             });
         }
 
@@ -184,6 +210,7 @@ impl<'s> Compiler<'s> {
             uniforms.push(ShaderUniformBinding {
                 name: uniform.name.clone(),
                 value,
+                range: uniform.min.zip(uniform.max).map(|(min, max)| [min, max]),
             });
         }
 
@@ -268,6 +295,26 @@ impl<'s> Compiler<'s> {
                 }
                 Some(ShaderUniformValue::Float2 { value })
             }
+            valle_motion::shader::UniformType::Float3 => {
+                let value = self.shader_components::<3>(uniform, expression, &label)?;
+                Some(ShaderUniformValue::Float3 { value })
+            }
+            valle_motion::shader::UniformType::Float4 => {
+                let value = self.shader_components::<4>(uniform, expression, &label)?;
+                Some(ShaderUniformValue::Float4 { value })
+            }
+            valle_motion::shader::UniformType::Float2x2 => {
+                let value = self.shader_components::<4>(uniform, expression, &label)?;
+                Some(ShaderUniformValue::Float2x2 { value })
+            }
+            valle_motion::shader::UniformType::Float3x3 => {
+                let value = self.shader_components::<9>(uniform, expression, &label)?;
+                Some(ShaderUniformValue::Float3x3 { value })
+            }
+            valle_motion::shader::UniformType::Float4x4 => {
+                let value = self.shader_components::<16>(uniform, expression, &label)?;
+                Some(ShaderUniformValue::Float4x4 { value })
+            }
             valle_motion::shader::UniformType::Color => self
                 .color_binding(expression, &label)
                 .map(|value| ShaderUniformValue::Color { value }),
@@ -291,6 +338,52 @@ impl<'s> Compiler<'s> {
         }
     }
 
+    fn shader_components<const N: usize>(
+        &mut self,
+        uniform: &valle_motion::shader::ShaderUniform,
+        expression: &'s Expression<'s>,
+        label: &str,
+    ) -> Option<[NumberValue; N]> {
+        if let Some(serde_json::Value::Array(items)) = self.eval_static(expression) {
+            let values = items
+                .iter()
+                .map(|item| {
+                    item.as_f64()
+                        .filter(|v| {
+                            v.is_finite()
+                                && uniform.min.is_none_or(|min| *v >= f64::from(min))
+                                && uniform.max.is_none_or(|max| *v <= f64::from(max))
+                        })
+                        .map(|value| NumberValue::Static { value })
+                })
+                .collect::<Option<Vec<_>>>();
+            if let Some(values) = values.filter(|values| values.len() == N) {
+                return values.try_into().ok();
+            }
+            self.illegal(
+                DiagCode::GrammarForbidden,
+                expression.span(),
+                format!("{label} requires {N} finite numeric components within its declared range"),
+            );
+            return None;
+        }
+        let items = array_items(expression);
+        let Some(items) = items.filter(|items| items.len() == N) else {
+            self.illegal(DiagCode::GrammarForbidden, expression.span(), format!("{label} requires an array of {N} numeric components (matrices are column-major)"));
+            return None;
+        };
+        let values = items
+            .into_iter()
+            .map(|item| {
+                self.number_binding(item, label, |value| {
+                    uniform.min.is_none_or(|min| value >= f64::from(min))
+                        && uniform.max.is_none_or(|max| value <= f64::from(max))
+                })
+            })
+            .collect::<Option<Vec<_>>>()?;
+        values.try_into().ok()
+    }
+
     pub(super) fn shader_default_binding(
         value: &valle_motion::shader::UniformValue,
     ) -> ShaderUniformValue {
@@ -304,6 +397,31 @@ impl<'s> Compiler<'s> {
                 value: PointValue::Static {
                     value: Point::new(f64::from(*x), f64::from(*y)),
                 },
+            },
+            valle_motion::shader::UniformValue::Float3(value) => ShaderUniformValue::Float3 {
+                value: value.map(|v| NumberValue::Static {
+                    value: f64::from(v),
+                }),
+            },
+            valle_motion::shader::UniformValue::Float4(value) => ShaderUniformValue::Float4 {
+                value: value.map(|v| NumberValue::Static {
+                    value: f64::from(v),
+                }),
+            },
+            valle_motion::shader::UniformValue::Float2x2(value) => ShaderUniformValue::Float2x2 {
+                value: value.map(|v| NumberValue::Static {
+                    value: f64::from(v),
+                }),
+            },
+            valle_motion::shader::UniformValue::Float3x3(value) => ShaderUniformValue::Float3x3 {
+                value: value.map(|v| NumberValue::Static {
+                    value: f64::from(v),
+                }),
+            },
+            valle_motion::shader::UniformValue::Float4x4(value) => ShaderUniformValue::Float4x4 {
+                value: value.map(|v| NumberValue::Static {
+                    value: f64::from(v),
+                }),
             },
             valle_motion::shader::UniformValue::Color([r, g, b, a]) => {
                 let channel = |value: f32| (value.clamp(0.0, 1.0) * 255.0).round() as u8;

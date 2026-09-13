@@ -128,6 +128,8 @@ impl LocalBounds {
 pub enum ColorDomain {
     /// Valle's only compositor working space.
     LinearRec2020,
+    /// Independent numeric channels, without color or coverage conversions.
+    Data,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -167,10 +169,36 @@ pub struct FontKey {
     pub face_index: u32,
 }
 
+/// Deterministic static work estimate, independent of cache state and wall-clock time.
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ShaderWork {
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub operations: u64,
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub samples: u64,
+}
+
+impl ShaderWork {
+    pub fn add_pixels(&mut self, per_pixel: Self, pixels: u64) {
+        // Saturation always exceeds the host limits and therefore fails admission.
+        self.operations = self
+            .operations
+            .saturating_add(per_pixel.operations.saturating_mul(pixels));
+        self.samples = self
+            .samples
+            .saturating_add(per_pixel.samples.saturating_mul(pixels));
+    }
+}
+
 /// Runtime shader identity and frozen ABI. Source code is deliberately absent.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RuntimeShaderKey {
+    pub work_per_pixel: ShaderWork,
     pub uri: String,
     pub content_hash: DigestBytes,
     pub abi_hash: DigestBytes,
@@ -231,6 +259,7 @@ impl Insets {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub enum SamplingMode {
     NearestClamp,
     LinearClamp,

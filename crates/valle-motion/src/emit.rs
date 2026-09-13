@@ -790,16 +790,21 @@ impl Emitter<'_> {
             let inputs = shader
                 .inputs
                 .into_iter()
-                .map(|(name, asset)| ShaderTextureInput {
-                    name,
-                    image: self.out.recording.intern_image(
-                        valle_draw::program::recording::ImageSource {
-                            asset,
-                            width: border_box.width.ceil().max(0.0) as u32,
-                            height: border_box.height.ceil().max(0.0) as u32,
-                            source_time_s: None,
-                        },
-                    ),
+                .map(|input| ShaderTextureInput {
+                    data: input.kind == crate::shader::InputKind::Data,
+                    name: input.name,
+                    sampling: input.sampling.mode(),
+                    wrap: input.wrap.spread(),
+                    image: input.source.map(|asset| {
+                        self.out.recording.intern_image(
+                            valle_draw::program::recording::ImageSource {
+                                asset,
+                                width: border_box.width.ceil().max(0.0) as u32,
+                                height: border_box.height.ceil().max(0.0) as u32,
+                                source_time_s: None,
+                            },
+                        )
+                    }),
                 })
                 .collect::<Vec<_>>();
             let inputs = self.out.recording.intern_shader_inputs(&inputs);

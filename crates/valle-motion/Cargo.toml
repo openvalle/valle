@@ -29,6 +29,7 @@ ratex-parser.workspace = true
 ratex-layout.workspace = true
 thiserror.workspace = true
 ttf-parser.workspace = true
+image = { workspace = true, features = ["hdr"] }
 
 [package.metadata.cargo-machete]
 ignored = ["parley"]

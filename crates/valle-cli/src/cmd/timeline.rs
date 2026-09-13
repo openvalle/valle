@@ -151,14 +151,6 @@ fn render_document_impl(
                     });
                     catalog.insert_bytes(ContentDigest::of_bytes(bytes), bytes.to_vec())?;
                 }
-                for (i, shader) in prepared.shaders.packages().enumerate() {
-                    let shader_id = format!("shader:{name}:{i}");
-                    resources.add_shader(&shader_id, shader)?;
-                    deps.push(super::motion_package::FixedResourceDependency {
-                        role: format!("shader:{i}"),
-                        resource_id: shader_id,
-                    });
-                }
                 use valle_timeline::internal::wire::resource::*;
                 let descriptor = MotionArtifactDescriptorWire {
                     reads_destination: artifact.reads_destination(),
@@ -182,9 +174,10 @@ fn render_document_impl(
                 )?;
                 continue;
             }
-            let bytes = std::fs::read(&path)
+            let bound_asset = super::motion::load_asset(&path)
                 .with_context(|| format!("reading resource {name}: {}", path.display()))?;
-            let hash = ContentDigest::of_bytes(&bytes);
+            let bytes = bound_asset.bytes;
+            let hash = bound_asset.hash;
             let frozen_path = frozen.path().join(hash.as_hex());
             std::fs::write(&frozen_path, &bytes)?;
             let path = frozen_path;

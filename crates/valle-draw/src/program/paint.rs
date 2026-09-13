@@ -59,6 +59,17 @@ impl LinearColor {
     }
 }
 
+/// Shader author color -> linear sRGB, preserving RGB even when alpha is zero.
+/// This is intentionally straight alpha; coverage is applied at the shader output boundary.
+pub fn decode_srgb_straight(color: [f32; 4]) -> [f32; 4] {
+    [
+        decode_srgb_channel(f64::from(color[0])) as f32,
+        decode_srgb_channel(f64::from(color[1])) as f32,
+        decode_srgb_channel(f64::from(color[2])) as f32,
+        color[3],
+    ]
+}
+
 fn decode_srgb_channel(encoded: f64) -> f64 {
     if encoded.abs() <= 0.04045 {
         encoded / 12.92
@@ -97,6 +108,7 @@ pub struct GradientStop {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub enum SpreadMode {
     #[default]
     Pad,

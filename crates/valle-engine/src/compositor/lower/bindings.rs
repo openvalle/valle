@@ -143,6 +143,21 @@ struct PlanBindingLayoutWire {
 }
 
 impl PlanBindingLayout {
+    /// Resident raw-channel storage reserved alongside the frame surface budget.
+    pub fn data_texture_bytes(&self) -> u64 {
+        self.external_slots
+            .iter()
+            .filter_map(|slot| match slot.expected {
+                ExternalResourceDesc::DataTexture { extent } => Some(
+                    u64::from(extent.width())
+                        * u64::from(extent.height())
+                        * valle_motion::shader::DATA_TEXTURE_BYTES_PER_PIXEL,
+                ),
+                _ => None,
+            })
+            .sum()
+    }
+
     pub fn new(
         dynamic_slots: Vec<DynamicSlot>,
         external_slots: Vec<ExternalSlot>,
@@ -466,6 +481,11 @@ fn external_shape_matches(
     interpretation: &ResourceInterpretation,
     expected: &ExternalResourceDesc,
 ) -> bool {
+    if let ExternalResourceDesc::DataTexture { extent } = expected {
+        return matches!(interpretation, ResourceInterpretation::DataTexture {})
+            && valle_motion::shader::data_texture_storage_bytes(extent.width(), extent.height())
+                .is_ok();
+    }
     matches!(
         (interpretation, expected),
         (

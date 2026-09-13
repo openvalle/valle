@@ -148,6 +148,7 @@ interface RenderOptions {
 }
 
 interface BrowserProductEngineWire extends ProductEngineWire {
+  decode_shader_data_texture(digest: string, encoded: Uint8Array, width: number, height: number): Uint8Array;
   scene3d_resource_needs_json(canonicalRequest: Uint8Array): string;
   register_scene3d_texture(
     digest: string,
@@ -1445,6 +1446,25 @@ export class BrowserValleWebPlayer {
         ...empty,
       };
     }
+    if (expected.kind === "dataTexture") {
+      if (interpretation.kind !== "dataTexture") throw new Error("data texture request has wrong interpretation");
+      const asset = this.assetByDigest.get(content);
+      if (!asset || asset.type !== "image") throw new Error(`data texture ${content} has no admitted image asset`);
+      const extent = record(expected.extent, "data texture extent");
+      const width = Number(extent.width), height = Number(extent.height);
+      const encoded = await this.fetchAssetBytes(asset, content);
+      const pixels = this.engine.decode_shader_data_texture(contentWire, encoded, width, height);
+      const bytes = pixelBytes(width, height, 8);
+      if (pixels.byteLength !== bytes) throw new Error("data texture decoder returned invalid storage");
+      const image = this.CanvasKit.MakeImage({
+        width: width * 2, height: height * 4,
+        colorType: this.CanvasKit.ColorType.Alpha_8,
+        alphaType: this.CanvasKit.AlphaType.Premul,
+        colorSpace: this.CanvasKit.ColorSpace.SRGB,
+      }, pixels, width * 2);
+      if (!image) throw new Error(`CanvasKit cannot wrap data texture ${content}`);
+      return { object: { key, kind: "dataTexture", image }, bytes, dispose: () => image.delete(), ...empty };
+    }
     if (expected.kind === "fontBytes") {
       if (interpretation.kind !== "fontFace") throw new Error("font request has wrong interpretation");
       const bytes = this.fontBytes.get(content);
@@ -1452,7 +1472,7 @@ export class BrowserValleWebPlayer {
       return { object: { key, kind: "font", bytes }, bytes: bytes.byteLength, dispose: noop, ...empty };
     }
     if (expected.kind === "runtimeShader") {
-      const abi = contentDigestHex(interpretation.abiDigest, "runtime shader ABI digest");
+      const abi = contentDigestHex(interpretation.abi_digest, "runtime shader ABI digest");
       const bytes = this.shaderBytes.get(`${content}:${abi}`);
       if (!bytes) throw new Error(`runtime shader ${content}:${abi} is not registered`);
       return {

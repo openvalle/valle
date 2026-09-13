@@ -29,6 +29,7 @@ pub struct SkiaExternalObject {
 #[derive(Clone)]
 enum SkiaObjectPayload {
     Visual(Image),
+    DataTexture(Image),
     #[cfg(feature = "native")]
     DecodedVideo(Arc<valle_media::SourceFrame>),
     FontBytes(Arc<[u8]>),
@@ -40,6 +41,7 @@ impl core::fmt::Debug for SkiaExternalObject {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let payload = match &self.payload {
             SkiaObjectPayload::Visual(_) => "visual",
+            SkiaObjectPayload::DataTexture(_) => "dataTexture",
             #[cfg(feature = "native")]
             SkiaObjectPayload::DecodedVideo(_) => "decodedVideo",
             SkiaObjectPayload::FontBytes(_) => "fontBytes",
@@ -359,12 +361,53 @@ impl SkiaExternalObject {
         Self::scene3d(key, surface.image_snapshot())
     }
 
+    pub fn data_texture_encoded(
+        key: ResourceKey,
+        extent: Extent2d,
+        encoded: &[u8],
+    ) -> Result<Self, SkiaObjectError> {
+        if !matches!(key.interpretation, ResourceInterpretation::DataTexture {}) {
+            return Err(SkiaObjectError::WrongInterpretation {
+                expected: "dataTexture",
+            });
+        }
+        let packed = valle_engine::motion::shader::decode_data_texture(
+            encoded,
+            extent.width(),
+            extent.height(),
+        )
+        .map_err(SkiaObjectError::DataTexture)?;
+        let info = ImageInfo::new(
+            ((extent.width() * 2) as i32, (extent.height() * 4) as i32),
+            ColorType::Alpha8,
+            AlphaType::Premul,
+            None,
+        );
+        let image =
+            images::raster_from_data(&info, Data::new_copy(&packed), extent.width() as usize * 2)
+                .ok_or(SkiaObjectError::InvalidPixelPayload)?;
+        Ok(Self {
+            key,
+            descriptor: ExternalResourceDesc::DataTexture { extent },
+            payload: SkiaObjectPayload::DataTexture(image),
+        })
+    }
+
+    pub(crate) fn data_image(&self) -> Option<&Image> {
+        match &self.payload {
+            SkiaObjectPayload::DataTexture(image) => Some(image),
+            _ => None,
+        }
+    }
+
     pub(crate) fn visual_image(&self) -> Option<&Image> {
         match &self.payload {
             SkiaObjectPayload::Visual(image) | SkiaObjectPayload::Scene3d(image) => Some(image),
             #[cfg(feature = "native")]
             SkiaObjectPayload::DecodedVideo(_) => None,
-            SkiaObjectPayload::FontBytes(_) | SkiaObjectPayload::RuntimeShader(_) => None,
+            SkiaObjectPayload::DataTexture(_)
+            | SkiaObjectPayload::FontBytes(_)
+            | SkiaObjectPayload::RuntimeShader(_) => None,
         }
     }
 
@@ -415,7 +458,9 @@ impl SkiaExternalObject {
     #[cfg(feature = "native")]
     pub(crate) fn resident_bytes(&self) -> Option<u64> {
         match &self.payload {
-            SkiaObjectPayload::Visual(image) | SkiaObjectPayload::Scene3d(image) => {
+            SkiaObjectPayload::Visual(image)
+            | SkiaObjectPayload::Scene3d(image)
+            | SkiaObjectPayload::DataTexture(image) => {
                 let info = image.image_info();
                 u64::try_from(info.width())
                     .ok()?
@@ -538,6 +583,8 @@ impl<'a> SkiaTarget<'a> {
 
 #[derive(Debug, Error)]
 pub enum SkiaObjectError {
+    #[error("invalid data texture: {0}")]
+    DataTexture(String),
     #[error("external object requires {expected} interpretation")]
     WrongInterpretation { expected: &'static str },
     #[error("external object has an invalid pixel extent")]

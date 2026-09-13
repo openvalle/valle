@@ -277,6 +277,26 @@ impl RequestAllocator {
         )
     }
 
+    pub(crate) fn data_texture(
+        &mut self,
+        asset: &SemanticAsset,
+        path: &str,
+    ) -> Result<ExternalHandleId, RequestError> {
+        if asset.kind != SemanticAssetKind::Image {
+            return Err(RequestError::InvalidVisualDescriptor);
+        }
+        let extent = asset
+            .descriptor
+            .extent()
+            .ok_or(RequestError::InvalidVisualDescriptor)?;
+        self.allocate(
+            ResourceKey::new(asset.digest.clone(), ResourceInterpretation::DataTexture {}),
+            ResourceSample::Static,
+            ExternalResourceDesc::DataTexture { extent },
+            path,
+        )
+    }
+
     pub(crate) fn font(
         &mut self,
         digest: ContentDigest,

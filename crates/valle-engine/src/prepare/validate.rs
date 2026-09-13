@@ -581,7 +581,20 @@ impl Admission<'_> {
             }
             let request =
                 self.use_handle(binding.handle, format!("{path}.texture[{}]", binding.key))?;
-            expect_visual_request(&request, path)?;
+            if requirement.color_domain == valle_draw::requirements::ColorDomain::Data {
+                if !matches!(
+                    request.key().interpretation,
+                    ResourceInterpretation::DataTexture {}
+                ) || !matches!(request.expected(), ExternalResourceDesc::DataTexture { .. })
+                {
+                    return Err(invalid(
+                        path,
+                        "Shader data input requires a data texture request",
+                    ));
+                }
+            } else {
+                expect_visual_request(&request, path)?;
+            }
             let expected_sample = match requirement.kind {
                 TextureKind::Video => {
                     let micros = requirement.sample_time_micros.ok_or_else(|| {

@@ -100,3 +100,85 @@ fn execute_image_render(render: EngineRender, pixels: [u8; 16]) -> [u8; 16] {
     assert!(surface.read_pixels(&info, &mut rgba, 8, (0, 0)));
     rgba
 }
+
+#[test]
+fn shader_language_executes_bounded_math_and_sanitizes_invalid_values() {
+    use skia_safe::{Data, Paint, RuntimeEffect, shaders};
+    use valle_motion::shader::{
+        BudgetClass, OutputContract, ShaderManifest, ShaderPackage, ShaderUniform, UniformBindings,
+        UniformType, UniformValue,
+    };
+    let descriptor = ShaderManifest {
+        name: "math-check".into(),
+        entry: "source.vsksl".into(),
+        inputs: vec![],
+        uniforms: vec![ShaderUniform {
+            name: "tint".into(),
+            uniform_type: UniformType::Color,
+            required: false,
+            default: Some(UniformValue::Color([1.0, 0.0, 0.0, 0.0])),
+            min: None,
+            max: None,
+        }],
+        output: OutputContract::default(),
+        budget: BudgetClass::Local,
+    };
+    // Grayscale avoids any dependence on the target's color primaries. RGB=2 checks that
+    // the shader boundary does not clip to the display range; alpha remains coverage.
+    let source = br#"
+        float4 valle_main(float2 uv) {
+            float sum = 0.0;
+            const int n = 3;
+            for (int i = 0; i < n; ++i) { sum += later(float(i)); }
+            float2x2 identity = float2x2(1.0);
+            float2 p = identity * uv;
+            float invalid = sqrt(-p.x) + pow(-p.x, 0.5) + 1.0 / (p.y-p.y);
+            float2 zero = normalize(float2(0.0));
+            if (p.x < 0.34) { return float4(float3(sum / 1.5 + invalid + zero.x), 0.5); }
+            if (p.x < 0.67) { return float4(tint.rgb, 1.0); }
+            return float4(exp(1000.0), exp(1000.0), exp(1000.0), 1.0);
+        }
+        float later(float n) { if (n > 0.0) return n; else return 0.0; }
+    "#;
+    let package = ShaderPackage::compile(descriptor, source).unwrap();
+    let effect = RuntimeEffect::make_for_shader(&package.generated_sksl, None)
+        .unwrap_or_else(|error| panic!("{error}\n{}", package.generated_sksl));
+    let uniforms = package
+        .pack_uniforms(
+            [3.0, 1.0],
+            &std::collections::BTreeMap::new(),
+            &UniformBindings::empty(),
+        )
+        .unwrap();
+    let shader = effect
+        .make_shader(Data::new_copy(&uniforms), &[shaders::empty().into()], None)
+        .unwrap();
+    let info = ImageInfo::new((3, 1), ColorType::RGBAF32, AlphaType::Premul, None);
+    let render = || {
+        let mut surface = surfaces::raster(&info, None, None).unwrap();
+        let mut paint = Paint::default();
+        paint.set_shader(shader.clone());
+        surface.canvas().draw_paint(&paint);
+        let mut bytes = [0u8; 48];
+        assert!(surface.read_pixels(&info, &mut bytes, 48, (0, 0)));
+        bytes
+    };
+    let first = render();
+    assert_eq!(first, render());
+    let values = first
+        .chunks_exact(4)
+        .map(|b| f32::from_ne_bytes(b.try_into().unwrap()))
+        .collect::<Vec<_>>();
+    assert!(values.iter().all(|v| v.is_finite()), "{values:?}");
+    for channel in &values[..3] {
+        assert!((*channel - 1.0).abs() < 0.002, "{values:?}");
+    }
+    assert_eq!(values[3], 0.5);
+    for (value, expected) in values[4..8]
+        .iter()
+        .zip([0.6274039, 0.06909729, 0.01639144, 1.0])
+    {
+        assert!((value - expected).abs() < 0.00001, "{values:?}");
+    }
+    assert_eq!(&values[8..], &[0.0, 0.0, 0.0, 1.0]);
+}

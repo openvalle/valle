@@ -4,10 +4,7 @@
 //! Timeline render input whose resource proof is opened by the Rust Product engine before
 //! any JSON is published to Studio.
 
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    sync::Arc,
-};
+use std::{collections::BTreeMap, sync::Arc};
 
 use anyhow::{Context, Result, anyhow, bail};
 use serde_json::{Value, json};
@@ -20,8 +17,8 @@ use valle_engine::render::{
     VerifiedHandleId, VerifiedResourceFacts, VisualFootprint,
 };
 use valle_motion::{
-    AssetKind, ControlType, CueWindow, MotionValue, NodeKind, SceneArtifact,
-    shader::{ShaderPackage, ShaderRegistry},
+    AssetKind, ControlType, CueWindow, MotionValue, SceneArtifact,
+    shader::ShaderPackage,
     value::{AngleUnit, LengthUnit},
 };
 use valle_timeline::internal::{
@@ -45,7 +42,6 @@ pub(super) struct StandaloneMotionPackageInput<'a> {
     pub artifact: &'a SceneArtifact,
     pub assets: &'a BTreeMap<String, BoundAsset>,
     pub font_blobs: &'a [Vec<u8>],
-    pub shaders: &'a ShaderRegistry,
     pub cue_bindings: &'a BTreeMap<String, CueWindow>,
     pub prop_bindings: &'a BTreeMap<String, Value>,
     pub duration: RationalTime,
@@ -95,20 +91,6 @@ pub(super) fn build_standalone_motion_package(
         let resource_id = resources.intern_font(bytes)?;
         component_dependencies.push(FixedResourceDependency {
             role: format!("font:{index}"),
-            resource_id,
-        });
-    }
-
-    let used_shaders = used_shader_uris(input.artifact);
-    for package in input
-        .shaders
-        .packages()
-        .filter(|package| used_shaders.contains(&package.uri().to_string()))
-    {
-        let resource_id = shader_resource_id(package);
-        resources.add_shader(&resource_id, package)?;
-        component_dependencies.push(FixedResourceDependency {
-            role: format!("shader:{}", package.uri()),
             resource_id,
         });
     }
@@ -349,24 +331,6 @@ fn motion_digest(bytes: &[u8]) -> ContentDigest {
     ContentDigest::of_bytes(bytes)
 }
 
-fn used_shader_uris(artifact: &SceneArtifact) -> BTreeSet<String> {
-    artifact
-        .nodes
-        .iter()
-        .filter_map(|node| match &node.kind {
-            NodeKind::ShaderLayer { program, .. } => Some(program.uri.clone()),
-            _ => None,
-        })
-        .collect()
-}
-
-fn shader_resource_id(package: &ShaderPackage) -> String {
-    format!(
-        "shader:{}-v{}",
-        package.manifest.name, package.manifest.version
-    )
-}
-
 pub(super) struct FixedResources {
     pub(super) entries: BTreeMap<String, ResourceEntryWire>,
     pub(super) domain_bindings: ResourceBindings,
@@ -437,6 +401,10 @@ impl FixedResources {
             AssetKind::Model3d => {
                 bail!("Model3D Motion assets have no Timeline ResourceManifest kind")
             }
+            AssetKind::Shader => {
+                let package = ShaderPackage::from_frozen(&asset.bytes)?;
+                self.add_shader(resource_id, &package)
+            }
         }
     }
 
@@ -475,7 +443,7 @@ impl FixedResources {
     pub(super) fn add_shader(&mut self, resource_id: &str, package: &ShaderPackage) -> Result<()> {
         self.has_shader = true;
         let digest = package.content_hash;
-        let controls_schema_digest = package.manifest.abi_digest;
+        let controls_schema_digest = package.abi_hash;
         let descriptor = ShaderResourceDescriptorWire {
             controls_schema_digest,
             reads_destination: false,

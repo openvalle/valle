@@ -186,7 +186,14 @@ pub struct BackdropRead {
 pub enum ShaderUniformValue {
     Float(f32),
     Float2([f32; 2]),
-    Color(LinearColor),
+    Float3([f32; 3]),
+    Float4([f32; 4]),
+    Float2x2([f32; 4]),
+    Float3x3([f32; 9]),
+    Float4x4([f32; 16]),
+
+    /// Linear sRGB, straight alpha; RGB remains meaningful at zero coverage.
+    Color([f32; 4]),
     Bool(bool),
 }
 
@@ -200,19 +207,37 @@ pub struct ShaderUniformBinding {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ShaderTextureBinding {
+    pub wrap: super::SpreadMode,
     pub name: String,
-    pub texture: crate::requirements::ExternalTexture,
+    pub texture: Option<crate::requirements::ExternalTexture>,
     pub sampling: SamplingMode,
 }
+
+/// Maximum local shader output area, including static padding.
+pub const MAX_SHADER_LAYER_PIXELS: u64 = 1920 * 1080;
 
 /// One admitted shader applied to the complete child contribution of a group.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ShaderLayer {
+    /// Static local pixel outsets, in left/top/right/bottom order.
+    pub padding: [u32; 4],
     pub shader: RuntimeShaderKey,
     pub bounds: Rect,
     pub uniforms: Vec<ShaderUniformBinding>,
     pub textures: Vec<ShaderTextureBinding>,
+}
+
+impl ShaderLayer {
+    pub fn output_bounds(&self) -> Rect {
+        let [left, top, right, bottom] = self.padding.map(f64::from);
+        Rect::new(
+            self.bounds.x - left,
+            self.bounds.y - top,
+            self.bounds.width + left + right,
+            self.bounds.height + top + bottom,
+        )
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
