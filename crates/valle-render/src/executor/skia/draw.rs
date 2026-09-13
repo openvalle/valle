@@ -1103,6 +1103,17 @@ impl ProgramRuntime {
     }
 
     fn draw_glyph_run(&self, canvas: &skia_safe::Canvas, run: &GlyphRun) -> Result<(), DrawError> {
+        if let Some(outline) = run.outline {
+            let ink = path(
+                &self.program.paths()[outline.raw() as usize],
+                FillRule::NonZero,
+            )?;
+            canvas.draw_path(&ink, &self.paint(run.paint)?);
+            if let Some(stroke) = &run.stroke {
+                canvas.draw_path(&ink, &self.stroke(stroke)?);
+            }
+            return Ok(());
+        }
         let face_hash = ContentDigest::from_bytes(run.font.face_hash.into_bytes());
         let typeface = self
             .fonts
@@ -2057,6 +2068,86 @@ impl From<SurfaceError> for DrawError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn glyph_outline_changes_render_without_font_resources() {
+        use valle_draw::program::{DrawProgramBuilder, Glyph, LinearColor};
+        use valle_draw::requirements::DigestBytes;
+
+        let info = ImageInfo::new(
+            (32, 32),
+            skia_safe::ColorType::RGBAF32,
+            skia_safe::AlphaType::Premul,
+            Some(working_color_space().unwrap()),
+        );
+        let mut surface = skia_safe::surfaces::raster(&info, None, None).unwrap();
+        let mut render = |width: f64| {
+            let mut builder = DrawProgramBuilder::new(Rect::new(0.0, 0.0, 32.0, 32.0));
+            let outline = builder.push_path(PathData {
+                verbs: vec![
+                    PathVerb::MoveTo,
+                    PathVerb::LineTo,
+                    PathVerb::LineTo,
+                    PathVerb::LineTo,
+                    PathVerb::Close,
+                ],
+                points: vec![
+                    [4.0, 5.0],
+                    [4.0 + width, 5.0],
+                    [4.0 + width, 29.0],
+                    [4.0, 29.0],
+                ],
+            });
+            let paint = builder.push_paint(Paint::Solid(LinearColor::new(1.0, 1.0, 1.0, 1.0)));
+            // Keep the font and glyph identity unchanged; resolved ink determines the pixels.
+            let root = builder.push_node(Node::GlyphRun(GlyphRun {
+                font: FontKey {
+                    face_hash: DigestBytes::from_bytes([7; 32]),
+                    face_index: 0,
+                },
+                font_size: 10.0,
+                glyphs: vec![Glyph {
+                    id: 1,
+                    x: 20.0,
+                    y: 30.0,
+                }],
+                outline: Some(outline),
+                bounds: Rect::new(4.0, 5.0, width, 24.0),
+                paint,
+                stroke: None,
+                source_node: None,
+                source_ranges: vec![],
+            }));
+            builder.add_root(root);
+            let runtime = ProgramRuntime {
+                program: Arc::new(builder.finish().unwrap()),
+                textures: BTreeMap::new(),
+                fonts: BTreeMap::new(),
+                shaders: BTreeMap::new(),
+                scenes: BTreeMap::new(),
+                glass: None,
+                blend: None,
+            };
+            surface.canvas().clear(Color4f::new(0.0, 0.0, 0.0, 0.0));
+            for root in runtime.program.roots() {
+                runtime.raster_node(surface.canvas(), *root).unwrap();
+            }
+            let mut bytes = vec![0u8; 32 * 32 * 16];
+            assert!(surface.read_pixels(&info, &mut bytes, 32 * 16, (0, 0)));
+            bytes
+        };
+        let ink = |pixels: &[u8]| {
+            pixels
+                .chunks_exact(16)
+                .map(|pixel| f32::from_ne_bytes(pixel[12..16].try_into().unwrap()))
+                .sum::<f32>()
+        };
+        let thin = render(4.0);
+        let thick = render(12.0);
+        assert_eq!(ink(&thin), 4.0 * 24.0);
+        assert_eq!(ink(&thick), 12.0 * 24.0);
+        assert_eq!(render(4.0), thin);
+    }
 
     #[test]
     fn direct_tree_keeps_nested_transforms_and_translucent_painter_order() {

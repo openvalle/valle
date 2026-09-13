@@ -1591,6 +1591,12 @@ function drawImageNode(
 }
 
 function drawGlyphNode(CanvasKit: CanvasKit, canvas: Canvas, admitted: AdmittedProgram, node: Wire): void {
+  if (node.outline != null) {
+    drawPathNode(CanvasKit, canvas, admitted.draw, {
+      path: node.outline, fillRule: "nonZero", fill: node.paint, stroke: node.stroke,
+    });
+    return;
+  }
   const fontKeyWire = record(node.font, "glyph font");
   const face = required(admitted.fonts, fontKey(String(fontKeyWire.faceHash), positiveIdOrZero(fontKeyWire.faceIndex, "faceIndex")), "font face");
   const font = new CanvasKit.Font(face, finiteNumber(node.fontSize, "font size"));

@@ -482,6 +482,7 @@ fn push_bucket(
         font: bucket.font.clone(),
         font_size: bucket.font_size,
         glyphs,
+        outline: None,
         bounds: bucket.rect(),
         paint,
         stroke: None,

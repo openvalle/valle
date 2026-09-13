@@ -172,6 +172,7 @@ fn flush_run(list: &mut ProgramRecording, run: &mut Vec<PendingGlyph>) -> Result
     list.push(RecordCmd::GlyphRun {
         font,
         glyphs: span,
+        outline: None,
         paint: Paint::Solid(paint),
         stroke: None,
         source: None,

@@ -110,6 +110,10 @@ pub struct GlyphRun {
     /// Em size in program-local units. Glyph positions are local baseline origins at this size.
     pub font_size: f32,
     pub glyphs: Vec<Glyph>,
+    /// Exact ink resolved by the shaper, including variable font axes. When present,
+    /// executors draw this path; glyphs remain available for source addressing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outline: Option<PathId>,
     /// Shaper-authored conservative ink bounds in program-local coordinates.
     pub bounds: Rect,
     pub paint: PaintId,

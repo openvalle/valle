@@ -64,6 +64,44 @@ describe("long-lived CanvasKit executor caches", () => {
 });
 
 
+test("glyph outline changes render without font resources", async () => {
+  const ck = await CanvasKitInit({ locateFile: () => wasmPath });
+  const surface = ck.MakeSurface(32, 32)!;
+  const builtins = new CanvasKitBuiltinRuntime(ck);
+  const identity = [1, 0, 0, 0, 1, 0, 0, 0, 1];
+  const render = (width: number) => {
+    const draw = {
+      nodes: [{ kind: "glyphRun", value: {
+        // Keep the font and glyph identity unchanged; resolved ink determines the pixels.
+        font: { faceHash: "07".repeat(32), faceIndex: 0 }, fontSize: 10,
+        glyphs: [{ id: 1, x: 20, y: 30 }], outline: 0, paint: 0,
+        bounds: { x: 4, y: 5, width, height: 24 },
+      } }],
+      paths: [{ verbs: ["moveTo", "lineTo", "lineTo", "lineTo", "close"],
+        points: [[4, 5], [4 + width, 5], [4 + width, 29], [4, 29]] }],
+      paints: [{ kind: "solid", value: { red: 1, green: 1, blue: 1, alpha: 1 } }],
+    };
+    const admitted = { draw, fonts: new Map() } as unknown as Parameters<typeof drawProgramNode>[3];
+    surface.getCanvas().clear(ck.TRANSPARENT);
+    drawProgramNode(ck, builtins, surface.getCanvas(), admitted, 0, identity);
+    const image = surface.makeImageSnapshot();
+    try {
+      const pixels = image.readPixels(0, 0, { width: 32, height: 32,
+        colorType: ck.ColorType.RGBA_8888, alphaType: ck.AlphaType.Unpremul,
+        colorSpace: ck.ColorSpace.SRGB })!;
+      return Uint8Array.from(pixels);
+    } finally { image.delete(); }
+  };
+  try {
+    const ink = (pixels: Uint8Array) => pixels.reduce((sum, value, i) => sum + (i % 4 === 3 ? value : 0), 0);
+    const thin = render(4), thick = render(12);
+    expect(ink(thin)).toBe(4 * 24 * 255);
+    expect(ink(thick)).toBe(12 * 24 * 255);
+    expect(render(4)).toEqual(thin);
+  } finally { surface.delete(); builtins.dispose(); }
+});
+
+
 test("two-circle gradient keeps its offset focal point", async () => {
   const ck = await CanvasKitInit({ locateFile: () => wasmPath });
   const surface = ck.MakeSurface(24, 24)!;

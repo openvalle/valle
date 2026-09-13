@@ -86,6 +86,7 @@ fn fixture(reverse_arena_insertion: bool) -> DrawProgram {
             face_index: 0,
         },
         font_size: 16.0,
+        outline: None,
         glyphs: vec![
             Glyph {
                 id: 7,
@@ -427,6 +428,7 @@ fn glyph_run_requires_an_explicit_positive_local_font_size() {
                 face_index: 0,
             },
             font_size,
+            outline: None,
             glyphs: vec![Glyph {
                 id: 1,
                 x: 8.0,
@@ -444,6 +446,60 @@ fn glyph_run_requires_an_explicit_positive_local_font_size() {
             Err(DrawProgramError::InvalidValue { location, .. })
                 if location == "node[0].fontSize"
         ));
+    }
+}
+
+#[test]
+fn resolved_glyph_ink_is_referenced_canonically_and_controls_actual_bounds() {
+    for valid in [true, false] {
+        let mut builder = builder();
+        let ink = builder.push_path(PathData {
+            verbs: vec![
+                PathVerb::MoveTo,
+                PathVerb::LineTo,
+                PathVerb::LineTo,
+                PathVerb::Close,
+            ],
+            points: vec![[4.0, 5.0], [24.0, 5.0], [4.0, 35.0]],
+        });
+        let paint = builder.push_paint(Paint::Solid(LinearColor::new(1.0, 1.0, 1.0, 1.0)));
+        let root = builder.push_node(Node::GlyphRun(GlyphRun {
+            font: FontKey {
+                face_hash: DigestBytes::from_bytes([7; 32]),
+                face_index: 0,
+            },
+            font_size: 40.0,
+            glyphs: vec![Glyph {
+                id: 1,
+                x: 4.0,
+                y: 35.0,
+            }],
+            outline: Some(if valid {
+                ink
+            } else {
+                valle_draw::program::PathId::from_raw(99)
+            }),
+            // Exact outline geometry supersedes the old shaper envelope for ROI allocation.
+            bounds: Rect::new(0.0, 0.0, 1.0, 1.0),
+            paint,
+            stroke: None,
+            source_node: Some("label".into()),
+            source_ranges: vec![[0, 1]],
+        }));
+        builder.add_root(root);
+        if !valid {
+            assert!(builder.finish().is_err());
+            continue;
+        }
+        let program = builder.finish().unwrap();
+        assert_eq!(
+            program.geometries()[0].output_bounds,
+            LocalBounds::from_rect(Rect::new(4.0, 5.0, 20.0, 30.0))
+        );
+        assert_eq!(
+            DrawProgram::from_packed(&program.packed_bytes().unwrap()).unwrap(),
+            program
+        );
     }
 }
 

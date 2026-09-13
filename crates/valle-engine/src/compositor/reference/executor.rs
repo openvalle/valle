@@ -1553,7 +1553,41 @@ fn prepare_glyph_fill(
     run: &GlyphRun,
     outline_segments: &mut u64,
 ) -> Result<ReferenceFill, ReferenceExecuteError> {
+    if run.stroke.is_some() {
+        return Err(ReferenceExecuteError::UnsupportedPass { pass });
+    }
     let color = solid_program_paint(program, run.paint, pass)?;
+    if let Some(outline) = run.outline {
+        let path = program.paths().get(outline.raw() as usize).ok_or(
+            ReferenceExecuteError::InvalidProgram {
+                program: program_id,
+            },
+        )?;
+        let remaining = MAX_REFERENCE_OUTLINE_SEGMENTS.saturating_sub(*outline_segments);
+        let segments = resolved_outline_segments(
+            path,
+            f64::from(run.font_size) * GLYPH_CURVE_TOLERANCE_PER_EM,
+            remaining as usize,
+        )
+        .map_err(|error| match error {
+            GlyphOutlineError::SegmentBudget => {
+                ReferenceExecuteError::OutlineSegmentBudgetExceeded {
+                    pass,
+                    required: MAX_REFERENCE_OUTLINE_SEGMENTS.saturating_add(1),
+                    maximum: MAX_REFERENCE_OUTLINE_SEGMENTS,
+                }
+            }
+            _ => ReferenceExecuteError::InvalidProgram {
+                program: program_id,
+            },
+        })?;
+        reserve_outline_segments(pass, segments.len() as u64, outline_segments)?;
+        let shapes = match line_segments_bounds(&segments) {
+            Some(bounds) => vec![ReferenceShape { segments, bounds }],
+            None => Vec::new(),
+        };
+        return Ok(ReferenceFill { shapes, color });
+    }
     let binding = prepared
         .resources
         .fonts
@@ -1690,6 +1724,58 @@ fn glyph_local_bounds(origin: [f64; 2], scale: f64, bounds: ttf_parser::Rect) ->
     let top = origin[1] - f64::from(bounds.y_max) * scale;
     let bottom = origin[1] - f64::from(bounds.y_min) * scale;
     valle_draw::Rect::from_edges(left, top, right, bottom)
+}
+
+// Resolved variable-font ink already uses local canvas coordinates. Reuse the bounded curve
+// flattener without applying font-unit scaling or the font coordinate system's Y inversion.
+fn resolved_outline_segments(
+    path: &PathData,
+    tolerance: f64,
+    maximum: usize,
+) -> Result<Vec<LineSegment>, GlyphOutlineError> {
+    let mut builder = GlyphOutlineBuilder::new([0.0, 0.0], 1.0, tolerance, maximum);
+    let mut points = path.points.iter();
+    let mut take = || points.next().copied().ok_or(GlyphOutlineError::Invalid);
+    for verb in &path.verbs {
+        match verb {
+            PathVerb::MoveTo => {
+                builder.close_contour();
+                let point = take()?;
+                builder.first = Some(point);
+                builder.current = Some(point);
+            }
+            PathVerb::LineTo => builder.line_to_local(take()?),
+            PathVerb::QuadTo => {
+                let control = take()?;
+                let to = take()?;
+                builder.flatten_quad(
+                    builder.current.ok_or(GlyphOutlineError::Invalid)?,
+                    control,
+                    to,
+                    0,
+                );
+                builder.current = Some(to);
+            }
+            PathVerb::CubicTo => {
+                let first = take()?;
+                let second = take()?;
+                let to = take()?;
+                builder.flatten_cubic(
+                    builder.current.ok_or(GlyphOutlineError::Invalid)?,
+                    first,
+                    second,
+                    to,
+                    0,
+                );
+                builder.current = Some(to);
+            }
+            PathVerb::Close => builder.close_contour(),
+        }
+    }
+    if points.next().is_some() {
+        return Err(GlyphOutlineError::Invalid);
+    }
+    builder.finish()
 }
 
 fn union_local_rect(left: valle_draw::Rect, right: valle_draw::Rect) -> valle_draw::Rect {
@@ -5157,6 +5243,37 @@ mod tests {
         assert!(
             segments.len() > 2,
             "controls outside the finite chord must not collapse to one edge"
+        );
+    }
+
+    #[test]
+    fn resolved_outline_keeps_canvas_coordinates_and_curve_budgets() {
+        let path = PathData {
+            verbs: vec![
+                PathVerb::MoveTo,
+                PathVerb::LineTo,
+                PathVerb::QuadTo,
+                PathVerb::CubicTo,
+                PathVerb::Close,
+            ],
+            points: vec![
+                [4.0, 5.0],
+                [24.0, 5.0],
+                [24.0, 20.0],
+                [24.0, 35.0],
+                [14.0, 35.0],
+                [4.0, 20.0],
+                [4.0, 5.0],
+            ],
+        };
+        let segments = resolved_outline_segments(&path, 0.01, 4096).unwrap();
+        assert_eq!(
+            line_segments_bounds(&segments),
+            Some(valle_draw::Rect::new(4.0, 5.0, 20.0, 30.0))
+        );
+        assert_eq!(
+            resolved_outline_segments(&path, 0.01, 1).unwrap_err(),
+            GlyphOutlineError::SegmentBudget
         );
     }
 }

@@ -972,6 +972,10 @@ pub enum RecordCmd {
     GlyphRun {
         font: FontId,
         glyphs: Span,
+        /// Optional shaper-resolved ink in the same coordinate space as the glyph origins.
+        /// Variable font instances use this geometry instead of reloading the default face.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        outline: Option<PathRef>,
         paint: Paint,
         /// Optional centered glyph stroke. Apply fill before stroke within the same command to
         /// preserve CSS paint order across backends.
@@ -1820,12 +1824,16 @@ impl ProgramRecording {
             RecordCmd::GlyphRun {
                 font,
                 glyphs,
+                outline,
                 paint: p,
                 stroke: st,
                 source,
             } => {
                 self.check_id(at, "fonts", font.0, self.fonts.len())?;
                 span("glyphs", *glyphs, self.glyphs.len())?;
+                if let Some(outline) = outline {
+                    self.check_path(at, *outline)?;
+                }
                 if let Some(source) = source {
                     self.check_id(at, "textSources", source.node.0, self.text_sources.len())?;
                     span(

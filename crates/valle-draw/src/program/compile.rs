@@ -398,6 +398,7 @@ impl<'a> RecordingCompiler<'a> {
             RecordCmd::GlyphRun {
                 font,
                 glyphs,
+                outline,
                 paint,
                 stroke,
                 source,
@@ -416,7 +417,25 @@ impl<'a> RecordingCompiler<'a> {
                         index: glyphs.start,
                     },
                 )?;
-                let bounds = glyph_bounds(glyphs, face.size);
+                let bounds = outline
+                    .and_then(|path| self.source.points.get(path.points.range()))
+                    .map(|points| {
+                        points
+                            .iter()
+                            .fold(None, |bounds: Option<Rect>, point| {
+                                Some(match bounds {
+                                    None => Rect::new(point.x, point.y, 0.0, 0.0),
+                                    Some(b) => Rect::from_edges(
+                                        b.left().min(point.x),
+                                        b.top().min(point.y),
+                                        b.right().max(point.x),
+                                        b.bottom().max(point.y),
+                                    ),
+                                })
+                            })
+                            .unwrap_or(Rect::new(0.0, 0.0, 0.0, 0.0))
+                    })
+                    .unwrap_or_else(|| glyph_bounds(glyphs, face.size));
                 let source_node = source
                     .as_ref()
                     .and_then(|source| self.source.text_sources.get(source.node.index()))
@@ -440,6 +459,9 @@ impl<'a> RecordingCompiler<'a> {
                     })
                     .collect();
                 let paint = self.paint(command_index, paint)?;
+                let outline = outline
+                    .map(|path| self.path(command_index, path))
+                    .transpose()?;
                 let stroke = stroke
                     .as_ref()
                     .map(|stroke| self.stroke(command_index, stroke))
@@ -448,6 +470,7 @@ impl<'a> RecordingCompiler<'a> {
                     font: font_key(face)?,
                     font_size: face.size as f32,
                     glyphs,
+                    outline,
                     bounds,
                     paint,
                     stroke,

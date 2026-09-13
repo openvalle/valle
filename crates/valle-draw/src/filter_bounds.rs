@@ -154,7 +154,19 @@ fn leaf_bounds(cmd: &RecordCmd, list: &ProgramRecording) -> Option<Rect> {
             }
             Some(rect)
         }
-        RecordCmd::GlyphRun { font, glyphs, .. } => {
+        RecordCmd::GlyphRun {
+            font,
+            glyphs,
+            outline,
+            stroke,
+            ..
+        } => {
+            if let Some(outline) = outline {
+                let bounds = path_bounds(list, *outline)?;
+                return Some(stroke.as_ref().map_or(bounds, |stroke| {
+                    grow(bounds, stroke.width.abs() * stroke.miter_limit.max(1.0))
+                }));
+            }
             let size = list.fonts.get(font.0 as usize).map_or(0.0, |f| f.size);
             let run = list.glyphs.get(glyphs.range())?;
             let mut bbox: Option<Rect> = None;

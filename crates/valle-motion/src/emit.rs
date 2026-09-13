@@ -1855,15 +1855,12 @@ impl Emitter<'_> {
             self.unsupported(np, "bitmap emoji glyphs");
         }
         let span = self.out.recording.intern_glyphs(&glyphs);
-        // Read glyph stroke width and color from the node style.
-        let ctx_style = &self.tree.root.node_at_path(&np.path).map(|n| &n.context);
-        let declared_stroke = ctx_style.as_ref().and_then(|c| {
-            let w = f64::from(c.style.webkit_text_stroke_width?.to_px(&c.sizing, 0.0));
-            let color = c
-                .style
-                .webkit_text_stroke_color
-                .map_or(c.current_color, |ci| ci.resolve(c.current_color));
-            (w > 0.0).then(|| (w, rgba_of(color)))
+        // The shaper carries the actual inline run's stroke, including inherited Span styles.
+        let declared_stroke = (shaped.brush.stroke_width > 0.0).then(|| {
+            (
+                f64::from(shaped.brush.stroke_width),
+                rgba_of(shaped.brush.stroke_color),
+            )
         });
         // Shadow the combined fill and stroke shape, preserving each component's alpha. Transparent
         // fills therefore produce outline-shaped shadows.
@@ -1922,6 +1919,10 @@ impl Emitter<'_> {
             &paint,
             &stroke,
             placements,
+            (!shaped.variations.is_empty()
+                || ttf_parser::Face::parse(shaped.font_data(), shaped.font_index)
+                    .is_ok_and(|face| face.is_variable()))
+            .then_some(run),
         );
         if run_opacity < 1.0 {
             self.push(RecordCmd::End);
@@ -1944,6 +1945,7 @@ impl Emitter<'_> {
         paint: &Paint,
         stroke: &Option<Stroke>,
         placements: Option<&[Option<Affine>]>,
+        outline_run: Option<&PositionedInlineRun>,
     ) {
         let ranges = source.map(|source| {
             self.out.recording.glyph_source_ranges
@@ -2003,9 +2005,11 @@ impl Emitter<'_> {
             match placements {
                 None => {
                     let depth = decorate(self);
+                    let outline = outline_run.map(|run| self.glyph_outline(run, &glyphs[at..end]));
                     self.push(RecordCmd::GlyphRun {
                         font,
                         glyphs: sub_span(at, end),
+                        outline,
                         paint: color,
                         stroke: stroke.clone(),
                         source: sub_source(at, end),
@@ -2023,9 +2027,12 @@ impl Emitter<'_> {
                         };
                         self.push(RecordCmd::BeginTransform { transform });
                         let depth = 1 + decorate(self);
+                        let outline = outline_run
+                            .map(|run| self.glyph_outline(run, &glyphs[index..index + 1]));
                         self.push(RecordCmd::GlyphRun {
                             font,
                             glyphs: sub_span(index, index + 1),
+                            outline,
                             paint: color,
                             stroke: stroke.clone(),
                             source: sub_source(index, index + 1),
@@ -2038,6 +2045,38 @@ impl Emitter<'_> {
             }
             at = end;
         }
+    }
+
+    /// Takumi resolved these paths with the same axis coordinates and size used for shaping.
+    /// Freeze that ink into the frame program so neither backend reloads a default instance.
+    /// Positions include shadows; per-unit and text-path transforms still wrap the GlyphRun.
+    fn glyph_outline(
+        &mut self,
+        run: &PositionedInlineRun,
+        glyphs: &[Glyph],
+    ) -> valle_draw::PathRef {
+        use takumi_core::geometry::PathCommand as C;
+        let mut path = self.out.recording.begin_path();
+        for glyph in glyphs {
+            let Some(ResolvedGlyph::Outline(outline)) =
+                run.resolved_glyphs.get(&glyph.id).map(|g| g.as_ref())
+            else {
+                continue;
+            };
+            let pt = |q: &takumi_core::geometry::Point<f32>| {
+                valle_draw::Point::new(f64::from(q.x) + glyph.x, f64::from(q.y) + glyph.y)
+            };
+            for command in outline.paths() {
+                path = match command {
+                    C::MoveTo(a) => path.move_to(pt(a)),
+                    C::LineTo(a) => path.line_to(pt(a)),
+                    C::QuadTo(a, b) => path.quad_to(pt(a), pt(b)),
+                    C::CubicTo(a, b, c) => path.cubic_to(pt(a), pt(b), pt(c)),
+                    C::Close => path.close(),
+                };
+            }
+        }
+        path.finish()
     }
 
     fn background(
@@ -2936,6 +2975,7 @@ impl Emitter<'_> {
                     paint,
                     stroke,
                     source: _,
+                    outline: _,
                 } => {
                     let face = fragment.list.fonts[font.index()].clone();
                     let interned = self.out.recording.intern_font(face);
@@ -2951,6 +2991,7 @@ impl Emitter<'_> {
                     self.push(RecordCmd::GlyphRun {
                         font: interned,
                         glyphs: span,
+                        outline: None,
                         paint: paint.clone(),
                         stroke: stroke.clone(),
                         source: None,

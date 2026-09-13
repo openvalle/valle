@@ -307,6 +307,9 @@ fn validate_raw(
                 validate_unit(image.opacity, &format!("node[{index}].opacity"))?;
             }
             Node::GlyphRun(run) => {
+                if let Some(outline) = run.outline {
+                    check_path_id(id, outline, paths.len())?;
+                }
                 finite_f32(run.font_size, &format!("node[{index}].fontSize"))?;
                 if run.font_size <= 0.0 {
                     return invalid(format!("node[{index}].fontSize"), "must be positive");
@@ -949,6 +952,7 @@ impl<'a> Canonicalizer<'a> {
                 Node::Path(path)
             }
             Node::GlyphRun(mut run) => {
+                run.outline = run.outline.map(|outline| self.remap_path(outline));
                 run.paint = self.remap_paint(run.paint);
                 if let Some(stroke) = &mut run.stroke {
                     stroke.paint = self.remap_paint(stroke.paint);
@@ -1382,7 +1386,13 @@ fn derive_node_geometry(
             }
         }
         Node::GlyphRun(node) => {
-            let mut bounds = node.bounds;
+            let mut bounds = match node.outline {
+                Some(outline) => match path_bounds(&program.paths[outline.index()]) {
+                    Some(bounds) => bounds,
+                    None => return Ok(NodeGeometry::EMPTY),
+                },
+                None => node.bounds,
+            };
             if let Some(stroke) = &node.stroke {
                 let join_scale = match stroke.join {
                     super::StrokeJoin::Miter => f64::from(stroke.miter_limit),
