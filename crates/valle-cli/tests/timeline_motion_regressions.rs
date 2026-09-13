@@ -40,6 +40,98 @@ fn pixel(dir: &Path, name: &str, x: usize, y: usize) -> Vec<u8> {
 }
 
 #[test]
+fn motion_video_offsets_and_rates_select_the_numbered_source_frame() {
+    let temp = tempfile::tempdir().unwrap();
+    let dir = temp.path();
+    // Encode the source frame number as eight black/white bars. This remains readable through
+    // H.264 and color conversion, so the assertion checks media sampling rather than color math.
+    std::fs::write(dir.join("numbered.motion.tsx"), r##"
+const BITS = [0,1,2,3,4,5,6,7];
+export default function Numbered(ctx) {return <Scene style={{width:80,height:32,backgroundColor:"#000000"}}>
+  {BITS.map(bit => <View key={`bit-${bit}`} style={{position:"absolute",left:bit*10,top:0,width:10,height:32,
+    backgroundColor:floor(ctx.localFrame / pow(2,bit)) % 2 === 1 ? "#ffffff" : "#000000"}} />)}
+</Scene>;}
+"##).unwrap();
+    success(run(
+        dir,
+        &[
+            "motion",
+            "render",
+            "numbered.motion.tsx",
+            "--duration",
+            "12",
+            "--fps",
+            "10",
+            "--size",
+            "80x32",
+            "--backend",
+            "raster",
+            "-o",
+            "numbered.mp4",
+        ],
+    ));
+    for (case, (start, speed, dynamic)) in [
+        (3.0, 0.0, false),
+        (6.0, 0.5, false),
+        (6.0, 2.0, false),
+        (9.0, 1.0, false),
+        (6.0, 2.0, true),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let attr = |value: f64| {
+            if dynamic {
+                format!("ctx.seconds * 0 + {value}")
+            } else {
+                value.to_string()
+            }
+        };
+        std::fs::write(dir.join("video.motion.tsx"), format!(r#"
+export const controls = defineControls({{assets:{{clip:asset({{kind:"video"}})}}}});
+export default function Clip(ctx) {{return <Scene style={{{{width:80,height:32}}}}><Video src="asset://clip" sourceStart={{{}}} speed={{{}}} style={{{{width:80,height:32}}}} /></Scene>;}}
+"#,attr(start),attr(speed))).unwrap();
+        put(
+            dir,
+            "video.json",
+            json!({"canvas":{"width":80,"height":32,"fps":10},
+            "resources":{"motion":"video.motion.tsx","v":"numbered.mp4"},
+            "tracks":{"visual":[{"clips":[{"kind":"motion","component":"motion","start":0,"duration":3,"resources":{"clip":"v"}}]}]}}),
+        );
+        let mut first = None;
+        for (request, frame) in [10, 0, 20, 10].into_iter().enumerate() {
+            let file = format!("sample-{case}-{request}.png");
+            success(run(
+                dir,
+                &[
+                    "timeline",
+                    "render",
+                    "video.json",
+                    "--frame",
+                    &frame.to_string(),
+                    "-o",
+                    &file,
+                ],
+            ));
+            let image = valle_media::codec::read_rgba_png(&dir.join(&file)).unwrap();
+            let actual = (0..8).fold(0, |number, bit| {
+                number | (usize::from(image.data[(16 * 80 + bit * 10 + 5) * 4] > 128) << bit)
+            });
+            assert_eq!(
+                actual,
+                (start * 10.0 + f64::from(frame) * speed) as usize,
+                "start={start}, speed={speed}, frame={frame}, dynamic={dynamic}"
+            );
+            if request == 0 {
+                first = Some(image.data);
+            } else if request == 3 {
+                assert_eq!(first.as_ref().unwrap(), &image.data);
+            }
+        }
+    }
+}
+
+#[test]
 fn motion_check_prepares_glass_and_native_shader_resources() {
     let temp = tempfile::tempdir().unwrap();
     let dir = temp.path();

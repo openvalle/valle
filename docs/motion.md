@@ -336,6 +336,11 @@ sampling still follows the local Motion clock; `visible` hides drawing without
 moving the source clock. A `Video` node contributes video pixels, not an audio
 track. Use Timeline audio clips for sound; an `Audio` JSX primitive is not exposed.
 
+Both attributes accept finite numbers or frame expressions; they are not limited
+to 0–1. For example, `sourceStart={6} speed={2}` starts at source second 6 and
+samples source second 8 after one local second. The source time is
+`max(0, sourceStart + localSeconds * speed)`; `speed={0}` holds the source start.
+
 For a portable project font, declare `brand: asset({ kind: "font", required: true })`,
 bind `--asset brand=fonts/Brand.ttf`, and set `fontFamily: "asset://brand"`. An extra
 `--font fonts/Brand.ttf` instead registers that file by its font family for render

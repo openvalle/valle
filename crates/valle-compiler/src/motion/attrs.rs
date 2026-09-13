@@ -1249,6 +1249,26 @@ impl<'s> Compiler<'s> {
         span: Span,
         name: &str,
     ) -> Option<NumberValue> {
+        self.attr_number_value_in_range(value, span, name, Some(0.0..=1.0))
+    }
+
+    /// Seconds and playback multipliers are finite scalars, not normalized fractions.
+    pub(super) fn attr_finite_number_value(
+        &mut self,
+        value: &Option<JSXAttributeValue<'_>>,
+        span: Span,
+        name: &str,
+    ) -> Option<NumberValue> {
+        self.attr_number_value_in_range(value, span, name, None)
+    }
+
+    fn attr_number_value_in_range(
+        &mut self,
+        value: &Option<JSXAttributeValue<'_>>,
+        span: Span,
+        name: &str,
+        range: Option<std::ops::RangeInclusive<f64>>,
+    ) -> Option<NumberValue> {
         let static_value = match value {
             Some(JSXAttributeValue::StringLiteral(value)) => value.value.parse::<f64>().ok(),
             Some(JSXAttributeValue::ExpressionContainer(container)) => container
@@ -1263,13 +1283,20 @@ impl<'s> Compiler<'s> {
             _ => None,
         };
         if let Some(value) = static_value {
-            if value.is_finite() && (0.0..=1.0).contains(&value) {
+            if value.is_finite() && range.as_ref().is_none_or(|range| range.contains(&value)) {
                 return Some(NumberValue::Static { value });
             }
             self.illegal(
                 DiagCode::GrammarForbidden,
                 span,
-                format!("{name} must be a finite number in 0..=1"),
+                match range {
+                    Some(range) => format!(
+                        "{name} must be a finite number in {}..={}",
+                        range.start(),
+                        range.end()
+                    ),
+                    None => format!("{name} must be a finite number"),
+                },
             );
             return None;
         }

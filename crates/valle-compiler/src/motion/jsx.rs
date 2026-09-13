@@ -620,7 +620,7 @@ impl<'s> Compiler<'s> {
                         self.attr_static_string(&attribute.value, attribute.span(), "src");
                 }
                 "sourceStart" if kind_tag == "video" => {
-                    video_source_start = self.attr_number_value(
+                    video_source_start = self.attr_finite_number_value(
                         &attribute.value,
                         attribute.span(),
                         "sourceStart",
@@ -628,7 +628,7 @@ impl<'s> Compiler<'s> {
                 }
                 "speed" if kind_tag == "video" => {
                     video_speed =
-                        self.attr_number_value(&attribute.value, attribute.span(), "speed");
+                        self.attr_finite_number_value(&attribute.value, attribute.span(), "speed");
                 }
                 "src" if kind_tag == "image" => {
                     image_source = self.attr_static_string(
