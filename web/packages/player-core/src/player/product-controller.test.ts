@@ -252,47 +252,58 @@ test("Scene3D keeps canonical ContentDigest wires at every WASM boundary", async
   const produced = await player.fulfillRequestUncached({
     key: {
       content: SCENE_DIGEST,
-      interpretation: { kind: "scene3d", topologyDigest: TOPOLOGY_DIGEST },
+      interpretation: { kind: "scene3d", topology_digest: TOPOLOGY_DIGEST },
     },
     expected: { kind: "scene3d" },
-    payload: { kind: "scene3dFrame", canonicalRequest: [1, 2, 3] },
+    payload: { kind: "scene3dFrame", canonical_request: [1, 2, 3] },
   }, false);
 
   expect(calls).toEqual([[SCENE_DIGEST, TOPOLOGY_DIGEST]]);
   expect(produced.object.image).toBe(image);
 });
 
-test("Scene3D texture admission keeps the canonical ContentDigest wire", async () => {
-  const admittedDigests: string[] = [];
-  const encoded = Uint8Array.from([1, 2, 3]);
-  const pixels = Uint8Array.from([0, 0, 0, 0]);
+test("Scene3D model and environment admission use frozen bytes and deduplicate registration", async () => {
+  for (const kind of ["model", "environment"]) {
+  const bytes = Uint8Array.from([1, 2, 3]);
+  const registered: string[] = [];
   const player = Object.create(BrowserValleWebPlayer.prototype) as any;
   Object.assign(player, {
     scene3dResourceTasks: new Map(),
-    assetByDigest: new Map([[SCENE_DIGEST.slice("sha256:".length), { id: "texture" }]]),
-    engine: {
-      register_scene3d_texture(digest: string) {
-        admittedDigests.push(digest);
-      },
-    },
-    async fetchAssetBytes() { return encoded; },
-    async staticImage() {
-      return {
-        width: () => 1,
-        height: () => 1,
-        readPixels: () => pixels,
-        delete() {},
-      };
-    },
-    CanvasKit: {
-      ColorType: { RGBA_8888: 1 },
-      AlphaType: { Premul: 1 },
-      ColorSpace: { SRGB: 1 },
-    },
+    [kind === "model" ? "modelBytes" : "environmentBytes"]: new Map([[SCENE_DIGEST.slice("sha256:".length), bytes]]),
+    engine: { [kind === "model" ? "register_scene3d_model" : "register_scene3d_environment"](digest: string, value: Uint8Array) {
+      expect(value).toBe(bytes); registered.push(digest);
+    } },
   });
+  await player.ensureScene3dResource(kind, SCENE_DIGEST);
+  await player.ensureScene3dResource(kind, SCENE_DIGEST);
+  expect(registered).toEqual([SCENE_DIGEST]);
+  await expect(player.ensureScene3dResource(kind, TOPOLOGY_DIGEST)).rejects.toThrow("no admitted frozen payload");
+  }
+});
 
-  await player.ensureScene3dResource("texture", SCENE_DIGEST);
-  expect(admittedDigests).toEqual([SCENE_DIGEST]);
+test("runtime shader fulfillment reads the Rust resource interpretation fields", async () => {
+  const bytes = Uint8Array.from([1, 2, 3]);
+  const player = Object.create(BrowserValleWebPlayer.prototype) as any;
+  player.shaderBytes = new Map([[`${SCENE_DIGEST.slice(7)}:${TOPOLOGY_DIGEST.slice(7)}`, bytes]]);
+  const produced = await player.fulfillRequestUncached({
+    key: {content: SCENE_DIGEST, interpretation: {kind: "runtimeShader", abi_digest: TOPOLOGY_DIGEST}},
+    expected: {kind: "runtimeShader"},
+  }, false);
+  expect(produced.object.bytes).toBe(bytes);
+});
+
+test("Scene3D textures share encoded bytes and keep color/data registrations distinct", async () => {
+  const encoded=Uint8Array.from([1,2,3]);
+  const registered:string[]=[];
+  const player=Object.create(BrowserValleWebPlayer.prototype) as any;
+  Object.assign(player,{
+    scene3dResourceTasks:new Map(),
+    assetByDigest:new Map([[SCENE_DIGEST.slice(7),{id:"texture"}]]),
+    async fetchAssetBytes(){return encoded;},
+    engine:{register_scene3d_texture(digest:string,bytes:Uint8Array,role:string){expect(bytes).toBe(encoded);registered.push(`${digest}:${role}`);}},
+  });
+  for (const role of ["color","data","color"]) await player.ensureScene3dResource("texture",SCENE_DIGEST,role);
+  expect(registered).toEqual([`${SCENE_DIGEST}:color`,`${SCENE_DIGEST}:data`]);
 });
 
 test("compiled audio keeps canonical ContentDigest wire until decode admission", async () => {
@@ -371,15 +382,4 @@ test("failed render-package staging preserves the last-good runtime", async () =
     executorDisposed: 0,
     resumed: 1,
   });
-});
-
-test("runtime shader fulfillment reads the Rust resource interpretation fields", async () => {
-  const bytes = Uint8Array.from([1, 2, 3]);
-  const player = Object.create(BrowserValleWebPlayer.prototype) as any;
-  player.shaderBytes = new Map([[`${SCENE_DIGEST.slice(7)}:${TOPOLOGY_DIGEST.slice(7)}`, bytes]]);
-  const produced = await player.fulfillRequestUncached({
-    key: {content: SCENE_DIGEST, interpretation: {kind: "runtimeShader", abi_digest: TOPOLOGY_DIGEST}},
-    expected: {kind: "runtimeShader"},
-  }, false);
-  expect(produced.object.bytes).toBe(bytes);
 });

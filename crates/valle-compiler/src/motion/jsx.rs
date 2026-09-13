@@ -153,6 +153,7 @@ impl<'s> Compiler<'s> {
         let mut shader_inputs: Option<&'s ObjectExpression<'s>> = None;
         let mut shader_uniforms: Option<&'s ObjectExpression<'s>> = None;
         let mut scene3d_camera: Option<&'s ObjectExpression<'s>> = None;
+        let mut scene3d_pbr: Option<&'s ObjectExpression<'s>> = None;
         for attribute in &element.opening_element.attributes {
             let JSXAttributeItem::Attribute(attribute) = attribute else {
                 self.illegal(DiagCode::GrammarForbidden, attribute.span(), "JSX spread attributes are illegal because property order and provenance must stay explicit");
@@ -178,6 +179,9 @@ impl<'s> Compiler<'s> {
                         attribute.span(),
                         "Scene3D camera",
                     );
+                }
+                "pbr" if kind_tag == "scene3d" => {
+                    scene3d_pbr = self.attr_object_literal(&attribute.value,attribute.span(),"Scene3D pbr");
                 }
                 "latex" if kind_tag == "math-formula" => {
                     formula_latex =
@@ -1077,6 +1081,7 @@ impl<'s> Compiler<'s> {
                 styles,
                 visibility,
                 scene3d_camera,
+                scene3d_pbr,
             );
         }
 

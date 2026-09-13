@@ -9,6 +9,7 @@ use valle_timeline::internal::fixed_package::{
     FixedPackageMember, FixedPackageMemberRole, is_normalized_package_relative_path,
     validate_fixed_package_manifest,
 };
+use valle_timeline::internal::wire::resource::EnvironmentResourceDescriptorWire;
 
 use std::{
     cell::RefCell,
@@ -27,9 +28,9 @@ use valle_timeline::internal::{
     ContentDigest, RenderId, ResourceManifest,
     wire::resource::{
         AudioResourceDescriptorWire, FontResourceDescriptorWire, ImageResourceDescriptorWire,
-        LottieArtifactAbiWire, LottieResourceDescriptorWire, MotionArtifactAbiWire,
-        MotionArtifactDescriptorWire, ResourceEntryWire, ShaderArtifactAbiWire,
-        ShaderResourceDescriptorWire, VideoResourceDescriptorWire,
+        LottieArtifactAbiWire, LottieResourceDescriptorWire, Model3dResourceDescriptorWire,
+        MotionArtifactAbiWire, MotionArtifactDescriptorWire, ResourceEntryWire,
+        ShaderArtifactAbiWire, ShaderResourceDescriptorWire, VideoResourceDescriptorWire,
     },
 };
 
@@ -321,6 +322,14 @@ struct AudioFootprintWire {
     deny_unknown_fields
 )]
 enum VerifiedResourceFactsWire {
+    Environment {
+        descriptor: EnvironmentResourceDescriptorWire,
+        bytes_base64: String,
+    },
+    Model3d {
+        descriptor: Model3dResourceDescriptorWire,
+        bytes_base64: String,
+    },
     Video {
         descriptor: VideoResourceDescriptorWire,
         temporal_footprint: VisualFootprintWire,
@@ -693,6 +702,14 @@ pub fn canonical_verified_binding_bundle(
 impl VerifiedResourceFactsWire {
     fn from_domain(facts: &VerifiedResourceFacts) -> Result<Self, String> {
         Ok(match facts {
+            VerifiedResourceFacts::Model3d { descriptor, bytes } => Self::Model3d {
+                descriptor: descriptor.clone(),
+                bytes_base64: BASE64_STANDARD.encode(bytes),
+            },
+            VerifiedResourceFacts::Environment { descriptor, bytes } => Self::Environment {
+                descriptor: descriptor.clone(),
+                bytes_base64: BASE64_STANDARD.encode(bytes),
+            },
             VerifiedResourceFacts::Video {
                 descriptor,
                 temporal_footprint,
@@ -981,6 +998,20 @@ impl VerifiedResourceFactsWire {
     fn matches_manifest_entry(&self, entry: &ResourceEntryWire) -> bool {
         match (self, entry) {
             (
+                Self::Model3d { descriptor, .. },
+                ResourceEntryWire::Model3d {
+                    descriptor: expected,
+                    ..
+                },
+            ) => descriptor == expected,
+            (
+                Self::Environment { descriptor, .. },
+                ResourceEntryWire::Environment {
+                    descriptor: expected,
+                    ..
+                },
+            ) => descriptor == expected,
+            (
                 Self::Video { descriptor, .. },
                 ResourceEntryWire::Video {
                     descriptor: expected,
@@ -1044,6 +1075,20 @@ impl VerifiedResourceFactsWire {
 
     fn into_domain(self) -> Result<VerifiedResourceFacts, String> {
         Ok(match self {
+            Self::Model3d {
+                descriptor,
+                bytes_base64,
+            } => VerifiedResourceFacts::Model3d {
+                descriptor,
+                bytes: decode_base64_payload(bytes_base64, "model3d.bytesBase64")?,
+            },
+            Self::Environment {
+                descriptor,
+                bytes_base64,
+            } => VerifiedResourceFacts::Environment {
+                descriptor,
+                bytes: decode_base64_payload(bytes_base64, "environment.bytesBase64")?,
+            },
             Self::Video {
                 descriptor,
                 temporal_footprint,
@@ -1139,6 +1184,8 @@ fn resource_entry_digest(entry: &ResourceEntryWire) -> &ContentDigest {
         | ResourceEntryWire::Image { digest, .. }
         | ResourceEntryWire::Lottie { digest, .. }
         | ResourceEntryWire::Font { digest, .. }
+        | ResourceEntryWire::Model3d { digest, .. }
+        | ResourceEntryWire::Environment { digest, .. }
         | ResourceEntryWire::MotionArtifact { digest, .. }
         | ResourceEntryWire::Shader { digest, .. } => digest,
     }

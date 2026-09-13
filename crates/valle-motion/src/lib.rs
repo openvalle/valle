@@ -53,10 +53,12 @@ pub use artifact::{
     OPTIONAL_CAPABILITIES, PARTICLE_FIELD_CAPABILITY, PaintValue, ParticleSpec, PathStroke,
     PathValue, PerUnit, PointValue, RICH_TEXT_CAPABILITY, RICH_TEXT_INLINE_IMAGE_CAPABILITY,
     RectValue, ResourceRef, SCENE3D_LAYER_CAPABILITY, SHADER_LAYER_CAPABILITY,
-    Scene3DCameraBinding, Scene3DFrameBinding, Scene3DMeshBinding, SceneArtifact, SceneNode,
-    SemanticMeta, ShaderProgramRef, ShaderTextureInput, ShaderUniformBinding, ShaderUniformValue,
-    StyleBinding, StyleValue, TRANSFORM_SCALE2D_CAPABILITY, TextSplit, TextValue, UnitStyle,
-    VIDEO_CAPABILITY, VIEWPORT_CAPABILITY, ValidationError, font_family_alias,
+    Scene3DCameraBinding, Scene3DFrameBinding, Scene3DLightBinding, Scene3DMaterialBinding,
+    Scene3DMaterialOverrideBinding, Scene3DMeshBinding, Scene3DNodeBinding,
+    Scene3DTransformBinding, SceneArtifact, SceneNode, SemanticMeta, ShaderProgramRef,
+    ShaderTextureInput, ShaderUniformBinding, ShaderUniformValue, StyleBinding, StyleValue,
+    TRANSFORM_SCALE2D_CAPABILITY, TextSplit, TextValue, UnitStyle, VIDEO_CAPABILITY,
+    VIEWPORT_CAPABILITY, ValidationError, font_family_alias,
 };
 pub use batch::{BatchFieldProgress, resolve_geometry_batch};
 pub use canonical::{CanonicalError, canonical_bytes};

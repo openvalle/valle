@@ -40,6 +40,311 @@ fn pixel(dir: &Path, name: &str, x: usize, y: usize) -> Vec<u8> {
 }
 
 #[test]
+fn environment_assets_are_frozen_and_render_in_arbitrary_frame_order() {
+    let temp = tempfile::tempdir().unwrap();
+    let dir = temp.path();
+    std::fs::copy(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../valle-motion/tests/fixtures/scene3d/triangle.glb"),
+        dir.join("model.glb"),
+    )
+    .unwrap();
+    let write_environment = |changed: bool| {
+        let mut encoder =
+            png::Encoder::new(std::fs::File::create(dir.join("sky.png")).unwrap(), 16, 8);
+        encoder.set_color(png::ColorType::Rgb);
+        let pixels = (0..128)
+            .flat_map(|i| {
+                if changed {
+                    [0, 255, 0]
+                } else if i % 16 < 8 {
+                    [255, 32, 0]
+                } else {
+                    [0, 32, 255]
+                }
+            })
+            .collect::<Vec<_>>();
+        encoder
+            .write_header()
+            .unwrap()
+            .write_image_data(&pixels)
+            .unwrap();
+    };
+    write_environment(false);
+    png(dir, "map.png", [128, 128, 255]);
+    let source = r##"export const controls=defineControls({assets:{model:asset({kind:"model3d"}),sky:asset({kind:"environment"}),map:asset({kind:"image"})}});
+export default function T(ctx){return <Scene style={{width:64,height:64}}><Scene3D key="scene" camera={{position:[ctx.seconds*0.1,0,4],target:[0,ctx.seconds*0.05,0],near:0.1+ctx.seconds*0.01,far:10+ctx.seconds}} pbr={{environment:{src:"asset://sky",intensity:1,rotation:ctx.seconds*90,background:true},toneMapping:"aces",exposure:0.7+ctx.seconds*0.2}} style={{width:64,height:64}}><Mesh key="mesh" src="asset://model" nodes={[{id:0,position:[ctx.seconds*0.01,0,0],rotation:[0,ctx.seconds*5,0],scale:[-1,1,1]}]} material={{type:"pbr",color:interpolate(ctx.seconds,[0,2],["#ffaaaa","#aaaaff"]),metallic:ctx.seconds*0.2,roughness:0.3+ctx.seconds*0.2,emissive:"#ffffff",emissiveIntensity:ctx.seconds*0.1,normalScale:ctx.seconds*0.2,textures:{baseColor:"asset://map",normal:"asset://map",emissive:"asset://map"}}}/><DirectionalLight color={interpolate(ctx.seconds,[0,2],["#ff0000","#0000ff"])} direction={[ctx.seconds*0.1,0,1]} intensity={0.5+ctx.seconds*0.1}/></Scene3D></Scene>;}"##;
+    std::fs::write(dir.join("scene.motion.tsx"), source).unwrap();
+    put(
+        dir,
+        "scene.timeline.json",
+        json!({"canvas":{"width":64,"height":64,"fps":30},"resources":{"scene":"scene.motion.tsx","model":"model.glb","sky":"sky.png","map":"map.png"},"tracks":{"visual":[{"clips":[{"kind":"motion","component":"scene","start":0,"duration":3,"resources":{"model":"model","sky":"sky","map":"map"}}]}]}}),
+    );
+    let render = |frame: u32, name: &str| {
+        run(
+            dir,
+            &[
+                "motion",
+                "render",
+                "scene.motion.tsx",
+                "--asset",
+                "model=model.glb",
+                "--asset",
+                "sky=sky.png",
+                "--asset",
+                "map=map.png",
+                "--size",
+                "64x64",
+                "--duration",
+                "3",
+                "--fps",
+                "30",
+                "--frame",
+                &frame.to_string(),
+                "--backend",
+                "raster",
+                "-o",
+                name,
+            ],
+        )
+    };
+    let mut frames = std::collections::BTreeMap::new();
+    for (index, frame) in [60, 0, 30, 60].into_iter().enumerate() {
+        let name = format!("frame-{index}.png");
+        success(render(frame, &name));
+        let pixels = valle_media::codec::read_rgba_png(&dir.join(name))
+            .unwrap()
+            .data;
+        assert!(
+            pixels.chunks_exact(4).all(|p| p[3] == 255),
+            "environment background must cover the scene"
+        );
+        if let Some(previous) = frames.insert(frame, pixels.clone()) {
+            assert_eq!(previous, pixels);
+        }
+    }
+    assert_ne!(frames[&0], frames[&60]);
+    std::thread::scope(|scope| {
+        let a = scope.spawn(|| success(render(60, "parallel-a.png")));
+        let b = scope.spawn(|| success(render(60, "parallel-b.png")));
+        a.join().unwrap();
+        b.join().unwrap();
+    });
+    for name in ["parallel-a.png", "parallel-b.png"] {
+        assert_eq!(
+            frames[&60],
+            valle_media::codec::read_rgba_png(&dir.join(name))
+                .unwrap()
+                .data
+        );
+    }
+    success(run(
+        dir,
+        &[
+            "timeline",
+            "render",
+            "scene.timeline.json",
+            "--frame",
+            "60",
+            "-o",
+            "timeline.png",
+        ],
+    ));
+    assert_eq!(
+        frames[&60],
+        valle_media::codec::read_rgba_png(&dir.join("timeline.png"))
+            .unwrap()
+            .data
+    );
+    write_environment(true);
+    success(render(60, "changed.png"));
+    assert_ne!(
+        frames[&60],
+        valle_media::codec::read_rgba_png(&dir.join("changed.png"))
+            .unwrap()
+            .data
+    );
+    write_environment(false);
+    png(dir, "map.png", [255, 128, 128]);
+    success(render(60, "changed-map.png"));
+    assert_ne!(
+        frames[&60],
+        valle_media::codec::read_rgba_png(&dir.join("changed-map.png"))
+            .unwrap()
+            .data
+    );
+}
+
+#[test]
+fn model3d_assets_render_from_motion_and_timeline() {
+    let temp = tempfile::tempdir().unwrap();
+    let dir = temp.path();
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../valle-motion/tests/fixtures/scene3d");
+    for file in ["triangle.glb", "narrow.glb", "triangle.motion.tsx"] {
+        std::fs::copy(fixture.join(file), dir.join(file)).unwrap();
+    }
+    put(
+        dir,
+        "model.json",
+        json!({"canvas":{"width":64,"height":64,"fps":10},
+        "resources":{"motion":"triangle.motion.tsx","model":"triangle.glb"},
+        "tracks":{"visual":[{"clips":[{"kind":"motion","component":"motion","start":0,"duration":0.6,"resources":{"model":"model"}}]}]}}),
+    );
+    let mut frames = std::collections::BTreeMap::new();
+    for (request, frame) in [3, 0, 5, 3].into_iter().enumerate() {
+        let standalone = format!("motion-{request}.png");
+        let timeline = format!("timeline-{request}.png");
+        success(run(
+            dir,
+            &[
+                "motion",
+                "render",
+                "triangle.motion.tsx",
+                "--asset",
+                "model=triangle.glb",
+                "--frame",
+                &frame.to_string(),
+                "--duration",
+                "0.6",
+                "--fps",
+                "10",
+                "--size",
+                "64x64",
+                "-o",
+                &standalone,
+            ],
+        ));
+        success(run(
+            dir,
+            &[
+                "timeline",
+                "render",
+                "model.json",
+                "--frame",
+                &frame.to_string(),
+                "-o",
+                &timeline,
+            ],
+        ));
+        let pixels = valle_media::codec::read_rgba_png(&dir.join(standalone))
+            .unwrap()
+            .data;
+        assert!(
+            pixels
+                .chunks_exact(4)
+                .filter(|pixel| pixel[0] > 150)
+                .count()
+                > 100,
+            "model must produce visible geometry"
+        );
+        assert_eq!(
+            pixels,
+            valle_media::codec::read_rgba_png(&dir.join(timeline))
+                .unwrap()
+                .data
+        );
+        if let Some(previous) = frames.insert(frame, pixels.clone()) {
+            assert_eq!(previous, pixels);
+        }
+    }
+    assert_ne!(frames[&0], frames[&3], "frame time must change model pose");
+    assert_ne!(frames[&3], frames[&5]);
+    success(run(
+        dir,
+        &[
+            "motion",
+            "render",
+            "triangle.motion.tsx",
+            "--asset",
+            "model=narrow.glb",
+            "--frame",
+            "3",
+            "--duration",
+            "0.6",
+            "--fps",
+            "10",
+            "--size",
+            "64x64",
+            "-o",
+            "narrow.png",
+        ],
+    ));
+    assert_ne!(
+        frames[&3],
+        valle_media::codec::read_rgba_png(&dir.join("narrow.png"))
+            .unwrap()
+            .data,
+        "resource replacement must change pixels"
+    );
+    for (command, input, extra) in [
+        (
+            "motion",
+            "triangle.motion.tsx",
+            vec![
+                "--asset",
+                "model=triangle.glb",
+                "--duration",
+                "0.6",
+                "--fps",
+                "10",
+                "--size",
+                "64x64",
+            ],
+        ),
+        ("timeline", "model.json", vec![]),
+    ] {
+        let output = format!("{command}.mp4");
+        let mut args = vec![command, "render", input];
+        args.extend(extra);
+        args.extend(["-o", &output]);
+        let report = success(run(dir, &args));
+        assert_eq!(report["delivery"]["frames"], 6);
+        let decode = Command::new("ffmpeg")
+            .current_dir(dir)
+            .args(["-v", "error", "-xerror", "-i", &output, "-f", "null", "-"])
+            .output()
+            .unwrap();
+        assert!(
+            decode.status.success(),
+            "{}",
+            String::from_utf8_lossy(&decode.stderr)
+        );
+    }
+    for (file, bytes, diagnostic) in [
+        ("corrupt.glb", vec![0; 32], "magic"),
+        (
+            "oversize.glb",
+            vec![0; 16 * 1024 * 1024 + 1],
+            "GLB bytes must be <=",
+        ),
+    ] {
+        std::fs::write(dir.join(file), bytes).unwrap();
+        let report = run(
+            dir,
+            &[
+                "motion",
+                "check",
+                "triangle.motion.tsx",
+                "--asset",
+                &format!("model={file}"),
+                "--size",
+                "64x64",
+            ],
+        );
+        assert!(!report.status.success());
+        assert!(
+            format!(
+                "{}{}",
+                String::from_utf8_lossy(&report.stdout),
+                String::from_utf8_lossy(&report.stderr)
+            )
+            .contains(diagnostic)
+        );
+    }
+}
+
+#[test]
 fn multiple_motion_components_share_fonts_and_keep_later_formula_dependencies() {
     let temp = tempfile::tempdir().unwrap();
     let dir = temp.path();

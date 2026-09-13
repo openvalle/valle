@@ -184,6 +184,8 @@ fn entry_digest(entry: &ResourceEntryWire) -> &ContentDigest {
         | ResourceEntryWire::Image { digest, .. }
         | ResourceEntryWire::Lottie { digest, .. }
         | ResourceEntryWire::Font { digest, .. }
+        | ResourceEntryWire::Model3d { digest, .. }
+        | ResourceEntryWire::Environment { digest, .. }
         | ResourceEntryWire::MotionArtifact { digest, .. }
         | ResourceEntryWire::Shader { digest, .. } => digest,
     }

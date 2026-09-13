@@ -376,6 +376,7 @@ fn prepare_endpoint(
             )
             .map_err(|error| PrepareError::at(path, error))?;
             let assets = compiled_motion_assets(source, path)?;
+            let model_resources = compiled_motion_models(source);
             let font_dependencies: Vec<_> = source
                 .motion_artifact_dependencies()
                 .iter()
@@ -405,15 +406,15 @@ fn prepare_endpoint(
                     clip_id: &clip.clip_id,
                     render_seed: render_seed(render),
                     assets: &assets,
+                    model_resources: &model_resources,
                 })
                 .map_err(|error| PrepareError::at(format!("{path}.motion"), error))?;
-            if !built.scene3d_frames.is_empty() {
-                return Err(PrepareError::at(
-                    format!("{path}.motion.scene3d"),
-                    "Scene3D entered a render that did not admit Model3d resources",
-                ));
-            }
             let mut fixture = motion::FixtureProgram::new(built.program);
+            for frame in built.scene3d_frames {
+                fixture = fixture
+                    .with_scene3d_frame(frame)
+                    .map_err(|error| PrepareError::at(format!("{path}.motion.scene3d"), error))?;
+            }
             for (name, asset) in &assets {
                 fixture = fixture
                     .with_asset(name.clone(), asset.clone())
@@ -472,6 +473,34 @@ fn prepare_endpoint(
         )?);
     }
     Ok(prepared)
+}
+
+fn compiled_motion_models(
+    source: &EvaluatedSourceRef,
+) -> std::collections::BTreeMap<String, ContentDigest> {
+    let mut models = std::collections::BTreeMap::new();
+    for (control, resource) in source.motion_resources() {
+        if matches!(
+            resource.facts(),
+            VerifiedResourceFacts::Model3d { .. } | VerifiedResourceFacts::Environment { .. }
+        ) {
+            models.insert(control.clone(), *resource.digest());
+        }
+    }
+    for resource in source.motion_artifact_dependencies() {
+        if matches!(
+            resource.facts(),
+            VerifiedResourceFacts::Model3d { .. } | VerifiedResourceFacts::Environment { .. }
+        ) {
+            models
+                .entry(resource.role().to_owned())
+                .or_insert(*resource.digest());
+            models
+                .entry(resource.resource_id().to_owned())
+                .or_insert(*resource.digest());
+        }
+    }
+    models
 }
 
 fn compiled_motion_assets(

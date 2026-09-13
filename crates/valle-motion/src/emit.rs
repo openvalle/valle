@@ -1033,19 +1033,31 @@ impl Emitter<'_> {
                 }
                 if let Some(request) = scene3d {
                     let mut resource_bindings = BTreeMap::new();
-                    for mesh in &request.scene.meshes {
-                        let controls = core::iter::once(&mesh.model_control)
-                            .chain(mesh.material.texture_control.iter());
-                        for control in controls {
-                            if let Some(digest_bytes) = self
-                                .resources
-                                .and_then(|resources| resources.scene3d_resource_digest(control))
-                            {
-                                resource_bindings.insert(
-                                    control.clone(),
-                                    crate::ContentDigest::from_bytes(digest_bytes),
-                                );
-                            }
+                    let controls = request
+                        .scene
+                        .meshes
+                        .iter()
+                        .flat_map(|mesh| {
+                            core::iter::once(mesh.model_control.as_str())
+                                .chain(mesh.texture_controls().map(|(control, _)| control))
+                        })
+                        .chain(
+                            request
+                                .scene
+                                .pbr
+                                .environment
+                                .iter()
+                                .map(|environment| environment.control.as_str()),
+                        );
+                    for control in controls {
+                        if let Some(digest) = self
+                            .resources
+                            .and_then(|resources| resources.scene3d_resource_digest(control))
+                        {
+                            resource_bindings.insert(
+                                control.to_owned(),
+                                crate::ContentDigest::from_bytes(digest),
+                            );
                         }
                     }
                     let frame = crate::Scene3DFrameRequest::new(

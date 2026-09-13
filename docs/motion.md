@@ -1228,23 +1228,137 @@ boxes. Use camera movement for a viewport pan/zoom rather than changing every no
 
 `Scene3D` rasterizes a bounded 3D scene into a composited leaf. Give it explicit
 width/height and `camera={{ position:[x,y,z], target:[x,y,z], ... }}`.
-The position/target are static triples. Animated orbit/distance/FOV use
-`orbitYaw`, `orbitPitch`, `distance`, `fov`; near/far are static clipping planes.
+Position/target components, `orbitYaw`, `orbitPitch`, `distance`, `fov`, `near`
+and `far` may use frame expressions. Motion resolves orbit controls into the final
+position before submitting the frame; the renderer receives one complete camera.
 FOV defaults to 38° and is restricted to 10–120°; near defaults to 0.1.
 
 Its direct children are explicit leaves, not arbitrary React/Three.js content:
 
 | Child | Attributes |
 | --- | --- |
-| `Mesh` | Static `key`, `src="asset://model"`, `material`; static `position`, `rotation`, `scale` triples; animated `translateX/Y/Z`, `rotateX/Y/Z`, `scaleX/Y/Z` |
+| `Mesh` | Static `key`, `src="asset://model"`; `material` and indexed `materials` overrides; animated `position`, `rotation`, `scale` triples and `translateX/Y/Z`, `rotateX/Y/Z`, `scaleX/Y/Z`; model-node `nodes` bindings |
 | `Anchor3D` | Static `key`, parent mesh key and position triple |
-| `AmbientLight` | Optional key/intensity; intensity can animate |
-| `DirectionalLight` | Static direction triple, optional key/intensity |
+| `AmbientLight` | Optional key, opaque `color` (default white), `intensity`; color and intensity may animate |
+| `DirectionalLight` | Animated nonzero `direction` triple, optional key, color (default white), intensity |
+| `HemisphereLight` | Opaque `skyColor` / `groundColor`, optional `direction` (default +Y), key/intensity; colors, direction and intensity may animate |
 
-Models use a declared `model3d` asset and the admitted GLB format. Mesh material is
-`{ type: "unlit" or "lambert", color: staticColor, texture?: "asset://image" }`.
-The asset loader applies explicit geometry/texture limits; this is not unrestricted
-glTF, PBR, skeletal animation or a general 3D engine.
+Models use a declared `model3d` asset and the admitted GLB format. With no material
+attributes, a Mesh uses the model's metallic/roughness materials. `material` supplies
+an override for the whole Mesh; `materials={[{id: 0, ...}]}` supplies overrides for
+original GLB material indices. Merge order is source material, whole-Mesh override,
+then indexed override. Missing properties inherit; supplied values replace them.
+Primitives without a source material index receive the whole-Mesh override.
+
+```tsx
+<Mesh key="model" src="asset://model"
+  material={{ type: "pbr", roughness: 0.3 + ctx.seconds * 0.1,
+    textures: { baseColor: "asset://paint", normal: "asset://normal" } }}
+  materials={[{ id: 0, color: "#2878ff", metallic: 0.8,
+    emissive: "#102040", emissiveIntensity: ctx.seconds * 0.2,
+    alphaMode: "mask", alphaCutoff: 0.5, doubleSided: true,
+    textures: { normal: null } }]} />
+```
+
+`type` is `unlit`, `lambert` or `pbr`. Colors and numeric material properties may use
+frame expressions: `color`, `metallic` (0–1), `roughness` (0–1), opaque `emissive`,
+`emissiveIntensity` (0–16), `normalScale` (−16–16), `occlusionStrength` (0–1) and
+`alphaCutoff` (0–1). CSS colors are interpreted as sRGB and converted to linear RGB.
+Every frame carries the complete set of authored overrides, evaluated before drawing;
+source materials and prepared images remain immutable.
+
+Texture controls have kind `image` and accept PNG/JPEG. The `textures` map has five
+slots: `baseColor` (sRGB RGB + linear alpha), `metallicRoughness` (G roughness/B
+metallic), `normal` (tangent-space RGB), `occlusion` (R), and `emissive` (sRGB RGB).
+All slots use `TEXCOORD_0`. Omit a slot to inherit it, or set it to `null` to remove it.
+A texture can be an asset URI or `{ src, wrapU, wrapV, minFilter, magFilter, mipmap }`.
+Wrap modes are `clamp`/`repeat`/`mirror`; min/mag filters are `nearest`/`linear`; mipmap
+selection is `none`/`nearest`/`linear`. Defaults are repeat wrap and linear filtering.
+Current-frame UV gradients select the mip level, including each input's own size.
+
+Embedded and external images use the same Rust decoder and sampler. Color and data
+roles have separate cache identities and mip chains. Float RGBA storage preserves
+16-bit PNG values and RGB under transparent alpha; color conversion happens before
+linear mip filtering. Storage budgets include every mip at 16 bytes per pixel.
+Host image fulfillment verifies encoded content digests before registration. Portable
+hosts must retain the referenced image bytes alongside the fixed semantic package.
+
+`alphaMode` and `doubleSided` are static material configuration. All material kinds
+support opaque and mask modes. Opaque ignores base alpha. Mask multiplies factor alpha
+by texture alpha, discards values below the cutoff (default 0.5), and writes no
+color/depth/picking data for discarded fragments. Retained fragments are opaque.
+Double-sided materials render both faces with reversed back-face normals. Use the
+Scene3D layer's 2D opacity for compositing transparency; sorted 3D blending is outside
+this profile. Normal and occlusion maps share the same semantics for lit materials;
+occlusion affects indirect illumination.
+
+Mesh vector attributes may contain frame expressions. Axis translations and rotations
+add to the corresponding vector components; axis scales multiply them. The compiler
+combines these into one complete transform. Rotation uses degrees and `T * Rz * Ry * Rx * S`.
+Scale may be negative; its magnitude must remain between 0.000001 and 1000, with no
+zero crossing. No mutable pose state is retained between frames.
+
+To animate model nodes, bind their original GLB indices:
+
+```tsx
+<Mesh key="model" src="asset://model" material={{ type: "pbr", color: "#ffffff" }}
+  nodes={[
+    { id: 2, position: [0, ctx.seconds * 0.1, 0], rotation: [0, ctx.seconds * 30, 0], scale: [1, 1, 1] },
+  ]} />
+```
+
+Each entry **replaces the node's complete local transform**: omitted position/rotation
+are zero and omitted scale is one. Unbound nodes retain their frozen source transforms.
+The hierarchy is recalculated from these inputs on every frame; parent transforms affect
+all descendants, while instances referencing the same mesh can move independently.
+IDs must be distinct and reference active nodes in the selected model scene. No external
+animation player or imported glTF animation track is involved.
+
+Static GLB scenes admit multiple roots, parent/child nodes and shared mesh instances.
+Node TRS and column-major affine matrices remain separate from source geometry;
+matrices must decompose into non-singular TRS. Negative scales are supported, with
+inverse-transpose normals and mirrored winding. Node identifiers are their original
+glTF indices, independent of display names and traversal order. The importer retains
+up to 256 nodes/meshes and a maximum hierarchy depth of 32. Picking returns the
+scene object's semantic address plus `nodeId`, the original glTF node index.
+The raster keeps separate object/node planes, with ten bytes per pixel for color,
+depth and both identifiers; buffer reuse resets every plane.
+
+Triangle primitives accept packed or interleaved FLOAT positions/normals, FLOAT or
+normalized U8/U16 UVs, U8/U16/U32 indices and non-indexed geometry. Missing normals
+produce flat face normals with split corners. UVs may be absent when no material
+texture needs them; binding a texture without UVs reports an error. Buffer-view targets
+are optional, and present targets must match their use. External URIs, sparse accessors,
+skins, morphs, extensions, imported animation and alpha-blended GLB materials remain
+outside the admitted profile.
+
+Environment lighting uses an explicitly bound `asset({kind: "environment"})` resource:
+
+```tsx
+<Scene3D pbr={{
+  environment: { src: "asset://sky", intensity: 1, rotation: ctx.seconds * 30, background: false },
+  toneMapping: "aces", exposure: 1.1,
+}} /* camera and model children as above */ />
+```
+
+Bind an equirectangular HDR, PNG or JPEG panorama with `--asset sky=sky.hdr`.
+The source must be 2:1 and no larger than 4096×2048. HDR RGB is linear sRGB;
+PNG/JPEG RGB is interpreted as sRGB. Alpha is ignored for lighting. RGB must be
+finite within 0–65504. Admission deterministically produces diffuse cube faces
+and reflection mips and freezes the bytes with source identity and preprocessing
+settings. Runtime reads these immutable resources without reopening the source.
+
+Intensity (0–16) and Y rotation in degrees may use frame expressions. Background
+visibility is independent of illumination. Tone mapping (`none` or `aces`) and
+exposure (0–16, default 1) are applied once in linear light before scene output.
+Tone mapping is static; exposure may animate. Ambient, directional and hemisphere
+light colors are converted from sRGB to linear values for both Lambert and PBR.
+
+
+The loader retains a 16 MiB GLB / 65,535 vertex / 20,000 triangle limit. A layer
+admits at most 8 textures, 24 Mi pixels and 128 MiB decoded mip/environment storage.
+Geometry storage is shared between nodes, while vertex and triangle work is charged
+for every rendered instance. Over-budget inputs fail before drawing.
 
 `project3d("sceneKey","meshKey::anchorKey")` returns a post-layout 2D point for an
 overlay. The same paint-only dependency rules as `bounds` apply. See

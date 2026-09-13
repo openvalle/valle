@@ -11,6 +11,7 @@ impl<'s> Compiler<'s> {
         styles: Vec<StyleBinding>,
         visibility: Option<ExprId>,
         camera_object: Option<&'s ObjectExpression<'s>>,
+        pbr_object: Option<&'s ObjectExpression<'s>>,
     ) -> Option<PendingNode> {
         let camera_object = camera_object.or_else(|| {
             self.illegal(
@@ -34,70 +35,149 @@ impl<'s> Compiler<'s> {
                 "far",
             ],
         )?;
-        let position = self.scene3d_required_vec3(
+        let position = self.scene3d_frame_vec3(
             camera_values.get("position").copied(),
             camera_object.span(),
             "Scene3D camera.position",
         )?;
-        let target = self.scene3d_required_vec3(
+        let target = self.scene3d_frame_vec3(
             camera_values.get("target").copied(),
             camera_object.span(),
             "Scene3D camera.target",
         )?;
         let number = |value: f64| NumberValue::Static { value };
-        let orbit_yaw_degrees = camera_values
-            .get("orbitYaw")
-            .and_then(|value| self.number_binding(value, "Scene3D camera.orbitYaw", |_| true))
-            .unwrap_or_else(|| number(0.0));
-        let orbit_pitch_degrees = camera_values
-            .get("orbitPitch")
-            .and_then(|value| self.number_binding(value, "Scene3D camera.orbitPitch", |_| true))
-            .unwrap_or_else(|| number(0.0));
-        let base_delta = [
-            f64::from(position.0[0] - target.0[0]),
-            f64::from(position.0[1] - target.0[1]),
-            f64::from(position.0[2] - target.0[2]),
-        ];
-        let base_distance = valle_draw::math::sqrt(
-            base_delta
-                .into_iter()
-                .map(|component| component * component)
-                .sum(),
-        );
-        let distance = camera_values
-            .get("distance")
-            .and_then(|value| {
-                self.number_binding(value, "Scene3D camera.distance", |value| value > 0.0)
-            })
-            .unwrap_or_else(|| number(base_distance));
-        let fov_y_degrees = camera_values
-            .get("fov")
-            .and_then(|value| {
-                self.number_binding(value, "Scene3D camera.fov", |value| {
-                    (10.0..=120.0).contains(&value)
-                })
-            })
-            .unwrap_or_else(|| number(38.0));
-        let static_fov = match &fov_y_degrees {
-            NumberValue::Static { value } => *value as f32,
-            NumberValue::Expr { .. } => 38.0,
+        let orbit_yaw_degrees = self.scene3d_number(
+            camera_values.get("orbitYaw").copied(),
+            0.0,
+            "camera orbitYaw",
+        )?;
+        let orbit_pitch_degrees = self.scene3d_number(
+            camera_values.get("orbitPitch").copied(),
+            0.0,
+            "camera orbitPitch",
+        )?;
+        let distance = match camera_values.get("distance") {
+            Some(value) => Some(self.number_binding(value, "camera distance", |v| v > 0.0)?),
+            None => None,
         };
-        let near = self.scene3d_static_number(
-            camera_values.get("near").copied(),
-            0.1,
-            "Scene3D camera.near",
-        )?;
-        let far = self.scene3d_static_number(
-            camera_values.get("far").copied(),
-            100.0,
-            "Scene3D camera.far",
-        )?;
+        let camera_binding = Scene3DCameraBinding {
+            position,
+            target,
+            orbit_yaw_degrees,
+            orbit_pitch_degrees,
+            distance,
+            fov_y_degrees: self.scene3d_number(
+                camera_values.get("fov").copied(),
+                38.0,
+                "camera fov",
+            )?,
+            near: self.scene3d_number(camera_values.get("near").copied(), 0.1, "camera near")?,
+            far: self.scene3d_number(camera_values.get("far").copied(), 100.0, "camera far")?,
+        };
+        if let Some(Err(error)) = camera_binding.constant() {
+            self.illegal(
+                DiagCode::GrammarForbidden,
+                camera_object.span(),
+                error.to_string(),
+            );
+            return None;
+        }
 
         let mut meshes = Vec::new();
         let mut mesh_frames = Vec::new();
         let mut lights = Vec::new();
-        let mut light_intensities = Vec::new();
+        let mut light_frames = Vec::new();
         let mut anchors = Vec::new();
+        let mut pbr = valle_motion::scene3d::PbrOptions::default();
+        let mut exposure = number(1.0);
+        let mut environment_intensity = number(1.0);
+        let mut environment_rotation_degrees = number(0.0);
+        if let Some(object) = pbr_object {
+            let values = self.scene3d_object_values(
+                object,
+                "Scene3D pbr",
+                &["environment", "toneMapping", "exposure"],
+            )?;
+
+            if let Some(expression) = values.get("environment") {
+                let Expression::ObjectExpression(object) = expression.without_parentheses() else {
+                    self.illegal(
+                        DiagCode::GrammarForbidden,
+                        expression.span(),
+                        "Scene3D environment must be { src, intensity?, rotation?, background? }",
+                    );
+                    return None;
+                };
+                let values = self.scene3d_object_values(
+                    object,
+                    "Scene3D environment",
+                    &["src", "intensity", "rotation", "background"],
+                )?;
+                let source = values
+                    .get("src")
+                    .and_then(|v| self.eval_static(v))
+                    .and_then(|v| v.as_str().map(str::to_owned));
+                let control = source.as_deref().and_then(|v| v.strip_prefix("asset://"));
+                let Some(control) = control.filter(|control| {
+                    self.controls
+                        .assets
+                        .get(*control)
+                        .is_some_and(|a| a.kind == AssetKind::Environment)
+                }) else {
+                    self.illegal(
+                        DiagCode::GrammarForbidden,
+                        expression.span(),
+                        "Scene3D environment src must be asset://<environment-control>",
+                    );
+                    return None;
+                };
+                let mut background = false;
+                if let Some(value) = values.get("background") {
+                    let Some(value) = self.eval_static(value).and_then(|v| v.as_bool()) else {
+                        self.illegal(
+                            DiagCode::GrammarForbidden,
+                            value.span(),
+                            "environment background must be a static boolean",
+                        );
+                        return None;
+                    };
+                    background = value;
+                }
+                pbr.environment = Some(valle_motion::scene3d::EnvironmentSpec {
+                    control: control.to_owned(),
+                    background,
+                });
+                if let Some(value) = values.get("intensity") {
+                    environment_intensity =
+                        self.number_binding(value, "environment intensity", |v| {
+                            (0.0..=16.0).contains(&v)
+                        })?;
+                }
+                if let Some(value) = values.get("rotation") {
+                    environment_rotation_degrees =
+                        self.number_binding(value, "environment rotation", |v| {
+                            v.abs() <= f64::from(valle_motion::scene3d::MAX_ABS_ROTATION_DEGREES)
+                        })?;
+                }
+            }
+            if let Some(expression) = values.get("toneMapping") {
+                match self
+                    .eval_static(expression)
+                    .and_then(|v| v.as_str().map(str::to_owned))
+                    .as_deref()
+                {
+                    Some("aces") => pbr.tone_mapping = valle_motion::scene3d::ToneMapping::Aces,
+                    Some("none") => pbr.tone_mapping = valle_motion::scene3d::ToneMapping::None,
+                    _ => self.illegal(
+                        DiagCode::GrammarForbidden,
+                        expression.span(),
+                        "Scene3D pbr.toneMapping must be `aces` or `none`",
+                    ),
+                }
+            }
+            exposure =
+                self.scene3d_number(values.get("exposure").copied(), 1.0, "Scene3D exposure")?;
+        }
         for child in &element.children {
             let JSXChild::Element(child) = child else {
                 if matches!(child, JSXChild::Text(text) if text.value.trim().is_empty())
@@ -143,6 +223,8 @@ impl<'s> Compiler<'s> {
                             "key",
                             "src",
                             "material",
+                            "materials",
+                            "nodes",
                             "position",
                             "rotation",
                             "scale",
@@ -181,46 +263,17 @@ impl<'s> Compiler<'s> {
                         );
                         continue;
                     }
-                    let material = self.scene3d_material(&attrs, child.span())?;
-                    let transform = valle_motion::scene3d::Transform3D {
-                        translation: self.scene3d_optional_attr_vec3(
-                            &attrs,
-                            "position",
-                            valle_motion::scene3d::Vec3::ZERO,
-                            "Mesh position",
-                        )?,
-                        rotation_degrees: self.scene3d_optional_attr_vec3(
-                            &attrs,
-                            "rotation",
-                            valle_motion::scene3d::Vec3::ZERO,
-                            "Mesh rotation",
-                        )?,
-                        scale: self.scene3d_optional_attr_vec3(
-                            &attrs,
-                            "scale",
-                            valle_motion::scene3d::Vec3::ONE,
-                            "Mesh scale",
-                        )?,
-                    };
-                    let frame_number = |this: &mut Self, name: &str, default: f64| {
-                        attrs
-                            .get(name)
-                            .and_then(|(value, span)| {
-                                this.scene3d_attr_number(value, *span, &format!("Mesh {name}"))
-                            })
-                            .unwrap_or(NumberValue::Static { value: default })
-                    };
+                    let (material, material_frame) = self.scene3d_material(&attrs, child.span())?;
+                    let (material_overrides, material_frames) = self.scene3d_material_overrides(&attrs)?;
+                    let transform = self.scene3d_mesh_transform(&attrs, child.span())?;
+                    let node_frames = self.scene3d_nodes(&attrs)?;
+                    let node_ids = node_frames.iter().map(|n| n.id).collect();
                     mesh_frames.push(Scene3DMeshBinding {
                         key: mesh_key.clone(),
-                        translation_x: frame_number(self, "translateX", 0.0),
-                        translation_y: frame_number(self, "translateY", 0.0),
-                        translation_z: frame_number(self, "translateZ", 0.0),
-                        rotation_x_degrees: frame_number(self, "rotateX", 0.0),
-                        rotation_y_degrees: frame_number(self, "rotateY", 0.0),
-                        rotation_z_degrees: frame_number(self, "rotateZ", 0.0),
-                        scale_x: frame_number(self, "scaleX", 1.0),
-                        scale_y: frame_number(self, "scaleY", 1.0),
-                        scale_z: frame_number(self, "scaleZ", 1.0),
+                        material: material_frame,
+                        material_overrides: material_frames,
+                        transform,
+                        nodes: node_frames,
                     });
                     self.source_ledger.object_spans
                         .push((
@@ -233,7 +286,8 @@ impl<'s> Compiler<'s> {
                         key: mesh_key,
                         model_control,
                         material,
-                        transform,
+                        material_overrides,
+                        node_ids,
                     });
                 }
                 "Anchor3D" => {
@@ -252,49 +306,10 @@ impl<'s> Compiler<'s> {
                         )?,
                     });
                 }
-                "AmbientLight" => {
-                    let attrs =
-                        self.scene3d_attributes(child, "AmbientLight", &["key", "intensity"])?;
-                    let intensity = attrs
-                        .get("intensity")
-                        .and_then(|(value, span)| {
-                            self.scene3d_attr_number(value, *span, "AmbientLight intensity")
-                        })
-                        .unwrap_or(NumberValue::Static { value: 1.0 });
-                    let static_intensity = match &intensity {
-                        NumberValue::Static { value } => *value as f32,
-                        NumberValue::Expr { .. } => 1.0,
-                    };
-                    lights.push(valle_motion::scene3d::LightSpec::Ambient {
-                        intensity: static_intensity,
-                    });
-                    light_intensities.push(intensity);
-                }
-                "DirectionalLight" => {
-                    let attrs = self.scene3d_attributes(
-                        child,
-                        "DirectionalLight",
-                        &["key", "direction", "intensity"],
-                    )?;
-                    let intensity = attrs
-                        .get("intensity")
-                        .and_then(|(value, span)| {
-                            self.scene3d_attr_number(value, *span, "DirectionalLight intensity")
-                        })
-                        .unwrap_or(NumberValue::Static { value: 1.0 });
-                    let static_intensity = match &intensity {
-                        NumberValue::Static { value } => *value as f32,
-                        NumberValue::Expr { .. } => 1.0,
-                    };
-                    lights.push(valle_motion::scene3d::LightSpec::Directional {
-                        direction: self.scene3d_required_attr_vec3(
-                            &attrs,
-                            "direction",
-                            "DirectionalLight direction",
-                        )?,
-                        intensity: static_intensity,
-                    });
-                    light_intensities.push(intensity);
+                "AmbientLight" | "DirectionalLight" | "HemisphereLight" => {
+                    let binding = self.scene3d_light_binding(child, child_tag)?;
+                    lights.push(binding.kind());
+                    light_frames.push(binding);
                 }
                 _ => self.illegal(
                     DiagCode::GrammarForbidden,
@@ -307,16 +322,10 @@ impl<'s> Compiler<'s> {
         }
 
         let scene = valle_motion::scene3d::Scene3DSpec {
-            camera: valle_motion::scene3d::CameraSpec {
-                position,
-                target,
-                fov_y_degrees: static_fov,
-                near,
-                far,
-            },
             meshes,
             lights,
             anchors,
+            pbr,
         };
         if let Err(errors) = scene.validate() {
             for error in errors.0 {
@@ -338,14 +347,12 @@ impl<'s> Compiler<'s> {
             kind: NodeKind::Scene3D {
                 scene,
                 frame: Scene3DFrameBinding {
-                    camera: Scene3DCameraBinding {
-                        orbit_yaw_degrees,
-                        orbit_pitch_degrees,
-                        distance,
-                        fov_y_degrees,
-                    },
+                    environment_intensity,
+                    environment_rotation_degrees,
+                    exposure,
+                    camera: camera_binding,
                     meshes: mesh_frames,
-                    light_intensities,
+                    lights: light_frames,
                 },
             },
             class_names,
@@ -526,13 +533,25 @@ impl<'s> Compiler<'s> {
         })
     }
 
-    pub(super) fn scene3d_required_vec3(
+    fn scene3d_number(
         &mut self,
-        expression: Option<&'s Expression<'s>>,
+        value: Option<&'s Expression<'s>>,
+        default: f64,
+        label: &str,
+    ) -> Option<NumberValue> {
+        match value {
+            Some(value) => self.number_binding(value, label, |_| true),
+            None => Some(NumberValue::Static { value: default }),
+        }
+    }
+
+    fn scene3d_frame_vec3(
+        &mut self,
+        value: Option<&'s Expression<'s>>,
         span: Span,
         label: &str,
-    ) -> Option<valle_motion::scene3d::Vec3> {
-        let Some(expression) = expression else {
+    ) -> Option<[NumberValue; 3]> {
+        let Some(value) = value else {
             self.illegal(
                 DiagCode::GrammarForbidden,
                 span,
@@ -540,7 +559,262 @@ impl<'s> Compiler<'s> {
             );
             return None;
         };
-        self.scene3d_vec3(expression, label)
+        if let Some(value) = self.eval_static(value).and_then(|v| v.as_array().cloned()) {
+            if value.len() == 3 && value.iter().all(|v| v.as_f64().is_some_and(f64::is_finite)) {
+                return Some(std::array::from_fn(|i| NumberValue::Static {
+                    value: value[i].as_f64().unwrap(),
+                }));
+            }
+        }
+        let Some(items) = array_items(value).filter(|a| a.len() == 3) else {
+            self.illegal(
+                DiagCode::GrammarForbidden,
+                span,
+                format!("{label} requires a numeric [x,y,z] array"),
+            );
+            return None;
+        };
+        items
+            .into_iter()
+            .map(|v| self.number_binding(v, label, |_| true))
+            .collect::<Option<Vec<_>>>()?
+            .try_into()
+            .ok()
+    }
+
+    fn scene3d_mesh_transform(
+        &mut self,
+        attrs: &BTreeMap<String, (&'s Option<JSXAttributeValue<'s>>, Span)>,
+        span: Span,
+    ) -> Option<Scene3DTransformBinding> {
+        let mut vectors = Vec::new();
+        for (name, axes, default) in [
+            ("position", ["translateX", "translateY", "translateZ"], 0.0),
+            ("rotation", ["rotateX", "rotateY", "rotateZ"], 0.0),
+            ("scale", ["scaleX", "scaleY", "scaleZ"], 1.0),
+        ] {
+            let mut vector = self.scene3d_frame_attr_vec3(attrs, name, Some([default; 3]))?;
+            for (i, axis) in axes.into_iter().enumerate() {
+                let Some((value, at)) = attrs.get(axis) else {
+                    continue;
+                };
+                let offset = self.scene3d_attr_number(value, *at, axis)?;
+                vector[i] = match (&vector[i], &offset) {
+                    (NumberValue::Static { value: a }, NumberValue::Static { value: b }) => {
+                        NumberValue::Static {
+                            value: if name == "scale" { a * b } else { a + b },
+                        }
+                    }
+                    _ => {
+                        let mut expr = |n: &NumberValue| match n {
+                            NumberValue::Expr { expr } => *expr,
+                            NumberValue::Static { value } => self.push(
+                                Expr::Const {
+                                    value: MotionValue::Number(*value),
+                                },
+                                span,
+                            ),
+                        };
+                        let lhs = expr(&vector[i]);
+                        let rhs = expr(&offset);
+                        NumberValue::Expr {
+                            expr: self.push(
+                                if name == "scale" {
+                                    Expr::Mul { lhs, rhs }
+                                } else {
+                                    Expr::Add { lhs, rhs }
+                                },
+                                span,
+                            ),
+                        }
+                    }
+                };
+            }
+            vectors.push(vector);
+        }
+        let [translation, rotation_degrees, scale] = <[_; 3]>::try_from(vectors).ok()?;
+        Some(Scene3DTransformBinding {
+            translation,
+            rotation_degrees,
+            scale,
+        })
+    }
+
+    fn scene3d_nodes(
+        &mut self,
+        attrs: &BTreeMap<String, (&'s Option<JSXAttributeValue<'s>>, Span)>,
+    ) -> Option<Vec<Scene3DNodeBinding>> {
+        let Some((value, span)) = attrs.get("nodes") else {
+            return Some(Vec::new());
+        };
+        let Some(JSXAttributeValue::ExpressionContainer(container)) = value else {
+            self.illegal(
+                DiagCode::GrammarForbidden,
+                *span,
+                "Mesh nodes must be an explicit array of {id, position?, rotation?, scale?}",
+            );
+            return None;
+        };
+        let Some(items) = container.expression.as_expression().and_then(array_items) else {
+            self.illegal(
+                DiagCode::GrammarForbidden,
+                *span,
+                "Mesh nodes requires an explicit array",
+            );
+            return None;
+        };
+        if items.len() > valle_motion::scene3d::MAX_MODEL_NODES {
+            self.illegal(
+                DiagCode::GrammarForbidden,
+                *span,
+                "Mesh node bindings exceed the node budget",
+            );
+            return None;
+        }
+        let mut result = Vec::new();
+        for item in items {
+            let Expression::ObjectExpression(object) = item.without_parentheses() else {
+                self.illegal(
+                    DiagCode::GrammarForbidden,
+                    item.span(),
+                    "each Mesh node binding must be an object",
+                );
+                return None;
+            };
+            let values = self.scene3d_object_values(
+                object,
+                "Mesh node",
+                &["id", "position", "rotation", "scale"],
+            )?;
+            let Some(id) = values
+                .get("id")
+                .and_then(|v| self.eval_static(v))
+                .and_then(|v| v.as_u64())
+                .filter(|v| *v < valle_motion::scene3d::MAX_MODEL_NODES as u64)
+            else {
+                self.illegal(
+                    DiagCode::GrammarForbidden,
+                    item.span(),
+                    "Mesh node id must be a static GLB node index within the node budget",
+                );
+                return None;
+            };
+            let mut vectors = Vec::new();
+            for (name, default) in [("position", 0.0), ("rotation", 0.0), ("scale", 1.0)] {
+                vectors.push(match values.get(name) {
+                    Some(v) => self.scene3d_frame_vec3(Some(v), v.span(), name)?,
+                    None => std::array::from_fn(|_| NumberValue::Static { value: default }),
+                });
+            }
+            let [translation, rotation_degrees, scale] = <[_; 3]>::try_from(vectors).ok()?;
+            result.push(Scene3DNodeBinding {
+                id: id as u32,
+                transform: Scene3DTransformBinding {
+                    translation,
+                    rotation_degrees,
+                    scale,
+                },
+            });
+        }
+        Some(result)
+    }
+
+    fn scene3d_light_binding(
+        &mut self,
+        child: &'s JSXElement<'s>,
+        tag: &str,
+    ) -> Option<Scene3DLightBinding> {
+        let allowed: &[&str] = match tag {
+            "AmbientLight" => &["key", "color", "intensity"],
+            "DirectionalLight" => &["key", "color", "direction", "intensity"],
+            _ => &["key", "skyColor", "groundColor", "direction", "intensity"],
+        };
+        let attrs = self.scene3d_attributes(child, tag, allowed)?;
+        let intensity = match attrs.get("intensity") {
+            Some((value, span)) => self.scene3d_attr_number(value, *span, "light intensity")?,
+            None => NumberValue::Static { value: 1.0 },
+        };
+        let binding = match tag {
+            "AmbientLight" => Scene3DLightBinding::Ambient {
+                intensity,
+                color: self.scene3d_light_color(&attrs, "color", Some("#ffffff"))?,
+            },
+            "DirectionalLight" => Scene3DLightBinding::Directional {
+                intensity,
+                direction: self.scene3d_frame_attr_vec3(&attrs, "direction", None)?,
+                color: self.scene3d_light_color(&attrs, "color", Some("#ffffff"))?,
+            },
+            _ => Scene3DLightBinding::Hemisphere {
+                intensity,
+                direction: self.scene3d_frame_attr_vec3(
+                    &attrs,
+                    "direction",
+                    Some([0.0, 1.0, 0.0]),
+                )?,
+                sky_color: self.scene3d_light_color(&attrs, "skyColor", None)?,
+                ground_color: self.scene3d_light_color(&attrs, "groundColor", None)?,
+            },
+        };
+        if let Some(value) = binding.constant() {
+            if let Err(error) = value.validate() {
+                self.illegal(DiagCode::GrammarForbidden, child.span(), error.to_string());
+                return None;
+            }
+        }
+        Some(binding)
+    }
+
+    fn scene3d_frame_attr_vec3(
+        &mut self,
+        attrs: &BTreeMap<String, (&'s Option<JSXAttributeValue<'s>>, Span)>,
+        name: &str,
+        default: Option<[f64; 3]>,
+    ) -> Option<[NumberValue; 3]> {
+        match attrs.get(name) {
+            Some((Some(JSXAttributeValue::ExpressionContainer(container)), span)) => {
+                self.scene3d_frame_vec3(container.expression.as_expression(), *span, name)
+            }
+            None if default.is_some() => {
+                Some(default.unwrap().map(|value| NumberValue::Static { value }))
+            }
+            _ => {
+                self.illegal(
+                    DiagCode::GrammarForbidden,
+                    attrs.get(name).map_or(Span::default(), |(_, s)| *s),
+                    format!("{name} requires a numeric [x,y,z] array"),
+                );
+                None
+            }
+        }
+    }
+
+    fn scene3d_light_color(
+        &mut self,
+        attrs: &BTreeMap<String, (&'s Option<JSXAttributeValue<'s>>, Span)>,
+        name: &str,
+        default: Option<&str>,
+    ) -> Option<ColorValue> {
+        let color = match attrs.get(name) {
+            Some((Some(JSXAttributeValue::StringLiteral(value)), _)) => {
+                Rgba::parse(&value.value).map(|value| ColorValue::Static { value })
+            }
+            Some((Some(JSXAttributeValue::ExpressionContainer(container)), _)) => {
+                self.color_binding(container.expression.as_expression()?, name)
+            }
+            None => default
+                .and_then(Rgba::parse)
+                .map(|value| ColorValue::Static { value }),
+            _ => None,
+        };
+        if color.is_none() || matches!(color,Some(ColorValue::Static {value}) if value.a!=255) {
+            self.illegal(
+                DiagCode::GrammarForbidden,
+                attrs.get(name).map_or(Span::default(), |(_, s)| *s),
+                format!("light {name} must be an opaque color expression"),
+            );
+            return None;
+        }
+        color
     }
 
     pub(super) fn scene3d_vec3(
@@ -598,134 +872,275 @@ impl<'s> Compiler<'s> {
         self.scene3d_vec3(container.expression.as_expression()?, label)
     }
 
-    pub(super) fn scene3d_optional_attr_vec3(
+    fn scene3d_material(
         &mut self,
         attrs: &BTreeMap<String, (&'s Option<JSXAttributeValue<'s>>, Span)>,
-        name: &str,
-        default: valle_motion::scene3d::Vec3,
-        label: &str,
-    ) -> Option<valle_motion::scene3d::Vec3> {
-        if attrs.contains_key(name) {
-            self.scene3d_required_attr_vec3(attrs, name, label)
-        } else {
-            Some(default)
+        _span: Span,
+    ) -> Option<(valle_motion::scene3d::MaterialSpec, Scene3DMaterialBinding)> {
+        let Some((value, span)) = attrs.get("material") else {
+            return Some((Default::default(), Default::default()));
+        };
+        let object = self.attr_object_literal(value, *span, "Mesh material")?;
+        self.scene3d_material_object(object, false)
+    }
+
+    fn scene3d_material_overrides(
+        &mut self,
+        attrs: &BTreeMap<String, (&'s Option<JSXAttributeValue<'s>>, Span)>,
+    ) -> Option<(
+        Vec<valle_motion::scene3d::MaterialOverrideSpec>,
+        Vec<Scene3DMaterialOverrideBinding>,
+    )> {
+        let Some((value, span)) = attrs.get("materials") else {
+            return Some((Vec::new(), Vec::new()));
+        };
+        let Some(JSXAttributeValue::ExpressionContainer(container)) = value else {
+            self.illegal(
+                DiagCode::GrammarForbidden,
+                *span,
+                "Mesh materials requires an array of material overrides with original GLB indices",
+            );
+            return None;
+        };
+        let Some(items) = container
+            .expression
+            .as_expression()
+            .and_then(array_items)
+            .filter(|v| v.len() <= valle_motion::scene3d::MAX_MATERIALS)
+        else {
+            self.illegal(
+                DiagCode::GrammarForbidden,
+                *span,
+                "Mesh materials requires a bounded explicit array",
+            );
+            return None;
+        };
+        let mut specs = Vec::new();
+        let mut frames = Vec::new();
+        for item in items {
+            let Expression::ObjectExpression(object) = item.without_parentheses() else {
+                self.illegal(
+                    DiagCode::GrammarForbidden,
+                    item.span(),
+                    "each material override must be an object",
+                );
+                return None;
+            };
+            let id = object
+                .properties
+                .iter()
+                .find_map(|p| match p {
+                    ObjectPropertyKind::ObjectProperty(p)
+                        if p.key.static_name().as_deref() == Some("id") =>
+                    {
+                        Some(&p.value)
+                    }
+                    _ => None,
+                })
+                .and_then(|v| self.eval_static(v))
+                .and_then(|v| v.as_u64());
+            let Some(id) = id.filter(|&id| id < valle_motion::scene3d::MAX_MATERIALS as u64) else {
+                self.illegal(
+                    DiagCode::GrammarForbidden,
+                    item.span(),
+                    "material id must be a static GLB material index within the material budget",
+                );
+                return None;
+            };
+            let (material, frame) = self.scene3d_material_object(object, true)?;
+            specs.push(valle_motion::scene3d::MaterialOverrideSpec {
+                id: id as u32,
+                material,
+            });
+            frames.push(Scene3DMaterialOverrideBinding {
+                id: id as u32,
+                material: frame,
+            });
         }
+        Some((specs, frames))
     }
 
-    pub(super) fn scene3d_static_number(
+    fn scene3d_material_object(
         &mut self,
-        expression: Option<&'s Expression<'s>>,
-        default: f32,
-        label: &str,
-    ) -> Option<f32> {
-        let Some(expression) = expression else {
-            return Some(default);
+        object: &'s ObjectExpression<'s>,
+        indexed: bool,
+    ) -> Option<(valle_motion::scene3d::MaterialSpec, Scene3DMaterialBinding)> {
+        use valle_motion::scene3d::{
+            AlphaMode, MaterialKind, MaterialSpec, MaterialTexture, MaterialTextureSlot,
         };
-        self.eval_static(expression)
-            .and_then(|value| value.as_f64())
-            .filter(|value| value.is_finite())
-            .map(|value| value as f32)
-            .or_else(|| {
-                self.illegal(
-                    DiagCode::GrammarForbidden,
-                    expression.span(),
-                    format!("{label} must be a prepare-time finite number"),
-                );
-                None
-            })
-    }
-
-    pub(super) fn scene3d_material(
-        &mut self,
-        attrs: &BTreeMap<String, (&'s Option<JSXAttributeValue<'s>>, Span)>,
-        span: Span,
-    ) -> Option<valle_motion::scene3d::MaterialSpec> {
-        let Some((value, material_span)) = attrs.get("material") else {
-            self.illegal(
-                DiagCode::GrammarForbidden,
-                span,
-                "Mesh requires material={{ type, color, texture? }}",
+        let mut allowed = vec![
+            "type",
+            "color",
+            "metallic",
+            "roughness",
+            "emissive",
+            "emissiveIntensity",
+            "normalScale",
+            "occlusionStrength",
+            "alphaCutoff",
+            "alphaMode",
+            "doubleSided",
+            "textures",
+        ];
+        if indexed {
+            allowed.push("id");
+        }
+        let values = self.scene3d_object_values(object, "Mesh material", &allowed)?;
+        let mut spec = MaterialSpec::default();
+        if let Some(value) = values.get("type") {
+            spec.kind = Some(
+                match self
+                    .eval_static(value)
+                    .and_then(|v| v.as_str().map(str::to_owned))
+                    .as_deref()
+                {
+                    Some("unlit") => MaterialKind::Unlit,
+                    Some("lambert") => MaterialKind::Lambert,
+                    Some("pbr") => MaterialKind::Pbr,
+                    _ => {
+                        self.illegal(
+                            DiagCode::GrammarForbidden,
+                            value.span(),
+                            "material type must be unlit, lambert or pbr",
+                        );
+                        return None;
+                    }
+                },
             );
-            return None;
-        };
-        let object = self.attr_object_literal(value, *material_span, "Mesh material")?;
-        let values =
-            self.scene3d_object_values(object, "Mesh material", &["type", "color", "texture"])?;
-        let kind = match values
-            .get("type")
-            .and_then(|value| self.eval_static(value))
-            .and_then(|value| value.as_str().map(str::to_owned))
-            .as_deref()
-        {
-            Some("unlit") => valle_motion::scene3d::MaterialKind::Unlit,
-            Some("lambert") => valle_motion::scene3d::MaterialKind::Lambert,
-            _ => {
-                self.illegal(
-                    DiagCode::GrammarForbidden,
-                    object.span(),
-                    "Mesh material.type must be `unlit` or `lambert`",
-                );
-                return None;
-            }
-        };
-        let color_text = values
-            .get("color")
-            .and_then(|value| self.eval_static(value))
-            .and_then(|value| value.as_str().map(str::to_owned));
-        let Some(color) = color_text.as_deref().and_then(Rgba::parse) else {
-            self.illegal(
-                DiagCode::GrammarForbidden,
-                object.span(),
-                "Mesh material.color must be a static CSS color",
+        }
+        if let Some(value) = values.get("alphaMode") {
+            spec.alpha_mode = Some(
+                match self
+                    .eval_static(value)
+                    .and_then(|v| v.as_str().map(str::to_owned))
+                    .as_deref()
+                {
+                    Some("opaque") => AlphaMode::Opaque,
+                    Some("mask") => AlphaMode::Mask,
+                    _ => {
+                        self.illegal(
+                            DiagCode::GrammarForbidden,
+                            value.span(),
+                            "material alphaMode must be opaque or mask",
+                        );
+                        return None;
+                    }
+                },
             );
-            return None;
-        };
-        let texture_control = if let Some(expression) = values.get("texture") {
-            let texture = self
-                .eval_static(expression)
-                .and_then(|value| value.as_str().map(str::to_owned));
-            let Some(texture) = texture else {
+        }
+        if let Some(value) = values.get("doubleSided") {
+            let Some(value) = self.eval_static(value).and_then(|v| v.as_bool()) else {
                 self.illegal(
                     DiagCode::GrammarForbidden,
-                    expression.span(),
-                    "Mesh material.texture must be a static asset://<image-control>",
+                    value.span(),
+                    "material doubleSided must be a static boolean",
                 );
                 return None;
             };
-            let Some(control) = texture.strip_prefix("asset://").map(str::to_owned) else {
+            spec.double_sided = Some(value);
+        }
+        if let Some(value) = values.get("textures") {
+            let Some(textures) = self.eval_static(value).and_then(|v| v.as_object().cloned())
+            else {
                 self.illegal(
                     DiagCode::GrammarForbidden,
-                    expression.span(),
-                    "Mesh material.texture must be asset://<image-control>",
+                    value.span(),
+                    "material textures must be a static slot map",
                 );
                 return None;
             };
-            if !self
-                .controls
-                .assets
-                .get(&control)
-                .is_some_and(|asset| asset.kind == AssetKind::Image)
-            {
-                self.illegal(
-                    DiagCode::GrammarForbidden,
-                    expression.span(),
-                    format!("Mesh texture control `{control}` must have kind image"),
-                );
-                return None;
+            for (name, value_json) in textures {
+                let Ok(slot) = serde_json::from_value::<MaterialTextureSlot>(
+                    serde_json::Value::String(name.clone()),
+                ) else {
+                    self.illegal(
+                        DiagCode::GrammarForbidden,
+                        value.span(),
+                        format!("unknown material texture slot {name}"),
+                    );
+                    return None;
+                };
+                if value_json.is_null() {
+                    spec.textures.insert(slot, None);
+                    continue;
+                }
+                let mut texture = match value_json {
+                    serde_json::Value::String(src) => {
+                        serde_json::Map::from_iter([("src".into(), serde_json::Value::String(src))])
+                    }
+                    serde_json::Value::Object(value) => value,
+                    _ => {
+                        self.illegal(DiagCode::GrammarForbidden,value.span(),"texture requires an asset URI, {src, wrapU?, wrapV?, minFilter?, magFilter?, mipmap?}, or null");
+                        return None;
+                    }
+                };
+                if texture.contains_key("control") {
+                    self.illegal(
+                        DiagCode::GrammarForbidden,
+                        value.span(),
+                        "texture uses src, not control",
+                    );
+                    return None;
+                }
+                let Some(control) = texture.remove("src").and_then(|v| {
+                    v.as_str()
+                        .and_then(|v| v.strip_prefix("asset://"))
+                        .map(str::to_owned)
+                }) else {
+                    self.illegal(
+                        DiagCode::GrammarForbidden,
+                        value.span(),
+                        "material texture src must be asset://<image-control>",
+                    );
+                    return None;
+                };
+                if !self
+                    .controls
+                    .assets
+                    .get(&control)
+                    .is_some_and(|v| v.kind == AssetKind::Image)
+                {
+                    self.illegal(
+                        DiagCode::GrammarForbidden,
+                        value.span(),
+                        format!("material texture {control} must name an image control"),
+                    );
+                    return None;
+                }
+                texture.insert("control".into(), serde_json::Value::String(control));
+                let texture = match serde_json::from_value::<MaterialTexture>(
+                    serde_json::Value::Object(texture),
+                ) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        self.illegal(DiagCode::GrammarForbidden, value.span(), e.to_string());
+                        return None;
+                    }
+                };
+                spec.textures.insert(slot, Some(texture));
             }
-            Some(control)
-        } else {
-            None
-        };
-        Some(valle_motion::scene3d::MaterialSpec {
-            kind,
-            color: valle_motion::scene3d::Color4([
-                f32::from(color.r) / 255.0,
-                f32::from(color.g) / 255.0,
-                f32::from(color.b) / 255.0,
-                f32::from(color.a) / 255.0,
-            ]),
-            texture_control,
-        })
+        }
+        let mut frame = Scene3DMaterialBinding::default();
+        for (name, binding) in [
+            ("color", &mut frame.color),
+            ("emissive", &mut frame.emissive),
+        ] {
+            if let Some(value) = values.get(name) {
+                *binding = Some(self.color_binding(value, name)?);
+            }
+        }
+        for (name, binding) in [
+            ("metallic", &mut frame.metallic),
+            ("roughness", &mut frame.roughness),
+            ("emissiveIntensity", &mut frame.emissive_intensity),
+            ("normalScale", &mut frame.normal_scale),
+            ("occlusionStrength", &mut frame.occlusion_strength),
+            ("alphaCutoff", &mut frame.alpha_cutoff),
+        ] {
+            if let Some(value) = values.get(name) {
+                *binding = Some(self.number_binding(value, name, |_| true)?);
+            }
+        }
+        Some((spec, frame))
     }
 }

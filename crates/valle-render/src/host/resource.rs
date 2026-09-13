@@ -13,14 +13,14 @@ use std::{
 };
 
 use sha2::{Digest, Sha256};
-use skia_safe::{AlphaType, ColorSpace, ColorType, Data, ImageInfo, image::CachingHint, images};
+use skia_safe::{Data, images};
 use thiserror::Error;
 use valle_engine::{
     motion::{
         Scene3DFrameRequest,
         scene3d::{
-            AdmittedModel, PreparedScene, ScenePrepareCacheKey, SceneResources, TextureAsset,
-            admit_glb, prepare_cache_key, prepare_scene, render_scene,
+            AdmittedModel, MaterialImage, PreparedScene, ScenePrepareCacheKey, SceneResources,
+            TextureRole, admit_glb, prepare_cache_key, prepare_scene, render_scene,
         },
     },
     resource::{
@@ -299,7 +299,8 @@ pub struct NativeResourceProvider {
     video: BTreeMap<ContentDigest, LibavVideoSource>,
     video_transport: VideoFrameTransport,
     models: BTreeMap<ContentDigest, Arc<AdmittedModel>>,
-    textures: BTreeMap<ContentDigest, Arc<TextureAsset>>,
+    environments: BTreeMap<ContentDigest, Arc<valle_engine::motion::scene3d::EnvironmentAsset>>,
+    textures: BTreeMap<(ContentDigest, TextureRole), Arc<MaterialImage>>,
     scenes: BTreeMap<ScenePrepareCacheKey, Arc<PreparedScene>>,
     #[cfg(feature = "lottie")]
     lottie: BTreeMap<ContentDigest, super::lottie::LottieDocument>,
@@ -327,6 +328,7 @@ impl NativeResourceProvider {
             video: BTreeMap::new(),
             video_transport: VideoFrameTransport::Cpu,
             models: BTreeMap::new(),
+            environments: BTreeMap::new(),
             textures: BTreeMap::new(),
             scenes: BTreeMap::new(),
             #[cfg(feature = "lottie")]
@@ -337,7 +339,18 @@ impl NativeResourceProvider {
     /// Freeze backend payloads from the admitted render. Shader package identity is not the
     /// digest of generated SkSL; the engine has already verified and lowered the package.
     pub fn with_render_resources(mut self, render: &valle_engine::render::CompiledRender) -> Self {
+        for (digest, environment) in render.admitted_environments() {
+            self.environments.insert(*digest, Arc::clone(environment));
+        }
+        for (digest, model) in render.admitted_models() {
+            self.models.insert(*digest, Arc::clone(model));
+        }
         for resource in render.execution_resources() {
+            if resource.kind() == valle_engine::render::CompiledExecutionResourceKind::Model3dBytes
+            {
+                self.bytes
+                    .insert(*resource.content_digest(), Arc::from(resource.bytes()));
+            }
             if resource.kind() == valle_engine::render::CompiledExecutionResourceKind::RuntimeShader
             {
                 if let Some(abi) = resource.abi_digest() {
@@ -568,11 +581,24 @@ impl NativeResourceProvider {
             let model_digest = binding_digest(frame, &mesh.model_control)?;
             let model = self.model(&model_digest)?;
             resources.models.insert(mesh.model_control.clone(), model);
-            if let Some(control) = &mesh.material.texture_control {
+            for (control, role) in mesh.texture_controls() {
                 let texture_digest = binding_digest(frame, control)?;
-                let texture = self.texture(&texture_digest)?;
-                resources.textures.insert(control.clone(), texture);
+                let texture = self.texture(&texture_digest, role)?;
+                resources
+                    .textures
+                    .insert((control.to_owned(), role), texture);
             }
+        }
+        if let Some(environment) = &frame.scene.pbr.environment {
+            let digest = binding_digest(frame, &environment.control)?;
+            let asset = self.environments.get(&digest).ok_or_else(|| {
+                NativeResourceError::SceneRequest {
+                    reason: format!("environment {digest} has no admitted frozen payload"),
+                }
+            })?;
+            resources
+                .environments
+                .insert(environment.control.clone(), Arc::clone(asset));
         }
         Ok(resources)
     }
@@ -581,8 +607,12 @@ impl NativeResourceProvider {
         if let Some(model) = self.models.get(digest) {
             return Ok(Arc::clone(model));
         }
-        let source = self.source(digest.clone())?;
-        let bytes = self.source_bytes(digest, &source)?;
+        let bytes = if let Some(bytes) = self.bytes.get(digest) {
+            Arc::clone(bytes)
+        } else {
+            let source = self.source(*digest)?;
+            self.source_bytes(digest, &source)?
+        };
         let model = Arc::new(
             admit_glb(&bytes).map_err(|error| NativeResourceError::Model {
                 digest: digest.to_string(),
@@ -596,62 +626,30 @@ impl NativeResourceProvider {
     fn texture(
         &mut self,
         digest: &ContentDigest,
-    ) -> Result<Arc<TextureAsset>, NativeResourceError> {
-        if let Some(texture) = self.textures.get(digest) {
+        role: TextureRole,
+    ) -> Result<Arc<MaterialImage>, NativeResourceError> {
+        if let Some(texture) = self.textures.get(&(*digest, role)) {
             return Ok(Arc::clone(texture));
         }
-        let source = self.source(digest.clone())?;
-        let bytes = self.source_bytes(digest, &source)?;
-        let image =
-            images::deferred_from_encoded_data(Data::new_copy(&bytes), None).ok_or_else(|| {
-                NativeResourceError::Texture {
-                    digest: digest.to_string(),
-                    reason: "encoded image cannot be decoded".into(),
-                }
-            })?;
-        let width = u32::try_from(image.width()).map_err(|_| NativeResourceError::Texture {
-            digest: digest.to_string(),
-            reason: "decoded width is invalid".into(),
-        })?;
-        let height = u32::try_from(image.height()).map_err(|_| NativeResourceError::Texture {
-            digest: digest.to_string(),
-            reason: "decoded height is invalid".into(),
-        })?;
-        let info = ImageInfo::new(
-            (image.width(), image.height()),
-            ColorType::RGBA8888,
-            AlphaType::Premul,
-            Some(ColorSpace::new_srgb()),
-        );
-        let row_bytes = usize::try_from(width)
-            .ok()
-            .and_then(|value| value.checked_mul(4))
-            .ok_or_else(|| NativeResourceError::Texture {
-                digest: digest.to_string(),
-                reason: "decoded row size overflows".into(),
-            })?;
-        let mut rgba = vec![
-            0_u8;
-            row_bytes
-                .checked_mul(usize::try_from(height).unwrap_or(usize::MAX))
-                .ok_or_else(|| NativeResourceError::Texture {
-                    digest: digest.to_string(),
-                    reason: "decoded byte size overflows".into(),
-                })?
-        ];
-        if !image.read_pixels(&info, &mut rgba, row_bytes, (0, 0), CachingHint::Disallow) {
-            return Err(NativeResourceError::Texture {
-                digest: digest.to_string(),
-                reason: "decoded pixels cannot be read".into(),
-            });
-        }
-        let texture = Arc::new(TextureAsset::new(*digest, width, height, rgba).map_err(
-            |error| NativeResourceError::Texture {
+        let bytes = if let Some(bytes) = self.bytes.get(digest) {
+            Arc::clone(bytes)
+        } else {
+            let source = self.source(*digest)?;
+            self.source_bytes(digest, &source)?
+        };
+        let texture = Arc::new(MaterialImage::from_encoded(&bytes, role).map_err(|error| {
+            NativeResourceError::Texture {
                 digest: digest.to_string(),
                 reason: error.to_string(),
-            },
-        )?);
-        self.textures.insert(digest.clone(), Arc::clone(&texture));
+            }
+        })?);
+        if texture.content_digest() != *digest {
+            return Err(NativeResourceError::Texture {
+                digest: digest.to_string(),
+                reason: "material texture digest differs from bound bytes".into(),
+            });
+        }
+        self.textures.insert((*digest, role), Arc::clone(&texture));
         Ok(texture)
     }
 

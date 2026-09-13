@@ -3,34 +3,49 @@
 //! use the same validation without a separate mutable scene runtime.
 
 mod asset;
+mod environment;
+mod material;
+pub use material::*;
 mod raster;
 
-pub use asset::{AdmittedModel, ModelVertex, PrimitiveRange, admit_glb};
+pub use asset::{
+    AdmittedModel, MaterialImage, ModelInstance, ModelMaterial, ModelMesh, ModelNode, ModelVertex,
+    PrimitiveRange, admit_glb,
+};
+pub use environment::{EnvironmentAsset, EnvironmentSettings};
 pub use raster::{
-    AnchorProjection, BACKGROUND_OBJECT_ID, CLEAR_DEPTH, PreparedScene, RasterFrame,
-    Scene3DAnchorMetadata, Scene3DFrameMetadata, Scene3DObjectMetadata, Scene3DPick,
-    ScenePrepareCacheKey, SceneResources, TextureAsset, prepare_cache_key, prepare_scene,
-    project_anchors, render_scene, render_scene_reusing,
+    AnchorProjection, BACKGROUND_NODE_ID, BACKGROUND_OBJECT_ID, CLEAR_DEPTH, PreparedScene,
+    RasterFrame, Scene3DAnchorMetadata, Scene3DFrameMetadata, Scene3DObjectMetadata, Scene3DPick,
+    ScenePrepareCacheKey, SceneResources, prepare_cache_key, prepare_scene, project_anchors,
+    render_scene, render_scene_reusing,
 };
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
 pub const MAX_LAYER_EDGE: u32 = 2_048;
 pub const MAX_LAYER_PIXELS: u64 = 2_000_000;
-pub const MAX_FRAME_BUFFER_BYTES: u64 = MAX_LAYER_PIXELS * 8; // premul RGBA8 + u16 depth + u16 id
+pub const MAX_FRAME_BUFFER_BYTES: u64 = MAX_LAYER_PIXELS * 10; // RGBA8 + u16 depth/object/node
 pub const MAX_MODEL_BYTES: u64 = 16 * 1024 * 1024;
 pub const MAX_VERTICES: u32 = 65_535;
 pub const MAX_TRIANGLES: u32 = 20_000;
 pub const MAX_MESHES: usize = 8;
+pub const MAX_MODEL_NODES: usize = 256;
+pub const MAX_NODE_DEPTH: usize = 32;
 pub const MAX_MATERIALS: usize = MAX_MESHES;
-pub const MAX_TEXTURES: u32 = 4;
-pub const MAX_TEXTURE_PIXELS: u64 = 4_194_304;
+// Texture count, pixel count and decoded mip/environment storage are bounded independently.
+pub const MAX_TEXTURES: u32 = 8;
+pub const MAX_TEXTURE_PIXELS: u64 = 24 * 1024 * 1024;
+pub const MAX_TEXTURE_STORAGE_BYTES: u64 = 128 * 1024 * 1024;
 pub const MAX_ANCHORS: usize = 32;
 pub const MAX_DIRECTIONAL_LIGHTS: usize = 2;
-pub const MAX_FRAME_SCALARS: usize = 4 + MAX_MESHES * 9 + 1 + MAX_DIRECTIONAL_LIGHTS;
+pub const MAX_FRAME_SCALARS: usize = 12
+    + MAX_MESHES * ((1 + MAX_MODEL_NODES) * 9 + (1 + MAX_MATERIALS) * MATERIAL_FRAME_SCALARS)
+    + 5
+    + 12
+    + MAX_DIRECTIONAL_LIGHTS * 8;
 pub const MAX_ABS_POSITION: f32 = 10_000.0;
 pub const MAX_SCALE: f32 = 1_000.0;
 pub const MAX_ABS_ROTATION_DEGREES: f32 = 1_000_000.0;
@@ -43,26 +58,49 @@ pub const MAX_CAMERA_FAR: f32 = 100_000.0;
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Scene3DSpec {
-    pub camera: CameraSpec,
     pub meshes: Vec<MeshSpec>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub lights: Vec<LightSpec>,
+    pub lights: Vec<LightKind>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub anchors: Vec<AnchorSpec>,
+    #[serde(default, skip_serializing_if = "PbrOptions::is_default")]
+    pub pbr: PbrOptions,
 }
 
+/// Immutable lighting/output configuration for embedded PBR materials.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(rename_all = "camelCase", deny_unknown_fields, default)]
+pub struct PbrOptions {
+    pub environment: Option<EnvironmentSpec>,
+    pub tone_mapping: ToneMapping,
+}
+impl Default for PbrOptions {
+    fn default() -> Self {
+        Self {
+            environment: None,
+            tone_mapping: ToneMapping::None,
+        }
+    }
+}
+impl PbrOptions {
+    fn is_default(&self) -> bool {
+        self == &Self::default()
+    }
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct CameraSpec {
-    pub position: Vec3,
-    pub target: Vec3,
-    #[serde(default = "default_fov")]
-    pub fov_y_degrees: f32,
-    #[serde(default = "default_near")]
-    pub near: f32,
-    #[serde(default = "default_far")]
-    pub far: f32,
+pub struct EnvironmentSpec {
+    pub control: String,
+    pub background: bool,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(rename_all = "camelCase")]
+pub enum ToneMapping {
+    None,
+    Aces,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -70,21 +108,14 @@ pub struct CameraSpec {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct MeshSpec {
     pub key: String,
-    /// Logical project control name. 10.3c resolves it to an admitted content hash before raster.
+    /// Logical project control name, resolved to admitted content before rasterization.
     pub model_control: String,
     pub material: MaterialSpec,
-    #[serde(default)]
-    pub transform: Transform3D,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct MaterialSpec {
-    pub kind: MaterialKind,
-    pub color: Color4,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub texture_control: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub material_overrides: Vec<MaterialOverrideSpec>,
+    /// Original GLB node indices whose complete local transforms are supplied per frame.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub node_ids: Vec<u32>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -93,14 +124,105 @@ pub struct MaterialSpec {
 pub enum MaterialKind {
     Unlit,
     Lambert,
+    Pbr,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(rename_all = "camelCase")]
+pub enum LightKind {
+    Ambient,
+    Directional,
+    Hemisphere,
+}
+impl LightKind {
+    pub fn scalar_count(self) -> usize {
+        match self {
+            Self::Ambient => 5,
+            Self::Directional => 8,
+            Self::Hemisphere => 12,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
-#[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
-pub enum LightSpec {
-    Ambient { intensity: f32 },
-    Directional { direction: Vec3, intensity: f32 },
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub enum LightFrameState {
+    Ambient {
+        color: Color4,
+        intensity: f32,
+    },
+    Directional {
+        color: Color4,
+        direction: Vec3,
+        intensity: f32,
+    },
+    Hemisphere {
+        sky_color: Color4,
+        ground_color: Color4,
+        direction: Vec3,
+        intensity: f32,
+    },
+}
+impl LightFrameState {
+    pub fn kind(&self) -> LightKind {
+        match self {
+            Self::Ambient { .. } => LightKind::Ambient,
+            Self::Directional { .. } => LightKind::Directional,
+            Self::Hemisphere { .. } => LightKind::Hemisphere,
+        }
+    }
+    pub fn validate(&self) -> Result<(), ContractErrors> {
+        let mut errors = ContractErrors::default();
+        self.validate_at("/light", &mut errors);
+        errors.finish()
+    }
+    fn validate_at(&self, path: &str, errors: &mut ContractErrors) {
+        let intensity = match self {
+            Self::Ambient { intensity, .. }
+            | Self::Directional { intensity, .. }
+            | Self::Hemisphere { intensity, .. } => *intensity,
+        };
+        validate_intensity(intensity, &format!("{path}/intensity"), errors);
+        let mut color = |value: Color4, name: &str| {
+            if !value.valid() || value.0[3] != 1.0 {
+                errors.push(
+                    format!("{path}/{name}"),
+                    "light colors must be opaque finite sRGB colors",
+                );
+            }
+        };
+        match self {
+            Self::Ambient { color: c, .. } | Self::Directional { color: c, .. } => {
+                color(*c, "color")
+            }
+            Self::Hemisphere {
+                sky_color,
+                ground_color,
+                ..
+            } => {
+                color(*sky_color, "skyColor");
+                color(*ground_color, "groundColor");
+            }
+        }
+        if let Self::Directional { direction, .. } | Self::Hemisphere { direction, .. } = self {
+            if !direction.finite()
+                || direction.length_squared() <= 1.0e-12
+                || direction.0.iter().any(|v| v.abs() > MAX_ABS_POSITION)
+            {
+                errors.push(
+                    format!("{path}/direction"),
+                    "light direction must be a finite, bounded, non-zero vector",
+                );
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -166,27 +288,30 @@ impl Color4 {
     }
 }
 
-/// Only these scalar slots may vary per frame. Vec3/quaternion/matrix are deliberately absent.
-/// Motion evaluates its NumberValue/Expr graph first, converts finite f64 to f32 once, then sends
+/// Motion evaluates its expression graph first, converts finite f64 to f32 once, then sends
 /// a complete `Frame3DState` to Native or Wasm raster; the core never reads a clock or prior frame.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Frame3DState {
+    pub exposure: f32,
+    pub environment_intensity: f32,
+    pub environment_rotation_degrees: f32,
     pub camera: CameraFrameState,
     pub meshes: Vec<MeshFrameState>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub light_intensities: Vec<f32>,
+    pub lights: Vec<LightFrameState>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CameraFrameState {
-    pub orbit_yaw_degrees: f32,
-    pub orbit_pitch_degrees: f32,
-    pub distance: f32,
+    pub position: Vec3,
+    pub target: Vec3,
     pub fov_y_degrees: f32,
+    pub near: f32,
+    pub far: f32,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -194,15 +319,21 @@ pub struct CameraFrameState {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct MeshFrameState {
     pub key: String,
-    pub translation_x: f32,
-    pub translation_y: f32,
-    pub translation_z: f32,
-    pub rotation_x_degrees: f32,
-    pub rotation_y_degrees: f32,
-    pub rotation_z_degrees: f32,
-    pub scale_x: f32,
-    pub scale_y: f32,
-    pub scale_z: f32,
+    pub material: MaterialFrameState,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub material_overrides: Vec<MaterialOverrideState>,
+    pub transform: Transform3D,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub nodes: Vec<NodeFrameState>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct NodeFrameState {
+    pub id: u32,
+    /// Complete local TRS replacing the source node's local transform for this frame.
+    pub transform: Transform3D,
 }
 
 /// One unit shared by asset admission, Artifact validation and every frame execution entry.
@@ -230,7 +361,7 @@ impl BudgetUsage {
     }
 
     pub fn frame_buffer_bytes(self) -> Option<u64> {
-        self.layer_pixels()?.checked_mul(8)
+        self.layer_pixels()?.checked_mul(10)
     }
 
     pub fn validate(self) -> Result<(), ContractErrors> {
@@ -314,10 +445,24 @@ impl BudgetUsage {
     }
 }
 
+impl MeshSpec {
+    pub fn texture_controls(&self) -> impl Iterator<Item = (&str, TextureRole)> {
+        std::iter::once(&self.material)
+            .chain(self.material_overrides.iter().map(|m| &m.material))
+            .flat_map(MaterialSpec::texture_controls)
+    }
+}
+
 impl Scene3DSpec {
     pub fn validate(&self) -> Result<(), ContractErrors> {
         let mut errors = ContractErrors::default();
-        validate_camera(&self.camera, &mut errors);
+        if let Some(environment) = &self.pbr.environment {
+            validate_control(
+                &environment.control,
+                "/pbr/environment/control",
+                &mut errors,
+            );
+        }
         if self.meshes.is_empty() || self.meshes.len() > MAX_MESHES {
             errors.push(
                 "/meshes",
@@ -342,70 +487,50 @@ impl Scene3DSpec {
                 &format!("{path}/modelControl"),
                 &mut errors,
             );
-            validate_transform(mesh.transform, &format!("{path}/transform"), &mut errors);
-            if !mesh.material.color.valid() {
+            if mesh.node_ids.len() > MAX_MODEL_NODES
+                || mesh
+                    .node_ids
+                    .iter()
+                    .any(|&id| id as usize >= MAX_MODEL_NODES)
+                || mesh.node_ids.iter().copied().collect::<BTreeSet<_>>().len()
+                    != mesh.node_ids.len()
+            {
                 errors.push(
-                    format!("{path}/material/color"),
-                    "material color channels must be finite in 0..=1",
+                    format!("{path}/nodeIds"),
+                    "node IDs must be distinct and within the node budget",
                 );
             }
-            if let Some(texture) = &mesh.material.texture_control {
-                validate_control(
-                    texture,
-                    &format!("{path}/material/textureControl"),
+            mesh.material
+                .validate_at(&format!("{path}/material"), &mut errors);
+            let mut material_ids = BTreeSet::new();
+            for (at, material) in mesh.material_overrides.iter().enumerate() {
+                if material.id as usize >= MAX_MATERIALS || !material_ids.insert(material.id) {
+                    errors.push(
+                        format!("{path}/materialOverrides/{at}/id"),
+                        "material IDs must be distinct and within the material budget",
+                    );
+                }
+                material.material.validate_at(
+                    &format!("{path}/materialOverrides/{at}/material"),
                     &mut errors,
                 );
             }
         }
-        let mut ambient = 0;
-        let mut directional = 0;
-        for (index, light) in self.lights.iter().enumerate() {
-            match light {
-                LightSpec::Ambient { intensity } => {
-                    ambient += 1;
-                    validate_intensity(
-                        *intensity,
-                        &format!("/lights/{index}/intensity"),
-                        &mut errors,
-                    );
-                }
-                LightSpec::Directional {
-                    direction,
-                    intensity,
-                } => {
-                    directional += 1;
-                    let length_squared = direction.length_squared();
-                    if !direction.finite()
-                        || !length_squared.is_finite()
-                        || length_squared <= 1.0e-12
-                        || direction
-                            .0
-                            .into_iter()
-                            .any(|component| component.abs() > MAX_ABS_POSITION)
-                    {
-                        errors.push(
-                            format!("/lights/{index}/direction"),
-                            format!(
-                                "direction must be a finite non-zero surface-to-light vector with components <= {MAX_ABS_POSITION}"
-                            ),
-                        );
-                    }
-                    validate_intensity(
-                        *intensity,
-                        &format!("/lights/{index}/intensity"),
-                        &mut errors,
-                    );
-                }
+        for (kind, limit, label) in [
+            (LightKind::Ambient, 1, "ambient"),
+            (LightKind::Hemisphere, 1, "hemisphere"),
+            (
+                LightKind::Directional,
+                MAX_DIRECTIONAL_LIGHTS,
+                "directional",
+            ),
+        ] {
+            if self.lights.iter().filter(|&&value| value == kind).count() > limit {
+                errors.push(
+                    "/lights",
+                    format!("Scene3D allows at most {limit} {label} lights"),
+                );
             }
-        }
-        if ambient > 1 {
-            errors.push("/lights", "Scene3D allows at most one ambient light");
-        }
-        if directional > MAX_DIRECTIONAL_LIGHTS {
-            errors.push(
-                "/lights",
-                format!("Scene3D allows at most {MAX_DIRECTIONAL_LIGHTS} directional lights"),
-            );
         }
         let mut anchor_keys = BTreeSet::new();
         for (index, anchor) in self.anchors.iter().enumerate() {
@@ -446,46 +571,45 @@ impl Scene3DSpec {
     }
 
     pub fn frame_scalar_count(&self) -> usize {
-        4 + self.meshes.len() * 9 + self.lights.len()
+        12 + self
+            .meshes
+            .iter()
+            .map(|m| {
+                (1 + m.node_ids.len()) * 9
+                    + (1 + m.material_overrides.len()) * MATERIAL_FRAME_SCALARS
+            })
+            .sum::<usize>()
+            + self
+                .lights
+                .iter()
+                .map(|light| light.scalar_count())
+                .sum::<usize>()
     }
 }
 
 impl Frame3DState {
     pub fn validate_for(&self, scene: &Scene3DSpec) -> Result<(), ContractErrors> {
         let mut errors = ContractErrors::default();
-        for (path, value) in [
-            ("/camera/orbitYawDegrees", self.camera.orbit_yaw_degrees),
-            ("/camera/orbitPitchDegrees", self.camera.orbit_pitch_degrees),
-            ("/camera/distance", self.camera.distance),
-            ("/camera/fovYDegrees", self.camera.fov_y_degrees),
-        ] {
-            if !value.is_finite() {
-                errors.push(path, "frame scalar must be finite");
-            }
-        }
-        if !(-89.0..=89.0).contains(&self.camera.orbit_pitch_degrees) {
+        if !self.environment_intensity.is_finite()
+            || !(0.0..=16.0).contains(&self.environment_intensity)
+        {
             errors.push(
-                "/camera/orbitPitchDegrees",
-                "orbit pitch must be in -89..=89 degrees",
+                "/environmentIntensity",
+                "environment intensity must be finite in 0..=16",
             );
         }
-        if self.camera.orbit_yaw_degrees.abs() > MAX_ABS_ROTATION_DEGREES {
+        if !self.environment_rotation_degrees.is_finite()
+            || self.environment_rotation_degrees.abs() > MAX_ABS_ROTATION_DEGREES
+        {
             errors.push(
-                "/camera/orbitYawDegrees",
-                format!("orbit yaw magnitude must be <= {MAX_ABS_ROTATION_DEGREES}"),
+                "/environmentRotationDegrees",
+                "environment rotation must be finite and within the rotation budget",
             );
         }
-        if !(0.01..=MAX_ABS_POSITION).contains(&self.camera.distance) {
-            errors.push(
-                "/camera/distance",
-                format!("camera distance must be in 0.01..={MAX_ABS_POSITION}"),
-            );
-        }
-        if !(10.0..=120.0).contains(&self.camera.fov_y_degrees) {
-            errors.push(
-                "/camera/fovYDegrees",
-                "vertical FOV must be in 10..=120 degrees",
-            );
+
+        validate_camera(&self.camera, &mut errors);
+        if !self.exposure.is_finite() || !(0.0..=16.0).contains(&self.exposure) {
+            errors.push("/exposure", "exposure must be finite in 0..=16");
         }
         let expected = scene
             .meshes
@@ -504,81 +628,64 @@ impl Frame3DState {
             );
         }
         for (index, mesh) in self.meshes.iter().enumerate() {
-            for (name, value) in mesh.scalars() {
-                if !value.is_finite() {
-                    errors.push(
-                        format!("/meshes/{index}/{name}"),
-                        "frame scalar must be finite",
-                    );
-                }
-            }
-            if mesh.scale_x <= 0.0 || mesh.scale_y <= 0.0 || mesh.scale_z <= 0.0 {
+            let path = format!("/meshes/{index}");
+            validate_transform(mesh.transform, &format!("{path}/transform"), &mut errors);
+            if scene.meshes.get(index).is_some_and(|spec| {
+                spec.node_ids != mesh.nodes.iter().map(|n| n.id).collect::<Vec<_>>()
+            }) {
                 errors.push(
-                    format!("/meshes/{index}/scale"),
-                    "frame scale axes must all be > 0",
+                    format!("{path}/nodes"),
+                    "frame node IDs must match the frozen node bindings in exact order",
                 );
             }
-            for (name, value) in [
-                ("translationX", mesh.translation_x),
-                ("translationY", mesh.translation_y),
-                ("translationZ", mesh.translation_z),
-            ] {
-                if value.abs() > MAX_ABS_POSITION {
-                    errors.push(
-                        format!("/meshes/{index}/{name}"),
-                        format!("translation magnitude must be <= {MAX_ABS_POSITION}"),
-                    );
-                }
-            }
-            for (name, value) in [
-                ("rotationXDegrees", mesh.rotation_x_degrees),
-                ("rotationYDegrees", mesh.rotation_y_degrees),
-                ("rotationZDegrees", mesh.rotation_z_degrees),
-            ] {
-                if value.abs() > MAX_ABS_ROTATION_DEGREES {
-                    errors.push(
-                        format!("/meshes/{index}/{name}"),
-                        format!("rotation magnitude must be <= {MAX_ABS_ROTATION_DEGREES}"),
-                    );
-                }
-            }
-            if mesh.scale_x > MAX_SCALE || mesh.scale_y > MAX_SCALE || mesh.scale_z > MAX_SCALE {
+            mesh.material
+                .validate_at(&format!("{path}/material"), &mut errors);
+            if scene.meshes.get(index).is_some_and(|spec| {
+                spec.material_overrides
+                    .iter()
+                    .map(|m| m.id)
+                    .collect::<Vec<_>>()
+                    != mesh
+                        .material_overrides
+                        .iter()
+                        .map(|m| m.id)
+                        .collect::<Vec<_>>()
+            }) {
                 errors.push(
-                    format!("/meshes/{index}/scale"),
-                    format!("frame scale axes must be <= {MAX_SCALE}"),
+                    format!("{path}/materialOverrides"),
+                    "frame material IDs must match the frozen material bindings in exact order",
+                );
+            }
+            for (at, material) in mesh.material_overrides.iter().enumerate() {
+                material.material.validate_at(
+                    &format!("{path}/materialOverrides/{at}/material"),
+                    &mut errors,
+                );
+            }
+            for (at, node) in mesh.nodes.iter().enumerate() {
+                validate_transform(
+                    node.transform,
+                    &format!("{path}/nodes/{at}/transform"),
+                    &mut errors,
                 );
             }
         }
-        if self.light_intensities.len() != scene.lights.len() {
+        if self
+            .lights
+            .iter()
+            .map(LightFrameState::kind)
+            .collect::<Vec<_>>()
+            != scene.lights
+        {
             errors.push(
-                "/lightIntensities",
-                "frame light intensities must match all Scene3D lights in static order",
+                "/lights",
+                "frame lights must match the frozen light kinds in exact order",
             );
         }
-        for (index, intensity) in self.light_intensities.iter().enumerate() {
-            validate_intensity(
-                *intensity,
-                &format!("/lightIntensities/{index}"),
-                &mut errors,
-            );
+        for (index, light) in self.lights.iter().enumerate() {
+            light.validate_at(&format!("/lights/{index}"), &mut errors);
         }
         errors.finish()
-    }
-}
-
-impl MeshFrameState {
-    fn scalars(&self) -> BTreeMap<&'static str, f32> {
-        BTreeMap::from([
-            ("translationX", self.translation_x),
-            ("translationY", self.translation_y),
-            ("translationZ", self.translation_z),
-            ("rotationXDegrees", self.rotation_x_degrees),
-            ("rotationYDegrees", self.rotation_y_degrees),
-            ("rotationZDegrees", self.rotation_z_degrees),
-            ("scaleX", self.scale_x),
-            ("scaleY", self.scale_y),
-            ("scaleZ", self.scale_z),
-        ])
     }
 }
 
@@ -623,19 +730,15 @@ impl fmt::Display for ContractErrors {
 
 impl std::error::Error for ContractErrors {}
 
-fn default_fov() -> f32 {
-    38.0
+impl CameraFrameState {
+    pub fn validate(&self) -> Result<(), ContractErrors> {
+        let mut errors = ContractErrors::default();
+        validate_camera(self, &mut errors);
+        errors.finish()
+    }
 }
 
-fn default_near() -> f32 {
-    0.1
-}
-
-fn default_far() -> f32 {
-    100.0
-}
-
-fn validate_camera(camera: &CameraSpec, errors: &mut ContractErrors) {
+fn validate_camera(camera: &CameraFrameState, errors: &mut ContractErrors) {
     if !camera.position.finite() || !camera.target.finite() {
         errors.push("/camera", "camera position and target must be finite");
     }
@@ -687,15 +790,31 @@ fn validate_camera(camera: &CameraSpec, errors: &mut ContractErrors) {
     }
 }
 
+impl Transform3D {
+    pub fn validate(&self) -> Result<(), ContractErrors> {
+        let mut errors = ContractErrors::default();
+        validate_transform(*self, "/transform", &mut errors);
+        errors.finish()
+    }
+}
+
 fn validate_transform(transform: Transform3D, path: &str, errors: &mut ContractErrors) {
     if !transform.translation.finite()
         || !transform.rotation_degrees.finite()
         || !transform.scale.finite()
     {
-        errors.push(path, "transform literals must be finite");
+        errors.push(path, "transform components must be finite");
     }
-    if transform.scale.0.into_iter().any(|value| value <= 0.0) {
-        errors.push(format!("{path}/scale"), "scale axes must all be > 0");
+    if transform
+        .scale
+        .0
+        .into_iter()
+        .any(|value| value.abs() < 0.000001)
+    {
+        errors.push(
+            format!("{path}/scale"),
+            "scale axis magnitudes must all be >= 0.000001",
+        );
     }
     if transform
         .translation
@@ -719,10 +838,15 @@ fn validate_transform(transform: Transform3D, path: &str, errors: &mut ContractE
             format!("rotation magnitude must be <= {MAX_ABS_ROTATION_DEGREES}"),
         );
     }
-    if transform.scale.0.into_iter().any(|value| value > MAX_SCALE) {
+    if transform
+        .scale
+        .0
+        .into_iter()
+        .any(|value| value.abs() > MAX_SCALE)
+    {
         errors.push(
             format!("{path}/scale"),
-            format!("scale axes must be <= {MAX_SCALE}"),
+            format!("scale axis magnitudes must be <= {MAX_SCALE}"),
         );
     }
 }

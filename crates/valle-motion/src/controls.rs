@@ -620,6 +620,7 @@ pub enum AssetKind {
     Video,
     Font,
     Model3d,
+    Environment,
     Shader,
 }
 

@@ -96,10 +96,11 @@ pub(super) fn controls_from_json(value: &serde_json::Value) -> Result<ControlsSc
                 Some("video") => AssetKind::Video,
                 Some("font") => AssetKind::Font,
                 Some("model3d") => AssetKind::Model3d,
+                Some("environment") => AssetKind::Environment,
                 Some("shader") => AssetKind::Shader,
                 _ => {
                     return Err(
-                        "asset kind must be image/audio/video/font/model3d/shader",
+                        "asset kind must be image/audio/video/font/model3d/environment/shader",
                     );
                 }
             };

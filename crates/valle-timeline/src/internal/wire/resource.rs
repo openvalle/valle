@@ -50,6 +50,14 @@ pub enum ResourceEntryWire {
         digest: ContentDigest,
         descriptor: FontResourceDescriptorWire,
     },
+    Model3d {
+        digest: ContentDigest,
+        descriptor: Model3dResourceDescriptorWire,
+    },
+    Environment {
+        digest: ContentDigest,
+        descriptor: EnvironmentResourceDescriptorWire,
+    },
     MotionArtifact {
         digest: ContentDigest,
         abi: MotionArtifactAbiWire,
@@ -135,6 +143,28 @@ pub struct FontVariationAxisWire {
     pub minimum: f64,
     pub default: f64,
     pub maximum: f64,
+}
+
+/// Frozen facts for an admitted, self-contained GLB model. Runtime locators are not semantic.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Model3dResourceDescriptorWire {
+    pub byte_length: u32,
+    pub vertex_count: u32,
+    pub triangle_count: u32,
+}
+
+/// Frozen, prefiltered panoramic lighting. Payload admission verifies the full cube/mip layout.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EnvironmentResourceDescriptorWire {
+    pub byte_length: u32,
+    pub source_size: [u32; 2],
+    pub face_size: u32,
+    pub diffuse_size: u32,
+    pub samples: u32,
 }
 
 /// Motion artifact compositor-read semantics. The artifact's embedded `controls` object is the

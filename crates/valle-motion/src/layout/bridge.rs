@@ -435,7 +435,7 @@ impl Scene3DFrameRequest {
     pub fn content_digest(&self) -> Result<crate::ContentDigest, crate::CanonicalError> {
         use sha2::{Digest, Sha256};
         let mut hash = Sha256::new();
-        hash.update(b"valle-scene3d-frame-request-v1\0");
+        hash.update(b"valle-scene3d-frame-request\0");
         hash.update(self.canonical_bytes()?);
         Ok(crate::ContentDigest::from_bytes(hash.finalize().into()))
     }
@@ -443,7 +443,7 @@ impl Scene3DFrameRequest {
     pub fn topology_digest(&self) -> Result<crate::ContentDigest, crate::CanonicalError> {
         use sha2::{Digest, Sha256};
         let mut hash = Sha256::new();
-        hash.update(b"valle-scene3d-topology-v1\0");
+        hash.update(b"valle-scene3d-topology\0");
         hash.update(crate::canonical_bytes(&self.scene)?);
         Ok(crate::ContentDigest::from_bytes(hash.finalize().into()))
     }

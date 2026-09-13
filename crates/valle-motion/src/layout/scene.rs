@@ -1475,51 +1475,141 @@ fn resolve_scene3d_requests(
         let scalar = |binding: &NumberValue, op: &'static str| {
             number_value(binding, values, at, op).map(|value| value as f32)
         };
+        let vector = |v: &[NumberValue; 3]| -> Result<valle_motion::scene3d::Vec3, LayoutError> {
+            Ok(valle_motion::scene3d::Vec3::new(
+                scalar(&v[0], "scene3d vector x")?,
+                scalar(&v[1], "scene3d vector y")?,
+                scalar(&v[2], "scene3d vector z")?,
+            ))
+        };
+        let color = |v: &ColorValue| -> Result<valle_motion::scene3d::Color4, LayoutError> {
+            let c = color_value(v, values, at)?;
+            Ok(valle_motion::scene3d::Color4(
+                [c.r, c.g, c.b, c.a].map(|v| f32::from(v) / 255.0),
+            ))
+        };
+        let camera = valle_motion::scene3d::CameraFrameState {
+            position: vector(&frame.camera.position)?,
+            target: vector(&frame.camera.target)?,
+            near: scalar(&frame.camera.near, "scene3d camera near")?,
+            far: scalar(&frame.camera.far, "scene3d camera far")?,
+            fov_y_degrees: scalar(&frame.camera.fov_y_degrees, "scene3d camera fov")?,
+        }
+        .with_orbit(
+            scalar(&frame.camera.orbit_yaw_degrees, "scene3d camera yaw")?,
+            scalar(&frame.camera.orbit_pitch_degrees, "scene3d camera pitch")?,
+            frame
+                .camera
+                .distance
+                .as_ref()
+                .map(|n| scalar(n, "scene3d camera distance"))
+                .transpose()?,
+        )
+        .map_err(|error| LayoutError::BadScene3D {
+            node: node.key.clone(),
+            reason: error.to_string(),
+        })?;
+        let material = |m: &crate::Scene3DMaterialBinding| -> Result<valle_motion::scene3d::MaterialFrameState, LayoutError> {
+            Ok(valle_motion::scene3d::MaterialFrameState {
+                color: m.color.as_ref().map(|v| color(v)).transpose()?,
+                emissive: m.emissive.as_ref().map(|v| color(v)).transpose()?,
+                metallic: m.metallic.as_ref().map(|v| scalar(v, "material metallic")).transpose()?,
+                roughness: m.roughness.as_ref().map(|v| scalar(v, "material roughness")).transpose()?,
+                emissive_intensity: m.emissive_intensity.as_ref().map(|v| scalar(v, "material emissive_intensity")).transpose()?,
+                normal_scale: m.normal_scale.as_ref().map(|v| scalar(v, "material normal_scale")).transpose()?,
+                occlusion_strength: m.occlusion_strength.as_ref().map(|v| scalar(v, "material occlusion_strength")).transpose()?,
+                alpha_cutoff: m.alpha_cutoff.as_ref().map(|v| scalar(v, "material alpha_cutoff")).transpose()?,
+            })
+        };
         let resolved = valle_motion::scene3d::Frame3DState {
-            camera: valle_motion::scene3d::CameraFrameState {
-                orbit_yaw_degrees: scalar(
-                    &frame.camera.orbit_yaw_degrees,
-                    "scene3d camera orbit yaw",
-                )?,
-                orbit_pitch_degrees: scalar(
-                    &frame.camera.orbit_pitch_degrees,
-                    "scene3d camera orbit pitch",
-                )?,
-                distance: scalar(&frame.camera.distance, "scene3d camera distance")?,
-                fov_y_degrees: scalar(&frame.camera.fov_y_degrees, "scene3d camera fov")?,
-            },
+            exposure: scalar(&frame.exposure, "scene3d exposure")?,
+            environment_intensity: scalar(
+                &frame.environment_intensity,
+                "scene3d environment intensity",
+            )?,
+            environment_rotation_degrees: scalar(
+                &frame.environment_rotation_degrees,
+                "scene3d environment rotation",
+            )?,
+            camera,
             meshes: frame
                 .meshes
                 .iter()
                 .map(|mesh| {
                     Ok(valle_motion::scene3d::MeshFrameState {
                         key: mesh.key.clone(),
-                        translation_x: scalar(&mesh.translation_x, "scene3d mesh translation x")?,
-                        translation_y: scalar(&mesh.translation_y, "scene3d mesh translation y")?,
-                        translation_z: scalar(&mesh.translation_z, "scene3d mesh translation z")?,
-                        rotation_x_degrees: scalar(
-                            &mesh.rotation_x_degrees,
-                            "scene3d mesh rotation x",
-                        )?,
-                        rotation_y_degrees: scalar(
-                            &mesh.rotation_y_degrees,
-                            "scene3d mesh rotation y",
-                        )?,
-                        rotation_z_degrees: scalar(
-                            &mesh.rotation_z_degrees,
-                            "scene3d mesh rotation z",
-                        )?,
-                        scale_x: scalar(&mesh.scale_x, "scene3d mesh scale x")?,
-                        scale_y: scalar(&mesh.scale_y, "scene3d mesh scale y")?,
-                        scale_z: scalar(&mesh.scale_z, "scene3d mesh scale z")?,
+                        material: material(&mesh.material)?,
+                        material_overrides: mesh
+                            .material_overrides
+                            .iter()
+                            .map(|m| {
+                                Ok(valle_motion::scene3d::MaterialOverrideState {
+                                    id: m.id,
+                                    material: material(&m.material)?,
+                                })
+                            })
+                            .collect::<Result<Vec<_>, LayoutError>>()?,
+                        transform: valle_motion::scene3d::Transform3D {
+                            translation: vector(&mesh.transform.translation)?,
+                            rotation_degrees: vector(&mesh.transform.rotation_degrees)?,
+                            scale: vector(&mesh.transform.scale)?,
+                        },
+                        nodes: mesh
+                            .nodes
+                            .iter()
+                            .map(|n| {
+                                Ok(valle_motion::scene3d::NodeFrameState {
+                                    id: n.id,
+                                    transform: valle_motion::scene3d::Transform3D {
+                                        translation: vector(&n.transform.translation)?,
+                                        rotation_degrees: vector(&n.transform.rotation_degrees)?,
+                                        scale: vector(&n.transform.scale)?,
+                                    },
+                                })
+                            })
+                            .collect::<Result<Vec<_>, LayoutError>>()?,
                     })
                 })
                 .collect::<Result<Vec<_>, LayoutError>>()?,
-            light_intensities: frame
-                .light_intensities
+            lights: frame
+                .lights
                 .iter()
-                .map(|value| scalar(value, "scene3d light intensity"))
-                .collect::<Result<Vec<_>, LayoutError>>()?,
+                .map(
+                    |light| -> Result<valle_motion::scene3d::LightFrameState, LayoutError> {
+                        use crate::Scene3DLightBinding as Binding;
+                        use valle_motion::scene3d::LightFrameState as Light;
+                        Ok(match light {
+                            Binding::Ambient {
+                                color: c,
+                                intensity,
+                            } => Light::Ambient {
+                                color: color(c)?,
+                                intensity: scalar(intensity, "scene3d light intensity")?,
+                            },
+                            Binding::Directional {
+                                color: c,
+                                direction,
+                                intensity,
+                            } => Light::Directional {
+                                color: color(c)?,
+                                direction: vector(direction)?,
+                                intensity: scalar(intensity, "scene3d light intensity")?,
+                            },
+                            Binding::Hemisphere {
+                                sky_color,
+                                ground_color,
+                                direction,
+                                intensity,
+                            } => Light::Hemisphere {
+                                sky_color: color(sky_color)?,
+                                ground_color: color(ground_color)?,
+                                direction: vector(direction)?,
+                                intensity: scalar(intensity, "scene3d light intensity")?,
+                            },
+                        })
+                    },
+                )
+                .collect::<Result<Vec<_>, _>>()?,
         };
         resolved
             .validate_for(scene)

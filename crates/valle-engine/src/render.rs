@@ -16,6 +16,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     sync::Arc,
 };
+use valle_timeline::internal::wire::resource::EnvironmentResourceDescriptorWire;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
@@ -33,9 +34,9 @@ use valle_timeline::internal::{
     wire::resource::{
         AudioChannelLayoutWire, AudioResourceDescriptorWire, ContinuousBoundarySamplingWire,
         FontResourceDescriptorWire, FontVariationAxisWire, ImageResourceDescriptorWire,
-        LottieArtifactAbiWire, LottieResourceDescriptorWire, MotionArtifactAbiWire,
-        MotionArtifactDescriptorWire, ResourceEntryWire, ShaderArtifactAbiWire,
-        ShaderResourceDescriptorWire, VideoResourceDescriptorWire,
+        LottieArtifactAbiWire, LottieResourceDescriptorWire, Model3dResourceDescriptorWire,
+        MotionArtifactAbiWire, MotionArtifactDescriptorWire, ResourceEntryWire,
+        ShaderArtifactAbiWire, ShaderResourceDescriptorWire, VideoResourceDescriptorWire,
     },
 };
 pub use valle_timeline::internal::{FrameKey, RenderId};
@@ -153,6 +154,8 @@ pub enum ResourceKind {
     Image,
     Lottie,
     Font,
+    Model3d,
+    Environment,
     MotionArtifact,
     Shader,
 }
@@ -223,6 +226,16 @@ impl AudioFootprint {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum VerifiedResourceFacts {
+    Environment {
+        descriptor: EnvironmentResourceDescriptorWire,
+        #[serde(skip)]
+        bytes: Arc<[u8]>,
+    },
+    Model3d {
+        descriptor: Model3dResourceDescriptorWire,
+        #[serde(skip)]
+        bytes: Arc<[u8]>,
+    },
     Video {
         descriptor: VideoResourceDescriptorWire,
         temporal_footprint: VisualFootprint,
@@ -274,8 +287,8 @@ fn artifact_asset_kind(kind: AssetKind) -> Option<ResourceKind> {
         AssetKind::Audio => Some(ResourceKind::Audio),
         AssetKind::Video => Some(ResourceKind::Video),
         AssetKind::Font => Some(ResourceKind::Font),
-        // Timeline has no model-3d ResourceManifest kind.
-        AssetKind::Model3d => None,
+        AssetKind::Model3d => Some(ResourceKind::Model3d),
+        AssetKind::Environment => Some(ResourceKind::Environment),
         AssetKind::Shader => Some(ResourceKind::Shader),
     }
 }
@@ -288,6 +301,8 @@ impl VerifiedResourceFacts {
             Self::Image { .. } => ResourceKind::Image,
             Self::Lottie { .. } => ResourceKind::Lottie,
             Self::Font { .. } => ResourceKind::Font,
+            Self::Model3d { .. } => ResourceKind::Model3d,
+            Self::Environment { .. } => ResourceKind::Environment,
             Self::MotionArtifact { .. } => ResourceKind::MotionArtifact,
             Self::Shader { .. } => ResourceKind::Shader,
         }
@@ -733,6 +748,8 @@ pub enum EngineOpenDiagnosticCode {
     MotionResourceSchemaMismatch,
     MotionTimingMismatch,
     FontPayloadMismatch,
+    Model3dPayloadMismatch,
+    EnvironmentPayloadMismatch,
     UnsupportedFontFaceIndex,
     MissingFontGlyph,
     ShaderPayloadMismatch,
@@ -793,6 +810,8 @@ enum ResolvedExecutionPayload {
     None,
     Shader(Arc<ShaderPackage>),
     Motion(Arc<valle_motion::PreparedScene>),
+    Model3d(Arc<valle_motion::scene3d::AdmittedModel>),
+    Environment(Arc<valle_motion::scene3d::EnvironmentAsset>),
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -2431,6 +2450,8 @@ impl MotionFrameAddress {
 #[serde(rename_all = "kebab-case")]
 pub enum CompiledExecutionResourceKind {
     FontBytes,
+    Model3dBytes,
+    EnvironmentBytes,
     RuntimeShader,
 }
 
@@ -2578,6 +2599,37 @@ impl CompiledRender {
             .collect()
     }
 
+    /// Shares already admitted geometry and texture mips between native frame workers. The
+    /// matching frozen bytes remain available to Wasm and portable binding packages.
+    pub fn admitted_models(
+        &self,
+    ) -> impl Iterator<Item = (&ContentDigest, &Arc<valle_motion::scene3d::AdmittedModel>)> {
+        self.resources
+            .resources
+            .iter()
+            .filter_map(|resource| match &resource.execution {
+                ResolvedExecutionPayload::Model3d(model) => Some((&resource.digest, model)),
+                _ => None,
+            })
+    }
+
+    pub fn admitted_environments(
+        &self,
+    ) -> impl Iterator<
+        Item = (
+            &ContentDigest,
+            &Arc<valle_motion::scene3d::EnvironmentAsset>,
+        ),
+    > {
+        self.resources
+            .resources
+            .iter()
+            .filter_map(|resource| match &resource.execution {
+                ResolvedExecutionPayload::Environment(model) => Some((&resource.digest, model)),
+                _ => None,
+            })
+    }
+
     /// Looks up one backend payload under an explicitly pinned render.
     pub fn execution_resource(
         &self,
@@ -2710,6 +2762,22 @@ fn compiled_execution_resource_ref(
     resource: &ResolvedResource,
 ) -> Option<CompiledExecutionResourceRef<'_>> {
     match (&resource.facts, &resource.execution) {
+        (VerifiedResourceFacts::Model3d { bytes, .. }, _) => Some(CompiledExecutionResourceRef {
+            resource_id: &resource.resource_id,
+            kind: CompiledExecutionResourceKind::Model3dBytes,
+            content_digest: &resource.digest,
+            abi_digest: None,
+            bytes,
+        }),
+        (VerifiedResourceFacts::Environment { bytes, .. }, _) => {
+            Some(CompiledExecutionResourceRef {
+                resource_id: &resource.resource_id,
+                kind: CompiledExecutionResourceKind::EnvironmentBytes,
+                content_digest: &resource.digest,
+                abi_digest: None,
+                bytes,
+            })
+        }
         (VerifiedResourceFacts::Font { bytes, .. }, _) => Some(CompiledExecutionResourceRef {
             resource_id: &resource.resource_id,
             kind: CompiledExecutionResourceKind::FontBytes,
@@ -4045,6 +4113,8 @@ fn resource_kind(entry: &ResourceEntryWire) -> ResourceKind {
         ResourceEntryWire::Image { .. } => ResourceKind::Image,
         ResourceEntryWire::Lottie { .. } => ResourceKind::Lottie,
         ResourceEntryWire::Font { .. } => ResourceKind::Font,
+        ResourceEntryWire::Model3d { .. } => ResourceKind::Model3d,
+        ResourceEntryWire::Environment { .. } => ResourceKind::Environment,
         ResourceEntryWire::MotionArtifact { .. } => ResourceKind::MotionArtifact,
         ResourceEntryWire::Shader { .. } => ResourceKind::Shader,
     }
@@ -4057,6 +4127,8 @@ fn resource_digest(entry: &ResourceEntryWire) -> &ContentDigest {
         | ResourceEntryWire::Image { digest, .. }
         | ResourceEntryWire::Lottie { digest, .. }
         | ResourceEntryWire::Font { digest, .. }
+        | ResourceEntryWire::Model3d { digest, .. }
+        | ResourceEntryWire::Environment { digest, .. }
         | ResourceEntryWire::MotionArtifact { digest, .. }
         | ResourceEntryWire::Shader { digest, .. } => digest,
     }
@@ -4073,6 +4145,20 @@ fn resource_abi(entry: &ResourceEntryWire) -> Option<&'static str> {
 
 fn binding_facts_match(entry: &ResourceEntryWire, facts: &VerifiedResourceFacts) -> bool {
     match (entry, facts) {
+        (
+            ResourceEntryWire::Model3d { descriptor, .. },
+            VerifiedResourceFacts::Model3d {
+                descriptor: verified,
+                ..
+            },
+        ) => descriptor == verified,
+        (
+            ResourceEntryWire::Environment { descriptor, .. },
+            VerifiedResourceFacts::Environment {
+                descriptor: verified,
+                ..
+            },
+        ) => descriptor == verified,
         (
             ResourceEntryWire::Video { descriptor, .. },
             VerifiedResourceFacts::Video {
@@ -4141,6 +4227,43 @@ fn verify_execution_payload(
     digest: &ContentDigest,
 ) -> Result<ResolvedExecutionPayload, (EngineOpenDiagnosticCode, String)> {
     match (entry, facts) {
+        (
+            ResourceEntryWire::Environment { .. },
+            VerifiedResourceFacts::Environment { descriptor, bytes },
+        ) => {
+            let fail =
+                |reason: String| (EngineOpenDiagnosticCode::EnvironmentPayloadMismatch, reason);
+            if &ContentDigest::of_bytes(bytes) != digest {
+                return Err(fail("content-digest".into()));
+            }
+            let environment = valle_motion::scene3d::EnvironmentAsset::from_frozen(bytes)
+                .map_err(|e| fail(e.to_string()))?;
+            if environment.descriptor() != *descriptor {
+                return Err(fail(
+                    "environment descriptor differs from frozen payload".into(),
+                ));
+            }
+            Ok(ResolvedExecutionPayload::Environment(Arc::new(environment)))
+        }
+
+        (
+            ResourceEntryWire::Model3d { .. },
+            VerifiedResourceFacts::Model3d { descriptor, bytes },
+        ) => {
+            let fail = |reason: String| (EngineOpenDiagnosticCode::Model3dPayloadMismatch, reason);
+            if &ContentDigest::of_bytes(bytes) != digest {
+                return Err(fail("content-digest".into()));
+            }
+            let model = valle_motion::scene3d::admit_glb(bytes)
+                .map_err(|error| fail(format!("GLB admission: {error}")))?;
+            if model.source_bytes() != u64::from(descriptor.byte_length)
+                || model.vertex_count() != descriptor.vertex_count
+                || model.triangle_count() != descriptor.triangle_count
+            {
+                return Err(fail("model descriptor differs from admitted GLB".into()));
+            }
+            Ok(ResolvedExecutionPayload::Model3d(Arc::new(model)))
+        }
         (ResourceEntryWire::Audio { .. }, VerifiedResourceFacts::Audio { .. }) => {
             Ok(ResolvedExecutionPayload::None)
         }
@@ -4503,6 +4626,54 @@ mod compiled_canvas_tests {
         assert_eq!(font.kind(), CompiledExecutionResourceKind::FontBytes);
         assert_eq!(font.bytes(), &*font_bytes);
         assert_eq!(font.abi_digest(), None);
+    }
+
+    #[test]
+    fn model_payload_is_verified_against_bytes_geometry_and_digest() {
+        let bytes: Arc<[u8]> = Arc::from(
+            &include_bytes!("../../valle-motion/tests/fixtures/scene3d/triangle.glb")[..],
+        );
+        let digest = ContentDigest::of_bytes(&bytes);
+        let descriptor = Model3dResourceDescriptorWire {
+            byte_length: bytes.len() as u32,
+            vertex_count: 3,
+            triangle_count: 1,
+        };
+        let entry = ResourceEntryWire::Model3d {
+            digest,
+            descriptor: descriptor.clone(),
+        };
+        let facts = VerifiedResourceFacts::Model3d {
+            descriptor: descriptor.clone(),
+            bytes: Arc::clone(&bytes),
+        };
+        assert!(verify_execution_payload(&entry, &facts, &digest).is_ok());
+        let bad_facts = VerifiedResourceFacts::Model3d {
+            descriptor: descriptor.clone(),
+            bytes: Arc::from(&b"different bytes"[..]),
+        };
+        assert_eq!(
+            verify_execution_payload(&entry, &bad_facts, &digest)
+                .unwrap_err()
+                .0,
+            EngineOpenDiagnosticCode::Model3dPayloadMismatch
+        );
+        let mut bad_descriptor = descriptor;
+        bad_descriptor.triangle_count = 2;
+        let bad_entry = ResourceEntryWire::Model3d {
+            digest,
+            descriptor: bad_descriptor.clone(),
+        };
+        let bad_facts = VerifiedResourceFacts::Model3d {
+            descriptor: bad_descriptor,
+            bytes,
+        };
+        assert_eq!(
+            verify_execution_payload(&bad_entry, &bad_facts, &digest)
+                .unwrap_err()
+                .0,
+            EngineOpenDiagnosticCode::Model3dPayloadMismatch
+        );
     }
 
     #[test]

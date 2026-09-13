@@ -657,19 +657,206 @@ pub enum NodeKind {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Scene3DFrameBinding {
+    pub exposure: NumberValue,
+    pub environment_intensity: NumberValue,
+    pub environment_rotation_degrees: NumberValue,
     pub camera: Scene3DCameraBinding,
     pub meshes: Vec<Scene3DMeshBinding>,
-    pub light_intensities: Vec<NumberValue>,
+    pub lights: Vec<Scene3DLightBinding>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Scene3DCameraBinding {
+    pub position: [NumberValue; 3],
+    pub target: [NumberValue; 3],
+    pub near: NumberValue,
+    pub far: NumberValue,
     pub orbit_yaw_degrees: NumberValue,
     pub orbit_pitch_degrees: NumberValue,
-    pub distance: NumberValue,
+    pub distance: Option<NumberValue>,
     pub fov_y_degrees: NumberValue,
+}
+
+impl Scene3DCameraBinding {
+    pub fn numbers(&self) -> Vec<(&'static str, &NumberValue)> {
+        let mut values = vec![
+            ("position/0", &self.position[0]),
+            ("position/1", &self.position[1]),
+            ("position/2", &self.position[2]),
+            ("target/0", &self.target[0]),
+            ("target/1", &self.target[1]),
+            ("target/2", &self.target[2]),
+            ("near", &self.near),
+            ("far", &self.far),
+            ("fovYDegrees", &self.fov_y_degrees),
+            ("orbitYawDegrees", &self.orbit_yaw_degrees),
+            ("orbitPitchDegrees", &self.orbit_pitch_degrees),
+        ];
+        if let Some(distance) = &self.distance {
+            values.push(("distance", distance));
+        }
+        values
+    }
+    pub fn constant(
+        &self,
+    ) -> Option<Result<crate::scene3d::CameraFrameState, crate::scene3d::ContractErrors>> {
+        let number = |n: &NumberValue| {
+            if let NumberValue::Static { value } = n {
+                Some(*value as f32)
+            } else {
+                None
+            }
+        };
+        let vector = |v: &[NumberValue; 3]| {
+            Some(crate::scene3d::Vec3::new(
+                number(&v[0])?,
+                number(&v[1])?,
+                number(&v[2])?,
+            ))
+        };
+        let camera = crate::scene3d::CameraFrameState {
+            position: vector(&self.position)?,
+            target: vector(&self.target)?,
+            near: number(&self.near)?,
+            far: number(&self.far)?,
+            fov_y_degrees: number(&self.fov_y_degrees)?,
+        };
+        let distance = match &self.distance {
+            Some(n) => Some(number(n)?),
+            None => None,
+        };
+        Some(camera.with_orbit(
+            number(&self.orbit_yaw_degrees)?,
+            number(&self.orbit_pitch_degrees)?,
+            distance,
+        ))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub enum Scene3DLightBinding {
+    Ambient {
+        color: ColorValue,
+        intensity: NumberValue,
+    },
+    Directional {
+        color: ColorValue,
+        direction: [NumberValue; 3],
+        intensity: NumberValue,
+    },
+    Hemisphere {
+        sky_color: ColorValue,
+        ground_color: ColorValue,
+        direction: [NumberValue; 3],
+        intensity: NumberValue,
+    },
+}
+impl Scene3DLightBinding {
+    pub fn constant(&self) -> Option<crate::scene3d::LightFrameState> {
+        let number = |n: &NumberValue| {
+            if let NumberValue::Static { value } = n {
+                Some(*value as f32)
+            } else {
+                None
+            }
+        };
+        let color = |c: &ColorValue| {
+            if let ColorValue::Static { value } = c {
+                Some(crate::scene3d::Color4(
+                    [value.r, value.g, value.b, value.a].map(|v| f32::from(v) / 255.0),
+                ))
+            } else {
+                None
+            }
+        };
+        let vector = |v: &[NumberValue; 3]| {
+            Some(crate::scene3d::Vec3::new(
+                number(&v[0])?,
+                number(&v[1])?,
+                number(&v[2])?,
+            ))
+        };
+        Some(match self {
+            Self::Ambient {
+                color: c,
+                intensity,
+            } => crate::scene3d::LightFrameState::Ambient {
+                color: color(c)?,
+                intensity: number(intensity)?,
+            },
+            Self::Directional {
+                color: c,
+                direction,
+                intensity,
+            } => crate::scene3d::LightFrameState::Directional {
+                color: color(c)?,
+                direction: vector(direction)?,
+                intensity: number(intensity)?,
+            },
+            Self::Hemisphere {
+                sky_color,
+                ground_color,
+                direction,
+                intensity,
+            } => crate::scene3d::LightFrameState::Hemisphere {
+                sky_color: color(sky_color)?,
+                ground_color: color(ground_color)?,
+                direction: vector(direction)?,
+                intensity: number(intensity)?,
+            },
+        })
+    }
+    pub fn kind(&self) -> crate::scene3d::LightKind {
+        use crate::scene3d::LightKind;
+        match self {
+            Self::Ambient { .. } => LightKind::Ambient,
+            Self::Directional { .. } => LightKind::Directional,
+            Self::Hemisphere { .. } => LightKind::Hemisphere,
+        }
+    }
+    pub fn numbers(&self) -> Vec<(&'static str, &NumberValue)> {
+        let (intensity, direction) = match self {
+            Self::Ambient { intensity, .. } => (intensity, None),
+            Self::Directional {
+                intensity,
+                direction,
+                ..
+            }
+            | Self::Hemisphere {
+                intensity,
+                direction,
+                ..
+            } => (intensity, Some(direction)),
+        };
+        let mut result = vec![("intensity", intensity)];
+        if let Some(v) = direction {
+            result.extend([
+                ("direction/0", &v[0]),
+                ("direction/1", &v[1]),
+                ("direction/2", &v[2]),
+            ]);
+        }
+        result
+    }
+    pub fn colors(&self) -> Vec<(&'static str, &ColorValue)> {
+        match self {
+            Self::Ambient { color, .. } | Self::Directional { color, .. } => vec![("color", color)],
+            Self::Hemisphere {
+                sky_color,
+                ground_color,
+                ..
+            } => vec![("skyColor", sky_color), ("groundColor", ground_color)],
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -677,15 +864,134 @@ pub struct Scene3DCameraBinding {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Scene3DMeshBinding {
     pub key: String,
-    pub translation_x: NumberValue,
-    pub translation_y: NumberValue,
-    pub translation_z: NumberValue,
-    pub rotation_x_degrees: NumberValue,
-    pub rotation_y_degrees: NumberValue,
-    pub rotation_z_degrees: NumberValue,
-    pub scale_x: NumberValue,
-    pub scale_y: NumberValue,
-    pub scale_z: NumberValue,
+    pub material: Scene3DMaterialBinding,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub material_overrides: Vec<Scene3DMaterialOverrideBinding>,
+    pub transform: Scene3DTransformBinding,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub nodes: Vec<Scene3DNodeBinding>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Scene3DNodeBinding {
+    pub id: u32,
+    pub transform: Scene3DTransformBinding,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Scene3DTransformBinding {
+    pub translation: [NumberValue; 3],
+    pub rotation_degrees: [NumberValue; 3],
+    pub scale: [NumberValue; 3],
+}
+impl Scene3DTransformBinding {
+    pub fn numbers(&self) -> Vec<(String, &NumberValue)> {
+        [
+            ("translation", &self.translation),
+            ("rotationDegrees", &self.rotation_degrees),
+            ("scale", &self.scale),
+        ]
+        .into_iter()
+        .flat_map(|(name, v)| {
+            v.iter()
+                .enumerate()
+                .map(move |(i, n)| (format!("{name}/{i}"), n))
+        })
+        .collect()
+    }
+    pub fn constant(&self) -> Option<crate::scene3d::Transform3D> {
+        let vector = |v: &[NumberValue; 3]| -> Option<crate::scene3d::Vec3> {
+            let numbers = v
+                .iter()
+                .map(|n| match n {
+                    NumberValue::Static { value } => Some(*value as f32),
+                    _ => None,
+                })
+                .collect::<Option<Vec<_>>>()?;
+            Some(crate::scene3d::Vec3(numbers.try_into().ok()?))
+        };
+        Some(crate::scene3d::Transform3D {
+            translation: vector(&self.translation)?,
+            rotation_degrees: vector(&self.rotation_degrees)?,
+            scale: vector(&self.scale)?,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Scene3DMaterialBinding {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<ColorValue>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub emissive: Option<ColorValue>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metallic: Option<NumberValue>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub roughness: Option<NumberValue>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub emissive_intensity: Option<NumberValue>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub normal_scale: Option<NumberValue>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub occlusion_strength: Option<NumberValue>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alpha_cutoff: Option<NumberValue>,
+}
+impl Scene3DMaterialBinding {
+    pub fn numbers(&self) -> Vec<(&'static str, &NumberValue)> {
+        [
+            ("metallic", &self.metallic),
+            ("roughness", &self.roughness),
+            ("emissiveIntensity", &self.emissive_intensity),
+            ("normalScale", &self.normal_scale),
+            ("occlusionStrength", &self.occlusion_strength),
+            ("alphaCutoff", &self.alpha_cutoff),
+        ]
+        .into_iter()
+        .filter_map(|(k, v)| v.as_ref().map(|v| (k, v)))
+        .collect()
+    }
+    pub fn colors(&self) -> Vec<(&'static str, &ColorValue)> {
+        [("color", &self.color), ("emissive", &self.emissive)]
+            .into_iter()
+            .filter_map(|(k, v)| v.as_ref().map(|v| (k, v)))
+            .collect()
+    }
+    pub fn static_values(&self) -> crate::scene3d::MaterialFrameState {
+        let n = |value: &Option<NumberValue>| match value {
+            Some(NumberValue::Static { value }) => Some(*value as f32),
+            _ => None,
+        };
+        let c = |value: &Option<ColorValue>| match value {
+            Some(ColorValue::Static { value }) => Some(crate::scene3d::Color4(
+                [value.r, value.g, value.b, value.a].map(|v| v as f32 / 255.0),
+            )),
+            _ => None,
+        };
+        crate::scene3d::MaterialFrameState {
+            color: c(&self.color),
+            emissive: c(&self.emissive),
+            metallic: n(&self.metallic),
+            roughness: n(&self.roughness),
+            emissive_intensity: n(&self.emissive_intensity),
+            normal_scale: n(&self.normal_scale),
+            occlusion_strength: n(&self.occlusion_strength),
+            alpha_cutoff: n(&self.alpha_cutoff),
+        }
+    }
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Scene3DMaterialOverrideBinding {
+    pub id: u32,
+    pub material: Scene3DMaterialBinding,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1017,35 +1323,64 @@ impl SceneNode {
                 }
             }
             NodeKind::Scene3D { frame, .. } => {
-                for (name, value) in [
-                    ("orbitYawDegrees", &frame.camera.orbit_yaw_degrees),
-                    ("orbitPitchDegrees", &frame.camera.orbit_pitch_degrees),
-                    ("distance", &frame.camera.distance),
-                    ("fovYDegrees", &frame.camera.fov_y_degrees),
-                ] {
+                number(
+                    "/kind/frame/environmentIntensity".into(),
+                    &frame.environment_intensity,
+                    &mut refs,
+                );
+                number(
+                    "/kind/frame/environmentRotationDegrees".into(),
+                    &frame.environment_rotation_degrees,
+                    &mut refs,
+                );
+                number("/kind/frame/exposure".into(), &frame.exposure, &mut refs);
+                for (name, value) in frame.camera.numbers() {
                     number(format!("/kind/frame/camera/{name}"), value, &mut refs);
                 }
                 for (at, mesh) in frame.meshes.iter().enumerate() {
-                    for (name, value) in [
-                        ("translationX", &mesh.translation_x),
-                        ("translationY", &mesh.translation_y),
-                        ("translationZ", &mesh.translation_z),
-                        ("rotationXDegrees", &mesh.rotation_x_degrees),
-                        ("rotationYDegrees", &mesh.rotation_y_degrees),
-                        ("rotationZDegrees", &mesh.rotation_z_degrees),
-                        ("scaleX", &mesh.scale_x),
-                        ("scaleY", &mesh.scale_y),
-                        ("scaleZ", &mesh.scale_z),
-                    ] {
-                        number(format!("/kind/frame/meshes/{at}/{name}"), value, &mut refs);
+                    for (name, value) in mesh.transform.numbers() {
+                        number(
+                            format!("/kind/frame/meshes/{at}/transform/{name}"),
+                            value,
+                            &mut refs,
+                        );
+                    }
+                    for (material_at, material) in std::iter::once(&mesh.material)
+                        .chain(mesh.material_overrides.iter().map(|m| &m.material))
+                        .enumerate()
+                    {
+                        for (name, value) in material.numbers() {
+                            number(
+                                format!("/kind/frame/meshes/{at}/materials/{material_at}/{name}"),
+                                value,
+                                &mut refs,
+                            );
+                        }
+                        for (name, value) in material.colors() {
+                            color(
+                                format!("/kind/frame/meshes/{at}/materials/{material_at}/{name}"),
+                                value,
+                                &mut refs,
+                            );
+                        }
+                    }
+                    for (node_at, node) in mesh.nodes.iter().enumerate() {
+                        for (name, value) in node.transform.numbers() {
+                            number(
+                                format!("/kind/frame/meshes/{at}/nodes/{node_at}/transform/{name}"),
+                                value,
+                                &mut refs,
+                            );
+                        }
                     }
                 }
-                for (at, value) in frame.light_intensities.iter().enumerate() {
-                    number(
-                        format!("/kind/frame/lightIntensities/{at}"),
-                        value,
-                        &mut refs,
-                    );
+                for (at, light) in frame.lights.iter().enumerate() {
+                    for (name, value) in light.numbers() {
+                        number(format!("/kind/frame/lights/{at}/{name}"), value, &mut refs);
+                    }
+                    for (name, value) in light.colors() {
+                        color(format!("/kind/frame/lights/{at}/{name}"), value, &mut refs);
+                    }
                 }
             }
             NodeKind::Video {
@@ -2693,6 +3028,24 @@ impl SceneArtifact {
                 }
             }
             if let NodeKind::Scene3D { scene, frame } = &node.kind {
+                if let Some(environment) = &scene.pbr.environment {
+                    if !self
+                        .controls
+                        .assets
+                        .get(&environment.control)
+                        .is_some_and(|asset| asset.kind == crate::controls::AssetKind::Environment)
+                        || !self
+                            .resource_refs
+                            .iter()
+                            .any(|resource| resource.control == environment.control)
+                    {
+                        errors.push(ValidationError::new(
+                            format!("{path}/kind/scene/pbr/environment"),
+                            "Scene3D environment requires a bound environment asset control",
+                        ));
+                    }
+                }
+
                 if let Err(scene_errors) = scene.validate() {
                     for error in scene_errors.0 {
                         errors.push(ValidationError::new(
@@ -2717,40 +3070,103 @@ impl SceneArtifact {
                         "Scene3D frame mesh bindings must match static mesh keys in exact order",
                     ));
                 }
-                if frame.light_intensities.len() != scene.lights.len() {
+                if frame
+                    .lights
+                    .iter()
+                    .map(Scene3DLightBinding::kind)
+                    .collect::<Vec<_>>()
+                    != scene.lights
+                {
                     errors.push(ValidationError::new(
-                        format!("{path}/kind/frame/lightIntensities"),
-                        "Scene3D frame light bindings must match static lights in exact order",
+                        format!("{path}/kind/frame/lights"),
+                        "frame light bindings must match the static light kinds",
                     ));
                 }
                 let scalar = |value: &NumberValue| scalar_value_valid(value, expr_types);
-                let camera_valid = [
-                    &frame.camera.orbit_yaw_degrees,
-                    &frame.camera.orbit_pitch_degrees,
-                    &frame.camera.distance,
-                    &frame.camera.fov_y_degrees,
-                ]
-                .into_iter()
-                .all(scalar);
-                let meshes_valid = frame.meshes.iter().all(|mesh| {
-                    [
-                        &mesh.translation_x,
-                        &mesh.translation_y,
-                        &mesh.translation_z,
-                        &mesh.rotation_x_degrees,
-                        &mesh.rotation_y_degrees,
-                        &mesh.rotation_z_degrees,
-                        &mesh.scale_x,
-                        &mesh.scale_y,
-                        &mesh.scale_z,
-                    ]
-                    .into_iter()
-                    .all(scalar)
+                let camera_valid = frame.camera.numbers().into_iter().all(|(_, n)| scalar(n));
+                if let Some(Err(error)) = frame.camera.constant() {
+                    errors.push(ValidationError::new(
+                        format!("{path}/kind/frame/camera"),
+                        error.to_string(),
+                    ));
+                }
+                for light in &frame.lights {
+                    if let Some(value) = light.constant() {
+                        if let Err(error) = value.validate() {
+                            errors.push(ValidationError::new(
+                                format!("{path}/kind/frame/lights"),
+                                error.to_string(),
+                            ));
+                        }
+                    }
+                }
+                let lights_valid = frame.lights.iter().all(|light| {
+                    light.numbers().into_iter().all(|(_, n)| scalar(n))
+                        && light.colors().into_iter().all(|(_, c)| {
+                            color_value_valid(c, expr_types)
+                                && !matches!(c,ColorValue::Static {value} if value.a != 255)
+                        })
                 });
-                if !camera_valid || !meshes_valid || !frame.light_intensities.iter().all(scalar) {
+                let mut meshes_valid = true;
+                for (at, mesh) in frame.meshes.iter().enumerate() {
+                    if scene.meshes.get(at).is_some_and(|spec| {
+                        spec.node_ids != mesh.nodes.iter().map(|n| n.id).collect::<Vec<_>>()
+                    }) {
+                        meshes_valid = false;
+                    }
+                    if scene.meshes.get(at).is_some_and(|spec| {
+                        spec.material_overrides
+                            .iter()
+                            .map(|m| m.id)
+                            .collect::<Vec<_>>()
+                            != mesh
+                                .material_overrides
+                                .iter()
+                                .map(|m| m.id)
+                                .collect::<Vec<_>>()
+                    }) {
+                        meshes_valid = false;
+                    }
+                    for material in std::iter::once(&mesh.material)
+                        .chain(mesh.material_overrides.iter().map(|m| &m.material))
+                    {
+                        meshes_valid &= material.numbers().into_iter().all(|(_, n)| scalar(n));
+                        meshes_valid &= material
+                            .colors()
+                            .into_iter()
+                            .all(|(_, c)| color_value_valid(c, expr_types));
+                        if let Err(error) = material.static_values().validate() {
+                            errors.push(ValidationError::new(
+                                format!("{path}/kind/frame/meshes/{at}/material"),
+                                error.to_string(),
+                            ));
+                        }
+                    }
+                    for transform in std::iter::once(&mesh.transform)
+                        .chain(mesh.nodes.iter().map(|n| &n.transform))
+                    {
+                        meshes_valid &= transform.numbers().into_iter().all(|(_, n)| scalar(n));
+                        if let Some(value) = transform.constant() {
+                            if let Err(error) = value.validate() {
+                                errors.push(ValidationError::new(
+                                    format!("{path}/kind/frame/meshes/{at}"),
+                                    error.to_string(),
+                                ));
+                            }
+                        }
+                    }
+                }
+                if !camera_valid
+                    || !meshes_valid
+                    || !lights_valid
+                    || !scalar(&frame.exposure)
+                    || matches!(frame.exposure,NumberValue::Static {value} if !(0.0..=16.0).contains(&value))
+                    || !scalar(&frame.environment_intensity)
+                    || !scalar(&frame.environment_rotation_degrees)
+                {
                     errors.push(ValidationError::new(
                         format!("{path}/kind/frame"),
-                        "Scene3D frame slots must all be typed NumberValue bindings",
+                        "Scene3D frame slots require typed numeric and opaque color bindings",
                     ));
                 }
                 for (mesh_at, mesh) in scene.meshes.iter().enumerate() {
@@ -2772,7 +3188,7 @@ impl SceneArtifact {
                             "Scene3D model control needs a content-addressed resourceRef",
                         ));
                     }
-                    if let Some(texture) = &mesh.material.texture_control {
+                    for (texture, _) in mesh.texture_controls() {
                         if !self
                             .controls
                             .assets
@@ -2780,10 +3196,8 @@ impl SceneArtifact {
                             .is_some_and(|asset| asset.kind == crate::controls::AssetKind::Image)
                         {
                             errors.push(ValidationError::new(
-                                format!(
-                                    "{path}/kind/scene/meshes/{mesh_at}/material/textureControl"
-                                ),
-                                "Scene3D textureControl must name an image asset control",
+                                format!("{path}/kind/scene/meshes/{mesh_at}/material/textures"),
+                                "Scene3D texture bindings must name image asset controls",
                             ));
                         }
                         if !self
@@ -2792,9 +3206,7 @@ impl SceneArtifact {
                             .any(|resource| resource.control == *texture)
                         {
                             errors.push(ValidationError::new(
-                                format!(
-                                    "{path}/kind/scene/meshes/{mesh_at}/material/textureControl"
-                                ),
+                                format!("{path}/kind/scene/meshes/{mesh_at}/material/textures"),
                                 "Scene3D texture control needs a content-addressed resourceRef",
                             ));
                         }

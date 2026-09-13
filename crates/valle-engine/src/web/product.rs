@@ -67,11 +67,19 @@ struct ProductScene3dPlacement {
     device_from_local: [f64; 9],
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Scene3dTextureNeed {
+    digest: ContentDigest,
+    role: valle_motion::scene3d::TextureRole,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Scene3dResourceNeeds {
     models: Vec<ContentDigest>,
-    textures: Vec<ContentDigest>,
+    textures: Vec<Scene3dTextureNeed>,
+    environments: Vec<ContentDigest>,
 }
 
 #[derive(Serialize)]
@@ -171,7 +179,11 @@ impl Ticket {
 #[wasm_bindgen]
 pub struct ProductEngine {
     scene3d_models: BTreeMap<ContentDigest, Arc<valle_motion::scene3d::AdmittedModel>>,
-    scene3d_textures: BTreeMap<ContentDigest, Arc<valle_motion::scene3d::TextureAsset>>,
+    scene3d_environments: BTreeMap<ContentDigest, Arc<valle_motion::scene3d::EnvironmentAsset>>,
+    scene3d_textures: BTreeMap<
+        (ContentDigest, valle_motion::scene3d::TextureRole),
+        Arc<valle_motion::scene3d::MaterialImage>,
+    >,
     scene3d_prepared: BTreeMap<
         valle_motion::scene3d::ScenePrepareCacheKey,
         Arc<valle_motion::scene3d::PreparedScene>,
@@ -189,6 +201,7 @@ impl ProductEngine {
     pub fn new() -> Self {
         Self {
             scene3d_models: BTreeMap::new(),
+            scene3d_environments: BTreeMap::new(),
             scene3d_textures: BTreeMap::new(),
             scene3d_prepared: BTreeMap::new(),
             scene3d_frames: BTreeMap::new(),
@@ -232,6 +245,7 @@ impl ProductEngine {
     /// remain JS-owned and must be retired by the host under the matching external generation.
     pub fn reset(&mut self) {
         self.scene3d_models.clear();
+        self.scene3d_environments.clear();
         self.scene3d_textures.clear();
         self.scene3d_prepared.clear();
         self.scene3d_frames.clear();
@@ -328,6 +342,8 @@ impl ProductEngine {
         let render = self.active_render(render_id)?;
         let kind = match kind {
             "font-bytes" => CompiledExecutionResourceKind::FontBytes,
+            "model3d-bytes" => CompiledExecutionResourceKind::Model3dBytes,
+            "environment-bytes" => CompiledExecutionResourceKind::EnvironmentBytes,
             "runtime-shader" => CompiledExecutionResourceKind::RuntimeShader,
             _ => return Err(JsError::new("[compiled_resource_kind] unsupported kind")),
         };
@@ -403,29 +419,59 @@ impl ProductEngine {
     }
 
     /// Report the immutable model/texture content that the host still needs for one exact
-    /// Scene3D resource request. JavaScript fetches bytes and decodes image pixels, but it never
+    /// Scene3D resource request. JavaScript supplies frozen bytes, but it never
     /// interprets the scene topology or decides which controls are models versus textures.
     pub fn scene3d_resource_needs_json(&self, canonical_request: &[u8]) -> Result<String, JsError> {
         let frame = parse_scene3d_request(canonical_request)?;
         let mut models = BTreeMap::<ContentDigest, ()>::new();
-        let mut textures = BTreeMap::<ContentDigest, ()>::new();
+        let mut textures =
+            BTreeMap::<(ContentDigest, valle_motion::scene3d::TextureRole), ()>::new();
         for mesh in &frame.scene.meshes {
             let model = scene3d_binding_digest(&frame, &mesh.model_control)?;
             if !self.scene3d_models.contains_key(&model) {
                 models.insert(model, ());
             }
-            if let Some(control) = &mesh.material.texture_control {
+            for (control, role) in mesh.texture_controls() {
                 let texture = scene3d_binding_digest(&frame, control)?;
-                if !self.scene3d_textures.contains_key(&texture) {
-                    textures.insert(texture, ());
+                if !self.scene3d_textures.contains_key(&(texture, role)) {
+                    textures.insert((texture, role), ());
                 }
             }
         }
+        let environment = frame
+            .scene
+            .pbr
+            .environment
+            .as_ref()
+            .map(|e| scene3d_binding_digest(&frame, &e.control))
+            .transpose()?;
         serde_json::to_string(&Scene3dResourceNeeds {
+            environments: environment
+                .into_iter()
+                .filter(|d| !self.scene3d_environments.contains_key(d))
+                .collect(),
             models: models.into_keys().collect(),
-            textures: textures.into_keys().collect(),
+            textures: textures
+                .into_keys()
+                .map(|(digest, role)| Scene3dTextureNeed { digest, role })
+                .collect(),
         })
         .map_err(|error| js_error("scene3d_needs", error))
+    }
+
+    pub fn register_scene3d_environment(
+        &mut self,
+        digest: &str,
+        bytes: &[u8],
+    ) -> Result<(), JsError> {
+        let digest = verified_content_digest(digest, bytes, "scene3d_environment_digest")?;
+        if !self.scene3d_environments.contains_key(&digest) {
+            let environment = valle_motion::scene3d::EnvironmentAsset::from_frozen(bytes)
+                .map_err(|e| js_error("scene3d_environment", e))?;
+            self.scene3d_environments
+                .insert(digest, Arc::new(environment));
+        }
+        Ok(())
     }
 
     /// Admit GLB bytes under the same content identity carried by the Product resource request.
@@ -439,22 +485,26 @@ impl ProductEngine {
         Ok(())
     }
 
-    /// Admit CanvasKit-decoded premultiplied RGBA8 while retaining the encoded-byte digest as the
-    /// texture identity. Native performs the equivalent decode through Skia.
+    /// Decode encoded material images in the shared Rust core, with color/data in cache identity.
     pub fn register_scene3d_texture(
         &mut self,
         digest: &str,
         encoded_bytes: &[u8],
-        width: u32,
-        height: u32,
-        premul_rgba8: &[u8],
+        role: &str,
     ) -> Result<(), JsError> {
+        use valle_motion::scene3d::{MaterialImage, TextureRole};
         let digest = verified_content_digest(digest, encoded_bytes, "scene3d_texture_digest")?;
-        let texture =
-            valle_motion::scene3d::TextureAsset::new(digest, width, height, premul_rgba8.to_vec())
-                .map_err(|error| js_error("scene3d_texture", error))?;
-        self.scene3d_textures.insert(digest, Arc::new(texture));
-        self.scene3d_prepared.clear();
+        let role = match role {
+            "color" => TextureRole::Color,
+            "data" => TextureRole::Data,
+            _ => return Err(JsError::new("[scene3d_texture] role must be color or data")),
+        };
+        if !self.scene3d_textures.contains_key(&(digest, role)) {
+            let texture = MaterialImage::from_encoded(encoded_bytes, role)
+                .map_err(|e| js_error("scene3d_texture", e))?;
+            self.scene3d_textures
+                .insert((digest, role), Arc::new(texture));
+        }
         Ok(())
     }
 
@@ -491,6 +541,16 @@ impl ProductEngine {
         }
 
         let mut resources = valle_motion::scene3d::SceneResources::default();
+        if let Some(environment) = &frame.scene.pbr.environment {
+            let digest = scene3d_binding_digest(&frame, &environment.control)?;
+            let asset = self.scene3d_environments.get(&digest).ok_or_else(|| {
+                JsError::new("[scene3d_environment] frozen environment has not been fulfilled")
+            })?;
+            resources
+                .environments
+                .insert(environment.control.clone(), Arc::clone(asset));
+        }
+
         for mesh in &frame.scene.meshes {
             let model_digest = scene3d_binding_digest(&frame, &mesh.model_control)?;
             let model = self.scene3d_models.get(&model_digest).ok_or_else(|| {
@@ -502,17 +562,20 @@ impl ProductEngine {
             resources
                 .models
                 .insert(mesh.model_control.clone(), Arc::clone(model));
-            if let Some(control) = &mesh.material.texture_control {
+            for (control, role) in mesh.texture_controls() {
                 let texture_digest = scene3d_binding_digest(&frame, control)?;
-                let texture = self.scene3d_textures.get(&texture_digest).ok_or_else(|| {
-                    JsError::new(&format!(
-                        "[scene3d_resource] texture {} has not been fulfilled",
-                        texture_digest
-                    ))
-                })?;
+                let texture = self
+                    .scene3d_textures
+                    .get(&(texture_digest, role))
+                    .ok_or_else(|| {
+                        JsError::new(&format!(
+                            "[scene3d_resource] texture {} has not been fulfilled",
+                            texture_digest
+                        ))
+                    })?;
                 resources
                     .textures
-                    .insert(control.clone(), Arc::clone(texture));
+                    .insert((control.to_owned(), role), Arc::clone(texture));
             }
         }
 
@@ -544,8 +607,12 @@ impl ProductEngine {
         };
         let raster = valle_motion::scene3d::render_scene(&prepared, &frame.frame)
             .map_err(|error| js_error("scene3d_render", error))?;
+        let scene_key = frame
+            .provider_key
+            .strip_prefix("scene3d://")
+            .unwrap_or(&frame.provider_key);
         let metadata = raster
-            .metadata(&frame.provider_key, &frame.scene)
+            .metadata(scene_key, &frame.scene)
             .map_err(|error| js_error("scene3d_metadata", error))?;
         let rgba = raster.premul_rgba8.clone();
         if self.scene3d_frames.len() >= MAX_SCENE3D_FRAME_CACHE

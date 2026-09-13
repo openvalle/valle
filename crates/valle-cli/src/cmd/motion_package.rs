@@ -27,9 +27,9 @@ use valle_timeline::internal::{
         AudioChannelLayoutWire, AudioResourceDescriptorWire, ColorMatrixWire, ColorPrimariesWire,
         ColorTransferWire, ContinuousBoundarySamplingWire, FontResourceDescriptorWire,
         FontVariationAxisWire, ImageResourceDescriptorWire, MediaColorDescriptorWire,
-        MediaOrientationWire, MotionArtifactAbiWire, MotionArtifactDescriptorWire,
-        ResourceEntryWire, ResourceManifestEnvelopeWire, ShaderArtifactAbiWire,
-        ShaderResourceDescriptorWire,
+        MediaOrientationWire, Model3dResourceDescriptorWire, MotionArtifactAbiWire,
+        MotionArtifactDescriptorWire, ResourceEntryWire, ResourceManifestEnvelopeWire,
+        ShaderArtifactAbiWire, ShaderResourceDescriptorWire,
     },
 };
 use valle_timeline::{FrameRate, RationalTime, time::ExactRational};
@@ -399,11 +399,46 @@ impl FixedResources {
                 "Video Motion assets require a verified presentation-index descriptor not yet produced by standalone Studio"
             ),
             AssetKind::Model3d => {
-                bail!("Model3D Motion assets have no Timeline ResourceManifest kind")
+                let model = valle_motion::scene3d::admit_glb(&asset.bytes)
+                    .with_context(|| format!("admitting GLB asset `{resource_id}`"))?;
+                let descriptor = Model3dResourceDescriptorWire {
+                    byte_length: u32::try_from(model.source_bytes())?,
+                    vertex_count: model.vertex_count(),
+                    triangle_count: model.triangle_count(),
+                };
+                self.add(
+                    resource_id,
+                    ResourceEntryWire::Model3d {
+                        digest,
+                        descriptor: descriptor.clone(),
+                    },
+                    VerifiedResourceFacts::Model3d {
+                        descriptor,
+                        bytes: asset.bytes.clone().into(),
+                    },
+                    Vec::new(),
+                )
             }
             AssetKind::Shader => {
                 let package = ShaderPackage::from_frozen(&asset.bytes)?;
                 self.add_shader(resource_id, &package)
+            }
+            AssetKind::Environment => {
+                let environment =
+                    valle_motion::scene3d::EnvironmentAsset::from_frozen(&asset.bytes)?;
+                let descriptor = environment.descriptor();
+                self.add(
+                    resource_id,
+                    ResourceEntryWire::Environment {
+                        digest: environment.content_digest(),
+                        descriptor: descriptor.clone(),
+                    },
+                    VerifiedResourceFacts::Environment {
+                        descriptor,
+                        bytes: environment.frozen_bytes()?.into(),
+                    },
+                    Vec::new(),
+                )
             }
         }
     }
@@ -620,6 +655,8 @@ fn entry_digest(entry: &ResourceEntryWire) -> &ContentDigest {
         | ResourceEntryWire::Image { digest, .. }
         | ResourceEntryWire::Lottie { digest, .. }
         | ResourceEntryWire::Font { digest, .. }
+        | ResourceEntryWire::Model3d { digest, .. }
+        | ResourceEntryWire::Environment { digest, .. }
         | ResourceEntryWire::MotionArtifact { digest, .. }
         | ResourceEntryWire::Shader { digest, .. } => digest,
     }

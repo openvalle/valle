@@ -90,6 +90,50 @@
           ],
           "type": "string"
         },
+        "EnvironmentResourceDescriptorWire": {
+          "additionalProperties": false,
+          "description": "Frozen, prefiltered panoramic lighting. Payload admission verifies the full cube/mip layout.",
+          "properties": {
+            "byteLength": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "diffuseSize": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "faceSize": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "samples": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "sourceSize": {
+              "items": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "maxItems": 2,
+              "minItems": 2,
+              "type": "array"
+            }
+          },
+          "required": [
+            "byteLength",
+            "sourceSize",
+            "faceSize",
+            "diffuseSize",
+            "samples"
+          ],
+          "type": "object"
+        },
         "ExactRational": {
           "pattern": "^(0|[1-9][0-9]*|-[1-9][0-9]*)/[1-9][0-9]*$",
           "type": "string"
@@ -242,6 +286,33 @@
           ],
           "type": "string"
         },
+        "Model3dResourceDescriptorWire": {
+          "additionalProperties": false,
+          "description": "Frozen facts for an admitted, self-contained GLB model. Runtime locators are not semantic.",
+          "properties": {
+            "byteLength": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "triangleCount": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "vertexCount": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "byteLength",
+            "vertexCount",
+            "triangleCount"
+          ],
+          "type": "object"
+        },
         "MotionArtifactAbiWire": {
           "enum": [
             "valle.motion/artifact@1"
@@ -379,6 +450,48 @@
                 },
                 "kind": {
                   "const": "font",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "digest",
+                "descriptor"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "descriptor": {
+                  "$ref": "#/$defs/Model3dResourceDescriptorWire"
+                },
+                "digest": {
+                  "$ref": "#/$defs/ContentDigest"
+                },
+                "kind": {
+                  "const": "model3d",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "digest",
+                "descriptor"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "descriptor": {
+                  "$ref": "#/$defs/EnvironmentResourceDescriptorWire"
+                },
+                "digest": {
+                  "$ref": "#/$defs/ContentDigest"
+                },
+                "kind": {
+                  "const": "environment",
                   "type": "string"
                 }
               },

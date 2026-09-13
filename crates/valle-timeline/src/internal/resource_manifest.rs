@@ -159,6 +159,19 @@ fn validate_entry(
                 }
             }
         }
+        ResourceEntryWire::Model3d { descriptor, .. } => {
+            require_positive_u32(resource_id, "byteLength", descriptor.byte_length)?;
+            require_positive_u32(resource_id, "vertexCount", descriptor.vertex_count)?;
+            require_positive_u32(resource_id, "triangleCount", descriptor.triangle_count)?;
+        }
+        ResourceEntryWire::Environment { descriptor, .. } => {
+            require_positive_u32(resource_id, "byteLength", descriptor.byte_length)?;
+            require_positive_u32(resource_id, "sourceWidth", descriptor.source_size[0])?;
+            require_positive_u32(resource_id, "sourceHeight", descriptor.source_size[1])?;
+            require_positive_u32(resource_id, "faceSize", descriptor.face_size)?;
+            require_positive_u32(resource_id, "diffuseSize", descriptor.diffuse_size)?;
+            require_positive_u32(resource_id, "samples", descriptor.samples)?;
+        }
         ResourceEntryWire::MotionArtifact { .. } | ResourceEntryWire::Shader { .. } => {}
     }
 

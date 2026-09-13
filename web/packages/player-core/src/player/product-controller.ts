@@ -149,13 +149,13 @@ interface RenderOptions {
 
 interface BrowserProductEngineWire extends ProductEngineWire {
   decode_shader_data_texture(digest: string, encoded: Uint8Array, width: number, height: number): Uint8Array;
+  register_scene3d_model(digest: string, bytes: Uint8Array): void;
+  register_scene3d_environment(digest: string, bytes: Uint8Array): void;
   scene3d_resource_needs_json(canonicalRequest: Uint8Array): string;
   register_scene3d_texture(
     digest: string,
     encodedBytes: Uint8Array,
-    width: number,
-    height: number,
-    premulRgba8: Uint8Array,
+    role: "color" | "data",
   ): void;
   render_scene3d_request(
     contentDigest: string,
@@ -247,7 +247,9 @@ interface LottieRuntime {
 }
 
 interface FrozenBundleResources {
+  environments: Map<string, Uint8Array>;
   fonts: Map<string, Uint8Array>;
+  models: Map<string, Uint8Array>;
   shaders: Map<string, Uint8Array>;
 }
 
@@ -558,6 +560,8 @@ export class BrowserValleWebPlayer {
   private readonly videoRings = new Map<string, DecoderRing>();
   private readonly lottie = new Map<string, LottieRuntime>();
   private readonly fontBytes = new Map<string, Uint8Array>();
+  private readonly modelBytes = new Map<string, Uint8Array>();
+  private readonly environmentBytes = new Map<string, Uint8Array>();
   private readonly shaderBytes = new Map<string, Uint8Array>();
   private readonly resourceObjects: BrowserResourceCache<CachedBrowserResource>;
   private renderReceipt: ProductRenderReceipt | null = null;
@@ -1073,7 +1077,7 @@ export class BrowserValleWebPlayer {
     canvasX: number,
     canvasY: number,
   ): Promise<{
-    object: { semanticAddress: string } | null;
+    object: { semanticAddress: string; nodeId: number } | null;
     compositionFrame: number;
     sourceFrame: number;
     boxes: Record<string, [number, number, number, number]>;
@@ -1122,6 +1126,8 @@ export class BrowserValleWebPlayer {
     this.lottie.clear();
     this.assetBytes.clear();
     this.fontBytes.clear();
+    this.modelBytes.clear();
+    this.environmentBytes.clear();
     this.shaderBytes.clear();
     this.hitRects = [];
     this.frameInspection = {
@@ -1237,6 +1243,8 @@ export class BrowserValleWebPlayer {
     replaceMap(this.assetsById, staged.admittedAssets.byId);
     replaceMap(this.assetByDigest, staged.admittedAssets.byDigest);
     replaceMap(this.fontBytes, staged.frozenResources.fonts);
+    replaceMap(this.modelBytes, staged.frozenResources.models);
+    replaceMap(this.environmentBytes, staged.frozenResources.environments);
     replaceMap(this.shaderBytes, staged.frozenResources.shaders);
     this.engine = staged.engine;
     this.planner = staged.planner;
@@ -1488,18 +1496,18 @@ export class BrowserValleWebPlayer {
       if (
         payload.kind !== "scene3dFrame"
         || payloadKeys.length !== 2
-        || payloadKeys[0] !== "canonicalRequest"
+        || payloadKeys[0] !== "canonical_request"
         || payloadKeys[1] !== "kind"
       ) {
         throw new Error("Scene3D request has an invalid payload shape");
       }
       const canonicalRequest = packedByteArray(
-        payload.canonicalRequest,
+        payload.canonical_request,
         "Scene3D canonical request",
       );
       await this.ensureScene3dResources(canonicalRequest);
       const topology = contentDigestWire(
-        interpretation.topologyDigest,
+        interpretation.topology_digest,
         "Scene3D topology digest",
       );
       const rgba = this.engine.render_scene3d_request(contentWire, topology, canonicalRequest);
@@ -1530,47 +1538,40 @@ export class BrowserValleWebPlayer {
   private async ensureScene3dResources(canonicalRequest: Uint8Array): Promise<void> {
     const needs = JSON.parse(this.engine.scene3d_resource_needs_json(canonicalRequest)) as {
       models: string[];
-      textures: string[];
+      textures: {digest:string;role:"color" | "data"}[];
+      environments: string[];
     };
     await Promise.all([
+      ...needs.environments.map((digest) => this.ensureScene3dResource("environment", digest)),
       ...needs.models.map((digest) => this.ensureScene3dResource("model", digest)),
-      ...needs.textures.map((digest) => this.ensureScene3dResource("texture", digest)),
+      ...needs.textures.map(({digest,role}) => this.ensureScene3dResource("texture", digest, role)),
     ]);
   }
 
-  private async ensureScene3dResource(kind: "model" | "texture", declaredDigest: string): Promise<void> {
+  private async ensureScene3dResource(kind: "model" | "texture" | "environment", declaredDigest: string, role?: "color" | "data"): Promise<void> {
     const digestWire = contentDigestWire(declaredDigest, `Scene3D ${kind} digest`);
     const digest = digestWire.slice("sha256:".length);
-    const key = `${kind}:${digest}`;
+    const key = `${kind}:${digest}:${role ?? ""}`;
     const existing = this.scene3dResourceTasks.get(key);
     if (existing) return existing;
     const task = (async () => {
+      if (kind === "environment") {
+        const bytes = this.environmentBytes.get(digest);
+        if (!bytes) throw new Error(`Scene3D environment ${digest} has no admitted frozen payload`);
+        this.engine.register_scene3d_environment(digestWire, bytes);
+        return;
+      }
       if (kind === "model") {
-        throw new Error(
-          `Scene3D model ${digest} cannot be fulfilled by the Timeline common profile`,
-        );
+        const bytes = this.modelBytes.get(digest);
+        if (!bytes) throw new Error(`Scene3D model ${digest} has no admitted frozen payload`);
+        this.engine.register_scene3d_model(digestWire, bytes);
+        return;
       }
       const asset = this.assetByDigest.get(digest);
       if (!asset) throw new Error(`Scene3D ${kind} ${digest} has no admitted browser asset`);
       const bytes = await this.fetchAssetBytes(asset, digest);
-      const image = await this.staticImage(asset);
-      try {
-        const width = image.width();
-        const height = image.height();
-        const pixels = image.readPixels(0, 0, {
-          width,
-          height,
-          colorType: this.CanvasKit.ColorType.RGBA_8888,
-          alphaType: this.CanvasKit.AlphaType.Premul,
-          colorSpace: this.CanvasKit.ColorSpace.SRGB,
-        });
-        if (!(pixels instanceof Uint8Array) || pixels.byteLength !== width * height * 4) {
-          throw new Error(`CanvasKit cannot read premultiplied RGBA8 for Scene3D texture '${asset.id}'`);
-        }
-        this.engine.register_scene3d_texture(digestWire, bytes, width, height, pixels);
-      } finally {
-        image.delete();
-      }
+      if (role !== "color" && role !== "data") throw new Error("Scene3D texture requires a color/data role");
+      this.engine.register_scene3d_texture(digestWire, bytes, role);
     })();
     this.scene3dResourceTasks.set(key, task);
     try {
@@ -2149,7 +2150,7 @@ export class BrowserValleWebPlayer {
     canvasX: number,
     canvasY: number,
     clipId?: string,
-  ): { semanticAddress: string } | null {
+  ): { semanticAddress: string; nodeId: number } | null {
     if (!Number.isFinite(canvasX) || !Number.isFinite(canvasY)) {
       throw new Error("Scene3D pick coordinates must be finite");
     }
@@ -2173,7 +2174,7 @@ export class BrowserValleWebPlayer {
       const pixelY = Math.min(frameHeight - 1, Math.floor((local[1] - y) / height * frameHeight));
       const pick = JSON.parse(
         this.engine.scene3d_pick_json(placement.contentHash, pixelX, pixelY),
-      ) as { semanticAddress: string } | null;
+      ) as { semanticAddress: string; nodeId: number } | null;
       if (pick) return pick;
     }
     return null;
@@ -2211,6 +2212,8 @@ function indexCompiledExecutionResources(
   renderId: string,
 ): FrozenBundleResources {
   const fonts = new Map<string, Uint8Array>();
+  const models = new Map<string, Uint8Array>();
+  const environments = new Map<string, Uint8Array>();
   const shaders = new Map<string, Uint8Array>();
   const resources = JSON.parse(engine.compiled_execution_resources_json(renderId));
   if (!Array.isArray(resources)) {
@@ -2229,6 +2232,8 @@ function indexCompiledExecutionResources(
     }
     if (
       resource.kind !== "font-bytes"
+      && resource.kind !== "model3d-bytes"
+      && resource.kind !== "environment-bytes"
       && resource.kind !== "runtime-shader"
     ) {
       throw new Error(
@@ -2257,6 +2262,10 @@ function indexCompiledExecutionResources(
     );
     if (resource.kind === "font-bytes") {
       fonts.set(content, bytes);
+    } else if (resource.kind === "environment-bytes") {
+      environments.set(content, bytes);
+    } else if (resource.kind === "model3d-bytes") {
+      models.set(content, bytes);
     } else if (resource.kind === "runtime-shader") {
       const abi = contentDigestHex(
         resource.abiDigest,
@@ -2265,7 +2274,7 @@ function indexCompiledExecutionResources(
       shaders.set(`${content}:${abi}`, bytes);
     }
   }
-  return { fonts, shaders };
+  return { fonts, models, shaders, environments };
 }
 
 function replaceMap<K, V>(target: Map<K, V>, source: ReadonlyMap<K, V>): void {

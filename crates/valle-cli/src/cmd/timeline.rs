@@ -83,6 +83,7 @@ fn render_document_impl(
             .collect();
         ordered.sort_by_key(|(name, _)| motion_component(&doc, name).is_none());
         let mut motion_asset_kinds = std::collections::BTreeMap::new();
+        let mut motion_environments = std::collections::BTreeMap::new();
         for (name, locator) in ordered {
             let locator = locator
                 .as_str()
@@ -134,6 +135,10 @@ fn render_document_impl(
                             .get(control)
                             .ok_or_else(|| anyhow!("unknown Motion asset control {control}"))?
                             .kind;
+                        if kind == AssetKind::Environment {
+                            motion_environments
+                                .insert(key.to_owned(), prepared.assets[control].clone());
+                        }
                         if motion_asset_kinds
                             .insert(key.to_owned(), kind)
                             .is_some_and(|old| old != kind)
@@ -174,8 +179,12 @@ fn render_document_impl(
                 )?;
                 continue;
             }
-            let bound_asset = super::motion::load_asset(&path)
-                .with_context(|| format!("reading resource {name}: {}", path.display()))?;
+            let bound_asset = if let Some(asset) = motion_environments.remove(name) {
+                asset
+            } else {
+                super::motion::load_asset(&path)
+                    .with_context(|| format!("reading resource {name}: {}", path.display()))?
+            };
             let bytes = bound_asset.bytes;
             let hash = bound_asset.hash;
             let frozen_path = frozen.path().join(hash.as_hex());

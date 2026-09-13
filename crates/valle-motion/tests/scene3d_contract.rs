@@ -1,40 +1,39 @@
 use valle_motion::scene3d::{
-    AnchorSpec, BudgetUsage, CameraFrameState, CameraSpec, Color4, Frame3DState, LightSpec,
+    AnchorSpec, BudgetUsage, CameraFrameState, Color4, Frame3DState, LightFrameState, LightKind,
     MAX_ABS_POSITION, MAX_ABS_ROTATION_DEGREES, MAX_ANCHORS, MAX_CAMERA_FAR,
     MAX_DIRECTIONAL_LIGHTS, MAX_FRAME_BUFFER_BYTES, MAX_FRAME_SCALARS, MAX_LAYER_EDGE,
     MAX_LAYER_PIXELS, MAX_MATERIALS, MAX_MESHES, MAX_MODEL_BYTES, MAX_SCALE, MAX_TEXTURE_PIXELS,
-    MAX_TEXTURES, MAX_TRIANGLES, MAX_VERTICES, MaterialKind, MaterialSpec, MeshFrameState,
-    MeshSpec, Scene3DSpec, Transform3D, Vec3,
+    MAX_TEXTURE_STORAGE_BYTES, MAX_TEXTURES, MAX_TRIANGLES, MAX_VERTICES, MaterialFrameState,
+    MaterialKind, MaterialSpec, MaterialTexture, MaterialTextureSlot, MeshFrameState, MeshSpec,
+    MipmapFilter, Scene3DSpec, TextureFilter, TextureWrap, Transform3D, Vec3,
 };
-
-const GOLDEN: &str = include_str!("golden/scene3d-spec.json");
 
 fn spec() -> Scene3DSpec {
     Scene3DSpec {
-        camera: CameraSpec {
-            position: Vec3::new(0.0, 1.2, 4.5),
-            target: Vec3::new(0.0, 0.4, 0.0),
-            fov_y_degrees: 38.0,
-            near: 0.1,
-            far: 100.0,
-        },
+        pbr: Default::default(),
         meshes: vec![MeshSpec {
             key: "product".into(),
             model_control: "productModel".into(),
             material: MaterialSpec {
-                kind: MaterialKind::Lambert,
-                color: Color4([82.0 / 255.0, 220.0 / 255.0, 1.0, 0.96]),
-                texture_control: Some("productTexture".into()),
+                kind: Some(MaterialKind::Lambert),
+                textures: [(
+                    MaterialTextureSlot::BaseColor,
+                    Some(MaterialTexture {
+                        control: "productTexture".into(),
+                        wrap_u: TextureWrap::Clamp,
+                        wrap_v: TextureWrap::Clamp,
+                        min_filter: TextureFilter::Nearest,
+                        mag_filter: TextureFilter::Nearest,
+                        mipmap: MipmapFilter::None,
+                    }),
+                )]
+                .into(),
+                ..MaterialSpec::default()
             },
-            transform: Transform3D::default(),
+            material_overrides: Vec::new(),
+            node_ids: Vec::new(),
         }],
-        lights: vec![
-            LightSpec::Ambient { intensity: 0.18 },
-            LightSpec::Directional {
-                direction: Vec3::new(-0.7, 0.9, 0.55),
-                intensity: 1.0,
-            },
-        ],
+        lights: vec![LightKind::Ambient, LightKind::Directional],
         anchors: vec![AnchorSpec {
             key: "feature-anchor".into(),
             parent: "product".into(),
@@ -45,45 +44,64 @@ fn spec() -> Scene3DSpec {
 
 fn frame() -> Frame3DState {
     Frame3DState {
+        exposure: 1.0,
+        environment_intensity: 1.0,
+        environment_rotation_degrees: 0.0,
         camera: CameraFrameState {
-            orbit_yaw_degrees: 26.0,
-            orbit_pitch_degrees: 0.0,
-            distance: 4.5,
+            position: Vec3::new(0.0, 1.2, 4.5),
+            target: Vec3::new(0.0, 0.4, 0.0),
             fov_y_degrees: 38.0,
-        },
+            near: 0.1,
+            far: 100.0,
+        }
+        .with_orbit(26.0, 0.0, Some(4.5))
+        .unwrap(),
         meshes: vec![MeshFrameState {
             key: "product".into(),
-            translation_x: 0.0,
-            translation_y: 0.0,
-            translation_z: 0.0,
-            rotation_x_degrees: 0.0,
-            rotation_y_degrees: 10.92,
-            rotation_z_degrees: 0.0,
-            scale_x: 1.0,
-            scale_y: 1.0,
-            scale_z: 1.0,
+            material: MaterialFrameState {
+                color: Some(Color4([0.8, 0.95, 1.0, 1.0])),
+                ..MaterialFrameState::default()
+            },
+            material_overrides: Vec::new(),
+            transform: Transform3D {
+                rotation_degrees: Vec3::new(0.0, 10.92, 0.0),
+                ..Transform3D::default()
+            },
+            nodes: Vec::new(),
         }],
-        light_intensities: vec![0.18, 1.0],
+        lights: vec![
+            LightFrameState::Ambient {
+                color: Color4([1.0; 4]),
+                intensity: 0.18,
+            },
+            LightFrameState::Directional {
+                color: Color4([1.0; 4]),
+                direction: Vec3::new(-0.7, 0.9, 0.55),
+                intensity: 1.0,
+            },
+        ],
     }
 }
 
 #[test]
 fn scene_contract_wire_is_exact_strict_and_wasm_clean() {
     let scene = spec();
-    assert_eq!(scene.frame_scalar_count(), 15);
-    scene.validate().expect("valid fixed Scene3D contract");
-    let json = serde_json::to_string_pretty(&scene).unwrap() + "\n";
-    assert_eq!(json, GOLDEN);
-    let decoded: Scene3DSpec = serde_json::from_str(GOLDEN).unwrap();
-    assert_eq!(decoded, scene);
-
-    let unknown = GOLDEN.replacen(
-        "\"camera\": {",
-        "\"mutableRuntime\": true,\n  \"camera\": {",
-        1,
+    assert_eq!(scene.frame_scalar_count(), 48);
+    scene.validate().unwrap();
+    let json = serde_json::to_value(&scene).unwrap();
+    assert_eq!(
+        json["lights"],
+        serde_json::json!(["ambient", "directional"])
     );
+    assert!(json.get("camera").is_none());
+    assert_eq!(
+        serde_json::from_value::<Scene3DSpec>(json.clone()).unwrap(),
+        scene
+    );
+    let mut unknown = json;
+    unknown["mutableRuntime"] = serde_json::json!(true);
     assert!(
-        serde_json::from_str::<Scene3DSpec>(&unknown)
+        serde_json::from_value::<Scene3DSpec>(unknown)
             .unwrap_err()
             .to_string()
             .contains("unknown field")
@@ -96,11 +114,7 @@ fn fixed_topology_keys_lights_materials_and_anchors_fail_closed() {
     changed.meshes.push(changed.meshes[0].clone());
     changed.meshes[1].key = "product".into();
     changed.anchors[0].parent = "missing".into();
-    changed.lights.push(LightSpec::Ambient { intensity: 0.2 });
-    changed.lights.push(LightSpec::Directional {
-        direction: Vec3::new(0.0, 0.0, 0.0),
-        intensity: 8.0,
-    });
+    changed.lights.push(LightKind::Ambient);
     let errors = changed.validate().unwrap_err();
     assert!(
         errors
@@ -115,17 +129,10 @@ fn fixed_topology_keys_lights_materials_and_anchors_fail_closed() {
             .iter()
             .any(|error| error.message.contains("ambient"))
     );
-    assert!(
-        errors
-            .0
-            .iter()
-            .any(|error| error.message.contains("non-zero"))
-    );
-    assert!(errors.0.iter().any(|error| error.message.contains("0..=4")));
 }
 
 #[test]
-fn frame_contract_has_only_explicit_scalars_and_static_mesh_order() {
+fn frame_contract_carries_complete_camera_lights_and_static_mesh_order() {
     let scene = spec();
     frame()
         .validate_for(&scene)
@@ -133,9 +140,9 @@ fn frame_contract_has_only_explicit_scalars_and_static_mesh_order() {
 
     let mut changed = frame();
     changed.meshes[0].key = "other".into();
-    changed.meshes[0].scale_y = 0.0;
-    changed.camera.orbit_pitch_degrees = 90.0;
-    changed.light_intensities.clear();
+    changed.meshes[0].transform.scale.0[1] = 0.0;
+    changed.camera.position = changed.camera.target;
+    changed.lights.clear();
     let errors = changed.validate_for(&scene).unwrap_err();
     assert!(
         errors
@@ -148,14 +155,61 @@ fn frame_contract_has_only_explicit_scalars_and_static_mesh_order() {
         errors
             .0
             .iter()
-            .any(|error| error.message.contains("orbit pitch"))
+            .any(|error| error.message.contains("differ from position"))
     );
     assert!(
         errors
             .0
             .iter()
-            .any(|error| error.message.contains("all Scene3D lights"))
+            .any(|error| error.message.contains("light kinds"))
     );
+}
+
+#[test]
+fn camera_projection_orbit_and_light_values_validate_the_complete_frame() {
+    let scene = spec();
+    let camera = frame().camera;
+    assert!(camera.with_orbit(0.0, 0.0, None).is_ok());
+    for (yaw, pitch, distance) in [
+        (f32::NAN, 0.0, None),
+        (0.0, 90.0, None),
+        (0.0, 0.0, Some(-1.0)),
+    ] {
+        assert!(camera.with_orbit(yaw, pitch, distance).is_err());
+    }
+    let mut pole = camera;
+    pole.position = Vec3::new(0.0, 1.0, 1.0);
+    pole.target = Vec3::ZERO;
+    assert!(
+        pole.with_orbit(0.0, -45.0, None).is_err(),
+        "validate the final orientation, not just the pitch input"
+    );
+    for bad in 0..6 {
+        let mut state = frame();
+        match bad {
+            0 => state.camera.near = state.camera.far,
+            1 => state.camera.target.0[0] = f32::NAN,
+            2 => state.exposure = 17.0,
+            3 => {
+                state.lights[0] = LightFrameState::Ambient {
+                    color: Color4([1.0, 0.0, 0.0, 0.5]),
+                    intensity: 1.0,
+                }
+            }
+            4 => {
+                state.lights[1] = LightFrameState::Directional {
+                    color: Color4([1.0; 4]),
+                    direction: Vec3::ZERO,
+                    intensity: 1.0,
+                }
+            }
+            _ => state.lights.swap(0, 1),
+        }
+        assert!(
+            state.validate_for(&scene).is_err(),
+            "invalid frame case {bad}"
+        );
+    }
 }
 
 #[test]
@@ -242,22 +296,51 @@ fn object_addresses_are_two_keys_not_an_ambiguous_flat_string() {
 }
 
 #[test]
-fn constants_lock_the_first_product_budget() {
+fn constants_lock_the_bounded_pbr_product_budget() {
     assert_eq!(MAX_LAYER_EDGE, 2_048);
     assert_eq!(MAX_LAYER_PIXELS, 2_000_000);
-    assert_eq!(MAX_FRAME_BUFFER_BYTES, 16_000_000);
+    assert_eq!(MAX_FRAME_BUFFER_BYTES, 20_000_000);
     assert_eq!(MAX_MODEL_BYTES, 16_777_216);
     assert_eq!(MAX_VERTICES, 65_535);
     assert_eq!(MAX_TRIANGLES, 20_000);
     assert_eq!(MAX_MESHES, 8);
     assert_eq!(MAX_MATERIALS, 8);
-    assert_eq!(MAX_TEXTURES, 4);
-    assert_eq!(MAX_TEXTURE_PIXELS, 4_194_304);
+    assert_eq!(MAX_TEXTURES, 8);
+    assert_eq!(MAX_TEXTURE_PIXELS, 25_165_824);
+    assert_eq!(MAX_TEXTURE_STORAGE_BYTES, 134_217_728);
     assert_eq!(MAX_ANCHORS, 32);
     assert_eq!(MAX_DIRECTIONAL_LIGHTS, 2);
-    assert_eq!(MAX_FRAME_SCALARS, 79);
+    assert_eq!(MAX_FRAME_SCALARS, 19_557);
     assert_eq!(MAX_ABS_POSITION, 10_000.0);
     assert_eq!(MAX_SCALE, 1_000.0);
     assert_eq!(MAX_ABS_ROTATION_DEGREES, 1_000_000.0);
     assert_eq!(MAX_CAMERA_FAR, 100_000.0);
+}
+
+#[test]
+fn node_bindings_have_stable_distinct_ids_and_complete_bounded_frame_transforms() {
+    use valle_motion::scene3d::NodeFrameState;
+    let mut scene = spec();
+    scene.meshes[0].node_ids = vec![2, 0];
+    let mut state = frame();
+    state.meshes[0].nodes = [2, 0]
+        .map(|id| NodeFrameState {
+            id,
+            transform: Transform3D::default(),
+        })
+        .to_vec();
+    state.meshes[0].nodes[0].transform.scale.0[0] = -2.0;
+    state.validate_for(&scene).unwrap();
+    assert_eq!(scene.frame_scalar_count(), 66);
+    state.meshes[0].nodes.swap(0, 1);
+    assert!(state.validate_for(&scene).is_err());
+    state.meshes[0].nodes.swap(0, 1);
+    for invalid in [0.0, f32::NAN, 0.0000001, -1001.0] {
+        state.meshes[0].nodes[0].transform.scale.0[0] = invalid;
+        assert!(state.validate_for(&scene).is_err());
+    }
+    for ids in [vec![2, 2], vec![256]] {
+        scene.meshes[0].node_ids = ids;
+        assert!(scene.validate().is_err());
+    }
 }

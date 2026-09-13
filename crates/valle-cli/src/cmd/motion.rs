@@ -323,7 +323,7 @@ pub(super) struct PreparedInput {
 fn compile_with_font_assets(
     graph: &valle_compiler::motion::MotionModuleGraph,
     resources: &[ResourceRef],
-    assets: &BTreeMap<String, BoundAsset>,
+    assets: &mut BTreeMap<String, BoundAsset>,
     font_blobs: &[Vec<u8>],
     canvas_size: MotionViewport,
     shaders: &valle_motion::shader::ShaderRegistry,
@@ -352,7 +352,7 @@ fn compile_with_font_assets(
         canvas_size.tuple(),
     )
     .map_err(|diagnostic| anyhow!("{}", diagnostic.message))?;
-    let compiled = match valle_compiler::motion::compile_motion_modules_with_full_env_and_data(
+    let mut compiled = match valle_compiler::motion::compile_motion_modules_with_full_env_and_data(
         graph,
         resources,
         Some(&measure),
@@ -362,6 +362,27 @@ fn compile_with_font_assets(
         Ok(compiled) => compiled,
         Err(diagnostics) => return Ok(Err(diagnostics)),
     };
+    for (control, schema) in &compiled.artifact.controls.assets {
+        if schema.kind == valle_motion::AssetKind::Environment {
+            if let Some(asset) = assets.get_mut(control) {
+                let environment = valle_motion::scene3d::EnvironmentAsset::from_encoded(
+                    &asset.bytes,
+                    Default::default(),
+                )?;
+                asset.bytes = environment.frozen_bytes()?;
+                asset.hash = environment.content_digest();
+                for resource in &mut compiled.artifact.resource_refs {
+                    if resource.control == *control {
+                        resource.content_hash = asset.hash;
+                    }
+                }
+            }
+        }
+    }
+    compiled
+        .artifact
+        .validate()
+        .map_err(|e| anyhow!("invalid frozen Motion asset bindings: {e:?}"))?;
     let mut render_aliases = Vec::new();
     for (control, schema) in &compiled.artifact.controls.assets {
         if schema.kind != valle_motion::AssetKind::Font {
@@ -392,7 +413,7 @@ struct FingerprintInputs<'a> {
 
 fn studio_state_json(request: &StudioRequest, generation: u64) -> Result<String> {
     let module_graph = load_motion_module_graph(&request.input)?;
-    let assets = load_assets(&request.asset_specs)?;
+    let mut assets = load_assets(&request.asset_specs)?;
     let shaders = shader_registry(&assets)?;
     let resources = assets
         .iter()
@@ -408,7 +429,7 @@ fn studio_state_json(request: &StudioRequest, generation: u64) -> Result<String>
     let (compiled, _) = match compile_with_font_assets(
         &module_graph,
         &resources,
-        &assets,
+        &mut assets,
         &font_blobs,
         request.canvas_size,
         &shaders,
@@ -738,7 +759,7 @@ fn compile_and_prepare(
     let perf = perf_enabled();
     let compile_started = perf.then(Instant::now);
     let module_graph = load_motion_module_graph(input)?;
-    let assets = load_assets(asset_specs)?;
+    let mut assets = load_assets(asset_specs)?;
     let shaders = shader_registry(&assets)?;
     let resources = assets
         .iter()
@@ -751,7 +772,7 @@ fn compile_and_prepare(
     let (compiled, _) = match compile_with_font_assets(
         &module_graph,
         &resources,
-        &assets,
+        &mut assets,
         font_blobs,
         canvas_size,
         &shaders,

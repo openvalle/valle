@@ -94,6 +94,7 @@ export namespace ResourceManifestSchema {
   export type ColorTransferWire = ("srgb" | "bt709" | "pq" | "hlg");
   export type ContentDigest = string;
   export type ContinuousBoundarySamplingWire = "left-limit";
+  export type EnvironmentResourceDescriptorWire = { "byteLength": number; "diffuseSize": number; "faceSize": number; "samples": number; "sourceSize": [number, number] };
   export type ExactRational = string;
   export type FontResourceDescriptorWire = { "faceIndex": number; "variationAxes": Record<string, FontVariationAxisWire> };
   export type FontVariationAxisWire = { "default": number; "maximum": number; "minimum": number };
@@ -102,11 +103,12 @@ export namespace ResourceManifestSchema {
   export type LottieResourceDescriptorWire = { "boundarySampling": ContinuousBoundarySamplingWire; "duration": RationalTime; "height": number; "timeBase": ExactRational; "width": number };
   export type MediaColorDescriptorWire = { "fullRange": boolean; "matrix": ColorMatrixWire; "primaries": ColorPrimariesWire; "transfer": ColorTransferWire };
   export type MediaOrientationWire = ("identity" | "rotate-90" | "rotate-180" | "rotate-270" | "flip-horizontal" | "flip-vertical");
+  export type Model3dResourceDescriptorWire = { "byteLength": number; "triangleCount": number; "vertexCount": number };
   export type MotionArtifactAbiWire = "valle.motion/artifact@1";
   export type MotionArtifactDescriptorWire = { "boundarySampling": ContinuousBoundarySamplingWire; "readsDestination": boolean };
   export type RationalTime = string;
   export type RequiredNullable_for_uint32 = (number | null);
-  export type ResourceEntryWire = ({ "descriptor": VideoResourceDescriptorWire; "digest": ContentDigest; "kind": "video" } | { "descriptor": AudioResourceDescriptorWire; "digest": ContentDigest; "kind": "audio" } | { "descriptor": ImageResourceDescriptorWire; "digest": ContentDigest; "kind": "image" } | { "abi": LottieArtifactAbiWire; "descriptor": LottieResourceDescriptorWire; "digest": ContentDigest; "kind": "lottie" } | { "descriptor": FontResourceDescriptorWire; "digest": ContentDigest; "kind": "font" } | { "abi": MotionArtifactAbiWire; "descriptor": MotionArtifactDescriptorWire; "digest": ContentDigest; "kind": "motion-artifact" } | { "abi": ShaderArtifactAbiWire; "descriptor": ShaderResourceDescriptorWire; "digest": ContentDigest; "kind": "shader" });
+  export type ResourceEntryWire = ({ "descriptor": VideoResourceDescriptorWire; "digest": ContentDigest; "kind": "video" } | { "descriptor": AudioResourceDescriptorWire; "digest": ContentDigest; "kind": "audio" } | { "descriptor": ImageResourceDescriptorWire; "digest": ContentDigest; "kind": "image" } | { "abi": LottieArtifactAbiWire; "descriptor": LottieResourceDescriptorWire; "digest": ContentDigest; "kind": "lottie" } | { "descriptor": FontResourceDescriptorWire; "digest": ContentDigest; "kind": "font" } | { "descriptor": Model3dResourceDescriptorWire; "digest": ContentDigest; "kind": "model3d" } | { "descriptor": EnvironmentResourceDescriptorWire; "digest": ContentDigest; "kind": "environment" } | { "abi": MotionArtifactAbiWire; "descriptor": MotionArtifactDescriptorWire; "digest": ContentDigest; "kind": "motion-artifact" } | { "abi": ShaderArtifactAbiWire; "descriptor": ShaderResourceDescriptorWire; "digest": ContentDigest; "kind": "shader" });
   export type ShaderArtifactAbiWire = "valle.shader/artifact@1";
   export type ShaderResourceDescriptorWire = { "controlsSchemaDigest": ContentDigest; "readsDestination": boolean };
   export type VideoResourceDescriptorWire = { "audioStream": RequiredNullable_for_uint32; "color": MediaColorDescriptorWire; "duration": RationalTime; "height": number; "orientation": MediaOrientationWire; "presentationIndexDigest": ContentDigest; "timeBase": ExactRational; "videoStream": number; "width": number };

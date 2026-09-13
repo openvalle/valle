@@ -135,6 +135,7 @@ pub(crate) struct CompiledMotionProgramContext<'a> {
     pub clip_id: &'a str,
     pub render_seed: u32,
     pub assets: &'a BTreeMap<String, SemanticAsset>,
+    pub model_resources: &'a BTreeMap<String, ContentDigest>,
 }
 
 /// Timeline Motion producer. Every input is already compiled or a
@@ -225,6 +226,7 @@ pub(crate) fn build_compiled_motion_program(
     })?;
     let catalog = CompiledMotionProgramCatalog {
         assets: context.assets,
+        model_resources: context.model_resources,
     };
     let report = valle_motion::emit_program_with_faces(
         &tree,
@@ -417,6 +419,7 @@ fn compiled_cue_windows(
 
 struct CompiledMotionProgramCatalog<'a> {
     assets: &'a BTreeMap<String, SemanticAsset>,
+    model_resources: &'a BTreeMap<String, ContentDigest>,
 }
 
 impl valle_draw::program::ProgramResourceCatalog for CompiledMotionProgramCatalog<'_> {
@@ -431,9 +434,11 @@ impl valle_draw::program::ProgramResourceCatalog for CompiledMotionProgramCatalo
     }
 
     fn scene3d_resource_digest(&self, control: &str) -> Option<[u8; 32]> {
-        self.assets
+        self.model_resources
             .get(control)
-            .map(|asset| *asset.digest.as_bytes())
+            .copied()
+            .or_else(|| self.assets.get(control).map(|asset| asset.digest))
+            .map(|digest| *digest.as_bytes())
     }
 }
 
@@ -978,6 +983,7 @@ pub struct FixtureProgram {
     assets: BTreeMap<String, SemanticAsset>,
     fonts: Vec<SemanticFont>,
     structures: BTreeMap<String, SemanticStructure>,
+    scene3d_frames: BTreeMap<ContentDigest, valle_motion::Scene3DFrameRequest>,
 }
 
 impl FixtureProgram {
@@ -987,6 +993,7 @@ impl FixtureProgram {
             assets: BTreeMap::new(),
             fonts: Vec::new(),
             structures: BTreeMap::new(),
+            scene3d_frames: BTreeMap::new(),
         }
     }
 
@@ -1021,6 +1028,19 @@ impl FixtureProgram {
 
     pub fn program(&self) -> &DrawProgram {
         &self.program
+    }
+
+    pub fn with_scene3d_frame(
+        mut self,
+        frame: valle_motion::Scene3DFrameRequest,
+    ) -> Result<Self, ProgramPrepareError> {
+        let digest = frame
+            .content_digest()
+            .map_err(|error| ProgramPrepareError::Scene3dFrame {
+                reason: error.to_string(),
+            })?;
+        self.scene3d_frames.insert(digest, frame);
+        Ok(self)
     }
 }
 
@@ -1266,34 +1286,29 @@ pub(crate) fn prepare_program(
 
     for scene in &requirements.scene3d {
         let scene_digest = ContentDigest::from_bytes(scene.content_hash.into_bytes());
-        let structure = context
+        let frame = context
             .fixture
-            .structures
-            .values()
-            .find(|candidate| candidate.digest == scene_digest)
-            .ok_or_else(|| ProgramPrepareError::MissingStructure {
-                key: scene.content_hash.as_hex(),
+            .scene3d_frames
+            .get(&scene_digest)
+            .ok_or_else(|| ProgramPrepareError::MissingScene3dFrame {
+                content_hash: scene.content_hash.as_hex(),
             })?;
-        let StructureDescriptor::Scene3d {
-            topology_digest, ..
-        } = &structure.descriptor
-        else {
-            return Err(ProgramPrepareError::StructureKindMismatch {
-                key: structure.key.clone(),
-            });
-        };
-        validate_scene(scene, structure)?;
-        let path = format!("{}.scene3d[{}]", context.semantic_path, structure.key);
+        validate_scene(scene, frame)?;
+        let key = scene.content_hash.as_hex();
+        let path = format!("{}.scene3d[{}]", context.semantic_path, key);
         let handle = requests.scene3d(
-            structure.digest.clone(),
-            topology_digest.clone(),
-            b"null".to_vec(),
+            scene_digest,
+            ContentDigest::from_bytes(scene.topology_hash.into_bytes()),
+            frame
+                .canonical_bytes()
+                .map_err(|error| ProgramPrepareError::Scene3dFrame {
+                    reason: error.to_string(),
+                })?,
             &path,
         )?;
-        bindings.scenes.push(ProgramStructureBinding {
-            key: structure.key.clone(),
-            handle,
-        });
+        bindings
+            .scenes
+            .push(ProgramStructureBinding { key, handle });
     }
 
     let packed = context.fixture.program.packed_bytes()?;
@@ -1353,24 +1368,26 @@ fn validate_shader(
 
 fn validate_scene(
     requirement: &Scene3dKey,
-    structure: &SemanticStructure,
+    frame: &valle_motion::Scene3DFrameRequest,
 ) -> Result<(), ProgramPrepareError> {
-    let StructureDescriptor::Scene3d {
-        topology_digest, ..
-    } = &structure.descriptor
-    else {
-        return Err(ProgramPrepareError::StructureKindMismatch {
-            key: structure.key.clone(),
-        });
-    };
+    let content = frame
+        .content_digest()
+        .map_err(|error| ProgramPrepareError::Scene3dFrame {
+            reason: error.to_string(),
+        })?;
+    let topology = frame
+        .topology_digest()
+        .map_err(|error| ProgramPrepareError::Scene3dFrame {
+            reason: error.to_string(),
+        })?;
     let content_digest = ContentDigest::from_bytes(requirement.content_hash.into_bytes());
     let topology_digest_from_requirement =
         ContentDigest::from_bytes(requirement.topology_hash.into_bytes());
-    if content_digest == structure.digest && topology_digest_from_requirement == *topology_digest {
+    if content_digest == content && topology_digest_from_requirement == topology {
         Ok(())
     } else {
         Err(ProgramPrepareError::StructureDigestMismatch {
-            key: structure.key.clone(),
+            key: requirement.content_hash.as_hex(),
         })
     }
 }
