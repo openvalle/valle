@@ -36,7 +36,6 @@ export interface RootRuntimeManifest {
     canvasKit: {
       full: { glue: string; wasm: string };
     };
-    fonts: { defaultSans: string };
     workers: { productFrame: string };
   };
 }
@@ -91,7 +90,6 @@ export async function emitRuntimeManifests(
     spec("product-frame-worker", "worker", "runtime/workers/product-frame.js", "Apache-2.0"),
     spec("canvaskit-full-glue", "glue", "runtime/canvaskit/canvaskit.js", "BSD-3-Clause", "canvaskit-full", `npm:canvaskit-wasm@${dependencyVersions.canvasKit}`),
     spec("canvaskit-full-wasm", "wasm", "runtime/canvaskit/canvaskit.wasm", "BSD-3-Clause", "canvaskit-full", `npm:canvaskit-wasm@${dependencyVersions.canvasKit}`),
-    spec("default-sans", "font", "runtime/fonts/NotoSans-Regular.ttf", "OFL-1.1", undefined, "https://github.com/notofonts/latin-greek-cyrillic"),
     spec("canvaskit-license", "license", "runtime/licenses/canvaskit.txt", "BSD-3-Clause", undefined, `npm:canvaskit-wasm@${dependencyVersions.canvasKit}`),
     spec("mp4box-license", "license", "runtime/licenses/mp4box.txt", "BSD-3-Clause", undefined, `npm:mp4box@${dependencyVersions.mp4box}`),
     spec("valle-third-party-notices", "license", "runtime/licenses/valle-and-third-party.txt", "Apache-2.0 AND MIT AND ISC AND OFL-1.1 AND CC-BY-4.0"),
@@ -129,7 +127,6 @@ export async function emitRuntimeManifests(
       canvasKit: {
         full: { glue: "runtime/canvaskit/canvaskit.js", wasm: "runtime/canvaskit/canvaskit.wasm" },
       },
-      fonts: { defaultSans: "runtime/fonts/NotoSans-Regular.ttf" },
       workers: { productFrame: "runtime/workers/product-frame.js" },
     },
   };
@@ -232,7 +229,6 @@ function flattenRuntimeAssets(value: RootRuntimeManifest["runtimeAssets"]): stri
     value.engine.wasm,
     value.canvasKit.full.glue,
     value.canvasKit.full.wasm,
-    value.fonts.defaultSans,
     value.workers.productFrame,
   ];
 }

@@ -31,6 +31,7 @@ export class VallePlayerElement extends LitElement {
     resourceManifestJson: { attribute: false },
     verifiedBindingBundleJson: { attribute: false },
     assets: { attribute: false },
+    fonts: { attribute: false },
     runtimeAssets: { attribute: false },
     runtimeBaseUrl: { attribute: false },
     audioContext: { attribute: false },
@@ -101,6 +102,7 @@ export class VallePlayerElement extends LitElement {
   declare resourceManifestJson: string;
   declare verifiedBindingBundleJson: string;
   declare assets: VallePlayerOptions["assets"];
+  declare fonts: VallePlayerOptions["fonts"];
   declare runtimeAssets: VallePlayerOptions["runtimeAssets"] | null;
   declare runtimeBaseUrl: VallePlayerOptions["runtimeBaseUrl"];
   declare audioContext: VallePlayerOptions["audioContext"];
@@ -192,6 +194,7 @@ export class VallePlayerElement extends LitElement {
     this.resourceManifestJson = options.resourceManifestJson;
     this.verifiedBindingBundleJson = options.verifiedBindingBundleJson;
     this.assets = options.assets;
+    this.fonts = options.fonts;
     this.runtimeAssets = options.runtimeAssets;
     this.runtimeBaseUrl = options.runtimeBaseUrl;
     this.assetBaseUrl = options.assetBaseUrl ?? this.assetBaseUrl;
@@ -226,6 +229,7 @@ export class VallePlayerElement extends LitElement {
       resourceManifestJson: this.resourceManifestJson,
       verifiedBindingBundleJson: this.verifiedBindingBundleJson,
       assets: this.assets,
+      fonts: this.fonts,
       canvas,
       assetBaseUrl: this.assetBaseUrl,
       proxyBase: this.proxyBase,

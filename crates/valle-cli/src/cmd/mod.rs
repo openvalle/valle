@@ -14,6 +14,7 @@ pub mod models;
 
 pub mod motion;
 
+mod motion_fonts;
 mod motion_package;
 pub mod project;
 pub mod segment;

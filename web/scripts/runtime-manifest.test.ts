@@ -27,7 +27,7 @@ describe("root runtime manifest closure", () => {
 
   test("rejects a glue path outside its declared closure", async () => {
     const splitGroup = structuredClone(manifest);
-    splitGroup.assetGroups[0].glue = manifest.runtimeAssets.fonts.defaultSans;
+    splitGroup.assetGroups[0].glue = manifest.runtimeAssets.workers.productFrame;
     await expect(assertRuntimeManifest(dist, splitGroup)).rejects.toThrow(/outside its glue\+wasm group/);
   });
 

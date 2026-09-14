@@ -61,6 +61,19 @@ pub(super) struct StandaloneMotionPackage {
     pub execution_profile_json: String,
 }
 
+pub(super) fn font_dependency_role(artifact: &SceneArtifact, bytes: &[u8], index: usize) -> String {
+    let has_formula = artifact
+        .nodes
+        .iter()
+        .any(|node| matches!(node.kind, valle_motion::NodeKind::MathFormula { .. }));
+    let is_formula = has_formula
+        && valle_motion::math_formula::formula_font_pack().any(|(_, font)| font == bytes);
+    format!(
+        "{}:{index}",
+        if is_formula { "formula-font" } else { "font" }
+    )
+}
+
 pub(super) fn build_standalone_motion_package(
     input: StandaloneMotionPackageInput<'_>,
 ) -> Result<StandaloneMotionPackage> {
@@ -91,7 +104,7 @@ pub(super) fn build_standalone_motion_package(
     for (index, bytes) in input.font_blobs.iter().enumerate() {
         let resource_id = resources.intern_font(bytes)?;
         component_dependencies.push(FixedResourceDependency {
-            role: format!("font:{index}"),
+            role: font_dependency_role(input.artifact, bytes, index),
             resource_id,
         });
     }
@@ -708,7 +721,116 @@ mod tests {
         let all_formula_count = valle_motion::math_formula::formula_font_pack().count();
         assert!(formula_fonts.len() > plain_fonts.len());
         assert!(formula_fonts.len() < plain_fonts.len() + all_formula_count);
-        assert_eq!(&formula_fonts[..plain_fonts.len()], plain_fonts.as_slice());
+        assert_eq!(plain_fonts.len(), 1);
+        assert!(formula_fonts.iter().all(|font| {
+            valle_motion::math_formula::formula_font_pack().any(|(_, bytes)| font == bytes)
+        }));
+    }
+
+    fn text_package(source: &str) -> StandaloneMotionPackage {
+        let artifact = valle_compiler::motion::compile_motion(source)
+            .unwrap()
+            .artifact;
+        let fonts = super::super::motion::fixed_package_font_blobs(&artifact, &[]).unwrap();
+        build_standalone_motion_package(StandaloneMotionPackageInput {
+            timing: None,
+            artifact: &artifact,
+            assets: &BTreeMap::new(),
+            font_blobs: &fonts,
+            cue_bindings: &BTreeMap::new(),
+            prop_bindings: &BTreeMap::new(),
+            duration: RationalTime::ONE,
+            frame_rate: FrameRate::new(30, 1).unwrap(),
+            canvas: (320, 180),
+        })
+        .unwrap()
+    }
+
+    #[test]
+    fn host_fonts_replace_text_stack_and_preserve_formula_resources() {
+        use base64::{Engine as _, engine::general_purpose::STANDARD};
+        let package = text_package(
+            r#"export default function T(){return <Scene><Text>Hello</Text><MathFormula latex="x^2" /></Scene>}"#,
+        );
+        let font = valle_motion::DEFAULT_MOTION_FONT_WEIGHTS[9];
+        let selected = valle_engine::fixed_package::with_motion_fonts(
+            &package.fixed_package_manifest_json,
+            &package.timeline_json,
+            &package.resource_manifest_json,
+            &package.verified_binding_bundle_json,
+            &[valle_engine::fixed_package::MotionFontBytes {
+                bytes_base64: STANDARD.encode(font),
+            }],
+        )
+        .unwrap();
+        let bundle: Value = serde_json::from_str(&selected.verified_binding_bundle_json).unwrap();
+        let dependencies = bundle["bindings"][COMPONENT_RESOURCE_ID]["dependencies"]
+            .as_array()
+            .unwrap();
+        assert_eq!(
+            dependencies
+                .iter()
+                .filter(|dep| dep["role"].as_str().unwrap().starts_with("font:"))
+                .count(),
+            1
+        );
+        assert!(
+            dependencies
+                .iter()
+                .any(|dep| dep["role"].as_str().unwrap().starts_with("formula-font:"))
+        );
+        let profile = canonical_fixed_execution_profile(COMMON_PROFILE_KEY).unwrap();
+        let files = fixed_package_files(
+            &selected.timeline_json,
+            &selected.resource_manifest_json,
+            &selected.verified_binding_bundle_json,
+            &profile,
+        );
+        let render = open_verified_fixed_package(&selected.fixed_package_manifest_json, &files)
+            .unwrap()
+            .engine_render();
+        let spec = valle_engine::frame::RenderSpec::new(
+            320,
+            180,
+            valle_engine::frame::RenderQuality::Preview,
+            valle_engine::resource::OutputSpec::srgb_preview(
+                valle_engine::resource::OutputBackground::opaque_srgb([0, 0, 0]),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let mut compiler = render.frame_compiler();
+        let frame = compiler
+            .evaluate_prepare(
+                render.render_id(),
+                valle_timeline::internal::FrameKey::new(0),
+                spec,
+            )
+            .unwrap();
+        let requests = serde_json::to_string(&frame.prepared().resource_requests).unwrap();
+        assert!(requests.contains(&ContentDigest::of_bytes(font).as_hex().to_owned()));
+        assert!(
+            !requests.contains(
+                &ContentDigest::of_bytes(valle_motion::DEFAULT_MOTION_FONT)
+                    .as_hex()
+                    .to_owned()
+            )
+        );
+        // Reapplying the same selection is stable, without accumulating resources or handles.
+        let repeated = valle_engine::fixed_package::with_motion_fonts(
+            &selected.fixed_package_manifest_json,
+            &selected.timeline_json,
+            &selected.resource_manifest_json,
+            &selected.verified_binding_bundle_json,
+            &[valle_engine::fixed_package::MotionFontBytes {
+                bytes_base64: STANDARD.encode(font),
+            }],
+        )
+        .unwrap();
+        assert_eq!(
+            selected.fixed_package_manifest_json,
+            repeated.fixed_package_manifest_json
+        );
     }
 
     #[test]

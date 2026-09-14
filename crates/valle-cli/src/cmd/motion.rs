@@ -1163,14 +1163,13 @@ fn read_font_files(paths: &[PathBuf]) -> Result<Vec<Vec<u8>>> {
 }
 
 fn authoring_font_blobs(explicit: &[Vec<u8>]) -> Vec<Vec<u8>> {
-    // Explicit faces extend the deterministic Motion pack. Keeping the same base pack in
-    // authoring and fixed-package execution prevents `--font` from silently changing generic
-    // fallback metrics during compile while the Product engine still renders with the defaults.
-    let mut blobs = valle_motion::DEFAULT_MOTION_FONT_WEIGHTS
-        .iter()
-        .map(|bytes| bytes.to_vec())
-        .collect::<Vec<_>>();
-    blobs.extend(explicit.iter().cloned());
+    // User faces are preferred; the built-in palette supplies missing families/scripts.
+    let mut blobs = explicit.to_vec();
+    blobs.extend(
+        valle_motion::default_motion_fonts()
+            .iter()
+            .map(|bytes| bytes.to_vec()),
+    );
     for (_, bytes) in valle_motion::math_formula::formula_font_pack() {
         blobs.push(bytes.to_vec());
     }
@@ -1182,12 +1181,9 @@ pub(super) fn fixed_package_font_blobs(
     artifact: &valle_motion::SceneArtifact,
     explicit: &[Vec<u8>],
 ) -> Result<Vec<Vec<u8>>> {
-    let mut blobs = valle_motion::DEFAULT_MOTION_FONT_WEIGHTS
-        .iter()
-        .map(|bytes| bytes.to_vec())
-        .collect::<Vec<_>>();
+    let mut blobs = explicit.to_vec();
+    blobs.extend(super::motion_fonts::selected_default_fonts(artifact));
     blobs.extend(used_formula_font_blobs(artifact)?);
-    blobs.extend(explicit.iter().cloned());
     deduplicate_font_blobs(&mut blobs);
     Ok(blobs)
 }

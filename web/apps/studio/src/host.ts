@@ -264,7 +264,6 @@ export function playerRuntimeAssetsFromStudioBoot(boot: StudioBoot): PlayerRunti
         wasm: required("canvasKitFullWasm"),
       },
     },
-    fonts: { defaultSans: required("defaultSansFont") },
     workers: { productFrame: required("productFrameWorker") },
   };
 }

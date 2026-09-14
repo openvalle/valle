@@ -32,7 +32,6 @@ const config: TimelineWorkspaceRuntimeConfig = {
     canvasKit: {
       full: { glue: "canvaskit-full.js", wasm: "canvaskit-full.wasm" },
     },
-    fonts: { defaultSans: "default-sans.ttf" },
     workers: { productFrame: "product-frame.js" },
   },
   runtimeBaseUrl: "http://studio.test/",

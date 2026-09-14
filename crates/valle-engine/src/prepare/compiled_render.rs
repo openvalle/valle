@@ -377,14 +377,31 @@ fn prepare_endpoint(
             .map_err(|error| PrepareError::at(path, error))?;
             let assets = compiled_motion_assets(source, path)?;
             let model_resources = compiled_motion_models(source);
-            let font_dependencies: Vec<_> = source
+            // Dependency roles retain the authored fallback order, including font:10+.
+            let mut font_resources: Vec<_> = source
                 .motion_artifact_dependencies()
                 .iter()
-                .filter_map(|resource| match resource.facts() {
-                    VerifiedResourceFacts::Font { bytes, .. } => {
-                        Some((*resource.digest(), bytes.as_ref()))
-                    }
-                    _ => None,
+                .filter(|resource| matches!(resource.facts(), VerifiedResourceFacts::Font { .. }))
+                .collect();
+            font_resources.sort_by_key(|resource| {
+                resource
+                    .role()
+                    .rsplit_once("/font:")
+                    .and_then(|(_, index)| index.parse::<usize>().ok())
+                    .unwrap_or(usize::MAX)
+            });
+            let font_dependencies: Vec<_> = font_resources
+                .into_iter()
+                .map(|resource| {
+                    let VerifiedResourceFacts::Font { bytes, .. } = resource.facts() else {
+                        unreachable!()
+                    };
+                    let generic = resource
+                        .role()
+                        .rsplit('/')
+                        .next()
+                        .is_some_and(|role| role.starts_with("font:"));
+                    (*resource.digest(), bytes.as_ref(), generic)
                 })
                 .collect();
             let fonts = state
@@ -542,26 +559,6 @@ fn install_compiled_motion_fonts(
     source: &EvaluatedSourceRef,
     path: &str,
 ) -> Result<motion::FixtureProgram, PrepareError> {
-    // Font identities are shared metadata; Wasm obtains actual bytes from render resources.
-    static DEFAULT_FONTS: std::sync::OnceLock<Vec<SemanticFont>> = std::sync::OnceLock::new();
-    for font in DEFAULT_FONTS.get_or_init(|| {
-        valle_motion::DEFAULT_MOTION_FONT_FILES
-            .iter()
-            .map(|name| {
-                let spec = valle_motion::runtime_fonts::specs()
-                    .iter()
-                    .find(|spec| spec.name == *name)
-                    .expect("default font identity");
-                SemanticFont::new(
-                    *name,
-                    ContentDigest::from_hex(&spec.sha256).expect("default font digest"),
-                    0,
-                )
-            })
-            .collect()
-    }) {
-        fixture = fixture.with_font(font.clone());
-    }
     for resource in source.motion_artifact_dependencies() {
         let VerifiedResourceFacts::Font { descriptor, .. } = resource.facts() else {
             continue;

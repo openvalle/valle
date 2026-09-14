@@ -253,7 +253,7 @@ pub(crate) fn prepare_timeline_package(
                 for (i, bytes) in font_blobs.iter().enumerate() {
                     let font_id = resources.intern_font(bytes)?;
                     deps.push(super::motion_package::FixedResourceDependency {
-                        role: format!("font:{i}"),
+                        role: super::motion_package::font_dependency_role(&artifact, bytes, i),
                         resource_id: font_id,
                     });
                     blobs.insert(

@@ -8,7 +8,6 @@ const runtimeAssets = {
   canvasKit: {
     full: { glue: "canvaskit/full.js", wasm: "canvaskit/full.wasm" },
   },
-  fonts: { defaultSans: "fonts/NotoSans-Regular.ttf" },
   workers: { productFrame: "workers/product-frame.js" },
 };
 
@@ -26,9 +25,6 @@ describe("player runtime asset map", () => {
         },
       },
 
-      fonts: {
-        defaultSans: "https://example.test/runtime/fonts/NotoSans-Regular.ttf",
-      },
       workers: {
         productFrame: "https://example.test/runtime/workers/product-frame.js",
       },
@@ -40,7 +36,6 @@ describe("player runtime asset map", () => {
     const resolved = resolvePlayerRuntimeAssets(runtimeAssets, "/runtime/");
     expect(resolved.engine.glue).toBe(new URL("engine/engine.js", expectedBase).href);
     expect(resolved.canvasKit.full.wasm).toBe(new URL("canvaskit/full.wasm", expectedBase).href);
-    expect(resolved.fonts.defaultSans).toBe(new URL("fonts/NotoSans-Regular.ttf", expectedBase).href);
     expect(resolved.workers.productFrame).toBe(new URL("workers/product-frame.js", expectedBase).href);
   });
 

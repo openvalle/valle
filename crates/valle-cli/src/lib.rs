@@ -612,7 +612,7 @@ pub enum MotionAction {
         /// Bind an asset control as name=path; may be repeated.
         #[arg(long = "asset", value_name = "NAME=PATH")]
         assets: Vec<String>,
-        /// Add a font alongside the deterministic default fonts; may be repeated.
+        /// Use a preferred font file; may be repeated to form an ordered stack. Defaults provide fallback.
         #[arg(long)]
         font: Vec<PathBuf>,
         #[command(flatten)]
@@ -636,8 +636,7 @@ pub enum MotionAction {
         /// Bind an asset control as name=path; may be repeated.
         #[arg(long = "asset", value_name = "NAME=PATH")]
         assets: Vec<String>,
-        /// Add a font file for measurement and preview alongside the default fonts; may be
-        /// repeated.
+        /// Use a preferred font file for measurement and preview; may be repeated. Defaults provide fallback.
         #[arg(long)]
         font: Vec<PathBuf>,
         #[command(flatten)]

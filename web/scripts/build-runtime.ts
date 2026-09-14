@@ -78,7 +78,6 @@ await withBuildDirectory(path.join(root, "dist"), async (dist) => {
     [path.join(canvasKitRoot, "bin", "full", "canvaskit.wasm"), "runtime/canvaskit/canvaskit.wasm"],
     [path.join(canvasKitRoot, "LICENSE"), "runtime/licenses/canvaskit.txt"],
     [path.join(mp4boxRoot, "LICENSE"), "runtime/licenses/mp4box.txt"],
-    [path.resolve(root, "..", "assets", "fonts", "noto", "NotoSans-Regular.ttf"), "runtime/fonts/NotoSans-Regular.ttf"],
   ] as const) {
     const destination = path.join(dist, target);
     await mkdir(path.dirname(destination), { recursive: true });

@@ -3,7 +3,6 @@ export interface PlayerRuntimeAssets {
   canvasKit: {
     full: { glue: string; wasm: string };
   };
-  fonts: { defaultSans: string };
   workers: { productFrame: string };
 }
 
@@ -12,7 +11,6 @@ type RuntimeAssetsInput = {
   canvasKit?: {
     full?: Partial<PlayerRuntimeAssets["canvasKit"]["full"]>;
   };
-  fonts?: Partial<PlayerRuntimeAssets["fonts"]>;
   workers?: Partial<PlayerRuntimeAssets["workers"]>;
 };
 
@@ -23,7 +21,6 @@ const REQUIRED_URLS: ReadonlyArray<readonly [string, RuntimeAssetReader]> = [
   ["engine.wasm", (assets) => assets.engine?.wasm],
   ["canvasKit.full.glue", (assets) => assets.canvasKit?.full?.glue],
   ["canvasKit.full.wasm", (assets) => assets.canvasKit?.full?.wasm],
-  ["fonts.defaultSans", (assets) => assets.fonts?.defaultSans],
   ["workers.productFrame", (assets) => assets.workers?.productFrame],
 ];
 
@@ -57,9 +54,6 @@ export function resolvePlayerRuntimeAssets(
         glue: resolve(assets.canvasKit.full.glue),
         wasm: resolve(assets.canvasKit.full.wasm),
       },
-    },
-    fonts: {
-      defaultSans: resolve(assets.fonts.defaultSans),
     },
     workers: {
       productFrame: resolve(assets.workers.productFrame),

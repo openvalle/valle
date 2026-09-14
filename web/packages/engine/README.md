@@ -28,7 +28,6 @@ const player = await createBrowserValleWebPlayer({
         wasm: "/canvaskit/canvaskit.wasm",
       },
     },
-    fonts: { defaultSans: "/fonts/NotoSans-Regular.ttf" },
   },
 });
 
@@ -66,6 +65,38 @@ This registers `<valle-player>`. The default `valle-engine` entry neither import
 | `valle-engine/workers/*` | Browser frame-planning worker |
 
 The compiler entry currently uses the same Engine WASM as playback. It does not create a player or load CanvasKit. Internal Timeline/protocol and CanvasKit executor subpaths support the repository applications; ordinary consumers should use the entries above.
+
+## Fonts
+
+Fonts are resources of the work. The SDK has no bundled font bytes or mandatory font URL.
+CLI packages select default faces from the text, styles and glyph coverage; dynamic text keeps
+broader fallback coverage so later frames can introduce another script.
+
+To choose a different Motion font stack, pass TTF/OTF URLs or `Uint8Array` bytes:
+
+```ts
+const player = await createBrowserValleWebPlayer({
+  ...options,
+  fonts: [
+    "/fonts/Brand-Regular.ttf",
+    "/fonts/Brand-Bold.ttf",
+    "/fonts/NotoSansCJKsc-Regular.otf",
+    "/fonts/Noto-COLRv1.ttf",
+  ],
+});
+```
+
+The list replaces the ordinary Motion text fonts. Faces keep their own family names and weights;
+use those names in `fontFamily`. The order supplies fallback priority. Choose the fallback faces
+needed for your text; URLs may use your server or a CDN that permits CORS. Use a direct TTF/OTF
+file URL, rather than a Google Fonts CSS URL or WOFF2 file.
+
+Loading starts with player initialization, finishes before text layout, and is reused within that
+player. Omitting `fonts` uses the work's selected fonts. Font changes produce a new render identity;
+there is no requirement to match a built-in Noto digest. Formula fonts and explicit `asset://` font
+bindings belong to their respective resources and are preserved. CSS-loaded document fonts are
+separate from the engine's font bytes. Compile-time `measureText()` values are already calculated;
+choose the same authoring fonts when those measurements must match a later render.
 
 ## Repository build
 

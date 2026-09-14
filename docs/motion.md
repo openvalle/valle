@@ -343,8 +343,17 @@ samples source second 8 after one local second. The source time is
 
 For a portable project font, declare `brand: asset({ kind: "font", required: true })`,
 bind `--asset brand=fonts/Brand.ttf`, and set `fontFamily: "asset://brand"`. An extra
-`--font fonts/Brand.ttf` instead registers that file by its font family for render
-and Studio. Supply the same `--font` options to `motion check`.
+`--font fonts/Brand.ttf` registers a preferred face by its own family name for render
+and Studio. Repeat `--font` to compose an ordered font stack, and use the same
+options for `motion check`. The built-in Noto/serif/monospace palette provides
+fallback; packages include the selected families, weights and script coverage
+instead of always copying the entire palette. Dynamic text retains wider fallback
+coverage for later frames.
+
+Web hosts can supply an ordered `fonts` list of TTF/OTF URLs or bytes when creating
+`valle-engine` players. Fonts load before layout and produce a new render identity.
+They do not need to match built-in Noto bytes. See the [SDK font options](../web/packages/engine/README.md#fonts).
+Formula faces and explicit `asset://` font bindings remain resources of the work.
 
 ## Time and animation
 

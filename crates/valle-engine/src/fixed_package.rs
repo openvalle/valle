@@ -34,6 +34,9 @@ use valle_timeline::internal::{
     },
 };
 
+mod fonts;
+pub use fonts::{MotionFontBytes, MotionFontPackage, with_motion_fonts};
+
 use crate::{
     product::EngineRender,
     render::{
@@ -260,7 +263,7 @@ struct VerifiedBindingBundleWire {
 /// unrelated locator/payload cannot become an eager prerequisite for opening a
 /// render. Only bindings reached from the document roots (and their declared
 /// dependencies) are subsequently decoded into [`ResourceBindingWire`].
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct UnresolvedBindingBundleWire {
     bindings: BTreeMap<String, Value>,

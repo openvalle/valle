@@ -30,3 +30,5 @@ export {
   type TimelineCompilerRuntime,
   type TimelineCompilerRuntimeOptions,
 } from "./compiler.ts";
+
+export type { MotionFontSource } from "./fonts.ts";

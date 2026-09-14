@@ -1,3 +1,4 @@
+import { createMotionFontLoader, type MotionFontSource } from "../fonts.ts";
 import canvasKitPackage from "canvaskit-wasm/package.json";
 // Browser Product Compositor host.
 //
@@ -68,6 +69,8 @@ export interface BrowserValleWebPlayerOptions {
   resourceManifestJson: string;
   verifiedBindingBundleJson: string;
   assets?: BrowserResourceLocator[];
+  /** Replace ordinary Motion fonts with this ordered, lazily loaded stack. Omit to use the work's fonts. */
+  fonts?: readonly MotionFontSource[];
   canvas?: HTMLCanvasElement | null;
   assetBaseUrl?: string;
   proxyBase?: string | null;
@@ -167,6 +170,7 @@ interface BrowserProductEngineWire extends ProductEngineWire {
 }
 
 interface ValleWasmModule {
+  with_motion_fonts(packageJson: string, timelineJson: string, manifestJson: string, bundleJson: string, fontsJson: string): string;
   default(wasmUrl: string): Promise<void>;
   canonicalize_timeline_document(timelineJson: string): string;
   timeline_document_view(timelineJson: string): string;
@@ -532,6 +536,7 @@ export class BrowserValleWebPlayer {
   readonly stats: PlayerStats;
   hitRects: ProductHitRect[] = [];
 
+  private readonly loadMotionFonts?: () => Promise<string>;
   private readonly runtimeAssets: PlayerRuntimeAssets;
   private readonly wasmModuleUrl: string;
   private readonly wasmUrl: string;
@@ -596,6 +601,10 @@ export class BrowserValleWebPlayer {
     this.resourceManifest = JSON.parse(options.resourceManifestJson) as ResourceManifest;
     this.verifiedBindingBundleJson = options.verifiedBindingBundleJson;
     this.assets = options.assets ?? [];
+    if (options.fonts !== undefined) {
+      const pageUrl = typeof location === "undefined" ? import.meta.url : location.href;
+      this.loadMotionFonts = createMotionFontLoader(options.fonts, new URL(options.assetBaseUrl ?? pageUrl, pageUrl).href);
+    }
     this.canvas = options.canvas ?? null;
     this.assetBaseUrl = options.assetBaseUrl ?? "/assets/";
     this.proxyBase = options.proxyBase ?? null;
@@ -1181,6 +1190,14 @@ export class BrowserValleWebPlayer {
   }
 
   private async stageRenderPackage(next: RenderPackageReplacement): Promise<StagedRenderPackage> {
+    if (this.loadMotionFonts) {
+      const fontsJson = await this.loadMotionFonts();
+      const selected = JSON.parse(this.wasm.with_motion_fonts(
+        next.fixedPackageManifestJson, next.timelineJson, next.resourceManifestJson,
+        next.verifiedBindingBundleJson, fontsJson,
+      )) as RenderPackageReplacement;
+      next = { ...next, ...selected };
+    }
     const canonical = this.canonicalizeTimelineDocument(
       JSON.parse(next.timelineJson) as TimelineDocument,
     );

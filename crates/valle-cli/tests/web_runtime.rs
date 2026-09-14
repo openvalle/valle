@@ -19,7 +19,7 @@ fn fake_runtime() -> PathBuf {
     let root = temp_dir("valle_wrt");
     let html_path = "apps/preview/index.html";
     let js_path = "apps/preview/app.js";
-    let specs: [(&str, &str, &str, &[u8], Option<&str>); 8] = [
+    let specs: [(&str, &str, &str, &[u8], Option<&str>); 7] = [
         (
             "html",
             "html",
@@ -55,13 +55,6 @@ fn fake_runtime() -> PathBuf {
             valle_cli::webruntime::CANVASKIT_FULL_WASM_PATH,
             b"canvas full wasm",
             Some("canvaskit-full"),
-        ),
-        (
-            "font",
-            "font",
-            valle_cli::webruntime::DEFAULT_SANS_FONT_PATH,
-            b"font",
-            None,
         ),
         (
             "worker",

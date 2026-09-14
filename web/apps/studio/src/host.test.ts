@@ -24,7 +24,6 @@ const runtime = {
     engineWasm: "/runtime/engine/valle_engine_bg.wasm",
     canvasKitFullGlue: "/runtime/canvaskit/canvaskit.js",
     canvasKitFullWasm: "/runtime/canvaskit/canvaskit.wasm",
-    defaultSansFont: "/runtime/fonts/NotoSans-Regular.ttf",
     productFrameWorker: "/runtime/workers/product-frame.js",
   },
 };
@@ -410,7 +409,6 @@ describe("Studio host adapters", () => {
               wasm: runtime.assetUrls.canvasKitFullWasm,
             },
           },
-          fonts: { defaultSans: runtime.assetUrls.defaultSansFont },
           workers: { productFrame: runtime.assetUrls.productFrameWorker },
         });
         return {

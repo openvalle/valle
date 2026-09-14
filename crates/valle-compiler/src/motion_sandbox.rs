@@ -327,12 +327,9 @@ impl MeasureEnv {
                 )
             })?;
         } else {
-            for (index, blob) in font_blobs.iter().enumerate() {
+            for blob in font_blobs {
                 fonts
-                    .register(valle_motion::default_motion_font_resource(
-                        index,
-                        blob.clone(),
-                    ))
+                    .register(valle_motion::motion_font_resource(blob.clone()))
                     .map_err(|error| {
                         MotionDiagnostic::new(
                             DiagCode::StaticEvalFailed,

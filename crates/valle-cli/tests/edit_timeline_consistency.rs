@@ -113,7 +113,7 @@ fn make_runtime(root: &Path) -> PathBuf {
     let html_path = "runtime/apps/studio.html";
     let html = b"<!doctype html><title>Studio acceptance</title>";
     let js_path = "runtime/apps/studio.js";
-    let specs: [(&str, &str, &str, &[u8], Option<&str>); 8] = [
+    let specs: [(&str, &str, &str, &[u8], Option<&str>); 7] = [
         ("studio-html", "html", html_path, html, None),
         ("studio-js", "app", js_path, b"void 0", None),
         (
@@ -143,13 +143,6 @@ fn make_runtime(root: &Path) -> PathBuf {
             valle_cli::webruntime::CANVASKIT_FULL_WASM_PATH,
             b"canvas full wasm",
             Some("canvaskit-full"),
-        ),
-        (
-            "font",
-            "font",
-            valle_cli::webruntime::DEFAULT_SANS_FONT_PATH,
-            b"font",
-            None,
         ),
         (
             "worker",
@@ -402,7 +395,6 @@ fn run_project_studio_authoring_browser(home: &Path) -> Option<Value> {
         "engineWasm",
         "canvasKitFullGlue",
         "canvasKitFullWasm",
-        "defaultSansFont",
         "productFrameWorker",
     ] {
         assert!(

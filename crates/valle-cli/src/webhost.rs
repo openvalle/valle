@@ -102,7 +102,6 @@ fn project_boot(project: &ProjectStudioCtx, config_json: &str) -> Result<String>
         ("engineWasm", "/engine/wasm"),
         ("canvasKitFullGlue", "/canvasKit/full/glue"),
         ("canvasKitFullWasm", "/canvasKit/full/wasm"),
-        ("defaultSansFont", "/fonts/defaultSans"),
         ("productFrameWorker", "/workers/productFrame"),
     ] {
         if let Some(value) = runtime_assets
@@ -178,7 +177,6 @@ fn studio_boot_from_config(config_json: &str) -> Result<String> {
         ("engineWasm", "/engine/wasm"),
         ("canvasKitFullGlue", "/canvasKit/full/glue"),
         ("canvasKitFullWasm", "/canvasKit/full/wasm"),
-        ("defaultSansFont", "/fonts/defaultSans"),
         ("productFrameWorker", "/workers/productFrame"),
     ] {
         if let Some(value) = runtime_assets

@@ -28,13 +28,12 @@ pub(crate) struct BuiltMotionProgram {
     pub layout_boxes: BTreeMap<String, [f32; 4]>,
 }
 
-/// Worker-local font registries keyed by the ordered, verified dependency digests. A seek can
+/// Worker-local font registries keyed by ordered dependency digests and default-family roles. A seek can
 /// reuse a registry, while a font edit necessarily selects a different key. Keep only a small
 /// LRU so repeatedly replacing a Studio package cannot retain every previous font collection.
 #[derive(Default)]
 pub(super) struct MotionFontCache {
-    defaults: Option<valle_motion::Fonts>,
-    entries: VecDeque<(Vec<ContentDigest>, MotionFontSet)>,
+    entries: VecDeque<(Vec<(ContentDigest, bool)>, MotionFontSet)>,
 }
 
 pub(super) struct MotionFontSet {
@@ -54,40 +53,19 @@ impl MotionFontCache {
 
     pub(super) fn get(
         &mut self,
-        dependencies: &[(ContentDigest, &[u8])],
+        dependencies: &[(ContentDigest, &[u8], bool)],
     ) -> Result<&MotionFontSet, ProgramPrepareError> {
-        let key: Vec<_> = dependencies.iter().map(|(digest, _)| *digest).collect();
+        let key: Vec<_> = dependencies
+            .iter()
+            .map(|(digest, _, generic)| (*digest, *generic))
+            .collect();
         if let Some(index) = self.entries.iter().position(|(cached, _)| *cached == key) {
             let entry = self.entries.remove(index).expect("located font registry");
             self.entries.push_back(entry);
         } else {
-            if self.defaults.is_none() {
-                #[allow(unused_mut)]
-                let mut fonts = valle_motion::Fonts::default();
-                #[cfg(not(target_arch = "wasm32"))]
-                valle_motion::register_default_motion_fonts(&mut fonts).map_err(|error| {
-                    ProgramPrepareError::MotionLayout {
-                        reason: error.to_string(),
-                    }
-                })?;
-                self.defaults = Some(fonts);
-            }
-            let mut fonts = self
-                .defaults
-                .as_ref()
-                .expect("registered default fonts")
-                .clone();
-            // Keep Native fallback priority even when resource bindings arrive in digest order.
-            #[cfg(target_arch = "wasm32")]
-            let mut ordered_dependencies = dependencies.to_vec();
-            #[cfg(target_arch = "wasm32")]
-            ordered_dependencies.sort_by_key(|(digest, _)| {
-                valle_motion::runtime_fonts::default_index(digest).unwrap_or(usize::MAX)
-            });
-            #[cfg(target_arch = "wasm32")]
-            let dependencies = ordered_dependencies.as_slice();
-            for (digest, bytes) in dependencies {
-                register_motion_dependency_font(&mut fonts, bytes, digest)?;
+            let mut fonts = valle_motion::Fonts::default();
+            for (digest, bytes, generic) in dependencies {
+                register_motion_dependency_font(&mut fonts, bytes, digest, *generic)?;
             }
             if self.entries.len() == Self::CAPACITY {
                 self.entries.pop_front();
@@ -95,7 +73,7 @@ impl MotionFontCache {
             #[cfg(target_arch = "wasm32")]
             let mut formulas = valle_motion::math_formula::FormulaFontRegistry::new();
             #[cfg(target_arch = "wasm32")]
-            for (digest, bytes) in dependencies {
+            for (digest, bytes, _) in dependencies {
                 let hash = digest.as_hex();
                 if let Some(face) = valle_motion::math_formula::formula_faces()
                     .iter()
@@ -257,30 +235,20 @@ fn register_motion_dependency_font(
     fonts: &mut valle_motion::Fonts,
     bytes: &[u8],
     digest: &ContentDigest,
+    generic: bool,
 ) -> Result<(), ProgramPrepareError> {
-    let default_index = valle_motion::runtime_fonts::default_index(digest);
-    let is_default = default_index.is_some();
-    #[cfg(target_arch = "wasm32")]
-    if let Some(index) = default_index {
-        fonts
-            .register(valle_motion::default_motion_font_resource(
-                index,
-                bytes.to_vec(),
-            ))
-            .map_err(|error| ProgramPrepareError::MotionLayout {
-                reason: error.to_string(),
-            })?;
-    }
-    if !is_default {
-        // Preserve the font's own name-table family for artifacts that author that family
-        // directly. Takumi deduplicates by content + family, so the content-addressed alias below
-        // remains a distinct lookup for compiler-lowered `asset://...` references.
-        fonts
-            .register(valle_motion::FontResource::new(bytes.to_vec()))
-            .map_err(|error| ProgramPrepareError::MotionLayout {
-                reason: error.to_string(),
-            })?;
-    }
+    let resource = if generic {
+        valle_motion::motion_font_resource(bytes.to_vec())
+    } else {
+        // Asset-bound and formula faces keep their own names without selecting a
+        // default family for ordinary text elsewhere in the component.
+        valle_motion::FontResource::new(bytes.to_vec())
+    };
+    fonts
+        .register(resource)
+        .map_err(|error| ProgramPrepareError::MotionLayout {
+            reason: error.to_string(),
+        })?;
     fonts
         .register(
             valle_motion::FontResource::new(bytes.to_vec()).override_info(
@@ -1501,7 +1469,7 @@ export default function Card() {{
     fn cached_fonts_preserve_content_aliases_after_font_changes_and_eviction() {
         let mut cache = MotionFontCache::default();
         let digest = ContentDigest::of_bytes(DEPENDENCY_FONT);
-        let dependencies = [(digest, DEPENDENCY_FONT)];
+        let dependencies = [(digest, DEPENDENCY_FONT, true)];
         let alias = valle_motion::font_family_alias(&digest);
         let cold = emitted_font_request(cache.get(&dependencies).unwrap(), &alias);
         assert_eq!(cold.face_hash.into_bytes(), *digest.as_bytes());
@@ -1510,7 +1478,7 @@ export default function Card() {{
         // alternating clips can do. Every set must resolve its own immutable font bytes.
         for bytes in valle_motion::default_motion_fonts().iter().take(5) {
             let replacement = ContentDigest::of_bytes(bytes);
-            let fonts = cache.get(&[(replacement, bytes)]).unwrap();
+            let fonts = cache.get(&[(replacement, bytes, true)]).unwrap();
             let request =
                 emitted_font_request(fonts, &valle_motion::font_family_alias(&replacement));
             assert_eq!(request.face_hash.into_bytes(), *replacement.as_bytes());
@@ -1523,6 +1491,51 @@ export default function Card() {{
         assert_eq!(
             emitted_font_request(cache.get(&dependencies).unwrap(), &alias),
             cold
+        );
+    }
+
+    #[test]
+    fn generic_family_uses_host_bytes_without_matching_a_builtin_digest() {
+        let mut custom = valle_motion::DEFAULT_MOTION_FONT.to_vec();
+        custom.extend_from_slice(b"host font revision");
+        let digest = ContentDigest::of_bytes(&custom);
+        let mut cache = MotionFontCache::default();
+        let fonts = cache.get(&[(digest, custom.as_slice(), true)]).unwrap();
+        let request = emitted_font_request(fonts, "sans-serif");
+        assert_eq!(request.face_hash.into_bytes(), *digest.as_bytes());
+    }
+
+    #[test]
+    fn bound_font_does_not_override_the_host_default_family() {
+        let mono = valle_motion::DEFAULT_MOTION_FONT_WEIGHTS[9];
+        let brand = include_bytes!("../../../../assets/fonts/katex/KaTeX_Fraktur-Regular.ttf");
+        let mono_digest = ContentDigest::of_bytes(mono);
+        let brand_digest = ContentDigest::of_bytes(brand);
+        let mut cache = MotionFontCache::default();
+        let fonts = cache
+            .get(&[(mono_digest, mono, true), (brand_digest, brand, false)])
+            .unwrap();
+        assert_eq!(
+            emitted_font_request(fonts, "sans-serif")
+                .face_hash
+                .into_bytes(),
+            *mono_digest.as_bytes()
+        );
+        assert_eq!(
+            emitted_font_request(fonts, &valle_motion::font_family_alias(&brand_digest))
+                .face_hash
+                .into_bytes(),
+            *brand_digest.as_bytes()
+        );
+        // Changing the role must select a different cache entry for the same bytes.
+        let fonts = cache
+            .get(&[(mono_digest, mono, true), (brand_digest, brand, true)])
+            .unwrap();
+        assert_eq!(
+            emitted_font_request(fonts, "sans-serif")
+                .face_hash
+                .into_bytes(),
+            *brand_digest.as_bytes()
         );
     }
 
@@ -1547,7 +1560,7 @@ export default function Card() {{
 
         let mut fonts = valle_motion::Fonts::default();
         valle_motion::register_default_motion_fonts(&mut fonts).expect("register default fonts");
-        register_motion_dependency_font(&mut fonts, DEPENDENCY_FONT, &digest)
+        register_motion_dependency_font(&mut fonts, DEPENDENCY_FONT, &digest, false)
             .expect("register dependency font under both families");
 
         let internal_request = emitted_font_request(&fonts, &internal_family);

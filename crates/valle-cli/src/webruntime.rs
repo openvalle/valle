@@ -31,7 +31,6 @@ pub const ENGINE_GLUE_PATH: &str = "runtime/engine/valle_engine.js";
 pub const ENGINE_WASM_PATH: &str = "runtime/engine/valle_engine_bg.wasm";
 pub const CANVASKIT_FULL_GLUE_PATH: &str = "runtime/canvaskit/canvaskit.js";
 pub const CANVASKIT_FULL_WASM_PATH: &str = "runtime/canvaskit/canvaskit.wasm";
-pub const DEFAULT_SANS_FONT_PATH: &str = "runtime/fonts/NotoSans-Regular.ttf";
 pub const PRODUCT_FRAME_WORKER_PATH: &str = "runtime/workers/product-frame.js";
 
 /// Rust hosts and the admitted root manifest use one canonical runtime URL map.
@@ -41,7 +40,6 @@ pub fn runtime_assets_json() -> serde_json::Value {
         "canvasKit": {
             "full": { "glue": CANVASKIT_FULL_GLUE_PATH, "wasm": CANVASKIT_FULL_WASM_PATH }
         },
-        "fonts": { "defaultSans": DEFAULT_SANS_FONT_PATH },
         "workers": { "productFrame": PRODUCT_FRAME_WORKER_PATH }
     })
 }
@@ -85,7 +83,6 @@ struct BuildManifest {
 struct BuildRuntimeAssets {
     engine: BuildGlueWasmBinding,
     canvas_kit: BuildCanvasKitBindings,
-    fonts: BuildFontBindings,
     workers: BuildWorkerBindings,
 }
 
@@ -100,12 +97,6 @@ struct BuildGlueWasmBinding {
 #[serde(deny_unknown_fields)]
 struct BuildCanvasKitBindings {
     full: BuildGlueWasmBinding,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct BuildFontBindings {
-    default_sans: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -405,12 +396,6 @@ fn verify_files(read: impl Fn(&str) -> Result<Vec<u8>>) -> Result<VerifiedBuild>
             CANVASKIT_FULL_WASM_PATH,
             "wasm",
             Some("canvaskit-full"),
-        ),
-        (
-            build.runtime_assets.fonts.default_sans.as_str(),
-            DEFAULT_SANS_FONT_PATH,
-            "font",
-            None,
         ),
         (
             build.runtime_assets.workers.product_frame.as_str(),
@@ -831,7 +816,7 @@ mod tests {
         let dist = temp_dir("valle_webruntime_source");
         let html_path = "apps/preview/index.html";
         let chunk_path = "apps/preview/chunk-test.js";
-        let specs: [(&str, &str, &str, &[u8], Option<&str>); 8] = [
+        let specs: [(&str, &str, &str, &[u8], Option<&str>); 7] = [
             (
                 "html",
                 "html",
@@ -868,7 +853,6 @@ mod tests {
                 b"canvas full wasm",
                 Some("canvaskit-full"),
             ),
-            ("font", "font", DEFAULT_SANS_FONT_PATH, b"font", None),
             (
                 "worker",
                 "worker",
@@ -1246,11 +1230,7 @@ mod tests {
         let runtime = resolve(None).unwrap();
         assert_eq!(runtime.source, RuntimeSource::Embedded);
         let files = runtime.serving_map();
-        for path in [
-            ENGINE_WASM_PATH,
-            CANVASKIT_FULL_WASM_PATH,
-            DEFAULT_SANS_FONT_PATH,
-        ] {
+        for path in [ENGINE_WASM_PATH, CANVASKIT_FULL_WASM_PATH] {
             let HostedFile::VerifiedRuntime(bytes) = &files[path] else {
                 panic!()
             };

@@ -9,7 +9,6 @@ pub use valle_timeline::internal::ContentDigest;
 
 #[cfg(not(target_arch = "wasm32"))]
 mod font_data;
-pub mod runtime_fonts;
 
 pub mod artifact;
 pub mod batch;
@@ -115,14 +114,15 @@ pub use spring::{SpringParams, spring_at};
 pub use tailwind::{TAILWIND_CATALOG, TailwindClassError, validate_tailwind_class};
 pub use text::{
     DEFAULT_MOTION_FONT_FILES, FontOverride, FontResource, Fonts, GenericFamily, MeasureError,
-    MeasuredBox, TextMeasure, default_motion_font_resource, measure_text,
+    MeasuredBox, TextMeasure, measure_text,
 };
 pub use time::{frame_at_sample_floor, frame_rate_as_f64, sample_time_at_frame};
 pub use value::{MotionEasing, MotionValue};
 
 pub const MOTION_MATH_ENGINE_ID: &str = valle_draw::math::ENGINE_ID;
 
+pub use text::motion_font_resource;
 #[cfg(not(target_arch = "wasm32"))]
 pub use text::{DEFAULT_MOTION_FONT, DEFAULT_MOTION_FONT_WEIGHTS};
 #[cfg(not(target_arch = "wasm32"))]
-pub use text::{default_motion_fonts, motion_font_resource, register_default_motion_fonts};
+pub use text::{default_motion_fonts, register_default_motion_fonts};
