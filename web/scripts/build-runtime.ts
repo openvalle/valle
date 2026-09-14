@@ -9,6 +9,7 @@ import {
   WORKER_BUILDS,
 } from "./runtime-entrypoints.ts";
 import { emitRuntimeManifests } from "./runtime-manifest.ts";
+import { thirdPartyNotices } from "./third-party-notices.ts";
 import {
   assertCanvasKitBuildVersion,
   assertGeneratedEngineBuildVersion,
@@ -68,10 +69,10 @@ await withBuildDirectory(path.join(root, "dist"), async (dist) => {
     await Bun.write(path.join(engineRuntime, asset), Bun.file(path.join(generatedEngine, asset)));
   }
 
-  const playerCoreRoot = path.join(root, "packages", "player-core");
-  const canvasKitRoot = path.dirname(path.dirname(Bun.resolveSync("canvaskit-wasm", playerCoreRoot)));
+  const engineRoot = path.join(root, "packages", "engine");
+  const canvasKitRoot = path.dirname(path.dirname(Bun.resolveSync("canvaskit-wasm", engineRoot)));
   await assertCanvasKitBuildVersion(canvasKitRoot);
-  const mp4boxRoot = path.dirname(path.dirname(Bun.resolveSync("mp4box", playerCoreRoot)));
+  const mp4boxRoot = path.dirname(path.dirname(Bun.resolveSync("mp4box", engineRoot)));
   for (const [source, target] of [
     [path.join(canvasKitRoot, "bin", "full", "canvaskit.js"), "runtime/canvaskit/canvaskit.js"],
     [path.join(canvasKitRoot, "bin", "full", "canvaskit.wasm"), "runtime/canvaskit/canvaskit.wasm"],
@@ -84,21 +85,8 @@ await withBuildDirectory(path.join(root, "dist"), async (dist) => {
     await Bun.write(destination, Bun.file(source));
   }
 
-  // Preserve notices for fonts and adapted code embedded in the runtime.
-  const licenseRoots = [
-    "assets/fonts",
-    "crates/valle-motion/licenses",
-    "crates/valle-draw/licenses",
-  ];
-  const repo = path.resolve(root, "..");
-  const notices = [await Bun.file(path.join(repo, "LICENSE")).text()];
-  for (const relative of licenseRoots) {
-    const files = (await listFiles(path.join(repo, relative))).filter((file) => file.endsWith(".txt")).sort();
-    for (const file of files) {
-      notices.push(`${path.relative(repo, file)}\n\n${await Bun.file(file).text()}`);
-    }
-  }
-  await Bun.write(path.join(dist, "runtime", "licenses", "valle-and-third-party.txt"), notices.join("\n\n"));
+  await Bun.write(path.join(dist, "runtime", "licenses", "valle-and-third-party.txt"),
+    await thirdPartyNotices(path.resolve(root, "..")));
 
   await emitRuntimeManifests(dist, valleBuildVersion, runtimeProtocolVersion, {
     canvasKit: (await Bun.file(path.join(canvasKitRoot, "package.json")).json()).version,

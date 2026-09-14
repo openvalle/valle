@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { BrowserResourceCache } from "./resource-cache.ts";
 
 import {
   BrowserValleWebPlayer,
@@ -11,6 +12,142 @@ import {
 const RENDER_ID = "sha256:1111111111111111111111111111111111111111111111111111111111111111";
 const SCENE_DIGEST = `sha256:${"4".repeat(64)}`;
 const TOPOLOGY_DIGEST = `sha256:${"5".repeat(64)}`;
+
+test("rapid seeks wait for playback and preserve every requested frame", async () => {
+  const player = Object.create(BrowserValleWebPlayer.prototype) as any;
+  const playback = Promise.withResolvers<void>();
+  const renders = [Promise.withResolvers<void>(), Promise.withResolvers<void>()];
+  const started: number[] = [];
+  const updated: number[] = [];
+  let epochs = 0;
+  Object.assign(player, {
+    renderInFlight: playback.promise,
+    pause() {},
+    requirePlanner: () => ({ advanceEpoch() { epochs += 1; } }),
+    lastFrameTimeS: () => 3,
+    async renderTime(time: number) {
+      started.push(time);
+      await renders[started.length - 1]!.promise;
+      return { frame: { index: time * 30 } };
+    },
+    onTimeUpdate(time: number) { updated.push(time); },
+  });
+  const first = player.seek(0.5);
+  const second = player.seek(1);
+  expect(started).toEqual([]);
+  playback.resolve();
+  await Bun.sleep(0);
+  expect(started).toEqual([0.5]);
+  expect(epochs).toBe(1);
+  renders[0]!.resolve();
+  expect(await first).toEqual({ frame: { index: 15 } });
+  await Bun.sleep(0);
+  expect(started).toEqual([0.5, 1]);
+  expect(epochs).toBe(2);
+  renders[1]!.resolve();
+  expect(await second).toEqual({ frame: { index: 30 } });
+  expect(updated).toEqual([0.5, 1]);
+  expect(player.currentTime()).toBe(1);
+  expect(player.playbackFrame).toBe(30);
+  expect(player.renderInFlight).toBeNull();
+});
+
+test("a failed seek rejects its caller without blocking the next seek", async () => {
+  const player = Object.create(BrowserValleWebPlayer.prototype) as any;
+  const failed = Promise.withResolvers<void>();
+  const error = new Error("frame rendering failed");
+  Object.assign(player, {
+    renderInFlight: null,
+    pause() {},
+    requirePlanner: () => ({ advanceEpoch() {} }),
+    lastFrameTimeS: () => 3,
+    async renderTime(time: number) {
+      if (time === 0.5) await failed.promise;
+      return { frame: { index: time * 30 } };
+    },
+  });
+  const first = player.seek(0.5).catch((actual: unknown) => actual);
+  const second = player.seek(1);
+  failed.reject(error);
+  expect(await first).toBe(error);
+  expect(await second).toEqual({ frame: { index: 30 } });
+  expect(player.currentTime()).toBe(1);
+  expect(player.renderInFlight).toBeNull();
+});
+
+test("seeking during playback prebuffering cancels the old play request quietly", async () => {
+  const player = Object.create(BrowserValleWebPlayer.prototype) as any;
+  const ready = Promise.withResolvers<void>();
+  let clockStarts = 0;
+  Object.assign(player, {
+    closed: false, playing: false, playGeneration: 0, timeS: 0, renderInFlight: null,
+    lastFrameTimeS: () => 3,
+    frameAtSeconds: (time: number) => time * 30,
+    requireRenderReceipt: () => ({ frameRate: "30/1" }),
+    prefetchPlanningWindow: () => [{ ready: ready.promise }],
+    prefetchAudio: async () => null,
+    clock: { start() { clockStarts += 1; } },
+    pause() { this.playGeneration += 1; },
+    requirePlanner: () => ({ advanceEpoch() { ready.reject(new Error("epoch changed")); } }),
+    renderTime: async (time: number) => ({ frame: { index: time * 30 } }),
+  });
+  const playing = player.play();
+  await player.seek(1);
+  await playing;
+  expect(clockStarts).toBe(0);
+  expect(player.currentTime()).toBe(1);
+  expect(player.playing).toBe(false);
+});
+
+test("playback still reports an active prebuffer failure", async () => {
+  const player = Object.create(BrowserValleWebPlayer.prototype) as any;
+  const error = new Error("worker failed");
+  Object.assign(player, {
+    closed: false, playing: false, playGeneration: 0, timeS: 0, renderInFlight: null,
+    lastFrameTimeS: () => 3,
+    frameAtSeconds: () => 0,
+    requireRenderReceipt: () => ({ frameRate: "30/1" }),
+    prefetchPlanningWindow: () => [{ ready: Promise.reject(error) }],
+    prefetchAudio: async () => null,
+  });
+  expect(await player.play().catch((actual: unknown) => actual)).toBe(error);
+});
+
+test("failed frame planning releases resources that finished loading", async () => {
+  const player = Object.create(BrowserValleWebPlayer.prototype) as any;
+  const resources = new BrowserResourceCache();
+  const error = new Error("planning failed after requests");
+  let disposed = 0;
+  let released = 0;
+  Object.assign(player, {
+    closed: false, renderId: RENDER_ID, pxScale: 1, resourceObjects: resources,
+    stats: { requestBytes: 0 },
+    requireRenderReceipt: () => ({ frameCount: 90, canvasWidth: 320, canvasHeight: 180 }),
+    acquireTarget: () => ({ gpu: false }),
+    framePlanningInput: () => ({}),
+    assertActiveRenderId() {},
+    requirePlanner: () => ({
+      prepare: () => ({
+        key: "frame",
+        requests: Promise.resolve({
+          renderId: RENDER_ID, requestPacket: new Uint8Array(),
+          inspectionJson: JSON.stringify({ renderId: RENDER_ID, compositionFrame: 0, motion: [] }),
+        }),
+        ready: Promise.reject(error),
+      }),
+      release() { released += 1; },
+    }),
+    async fulfillRequests() {
+      resources.beginFrame();
+      resources.finishFrame(0);
+      return { dispose: [() => { disposed += 1; }] };
+    },
+  });
+  expect(await player.renderFrame(0).catch((actual: unknown) => actual)).toBe(error);
+  expect(released).toBe(1);
+  expect(disposed).toBe(1);
+  expect(() => resources.dispose()).not.toThrow();
+});
 
 test("slow preview follows the media clock and still presents the final frame", async () => {
   const player = Object.create(BrowserValleWebPlayer.prototype) as any;

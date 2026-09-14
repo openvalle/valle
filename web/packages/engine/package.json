@@ -1,15 +1,27 @@
 {
-  "name": "@valle/engine",
+  "name": "valle-engine",
   "version": "0.0.0",
   "private": true,
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
+    "./element": "./src/element.ts",
+    "./compiler": "./src/compiler.ts",
+    "./runtime-assets": "./src/runtime-assets.ts",
     "./internal": "./src/internal-timeline.ts",
     "./protocol": "./src/generated/protocol.ts",
     "./executor/canvaskit": "./src/executor/canvaskit/index.ts"
   },
   "dependencies": {
-    "canvaskit-wasm": "catalog:"
+    "canvaskit-wasm": "catalog:",
+    "mp4box": "2.4.1"
+  },
+  "peerDependencies": {
+    "lit": "3.3.3"
+  },
+  "peerDependenciesMeta": {
+    "lit": {
+      "optional": true
+    }
   }
 }

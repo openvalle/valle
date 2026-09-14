@@ -2,17 +2,17 @@ import type {
   EditTimelineRequest,
   EditTimelineResponse,
   Timeline,
-} from "@valle/engine";
+} from "valle-engine";
 import type {
   MotionContextWire,
   StudioBootWire,
-} from "@valle/engine/protocol";
-import { MOTION_SOURCE_MAP_VERSION, STUDIO_HOST_PROTOCOL_VERSION } from "@valle/engine/protocol";
+} from "valle-engine/protocol";
+import { MOTION_SOURCE_MAP_VERSION, STUDIO_HOST_PROTOCOL_VERSION } from "valle-engine/protocol";
 import type {
   ResourceManifest,
   TimelineDocument,
-} from "@valle/engine/internal";
-import type { PlayerRuntimeAssets } from "@valle/player-core";
+} from "valle-engine/internal";
+import type { PlayerRuntimeAssets } from "valle-engine";
 import { findMotionStructure } from "./project-motion-edit.ts";
 
 export type StudioBoot = StudioBootWire;

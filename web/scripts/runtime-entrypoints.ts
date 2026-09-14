@@ -5,13 +5,15 @@ export const APP_BUILDS = [
 ] as const;
 
 export const PACKAGE_BUILDS = [
-  ["engine", ["packages/engine/src/index.ts"]],
-  ["player-core", ["packages/player-core/src/index.ts"]],
-  ["player", ["packages/player/src/index.ts"]],
+  ["engine", [
+    "packages/engine/src/index.ts",
+    "packages/engine/src/element.ts",
+    "packages/engine/src/compiler.ts",
+  ]],
 ] as const;
 
 export const WORKER_BUILDS = [
-  ["product-frame", "packages/player-core/src/compositor/product-frame-worker.ts"],
+  ["product-frame", "packages/engine/src/runtime/compositor/product-frame-worker.ts"],
 ] as const;
 
 export function assertRuntimeEntrypoints(

@@ -1,5 +1,5 @@
-import type { TimelineDocumentView } from "@valle/player";
-import type { TimelineDocument } from "@valle/engine/internal";
+import type { TimelineDocumentView } from "valle-engine";
+import type { TimelineDocument } from "valle-engine/internal";
 
 export type TimelineBand = "visual" | "audio" | "caption" | "adjustment";
 export type VisualItem = TimelineDocument["document"]["visual"]["tracks"][number]["items"][number];

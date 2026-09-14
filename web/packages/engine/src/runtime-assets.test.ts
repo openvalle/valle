@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
-import { BrowserValleWebPlayer } from "@valle/player-core/controller";
-import { resolvePlayerRuntimeAssets } from "@valle/player-core/runtime-assets";
+import { BrowserValleWebPlayer } from "valle-engine";
+import { resolvePlayerRuntimeAssets } from "valle-engine/runtime-assets";
 
 const runtimeAssets = {
   engine: { glue: "engine/engine.js", wasm: "engine/engine.wasm" },

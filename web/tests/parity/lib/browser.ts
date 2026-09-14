@@ -3,7 +3,7 @@
 import { createTempDirectory, removeDirectory, repositoryPath } from "./files.ts";
 
 const DECODE_PAGE = repositoryPath("web/tests/parity/assets/webcodecs-decode.html");
-const PLAYER_CORE_JS = repositoryPath("web/dist/packages/player-core/index.mjs");
+const ENGINE_JS = repositoryPath("web/dist/packages/engine/index.mjs");
 const MAC_CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 const PATH_CANDIDATES = ["google-chrome", "google-chrome-stable", "chromium", "chromium-browser"] as const;
 
@@ -202,9 +202,9 @@ export async function decodeVideoFramesInBrowser(
   options: BrowserDecodeOptions = {},
 ): Promise<BrowserDecodeResult> {
   const timeoutMs = options.timeoutMs ?? 45_000;
-  const [decodePage, playerCore, video] = await Promise.all([
+  const [decodePage, engineRuntime, video] = await Promise.all([
     Bun.file(DECODE_PAGE).bytes(),
-    Bun.file(PLAYER_CORE_JS).bytes(),
+    Bun.file(ENGINE_JS).bytes(),
     Bun.file(videoPath).bytes(),
   ]);
 
@@ -229,7 +229,7 @@ export async function decodeVideoFramesInBrowser(
         }
       }
       if (url.pathname === "/decode.html") return new Response(decodePage, { headers: { "content-type": "text/html" } });
-      if (url.pathname === "/packages/player-core/index.mjs") return new Response(playerCore, { headers: { "content-type": "text/javascript" } });
+      if (url.pathname === "/packages/engine/index.mjs") return new Response(engineRuntime, { headers: { "content-type": "text/javascript" } });
       if (url.pathname === "/video.mp4") return new Response(video, { headers: { "content-type": "video/mp4" } });
       return new Response("not found", { status: 404 });
     },

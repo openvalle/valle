@@ -1,7 +1,7 @@
 import type {
   EditTimelineResponse,
   Timeline,
-} from "@valle/engine";
+} from "valle-engine";
 import type { StudioTimelineRevision } from "./host.ts";
 
 type AcceptedTimelineSave = Extract<

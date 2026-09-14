@@ -120,7 +120,7 @@ jobs:
         working-directory: web
         run: |
           bun run typecheck 2>&1 | tee "$PACKAGE_LOGS/web-typecheck.log"
-          bun test scripts/runtime-manifest.test.ts packages/player-core/src/runtime-assets.test.ts apps/studio/src/host.test.ts apps/studio/src/timeline-workspace-runtime.test.ts packages/player/src/controller.test.ts 2>&1 | tee "$PACKAGE_LOGS/web-tests.log"
+          bun test scripts/runtime-manifest.test.ts packages/engine/src/runtime-assets.test.ts apps/studio/src/host.test.ts apps/studio/src/timeline-workspace-runtime.test.ts packages/engine/src/controller.test.ts 2>&1 | tee "$PACKAGE_LOGS/web-tests.log"
       - name: Test native Web and runtime contracts
         env:
           VALLE_EMBED_WEB_DIR: ${{ github.workspace }}/web/dist

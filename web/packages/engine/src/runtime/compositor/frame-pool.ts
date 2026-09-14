@@ -1,5 +1,6 @@
 import {
   PRODUCT_FRAME_WORKER_PROTOCOL_VERSION,
+  PRODUCT_FRAME_TEMPLATE_CACHE_SIZE,
   assertProductFrameWorkerResponse,
   type ProductEngineBootstrap,
   type ProductFrameReadyStage,
@@ -33,6 +34,7 @@ interface WorkerSlot {
   index: number;
   worker: WorkerLike;
   tasks: Map<string, FrameTask>;
+  templateHashes: Set<string>;
 }
 
 export interface ProductFramePlanningInput {
@@ -155,7 +157,7 @@ export class ProductFramePlannerPool {
         type: "module",
         name: `valle-product-frame-${index}`,
       });
-      const slot: WorkerSlot = { index, worker, tasks: new Map() };
+      const slot: WorkerSlot = { index, worker, tasks: new Map(), templateHashes: new Set() };
       worker.onmessage = (event) => this.onMessage(slot, event.data);
       worker.onerror = (event) => this.fail(
         event.error instanceof Error
@@ -449,18 +451,21 @@ export class ProductFramePlannerPool {
       this.fail(new Error("Product frame ready stage identity drift"));
       return;
     }
-    // A worker sends each immutable template once. Cancellation only discards the frame;
-    // retain its template so subsequent seeks can consume bindings without another transfer.
+    // Mirror each worker's bounded LRU, including cancelled frames. Keep a packet while any
+    // worker can still reference it without transferring it again.
     const transferredPlan = message.stage.planPacket;
+    const templateKey = `${message.stage.renderId}:${message.stage.templateHash}`;
     if (transferredPlan) {
       const admittedPlan = transferredPlan.slice();
-      const templateKey = `${message.stage.renderId}:${message.stage.templateHash}`;
-      this.templatePackets.delete(templateKey);
       this.templatePackets.set(templateKey, admittedPlan);
-      while (this.templatePackets.size > 64) {
-        const oldest = this.templatePackets.keys().next();
-        if (oldest.done) break;
-        this.templatePackets.delete(oldest.value);
+    }
+    slot.templateHashes.delete(templateKey);
+    slot.templateHashes.add(templateKey);
+    if (slot.templateHashes.size > PRODUCT_FRAME_TEMPLATE_CACHE_SIZE) {
+      const oldest = slot.templateHashes.values().next().value!;
+      slot.templateHashes.delete(oldest);
+      if (this.slots.every((worker) => !worker.templateHashes.has(oldest))) {
+        this.templatePackets.delete(oldest);
       }
     }
     if (!task.cancelled) {
@@ -468,7 +473,6 @@ export class ProductFramePlannerPool {
         this.fail(new Error("Product frame became ready before its resource request stage"));
         return;
       }
-      const templateKey = `${message.stage.renderId}:${message.stage.templateHash}`;
       const planPacket = this.templatePackets.get(templateKey);
       if (!planPacket) {
         this.fail(new Error(`Product frame template '${message.stage.templateHash}' is absent`));

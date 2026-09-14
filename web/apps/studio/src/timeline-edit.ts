@@ -1,4 +1,4 @@
-import type { JsonValue, Timeline, TimelineSchema } from "@valle/engine";
+import type { JsonValue, Timeline, TimelineSchema } from "valle-engine";
 
 type TimelineVisualTrack = TimelineSchema.TimelineVisualTrackWire;
 type TimelineAudioTrack = TimelineSchema.TimelineAudioTrackWire;

@@ -5,7 +5,7 @@ import {
   type VallePlayerOptions,
   type ValleRenderResult,
 } from "./controller.ts";
-import type { BrowserValleWebPlayer } from "@valle/player-core";
+import type { BrowserValleWebPlayer } from "./runtime/product-controller.ts";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;

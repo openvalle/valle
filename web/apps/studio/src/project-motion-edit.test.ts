@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import type { TimelineDocument } from "@valle/engine/internal";
+import type { TimelineDocument } from "valle-engine/internal";
 
 import {
   motionContextWithTimelineFrames,

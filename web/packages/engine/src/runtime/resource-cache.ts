@@ -1,4 +1,4 @@
-import type { PackedValue } from "@valle/engine";
+import type { PackedValue } from "../abi/packed.ts";
 
 export interface BrowserResourceCacheLimits {
   readonly maxEntries: number;

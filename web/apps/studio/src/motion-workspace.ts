@@ -1,7 +1,7 @@
 import { DraftPreview } from "./draft-preview.ts";
-import { createTimelineCompilerRuntime } from "@valle/player-core";
+import { createTimelineCompilerRuntime } from "valle-engine";
 import { playerRuntimeAssetsFromStudioBoot, type MotionPreviewRequest } from "./host.ts";
-import type { VallePlayerElement } from "@valle/player";
+import type { VallePlayerElement } from "valle-engine/element";
 
 import { motionControls, type MotionContext, type StudioHost } from "./host.ts";
 import type {

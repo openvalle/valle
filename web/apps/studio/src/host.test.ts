@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import type { Timeline } from "@valle/engine";
-import type { TimelineDocument } from "@valle/engine/internal";
+import type { Timeline } from "valle-engine";
+import type { TimelineDocument } from "valle-engine/internal";
 
 import {
   MotionFileHost,

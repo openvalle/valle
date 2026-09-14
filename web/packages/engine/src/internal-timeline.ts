@@ -1,5 +1,5 @@
 // Internal canonical/storage contracts generated from Rust. Renderer and Studio host plumbing use
-// the private @valle/engine/internal subpath; @valle/engine intentionally does not re-export it.
+// the private valle-engine/internal subpath; valle-engine intentionally does not re-export it.
 export type {
   JsonValue,
   ResourceManifest,

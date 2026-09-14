@@ -12,9 +12,9 @@ describe("app boundaries", () => {
       Bun.file(path.join(root, "apps/studio/src/timeline-workspace-runtime.ts")).text(),
       Bun.file(path.join(root, "apps/studio/src/motion-workspace.ts")).text(),
     ]);
-    expect(timeline).toContain('from "@valle/player"');
+    expect(timeline).toContain('from "valle-engine/element"');
     expect(timelineRuntime).toContain("runtimeAssets: config.runtimeAssets");
-    expect(motion).toContain('from "@valle/player"');
+    expect(motion).toContain('from "valle-engine/element"');
     expect(motion).toContain("startMotionStudio");
   });
 
@@ -26,7 +26,7 @@ describe("app boundaries", () => {
       Bun.file(path.join(root, "apps/console/src/console-app.ts")).text(),
     ]);
     expect(demoHtml).toContain('src="./src/main.ts"');
-    expect(demo).toContain('from "@valle/player"');
+    expect(demo).toContain('from "valle-engine/element"');
     expect(demo).toContain("runtimeAssets: config.runtimeAssets");
     expect(consoleHtml).toContain('src="./src/main.ts"');
     expect(consoleHtml).toContain("<valle-console-app>");

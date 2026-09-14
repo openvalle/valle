@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- WebCodecs decode harness. Sample requested times through player-core's decoder ring, convert frames to straight-alpha RGBA, and POST results to the local callback server. Query: src and comma-separated times. Results include frame times, dimensions and rgbaBase64. -->
+<!-- WebCodecs decode harness. Sample requested times through the engine decoder ring, convert frames to straight-alpha RGBA, and POST results to the local callback server. Query: src and comma-separated times. Results include frame times, dimensions and rgbaBase64. -->
 <meta charset="utf-8" />
 <title>valle webcodecs decode</title>
 <script type="module">
-  import { createDecoderRing } from "/packages/player-core/index.mjs";
+  import { createDecoderRing } from "/packages/engine/index.mjs";
 
   async function post(body) {
     await fetch("/result", {

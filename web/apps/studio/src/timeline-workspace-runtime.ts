@@ -2,11 +2,11 @@ import type {
   CanonicalTimelineDocument,
   TimelineCompilerRuntime,
   TimelineCompilerRuntimeOptions,
-} from "@valle/player-core";
-import { createTimelineCompilerRuntime } from "@valle/player-core";
-import type { Timeline } from "@valle/engine";
-import type { ResourceManifest } from "@valle/engine/internal";
-import type { VallePlayerElementOptions } from "@valle/player";
+} from "valle-engine";
+import { createTimelineCompilerRuntime } from "valle-engine";
+import type { Timeline } from "valle-engine";
+import type { ResourceManifest } from "valle-engine/internal";
+import type { VallePlayerElementOptions } from "valle-engine/element";
 
 type PreviewPlayer = {
   load(options: VallePlayerElementOptions): Promise<void>;

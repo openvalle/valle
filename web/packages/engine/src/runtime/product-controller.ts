@@ -5,33 +5,31 @@ import canvasKitPackage from "canvaskit-wasm/package.json";
 // lowering. This file owns only browser resources, clock/scheduling, an opaque generation-scoped
 // object table, CanvasKit execution and presentation.
 
+import { RESOURCE_REQUESTS_ABI, decodePackedAbi, type PackedValue } from "../abi/packed.ts";
 import {
-  RESOURCE_REQUESTS_ABI,
   CanvasKitExecutor,
-  decodePackedAbi,
   type CanvasKitExecutionProfile,
   type CanvasKitExternalObject,
-  type PackedValue,
-} from "@valle/engine";
+} from "../executor/canvaskit/index.ts";
 import type {
   ResourceManifest,
   TimelineDocument,
-} from "@valle/engine/internal";
+} from "../internal-timeline.ts";
 import { createDecoderRing, keyframeThumbnails, type DecoderRing } from "../media/decoder-ring.ts";
 import { resolvePlayerRuntimeAssets, type PlayerRuntimeAssets } from "../runtime-assets.ts";
-import { canonicalizeTimelineDocumentWithWasm } from "../timeline-compiler.ts";
+import { canonicalizeTimelineDocumentWithWasm } from "../compiler.ts";
 import {
   ProductFramePlannerPool,
   type ProductFramePlanningInput,
   type ProductFramePlanningJob,
-} from "../compositor/frame-pool.ts";
+} from "./compositor/frame-pool.ts";
 import {
   emptyProductEngineBootstrap,
   parseProductRenderReceipt,
   type ProductEngineBootstrap,
   type ProductEngineWire,
   type ProductRenderReceipt,
-} from "../compositor/frame-protocol.ts";
+} from "./compositor/frame-protocol.ts";
 import { assertCanvaskitImportLayout } from "./visual-layout.ts";
 import {
   BrowserResourceCache,
@@ -548,7 +546,7 @@ export class BrowserValleWebPlayer {
   private timeS = 0;
   private playGeneration = 0;
   private rafId: number | null = null;
-  private renderInFlight: Promise<void> | null = null;
+  private renderInFlight: Promise<unknown> | null = null;
   private playbackPump: Promise<void> | null = null;
   private audioPump: Promise<void> | null = null;
   private playbackFrame: number | null = null;
@@ -636,13 +634,24 @@ export class BrowserValleWebPlayer {
 
   async seek(timeS: number, options: RenderOptions = {}) {
     this.pause();
-    if (this.renderInFlight) await this.renderInFlight.catch(() => undefined);
-    this.requirePlanner().advanceEpoch();
-    this.timeS = clamp(timeS, 0, this.lastFrameTimeS());
-    const rendered = await this.renderTime(this.timeS, options);
-    this.playbackFrame = rendered.frame.index;
-    this.onTimeUpdate?.(this.timeS);
-    return rendered;
+    const previous = this.renderInFlight;
+    // Reserve the render slot before yielding so rapid seeks cannot invalidate each other's
+    // demanded planning tasks. Each caller still receives the frame it requested.
+    const job = (async () => {
+      if (previous) await previous.catch(() => undefined);
+      this.requirePlanner().advanceEpoch();
+      this.timeS = clamp(timeS, 0, this.lastFrameTimeS());
+      const rendered = await this.renderTime(this.timeS, options);
+      this.playbackFrame = rendered.frame.index;
+      this.onTimeUpdate?.(this.timeS);
+      return rendered;
+    })();
+    this.renderInFlight = job;
+    try {
+      return await job;
+    } finally {
+      if (this.renderInFlight === job) this.renderInFlight = null;
+    }
   }
 
   async scrub(timeS: number) {
@@ -700,12 +709,13 @@ export class BrowserValleWebPlayer {
         planning.ready,
         fulfillment,
       ] as const);
+      // Successful fulfillment owns a frame lease even if planning failed or was superseded.
+      if (fulfillmentResult.status === "fulfilled") fulfilled = fulfillmentResult.value;
       if (readyResult.status === "rejected") throw readyResult.reason;
       if (fulfillmentResult.status === "rejected") throw fulfillmentResult.reason;
       const readyStage = readyResult.value;
       this.assertActiveRenderId(renderId, readyStage.renderId);
       const frameResources = fulfillmentResult.value;
-      fulfilled = frameResources;
       const resourceFulfillMs = performance.now() - fulfillmentStarted;
       const generation = readyStage.generation;
       const planPacket = readyStage.planPacket;
@@ -911,8 +921,10 @@ export class BrowserValleWebPlayer {
   async play(): Promise<void> {
     if (this.closed) throw new Error("browser player is closed");
     if (this.playing) return;
-    if (this.timeS >= this.lastFrameTimeS()) this.timeS = 0;
     const generation = ++this.playGeneration;
+    if (this.renderInFlight) await this.renderInFlight.catch(() => undefined);
+    if (generation !== this.playGeneration || this.closed) return;
+    if (this.timeS >= this.lastFrameTimeS()) this.timeS = 0;
     const planning = this.prefetchPlanningWindow(
       this.frameAtSeconds(this.timeS),
     );
@@ -923,8 +935,17 @@ export class BrowserValleWebPlayer {
     const prebufferFrames = Math.min(16, Math.max(1,
       Math.ceil(canonicalRationalNumber(this.requireRenderReceipt().frameRate, "frameRate") * 0.1),
     ));
-    await Promise.all(planning.slice(0, prebufferFrames).map((job) => job.ready));
-    const prefetched = await audio;
+    let prefetched: CompiledAudioPlayback | null;
+    try {
+      [, prefetched] = await Promise.all([
+        Promise.all(planning.slice(0, prebufferFrames).map((job) => job.ready)),
+        audio,
+      ]);
+    } catch (error) {
+      // A pause/seek can retire this play request while its initial frames are still planning.
+      if (generation !== this.playGeneration || this.closed) return;
+      throw error;
+    }
     if (generation !== this.playGeneration || this.closed) return;
     await this.clock.start(this.timeS, { useAudioClock: prefetched !== null });
     if (generation !== this.playGeneration || this.closed) return;

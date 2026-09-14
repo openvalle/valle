@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
-import type { Timeline } from "@valle/engine";
-import type { TimelineDocument } from "@valle/engine/internal";
+import type { Timeline } from "./timeline.ts";
+import type { TimelineDocument } from "./internal-timeline.ts";
 
 import {
   canonicalizeTimelineDocumentWithWasm,
@@ -8,7 +8,7 @@ import {
   normalizeTimelineWithWasm,
   timelineSourceTimeDeltaFromFramesWithWasm,
   timelineTimeFromFramesWithWasm,
-} from "./timeline-compiler.ts";
+} from "./compiler.ts";
 
 const timeline = {
   document: { metadata: {} },

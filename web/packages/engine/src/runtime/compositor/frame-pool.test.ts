@@ -318,7 +318,7 @@ test("planner rejects every pending promise after a batch-level worker failure",
 });
 
 
-test("a cancelled prefetch still supplies the template needed by the next seek", async () => {
+function manualTemplateWorker() {
   type Batch = Extract<ProductFrameWorkerRequest, { type: "prepareBatch" }>;
   const batches: Batch[] = [];
   const worker = {
@@ -333,19 +333,24 @@ test("a cancelled prefetch still supplies the template needed by the next seek",
     emit(message: ProductFrameWorkerResponse) {
       this.onmessage?.({ data: message } as MessageEvent<unknown>);
     },
-    complete(job: Batch["jobs"][number], planPacket: Uint8Array | null) {
+    complete(job: Batch["jobs"][number], planPacket: Uint8Array | null, templateHash = RENDER_ID) {
       const {key, renderId, epoch, frame, generation} = job.request;
       this.emit({ protocolVersion: PRODUCT_FRAME_WORKER_PROTOCOL_VERSION, type: "requests", id: job.id,
         stage: { key, renderId, epoch, frame, generation, requestPacket: new Uint8Array(),
           inspectionJson: "{}", evaluatePrepareMs: 0, requestInspectMs: 0,
           workerTurnGapMs: 0, previousReleaseMs: 0 } });
       this.emit({ protocolVersion: PRODUCT_FRAME_WORKER_PROTOCOL_VERSION, type: "ready", id: job.id,
-        stage: { key, renderId, epoch, frame, generation, templateHash: RENDER_ID, planPacket,
+        stage: { key, renderId, epoch, frame, generation, templateHash, planPacket,
           bindingPacket: new Uint8Array(), schedulePacket: new Uint8Array(),
           templateCacheHit: planPacket === null, lowerMs: 0, bindPacketsMs: 0, totalWorkerMs: 0 } });
     },
     terminate() {},
   };
+  return { worker, batches };
+}
+
+test("a cancelled prefetch still supplies the template needed by the next seek", async () => {
+  const { worker, batches } = manualTemplateWorker();
   let generation=0n;
   const pool=new ProductFramePlannerPool({workerUrl:"frame-worker.js",size:1,
     workerFactory:()=>worker, allocateGeneration:()=>++generation});
@@ -366,4 +371,36 @@ test("a cancelled prefetch still supplies the template needed by the next seek",
     expect((await next.ready).planPacket).toEqual(template);
     expect(pool.snapshot()).toMatchObject({completed:1,cancelled:1,errors:0});
   } finally {pool.close();}
+});
+
+
+test("template cache hits stay available while older unused templates are evicted", async () => {
+  const { worker, batches } = manualTemplateWorker();
+  let generation = 0n;
+  const pool = new ProductFramePlannerPool({ workerUrl: "frame-worker.js", size: 1,
+    workerFactory: () => worker, allocateGeneration: () => ++generation });
+  const bootstrap = emptyProductEngineBootstrap("engine.js", "engine.wasm", "{}", "{}", "{}", "{}");
+  bootstrap.expectedRenderId = RENDER_ID;
+  await pool.init(bootstrap);
+  const input = { frame: 0, width: 320, height: 180, transparent: false,
+    maxSurfaceBytes: 1024n, maxFrameBytes: 2048n };
+  async function complete(hash: string, packet: Uint8Array | null) {
+    const next = pool.prepare({ ...input, frame: input.frame++ });
+    await Promise.resolve();
+    worker.complete(batches.at(-1)!.jobs[0]!, packet, hash);
+    const ready = await next.ready;
+    pool.release(next.key);
+    return ready.planPacket;
+  }
+  try {
+    const hot = Uint8Array.of(1, 2, 3);
+    await complete(RENDER_ID, hot);
+    for (let frame = 2; frame < 75; frame += 1) {
+      const hash = `sha256:${frame.toString(16).padStart(64, "0")}`;
+      await complete(hash, Uint8Array.of(frame));
+      expect(await complete(RENDER_ID, null)).toEqual(hot);
+    }
+    expect(pool.snapshot().errors).toBe(0);
+    expect((pool as any).templatePackets.size).toBe(64);
+  } finally { pool.close(); }
 });

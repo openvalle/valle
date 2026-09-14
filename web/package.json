@@ -4,15 +4,17 @@
   "packageManager": "bun@1.4.2",
   "workspaces": {
     "packages": [
-      "packages/*",
-      "apps/*"
+      "packages/engine",
+      "apps/studio",
+      "apps/preview",
+      "apps/console"
     ],
     "catalog": {
       "canvaskit-wasm": "0.42.0"
     }
   },
   "scripts": {
-    "build": "bun run build:engine && bun run build:runtime",
+    "build": "bun run build:engine && bun run build:runtime && bun run build:sdk",
     "build:engine": "bun run scripts/build-engine.ts",
     "build:runtime": "bun run scripts/build-runtime.ts",
     "generate:packed-abi": "bun run scripts/generate-packed-abi.ts --write",
@@ -24,10 +26,12 @@
     "gate": "bun run typecheck && bun run build && bun test && bun run verify:boundaries",
     "test": "bun test",
     "test:parity": "bun test tests/parity",
-    "parity": "bun tests/parity/cli.ts"
+    "parity": "bun tests/parity/cli.ts",
+    "build:sdk": "bun run scripts/build-sdk.ts"
   },
   "devDependencies": {
     "@types/bun": "1.4.1",
-    "typescript": "7.0.2"
+    "typescript": "7.0.2",
+    "lit": "3.3.3"
   }
 }

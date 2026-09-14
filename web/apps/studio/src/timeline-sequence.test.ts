@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
-import type { TimelineDocumentView } from "@valle/player";
-import type { TimelineDocument } from "@valle/engine/internal";
+import type { TimelineDocumentView } from "valle-engine";
+import type { TimelineDocument } from "valle-engine/internal";
 
 import { projectTimelineSequences } from "./timeline-sequence.ts";
 

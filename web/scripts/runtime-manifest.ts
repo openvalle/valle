@@ -54,10 +54,6 @@ export async function emitRuntimeManifests(
   const manifestsDir = path.join(dist, "runtime", "manifests");
   await mkdir(manifestsDir, { recursive: true });
 
-  const engine = await manifestOf(dist, "engine", [
-    spec("engine-glue", "glue", "runtime/engine/valle_engine.js", "Apache-2.0", "engine-core"),
-    spec("engine-wasm", "wasm", "runtime/engine/valle_engine_bg.wasm", "Apache-2.0", "engine-core"),
-  ]);
   const apps: PackageRuntimeManifest[] = [];
   const claimedAppScripts = new Set<string>();
   for (const app of ["preview", "studio", "console"] as const) {
@@ -89,7 +85,9 @@ export async function emitRuntimeManifests(
     .filter((file) => file.endsWith(".js") || file.endsWith(".css"))
     .map((file) => path.relative(dist, file).replaceAll(path.sep, "/"))
     .filter((file) => !claimedAppScripts.has(file));
-  const playerCore = await manifestOf(dist, "player-core", [
+  const engine = await manifestOf(dist, "engine", [
+    spec("engine-glue", "glue", "runtime/engine/valle_engine.js", "Apache-2.0", "engine-core"),
+    spec("engine-wasm", "wasm", "runtime/engine/valle_engine_bg.wasm", "Apache-2.0", "engine-core"),
     spec("product-frame-worker", "worker", "runtime/workers/product-frame.js", "Apache-2.0"),
     spec("canvaskit-full-glue", "glue", "runtime/canvaskit/canvaskit.js", "BSD-3-Clause", "canvaskit-full", `npm:canvaskit-wasm@${dependencyVersions.canvasKit}`),
     spec("canvaskit-full-wasm", "wasm", "runtime/canvaskit/canvaskit.wasm", "BSD-3-Clause", "canvaskit-full", `npm:canvaskit-wasm@${dependencyVersions.canvasKit}`),
@@ -100,7 +98,7 @@ export async function emitRuntimeManifests(
     ...sharedChunks.map((file, index) => spec(`shared-app-${index}`, "shared", file, "Apache-2.0")),
   ]);
 
-  const packages = [engine, playerCore, ...apps];
+  const packages = [engine, ...apps];
   const packageRefs: RootRuntimeManifest["packages"] = [];
   for (const manifest of packages) {
     const manifestPath = `runtime/manifests/${manifest.package}.json`;

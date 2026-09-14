@@ -1,4 +1,4 @@
-import type { JsonValue } from "@valle/engine";
+import type { JsonValue } from "valle-engine";
 import { LitElement, html, type TemplateResult } from "lit";
 
 export interface MotionPropControlView {

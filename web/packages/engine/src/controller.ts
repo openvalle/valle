@@ -2,7 +2,7 @@ import {
   createBrowserValleWebPlayer,
   type BrowserValleWebPlayer,
   type CanonicalTimelineDocument,
-} from "@valle/player-core";
+} from "./runtime/product-controller.ts";
 
 export type VallePlayerState = "new" | "loading" | "ready" | "disposed";
 export type VallePlayerOptions = Parameters<typeof createBrowserValleWebPlayer>[0];

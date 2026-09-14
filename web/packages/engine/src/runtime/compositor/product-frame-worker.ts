@@ -1,5 +1,6 @@
 import {
   PRODUCT_FRAME_WORKER_PROTOCOL_VERSION,
+  PRODUCT_FRAME_TEMPLATE_CACHE_SIZE,
   applyProductEngineBootstrap,
   assertProductFrameWorkerRequest,
   productFrameWorkerFatalResponse,
@@ -239,9 +240,13 @@ function finishFrame(frame: StartedFrame): ProductFrameWorkerReadyStage {
     active.bind(ticket, request.generation);
     const transmitPlan = !sentTemplateHashes.has(templateIdentity);
     const planPacket = transmitPlan ? active.plan_template_bytes(ticket) : null;
-    if (transmitPlan) sentTemplateHashes.add(templateIdentity);
     const bindingPacket = active.binding_bytes(ticket);
     const schedulePacket = active.bound_schedule_bytes(ticket);
+    sentTemplateHashes.delete(templateIdentity);
+    sentTemplateHashes.add(templateIdentity);
+    if (sentTemplateHashes.size > PRODUCT_FRAME_TEMPLATE_CACHE_SIZE) {
+      sentTemplateHashes.delete(sentTemplateHashes.values().next().value!);
+    }
     const bindPacketsMs = performance.now() - bindStarted;
     return {
       key: request.key,

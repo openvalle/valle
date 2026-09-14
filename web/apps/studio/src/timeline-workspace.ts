@@ -1,11 +1,8 @@
 import { DraftPreview } from "./draft-preview.ts";
-import type { Timeline } from "@valle/engine";
-import type {
-  TimelineDocumentView,
-  VallePlayerElement,
-  VallePlayerElementOptions,
-} from "@valle/player";
-import type { TimelineDocument } from "@valle/engine/internal";
+import type { Timeline } from "valle-engine";
+import type { TimelineDocumentView } from "valle-engine";
+import type { VallePlayerElement, VallePlayerElementOptions } from "valle-engine/element";
+import type { TimelineDocument } from "valle-engine/internal";
 
 import {
   projectMotionContextFromAdmittedPreview,

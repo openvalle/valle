@@ -6,6 +6,7 @@
       "name": "@valle/web-workspace",
       "devDependencies": {
         "@types/bun": "1.4.1",
+        "lit": "3.3.3",
         "typescript": "7.0.2",
       },
     },
@@ -13,7 +14,6 @@
       "name": "@valle/console",
       "version": "0.0.0",
       "dependencies": {
-        "@valle/player": "workspace:0.0.0",
         "lit": "3.3.3",
       },
     },
@@ -21,50 +21,31 @@
       "name": "@valle/preview",
       "version": "0.0.0",
       "dependencies": {
-        "@valle/player": "workspace:0.0.0",
-        "@valle/player-core": "workspace:0.0.0",
-      },
-    },
-    "apps/shared": {
-      "name": "@valle/studio-ui",
-      "version": "0.0.0",
-      "dependencies": {
         "lit": "3.3.3",
+        "valle-engine": "workspace:0.0.0",
       },
     },
     "apps/studio": {
       "name": "@valle/studio",
       "version": "0.0.0",
       "dependencies": {
-        "@valle/engine": "workspace:0.0.0",
-        "@valle/player": "workspace:0.0.0",
-        "@valle/player-core": "workspace:0.0.0",
         "lit": "3.3.3",
+        "valle-engine": "workspace:0.0.0",
       },
     },
     "packages/engine": {
-      "name": "@valle/engine",
+      "name": "valle-engine",
       "version": "0.0.0",
       "dependencies": {
-        "canvaskit-wasm": "catalog:",
-      },
-    },
-    "packages/player": {
-      "name": "@valle/player",
-      "version": "0.0.0",
-      "dependencies": {
-        "@valle/player-core": "workspace:0.0.0",
-        "lit": "3.3.3",
-      },
-    },
-    "packages/player-core": {
-      "name": "@valle/player-core",
-      "version": "0.0.0",
-      "dependencies": {
-        "@valle/engine": "workspace:0.0.0",
         "canvaskit-wasm": "catalog:",
         "mp4box": "2.4.1",
       },
+      "peerDependencies": {
+        "lit": "3.3.3",
+      },
+      "optionalPeers": [
+        "lit",
+      ],
     },
   },
   "catalog": {
@@ -123,17 +104,9 @@
 
     "@valle/console": ["@valle/console@workspace:apps/console"],
 
-    "@valle/engine": ["@valle/engine@workspace:packages/engine"],
-
-    "@valle/player": ["@valle/player@workspace:packages/player"],
-
-    "@valle/player-core": ["@valle/player-core@workspace:packages/player-core"],
-
     "@valle/preview": ["@valle/preview@workspace:apps/preview"],
 
     "@valle/studio": ["@valle/studio@workspace:apps/studio"],
-
-    "@valle/studio-ui": ["@valle/studio-ui@workspace:apps/shared"],
 
     "@webgpu/types": ["@webgpu/types@0.1.21", "", {}, "sha512-pUrWq3V5PiSGFLeLxoGqReTZmiiXwY3jRkIG5sLLKjyqNxrwm/04b4nw7LSmGWJcKk59XOM/YRTUwOzo4MMlow=="],
 
@@ -152,5 +125,7 @@
     "typescript": ["typescript@7.0.2", "", { "optionalDependencies": { "@typescript/typescript-aix-ppc64": "7.0.2", "@typescript/typescript-darwin-arm64": "7.0.2", "@typescript/typescript-darwin-x64": "7.0.2", "@typescript/typescript-freebsd-arm64": "7.0.2", "@typescript/typescript-freebsd-x64": "7.0.2", "@typescript/typescript-linux-arm": "7.0.2", "@typescript/typescript-linux-arm64": "7.0.2", "@typescript/typescript-linux-loong64": "7.0.2", "@typescript/typescript-linux-mips64el": "7.0.2", "@typescript/typescript-linux-ppc64": "7.0.2", "@typescript/typescript-linux-riscv64": "7.0.2", "@typescript/typescript-linux-s390x": "7.0.2", "@typescript/typescript-linux-x64": "7.0.2", "@typescript/typescript-netbsd-arm64": "7.0.2", "@typescript/typescript-netbsd-x64": "7.0.2", "@typescript/typescript-openbsd-arm64": "7.0.2", "@typescript/typescript-openbsd-x64": "7.0.2", "@typescript/typescript-sunos-x64": "7.0.2", "@typescript/typescript-win32-arm64": "7.0.2", "@typescript/typescript-win32-x64": "7.0.2" }, "bin": { "tsc": "bin/tsc" } }, "sha512-8FYau96o3NKOhbjKi/qNvG/W5jhzxkbdm5sj9AbZ/5T5sWqn3hJgLfGx27sRKZWTvyzCP8dLRBTf5tBTSRVUNA=="],
 
     "undici-types": ["undici-types@8.3.0", "", {}, "sha512-j375ScV60dom+YkPFIfTLcOiPxkN/buHz5GobjLhixFuANaNs3C9l4GmrWqejgXWJ7BbJcFYpTEUkS1Ge8bpZQ=="],
+
+    "valle-engine": ["valle-engine@workspace:packages/engine"],
   }
 }

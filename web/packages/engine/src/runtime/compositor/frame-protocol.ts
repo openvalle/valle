@@ -6,6 +6,7 @@
 // than being rebound to a different product state.
 
 export const PRODUCT_FRAME_WORKER_PROTOCOL_VERSION = 1 as const;
+export const PRODUCT_FRAME_TEMPLATE_CACHE_SIZE = 64;
 
 export interface ProductEngineWire {
   open_fixed_package(

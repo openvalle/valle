@@ -1,6 +1,6 @@
-import type { JsonValue } from "@valle/engine";
-import type { TimelineDocumentView } from "@valle/player-core";
-import type { TimelineDocument } from "@valle/engine/internal";
+import type { JsonValue } from "valle-engine";
+import type { TimelineDocumentView } from "valle-engine";
+import type { TimelineDocument } from "valle-engine/internal";
 import type { GoodMotionContext } from "./motion-preview.ts";
 
 export type ProjectMotionEdit =

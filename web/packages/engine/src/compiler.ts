@@ -1,7 +1,7 @@
-import type { Timeline } from "@valle/engine";
-import type { TimelineDocument } from "@valle/engine/internal";
+import type { Timeline } from "./timeline.ts";
+import type { TimelineDocument } from "./internal-timeline.ts";
 
-import type { CanonicalTimelineDocument } from "./player/product-controller.ts";
+import type { CanonicalTimelineDocument } from "./runtime/product-controller.ts";
 import { resolvePlayerRuntimeAssets } from "./runtime-assets.ts";
 
 interface TimelineCompilerWasmModule {

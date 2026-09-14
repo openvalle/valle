@@ -6,7 +6,7 @@ import { hydrateIcons } from "../../shared/icons.ts";
 import "./studio-shell.ts";
 import "./timeline-components.ts";
 import "./motion-components.ts";
-import "@valle/player";
+import "valle-engine/element";
 
 export type { StudioWorkspace } from "./shell-state.ts";
 export { initialStudioShellState } from "./shell-state.ts";

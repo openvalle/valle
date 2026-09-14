@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 
-import type { Timeline } from "@valle/engine";
+import type { Timeline } from "valle-engine";
 import type { StudioTimelineRevision } from "./host.ts";
 import {
   assertReloadedTimelineSave,
