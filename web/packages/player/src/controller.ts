@@ -165,7 +165,7 @@ export class VallePlayerController extends EventTarget {
       const player = this.#requireReady("replaceRenderPackage");
       if (generation !== this.#contentGeneration) return undefined;
       const result = await this.#run("replaceRenderPackage", () => player.replaceRenderPackage(next));
-      if (generation !== this.#contentGeneration || this.#state !== "ready") return undefined;
+      if (!result || generation !== this.#contentGeneration || this.#state !== "ready") return undefined;
       this.#publishRender(player, result);
       return result;
     });

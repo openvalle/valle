@@ -1,3 +1,5 @@
+import { createTimelineCompilerRuntime } from "@valle/player-core";
+import { StudioTransport, isEditableTarget, type StudioTransportIntent } from "../../shared/transport.ts";
 import {
   VallePlayerElement,
   type CanonicalTimelineDocument,
@@ -77,6 +79,9 @@ import {
   }
   // Visible error reporting; headless probes also receive failures through `postFailure`.
   function showError(message: unknown): void {
+    $("previewError").hidden = false;
+    $("previewErrorText").textContent = "Preview failed. Retry to reload the saved project.";
+    $("previewErrorText").title = String(message);
     const element = document.getElementById("stage");
     if (element instanceof VallePlayerElement) {
       element.errorMessage = String(message ?? "unknown error");
@@ -106,7 +111,9 @@ import {
     postFailure(message).catch(() => {});
   });
 
+  $("retryPreview").addEventListener("click", () => location.reload());
   const config = await fetchConfig();
+  const compiler = await createTimelineCompilerRuntime({ runtimeAssets: config.runtimeAssets, runtimeBaseUrl: location.href });
   const player = $<VallePlayerElement>("stage");
   const scrub = $<HTMLInputElement>("scrub");
   const stageWrap = $<HTMLElement>("stageWrap");
@@ -178,15 +185,15 @@ import {
   }
 
   // ── transport (play state + scrubber + readout, kept in sync) ──
-  const PLAY_PATH = "M8 5.5v13l11-6.5z";
-  const PAUSE_PATH = "M7 5h3.5v14H7zM13.5 5H17v14h-3.5z";
+  const transport = $<StudioTransport>("transport");
   let loopEnabled = false;
   let rafPoll: number | null = null;
 
   function setPlayingUI(playing: boolean): void {
     stageWrap.dataset.playing = playing ? "true" : "false";
-    $("playIcon").setAttribute("d", playing ? PAUSE_PATH : PLAY_PATH);
-    $("playToggle").setAttribute("aria-label", playing ? "Pause" : "Play");
+    transport.sync(player.currentTime(), player.durationS(), fps, playing);
+    transport.looping = loopEnabled;
+    transport.muted = player.muted;
     $("bigplay").innerHTML = playing
       ? '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 5h3.5v14H7zM13.5 5H17v14h-3.5z"/></svg>'
       : '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13l11-6.5z"/></svg>';
@@ -223,7 +230,8 @@ import {
     await player.seek(Math.max(0, Math.min(t, player.lastFrameTimeS())));
     syncTransport();
   }
-  const stepFrames = (n: number): Promise<void> => seekTo(player.currentTime() + n / Math.max(1, fps));
+  const frameTime = (frame: number) => compiler.timelineTimeFromFrames(frame, config.timeline.document.canvas.fps);
+  const stepFrames = (n: number): Promise<void> => seekTo(frameTime(Math.max(0, frameOf(player.currentTime()) + n)));
   const seekBy = (dt: number): Promise<void> => seekTo(player.currentTime() + dt);
   // Range input can fire faster than a full component frame. Keep only the newest target so
   // current-priority Worker jobs and CanvasKit presentation stay single-flight.
@@ -252,14 +260,19 @@ import {
 
   // ── wire controls ──
   $("hit").addEventListener("click", togglePlay);
-  $("playToggle").addEventListener("click", togglePlay);
-  $("toStart").addEventListener("click", () => seekTo(0));
-  $("toEnd").addEventListener("click", () => seekTo(player.lastFrameTimeS()));
-  $("prevFrame").addEventListener("click", () => stepFrames(-1));
-  $("nextFrame").addEventListener("click", () => stepFrames(1));
-  $("loopBtn").addEventListener("click", () => {
-    loopEnabled = !loopEnabled;
-    $("loopBtn").setAttribute("aria-pressed", loopEnabled ? "true" : "false");
+  transport.addEventListener("studio-transport-intent", (event) => {
+    const intent = (event as CustomEvent<StudioTransportIntent>).detail;
+    switch (intent.type) {
+      case "toggle-play": togglePlay(); break;
+      case "play": void doPlay(); break;
+      case "pause": doPause(); break;
+      case "first-frame": void seekTo(0); break;
+      case "last-frame": void seekTo(player.lastFrameTimeS()); break;
+      case "seek-frame": void seekTo(frameTime(intent.frame)); break;
+      case "seek": void seekTo(intent.timeS); break;
+      case "loop": loopEnabled = intent.value; break;
+      case "mute": player.setMuted(intent.value); break;
+    }
   });
   $("fsBtn").addEventListener("click", () => {
     if (document.fullscreenElement) document.exitFullscreen();
@@ -289,11 +302,7 @@ import {
   const volGroup = $<HTMLElement>("volGroup");
   const vol = $<HTMLInputElement>("vol");
   function updateVolIcon(): void {
-    const muted = player.muted || player.masterVolume === 0;
-    $("muteBtn").setAttribute("aria-pressed", muted ? "true" : "false");
-    $("volIcon").innerHTML = muted
-      ? '<path d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M22 9l-6 6M16 9l6 6" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/>'
-      : '<path d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M16 8.5a4 4 0 0 1 0 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>';
+    transport.muted = player.muted || player.masterVolume === 0;
   }
   function updateAudioUI(): void {
     let has = false;
@@ -310,7 +319,6 @@ import {
     vol.style.setProperty("--vpct", `${v * 100}%`);
     updateVolIcon();
   });
-  $("muteBtn").addEventListener("click", toggleMute);
 
   // Performance HUD using frame rate, stage timings, surface mode, and audio status.
   const hud = $<HTMLElement>("hud");
@@ -356,16 +364,13 @@ import {
   setInterval(updateHud, 200);
 
   window.addEventListener("keydown", (e) => {
-    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    if (e.metaKey || e.ctrlKey || e.altKey || e.isComposing || isEditableTarget(e)) return;
     let handled = true;
     switch (e.key) {
-      case " ": case "k": togglePlay(); break;
-      case "ArrowLeft": case ",": stepFrames(e.shiftKey ? -Math.round(fps) : -1); break;
-      case "ArrowRight": case ".": stepFrames(e.shiftKey ? Math.round(fps) : 1); break;
+      case ",": stepFrames(e.shiftKey ? -Math.round(fps) : -1); break;
+      case ".": stepFrames(e.shiftKey ? Math.round(fps) : 1); break;
       case "j": seekBy(-1); break;
       case "l": seekBy(1); break;
-      case "Home": seekTo(0); break;
-      case "End": seekTo(player.lastFrameTimeS()); break;
       case "f": case "F": $("fsBtn").click(); break;
       case "m": case "M": toggleMute(); break;
       case "i": case "I": toggleHud(); break;

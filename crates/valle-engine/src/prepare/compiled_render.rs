@@ -31,11 +31,11 @@ use crate::{
         EvaluatedVisualTransition as EvaluatedRenderTransition, VerifiedResourceFacts,
     },
     resource::{
-        AuthorSrgbStraight, ColorDescription, ColorPrimaries, ColorRange, ContentDigest,
-        InputAlphaMode, MatrixCoefficients, MediaDescriptor, OperatorAlphaBehavior,
-        OperatorColorDomain, PixelOrientation, SemanticAsset, SemanticAssetKind, SemanticFont,
-        SemanticStructure, SignalLuminance, StructureDescriptor, StructureFootprint,
-        TransferFunction, VisualInterpretation,
+        ColorDescription, ColorPrimaries, ColorRange, ContentDigest, InputAlphaMode,
+        MatrixCoefficients, MediaDescriptor, OperatorAlphaBehavior, OperatorColorDomain,
+        PixelOrientation, SemanticAsset, SemanticAssetKind, SemanticFont, SemanticStructure,
+        SignalLuminance, StructureDescriptor, StructureFootprint, TransferFunction,
+        VisualInterpretation,
     },
 };
 
@@ -80,7 +80,7 @@ pub fn prepare_compiled_render_frame_cached(
         target: None,
     });
     let background = prepare_background(BackgroundBand {
-        author_srgb_straight: AuthorSrgbStraight(canvas.background_rgba()),
+        author_srgb_straight: render_spec.output().background().author_color(),
     })?;
     let mut state = PrepareState::new_with_context(
         super::PrepareFrameContext {

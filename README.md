@@ -109,6 +109,7 @@ Try the checked-in examples (no model downloads needed):
 ./dist/bin/valle motion check examples/hello.motion.tsx
 ./dist/bin/valle motion render examples/hello.motion.tsx --duration 3 --size 640x360 -o hello.mp4 --events
 ./dist/bin/valle timeline check examples/timeline.json
+./dist/bin/valle timeline studio examples/timeline.json
 ./dist/bin/valle timeline render examples/timeline.json -o timeline.mp4 --events
 ./dist/bin/valle motion studio examples/hello.motion.tsx --size 640x360
 ```

@@ -92,6 +92,7 @@ pub fn run(action: MotionAction) -> Result<std::process::ExitCode> {
             canvas,
         } => studio(StudioRequest {
             input,
+            preview_files: Arc::new(RwLock::new(BTreeMap::new())),
             asset_specs: assets,
             bindings,
             fonts: font,
@@ -151,6 +152,7 @@ fn render(
     let font_blobs = fixed_package_font_blobs(artifact, &explicit_fonts)?;
     let package = super::motion_package::build_standalone_motion_package(
         super::motion_package::StandaloneMotionPackageInput {
+            timing: None,
             artifact,
             assets: &prepared.assets,
             font_blobs: &font_blobs,
@@ -219,6 +221,7 @@ fn render(
 #[derive(Clone)]
 struct StudioRequest {
     input: PathBuf,
+    preview_files: Arc<RwLock<BTreeMap<String, Arc<[u8]>>>>,
     asset_specs: Vec<String>,
     bindings: MotionBindingArgs,
     fonts: Vec<PathBuf>,
@@ -277,8 +280,17 @@ fn studio(request: StudioRequest) -> Result<std::process::ExitCode> {
         sse: crate::webhost::SseBroadcaster::default(),
         capture_dir: None,
         library: None,
+        timeline_file: None,
         project: None,
         last_report: RwLock::new(None),
+        preview_files: Arc::clone(&request.preview_files),
+        motion_preview: Some({
+            let request = request.clone();
+            Box::new(move |body| {
+                let draft: MotionPreviewDraft = serde_json::from_str(body)?;
+                studio_state_json_with_draft(&request, 1, Some(&draft))
+            })
+        }),
     });
     let (server, addr) = crate::webhost::bind(request.port)?;
     let url = format!("http://{addr}/studio");
@@ -411,7 +423,37 @@ struct FingerprintInputs<'a> {
     fonts: Vec<&'a ContentDigest>,
 }
 
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct MotionPreviewDraft {
+    props: BTreeMap<String, serde_json::Value>,
+    timing: MotionPreviewTiming,
+    cues: BTreeMap<String, MotionPreviewCue>,
+}
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct MotionPreviewTiming {
+    enter_frames: u32,
+    exit_frames: u32,
+}
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct MotionPreviewCue {
+    start_frame: u32,
+    end_frame: u32,
+    enter_frames: u32,
+    exit_frames: u32,
+}
+
 fn studio_state_json(request: &StudioRequest, generation: u64) -> Result<String> {
+    studio_state_json_with_draft(request, generation, None)
+}
+
+fn studio_state_json_with_draft(
+    request: &StudioRequest,
+    generation: u64,
+    draft: Option<&MotionPreviewDraft>,
+) -> Result<String> {
     let module_graph = load_motion_module_graph(&request.input)?;
     let mut assets = load_assets(&request.asset_specs)?;
     let shaders = shader_registry(&assets)?;
@@ -483,9 +525,54 @@ fn studio_state_json(request: &StudioRequest, generation: u64) -> Result<String>
     let artifact_digest =
         ContentDigest::of_bytes(&canonical_bytes(&prepared.compiled.artifact)?).to_wire();
     let duration_frames = duration_frames(request.duration, request.fps)?;
-    let timing = prepared.compiled.artifact.controls.phase_spec();
-    let cue_bindings = read_cue_bindings(request.bindings.cues.as_deref(), request.fps)?;
-    let props = read_prop_bindings(request.bindings.props.as_deref())?;
+    let timing = if let Some(draft) = draft {
+        prepared
+            .compiled
+            .artifact
+            .controls
+            .timing
+            .resolve_phase_spec(
+                Some(draft.timing.enter_frames),
+                Some(draft.timing.exit_frames),
+            )
+            .map_err(|e| anyhow!("{e:?}"))?
+    } else {
+        prepared.compiled.artifact.controls.phase_spec()
+    };
+    if u64::from(timing.enter_frames) + u64::from(timing.exit_frames) > duration_frames as u64 {
+        bail!("Enter and exit phases exceed the Motion duration");
+    }
+    let cue_bindings = if let Some(draft) = draft {
+        draft
+            .cues
+            .iter()
+            .map(|(name, cue)| {
+                if cue.start_frame >= cue.end_frame
+                    || cue.end_frame > duration_frames as u32
+                    || u64::from(cue.enter_frames) + u64::from(cue.exit_frames)
+                        > u64::from(cue.end_frame - cue.start_frame)
+                {
+                    bail!("Cue {name} is outside the Motion duration");
+                }
+                Ok((
+                    name.clone(),
+                    CueWindow {
+                        start_frame: cue.start_frame,
+                        end_frame: cue.end_frame,
+                        enter_frames: cue.enter_frames,
+                        exit_frames: cue.exit_frames,
+                    },
+                ))
+            })
+            .collect::<Result<BTreeMap<_, _>>>()?
+    } else {
+        read_cue_bindings(request.bindings.cues.as_deref(), request.fps)?
+    };
+    let props = if let Some(draft) = draft {
+        draft.props.clone()
+    } else {
+        read_prop_bindings(request.bindings.props.as_deref())?
+    };
     let studio_cue_bindings = cue_bindings
         .iter()
         .map(|(name, cue)| {
@@ -506,6 +593,7 @@ fn studio_state_json(request: &StudioRequest, generation: u64) -> Result<String>
         fixed_package_font_blobs(&prepared.compiled.artifact, &explicit_font_blobs)?;
     let fixed_package = match super::motion_package::build_standalone_motion_package(
         super::motion_package::StandaloneMotionPackageInput {
+            timing: Some(timing),
             artifact: &prepared.compiled.artifact,
             assets: &prepared.assets,
             // Freeze every face that the Motion DrawProgram can request by content digest.
@@ -529,6 +617,14 @@ fn studio_state_json(request: &StudioRequest, generation: u64) -> Result<String>
             );
         }
     };
+    // Serve the prepared bytes, including normalized environment maps, rather than mutable files.
+    for asset in prepared.assets.values() {
+        request
+            .preview_files
+            .write()
+            .map_err(|_| anyhow!("preview files poisoned"))?
+            .insert(asset.hash.to_string(), Arc::from(asset.bytes.clone()));
+    }
     let asset_urls = prepared
         .assets
         .iter()
@@ -547,7 +643,7 @@ fn studio_state_json(request: &StudioRequest, generation: u64) -> Result<String>
             serde_json::json!({
                 "name": name,
                 "kind": kind,
-                "url": format!("/motion-assets/{name}"),
+                "url": format!("/preview-assets/{}", prepared.assets[name].hash),
             })
         })
         .collect::<Vec<_>>();
@@ -557,7 +653,7 @@ fn studio_state_json(request: &StudioRequest, generation: u64) -> Result<String>
         .map(|control| {
             serde_json::json!({
                 "id": format!("asset:{control}"),
-                "url": format!("/motion-assets/{control}"),
+                "url": format!("/preview-assets/{}", prepared.assets[control].hash),
             })
         })
         .collect::<Vec<_>>();

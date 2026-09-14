@@ -76,12 +76,17 @@ export async function emitRuntimeManifests(
     apps.push(await manifestOf(
       dist,
       `app-${app}`,
-      files.map((file, index) => spec(`${app}-${index}`, file.endsWith(".html") ? "html" : "app", file, "Apache-2.0")),
+      files.map((file, index) => spec(
+        `${app}-${index}`,
+        file.endsWith(".html") ? "html" : file.endsWith(".css") ? "style" : "app",
+        file,
+        "Apache-2.0",
+      )),
     ));
   }
 
   const sharedChunks = (await listFiles(path.join(dist, "chunks")))
-    .filter((file) => file.endsWith(".js"))
+    .filter((file) => file.endsWith(".js") || file.endsWith(".css"))
     .map((file) => path.relative(dist, file).replaceAll(path.sep, "/"))
     .filter((file) => !claimedAppScripts.has(file));
   const playerCore = await manifestOf(dist, "player-core", [

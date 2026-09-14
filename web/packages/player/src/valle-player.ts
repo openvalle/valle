@@ -387,7 +387,8 @@ export class VallePlayerElement extends LitElement {
     for (const type of RELAYED_EVENTS) {
       controller.addEventListener(type, (event: VallePlayerEventMap[typeof type]) => {
         if (this.#controller !== controller) return;
-        if (type === "error") {
+        if (type === "render") this.errorMessage = "";
+        if (type === "error" && ((event as VallePlayerEventMap["error"]).detail.operation !== "replaceRenderPackage" || controller.state !== "ready")) {
           const error = (event as VallePlayerEventMap["error"]).detail.error;
           this.errorMessage = error instanceof Error ? error.message : String(error);
         }

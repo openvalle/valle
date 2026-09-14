@@ -13,7 +13,7 @@ export type MotionFrameRateWire = { num: number, den: number, };
 
 export type CodeWire = string;
 
-export type StudioSessionWire = { "kind": "project", projectId: string, revision: number, token: string, } | { "kind": "timeline-file", input: string, } | { "kind": "motion-file", input: string, generation: number, };
+export type StudioSessionWire = { "kind": "project", projectId: string, revision: number, token: string, } | { "kind": "timeline-file", input: string, token: string, } | { "kind": "motion-file", input: string, generation: number, };
 
 export type StudioCapabilitiesWire = { saveTimeline: boolean, editProject: boolean, editMotionProps: boolean, writeMotionSource: boolean, };
 

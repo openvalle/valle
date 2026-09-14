@@ -109,7 +109,7 @@ pub(crate) fn run(json_output: bool, action: ProjectAction) -> Result<ExitCode> 
             web_assets_dir,
             port,
         } => {
-            let project_id = parse_project_id(project_id)?;
+            let project_id = parse_project_id(project_id).context("project studio expects a project ID; open a JSON file with: valle timeline studio <file>")?;
             let snapshot = store
                 .get_timeline(&project_id, revision)
                 .context("reading Project Studio initial revision")?;
@@ -121,13 +121,21 @@ pub(crate) fn run(json_output: bool, action: ProjectAction) -> Result<ExitCode> 
                 "runtimeAssets": crate::webruntime::runtime_assets_json()
             })
             .to_string();
+            let library_home = valle_project::assets::Home::resolve()?;
             let state = Arc::new(crate::webhost::StudioHost {
                 runtime_files: runtime.serving_map(),
                 assets_dir: None,
                 config_json: Arc::new(RwLock::new(config)),
                 sse: crate::webhost::SseBroadcaster::default(),
                 capture_dir: None,
-                library: None,
+                library: Some(crate::webhost::LibraryCtx {
+                    token: token.clone(),
+                    make_ctx: Box::new(move || super::assets::studio_context(library_home.clone())),
+                    thumbnail: None,
+                    analyzing: std::sync::atomic::AtomicBool::new(false),
+                    run_analyze: None,
+                }),
+                timeline_file: None,
                 project: Some(crate::webhost::ProjectStudioCtx {
                     token,
                     project_id: project_id.clone(),
@@ -139,6 +147,8 @@ pub(crate) fn run(json_output: bool, action: ProjectAction) -> Result<ExitCode> 
                     ),
                 }),
                 last_report: RwLock::new(None),
+                preview_files: Arc::new(RwLock::new(std::collections::BTreeMap::new())),
+                motion_preview: None,
             });
             let (server, addr) = crate::webhost::bind(port)?;
             let url = format!("http://{addr}/studio?project={project_id}");

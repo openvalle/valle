@@ -7,6 +7,7 @@ mod embedded {
     include!(concat!(env!("OUT_DIR"), "/embedded.rs"));
 }
 mod output;
+mod timeline_file;
 mod webhost;
 pub mod webruntime;
 
@@ -1051,6 +1052,16 @@ impl From<ModelsInstallBackendArg> for valle_media::models::InstallBackendSelect
 pub enum TimelineAction {
     /// Validate a timeline without rendering.
     Check { input: PathBuf },
+    /// Edit a Timeline JSON file in Studio; Save writes back to this file.
+    Studio {
+        input: PathBuf,
+        /// Override the bundled Web assets directory.
+        #[arg(long)]
+        web_assets_dir: Option<PathBuf>,
+        /// Local loopback port; 0 asks the OS for an available port.
+        #[arg(long, default_value_t = 9527)]
+        port: u16,
+    },
     /// Prepare resources and render a timeline to MP4 or one frame to PNG.
     Render {
         input: PathBuf,

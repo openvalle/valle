@@ -1,15 +1,6 @@
+export { StudioTransport, formatTimecode, type StudioTransportIntent } from "../../shared/transport.ts";
 import { LitElement, html, type TemplateResult } from "lit";
-
-export interface StudioMetaChip {
-  text: string;
-  tone?: "default" | "live" | "warning";
-  strong?: boolean;
-}
-
-export type StudioTransportIntent =
-  | { type: "toggle-play" }
-  | { type: "pause" }
-  | { type: "seek"; timeS: number };
+import { hydrateIcons } from "../../shared/icons.ts";
 
 export interface TimelineTickView {
   leftPx: number;
@@ -25,21 +16,31 @@ export interface TimelineClipView {
   label: string;
   selected: boolean;
   timingEditable?: boolean;
-  media?: { kind: "video" | "audio"; assetId: string };
+  fixedStart?: boolean;
+  fixedEnd?: boolean;
+  readOnly?: boolean;
+  error?: boolean;
+  media?: { kind: "video" | "audio"; assetId: string; sourceStartS: number; sourceDurationS: number };
 }
 
 export interface TimelineTrackView {
   id: string;
   kind: string;
+  name?: string;
+  indexLabel?: string;
+  selected?: boolean;
   clips: ReadonlyArray<TimelineClipView>;
 }
 
 export interface TimelineViewModel {
   widthPx: number;
   laneWidthPx: number;
+  labelWidthPx: number;
   playheadLeftPx: number;
   ticks: ReadonlyArray<TimelineTickView>;
   tracks: ReadonlyArray<TimelineTrackView>;
+  emptyMessage?: string;
+  showPlayhead?: boolean;
 }
 
 export interface InspectorValueRow {
@@ -49,14 +50,18 @@ export interface InspectorValueRow {
 }
 
 export interface InspectorFieldRow {
-  kind: "number" | "textarea" | "color";
+  kind: "number" | "textarea" | "color" | "select" | "checkbox";
   key: string;
   label: string;
-  value: string | number;
+  value: string | number | boolean;
   min?: number;
   max?: number;
   step?: number;
+  unit?: string;
+  prefix?: string;
+  values?: ReadonlyArray<string>;
   primaryText?: boolean;
+  readOnly?: boolean;
 }
 
 export type InspectorRow = InspectorValueRow | InspectorFieldRow;
@@ -67,128 +72,36 @@ export interface InspectorSectionView {
 }
 
 export interface InspectorViewModel {
-  clipId: string;
+  errorMessage?: string | null;
+  clipId: string | null;
+  kindLabel: string;
+  kindClass?: string;
+  title: string;
+  subtitle?: string;
+  summary?: ReadonlyArray<{ label: string; value: string }>;
   sections: ReadonlyArray<InspectorSectionView>;
-  rawJson: string;
+  rawJson?: string;
   motionSource?: string;
+  canDelete?: boolean;
+  emptyHint?: string;
 }
 
 export type StudioInspectorIntent =
-  | { type: "edit"; clipId: string; key: string; value: string | number }
+  | { type: "edit"; clipId: string; key: string; value: string | number | boolean }
+  | { type: "edit-end"; clipId: string; key: string }
   | { type: "open-motion"; clipId: string }
   | { type: "delete"; clipId: string };
 
 export interface StudioProjectControlsState {
   visible: boolean;
   dirty: boolean;
+  saving?: boolean;
   conflictMessage: string | null;
 }
 
-export type StudioProjectIntent = { type: "save" | "reload" };
-
-export class StudioHeaderMeta extends LitElement {
-  static properties = {
-    chips: { attribute: false },
-  };
-
-  declare chips: ReadonlyArray<StudioMetaChip>;
-
-  constructor() {
-    super();
-    this.chips = [];
-  }
-
-  protected createRenderRoot(): this {
-    return this;
-  }
-
-  protected render(): TemplateResult {
-    return html`${this.chips.map((chip) => html`
-      <span class="chip ${chip.tone === "warning" ? "warn" : chip.tone === "live" ? "live" : ""}">
-        ${chip.strong ? html`<b>${chip.text}</b>` : chip.text}
-      </span>
-    `)}`;
-  }
-}
-
-export class StudioTransport extends LitElement {
-  protected createRenderRoot(): this {
-    return this;
-  }
-
-  connectedCallback(): void {
-    super.connectedCallback();
-    window.addEventListener("keydown", this.#onKeydown);
-  }
-
-  disconnectedCallback(): void {
-    window.removeEventListener("keydown", this.#onKeydown);
-    super.disconnectedCallback();
-  }
-
-  protected render(): TemplateResult {
-    return html`
-      <button class="ctl" id="playToggle" type="button" title="Play / pause (Space)"
-        aria-label="Play" @click=${this.#toggle}>
-        <svg id="playIcon" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13l11-6.5z"></path></svg>
-      </button>
-      <input id="scrub" type="range" min="0" max="1" value="0" step="0.001"
-        aria-label="Seek" style="--pct:0%" @pointerdown=${this.#pause} @input=${this.#seek} />
-      <span class="time"><span class="cur" id="tCur">0:00.000</span> / <span id="tDur">0:00.000</span>
-        &nbsp;·&nbsp;<span id="tFrame">f0/0</span></span>
-    `;
-  }
-
-  configure(durationS: number, _fps: number): void {
-    const scrub = this.#scrub();
-    scrub.max = String(Math.max(0.001, durationS));
-    scrub.step = "0.001";
-  }
-
-  sync(timeS: number, durationS: number, _fps: number, playing: boolean): void {
-    const scrub = this.#scrub();
-    scrub.value = String(timeS);
-    scrub.style.setProperty("--pct", `${durationS > 0 ? (timeS / durationS) * 100 : 0}%`);
-    this.#required("tCur").textContent = formatTime(timeS);
-    this.#required("tDur").textContent = formatTime(durationS);
-    this.#required("tFrame").textContent = "compiled frame";
-    this.#required("playIcon").setAttribute(
-      "d",
-      playing ? "M7 5h3.5v14H7zM13.5 5H17v14h-3.5z" : "M8 5.5v13l11-6.5z",
-    );
-    this.#required("playToggle").setAttribute("aria-label", playing ? "Pause" : "Play");
-  }
-
-  #required(id: string): HTMLElement {
-    const element = this.querySelector<HTMLElement>(`#${id}`);
-    if (!element) throw new Error(`missing Studio transport element #${id}`);
-    return element;
-  }
-
-  #scrub(): HTMLInputElement {
-    return this.#required("scrub") as HTMLInputElement;
-  }
-
-  #emit(intent: StudioTransportIntent): void {
-    this.dispatchEvent(new CustomEvent("studio-transport-intent", {
-      detail: intent,
-      bubbles: true,
-      composed: true,
-    }));
-  }
-
-  #toggle = (): void => this.#emit({ type: "toggle-play" });
-  #pause = (): void => this.#emit({ type: "pause" });
-  #seek = (event: Event): void => {
-    this.#emit({ type: "seek", timeS: Number((event.currentTarget as HTMLInputElement).value) });
-  };
-  #onKeydown = (event: KeyboardEvent): void => {
-    if (event.metaKey || event.ctrlKey || event.altKey) return;
-    if (event.key !== " " && event.key !== "k") return;
-    event.preventDefault();
-    this.#toggle();
-  };
-}
+export type StudioProjectIntent =
+  | { type: "save" }
+  | { type: "reload" };
 
 export class StudioTimeline extends LitElement {
   static properties = {
@@ -196,6 +109,8 @@ export class StudioTimeline extends LitElement {
   };
 
   declare viewModel: TimelineViewModel | null;
+
+  #seekPointerId: number | null = null;
 
   constructor() {
     super();
@@ -210,40 +125,84 @@ export class StudioTimeline extends LitElement {
     this.viewModel = viewModel;
     this.requestUpdate();
     this.performUpdate();
+    hydrateIconsIn(this);
   }
 
   protected render(): TemplateResult {
     const model = this.viewModel;
     if (!model) return html``;
+    const labelWidth = model.labelWidthPx;
     return html`
-      <div class="tl" id="tl" style="width:${model.widthPx}px">
-        <div class="tl-ruler" id="tlRuler">
-          ${model.ticks.map((tick) => html`
-            <div class=${tick.label == null ? "tl-tick-minor" : "tl-tick"}
-              style="left:${tick.leftPx}px">${tick.label ?? ""}</div>
-          `)}
-        </div>
-        ${model.tracks.map((track) => html`
-          <div class="tl-row kind-${track.kind}">
-            <div class="tl-label"><span class="tl-kind">${track.kind}</span><span class="tl-tid">${track.id}</span></div>
-            <div class="tl-lane" style="width:${model.laneWidthPx}px">
-              ${track.clips.map((clip) => html`
-                <div class="tl-clip kind-${clip.kind} ${clip.selected ? "selected" : ""}"
-                  style="left:${clip.leftPx}px;width:${clip.widthPx}px"
-                  data-clip-id=${clip.id} title=${clip.title}>
-                  ${clip.media ? html`<canvas class="tl-media" data-kind=${clip.media.kind}
-                    data-asset-id=${clip.media.assetId}></canvas>` : ""}
-                  <span>${clip.label}</span>
-                  ${clip.timingEditable
-                    ? html`<div class="tl-trim w"></div><div class="tl-trim e"></div>`
-                    : ""}
-                </div>
-              `)}
-            </div>
+      <div class="timeline-content" style="width:${labelWidth + model.laneWidthPx}px">
+        <div class="ruler">
+          <div class="ruler-label">Track <span id="rulerUnit">sec</span></div>
+          <div class="ruler-lane" id="rulerLane" style="width:${model.laneWidthPx}px"
+            aria-label="Drag to seek">
+            ${model.ticks.map((tick) => html`
+              <span class="tick ${tick.label == null ? "minor" : ""}" style="left:${tick.leftPx}px">${tick.label ?? ""}</span>
+            `)}
+            <span class="playhead-grip" id="rulerGrip" aria-hidden="true"></span>
           </div>
-        `)}
-        <div class="tl-playhead" id="tlPlayhead" style="left:${model.playheadLeftPx}px"></div>
+        </div>
+        ${model.emptyMessage
+          ? html`<div class="empty-tracks"><strong>${model.emptyMessage}</strong></div>`
+          : model.tracks.map((track) => this.#renderTrack(track, model))}
+        ${model.showPlayhead === false
+          ? html``
+          : html`<div class="playhead" id="tlPlayhead" style="left:${model.playheadLeftPx}px"></div>`}
+        <div class="drop-line" id="dropLine" hidden></div>
       </div>
+    `;
+  }
+
+  #renderTrack(track: TimelineTrackView, model: TimelineViewModel): TemplateResult {
+    const kindClass = kindClassOf(track.kind);
+    return html`
+      <div class="track-row ${kindClass}">
+        <div class="track-head ${track.selected ? "selected" : ""}" title=${track.name ?? track.id}>
+          <span class="icon" data-icon=${kindIconOf(track.kind)}></span>
+          <span class="track-name">${track.name ?? track.id}</span>
+          <span class="track-index">${track.indexLabel ?? track.kind}</span>
+        </div>
+        <div class="track-lane" style="width:${model.laneWidthPx}px">
+          ${track.clips.map((clip) => this.#renderClip(clip))}
+        </div>
+      </div>
+    `;
+  }
+
+  #renderClip(clip: TimelineClipView): TemplateResult {
+    const kindClass = kindClassOf(clip.kind);
+    const width = clip.widthPx;
+    const tiny = width < 13;
+    const narrow = width < 32;
+    return html`
+      <button
+        type="button"
+        class="clip ${kindClass} ${clip.selected ? "selected" : ""} ${clip.readOnly ? "readonly" : ""} ${clip.error ? "error" : ""} ${tiny ? "tiny" : narrow ? "narrow" : ""}"
+        style="left:${clip.leftPx}px;width:${width}px"
+        data-clip-id=${clip.id}
+        title=${clip.title}
+        aria-label=${clip.label}
+        aria-pressed=${clip.selected}
+      >
+        <span class="clip-title">
+          <span class="icon" data-icon=${kindIconOf(clip.kind)}></span>
+          <span class="clip-text">${clip.label}</span>
+          ${clip.readOnly ? html`<span class="icon" data-icon="lock" aria-label="Read only"></span>` : ""}
+        </span>
+        <span class="clip-body">
+          ${clip.media
+            ? html`<canvas class="tl-media" data-kind=${clip.media.kind} data-asset-id=${clip.media.assetId}></canvas>`
+            : ""}
+        </span>
+        ${clip.timingEditable && !clip.readOnly && width >= 32
+          ? html`
+              ${clip.fixedStart ? "" : html`<span class="trim left" data-edge="left"></span>`}
+              ${clip.fixedEnd ? "" : html`<span class="trim right" data-edge="right"></span>`}
+            `
+          : ""}
+      </button>
     `;
   }
 }
@@ -268,48 +227,136 @@ export class StudioInspector extends LitElement {
     this.viewModel = viewModel;
     this.requestUpdate();
     this.performUpdate();
+    hydrateIconsIn(this);
   }
 
   protected render(): TemplateResult {
     const model = this.viewModel;
-    if (!model) return html`<div class="empty">Nothing selected. Click the stage or a timeline clip.</div>`;
+    if (!model || !model.clipId) {
+      return html`
+        <div class="empty-inspector">
+          <h2>${model?.title ?? "Nothing selected"}</h2>
+          <p>${model?.emptyHint ?? "Select a clip on the stage or timeline to inspect it."}</p>
+        </div>
+        ${model?.summary?.length
+          ? html`<section class="ins-section">
+              ${model.summary.map((row) => html`
+                <div class="inspector-metric"><span>${row.label}</span><span>${row.value}</span></div>
+              `)}
+            </section>`
+          : ""}
+        ${model?.rawJson
+          ? html`<details class="details"><summary>Technical details</summary><code>${model.rawJson}</code></details>`
+          : ""}
+      `;
+    }
+
     return html`
+      ${model.errorMessage ? html`<p class="field-error" role="alert">${model.errorMessage}</p>` : ""}
+      <div class="inspector-summary ${model.kindClass ?? ""}">
+        <span class="icon" data-icon=${kindIconOf(model.kindClass ?? model.kindLabel)}></span>
+        <div>
+          <strong>${model.title}</strong>
+          ${model.subtitle ? html`<small>${model.subtitle}</small>` : ""}
+        </div>
+      </div>
+      ${model.summary?.length
+        ? html`<section class="ins-section">
+            ${model.summary.map((row) => html`
+              <div class="inspector-metric"><span>${row.label}</span><span>${row.value}</span></div>
+            `)}
+          </section>`
+        : ""}
       ${model.sections.map((section) => html`
-        ${section.title ? html`<div class="ins-sec">${section.title}</div>` : ""}
-        ${section.rows.map((row) => this.#renderRow(row))}
+        <section class="ins-section">
+          ${section.title ? html`<h2 class="section-label">${section.title}</h2>` : ""}
+          ${section.rows.map((row) => this.#renderRow(row, model.clipId!))}
+        </section>
       `)}
-      ${model.motionSource ? html`
-        <button id="insOpenMotion" type="button" @click=${this.#openMotion}>
-          Edit component · ${model.motionSource}
-        </button>
-      ` : ""}
-      <button id="insDelete" class="ins-del" type="button" @click=${this.#delete}>Delete clip</button>
-      <details><summary>raw clip JSON</summary><pre>${model.rawJson}</pre></details>
+      ${model.motionSource
+        ? html`
+            <button class="button full-width" type="button" id="insOpenMotion" @click=${this.#openMotion}>
+              <span class="icon" data-icon="motion"></span>
+              Edit component · ${model.motionSource}
+            </button>
+          `
+        : ""}
+      ${model.canDelete
+        ? html`<button class="ins-del" type="button" @click=${this.#delete}>Delete clip</button>`
+        : ""}
+      ${model.rawJson
+        ? html`<details class="details"><summary>Technical details</summary><code>${model.rawJson}</code></details>`
+        : ""}
     `;
   }
 
-  #renderRow(row: InspectorRow): TemplateResult {
+  #renderRow(row: InspectorRow, clipId: string): TemplateResult {
     if (row.kind === "value") {
-      return html`<div class="ins-row"><span class="ins-k">${row.label}</span><span class="ins-v">${row.value}</span></div>`;
+      return html`
+        <div class="inspector-metric">
+          <span>${row.label}</span>
+          <span>${row.value}</span>
+        </div>
+      `;
+    }
+    if (row.readOnly) {
+      return html`
+        <div class="inspector-metric">
+          <span>${row.label}</span>
+          <span>${row.value}</span>
+        </div>
+      `;
     }
     return html`
-      <div class="ins-row">
-        <label class="ins-k">${row.label}</label>
-        <span class="ins-v">${this.#renderField(row)}</span>
-      </div>
+      <label class="field">
+        <span class="field-label">${row.label}</span>
+        ${this.#renderField(row, clipId)}
+      </label>
     `;
   }
 
-  #renderField(field: InspectorFieldRow): TemplateResult {
+  #renderField(field: InspectorFieldRow, clipId: string): TemplateResult {
     if (field.kind === "textarea") {
-      return html`<textarea id=${field.primaryText ? "insText" : ""} data-edit-key=${field.key}
-        .value=${String(field.value)} @input=${this.#edit}></textarea>`;
+      return html`
+        <textarea data-edit-key=${field.key} data-clip-id=${clipId}
+          .value=${String(field.value)} @change=${this.#edit} @blur=${this.#edit}
+          @keydown=${this.#fieldKeydown}></textarea>
+      `;
     }
     if (field.kind === "color") {
-      return html`<input type="color" data-edit-key=${field.key} .value=${String(field.value)} @input=${this.#edit} />`;
+      return html`
+        <div class="color-row">
+          <input type="color" data-edit-key=${field.key} data-clip-id=${clipId}
+            .value=${String(field.value).slice(0, 7)} @change=${this.#edit} @blur=${this.#edit} />
+          <span class="color-value">${String(field.value).toUpperCase()}</span>
+        </div>
+      `;
     }
-    return html`<input type="number" data-edit-key=${field.key} .value=${String(field.value)}
-      min=${field.min ?? ""} max=${field.max ?? ""} step=${field.step ?? ""} @change=${this.#edit} />`;
+    if (field.kind === "select") {
+      return html`
+        <select data-edit-key=${field.key} data-clip-id=${clipId}
+          .value=${String(field.value)} @change=${this.#edit} @blur=${this.#edit}>
+          ${(field.values ?? []).map((value) => html`<option value=${value}>${value}</option>`)}
+        </select>
+      `;
+    }
+    if (field.kind === "checkbox") {
+      return html`
+        <input type="checkbox" data-edit-key=${field.key} data-clip-id=${clipId}
+          .checked=${Boolean(field.value)} @change=${this.#edit} @blur=${this.#edit} />
+      `;
+    }
+    return html`
+      <span class="number-field">
+        ${field.prefix ? html`<span class="field-prefix">${field.prefix}</span>` : ""}
+        <input type="number" aria-label=${[field.label, field.unit].filter(Boolean).join(" ")} data-edit-key=${field.key} data-clip-id=${clipId}
+          .value=${String(field.value)}
+          min=${field.min ?? ""} max=${field.max ?? ""} step=${field.step ?? ""}
+          @change=${this.#edit} @blur=${this.#edit}
+          @keydown=${this.#fieldKeydown} />
+        ${field.unit ? html`<span class="field-unit">${field.unit}</span>` : ""}
+      </span>
+    `;
   }
 
   #emit(intent: StudioInspectorIntent): void {
@@ -321,30 +368,63 @@ export class StudioInspector extends LitElement {
   }
 
   #edit = (event: Event): void => {
-    const model = this.viewModel;
-    const input = event.currentTarget as HTMLInputElement | HTMLTextAreaElement;
+    const input = event.currentTarget as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement;
     const key = input.dataset.editKey;
-    if (!model || !key) return;
+    const clipId = input.dataset.clipId;
+    if (!key || !clipId) return;
+    const previous = this.viewModel?.sections.flatMap((section) => section.rows).find((row) => row.kind !== "value" && row.key === key);
+    if (previous && String(previous.value) === input.value && input.type !== "checkbox") return;
     if (input instanceof HTMLInputElement && input.type === "number") {
+      if (input.value === "" || !input.validity.valid) { input.setAttribute("aria-invalid", "true"); input.title = input.validationMessage || "Enter a valid number"; return; }
       const parsed = Number(input.value);
       if (!Number.isFinite(parsed)) return;
-      const min = input.min === "" ? Number.NEGATIVE_INFINITY : Number(input.min);
-      const max = input.max === "" ? Number.POSITIVE_INFINITY : Number(input.max);
-      const value = Math.min(max, Math.max(min, parsed));
-      input.value = String(value);
-      this.#emit({ type: "edit", clipId: model.clipId, key, value });
+      input.removeAttribute("aria-invalid"); input.title = "";
+      this.#emit({ type: "edit", clipId, key, value: parsed });
       return;
     }
-    if (input instanceof HTMLTextAreaElement && input.value === "") return;
-    this.#emit({ type: "edit", clipId: model.clipId, key, value: input.value });
+    if (input instanceof HTMLInputElement && input.type === "checkbox") {
+      this.#emit({ type: "edit", clipId, key, value: input.checked });
+      return;
+    }
+    const value = input.type === "color" && previous && String(previous.value).length === 9
+      ? input.value + String(previous.value).slice(7) : input.value;
+    this.#emit({ type: "edit", clipId, key, value });
+  };
+
+  #editEnd = (event: Event): void => {
+    const input = event.currentTarget as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement;
+    const key = input.dataset.editKey;
+    const clipId = input.dataset.clipId;
+    if (!key || !clipId) return;
+    this.#emit({ type: "edit-end", clipId, key });
+  };
+
+  #fieldKeydown = (event: KeyboardEvent): void => {
+    if (event.key === "Escape") {
+      const input = event.currentTarget as HTMLInputElement | HTMLTextAreaElement;
+      const field = this.viewModel?.sections.flatMap((section) => section.rows)
+        .find((row) => row.kind !== "value" && row.key === input.dataset.editKey);
+      if (field) input.value = String(field.value);
+      input.removeAttribute("aria-invalid"); input.title = "";
+      input.blur();
+      event.stopPropagation();
+      return;
+    }
+    if (event.key === "Enter" && !event.shiftKey) {
+      (event.currentTarget as HTMLInputElement).blur();
+    }
   };
 
   #delete = (): void => {
-    if (this.viewModel) this.#emit({ type: "delete", clipId: this.viewModel.clipId });
+    if (this.viewModel?.clipId) {
+      this.#emit({ type: "delete", clipId: this.viewModel.clipId });
+    }
   };
 
   #openMotion = (): void => {
-    if (this.viewModel) this.#emit({ type: "open-motion", clipId: this.viewModel.clipId });
+    if (this.viewModel?.clipId) {
+      this.#emit({ type: "open-motion", clipId: this.viewModel.clipId });
+    }
   };
 }
 
@@ -357,7 +437,7 @@ export class StudioProjectControls extends LitElement {
 
   constructor() {
     super();
-    this.controlsState = { visible: false, dirty: false, conflictMessage: null };
+    this.controlsState = { visible: false, dirty: false, saving: false, conflictMessage: null };
   }
 
   protected createRenderRoot(): this {
@@ -368,19 +448,19 @@ export class StudioProjectControls extends LitElement {
     this.controlsState = state;
     this.requestUpdate();
     this.performUpdate();
+    hydrateIconsIn(this);
   }
 
   protected render(): TemplateResult {
     const state = this.controlsState;
+    if (!state.visible) return html``;
     return html`
-      <button id="saveBtn" class="save-btn ${state.dirty ? "dirty" : ""}" type="button"
-        ?hidden=${!state.visible} ?disabled=${!state.dirty} @click=${() => this.#emit("save")}>
-        ${state.dirty ? "Save *" : "Saved"}
+      ${state.conflictMessage ? html`<button class="button" type="button" @click=${() => this.#emit("reload")}>Discard draft and reload</button>` : ""}
+      <button class="button primary" id="saveBtn" type="button"
+        ?disabled=${!state.dirty || state.saving === true}
+        @click=${() => this.#emit("save")}>
+        ${state.saving ? "Saving…" : "Save"}
       </button>
-      <span id="conflictBar" class="conflict-bar" ?hidden=${state.conflictMessage == null}>
-        <span id="conflictText">${state.conflictMessage ?? ""}</span>
-        <button id="conflictReload" type="button" @click=${() => this.#emit("reload")}>Discard draft and reload</button>
-      </span>
     `;
   }
 
@@ -393,19 +473,27 @@ export class StudioProjectControls extends LitElement {
   }
 }
 
-function formatTime(value: number): string {
-  const seconds = Math.max(0, Number(value) || 0);
-  const minutes = Math.floor(seconds / 60);
-  const rest = seconds - minutes * 60;
-  return `${minutes}:${rest.toFixed(3).padStart(6, "0")}`;
+export function kindClassOf(kind: string): string {
+  const value = kind.toLowerCase();
+  if (value === "phase") return "kind-phase";
+  if (value.includes("motion") || value.includes("lottie")) return "kind-motion";
+  if (value.includes("audio")) return "kind-audio";
+  if (value.includes("caption") || value.includes("text")) return "kind-caption";
+  if (value.includes("effect") || value.includes("adjustment")) return "kind-effect";
+  return "kind-visual";
 }
 
-if (!customElements.get("studio-header-meta")) {
-  customElements.define("studio-header-meta", StudioHeaderMeta);
+export function kindIconOf(kind: string): string {
+  const value = kind.toLowerCase();
+  if (value.includes("motion") || value.includes("lottie")) return "motion";
+  if (value.includes("audio")) return "music";
+  if (value.includes("caption") || value.includes("text")) return "text";
+  if (value.includes("effect") || value.includes("adjustment")) return "effect";
+  return "film";
 }
-if (!customElements.get("studio-transport")) {
-  customElements.define("studio-transport", StudioTransport);
-}
+
+function hydrateIconsIn(root: ParentNode): void { hydrateIcons(root); }
+
 if (!customElements.get("studio-timeline")) {
   customElements.define("studio-timeline", StudioTimeline);
 }
@@ -418,8 +506,6 @@ if (!customElements.get("studio-project-controls")) {
 
 declare global {
   interface HTMLElementTagNameMap {
-    "studio-header-meta": StudioHeaderMeta;
-    "studio-transport": StudioTransport;
     "studio-timeline": StudioTimeline;
     "studio-inspector": StudioInspector;
     "studio-project-controls": StudioProjectControls;

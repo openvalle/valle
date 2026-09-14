@@ -5,7 +5,7 @@ export type GoodMotionContext = Extract<MotionContext, { status: "ok" }>;
 /**
  * Adapt the producer-owned fixed package to the shared Player input.
  *
- * Motion controls remain authoring UI state until the producer emits another fixed package. This
+ * Draft controls are sent to the producer, which emits a new immutable fixed package. This
  * adapter must not rebuild or quantize Timeline data in JavaScript, because doing so would detach
  * the document from its fixed manifest, ResourceManifest and verified binding bundle pins.
  */

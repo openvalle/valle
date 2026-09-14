@@ -1,0 +1,319 @@
+body {
+    height: 100dvh;
+    display: block;
+    overflow: hidden;
+    background: var(--bg);
+  }
+
+  valle-console-app {
+    display: grid;
+    grid-template-rows: var(--topbar-height) minmax(0, 1fr);
+    height: 100%;
+    min-height: 0;
+  }
+
+  .topbar {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 0 18px;
+    border-bottom: 1px solid var(--line);
+    background: var(--panel);
+    min-width: 0;
+  }
+
+  .brand {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    font-weight: 650;
+    font-size: 15px;
+    user-select: none;
+    white-space: nowrap;
+  }
+
+  .brand svg {
+    width: 20px;
+    height: 20px;
+    stroke: var(--text);
+    stroke-width: 1.8;
+    fill: none;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .brand .sub {
+    color: var(--muted);
+    font-weight: 500;
+    font-size: 12px;
+    margin-left: 2px;
+  }
+
+  .tabs {
+    display: inline-flex;
+    gap: 14px;
+    height: 100%;
+  }
+
+  .tab {
+    display: inline-flex;
+    align-items: center;
+    padding: 0 2px;
+    background: transparent;
+    border-bottom: 2px solid transparent;
+    color: var(--muted);
+    font-size: 13px;
+  }
+
+  .tab:hover:not(:disabled) {
+    background: transparent;
+    color: var(--text);
+  }
+
+  .tab[aria-selected="true"] {
+    border-color: var(--accent);
+    color: var(--text);
+  }
+
+  #loading {
+    margin-left: auto;
+    color: var(--muted);
+    font-size: 12px;
+  }
+
+  .panel {
+    min-height: 0;
+    overflow: auto;
+    padding: 14px 18px 24px;
+  }
+
+  .toolbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 14px;
+    flex-wrap: wrap;
+  }
+
+  .toolbar input[type="search"],
+  .toolbar input[type="text"] {
+    width: min(360px, 100%);
+  }
+
+  .toolbar label {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--muted);
+    font-size: 12px;
+  }
+
+  .dash {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-bottom: 12px;
+  }
+
+  .dash span {
+    background: var(--control);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 4px 10px;
+    font-size: 12px;
+    color: var(--muted);
+  }
+
+  .note {
+    color: var(--warning);
+    font-size: 12px;
+    margin-bottom: 12px;
+  }
+
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 12px;
+  }
+
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    overflow: hidden;
+    cursor: pointer;
+    text-align: left;
+    padding: 0;
+    color: inherit;
+  }
+
+  .card:hover {
+    border-color: var(--accent);
+    background: var(--panel);
+  }
+
+  .card.selected {
+    border-color: var(--accent);
+    box-shadow: inset 0 0 0 1px var(--accent);
+  }
+
+  .card img,
+  .card .thumb {
+    width: 100%;
+    aspect-ratio: 16 / 9;
+    object-fit: cover;
+    background: #0e1014;
+    display: block;
+  }
+
+  .card-title { padding: 8px 10px 0; font-size: 13px; font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .card-meta { display: flex; align-items: center; gap: 8px; padding: 4px 10px 10px; font-size: 12px; color: var(--muted); }
+  .card .thumb { position: relative; display: grid; place-items: center; }
+  .thumb-icon { font-size: 28px; color: var(--muted); }
+  .evidence { font-size: 12px; color: var(--muted); padding: 0 10px 10px; }
+
+  .list {
+    display: grid;
+    gap: 1px;
+    background: var(--line);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    overflow: hidden;
+  }
+
+  .row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 12px;
+    align-items: center;
+    padding: 10px 12px;
+    background: var(--panel);
+    cursor: pointer;
+    text-align: left;
+    color: inherit;
+  }
+
+  .row:hover { background: var(--hover); }
+  .row.selected {
+    background: var(--selected);
+    box-shadow: inset 2px 0 0 var(--accent);
+  }
+
+  .row strong {
+    display: block;
+    font-size: 13px;
+    font-weight: 500;
+  }
+
+  .row small {
+    color: var(--muted);
+    font-size: 12px;
+  }
+
+  .empty {
+    color: var(--muted);
+    font-size: 13px;
+    padding: 28px 8px;
+    text-align: center;
+  }
+
+  .empty code {
+    color: var(--text);
+    background: var(--control);
+    border-radius: 4px;
+    padding: 1px 6px;
+  }
+
+  #drawer {
+    position: fixed;
+    top: var(--topbar-height);
+    right: 0;
+    bottom: 0;
+    width: min(380px, 92vw);
+    background: var(--panel);
+    border-left: 1px solid var(--line);
+    box-shadow: -12px 0 30px #0006;
+    overflow: auto;
+    padding: 16px;
+    z-index: 30;
+  }
+
+  .drawer-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 12px;
+  }
+
+  .drawer-head b {
+    font-size: 14px;
+    font-weight: 550;
+  }
+
+  #drawer img {
+    width: 100%;
+    border-radius: 6px;
+    background: #0e1014;
+    margin-bottom: 12px;
+  }
+
+  #drawer dl {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 6px 12px;
+    margin: 0 0 14px;
+    font-size: 12px;
+  }
+
+  #drawer dt { color: var(--muted); }
+  #drawer dd { margin: 0; color: var(--text); font-variant-numeric: tabular-nums; }
+
+  #drawer h4 {
+    margin: 16px 0 8px;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--muted);
+  }
+
+  #drawer ul {
+    margin: 0 0 10px;
+    padding-left: 18px;
+    color: var(--text);
+    font-size: 12px;
+  }
+
+  .action-row {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 8px;
+    flex-wrap: wrap;
+  }
+
+  .action-row input { flex: 1 1 120px; }
+  .action-row input.narrow { flex: 0 0 110px; }
+
+  #dTags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 8px;
+  }
+
+  #dTags span {
+    background: var(--control);
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    padding: 2px 8px;
+    font-size: 11px;
+    color: var(--muted);
+  }
+
+  #drawer .danger {
+    margin-top: 18px;
+    width: 100%;
+  }
+
+  @media (max-width: 780px) {
+    .grid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
+  }

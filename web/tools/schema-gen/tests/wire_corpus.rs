@@ -75,7 +75,7 @@ fn fixed_motion_context() -> Value {
 fn non_timeline_host_protocols_remain_closed() {
     let boot = r#"{
       "protocolVersion":1,
-      "session":{"kind":"timeline-file","input":"timeline.json"},
+      "session":{"kind":"timeline-file","input":"timeline.json","token":"file-token"},
       "capabilities":{
         "saveTimeline":false,
         "editProject":false,

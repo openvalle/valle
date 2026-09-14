@@ -14,6 +14,11 @@ use valle_timeline::{Timeline, decode_timeline, timeline_bytes};
 
 pub fn run(action: TimelineAction) -> Result<std::process::ExitCode> {
     match action {
+        TimelineAction::Studio {
+            input,
+            web_assets_dir,
+            port,
+        } => crate::timeline_file::serve(&input, web_assets_dir.as_deref(), port),
         TimelineAction::Check { input } => {
             let timeline = decode_timeline(&super::read(&input)?)?;
             let temp = tempfile::tempdir()?;
@@ -67,13 +72,74 @@ fn render_document_impl(
     {
         bail!("output must have an .{extension} extension");
     }
+    let prepared = prepare_timeline_package(timeline, base)?;
+    let profile = canonical_fixed_execution_profile(COMMON_PROFILE_KEY).map_err(|e| anyhow!(e))?;
+    let files = fixed_package_files(
+        &prepared.canonical_timeline_json,
+        &prepared.resource_manifest_json,
+        &prepared.verified_binding_bundle_json,
+        &profile,
+    );
+    let opened = open_verified_fixed_package(&prepared.fixed_package_manifest_json, &files)
+        .map_err(|e| anyhow!(e))?;
+    let catalog = prepared.catalog;
+    let renderer = NativeRenderer::new(
+        NativeProject::from_render(opened.engine_render(), Arc::new(catalog)),
+        NativeRenderOptions {
+            backend: valle_render::executor::skia::SkiaBackendKind::Raster,
+            background: valle_engine::resource::OutputBackground::AuthorSrgbStraight {
+                color: valle_engine::resource::AuthorSrgbStraight(
+                    opened.engine_render().canvas().background_rgba(),
+                ),
+            },
+            progress: crate::output::render_progress(),
+            ..NativeRenderOptions::default()
+        },
+    );
+    if checking {
+        return Ok(std::process::ExitCode::SUCCESS);
+    }
+    let summary = match frame {
+        Some(f) => renderer.preview_frame_key(valle_engine::render::FrameKey::new(f), output)?,
+        None => renderer.export_mp4(output)?,
+    };
+    super::fixed_render::print_delivery_report(
+        &opened,
+        if frame.is_some() { "preview" } else { "export" },
+        output,
+        &summary,
+    )?;
+    Ok(std::process::ExitCode::SUCCESS)
+}
+
+/// One frozen preparation shared by Native delivery and browser previews.
+pub(crate) struct TimelinePreviewPackage {
+    pub timeline_json: String,
+    pub canonical_timeline_json: String,
+    pub fixed_package_manifest_json: String,
+    pub resource_manifest_json: String,
+    pub verified_binding_bundle_json: String,
+    pub motion: serde_json::Value,
+    pub blobs: std::collections::BTreeMap<String, Vec<u8>>,
+    catalog: NativeResourceCatalog,
+    _frozen: tempfile::TempDir,
+}
+
+pub(crate) fn prepare_timeline_package(
+    timeline: Timeline,
+    base: &Path,
+) -> Result<TimelinePreviewPackage> {
+    let timeline_json = String::from_utf8(timeline_bytes(&timeline)?)?;
     let mut doc: serde_json::Value = serde_json::from_slice(&timeline_bytes(&timeline)?)?;
     prepare_motion_instances(&mut doc)?;
     let timeline = decode_timeline(&serde_json::to_string(&doc)?)?;
-    let canonical = encode_canonical(&valle_compiler::compile_timeline(timeline)?)?;
+    let compiled = valle_compiler::compile_timeline(timeline)?;
+    let canonical = encode_canonical(&compiled)?;
     let frozen = tempfile::tempdir().context("creating immutable render resources")?;
     let mut resources = super::motion_package::FixedResources::new();
     let mut catalog = NativeResourceCatalog::new();
+    let mut blobs = std::collections::BTreeMap::new();
+    let mut structures = Vec::new();
     if let Some(locators) = doc["resources"].as_object() {
         let mut used = std::collections::BTreeSet::new();
         collect_used_resources(&doc["tracks"], &mut used);
@@ -123,7 +189,43 @@ fn render_document_impl(
                     doc["canvas"]["height"].as_u64().unwrap_or(1080) as u32,
                 );
                 let prepared = super::motion::compile_timeline_component(&path, &specs, canvas)?;
+                let mut source_map = serde_json::to_value(&prepared.compiled.source_map)?;
+                source_map["entry"] = serde_json::json!(path);
                 let artifact = prepared.compiled.artifact;
+                let compiled_json: serde_json::Value = serde_json::from_str(&canonical)?;
+                for track in compiled_json["document"]["visual"]["tracks"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                {
+                    for item in track["items"].as_array().into_iter().flatten() {
+                        if item["source"]["component"].as_str() == Some(&id) {
+                            let frame_rate: valle_timeline::FrameRate = serde_json::from_value(
+                                compiled_json["document"]["canvas"]["fps"].clone(),
+                            )?;
+                            let frame = |value: &serde_json::Value| -> Result<i64> {
+                                let time: valle_timeline::RationalTime =
+                                    serde_json::from_value(value.clone())?;
+                                Ok(valle_timeline::internal::quantize::quantize_frame_boundary(
+                                    time, frame_rate,
+                                )?)
+                            };
+                            let mut cues = serde_json::Map::new();
+                            for (name, cue) in
+                                item["source"]["cues"].as_object().into_iter().flatten()
+                            {
+                                cues.insert(name.clone(), serde_json::json!({
+                                    "startFrame": frame(&cue["start"])?, "endFrame": frame(&cue["end"])?,
+                                    "enterFrames": frame(&cue["enterDuration"])?, "exitFrames": frame(&cue["exitDuration"])?
+                                }));
+                            }
+                            structures.push(serde_json::json!({
+                                "clipId": item["id"],
+                                "authoring": { "sourceMap": source_map, "totalFrames": frame(&item["source"]["sourceDuration"])?, "cues": cues }
+                            }));
+                        }
+                    }
+                }
                 if let Some(bindings) = clip["resources"].as_object() {
                     for (control, resource) in bindings {
                         let key = resource
@@ -154,6 +256,10 @@ fn render_document_impl(
                         role: format!("font:{i}"),
                         resource_id: font_id,
                     });
+                    blobs.insert(
+                        ContentDigest::of_bytes(bytes).as_hex().to_owned(),
+                        bytes.to_vec(),
+                    );
                     catalog.insert_bytes(ContentDigest::of_bytes(bytes), bytes.to_vec())?;
                 }
                 use valle_timeline::internal::wire::resource::*;
@@ -187,6 +293,7 @@ fn render_document_impl(
             };
             let bytes = bound_asset.bytes;
             let hash = bound_asset.hash;
+            blobs.insert(hash.as_hex().to_owned(), bytes.clone());
             let frozen_path = frozen.path().join(hash.as_hex());
             std::fs::write(&frozen_path, &bytes)?;
             let path = frozen_path;
@@ -333,34 +440,18 @@ fn render_document_impl(
     let profile = canonical_fixed_execution_profile(COMMON_PROFILE_KEY).map_err(|e| anyhow!(e))?;
     let files = fixed_package_files(&canonical, manifest, &bindings, &profile);
     let package = canonical_fixed_package_manifest(&files).map_err(|e| anyhow!(e))?;
-    let opened = open_verified_fixed_package(&package, &files).map_err(|e| anyhow!(e))?;
-    let renderer = NativeRenderer::new(
-        NativeProject::from_render(opened.engine_render(), Arc::new(catalog)),
-        NativeRenderOptions {
-            backend: valle_render::executor::skia::SkiaBackendKind::Raster,
-            background: valle_engine::resource::OutputBackground::AuthorSrgbStraight {
-                color: valle_engine::resource::AuthorSrgbStraight(
-                    opened.engine_render().canvas().background_rgba(),
-                ),
-            },
-            progress: crate::output::render_progress(),
-            ..NativeRenderOptions::default()
-        },
-    );
-    if checking {
-        return Ok(std::process::ExitCode::SUCCESS);
-    }
-    let summary = match frame {
-        Some(f) => renderer.preview_frame_key(valle_engine::render::FrameKey::new(f), output)?,
-        None => renderer.export_mp4(output)?,
-    };
-    super::fixed_render::print_delivery_report(
-        &opened,
-        if frame.is_some() { "preview" } else { "export" },
-        output,
-        &summary,
-    )?;
-    Ok(std::process::ExitCode::SUCCESS)
+    open_verified_fixed_package(&package, &files).map_err(|e| anyhow!(e))?;
+    Ok(TimelinePreviewPackage {
+        timeline_json,
+        canonical_timeline_json: canonical,
+        fixed_package_manifest_json: package,
+        resource_manifest_json: manifest.to_owned(),
+        verified_binding_bundle_json: bindings,
+        motion: serde_json::json!({"structures": structures, "problems": [], "shaders": []}),
+        blobs,
+        catalog,
+        _frozen: frozen,
+    })
 }
 
 fn resource_kind(doc: &serde_json::Value, name: &str) -> Option<AssetKind> {

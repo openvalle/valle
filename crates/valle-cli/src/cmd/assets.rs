@@ -12,6 +12,12 @@ use valle_project::assets::{
 
 use crate::{AssetsAction, EntityCmd};
 
+pub(crate) fn studio_context(home: Home) -> Ctx {
+    let mut ctx = Ctx::new(home, Box::new(CliProber));
+    ctx.analyzers = super::assets_analyzers::assemble();
+    ctx
+}
+
 pub(crate) fn run(json: bool, events: bool, action: AssetsAction) -> Result<ExitCode> {
     if events {
         // Use NDJSON for progress events followed by the final report.

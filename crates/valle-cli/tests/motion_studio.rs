@@ -1,6 +1,6 @@
 // Studio renders through browser Wasm and requires only the motion feature.
 
-//! Motion Studio acceptance with real Chromium and Wasm. Control edits cannot mutate a pinned package; source reload publishes a new package while retaining the last good result.
+//! Motion Studio acceptance with real Chromium and Wasm. Control edits and source reload publish a new package while retaining the last good result.
 
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -407,8 +407,8 @@ fn motion_studio_controls_are_authoring_state_until_a_new_package_is_published()
         "props panel must expose editable controls: {report}"
     );
     assert_eq!(
-        probe["fixedPackagePinnedAfterLocalEdit"], true,
-        "local controls must not mutate pinned package pixels: {report}"
+        probe["draftPreviewUpdated"], true,
+        "local controls must prepare and display new package pixels: {report}"
     );
     assert_eq!(
         probe["playbackVariesAcrossFrames"], true,
@@ -681,10 +681,7 @@ fn module_scenes_are_editable_and_source_locatable_in_studio() {
         let probe = &report["stats"]["motionStudio"];
         assert_eq!(probe["prop"], "accentStrength", "{name}: {report}");
         assert_eq!(probe["propsEditable"], true, "{name}: {report}");
-        assert_eq!(
-            probe["fixedPackagePinnedAfterLocalEdit"], true,
-            "{name}: {report}"
-        );
+        assert_eq!(probe["draftPreviewUpdated"], true, "{name}: {report}");
         assert_eq!(
             probe["playbackVariesAcrossFrames"], true,
             "{name}: {report}"

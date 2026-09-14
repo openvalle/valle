@@ -29,6 +29,7 @@ pub enum StudioSessionWire {
     },
     TimelineFile {
         input: String,
+        token: String,
     },
     MotionFile {
         input: String,

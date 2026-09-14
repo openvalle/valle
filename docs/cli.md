@@ -8,7 +8,7 @@ no source checkout; for a source build, use `cargo xtask build --release` and se
 | Group | Use it for | First command |
 | --- | --- | --- |
 | `motion` | Author animated graphics in JSX, check, preview, render | `valle motion check examples/hello.motion.tsx` |
-| `timeline` | Validate and render a timeline document | `valle timeline check examples/timeline.json` |
+| `timeline` | Validate, edit and render a timeline document | `valle timeline studio examples/timeline.json` |
 | `project` | Keep timeline revisions, apply edits, restore, preview, render | `valle project create demo --timeline examples/timeline.json` |
 | `assets` | Import, organize, annotate and search local media | `valle assets add cover.png --tag demo` |
 | `media` | Process individual media files with local models | `valle media enhance speech.wav -o clean.wav` |
@@ -100,6 +100,7 @@ The [example timeline](../examples/timeline.json) cuts from blue to teal after
 
 ```sh
 valle timeline check examples/timeline.json --json
+valle timeline studio examples/timeline.json --port 0
 valle timeline render examples/timeline.json -o "$demo_dir/timeline.mp4" --events
 valle timeline render examples/timeline.json --frame 60 -o "$demo_dir/timeline.png"
 ```
@@ -132,10 +133,18 @@ timeline file, independent of the current working directory. A Motion clip uses
 opens the same verified package as rendering. It reports missing used files and
 invalid source ranges; it does not test every frame or encoder.
 
+`timeline studio <file>` opens a JSON file directly. Relative resource paths resolve
+from that file's directory. Edits preview without changing the file; **Save** atomically
+writes the complete JSON back to the opened path. External file changes cause a conflict
+until explicitly reloaded. This session does not create a project or persistent revisions.
+Use `--web-assets-dir web/dist` when running a development binary without embedded assets.
+
 ## Project: versioned timeline editing
 
 See the [Project editing reference](project.md), also available through
 `valle docs project`, for revision handling, resource storage and Studio workflows.
+`project studio` takes a project ID from this store, not a JSON path; use
+`timeline studio` to edit a standalone file.
 
 ```sh
 valle project create demo --timeline examples/timeline.json --json

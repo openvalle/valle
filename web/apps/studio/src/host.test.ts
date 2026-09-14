@@ -138,10 +138,32 @@ function fixedPackage() {
 }
 
 describe("Studio host adapters", () => {
+  test("file sessions load their snapshot and authenticate preview and explicit saves", async () => {
+    const boot = assertStudioBoot({
+      protocolVersion: 1, session: { kind: "timeline-file", input: "/cuts/edit.json", token: "file-token" },
+      capabilities: { ...capabilities, saveTimeline: true }, runtime,
+    });
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const host = new TimelineFileHost(boot, async (url, init) => {
+      calls.push({ url: String(url), init });
+      return json(String(url) === "/timeline/edit" ? { outcome: "committed", revision: 2 } : fixedPackage());
+    });
+    expect((await host.loadTimeline()).timeline).toEqual(sparseTimeline());
+    await host.prepareTimelinePreview({ timeline: sparseTimeline() });
+    const edit = { baseRevision: 1, timeline: sparseTimeline(), intent: "Save file" };
+    expect(await host.saveTimeline(edit)).toEqual({ outcome: "committed", revision: 2 });
+    expect(calls.map((call) => call.url)).toEqual(["/timeline/get", "/timeline/preview", "/timeline/edit"]);
+    for (const call of calls.slice(1)) {
+      expect(call.init?.method).toBe("POST");
+      expect(new Headers(call.init?.headers).get("x-valle-token")).toBe("file-token");
+    }
+    expect(JSON.parse(String(calls[2]?.init?.body))).toEqual(edit);
+  });
+
   test("selects all three hosts only from the explicit session discriminator", async () => {
     const fixtures = [
       [{ kind: "project", projectId: "p1", revision: 3, token: "tok" }, ProjectHost],
-      [{ kind: "timeline-file", input: "cut.valle.json" }, TimelineFileHost],
+      [{ kind: "timeline-file", input: "cut.valle.json", token: "file-token" }, TimelineFileHost],
       [{ kind: "motion-file", input: "card.motion.tsx", generation: 2 }, MotionFileHost],
     ] as const;
     for (const [session, Host] of fixtures) {
@@ -155,7 +177,7 @@ describe("Studio host adapters", () => {
   test("rejects malformed Studio event JSON", () => {
     const boot = assertStudioBoot({
       protocolVersion: 1,
-      session: { kind: "timeline-file", input: "cut.valle.json" },
+      session: { kind: "timeline-file", input: "cut.valle.json", token: "file-token" },
       capabilities,
       runtime,
     });
@@ -222,10 +244,49 @@ describe("Studio host adapters", () => {
     expect(report).toMatchObject({ outcome: "committed", revision: 8 });
   });
 
+  test("project host prepares a one-shot draft preview without persisting", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const boot = assertStudioBoot({
+      protocolVersion: 1,
+      session: { kind: "project", projectId: "p1", revision: 3, token: "secret" },
+      capabilities: { ...capabilities, saveTimeline: true, editProject: true },
+      runtime,
+    });
+    const packageJson = fixedPackage();
+    const fetcher = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      calls.push({ url, init });
+      return json({
+        status: "ok",
+        timelineJson: packageJson.timelineJson,
+        timeline: packageJson.timeline,
+        render: packageJson.render,
+      });
+    });
+    const host = new ProjectHost(
+      boot as typeof boot & { session: Extract<typeof boot.session, { kind: "project" }> },
+      fetcher,
+    );
+
+    const draft = sparseTimeline();
+    const result = await host.prepareTimelinePreview?.({ timeline: draft });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.url).toBe("/timeline/preview?project=p1");
+    expect(new Headers(calls[0]?.init?.headers).get("x-valle-token")).toBe("secret");
+    expect(JSON.parse(String(calls[0]?.init?.body))).toEqual({ timeline: draft });
+    expect(result).toMatchObject({
+      status: "ok",
+      render: {
+        fixedPackageManifestJson: packageJson.render.fixedPackageManifestJson,
+      },
+    });
+  });
+
   test("Timeline host fails closed on the unsupported versioned track-list shape", async () => {
     const boot = assertStudioBoot({
       protocolVersion: 1,
-      session: { kind: "timeline-file", input: "timeline.json" },
+      session: { kind: "timeline-file", input: "timeline.json", token: "file-token" },
       capabilities,
       runtime,
     });
@@ -249,7 +310,7 @@ describe("Studio host adapters", () => {
   test("Timeline host rejects partial fixed render packages", async () => {
     const boot = assertStudioBoot({
       protocolVersion: 1,
-      session: { kind: "timeline-file", input: "timeline.json" },
+      session: { kind: "timeline-file", input: "timeline.json", token: "file-token" },
       capabilities,
       runtime,
     });
@@ -487,7 +548,7 @@ describe("Studio host adapters", () => {
         }),
       },
       assets: [
-        { id: "poster", type: "image", url: "images/poster.png" },
+        { id: "asset:poster", type: "image", url: "images/poster.png" },
         { id: "font:noto", type: "font", url: "fonts/noto.otf" },
       ],
       runtimeAssets: { engine: {} },

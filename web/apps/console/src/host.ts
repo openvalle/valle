@@ -1,14 +1,13 @@
 // Console application assembly.
 //
 // Library and project management backed by server commands. Asset actions use `/library/execute`;
-// project actions use `/execute`. Fetch and rerender after mutations so the server remains
+// projects use the bound Studio snapshot. Fetch and rerender after mutations so the server remains
 // authoritative.
 
-import { bridgeProjectAssetToLibrary } from "./asset-bridge.ts";
 
 export {};
 
-interface ConsoleConfig { token?: string }
+interface ConsoleConfig { token?: string; projectId?: string; library?: boolean }
 interface ApiError { message?: string }
 interface Evidence { field: string; snippet: string }
 interface AssetRow {
@@ -189,6 +188,8 @@ function thumbNode(hash: string, kind: string): HTMLElement {
 function assetCard(row: AssetRow): HTMLElement {
   const card = el("div", "card");
   card.dataset.hash = row.hash;
+  card.tabIndex = 0; card.setAttribute("role", "button");
+  card.addEventListener("keydown", (event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); card.click(); } });
   card.appendChild(thumbNode(row.hash, row.kind));
   const title = row.title || row.original_name || row.hash.slice(0, 12);
   card.appendChild(el("div", "card-title", title));
@@ -210,6 +211,8 @@ function assetCard(row: AssetRow): HTMLElement {
 function searchCard(item: SearchItem): HTMLElement {
   const card = el("div", "card");
   card.dataset.hash = item.asset;
+  card.tabIndex = 0; card.setAttribute("role", "button");
+  card.addEventListener("keydown", (event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); card.click(); } });
   card.appendChild(thumbNode(item.asset, item.kind));
   card.appendChild(el("div", "card-title", item.title || item.asset.slice(0, 12)));
   const meta = el("div", "card-meta");
@@ -262,138 +265,36 @@ function onSearchInput(): void {
   }, 200);
 }
 
-// Project command transport.
-async function proj(command: Verb, project?: string): Promise<ApiReport> {
-  const body: { command: Verb; project?: string } = { command };
-  if (project) body.project = project;
-  const res = await fetch("/execute", {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      "x-valle-token": config.token ?? "",
-    },
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) throw new Error(`execute endpoint ${res.status}`);
-  return await res.json();
-}
-
-// Project list, creation, details, and asset-library integration.
+// The local Host owns one project. Only show that project's real snapshot and open link.
 let projectsReachable = false;
-
-function fmtSecs(s: number | null | undefined): string {
-  return s != null ? `${Number(s).toFixed(1)}s` : "";
+interface BoundProject {
+  projectId: string;
+  timelineRevision: { revision: number; createdAt: string };
+  timeline: { canvas: { width: number; height: number; fps: number | string }; tracks: Record<string, unknown> };
 }
-
 async function loadProjects(): Promise<number> {
-  const report = await proj({ verb: "list" });
-  if (!report.ok) throw new Error(report.error?.message ?? "list projects failed");
-  const rows = report.data?.projects ?? [];
-  const list = $("projList");
-  list.replaceChildren(...rows.map(projectRow));
-  $("projEmpty").hidden = rows.length > 0;
-  return rows.length;
-}
-
-function projectRow(p: ProjectRow): HTMLElement {
+  if (!config.projectId) throw new Error("No project is attached to this host");
+  const response = await fetch(`/timeline/get?project=${encodeURIComponent(config.projectId)}`);
+  if (!response.ok) throw new Error(`Project snapshot returned ${response.status}`);
+  const project = await response.json() as BoundProject;
   const row = el("div", "proj-row");
-  row.dataset.project = p.id;
+  row.dataset.project = project.projectId;
   const head = el("div", "proj-head");
-  head.appendChild(el("b", null, p.name || "(Untitled)"));
-  head.appendChild(el("span", "pid", p.id));
-  head.appendChild(el("span", "meta", `head ${p.head ?? "?"} · ${fmtSecs(p.duration)}`));
-  head.appendChild(el("span", "spacer"));
-  const detailBtn = el("button", null, "Details");
-  head.appendChild(detailBtn);
-  const open = el("a", null, "Open Studio");
-  open.href = `/studio?project=${encodeURIComponent(p.id)}`;
-  head.appendChild(open);
-  row.appendChild(head);
-
+  head.append(el("b", null, project.projectId), el("span", "meta", new Date(project.timelineRevision.createdAt).toLocaleString()), el("span", "spacer"));
+  const button = el("button", "button", "Details");
+  const open = el("a", "button primary", "Open Studio");
+  open.href = `/studio?project=${encodeURIComponent(project.projectId)}`;
+  head.append(button, open);
   const detail = el("div", "proj-detail");
+  const canvas = project.timeline.canvas;
+  detail.textContent = `${canvas.width} × ${canvas.height} · ${canvas.fps} fps · Revision ${project.timelineRevision.revision}`;
   detail.hidden = true;
-  row.appendChild(detail);
-  detailBtn.addEventListener("click", () => {
-    if (detail.hidden) {
-      renderProjectDetail(p.id, detail).catch((e) => showError(e));
-      detail.hidden = false;
-      detailBtn.textContent = "Collapse";
-    } else {
-      detail.hidden = true;
-      detailBtn.textContent = "Details";
-    }
-  });
-  return row;
-}
-
-/// Combine project details, history, and library links. A shortened project asset address must
-/// uniquely match a full library digest before linking.
-async function renderProjectDetail(id: string, box: HTMLElement): Promise<void> {
-  const [d, l, pa, libList] = await Promise.all([
-    proj({ verb: "describe" }, id),
-    proj({ verb: "log", limit: 20 }, id),
-    proj({ verb: "list-assets" }, id),
-    libraryReachable ? lib({ verb: "list" }) : Promise.resolve<ApiReport>({ ok: false }),
-  ]);
-  if (!d.ok) throw new Error(d.error?.message ?? "describe failed");
-  const libHashes: string[] = libList.ok ? (libList.data?.assets ?? []).map((a: AssetRow) => a.hash) : [];
-
-  box.replaceChildren();
-  const c = d.data?.canvas ?? {};
-  box.appendChild(
-    el("div", null, `Canvas ${c.width}×${c.height}@${c.fps} · Duration ${fmtSecs(c.duration)} · head ${d.data?.head}`),
-  );
-
-  const tracks = d.data?.tracks ?? [];
-  if (tracks.length) {
-    box.appendChild(el("h5", null, "Tracks"));
-    const ul = el("ul");
-    for (const t of tracks) {
-      ul.appendChild(el("li", null, `${t.id} (${t.kind}) · ${(t.clips ?? []).length} clips`));
-    }
-    box.appendChild(ul);
-  }
-
-  const assets = pa.ok ? (pa.data?.assets ?? []) : [];
-  if (assets.length) {
-    box.appendChild(el("h5", null, "Assets and library links"));
-    const ul = el("ul");
-    for (const a of assets) {
-      const li = el("li", null, `${a.id} · ${a.type ?? ""} `);
-      const bridge = bridgeProjectAssetToLibrary(a.id, libHashes);
-      if (bridge.status === "matched") {
-        const link = el("span", "bridge", "In library →");
-        link.addEventListener("click", () => {
-          selectTab("library");
-          openDetail(bridge.contentDigest).catch((e) => showError(e));
-        });
-        li.appendChild(link);
-        li.dataset.bridge = bridge.contentDigest;
-      } else if (bridge.status === "ambiguous") {
-        const label = el("span", "nobridge ambiguous", `Ambiguous library match (${bridge.contentDigests.length} candidates)`);
-        label.title = bridge.contentDigests.join("\n");
-        li.appendChild(label);
-      } else if (bridge.status === "unaddressable") {
-        li.appendChild(el("span", "nobridge", "Project asset has no verifiable content prefix"));
-      } else {
-        li.appendChild(el("span", "nobridge", "Asset outside library"));
-      }
-      ul.appendChild(li);
-    }
-    box.appendChild(ul);
-  }
-
-  const log = l.ok ? (l.data?.log ?? []) : [];
-  if (log.length) {
-    box.appendChild(el("h5", null, "Edit history"));
-    const ul = el("ul");
-    for (const r of log) {
-      ul.appendChild(
-        el("li", null, `#${r.seq} ${r.cmd}${r.note ? `——${r.note}` : ""} · ${r.by ?? ""} · ${r.ts ?? ""}`),
-      );
-    }
-    box.appendChild(ul);
-  }
+  button.addEventListener("click", () => { detail.hidden = !detail.hidden; button.textContent = detail.hidden ? "Details" : "Collapse"; });
+  row.append(head, detail);
+  $("projList").replaceChildren(row);
+  $("projEmpty").hidden = true;
+  $("projNote").hidden = true;
+  return 1;
 }
 
 // Library statistics.
@@ -633,26 +534,10 @@ async function main(): Promise<void> {
   });
 
   // Project actions.
-  $("projCreate").addEventListener("click", async () => {
-    const name = $<HTMLInputElement>("projName").value.trim();
-    $<HTMLInputElement>("projName").value = "";
-    try {
-      const report = await proj({ verb: "create", name: name || undefined });
-      if (!report.ok) {
-        $("projNote").textContent = report.error?.message ?? "create failed";
-        $("projNote").hidden = false;
-        return;
-      }
-      $("projNote").hidden = true;
-      await loadProjects();
-    } catch (e) {
-      showError(e);
-    }
-  });
   $("projRefresh").addEventListener("click", () => loadProjects().catch((e) => showError(e)));
 
   try {
-    const raw: unknown = await (await fetch("/config.json")).json();
+    const raw: unknown = await (await fetch("/console/config.json")).json();
     config = typeof raw === "object" && raw !== null ? raw as ConsoleConfig : {};
   } catch {
     config = {};
@@ -661,6 +546,7 @@ async function main(): Promise<void> {
 
   // Check endpoint availability and show an unavailable state for static preview hosts.
   try {
+    if (!config.library) throw new Error("No asset library is attached");
     await loadGrid();
     libraryReachable = true;
     renderDash().catch(() => {});
@@ -699,7 +585,7 @@ async function main(): Promise<void> {
     projectsReachable = true;
   } catch {
     projectsReachable = false;
-    $("projNote").textContent = "This host has no project endpoint. Start Studio with `valle project --project <ID> studio`.";
+    $("projNote").textContent = "This host has no project endpoint. Open a project with `valle project studio <ID>`.";
     $("projNote").hidden = false;
   }
 
@@ -804,10 +690,6 @@ async function runSmoke(): Promise<void> {
       probe.bridgeHits = detail.querySelectorAll("li[data-bridge]").length;
       probe.studioLink = firstRow.querySelector("a")?.getAttribute("href") ?? "";
     }
-    $<HTMLInputElement>("projName").value = "smoke-created";
-    $("projCreate").dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    await new Promise((r) => setTimeout(r, 500));
-    probe.projectsAfterCreate = document.querySelectorAll("#projList .proj-row").length;
     $("tabBtnLibrary").dispatchEvent(new MouseEvent("click", { bubbles: true }));
   }
 

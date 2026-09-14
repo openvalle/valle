@@ -669,7 +669,15 @@ impl ProductEngine {
         let background = if transparent {
             OutputBackground::Transparent
         } else {
-            OutputBackground::opaque_srgb([0, 0, 0])
+            let render = self
+                .active_render
+                .as_ref()
+                .ok_or_else(|| JsError::new("[render_closed] call open_fixed_package first"))?;
+            OutputBackground::AuthorSrgbStraight {
+                color: crate::resource::AuthorSrgbStraight(
+                    render.compiled().canvas().background_rgba(),
+                ),
+            }
         };
         let output =
             OutputSpec::srgb_preview(background).map_err(|error| js_error("output_spec", error))?;
@@ -1249,6 +1257,34 @@ mod tests {
         let files = fixed_package_files(&timeline, &resource_manifest, &bundle, &execution_profile);
         let fixed_package_manifest = canonical_fixed_package_manifest(&files).unwrap();
         (fixed_package_manifest, timeline, resource_manifest, bundle)
+    }
+
+    #[test]
+    fn preview_accepts_authored_background_and_explicit_transparency() {
+        let (timeline, resources, bundle, profile) = empty_fixed_package_fixtures();
+        let mut value: serde_json::Value = serde_json::from_str(&timeline).unwrap();
+        value["document"]["background"]["color"] = serde_json::json!("#102030ff");
+        let timeline = valle_timeline::internal::encode_canonical(
+            &valle_timeline::internal::decode_canonical(&value.to_string()).unwrap(),
+        )
+        .unwrap();
+        let files = fixed_package_files(&timeline, &resources, &bundle, &profile);
+        let package = canonical_fixed_package_manifest(&files).unwrap();
+        let mut engine = ProductEngine::new();
+        let receipt: serde_json::Value = serde_json::from_str(
+            &engine
+                .open_fixed_package(&package, &timeline, &resources, &bundle)
+                .unwrap(),
+        )
+        .unwrap();
+        let id = receipt["renderId"].as_str().unwrap();
+        for transparent in [false, true] {
+            assert!(
+                engine
+                    .evaluate_prepare_preview(id, 0, 320, 180, transparent)
+                    .is_ok()
+            );
+        }
     }
 
     #[test]

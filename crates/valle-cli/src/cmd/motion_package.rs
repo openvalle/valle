@@ -39,6 +39,7 @@ use super::motion::BoundAsset;
 const COMPONENT_RESOURCE_ID: &str = "component:standalone-motion";
 
 pub(super) struct StandaloneMotionPackageInput<'a> {
+    pub timing: Option<valle_motion::PhaseSpec>,
     pub artifact: &'a SceneArtifact,
     pub assets: &'a BTreeMap<String, BoundAsset>,
     pub font_blobs: &'a [Vec<u8>],
@@ -176,7 +177,9 @@ fn build_timeline(
             ))
         })
         .collect::<Result<BTreeMap<_, _>>>()?;
-    let phase = input.artifact.controls.phase_spec();
+    let phase = input
+        .timing
+        .unwrap_or_else(|| input.artifact.controls.phase_spec());
     let document = json!({
         "document": {
             "canvas": {

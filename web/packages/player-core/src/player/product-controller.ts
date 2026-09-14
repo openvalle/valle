@@ -88,7 +88,7 @@ export type RenderPackageReplacement = Pick<
   | "resourceManifestJson"
   | "verifiedBindingBundleJson"
 > &
-  Partial<Pick<BrowserValleWebPlayerOptions, "assets">>;
+  Partial<Pick<BrowserValleWebPlayerOptions, "assets">> & { isCurrent?: () => boolean };
 
 export interface CanonicalTimelineDocument {
   timeline: TimelineDocument;
@@ -1031,6 +1031,13 @@ export class BrowserValleWebPlayer {
       }
       throw error;
     }
+    if (next.isCurrent && !next.isCurrent()) {
+      staged.compositor.dispose();
+      staged.planner.close();
+      staged.engine.free();
+      if (resume) await this.play();
+      return undefined;
+    }
     this.commitStagedRenderPackage(staged);
     this.timeS = clamp(this.timeS, 0, this.lastFrameTimeS());
     const rendered = await this.seek(this.timeS);
@@ -1423,7 +1430,7 @@ export class BrowserValleWebPlayer {
       const bytes = pixelBytes(extent.width, extent.height, 4);
       const sample = record(request.sample, "resource sample");
       if (asset.type === "video") {
-        const time = rationalSeconds(record(sample.time, "video source time"));
+        const time = rationalSeconds(sample.time);
         const result = await this.videoImage(asset, time, gpu);
         return {
           object: { key, kind: "visual", image: result.image },
@@ -1435,7 +1442,7 @@ export class BrowserValleWebPlayer {
         };
       }
       if (asset.type === "lottie") {
-        const time = rationalSeconds(record(sample.time, "Lottie source time"));
+        const time = rationalSeconds(sample.time);
         const image = await this.lottieImage(asset, time);
         return {
           object: { key, kind: "visual", image },
@@ -2554,13 +2561,11 @@ function applyHomography(matrix: readonly number[], point: readonly [number, num
   return mapped.every(Number.isFinite) ? mapped : null;
 }
 
-function rationalSeconds(value: Wire): number {
-  const numerator = typeof value.numerator === "bigint" ? Number(value.numerator) : Number(value.numerator);
-  const denominator = Number(value.denominator);
-  if (!Number.isSafeInteger(numerator) || !Number.isSafeInteger(denominator) || denominator <= 0) {
-    throw new Error("RationalTime is invalid");
-  }
-  return numerator / denominator;
+function rationalSeconds(value: unknown): number {
+  if (typeof value !== "string" || !/^-?(0|[1-9]\d*)\/[1-9]\d*$/.test(value)) throw new Error("RationalTime must be an exact num/den string");
+  const [numerator, denominator] = value.split("/").map(Number);
+  if (!Number.isSafeInteger(numerator) || !Number.isSafeInteger(denominator) || denominator! <= 0) throw new Error("RationalTime is invalid");
+  return numerator! / denominator!;
 }
 
 function exactInteger(value: unknown, label: string): number {

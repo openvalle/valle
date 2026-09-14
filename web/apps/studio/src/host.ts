@@ -84,6 +84,37 @@ type TimelineMotionSource = Extract<TimelineVisualClip["source"], { type: "motio
 export type TimelineEdit = EditTimelineRequest;
 export type SaveReport = EditTimelineResponse;
 
+export interface TimelinePreviewRequest {
+  timeline: Timeline;
+}
+
+export type TimelinePreviewResult =
+  | {
+    status: "ok";
+    timelineJson: string;
+    timeline: Timeline;
+    assets: unknown[];
+    motion: unknown;
+    render: {
+      timelineJson: string;
+      timeline: TimelineDocument;
+      fixedPackageManifestJson: string;
+      resourceManifestJson: string;
+      resourceManifest: ResourceManifest;
+      verifiedBindingBundleJson: string;
+    };
+  }
+  | {
+    status: "error";
+    diagnostics: ReadonlyArray<{ class: string; code: string; message: string }>;
+  };
+
+export interface MotionPreviewRequest {
+  props: Record<string, unknown>;
+  timing: { enterFrames: number; exitFrames: number };
+  cues: Record<string, { startFrame: number; endFrame: number; enterFrames: number; exitFrames: number }>;
+}
+
 export interface StudioHost {
   readonly boot: StudioBoot;
   load(): Promise<StudioBoot>;
@@ -91,6 +122,8 @@ export interface StudioHost {
   loadTimeline?(): Promise<TimelineContext>;
   saveTimeline?(edit: TimelineEdit): Promise<SaveReport>;
   loadMotion?(request: MotionRequest): Promise<MotionContext>;
+  prepareMotionPreview?(request: MotionPreviewRequest): Promise<MotionContext>;
+  prepareTimelinePreview?(request: TimelinePreviewRequest): Promise<TimelinePreviewResult>;
 }
 
 interface EventSourceLike {
@@ -141,7 +174,12 @@ abstract class BaseStudioHost implements StudioHost {
 
   protected async fetchJson(url: string, init?: RequestInit): Promise<Record<string, unknown>> {
     const response = await this.fetcher(url, init);
-    if (!response.ok) throw new Error(`${url} returned ${response.status}`);
+    if (!response.ok) {
+      const failure: unknown = await response.json().catch(() => null);
+      const message = isRecord(failure) && isRecord(failure.error) && typeof failure.error.message === "string"
+        ? `: ${failure.error.message}` : "";
+      throw new Error(`${url} returned ${response.status}${message}`);
+    }
     const value: unknown = await response.json();
     if (!isRecord(value)) throw new Error(`${url} did not return a JSON object`);
     return value;
@@ -187,6 +225,23 @@ export class ProjectHost extends BaseStudioHost {
     return report as unknown as SaveReport;
   }
 
+  async prepareTimelinePreview(
+    request: TimelinePreviewRequest,
+  ): Promise<TimelinePreviewResult> {
+    const report = await this.fetchJson(
+      `/timeline/preview?project=${encodeURIComponent(this.boot.session.projectId)}`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-valle-token": this.boot.session.token,
+        },
+        body: JSON.stringify({ timeline: request.timeline }),
+      },
+    );
+    return report as unknown as TimelinePreviewResult;
+  }
+
 }
 
 export function playerRuntimeAssetsFromStudioBoot(boot: StudioBoot): PlayerRuntimeAssets {
@@ -216,11 +271,41 @@ export function playerRuntimeAssetsFromStudioBoot(boot: StudioBoot): PlayerRunti
 
 export class TimelineFileHost extends BaseStudioHost {
   async loadTimeline(): Promise<TimelineContext> {
-    return assertTimelineContext(await this.fetchJson("/config.json"));
+    return assertTimelineContext({
+      ...await this.fetchJson("/timeline/get"),
+      runtimeAssets: playerRuntimeAssetsFromStudioBoot(this.boot),
+      assetBaseUrl: this.boot.runtime.assetBaseUrl,
+      proxyBase: this.boot.runtime.proxyBase ?? null,
+    });
+  }
+
+  private async post(url: string, body: unknown): Promise<Record<string, unknown>> {
+    if (this.boot.session.kind !== "timeline-file") throw new Error("Timeline file session required");
+    return this.fetchJson(url, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-valle-token": this.boot.session.token },
+      body: JSON.stringify(body),
+    });
+  }
+
+  async saveTimeline(edit: TimelineEdit): Promise<SaveReport> {
+    return await this.post("/timeline/edit", edit) as unknown as SaveReport;
+  }
+
+  async prepareTimelinePreview(request: TimelinePreviewRequest): Promise<TimelinePreviewResult> {
+    return await this.post("/timeline/preview", request) as unknown as TimelinePreviewResult;
   }
 }
 
 export class MotionFileHost extends BaseStudioHost {
+  async prepareMotionPreview(request: MotionPreviewRequest): Promise<MotionContext> {
+    return assertMotionContext(await this.fetchJson("/motion/preview", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-valle-preview": "1" },
+      body: JSON.stringify(request),
+    }));
+  }
+
   async loadMotion(_request: MotionRequest = {}): Promise<MotionContext> {
     return assertMotionContext(await this.fetchJson("/config.json"));
   }
@@ -272,7 +357,7 @@ export function assertStudioBoot(value: unknown): StudioBoot {
       throw new Error("project Studio session is incomplete");
     }
   } else if (kind === "timeline-file") {
-    if (typeof value.session.input !== "string") throw new Error("timeline-file input is required");
+    if (typeof value.session.input !== "string" || typeof value.session.token !== "string") throw new Error("timeline-file input and token are required");
   } else if (kind === "motion-file") {
     if (typeof value.session.input !== "string" || typeof value.session.generation !== "number") {
       throw new Error("motion-file session is incomplete");
@@ -459,7 +544,7 @@ function isTimeline(value: unknown): value is Timeline {
 /** Project a Motion editor context only after the caller's Product admission has succeeded. */
 export function projectMotionContextFromAdmittedPreview(
   config: TimelineContext,
-  boot: StudioBoot & { session: Extract<StudioSession, { kind: "project" }> },
+  boot: StudioBoot & { session: Exclude<StudioSession, { kind: "motion-file" }> },
   request: MotionRequest,
   authoringTimeline: TimelineDocument = config.render.timeline,
 ): MotionContext {
@@ -474,10 +559,12 @@ export function projectMotionContextFromAdmittedPreview(
   const motionContent = timelineClip?.type === "clip" && timelineClip.source.type === "motion"
     ? timelineClip.source
     : null;
-  const component = motionContent?.component ?? null;
+  const admittedClip = config.render.timeline.document.visual.tracks.flatMap((track) => track.items)
+    .find((item) => item.type === "clip" && item.id === clipId);
+  const component = admittedClip?.type === "clip" && admittedClip.source.type === "motion" ? admittedClip.source.component : null;
   const missingContext = (missing: string) => motionContextError(
-    clipId ?? boot.session.projectId,
-    Number(config.generation ?? boot.session.revision),
+    clipId ?? (boot.session.kind === "project" ? boot.session.projectId : boot.session.input),
+    Number(config.generation ?? config.timelineRevision.revision),
     "motion-context-missing",
     `Selected project clip is missing ${missing}`,
   );
@@ -547,7 +634,7 @@ export function projectMotionContextFromAdmittedPreview(
   return assertMotionContext({
     status: "ok",
     protocolVersion: STUDIO_HOST_PROTOCOL_VERSION,
-    generation: Number(config.generation ?? boot.session.revision),
+    generation: Number(config.generation ?? config.timelineRevision.revision),
     input: typeof sourceMap.entry === "string" ? sourceMap.entry : `components/${component}.tsx`,
     artifactDigest,
     artifact,
@@ -595,10 +682,7 @@ function boundMotionAssets(
   assetBaseUrl: string,
 ): Array<{ name: string; kind: string; url: string }> {
   return Object.entries(bindings).flatMap(([name, reference]) => {
-    const assetId = typeof reference === "string" && reference.startsWith("asset:")
-      ? reference.slice("asset:".length)
-      : null;
-    const asset = assetId ? assetsById.get(assetId) : undefined;
+    const asset = typeof reference === "string" ? assetsById.get(reference) : undefined;
     const kind = String(record(controls[name]).kind ?? "");
     return asset && typeof asset.url === "string"
       ? [{ name, kind, url: resolveHostedAssetUrl(asset.url, assetBaseUrl) }]

@@ -8,6 +8,30 @@ fn valle() -> Command {
     Command::new(env!("CARGO_BIN_EXE_valle"))
 }
 
+#[test]
+fn timeline_studio_accepts_files_and_project_studio_explains_its_id_argument() {
+    let help = valle()
+        .args(["timeline", "studio", "--help"])
+        .output()
+        .unwrap();
+    assert!(help.status.success());
+    let text = String::from_utf8(help.stdout).unwrap();
+    assert!(text.contains("<INPUT>"));
+    assert!(text.contains("Save writes back"));
+    let home = tempfile::tempdir().unwrap();
+    let rejected = valle()
+        .env("VALLE_HOME", home.path())
+        .args(["project", "studio", "examples/timeline.json"])
+        .output()
+        .unwrap();
+    assert!(!rejected.status.success());
+    assert!(
+        String::from_utf8(rejected.stderr)
+            .unwrap()
+            .contains("valle timeline studio <file>")
+    );
+}
+
 fn listed_help_commands(help: &str) -> Vec<&str> {
     help.lines()
         .skip_while(|line| line.trim() != "Commands:")
