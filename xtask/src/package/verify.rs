@@ -175,23 +175,34 @@ fn verify_runtime(
             );
         }
     }
-    // Motion mounts its complete native font pack in memory, beyond the base Web manifest font.
-    let font_specs: Vec<Value> = serde_json::from_str(include_str!(
-        "../../../crates/valle-motion/src/runtime-fonts.json"
-    ))?;
-    for font in font_specs {
-        let name = font["name"].as_str().context("font name missing")?;
-        let route = if name.starts_with("KaTeX_") {
-            format!("runtime/fonts/katex/{name}")
-        } else {
-            format!("runtime/fonts/{name}")
-        };
-        let downloaded = temp.path().join("downloaded-font");
-        fetch(&format!("{base}/{route}"), &downloaded)?;
-        ensure!(
-            hash_file(&downloaded)? == font["sha256"].as_str().unwrap(),
-            "served built-in font mismatch: {name}"
-        );
+    // Motion serves the native font assets from memory. Derive expected bytes from
+    // the source assets instead of maintaining a second, fixed font/hash catalog.
+    let font_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../assets/fonts");
+    for (directory, route_prefix) in [("noto", "runtime/fonts"), ("katex", "runtime/fonts/katex")] {
+        let mut fonts = fs::read_dir(font_root.join(directory))?
+            .map(|entry| entry.map(|entry| entry.path()))
+            .collect::<std::io::Result<Vec<_>>>()?;
+        fonts.retain(|path| {
+            path.is_file()
+                && matches!(
+                    path.extension().and_then(|ext| ext.to_str()),
+                    Some("ttf" | "otf")
+                )
+        });
+        fonts.sort();
+        ensure!(!fonts.is_empty(), "no bundled fonts found in {directory}");
+        for font in fonts {
+            let name = font
+                .file_name()
+                .and_then(|name| name.to_str())
+                .context("invalid font filename")?;
+            let downloaded = temp.path().join("downloaded-font");
+            fetch(&format!("{base}/{route_prefix}/{name}"), &downloaded)?;
+            ensure!(
+                hash_file(&downloaded)? == hash_file(&font)?,
+                "served built-in font mismatch: {name}"
+            );
+        }
     }
     println!(
         "Verified {}: {platform}, single binary, embedded licenses/Web assets, no resource extraction, Motion/PNG/Studio without FFmpeg",
