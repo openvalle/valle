@@ -7,7 +7,7 @@ import { initSync, ProductEngine } from "../generated/web/valle_engine.js";
 import { decodePackedAbi, RESOURCE_REQUESTS_ABI } from "./abi/packed.ts";
 
 const root = resolve(import.meta.dir, "../../../..");
-const cli = join(root, "target/debug/valle");
+const cli = process.env.VALLE_TEST_CLI ?? join(root, "target/debug/valle");
 // Run with VALLE_TEST_NATIVE_BACKEND=metal outside the sandbox to exercise the GPU.
 const nativeBackend = process.env.VALLE_TEST_NATIVE_BACKEND ?? "raster";
 if (nativeBackend !== "raster" && nativeBackend !== "metal") throw new Error("unsupported test backend");

@@ -84,6 +84,60 @@ pub fn transform_output_image(
         .collect()
 }
 
+/// Convert a packed working-linear buffer to premultiplied sRGB in place. This is the
+/// SDR-100 preview contract (no tone mapping, ChromaCompress), before storage quantization.
+/// Keeping storage conversion in the executor preserves its F16 intermediate and alpha rules.
+pub fn transform_srgb_preview_pixels(
+    pixels: &mut [f32],
+    opaque: bool,
+) -> Result<(), OutputMathError> {
+    if !pixels.len().is_multiple_of(4) {
+        return Err(OutputMathError::InvalidRgbaBuffer);
+    }
+    // Flat spans are common in both artwork and transparent padding. Reuse only an exactly
+    // equal adjacent input; no quantized lookup, retained frame state or resource invalidation.
+    let mut previous: Option<([f32; 4], [f32; 4])> = None;
+    for channels in pixels.chunks_exact_mut(4) {
+        let input = [channels[0], channels[1], channels[2], channels[3]];
+        if let Some((source, encoded)) = previous
+            && source == input
+        {
+            channels.copy_from_slice(&encoded);
+            continue;
+        }
+        // F16 storage can underflow coverage before an HDR channel. As in the output shader,
+        // zero coverage discards that residual RGB instead of attempting to unpremultiply it.
+        let pixel = if input[3] == 0.0 {
+            PremulRgba32::TRANSPARENT
+        } else {
+            PremulRgba32::from_premultiplied(input)?
+        };
+        let target = working_to_primaries(pixel.straight_rgb()?, ColorPrimaries::Rec709)?;
+        let mapped = gamut_map(
+            target,
+            ColorPrimaries::Rec709,
+            1.0,
+            GamutMap::ChromaCompress,
+        )?;
+        let encoded = encode_output_rgb(
+            mapped,
+            TransferFunction::Srgb,
+            ColorPrimaries::Rec709,
+            crate::resource::SignalLuminance::SDR_100,
+        )?;
+        let alpha = if opaque { 1.0 } else { pixel.alpha() };
+        let output = [
+            encoded[0] * alpha,
+            encoded[1] * alpha,
+            encoded[2] * alpha,
+            alpha,
+        ];
+        channels.copy_from_slice(&output);
+        previous = Some((input, output));
+    }
+    Ok(())
+}
+
 pub fn tone_map(rgb: [f32; 3], method: ToneMap) -> Result<[f32; 3], OutputMathError> {
     if !rgb.iter().all(|channel| channel.is_finite()) {
         return Err(OutputMathError::NonFiniteOutput);
@@ -264,6 +318,8 @@ fn round_shift_even(value: u32, shift: u32) -> u32 {
 
 #[derive(Debug, Error, Clone, PartialEq)]
 pub enum OutputMathError {
+    #[error("output buffer must contain complete RGBA pixels")]
+    InvalidRgbaBuffer,
     #[error(transparent)]
     Pixel(#[from] super::PixelError),
     #[error(transparent)]
@@ -281,6 +337,52 @@ mod tests {
         AuthorSrgbStraight, Dither, GamutMap, LuminanceNits, OutputBackground, OutputColorEncoding,
         SignalLuminance,
     };
+
+    #[test]
+    fn packed_preview_matches_scalar_reference_with_repeated_and_changing_pixels() {
+        for opaque in [false, true] {
+            let output = spec(
+                OutputColorEncoding::SRGB,
+                if opaque {
+                    OutputAlphaMode::Opaque
+                } else {
+                    OutputAlphaMode::PremultipliedCoverage
+                },
+                ToneMap::None,
+                GamutMap::ChromaCompress,
+                Dither::None,
+                OutputBitDepth::Eight,
+                SignalLuminance::SDR_100,
+            );
+            let mut input = Vec::new();
+            for alpha in [0.0, 1.0 / 255.0, 0.25, 0.5, 1.0] {
+                let alpha = if opaque { 1.0 } else { alpha };
+                for rgb in [
+                    [0.0; 3],
+                    [1.0; 3],
+                    [1.0, 0.0, 0.0],
+                    [-0.5, 0.2, 1.4],
+                    [0.0031308; 3],
+                ] {
+                    let pixel = PremulRgba32::from_straight(rgb, alpha).unwrap();
+                    input.extend([pixel; 3]);
+                }
+            }
+            let expected: Vec<_> = input
+                .iter()
+                .flat_map(|pixel| {
+                    transform_output_pixel(*pixel, output, [0, 0])
+                        .unwrap()
+                        .encoded
+                })
+                .collect();
+            let mut actual: Vec<_> = input.iter().flat_map(|pixel| pixel.channels()).collect();
+            transform_srgb_preview_pixels(&mut actual, opaque).unwrap();
+            assert_eq!(actual, expected);
+        }
+        assert!(transform_srgb_preview_pixels(&mut [0.0; 3], false).is_err());
+        assert!(transform_srgb_preview_pixels(&mut [f32::NAN, 0.0, 0.0, 1.0], false).is_err());
+    }
 
     fn spec(
         target: OutputColorEncoding,

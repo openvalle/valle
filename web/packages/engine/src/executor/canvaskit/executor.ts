@@ -1,3 +1,4 @@
+import { drawSrgbPreviewCpu } from "./output-transform.ts";
 import canvasKitPackage from "canvaskit-wasm/package.json";
 import type {
   Canvas,
@@ -62,10 +63,21 @@ export interface CanvasKitExecutionTarget {
   /** Same immutable limits admitted by Engine lowering for this frame. */
   readonly maxSurfaceBytes?: bigint;
   readonly maxFrameBytes?: bigint;
+  /** Optional diagnostics for materialized passes; GPU times measure submission, not completion. */
+  readonly onPassTiming?: (timing: CanvasKitPassTiming) => void;
 }
 
-/** Canonical Rust/Wasm Motion Glass kernel owned by ProductEngine. */
-export interface CanvasKitGlassKernel {
+export interface CanvasKitPassTiming {
+  readonly kind: string;
+  readonly width: number;
+  readonly height: number;
+  readonly drawMs: number;
+  readonly snapshotMs: number;
+}
+
+/** Canonical Rust/Wasm kernels owned by ProductEngine. */
+export interface CanvasKitEngineKernels {
+  transform_srgb_preview_pixels(pixels: Float32Array, opaque: boolean): void;
   pack_motion_glass_uniforms(
     programJson: string,
     ownerToDevice: Float64Array,
@@ -258,7 +270,7 @@ export class CanvasKitExecutor {
 
   constructor(
     readonly CanvasKit: CanvasKit,
-    readonly glassKernel: CanvasKitGlassKernel | null = null,
+    readonly engineKernels: CanvasKitEngineKernels | null = null,
   ) {
     this.builtins = new CanvasKitBuiltinRuntime(CanvasKit);
   }
@@ -600,6 +612,7 @@ async function executeCanvasKitFrame(
         retireOuterResources(plan, index + 1, resources, outputId);
         continue;
       }
+      const passStarted = target.onPassTiming ? performance.now() : 0;
       const slot = surfaceSlotByResource.get(outputId);
       const slotExtent = slot === undefined
         ? extent
@@ -628,7 +641,7 @@ async function executeCanvasKitFrame(
             CanvasKit,
             builtins,
             arena,
-            executor.glassKernel,
+            executor.engineKernels,
             program,
             required(boundSchedule.programs, positiveId(kind.program, "RasterProgram.program"), "bound program schedule"),
             destinations,
@@ -645,7 +658,7 @@ async function executeCanvasKitFrame(
             CanvasKit,
             builtins,
             arena,
-            executor.glassKernel,
+            executor.engineKernels,
             program,
             required(boundSchedule.programs, positiveId(kind.program, "RasterCaption.program"), "bound program schedule"),
             [],
@@ -709,6 +722,12 @@ async function executeCanvasKitFrame(
               canvas,
               input.image,
               record(kind.operation, "copy operation"),
+              !target.directContext
+                && outputRoi.x === 0 && outputRoi.y === 0
+                && outputRoi.width === extent.width && outputRoi.height === extent.height
+                && rootBytes * 2n <= maxSurfaceBytes
+                && arena.residentBytes + rootBytes * 4n + dataTextureBytes <= maxFrameBytes
+                ? executor.engineKernels : null,
             );
           } finally {
             if (input.owned) input.image?.delete();
@@ -720,17 +739,27 @@ async function executeCanvasKitFrame(
       }} finally { canvas.restore(); }
 
       surface.flush();
+      const snapshotStarted = target.onPassTiming ? performance.now() : 0;
       const snapshot = surface.makeImageSnapshot();
+      target.onPassTiming?.({
+        kind: String(kind.kind), width: outputRoi.width, height: outputRoi.height,
+        drawMs: snapshotStarted - passStarted, snapshotMs: performance.now() - snapshotStarted,
+      });
       resources.set(outputId, { image: snapshot, owned: true, roi: outputRoi });
       retireOuterResources(plan, index + 1, resources, outputId);
       maximumLiveImages = Math.max(maximumLiveImages, liveImages(resources));
     }
 
     output = image(resources, positiveId(plan.output, "plan.output"));
+    const presentStarted = target.onPassTiming ? performance.now() : 0;
     const targetCanvas = target.surface.getCanvas();
     targetCanvas.clear(CanvasKit.TRANSPARENT);
     drawImage(CanvasKit, targetCanvas, output, 1, "src");
     target.surface.flush();
+    target.onPassTiming?.({
+      kind: "presentOutput", width: extent.width, height: extent.height,
+      drawMs: performance.now() - presentStarted, snapshotMs: 0,
+    });
     arena.prepareReport();
     return {
       profile: {
@@ -903,7 +932,7 @@ function executeProgram(
   CanvasKit: CanvasKit,
   builtins: CanvasKitBuiltinRuntime,
   arena: SurfaceArena,
-  glassKernel: CanvasKitGlassKernel | null,
+  engineKernels: CanvasKitEngineKernels | null,
   admitted: AdmittedProgram,
   bound: BoundProgramRuntimeSchedule,
   destinations: ImageValue[],
@@ -989,7 +1018,7 @@ function executeProgram(
           executeProgramPass(
             CanvasKit,
             builtins,
-            glassKernel,
+            engineKernels,
             canvas,
             admitted,
             kind,
@@ -1332,7 +1361,7 @@ function drawDirectRasterBackdrop(
 function executeProgramPass(
   CanvasKit: CanvasKit,
   builtins: CanvasKitBuiltinRuntime,
-  glassKernel: CanvasKitGlassKernel | null,
+  engineKernels: CanvasKitEngineKernels | null,
   canvas: Canvas,
   admitted: AdmittedProgram,
   kind: Wire,
@@ -1375,7 +1404,7 @@ function executeProgramPass(
       return;
     }
     case "motionGlass": {
-      const kernel = requireGlassKernel(glassKernel);
+      const kernel = requireGlassKernel(engineKernels);
       const input = programValue(values, kind.input);
       const ownerToDevice = programMatrix(admitted, localPlan, kind.output, device);
       const uniforms = kernel.pack_motion_glass_uniforms(
@@ -1386,7 +1415,7 @@ function executeProgramPass(
       return;
     }
     case "applyMotionGlassForeground": {
-      const kernel = requireGlassKernel(glassKernel);
+      const kernel = requireGlassKernel(engineKernels);
       const input = programValue(values, kind.input);
       const ownerToDevice = programTransformMatrix(
         admitted,
@@ -2655,7 +2684,7 @@ function programTransformMatrix(admitted: AdmittedProgram, localToProgram: numbe
   return mul3(device, mul3(normalize, localToProgram));
 }
 
-function requireGlassKernel(kernel: CanvasKitGlassKernel | null): CanvasKitGlassKernel {
+function requireGlassKernel(kernel: CanvasKitEngineKernels | null): CanvasKitEngineKernels {
   if (!kernel) fail("motion_glass_kernel", "ProductEngine Motion Glass kernel is not attached");
   return kernel;
 }
@@ -3410,6 +3439,7 @@ function drawOutputTransform(
   canvas: Canvas,
   input: Image | null,
   operation: Wire,
+  cpuKernel: CanvasKitEngineKernels | null,
 ): void {
   if (operation.kind !== "outputTransform") {
     fail("copy_operation", `copy operation '${String(operation.kind)}' is outside the closed set`);
@@ -3417,23 +3447,25 @@ function drawOutputTransform(
   const spec = record(operation.spec, "output transform spec");
   const target = record(spec.target, "output color target");
   const luminance = record(spec.luminance, "output luminance");
-  drawBuiltinImage(
-    CanvasKit,
-    builtins,
-    canvas,
-    "outputTransform",
-    [
-      primariesCode(String(target.primaries)),
-      transferCode(String(target.transfer)),
-      enumCode(String(spec.toneMap), ["none", "reinhardLuminance"], "tone map"),
-      enumCode(String(spec.gamutMap), ["clip", "chromaCompress"], "gamut map"),
-      enumCode(String(spec.alpha), ["opaque", "straightCoverage", "premultipliedCoverage"], "output alpha"),
-      positiveId(luminance.referenceWhite, "output reference white"),
-      positiveId(luminance.peak, "output peak luminance"),
-    ],
-    [input],
-    "src",
-  );
+  const uniforms = [
+    primariesCode(String(target.primaries)),
+    transferCode(String(target.transfer)),
+    enumCode(String(spec.toneMap), ["none", "reinhardLuminance"], "tone map"),
+    enumCode(String(spec.gamutMap), ["clip", "chromaCompress"], "gamut map"),
+    enumCode(String(spec.alpha), ["opaque", "straightCoverage", "premultipliedCoverage"], "output alpha"),
+    positiveId(luminance.referenceWhite, "output reference white"),
+    positiveId(luminance.peak, "output peak luminance"),
+  ];
+  if (cpuKernel && input && target.primaries === "rec709" && target.transfer === "srgb"
+    // Low coverage can amplify tiny F16 differences when delivered as straight RGBA8.
+    // Keep coverage output on SkSL until it meets the same final-pixel parity budget.
+    && spec.alpha === "opaque"
+    && spec.toneMap === "none" && spec.gamutMap === "chromaCompress"
+    && luminance.referenceWhite === 100 && luminance.peak === 100) {
+    drawSrgbPreviewCpu(CanvasKit, canvas, input, cpuKernel, spec.alpha === "opaque");
+    return;
+  }
+  drawBuiltinImage(CanvasKit, builtins, canvas, "outputTransform", uniforms, [input], "src");
 }
 
 function enumCode(value: string, values: readonly string[], label: string): number {

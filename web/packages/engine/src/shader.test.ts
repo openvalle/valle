@@ -11,7 +11,7 @@ import { CanvasKitExecutor, type CanvasKitExternalObject } from "./executor/canv
 // Build the local CLI and WASM before this integration test. Both backends use a
 // package compiled from these author files; no generated shader/image fixtures are stored.
 const root = resolve(import.meta.dir, "../../../../");
-const cli = join(root, "target/debug/valle");
+const cli = process.env.VALLE_TEST_CLI ?? join(root, "target/debug/valle");
 // Run with VALLE_TEST_NATIVE_BACKEND=metal outside the sandbox to exercise the GPU.
 const nativeBackend = process.env.VALLE_TEST_NATIVE_BACKEND ?? "raster";
 if (nativeBackend !== "raster" && nativeBackend !== "metal") throw new Error("unsupported test backend");
@@ -190,7 +190,7 @@ test("frozen shaders align Native/CanvasKit sampling and arbitrary-frame results
       // Read the same verified package used by Native delivery through the existing local host.
       const server = spawn(["motion", "studio", "effect.motion.tsx", ...caseAssets, "--port", "0", "--web-assets-dir", join(root, "web/dist")]);
       let engine: ProductEngine | undefined;
-      const executor = new CanvasKitExecutor(ck);
+      let executor: CanvasKitExecutor | undefined;
       const surface = ck.MakeSurface(64, 64)!;
       try {
         const reader = server.stdout.getReader();
@@ -210,8 +210,17 @@ test("frozen shaders align Native/CanvasKit sampling and arbitrary-frame results
           return { engine, renderId: receipt.renderId as string };
         };
         const opened = open(); engine = opened.engine;
-        const renderWeb = async (engine: ProductEngine, renderId: string, frame: number) => {
-          const ticket = engine.evaluate_prepare_preview(renderId, BigInt(frame), 64, 64, false);
+        let cpuOutputCalls = 0;
+        executor = new CanvasKitExecutor(ck, {
+          transform_srgb_preview_pixels(pixels, opaque) {
+            cpuOutputCalls += 1;
+            engine!.transform_srgb_preview_pixels(pixels, opaque);
+          },
+          pack_motion_glass_uniforms: engine.pack_motion_glass_uniforms.bind(engine),
+          pack_motion_glass_foreground_uniforms: engine.pack_motion_glass_foreground_uniforms.bind(engine),
+        });
+        const renderWeb = async (engine: ProductEngine, renderId: string, frame: number, transparent = false) => {
+          const ticket = engine.evaluate_prepare_preview(renderId, BigInt(frame), 64, 64, transparent);
           const owned: Array<{ delete(): void }> = [];
           try {
             const requests = await decodePackedAbi(engine.resource_requests(ticket), RESOURCE_REQUESTS_ABI) as any[];
@@ -265,7 +274,7 @@ test("frozen shaders align Native/CanvasKit sampling and arbitrary-frame results
                 }).toThrow("bytes");
               } finally { engine.release_ticket(limited); }
             }
-            await executor.execute(engine.plan_template_bytes(ticket), engine.binding_bytes(ticket), engine.bound_schedule_bytes(ticket), { generation: 1n, objects }, { surface });
+            await executor!.execute(engine.plan_template_bytes(ticket), engine.binding_bytes(ticket), engine.bound_schedule_bytes(ticket), { generation: 1n, objects }, { surface });
             return Uint8Array.from(surface.getCanvas().readPixels(0, 0, info)!);
           } finally { owned.forEach(v => v.delete()); engine.release_ticket(ticket); }
         };
@@ -324,6 +333,10 @@ test("frozen shaders align Native/CanvasKit sampling and arbitrary-frame results
           }
           if (frame === 60) { if (first) expect(web).toEqual(first); else first = web; }
         }
+        expect(cpuOutputCalls).toBeGreaterThan(0);
+        const opaqueCalls = cpuOutputCalls;
+        await renderWeb(engine, opened.renderId, 60, true);
+        expect(cpuOutputCalls, "coverage output must retain the SkSL conversion").toBe(opaqueCalls);
         if (scene3d) {await rm(join(dir,"model.glb"));await rm(join(dir,"effect.vsksl"));}
         const fresh = open();
         try { expect(await renderWeb(fresh.engine, fresh.renderId, 60)).toEqual(first!); } finally { fresh.engine.free(); }
@@ -331,7 +344,7 @@ test("frozen shaders align Native/CanvasKit sampling and arbitrary-frame results
         failures.push(`${sampling}/${wrap}: ${error instanceof Error ? error.message : String(error)}`);
       } finally {
         server.kill(); await server.exited;
-        engine?.free(); executor.dispose(); surface.delete();
+        executor?.dispose(); engine?.free(); surface.delete();
       }
     }
     expect(failures, `${nativeBackend}/CanvasKit Shader parity`).toEqual([]);

@@ -9,6 +9,7 @@ export const PRODUCT_FRAME_WORKER_PROTOCOL_VERSION = 1 as const;
 export const PRODUCT_FRAME_TEMPLATE_CACHE_SIZE = 64;
 
 export interface ProductEngineWire {
+  transform_srgb_preview_pixels(pixels: Float32Array, opaque: boolean): void;
   open_fixed_package(
     fixedPackageManifestJson: string,
     timelineJson: string,

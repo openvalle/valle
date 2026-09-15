@@ -7,6 +7,7 @@ export {
   type CanvasKitGlyphCoverageProfile,
   type CanvasKitExecutionReport,
   type CanvasKitExecutionTarget,
+  type CanvasKitPassTiming,
   type CanvasKitExternalObject,
   type CanvasKitObjectTable,
 } from "./executor.ts";

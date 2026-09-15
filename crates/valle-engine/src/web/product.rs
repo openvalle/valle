@@ -212,6 +212,17 @@ impl ProductEngine {
         }
     }
 
+    /// CPU preview output using the shared color math. CanvasKit owns F16 storage and final
+    /// delivery quantization; this boundary only converts packed premultiplied float pixels.
+    pub fn transform_srgb_preview_pixels(
+        &self,
+        pixels: &mut [f32],
+        opaque: bool,
+    ) -> Result<(), JsError> {
+        crate::compositor::reference::transform_srgb_preview_pixels(pixels, opaque)
+            .map_err(|error| js_error("srgb_preview_output", error))
+    }
+
     /// Pack the canonical production SkSL uniform ABI. CanvasKit binds these floats and the
     /// working-linear backdrop mechanically; no material formulas or pixels cross into JS/Wasm.
     pub fn pack_motion_glass_uniforms(
