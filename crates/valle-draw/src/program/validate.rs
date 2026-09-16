@@ -1228,7 +1228,10 @@ fn insert_shader_requirement(
     shader: &crate::requirements::RuntimeShaderKey,
 ) -> Result<(), DrawProgramError> {
     if shader.work_per_pixel.operations == 0 {
-        return invalid("shader.workPerPixel", "shader work must include the output adapter");
+        return invalid(
+            "shader.workPerPixel",
+            "shader work must include the output adapter",
+        );
     }
     if let Some(existing) = shaders.insert(shader.uri.clone(), shader.clone())
         && existing != *shader
@@ -1655,13 +1658,13 @@ fn apply_filter_bounds(
             shutter_angle_degrees,
         } => {
             let scale = *shutter_angle_degrees / 360.0;
-            let dx = velocity[0] * scale;
-            let dy = velocity[1] * scale;
+            let dx = velocity[0].abs() * scale;
+            let dy = velocity[1].abs() * scale;
             Rect::from_edges(
-                rect.left() + f64::from(dx.min(0.0)),
-                rect.top() + f64::from(dy.min(0.0)),
-                rect.right() + f64::from(dx.max(0.0)),
-                rect.bottom() + f64::from(dy.max(0.0)),
+                rect.left() - f64::from(dx),
+                rect.top() - f64::from(dy),
+                rect.right() + f64::from(dx),
+                rect.bottom() + f64::from(dy),
             )
         }
         Filter::ColorMatrix { .. }
@@ -1819,9 +1822,9 @@ fn filter_footprint(filter: &Filter) -> Insets {
             shutter_angle_degrees,
         } => {
             let scale = *shutter_angle_degrees / 360.0;
-            let dx = velocity[0] * scale;
-            let dy = velocity[1] * scale;
-            Insets::new((-dx).max(0.0), (-dy).max(0.0), dx.max(0.0), dy.max(0.0))
+            let dx = velocity[0].abs() * scale;
+            let dy = velocity[1].abs() * scale;
+            Insets::new(dx, dy, dx, dy)
         }
         Filter::ColorMatrix { .. }
         | Filter::Brightness { .. }

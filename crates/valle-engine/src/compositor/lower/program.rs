@@ -1158,13 +1158,13 @@ fn program_filter_bounds(bounds: LocalBounds, filter: &Filter) -> LocalBounds {
             shutter_angle_degrees,
         } => {
             let scale = *shutter_angle_degrees / 360.0;
-            let dx = velocity[0] * scale;
-            let dy = velocity[1] * scale;
+            let dx = velocity[0].abs() * scale;
+            let dy = velocity[1].abs() * scale;
             LocalBounds::from_rect(Rect::from_edges(
-                rect.left() + f64::from(dx.min(0.0)),
-                rect.top() + f64::from(dy.min(0.0)),
-                rect.right() + f64::from(dx.max(0.0)),
-                rect.bottom() + f64::from(dy.max(0.0)),
+                rect.left() - f64::from(dx),
+                rect.top() - f64::from(dy),
+                rect.right() + f64::from(dx),
+                rect.bottom() + f64::from(dy),
             ))
         }
         Filter::ColorMatrix { .. }
@@ -1382,6 +1382,29 @@ mod tests {
         let mut group = Group::plain(vec![leaf]);
         group.transform = Transform2d([1.0, 0.0, x, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]);
         builder.push_node(Node::Group(group))
+    }
+
+    #[test]
+    fn velocity_blur_pass_bounds_match_centered_gaussian_geometry_in_both_directions() {
+        for velocity in [[20.0, -10.0], [-20.0, 10.0]] {
+            let mut builder = DrawProgramBuilder::new(Rect::new(0.0, 0.0, 64.0, 48.0));
+            let leaf = rect_path(
+                &mut builder,
+                Rect::new(10.0, 10.0, 20.0, 20.0),
+                LinearColor::new(1.0, 0.0, 0.0, 1.0),
+            );
+            let mut group = Group::plain(vec![leaf]);
+            group.filters.push(Filter::VelocityBlur {
+                velocity,
+                shutter_angle_degrees: 180.0,
+            });
+            let root = builder.push_node(Node::Group(group));
+            builder.add_root(root);
+            let program = builder.finish().unwrap();
+            let plan = ProgramPlan::derive(&program).unwrap();
+            assert!(plan.resources().iter().any(|resource| resource.bounds
+                == LocalBounds::from_rect(Rect::new(0.0, 5.0, 40.0, 30.0))));
+        }
     }
 
     #[test]

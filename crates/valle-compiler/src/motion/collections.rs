@@ -508,6 +508,7 @@ impl<'s> Compiler<'s> {
         &mut self,
         arguments: &[Argument<'_>],
         span: Span,
+        builtin: &str,
     ) -> Option<ExprId> {
         let [argument] = arguments else {
             self.illegal(
@@ -531,6 +532,8 @@ impl<'s> Compiler<'s> {
         let mut saw_fps = false;
         let mut preset: Option<(String, Span)> = None;
         let mut bare: Vec<(&'static str, f64, Span)> = Vec::new();
+        let mut initial_velocity = 0.0;
+        let mut seen = BTreeSet::new();
         for property in &object.properties {
             let ObjectPropertyKind::ObjectProperty(property) = property else {
                 self.illegal(
@@ -548,8 +551,27 @@ impl<'s> Compiler<'s> {
                 );
                 return None;
             };
+            if !seen.insert(name.clone()) {
+                self.illegal(
+                    DiagCode::GrammarForbidden,
+                    property.span(),
+                    format!("{builtin} option `{name}` is duplicated"),
+                );
+                return None;
+            }
             match name.as_str() {
                 "elapsedFrames" => elapsed = self.lower_expr(&property.value),
+                "initialVelocity" => {
+                    let Some(value) = self
+                        .fold_to_number(&property.value)
+                        .filter(|v| v.is_finite())
+                    else {
+                        self.illegal(DiagCode::GrammarForbidden, property.value.span(),
+                            "spring initialVelocity must be a finite number known at compile time, in normalized distance per second");
+                        return None;
+                    };
+                    initial_velocity = value;
+                }
                 "fps" => {
                     // Only accept ctx.fps.
                     let source = self.src(&property.value).trim().to_string();
@@ -604,7 +626,7 @@ impl<'s> Compiler<'s> {
                         property.span(),
                         format!(
                             "`{other}` is not a spring option; use elapsedFrames, fps, preset, \
-                             or mass/stiffness/damping"
+                             initialVelocity, or mass/stiffness/damping"
                         ),
                     );
                     return None;
@@ -663,6 +685,7 @@ impl<'s> Compiler<'s> {
                 mass: 1.0,
                 stiffness: 100.0,
                 damping: 10.0,
+                initial_velocity: 0.0,
             };
             for (name, value, value_span) in bare {
                 let slot = match name {
@@ -689,6 +712,12 @@ impl<'s> Compiler<'s> {
                 mass: params.mass,
                 stiffness: params.stiffness,
                 damping: params.damping,
+                initial_velocity,
+                output: if builtin == "springVelocity" {
+                    valle_motion::spring::SpringOutput::Velocity
+                } else {
+                    valle_motion::spring::SpringOutput::Position
+                },
             },
             span,
         ))

@@ -368,6 +368,8 @@ pub enum Expr {
         mass: f64,
         stiffness: f64,
         damping: f64,
+        initial_velocity: f64,
+        output: crate::spring::SpringOutput,
     },
     /// Post-layout node border box. Anchors and connectors compose this with existing geometry and
     /// arithmetic expressions. It is unavailable during base evaluation; admission rejects its use
@@ -1179,6 +1181,8 @@ pub(crate) fn validate_exprs(
                 mass,
                 stiffness,
                 damping,
+                initial_velocity,
+                ..
             } => {
                 if child(*elapsed_frames) != Some(ExprType::Number) {
                     errors.push(ValidationError::new(
@@ -1194,10 +1198,11 @@ pub(crate) fn validate_exprs(
                     || *stiffness <= 0.0
                     || !damping.is_finite()
                     || *damping < 0.0
+                    || !initial_velocity.is_finite()
                 {
                     errors.push(ValidationError::new(
                         format!("{path}"),
-                        "spring mass/stiffness must be finite and positive, damping non-negative",
+                        "spring mass/stiffness must be finite and positive, damping non-negative, initialVelocity finite",
                     ));
                 }
                 Some(ExprType::Number)

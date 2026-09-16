@@ -145,7 +145,8 @@ async function handleRequest(request: any, state: any) {
     const url = new URL(request.url);
     if (request.method === "POST" && url.pathname === "/result") {
         try {
-            state.resolveResult(await request.json());
+            const report = await request.json();
+            if (report.status !== "running") state.resolveResult(report);
             return new Response(null, { status: 204 });
         }
         catch (error) {

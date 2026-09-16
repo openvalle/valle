@@ -956,9 +956,10 @@ fn recording_filter_footprint(filter: &Filter) -> Insets {
             shutter_angle_degrees,
         } => {
             let scale = *shutter_angle_degrees / 360.0;
-            let dx = velocity[0] * scale;
-            let dy = velocity[1] * scale;
-            Insets::new((-dx).max(0.0), (-dy).max(0.0), dx.max(0.0), dy.max(0.0))
+            // Executors use a centered directional Gaussian, so support grows on both sides.
+            let dx = velocity[0].abs() * scale;
+            let dy = velocity[1].abs() * scale;
+            Insets::new(dx, dy, dx, dy)
         }
         _ => Insets::default(),
     }

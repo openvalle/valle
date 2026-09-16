@@ -6,6 +6,21 @@
 mod product;
 mod timeline;
 pub use product::ProductEngine;
+
+/// Read-only Studio samples, evaluated by the same Rust expressions as rendering.
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn sample_motion_properties(
+    artifact_json: &str,
+    request_json: &str,
+) -> Result<String, wasm_bindgen::JsError> {
+    let run = || -> Result<String, String> {
+        let artifact = serde_json::from_str(artifact_json).map_err(|e| e.to_string())?;
+        let request = serde_json::from_str(request_json).map_err(|e| e.to_string())?;
+        let samples = valle_motion::inspect::sample_properties(&artifact, &request)?;
+        serde_json::to_string(&samples).map_err(|e| e.to_string())
+    };
+    run().map_err(|e| wasm_bindgen::JsError::new(&e))
+}
 pub use timeline::{
     canonicalize_timeline_document, compile_timeline, normalize_timeline, timeline_document_view,
     timeline_source_time_delta_from_frames, timeline_time_from_frames,

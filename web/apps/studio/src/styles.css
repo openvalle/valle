@@ -1019,3 +1019,24 @@ valle-studio-app {
 .media-unavailable { color: var(--muted); font-size: 10px; padding: 0 6px; }
 
 .field-error { color: var(--error); background: var(--error-bg); padding: 10px; font-size: 12px; overflow-wrap: anywhere; }
+/* Read-only Motion diagnostics; all selectors stay inside the inspector. */
+.motion-curves { min-width: 0; }
+studio-motion-curves { display: block; min-width: 0; }
+.motion-curves select { width: 100%; min-width: 0; }
+.curve-range { display: flex; gap: 6px; margin: 10px 0; }
+.curve-range label { flex: 1; min-width: 0; font-size: 10px; }
+.curve-range input, .curve-range select { width: 100%; box-sizing: border-box; }
+.curve-channel { margin-top: 16px; border-top: 1px solid var(--border); padding-top: 10px; }
+.curve-channel output { display: block; font: 10px monospace; font-variant-numeric: tabular-nums; min-height: 16px; margin-top: 6px; }
+.curve-plot { display: block; width: 100%; margin: 6px 0; overflow: visible; }
+.curve-plot text { fill: currentColor; font: 9px monospace; }
+.curve-grid, .curve-phase { stroke: currentColor; opacity: .18; }
+.curve-phase { stroke-dasharray: 3 3; }
+.curve-axis-0 { stroke: #42be95; }
+circle.curve-axis-0 { fill: #42be95; }
+.curve-axis-1 { stroke: #689dff; }
+circle.curve-axis-1 { fill: #689dff; }
+.curve-boundary { fill: #e89b49; stroke: #e89b49; }
+.curve-playhead { stroke: currentColor; opacity: .6; pointer-events: none; }
+.curve-plot circle { cursor: pointer; }
+.curve-plot circle:focus { outline: none; stroke: currentColor; stroke-width: 3; }

@@ -38,6 +38,9 @@ pub(super) struct MotionFontCache {
 
 pub(super) struct MotionFontSet {
     text: valle_motion::Fonts,
+    // Each immutable font set retains only the most recently used admitted scene geometry.
+    // The outer font cache is bounded to four entries; replacing either input drops old layout.
+    layout: std::cell::RefCell<Option<valle_motion::layout::LayoutCache>>,
     #[cfg(target_arch = "wasm32")]
     formulas: valle_motion::math_formula::FormulaFontRegistry,
 }
@@ -90,6 +93,7 @@ impl MotionFontCache {
                 key,
                 MotionFontSet {
                     text: fonts,
+                    layout: Default::default(),
                     #[cfg(target_arch = "wasm32")]
                     formulas,
                 },
@@ -172,16 +176,37 @@ pub(crate) fn build_compiled_motion_program(
         formula_fonts: &context.fonts.formulas,
         styles: Some(context.styles),
     };
-    let mut tree = valle_motion::build_tree(
-        context.prepared,
-        &motion_context,
-        &props,
-        &signals,
-        &options,
-    )
-    .map_err(|error| ProgramPrepareError::MotionLayout {
-        reason: error.to_string(),
-    })?;
+    let reused = {
+        let mut cache = context.fonts.layout.borrow_mut();
+        if cache
+            .as_ref()
+            .is_none_or(|cache| !cache.is_for(context.prepared))
+        {
+            *cache = valle_motion::layout::LayoutCache::new(context.prepared, &context.fonts.text);
+        }
+        cache.as_ref().map(|cache| {
+            cache.build_tree(
+                &motion_context,
+                &props,
+                &signals,
+                options.viewport,
+                options.styles,
+            )
+        })
+    };
+    let mut tree = reused
+        .unwrap_or_else(|| {
+            valle_motion::build_tree(
+                context.prepared,
+                &motion_context,
+                &props,
+                &signals,
+                &options,
+            )
+        })
+        .map_err(|error| ProgramPrepareError::MotionLayout {
+            reason: error.to_string(),
+        })?;
     if !tree.glass.surfaces.is_empty() {
         let glass = tree.glass.clone();
         let instance = valle_timeline::internal::MotionInstanceId::new(context.clip_id.to_owned())

@@ -337,7 +337,13 @@ impl<'s> Compiler<'s> {
                         return None;
                     }
                     "interpolate" => return self.lower_interpolate(&call.arguments, call.span()),
-                    "spring" => return self.lower_spring(&call.arguments, call.span()),
+                    "spring" | "springVelocity" => {
+                        return self.lower_spring(
+                            &call.arguments,
+                            call.span(),
+                            callee.name.as_str(),
+                        );
+                    }
                     "stageProgress" => {
                         let arguments = call.arguments.iter().collect::<Vec<_>>();
                         return self.lower_stage_progress(&arguments, call.span(), false);

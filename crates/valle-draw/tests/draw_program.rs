@@ -950,3 +950,42 @@ fn shader_output_budget_includes_padding_even_without_content() {
         assert_eq!(builder.finish().is_ok(), accepted, "padding={padding:?}");
     }
 }
+
+#[test]
+fn directional_gaussian_bounds_include_both_sides_for_either_velocity_sign() {
+    for velocity in [[20.0, -10.0], [-20.0, 10.0]] {
+        let mut b = builder();
+        let path = b.push_path(PathData {
+            verbs: vec![
+                PathVerb::MoveTo,
+                PathVerb::LineTo,
+                PathVerb::LineTo,
+                PathVerb::Close,
+            ],
+            points: vec![[10.0, 10.0], [30.0, 10.0], [30.0, 30.0]],
+        });
+        let paint = b.push_paint(Paint::Solid(LinearColor::new(1.0, 0.0, 0.0, 1.0)));
+        let leaf = b.push_node(Node::Path(PathNode {
+            path,
+            fill_rule: Default::default(),
+            fill: Some(paint),
+            stroke: None,
+        }));
+        let mut group = Group::plain(vec![leaf]);
+        group.filters.push(Filter::VelocityBlur {
+            velocity,
+            shutter_angle_degrees: 180.0,
+        });
+        let root = b.push_node(Node::Group(group));
+        b.add_root(root);
+        let program = b.finish().unwrap();
+        assert_eq!(
+            program.requirements().filter_footprint,
+            Insets::new(10.0, 5.0, 10.0, 5.0)
+        );
+        assert_eq!(
+            program.requirements().output_bounds.rect(),
+            Some(Rect::new(0.0, 5.0, 40.0, 30.0))
+        );
+    }
+}

@@ -242,9 +242,9 @@ pub struct ResolvedUnit {
 
 pub struct LayoutTree {
     pub root: RenderNode,
-    pub layout: Rc<LayoutResults>,
+    pub layout: std::sync::Arc<LayoutResults>,
     pub values: Vec<MotionValue>,
-    pub keys: Rc<std::collections::HashMap<u64, String>>,
+    pub keys: std::sync::Arc<std::collections::HashMap<u64, String>>,
     /// Scene key to evaluated unit parameters; emission reads these without reevaluation.
     pub units: Rc<std::collections::HashMap<String, Vec<ResolvedUnit>>>,
     /// Render-tree path to Scene key, using the same coordinates as `NodePaint::path`. Inline text

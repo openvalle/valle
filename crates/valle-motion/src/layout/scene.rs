@@ -156,9 +156,17 @@ impl From<EvalError> for LayoutError {
 #[derive(Debug, Clone)]
 pub struct PreparedScene {
     artifact: Arc<SceneArtifact>,
+    layout_reusable: bool,
 }
 
 impl PreparedScene {
+    pub fn can_reuse_layout(&self) -> bool {
+        self.layout_reusable
+    }
+    pub(super) fn same_instance(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.artifact, &other.artifact)
+    }
+
     pub fn artifact(&self) -> &SceneArtifact {
         &self.artifact
     }
@@ -175,6 +183,7 @@ pub fn prepare_owned(artifact: SceneArtifact) -> Result<PreparedScene, LayoutErr
     artifact.validate().map_err(LayoutError::InvalidArtifact)?;
     admit_deterministic_surface(&artifact)?;
     Ok(PreparedScene {
+        layout_reusable: super::reuse::eligible(&artifact),
         artifact: Arc::new(artifact),
     })
 }
@@ -190,6 +199,56 @@ pub fn build_tree(
     signals: &valle_motion::ResolvedSignals,
     opts: &LayoutOptions<'_>,
 ) -> Result<LayoutTree, LayoutError> {
+    build_tree_inner(prepared, ctx, props, signals, opts, None, None)
+}
+
+/// Native diagnostics only. These timings never enter an Artifact or DrawProgram.
+#[derive(Debug, Default, serde::Serialize)]
+pub struct LayoutTimings {
+    pub layout_reused: bool,
+    pub eval_ms: f64,
+    pub tree_ms: f64,
+    pub layout_ms: f64,
+    pub finish_ms: f64,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn build_tree_profiled(
+    prepared: &PreparedScene,
+    ctx: &valle_motion::MotionContext,
+    props: &ResolvedProps,
+    signals: &valle_motion::ResolvedSignals,
+    opts: &LayoutOptions<'_>,
+) -> Result<(LayoutTree, LayoutTimings), LayoutError> {
+    let mut timings = LayoutTimings::default();
+    let tree = build_tree_inner(
+        prepared,
+        ctx,
+        props,
+        signals,
+        opts,
+        Some(&mut timings),
+        None,
+    )?;
+    Ok((tree, timings))
+}
+
+pub(super) fn build_tree_inner(
+    prepared: &PreparedScene,
+    ctx: &valle_motion::MotionContext,
+    props: &ResolvedProps,
+    signals: &valle_motion::ResolvedSignals,
+    opts: &LayoutOptions<'_>,
+    mut timings: Option<&mut LayoutTimings>,
+    geometry_cache: Option<&std::cell::RefCell<Option<super::reuse::GeometrySnapshot>>>,
+) -> Result<LayoutTree, LayoutError> {
+    let mut started = timings.as_ref().map(|_| std::time::Instant::now());
+    fn elapsed(started: &mut Option<std::time::Instant>) -> f64 {
+        let now = std::time::Instant::now();
+        started
+            .replace(now)
+            .map_or(0.0, |start| (now - start).as_secs_f64() * 1000.0)
+    }
     let artifact = prepared.artifact();
     if opts.viewport.size.width == Some(0) || opts.viewport.size.height == Some(0) {
         return Err(LayoutError::BadViewport);
@@ -206,6 +265,9 @@ pub fn build_tree(
             viewport: eval_viewport(opts),
         },
     )?;
+    if let Some(timings) = timings.as_deref_mut() {
+        timings.eval_ms = elapsed(&mut started);
+    }
     let formulas = prepare_formula_fragments(artifact, &values, opts)?;
     // Wrap World subtrees inside the root and leave Screen subtrees outside the camera.
     //
@@ -246,15 +308,6 @@ pub fn build_tree(
     } else {
         camera_wrappers(artifact, &values, opts)?
     };
-    let node = node_of(
-        artifact,
-        artifact.root.0 as usize,
-        &values,
-        opts.styles,
-        camera.as_ref(),
-        &formulas,
-        None,
-    )?;
     let render_context = takumi_core::context::RenderContext::builder()
         .fonts(opts.fonts.snapshot())
         .sizing(SizingContext::builder().viewport(opts.viewport).build())
@@ -264,49 +317,103 @@ pub fn build_tree(
         .draw_debug_border(false)
         .style(Box::new(ComputedStyle::default()))
         .build();
-    let layout_root = RenderNode::from_node(&render_context, node);
-    let mut tree = takumi_core::layout::tree::LayoutTree::from_render_node(&layout_root);
-    tree.compute_layout(render_context.sizing.viewport.into());
-    let layout = Rc::new(tree.into_results());
+    let geometry_key =
+        geometry_cache.map(|_| super::reuse::GeometryKey::new(opts.viewport, props, ctx));
+    let cached = geometry_cache.and_then(|cache| {
+        cache
+            .borrow()
+            .as_ref()
+            .filter(|snapshot| Some(&snapshot.key) == geometry_key.as_ref())
+            .cloned()
+    });
+    let (layout, keys, boxes, scene3d_content_boxes) = if let Some(snapshot) = cached {
+        if let Some(timings) = timings.as_deref_mut() {
+            timings.layout_reused = true;
+        }
+        (
+            snapshot.layout,
+            snapshot.keys,
+            snapshot.boxes,
+            snapshot.scene3d_boxes,
+        )
+    } else {
+        let node = node_of(
+            artifact,
+            artifact.root.0 as usize,
+            &values,
+            opts.styles,
+            camera.as_ref(),
+            &formulas,
+            None,
+        )?;
+        let layout_root = RenderNode::from_node(&render_context, node);
+        let mut tree = takumi_core::layout::tree::LayoutTree::from_render_node(&layout_root);
+        if let Some(timings) = timings.as_deref_mut() {
+            timings.tree_ms = elapsed(&mut started);
+        }
+        tree.compute_layout(render_context.sizing.viewport.into());
+        let layout = Arc::new(tree.into_results());
+        if let Some(timings) = timings.as_deref_mut() {
+            timings.layout_ms = elapsed(&mut started);
+        }
 
-    let mut keys = HashMap::new();
-    // Collect Scene keys and layout boxes during the same traversal for post-layout evaluation.
-    let mut boxes = BTreeMap::new();
-    let mut scene3d_content_boxes = BTreeMap::new();
-    walk_pairs(
-        artifact,
-        artifact.root,
-        &layout,
-        takumi_core::geometry::NodeId::ROOT,
-        (0.0, 0.0),
-        &mut |at, id, origin| {
-            if let Some(node) = artifact.nodes.get(at) {
-                keys.insert(u64::from(id), node.key.clone());
-                if let Ok(computed) = layout.layout(id) {
-                    boxes.insert(
-                        node.key.clone(),
-                        valle_draw::Rect::new(
-                            f64::from(origin.0),
-                            f64::from(origin.1),
-                            f64::from(computed.size.width),
-                            f64::from(computed.size.height),
-                        ),
-                    );
-                    if matches!(node.kind, NodeKind::Scene3D { .. }) {
-                        scene3d_content_boxes.insert(
+        let mut keys = HashMap::new();
+        // Collect Scene keys and layout boxes during the same traversal for post-layout evaluation.
+        let mut boxes = BTreeMap::new();
+        let mut scene3d_content_boxes = BTreeMap::new();
+        walk_pairs(
+            artifact,
+            artifact.root,
+            &layout,
+            takumi_core::geometry::NodeId::ROOT,
+            (0.0, 0.0),
+            &mut |at, id, origin| {
+                if let Some(node) = artifact.nodes.get(at) {
+                    keys.insert(u64::from(id), node.key.clone());
+                    if let Ok(computed) = layout.layout(id) {
+                        boxes.insert(
                             node.key.clone(),
                             valle_draw::Rect::new(
-                                f64::from(origin.0 + computed.border.left + computed.padding.left),
-                                f64::from(origin.1 + computed.border.top + computed.padding.top),
-                                f64::from(computed.content_box_width().max(0.0)),
-                                f64::from(computed.content_box_height().max(0.0)),
+                                f64::from(origin.0),
+                                f64::from(origin.1),
+                                f64::from(computed.size.width),
+                                f64::from(computed.size.height),
                             ),
                         );
+                        if matches!(node.kind, NodeKind::Scene3D { .. }) {
+                            scene3d_content_boxes.insert(
+                                node.key.clone(),
+                                valle_draw::Rect::new(
+                                    f64::from(
+                                        origin.0 + computed.border.left + computed.padding.left,
+                                    ),
+                                    f64::from(
+                                        origin.1 + computed.border.top + computed.padding.top,
+                                    ),
+                                    f64::from(computed.content_box_width().max(0.0)),
+                                    f64::from(computed.content_box_height().max(0.0)),
+                                ),
+                            );
+                        }
                     }
                 }
-            }
-        },
-    )?;
+            },
+        )?;
+
+        let keys = Arc::new(keys);
+        let boxes = Arc::new(boxes);
+        let scene3d_content_boxes = Arc::new(scene3d_content_boxes);
+        if let Some(cache) = geometry_cache {
+            cache.replace(Some(super::reuse::GeometrySnapshot {
+                key: geometry_key.expect("cache supplied"),
+                layout: layout.clone(),
+                keys: keys.clone(),
+                boxes: boxes.clone(),
+                scene3d_boxes: scene3d_content_boxes.clone(),
+            }));
+        }
+        (layout, keys, boxes, scene3d_content_boxes)
+    };
 
     // The second evaluation pass replaces placeholders for bounds and their dependents, leaving
     // other expressions unchanged.
@@ -768,11 +875,14 @@ pub fn build_tree(
         &css_3d_planes,
     )?;
 
+    if let Some(timings) = timings {
+        timings.finish_ms = elapsed(&mut started);
+    }
     Ok(LayoutTree {
         root,
         layout,
         values,
-        keys: Rc::new(keys),
+        keys,
         units: Rc::new(units),
         render_keys: Rc::new(render_keys),
         node_texts: Rc::new(node_texts),
@@ -797,7 +907,7 @@ fn resolve_glass_layout(
     artifact: &SceneArtifact,
     values: &[MotionValue],
     root: &RenderNode,
-    layout: &Rc<LayoutResults>,
+    layout: &Arc<LayoutResults>,
     keys: &HashMap<u64, String>,
     boxes: &BTreeMap<String, valle_draw::Rect>,
     css_3d_planes: &HashMap<String, crate::layout::bridge::Css3dPlane>,

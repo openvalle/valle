@@ -1,5 +1,7 @@
 import type { JsonValue } from "valle-engine";
 import { LitElement, html, type TemplateResult } from "lit";
+import "./motion-curves.ts";
+import type { MotionCurveInputs } from "./motion-curves.ts";
 
 export interface MotionPropControlView {
   name: string;
@@ -49,6 +51,7 @@ export interface MotionWorkspaceViewModel {
   mappings: ReadonlyArray<MotionMappingView>;
   canReturn: boolean;
   selectedLocation?: string | null;
+  curves?: MotionCurveInputs;
 }
 
 export type MotionWorkspaceIntent =
@@ -161,6 +164,8 @@ export class StudioMotionWorkspace extends LitElement {
             </section>
           `
         : ""}
+
+      <studio-motion-curves .inputs=${model.curves ?? null}></studio-motion-curves>
 
       <button class="button full-width" type="button" id="copyProps" @click=${this.#copyProps}>
         <span class="icon" data-icon="copy"></span>

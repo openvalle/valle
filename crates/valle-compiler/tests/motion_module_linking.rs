@@ -41,6 +41,49 @@ export function Card(ctx, props, signals) {
 const THEME: &str = r##"export const accent = "#22d3ee";"##;
 
 #[test]
+fn renamed_helper_calls_preserve_return_and_template_literal_semantics() {
+    // Each renamed identifier splits a source-map segment. It must not introduce JS line breaks.
+    let helpers = r#"
+const tone = "red";
+function schedule(start) { return { start, close: start + 2 }; }
+export function timing(start) { return schedule(start); }
+function ramp(t) { return interpolate(t, [0, 1], [0, 1]); }
+export function presence(t) { return ramp(t) * (1 - ramp(t - 1)); }
+export function paint() { return `${tone}`; }
+"#;
+    let entry = r#"
+import { timing, presence, paint } from './helpers';
+const span = timing(0.25);
+export default function Scene(ctx) {
+  return <View style={{ width: span.close, opacity: presence(ctx.seconds), color: paint() }} />;
+}
+"#;
+    let linked = compile_motion_modules(&graph(
+        "scene.tsx",
+        &[("scene.tsx", entry), ("helpers.ts", helpers)],
+    ))
+    .unwrap();
+    let inline = format!(
+        "{}\n{}",
+        helpers.replace("export ", ""),
+        entry
+            .lines()
+            .filter(|line| !line.starts_with("import "))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+    let direct = valle_compiler::motion::compile_motion(&inline).unwrap();
+    assert_eq!(linked.artifact, direct.artifact);
+    assert!(
+        linked
+            .source_map
+            .exprs
+            .iter()
+            .any(|m| m.source_path == "helpers.ts")
+    );
+}
+
+#[test]
 fn relative_modules_aliases_and_source_map_compile_as_one_closed_program() {
     let compiled = compile_motion_modules(&graph(
         "dashboard.motion.tsx",

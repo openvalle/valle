@@ -504,8 +504,8 @@ impl<'s> Compiler<'s> {
                         },
                     ],
                     easings: Vec::new(),
-                    extrapolate_left: Extrapolation::Clamp,
-                    extrapolate_right: Extrapolation::Clamp,
+                    extrapolate_left: Extrapolation::Extend,
+                    extrapolate_right: Extrapolation::Extend,
                 },
                 span,
             )
@@ -527,6 +527,34 @@ impl<'s> Compiler<'s> {
         );
         let scale_x = number(self, from.width / to.width, 1.0);
         let scale_y = number(self, from.height / to.height, 1.0);
+        // Preserve spring overshoot in both directions. Only prevent a size crossing zero from
+        // reflecting the subtree; translation continues along the authored trajectory.
+        let non_negative = |this: &mut Self, input: ExprId| {
+            let zero = this.push(
+                Expr::Const {
+                    value: MotionValue::Number(0.0),
+                },
+                span,
+            );
+            let negative = this.push(
+                Expr::Compare {
+                    op: CompareOp::Lt,
+                    lhs: input,
+                    rhs: zero,
+                },
+                span,
+            );
+            this.push(
+                Expr::Select {
+                    condition: negative,
+                    when_true: zero,
+                    when_false: input,
+                },
+                span,
+            )
+        };
+        let scale_x = non_negative(self, scale_x);
+        let scale_y = non_negative(self, scale_y);
         let scale = self.push(
             Expr::MakePoint {
                 x: scale_x,

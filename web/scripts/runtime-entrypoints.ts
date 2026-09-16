@@ -14,6 +14,7 @@ export const PACKAGE_BUILDS = [
 
 export const WORKER_BUILDS = [
   ["product-frame", "packages/engine/src/runtime/compositor/product-frame-worker.ts"],
+  ["motion-curves", "apps/studio/src/motion-curves-worker.ts"],
 ] as const;
 
 export function assertRuntimeEntrypoints(

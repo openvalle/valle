@@ -89,7 +89,24 @@ fn continuity_of(expr: &Expr, prior: &[TemporalContinuity]) -> TemporalContinuit
         Expr::Cue { .. } => TemporalContinuity::Piecewise {
             boundaries: Vec::new(),
         },
-        Expr::Spring { elapsed_frames, .. } => child(*elapsed_frames).meet(TemporalContinuity::C2),
+        Expr::Spring {
+            elapsed_frames,
+            initial_velocity,
+            output,
+            ..
+        } => {
+            // Before t=0 the spring is stationary. Position has a continuous first derivative
+            // only with zero initial velocity; velocity itself can jump at the start boundary.
+            let smoothness =
+                if *initial_velocity == 0.0 && *output == crate::spring::SpringOutput::Position {
+                    TemporalContinuity::C1
+                } else {
+                    TemporalContinuity::Piecewise {
+                        boundaries: Vec::new(),
+                    }
+                };
+            child(*elapsed_frames).meet(smoothness)
+        }
         Expr::Interpolate {
             input,
             extrapolate_left,
@@ -216,5 +233,36 @@ mod tests {
         assert!(matches!(continuity[4], TemporalContinuity::Discrete));
         assert!(continuity[3].is_track_legal());
         assert!(!continuity[4].is_track_legal());
+    }
+
+    #[test]
+    fn spring_start_boundaries_do_not_claim_unproven_continuity() {
+        use crate::spring::SpringOutput;
+        let make = |initial_velocity, output| Expr::Spring {
+            elapsed_frames: ExprId(0),
+            mass: 1.0,
+            stiffness: 100.0,
+            damping: 10.0,
+            initial_velocity,
+            output,
+        };
+        let exprs = vec![
+            Expr::Context {
+                input: ContextInput::CompositionSeconds,
+            },
+            make(0.0, SpringOutput::Position),
+            make(1.0, SpringOutput::Position),
+            make(0.0, SpringOutput::Velocity),
+        ];
+        let continuity = infer_continuity(&exprs);
+        assert_eq!(continuity[1], TemporalContinuity::C1);
+        assert!(matches!(
+            continuity[2],
+            TemporalContinuity::Piecewise { .. }
+        ));
+        assert!(matches!(
+            continuity[3],
+            TemporalContinuity::Piecewise { .. }
+        ));
     }
 }

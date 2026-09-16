@@ -25,6 +25,7 @@ pub mod eval;
 pub mod expr;
 pub mod geometry;
 pub mod glass;
+pub mod inspect;
 pub mod layout;
 pub mod lock;
 pub mod math_formula;
@@ -110,7 +111,7 @@ pub use phases::{
 };
 pub use plan::{PlanClip, PlanStep, SignalPlan};
 pub use signals::{CueError, CueSchedule, CueState, CueWindow, ResolvedSignals};
-pub use spring::{SpringParams, spring_at};
+pub use spring::{SpringOutput, SpringParams, SpringSample, spring_at, spring_sample_at};
 pub use tailwind::{TAILWIND_CATALOG, TailwindClassError, validate_tailwind_class};
 pub use text::{
     DEFAULT_MOTION_FONT_FILES, FontOverride, FontResource, Fonts, GenericFamily, MeasureError,

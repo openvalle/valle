@@ -16,6 +16,26 @@ interface TimelineCompilerWasmModule {
   ): number;
   timeline_time_from_frames(frames: number, fpsJson: string): number;
   timeline_document_view(timelineJson: string): string;
+  sample_motion_properties(artifactJson: string, requestJson: string): string;
+}
+
+export interface MotionPropertyRequest {
+  node: string;
+  startFrame: number; endFrame: number; maxPoints: number; durationFrames: number;
+  fps: string;
+  phases: { enterFrames: number; exitFrames: number; holdCycleFrames?: number | null };
+  props: Record<string, unknown>;
+  cues: Record<string, { startFrame: number; endFrame: number; enterFrames: number; exitFrames: number }>;
+  viewport: [number, number];
+}
+export interface MotionPropertySamples {
+  node: string;
+  frames: number[];
+  phaseBoundaries: [number, number];
+  channels: Array<{
+    property: string; unit: string; unavailable: string | null;
+    samples: Array<{ frame: number; value: number[]; velocity: number[] | null; boundary: string | null }>;
+  }>;
 }
 
 export interface TimelineCompilerRuntime {
@@ -59,6 +79,13 @@ export async function createTimelineCompilerRuntime(
     compileTimeline: (timeline) => compileTimelineWithWasm(wasm, timeline),
     canonicalizeTimelineDocument: (timeline) => canonicalizeTimelineDocumentWithWasm(wasm, timeline),
   };
+}
+
+/** Bounded local-property inspection; no layout or rendering. Run in a diagnostic worker. */
+export async function sampleMotionProperties(options: TimelineCompilerRuntimeOptions, artifact: Record<string, unknown>, request: MotionPropertyRequest): Promise<MotionPropertySamples> {
+  const assets = resolvePlayerRuntimeAssets(options.runtimeAssets, options.runtimeBaseUrl);
+  const wasm = await loadTimelineCompilerWasm(assets.engine.glue, assets.engine.wasm);
+  return JSON.parse(wasm.sample_motion_properties(JSON.stringify(artifact), JSON.stringify(request))) as MotionPropertySamples;
 }
 
 /** Normalize one sparse Timeline without introducing a JavaScript q6 implementation. */

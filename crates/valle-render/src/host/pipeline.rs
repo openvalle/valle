@@ -607,6 +607,19 @@ impl PipelineAccumulator {
     }
 
     fn add(&mut self, evidence: &super::FrameEvidence) -> Result<(), PipelineError> {
+        // Opt-in per-frame diagnostics, outside all render identities and scheduling decisions.
+        if std::env::var_os("VALLE_PERF_FRAMES").is_some() {
+            let t = evidence.timings;
+            eprintln!(
+                "[valle frame] {}",
+                serde_json::json!({
+                    "frame": evidence.frame, "profile": format!("{:?}", evidence.profile),
+                    "evaluatePrepareUs": t.evaluate_prepare_us, "fulfillLowerWallUs": t.fulfill_lower_wall_us,
+                    "bindUs": t.bind_us, "executeUs": t.execute_us, "readbackUs": t.delivery_readback_us,
+                    "totalUs": t.total_us,
+                })
+            );
+        }
         match self.render_id {
             Some(render_id) if render_id != evidence.render_id => {
                 return Err(PipelineError::MixedRenderIds);

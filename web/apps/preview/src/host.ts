@@ -27,6 +27,7 @@ import { VallePlayerElement, type VallePlayerElementOptions } from "valle-engine
 
   const $ = requiredElement;
   const params = new URLSearchParams(location.search);
+  const profileEnabled = params.get("perf") === "1" || params.get("perf") === "playback";
 
   function errorText(error: unknown): string {
     if (error instanceof Error) return error.stack ?? error.message;
@@ -116,6 +117,7 @@ import { VallePlayerElement, type VallePlayerElementOptions } from "valle-engine
   const stageWrap = $<HTMLElement>("stageWrap");
 
   player.configure({
+    gpu: params.get("gpu") === "0" ? false : config.gpu,
     fixedPackageManifestJson: config.fixedPackageManifestJson,
     timelineJson: config.timelineJson,
     resourceManifestJson: config.resourceManifestJson,
@@ -126,7 +128,14 @@ import { VallePlayerElement, type VallePlayerElementOptions } from "valle-engine
     runtimeAssets: config.runtimeAssets,
     runtimeBaseUrl: config.runtimeBaseUrl ?? location.href,
   });
+  async function reportPerformanceProgress(stage: string, stats?: unknown): Promise<void> {
+    if (params.get("perf") !== "1" || params.get("smoke") !== "1") return;
+    await fetch("/result", { method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ status: "running", stage, stats }) });
+  }
+  await reportPerformanceProgress("load");
   await player.load();
+  await reportPerformanceProgress("loaded", player.stats);
   globalThis.vallePlayer = player;
 
   // ── timeline-derived UI state (fps as {num,den} → number; meta chips; scrub range) ──
@@ -435,12 +444,19 @@ import { VallePlayerElement, type VallePlayerElementOptions } from "valle-engine
     const captures: Array<Record<string, unknown>> = [];
     let stage = "initial-seek";
     try {
+    await reportPerformanceProgress("initial-seek", player.stats);
     if (config.initialTimeS != null) {
       await player.seek(config.initialTimeS);
     }
     // Keep playback-window deltas alongside lifetime counters. Component runtime/CanvasKit cold
     // start happens before this point and otherwise obscures whether misses occur during play.
     const smokeBaseline = { ...player.stats };
+    const pacing: Array<{ atMs: number; sourceFrame: number; lagFrames: number }> = [];
+    const runtime = player.controller?.player;
+    const onPresented = (frame: number, atMs: number, clockTimeS: number) => pacing.push({ atMs, sourceFrame: frame,
+      lagFrames: Math.max(0, Math.floor(clockTimeS * fps) - frame) });
+    // The element's render event covers explicit seeks; playback completes inside its runtime.
+    if (profileEnabled && runtime) runtime.onFramePresented = onPresented;
     const playT0 = performance.now();
     stage = "play";
     await player.play();
@@ -452,6 +468,43 @@ import { VallePlayerElement, type VallePlayerElementOptions } from "valle-engine
     player.pause();
     // Measure elapsed playback time because busy test hosts may delay timers.
     const smokePlayedMs = performance.now() - playT0;
+    if (runtime) runtime.onFramePresented = undefined;
+    const smokeEnd = { ...player.stats };
+    await reportPerformanceProgress("played", smokeEnd);
+    let performanceReport: Record<string, unknown> | undefined;
+    if (profileEnabled) {
+      const frameCount = Math.max(1, Math.round(player.durationS() * fps));
+      const sampleCount = Math.min(frameCount, Math.max(6, Math.min(24, Number(params.get("perfSamples")) || 24)));
+      if (params.get("perf") === "1") {
+        for (const frame of [1, 2, 3]) await player.seek(compiler.timelineTimeFromFrames(Math.min(frameCount - 1, frame), config.timeline.document.canvas.fps));
+      }
+      const trials: Array<Array<Record<string, number>>> = [];
+      for (let trial = 0; trial < (params.get("perf") === "1" ? 5 : 0); trial += 1) {
+        const rows: Array<Record<string, number>> = [];
+        for (let i = 0; i < sampleCount; i += 1) {
+          const frame = Math.floor(i * (frameCount - 1) / Math.max(1, sampleCount - 1));
+          const before = { ...player.stats };
+          await player.seek(compiler.timelineTimeFromFrames(frame, config.timeline.document.canvas.fps));
+          const row: Record<string, number> = { frame };
+          for (const key of Object.keys(before) as Array<keyof typeof before>) {
+            if (key.startsWith("perf") && typeof before[key] === "number") row[key] = Number(player.stats[key]) - Number(before[key]);
+          }
+          rows.push(row);
+        }
+        trials.push(rows);
+        await reportPerformanceProgress(`trial-${trial + 1}`, player.stats);
+      }
+      const gl = document.createElement("canvas").getContext("webgl");
+      const debug = gl?.getExtension("WEBGL_debug_renderer_info");
+      const renderer = debug ? gl!.getParameter(debug.UNMASKED_RENDERER_WEBGL) : "unavailable";
+      gl?.getExtension("WEBGL_lose_context")?.loseContext();
+      const memory = (performance as Performance & { memory?: { usedJSHeapSize: number; totalJSHeapSize: number; jsHeapSizeLimit: number } }).memory;
+      performanceReport = { trials, pacing: pacing.map(p => ({ ...p, atMs: p.atMs - playT0 })), renderer,
+        surfaceMode: smokeEnd.surfaceMode, workers: player.stats.framePlannerWorkers, fps, width: player.canvas?.width, height: player.canvas?.height,
+        coldStats: smokeBaseline,
+        jsHeap: memory ? { usedJSHeapSize: memory.usedJSHeapSize, totalJSHeapSize: memory.totalJSHeapSize, jsHeapSizeLimit: memory.jsHeapSizeLimit } : null,
+        maximumSurfacePeakBytes: player.stats.maximumSurfacePeakBytes };
+    }
     // Read the visible canvas to verify nonblack presentation for CPU and GPU paths. CPU captures
     // alone cannot verify direct GPU presentation.
     let presentNonBlackPixels = 0;
@@ -495,12 +548,13 @@ import { VallePlayerElement, type VallePlayerElementOptions } from "valle-engine
         stats: {
           ...player.stats,
           smokePlayedMs,
-          smokeRenders: player.stats.renders - smokeBaseline.renders,
-          smokeFrameMs: player.stats.perfFrameMs - smokeBaseline.perfFrameMs,
-          smokePreparedFrames: player.stats.preparedFrames - smokeBaseline.preparedFrames,
-          smokeSurfaceAllocations: player.stats.surfaceAllocations - smokeBaseline.surfaceAllocations,
-          smokeSurfaceReuses: player.stats.surfaceReuses - smokeBaseline.surfaceReuses,
+          smokeRenders: smokeEnd.renders - smokeBaseline.renders,
+          smokeFrameMs: smokeEnd.perfFrameMs - smokeBaseline.perfFrameMs,
+          smokePreparedFrames: smokeEnd.preparedFrames - smokeBaseline.preparedFrames,
+          smokeSurfaceAllocations: smokeEnd.surfaceAllocations - smokeBaseline.surfaceAllocations,
+          smokeSurfaceReuses: smokeEnd.surfaceReuses - smokeBaseline.surfaceReuses,
           presentNonBlackPixels,
+          performanceReport,
         },
         captures,
       }),

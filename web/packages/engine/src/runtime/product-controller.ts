@@ -533,6 +533,8 @@ export class BrowserValleWebPlayer {
   muted = false;
   closed = false;
   onTimeUpdate?: (timeS: number) => void;
+  /** Optional presentation diagnostics. Never participates in frame evaluation or scheduling. */
+  onFramePresented?: (frame: number, atMs: number, clockTimeS: number) => void;
   readonly stats: PlayerStats;
   hitRects: ProductHitRect[] = [];
 
@@ -914,6 +916,8 @@ export class BrowserValleWebPlayer {
       this.inspectedFrame = frame;
       this.inspectionScaleX = width / canvasWidth;
       this.inspectionScaleY = height / canvasHeight;
+      this.onFramePresented?.(frame, performance.now(), this.playing
+        ? clamp(this.clock.now(), 0, this.lastFrameTimeS()) : this.timeS);
       return this.lastRender;
     } finally {
       planner.release(planning.key);

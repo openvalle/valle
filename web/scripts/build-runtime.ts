@@ -35,15 +35,17 @@ await withBuildDirectory(path.join(root, "dist"), async (dist) => {
     assertBuild(result, `package ${name}`);
   }
 
-  const workerResult = await Bun.build({
-    entrypoints: WORKER_BUILDS.map(([, entrypoint]) => path.join(root, entrypoint)),
-    outdir: path.join(dist, "runtime", "workers"),
-    format: "esm",
-    target: "browser",
-    sourcemap: "external",
-    naming: { entry: "product-frame.js" },
-  });
-  assertBuild(workerResult, "Product frame worker");
+  for (const [name, entrypoint] of WORKER_BUILDS) {
+    const workerResult = await Bun.build({
+      entrypoints: [path.join(root, entrypoint)],
+      outdir: path.join(dist, "runtime", "workers"),
+      format: "esm",
+      target: "browser",
+      sourcemap: "external",
+      naming: { entry: `${name}.js` },
+    });
+    assertBuild(workerResult, `${name} worker`);
+  }
 
   const appResult = await Bun.build({
     entrypoints: APP_BUILDS.map(([, entrypoint]) => path.join(root, entrypoint)),

@@ -423,13 +423,37 @@ export default function SpringTitle(ctx) {
 }
 ```
 
-`spring({ elapsedFrames, fps: ctx.fps, preset })` starts at 0 with zero velocity
+`spring({ elapsedFrames, fps: ctx.fps, preset })` starts at 0 with zero velocity by default
 and converges to 1; it can overshoot. It continues settling after a phase when
 given `elapsedFrames`. Presets: `gentle`, `wobbly`, `stiff`, `slow`, `bouncy`.
 Alternatively provide static `mass`, `stiffness`, `damping` (defaults 1, 100, 10).
 Mass/stiffness must be positive; damping must be non-negative. A preset and physical
 parameters are mutually exclusive. There are no `from`, `to`, `duration` or
 `overshootClamping` options: scale/offset/clamp the result explicitly.
+
+Optional `initialVelocity` is a finite, compile-time number in **normalized distance
+per second**, default 0. It can accompany a preset. For a segment moving from 100px
+to 300px with an incoming velocity of 100px/s, use `initialVelocity: 0.5`
+(`100 / (300 - 100)`) and position `100 + 200 * spring(...)`. This preserves the
+incoming velocity at that authored boundary. It does not infer an initial condition
+from playback history or automatically smooth arbitrary keyframe joins.
+
+`springVelocity({ elapsedFrames, fps: ctx.fps, ... })` accepts the same options and
+returns the **analytic derivative per second** of the normalized spring position.
+Multiply by the travel distance to obtain px/s. Before time zero both position and
+velocity are zero; at zero the velocity equals `initialVelocity`. Neither function
+uses iterative simulation or a settling threshold, including for zero damping.
+
+```tsx
+const p = spring({ elapsedFrames: ctx.enter.elapsedFrames, fps: ctx.fps, preset: "gentle" });
+const v = springVelocity({ elapsedFrames: ctx.enter.elapsedFrames, fps: ctx.fps, preset: "gentle" });
+// For a 120px horizontal movement:
+// translate: point(120 * p, 0)
+// motionBlur: motionBlur(point(120 * v * ctx.fps.den / ctx.fps.num, 0), 180)
+```
+
+Compose separate curves for opacity, position, scale and path reveal. An easing
+per segment does not guarantee matching velocities across adjacent segments.
 
 ### Sequences and repetition
 
@@ -1034,6 +1058,13 @@ blur using explicit velocity in pixels/frame. Shutter angle defaults to 180°.
 This is a spatial approximation; it does not sample multiple historical scenes
 or infer the velocity from a changing `left`/`rotate` property.
 
+Use `springVelocity` for an exact spring derivative. For an arbitrary pure position
+helper `position(t)`, a centered one-frame displacement is
+`position(t + 0.5 / fps) - position(t - 0.5 / fps)`, already in px/frame. This is an
+approximation of instantaneous velocity and explicitly samples the same authored
+trajectory on both sides of the target time. It never reads the last displayed
+frame. A step cut still needs an authored blur decision; it is not a smooth path.
+
 Effects on a group include its descendants. Keep the affected bounds small and
 inspect clipping near edges. See
 [advanced node effects](../crates/valle-compiler/tests/fixtures/motion/effects/advanced-node-effects.motion.tsx)
@@ -1069,6 +1100,10 @@ export default function Flip(ctx) {
 that ID through `style.layoutTransition: flip(layouts,from,to,progress)`.
 The transition owns the node geometry; do not also author its position/size/
 translation/scale fields. State names are static; progress may animate.
+Progress is not clamped: springs and custom easing can overshoot or undershoot.
+Translation and scale extend linearly beyond the endpoints, with each scale axis
+floored at zero to prevent a collapsed rectangle from reflecting its subtree.
+If a transition should stop at its endpoints, pass `clamp(progress, 0, 1)` explicitly.
 
 ### Glass
 
@@ -1577,3 +1612,42 @@ with a meaningful example/test. Source owners:
 [Tailwind admission](../crates/valle-motion/src/tailwind.rs),
 [layout admission](../crates/valle-motion/src/layout/scene.rs),
 [drawing emission](../crates/valle-motion/src/emit.rs).
+
+## Static layout reuse
+
+The prepared Motion engine can retain one immutable layout geometry snapshot per
+active scene/font configuration. It admits only fixed topology, fixed text and
+static layout inputs, with dynamic `translate`, `scale`, `rotate` and `opacity`.
+Props and stable viewport/FPS/duration expressions may participate in layout;
+changing these inputs invalidates the snapshot. Fonts are frozen at preparation,
+and a replacement artifact or font set creates a new cache.
+
+Unsupported nodes, dynamic layout/text, cues affecting layout, post-layout
+dependencies, 3D and complex effects use the full layout path. A hit skips tree
+construction and layout solving, while evaluating the requested frame and
+rebuilding its current paint state and DrawProgram. It never reuses a previous
+frame's rendered result. Cache hits, misses, replacement and request order have
+the same normalized DrawProgram bytes. This reduces preparation work; drawing
+and presentation costs remain separate.
+
+## Studio property curves
+
+The Motion inspector's **Property curves** panel samples explicit `opacity`,
+`translate`, `scale` and `rotate` bindings for the selected child. Choose an
+enter/hold/exit phase or local frame window; switch between frames and seconds.
+Click a plotted source frame to seek the existing preview and use its source
+location to inspect the authoring code. An empty phase has no samples.
+
+Sampling runs in a separate worker through the existing Rust/Wasm evaluator,
+using the active artifact, exact FPS, phase mapping, props, cues and viewport.
+The request is bounded to one node, four properties and at most 240 actual source
+frames. Closing/hiding the panel or changing inputs cancels obsolete work.
+Playback only updates the playhead; it does not resample the curves.
+
+Dots are sampled frames; connecting lines do not prove continuous motion. Speeds
+are adjacent-frame central differences in px/s, degrees/s or property units/s.
+Endpoints and recognized branch/segment/discrete boundaries omit uncertain speed.
+The first/last observed change is only as precise as the sampled window. This is
+a local-property inspector: inherited styles, parent transforms, relative length
+units, per-unit text and layout-dependent expressions are not presented as
+resolved world-space velocity. Unsupported channels show an explicit reason.

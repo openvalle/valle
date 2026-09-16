@@ -792,7 +792,11 @@ impl PlanProgramLayout {
 }
 
 fn program_frame_payload_bytes(frame: &PlanProgramFrame) -> Result<Vec<u8>, PlanValidationError> {
-    canonical::bytes(&PlanProgramFramePayload {
+    // Match the typed JSON encoding used by packed DrawProgram sections. Going through
+    // serde_json::Value promotes f32 fields to f64, giving the same filter footprint two
+    // different decimal values in JavaScript. This closed struct has deterministic field
+    // order; its bytes are a wire payload, not a normalized semantic cache identity.
+    serde_json::to_vec(&PlanProgramFramePayload {
         viewport: frame.viewport,
         requirements: frame.requirements.clone(),
         local_plan: frame.local_plan.clone(),
@@ -1313,6 +1317,47 @@ impl From<&super::ProgramSurfaceAllocation> for ProgramSurfaceAllocationStructur
 #[cfg(test)]
 mod packed_program_bytes_tests {
     use serde::{Deserialize, Serialize};
+
+    #[test]
+    fn frame_metadata_preserves_packed_f32_json_numbers() {
+        use super::*;
+        use valle_draw::{
+            program::{DrawProgramBuilder, Group, Node},
+            requirements::Insets,
+        };
+
+        let viewport = Rect::new(0.0, 0.0, 960.0, 620.0);
+        let mut builder = DrawProgramBuilder::new(viewport);
+        let root = builder.push_node(Node::Group(Group::plain(Vec::new())));
+        builder.add_root(root);
+        let draw = builder.finish().unwrap();
+        let local_plan = ProgramPlan::derive(&draw).unwrap();
+        let local_schedule = ProgramSchedule::derive(&local_plan).unwrap();
+        let mut requirements = DrawRequirements::default();
+        // A fractional animated blur footprint previously widened to f64 only in metadata.
+        requirements.filter_footprint = Insets::uniform(3.8418267);
+        let frame = PlanProgramFrame {
+            id: ProgramId::new(1).unwrap(),
+            kind: PreparedProgramKind::Motion,
+            semantic_path: "motion".into(),
+            viewport,
+            requirements,
+            resources: PlanProgramResources::default(),
+            destination_uses: Vec::new(),
+            local_plan,
+            local_schedule,
+        };
+        let bytes = program_frame_payload_bytes(&frame).unwrap();
+        let metadata: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        let packed_requirements: serde_json::Value =
+            serde_json::from_slice(&serde_json::to_vec(&frame.requirements).unwrap()).unwrap();
+        assert_eq!(metadata["requirements"], packed_requirements);
+        assert_eq!(
+            metadata["requirements"]["filterFootprint"]["left"],
+            3.8418267
+        );
+        assert_eq!(bytes, program_frame_payload_bytes(&frame).unwrap());
+    }
 
     #[derive(Debug, PartialEq, Serialize, Deserialize)]
     struct Probe {

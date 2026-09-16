@@ -88,6 +88,7 @@ export async function emitRuntimeManifests(
     spec("engine-glue", "glue", "runtime/engine/valle_engine.js", "Apache-2.0", "engine-core"),
     spec("engine-wasm", "wasm", "runtime/engine/valle_engine_bg.wasm", "Apache-2.0", "engine-core"),
     spec("product-frame-worker", "worker", "runtime/workers/product-frame.js", "Apache-2.0"),
+    spec("motion-curves-worker", "worker", "runtime/workers/motion-curves.js", "Apache-2.0"),
     spec("canvaskit-full-glue", "glue", "runtime/canvaskit/canvaskit.js", "BSD-3-Clause", "canvaskit-full", `npm:canvaskit-wasm@${dependencyVersions.canvasKit}`),
     spec("canvaskit-full-wasm", "wasm", "runtime/canvaskit/canvaskit.wasm", "BSD-3-Clause", "canvaskit-full", `npm:canvaskit-wasm@${dependencyVersions.canvasKit}`),
     spec("canvaskit-license", "license", "runtime/licenses/canvaskit.txt", "BSD-3-Clause", undefined, `npm:canvaskit-wasm@${dependencyVersions.canvasKit}`),
@@ -115,7 +116,7 @@ export async function emitRuntimeManifests(
       { id: "engine-core", glue: "runtime/engine/valle_engine.js", wasm: ["runtime/engine/valle_engine_bg.wasm"] },
       { id: "canvaskit-full", glue: "runtime/canvaskit/canvaskit.js", wasm: ["runtime/canvaskit/canvaskit.wasm"] },
     ],
-    workers: [{ id: "product-frame", path: "runtime/workers/product-frame.js" }],
+    workers: [{ id: "product-frame", path: "runtime/workers/product-frame.js" }, { id: "motion-curves", path: "runtime/workers/motion-curves.js" }],
     apps: [
       { id: "preview", html: "apps/preview/index.html" },
       { id: "studio", html: "apps/studio/index.html" },

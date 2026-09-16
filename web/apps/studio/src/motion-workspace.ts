@@ -17,6 +17,7 @@ import type { ValleStudioApp } from "./studio-shell.ts";
 import type { StudioTimeline, StudioTransport, StudioTransportIntent } from "./timeline-components.ts";
 import { TimelineEditQueue } from "./timeline-edit-queue.ts";
 import type { ProjectMotionEdit } from "./project-motion-edit.ts";
+import type { StudioMotionCurves } from "./motion-curves.ts";
 
 interface MotionValue { kind: string; value: unknown }
 interface LocateResult { key: string; location: string; kind?: "object3d" }
@@ -72,6 +73,7 @@ export async function startMotionStudio(
   let raf: number | null = null;
   let hostVersion = 0;
   let latestGeneration = -1;
+  let curvePending = false;
   const snapshot = () => JSON.stringify({ props, timing, cues });
   const frameTime = (frame: number) => context ? compiler.timelineTimeFromFrames(frame, `${context.fps.num}/${context.fps.den}`) : 0;
   const localTime = () => Math.max(0, (projectSession?.sourceStartS ?? 0) + (player.currentTime() - (projectSession?.clipStartS ?? 0)) * (projectSession?.rate ?? 1));
@@ -79,6 +81,7 @@ export async function startMotionStudio(
     if (!context || abort.signal.aborted || shell.workspace.kind !== "motion") return;
     const time = Math.min(localTime(), frameTime(Math.max(0, context.durationFrames - 1)));
     transport.sync(time, frameTime(context.durationFrames), context.fps.num / context.fps.den, player.playing);
+    workspace.querySelector<StudioMotionCurves>("studio-motion-curves")?.syncFrame(time * context.fps.num / context.fps.den);
     const x = time / Math.max(1e-9, frameTime(context.durationFrames)) * laneWidth;
     const line = timeline.querySelector<HTMLElement>("#tlPlayhead");
     const grip = timeline.querySelector<HTMLElement>("#rulerGrip");
@@ -139,7 +142,8 @@ export async function startMotionStudio(
   };
   const render = () => {
     if (!context || abort.signal.aborted) return;
-    workspace.renderWorkspace({ ...buildMotionWorkspaceModel(context, props, timing, cues, Boolean(projectSession)), selectedLocation: lastLocate?.location ?? null });
+    workspace.renderWorkspace({ ...buildMotionWorkspaceModel(context, props, timing, cues, Boolean(projectSession)), selectedLocation: lastLocate?.location ?? null,
+      curves: curvePending ? undefined : { context, props, timing, cues, selectedKey: lastLocate?.key ?? null } });
     renderTimeline();
     document.getElementById("timelineTitle")!.textContent = "Phases & cues";
     document.getElementById("trackCount")!.textContent = "";
@@ -158,16 +162,16 @@ export async function startMotionStudio(
     apply: async (next, _draft, isCurrent) => {
       if (next.status === "error") throw new Error(next.diagnostics.map((d) => d.message).join("\n"));
       await player.replaceRenderPackage({ ...buildMotionPreview(next), isCurrent });
-      if (isCurrent()) context = next;
+      if (isCurrent()) { context = next; render(); }
     },
     updating: () => shell.dispatchIntent({ type: "preview-status", status: "updating", message: null }),
-    ready: () => { shell.dispatchIntent({ type: "preview-status", status: "ready", message: null }); syncTransport(); },
+    ready: () => { curvePending = false; render(); shell.dispatchIntent({ type: "preview-status", status: "ready", message: null }); syncTransport(); },
     failed: (error) => shell.dispatchIntent({ type: "preview-status", status: "error", message: error instanceof Error ? error.message : String(error) }),
   });
-  const schedule = () => draftPreview.schedule({
+  const schedule = () => { curvePending = true; render(); draftPreview.schedule({
     props: Object.fromEntries(Object.entries(props).map(([name, value]) => [name, value.value])), timing,
     cues: Object.fromEntries(Object.entries(cues).map(([name, { type: _type, ...cue }]) => [name, cue])),
-  });
+  }); };
   const applyEdit = async (intent: ProjectMotionEdit) => {
     if (!context || abort.signal.aborted) return;
     if (projectSession) {
@@ -197,6 +201,7 @@ export async function startMotionStudio(
     if (!projectSession || abort.signal.aborted) return;
     await queue.idle();
     abort.abort(); draftPreview.invalidate();
+    workspace.querySelector<StudioMotionCurves>("studio-motion-curves")?.remove();
     if (raf !== null) cancelAnimationFrame(raf);
     player.pause();
     await projectSession.returnToTimeline();
@@ -210,6 +215,7 @@ export async function startMotionStudio(
     }
     if (intent.type !== "prop-end") enqueueEdit(intent);
   }, listenerOptions);
+  workspace.addEventListener("motion-curve-seek", (event) => { void seekFrame((event as CustomEvent<{ frame: number }>).detail.frame); }, listenerOptions);
   transport.addEventListener("studio-transport-intent", (event) => {
     if (!context || player.state !== "ready") return;
     const intent = (event as CustomEvent<StudioTransportIntent>).detail;
@@ -247,8 +253,16 @@ export async function startMotionStudio(
       (document.getElementById("timelineZoom") as HTMLInputElement).value = String(zoom); renderTimeline();
     }, listenerOptions);
   }
-  const observer = new ResizeObserver(renderTimeline); observer.observe(scroll);
-  abort.signal.addEventListener("abort", () => observer.disconnect(), { once: true });
+  let resizeFrame: number | null = null;
+  const observer = new ResizeObserver(() => {
+    // Timeline writes can resize the observed scroll area; finish this observation first.
+    resizeFrame ??= requestAnimationFrame(() => { resizeFrame = null; renderTimeline(); });
+  });
+  observer.observe(scroll);
+  abort.signal.addEventListener("abort", () => {
+    observer.disconnect();
+    if (resizeFrame !== null) cancelAnimationFrame(resizeFrame);
+  }, { once: true });
   let gesture: { id: string | null; edge: string | undefined; x: number; pointer: number } | null = null;
   timeline.addEventListener("pointerdown", (event) => {
     const target = event.target as Element;

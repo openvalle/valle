@@ -44,6 +44,26 @@ describe("browser subprocess diagnostics", () => {
     }
   });
 
+  test("waits through progress reports until the hosted result is final", async () => {
+    let requests = 0;
+    const server = Bun.serve({
+      hostname: "127.0.0.1", port: 0,
+      fetch() {
+        requests += 1;
+        return Response.json(requests < 3 ? { status: "running", stage: "load" } : { status: "ok", frames: 30 });
+      },
+    });
+    const abort = new AbortController();
+    try {
+      expect(await pollBrowserReport(`http://127.0.0.1:${server.port}/smoke-report`, abort.signal, 1))
+        .toEqual({ status: "ok", frames: 30 });
+      expect(requests).toBe(3);
+    } finally {
+      abort.abort();
+      server.stop(true);
+    }
+  });
+
   test("cancels a hosted report poll without leaving its retry timer alive", async () => {
     let markRequested!: () => void;
     const requested = new Promise<void>((resolve) => {

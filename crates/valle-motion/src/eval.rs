@@ -817,20 +817,27 @@ fn eval_one(
             mass,
             stiffness,
             damping,
+            initial_velocity,
+            output,
         } => {
             let frames = as_number(at, "spring", child(*elapsed_frames)?)?;
             let fps = crate::frame_rate_as_f64(inputs.ctx.fps);
             if !fps.is_finite() || fps <= 0.0 {
                 return Err(EvalError::TypeMismatch { at, op: "spring" });
             }
-            Ok(MotionValue::Number(crate::spring::spring_at(
+            let sample = crate::spring::spring_sample_at(
                 frames / fps,
                 crate::spring::SpringParams {
                     mass: *mass,
                     stiffness: *stiffness,
                     damping: *damping,
+                    initial_velocity: *initial_velocity,
                 },
-            )))
+            );
+            Ok(MotionValue::Number(match output {
+                crate::spring::SpringOutput::Position => sample.position,
+                crate::spring::SpringOutput::Velocity => sample.velocity,
+            }))
         }
         Expr::Interpolate {
             input,

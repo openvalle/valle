@@ -123,7 +123,10 @@ export async function pollBrowserReport(
     } catch {
       if (signal.aborted) throw browserReportAbortError();
     }
-    if (response?.ok) return await response.json();
+    if (response?.ok) {
+      const report = await response.json();
+      if (report.status !== "running") return report;
+    }
     await waitForBrowserReportRetry(signal, retryDelayMs);
   }
 }

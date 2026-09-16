@@ -273,21 +273,25 @@ impl<'a> Linker<'a> {
     }
 
     fn append_module(&mut self, output: &ModuleOutput) {
-        for chunk in &output.chunks {
+        for statement in &output.chunks {
             if !self.linked_source.is_empty() && !self.linked_source.ends_with('\n') {
                 self.linked_source.push('\n');
             }
-            let linked_start = self.linked_source.len() as u32;
-            self.linked_source.push_str(&chunk.text);
-            let linked_end = self.linked_source.len() as u32;
-            self.segments.push(LinkedSegment {
-                linked_start,
-                linked_end,
-                path: output.info.path.clone(),
-                original_start: chunk.original.start,
-                original_end: chunk.original.end,
-                exact: chunk.exact,
-            });
+            // Renames split a statement into source-map segments, not JS statements. Inserting
+            // line breaks between them changes `return helper()` into `return; helper()` via ASI.
+            for chunk in statement {
+                let linked_start = self.linked_source.len() as u32;
+                self.linked_source.push_str(&chunk.text);
+                let linked_end = self.linked_source.len() as u32;
+                self.segments.push(LinkedSegment {
+                    linked_start,
+                    linked_end,
+                    path: output.info.path.clone(),
+                    original_start: chunk.original.start,
+                    original_end: chunk.original.end,
+                    exact: chunk.exact,
+                });
+            }
         }
         self.linked_source.push('\n');
     }
@@ -303,7 +307,7 @@ struct ModuleOutput {
     normalized_ast: String,
     exports: BTreeMap<String, String>,
     display_names: BTreeMap<String, String>,
-    chunks: Vec<SourceChunk>,
+    chunks: Vec<Vec<SourceChunk>>,
 }
 
 struct SourceChunk {
@@ -778,7 +782,7 @@ fn analyze_module(
                     } else {
                         export.declaration.span()
                     };
-                    chunks.extend(render_span(source, span, &edits.edits));
+                    chunks.push(render_span(source, span, &edits.edits));
                 }
                 Statement::ExportDefaultDeclaration(export) => match &export.declaration {
                     ExportDefaultDeclarationKind::FunctionDeclaration(function) => {
@@ -803,7 +807,7 @@ fn analyze_module(
                         } else {
                             function.span()
                         };
-                        chunks.extend(render_span(source, span, &edits.edits));
+                        chunks.push(render_span(source, span, &edits.edits));
                     }
                     ExportDefaultDeclarationKind::TSInterfaceDeclaration(_) => {}
                     _ => {
@@ -905,7 +909,7 @@ fn analyze_module(
                     }
                 }
                 declaration if is_type_statement(declaration) => {}
-                other => chunks.extend(render_span(source, other.span(), &edits.edits)),
+                other => chunks.push(render_span(source, other.span(), &edits.edits)),
             }
         }
 

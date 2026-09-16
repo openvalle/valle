@@ -3,7 +3,9 @@
 //! CSS animation clock stays at zero.
 
 pub(crate) mod bridge;
+mod reuse;
 mod scene;
+pub use reuse::LayoutCache;
 
 pub use bridge::{
     GlassLayoutEnvironment, GlassLayoutField, GlassLayoutForeground, GlassLayoutFrame,
@@ -14,6 +16,8 @@ pub use scene::{
     LayoutError, PreparedScene, build_tree, layout_boxes, prepare as prepare_scene,
     prepare_owned as prepare_owned_scene,
 };
+#[cfg(not(target_arch = "wasm32"))]
+pub use scene::{LayoutTimings, build_tree_profiled};
 pub use takumi_core::viewport::Viewport;
 
 /// Layout implementation identity included in the Artifact build fingerprint.
