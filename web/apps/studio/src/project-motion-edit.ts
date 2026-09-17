@@ -16,7 +16,7 @@ type MotionFrameProjection = NonNullable<
   TimelineDocumentView["sequences"][number]["items"][number]["motionFrames"]
 >;
 
-/** Overlay canonical Timeline Motion overrides projected by Rust onto admitted UI defaults. */
+/** Keep the prepared renderer phase layout; overlay canonical source seconds and cue windows. */
 export function motionContextWithTimelineFrames(
   context: GoodMotionContext,
   motionFrames: MotionFrameProjection | undefined,
@@ -30,14 +30,20 @@ export function motionContextWithTimelineFrames(
       endFrame: cue.endFrame,
       enterFrames: cue.enterFrames,
       exitFrames: cue.exitFrames,
+      start: cue.start,
+      end: cue.end,
+      enterDuration: cue.enterDuration,
+      exitDuration: cue.exitDuration,
     };
   }
   return {
     ...context,
     durationFrames: motionFrames.sourceDurationFrames,
     timing: {
-      enterFrames: motionFrames.enterFrames ?? context.timing.enterFrames,
-      exitFrames: motionFrames.exitFrames ?? context.timing.exitFrames,
+      enterFrames: context.timing.enterFrames,
+      exitFrames: context.timing.exitFrames,
+      enterDuration: motionFrames.enterDuration ?? context.timing.enterDuration,
+      exitDuration: motionFrames.exitDuration ?? context.timing.exitDuration,
     },
     cueBindings,
   };

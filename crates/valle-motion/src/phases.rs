@@ -6,10 +6,13 @@
 //! Empty clips are not evaluated.
 
 use serde::{Deserialize, Serialize};
-use valle_timeline::FrameRate;
 use valle_timeline::internal::SampleTime;
+use valle_timeline::internal::quantize::quantize_frame_boundary;
+use valle_timeline::time::TimeError;
+use valle_timeline::{FrameRate, RationalTime};
 
 use crate::context::{HoldContext, MotionContext, PhaseContext, PhaseKind};
+use crate::controls::TimingSeconds;
 use crate::time::{frame_at_sample_floor, sample_time_at_frame};
 
 /// Declared phase lengths in frames. Clips may override component defaults.
@@ -38,6 +41,53 @@ pub struct PhaseLayout {
     pub exit_frames: u32,
     /// Cycle configuration from [`PhaseSpec`]; it affects hold context, not window allocation.
     pub hold_cycle_frames: Option<u32>,
+    /// Exact authored seconds; evaluated from the current sample without accumulating rounded cycles.
+    #[cfg_attr(feature = "ts", ts(type = "string | null"))]
+    pub hold_cycle_duration: Option<RationalTime>,
+}
+
+/// Combine clip overrides with component timing defaults before allocating phase windows.
+pub fn resolve_timing_seconds(
+    enter_override: Option<RationalTime>,
+    exit_override: Option<RationalTime>,
+    authored: Option<TimingSeconds>,
+) -> TimingSeconds {
+    TimingSeconds {
+        enter_duration: enter_override
+            .unwrap_or_else(|| authored.map_or(RationalTime::ZERO, |timing| timing.enter_duration)),
+        exit_duration: exit_override
+            .unwrap_or_else(|| authored.map_or(RationalTime::ZERO, |timing| timing.exit_duration)),
+        hold_cycle_duration: authored.and_then(|timing| timing.hold_cycle_duration),
+    }
+}
+
+/// Resolve authored seconds against the actual source duration and output frame rate.
+pub fn phase_windows_seconds(
+    timing: TimingSeconds,
+    duration: RationalTime,
+    fps: FrameRate,
+) -> Result<PhaseLayout, TimeError> {
+    let enter = timing.enter_duration;
+    let exit = timing.exit_duration;
+    let requested = enter.checked_add(exit)?;
+    let (enter_end, exit_start) = if requested > duration {
+        let compressed = duration.checked_mul(enter)?.checked_div(requested)?;
+        (compressed, compressed)
+    } else {
+        (enter, duration.checked_sub(exit)?)
+    };
+    let b1 = quantize_frame_boundary(enter_end, fps)?;
+    let b2 = quantize_frame_boundary(exit_start, fps)?;
+    let b3 = quantize_frame_boundary(duration, fps)?;
+    let to_u32 = |value| u32::try_from(value).map_err(|_| TimeError::Overflow);
+    Ok(PhaseLayout {
+        duration_frames: to_u32(b3)?,
+        enter_frames: to_u32(b1)?,
+        hold_frames: to_u32(b2 - b1)?,
+        exit_frames: to_u32(b3 - b2)?,
+        hold_cycle_frames: None,
+        hold_cycle_duration: timing.hold_cycle_duration,
+    })
 }
 
 /// Deterministic editor-side result for making a Motion clip follow narration length.
@@ -139,6 +189,7 @@ pub fn phase_windows(spec: &PhaseSpec, duration_frames: u32) -> PhaseLayout {
         hold_frames: hold,
         exit_frames: exit,
         hold_cycle_frames: spec.hold_cycle_frames,
+        hold_cycle_duration: None,
     }
 }
 
@@ -196,23 +247,47 @@ pub fn motion_context_at(
     // After hold ends, report the last played cycle at its closed endpoint. Computing directly from
     // the clamped hold frame could jump to an unplayed cycle when the length is an exact multiple
     // of the cycle period.
-    let (iteration, cycle_frame, cycle_progress) = match layout.hold_cycle_frames {
-        Some(cycle) if cycle > 0 => {
-            let len = layout.hold_frames;
-            if hold_frame == len && len > 0 {
-                let it = (len - 1) / cycle;
-                let cf = len - it * cycle;
-                (it, cf, f64::from(cf) / f64::from(cycle))
-            } else {
-                (
-                    hold_frame / cycle,
-                    hold_frame % cycle,
-                    f64::from(hold_frame % cycle) / f64::from(cycle),
-                )
+    let (iteration, cycle_frame, cycle_progress) = if let Some(cycle) = layout.hold_cycle_duration {
+        let sampled_hold_frame = if hold_frame == layout.hold_frames && layout.hold_frames > 0 {
+            layout.hold_frames - 1
+        } else {
+            hold_frame
+        };
+        let sampled_time = sample_time_at_frame(i64::from(sampled_hold_frame), fps)
+            .ok()?
+            .composition();
+        let ratio = sampled_time.checked_div(cycle).ok()?;
+        let it = u32::try_from(ratio.numerator() / i64::from(ratio.denominator())).ok()?;
+        let cycle_start = cycle
+            .checked_mul(RationalTime::new(i64::from(it), 1).ok()?)
+            .ok()?;
+        let current_time = sample_time_at_frame(i64::from(hold_frame), fps)
+            .ok()?
+            .composition();
+        // Exit frames hold the endpoint of the last played cycle. The hold boundary may lie
+        // beyond that cycle's end even though its final sampled frame was inside the cycle.
+        let remainder = current_time.checked_sub(cycle_start).ok()?.min(cycle);
+        let frame = u32::try_from(quantize_frame_boundary(remainder, fps).ok()?).ok()?;
+        (it, frame, remainder.checked_div(cycle).ok()?.as_f64())
+    } else {
+        match layout.hold_cycle_frames {
+            Some(cycle) if cycle > 0 => {
+                let len = layout.hold_frames;
+                if hold_frame == len && len > 0 {
+                    let it = (len - 1) / cycle;
+                    let cf = len - it * cycle;
+                    (it, cf, f64::from(cf) / f64::from(cycle))
+                } else {
+                    (
+                        hold_frame / cycle,
+                        hold_frame % cycle,
+                        f64::from(hold_frame % cycle) / f64::from(cycle),
+                    )
+                }
             }
+            // Without a cycle period, the entire hold is one cycle.
+            _ => (0, hold_frame, hold_progress),
         }
-        // Without a cycle period, the entire hold is one cycle.
-        _ => (0, hold_frame, hold_progress),
     };
 
     Some(MotionContext {
@@ -277,6 +352,95 @@ pub fn motion_context_at_sample(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn second_boundaries_quantize_from_absolute_source_time() {
+        let fps = FrameRate::new(24, 1).unwrap();
+        let timing = TimingSeconds {
+            enter_duration: RationalTime::new(1, 2).unwrap(),
+            exit_duration: RationalTime::new(1, 2).unwrap(),
+            hold_cycle_duration: None,
+        };
+        let layout = phase_windows_seconds(timing, RationalTime::new(23, 5).unwrap(), fps).unwrap();
+        assert_eq!(
+            (
+                layout.duration_frames,
+                layout.enter_frames,
+                layout.hold_frames,
+                layout.exit_frames
+            ),
+            (110, 12, 86, 12)
+        );
+        let short = phase_windows_seconds(timing, RationalTime::new(1, 4).unwrap(), fps).unwrap();
+        assert_eq!(
+            (short.enter_frames, short.hold_frames, short.exit_frames),
+            (3, 0, 3)
+        );
+        let no_authored_timing = phase_windows_seconds(
+            TimingSeconds {
+                enter_duration: RationalTime::ZERO,
+                exit_duration: RationalTime::new(15, 100).unwrap(),
+                hold_cycle_duration: None,
+            },
+            RationalTime::new(46, 10).unwrap(),
+            fps,
+        )
+        .unwrap();
+        assert_eq!(no_authored_timing.exit_start(), 107);
+    }
+
+    #[test]
+    fn second_cycle_uses_current_sample_instead_of_rounded_period() {
+        let fps = FrameRate::new(30, 1).unwrap();
+        let layout = phase_windows_seconds(
+            TimingSeconds {
+                enter_duration: RationalTime::ZERO,
+                exit_duration: RationalTime::ZERO,
+                hold_cycle_duration: Some(RationalTime::new(1, 10).unwrap()),
+            },
+            RationalTime::new(2, 1).unwrap(),
+            fps,
+        )
+        .unwrap();
+        let context = motion_context_at(30, &layout, fps).unwrap();
+        assert_eq!(context.hold.iteration, 10);
+        assert_eq!(context.hold.cycle_frame, 0);
+
+        let fractional = phase_windows_seconds(
+            TimingSeconds {
+                enter_duration: RationalTime::ZERO,
+                exit_duration: RationalTime::ZERO,
+                hold_cycle_duration: Some(RationalTime::new(11, 100).unwrap()),
+            },
+            RationalTime::new(100, 1).unwrap(),
+            fps,
+        )
+        .unwrap();
+        let late = motion_context_at(300, &fractional, fps).unwrap();
+        assert_eq!(late.hold.iteration, 90);
+        assert!((late.hold.cycle_progress - 10.0 / 11.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn exit_holds_last_cycle_progress_at_or_before_one() {
+        let fps = FrameRate::new(24, 1).unwrap();
+        let layout = phase_windows_seconds(
+            TimingSeconds {
+                enter_duration: RationalTime::ZERO,
+                exit_duration: RationalTime::new(1, 10).unwrap(),
+                hold_cycle_duration: Some(RationalTime::new(11, 100).unwrap()),
+            },
+            RationalTime::ONE,
+            fps,
+        )
+        .unwrap();
+        assert_eq!((layout.hold_frames, layout.exit_frames), (22, 2));
+        for frame in [22, 23] {
+            let context = motion_context_at(frame, &layout, fps).unwrap();
+            assert_eq!(context.hold.iteration, 7);
+            assert_eq!(context.hold.cycle_progress, 1.0);
+        }
+    }
 
     #[test]
     fn round_div_ties_go_up_not_bankers() {

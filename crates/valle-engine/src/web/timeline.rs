@@ -76,6 +76,8 @@ struct MotionAuthoringFramesView {
     source_duration_frames: i64,
     enter_frames: Option<i64>,
     exit_frames: Option<i64>,
+    enter_duration: Option<f64>,
+    exit_duration: Option<f64>,
     cues: BTreeMap<String, MotionCueFramesView>,
 }
 
@@ -91,6 +93,10 @@ enum MotionCueFramesView {
         end_frame: i64,
         enter_frames: i64,
         exit_frames: i64,
+        start: f64,
+        end: f64,
+        enter_duration: f64,
+        exit_duration: f64,
     },
 }
 
@@ -612,20 +618,54 @@ fn project_motion_frames(
                     end,
                     enter_duration,
                     exit_duration,
-                } => MotionCueFramesView::SourceRange {
-                    start_frame: frame(*start)?,
-                    end_frame: frame(*end)?,
-                    enter_frames: frame(*enter_duration)?,
-                    exit_frames: frame(*exit_duration)?,
-                },
+                } => {
+                    let window = valle_motion::signals::cue_window_seconds(
+                        RationalTime::from_exact(*start),
+                        RationalTime::from_exact(*end),
+                        RationalTime::from_exact(*enter_duration),
+                        RationalTime::from_exact(*exit_duration),
+                        frame_rate,
+                    )
+                    .map_err(|error| timeline_error("timeline_document_view", error))?;
+                    MotionCueFramesView::SourceRange {
+                        start_frame: i64::from(window.start_frame),
+                        end_frame: i64::from(window.end_frame),
+                        enter_frames: i64::from(window.enter_frames),
+                        exit_frames: i64::from(window.exit_frames),
+                        start: start.as_f64(),
+                        end: end.as_f64(),
+                        enter_duration: enter_duration.as_f64(),
+                        exit_duration: exit_duration.as_f64(),
+                    }
+                }
             };
             Ok((name.clone(), view))
         })
         .collect::<Result<_, String>>()?;
+    // A canonical Timeline does not contain component timing defaults. Only a pair of explicit
+    // clip overrides can be resolved here; Project's prepared Motion projection supplies the
+    // complete layout when either side inherits its component default.
+    let phases = match (source.phases.enter_duration, source.phases.exit_duration) {
+        (Some(enter), Some(exit)) => Some(
+            valle_motion::phase_windows_seconds(
+                valle_motion::resolve_timing_seconds(
+                    Some(RationalTime::from_exact(enter)),
+                    Some(RationalTime::from_exact(exit)),
+                    None,
+                ),
+                RationalTime::from_exact(source.source_duration),
+                frame_rate,
+            )
+            .map_err(|error| timeline_error("timeline_document_view", error))?,
+        ),
+        _ => None,
+    };
     Ok(MotionAuthoringFramesView {
         source_duration_frames: frame(source.source_duration)?,
-        enter_frames: source.phases.enter_duration.map(frame).transpose()?,
-        exit_frames: source.phases.exit_duration.map(frame).transpose()?,
+        enter_frames: phases.map(|layout| i64::from(layout.enter_frames)),
+        exit_frames: phases.map(|layout| i64::from(layout.exit_frames)),
+        enter_duration: source.phases.enter_duration.map(|value| value.as_f64()),
+        exit_duration: source.phases.exit_duration.map(|value| value.as_f64()),
         cues,
     })
 }
@@ -665,6 +705,31 @@ mod tests {
         ]}]
       }
     }"##;
+
+    #[test]
+    fn motion_phase_view_uses_absolute_boundaries_and_short_duration_compression() {
+        let view = |duration: f64, enter: f64, exit: f64| {
+            let timeline = serde_json::json!({
+                "canvas": {"width": 64, "height": 64, "fps": 24},
+                "resources": {"motion": "unused.motion.tsx"},
+                "tracks": {"visual": [{"clips": [{
+                    "kind": "motion", "component": "motion", "start": 0,
+                    "duration": duration, "sourceDuration": duration,
+                    "phases": {"enterDuration": enter, "exitDuration": exit}
+                }]}]}
+            });
+            let compiled = compile_timeline_native(&timeline.to_string()).unwrap();
+            let view: serde_json::Value =
+                serde_json::from_str(&timeline_document_view_native(&compiled).unwrap()).unwrap();
+            view["sequences"][0]["items"][0]["motionFrames"].clone()
+        };
+        let long = view(4.6, 0.0, 0.15);
+        assert_eq!(long["sourceDurationFrames"], 110);
+        assert_eq!(long["exitFrames"], 3);
+        let short = view(0.5, 1.0, 1.0);
+        assert_eq!(short["enterFrames"], 6);
+        assert_eq!(short["exitFrames"], 6);
+    }
 
     #[test]
     fn compile_timeline_uses_the_reserved_timeline_identity_namespace() {

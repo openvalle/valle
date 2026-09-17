@@ -71,6 +71,48 @@ fn unitless_line_height_is_a_font_size_multiplier() {
 }
 
 #[test]
+fn size_leading_utilities_match_explicit_multiline_glyph_positions() {
+    for (class, style) in [
+        ("text-sm/6", "fontSize:'0.875rem',lineHeight:'1.5rem'"),
+        ("text-[13px]/[20px]", "fontSize:13,lineHeight:'20px'"),
+        ("text-[length:13px]/[1.4]", "fontSize:13,lineHeight:1.4"),
+        ("text-[13px] leading-[1.4]", "fontSize:13,lineHeight:1.4"),
+    ] {
+        let class_source = scene(&format!(
+            r#"<Text key="t" className="{class}" style={{{{display:'block',width:140,color:'white'}}}}>A long title wraps across several lines</Text>"#
+        ));
+        let style_source = scene(&format!(
+            r#"<Text key="t" style={{{{display:'block',width:140,color:'white',{style}}}}}>A long title wraps across several lines</Text>"#
+        ));
+        let actual = emit_source(&class_source).program;
+        let reference = emit_source(&style_source).program;
+        assert_eq!(
+            actual.packed_bytes().unwrap(),
+            reference.packed_bytes().unwrap(),
+            "{class}"
+        );
+        let baselines: Vec<_> = actual
+            .nodes()
+            .iter()
+            .filter_map(|node| match node {
+                valle_draw::program::Node::GlyphRun(run) => {
+                    Some(run.glyphs.iter().map(|glyph| glyph.y))
+                }
+                _ => None,
+            })
+            .flatten()
+            .collect();
+        assert!(
+            baselines.len() >= 20
+                && baselines.iter().copied().fold(f64::NEG_INFINITY, f64::max)
+                    - baselines.iter().copied().fold(f64::INFINITY, f64::min)
+                    >= 18.0,
+            "{class} must exercise actual multiline glyph layout: {baselines:?}"
+        );
+    }
+}
+
+#[test]
 fn px_line_height_with_sufficient_height_emits_glyphs() {
     assert!(
         glyph_count(

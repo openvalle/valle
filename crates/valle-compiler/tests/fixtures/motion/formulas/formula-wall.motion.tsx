@@ -1,3 +1,4 @@
+export const composition = { width: 1920, height: 1080, fps: 30, duration: 5 };
 // Formula wall: many locked KaTeX faces on one board.
 //
 //   cargo run -p valle-cli --bin valle -- motion check \
@@ -7,11 +8,7 @@
 export const component = "formula-wall";
 
 export const controls = defineControls({
-  timing: {
-    enterFrames: frames({ default: 0, min: 0 }),
-    holdCycleFrames: optionalFrames({ default: null, min: 1 }),
-    exitFrames: frames({ default: 0, min: 0 }),
-  },
+  timing: { enterDuration: 0, exitDuration: 0 },
 });
 
 const CARDS = [
@@ -76,6 +73,7 @@ const CARDS = [
     color: "#f8fafc",
   },
 ];
+const FORMULA_SIZES = [48, 38, 48, 34, 40, 38, 34, 38, 42, 48, 34, 48];
 
 export default function FormulaWall(ctx) {
   const t = ctx.hold.progress;
@@ -111,10 +109,10 @@ export default function FormulaWall(ctx) {
             backgroundColor: "#22d3ee",
           }}
         />
-        <Text key="brand" style={{ marginLeft: 14, fontSize: 26, color: "#e2e8f0" }}>
+        <Text key="brand" style={{ marginLeft: 14, fontSize: 32, color: "#e2e8f0" }}>
           VALLE / MATHFORMULA
         </Text>
-        <Text key="note" style={{ marginLeft: 36, fontSize: 18, color: "#64748b" }}>
+        <Text key="note" style={{ marginLeft: 36, fontSize: 22, color: "#94a3b8" }}>
           十二道式 · 中文只在标题里
         </Text>
       </View>
@@ -142,17 +140,17 @@ export default function FormulaWall(ctx) {
                 })) *
                 26,
             ),
-            padding: 16,
+            padding: 22,
           }}
         >
-          <Text key={`label-${card.title}`} style={{ fontSize: 14, color: "#64748b" }}>
+          <Text key={`label-${card.title}`} style={{ fontSize: 18, letterSpacing: 2, color: "#94a3b8" }}>
             {card.title}
           </Text>
           <MathFormula
             key={`tex-${card.title}`}
             latex={card.latex}
             displayMode="display"
-            style={{ fontSize: 28, color: card.color }}
+            style={{ fontSize: FORMULA_SIZES[i], color: card.color, marginTop: 18 }}
           />
         </View>
       ))}

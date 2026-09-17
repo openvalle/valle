@@ -31,6 +31,8 @@ the browser DOM and arbitrary npm packages are not part of this environment.
 Save this complete file as `title.motion.tsx`:
 
 ```tsx
+export const composition = { width: 1920, height: 1080, fps: 30, duration: 5 };
+
 export default function Title(ctx) {
   const reveal = interpolate(ctx.progress, [0, 0.25], [0, 1], { easing: "easeOut" });
   return (
@@ -48,10 +50,10 @@ export default function Title(ctx) {
 With `valle` on PATH (use `./dist/bin/valle` in a source checkout):
 
 ```sh
-valle motion check title.motion.tsx --size 640x360 --json
-valle motion render title.motion.tsx --duration 3 --fps 30 --size 640x360 --frame 30 -o title.png --backend raster --json
-valle motion studio title.motion.tsx --duration 3 --fps 30 --size 640x360
-valle motion render title.motion.tsx --duration 3 --fps 30 --size 640x360 -o title.mp4 --events
+valle motion check title.motion.tsx --json
+valle motion render title.motion.tsx --frame 30 -o title.png --backend raster --json
+valle motion studio title.motion.tsx
+valle motion render title.motion.tsx -o title.mp4 --events
 ```
 
 `--frame` is zero-based and selects PNG output; without it, render produces MP4.
@@ -59,10 +61,13 @@ Destinations must be new files. Pure graphics PNG rendering needs no FFmpeg; MP4
 encoding and video decoding need compatible FFmpeg shared libraries. See
 [runtime setup](cli.md#runtime-notes).
 
-`--size` defines the logical canvas used by layout and `ctx.viewport`.
-`--output-size` scales delivery without changing layout. Keep duration, FPS, canvas,
-data, assets and fonts consistent between previews and export. Defaults are five
-seconds, 30 FPS and 1920×1080; rational FPS such as `30000/1001` is accepted.
+Canvas and duration come from the file's `composition`; `fps` is optional there and
+can be supplied or overridden with `--fps`. A standalone file without a composition
+is an error. `--output-size` scales delivery without changing layout or
+`ctx.viewport`. `duration` is in seconds; output frames are the nearest frame
+boundary at the actual FPS. For example, 4.6 seconds at 24 FPS produces 110 frames.
+Keep data, assets and fonts consistent between previews and export; a rational
+`fps` such as `30000/1001` is accepted in `composition` and `--fps`.
 
 ## Language and components
 
@@ -70,9 +75,9 @@ seconds, 30 FPS and 1920×1080; rational FPS such as `30000/1001` is accepted.
 
 The entry module needs a default function declaration. Name it, or supply
 `export const component = "name"`. Optional `export const controls =
-defineControls(...)` declares external inputs. The entry module's named exports
-are `component` and `controls`; helper modules may export reusable values and
-components.
+defineControls(...)` declares external inputs. The entry module may export
+`composition`, `component`, and `controls`; helper modules may export reusable
+values and components.
 
 The root parameter positions are `(ctx, props, signals, data)`. Omit unused trailing
 parameters. `props` and `data` may be destructured in their positions. An authored
@@ -97,7 +102,7 @@ construct a new tree on every frame.
 | Destructuring | Explicit object fields and array entries, including supported defaults; no rest or computed field names |
 | TypeScript | `as const`, `satisfies`, assertions and non-null wrappers are peeled where supported; this is not a TypeScript type checker |
 | JSX fragments | Use a `Group` or `View` to give multiple children one root |
-| Spread | No JSX prop spread or style/per-unit spread; list and interpolation arrays cannot have spreads or holes |
+| Spread | Fixed-shape style objects support spreads. JSX prop/per-unit spread and list/interpolation array spreads or holes are not admitted |
 
 Prepare-time means independent of `ctx`, runtime `props` and cue signals. Module
 constants, bound `data`, static component arguments, a theme and explicit resources
@@ -214,7 +219,7 @@ with `viewBox`, `<defs>`, CSS selectors or arbitrary SVG attributes.
 | --- | --- |
 | `props` | Typed scalar/geometric controls read through `props.name` |
 | `data` | Validated structured JSON available during prepare through the fourth root argument |
-| `timing` | `enterFrames: frames(...)`, `exitFrames: frames(...)`, `holdCycleFrames: optionalFrames(...)` |
+| `timing` | `enterDuration`, `exitDuration`, optional `holdCycleDuration`, all in seconds |
 | `cues` | Named `spanCue({ required })` declarations, read through `signals.name` |
 | `assets` | `asset({ kind, required })`, referenced by `asset://name` |
 | `camera` | Typed camera controls for host integration; the scene's authored camera is `Scene camera={{...}}` |
@@ -245,8 +250,9 @@ For example, `cues.json` can contain:
 Cue times are seconds in the Motion source. See [Timeline integration](timeline.md#motion-integration)
 for animated prop curves and clip placement. `motion check` uses the same preparation
 and Native Raster rendering path for one frame (default `--frame 0`); pass the same
-`--duration`, `--fps`, `--size` and bindings as the intended render. It creates no
-persistent output and does not prove that every frame or encoder will succeed.
+data, asset and font bindings as the intended render, and keep them consistent with the
+file's `composition`. It creates no persistent output and does not prove that every frame
+or encoder will succeed.
 
 ### Structured data example
 
@@ -291,8 +297,8 @@ Save `bars.json`:
 ```
 
 ```sh
-valle motion check bars.motion.tsx --data bars.json --size 640x360
-valle motion render bars.motion.tsx --data bars.json --size 640x360 --duration 3 --fps 30 --frame 45 -o bars.png
+valle motion check bars.motion.tsx --data bars.json
+valle motion render bars.motion.tsx --data bars.json --frame 45 -o bars.png
 ```
 
 Data schemas accept `number({ min, max })`, `string({ minBytes, maxBytes })`,
@@ -321,12 +327,14 @@ export default function Poster(ctx) {
 ```
 
 ```sh
-valle motion check poster.motion.tsx --asset poster=poster.png --size 640x360
-valle motion render poster.motion.tsx --asset poster=poster.png --size 640x360 --frame 0 -o poster-frame.png
+valle motion check poster.motion.tsx --asset poster=poster.png
+valle motion render poster.motion.tsx --asset poster=poster.png --frame 0 -o poster-frame.png
 ```
 
-Media primitives default to block layout; use explicit `display: "inline"` when
-placing an image in a text line. Asset kinds are `image`, `audio`, `video`, `font`,
+Media primitives default to block layout. A direct `Image` child of rich `Text`
+defaults to an atomic inline box; elsewhere, use `display: "inline"` to place
+media in a text line. Authored display styles or utilities override these defaults.
+Asset kinds are `image`, `audio`, `video`, `font`,
 `model3d`. References are static;
 the declared kind must match the consumer. Required assets must be bound. Do not
 put HTTP/file paths directly in `src` or use CSS `url(...)` as a resource loader.
@@ -349,6 +357,8 @@ options for `motion check`. The built-in Noto/serif/monospace palette provides
 fallback; packages include the selected families, weights and script coverage
 instead of always copying the entire palette. Dynamic text retains wider fallback
 coverage for later frames.
+Resource font references belong in `style.fontFamily`; a font-family utility such as
+`[font-family:'asset://brand']` is rejected because utilities do not bind assets.
 
 Web hosts can supply an ordered `fonts` list of TTF/OTF URLs or bytes when creating
 `valle-engine` players. Fonts load before layout and produce a new render identity.
@@ -407,8 +417,7 @@ Save as `spring.motion.tsx`:
 
 ```tsx
 export const controls = defineControls({
-  timing: { enterFrames: frames({ default: 18, min: 0 }),
-    exitFrames: frames({ default: 12, min: 0 }) },
+  timing: { enterDuration: 0.6, exitDuration: 0.4 },
 });
 export default function SpringTitle(ctx) {
   const enter = spring({ elapsedFrames: ctx.enter.elapsedFrames, fps: ctx.fps, preset: "gentle" });
@@ -533,12 +542,31 @@ numeric text; locale-dependent formatting is unavailable.
 
 ### Style values and precedence
 
-Write inline style object literals with camelCase keys; quoted kebab-case keys are
-also accepted. For example `backgroundColor` and `"background-color"` name the
-same property. No computed keys or spreads; write each binding explicitly.
+Write style objects with camelCase keys; quoted kebab-case keys are also accepted.
+For example `backgroundColor` and `"background-color"` name the same property.
+Immutable object references, aliases, nested object spreads, and prepare-time
+string computed keys are supported. Local objects can contain frame expressions
+as long as their property set is fixed:
 
-`className` is static. Explicit styles override utility styles. Avoid conflicting
-utilities and shorthand/longhand duplication; write the intended value once.
+```tsx
+const cardStyle = { padding: 24, borderRadius: 20, backgroundColor: "#123456" };
+export default function Demo(ctx) {
+  const style = { ...cardStyle, width: 240 + ctx.localFrame, height: 120 };
+  return <Scene><View style={style} /></Scene>;
+}
+```
+
+Objects retain their declaration scope. Duplicate keys replace the value while
+keeping the first insertion position, following JavaScript object enumeration;
+this also applies across spreads. Getters, setters, methods, prototype changes,
+and frame-varying property names/sets are rejected. Style object references must
+currently resolve to authored object literals; arbitrary helper-returned objects
+are not a supported style input. The same rules apply to `Span`'s supported subset.
+
+`className` supports static strings and finite conditional/template choices.
+Ordinary inline styles override ordinary utilities; an
+important utility (trailing `!`) overrides an ordinary inline style. Utility
+conflicts use Tailwind rule order rather than class-string order.
 Inherited typography follows the parent where appropriate; a primitive's implied
 class supplies only its documented layout shortcut.
 
@@ -556,16 +584,18 @@ values. Typed lengths support `px`, `%`, `em`, `rem`, `vw`, `vh`; typed angles
 support `deg`, `rad`, `turn`. Units resolve in the property context; percentages
 are not universally percentages of the viewport.
 
-For responsive geometry, use `ctx.viewport.width`/`.height` in numeric expressions.
+For geometry that follows the logical canvas, use `ctx.viewport.width`/`.height` in numeric expressions.
 For percentage translations use a typed pair such as `"-50% -50%"`.
 When interpolating lengths, keep the units the same at corresponding stops.
 
-The tables below describe Motion's usable authoring surface, grouped by purpose.
-`S` means a static value, `D` a supported frame expression. A `D` entry does not
-permit arbitrary JavaScript or CSS string construction. A parser accepting an
-additional CSS property is not proof that Motion paints it correctly. The
-[verification section](#examples-and-verification) distinguishes executed examples
-from source-based reference coverage.
+A value that has to be shared is a `const` at the top of the file, not a variable:
+author CSS custom properties (`style={{ "--accent": … }}`) and variable consumers
+(`var(--accent)`, `w-(--size)`, `text-(length:--size)`) are permanently rejected, and the
+diagnostic names the `const` replacement. The internal `--tw-*` composition slots belong
+to the utility lowerer and are not author API.
+
+Frame-varying values are expressions, not variables. Write the expression where the value
+is used; a helper may take the value as a parameter and keep the expression in one place.
 
 ### Layout and sizing
 
@@ -657,34 +687,61 @@ CSS gradients use sRGB interpolation. Omitting the interpolation space preserves
 the supported legacy behavior; explicit `in srgb` is accepted. `in oklab`,
 `in srgb-linear`, Display-P3 and relative-color gradient forms are not admitted.
 Multiple gradient layers use a comma-separated `backgroundImage` value.
+Gradient stops currently must resolve inside the emitted gradient's `[0, 1]`
+offset range. CSS stops outside that range can fail DrawProgram validation;
+extending/remapping the gradient rather than clamping its stops remains unimplemented
+([CSS gradient stop positions](https://www.w3.org/TR/css-images-3/#linear-gradient-syntax)).
 
 ### Transforms
 
 | Property | Example / contract |
 | --- | --- |
-| `translate` | `point(x,y)`, `"12px 24px"`, `"-50% -50%"`; dynamic typed pairs accepted |
+| `translate` | `point(x,y)`, `"12px 24px"`, `"-50% -50%"`; a single CSS length defaults Y to zero; dynamic typed pairs accepted |
 | `rotate` | `"15deg"` or angle-valued interpolation; numeric degrees via a transform template |
 | `rotateX`, `rotateY` | Numeric degrees or typed angles for a projected layer |
-| `scale` | `1.2` or a typed 2D scale; unitless |
+| `scale` | `1.2`, `point(1.2,0.8)`, or CSS `"120% 80%"`; `"none"` resets the property |
 | `scaleX`, `scaleY` | One axis at a time; compiler lowers to a 2D scale binding |
 | `transformOrigin` | `"50% 50%"`, `point(x,y)`; defaults to center |
-| `transform` | Supported translate/rotate/scale function list, including admitted 3D forms; authored order is preserved |
+| `transform` | Ordered 2D translate/rotate/scale/skew/matrix list, closed templates and finite branches; admitted 3D forms use the projection adapter |
 | `perspective`, `perspectiveOrigin` | Positive perspective distance and static/dynamic supported origin components |
 | `transformStyle`, `backfaceVisibility` | Explicit `transformStyle` must be static `"preserve-3d"`; backface visibility is static `"visible"` / `"hidden"` |
 
-For animated 2D translation, prefer `translate: point(x,y)`. A two-argument
-`translate(${x}px ${y}px)` template is not interchangeable with a single typed
-Length2 hole. `translateX(${x}px) translateY(${y}px)` is supported. For rotation
-use `` transform: `rotate(${angle}deg)` ``; for scaling use
-`` transform: `scale(${factor})` ``. Put a complete numeric argument in each hole.
+For animated 2D translation, use `translate: point(x,y)` or the CSS list
+`` transform: `translate(${x}px, ${y}px)` ``. Transform functions use CSS comma
+separators; independent properties use spaces. Single-argument `translate(12px)`
+means `translate(12px, 0px)`. Percentage translations use the element's border box.
 
-Supported ordered functions include `translate`, `translateX/Y/Z`, `translate3d`,
-`rotate`, `rotateX/Y/Z`, `rotate3d`, `scale`, `scaleX/Y/Z`, `scale3d`.
+Independent properties compose in the order **translate → rotate → scale →
+transform list**, around `transformOrigin`, regardless of style-object key order.
+The list retains every function in authored order: `scale(2) translateX(10px)`
+translates by 20px; `translateX(10px) scale(2)` translates by 10px. Combining an
+independent scale with a list scale is valid and does not require nested boxes.
+`scale: 1`, `translate: "0px"` and an identity matrix still establish a containing
+block for positioned descendants; `none` does not. Singular transforms paint no
+subtree, while its layout boxes remain available.
+
+2D functions include `translate`, `translateX/Y`, `rotate`, `scale`, `scaleX/Y`,
+`skew`, `skewX/Y`, and `matrix(a,b,c,d,e,f)`. Supported length `calc()` expressions
+retain their layout reference box. All branches of a conditional list are checked,
+and templates accept typed numeric/length/angle holes with valid CSS units. Every
+frame is evaluated directly; selecting a different list never starts a transition.
+Lists depending on `bounds`/`anchor`/`project3d` use syntax-valid probes prepared
+before rendering. Every branch must preserve containing-block presence: different
+non-empty lists are allowed, as are branches that all reset to `none`/`initial`,
+but switching between a list and `none` is rejected. Inherited presence is not
+admitted in these post-layout expressions. The final values are evaluated from
+the requested frame's layout, without using previously rendered frames.
+
+The separate CSS 3D adapter supports ordered `translateZ`, `translate3d`,
+`rotateX/Y/Z`, `rotate3d`, `scaleZ`, `scale3d` and its admitted translate/rotate/scale
+2D functions. A mixed 3D list does not yet accept skew/matrix or nested length math.
 Use the separate `perspective` style rather than a `perspective()` transform function.
-Do not assume `matrix`, `matrix3d`, `skew`, nested `calc()` inside transform
-functions or arbitrary string-built transform lists work. Do not declare scale
-multiple ways on the same node. To combine independent transforms without
-ambiguity, put them on nested boxes.
+`matrix3d` remains unsupported. A 2D list's support does not establish full CSS 3D
+flattening or composition semantics.
+Native raster currently rejects spatial blur/drop-shadow combinations whose final
+affine transform produces a non-axis-aligned Gaussian covariance (for example,
+skew plus blur). This is an explicit backend limitation, even when layout and
+DrawProgram generation accept the individual properties.
 `projectQuad` is explicitly rejected as an author API.
 
 ### Filters and animated paint example
@@ -698,7 +755,13 @@ Filters compose in written order. `filter` affects the node and descendants;
 Use non-negative blur lengths, finite scalar/percentage factors and explicit
 angle units for hue rotation. `drop-shadow` uses offsets, optional blur and color;
 it is different from a spread/inset `boxShadow`. SVG `url(...)` filters are not
-supported. `none` and zero blur are valid no-ops.
+supported. `none` overrides lower-priority filters. Zero blur keeps CSS cascade
+and containing-block semantics even though it does not soften pixels. Filter
+`blur()` and the third length of `drop-shadow()` are Gaussian sigma, unlike the
+blur radius of `box-shadow`/`text-shadow` ([CSS Filter Effects](https://www.w3.org/TR/filter-effects-1/#funcdef-filter-blur)).
+Post-layout filter templates and branches follow the same presence rule as
+transform lists. Probe values do not bypass per-frame validation: a negative blur
+computed from actual bounds still fails on that frame.
 
 Save as `paint.motion.tsx`:
 
@@ -726,10 +789,37 @@ groups and many overlapping translucent layers can dominate CPU/GPU work.
 
 ## Tailwind class catalog
 
-Motion validates `className` against its own finite catalog. It is not a Tailwind
-build pipeline: there is no config/plugin processing, arbitrary class generation,
-responsive variant or interaction state. Static expressions may construct a class
-string at prepare time; it cannot vary with `ctx`.
+Motion validates every candidate in `className` against its supported catalog.
+There is no config/plugin processing, unbounded class generation or implicit
+interaction state. Responsive variants use the logical canvas; finite choices
+may also depend on `ctx` or props:
+
+```tsx
+<View className={`p-4 ${ctx.localFrame >= 30 ? "w-40" : "w-20"} bg-${active ? "blue-500" : "red-500"}`} />
+```
+
+String constants, ternaries, finite template holes, local bindings and pure helpers
+that lower to those expressions are supported. Every candidate is checked before
+rendering, including inactive branches. Independent whitespace-separated choices
+remain separate selectors rather than combinations of entire style objects.
+One token can have at most 64 finite choices; arbitrary numeric/string substitutions
+such as `` `w-${ctx.localFrame}` `` are rejected. Selection is discrete and does
+not start an implicit transition or animation. Post-layout bounds cannot control
+class selection, since classes can affect layout.
+
+Variants are permanently rejected: `sm:`/`md:`/`lg:`/`xl:`/`2xl:`, `min-*`, `max-*`,
+`portrait:`, `landscape:`, `dark:`, `hover:`, `focus:` and `press:`. The canvas is fixed by
+the entry file's `composition` for standalone preview, so a breakpoint would be a constant.
+Keep one file per deliverable shape, or branch on props or data. Do not compare
+`ctx.viewport.width` as if it were a CSS breakpoint.
+
+`ctx.viewport.width`/`.height` are numeric expressions for geometry (bar widths, positions).
+They read the Motion composition's logical canvas in standalone and Timeline use.
+Timeline fits that completed canvas into the clip target rectangle. They are not the
+display window, `--output-size`, or system preferences. The low-level Rust
+`LayoutOptions.viewport` takes device-pixel extents: its logical canvas is `size / DPR`.
+Normal Native/Wasm hosts use DPR 1 and scale delivery afterward. The same rules prepare
+every finite class choice, and class string order still does not decide a conflict.
 
 The following catalog families are admitted. `N` means a finite non-negative
 number unless a narrower range is stated; it does not imply arbitrary CSS text.
@@ -738,17 +828,18 @@ number unless a narrower range is stated; it does not imply arbitrary CSS text.
 | --- | --- |
 | Display / position | `block`, `inline`, `inline-block`, `flex`, `inline-flex`, `grid`, `inline-grid`, `hidden`; `static`, `relative`, `absolute`, `fixed` |
 | Box / visibility | `box-border`, `box-content`, `visible`, `invisible`, `isolate`, `isolation-auto` |
-| Flex | `flex-row`, `flex-col`, reverse variants; `flex-wrap`, `flex-wrap-reverse`, `flex-nowrap`; `flex-auto`, `flex-initial`, `flex-none` |
+| Flex | `flex-row`, `flex-col`, reverse variants; `flex-wrap`, `flex-wrap-reverse`, `flex-nowrap`; `flex-auto`, `flex-initial`, `flex-none`, `flex-N`; `grow`, `grow-N`, `shrink`, `shrink-N` |
 | Alignment | `items-{baseline,center,end,start,stretch}`; `self-{auto,baseline,center,end,start,stretch}`; `justify-{around,between,center,end,evenly,normal,start,stretch}`; `content-{around,between,center,end,evenly,normal,start,stretch}` |
 | Spacing | `gap`, `gap-x/y`; `m`, `mx/y`, `mt/r/b/l/s/e`; `p`, `px/y`, `pt/r/b/l/s/e`; `inset`, `inset-x/y`, `top/right/bottom/left`, each followed by `-N`, `-px`, `-full` |
 | Automatic / negative spacing | `auto` for margins/insets; a leading `-` for margins/insets, not padding/gap |
-| Sizing | `w`, `h`, `min-w/h`, `max-w/h`, `size`, `basis` followed by `-N` or `-{auto,px,full,screen,min,max,fit}` |
+| Sizing | `w`, `h`, `min-w/h`, `max-w/h`, `size`, `basis` followed by `-N` or `-{auto,px,full,screen}`; fractions on `w/h`, `min-w/h`, `max-w/h`, and `basis`; container tokens `max-w-{3xs,2xs,xs,sm,md,lg,xl,2xl,3xl,4xl,5xl,6xl,7xl}` |
 | Aspect | `aspect-auto`, `aspect-square`, `aspect-video` |
 | Grid | `grid-cols/rows-N`, `col/row-span-N`, `col/row-start/end-N`, N 1–64; `grid-cols/rows-none`, `col/row-span-full`, `col/row-start/end-auto` |
-| Grid flow / automatic tracks | `grid-flow-{row,col,dense,row-dense,col-dense}`; `auto-cols/rows-{auto,min,max,fr}` |
-| Overflow | `overflow-{auto,clip,hidden,scroll,visible}` |
-| Text size / alignment | `text-{xs,sm,base,lg,xl,2xl,3xl,4xl,5xl,6xl,7xl,8xl,9xl}`; `text-{left,center,right,justify,start,end}` |
+| Grid flow / automatic tracks | `grid-flow-{row,col,dense,row-dense,col-dense}`; `auto-cols/rows-{auto,fr}` |
+| Overflow | `overflow-{clip,hidden,visible}`; scrolling/auto overflow is not implemented |
+| Text size / alignment | `text-{xs,sm,base,lg,xl,2xl,3xl,4xl,5xl,6xl,7xl,8xl,9xl}`; optional numeric or arbitrary leading modifier, such as `text-sm/6` and `text-[13px]/[20px]`; `text-{left,center,right,justify,start,end}` |
 | Font weight / style | `font-{thin,extralight,light,normal,medium,semibold,bold,extrabold,black}`; `italic`, `not-italic` |
+| Font family | `font-sans`, `font-serif`, `font-mono`; family stacks resolve only against fixed fonts supplied to the package |
 | Tracking / leading | `tracking-{tighter,tight,normal,wide,wider,widest}`; `leading-N`, `leading-{none,tight,snug,normal,relaxed,loose}` |
 | Text behavior | `uppercase`, `lowercase`, `capitalize`, `normal-case`; `break-{all,keep,normal}`; `whitespace-{normal,nowrap,pre,pre-line,pre-wrap}`; `truncate`, `text-clip`, `text-ellipsis`, `tabular-nums` |
 | Text decoration / clamp | `underline`, `overline`, `line-through`, `no-underline`; `line-clamp-N` for 1–64 and `line-clamp-none` |
@@ -758,6 +849,13 @@ number unless a narrower range is stated; it does not imply arbitrary CSS text.
 | Opacity | `opacity-N`, N 0–100 |
 | Gradients | `bg-linear-to-{t,tr,r,br,b,bl,l,tl}`, `bg-radial`, `bg-conic`; `from/via/to-COLOR` and `from/via/to-N%` |
 | Colors | `bg`, `text`, `border`, border side/axis variants, `outline`, `decoration`, `shadow`, `text-shadow` with admitted color tokens |
+| Additional alignment | `justify-items-*`, `justify-self-*`, `place-items-*`, `place-content-*`, `place-self-*`, with the corresponding supported CSS keyword |
+| Order / stacking | `order-N`, `-order-N`, `order-none`; `z-N`, `-z-N`, `z-auto` |
+| Media | `object-{contain,cover,fill,none,scale-down}`; `object-{center,top,right,bottom,left,left-top,left-bottom,right-top,right-bottom}` |
+| Text wrapping | `text-wrap`, `text-nowrap`, `text-balance`, `text-pretty` |
+| 2D transforms | `translate`, `translate-x/y` with spacing, fractions, `full`, `px`, or arbitrary lengths; `rotate-N`, `scale-N`, `scale-x/y-N` with integer N; `origin-{center,top,right,bottom,left,top-left,top-right,bottom-left,bottom-right}`; negative transforms; `translate-none`, `rotate-none`, `scale-none` |
+| Filters | `blur`, `blur-{xs,sm,md,lg,xl,2xl,3xl,none}`; `brightness-N`, `contrast-N`, `grayscale-N`, `hue-rotate-N`, `invert-N`, `saturate-N`, `sepia-N` with non-negative integer N; bare `grayscale`, `invert`, `sepia`; negative hue rotation; `drop-shadow`, `drop-shadow-{xs,sm,md,lg,xl,2xl,none}`; `filter`, `filter-none` |
+| Backdrop filters | `backdrop-` versions of blur/brightness/contrast/grayscale/hue-rotate/invert/saturate/sepia; `backdrop-opacity-N`; `backdrop-filter`, `backdrop-filter-none` |
 
 Color tokens are `black`, `white`, `transparent`, `current`, or a palette family
 plus shade. Families: slate, gray, zinc, neutral, stone, red, orange, amber, yellow,
@@ -766,17 +864,82 @@ rose. Shades: 50, 100, 200, 300, 400, 500, 600, 700, 800, 900, 950. Palette colo
 can use `/N` opacity, for example `bg-blue-500/20`.
 
 Numeric spacing uses the utility scale (for example `p-4` is 16px with the default
-root sizing), not literal pixel counts. Use `style` for exact geometry. Fractions
-such as `w-1/2`, arbitrary brackets such as `w-[320px]`, `flex-1`, and transform/
-filter utilities are not in this catalog; use `width: "50%"`, `width: 320`,
-`flex: "1 1 0px"`, `transform` or `filter` styles instead.
+root sizing), not literal pixel counts. Fractions such as `w-1/2` and `basis-1/3`
+resolve to percentages. `flex-1` uses CSS `flex: 1`, including its percentage basis.
+Arbitrary values are admitted on `w/h`, `size`, `min-w/h`, `max-w/h`, `basis`,
+all admitted padding/margin axes and sides, `gap`, `gap-x/y`, `inset`, `inset-x/y`,
+`top/right/bottom/left`, `grid-cols/rows`, `aspect`, `bg` (color), `leading`, and
+`text` (color or size). Examples: `w-[320px]`, `w-[calc(100%_-_40px)]`,
+`grid-cols-[1fr_2fr]`, `aspect-[4/3]`, `bg-[#123456]`, `px-[13px]`,
+`-left-[20px]`, `leading-[1.4]`, and `text-[length:13px]/[20px]`.
+Negative arbitrary margins/insets are supported; negative padding/sizes are rejected.
+Slash leading uses the spacing scale (`/6` = `1.5rem`); a bracket value keeps its
+CSS units or unitless multiplier. For width-constrained standalone text, select a
+block/flex/grid layout context: inline text does not acquire a width from `width`.
+Visual arbitrary values include `translate-x-[25%]`, `-rotate-[0.25turn]`,
+`scale-[1.25_0.5]`, `origin-[20%_40%]`, `blur-[3px]`, `brightness-[1.25]`,
+`drop-shadow-[2px_4px_3px_#000]`, `filter-[blur(3px)_brightness(1.25)]`, and
+`backdrop-filter-[blur(3px)]`. Values go through the same strict CSS parser as
+inline styles.
 
-Forbidden forms include `hover:...`, `md:...`, `dark:...`, leading/trailing `!`,
-`animate-*`, `transition-*`, `transform-gpu` and `transform-cpu`. A legal utility
+General arbitrary properties use canonical CSS names: `[width:123px]`,
+`[padding:3px_7px]`, `[border:2px_solid_red]`,
+`[transform:scale(1.2)_translateX(4px)]`, and `[backdrop-filter:blur(2px)]`.
+They use the same property admission, value checks, cascade and cache rules as
+inline CSS; this syntax does not enable unsupported properties or values.
+All candidates in a finite conditional class are validated, including branches
+not selected at the requested frame. Append `!` for importance, for example
+`[width:123px]!`.
+
+Underscores represent spaces in arbitrary values; escape an underscore to retain
+it in a font name. Inside a JavaScript string, escape the backslash too:
+`className={"[font-family:'KaTeX\\_Main']"}`. Quoted strings, nested parentheses
+and math operators are decoded before CSS parsing. Within utility values, URL
+backgrounds, custom-property declarations, and unsupported math
+functions remain rejected. Static inline CSS variables use the preparation path
+described above.
+Finite font-family class choices can select among fixed fonts supplied to the
+render package; each frame resolves glyphs and layout for its selected family.
+Use `style={{ fontFamily: "asset://brand" }}` for a bound font resource.
+Font names do not load system or remote fonts.
+The default pack provides Noto Sans, KaTeX Main serif faces and Noto Sans Mono for
+the three font-family utilities, plus fixed script/emoji fallbacks. Finite choices
+retain the required candidate families in the render package, including inherited
+font classes on ancestor containers.
+
+Translation percentages use the node's own border box. Transform axes compose
+within each property; scale arbitrary values set the whole scale property.
+Individual filter utilities compose in a fixed order: blur, brightness, contrast,
+grayscale, hue rotation, invert, saturate, sepia, drop-shadow. Backdrop chains put
+opacity after invert and omit drop-shadow. A whole `filter-[...]` retains the
+authored function order. Composition slots do not inherit to child nodes.
+Conflicting utilities still follow rule order: for example, `blur-sm` wins over
+`blur-none`; use `filter-none` or an appropriate important override to reset the
+effect. Negative/non-finite filter values fail; mixed-unit blur expressions are
+also checked after resolving the actual frame's sizing context.
+
+Utilities are expanded once during prepare, in a fixed property order. Reordering
+`className` does not change conflicting utility results.
+Ordinary inline styles override ordinary utilities; a trailing `!` marks an
+important utility, for example `w-40!`, which overrides ordinary inline width.
+Motion primitives default to `box-sizing: border-box`, zero margin/padding, and
+zero-width solid borders. `border-2 border-white` paints directly; `box-content`
+and `border-none` explicitly override those defaults.
+Image and video block defaults have lower priority than authored display rules.
+An image directly inside rich `Text` defaults to an atomic inline box when no
+authored display choice applies at that frame. Explicit inline media retains its
+own width/height, and `bounds()` uses its actual placement in the text flow.
+
+Forbidden forms include `hover:...`, `dark:...`, every other variant, leading `!`,
+every `animate-*` class, `transition-*`, `transform-gpu` and `transform-cpu`. Drive
+loops with `interpolate` over local time. A legal utility
 name still needs meaningful values and an appropriate node/layout context.
-The `w-min`, `w-max` and `w-fit` utilities pass the tested render path. They are not
-interchangeable with inline `width: "min-content"`, `"max-content"` or
-`"fit-content"`, which the current CSS declaration parser rejects.
+Intrinsic sizing (`w-min`, `w-max`, `w-fit` and the corresponding height/min/max
+variants), `auto-cols-min/max`, and `auto-rows-min/max` are permanently rejected: write
+an explicit length or percentage, or `measureText` for a text-sized box. Inline
+`min-content`, `max-content`, and `fit-content` are rejected for the same reason. Grid track lists
+must be fully valid: `subgrid` and trailing unknown tokens fail during compilation
+or artifact validation, rather than becoming empty or truncated track lists.
 
 ## Text, fonts and formulas
 
@@ -857,11 +1020,43 @@ as arbitrary selectable JSX nodes.
 
 ### Measuring and fitting
 
-`measureText(text, { className?, style?, maxWidth? })` runs during preparation and
-returns measured metrics including `width` and `height`. Here `style` is a CSS
-declaration **string**, for example `"font-size: 24px"`, not the JSX style object.
-Text/options must be prepare-time values and measurements use the supplied fonts.
-Do not pass frame-varying text/width or use browser measurement APIs.
+`measureText(text, { fontSize, fontFamily?, fontWeight?, letterSpacing?,
+lineHeight?, maxWidth? })` runs during preparation and returns measured metrics
+including `width` and `height`. `fontSize` is required; every option is the same
+value, with the same meaning, as the identically named property in a JSX `style`
+object, so measurement admits exactly what rendering admits. `measureText` does
+**not** accept `className` or `style`: pass explicit typography, and write the
+same numbers on the `Text` node you are sizing. Numbers are CSS pixels; `lineHeight`
+is the unitless multiplier the CSS property is. String lengths such as `"1rem"` or
+`"36px"` are not accepted — compute the pixel value in a `const` instead.
+
+```tsx
+const label = "全球业务网络 Overview";
+const metrics = measureText(label, { fontFamily: "monospace", fontSize: 28, lineHeight: 1.25, maxWidth: 200 });
+export default function Card() {
+  return <Scene style={{ width: 640, height: 480 }}>
+    <View style={{ width: metrics.width, height: metrics.height, backgroundColor: "#334455" }} />
+    <Text style={{ width: 200, fontFamily: "monospace", fontSize: 28, lineHeight: 1.25 }}>{label}</Text>
+  </Scene>;
+}
+```
+
+`width` and `height` describe the layout border box of the measured text before
+paint transforms, in CSS pixels. `maxWidth` supplies the available layout width for
+wrapping; without it, measurement uses intrinsic max-content width. Text and options
+must be prepare-time values. Measurement prepares an isolated `Text` node through the
+same layout path, font stack and property admission as rendering, so supply the same
+font bytes and canvas as rendering; an asset font is named with the same alias an
+authored `fontFamily` uses (`fontFamily: "asset://brandFont"`). A surrounding JSX
+parent's inherited styles are not part of the isolated request: pass the relevant
+typography explicitly.
+Font lists such as `"monospace, sans-serif"` and quoted names with fallbacks keep
+their order and the same parsing as `Text`.
+
+Measurements become artifact constants. Do not pass frame-varying text or options, and
+do not use browser measurement APIs. Reprepare when fonts or the canvas change.
+Low-level Rust callers also supply viewport DPR; metrics remain CSS pixels, with
+device-pixel rounding determined by that fixed DPR.
 
 `style.fitText: fitText({ minFontSize: 16, maxFontSize: 48 })` fits text to a fixed
 content box with bounded font sizes. Set explicit width/height. The options are
@@ -1536,24 +1731,38 @@ accepted programs and rejection cases.
 | `GrammarForbidden` on a list | Prepare its input first, use a synchronous map and add stable keys |
 | `GrammarForbidden` on a style | Use an explicit style object, supported types and closed CSS structure |
 | `TailwindForbidden` / `TailwindUnsupported` | Consult the catalog; replace the utility with an explicit supported style |
+| `StyleUnknownProperty` | Check the property name; arbitrary properties use canonical kebab-case CSS names |
+| `StyleUnsupportedProperty` / `StyleUnsupportedValue` | Follow the property's specific reason and supported alternative |
+| `StyleInvalidValue` | Correct the CSS value, units, numeric range or trailing tokens |
 | `SandboxForbidden` | Move I/O/time/locale-dependent work outside Motion; bind its results as data |
 | `StaticEvalFailed` / `BuiltinRejected` | Check argument shape, prepare-time requirements, ranges and finite values |
 | Missing image/font/video | Declare the matching asset control and pass `--asset name=path` |
 | Text looks different after export | Match font resources, canvas, duration and FPS; inspect wrapping/fallback |
-| Border is missing | Set `borderStyle: "solid"` or a complete border shorthand |
+| Border is missing | Set a positive border width and visible color; check for an explicit `border-none` or `borderStyle: "none"` override |
 | Open path fills an unexpected shape | Set `fill="none"` for stroke-only intent |
 | A blur is rejected at certain frames | Clamp its computed radius to non-negative values |
 | Post-layout dependency error | Keep bounds/anchors out of size, ordinary layout and text content |
 | PNG and MP4 show different animation states | Match all render inputs and compare the same zero-based frame |
 | Slow export | Inspect bounded layers/blur/overdraw first; select backend/workers and encoding separately |
 
+CSS values and expanded utilities share property diagnostics. Machine-readable compiler
+diagnostics retain `style.kind`, `style.property`, `style.value` and `style.reason`, plus
+the source span, node path and original `utility` when available. The style value is the
+CSS value after utility decoding; the original utility preserves authored spelling.
+All candidates in a finite class choice are validated, including currently inactive
+branches. Type errors and unsupported expression structure can fail before CSS validation.
+
+Compiler diagnostics name the replacement for each permanent rejection. Those are
+property policies, not a guarantee that every CSS value or renderer combination works;
+the limits and tested scenes remain authoritative.
+
 Unsupported authoring patterns include React hooks/effects, DOM access, browser
-events, external CSS stylesheets/selectors/media queries, CSS keyframe animations,
+events, local and remote stylesheets, selectors and media queries, CSS keyframe animations,
 arbitrary npm modules, runtime network/filesystem access, unseeded randomness,
 dynamic resource identities and frame-varying tree sizes.
 
 Use `Clip`/`Mask` instead of CSS `clip-path`/`mask-image`; use `motionPath` instead
-of CSS `offset-path`; use supported transforms rather than matrix/skew strings.
+of CSS `offset-path`; use the supported ordered transform list for 2D skew/matrix.
 An upstream CSS parser may recognize an otherwise unsupported declaration. Always
 check the rendered frame and any prepare/render diagnostics; `motion check` cannot
 prove every future frame's numeric validity or every backend's visual behavior.
@@ -1574,10 +1783,10 @@ machine-readable progress on stdout. See [CLI output](cli.md#output-contract-for
 ## Examples and verification
 
 Complete snippets above are intended to be saved as the named `.motion.tsx` files.
-Unless another command is shown, inspect them at 640×360, duration three seconds,
-30 FPS, frame 45, using a fresh PNG output path. Try early/late frames for animated
-scenes. `poster` needs an image, `bars` its JSON, and `Dissolve` its package/image.
-Source-only snippets or constructor signatures are not standalone scenes.
+Unless another command is shown, inspect frame 45 with a fresh PNG output path, using
+the `composition` the snippet declares. Try early and late frames for animated scenes.
+`poster` needs an image, `bars` its JSON, and `Dissolve` its package/image. Source-only
+snippets or constructor signatures are not standalone scenes.
 
 This reference follows the compiler, layout adapter and native renderer. The
 [authoring regression tests](../crates/valle-compiler/tests/motion_authoring_regressions.rs)

@@ -9,11 +9,13 @@ use std::sync::OnceLock;
 use std::sync::mpsc::{Receiver, channel};
 use std::time::{Duration, Instant};
 
-const SOURCE: &str = r##"export const controls = defineControls({
+const SOURCE: &str = r##"export const composition = { width: 240, height: 140, fps: 30, duration: 3 };
+
+export const controls = defineControls({
   props: { size: number({ default: 40, min: 10, max: 200 }) },
   timing: {
-    enterFrames: frames({ default: 3, min: 0 }),
-    exitFrames: frames({ default: 2, min: 0 }),
+    enterDuration: 0.1,
+    exitDuration: 0.066667,
   },
 });
 
@@ -345,7 +347,6 @@ fn motion_studio_controls_are_authoring_state_until_a_new_package_is_published()
         .args(["--events", "motion", "studio"])
         .arg(&source)
         .args(["--port", "0"])
-        .args(["--size", "240x140"])
         .args(["--web-assets-dir"])
         .arg(web_runtime_dir())
         .stdout(Stdio::piped())
@@ -471,7 +472,7 @@ fn motion_studio_hot_reload_keeps_last_good_frame_and_recovers() {
     let mut child = Command::new(env!("CARGO_BIN_EXE_valle"))
         .args(["--events", "motion", "studio"])
         .arg(&source)
-        .args(["--port", "0", "--size", "240x140"])
+        .args(["--port", "0"])
         .args(["--web-assets-dir"])
         .arg(web_runtime_dir())
         .stdout(Stdio::piped())
@@ -604,17 +605,7 @@ fn module_scenes_are_editable_and_source_locatable_in_studio() {
         command
             .args(["--events", "motion", "studio"])
             .arg(root.join(source))
-            .args([
-                "--port",
-                "0",
-                "--duration",
-                "6",
-                "--fps",
-                "30",
-                "--size",
-                "1920x1080",
-                "--web-assets-dir",
-            ])
+            .args(["--port", "0", "--web-assets-dir"])
             .arg(web_runtime_dir());
         if let Some(relative) = data {
             command.args(["--data"]).arg(root.join(relative));

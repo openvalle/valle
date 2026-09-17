@@ -5,9 +5,10 @@ use std::collections::BTreeMap;
 
 use valle_compiler::motion::compile_motion;
 use valle_motion::{
-    EvalInputs, Expr, MotionValue, ResolvedSignals, motion_context_at, phase_windows, resolve_props,
+    EvalInputs, Expr, MotionValue, ResolvedSignals, motion_context_at, phase_windows,
+    phase_windows_seconds, resolve_props,
 };
-use valle_timeline::FrameRate;
+use valle_timeline::{FrameRate, RationalTime};
 
 fn diagnostics_of(source: &str) -> Vec<String> {
     compile_motion(source)
@@ -37,7 +38,17 @@ fn spring_value(source: &str, fps_num: u32, duration_frames: u32, frame: u32) ->
     let compiled = compile_motion(source).expect("compiles");
     let artifact = &compiled.artifact;
     let props = resolve_props(&artifact.controls, &BTreeMap::new()).expect("props");
-    let layout = phase_windows(&artifact.controls.phase_spec(), duration_frames);
+    let fps = FrameRate::new(i64::from(fps_num), 1).unwrap();
+    let layout = if let Some(timing) = artifact.controls.timing_seconds {
+        phase_windows_seconds(
+            timing,
+            RationalTime::new(i64::from(duration_frames), fps_num).unwrap(),
+            fps,
+        )
+        .unwrap()
+    } else {
+        phase_windows(&artifact.controls.phase_spec(), duration_frames)
+    };
     let ctx = motion_context_at(
         frame,
         &layout,
@@ -123,7 +134,7 @@ fn the_spring_is_frame_rate_invariant_bit_for_bit() {
 fn the_spring_keeps_converging_after_its_phase_window_closes() {
     let source = SPRING.replace(
         "export default function P(ctx) {",
-        "export const controls = defineControls({ timing: { enterFrames: frames({ default: 6, min: 0, max: 120 }) } });\nexport default function P(ctx) {",
+        "export const controls = defineControls({ timing: { enterDuration: 0.2 } });\nexport default function P(ctx) {",
     );
     // Samples beyond the enter window must continue changing toward rest.
     let inside = spring_value(&source, 30, 60, 5);
@@ -144,7 +155,7 @@ fn the_spring_keeps_converging_after_its_phase_window_closes() {
 fn the_spring_sits_at_its_start_value_before_its_phase_begins() {
     // Sampling the exit spring at clip start precedes its phase window.
     let source = r##"
-export const controls = defineControls({ timing: { exitFrames: frames({ default: 10, min: 0, max: 120 }) } });
+export const controls = defineControls({ timing: { exitDuration: 0.333333 } });
 export default function P(ctx) {
   const out = spring({ elapsedFrames: ctx.exit.elapsedFrames, fps: ctx.fps, preset: "gentle" });
   return (<Scene className="h-full w-full">

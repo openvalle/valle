@@ -1,5 +1,7 @@
 import { releaseTheme } from "./shared-theme";
 
+// The delivery contract: Studio opens this fixture as its own entry.
+export const composition = { width: 1920, height: 1080, fps: 30, duration: 6 };
 export const component = "code-build";
 
 export const controls = defineControls({
@@ -43,7 +45,7 @@ export default function CodeBuild(ctx, props, signals) {
             {"\n      <Text>Every frame is pure.</Text>\n    </Scene>\n  );\n}"}
           </Text>
           <View key="terminal" className="absolute" style={{ borderStyle: "solid", left: 24, bottom: 24, width: 992, height: 142, borderRadius: 16, backgroundColor: "#020617", borderWidth: 1, borderColor: useTheme().colors.hairline }}>
-            <Text key="command" className="absolute whitespace-pre tabular-nums" style={{ left: 22, top: 18, width: 940, height: 44, color: useTheme().colors.accent, fitText: fitText({ minFontSize: 16, maxFontSize: 28 }) }}>{"> valle motion studio release.motion.tsx --duration 3 --fps 60"}</Text>
+            <Text key="command" className="absolute whitespace-pre tabular-nums" style={{ left: 22, top: 18, width: 940, height: 44, color: useTheme().colors.accent, fitText: fitText({ minFontSize: 16, maxFontSize: 28 }) }}>{"> valle motion studio release.motion.tsx --fps 60"}</Text>
             <Text key="result" className="absolute" style={{ left: 22, top: 82, fontSize: 24, color: "#86efac", opacity: done }}>{`✓ ${padNumber(round(done * 180), { width: 3 })} frames · byte stable`}</Text>
           </View>
         </View>

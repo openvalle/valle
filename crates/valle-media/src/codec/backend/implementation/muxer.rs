@@ -462,6 +462,12 @@ impl Muxer {
             let v_sidx = vost.index();
             vost.set_parameters(&venc);
             vost.set_time_base(v_enc_tb);
+            let frame_rate = Rational(
+                i32::try_from(fps_num).context("video FPS numerator exceeds FFmpeg range")?,
+                i32::try_from(fps_den).context("video FPS denominator exceeds FFmpeg range")?,
+            );
+            vost.set_rate(frame_rate);
+            vost.set_avg_frame_rate(frame_rate);
             v_sidx
         };
 
@@ -941,6 +947,31 @@ impl Muxer {
                 self.a_enc_tb,
                 audio_stream_time_base,
             )?;
+        }
+        // FFmpeg's MP4 trailer can otherwise report the last video PTS as the stream duration,
+        // omitting the last frame interval even though every packet carries a duration.
+        let video_end_ticks = if self.timestamped_video {
+            self.last_video_pts
+                .map(|pts| {
+                    pts.checked_add(
+                        self.last_video_duration
+                            .or(self.last_video_step)
+                            .unwrap_or(self.nominal_frame_ticks),
+                    )
+                    .context("video stream duration overflows i64")
+                })
+                .transpose()?
+                .unwrap_or(0)
+        } else {
+            self.frame_idx
+        };
+        let stream_duration = unsafe {
+            ff::ffi::av_rescale_q(video_end_ticks, self.v_enc_tb.into(), self.v_ost_tb.into())
+        };
+        if let Some(mut stream) = self.octx.stream_mut(self.v_sidx) {
+            unsafe {
+                (*stream.as_mut_ptr()).duration = stream_duration;
+            }
         }
         self.octx.write_trailer()?;
         self.finished = true;

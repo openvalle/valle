@@ -1423,6 +1423,7 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
     const next = await loadTimeline() as StudioConfig;
     draftPreview.invalidate();
     config = next;
+    workspaceRuntime.setMotionSourceDurations(next.motionSourceDurations ?? {});
     savedSnapshotJson = JSON.stringify(next.timeline);
     workingCopy = structuredClone(next.timeline);
     compiledCopy = compileTimeline(workingCopy);

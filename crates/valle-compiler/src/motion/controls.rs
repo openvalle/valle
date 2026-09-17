@@ -1,6 +1,8 @@
 //! Folded controls schema and structured prepare-data parsing.
 
 use super::*;
+use valle_motion::TimingSeconds;
+use valle_timeline::RationalTime;
 
 pub(super) fn default_controls() -> ControlsSchema {
     ControlsSchema {
@@ -23,6 +25,7 @@ pub(super) fn default_controls() -> ControlsSchema {
                 max: None,
             },
         },
+        timing_seconds: None,
         cues: BTreeMap::new(),
         assets: BTreeMap::new(),
         camera: CameraControls::default(),
@@ -49,17 +52,31 @@ pub(super) fn controls_from_json(value: &serde_json::Value) -> Result<ControlsSc
         let timing = timing
             .as_object()
             .ok_or("controls.timing must be an object")?;
-        ensure_keys(timing, &["enterFrames", "holdCycleFrames", "exitFrames"])
-            .map_err(str::to_string)?;
-        if let Some(value) = timing.get("enterFrames") {
-            controls.timing.enter_frames = parse_frames(value, false)?.0;
-        }
-        if let Some(value) = timing.get("holdCycleFrames") {
-            controls.timing.hold_cycle_frames = parse_frames(value, true)?.1;
-        }
-        if let Some(value) = timing.get("exitFrames") {
-            controls.timing.exit_frames = parse_frames(value, false)?.0;
-        }
+        ensure_keys(
+            timing,
+            &["enterDuration", "holdCycleDuration", "exitDuration"],
+        )
+        .map_err(str::to_string)?;
+        let seconds = |field: &str, positive: bool| -> Result<Option<RationalTime>, String> {
+            let Some(value) = timing.get(field) else {
+                return Ok(None);
+            };
+            let number = value
+                .as_number()
+                .ok_or_else(|| format!("{field} must be a number of seconds"))?;
+            let exact = valle_timeline::wire::timeline::TimelineTimeWire::new(number.to_string())
+                .map_err(|error| format!("{field}: {error}"))?
+                .to_exact();
+            if positive && !exact.is_positive() {
+                return Err(format!("{field} must be positive"));
+            }
+            Ok(Some(RationalTime::from_exact(exact)))
+        };
+        controls.timing_seconds = Some(TimingSeconds {
+            enter_duration: seconds("enterDuration", false)?.unwrap_or(RationalTime::ZERO),
+            exit_duration: seconds("exitDuration", false)?.unwrap_or(RationalTime::ZERO),
+            hold_cycle_duration: seconds("holdCycleDuration", true)?,
+        });
     }
     if let Some(cues) = object.get("cues") {
         controls.cues = parse_named(cues, |value| {
@@ -395,40 +412,6 @@ pub(super) fn control_default(
             .map(|value| MotionValue::Enum(value.into()))
             .ok_or("select default must be text"),
     }
-}
-
-pub(super) fn parse_frames(
-    value: &serde_json::Value,
-    optional: bool,
-) -> Result<(FrameControl, OptionalFrameControl), &'static str> {
-    let object = value
-        .as_object()
-        .ok_or("frame control must use frames()/optionalFrames()")?;
-    ensure_keys(object, &["kind", "default", "min", "max"])?;
-    let expected = if optional { "optionalFrames" } else { "frames" };
-    if object.get("kind").and_then(serde_json::Value::as_str) != Some(expected) {
-        return Err("wrong frame control helper");
-    }
-    let min = object
-        .get("min")
-        .and_then(serde_json::Value::as_u64)
-        .unwrap_or(if optional { 1 } else { 0 }) as u32;
-    let max = object
-        .get("max")
-        .and_then(serde_json::Value::as_u64)
-        .map(|value| value as u32);
-    let default = object
-        .get("default")
-        .and_then(serde_json::Value::as_u64)
-        .map(|value| value as u32);
-    Ok((
-        FrameControl {
-            default: default.unwrap_or(0),
-            min,
-            max,
-        },
-        OptionalFrameControl { default, min, max },
-    ))
 }
 
 pub(super) fn ensure_keys(

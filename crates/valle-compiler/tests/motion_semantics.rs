@@ -4,8 +4,7 @@
 #![cfg(feature = "motion")]
 
 use valle_compiler::motion::compile_motion;
-use valle_motion::value::{Angle, AngleUnit};
-use valle_motion::{Expr, Extrapolation, MotionValue, StyleValue};
+use valle_motion::{Expr, MotionValue, StyleValue};
 
 /// Insert style fields verbatim into a one-node scene.
 fn scene(style: &str) -> String {
@@ -29,100 +28,78 @@ fn reject(style: &str, needle: &str) {
     );
 }
 
-// Typed 2D transforms and authored-order CSS 3D transforms.
+// CSS transform lists stay ordered and independent from individual properties.
 
 #[test]
-fn static_transform_lowers_to_per_property_typed_bindings_in_fixed_order() {
+fn static_transform_preserves_the_list_without_overwriting_individual_properties() {
     let compiled = compile_motion(&scene(
-        r#"transform: "translate(12px 0px) rotate(45deg) scale(1.5)""#,
-    ))
-    .expect("fixed-order static transform compiles");
-    let artifact = compiled.artifact;
-    let node = &artifact.nodes[0];
+        r#"translate:'4px 0px', scale:2, transform: "translate(12px, 0px) rotate(45deg) scale(1.5)""#,
+    )).unwrap();
+    let node = &compiled.artifact.nodes[0];
     let properties = node
         .styles
         .iter()
         .map(|style| style.property.as_str())
         .collect::<Vec<_>>();
-    assert_eq!(properties, ["translate", "rotate", "scale"]);
+    assert_eq!(properties, ["translate", "scale", "transform"]);
+    assert!(
+        matches!(&node.styles[2].value, StyleValue::Static { value: MotionValue::Str(value) }
+        if value == "translate(12px, 0px) rotate(45deg) scale(1.5)")
+    );
+    compiled.artifact.validate().unwrap();
+}
+
+#[test]
+fn numeric_transform_holes_keep_closed_css_structure() {
+    let artifact = compile_motion(&scene("transform: `rotate(${ctx.enter.progress * 90}deg)`"))
+        .unwrap()
+        .artifact;
+    assert!(
+        artifact
+            .exprs
+            .iter()
+            .any(|value| matches!(value, Expr::Template { .. }))
+    );
     assert!(matches!(
-        &node.styles[1].value,
-        StyleValue::Static { value: MotionValue::Angle(angle) }
-            if angle.value == 45.0 && angle.unit == AngleUnit::Deg
+        artifact.nodes[0].styles[0].value,
+        StyleValue::Expr { .. }
     ));
-    assert!(matches!(
-        &node.styles[2].value,
-        StyleValue::Static { value: MotionValue::Number(scale) } if *scale == 1.5
-    ));
-    artifact.validate().expect("artifact validates");
+    artifact.validate().unwrap();
 }
 
 #[test]
-fn rotate_hole_with_unit_suffix_desugars_to_the_bit_exact_identity_interpolate() {
-    let compiled = compile_motion(&scene("transform: `rotate(${ctx.enter.progress * 90}deg)`"))
-        .expect("rotate(${a}deg) is the sanctioned Number-hole form");
-    let artifact = compiled.artifact;
-    // Convert a numeric rotation hole to Angle with identity interpolation and Extend extrapolation.
-    let identity = artifact.exprs.iter().any(|expression| {
-        let Expr::Interpolate {
-            stops,
-            easings,
-            extrapolate_left: Extrapolation::Extend,
-            extrapolate_right: Extrapolation::Extend,
-            ..
-        } = expression
-        else {
-            return false;
-        };
-        easings.is_empty()
-            && stops.len() == 2
-            && stops.iter().enumerate().all(|(index, stop)| {
-                let expected = index as f64;
-                stop.input == expected
-                    && stop.output
-                        == MotionValue::Angle(Angle {
-                            value: expected,
-                            unit: AngleUnit::Deg,
-                        })
-            })
-    });
-    assert!(identity, "identity interpolate not found in expr arena");
-    // Run artifact validation to require Angle-valued rotation bindings.
-    artifact
-        .validate()
-        .expect("rotate binding type-checks as Angle");
+fn transform_order_optional_arguments_and_length_math_are_admitted() {
+    for value in [
+        "scale(1.2) rotate(10deg)",
+        "translate(10px, 20px)",
+        "translate(10px)",
+        "translate(calc(10% + 2px))",
+        "skew(10deg)",
+        "matrix(1,0,0,1,3,4)",
+    ] {
+        compile_motion(&scene(&format!("transform:'{value}'"))).unwrap();
+    }
 }
 
 #[test]
-fn authored_order_and_css_comma_forms_are_admitted_but_nested_functions_stay_closed() {
-    compile_motion(&scene(r#"transform: "scale(1.2) rotate(10deg)""#))
-        .expect("supported transform functions preserve authored order");
-    compile_motion(&scene(r#"transform: "translate(10px, 20px)""#))
-        .expect("CSS comma-separated translate is in the deterministic subset");
+fn transform_functions_require_valid_css_arguments_and_check_inactive_branches() {
+    for value in [
+        "translate(12px 0px)",
+        "translateX(1)",
+        "translate(auto)",
+        "matrix(1,0,0,1,3,4,5)",
+        "translateX(1px,2px)",
+        "skew(1deg,2deg,3deg)",
+        "scale(1) trailing",
+        "matrix3d(1)",
+        "rotate(10px)",
+    ] {
+        reject(&format!("transform:'{value}'"), "transform");
+    }
+    reject("transform: `scale(${ctx.enter.progress}x)`", "transform");
     reject(
-        r#"transform: "scale(calc(1))""#,
-        "ordered CSS 3D translate/rotate/scale functions",
-    );
-}
-
-#[test]
-fn hole_suffix_contract_is_per_property() {
-    reject(
-        "transform: `scale(${ctx.enter.progress}x)`",
-        "unitless Number hole",
-    );
-    reject(
-        "transform: `translate(${ctx.enter.progress}px ${ctx.enter.progress}px)`",
-        "one Length2-valued hole",
-    );
-    reject(
-        "transform: `rotate(${ctx.enter.progress}grad)`",
-        "`deg`/`rad`/`turn` suffix",
-    );
-    // Diagnostics must not expose internal hole identifiers.
-    reject(
-        "transform: `rotate(-${ctx.enter.progress}deg)`",
-        "span the whole argument",
+        "transform: ctx.localFrame < 30 ? 'none' : 'translate(auto)'",
+        "transform",
     );
 }
 

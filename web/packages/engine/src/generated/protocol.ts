@@ -21,9 +21,9 @@ export type StudioRuntimeWire = { assetBaseUrl: string, proxyBase?: string, asse
 
 export type StudioBootWire = { protocolVersion: number, session: StudioSessionWire, capabilities: StudioCapabilitiesWire, runtime: StudioRuntimeWire, };
 
-export type MotionTimingWire = { enterFrames: number, exitFrames: number, };
+export type MotionTimingWire = { enterFrames: number, exitFrames: number, enterDuration?: number, exitDuration?: number, };
 
-export type MotionCueWindowWire = { "type": "sourceRange", startFrame: number, endFrame: number, enterFrames: number, exitFrames: number, };
+export type MotionCueWindowWire = { "type": "sourceRange", startFrame: number, endFrame: number, enterFrames: number, exitFrames: number, start?: number, end?: number, enterDuration?: number, exitDuration?: number, };
 
 export type MotionViewportWire = { width: number, height: number, };
 

@@ -5,7 +5,9 @@
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
-use valle_timeline::FrameRate;
+use valle_timeline::internal::quantize::quantize_frame_boundary;
+use valle_timeline::time::TimeError;
+use valle_timeline::{FrameRate, RationalTime};
 
 use crate::{ControlsSchema, PhaseSpec, motion_context_at, phase_windows};
 
@@ -37,6 +39,35 @@ impl CueWindow {
         }
         Ok(())
     }
+}
+
+/// Resolve an authored cue in seconds to the same compressed, absolute frame boundaries used
+/// by rendering. Absolute quantization keeps adjacent cues aligned at fractional frame rates.
+pub fn cue_window_seconds(
+    start: RationalTime,
+    end: RationalTime,
+    enter: RationalTime,
+    exit: RationalTime,
+    fps: FrameRate,
+) -> Result<CueWindow, TimeError> {
+    let duration = end.checked_sub(start)?;
+    let requested = enter.checked_add(exit)?;
+    let (enter_end, exit_start) = if requested > duration {
+        let middle = start.checked_add(duration.checked_mul(enter)?.checked_div(requested)?)?;
+        (middle, middle)
+    } else {
+        (start.checked_add(enter)?, end.checked_sub(exit)?)
+    };
+    let b0 = quantize_frame_boundary(start, fps)?;
+    let b1 = quantize_frame_boundary(enter_end, fps)?;
+    let b2 = quantize_frame_boundary(exit_start, fps)?;
+    let b3 = quantize_frame_boundary(end, fps)?;
+    Ok(CueWindow {
+        start_frame: u32::try_from(b0).map_err(|_| TimeError::Overflow)?,
+        end_frame: u32::try_from(b3).map_err(|_| TimeError::Overflow)?,
+        enter_frames: u32::try_from(b1 - b0).map_err(|_| TimeError::Overflow)?,
+        exit_frames: u32::try_from(b3 - b2).map_err(|_| TimeError::Overflow)?,
+    })
 }
 
 /// Frame-pure state exposed as `signals.<name>.*`.
@@ -208,6 +239,7 @@ mod tests {
         ControlsSchema {
             props: BTreeMap::new(),
             data: BTreeMap::new(),
+            timing_seconds: None,
             timing: TimingControls {
                 enter_frames: FrameControl {
                     default: 0,
@@ -259,6 +291,22 @@ mod tests {
         assert!(!after.active);
         assert_eq!(after.progress, 1.0);
         assert_eq!(after.local_frame, 10);
+    }
+
+    #[test]
+    fn authored_cue_phases_compress_to_the_actual_frame_window() {
+        let fps = FrameRate::new(24, 1).unwrap();
+        let window = cue_window_seconds(
+            RationalTime::ZERO,
+            RationalTime::new(1, 2).unwrap(),
+            RationalTime::ONE,
+            RationalTime::ONE,
+            fps,
+        )
+        .unwrap();
+        assert_eq!(window.start_frame, 0);
+        assert_eq!(window.end_frame, 12);
+        assert_eq!((window.enter_frames, window.exit_frames), (6, 6));
     }
 
     #[test]

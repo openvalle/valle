@@ -108,7 +108,9 @@ pub(crate) struct CompiledMotionProgramContext<'a> {
     pub instance: &'a crate::render::CompiledMotionInstance,
     pub evaluated: &'a crate::render::EvaluatedSourceRef,
     pub source_frame: u32,
+    pub source_time: valle_timeline::RationalTime,
     pub viewport: Extent2d,
+    pub source_clip: Option<valle_draw::Rect>,
     pub fps: FrameRate,
     pub styles: &'a valle_motion::StyleCache,
     pub faces: &'a valle_motion::FaceCache,
@@ -152,10 +154,19 @@ pub(crate) fn build_compiled_motion_program(
             ),
         });
     }
-    let motion_context = valle_motion::motion_context_at(local_frame, &phase_windows, context.fps)
-        .ok_or_else(|| ProgramPrepareError::CompiledInvariant {
-            reason: format!("local frame {local_frame} is outside Motion duration {total_frames}"),
-        })?;
+    let mut motion_context = valle_motion::motion_context_at(
+        local_frame,
+        &phase_windows,
+        context.fps,
+    )
+    .ok_or_else(|| ProgramPrepareError::CompiledInvariant {
+        reason: format!("local frame {local_frame} is outside Motion duration {total_frames}"),
+    })?;
+    motion_context.sample = valle_timeline::internal::SampleTime::new(context.source_time);
+    motion_context.progress = (context.source_time.as_f64()
+        * (context.fps.numerator() as f64 / context.fps.denominator() as f64)
+        / f64::from(total_frames))
+    .clamp(0.0, 1.0);
 
     let cue_windows = compiled_cue_windows(context.instance, context.fps)?;
     let cues =
@@ -231,12 +242,21 @@ pub(crate) fn build_compiled_motion_program(
         assets: context.assets,
         model_resources: context.model_resources,
     };
-    let report = valle_motion::emit_program_with_faces(
-        &tree,
-        &valle_motion::default_font_naming,
-        Some(context.faces),
-        &catalog,
-    )
+    let report = match context.source_clip {
+        Some(clip) => valle_motion::emit::emit_program_with_faces_clipped(
+            &tree,
+            &valle_motion::default_font_naming,
+            Some(context.faces),
+            &catalog,
+            clip,
+        ),
+        None => valle_motion::emit_program_with_faces(
+            &tree,
+            &valle_motion::default_font_naming,
+            Some(context.faces),
+            &catalog,
+        ),
+    }
     .map_err(|error| ProgramPrepareError::MotionEmit {
         reason: error.to_string(),
     })?;
@@ -287,23 +307,6 @@ fn register_motion_dependency_font(
             reason: error.to_string(),
         })?;
     Ok(())
-}
-
-fn cue_duration_frames(
-    duration: valle_timeline::RationalTime,
-    fps: FrameRate,
-) -> Result<u32, ProgramPrepareError> {
-    let interval = valle_timeline::internal::quantize::quantize_frame_interval(
-        valle_timeline::RationalTime::ZERO,
-        duration,
-        fps,
-    )
-    .map_err(|error| ProgramPrepareError::MotionSignals {
-        reason: error.to_string(),
-    })?;
-    u32::try_from(interval.duration_frames).map_err(|_| ProgramPrepareError::MotionSignals {
-        reason: "cue duration frame count exceeds u32".into(),
-    })
 }
 
 fn compiled_motion_overrides(
@@ -378,34 +381,16 @@ fn compiled_cue_windows(
                 exit_duration,
             } => (*start, *end, *enter_duration, *exit_duration),
         };
-        let interval = valle_timeline::internal::quantize::quantize_frame_interval(
-            start,
-            end.checked_sub(start)
-                .map_err(|error| ProgramPrepareError::MotionSignals {
-                    reason: error.to_string(),
-                })?,
-            fps,
-        )
-        .map_err(|error| ProgramPrepareError::MotionSignals {
-            reason: error.to_string(),
-        })?;
-        output.insert(
-            name.clone(),
-            valle_motion::CueWindow {
-                start_frame: u32::try_from(interval.start_frame).map_err(|_| {
-                    ProgramPrepareError::MotionSignals {
-                        reason: "cue starts outside u32".into(),
-                    }
-                })?,
-                end_frame: u32::try_from(interval.end_frame).map_err(|_| {
-                    ProgramPrepareError::MotionSignals {
-                        reason: "cue ends outside u32".into(),
-                    }
-                })?,
-                enter_frames: cue_duration_frames(enter, fps)?,
-                exit_frames: cue_duration_frames(exit, fps)?,
-            },
-        );
+        let window = valle_motion::signals::cue_window_seconds(start, end, enter, exit, fps)
+            .map_err(|error| ProgramPrepareError::MotionSignals {
+                reason: error.to_string(),
+            })?;
+        if window.end_frame <= window.start_frame {
+            return Err(ProgramPrepareError::MotionSignals {
+                reason: format!("cue {name} has no frame at this fps"),
+            });
+        }
+        output.insert(name.clone(), window);
     }
     Ok(output)
 }

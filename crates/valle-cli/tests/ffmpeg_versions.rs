@@ -35,7 +35,8 @@ fn success(out: &Output) -> Value {
     serde_json::from_slice(&out.stdout).unwrap()
 }
 fn scene(dir: &Path) {
-    std::fs::write(dir.join("scene.motion.tsx"), "export default function Test(){return <Scene style={{backgroundColor:'#123456'}}><Text style={{fontSize:24}}>ABI</Text></Scene>;}").unwrap();
+    // 0.2s at 30 FPS is six frames, and the contract carries that instead of command-line flags.
+    std::fs::write(dir.join("scene.motion.tsx"), "export const composition = { width: 160, height: 90, fps: 30, duration: 0.2 }; export default function Test(){return <Scene style={{backgroundColor:'#123456'}}><Text style={{fontSize:24}}>ABI</Text></Scene>;}").unwrap();
 }
 fn render(dir: &Path, libraries: &Path, hardware: bool) {
     let mut args = vec![
@@ -43,12 +44,6 @@ fn render(dir: &Path, libraries: &Path, hardware: bool) {
         "motion",
         "render",
         "scene.motion.tsx",
-        "--duration",
-        "0.2",
-        "--size",
-        "160x90",
-        "--fps",
-        "30",
         "--backend",
         if hardware { "metal" } else { "raster" },
         "-o",

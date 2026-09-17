@@ -95,10 +95,10 @@ macOS 包要求 macOS 15+，采用 ad-hoc 签名，未经过 Apple 公证。Linu
 
 ```sh
 ./dist/bin/valle motion check examples/hello.motion.tsx
-./dist/bin/valle motion render examples/hello.motion.tsx --duration 3 --size 640x360 -o hello.mp4 --events
+./dist/bin/valle motion render examples/hello.motion.tsx -o hello.mp4 --events
 ./dist/bin/valle timeline check examples/timeline.json
 ./dist/bin/valle timeline render examples/timeline.json -o timeline.mp4 --events
-./dist/bin/valle motion studio examples/hello.motion.tsx --size 640x360
+./dist/bin/valle motion studio examples/hello.motion.tsx
 ```
 
 输出文件不能已存在。`--json` 输出一个机器可读结果；`--events` 输出 NDJSON 进度及最终结果。Studio 输出就绪消息后持续运行，用 Ctrl-C 停止。

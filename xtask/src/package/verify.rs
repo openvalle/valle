@@ -76,13 +76,12 @@ fn verify_runtime(
     let motion = temp.path().join("check.motion.tsx");
     fs::write(
         &motion,
-        "export default function Check(ctx) { return <Scene style={{backgroundColor: '#102030'}}><Text style={{fontSize: 24, color: '#ffffff'}}>Valle</Text></Scene>; }\n",
+        "export const composition = { width: 320, height: 180, fps: 30, duration: 1 / 30 };\nexport default function Check(ctx) { return <Scene style={{backgroundColor: '#102030'}}><Text style={{fontSize: 24, color: '#ffffff'}}>Valle</Text></Scene>; }\n",
     )?;
     let check = capture(
         clean_command(executable, temp.path())
             .args(["--json", "motion", "check"])
-            .arg(&motion)
-            .args(["--size", "320x180"]),
+            .arg(&motion),
     )?;
     let report: Value = serde_json::from_str(&check)?;
     ensure!(
@@ -94,15 +93,7 @@ fn verify_runtime(
     render
         .args(["--json", "motion", "render"])
         .arg(&motion)
-        .args([
-            "--frame",
-            "0",
-            "--size",
-            "320x180",
-            "--backend",
-            "raster",
-            "-o",
-        ])
+        .args(["--frame", "0", "--backend", "raster", "-o"])
         .arg(&image);
     let report: Value = serde_json::from_str(&run_bounded(&mut render, temp.path(), "frame", 90)?)?;
     ensure!(
@@ -129,7 +120,7 @@ fn verify_runtime(
     let child = command
         .args(["--json", "motion", "studio"])
         .arg(&motion)
-        .args(["--port", "0", "--size", "320x180"])
+        .args(["--port", "0"])
         .stdout(fs::File::create(&ready)?)
         .stderr(fs::File::create(&errors)?)
         .spawn()?;

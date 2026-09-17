@@ -1,4 +1,8 @@
-//! Prepare-time theme validation and deterministic deep merge.
+//! Prepare-time validation and deterministic deep merge for the JS `ThemeProvider` value.
+//!
+//! This is the author's component-data provider, not the CSS theme system removed by the style
+//! convergence plan. There is no CSS `@theme`, local stylesheet, or author CSS variable path left
+//! in the compiler; keep this module when deleting those.
 
 use super::*;
 

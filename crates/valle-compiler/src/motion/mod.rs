@@ -5,6 +5,7 @@
 //! `valle_motion::Expr`. The compiler never evaluates a frame.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 use oxc::allocator::Allocator;
 use oxc::ast::ast::{
@@ -21,7 +22,7 @@ use serde::{Deserialize, Serialize};
 use valle_draw::program::recording::{FillRule, MaskMode, SpreadMode};
 use valle_draw::{Cap, Join, PathVerb, Point, Rect, Rgba};
 use valle_motion::diag::{DiagClass, DiagCode, MotionDiagnostic};
-use valle_motion::value::{Angle, AngleUnit, Length, Length2};
+use valle_motion::value::{Angle, Length, Length2};
 use valle_motion::{
     ARTIFACT_FORMAT_VERSION, ArrowKind, ArrowSpec, AssetControl, AssetKind,
     BACKDROP_DISPLACEMENT_CAPABILITY, BASE_CAPABILITIES, BatchColorField, BatchNumberField,
@@ -45,7 +46,6 @@ use valle_motion::{
     TRANSFORM_SCALE2D_CAPABILITY, TextSplit, TextValue, TimingControls, UnitStyle,
     VIEWPORT_CAPABILITY, font_family_alias, geometry_eval_policy,
 };
-use valle_motion::{TAILWIND_CATALOG, TailwindClassError, validate_tailwind_class};
 
 use crate::motion_sandbox::{Sandbox, THEME_SCOPE_BINDING, scan_forbidden};
 
@@ -56,10 +56,12 @@ pub type ShaderRegistryEnv = valle_motion::shader::ShaderRegistry;
 
 mod attrs;
 mod builtins;
+mod classes;
 mod collections;
 mod compiler;
 mod controls;
 mod css;
+mod delivery;
 mod diagnostics;
 mod effects;
 mod expr;
@@ -74,9 +76,10 @@ mod scene3d;
 mod scope;
 mod shader;
 mod style;
+mod style_objects;
 mod syntax;
 mod text;
-mod theme;
+mod theme_provider;
 mod transform;
 mod values;
 use controls::*;
@@ -90,7 +93,7 @@ pub use modules::{
 use output::*;
 use prelude::STATIC_HELPERS;
 use syntax::*;
-use theme::*;
+use theme_provider::*;
 use values::*;
 
 /// The current theme value is rebound inside each prepare evaluation: one compiler can enter and
@@ -200,6 +203,14 @@ pub struct CompilerDiagnostic {
     pub span: SourceSpan,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub utility: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub style: Option<valle_motion::style::StyleIssue>,
+    #[serde(skip)]
+    pub(crate) css_rule: Option<usize>,
     pub message: String,
 }
 
@@ -324,7 +335,7 @@ pub fn compile_motion_with_full_env_and_data(
     shaders: Option<&ShaderRegistryEnv>,
     data: Option<&PrepareDataBinding>,
 ) -> Result<CompiledMotion, Vec<CompilerDiagnostic>> {
-    compile_motion_impl(source, resources, measure, shaders, data)
+    compile_motion_impl(source, resources, measure, shaders, data, None)
 }
 
 fn compile_motion_impl(
@@ -333,6 +344,7 @@ fn compile_motion_impl(
     measure: Option<&MeasureEnv>,
     shaders: Option<&ShaderRegistryEnv>,
     data: Option<&PrepareDataBinding>,
+    _entry: Option<&str>,
 ) -> Result<CompiledMotion, Vec<CompilerDiagnostic>> {
     let allocator = Allocator::default();
     let parsed = Parser::new(&allocator, source, SourceType::tsx()).parse();
@@ -351,9 +363,34 @@ fn compile_motion_impl(
     }
 
     let program = parsed.program;
+    // Relative units inside `measureText` must use the canvas the scene renders at, and that canvas
+    // lives in the entry file's contract rather than a host option. Bind it from the literal
+    // contract before any module-level constant is evaluated, and refuse to guess when the file
+    // measures text but writes a contract this pre-pass cannot read.
+    // A module may be reusable regardless of its filename. Delivery validates work metadata.
+    let require_composition = false;
+    let bound_measure;
+    let measure = match measure {
+        Some(env) => match delivery::literal_composition(&program) {
+            Some(composition) => {
+                bound_measure = env.bind_viewport(composition.viewport().tuple());
+                Some(&bound_measure)
+            }
+            None => Some(env),
+        },
+        None => None,
+    };
     let normalized_source = normalized_ast(&program);
     let normalized_ast_digest = ContentDigest::of_bytes(normalized_source.as_bytes());
-    let mut compiler = Compiler::new(source, &program, resources, measure, shaders, data)?;
+    let mut compiler = Compiler::new(
+        source,
+        &program,
+        resources,
+        measure,
+        shaders,
+        data,
+        require_composition,
+    )?;
     let artifact = compiler.compile(&program)?;
     let prepared_data_bytes =
         valle_motion::canonical_bytes(&data).expect("validated prepare data binding is canonical");
@@ -438,6 +475,7 @@ struct PendingNode {
     /// Explicit World/Screen marker; None inherits the parent's space, defaulting to World.
     space: Option<CoordinateSpace>,
     class_names: Vec<String>,
+    class_conditions: BTreeMap<String, ExprId>,
     styles: Vec<StyleBinding>,
     visibility: Option<ExprId>,
     semantic: Option<SemanticMeta>,
@@ -590,6 +628,8 @@ struct Bindings<'s> {
     tuples: BTreeMap<String, Vec<ExprId>>,
     /// Prepare-time JSON values visible to the deterministic sandbox.
     statics: BTreeMap<String, serde_json::Value>,
+    /// Fixed-shape object syntax with its declaration scope. Kept compiler-only.
+    objects: BTreeMap<String, style_objects::AuthoredObject<'s>>,
     /// JSX child fragments bound by component/helper expansion.
     children: BTreeMap<String, Vec<PendingNode>>,
     /// Props of the component currently being expanded.
@@ -602,6 +642,7 @@ struct BindingFrame<'s> {
     scalars: BTreeMap<String, ExprId>,
     tuples: BTreeMap<String, Vec<ExprId>>,
     statics: BTreeMap<String, serde_json::Value>,
+    objects: BTreeMap<String, style_objects::AuthoredObject<'s>>,
     children: BTreeMap<String, Vec<PendingNode>>,
 }
 
@@ -632,6 +673,11 @@ impl<'s> Bindings<'s> {
             } else {
                 std::mem::take(&mut self.statics)
             },
+            objects: if captures_scope {
+                self.objects.clone()
+            } else {
+                std::mem::take(&mut self.objects)
+            },
             children: std::mem::take(&mut self.children),
             component_props: self.component_props.take(),
         }
@@ -654,6 +700,7 @@ impl<'s> Bindings<'s> {
             scalars: self.scalars.clone(),
             tuples: self.tuples.clone(),
             statics: self.statics.clone(),
+            objects: self.objects.clone(),
             children: self.children.clone(),
         }
     }
@@ -663,6 +710,7 @@ impl<'s> Bindings<'s> {
         self.scalars = frame.scalars;
         self.tuples = frame.tuples;
         self.statics = frame.statics;
+        self.objects = frame.objects;
         self.children = frame.children;
     }
 }
@@ -699,6 +747,10 @@ struct Compiler<'s> {
     has_measure: bool,
     shader_registry: Option<ShaderRegistryEnv>,
     component: Option<String>,
+    /// Fixed delivery contract from `export const composition`; absent for in-memory compiles.
+    composition: Option<valle_motion::Composition>,
+    /// Authored entry files must declare the delivery contract; in-memory compiles need not.
+    require_composition: bool,
     controls: ControlsSchema,
     controls_span: Option<Span>,
     prepare_data: Option<PrepareDataBinding>,

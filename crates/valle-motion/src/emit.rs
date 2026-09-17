@@ -173,7 +173,7 @@ pub fn emit_with_faces(
     naming: FontNaming<'_>,
     faces: Option<&FaceCache>,
 ) -> Result<EmitReport, EmitError> {
-    emit_with_faces_and_catalog(tree, naming, faces, None)
+    emit_with_faces_and_catalog(tree, naming, faces, None, None)
 }
 
 /// Product emission with immutable interpreted-content descriptors. This is required for
@@ -185,7 +185,18 @@ pub fn emit_program_with_faces(
     faces: Option<&FaceCache>,
     catalog: &dyn valle_draw::program::ProgramResourceCatalog,
 ) -> Result<EmitReport, EmitError> {
-    emit_with_faces_and_catalog(tree, naming, faces, Some(catalog))
+    emit_with_faces_and_catalog(tree, naming, faces, Some(catalog), None)
+}
+
+/// Emit a Motion program with a source-space clip, used by Timeline `fit: cover`.
+pub fn emit_program_with_faces_clipped(
+    tree: &LayoutTree,
+    naming: FontNaming<'_>,
+    faces: Option<&FaceCache>,
+    catalog: &dyn valle_draw::program::ProgramResourceCatalog,
+    clip: Rect,
+) -> Result<EmitReport, EmitError> {
+    emit_with_faces_and_catalog(tree, naming, faces, Some(catalog), Some(clip))
 }
 
 fn emit_with_faces_and_catalog(
@@ -193,6 +204,7 @@ fn emit_with_faces_and_catalog(
     naming: FontNaming<'_>,
     faces: Option<&FaceCache>,
     catalog: Option<&dyn valle_draw::program::ProgramResourceCatalog>,
+    source_clip: Option<Rect>,
 ) -> Result<EmitReport, EmitError> {
     let root_layout = tree
         .layout
@@ -203,6 +215,7 @@ fn emit_with_faces_and_catalog(
         scene3d_frames: Vec::new(),
         unsupported: Vec::new(),
     };
+    validate_transform_matrices(tree)?;
     let contexts = build_stacking_contexts(
         &tree.root,
         &tree.layout,
@@ -230,16 +243,33 @@ fn emit_with_faces_and_catalog(
         resources: catalog,
         material_stack: Vec::new(),
     };
+    if let Some(rect) = source_clip {
+        e.push(RecordCmd::BeginClipRect { rect });
+    }
     e.context(0)?;
+    if source_clip.is_some() {
+        e.push(RecordCmd::End);
+    }
     e.account_invisible_formulas();
     e.report_unplaced_formulas();
     // Backfill filter content bounds after the complete recording exposes all subtree geometry.
     out.recording.backfill_filter_bounds();
+    let dpr = f64::from(tree.viewport.device_pixel_ratio);
     let viewport = Rect::new(
         0.0,
         0.0,
-        f64::from(root_layout.size.width),
-        f64::from(root_layout.size.height),
+        tree.viewport
+            .size
+            .width
+            .map_or(f64::from(root_layout.size.width), |width| {
+                f64::from(width) / dpr
+            }),
+        tree.viewport
+            .size
+            .height
+            .map_or(f64::from(root_layout.size.height), |height| {
+                f64::from(height) / dpr
+            }),
     );
     let program = match catalog {
         Some(textures) => {
@@ -255,6 +285,38 @@ fn emit_with_faces_and_catalog(
         scene3d_frames: out.scene3d_frames,
         unsupported: out.unsupported,
     })
+}
+
+/// The upstream painter may cull a non-finite matrix as if it were singular. Check
+/// computed box transforms before that culling so numeric overflow cannot become a
+/// successful empty frame. Use the same resolved sizes and ancestor composition.
+fn validate_transform_matrices(tree: &LayoutTree) -> Result<(), EmitError> {
+    let mut pending = vec![(&tree.root, NodeId::ROOT, TAffine::IDENTITY)];
+    while let Some((node, id, parent)) = pending.pop() {
+        let Ok(layout) = tree.layout.layout(id) else {
+            continue;
+        };
+        let local = node.context.style.local_transform(
+            layout.size.width,
+            layout.size.height,
+            &node.context.sizing,
+        );
+        let matrix = parent * TAffine::translation(layout.location.x, layout.location.y) * local;
+        if !matrix.to_cols_array().into_iter().all(f32::is_finite) {
+            return Err(EmitError::BadStyle {
+                node: tree.keys.get(&u64::from(id)).cloned().unwrap_or_default(),
+                reason: "computed transform must be finite".into(),
+            });
+        }
+        if let (Some(children), Ok(boxes)) = (&node.children, tree.layout.box_children(id)) {
+            for child in boxes {
+                if let Some(node) = children.get(child.render_index) {
+                    pending.push((node, child.node_id, matrix));
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 struct EmissionResourceCatalog<'a> {
@@ -502,6 +564,23 @@ impl Emitter<'_> {
             return Ok(none);
         }
 
+        if !np.transform.to_cols_array().into_iter().all(f32::is_finite) {
+            return Err(EmitError::BadStyle {
+                node: self.node_key(np).unwrap_or_default().to_owned(),
+                reason: "computed transform must be finite".into(),
+            });
+        }
+        // A singular CSS transform paints neither the element nor its descendants.
+        // Test the f32 matrix in f64 so finite large components cannot overflow here.
+        let determinant = f64::from(np.transform.a) * f64::from(np.transform.d)
+            - f64::from(np.transform.b) * f64::from(np.transform.c);
+        if determinant == 0.0 {
+            return Ok(Open {
+                hidden: true,
+                ..none
+            });
+        }
+
         if let Some(key) = self.tree.keys.get(&u64::from(np.node_id))
             && self
                 .tree
@@ -680,7 +759,7 @@ impl Emitter<'_> {
             .get(&u64::from(np.node_id))
             .and_then(|key| self.tree.backdrop_advanced_filters.get(key));
         if !style.backdrop_filter.is_empty() || backdrop_advanced.is_some_and(|f| !f.is_empty()) {
-            let mut ops = self.filter_ops(np, &style.backdrop_filter, &node.context);
+            let mut ops = self.filter_ops(np, &style.backdrop_filter, &node.context)?;
             if let Some(advanced) = backdrop_advanced {
                 ops.extend_from_slice(advanced);
             }
@@ -723,7 +802,7 @@ impl Emitter<'_> {
 
         // Keep CSS filters inside the opacity/blend group.
         if !style.filter.is_empty() {
-            let filters = self.filters(np, &style.filter, &node.context);
+            let filters = self.filters(np, &style.filter, &node.context)?;
             self.push(RecordCmd::BeginFilter {
                 filters,
                 // Defer filter bounds until the complete recording is available.
@@ -2815,9 +2894,9 @@ impl Emitter<'_> {
         np: &NodePaint,
         filters: &takumi_core::style::Filters,
         ctx: &takumi_core::context::RenderContext,
-    ) -> valle_draw::Span {
-        let ops = self.filter_ops(np, filters, ctx);
-        self.out.recording.intern_filters(&ops)
+    ) -> Result<valle_draw::Span, EmitError> {
+        let ops = self.filter_ops(np, filters, ctx)?;
+        Ok(self.out.recording.intern_filters(&ops))
     }
 
     fn filter_ops(
@@ -2825,16 +2904,29 @@ impl Emitter<'_> {
         np: &NodePaint,
         filters: &takumi_core::style::Filters,
         ctx: &takumi_core::context::RenderContext,
-    ) -> Vec<valle_draw::program::recording::FilterOp> {
+    ) -> Result<Vec<valle_draw::program::recording::FilterOp>, EmitError> {
         use takumi_core::style::Filter as TF;
         use valle_draw::program::recording::FilterOp as F;
         let mut ops = Vec::new();
         for f in filters.iter() {
             let op = match f {
-                // Use the upstream filter blur-to-sigma conversion convention.
-                TF::Blur(v) => F::Blur {
-                    sigma: f64::from(v.to_px(&ctx.sizing, 1.0)) / 2.0,
-                },
+                // CSS filter blur and drop-shadow take sigma directly. Only box/text
+                // shadows use a blur radius of twice sigma (Filter Effects §6.1).
+                TF::Blur(v) => {
+                    let sigma = f64::from(v.to_px(&ctx.sizing, 1.0));
+                    if !sigma.is_finite() || sigma < 0.0 {
+                        return Err(EmitError::BadStyle {
+                            node: self
+                                .tree
+                                .keys
+                                .get(&u64::from(np.node_id))
+                                .cloned()
+                                .unwrap_or_default(),
+                            reason: "filter blur sigma must be finite and >= 0".into(),
+                        });
+                    }
+                    F::Blur { sigma }
+                }
                 TF::Brightness(v) => F::Brightness {
                     amount: f64::from(v.0),
                 },
@@ -2842,30 +2934,42 @@ impl Emitter<'_> {
                     amount: f64::from(v.0),
                 },
                 TF::Grayscale(v) => F::Grayscale {
-                    amount: f64::from(v.0),
+                    amount: f64::from(v.0.min(1.0)),
                 },
                 TF::HueRotate(v) => F::HueRotate {
                     degrees: f64::from(**v),
                 },
                 TF::Invert(v) => F::Invert {
-                    amount: f64::from(v.0),
+                    amount: f64::from(v.0.min(1.0)),
                 },
                 TF::Opacity(v) => F::Opacity {
-                    amount: f64::from(v.0),
+                    amount: f64::from(v.0.min(1.0)),
                 },
                 TF::Saturate(v) => F::Saturate {
                     amount: f64::from(v.0),
                 },
                 TF::Sepia(v) => F::Sepia {
-                    amount: f64::from(v.0),
+                    amount: f64::from(v.0.min(1.0)),
                 },
                 TF::DropShadow(s) => {
                     // Drop shadows use the painted alpha contour, while box shadows use box
-                    // geometry. Resolve lengths upstream and convert radius to sigma consistently.
+                    // geometry. Resolve sigma against the same sizing context as blur().
+                    let sigma = f64::from(s.blur_radius.to_px(&ctx.sizing, 1.0));
+                    if !sigma.is_finite() || sigma < 0.0 {
+                        return Err(EmitError::BadStyle {
+                            node: self
+                                .tree
+                                .keys
+                                .get(&u64::from(np.node_id))
+                                .cloned()
+                                .unwrap_or_default(),
+                            reason: "filter drop-shadow sigma must be finite and >= 0".into(),
+                        });
+                    }
                     F::DropShadow {
                         dx: f64::from(s.offset_x.to_px(&ctx.sizing, 1.0)),
                         dy: f64::from(s.offset_y.to_px(&ctx.sizing, 1.0)),
-                        sigma: f64::from(s.blur_radius.to_px(&ctx.sizing, 1.0)) / 2.0,
+                        sigma,
                         color: rgba_of(s.color.resolve(ctx.current_color)),
                     }
                 }
@@ -2878,7 +2982,7 @@ impl Emitter<'_> {
             };
             ops.push(op);
         }
-        ops
+        Ok(ops)
     }
 
     fn fill_box(&mut self, rect: Rect, radii: [Point; 4], color: Rgba) {

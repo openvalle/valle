@@ -4,20 +4,17 @@
 //! [`SceneArtifact`]. The backend-neutral [`crate::emit`] then shapes text and emits the same [`valle_draw::program::recording::ProgramRecording`]
 //! consumed by Native and CanvasKit executors.
 
+use crate::style::gradient_background_source;
 use std::collections::{BTreeMap, HashMap};
 use std::rc::Rc;
-use std::str::FromStr;
 use std::sync::Arc;
 
 use takumi_core::layout::node::Node;
 use takumi_core::layout::tree::{LayoutResults, RenderNode};
 use takumi_core::scene::{PaintItemKind, StackingContextNode, build_stacking_contexts};
-use takumi_core::style::{
-    Affine as TAffine, Background, BackgroundImage, BackgroundImages, ComputedStyle, FromCssStr,
-    SizingContext,
-};
+use takumi_core::style::{Affine as TAffine, ComputedStyle, SizingContext, ZIndex};
 use valle_motion::MotionValue;
-use valle_motion::value::{Length, Length2, LengthUnit};
+use valle_motion::value::{Length, LengthUnit};
 use valle_motion::{
     BatchPositions, BoolValue, ColorValue, CoordinateSpace, EvalError, EvalInputs, Expr, ExprId,
     GeometryBatchGeometry, GradientStopValue, MaskValue, NodeId, NodeKind, NumberValue, PaintValue,
@@ -69,9 +66,8 @@ pub enum LayoutError {
         node: String,
         reason: String,
     },
-    /// Reject paint surfaces that still use platform transcendental math instead of Valle's
-    /// deterministic implementation.
-    NondeterministicSurface {
+    /// Reject CSS surfaces without a supported Motion lowering or paint implementation.
+    UnsupportedSurface {
         node: String,
         surface: String,
     },
@@ -100,7 +96,9 @@ impl core::fmt::Display for LayoutError {
             ),
             LayoutError::Eval(error) => write!(f, "eval: {error}"),
             LayoutError::BadNode { at } => write!(f, "node {at}: out of range"),
-            LayoutError::BadViewport => f.write_str("viewport must have non-zero size"),
+            LayoutError::BadViewport => f.write_str(
+                "viewport dimensions must be non-zero and DPR finite and positive; a scene that reads ctx.viewport also requires both dimensions and a finite positive initial font size",
+            ),
             LayoutError::BadStyle {
                 node,
                 declarations,
@@ -121,9 +119,9 @@ impl core::fmt::Display for LayoutError {
             LayoutError::BadFormula { node, reason } => {
                 write!(f, "node `{node}`: bad MathFormula ({reason})")
             }
-            LayoutError::NondeterministicSurface { node, surface } => write!(
+            LayoutError::UnsupportedSurface { node, surface } => write!(
                 f,
-                "node `{node}` uses `{surface}`, which is outside the deterministic paint surface"
+                "node `{node}` uses `{surface}`, which has no supported Motion lowering or paint implementation"
             ),
             LayoutError::PostLayoutOffOrigin {
                 node,
@@ -157,6 +155,10 @@ impl From<EvalError> for LayoutError {
 pub struct PreparedScene {
     artifact: Arc<SceneArtifact>,
     layout_reusable: bool,
+    stylesheet: Arc<takumi_core::style::StyleSheet>,
+    requires_explicit_viewport: bool,
+    layout_classes: Vec<Vec<String>>,
+    layout_probes: Vec<(crate::ExprId, MotionValue)>,
 }
 
 impl PreparedScene {
@@ -170,6 +172,37 @@ impl PreparedScene {
     pub fn artifact(&self) -> &SceneArtifact {
         &self.artifact
     }
+
+    fn validate_viewport(
+        &self,
+        viewport: takumi_core::viewport::Viewport,
+    ) -> Result<(), LayoutError> {
+        if viewport.size.width == Some(0)
+            || viewport.size.height == Some(0)
+            || !viewport.device_pixel_ratio.is_finite()
+            || viewport.device_pixel_ratio <= 0.0
+            || self.requires_explicit_viewport
+                && (viewport.size.width.is_none()
+                    || viewport.size.height.is_none()
+                    || !viewport.font_size.is_finite()
+                    || viewport.font_size <= 0.0)
+        {
+            return Err(LayoutError::BadViewport);
+        }
+        Ok(())
+    }
+
+    /// Intrinsic measurement prepares a static Text artifact and shares this exact node/style
+    /// construction with frame layout. Only its available-space constraint differs.
+    pub(crate) fn intrinsic_node(
+        &self,
+        at: NodeId,
+        viewport: takumi_core::viewport::Viewport,
+    ) -> Result<(Node, Arc<takumi_core::style::StyleSheet>), LayoutError> {
+        self.validate_viewport(viewport)?;
+        let node = node_of(self, at.0 as usize, &[], None, None, &HashMap::new(), None)?;
+        Ok((node, self.stylesheet.clone()))
+    }
 }
 
 /// Validate wire versions, topology, and deterministic paint surfaces.
@@ -181,10 +214,48 @@ pub fn prepare(artifact: &SceneArtifact) -> Result<PreparedScene, LayoutError> {
 /// happen before the Artifact enters the `Arc`; every frame then reuses the same proof and bytes.
 pub fn prepare_owned(artifact: SceneArtifact) -> Result<PreparedScene, LayoutError> {
     artifact.validate().map_err(LayoutError::InvalidArtifact)?;
-    admit_deterministic_surface(&artifact)?;
+    admit_supported_surface(&artifact)?;
+    let (stylesheet, layout_classes) =
+        crate::tailwind::prepare_stylesheet(&artifact).map_err(|reason| LayoutError::BadStyle {
+            node: artifact.nodes[artifact.root.0 as usize].key.clone(),
+            declarations: "className utilities".into(),
+            reason,
+        })?;
+    let post_layout = crate::post_layout_dependent(&artifact.exprs);
+    let types =
+        crate::expr::validate_exprs(&artifact.exprs, &artifact.controls, &mut Vec::new()).types;
+    let probe_ids: std::collections::BTreeSet<_> = artifact
+        .nodes
+        .iter()
+        .flat_map(|node| &node.styles)
+        .filter_map(|style| match style.value {
+            StyleValue::Expr { expr } if post_layout[expr.0 as usize] => Some(expr.0),
+            _ => None,
+        })
+        .collect();
+    let layout_probes = probe_ids
+        .into_iter()
+        .map(|id| {
+            let expr = crate::ExprId(id);
+            (
+                expr,
+                crate::style::layout_probe_value(expr, &artifact.exprs, &types),
+            )
+        })
+        .collect();
     Ok(PreparedScene {
+        layout_classes,
+        // Only expressions that read `ctx.viewport` still need both dimensions; the canvas itself
+        // comes from the artifact's delivery contract.
+        requires_explicit_viewport: artifact
+            .capability_set
+            .names
+            .iter()
+            .any(|name| name == crate::artifact::VIEWPORT_CAPABILITY),
         layout_reusable: super::reuse::eligible(&artifact),
         artifact: Arc::new(artifact),
+        stylesheet,
+        layout_probes,
     })
 }
 
@@ -250,11 +321,18 @@ pub(super) fn build_tree_inner(
             .map_or(0.0, |start| (now - start).as_secs_f64() * 1000.0)
     }
     let artifact = prepared.artifact();
-    if opts.viewport.size.width == Some(0) || opts.viewport.size.height == Some(0) {
-        return Err(LayoutError::BadViewport);
-    }
+    let bound_viewport = opts.viewport.with_font_size(crate::ROOT_FONT_SIZE);
+    let opts = LayoutOptions {
+        viewport: bound_viewport,
+        fonts: opts.fonts,
+        styles: opts.styles,
+        #[cfg(target_arch = "wasm32")]
+        formula_fonts: opts.formula_fonts,
+    };
+    let opts = &opts;
+    prepared.validate_viewport(opts.viewport)?;
 
-    let values = eval_all(
+    let mut values = eval_all(
         artifact,
         EvalInputs {
             ctx,
@@ -265,6 +343,9 @@ pub(super) fn build_tree_inner(
             viewport: eval_viewport(opts),
         },
     )?;
+    for (expr, probe) in &prepared.layout_probes {
+        values[expr.0 as usize] = probe.clone();
+    }
     if let Some(timings) = timings.as_deref_mut() {
         timings.eval_ms = elapsed(&mut started);
     }
@@ -283,7 +364,7 @@ pub(super) fn build_tree_inner(
     let camera = if camera_depends_on_bounds(artifact) {
         let probe = identity_camera_wrappers(opts)?;
         let probe_node = node_of(
-            artifact,
+            prepared,
             artifact.root.0 as usize,
             &values,
             opts.styles,
@@ -291,7 +372,7 @@ pub(super) fn build_tree_inner(
             &formulas,
             None,
         )?;
-        let probe_boxes = layout_and_collect_boxes(artifact, probe_node, opts)?;
+        let probe_boxes = layout_and_collect_boxes(prepared, probe_node, opts)?;
         let probe_values = valle_motion::eval_layout_bounds(
             artifact,
             &values,
@@ -312,7 +393,7 @@ pub(super) fn build_tree_inner(
         .fonts(opts.fonts.snapshot())
         .sizing(SizingContext::builder().viewport(opts.viewport).build())
         .images(Rc::new(Default::default()))
-        .stylesheet(Default::default())
+        .stylesheet(prepared.stylesheet.clone())
         .time_ms(LayoutOptions::TIME_MS)
         .draw_debug_border(false)
         .style(Box::new(ComputedStyle::default()))
@@ -338,7 +419,7 @@ pub(super) fn build_tree_inner(
         )
     } else {
         let node = node_of(
-            artifact,
+            prepared,
             artifact.root.0 as usize,
             &values,
             opts.styles,
@@ -346,7 +427,8 @@ pub(super) fn build_tree_inner(
             &formulas,
             None,
         )?;
-        let layout_root = RenderNode::from_node(&render_context, node);
+        let mut layout_root = RenderNode::from_node(&render_context, node);
+        super::transform::preserve_identity(&mut layout_root);
         let mut tree = takumi_core::layout::tree::LayoutTree::from_render_node(&layout_root);
         if let Some(timings) = timings.as_deref_mut() {
             timings.tree_ms = elapsed(&mut started);
@@ -361,45 +443,41 @@ pub(super) fn build_tree_inner(
         // Collect Scene keys and layout boxes during the same traversal for post-layout evaluation.
         let mut boxes = BTreeMap::new();
         let mut scene3d_content_boxes = BTreeMap::new();
-        walk_pairs(
-            artifact,
-            artifact.root,
-            &layout,
-            takumi_core::geometry::NodeId::ROOT,
-            (0.0, 0.0),
-            &mut |at, id, origin| {
-                if let Some(node) = artifact.nodes.get(at) {
-                    keys.insert(u64::from(id), node.key.clone());
-                    if let Ok(computed) = layout.layout(id) {
-                        boxes.insert(
+        walk_pairs(artifact, &layout_root, &layout, &mut |at, id, origin| {
+            if let Some(node) = artifact.nodes.get(at) {
+                keys.insert(u64::from(id), node.key.clone());
+                if let Ok(computed) = layout.layout(id) {
+                    boxes.insert(
+                        node.key.clone(),
+                        valle_draw::Rect::new(
+                            f64::from(origin.0),
+                            f64::from(origin.1),
+                            f64::from(computed.size.width),
+                            f64::from(computed.size.height),
+                        ),
+                    );
+                    if matches!(node.kind, NodeKind::Scene3D { .. }) {
+                        scene3d_content_boxes.insert(
                             node.key.clone(),
                             valle_draw::Rect::new(
-                                f64::from(origin.0),
-                                f64::from(origin.1),
-                                f64::from(computed.size.width),
-                                f64::from(computed.size.height),
+                                f64::from(origin.0 + computed.border.left + computed.padding.left),
+                                f64::from(origin.1 + computed.border.top + computed.padding.top),
+                                f64::from(computed.content_box_width().max(0.0)),
+                                f64::from(computed.content_box_height().max(0.0)),
                             ),
                         );
-                        if matches!(node.kind, NodeKind::Scene3D { .. }) {
-                            scene3d_content_boxes.insert(
-                                node.key.clone(),
-                                valle_draw::Rect::new(
-                                    f64::from(
-                                        origin.0 + computed.border.left + computed.padding.left,
-                                    ),
-                                    f64::from(
-                                        origin.1 + computed.border.top + computed.padding.top,
-                                    ),
-                                    f64::from(computed.content_box_width().max(0.0)),
-                                    f64::from(computed.content_box_height().max(0.0)),
-                                ),
-                            );
-                        }
                     }
                 }
-            },
-        )?;
+            }
+        })?;
 
+        if artifact
+            .exprs
+            .iter()
+            .any(|expr| matches!(expr, crate::Expr::NodeBounds { .. }))
+        {
+            inline_boxes(artifact, &layout_root, &layout, &mut boxes)?;
+        }
         let keys = Arc::new(keys);
         let boxes = Arc::new(boxes);
         let scene3d_content_boxes = Arc::new(scene3d_content_boxes);
@@ -447,13 +525,42 @@ pub(super) fn build_tree_inner(
         &projected,
     )?;
     check_post_layout_origins(artifact, &values, &boxes)?;
-    let css_3d_planes = resolve_css_3d_planes(artifact, &values, &boxes, opts)?;
+    // Read the current frame's author cascade before adding derived depth. This includes
+    // conditional utilities, inline declarations, and importance in one computed result.
+    let author_styles = if artifact.nodes.iter().any(|node| {
+        node.styles.iter().any(|style| {
+            style.property.starts_with("motion-transform-3d-")
+                || matches!(
+                    style.property.as_str(),
+                    "rotate-x"
+                        | "rotate-y"
+                        | "perspective"
+                        | "transform-style"
+                        | "backface-visibility"
+                )
+        })
+    }) {
+        let author_node = node_of(
+            prepared,
+            artifact.root.0 as usize,
+            &values,
+            opts.styles,
+            camera.as_ref(),
+            &formulas,
+            None,
+        )?;
+        let author_root = RenderNode::from_node(&render_context, author_node);
+        css_3d_author_styles(artifact, &author_root, &boxes)?
+    } else {
+        HashMap::new()
+    };
+    let css_3d_planes = resolve_css_3d_planes(artifact, &values, &boxes, opts, &author_styles)?;
 
     // Post-layout values are admitted only into paint/transform slots or sidecar geometry. Rebuild
     // the same fixed-topology RenderNode with their final values, but keep the already-computed
     // LayoutResults. This makes `translate: project3d(...)` visible without a layout feedback pass.
     let final_node = node_of(
-        artifact,
+        prepared,
         artifact.root.0 as usize,
         &values,
         opts.styles,
@@ -461,7 +568,9 @@ pub(super) fn build_tree_inner(
         &formulas,
         Some(&css_3d_planes),
     )?;
-    let root = RenderNode::from_node(&render_context, final_node);
+    let mut root = RenderNode::from_node(&render_context, final_node);
+    super::transform::preserve_identity(&mut root);
+    apply_css_3d_depth(artifact, &mut root, &css_3d_planes);
 
     // Map render paths to Scene keys and retain original text to recover node-local offsets from
     // concatenated inline text. Layout keys cannot identify inline nodes that have no box.
@@ -880,6 +989,7 @@ pub(super) fn build_tree_inner(
     }
     Ok(LayoutTree {
         root,
+        viewport: opts.viewport,
         layout,
         values,
         keys,
@@ -1921,10 +2031,7 @@ fn resolve_css_position(
         LengthUnit::Percent => size * value.value / 100.0,
         LengthUnit::Px => value.value * dpr,
         LengthUnit::Rem => {
-            let rem = sizing
-                .root_font_size
-                .map(f64::from)
-                .unwrap_or(f64::from(sizing.viewport.font_size) * dpr);
+            let rem = f64::from(crate::ROOT_FONT_SIZE) * dpr;
             value.value * rem
         }
         LengthUnit::Em => value.value * f64::from(sizing.font_size),
@@ -2018,7 +2125,6 @@ struct Css3dStyle {
     preserve_3d: bool,
     backface_hidden: bool,
     perspective: Option<crate::layout::bridge::PerspectiveLength>,
-    transform_origin: Option<Length2>,
     perspective_origin_x: Option<Length>,
     perspective_origin_y: Option<Length>,
 }
@@ -2206,18 +2312,6 @@ fn css_3d_style(
                 out.backface_hidden = matches!(value, MotionValue::Enum(value) if value == "hidden")
             }
             "perspective" => out.perspective = Some(layer_perspective(value, &node.key)?),
-            "transform-origin" => {
-                out.transform_origin = Some(match value {
-                    MotionValue::Length2(value) => *value,
-                    _ => {
-                        return Err(LayoutError::BadStyle {
-                            node: node.key.clone(),
-                            declarations: "transform-origin".into(),
-                            reason: "CSS 3D transformOrigin must be a two-axis length".into(),
-                        });
-                    }
-                })
-            }
             "motion-perspective-origin-x" => {
                 out.perspective_origin_x =
                     Some(layer_length(value, &node.key, "perspectiveOrigin.x")?)
@@ -2297,6 +2391,86 @@ struct Css3dState {
     preserve_3d: bool,
 }
 
+#[derive(Clone, Copy)]
+struct Css3dAuthorStyle {
+    origin: valle_draw::Point,
+}
+
+/// Read the resolved author cascade from the same Takumi tree used for final paint. The origin
+/// is resolved against this node's own font sizing and layout box, rather than a global guess.
+fn css_3d_author_styles(
+    artifact: &SceneArtifact,
+    root: &RenderNode,
+    boxes: &BTreeMap<String, valle_draw::Rect>,
+) -> Result<HashMap<String, Css3dAuthorStyle>, LayoutError> {
+    let mut keys = HashMap::new();
+    walk_render_keys(artifact, artifact.root, root, &mut Vec::new(), &mut keys);
+    let mut out = HashMap::new();
+    for (path, key) in keys {
+        let Some(node) = root
+            .node_at_path(&path)
+            .filter(|node| node.source_order().is_some())
+        else {
+            continue;
+        };
+        let Some(rect) = boxes.get(&key) else {
+            continue;
+        };
+        let origin = node.context.style.transform_origin.0;
+        let x = f64::from(
+            takumi_core::style::Length::from(origin.x)
+                .to_px(&node.context.sizing, rect.width as f32),
+        ) + rect.x;
+        let y = f64::from(
+            takumi_core::style::Length::from(origin.y)
+                .to_px(&node.context.sizing, rect.height as f32),
+        ) + rect.y;
+        if !x.is_finite() || !y.is_finite() {
+            return Err(LayoutError::BadStyle {
+                node: key,
+                declarations: "transform-origin".into(),
+                reason: "origin must resolve to finite coordinates".into(),
+            });
+        }
+        out.insert(
+            key,
+            Css3dAuthorStyle {
+                origin: valle_draw::Point::new(x, y),
+            },
+        );
+    }
+    Ok(out)
+}
+
+/// Auto depth is a derived computed default. Applying it after the author cascade means even an
+/// important `z-index: auto` receives the fallback, while every explicit integer wins.
+fn apply_css_3d_depth(
+    artifact: &SceneArtifact,
+    root: &mut RenderNode,
+    planes: &HashMap<String, crate::layout::bridge::Css3dPlane>,
+) {
+    let mut keys = HashMap::new();
+    walk_render_keys(artifact, artifact.root, root, &mut Vec::new(), &mut keys);
+    for (path, key) in keys {
+        let Some(plane) = planes.get(&key) else {
+            continue;
+        };
+        let Some(node) = root
+            .node_at_path_mut(&path)
+            .filter(|node| node.source_order().is_some())
+        else {
+            continue;
+        };
+        if node.context.style.z_index == ZIndex::Auto {
+            let depth = (plane.depth * 1024.0)
+                .round()
+                .clamp(f64::from(i32::MIN + 1), f64::from(i32::MAX - 1))
+                as i32;
+            node.context.style.z_index = ZIndex::Integer(depth);
+        }
+    }
+}
+
 impl Default for Css3dState {
     fn default() -> Self {
         Self {
@@ -2312,6 +2486,7 @@ fn resolve_css_3d_planes(
     values: &[MotionValue],
     boxes: &BTreeMap<String, valle_draw::Rect>,
     opts: &LayoutOptions<'_>,
+    author_styles: &HashMap<String, Css3dAuthorStyle>,
 ) -> Result<HashMap<String, crate::layout::bridge::Css3dPlane>, LayoutError> {
     let sizing = SizingContext::builder().viewport(opts.viewport).build();
     let mut out = HashMap::new();
@@ -2321,6 +2496,7 @@ fn resolve_css_3d_planes(
         values,
         boxes,
         &sizing,
+        author_styles,
         Css3dState::default(),
         &mut out,
     )?;
@@ -2333,39 +2509,16 @@ fn resolve_css_3d_node(
     values: &[MotionValue],
     boxes: &BTreeMap<String, valle_draw::Rect>,
     sizing: &SizingContext,
+    author_styles: &HashMap<String, Css3dAuthorStyle>,
     state: Css3dState,
     out: &mut HashMap<String, crate::layout::bridge::Css3dPlane>,
 ) -> Result<(), LayoutError> {
     let node = artifact.nodes.get(at).ok_or(LayoutError::BadNode { at })?;
     let style = css_3d_style(node, values, at)?;
     let rect = boxes.get(&node.key).copied().unwrap_or_default();
-    let transform_origin = style.transform_origin.unwrap_or(Length2 {
-        x: Length {
-            value: 50.0,
-            unit: LengthUnit::Percent,
-        },
-        y: Length {
-            value: 50.0,
-            unit: LengthUnit::Percent,
-        },
-    });
-    let origin = valle_draw::Point::new(
-        resolve_css_position(
-            transform_origin.x,
-            rect.x,
-            rect.width,
-            sizing,
-            &node.key,
-            "transformOrigin.x",
-        )?,
-        resolve_css_position(
-            transform_origin.y,
-            rect.y,
-            rect.height,
-            sizing,
-            &node.key,
-            "transformOrigin.y",
-        )?,
+    let origin = author_styles.get(&node.key).map_or_else(
+        || valle_draw::Point::new(rect.x + rect.width / 2.0, rect.y + rect.height / 2.0),
+        |style| style.origin,
     );
     let local = css_3d_local_matrix(&style, origin, rect);
     let matrix = if state.preserve_3d {
@@ -2517,6 +2670,7 @@ fn resolve_css_3d_node(
             values,
             boxes,
             sizing,
+            author_styles,
             child_state,
             out,
         )?;
@@ -2979,7 +3133,7 @@ fn formula_style_from_node(
 }
 
 fn node_of(
-    artifact: &SceneArtifact,
+    prepared: &PreparedScene,
     at: usize,
     values: &[MotionValue],
     cache: Option<&crate::StyleCache>,
@@ -2987,8 +3141,16 @@ fn node_of(
     formulas: &HashMap<String, crate::math_formula::FormulaFragment>,
     css_3d_planes: Option<&HashMap<String, crate::layout::bridge::Css3dPlane>>,
 ) -> Result<Node, LayoutError> {
-    let mut projected =
-        projected_nodes_of(artifact, at, values, cache, camera, formulas, css_3d_planes)?;
+    let mut projected = projected_nodes_of(
+        prepared,
+        at,
+        values,
+        cache,
+        camera,
+        formulas,
+        css_3d_planes,
+        &[],
+    )?;
     if projected.len() != 1 {
         return Err(LayoutError::BadNode { at });
     }
@@ -2998,14 +3160,16 @@ fn node_of(
 /// Project one Artifact node into zero or one Takumi boxes. GlassField is a semantic material
 /// scope, not a CSS box, so it contributes its projected children directly to the parent.
 fn projected_nodes_of(
-    artifact: &SceneArtifact,
+    prepared: &PreparedScene,
     at: usize,
     values: &[MotionValue],
     cache: Option<&crate::StyleCache>,
     camera: Option<&CameraWrappers>,
     formulas: &HashMap<String, crate::math_formula::FormulaFragment>,
     css_3d_planes: Option<&HashMap<String, crate::layout::bridge::Css3dPlane>>,
+    css_active: &[bool],
 ) -> Result<Vec<Node>, LayoutError> {
+    let artifact = prepared.artifact();
     let template = artifact.nodes.get(at).ok_or(LayoutError::BadNode { at })?;
     let child_range = template.children.start as usize..template.children.end as usize;
     let child_ids = artifact
@@ -3016,13 +3180,14 @@ fn projected_nodes_of(
         .iter()
         .map(|child| {
             projected_nodes_of(
-                artifact,
+                prepared,
                 child.0 as usize,
                 values,
                 cache,
                 camera,
                 formulas,
                 css_3d_planes,
+                css_active,
             )
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -3088,7 +3253,9 @@ fn projected_nodes_of(
         // Video shares image layout and emission; the video side table supplies the frame time.
         NodeKind::Video { source, .. } => Node::image(source.clone()),
     };
-    let mut preset = String::new();
+    let mut preset = String::from(
+        "box-sizing: border-box; margin: 0; padding: 0; border-width: 0; border-style: solid;",
+    );
     if matches!(
         template.kind,
         NodeKind::Group
@@ -3102,6 +3269,22 @@ fn projected_nodes_of(
             | NodeKind::Scene3D { .. }
     ) {
         preset.push_str("display: block;");
+    }
+    if matches!(
+        template.kind,
+        NodeKind::Image { .. } | NodeKind::Video { .. }
+    ) {
+        preset.push_str(
+            if template
+                .styles
+                .iter()
+                .any(|style| style.property == "motion-inline-image")
+            {
+                "display: inline-block;"
+            } else {
+                "display: block;"
+            },
+        );
     }
     // Clip and Mask must create stacking contexts so their begin/end groups enclose descendants.
     //
@@ -3177,29 +3360,29 @@ fn projected_nodes_of(
         })?);
     }
 
-    if !template.class_names.is_empty() {
-        // Replaced media are atomic inline boxes. Use Takumi's atomic box measurement
-        // so explicit CSS dimensions work without loading host-owned image pixels.
-        let joined = template
-            .class_names
-            .iter()
-            .map(|name| {
-                if matches!(
-                    template.kind,
-                    NodeKind::Image { .. } | NodeKind::Video { .. }
-                ) && name == "inline"
-                {
-                    "inline-block"
-                } else {
-                    name.as_str()
+    let mut active_classes = Vec::with_capacity(template.class_names.len());
+    for (class, layout_class) in template
+        .class_names
+        .iter()
+        .zip(&prepared.layout_classes[at])
+    {
+        let active = match template.class_conditions.get(class) {
+            Some(expr) => match value(values, *expr, at)? {
+                MotionValue::Bool(active) => *active,
+                _ => {
+                    return Err(LayoutError::Eval(EvalError::TypeMismatch {
+                        at,
+                        op: "className condition",
+                    }));
                 }
-            })
-            .collect::<Vec<_>>()
-            .join(" ");
-        let tw = takumi_core::style::TailwindValues::from_str(&joined)
-            .unwrap_or_else(|_| unreachable!("Takumi TailwindValues::from_str is infallible"));
-        node = node.with_tw(tw).with_class_name(joined);
+            },
+            None => true,
+        };
+        if active {
+            active_classes.push(layout_class.as_str());
+        }
     }
+    node = node.with_class_name(active_classes.join(" "));
 
     let visible = match template.visibility {
         Some(expr) => match value(values, expr, at)? {
@@ -3215,24 +3398,6 @@ fn projected_nodes_of(
     };
     let mut declarations = declarations(template, values, visible, at)?;
     if let Some(plane) = css_3d_planes.and_then(|planes| planes.get(&template.key)) {
-        // `preserve-3d` needs a painter-order fallback when the author leaves stacking at auto.
-        // An explicit z-index is stronger author intent and must not be overwritten by the
-        // center-depth approximation: two parallel, laterally offset planes can exchange center
-        // depth during a camera orbit even though their physical front/back order never changes.
-        if !template
-            .styles
-            .iter()
-            .any(|style| style.property == "z-index")
-        {
-            let z_index = (plane.depth * 1024.0)
-                .round()
-                .clamp(f64::from(i32::MIN + 1), f64::from(i32::MAX - 1))
-                as i32;
-            if !declarations.is_empty() {
-                declarations.push_str("; ");
-            }
-            declarations.push_str(&format!("z-index: {z_index}"));
-        }
         if plane.hidden {
             if !declarations.is_empty() {
                 declarations.push_str("; ");
@@ -3322,7 +3487,9 @@ fn declarations(
         });
     }
     for style in &node.styles {
-        if style.property.starts_with("motion-displacement-")
+        // Author `--*` is rejected at admission; skip it here so it never enters the cascade.
+        if style.property.starts_with("--")
+            || style.property.starts_with("motion-displacement-")
             || style.property.starts_with("motion-velocity-blur-")
             || style.property.starts_with("motion-transform-3d-")
             || style.property.starts_with("motion-perspective-origin-")
@@ -3332,6 +3499,7 @@ fn declarations(
         if matches!(
             style.property.as_str(),
             "motion-path-anchor"
+                | "motion-inline-image"
                 | "motion-path-angle-offset"
                 | "rotate-x"
                 | "rotate-y"
@@ -3351,7 +3519,7 @@ fn declarations(
             && matches!(style.property.as_str(), "background" | "background-image")
             && !gradient_background_source(&style.property, &css_token(value))
         {
-            return Err(LayoutError::NondeterministicSurface {
+            return Err(LayoutError::UnsupportedSurface {
                 node: node.key.clone(),
                 surface: style.property.clone(),
             });
@@ -3448,12 +3616,14 @@ fn unit_boundaries(source: &str, split: TextSplit) -> Vec<(u32, u32)> {
     }
 }
 
-/// Expose the viewport only when both dimensions are available; missing dimensions must not produce
-/// guessed values.
+/// Takumi stores device extents; expressions and media queries use CSS pixels. Native/Wasm
+/// hosts lay out at DPR 1 and apply delivery scaling later. Low-level callers may supply a
+/// different DPR, so convert here too. Missing dimensions must not produce guessed values.
 fn eval_viewport(opts: &LayoutOptions<'_>) -> Option<(f64, f64)> {
     let width = opts.viewport.size.width?;
     let height = opts.viewport.size.height?;
-    Some((f64::from(width), f64::from(height)))
+    let dpr = f64::from(opts.viewport.device_pixel_ratio);
+    Some((f64::from(width) / dpr, f64::from(height) / dpr))
 }
 
 fn resolve_units(
@@ -3697,88 +3867,64 @@ fn walk_owned_subtree_keys(
     }
 }
 
+/// Follow the actual render/layout trees, using the existing source-key mapping.
+/// Anonymous inline wrappers and camera wrappers have geometry but are not authored
+/// nodes. Pairing artifact child indices directly with them assigns the wrong bounds.
 fn walk_pairs(
     artifact: &SceneArtifact,
-    node_id: NodeId,
+    root: &RenderNode,
     layout: &LayoutResults,
-    layout_id: takumi_core::geometry::NodeId,
-    origin: (f32, f32),
     callback: &mut dyn FnMut(usize, takumi_core::geometry::NodeId, (f32, f32)),
 ) -> Result<(), LayoutError> {
-    let at = node_id.0 as usize;
-    artifact.nodes.get(at).ok_or(LayoutError::BadNode { at })?;
-    // Accumulate parent-relative layout offsets to obtain scene coordinates for bounds and anchors.
-    let here = origin_of(layout, layout_id, origin);
-    callback(at, layout_id, here);
-    let children = projected_child_ids(artifact, node_id).ok_or(LayoutError::BadNode { at })?;
-    let Ok(layout_children) = layout.box_children(layout_id) else {
-        return Ok(());
-    };
-    // Skip the two camera wrappers when pairing trees. Admission guarantees Screen nodes are direct
-    // root children after World content.
-    if at == artifact.root.0 as usize && artifact.camera.is_some() {
-        let world_count = children
-            .iter()
-            .filter(|child| {
-                artifact
-                    .nodes
-                    .get(child.0 as usize)
-                    .is_some_and(|node| node.space != Some(CoordinateSpace::Screen))
-            })
-            .count();
-        for child in layout_children {
-            if child.render_index == 0 {
-                // Outer wrapper, inner wrapper, then World content.
-                let Ok(outer_children) = layout.box_children(child.node_id) else {
-                    continue;
-                };
-                let Some(inner) = outer_children.first() else {
-                    continue;
-                };
-                let Ok(world) = layout.box_children(inner.node_id) else {
-                    continue;
-                };
-                // Accumulate wrapper origins too; zero offsets are a style choice, not a traversal
-                // invariant.
-                let outer_origin = origin_of(layout, child.node_id, here);
-                let inner_origin = origin_of(layout, inner.node_id, outer_origin);
-                for item in world {
-                    let Some(node_id) = children.get(item.render_index).copied() else {
-                        continue;
-                    };
-                    walk_pairs(
-                        artifact,
-                        node_id,
-                        layout,
-                        item.node_id,
-                        inner_origin,
-                        callback,
-                    )?;
+    let mut render_keys = HashMap::new();
+    walk_render_keys(
+        artifact,
+        artifact.root,
+        root,
+        &mut Vec::new(),
+        &mut render_keys,
+    );
+    let indices: HashMap<_, _> = artifact
+        .nodes
+        .iter()
+        .enumerate()
+        .map(|(i, node)| (node.key.as_str(), i))
+        .collect();
+    let root_key = &artifact.nodes[artifact.root.0 as usize].key;
+    let mut pending = vec![(
+        root,
+        takumi_core::geometry::NodeId::ROOT,
+        Vec::new(),
+        (0.0, 0.0),
+    )];
+    while let Some((node, id, path, origin)) = pending.pop() {
+        let here = origin_of(layout, id, origin);
+        if node.source_order().is_some()
+            && let Some(key) = render_keys.get(&path)
+            && (path.is_empty() || key != root_key)
+            && let Some(&at) = indices.get(key.as_str())
+        {
+            callback(at, id, here);
+        }
+        if let (Some(children), Ok(layout_children)) = (&node.children, layout.box_children(id)) {
+            for item in layout_children.iter().rev() {
+                if let Some(child) = children.get(item.render_index) {
+                    let mut child_path = path.clone();
+                    child_path.push(item.render_index);
+                    pending.push((child, item.node_id, child_path, here));
                 }
-            } else if let Some(node_id) =
-                children.get(world_count + child.render_index - 1).copied()
-            {
-                walk_pairs(artifact, node_id, layout, child.node_id, here, callback)?;
             }
         }
-        return Ok(());
-    }
-    for child in layout_children {
-        let Some(node_id) = children.get(child.render_index).copied() else {
-            continue;
-        };
-        walk_pairs(artifact, node_id, layout, child.node_id, here, callback)?;
     }
     Ok(())
 }
 
-/// Absolute node origin equals the parent's absolute origin plus the relative layout location.
 fn origin_of(
     layout: &LayoutResults,
-    layout_id: takumi_core::geometry::NodeId,
+    id: takumi_core::geometry::NodeId,
     parent: (f32, f32),
 ) -> (f32, f32) {
-    match layout.layout(layout_id) {
+    match layout.layout(id) {
         Ok(computed) => (
             parent.0 + computed.location.x,
             parent.1 + computed.location.y,
@@ -3787,31 +3933,106 @@ fn origin_of(
     }
 }
 
-/// Admit Takumi paint surfaces only when they avoid platform-dependent transcendental math.
-fn admit_deterministic_surface(artifact: &SceneArtifact) -> Result<(), LayoutError> {
-    const STYLE_DENY: &[&str] = &[
-        "transform",
-        "skew",
-        "border-image",
-        "offset",
-        "offset-path",
-        "clip-path",
-        "mask",
-        "mask-image",
-    ];
-    const CLASS_MARKERS: &[&str] = &[
-        "transform",
-        "translate-",
-        "rotate-",
-        "scale-",
-        "skew-",
-        "blur",
-        "backdrop-",
-        "filter",
-        "clip-",
-        "mask-",
-    ];
+/// Atomic inline boxes live in the inline formatter rather than LayoutResults' box
+/// children. Query their actual placement using the same formatter as emission.
+fn inline_boxes(
+    artifact: &SceneArtifact,
+    root: &RenderNode,
+    layout: &LayoutResults,
+    boxes: &mut BTreeMap<String, valle_draw::Rect>,
+) -> Result<(), LayoutError> {
+    use takumi_core::layout::inline::{
+        InlineItem, InlineLayoutMode, InlineLayoutRequest, ProcessedInlineSpan,
+        collect_inline_items, create_inline_layout, resolve_inline_runs,
+    };
+    let mut render_keys = HashMap::new();
+    walk_render_keys(
+        artifact,
+        artifact.root,
+        root,
+        &mut Vec::new(),
+        &mut render_keys,
+    );
+    let mut source_keys = HashMap::new();
+    for (path, key) in render_keys {
+        if let Some(order) = root.node_at_path(&path).and_then(RenderNode::source_order) {
+            source_keys.insert(order, key);
+        }
+    }
+    let mut pending = vec![(root, takumi_core::geometry::NodeId::ROOT, (0.0, 0.0))];
+    while let Some((node, id, origin)) = pending.pop() {
+        let here = origin_of(layout, id, origin);
+        if node.should_create_inline_layout()
+            && let Ok(computed) = layout.layout(id)
+        {
+            let items = collect_inline_items(node);
+            let has_inline_box = items.iter().any(|item| {
+                matches!(item, InlineItem::RenderNode { render_node }
+                    if render_node.participates_as_inline_box())
+            });
+            if has_inline_box {
+                let ctx = &node.context;
+                let font_style =
+                    takumi_core::font_style::SizedFontStyle::from_style(&ctx.style, ctx);
+                let built = create_inline_layout(InlineLayoutRequest::in_content_box(
+                    items,
+                    takumi_core::geometry::Size {
+                        width: computed.content_box_width(),
+                        height: computed.content_box_height(),
+                    },
+                    &font_style,
+                    ctx,
+                    InlineLayoutMode::Draw,
+                ));
+                let resolved = resolve_inline_runs(&built, ctx, computed).map_err(|error| {
+                    LayoutError::BadStyle {
+                        node: artifact.nodes[artifact.root.0 as usize].key.clone(),
+                        declarations: "inline layout".into(),
+                        reason: error.to_string(),
+                    }
+                })?;
+                for visual in &resolved.inline_boxes {
+                    let Some(ProcessedInlineSpan::Box(item)) = built.spans.get(visual.id as usize)
+                    else {
+                        continue;
+                    };
+                    let Some(key) = item
+                        .render_node
+                        .source_order()
+                        .and_then(|order| source_keys.get(&order))
+                    else {
+                        continue;
+                    };
+                    let offset = computed.content_box_offset();
+                    boxes.insert(
+                        key.clone(),
+                        valle_draw::Rect::new(
+                            f64::from(here.0 + offset.x + visual.x + item.margin.left),
+                            f64::from(here.1 + offset.y + visual.y + item.margin.top),
+                            f64::from(
+                                (visual.width - item.margin.left - item.margin.right).max(0.0),
+                            ),
+                            f64::from(
+                                (visual.height - item.margin.top - item.margin.bottom).max(0.0),
+                            ),
+                        ),
+                    );
+                }
+            }
+        }
+        if let (Some(children), Ok(layout_children)) = (&node.children, layout.box_children(id)) {
+            for item in layout_children.iter().rev() {
+                if let Some(child) = children.get(item.render_index) {
+                    pending.push((child, item.node_id, here));
+                }
+            }
+        }
+    }
+    Ok(())
+}
 
+/// Check the CSS capabilities implemented by the Motion layout and paint adapters.
+fn admit_supported_surface(artifact: &SceneArtifact) -> Result<(), LayoutError> {
     let expr_types =
         crate::expr::validate_exprs(&artifact.exprs, &artifact.controls, &mut Vec::new()).types;
     for node in &artifact.nodes {
@@ -3819,29 +4040,14 @@ fn admit_deterministic_surface(artifact: &SceneArtifact) -> Result<(), LayoutErr
             if matches!(style.property.as_str(), "background" | "background-image")
                 && !gradient_background_binding(style, artifact, &expr_types)
             {
-                return Err(LayoutError::NondeterministicSurface {
-                    node: node.key.clone(),
-                    surface: style.property.clone(),
-                });
-            }
-            if STYLE_DENY.contains(&style.property.as_str()) {
-                return Err(LayoutError::NondeterministicSurface {
+                return Err(LayoutError::UnsupportedSurface {
                     node: node.key.clone(),
                     surface: style.property.clone(),
                 });
             }
         }
-        for class_name in &node.class_names {
-            if CLASS_MARKERS
-                .iter()
-                .any(|marker| class_name.contains(marker))
-            {
-                return Err(LayoutError::NondeterministicSurface {
-                    node: node.key.clone(),
-                    surface: format!("className:{class_name}"),
-                });
-            }
-        }
+        // Utility admission and expansion already validate the actual property/value.
+        // Substring bans here would reject supported transforms and effects again.
     }
     Ok(())
 }
@@ -3876,81 +4082,6 @@ fn gradient_background_binding(
         }
         _ => false,
     }
-}
-
-/// Keep URLs and unsupported interpolation spaces closed for both static and dynamic CSS.
-fn gradient_background_source(property: &str, source: &str) -> bool {
-    // Takumi 0.23 assigns the same value to omitted interpolation and explicit Oklab.
-    // Retain the source distinction: Valle's legacy gradients interpolate in sRGB.
-    let mut legacy_defaults = legacy_gradient_defaults(source).into_iter();
-    let srgb = takumi_core::style::ColorInterpolationMethod::from_css_str("in srgb")
-        .expect("sRGB is a valid CSS interpolation method");
-    let mut admitted = |image: &BackgroundImage| {
-        let interpolation = match image {
-            BackgroundImage::None => return true,
-            BackgroundImage::Linear(gradient) => gradient.interpolation,
-            BackgroundImage::Radial(gradient) => gradient.interpolation,
-            BackgroundImage::Conic(gradient) => gradient.interpolation,
-            BackgroundImage::Url(_) => return false,
-        };
-        let legacy = legacy_defaults.next().unwrap_or(false);
-        interpolation == srgb
-            || (legacy && interpolation == takumi_core::style::ColorInterpolationMethod::default())
-    };
-    match property {
-        "background-image" => BackgroundImages::from_css_str(source)
-            .is_ok_and(|images| !images.is_empty() && images.iter().all(admitted)),
-        "background" => Background::from_css_str(source).is_ok_and(|value| admitted(&value.image)),
-        _ => false,
-    }
-}
-
-/// CSS tokens preserve escapes and comments when distinguishing omitted interpolation.
-/// Takumi still parses and validates the complete value; this only classifies its gradients.
-fn legacy_gradient_defaults(source: &str) -> Vec<bool> {
-    use cssparser::{Parser, ParserInput, Token};
-    let mut input = ParserInput::new(source);
-    let mut parser = Parser::new(&mut input);
-    let mut defaults = Vec::new();
-    while let Ok(token) = parser.next().cloned() {
-        let Token::Function(name) = token else {
-            continue;
-        };
-        if !matches!(
-            name.to_ascii_lowercase().as_str(),
-            "linear-gradient"
-                | "radial-gradient"
-                | "conic-gradient"
-                | "repeating-linear-gradient"
-                | "repeating-radial-gradient"
-                | "repeating-conic-gradient"
-        ) {
-            continue;
-        }
-        let legacy = parser.parse_nested_block(|body| {
-            let mut explicit = false;
-            let mut modern = false;
-            while let Ok(token) = body.next().cloned() {
-                match token {
-                    Token::Ident(ident) if ident.eq_ignore_ascii_case("in") => explicit = true,
-                    Token::Function(name) => {
-                        modern |= matches!(name.to_ascii_lowercase().as_str(),
-                            "lab" | "lch" | "oklab" | "oklch" | "color" | "color-mix");
-                        let relative = body.parse_nested_block(|args| {
-                            let relative = matches!(args.next(), Ok(Token::Ident(ident)) if ident.eq_ignore_ascii_case("from"));
-                            while args.next().is_ok() {}
-                            Ok::<_, cssparser::ParseError<'_, ()>>(relative)
-                        }).unwrap_or(false);
-                        modern |= relative;
-                    }
-                    _ => {}
-                }
-            }
-            Ok::<_, cssparser::ParseError<'_, ()>>(!explicit && !modern)
-        }).unwrap_or(false);
-        defaults.push(legacy);
-    }
-    defaults
 }
 
 /// Lower the camera to two CSS wrappers: outer `T(viewport/2) * R * S`, inner `T(-center)`. Two
@@ -4015,44 +4146,40 @@ fn identity_camera_wrappers(opts: &LayoutOptions<'_>) -> Result<CameraWrappers, 
 
 /// Build, lay out, and collect boxes using the same parameters for probe and final passes.
 fn layout_and_collect_boxes(
-    artifact: &SceneArtifact,
+    prepared: &PreparedScene,
     node: Node,
     opts: &LayoutOptions<'_>,
 ) -> Result<BTreeMap<String, valle_draw::Rect>, LayoutError> {
+    let artifact = prepared.artifact();
     let render_context = takumi_core::context::RenderContext::builder()
         .fonts(opts.fonts.snapshot())
         .sizing(SizingContext::builder().viewport(opts.viewport).build())
         .images(Rc::new(Default::default()))
-        .stylesheet(Default::default())
+        .stylesheet(prepared.stylesheet.clone())
         .time_ms(LayoutOptions::TIME_MS)
         .draw_debug_border(false)
         .style(Box::new(ComputedStyle::default()))
         .build();
-    let root = RenderNode::from_node(&render_context, node);
+    let mut root = RenderNode::from_node(&render_context, node);
+    super::transform::preserve_identity(&mut root);
     let mut tree = takumi_core::layout::tree::LayoutTree::from_render_node(&root);
     tree.compute_layout(render_context.sizing.viewport.into());
     let layout = tree.into_results();
     let mut boxes = BTreeMap::new();
-    walk_pairs(
-        artifact,
-        artifact.root,
-        &layout,
-        takumi_core::geometry::NodeId::ROOT,
-        (0.0, 0.0),
-        &mut |at, id, origin| {
-            if let (Some(node), Ok(computed)) = (artifact.nodes.get(at), layout.layout(id)) {
-                boxes.insert(
-                    node.key.clone(),
-                    valle_draw::Rect::new(
-                        f64::from(origin.0),
-                        f64::from(origin.1),
-                        f64::from(computed.size.width),
-                        f64::from(computed.size.height),
-                    ),
-                );
-            }
-        },
-    )?;
+    walk_pairs(artifact, &root, &layout, &mut |at, id, origin| {
+        if let (Some(node), Ok(computed)) = (artifact.nodes.get(at), layout.layout(id)) {
+            boxes.insert(
+                node.key.clone(),
+                valle_draw::Rect::new(
+                    f64::from(origin.0),
+                    f64::from(origin.1),
+                    f64::from(computed.size.width),
+                    f64::from(computed.size.height),
+                ),
+            );
+        }
+    })?;
+    inline_boxes(artifact, &root, &layout, &mut boxes)?;
     Ok(boxes)
 }
 
@@ -4155,27 +4282,35 @@ pub fn layout_boxes(
     tree: &LayoutTree,
 ) -> Result<BTreeMap<String, [f32; 4]>, LayoutError> {
     let mut boxes = BTreeMap::new();
-    walk_pairs(
-        artifact,
-        artifact.root,
-        &tree.layout,
-        takumi_core::geometry::NodeId::ROOT,
-        (0.0, 0.0),
-        &mut |at, id, origin| {
-            if let (Some(node), Ok(layout)) = (artifact.nodes.get(at), tree.layout.layout(id)) {
-                boxes.insert(
-                    node.key.clone(),
-                    [origin.0, origin.1, layout.size.width, layout.size.height],
-                );
-            }
-        },
-    )?;
+    walk_pairs(artifact, &tree.root, &tree.layout, &mut |at, id, origin| {
+        if let (Some(node), Ok(layout)) = (artifact.nodes.get(at), tree.layout.layout(id)) {
+            boxes.insert(
+                node.key.clone(),
+                [origin.0, origin.1, layout.size.width, layout.size.height],
+            );
+        }
+    })?;
+    let mut inlines = BTreeMap::new();
+    inline_boxes(artifact, &tree.root, &tree.layout, &mut inlines)?;
+    boxes.extend(inlines.into_iter().map(|(key, rect)| {
+        (
+            key,
+            [
+                rect.x as f32,
+                rect.y as f32,
+                rect.width as f32,
+                rect.height as f32,
+            ],
+        )
+    }));
     Ok(boxes)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{declarations, resolve_layer_fx, unit_boundaries};
+    use super::{
+        Css3dOp, Css3dStyle, css_3d_local_matrix, declarations, resolve_layer_fx, unit_boundaries,
+    };
     use crate::layout::bridge::PerspectiveLength;
     use valle_motion::value::{Angle, Length, Length2, LengthUnit};
     use valle_motion::{
@@ -4190,12 +4325,32 @@ mod tests {
     }
 
     #[test]
+    fn css_3d_origin_changes_projected_corner_coordinates() {
+        let style = Css3dStyle {
+            ops: vec![Css3dOp::RotateY(45.0)],
+            ..Default::default()
+        };
+        let rect = valle_draw::Rect::new(100.0, 100.0, 100.0, 100.0);
+        let corner = css_3d_local_matrix(&style, valle_draw::Point::new(100.0, 100.0), rect)
+            .apply(100.0, 100.0, 0.0)
+            .unwrap();
+        let center = css_3d_local_matrix(&style, valle_draw::Point::new(150.0, 150.0), rect)
+            .apply(100.0, 100.0, 0.0)
+            .unwrap();
+        assert!((corner[0] - 100.0).abs() < 1e-9);
+        assert!((corner[1] - 100.0).abs() < 1e-9);
+        assert!((center[0] - (150.0 - 50.0 / 2.0_f64.sqrt())).abs() < 1e-9);
+        assert!((center[1] - 100.0).abs() < 1e-9);
+    }
+
+    #[test]
     fn motion_path_center_anchor_lowers_to_box_relative_translate() {
         let node = SceneNode {
             key: "follower".into(),
             kind: NodeKind::Box,
             space: None,
             class_names: vec![],
+            class_conditions: Default::default(),
             styles: vec![
                 static_style("motion-path-anchor", MotionValue::Enum("center".into())),
                 static_style("translate", MotionValue::Length2(Length2::px(30.0, 20.0))),
@@ -4219,6 +4374,7 @@ mod tests {
             kind: NodeKind::Box,
             space: None,
             class_names: vec![],
+            class_conditions: Default::default(),
             styles,
             visibility: None,
             children: ChildRange::EMPTY,

@@ -262,6 +262,7 @@ fn motion_resources_and_inline_karaoke_timings_lower_to_canonical_data() {
                     "duration": 3,
                     "kind": "motion",
                     "component": "component",
+                    "sourceDuration": 3,
                     "resources": {"hero": "texture"},
                     "cues": {
                         "intro": {"type": "source-range", "start": 0, "end": 2}

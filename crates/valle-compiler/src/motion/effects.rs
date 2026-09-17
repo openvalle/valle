@@ -15,19 +15,19 @@ impl<'s> Compiler<'s> {
                     _ => None,
                 })
         }) {
-            return match normalize_css_filter(&text) {
-                Ok(None) => None,
-                Ok(Some(kept)) => Some(StyleValue::Static {
-                    value: MotionValue::Str(kept),
+            return match valle_motion::style::parse_property(property, &text) {
+                // Keep `none` and identity filters until after cascade. They still override
+                // utilities, and a non-none identity filter establishes a containing block.
+                Ok(_) => Some(StyleValue::Static {
+                    value: MotionValue::Str(text),
                 }),
                 Err(reason) => {
-                    self.illegal(DiagCode::GrammarForbidden, expression.span(), reason);
+                    self.style_diagnostic(expression.span(), None, reason);
                     None
                 }
             };
         }
         let expr = self.lower_css_value_expression(expression)?;
-        let _ = property;
         Some(StyleValue::Expr { expr })
     }
 
@@ -97,59 +97,6 @@ impl<'s> Compiler<'s> {
                 );
             }
             PathTopology::Closed | PathTopology::Unknown => {}
-        }
-    }
-
-    pub(super) fn diagnose_border_paint(
-        &mut self,
-        span: Span,
-        class_names: &[String],
-        styles: &[StyleBinding],
-    ) {
-        let mut width = false;
-        let mut color = false;
-        let mut style_present = false;
-        let mut style_none = false;
-        for class_name in class_names {
-            if tailwind_sets_border_width(class_name) {
-                width = true;
-            }
-            if tailwind_sets_border_color(class_name) {
-                color = true;
-            }
-            if tailwind_sets_border_style(class_name) {
-                style_present = true;
-                if *class_name == "border-none" {
-                    style_none = true;
-                }
-            }
-        }
-        for style in styles {
-            let name = style.property.as_str();
-            if is_border_width_property(name) {
-                width = true;
-            }
-            if is_border_color_property(name) {
-                color = true;
-            }
-            if is_border_style_property(name) {
-                style_present = true;
-                if matches!(
-                    &style.value,
-                    StyleValue::Static {
-                        value: MotionValue::Str(value) | MotionValue::Enum(value)
-                    } if value == "none"
-                ) {
-                    style_none = true;
-                }
-            }
-        }
-        if (width || color) && (!style_present || style_none) {
-            self.illegal(
-                DiagCode::GrammarForbidden,
-                span,
-                "border width/color requires an explicit borderStyle (CSS default is none); write borderStyle: \"solid\" or a Tailwind border-solid class",
-            );
         }
     }
 

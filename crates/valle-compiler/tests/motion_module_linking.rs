@@ -17,6 +17,7 @@ fn graph(entry: &str, modules: &[(&str, &str)]) -> MotionModuleGraph {
 }
 
 const ENTRY: &str = r#"
+export const composition = { width: 1920, height: 1080, fps: 30, duration: 5 };
 import { Card as Panel } from "./components/card.motion";
 import { accent } from "./theme.motion";
 
@@ -52,6 +53,7 @@ export function presence(t) { return ramp(t) * (1 - ramp(t - 1)); }
 export function paint() { return `${tone}`; }
 "#;
     let entry = r#"
+export const composition = { width: 1920, height: 1080, fps: 30, duration: 5 };
 import { timing, presence, paint } from './helpers';
 const span = timing(0.25);
 export default function Scene(ctx) {
@@ -204,6 +206,7 @@ export default function TenModuleEntry() {{
 #[test]
 fn imported_theme_flows_through_a_provider_into_an_imported_component() {
     let entry = r#"
+export const composition = { width: 1920, height: 1080, fps: 30, duration: 5 };
 import { Dashboard } from "./dashboard.motion";
 import { brandTheme } from "./theme.motion";
 export default function App() {
@@ -268,6 +271,7 @@ export const brandTheme = {
 #[test]
 fn same_top_level_names_in_separate_modules_are_isolated_by_symbol_identity() {
     let entry = r#"
+export const composition = { width: 1920, height: 1080, fps: 30, duration: 5 };
 import { Left } from "./left";
 import { Right } from "./right";
 export const component = "Twins";
@@ -313,6 +317,7 @@ fn canonical_module_ordinals_are_stable_and_isolate_every_module_path() {
     const LEFT_PATH: &str = "collision/module-797876.tsx";
     const RIGHT_PATH: &str = "collision/module-1730603.tsx";
     let entry = r#"
+export const composition = { width: 1920, height: 1080, fps: 30, duration: 5 };
 import { label as leftLabel } from "./collision/module-797876";
 import { label as rightLabel } from "./collision/module-1730603";
 export default function NamespaceCollision() {
@@ -363,6 +368,7 @@ export default function NamespaceCollision() {
 #[test]
 fn unreachable_modules_do_not_change_linked_output_or_ordinals() {
     let entry = r#"
+export const composition = { width: 1920, height: 1080, fps: 30, duration: 5 };
 import { label } from "./visible";
 const __valle_m1_label = "UNUSED_SENTINEL";
 export default function ReachableOnly() {
@@ -405,6 +411,7 @@ export default function ReachableOnly() {
 #[test]
 fn unicode_top_level_bindings_remain_distinct_inside_one_module() {
     let entry = r#"
+export const composition = { width: 1920, height: 1080, fps: 30, duration: 5 };
 import { Labels } from "./labels";
 export default function UnicodeBindings() {
   return <Scene key="root"><Labels key="labels" /></Scene>;
@@ -440,6 +447,7 @@ export function Labels() {
 #[test]
 fn entry_bindings_cannot_capture_compiler_owned_module_names() {
     let entry = r#"
+export const composition = { width: 1920, height: 1080, fps: 30, duration: 5 };
 import { label } from "./dependency";
 const __valle_m0_label = "ENTRY";
 export default function ReservedCollision() {
@@ -466,6 +474,7 @@ export default function ReservedCollision() {
 #[test]
 fn missing_exports_report_the_complete_import_chain_at_the_import_site() {
     let entry = r#"
+export const composition = { width: 1920, height: 1080, fps: 30, duration: 5 };
 import { Mid } from "./mid";
 export const component = "Broken";
 export default function Broken(ctx) { return <Mid />; }
@@ -541,6 +550,7 @@ fn cycles_and_root_escape_are_rejected_before_lowering() {
 #[test]
 fn reexports_resolve_without_emitting_runtime_module_objects() {
     let entry = r##"
+export const composition = { width: 1920, height: 1080, fps: 30, duration: 5 };
 import { Card } from "./public";
 export const component = "Reexport";
 export default function Reexport(ctx) { return <Scene key="root"><Card key="card" label="ok" color="#fff" /></Scene>; }
@@ -567,6 +577,7 @@ export default function Reexport(ctx) { return <Scene key="root"><Card key="card
 #[test]
 fn erased_types_type_only_imports_as_const_and_satisfies_never_reach_quickjs() {
     let entry = r#"
+export const composition = { width: 1920, height: 1080, fps: 30, duration: 5 };
 import { TypedCard } from "./card";
 import type { Theme } from "./types";
 import { accent } from "./theme";

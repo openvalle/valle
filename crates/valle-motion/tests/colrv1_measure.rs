@@ -10,7 +10,7 @@ fn noto_emoji_measurement_preserves_sequences_and_is_repeatable() {
         measure_text(
             &TextMeasure {
                 text,
-                style: "font-size: 64px",
+                font_size: 64.0,
                 ..Default::default()
             },
             &fonts,

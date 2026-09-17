@@ -17,6 +17,7 @@ pub(super) fn emit_node(
         kind: node.kind,
         space: node.space,
         class_names: node.class_names,
+        class_conditions: node.class_conditions,
         styles: node.styles,
         visibility: node.visibility,
         children: ChildRange::EMPTY,

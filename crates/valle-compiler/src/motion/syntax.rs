@@ -242,6 +242,9 @@ pub(super) fn prelude_peeled_const_text(
 }
 
 pub(super) fn camel_to_kebab(value: &str) -> String {
+    if value.starts_with("--") {
+        return value.to_owned();
+    }
     let mut output = String::new();
     for character in value.chars() {
         if character.is_ascii_uppercase() {

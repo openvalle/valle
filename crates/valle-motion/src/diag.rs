@@ -44,10 +44,18 @@ pub enum DiagCode {
     UnknownContextPath,
     /// Reference to an undeclared prop.
     UnknownProp,
-    /// Forbidden wall-clock animation, responsive prefix, or interaction variant.
+    /// A class form outside the admitted utility grammar.
     TailwindForbidden,
-    /// Valid Tailwind utility absent from the versioned Valle catalog.
+    /// Tailwind utility without an implemented lowering.
     TailwindUnsupported,
+    /// Unknown or noncanonical CSS property name.
+    StyleUnknownProperty,
+    /// Recognized property without an implemented CSS lowering.
+    StyleUnsupportedProperty,
+    /// Recognized CSS value whose semantics are not implemented.
+    StyleUnsupportedValue,
+    /// Malformed or invalid value for a recognized property.
+    StyleInvalidValue,
     /// Forbidden nondeterministic sandbox access, including clocks, unseeded randomness, and I/O.
     SandboxForbidden,
     /// Static evaluation threw or returned a non-JSON value.
@@ -76,11 +84,16 @@ impl DiagCode {
             | DiagCode::UnknownContextPath
             | DiagCode::UnknownProp
             | DiagCode::TailwindForbidden
+            | DiagCode::StyleUnknownProperty
+            | DiagCode::StyleInvalidValue
             | DiagCode::SandboxForbidden
             | DiagCode::StaticEvalFailed
             | DiagCode::BuiltinRejected
             | DiagCode::MotionGlassNotAdmitted => DiagClass::Illegal,
-            DiagCode::TailwindUnsupported | DiagCode::UnsupportedSyntax => DiagClass::Unsupported,
+            DiagCode::TailwindUnsupported
+            | DiagCode::UnsupportedSyntax
+            | DiagCode::StyleUnsupportedProperty
+            | DiagCode::StyleUnsupportedValue => DiagClass::Unsupported,
         }
     }
 
@@ -100,6 +113,10 @@ impl DiagCode {
             DiagCode::UnknownProp => "unknown-prop",
             DiagCode::TailwindForbidden => "tailwind-forbidden",
             DiagCode::TailwindUnsupported => "tailwind-unsupported",
+            DiagCode::StyleUnknownProperty => "style-unknown-property",
+            DiagCode::StyleUnsupportedProperty => "style-unsupported-property",
+            DiagCode::StyleUnsupportedValue => "style-unsupported-value",
+            DiagCode::StyleInvalidValue => "style-invalid-value",
             DiagCode::SandboxForbidden => "sandbox-forbidden",
             DiagCode::StaticEvalFailed => "static-eval-failed",
             DiagCode::BuiltinRejected => "builtin-rejected",
@@ -173,6 +190,8 @@ mod tests {
             DiagCode::UnknownContextPath,
             DiagCode::UnknownProp,
             DiagCode::TailwindForbidden,
+            DiagCode::StyleUnknownProperty,
+            DiagCode::StyleInvalidValue,
             DiagCode::SandboxForbidden,
             DiagCode::StaticEvalFailed,
             DiagCode::BuiltinRejected,
@@ -181,15 +200,25 @@ mod tests {
         }
         // Unsupported syntax remains distinguishable from illegal input.
         assert_eq!(DiagCode::UnsupportedSyntax.class(), DiagClass::Unsupported);
-        assert_eq!(
-            DiagCode::TailwindUnsupported.class(),
-            DiagClass::Unsupported
-        );
+        for c in [
+            DiagCode::TailwindUnsupported,
+            DiagCode::StyleUnsupportedProperty,
+            DiagCode::StyleUnsupportedValue,
+        ] {
+            assert_eq!(c.class(), DiagClass::Unsupported, "{}", c.as_str());
+        }
     }
 
     #[test]
     fn code_string_and_serde_agree() {
-        for c in [DiagCode::SignalCycle, DiagCode::SignalProviderMissing] {
+        for c in [
+            DiagCode::SignalCycle,
+            DiagCode::SignalProviderMissing,
+            DiagCode::StyleUnknownProperty,
+            DiagCode::StyleUnsupportedProperty,
+            DiagCode::StyleUnsupportedValue,
+            DiagCode::StyleInvalidValue,
+        ] {
             let json = serde_json::to_string(&c).unwrap();
             assert_eq!(json, format!("\"{}\"", c.as_str()));
             assert_eq!(serde_json::from_str::<DiagCode>(&json).unwrap(), c);

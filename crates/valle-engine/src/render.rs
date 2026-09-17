@@ -1481,6 +1481,7 @@ pub struct CompiledMotionPhases {
     hold_frames: u32,
     exit_frames: u32,
     hold_cycle_frames: Option<u32>,
+    hold_cycle_duration: Option<RationalTime>,
 }
 
 impl CompiledMotionPhases {
@@ -1511,6 +1512,7 @@ impl CompiledMotionPhases {
             hold_frames: self.hold_frames,
             exit_frames: self.exit_frames,
             hold_cycle_frames: self.hold_cycle_frames,
+            hold_cycle_duration: self.hold_cycle_duration,
         }
     }
 }
@@ -1620,6 +1622,7 @@ enum CompiledSourcePayload {
     },
     Motion {
         instance: CompiledMotionInstance,
+        fit: CompiledRasterFit,
     },
     Solid {
         color: String,
@@ -1669,7 +1672,7 @@ impl CompiledSource {
 
     pub fn motion(&self) -> Option<&CompiledMotionInstance> {
         match &self.payload {
-            CompiledSourcePayload::Motion { instance } => Some(instance),
+            CompiledSourcePayload::Motion { instance, .. } => Some(instance),
             _ => None,
         }
     }
@@ -1678,7 +1681,8 @@ impl CompiledSource {
         match &self.payload {
             CompiledSourcePayload::Video { fit }
             | CompiledSourcePayload::Image { fit }
-            | CompiledSourcePayload::Lottie { fit } => Some(*fit),
+            | CompiledSourcePayload::Lottie { fit }
+            | CompiledSourcePayload::Motion { fit, .. } => Some(*fit),
             _ => None,
         }
     }

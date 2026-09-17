@@ -721,9 +721,26 @@ fn serve_project_edit(
             br#"{"error":{"code":"refused","message":"token/origin check failed"}}"#,
         );
     }
+    let request = match crate::cmd::project::resolve_studio_edit_request(
+        body,
+        &std::env::current_dir()?,
+    ) {
+        Ok(request) => request,
+        Err(error) => {
+            return write_simple(
+                out,
+                400,
+                "Bad Request",
+                &[("Content-Type", "application/json")],
+                serde_json::json!({"error":{"code":"motion_duration_resolution","message":error.to_string()}})
+                    .to_string()
+                    .as_bytes(),
+            );
+        }
+    };
     match project
         .store
-        .edit_timeline_json(&project.project_id, body, &project.auth)
+        .edit_timeline_json(&project.project_id, &request, &project.auth)
     {
         Ok(response) => {
             let json = serde_json::to_vec(&response)?;

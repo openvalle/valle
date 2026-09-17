@@ -16,14 +16,6 @@ use std::path::PathBuf;
 use anyhow::Result;
 use clap::{Parser, Subcommand, ValueEnum};
 
-/// Logical authoring canvas shared by every `valle motion` command.
-#[derive(clap::Args, Debug, Clone, Copy, Default)]
-pub struct MotionCanvasArgs {
-    /// Canvas dimensions, such as 1920x1080.
-    #[arg(long, value_parser = parse_canvas_size, default_value = "1920x1080")]
-    pub size: Option<(u32, u32)>,
-}
-
 /// One complete immutable Timeline fixed render package.
 #[derive(clap::Args, Debug, Clone)]
 pub struct FixedRenderPackageArgs {
@@ -548,6 +540,9 @@ pub struct InterpolateArgs {
 /// Delivery controls independent of the logical Motion authoring canvas.
 #[derive(clap::Args, Debug, Clone, Default)]
 pub struct MotionRenderTuningArgs {
+    /// Output frame rate; overrides the optional composition default.
+    #[arg(long)]
+    pub fps: Option<String>,
     /// Concurrent frame renderers (1-8). Defaults: Raster at most 2; Metal 1.
     #[arg(long, value_parser = clap::value_parser!(u8).range(1..=8))]
     pub workers: Option<u8>,
@@ -560,7 +555,7 @@ pub struct MotionRenderTuningArgs {
     /// Software H.264 encoder threads. Defaults to automatic selection.
     #[arg(long, conflicts_with_all = ["hardware_encode", "frame"], value_parser = clap::value_parser!(u16).range(1..))]
     pub encode_threads: Option<u16>,
-    /// Delivery dimensions; scales the logical --size canvas without changing layout.
+    /// Delivery dimensions; scales the composition canvas proportionally without changing layout.
     #[arg(long, value_parser = parse_canvas_size)]
     pub output_size: Option<(u32, u32)>,
 }
@@ -583,16 +578,12 @@ pub enum MotionAction {
         /// Fonts used by actual rendering; may be repeated.
         #[arg(long)]
         font: Vec<PathBuf>,
-        #[arg(long, default_value = "5")]
-        duration: String,
-        #[arg(long, default_value = "30")]
-        fps: String,
         /// Validate this exact frame through the native raster renderer.
         #[arg(long, default_value_t = 0)]
         frame: i64,
-        /// Logical canvas shared by compilation, measurement, and validation.
-        #[command(flatten)]
-        canvas: MotionCanvasArgs,
+        /// Output frame rate when the composition has no default.
+        #[arg(long)]
+        fps: Option<String>,
     },
     /// Compile Motion JSX and render an MP4 or one PNG frame.
     Render {
@@ -620,19 +611,14 @@ pub enum MotionAction {
         /// JSON object bound to controls.data during prepare.
         #[arg(long, value_name = "PATH")]
         data: Option<PathBuf>,
-        /// Duration in seconds as an exact Timeline decimal.
-        #[arg(long, default_value = "5")]
-        duration: String,
-        /// Frames per second, including rational rates such as 30000/1001.
-        #[arg(long, default_value = "30")]
-        fps: String,
-        #[command(flatten)]
-        canvas: MotionCanvasArgs,
     },
     /// Open local Motion Studio with hot reload, diagnostics, source mapping, and web preview.
     Studio {
         /// Motion JSX source file.
         input: PathBuf,
+        /// Preview frame rate when the composition has no default.
+        #[arg(long)]
+        fps: Option<String>,
         /// Bind an asset control as name=path; may be repeated.
         #[arg(long = "asset", value_name = "NAME=PATH")]
         assets: Vec<String>,
@@ -650,13 +636,6 @@ pub enum MotionAction {
         /// Local port; use 0 to let the OS select an available port.
         #[arg(long, default_value_t = 9527)]
         port: u16,
-        /// Studio duration in seconds, expressed as a Timeline q6 JSON decimal.
-        #[arg(long, default_value = "5")]
-        duration: String,
-        #[arg(long, default_value = "30")]
-        fps: String,
-        #[command(flatten)]
-        canvas: MotionCanvasArgs,
     },
 }
 

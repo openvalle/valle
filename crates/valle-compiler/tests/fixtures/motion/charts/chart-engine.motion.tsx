@@ -1,3 +1,4 @@
+export const composition = { width: 1920, height: 1080, fps: 30, duration: 5 };
 export const component = "chart-engine";
 
 const VALUES = [12, 28, 18, 32];
@@ -10,15 +11,15 @@ const STACK = stack(SERIES);
 const LINE = [18, 24, 21, 36, 32, 44];
 const PIE = pie(VALUES, { startAngle: deg(-90), endAngle: deg(-90) + TAU });
 const SEQ = scaleSequential({ domain: [0, 44], colors: ["#0f172a", "#38bdf8"] });
-const GROUP = scaleBand({ range: [80, 360], count: LABELS.length, paddingInner: 0.28 });
+const GROUP = scaleBand({ range: [120, 540], count: LABELS.length, paddingInner: 0.28 });
 const INNER = scaleBand({ range: [0, GROUP.bandwidth()], count: 2, paddingInner: 0.16 });
-const Y = scaleLinear({ domain: [0, 40], range: [340, 80] });
-const X_LINE = scalePoint({ range: [420, 760], count: LINE.length });
+const Y = scaleLinear({ domain: [0, 40], range: [510, 120] });
+const X_LINE = scalePoint({ range: [630, 1140], count: LINE.length });
 const TREND = curve(
   LINE.map((value, index) => point(X_LINE.at(index), Y.map(value))),
   { type: "monotoneX" },
 );
-const FILL = area(TREND, 340);
+const FILL = area(TREND, 510);
 const UPPER = curve(
   STACK.layers[1].map((pair, index) => point(X_LINE.at(index), Y.map(pair[1]))),
   { type: "monotoneX" },
@@ -33,6 +34,17 @@ export default function ChartEngine(ctx) {
   const needle = interpolate(ctx.progress, [0, 1], [deg(-120), deg(120)]);
   return (
     <Scene key="scene" className="relative h-full w-full" style={{ backgroundColor: "#020617" }}>
+      <View key="plot-surface" className="absolute" style={{ borderStyle: "solid", left: 60, top: 63, width: 1140, height: 930, borderRadius: 39, backgroundColor: "#0c1830", borderWidth: 1.5, borderColor: "#263959" }} />
+      <View key="summary" className="absolute" style={{ borderStyle: "solid", left: 1248, top: 63, width: 609, height: 930, borderRadius: 39, backgroundColor: "#101b33", borderWidth: 1.5, borderColor: "#334665" }}>
+        <Text key="eyebrow" className="absolute" style={{ left: 54, top: 60, fontSize: 24, letterSpacing: 4.5, color: "#67e8f9" }}>CHART ENGINE / 05</Text>
+        <Text key="heading" className="absolute" style={{ left: 51, top: 129, width: 495, fontSize: 51, color: "#f8fafc" }}>One data set, many marks.</Text>
+        <View key="rule" className="absolute" style={{ left: 54, top: 306, width: 501, height: 1.5, backgroundColor: "#334665" }} />
+        <Text key="bars-label" className="absolute" style={{ left: 54, top: 363, fontSize: 31.5, color: "#a5b4fc" }}>01  Grouped bars</Text>
+        <Text key="area-label" className="absolute" style={{ left: 54, top: 453, fontSize: 31.5, color: "#67e8f9" }}>02  Smooth area</Text>
+        <Text key="pie-label" className="absolute" style={{ left: 54, top: 543, fontSize: 31.5, color: "#a5b4fc" }}>03  Donut share</Text>
+        <Text key="gauge-label" className="absolute" style={{ left: 54, top: 633, fontSize: 31.5, color: "#67e8f9" }}>04  Gauge sweep</Text>
+        <Text key="footer" className="absolute" style={{ left: 54, bottom: 63, fontSize: 25.5, color: "#94a3b8" }}>All geometry is prepared once.</Text>
+      </View>
       {LABELS.map((label, category) =>
         SERIES.map((series, seriesIndex) => (
           <View
@@ -49,15 +61,15 @@ export default function ChartEngine(ctx) {
         )),
       )}
       <Path key="area" d={FILL} fill="#164e63" />
-      <Path key="line" d={TREND} fill="none" stroke="#22d3ee" strokeWidth="4" trimEnd={ctx.progress} />
+      <Path key="line" d={TREND} fill="none" stroke="#22d3ee" strokeWidth="6" trimEnd={ctx.progress} />
       <Path key="band" d={BAND} fill="#334155" />
       {PIE.map((slice, index) => (
         <Path
           key={`pie-${index}`}
           d={sector({
-            center: point(160, 520),
-            inner: 24,
-            outer: 70,
+            center: point(240, 780),
+            inner: 36,
+            outer: 105,
             start: slice.startAngle,
             end: interpolate(ctx.progress, [0, 1], [slice.startAngle, slice.endAngle], {
               easing: "easeOut",
@@ -69,9 +81,9 @@ export default function ChartEngine(ctx) {
       <Path
         key="gauge"
         d={sector({
-          center: point(640, 520),
-          inner: 36,
-          outer: 52,
+          center: point(960, 780),
+          inner: 54,
+          outer: 78,
           start: deg(-120),
           end: needle,
         })}
@@ -81,10 +93,10 @@ export default function ChartEngine(ctx) {
         key="radar"
         style={{
           position: "absolute",
-          left: 640 + 40 * Math.cos(deg(-90)),
-          top: 200 + 40 * Math.sin(deg(-90)),
-          width: 8,
-          height: 8,
+          left: 960 + 60 * Math.cos(deg(-90)),
+          top: 300 + 60 * Math.sin(deg(-90)),
+          width: 12,
+          height: 12,
           backgroundColor: SEQ.map(LINE[LINE.length - 1]),
         }}
       />

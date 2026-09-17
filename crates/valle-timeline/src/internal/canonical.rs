@@ -686,19 +686,9 @@ impl<'a> Validator<'a> {
                                 &format!("{cue_path}/exitDuration"),
                                 &clip.id,
                             );
-                            if let (Ok(phase_total), Ok(cue_duration)) = (
-                                enter_duration.checked_add(*exit_duration),
-                                end.checked_sub(*start),
-                            ) {
-                                if phase_total > cue_duration {
-                                    self.error(
-                                        "motion_cue_phase_exceeds_range",
-                                        &cue_path,
-                                        Some(&clip.id),
-                                        JsonObject::new(),
-                                    );
-                                }
-                            } else {
+                            if enter_duration.checked_add(*exit_duration).is_err()
+                                || end.checked_sub(*start).is_err()
+                            {
                                 self.error(
                                     "exact_time_overflow",
                                     &cue_path,
@@ -729,13 +719,7 @@ impl<'a> Validator<'a> {
                     (source.phases.enter_duration, source.phases.exit_duration)
                 {
                     match enter.checked_add(exit) {
-                        Ok(total) if total <= source.source_duration => {}
-                        Ok(_) => self.error(
-                            "motion_phase_exceeds_source_duration",
-                            &format!("{path}/source/phases"),
-                            Some(&clip.id),
-                            JsonObject::new(),
-                        ),
+                        Ok(_) => {}
                         Err(_) => self.error(
                             "exact_time_overflow",
                             &format!("{path}/source/phases"),
@@ -822,11 +806,11 @@ impl<'a> Validator<'a> {
     fn validate_motion_phase_duration(
         &mut self,
         value: ExactRational,
-        source_duration: ExactRational,
+        _source_duration: ExactRational,
         path: &str,
         entity_id: &str,
     ) {
-        if value.is_negative() || value > source_duration {
+        if value.is_negative() {
             self.error(
                 "motion_phase_duration_out_of_range",
                 path,

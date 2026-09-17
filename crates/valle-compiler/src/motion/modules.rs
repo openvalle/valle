@@ -26,7 +26,7 @@ use valle_motion::{ContentDigest, ResourceRef};
 
 use super::{
     CompiledMotion, CompilerDiagnostic, MeasureEnv, ModuleSourceInfo, PrepareDataBinding,
-    ShaderRegistryEnv, SourceSpan, compile_motion_with_full_env_and_data,
+    ShaderRegistryEnv, SourceSpan, compile_motion_impl,
 };
 
 /// Complete, explicit source closure accepted by every Motion host.
@@ -122,12 +122,13 @@ pub fn compile_motion_modules_with_full_env_and_data(
     data: Option<&PrepareDataBinding>,
 ) -> Result<CompiledMotion, Vec<CompilerDiagnostic>> {
     let linked = Linker::new(graph).link()?;
-    let mut compiled = match compile_motion_with_full_env_and_data(
+    let mut compiled = match compile_motion_impl(
         &linked.source,
         resources,
         measure,
         shaders,
         data,
+        Some(&graph.entry),
     ) {
         Ok(compiled) => compiled,
         Err(mut diagnostics) => {
@@ -253,6 +254,15 @@ impl<'a> Linker<'a> {
         };
         self.visiting.push(path.to_owned());
         let source = &self.graph.modules[path];
+        if path.ends_with(".css") {
+            return Err(vec![path_diagnostic(
+                path,
+                source,
+                Span::new(0, 0),
+                "local CSS is not supported: a value that has to be shared is a `const` at the top \
+                 of the file, and the built-in tokens are already available to utilities",
+            )]);
+        }
         let dependencies = discover_dependencies(path, source, self.graph, &self.visiting)?;
         for dependency in &dependencies {
             self.visit(&dependency.path)?;
@@ -453,6 +463,15 @@ fn discover_dependencies(
                     format!("{message}; import chain: {}", chain.join(" -> ")),
                 )]
             })?;
+            if resolved.ends_with(".css") {
+                return Err(vec![path_diagnostic(
+                    path,
+                    source,
+                    span,
+                    "local CSS is not supported: a value that has to be shared is a `const` at the \
+                     top of the file",
+                )]);
+            }
             dependencies.push(Dependency { path: resolved });
         }
         Ok(dependencies)
@@ -503,6 +522,15 @@ fn load_disk_module(
             format!("cannot read Motion module `{module}`: {error}"),
         )]
     })?;
+    if module.ends_with(".css") {
+        return Err(vec![path_diagnostic(
+            module,
+            &source,
+            Span::new(0, 0),
+            "local CSS is not supported: a value that has to be shared is a `const` at the top of \
+             the file, and the built-in tokens are already available to utilities",
+        )]);
+    }
     chain.push(module.to_owned());
     let specifiers = static_dependency_specifiers(module, &source)?;
     for (specifier, span) in specifiers {
@@ -673,6 +701,15 @@ fn analyze_module(
                     "import phase/attributes are outside the deterministic Motion module contract",
                 )]);
             }
+            if dependency.path.ends_with(".css") {
+                return Err(vec![path_diagnostic(
+                    path,
+                    source,
+                    import.span,
+                    "local CSS is not supported: a value that has to be shared is a `const` at the \
+                     top of the file",
+                )]);
+            }
             if import.import_kind == ImportOrExportKind::Type {
                 continue;
             }
@@ -766,6 +803,18 @@ fn analyze_module(
                 Statement::ExportDeclaration(export) => {
                     if is_type_declaration(&export.declaration) {
                         continue;
+                    }
+                    if !is_entry
+                        && declaration_root_names(&export.declaration, scoping)
+                            .iter()
+                            .any(|name| name == "composition")
+                    {
+                        return Err(vec![path_diagnostic(
+                            path,
+                            source,
+                            export.declaration.span(),
+                            "`composition` belongs to the entry `.motion.tsx` only; a component module must not declare the delivery contract",
+                        )]);
                     }
                     for name in declaration_root_names(&export.declaration, scoping) {
                         insert_export(
@@ -1286,6 +1335,10 @@ fn path_diagnostic(
         code: DiagCode::ModuleShape,
         span: source_span(source, span),
         source_path: Some(path.to_owned()),
+        node_path: None,
+        utility: None,
+        style: None,
+        css_rule: None,
         message: message.into(),
     }
 }

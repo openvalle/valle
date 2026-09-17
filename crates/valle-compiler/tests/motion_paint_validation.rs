@@ -116,13 +116,12 @@ fn closed_path_keeps_svg_default_black_without_fill_attr() {
 }
 
 #[test]
-fn filter_none_and_blur_zero_are_noops_negative_blur_is_rejected() {
+fn filter_none_and_blur_zero_preserve_cascade_negative_blur_is_rejected() {
     let none = compile_ok(&scene(
         r##"<View key="n" style={{ width: 20, height: 20, backgroundColor: "#fff", filter: "none" }} />"##,
     ));
     assert!(
-        !none
-            .artifact
+        none.artifact
             .nodes
             .iter()
             .any(|node| { node.styles.iter().any(|style| style.property == "filter") })
@@ -131,8 +130,7 @@ fn filter_none_and_blur_zero_are_noops_negative_blur_is_rejected() {
         r##"<View key="z" style={{ width: 20, height: 20, backgroundColor: "#fff", filter: "blur(0px)" }} />"##,
     ));
     assert!(
-        !zero
-            .artifact
+        zero.artifact
             .nodes
             .iter()
             .any(|node| { node.styles.iter().any(|style| style.property == "filter") })
@@ -150,7 +148,7 @@ fn filter_none_and_blur_zero_are_noops_negative_blur_is_rejected() {
     match &filter.value {
         valle_motion::StyleValue::Static {
             value: valle_motion::MotionValue::Str(text),
-        } => assert_eq!(text, "brightness(1.2)"),
+        } => assert_eq!(text, "blur(0px) brightness(1.2)"),
         other => panic!("expected kept filter string, got {other:?}"),
     }
     assert!(contains(
@@ -162,23 +160,13 @@ fn filter_none_and_blur_zero_are_noops_negative_blur_is_rejected() {
 }
 
 #[test]
-fn border_width_without_style_is_diagnosed_after_class_merge() {
-    assert!(contains(
-        &diagnostics(&scene(
-            r##"<View key="a" style={{ width: 40, height: 20, borderWidth: 2, borderColor: "#fff" }} />"##
-        )),
-        &["borderStyle"]
-    ));
-    assert!(contains(
-        &diagnostics(&scene(
-            r##"<View key="b" className="border-2 border-white" style={{ width: 40, height: 20 }} />"##
-        )),
-        &["borderStyle"]
-    ));
-    compile_ok(&scene(
-        r##"<View key="ok" className="border-2 border-solid border-white" style={{ width: 40, height: 20 }} />"##,
-    ));
-    compile_ok(&scene(
-        r##"<View key="ok2" style={{ width: 40, height: 20, borderWidth: 2, borderColor: "#fff", borderStyle: "solid" }} />"##,
-    ));
+fn border_width_and_color_use_motion_solid_default() {
+    for body in [
+        r##"<View key="a" style={{ width: 40, height: 20, borderWidth: 2, borderColor: "#fff" }} />"##,
+        r##"<View key="b" className="border-2 border-white" style={{ width: 40, height: 20 }} />"##,
+        r##"<View key="c" className="border-2 border-solid border-white" style={{ width: 40, height: 20 }} />"##,
+        r##"<View key="d" className="border-2 border-none border-white" style={{ width: 40, height: 20 }} />"##,
+    ] {
+        compile_ok(&scene(body));
+    }
 }

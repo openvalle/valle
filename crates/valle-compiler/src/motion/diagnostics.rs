@@ -14,7 +14,25 @@ pub(super) fn diagnostic_at(
         code,
         span: source_span,
         source_path: None,
+        node_path: None,
+        utility: None,
+        style: None,
+        css_rule: None,
         message: message.into(),
+    }
+}
+
+impl Compiler<'_> {
+    pub(super) fn style_diagnostic(
+        &mut self,
+        span: Span,
+        node_path: Option<&str>,
+        issue: valle_motion::style::StyleIssue,
+    ) {
+        let mut diagnostic = diagnostic_at(self.source, issue.code(), span, issue.to_string());
+        diagnostic.node_path = node_path.map(str::to_owned);
+        diagnostic.style = Some(issue);
+        self.push_diagnostic(diagnostic);
     }
 }
 

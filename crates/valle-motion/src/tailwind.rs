@@ -5,20 +5,130 @@
 //! This module is therefore the backend-neutral admission gate shared by compiler,
 //! artifact validation, Native layout, and Web layout.
 
+mod arbitrary;
+mod normalize;
+mod order_table;
+mod visual;
+pub(crate) use normalize::explicit_property;
+pub(crate) use normalize::prepare_stylesheet;
+
 /// Exact catalog identity. It is also part of the artifact capability set.
 pub const TAILWIND_CATALOG: &str = "tailwind";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TailwindClassError {
-    /// Legal Tailwind surface that Motion deliberately forbids because it is time-, viewport-, or
-    /// interaction-dependent.
+    /// Syntactically valid variable consumer; needs the complete node scope.
+    NeedsVariables,
+    /// Utility forms that currently have no authoring/lowering contract in Motion.
     Forbidden,
     /// Tailwind utility not present in this catalog.
     Unsupported,
+    /// A recognized condition with a value not yet supported by the viewport contract.
+    UnsupportedVariant(&'static str),
+    /// Preserve the shared property's actual value and diagnostic.
+    Css(crate::style::StyleIssue),
+    /// A malformed arbitrary value or utility token.
+    Syntax(&'static str),
 }
 
-/// Validate one already whitespace-separated `className` token.
+impl TailwindClassError {
+    pub fn code(&self) -> crate::diag::DiagCode {
+        use crate::diag::DiagCode;
+        match self {
+            Self::Forbidden => DiagCode::TailwindForbidden,
+            Self::NeedsVariables => DiagCode::TailwindUnsupported,
+            Self::Unsupported | Self::UnsupportedVariant(_) => DiagCode::TailwindUnsupported,
+            Self::Css(issue) => issue.code(),
+            Self::Syntax(_) => DiagCode::SyntaxError,
+        }
+    }
+
+    pub fn style_issue(&self) -> Option<&crate::style::StyleIssue> {
+        match self {
+            Self::Css(issue) => Some(issue),
+            _ => None,
+        }
+    }
+
+    pub fn message(&self, candidate: &str) -> String {
+        let reason = match self {
+            // The prefix already names the class, so an issue that used the class as its property
+            // contributes only its detail; otherwise the class would be printed twice.
+            Self::Css(issue) if issue.property != candidate => {
+                return format!("Tailwind class `{candidate}`: {issue}");
+            }
+            Self::Css(issue) => {
+                return format!("Tailwind class `{candidate}`: {}", issue.detail());
+            }
+            Self::Syntax(reason) => *reason,
+            Self::NeedsVariables => "CSS variable references require a complete node scope",
+            Self::UnsupportedVariant(reason) => *reason,
+            Self::Forbidden if candidate.starts_with('!') => {
+                "use a trailing ! for importance, for example p-4!"
+            }
+            Self::Forbidden if candidate.contains(':') => {
+                "responsive and state variants are not supported: the entry file's composition fixes \
+                 the canvas, so a breakpoint would be a constant. Keep one file per deliverable shape, \
+                 or branch on props or data"
+            }
+            Self::Forbidden if candidate.starts_with("animate-") => {
+                "`animate-*` is not a Motion loop; use `interpolate` over local time, for example \
+                 `interpolate(ctx.seconds % 1, [0, 1], [0, 360])`"
+            }
+            Self::Forbidden if candidate.starts_with("transition") => {
+                "transitions require an explicit state timeline; previous render requests are not state changes"
+            }
+            Self::Forbidden => "this utility form has no Motion lowering",
+            Self::Unsupported if is_unknown_color(candidate) => {
+                "no built-in color matches this name; use a literal color such as `bg-[#2563eb]`, or \
+                 `style={{ backgroundColor: accent }}`"
+            }
+            Self::Unsupported => {
+                "no implemented utility expansion; use an admitted CSS property through style or [property:value]"
+            }
+        };
+        format!("Tailwind class `{candidate}`: {reason}")
+    }
+}
+
+/// Validate one already whitespace-separated `className` token. Variable consumers
+/// receive syntax admission here; artifact validation resolves and checks every
+/// candidate against its complete node scope before a scene can be prepared.
 pub fn validate_tailwind_class(class_name: &str) -> Result<(), TailwindClassError> {
+    if class_name.is_empty() {
+        return Err(TailwindClassError::Forbidden);
+    }
+    match normalize::utility_with_theme(class_name) {
+        Ok(_) => Ok(()),
+        Err(TailwindClassError::NeedsVariables) => {
+            // A theme token supplies its own value, so a theme-backed class still resolves. Only a
+            // class that names a variable *in the candidate* is the deleted author surface.
+            if names_a_variable(class_name) {
+                Err(TailwindClassError::Css(
+                    crate::style::StyleIssue::new(
+                        crate::style::StyleIssueKind::UnsupportedValue,
+                        class_name,
+                        class_name,
+                        "utility consumes a CSS variable",
+                    )
+                    .with_suggestion(
+                        "a literal value, or an arbitrary value with a `const` interpolated",
+                    ),
+                ))
+            } else {
+                Ok(())
+            }
+        }
+        Err(error) => Err(error),
+    }
+}
+
+/// Whether a candidate names a CSS variable itself (`w-[var(--x)]`, `w-(--x)`).
+fn names_a_variable(candidate: &str) -> bool {
+    candidate.contains("var(") || candidate.contains("-(--")
+}
+
+fn validate_catalog_class(class_name: &str) -> Result<(), TailwindClassError> {
     if class_name.is_empty()
         || class_name.contains(':')
         || class_name.starts_with('!')
@@ -125,10 +235,8 @@ const FIXED: &[&str] = &[
     "justify-normal",
     "justify-start",
     "justify-stretch",
-    "overflow-auto",
     "overflow-clip",
     "overflow-hidden",
-    "overflow-scroll",
     "overflow-visible",
     "self-auto",
     "self-baseline",
@@ -197,35 +305,57 @@ fn is_sizing(class_name: &str) -> bool {
             .strip_prefix(prefix)
             .and_then(|suffix| suffix.strip_prefix('-'))
             .is_some_and(|value| {
-                matches!(
-                    value,
-                    "auto" | "px" | "full" | "screen" | "min" | "max" | "fit"
-                ) || non_negative_number(value)
+                matches!(value, "auto" | "px" | "full" | "screen") || non_negative_number(value)
             })
     }) || matches!(class_name, "aspect-auto" | "aspect-square" | "aspect-video")
 }
 
+/// Properties whose value is a color token.
+const COLOR_PREFIXES: &[&str] = &[
+    "bg",
+    "text",
+    "border",
+    "border-t",
+    "border-r",
+    "border-b",
+    "border-l",
+    "border-x",
+    "border-y",
+    "outline",
+    "decoration",
+    "shadow",
+    "text-shadow",
+];
+
 fn is_color(class_name: &str) -> bool {
-    const PREFIXES: &[&str] = &[
-        "bg",
-        "text",
-        "border",
-        "border-t",
-        "border-r",
-        "border-b",
-        "border-l",
-        "border-x",
-        "border-y",
-        "outline",
-        "decoration",
-        "shadow",
-        "text-shadow",
-    ];
-    PREFIXES.iter().any(|prefix| {
+    COLOR_PREFIXES.iter().any(|prefix| {
         class_name
             .strip_prefix(prefix)
             .and_then(|suffix| suffix.strip_prefix('-'))
             .is_some_and(is_color_token)
+    })
+}
+
+/// True when a class names a color the built-in scale does not carry (`bg-brand-500`).
+///
+/// The shape is checked too, so `border-3` keeps the generic utility message instead of being told
+/// to write a literal color.
+fn is_unknown_color(class_name: &str) -> bool {
+    const SHADES: &[&str] = &[
+        "50", "100", "200", "300", "400", "500", "600", "700", "800", "900", "950",
+    ];
+    COLOR_PREFIXES.iter().any(|prefix| {
+        class_name
+            .strip_prefix(prefix)
+            .and_then(|suffix| suffix.strip_prefix('-'))
+            .is_some_and(|token| {
+                !is_color_token(token)
+                    && token.rsplit_once('-').is_some_and(|(family, shade)| {
+                        !family.is_empty()
+                            && family.chars().all(|ch| ch.is_ascii_alphabetic())
+                            && SHADES.contains(&shade)
+                    })
+            })
     })
 }
 
@@ -445,12 +575,8 @@ fn is_grid(class_name: &str) -> bool {
             .is_some_and(|value| (1..=64).contains(&value))
     }) || [
         "auto-cols-auto",
-        "auto-cols-min",
-        "auto-cols-max",
         "auto-cols-fr",
         "auto-rows-auto",
-        "auto-rows-min",
-        "auto-rows-max",
         "auto-rows-fr",
     ]
     .contains(&class_name)
@@ -508,7 +634,7 @@ mod tests {
     #[test]
     fn rejects_variants_animation_and_unknown_utilities() {
         for class_name in [
-            "sm:grid",
+            "hover:grid",
             "hover:bg-red-500",
             "animate-spin",
             "transition",

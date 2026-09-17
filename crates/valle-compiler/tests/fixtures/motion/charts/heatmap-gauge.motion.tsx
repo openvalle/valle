@@ -1,3 +1,4 @@
+export const composition = { width: 1920, height: 1080, fps: 30, duration: 5 };
 export const component = "heatmap-gauge";
 
 const DAYS = ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"];
@@ -13,16 +14,16 @@ const COLOR = scaleSequential({
   domain: [0, 100],
   colors: ["#0b1324", "#155e75", "#22d3ee", "#ecfeff"],
 });
-const LEFT = 88;
-const TOP = 168;
-const CELL_W = 86;
-const CELL_H = 72;
-const GAP = 8;
+const LEFT = 132;
+const TOP = 252;
+const CELL_W = 129;
+const CELL_H = 108;
+const GAP = 12;
 const LOAD = 0.74;
 const GAUGE_START = deg(-130);
 const GAUGE_SPAN = deg(260);
-const GX = 1028;
-const GY = 390;
+const GX = 1542;
+const GY = 585;
 
 function Cell(ctx, { row, col, value }) {
   const show = interpolate(ctx.progress - (row * 7 + col) * 0.012, [0, 0.28], [0, 1], {
@@ -37,7 +38,7 @@ function Cell(ctx, { row, col, value }) {
         top: TOP + row * (CELL_H + GAP),
         width: CELL_W,
         height: CELL_H,
-        borderRadius: 10,
+        borderRadius: 15,
         backgroundColor: COLOR.map(value),
         opacity: 0.22 + show * 0.78,
       }}
@@ -52,17 +53,17 @@ export default function HeatmapGauge(ctx) {
   const track = interpolate(ctx.progress, [0.08, 0.4], [0, 1], { easing: "easeOut" });
   return (
     <Scene key="scene" className="relative h-full w-full" style={{ backgroundColor: "#050b14" }}>
-      <Text key="eyebrow" className="absolute" style={{ left: 72, top: 36, fontSize: 18, letterSpacing: 3, color: "#22d3ee" }}>
+      <Text key="eyebrow" className="absolute" style={{ left: 108, top: 54, fontSize: 27, letterSpacing: 4.5, color: "#22d3ee" }}>
         LOAD / WEEK
       </Text>
-      <Text key="title" className="absolute" style={{ left: 72, top: 68, fontSize: 38, color: "#e2e8f0" }}>
+      <Text key="title" className="absolute" style={{ left: 108, top: 102, fontSize: 57, color: "#e2e8f0" }}>
         Color is mapped once, the meter sweeps
       </Text>
       {HOURS.map((label, row) => (
         <Text
           key={`hour-${label}`}
           className="absolute"
-          style={{ left: 28, top: TOP + row * (CELL_H + GAP) + 22, width: 48, fontSize: 16, color: "#64748b", textAlign: "right" }}
+          style={{ left: 42, top: TOP + row * (CELL_H + GAP) + 33, width: 72, fontSize: 24, color: "#64748b", textAlign: "right" }}
         >
           {label}
         </Text>
@@ -71,7 +72,7 @@ export default function HeatmapGauge(ctx) {
         <Text
           key={`day-${label}`}
           className="absolute"
-          style={{ left: LEFT + col * (CELL_W + GAP), top: TOP + 5 * (CELL_H + GAP) + 12, width: CELL_W, fontSize: 15, color: "#94a3b8", textAlign: "center" }}
+          style={{ left: LEFT + col * (CELL_W + GAP), top: TOP + 5 * (CELL_H + GAP) + 18, width: CELL_W, fontSize: 22.5, color: "#94a3b8", textAlign: "center" }}
         >
           {label}
         </Text>
@@ -85,11 +86,11 @@ export default function HeatmapGauge(ctx) {
         key="gauge-track"
         d={sector({
           center: point(GX, GY),
-          inner: 78,
-          outer: 108,
+          inner: 117,
+          outer: 162,
           start: GAUGE_START,
           end: GAUGE_START + GAUGE_SPAN,
-          cornerRadius: 8,
+          cornerRadius: 12,
         })}
         fill="#1e293b"
         style={{ opacity: track }}
@@ -98,25 +99,25 @@ export default function HeatmapGauge(ctx) {
         key="gauge-value"
         d={sector({
           center: point(GX, GY),
-          inner: 78,
-          outer: 108,
+          inner: 117,
+          outer: 162,
           start: GAUGE_START,
           end: needle,
-          cornerRadius: 8,
+          cornerRadius: 12,
         })}
         fill="#22d3ee"
       />
       <Text
         key="gauge-label"
         className="absolute"
-        style={{ left: GX - 70, top: GY - 18, width: 140, fontSize: 16, letterSpacing: 2, color: "#64748b", textAlign: "center" }}
+        style={{ left: GX - 105, top: GY - 27, width: 315, fontSize: 24, letterSpacing: 3, color: "#64748b", textAlign: "center" }}
       >
         CAPACITY
       </Text>
       <Text
         key="gauge-read"
         className="absolute"
-        style={{ left: GX - 70, top: GY + 6, width: 140, fontSize: 32, color: "#ecfeff", textAlign: "center" }}
+        style={{ left: GX - 105, top: GY + 9, width: 315, fontSize: 48, color: "#ecfeff", textAlign: "center" }}
       >
         {formatPercent(LOAD, { decimals: 0 })}
       </Text>

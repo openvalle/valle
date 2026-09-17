@@ -1201,6 +1201,7 @@ mod tests {
         ControlsSchema {
             props: BTreeMap::new(),
             data: BTreeMap::new(),
+            timing_seconds: None,
             timing: TimingControls {
                 enter_frames: FrameControl {
                     default: 2,
@@ -1230,6 +1231,7 @@ mod tests {
             format_version: ARTIFACT_FORMAT_VERSION,
             capability_set: CapabilitySet::base(),
             component: "eval-test".into(),
+            composition: None,
             controls: controls(),
             resource_refs: vec![],
             exprs,
@@ -1238,6 +1240,7 @@ mod tests {
                 kind: NodeKind::Group,
                 space: None,
                 class_names: vec![],
+                class_conditions: Default::default(),
                 styles: vec![],
                 visibility: None,
                 children: ChildRange::EMPTY,

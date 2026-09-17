@@ -15,7 +15,7 @@ fn env() -> MeasureEnv {
 /// Place a measured static text width in an opacity slot to isolate measurement behavior.
 fn source(expr: &str) -> String {
     format!(
-        "const M = measureText(\"全球业务网络\", {{ style: \"font-size: 48px\" }});\n\
+        "const M = measureText(\"全球业务网络\", {{ fontSize: 48 }});\n\
          export default function Card(ctx) {{\n\
          \x20 return <Scene key=\"scene\" style={{{{ opacity: {expr} }}}} />;\n\
          }}\n"
@@ -132,7 +132,7 @@ fn measurement_is_reproducible_across_compiles() {
 
 #[test]
 fn bad_measure_options_surface_as_authored_diagnostics_not_panics() {
-    let source = "const M = measureText(\"x\", { maxWidth: -5 });\n\
+    let source = "const M = measureText(\"x\", { fontSize: 16, maxWidth: -5 });\n\
                   export default function Card(ctx) {\n  \
                   return <Scene key=\"scene\" style={{ opacity: M.width }} />;\n}\n";
     let diagnostics =
@@ -167,4 +167,236 @@ fn measure_cannot_be_used_to_smuggle_nondeterminism_into_prepare() {
             .map(|diagnostic| &diagnostic.message)
             .collect::<Vec<_>>()
     );
+}
+
+fn theme_graph(source: &str) -> valle_compiler::motion::MotionModuleGraph {
+    valle_compiler::motion::MotionModuleGraph::new(
+        "main.tsx",
+        std::collections::BTreeMap::from([("main.tsx".into(), source.to_owned())]),
+    )
+    .unwrap()
+}
+
+fn assert_measured_box_matches_text(
+    artifact: &valle_motion::SceneArtifact,
+    viewport: (u32, u32),
+    aliases: &[(String, &[u8])],
+) {
+    use std::collections::BTreeMap;
+    use valle_motion::{Fonts, LayoutOptions, ResolvedSignals, Viewport};
+    let mut fonts = Fonts::default();
+    valle_motion::register_default_motion_fonts(&mut fonts).unwrap();
+    for (alias, bytes) in aliases {
+        fonts
+            .register(
+                valle_motion::FontResource::new(bytes.to_vec()).override_info(
+                    valle_motion::FontOverride {
+                        family_name: Some(alias.as_str().into()),
+                        ..Default::default()
+                    },
+                ),
+            )
+            .unwrap();
+    }
+    let prepared = valle_motion::prepare_scene(artifact).unwrap();
+    let props = valle_motion::resolve_props(&artifact.controls, &BTreeMap::new()).unwrap();
+    let windows = valle_motion::phase_windows(&artifact.controls.phase_spec(), 90);
+    let mut programs = Vec::new();
+    for frame in [60, 0, 60] {
+        let ctx = valle_motion::motion_context_at(
+            frame,
+            &windows,
+            valle_timeline::FrameRate::new(30, 1).unwrap(),
+        )
+        .unwrap();
+        let tree = valle_motion::build_tree(
+            &prepared,
+            &ctx,
+            &props,
+            &ResolvedSignals::default(),
+            &LayoutOptions {
+                viewport: Viewport::new(viewport),
+                fonts: &fonts,
+                styles: None,
+            },
+        )
+        .unwrap();
+        let boxes = valle_motion::layout_boxes(artifact, &tree).unwrap();
+        assert_eq!(
+            &boxes["measured"][2..],
+            &boxes["actual"][2..],
+            "frame {frame}: {boxes:?}"
+        );
+        let report = valle_motion::emit(&tree, &valle_motion::default_font_naming).unwrap();
+        assert!(report.unsupported.is_empty(), "{:?}", report.unsupported);
+        programs.push(report.program.packed_bytes().unwrap());
+    }
+    assert_eq!(programs[0], programs[2]);
+    assert_ne!(
+        programs[0], programs[1],
+        "authored frame motion must still run"
+    );
+}
+
+#[test]
+fn constrained_measurement_matches_wrapped_rendered_text() {
+    use valle_compiler::motion::compile_motion_modules_with_full_env;
+    // Measure and render receive the same numbers, so the measured box must equal the laid-out
+    // Text box once the text wraps inside the same width.
+    let source = r#"
+const label='全球业务网络 Overview: shared measurement';
+const M=measureText(label,{fontFamily:'monospace',fontSize:28,lineHeight:1.25,maxWidth:200});
+export default function Card(ctx){return <Scene style={{width:'100%',height:480}}>
+  <View key='measured' style={{position:'absolute',width:M.width,height:M.height,backgroundColor:'#334455',opacity:ctx.localFrame/100}}/>
+  <Text key='actual' style={{position:'absolute',top:100,fontFamily:'monospace',fontSize:28,lineHeight:1.25,width:200}}>{label}</Text>
+</Scene>}
+"#;
+    let graph = theme_graph(source);
+    let compiled = compile_motion_modules_with_full_env(
+        &graph,
+        &[],
+        Some(&MeasureEnv::new(&[], (640, 480)).unwrap()),
+        None,
+    )
+    .unwrap();
+    assert_measured_box_matches_text(&compiled.artifact, (640, 480), &[]);
+}
+
+#[test]
+fn entry_measurement_uses_composition_canvas_even_with_a_small_host_viewport() {
+    let source = r#"
+export const composition = { width: 320, height: 180, duration: 1 };
+const label = 'iiii WWWW iiii WWWW';
+const M = measureText(label, { fontFamily: 'monospace, sans-serif', fontSize: 32, fontWeight: 700, letterSpacing: 1.5, lineHeight: 1.25, maxWidth: 120 });
+export default function Card(ctx) { return <Scene style={{ width: 320, height: 180 }}>
+  <View key='measured' style={{ position: 'absolute', width: M.width, height: M.height, opacity: ctx.localFrame / 100 }} />
+  <Text key='actual' style={{ position: 'absolute', top: 0, fontFamily: 'monospace, sans-serif', fontSize: 32, fontWeight: 700, letterSpacing: 1.5, lineHeight: 1.25, width: 120 }}>{label}</Text>
+</Scene>; }
+"#;
+    let compiled = valle_compiler::motion::compile_motion_with_env(
+        source,
+        &[],
+        Some(&MeasureEnv::new(&[], (1, 1)).unwrap()),
+    )
+    .unwrap();
+    assert_measured_box_matches_text(&compiled.artifact, (320, 180), &[]);
+}
+
+#[test]
+fn font_lists_measure_like_text_with_and_without_wrapping() {
+    use valle_compiler::motion::compile_motion_modules_with_full_env;
+    for family in [
+        "monospace, sans-serif",
+        "Noto Sans Mono, sans-serif",
+        "\"Noto Sans Mono\", monospace",
+        "'Noto Sans Mono', monospace",
+        "\"Missing, Family\", monospace",
+    ] {
+        for width in [None, Some(120)] {
+            let constraint = width.map_or(String::new(), |width| format!(",maxWidth:{width}"));
+            let text_width = width.map_or(String::new(), |width| format!(",width:{width}"));
+            let source = format!(
+                r#"
+const label='iiii WWWW iiii WWWW';
+const family={family:?};
+const M=measureText(label,{{fontFamily:family,fontSize:32{constraint}}});
+export default function Card(ctx){{return <Scene style={{{{width:640,height:480}}}}>
+  <View key='measured' style={{{{position:'absolute',width:M.width,height:M.height,opacity:ctx.localFrame/100}}}}/>
+  <Text key='actual' style={{{{position:'absolute',top:100,fontFamily:family,fontSize:32{text_width}}}}}>{{label}}</Text>
+</Scene>}}
+"#
+            );
+            let compiled = compile_motion_modules_with_full_env(
+                &theme_graph(&source),
+                &[],
+                Some(&MeasureEnv::new(&[], (640, 480)).unwrap()),
+                None,
+            )
+            .unwrap_or_else(|diagnostics| panic!("{family:?}: {diagnostics:#?}"));
+            assert_measured_box_matches_text(&compiled.artifact, (640, 480), &[]);
+        }
+    }
+}
+
+#[test]
+fn invalid_measure_options_name_the_option_and_the_replacement() {
+    let env = env();
+    for (options, needle) in [
+        ("{className:'font-mono'}", "className"),
+        ("{style:'font-size:24px'}", "style"),
+        ("{size:12}", "size"),
+        ("{fontSize:0}", "fontSize"),
+        ("{fontSize:16,fontWeight:2000}", "fontWeight"),
+        ("{fontSize:16,maxWidth:1e300}", "maxWidth"),
+        ("{fontSize:16,maxWidth:Infinity}", "maxWidth"),
+        ("{fontSize:16,maxWidth:NaN}", "maxWidth"),
+    ] {
+        let source = format!(
+            "const M=measureText('x',{options}); export default function Card(){{return <View style={{{{width:M.width}}}}/>}}"
+        );
+        let diagnostics = compile_motion_with_env(&source, &[], Some(&env)).unwrap_err();
+        assert!(
+            diagnostics.iter().any(|d| d.message.contains(needle)),
+            "`{options}` must name `{needle}`: {diagnostics:#?}"
+        );
+    }
+}
+
+#[test]
+fn literal_font_alias_matches_rendering() {
+    use valle_compiler::motion::compile_motion_modules_with_full_env;
+    const MONO: &[u8] = include_bytes!("../../../assets/fonts/noto/NotoSansMono-Regular.ttf");
+    let hash = valle_motion::ContentDigest::of_bytes(MONO);
+    let env = MeasureEnv::new_with_aliases(
+        &[],
+        &[("asset://brandFont".into(), MONO.to_vec())],
+        (960, 480),
+    )
+    .unwrap();
+    let source = r#"
+export const controls=defineControls({assets:{brandFont:asset({kind:'font',required:true})}});
+const label='iiii WWWW';
+const M=measureText(label,{fontFamily:'asset://brandFont',fontSize:32,lineHeight:1.5});
+export default function Card(ctx){return <Scene style={{width:960,height:480}}>
+  <View key='measured' style={{position:'absolute',width:M.width,height:M.height,backgroundColor:'#334455',opacity:ctx.localFrame/100}}/>
+  <Text key='actual' style={{position:'absolute',top:100,fontFamily:'asset://brandFont',fontSize:32,lineHeight:1.5}}>{label}</Text>
+</Scene>}
+"#;
+    let graph = theme_graph(source);
+    let compiled = compile_motion_modules_with_full_env(
+        &graph,
+        &[valle_motion::ResourceRef {
+            control: "brandFont".into(),
+            content_hash: hash.clone(),
+        }],
+        Some(&env),
+        None,
+    )
+    .unwrap();
+    assert_measured_box_matches_text(
+        &compiled.artifact,
+        (960, 480),
+        &[(valle_motion::font_family_alias(&hash), MONO)],
+    );
+}
+
+#[test]
+fn explicit_typography_measurement_matches_rendered_text() {
+    // Every numeric option is the same value an authored style takes, so the measured box and the
+    // laid-out Text box must agree without a second style language in between.
+    let source = r#"
+const label='iiii 全球 Overview';
+const M=measureText(label,{fontFamily:'monospace',fontSize:24,lineHeight:1.5,letterSpacing:2,fontWeight:700});
+export default function Card(ctx){return <Scene style={{width:640,height:480}}>
+  <View key='measured' style={{position:'absolute',width:M.width,height:M.height,backgroundColor:'#334455',opacity:ctx.localFrame/100}}/>
+  <Text key='actual' style={{position:'absolute',top:100,fontFamily:'monospace',fontSize:24,lineHeight:1.5,letterSpacing:2,fontWeight:700}}>{label}</Text>
+</Scene>}
+"#;
+    let compiled = compile_motion_with_env(
+        source,
+        &[],
+        Some(&MeasureEnv::new(&[], (640, 480)).unwrap()),
+    )
+    .unwrap();
+    assert_measured_box_matches_text(&compiled.artifact, (640, 480), &[]);
 }

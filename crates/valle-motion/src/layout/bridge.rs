@@ -1,7 +1,6 @@
 //! Shared Takumi layout types and deterministic style cache.
 
 use std::rc::Rc;
-use std::str::FromStr;
 
 use takumi_core::layout::tree::{LayoutResults, RenderNode};
 use takumi_core::resources::font::Fonts;
@@ -166,6 +165,9 @@ pub(crate) struct BatchContent {
 pub struct LayoutOptions<'a> {
     #[cfg(target_arch = "wasm32")]
     pub formula_fonts: &'a crate::math_formula::FormulaFontRegistry,
+    /// Takumi device-pixel extents and explicit initial CSS font size/DPR. The logical
+    /// canvas exposed to expressions and media conditions is `size / DPR`. Native/Wasm
+    /// hosts use DPR 1; delivery scaling does not change this layout viewport.
     pub viewport: Viewport,
     pub fonts: &'a Fonts,
     pub styles: Option<&'a StyleCache>,
@@ -205,7 +207,7 @@ impl StyleCache {
             }
             inner.misses += 1;
         }
-        let style = Style::from_str(declarations).map_err(|error| error.to_string())?;
+        let style = crate::style::parse_declarations(declarations)?;
         let mut inner = self.inner.borrow_mut();
         if inner.parsed.len() >= Self::MAX_ENTRIES {
             inner.parsed.clear();
@@ -218,7 +220,7 @@ impl StyleCache {
 pub(crate) fn parse_style(cache: Option<&StyleCache>, declarations: &str) -> Result<Style, String> {
     match cache {
         Some(cache) => cache.get_or_parse(declarations),
-        None => Style::from_str(declarations).map_err(|error| error.to_string()),
+        None => crate::style::parse_declarations(declarations),
     }
 }
 
@@ -242,6 +244,7 @@ pub struct ResolvedUnit {
 
 pub struct LayoutTree {
     pub root: RenderNode,
+    pub viewport: Viewport,
     pub layout: std::sync::Arc<LayoutResults>,
     pub values: Vec<MotionValue>,
     pub keys: std::sync::Arc<std::collections::HashMap<u64, String>>,
@@ -336,10 +339,7 @@ impl PerspectiveLength {
         let px = match self {
             Self::Px(value) => value * dpr,
             Self::Rem(value) => {
-                let rem = sizing
-                    .root_font_size
-                    .map(f64::from)
-                    .unwrap_or(f64::from(sizing.viewport.font_size) * dpr);
+                let rem = f64::from(crate::ROOT_FONT_SIZE) * dpr;
                 value * rem
             }
             Self::Em(value) => value * f64::from(sizing.font_size),

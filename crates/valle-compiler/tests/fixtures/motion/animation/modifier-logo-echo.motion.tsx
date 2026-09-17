@@ -1,15 +1,12 @@
+export const composition = { width: 1920, height: 1080, fps: 30, duration: 5 };
 export const component = "modifier-logo-echo";
 
 export const controls = defineControls({
-  timing: {
-    enterFrames: frames({ default: 0, min: 0 }),
-    holdCycleFrames: optionalFrames({ default: null, min: 1 }),
-    exitFrames: frames({ default: 0, min: 0 }),
-  },
+  timing: { enterDuration: 0, exitDuration: 0 },
 });
 
 const echoes = defineRepeater({ count: 18, keyPrefix: "echo" });
-const ROTATION_ROUTE = path("M 0 0 C 80 -120 160 120 240 0");
+const ROTATION_ROUTE = path("M 0 0 C 120 -180 240 180 360 0");
 
 export default function ModifierLogoEcho(ctx) {
   const t = ctx.hold.progress;
@@ -21,16 +18,16 @@ export default function ModifierLogoEcho(ctx) {
 
   return (
     <Scene className="relative h-full w-full" style={{ backgroundColor: "#050816" }}>
-      <View key="violet-glow" className="absolute" style={{ left: 390 + drift, top: 85, width: 500, height: 500, borderRadius: 250, backgroundColor: "#7c3aed", opacity: 0.24, filter: "blur(95px)" }} />
-      <View key="cyan-glow" className="absolute" style={{ left: 515 - drift, top: 175, width: 250, height: 250, borderRadius: 125, backgroundColor: "#06b6d4", opacity: 0.22, filter: "blur(62px)" }} />
+      <View key="violet-glow" className="absolute" style={{ left: 585 + drift, top: 127.5, width: 750, height: 750, borderRadius: 375, backgroundColor: "#7c3aed", opacity: 0.24, filter: "blur(142.5px)" }} />
+      <View key="cyan-glow" className="absolute" style={{ left: 772.5 - drift, top: 262.5, width: 375, height: 375, borderRadius: 187.5, backgroundColor: "#06b6d4", opacity: 0.22, filter: "blur(93px)" }} />
 
       {echoes.map((copy) => (
         <View key={copy.key} className="absolute" style={{
-          borderStyle: "solid", left: 640 - (78 + copy.index * 24) / 2,
-          top: 336 - (78 + copy.index * 24) / 2,
-          width: 78 + copy.index * 24,
-          height: 78 + copy.index * 24,
-          borderRadius: 20 + copy.index * 7,
+          borderStyle: "solid", left: 960 - (117 + copy.index * 36) / 2,
+          top: 504 - (117 + copy.index * 36) / 2,
+          width: 117 + copy.index * 36,
+          height: 117 + copy.index * 36,
+          borderRadius: 30 + copy.index * 7,
           borderWidth: copy.index < 3 ? 3 : 1,
           borderColor: copy.index % 2 === 0 ? "#67e8f9" : "#a78bfa",
           backgroundColor: copy.index % 2 === 0 ? "#22d3ee22" : "#8b5cf622",
@@ -39,11 +36,11 @@ export default function ModifierLogoEcho(ctx) {
         }} />
       ))}
 
-      <View key="mark" className="absolute flex items-center justify-center" style={{ borderStyle: "solid", left: 545, top: 241, width: 190, height: 190, borderRadius: 52, backgroundColor: "#090d1fdd", borderWidth: 2, borderColor: "#e0f2fe", opacity: reveal, transform: `scale(${0.72 + settle * 0.28})`, filter: "drop-shadow(0px 22px 42px #000000aa)" }}>
-        <Text key="v" style={{ fontSize: 112, color: "#f8fafc" }}>V</Text>
+      <View key="mark" className="absolute flex items-center justify-center" style={{ borderStyle: "solid", left: 817.5, top: 361.5, width: 285, height: 285, borderRadius: 78, backgroundColor: "#090d1fdd", borderWidth: 3, borderColor: "#e0f2fe", opacity: reveal, transform: `scale(${0.72 + settle * 0.28})`, filter: "drop-shadow(0px 33px 63px #000000aa)" }}>
+        <Text key="v" style={{ fontSize: 168, color: "#f8fafc" }}>V</Text>
       </View>
-      <Text key="title" className="absolute" style={{ left: 0, top: 570, width: 1280, fontSize: 34, letterSpacing: 8, color: "#f8fafc", textAlign: "center", opacity: reveal }}>MODIFIERS / ONE MOTION LANGUAGE</Text>
-      <Text key="meta" className="absolute" style={{ left: 0, top: 626, width: 1280, fontSize: 16, letterSpacing: 3, color: "#67e8f9", textAlign: "center", opacity: reveal }}>REPEATER · WIGGLE · TRAIL · AUTO ROTATE</Text>
+      <Text key="title" className="absolute" style={{ left: 0, top: 855, width: 1920, fontSize: 51, letterSpacing: 12, color: "#f8fafc", textAlign: "center", opacity: reveal }}>MODIFIERS / ONE MOTION LANGUAGE</Text>
+      <Text key="meta" className="absolute" style={{ left: 0, top: 939, width: 1920, fontSize: 24, letterSpacing: 4.5, color: "#67e8f9", textAlign: "center", opacity: reveal }}>REPEATER · WIGGLE · TRAIL · AUTO ROTATE</Text>
     </Scene>
   );
 }

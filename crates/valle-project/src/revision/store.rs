@@ -933,6 +933,9 @@ fn compile_timeline_errors(error: CompileTimelineError) -> Vec<EditErrorWire> {
         }]
     };
     match error {
+        CompileTimelineError::MissingMotionDuration { path } => {
+            one("missing_motion_duration", &path, BTreeMap::new())
+        }
         CompileTimelineError::InvalidResourceAlias { alias, path } => one(
             "invalid_resource_alias",
             &path,

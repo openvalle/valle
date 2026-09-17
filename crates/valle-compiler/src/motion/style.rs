@@ -94,58 +94,23 @@ impl<'s> Compiler<'s> {
 
     pub(super) fn lower_style(
         &mut self,
-        object: &'s ObjectExpression<'s>,
+        object: &super::style_objects::ResolvedStyle<'s>,
         path: &str,
         layout_id: Option<&str>,
     ) -> Vec<StyleBinding> {
+        let diagnostic_start = self.diagnostics.len();
         let mut styles = Vec::new();
         let mut saw_transform = false;
         let mut saw_motion_path = false;
         let mut saw_motion_path_component = false;
         let mut saw_layout_transition = false;
-        let has_authored_font_size = object.properties.iter().any(|property| {
-            let ObjectPropertyKind::ObjectProperty(property) = property else {
-                return false;
-            };
-            let name = match &property.key {
-                PropertyKey::StaticIdentifier(name) => Some(name.name.as_str()),
-                PropertyKey::StringLiteral(name) => Some(name.value.as_str()),
-                _ => None,
-            };
-            name.is_some_and(|name| camel_to_kebab(name) == "font-size")
-        });
-        let has_layout_transition = object.properties.iter().any(|property| {
-            let ObjectPropertyKind::ObjectProperty(property) = property else {
-                return false;
-            };
-            let name = match &property.key {
-                PropertyKey::StaticIdentifier(name) => Some(name.name.as_str()),
-                PropertyKey::StringLiteral(name) => Some(name.value.as_str()),
-                _ => None,
-            };
-            name.is_some_and(|name| camel_to_kebab(name) == "layout-transition")
-        });
-        for property in &object.properties {
-            let ObjectPropertyKind::ObjectProperty(property) = property else {
-                self.illegal(
-                    DiagCode::GrammarForbidden,
-                    property.span(),
-                    "style spread is illegal; list every dynamic property explicitly",
-                );
-                continue;
-            };
-            let name = match &property.key {
-                PropertyKey::StaticIdentifier(name) => name.name.to_string(),
-                PropertyKey::StringLiteral(name) => name.value.to_string(),
-                _ => {
-                    self.illegal(
-                        DiagCode::GrammarForbidden,
-                        property.key.span(),
-                        "computed style names are illegal",
-                    );
-                    continue;
-                }
-            };
+        let has_authored_font_size = object.contains("font-size");
+        let has_layout_transition = object.contains("layout-transition");
+        let saved_scope = self.style_scope();
+        for entry in &object.properties {
+            self.restore_style_scope(&entry.scope);
+            let property = entry.property;
+            let name = &entry.name;
             let property_name = camel_to_kebab(&name);
             if property_name == "layout-transition" {
                 if saw_layout_transition {
@@ -195,6 +160,45 @@ impl<'s> Compiler<'s> {
                         "style.layoutTransition owns `{property_name}`; move that geometry into defineLayoutStates"
                     ),
                 );
+                continue;
+            }
+            // Author `--*` / `var()` are a permanent rejection. Keep the original CSS so
+            // artifact admission can report the same diagnostic as a direct style object.
+            let static_css = self.eval_static(&property.value);
+            let variable_reference = static_css
+                .as_ref()
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(valle_motion::style::contains_variable);
+            if property_name.starts_with("--") || variable_reference {
+                let value = match static_css {
+                    Some(serde_json::Value::String(value)) => MotionValue::Str(value),
+                    Some(serde_json::Value::Number(value)) if property_name.starts_with("--") => {
+                        MotionValue::Number(value.as_f64().unwrap_or(f64::NAN))
+                    }
+                    _ => {
+                        self.illegal(DiagCode::GrammarForbidden, property.value.span(),
+                            "CSS custom properties currently require a prepare-time string or finite number");
+                        continue;
+                    }
+                };
+                if matches!(
+                    property_name.as_str(),
+                    "transform" | "translate" | "rotate" | "transform-origin"
+                ) {
+                    if saw_motion_path {
+                        self.illegal(DiagCode::GrammarForbidden, property.span(), "CSS variable transforms cannot be combined with motionPath on one node");
+                        continue;
+                    }
+                    if property_name == "transform" {
+                        saw_transform = true;
+                    } else {
+                        saw_motion_path_component = true;
+                    }
+                }
+                styles.push(StyleBinding {
+                    property: property_name,
+                    value: StyleValue::Static { value },
+                });
                 continue;
             }
             if property_name == "transform" {
@@ -413,21 +417,60 @@ impl<'s> Compiler<'s> {
                 }
                 saw_motion_path_component = true;
             }
-            if !matches!(
-                property_name.as_str(),
-                "rotate-x" | "rotate-y" | "perspective" | "paper-grain" | "contact-shadow"
-            ) && !valle_motion::layout::supports_css_property(&property_name)
+            let spec = valle_motion::style::property_spec(&property_name);
+            if let Err(error) = spec.admit() {
+                let at = property.value.span();
+                let value = string_literal(&property.value).unwrap_or_else(|| {
+                    self.source
+                        .get(at.start as usize..at.end as usize)
+                        .unwrap_or("")
+                        .to_owned()
+                });
+                let issue = valle_motion::style::StyleIssue::admission(error, &value);
+                // The label already names the property, so the issue contributes its detail only;
+                // repeating the property would bury the replacement.
+                let mut diagnostic = diagnostic_at(
+                    self.source,
+                    issue.code(),
+                    property.key.span(),
+                    format!("style.{name}: {}", issue.detail()),
+                );
+                diagnostic.node_path = Some(path.into());
+                diagnostic.style = Some(issue);
+                self.push_diagnostic(diagnostic);
+                continue;
+            }
+            if spec.lowering == valle_motion::style::PropertyLowering::Motion
+                && property_name.starts_with("motion-")
             {
                 self.illegal(
                     DiagCode::GrammarForbidden,
                     property.key.span(),
-                    format!("unknown or unsupported style property `{name}`"),
+                    "internal Motion bindings must be produced by their authoring helpers",
                 );
                 continue;
             }
             // Try literals, then compile-time folding, then runtime lowering. Folded values must
             // become Static entries without redundant arena nodes.
-            let mut value = match static_motion_value(&property.value) {
+            // Preserve ambiguous CSS keywords/family names and percentage opacity in their
+            // property grammar: generic Motion inference treats `none` as a paint color.
+            // Other prepared values retain their typed representation.
+            let css_literal = (spec.lowering == valle_motion::style::PropertyLowering::Css
+                || matches!(property_name.as_str(), "translate" | "rotate" | "scale"))
+            .then(|| self.eval_static(&property.value))
+            .flatten()
+            .and_then(|value| {
+                value
+                    .as_str()
+                    .filter(|text| {
+                        matches!(
+                            property_name.as_str(),
+                            "translate" | "rotate" | "scale" | "font-family" | "opacity"
+                        ) || text.trim().eq_ignore_ascii_case("none")
+                    })
+                    .map(|text| MotionValue::Str(text.to_owned()))
+            });
+            let mut value = match css_literal.or_else(|| static_motion_value(&property.value)) {
                 Some(value) => StyleValue::Static { value },
                 None => match self.fold_to_value(&property.value) {
                     Some(value) => StyleValue::Static { value },
@@ -533,11 +576,22 @@ impl<'s> Compiler<'s> {
                 self.extra_capabilities
                     .insert(CSS_3D_TRANSFORM_CAPABILITY.to_owned());
             }
+            if !valle_motion::style::is_motion_property(&property_name)
+                && let StyleValue::Static { value } = &value
+                && let Err(reason) = valle_motion::style::parse_property(
+                    &property_name,
+                    &valle_motion::css_token(value),
+                )
+            {
+                self.style_diagnostic(property.value.span(), Some(path), reason);
+                continue;
+            }
             styles.push(StyleBinding {
                 property: property_name,
                 value,
             });
         }
+        self.restore_style_scope(&saved_scope);
         if styles
             .iter()
             .filter(|style| style.property == "scale")
@@ -546,15 +600,18 @@ impl<'s> Compiler<'s> {
         {
             self.illegal(
                 DiagCode::GrammarForbidden,
-                object.span(),
-                "declare scale only once; do not mix style.scale with transform scale()/scaleX()/scaleY()",
+                object.span,
+                "declare independent scale only once; do not mix style.scale with style.scaleX/scaleY",
             );
         }
         if styles.is_empty() && !object.properties.is_empty() && self.diagnostics.is_empty() {
             self.unsupported(
-                object.span(),
+                object.span,
                 format!("style at `{path}` did not lower to any supported value"),
             );
+        }
+        for diagnostic in &mut self.diagnostics[diagnostic_start..] {
+            diagnostic.node_path.get_or_insert_with(|| path.to_owned());
         }
         styles
     }

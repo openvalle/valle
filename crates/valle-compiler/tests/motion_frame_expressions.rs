@@ -159,13 +159,10 @@ export default function P(ctx, props) { return <Scene>
     };
     assert_eq!(values[expr.0 as usize], MotionValue::Str("-5.5".into()));
 
-    let MotionValue::Length2(translation) =
-        style_value(&artifact, &values, "transform", "translate")
-    else {
-        panic!("axis transform lowers to Length2")
-    };
-    assert_eq!(translation.x.value, 24.0);
-    assert_eq!(translation.y.value, 12.0);
+    assert_eq!(
+        style_value(&artifact, &values, "transform", "transform"),
+        &MotionValue::Str("translateX(24px) translateY(12px) rotate(90deg) scale(1)".into())
+    );
     assert!(matches!(
         style_value(&artifact, &values, "wiggle", "translate"),
         MotionValue::Length2(_)

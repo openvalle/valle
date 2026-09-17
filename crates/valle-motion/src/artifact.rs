@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -9,7 +9,7 @@ use super::controls::ControlsSchema;
 use super::expr::{
     ContextInput, Expr, ExprId, ExprType, TemplatePart, geometry_eval_policy, validate_exprs,
 };
-use super::tailwind::{TAILWIND_CATALOG, TailwindClassError, validate_tailwind_class};
+use super::tailwind::TAILWIND_CATALOG;
 use crate::ContentDigest;
 use valle_draw::program::recording::{FillRule, MaskMode, SpreadMode};
 use valle_draw::{Point, Rgba};
@@ -1027,6 +1027,9 @@ pub struct SceneNode {
     pub kind: NodeKind,
     pub space: Option<CoordinateSpace>,
     pub class_names: Vec<String>,
+    /// Candidate utilities are fixed. Only these bool selectors vary by frame.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub class_conditions: BTreeMap<String, ExprId>,
     pub styles: Vec<StyleBinding>,
     pub visibility: Option<ExprId>,
     pub children: ChildRange,
@@ -1113,6 +1116,9 @@ impl SceneNode {
 
         if let Some(expr) = self.visibility {
             refs.push(("/visibility".into(), expr));
+        }
+        for (class, expr) in &self.class_conditions {
+            refs.push((format!("/classConditions/{class}"), *expr));
         }
         for (at, style) in self.styles.iter().enumerate() {
             if let StyleValue::Expr { expr } = &style.value {
@@ -1439,6 +1445,11 @@ pub struct SceneArtifact {
     pub capability_set: CapabilitySet,
     pub component: String,
     pub controls: ControlsSchema,
+    /// Fixed delivery contract of the entry file: canvas, frame rate, duration, and root font
+    /// size. Authored entries always carry one; only in-memory compiles may omit it, and every
+    /// rendering path rejects that state instead of substituting a default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub composition: Option<crate::composition::Composition>,
     pub resource_refs: Vec<ResourceRef>,
     pub exprs: Vec<Expr>,
     pub nodes: Vec<SceneNode>,
@@ -1470,10 +1481,14 @@ impl SceneArtifact {
     pub fn reads_destination(&self) -> bool {
         self.nodes.iter().any(|node| {
             matches!(node.kind, NodeKind::Glass(_) | NodeKind::GlassField(_))
-                || node.styles.iter().any(|style| {
-                    style.property == "backdrop-filter"
-                        || style.property.starts_with("motion-backdrop-displacement-")
+                || node.class_names.iter().any(|class| {
+                    crate::tailwind::explicit_property(class)
+                        .is_some_and(|name| crate::style::property_spec(name).reads_destination)
                 })
+                || node
+                    .styles
+                    .iter()
+                    .any(|style| crate::style::property_spec(&style.property).reads_destination)
         })
     }
 
@@ -1481,7 +1496,7 @@ impl SceneArtifact {
         self.validate_impl()
     }
 
-    fn validate_impl(&self) -> Result<(), Vec<ValidationError>> {
+    pub(crate) fn validate_impl(&self) -> Result<(), Vec<ValidationError>> {
         let mut errors = Vec::new();
         if self.format_version != ARTIFACT_FORMAT_VERSION {
             errors.push(ValidationError::new(
@@ -1494,6 +1509,11 @@ impl SceneArtifact {
                 "/component",
                 "component name must not be empty",
             ));
+        }
+        if let Some(composition) = &self.composition
+            && let Err(mut problems) = composition.validate()
+        {
+            errors.append(&mut problems);
         }
         if let Err(error) = self.capability_set.validate() {
             errors.push(error);
@@ -1525,7 +1545,7 @@ impl SceneArtifact {
         let expr_types = validate_exprs(&self.exprs, &self.controls, &mut errors).types;
         self.validate_nodes(&expr_types, &mut errors);
         self.validate_unit_scope(&mut errors);
-        self.validate_bounds_scope(&mut errors);
+        self.validate_bounds_scope(&expr_types, &mut errors);
         self.validate_camera(&mut errors);
         self.validate_viewport_capability(&mut errors);
         self.validate_video_capability(&mut errors);
@@ -1843,60 +1863,11 @@ impl SceneArtifact {
     /// Allow post-layout geometry only in paint properties, preventing feedback into layout. Treat
     /// properties as layout-affecting unless explicitly allowlisted; this preserves the two-pass
     /// evaluation order.
-    fn validate_bounds_scope(&self, errors: &mut Vec<ValidationError>) {
-        /// Properties known not to affect layout; all others are treated conservatively.
-        const PAINT_ONLY: &[&str] = &[
-            "opacity",
-            "color",
-            "background-color",
-            "background-image",
-            "border-color",
-            "border-radius",
-            "outline-color",
-            "box-shadow",
-            "text-shadow",
-            "fill",
-            "stroke",
-            "filter",
-            "backdrop-filter",
-            "mix-blend-mode",
-            "isolation",
-            "visibility",
-            // CSS transforms affect painting without changing layout boxes.
-            "transform",
-            "translate",
-            "rotate",
-            "scale",
-            "rotate-x",
-            "rotate-y",
-            "perspective",
-            "transform-style",
-            "backface-visibility",
-            "motion-perspective-origin-x",
-            "motion-perspective-origin-y",
-            "motion-perspective-origin-x-px",
-            "motion-perspective-origin-y-px",
-            "motion-perspective-origin-x-percent",
-            "motion-perspective-origin-y-percent",
-            "motion-transform-3d-translate-x",
-            "motion-transform-3d-translate-y",
-            "motion-transform-3d-translate-z",
-            "motion-transform-3d-translate-x-percent",
-            "motion-transform-3d-translate-y-percent",
-            "motion-transform-3d-rotate-x",
-            "motion-transform-3d-rotate-y",
-            "motion-transform-3d-rotate-z",
-            "motion-transform-3d-rotate-axis-x",
-            "motion-transform-3d-rotate-axis-y",
-            "motion-transform-3d-rotate-axis-z",
-            "motion-transform-3d-rotate-axis-angle",
-            "motion-transform-3d-scale-x",
-            "motion-transform-3d-scale-y",
-            "motion-transform-3d-scale-z",
-            "paper-grain",
-            "contact-shadow",
-        ];
-
+    fn validate_bounds_scope(
+        &self,
+        expr_types: &[Option<ExprType>],
+        errors: &mut Vec<ValidationError>,
+    ) {
         let post_layout_dependent = super::expr::post_layout_dependent(&self.exprs);
         let projection_dependent = super::expr::projection_dependent(&self.exprs);
         let is_post_layout = |expr: ExprId| {
@@ -1983,11 +1954,18 @@ impl SceneArtifact {
                     .and_then(|rest| rest.strip_suffix("/value"))
                     .and_then(|index| index.parse::<usize>().ok())
                 {
-                    node.styles
-                        .get(index)
-                        .is_none_or(|style| !PAINT_ONLY.contains(&style.property.as_str()))
+                    node.styles.get(index).is_none_or(|style| {
+                        let spec = crate::style::property_spec(&style.property);
+                        if spec.accepts_post_layout()
+                            && let Err(reason) =
+                                spec.validate_post_layout(expr, &self.exprs, expr_types)
+                        {
+                            errors.push(ValidationError::new(format!("{path}{slot}"), reason));
+                        }
+                        !spec.accepts_post_layout()
+                    })
                 } else {
-                    slot == "/kind/text"
+                    slot == "/kind/text" || slot.starts_with("/classConditions/")
                 };
                 if layout_affecting {
                     errors.push(ValidationError::new(
@@ -2564,18 +2542,25 @@ impl SceneArtifact {
                 ));
             }
             for (class_index, class_name) in node.class_names.iter().enumerate() {
-                if let Err(reason) = validate_tailwind_class(class_name) {
-                    let message = match reason {
-                        TailwindClassError::Forbidden => format!(
-                            "Tailwind class `{class_name}` is forbidden in frame-pure Motion"
-                        ),
-                        TailwindClassError::Unsupported => {
-                            format!("Tailwind class `{class_name}` is not in {TAILWIND_CATALOG}")
-                        }
-                    };
+                if let Err(reason) = crate::tailwind::validate_tailwind_class(class_name) {
+                    let message = reason.message(class_name);
+                    errors.push(
+                        ValidationError::new(format!("{path}/classNames/{class_index}"), message)
+                            .with_style(reason.style_issue().cloned()),
+                    );
+                }
+            }
+            for (class, condition) in &node.class_conditions {
+                if !node.class_names.contains(class) {
                     errors.push(ValidationError::new(
-                        format!("{path}/classNames/{class_index}"),
-                        message,
+                        format!("{path}/classConditions/{class}"),
+                        "conditional utility must be present in classNames",
+                    ));
+                }
+                if expr_types.get(condition.0 as usize) != Some(&Some(ExprType::Bool)) {
+                    errors.push(ValidationError::new(
+                        format!("{path}/classConditions/{class}"),
+                        "conditional utility must reference a bool expression",
                     ));
                 }
             }
@@ -3253,6 +3238,42 @@ impl SceneArtifact {
                 ));
             }
             for (style_index, style) in node.styles.iter().enumerate() {
+                if !crate::style::is_motion_property(&style.property) {
+                    let valid = match &style.value {
+                        StyleValue::Static { value } => {
+                            crate::style::parse_property(&style.property, &crate::css_token(value))
+                                .map(|_| ())
+                        }
+                        StyleValue::Expr { expr }
+                            if crate::style::supports_property(&style.property) =>
+                        {
+                            if let Some(variants) =
+                                css_expression_variants(*expr, &self.exprs, expr_types)
+                            {
+                                variants.iter().try_for_each(|value| {
+                                    crate::style::parse_property(&style.property, value).map(|_| ())
+                                })
+                            } else {
+                                Ok(())
+                            }
+                        }
+                        _ => Err(crate::style::StyleIssue::admission(
+                            crate::style::property_spec(&style.property)
+                                .admit()
+                                .expect_err("CSS property admission already failed"),
+                            "<expression>",
+                        )),
+                    };
+                    if let Err(reason) = valid {
+                        errors.push(
+                            ValidationError::new(
+                                format!("{path}/styles/{style_index}/value"),
+                                reason.to_string(),
+                            )
+                            .with_style(Some(reason)),
+                        );
+                    }
+                }
                 if style.property.is_empty() {
                     errors.push(ValidationError::new(
                         format!("{path}/styles/{style_index}/property"),
@@ -3260,6 +3281,20 @@ impl SceneArtifact {
                     ));
                 }
                 match style.property.as_str() {
+                    "motion-inline-image"
+                        if !matches!(node.kind, NodeKind::Image { .. })
+                            || !matches!(
+                                style.value,
+                                StyleValue::Static {
+                                    value: MotionValue::Bool(true)
+                                }
+                            ) =>
+                    {
+                        errors.push(ValidationError::new(
+                            format!("{path}/styles/{style_index}/value"),
+                            "inline image default must be static true on an Image node",
+                        ));
+                    }
                     "motion-path-anchor"
                         if !matches!(
                             &style.value,
@@ -3305,60 +3340,36 @@ impl SceneArtifact {
                     }
                     _ => {}
                 }
+                if let StyleValue::Expr { expr } = &style.value
+                    && let Some(valle_motion::expr::Expr::Template { parts }) =
+                        self.exprs.get(expr.0 as usize)
+                    && parts.iter().any(|part| {
+                        matches!(
+                            part,
+                            valle_motion::expr::TemplatePart::Text { value }
+                                if crate::style::contains_variable(value)
+                        )
+                    })
+                {
+                    errors.push(ValidationError::new(
+                        format!("{path}/styles/{style_index}/value"),
+                        format!(
+                            "style `{}` builds a CSS variable reference; author variables are not supported",
+                            style.property
+                        ),
+                    ));
+                }
                 let actual = match &style.value {
                     StyleValue::Static { value } => Some(ExprType::of_value(value)),
                     StyleValue::Expr { expr } => expr_types.get(expr.0 as usize).copied().flatten(),
                 };
-                let expected = match style.property.as_str() {
-                    "translate" => Some(actual == Some(ExprType::Length2)),
-                    "rotate" => Some(actual == Some(ExprType::Angle)),
-                    "rotate-x" | "rotate-y" => {
-                        Some(matches!(actual, Some(ExprType::Number | ExprType::Angle)))
-                    }
-                    "perspective" => {
-                        Some(matches!(actual, Some(ExprType::Number | ExprType::Length)))
-                    }
-                    "motion-perspective-origin-x" | "motion-perspective-origin-y" => {
-                        Some(actual == Some(ExprType::Length))
-                    }
-                    "motion-perspective-origin-x-px"
-                    | "motion-perspective-origin-y-px"
-                    | "motion-perspective-origin-x-percent"
-                    | "motion-perspective-origin-y-percent" => {
-                        Some(actual == Some(ExprType::Number))
-                    }
-                    "motion-transform-3d-translate-x-percent"
-                    | "motion-transform-3d-translate-y-percent" => {
-                        Some(actual == Some(ExprType::Number))
-                    }
-                    "motion-transform-3d-translate-x"
-                    | "motion-transform-3d-translate-y"
-                    | "motion-transform-3d-translate-z"
-                    | "motion-transform-3d-rotate-x"
-                    | "motion-transform-3d-rotate-y"
-                    | "motion-transform-3d-rotate-z"
-                    | "motion-transform-3d-rotate-axis-x"
-                    | "motion-transform-3d-rotate-axis-y"
-                    | "motion-transform-3d-rotate-axis-z"
-                    | "motion-transform-3d-rotate-axis-angle"
-                    | "motion-transform-3d-scale-x"
-                    | "motion-transform-3d-scale-y"
-                    | "motion-transform-3d-scale-z" => Some(actual == Some(ExprType::Number)),
-                    "transform-style" | "backface-visibility" => {
-                        Some(actual == Some(ExprType::Enum))
-                    }
-                    "paper-grain" | "contact-shadow" => Some(actual == Some(ExprType::Number)),
-                    "scale" => Some(matches!(actual, Some(ExprType::Number | ExprType::Point))),
-                    "opacity" => Some(actual == Some(ExprType::Number)),
-                    _ => None,
-                };
-                if let Some(matches) = expected {
-                    if !matches {
-                        errors.push(ValidationError::new(
-                            format!("{path}/styles/{style_index}/value"),
-                            format!("style `{}` has the wrong typed value", style.property),
-                        ));
-                    }
+                if !crate::style::property_spec(&style.property)
+                    .accepts_typed_value(actual, &style.value)
+                {
+                    errors.push(ValidationError::new(
+                        format!("{path}/styles/{style_index}/value"),
+                        format!("style `{}` has the wrong typed value", style.property),
+                    ));
                 }
                 if style.property == "scale"
                     && actual == Some(ExprType::Point)
@@ -3480,7 +3491,7 @@ impl SceneArtifact {
                         ));
                     }
                 }
-                if matches!(style.property.as_str(), "filter" | "backdrop-filter")
+                if crate::style::property_spec(&style.property).closed_css
                     && let StyleValue::Expr { expr } = &style.value
                 {
                     let valid = css_expression_variants(*expr, &self.exprs, expr_types).is_some();
@@ -3655,6 +3666,8 @@ fn rect_value_valid(value: &RectValue, expr_types: &[Option<ExprType>]) -> bool 
 pub struct ValidationError {
     pub path: String,
     pub message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub style: Option<crate::style::StyleIssue>,
 }
 
 impl ValidationError {
@@ -3662,7 +3675,13 @@ impl ValidationError {
         ValidationError {
             path: path.into(),
             message: message.into(),
+            style: None,
         }
+    }
+
+    pub(crate) fn with_style(mut self, style: Option<crate::style::StyleIssue>) -> Self {
+        self.style = style;
+        self
     }
 }
 
@@ -3689,7 +3708,7 @@ pub(crate) fn css_expression_variants(
         }
         match exprs.get(id.0 as usize)? {
             Expr::Const {
-                value: MotionValue::Str(text),
+                value: MotionValue::Str(text) | MotionValue::Enum(text),
             } => variants.push(text.clone()),
             Expr::Select {
                 when_true,

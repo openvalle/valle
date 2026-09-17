@@ -1,3 +1,4 @@
+export const composition = { width: 1920, height: 1080, fps: 30, duration: 5 };
 export const component = "donut-share";
 
 export const controls = defineControls({
@@ -17,26 +18,26 @@ const SLICES = pie(
   SHARE.map((item) => item.value),
   { startAngle: deg(-90), endAngle: deg(-90) + TAU, padAngle: deg(2.5) },
 );
-const CX = 430;
-const CY = 400;
-const OUTER = 188;
-const BOX_W = 124;
-const BOX_H = 50;
+const CX = 645;
+const CY = 600;
+const OUTER = 282;
+const BOX_W = 186;
+const BOX_H = 75;
 
 function layoutCallouts(slices) {
   const layouts = slices.map((slice) => {
     const cosine = Math.cos(slice.midAngle);
     const sine = Math.sin(slice.midAngle);
     const right = cosine >= 0;
-    const rim = point(CX + (OUTER + 10) * cosine, CY + (OUTER + 10) * sine);
-    const elbow = point(CX + (OUTER + 52) * cosine, CY + (OUTER + 52) * sine);
-    const joinX = right ? elbow.x + 18 : elbow.x - 18;
+    const rim = point(CX + (OUTER + 15) * cosine, CY + (OUTER + 15) * sine);
+    const elbow = point(CX + (OUTER + 78) * cosine, CY + (OUTER + 78) * sine);
+    const joinX = right ? elbow.x + 27 : elbow.x - 27;
     const join = point(joinX, elbow.y);
     return {
       rim,
       elbow,
       join,
-      textLeft: right ? joinX + 8 : joinX - 8 - BOX_W,
+      textLeft: right ? joinX + 12 : joinX - 12 - BOX_W,
       textTop: elbow.y - BOX_H / 2,
       align: right ? "left" : "right",
       right,
@@ -50,7 +51,7 @@ function layoutCallouts(slices) {
     for (let slot = 1; slot < order.length; slot++) {
       const previous = layouts[order[slot - 1]];
       const current = layouts[order[slot]];
-      const minTop = previous.textTop + BOX_H + 12;
+      const minTop = previous.textTop + BOX_H + 18;
       if (current.textTop < minTop) {
         const shift = minTop - current.textTop;
         current.textTop += shift;
@@ -68,7 +69,7 @@ function Slice(ctx, { index, color }) {
   const opened = interpolate(ctx.progress - index * 0.05, [0, 0.55], [0, 1], {
     easing: "easeOut",
   });
-  const hole = interpolate(ctx.progress, [0.12, 0.55], [0, 92], { easing: "easeOut" });
+  const hole = interpolate(ctx.progress, [0.12, 0.55], [0, 138], { easing: "easeOut" });
   return (
     <Path
       key="wedge"
@@ -78,7 +79,7 @@ function Slice(ctx, { index, color }) {
         outer: OUTER,
         start: slice.startAngle,
         end: interpolate(opened, [0, 1], [slice.startAngle, slice.endAngle]),
-        cornerRadius: 10,
+        cornerRadius: 15,
       })}
       fill={color}
     />
@@ -95,14 +96,14 @@ function Callout(ctx, { index, label, color }) {
       ? line([layout.rim, layout.elbow, layout.join])
       : line([layout.rim, layout.elbow, point(layout.join.x, layout.elbow.y), layout.join]);
   return (
-    <View key="callout" className="absolute" style={{ left: 0, top: 0, width: 1280, height: 720, opacity: fade }}>
+    <View key="callout" className="absolute" style={{ left: 0, top: 0, width: 1920, height: 1080, opacity: fade }}>
       <Path
         key="leader"
         style={{ position: "absolute", left: 0, top: 0 }}
         d={leader}
         fill="none"
         stroke={color}
-        strokeWidth="2"
+        strokeWidth="3"
         strokeLinecap="round"
         strokeLinejoin="round"
       />
@@ -113,7 +114,7 @@ function Callout(ctx, { index, label, color }) {
           left: layout.textLeft,
           top: layout.textTop,
           width: BOX_W,
-          fontSize: 20,
+          fontSize: 30,
           color,
           textAlign: layout.align,
         }}
@@ -125,9 +126,9 @@ function Callout(ctx, { index, label, color }) {
         className="absolute"
         style={{
           left: layout.textLeft,
-          top: layout.textTop + 24,
+          top: layout.textTop + 36,
           width: BOX_W,
-          fontSize: 18,
+          fontSize: 27,
           color: "#94a3b8",
           textAlign: layout.align,
         }}
@@ -142,10 +143,10 @@ export default function DonutShare(ctx, props) {
   const total = interpolate(ctx.progress, [0.2, 0.75], [0, 1], { easing: "easeOut" });
   return (
     <Scene key="scene" className="relative h-full w-full" style={{ backgroundColor: "#071018" }}>
-      <Text key="eyebrow" className="absolute" style={{ left: 72, top: 44, fontSize: 18, letterSpacing: 3, color: "#38bdf8" }}>
+      <Text key="eyebrow" className="absolute" style={{ left: 108, top: 66, fontSize: 27, letterSpacing: 4.5, color: "#38bdf8" }}>
         MIX / FOUR LINES
       </Text>
-      <Text key="title" className="absolute" style={{ left: 72, top: 76, fontSize: 42, color: props.ink }}>
+      <Text key="title" className="absolute" style={{ left: 108, top: 114, fontSize: 63, color: props.ink }}>
         Share opens as a ring
       </Text>
       {SHARE.map((item, index) => (
@@ -158,11 +159,11 @@ export default function DonutShare(ctx, props) {
         key="total-label"
         className="absolute"
         style={{
-          left: CX - 80,
-          top: CY - 28,
-          width: 160,
-          fontSize: 16,
-          letterSpacing: 2,
+          left: CX - 120,
+          top: CY - 42,
+          width: 360,
+          fontSize: 24,
+          letterSpacing: 3,
           color: props.mute,
           textAlign: "center",
           opacity: total,
@@ -174,10 +175,10 @@ export default function DonutShare(ctx, props) {
         key="total-value"
         className="absolute"
         style={{
-          left: CX - 80,
-          top: CY - 4,
-          width: 160,
-          fontSize: 36,
+          left: CX - 120,
+          top: CY - 6,
+          width: 360,
+          fontSize: 54,
           color: props.ink,
           textAlign: "center",
           opacity: total,

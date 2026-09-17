@@ -376,6 +376,7 @@ pub struct LottieSource {
 #[derive(Debug, Clone, PartialEq)]
 pub struct MotionInstance {
     pub component: ResourceId,
+    pub fit: RasterFit,
     pub source_start: RationalTime,
     pub source_duration: RationalTime,
     pub rate: RationalRate,
@@ -1200,6 +1201,7 @@ fn visual_source_from_wire(
         })),
         wire::VisualSourceWire::Motion(source) => Ok(VisualSource::Motion(MotionInstance {
             component: source.component,
+            fit: raster_fit_from_wire(source.fit),
             source_start: RationalTime::from_exact(source.source_start),
             source_duration: RationalTime::from_exact(source.source_duration),
             rate: RationalRate::from_exact(source.rate)
@@ -1258,6 +1260,7 @@ fn visual_source_into_wire(source: VisualSource) -> wire::VisualSourceWire {
         }),
         VisualSource::Motion(source) => wire::VisualSourceWire::Motion(wire::MotionInstanceWire {
             component: source.component,
+            fit: raster_fit_into_wire(source.fit),
             source_start: source.source_start.into_exact(),
             source_duration: source.source_duration.into_exact(),
             rate: source.rate.into_exact(),

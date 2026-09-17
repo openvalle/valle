@@ -35,7 +35,9 @@ pub(crate) fn run(json_output: bool, action: ProjectAction) -> Result<ExitCode> 
             intent,
         } => {
             let project_id = parse_project_id(project_id)?;
-            let timeline = load_timeline(&timeline)?;
+            let base = timeline.parent().unwrap_or(Path::new("."));
+            let timeline =
+                super::timeline::resolve_project_motion_durations(load_timeline(&timeline)?, base)?;
             let snapshot = store
                 .create_project(&project_id, &timeline, intent.as_deref(), &auth)
                 .context("creating project genesis")?;
@@ -247,11 +249,39 @@ fn load_timeline(path: &Path) -> Result<Timeline> {
 fn load_edit_request(path: &Path, base_revision: u64, intent: Option<&str>) -> Result<String> {
     let timeline =
         std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
-    let timeline = normalize_resource_paths(&timeline, path)?;
+    let mut timeline: Value = serde_json::from_str(&normalize_resource_paths(&timeline, path)?)?;
+    if decode_timeline(&serde_json::to_string(&timeline)?).is_ok() {
+        super::timeline::fill_motion_source_durations(
+            &mut timeline,
+            path.parent().unwrap_or(Path::new(".")),
+        )?;
+    }
+    let timeline = serde_json::to_string(&timeline)?;
     let intent = serde_json::to_string(&intent)?;
     Ok(format!(
         "{{\"baseRevision\":{base_revision},\"timeline\":{timeline},\"intent\":{intent}}}"
     ))
+}
+
+pub(crate) fn resolve_studio_edit_request(body: &str, base: &Path) -> Result<String> {
+    let mut request: Value = match serde_json::from_str(body) {
+        Ok(request) => request,
+        Err(_) => return Ok(body.to_owned()),
+    };
+    let Some(raw_timeline) = request.get("timeline") else {
+        return Ok(body.to_owned());
+    };
+    let document = normalize_resource_paths(
+        &serde_json::to_string(raw_timeline)?,
+        &base.join("studio-timeline.json"),
+    )?;
+    if decode_timeline(&document).is_err() {
+        return Ok(body.to_owned());
+    }
+    let mut timeline: Value = serde_json::from_str(&document)?;
+    super::timeline::fill_motion_source_durations(&mut timeline, base)?;
+    request["timeline"] = timeline;
+    Ok(serde_json::to_string(&request)?)
 }
 
 fn normalize_resource_paths(text: &str, path: &Path) -> Result<String> {
@@ -267,6 +297,38 @@ fn normalize_resource_paths(text: &str, path: &Path) -> Result<String> {
         }
     }
     Ok(serde_json::to_string(&value)?)
+}
+
+#[cfg(test)]
+mod motion_duration_tests {
+    use super::*;
+
+    #[test]
+    fn studio_edit_resolves_motion_duration_before_project_admission() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("title.motion.tsx"),
+            "export const composition = { width: 64, height: 64, fps: 24, duration: 1 };\nexport default function Title() { return <Scene />; }",
+        )
+        .unwrap();
+        let request = serde_json::json!({
+            "baseRevision": 1,
+            "timeline": {
+                "canvas": {"width":64,"height":64,"fps":24},
+                "resources": {"title":"title.motion.tsx"},
+                "tracks": {"visual":[{"clips":[{"kind":"motion","component":"title","start":0,"duration":1}]}]}
+            }
+        });
+        let resolved = resolve_studio_edit_request(&request.to_string(), dir.path()).unwrap();
+        let resolved: Value = serde_json::from_str(&resolved).unwrap();
+        assert_eq!(
+            resolved["timeline"]["tracks"]["visual"][0]["clips"][0]["sourceDuration"].as_f64(),
+            Some(1.0)
+        );
+        assert!(
+            Path::new(resolved["timeline"]["resources"]["title"].as_str().unwrap()).is_absolute()
+        );
+    }
 }
 
 fn project_studio_token() -> Result<String> {

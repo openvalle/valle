@@ -448,6 +448,7 @@ pub struct LottieSourceWire {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct MotionInstanceWire {
     pub component: ResourceId,
+    pub fit: RasterFitWire,
     pub source_start: ExactRational,
     pub source_duration: ExactRational,
     pub rate: ExactRational,

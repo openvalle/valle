@@ -3,6 +3,8 @@ import { DiagramPanel } from "./dashboard/diagram";
 import { MapPanel } from "./dashboard/map";
 import { brandTheme } from "./dashboard/theme";
 
+// The delivery contract: Studio opens this fixture as its own entry.
+export const composition = { width: 1920, height: 1080, fps: 30, duration: 6 };
 export const component = "release-dashboard";
 
 export const controls = defineControls({

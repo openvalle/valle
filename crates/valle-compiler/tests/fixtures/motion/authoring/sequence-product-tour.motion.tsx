@@ -1,11 +1,8 @@
+export const composition = { width: 1920, height: 1080, fps: 30, duration: 5 };
 export const component = "sequence-product-tour";
 
 export const controls = defineControls({
-  timing: {
-    enterFrames: frames({ default: 0, min: 0 }),
-    holdCycleFrames: optionalFrames({ default: null, min: 1 }),
-    exitFrames: frames({ default: 0, min: 0 }),
-  },
+  timing: { enterDuration: 0, exitDuration: 0 },
 });
 
 const tour = defineSequence({
@@ -30,47 +27,47 @@ export default function SequenceProductTour(ctx) {
 
   return (
     <Scene className="relative h-full w-full" style={{ backgroundColor: "#0a0d14" }}>
-      <View key="back-glow" className="absolute" style={{ left: 735, top: 30, width: 520, height: 620, borderRadius: 280, backgroundColor: "#7c3aed", opacity: 0.12 + pulse * 0.05, filter: "blur(105px)" }} />
-      <Text key="eyebrow" className="absolute" style={{ left: 64, top: 38, fontSize: 17, letterSpacing: 2, color: "#a78bfa", opacity: chrome }}>VALLE PRODUCT TOUR / 04</Text>
-      <Text key="headline" className="absolute" style={{ left: 62, top: 75, width: 690, fontSize: 54, color: "#f8fafc", opacity: chrome, translate: point(0, (1 - chrome) * 24) }}>One sequence. Clear intent.</Text>
-      <Text key="subhead" className="absolute" style={{ left: 65, top: 150, width: 620, fontSize: 21, color: "#64748b", opacity: chrome }}>Named stages compile into deterministic frame math.</Text>
+      <View key="back-glow" className="absolute" style={{ left: 1102.5, top: 45, width: 780, height: 930, borderRadius: 420, backgroundColor: "#7c3aed", opacity: 0.12 + pulse * 0.05, filter: "blur(157.5px)" }} />
+      <Text key="eyebrow" className="absolute" style={{ left: 96, top: 57, fontSize: 25.5, letterSpacing: 3, color: "#a78bfa", opacity: chrome }}>VALLE PRODUCT TOUR / 04</Text>
+      <Text key="headline" className="absolute" style={{ left: 93, top: 112.5, width: 1680, fontSize: 78, color: "#f8fafc", opacity: chrome, translate: point(0, (1 - chrome) * 36) }}>One sequence. Clear intent.</Text>
+      <Text key="subhead" className="absolute" style={{ left: 97.5, top: 225, width: 930, fontSize: 31.5, color: "#64748b", opacity: chrome }}>Named stages compile into deterministic frame math.</Text>
 
-      <View key="app" className="absolute" style={{ borderStyle: "solid", left: 62, top: 210, width: 1156, height: 450, borderRadius: 26, backgroundColor: "#101621", borderWidth: 1, borderColor: "#273247", opacity: chrome, transform: `scale(${0.96 + chrome * 0.04})`, filter: "drop-shadow(0px 32px 60px #00000099)" }}>
-        <View key="topbar" className="absolute flex items-center" style={{ borderStyle: "solid", left: 0, top: 0, width: 1156, height: 62, borderBottomWidth: 1, borderColor: "#273247" }}>
-          <View key="dot-r" style={{ marginLeft: 22, width: 11, height: 11, borderRadius: 6, backgroundColor: "#fb7185" }} />
-          <View key="dot-y" style={{ marginLeft: 8, width: 11, height: 11, borderRadius: 6, backgroundColor: "#fbbf24" }} />
-          <View key="dot-g" style={{ marginLeft: 8, width: 11, height: 11, borderRadius: 6, backgroundColor: "#34d399" }} />
-          <Text key="app-title" style={{ marginLeft: 395, fontSize: 17, color: "#94a3b8" }}>Launch workspace</Text>
+      <View key="app" className="absolute" style={{ borderStyle: "solid", left: 93, top: 315, width: 1734, height: 675, borderRadius: 39, backgroundColor: "#101621", borderWidth: 1.5, borderColor: "#273247", opacity: chrome, transform: `scale(${0.96 + chrome * 0.04})`, filter: "drop-shadow(0px 48px 90px #00000099)" }}>
+        <View key="topbar" className="absolute flex items-center" style={{ borderStyle: "solid", left: 0, top: 0, width: 1734, height: 93, borderBottomWidth: 1.5, borderColor: "#273247" }}>
+          <View key="dot-r" style={{ marginLeft: 33, width: 16.5, height: 16.5, borderRadius: 9, backgroundColor: "#fb7185" }} />
+          <View key="dot-y" style={{ marginLeft: 12, width: 16.5, height: 16.5, borderRadius: 9, backgroundColor: "#fbbf24" }} />
+          <View key="dot-g" style={{ marginLeft: 12, width: 16.5, height: 16.5, borderRadius: 9, backgroundColor: "#34d399" }} />
+          <Text key="app-title" style={{ marginLeft: 592.5, fontSize: 25.5, color: "#94a3b8" }}>Launch workspace</Text>
         </View>
 
-        <View key="sidebar" className="absolute" style={{ borderStyle: "solid", left: 0, top: 62, width: 218, height: 388, borderRightWidth: 1, borderColor: "#273247", opacity: nav }}>
+        <View key="sidebar" className="absolute" style={{ borderStyle: "solid", left: 0, top: 93, width: 327, height: 582, borderRightWidth: 1, borderColor: "#273247", opacity: nav }}>
           {STEPS.map((label, i) => (
-            <View key={`nav-${i}`} className="absolute flex items-center" style={{ left: 18, top: 24 + i * 72, width: 182, height: 52, borderRadius: 14, backgroundColor: i === 1 ? "#6d28d933" : "#00000000", opacity: staggerProgress(ctx.localFrame, ctx.fps, tour.navigation, i, seconds(0.1)), translate: point((1 - staggerProgress(ctx.localFrame, ctx.fps, tour.navigation, i, seconds(0.1))) * -24, 0) }}>
-              <View key={`nav-icon-${i}`} style={{ marginLeft: 13, width: 26, height: 26, borderRadius: 9, backgroundColor: i === 1 ? "#8b5cf6" : "#263247" }} />
-              <Text key={`nav-label-${i}`} style={{ marginLeft: 12, fontSize: 17, color: i === 1 ? "#ede9fe" : "#718096" }}>{label}</Text>
+            <View key={`nav-${i}`} className="absolute flex items-center" style={{ left: 27, top: 36 + i * 108, width: 273, height: 78, borderRadius: 21, backgroundColor: i === 1 ? "#6d28d933" : "#00000000", opacity: staggerProgress(ctx.localFrame, ctx.fps, tour.navigation, i, seconds(0.1)), translate: point((1 - staggerProgress(ctx.localFrame, ctx.fps, tour.navigation, i, seconds(0.1))) * -36, 0) }}>
+              <View key={`nav-icon-${i}`} style={{ marginLeft: 19.5, width: 39, height: 39, borderRadius: 13.5, backgroundColor: i === 1 ? "#8b5cf6" : "#263247" }} />
+              <Text key={`nav-label-${i}`} style={{ marginLeft: 18, fontSize: 25.5, color: i === 1 ? "#ede9fe" : "#718096" }}>{label}</Text>
             </View>
           ))}
         </View>
 
-        <View key="workspace" className="absolute" style={{ borderStyle: "solid", left: 244, top: 86, width: 550, height: 334, borderRadius: 20, backgroundColor: "#0c111a", borderWidth: 1, borderColor: "#222e41", opacity: work, translate: point(0, (1 - work) * 26) }}>
-          <Text key="workspace-label" className="absolute" style={{ left: 24, top: 22, fontSize: 15, letterSpacing: 1, color: "#64748b" }}>SEQUENCE GRAPH</Text>
+        <View key="workspace" className="absolute" style={{ borderStyle: "solid", left: 366, top: 129, width: 825, height: 501, borderRadius: 30, backgroundColor: "#0c111a", borderWidth: 1.5, borderColor: "#222e41", opacity: work, translate: point(0, (1 - work) * 39) }}>
+          <Text key="workspace-label" className="absolute" style={{ left: 36, top: 33, fontSize: 22.5, letterSpacing: 1.5, color: "#64748b" }}>SEQUENCE GRAPH</Text>
           {STEPS.map((label, i) => (
-            <View key={`stage-${i}`} className="absolute" style={{ borderStyle: "solid", left: 25 + i * 171, top: 86, width: 148, height: 116, borderRadius: 18, backgroundColor: i === 1 ? "#6d28d944" : "#182131", borderWidth: 1, borderColor: i === 1 ? "#a78bfa" : "#314057", opacity: staggerProgress(ctx.localFrame, ctx.fps, tour.workspace, i, seconds(0.12)), transform: `scale(${0.82 + staggerProgress(ctx.localFrame, ctx.fps, tour.workspace, i, seconds(0.12)) * 0.18})` }}>
-              <Text key={`stage-num-${i}`} className="absolute" style={{ left: 16, top: 13, fontSize: 14, color: "#8b9ab0" }}>{padNumber(i + 1, { width: 2 })}</Text>
-              <Text key={`stage-name-${i}`} className="absolute" style={{ left: 16, top: 49, fontSize: 19, color: "#f1f5f9" }}>{label}</Text>
+            <View key={`stage-${i}`} className="absolute" style={{ borderStyle: "solid", left: 37.5 + i * 258, top: 129, width: 222, height: 174, borderRadius: 27, backgroundColor: i === 1 ? "#6d28d944" : "#182131", borderWidth: 1.5, borderColor: i === 1 ? "#a78bfa" : "#314057", opacity: staggerProgress(ctx.localFrame, ctx.fps, tour.workspace, i, seconds(0.12)), transform: `scale(${0.82 + staggerProgress(ctx.localFrame, ctx.fps, tour.workspace, i, seconds(0.12)) * 0.18})` }}>
+              <Text key={`stage-num-${i}`} className="absolute" style={{ left: 24, top: 19.5, fontSize: 21, color: "#8b9ab0" }}>{padNumber(i + 1, { width: 2 })}</Text>
+              <Text key={`stage-name-${i}`} className="absolute" style={{ left: 24, top: 73.5, fontSize: 28.5, color: "#f1f5f9" }}>{label}</Text>
             </View>
           ))}
-          <View key="timeline-track" className="absolute" style={{ left: 25, top: 252, width: 500, height: 8, borderRadius: 4, backgroundColor: "#202b3d" }} />
-          <View key="timeline-fill" className="absolute" style={{ left: 25, top: 252, width: 500 * done, height: 8, borderRadius: 4, backgroundColor: "#8b5cf6", filter: "drop-shadow(0px 0px 10px #8b5cf6)" }} />
+          <View key="timeline-track" className="absolute" style={{ left: 37.5, top: 378, width: 750, height: 12, borderRadius: 6, backgroundColor: "#202b3d" }} />
+          <View key="timeline-fill" className="absolute" style={{ left: 37.5, top: 378, width: 750 * done, height: 12, borderRadius: 6, backgroundColor: "#8b5cf6", filter: "drop-shadow(0px 0px 15px #8b5cf6)" }} />
         </View>
 
-        <View key="insights" className="absolute" style={{ borderStyle: "solid", right: 24, top: 86, width: 310, height: 334, borderRadius: 20, backgroundColor: "#0c111a", borderWidth: 1, borderColor: "#222e41", opacity: insights, translate: point((1 - insights) * 32, 0) }}>
-          <Text key="insight-label" className="absolute" style={{ left: 22, top: 21, fontSize: 15, color: "#64748b" }}>FRAME CONFIDENCE</Text>
-          <Text key="insight-value" className="absolute" style={{ left: 20, top: 50, fontSize: 62, color: "#f8fafc" }}>{formatPercent(0.999, { decimals: 1 })}</Text>
+        <View key="insights" className="absolute" style={{ borderStyle: "solid", right: 36, top: 129, width: 465, height: 501, borderRadius: 30, backgroundColor: "#0c111a", borderWidth: 1.5, borderColor: "#222e41", opacity: insights, translate: point((1 - insights) * 48, 0) }}>
+          <Text key="insight-label" className="absolute" style={{ left: 33, top: 31.5, fontSize: 22.5, color: "#64748b" }}>FRAME CONFIDENCE</Text>
+          <Text key="insight-value" className="absolute" style={{ left: 30, top: 75, fontSize: 93, color: "#f8fafc" }}>{formatPercent(0.999, { decimals: 1 })}</Text>
           {VALUES.map((value, i) => (
-            <View key={`mini-${i}`} className="absolute" style={{ left: 24 + i * 43, bottom: 35, width: 25, height: insights * value * 1.45, borderRadius: 8, backgroundColor: i === 5 ? "#a78bfa" : "#334155" }} />
+            <View key={`mini-${i}`} className="absolute" style={{ left: 36 + i * 64.5, bottom: 52.5, width: 37.5, height: insights * value * 2.175, borderRadius: 12, backgroundColor: i === 5 ? "#a78bfa" : "#334155" }} />
           ))}
-          <Text key="done" className="absolute" style={{ left: 22, top: 150, fontSize: 18, color: "#6ee7b7", opacity: done }}>● READY TO PUBLISH</Text>
+          <Text key="done" className="absolute" style={{ left: 33, top: 225, fontSize: 27, color: "#6ee7b7", opacity: done }}>● READY TO PUBLISH</Text>
         </View>
       </View>
     </Scene>

@@ -77,9 +77,9 @@ impl<'s> Compiler<'s> {
             "GeometryBatch" => ("geometry-batch", None),
             "ShaderLayer" => ("shader-layer", None),
             "Scene3D" => ("scene3d", None),
-            "Image" | "img" => ("image", Some("block")),
+            "Image" | "img" => ("image", None),
             "MathFormula" => ("math-formula", None),
-            "Video" | "video" => ("video", Some("block")),
+            "Video" | "video" => ("video", None),
             "Clip" => ("clip", None),
             "Mask" => ("mask", None),
             "MaskSource" => ("mask-source", None),
@@ -96,8 +96,9 @@ impl<'s> Compiler<'s> {
             .into_iter()
             .map(str::to_string)
             .collect::<Vec<_>>();
+        let mut class_conditions = BTreeMap::new();
         let mut styles = Vec::new();
-        let mut style_object: Option<&'s ObjectExpression<'s>> = None;
+        let mut style_object = None;
         let mut layout_id = None;
         let mut visibility = None;
         let mut glass_props = super::glass::GlassProps::default();
@@ -209,38 +210,19 @@ impl<'s> Compiler<'s> {
                     formula_aria =
                         self.attr_static_string(&attribute.value, attribute.span(), "ariaLabel");
                 }
-                "className" => {
-                    if let Some(value) = self.attr_static_string(&attribute.value, attribute.span(), "className") {
-                        for class_name in value.split_whitespace() {
-                            match validate_tailwind_class(class_name) {
-                                Ok(()) => class_names.push(class_name.to_string()),
-                                Err(TailwindClassError::Forbidden) => self.illegal(
-                                    DiagCode::TailwindForbidden,
-                                    attribute.span(),
-                                    format!("Tailwind class `{class_name}` is forbidden in frame-pure Motion"),
-                                ),
-                                Err(TailwindClassError::Unsupported) => self.push_diagnostic(
-                                    diagnostic_at(
-                                        self.source,
-                                        DiagCode::TailwindUnsupported,
-                                        attribute.span(),
-                                        format!("Tailwind class `{class_name}` is not in {TAILWIND_CATALOG}"),
-                                    ),
-                                ),
-                            }
-                        }
-                    }
-                }
+                "className" => self.lower_classes(
+                    &attribute.value, attribute.span(), path, &mut class_names, &mut class_conditions,
+                ),
                 "style" => {
                     let Some(JSXAttributeValue::ExpressionContainer(container)) = &attribute.value else {
-                        self.illegal(DiagCode::GrammarForbidden, attribute.span(), "style must be an object literal");
+                        self.illegal(DiagCode::GrammarForbidden, attribute.span(), "style must be a fixed-shape object expression");
                         continue;
                     };
-                    let JSXExpression::ObjectExpression(object) = &container.expression else {
-                        self.illegal(DiagCode::GrammarForbidden, container.span(), "style must be an object literal");
+                    let Some(expression) = container.expression.as_expression() else {
+                        self.illegal(DiagCode::GrammarForbidden, container.span(), "style must be a fixed-shape object expression");
                         continue;
                     };
-                    if style_object.replace(object).is_some() {
+                    if style_object.replace(self.resolve_style(expression)).is_some() {
                         self.illegal(
                             DiagCode::GrammarForbidden,
                             attribute.span(),
@@ -679,19 +661,9 @@ impl<'s> Compiler<'s> {
                 other => self.unsupported(attribute.span(), format!("attribute `{other}` is legal on some frontend elements but is not in the admitted capability set")),
             }
         }
-        let has_layout_transition = style_object.is_some_and(|object| {
-            object.properties.iter().any(|property| {
-                let ObjectPropertyKind::ObjectProperty(property) = property else {
-                    return false;
-                };
-                let name = match &property.key {
-                    PropertyKey::StaticIdentifier(name) => Some(name.name.as_str()),
-                    PropertyKey::StringLiteral(name) => Some(name.value.as_str()),
-                    _ => None,
-                };
-                name.is_some_and(|name| camel_to_kebab(name) == "layout-transition")
-            })
-        });
+        let has_layout_transition = style_object
+            .as_ref()
+            .is_some_and(|object| object.contains("layout-transition"));
         if let Some(layout_id) = layout_id.as_deref() {
             let scoped = self.scoped_key(layout_id);
             if !self.layout_ids.insert(scoped) {
@@ -712,9 +684,8 @@ impl<'s> Compiler<'s> {
             }
         }
         if let Some(object) = style_object {
-            styles.extend(self.lower_style(object, path, layout_id.as_deref()));
+            styles.extend(self.lower_style(&object, path, layout_id.as_deref()));
         }
-        self.diagnose_border_paint(element.opening_element.span(), &class_names, &styles);
         if let Some(shape) = svg_shape {
             if path_d.is_some() {
                 self.illegal(
@@ -795,14 +766,12 @@ impl<'s> Compiler<'s> {
                         if let Some(mut image) =
                             self.lower_jsx(child, &format!("{path}.inline-image.{index}"))
                         {
-                            if !image.class_names.iter().any(|class_name| {
-                                matches!(
-                                    class_name.as_str(),
-                                    "inline" | "inline-block" | "inline-flex" | "inline-grid"
-                                )
-                            }) {
-                                image.class_names.push("inline-block".into());
-                            }
+                            // Contextual primitive default, below the author cascade. Media
+                            // conditions and finite class choices can override it independently.
+                            image.styles.push(StyleBinding {
+                                property: "motion-inline-image".into(),
+                                value: StyleValue::Static { value: MotionValue::Bool(true) },
+                            });
                             saw_inline_image = true;
                             items.push(RichItem::InlineImage(image));
                         }
@@ -853,13 +822,13 @@ impl<'s> Compiler<'s> {
             if rich && per_unit.is_some() {
                 self.unsupported(
                     element.span(),
-                    "multi-run Text cannot yet combine with split/perUnit because unit indices must span the whole paragraph",
+                    "split/perUnit needs one run per unit, and a multi-run Text spans several runs; keep the split text in its own single-run Text, or drop split/perUnit",
                 );
             }
             if rich && text_path.is_some() {
                 self.unsupported(
                     element.span(),
-                    "multi-run Text cannot yet combine with text-on-path because path distance must span the whole paragraph",
+                    "a text path lays out one run, and a multi-run Text spans several runs; keep the path text in its own single-run Text, or drop the path",
                 );
             }
             if !rich {
@@ -883,6 +852,7 @@ impl<'s> Compiler<'s> {
                         path: text_path,
                     },
                     class_names,
+                    class_conditions,
                     styles,
                     visibility,
                     semantic: None,
@@ -920,6 +890,7 @@ impl<'s> Compiler<'s> {
                                 path: None,
                             },
                             class_names: Vec::new(),
+                            class_conditions: Default::default(),
                             styles: run_styles,
                             visibility: None,
                             semantic: None,
@@ -937,6 +908,7 @@ impl<'s> Compiler<'s> {
                 key,
                 kind: NodeKind::Group,
                 class_names,
+                class_conditions,
                 styles,
                 visibility,
                 semantic: None,
@@ -993,6 +965,7 @@ impl<'s> Compiler<'s> {
                     }),
                 },
                 class_names,
+                class_conditions,
                 styles,
                 visibility,
                 semantic: None,
@@ -1065,6 +1038,7 @@ impl<'s> Compiler<'s> {
                     },
                 },
                 class_names,
+                class_conditions,
                 styles,
                 visibility,
                 semantic: None,
@@ -1078,6 +1052,7 @@ impl<'s> Compiler<'s> {
                 element,
                 key,
                 class_names,
+                class_conditions,
                 styles,
                 visibility,
                 scene3d_camera,
@@ -1109,6 +1084,7 @@ impl<'s> Compiler<'s> {
                     speed: video_speed.unwrap_or(NumberValue::Static { value: 1.0 }),
                 },
                 class_names,
+                class_conditions,
                 styles,
                 visibility,
                 semantic: None,
@@ -1159,6 +1135,7 @@ impl<'s> Compiler<'s> {
                     aria_label: formula_aria,
                 },
                 class_names,
+                class_conditions,
                 styles,
                 visibility,
                 semantic: None,
@@ -1183,6 +1160,7 @@ impl<'s> Compiler<'s> {
                 key,
                 kind: NodeKind::Image { source },
                 class_names,
+                class_conditions,
                 styles,
                 visibility,
                 semantic: None,
@@ -1335,6 +1313,7 @@ impl<'s> Compiler<'s> {
                 _ => unreachable!("leaf kinds returned above"),
             },
             class_names,
+            class_conditions,
             styles,
             visibility,
             semantic: None,

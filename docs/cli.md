@@ -63,27 +63,30 @@ See the [Motion authoring reference](motion.md) for supported JSX, components, C
 animation helpers, assets and complete scene examples.
 
 ```sh
-valle motion check examples/hello.motion.tsx --size 640x360
+valle motion check examples/hello.motion.tsx
 valle motion render examples/hello.motion.tsx \
-  --duration 3 --fps 30 --size 640x360 --backend raster \
-  -o "$demo_dir/hello.mp4" --events
+  --backend raster -o "$demo_dir/hello.mp4" --events
 valle motion render examples/hello.motion.tsx \
-  --duration 3 --fps 30 --size 640x360 --frame 45 \
-  -o "$demo_dir/cover.png"
-valle motion studio examples/hello.motion.tsx --size 640x360 --duration 3
+  --frame 45 -o "$demo_dir/cover.png"
+valle motion studio examples/hello.motion.tsx
 ```
 
 Studio prints a local URL and keeps running; stop it with Ctrl-C. `--port 0` asks
 the OS for a free port. Studio uses the Web resources embedded by `cargo xtask build`. `valle licenses` displays the embedded dependency notices and source links.
 
 `--frame` selects a zero-based frame and requires a `.png` output. Without it,
-render writes `.mp4`. `--size` sets the logical layout canvas; `--output-size`
-changes delivery dimensions. Motion accepts rational frame rates such as
-`--fps 30000/1001`. Bind declared asset controls with repeated `--asset name=path`,
-prepared data with `--data file.json`, and extra fonts with repeated `--font path`.
+render writes `.mp4`. The entry file declares its base canvas and duration in
+seconds: `export const composition = { width, height, duration, fps? }`.
+`--fps` overrides the optional file FPS for this invocation. If both are absent,
+the command asks for an FPS. `--output-size` scales delivery dimensions without
+changing source layout; its aspect ratio must match the composition. Motion in a
+Timeline also lays out on its own base canvas and is fitted into the clip size.
+`composition` and `--fps` accept a rational rate such as `"30000/1001"`. Bind
+declared asset controls with repeated `--asset name=path`, prepared data with
+`--data file.json`, and extra fonts with repeated `--font path`.
 Use `--props props.json` for constant prop values and `--cues cues.json` for Timeline
-source-range cue bindings. `check` accepts the same bindings, fonts, duration and FPS,
-and validates one Native Raster frame (`--frame 0` by default).
+source-range cue bindings. `check` accepts the same bindings and fonts, and validates
+one Native Raster frame (`--frame 0` by default).
 
 For video delivery, `--workers 1..8`, `--encode-threads N`, or `--hardware-encode`
 control execution. `--bitrate` requires hardware encoding. `--backend auto`

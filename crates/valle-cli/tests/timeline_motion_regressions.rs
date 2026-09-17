@@ -72,7 +72,8 @@ fn environment_assets_are_frozen_and_render_in_arbitrary_frame_order() {
     };
     write_environment(false);
     png(dir, "map.png", [128, 128, 255]);
-    let source = r##"export const controls=defineControls({assets:{model:asset({kind:"model3d"}),sky:asset({kind:"environment"}),map:asset({kind:"image"})}});
+    let source = r##"export const composition = { width: 64, height: 64, fps: 30, duration: 3 };
+export const controls=defineControls({assets:{model:asset({kind:"model3d"}),sky:asset({kind:"environment"}),map:asset({kind:"image"})}});
 export default function T(ctx){return <Scene style={{width:64,height:64}}><Scene3D key="scene" camera={{position:[ctx.seconds*0.1,0,4],target:[0,ctx.seconds*0.05,0],near:0.1+ctx.seconds*0.01,far:10+ctx.seconds}} pbr={{environment:{src:"asset://sky",intensity:1,rotation:ctx.seconds*90,background:true},toneMapping:"aces",exposure:0.7+ctx.seconds*0.2}} style={{width:64,height:64}}><Mesh key="mesh" src="asset://model" nodes={[{id:0,position:[ctx.seconds*0.01,0,0],rotation:[0,ctx.seconds*5,0],scale:[-1,1,1]}]} material={{type:"pbr",color:interpolate(ctx.seconds,[0,2],["#ffaaaa","#aaaaff"]),metallic:ctx.seconds*0.2,roughness:0.3+ctx.seconds*0.2,emissive:"#ffffff",emissiveIntensity:ctx.seconds*0.1,normalScale:ctx.seconds*0.2,textures:{baseColor:"asset://map",normal:"asset://map",emissive:"asset://map"}}}/><DirectionalLight color={interpolate(ctx.seconds,[0,2],["#ff0000","#0000ff"])} direction={[ctx.seconds*0.1,0,1]} intensity={0.5+ctx.seconds*0.1}/></Scene3D></Scene>;}"##;
     std::fs::write(dir.join("scene.motion.tsx"), source).unwrap();
     put(
@@ -93,12 +94,6 @@ export default function T(ctx){return <Scene style={{width:64,height:64}}><Scene
                 "sky=sky.png",
                 "--asset",
                 "map=map.png",
-                "--size",
-                "64x64",
-                "--duration",
-                "3",
-                "--fps",
-                "30",
                 "--frame",
                 &frame.to_string(),
                 "--backend",
@@ -181,9 +176,24 @@ fn model3d_assets_render_from_motion_and_timeline() {
     let dir = temp.path();
     let fixture =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../valle-motion/tests/fixtures/scene3d");
-    for file in ["triangle.glb", "narrow.glb", "triangle.motion.tsx"] {
+    for file in ["triangle.glb", "narrow.glb"] {
         std::fs::copy(fixture.join(file), dir.join(file)).unwrap();
     }
+    // The entry owns the delivery contract now: restate the 64x64 canvas, 10 fps and 0.6s the
+    // removed flags used to pass so standalone frames still line up with `model.json`.
+    let triangle = std::fs::read_to_string(fixture.join("triangle.motion.tsx"))
+        .unwrap()
+        .lines()
+        .map(|line| {
+            if line.starts_with("export const composition") {
+                "export const composition = { width: 64, height: 64, fps: 10, duration: 0.6 };"
+            } else {
+                line
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    std::fs::write(dir.join("triangle.motion.tsx"), triangle).unwrap();
     put(
         dir,
         "model.json",
@@ -205,12 +215,6 @@ fn model3d_assets_render_from_motion_and_timeline() {
                 "model=triangle.glb",
                 "--frame",
                 &frame.to_string(),
-                "--duration",
-                "0.6",
-                "--fps",
-                "10",
-                "--size",
-                "64x64",
                 "-o",
                 &standalone,
             ],
@@ -260,12 +264,6 @@ fn model3d_assets_render_from_motion_and_timeline() {
             "model=narrow.glb",
             "--frame",
             "3",
-            "--duration",
-            "0.6",
-            "--fps",
-            "10",
-            "--size",
-            "64x64",
             "-o",
             "narrow.png",
         ],
@@ -281,16 +279,7 @@ fn model3d_assets_render_from_motion_and_timeline() {
         (
             "motion",
             "triangle.motion.tsx",
-            vec![
-                "--asset",
-                "model=triangle.glb",
-                "--duration",
-                "0.6",
-                "--fps",
-                "10",
-                "--size",
-                "64x64",
-            ],
+            vec!["--asset", "model=triangle.glb"],
         ),
         ("timeline", "model.json", vec![]),
     ] {
@@ -328,8 +317,6 @@ fn model3d_assets_render_from_motion_and_timeline() {
                 "triangle.motion.tsx",
                 "--asset",
                 &format!("model={file}"),
-                "--size",
-                "64x64",
             ],
         );
         assert!(!report.status.success());
@@ -354,6 +341,7 @@ fn multiple_motion_components_share_fonts_and_keep_later_formula_dependencies() 
         let name = format!("card{index}");
         let file = format!("{name}.motion.tsx");
         std::fs::write(dir.join(&file), format!(r##"
+export const composition = {{ width: 160, height: 96, fps: 10, duration: 9 }};
 export default function Card(ctx) {{return <Scene style={{{{width:160,height:96}}}}>
   <Text style={{{{fontSize:20,color:"#ffffff"}}}}>Card {index}</Text>
   <MathFormula latex="\\frac{{1}}{{2}}" style={{{{position:"absolute",left:8,top:40,fontSize:24,color:"#ffffff",opacity:ctx.localFrame > 0 ? 1 : 0}}}} />
@@ -411,6 +399,7 @@ fn motion_video_offsets_and_rates_select_the_numbered_source_frame() {
     // Encode the source frame number as eight black/white bars. This remains readable through
     // H.264 and color conversion, so the assertion checks media sampling rather than color math.
     std::fs::write(dir.join("numbered.motion.tsx"), r##"
+export const composition = { width: 80, height: 32, fps: 10, duration: 12 };
 const BITS = [0,1,2,3,4,5,6,7];
 export default function Numbered(ctx) {return <Scene style={{width:80,height:32,backgroundColor:"#000000"}}>
   {BITS.map(bit => <View key={`bit-${bit}`} style={{position:"absolute",left:bit*10,top:0,width:10,height:32,
@@ -423,12 +412,6 @@ export default function Numbered(ctx) {return <Scene style={{width:80,height:32,
             "motion",
             "render",
             "numbered.motion.tsx",
-            "--duration",
-            "12",
-            "--fps",
-            "10",
-            "--size",
-            "80x32",
             "--backend",
             "raster",
             "-o",
@@ -453,6 +436,7 @@ export default function Numbered(ctx) {return <Scene style={{width:80,height:32,
             }
         };
         std::fs::write(dir.join("video.motion.tsx"), format!(r#"
+export const composition = {{ width: 80, height: 32, fps: 10, duration: 9 }};
 export const controls = defineControls({{assets:{{clip:asset({{kind:"video"}})}}}});
 export default function Clip(ctx) {{return <Scene style={{{{width:80,height:32}}}}><Video src="asset://clip" sourceStart={{{}}} speed={{{}}} style={{{{width:80,height:32}}}} /></Scene>;}}
 "#,attr(start),attr(speed))).unwrap();
@@ -519,16 +503,18 @@ fn motion_check_prepares_glass_and_native_shader_resources() {
     let sources = [
         (
             "glass.motion.tsx",
-            r##"export default function T(){return <Scene style={{width:64,height:64,backgroundColor:"#468aff"}}><Glass surfaceId="card" shape={{kind:"continuousRect",radius:4}} material={{clarity:0.8,depth:0.4,tint:"#b9d7ff18"}} style={{position:"absolute",left:8,top:8,width:40,height:30}}><Text style={{fontSize:12}}>Hi</Text></Glass></Scene>; }"##,
+            r##"export const composition = { width: 64, height: 64, fps: 30, duration: 3 };
+export default function T(){return <Scene style={{width:64,height:64,backgroundColor:"#468aff"}}><Glass surfaceId="card" shape={{kind:"continuousRect",radius:4}} material={{clarity:0.8,depth:0.4,tint:"#b9d7ff18"}} style={{position:"absolute",left:8,top:8,width:40,height:30}}><Text style={{fontSize:12}}>Hi</Text></Glass></Scene>; }"##,
         ),
         (
             "shader.motion.tsx",
-            r##"export const controls=defineControls({assets:{noise:asset({kind:"image"}),effect:asset({kind:"shader"})}}); export default function T(ctx){return <Scene style={{width:64,height:64}}><ShaderLayer source="asset://effect" inputs={{noise:"asset://noise"}} uniforms={{progress:ctx.progress,edgeWidth:0.06,edgeColor:"#38bdf8"}} style={{width:64,height:64}}><View style={{width:64,height:64,background:"#ffffff"}}/></ShaderLayer></Scene>; }"##,
+            r##"export const composition = { width: 64, height: 64, fps: 30, duration: 3 };
+export const controls=defineControls({assets:{noise:asset({kind:"image"}),effect:asset({kind:"shader"})}}); export default function T(ctx){return <Scene style={{width:64,height:64}}><ShaderLayer source="asset://effect" inputs={{noise:"asset://noise"}} uniforms={{progress:ctx.progress,edgeWidth:0.06,edgeColor:"#38bdf8"}} style={{width:64,height:64}}><View style={{width:64,height:64,background:"#ffffff"}}/></ShaderLayer></Scene>; }"##,
         ),
     ];
     for (name, source) in sources {
         std::fs::write(dir.join(name), source).unwrap();
-        let mut args = vec!["motion", "check", name, "--size", "64x64"];
+        let mut args = vec!["motion", "check", name];
         if name.starts_with("shader") {
             args.extend([
                 "--asset",
@@ -545,12 +531,10 @@ fn motion_check_prepares_glass_and_native_shader_resources() {
 fn motion_cues_are_explicit_and_optional_cues_stay_inactive() {
     let temp = tempfile::tempdir().unwrap();
     let dir = temp.path();
-    let source = r##"export const controls=defineControls({cues:{voice:spanCue({required:true})}});export default function T(ctx,props,signals){return <Scene><View style={{width:64,height:64,backgroundColor:"#ffffff",opacity:signals.voice.progress}}/></Scene>;}"##;
+    let source = r##"export const composition = { width: 64, height: 64, fps: 30, duration: 3 };
+export const controls=defineControls({cues:{voice:spanCue({required:true})}});export default function T(ctx,props,signals){return <Scene><View style={{width:64,height:64,backgroundColor:"#ffffff",opacity:signals.voice.progress}}/></Scene>;}"##;
     std::fs::write(dir.join("cue.motion.tsx"), source).unwrap();
-    let output = run(
-        dir,
-        &["motion", "check", "cue.motion.tsx", "--size", "64x64"],
-    );
+    let output = run(dir, &["motion", "check", "cue.motion.tsx"]);
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stdout).contains("voice"));
     put(
@@ -560,15 +544,7 @@ fn motion_cues_are_explicit_and_optional_cues_stay_inactive() {
     );
     success(run(
         dir,
-        &[
-            "motion",
-            "check",
-            "cue.motion.tsx",
-            "--size",
-            "64x64",
-            "--cues",
-            "cues.json",
-        ],
+        &["motion", "check", "cue.motion.tsx", "--cues", "cues.json"],
     ));
     std::fs::write(
         dir.join("optional.motion.tsx"),
@@ -581,8 +557,6 @@ fn motion_cues_are_explicit_and_optional_cues_stay_inactive() {
             "motion",
             "render",
             "optional.motion.tsx",
-            "--size",
-            "64x64",
             "--frame",
             "15",
             "--backend",
@@ -598,8 +572,6 @@ fn motion_cues_are_explicit_and_optional_cues_stay_inactive() {
             "motion",
             "render",
             "optional.motion.tsx",
-            "--size",
-            "64x64",
             "--frame",
             "15",
             "--cues",
@@ -619,7 +591,8 @@ fn repeated_motion_instances_bind_their_own_images_and_unused_files_are_not_load
     let dir = temp.path();
     png(dir, "red.png", [255, 0, 0]);
     png(dir, "blue.png", [0, 0, 255]);
-    std::fs::write(dir.join("image.motion.tsx"),r#"export const controls=defineControls({assets:{hero:asset({kind:"image"})}});export default function T(){return <Scene style={{width:64,height:64}}><Image src="asset://hero" style={{width:64,height:64}}/></Scene>;}"#).unwrap();
+    std::fs::write(dir.join("image.motion.tsx"),r#"export const composition = { width: 64, height: 64, fps: 10, duration: 9 };
+export const controls=defineControls({assets:{hero:asset({kind:"image"})}});export default function T(){return <Scene style={{width:64,height:64}}><Image src="asset://hero" style={{width:64,height:64}}/></Scene>;}"#).unwrap();
     put(
         dir,
         "timeline.json",
@@ -648,7 +621,8 @@ fn repeated_motion_instances_bind_their_own_images_and_unused_files_are_not_load
         assert_eq!(pixel(dir, file, 32, 32), color);
     }
     // Explicit inline images still render when the line contains no text glyphs.
-    std::fs::write(dir.join("image.motion.tsx"),r#"export const controls=defineControls({assets:{hero:asset({kind:"image"})}});export default function T(){return <Scene style={{width:64,height:64}}><Image src="asset://hero" style={{display:"inline",width:32,height:32}}/></Scene>;}"#).unwrap();
+    std::fs::write(dir.join("image.motion.tsx"),r#"export const composition = { width: 64, height: 64, fps: 10, duration: 9 };
+export const controls=defineControls({assets:{hero:asset({kind:"image"})}});export default function T(){return <Scene style={{width:64,height:64}}><Image src="asset://hero" style={{display:"inline",width:32,height:32}}/></Scene>;}"#).unwrap();
     success(run(
         dir,
         &[
@@ -767,7 +741,8 @@ fn video_original_audio_preserves_stereo_gain_trim_and_rate() {
 fn motion_props_use_css_values_in_both_cli_and_timeline() {
     let temp = tempfile::tempdir().unwrap();
     let dir = temp.path();
-    std::fs::write(dir.join("props.motion.tsx"),r##"export const controls=defineControls({props:{ink:color({default:"#ff0000"}),extent:length({default:"8px"}),turn:angle({default:"0deg"})}});export default function T(ctx,props){return <Scene style={{width:64,height:64}}><View style={{width:props.extent,height:32,background:props.ink,rotate:props.turn}}/></Scene>;}"##).unwrap();
+    std::fs::write(dir.join("props.motion.tsx"),r##"export const composition = { width: 64, height: 64, fps: 30, duration: 3 };
+export const controls=defineControls({props:{ink:color({default:"#ff0000"}),extent:length({default:"8px"}),turn:angle({default:"0deg"})}});export default function T(ctx,props){return <Scene style={{width:64,height:64}}><View style={{width:props.extent,height:32,background:props.ink,rotate:props.turn}}/></Scene>;}"##).unwrap();
     let props = json!({"ink":"#00ff00","extent":"64px","turn":"0deg"});
     put(dir, "props.json", props.clone());
     success(run(
@@ -778,8 +753,6 @@ fn motion_props_use_css_values_in_both_cli_and_timeline() {
             "props.motion.tsx",
             "--props",
             "props.json",
-            "--size",
-            "64x64",
         ],
     ));
     success(run(
@@ -790,8 +763,6 @@ fn motion_props_use_css_values_in_both_cli_and_timeline() {
             "props.motion.tsx",
             "--props",
             "props.json",
-            "--size",
-            "64x64",
             "--frame",
             "0",
             "--backend",
@@ -931,7 +902,8 @@ fn shader_file_assets_render_vectors_and_matrices_in_arbitrary_frame_order() {
     );
     let shader = "float4 valle_main(float2 uv) { float2 p = basis * uv; if (enabled) { return float4(float3(amount + offset.z + p.x * 0.05), 1.0); } return float4(0.0); }";
     std::fs::write(dir.join("field.vsksl"), shader).unwrap();
-    let source = r##"export const controls=defineControls({assets:{effect:asset({kind:"shader",required:true})}});
+    let source = r##"export const composition = { width: 64, height: 64, fps: 30, duration: 3 };
+export const controls=defineControls({assets:{effect:asset({kind:"shader",required:true})}});
 export default function T(ctx) { return <Scene style={{width:64,height:64}}><ShaderLayer source="asset://effect" uniforms={{amount:ctx.seconds*0.1,offset:[0,0,ctx.seconds*0.05],basis:[1,0,0,1],enabled:true}} style={{width:64,height:64}}><View style={{width:64,height:64,backgroundColor:"#fff"}}/></ShaderLayer></Scene>; }"##;
     std::fs::write(dir.join("effect.motion.tsx"), source).unwrap();
     put(
@@ -952,12 +924,6 @@ export default function T(ctx) { return <Scene style={{width:64,height:64}}><Sha
                 "effect.motion.tsx",
                 "--asset",
                 "effect=effect.shader.json",
-                "--size",
-                "64x64",
-                "--fps",
-                "30",
-                "--duration",
-                "3",
                 "--frame",
                 &frame.to_string(),
                 "--backend",
@@ -1063,8 +1029,16 @@ fn shader_frame_budget_counts_nested_layers_and_separate_clips() {
         ("clips", sampler, layer(""), 2),
     ] {
         std::fs::write(dir.join("effect.vsksl"), shader).unwrap();
-        std::fs::write(dir.join("effect.motion.tsx"), source(&body)).unwrap();
         for size in [64, 1920] {
+            let (width, height) = if size == 64 { (64, 36) } else { (1920, 1080) };
+            std::fs::write(
+                dir.join("effect.motion.tsx"),
+                format!(
+                    "export const composition = {{ width: {width}, height: {height}, fps: 30, duration: 3 }};\n{}",
+                    source(&body)
+                ),
+            )
+            .unwrap();
             put(
                 dir,
                 "effect.timeline.json",
@@ -1122,7 +1096,8 @@ fn shader_sampling_uses_each_texture_size_filter_and_wrap() {
         "float4 valle_main(float2 uv) { return sample_steps(float2(uv.x * 2.0, 0.5)); }",
     )
     .unwrap();
-    std::fs::write(dir.join("sample.motion.tsx"), r##"export const controls=defineControls({assets:{effect:asset({kind:"shader"}),image:asset({kind:"image"})}});export default function T(){return <Scene style={{width:64,height:64}}><ShaderLayer source="asset://effect" inputs={{steps:"asset://image"}} style={{width:64,height:64}}><View style={{width:64,height:64,backgroundColor:"#fff"}}/></ShaderLayer></Scene>; }"##).unwrap();
+    std::fs::write(dir.join("sample.motion.tsx"), r##"export const composition = { width: 64, height: 64, fps: 30, duration: 3 };
+export const controls=defineControls({assets:{effect:asset({kind:"shader"}),image:asset({kind:"image"})}});export default function T(){return <Scene style={{width:64,height:64}}><ShaderLayer source="asset://effect" inputs={{steps:"asset://image"}} style={{width:64,height:64}}><View style={{width:64,height:64,backgroundColor:"#fff"}}/></ShaderLayer></Scene>; }"##).unwrap();
     let render = |filter: &str, wrap: &str| {
         put(
             dir,
@@ -1144,8 +1119,6 @@ fn shader_sampling_uses_each_texture_size_filter_and_wrap() {
                 "effect=sample.shader.json",
                 "--asset",
                 "image=steps.png",
-                "--size",
-                "64x64",
                 "--frame",
                 "0",
                 "--backend",
@@ -1191,6 +1164,7 @@ fn shader_content_preserves_local_coordinates_and_complete_input() {
         }
         std::fs::write(dir.join("effect.vsksl"), shader).unwrap();
         std::fs::write(dir.join("effect.motion.tsx"), format!(r##"
+            export const composition = {{ width: 64, height: 64, fps: 30, duration: 3 }};
             export const controls=defineControls({{assets:{{effect:asset({{kind:"shader"}})}}}});
             export default function T() {{ return <Scene style={{{{width:64,height:64,backgroundColor:"#000"}}}}>{body}</Scene>; }}
         "##)).unwrap();
@@ -1202,8 +1176,6 @@ fn shader_content_preserves_local_coordinates_and_complete_input() {
                 "effect.motion.tsx",
                 "--asset",
                 "effect=effect.shader.json",
-                "--size",
-                "64x64",
                 "--frame",
                 "0",
                 "--backend",
@@ -1292,4 +1264,29 @@ fn shader_content_preserves_local_coordinates_and_complete_input() {
     );
     assert_eq!(pixel(dir, "result.png", 40, 32), [0, 0, 0]);
     assert_eq!(pixel(dir, "result.png", 12, 32), [0, 0, 0]);
+}
+
+#[test]
+fn timeline_accepts_a_component_whose_composition_differs_from_the_canvas() {
+    let temp = tempfile::tempdir().unwrap();
+    let dir = temp.path();
+    std::fs::write(
+        dir.join("card.motion.tsx"),
+        r##"export const composition = { width: 320, height: 180, fps: 30, duration: 1 };
+export default function Card() {
+  return <Scene className="h-full w-full" style={{ backgroundColor: "#102030" }} />;
+}
+"##,
+    )
+    .unwrap();
+    put(
+        dir,
+        "card.timeline.json",
+        json!({
+            "canvas": {"width": 64, "height": 64, "fps": 30, "background": "#000000"},
+            "resources": {"card": "card.motion.tsx"},
+            "tracks": {"visual": [{"clips": [{"kind": "motion", "component": "card", "start": 0, "duration": 1}]}]}
+        }),
+    );
+    success(run(dir, &["timeline", "check", "card.timeline.json"]));
 }

@@ -8,7 +8,7 @@ We thank the authors and maintainers of the projects below. This document covers
 | --- | --- |
 | **Remotion** | Video authoring with JSX components, modules, and data, plus embeddable player design. Valle implements its own compiler and renderer and does not depend on Remotion. |
 | **React / JSX** | Component-oriented authoring and JSX syntax, parsed by OXC without React DOM. |
-| **Tailwind CSS** | Utility-class vocabulary and styling conventions. Valle's supported [class catalog](crates/valle-motion/src/tailwind.rs) is resolved through Takumi. |
+| **Tailwind CSS** | Utility-class vocabulary and styling conventions. Valle's supported [class catalog](crates/valle-motion/src/tailwind.rs) is normalized into the shared CSS layout path. |
 | **Apache ECharts** | [Color parsing](crates/valle-draw/src/color.rs) references CSS/ECharts syntax. ECharts and zrender are not dependencies. |
 
 ## Adapted implementations
@@ -16,6 +16,7 @@ We thank the authors and maintainers of the projects below. This document covers
 | Source | Use | Attribution and license |
 | --- | --- | --- |
 | **d3-array / d3-scale** | Ticks, nice bounds, and band scales implemented in Rust with deterministic math. | [Implementation](crates/valle-motion/src/compute/scale.rs), [NOTICE and ISC licenses](crates/valle-motion/licenses/d3) |
+| **Tailwind CSS 4.1.13** | Default theme values and utility conventions, plus a hand-authored port of the property-order and property/count/alphanumeric cascade ordering. Arbitrary-value decoding follows the official behavior, pinned by literal cases. No upstream data file, generator or compiler is vendored. | [Default theme](crates/valle-motion/src/tailwind/defaults.json), [order table](crates/valle-motion/src/tailwind/order_table.rs), [normalizer](crates/valle-motion/src/tailwind/normalize.rs), [decoder](crates/valle-motion/src/tailwind/arbitrary.rs), [MIT license](crates/valle-motion/licenses/tailwind/MIT.txt) |
 | **d3-shape** | Pie angle allocation, monotone-X curves, and topology-stable annular sectors in Motion; rounded-sector drawing helper in Draw. | [Pie](crates/valle-motion/src/compute/pie.rs), [curve](crates/valle-motion/src/compute/curve.rs), [sector](crates/valle-motion/src/geometry.rs), [Draw sectors](crates/valle-draw/src/draw.rs), [Motion NOTICE](crates/valle-motion/licenses/d3/NOTICE.txt), [Draw NOTICE](crates/valle-draw/licenses/NOTICE.txt), [ISC license](crates/valle-motion/licenses/d3/d3-shape-ISC.txt) |
 | **GL Transitions** | GLSL transitions adapted to SkSL with changes to sampling interfaces, parameters, and DreamyZoom sample counts. | [Shaders](crates/valle-draw/assets/shaders), [authors and adaptation notes](crates/valle-draw/licenses/NOTICE.txt), [MIT license](crates/valle-draw/licenses/GL-Transitions-MIT.txt) |
 | **[Three.js r186](https://github.com/mrdoob/three.js/tree/r186)** | Scene3D uses the 16×16 DFG BRDF lookup data from `DFGLUTData.js`, stored as little-endian RG16F, and ACES tone mapping and multiscattering calculations adapted to Rust. | [Source and adaptation notes](crates/valle-motion/src/scene3d/raster/assets/README.md), [lighting](crates/valle-motion/src/scene3d/raster/lighting.rs), [PBR shading](crates/valle-motion/src/scene3d/raster/pbr.rs), [copyright and MIT license](crates/valle-motion/src/scene3d/raster/assets/THREE-LICENSE.txt) |

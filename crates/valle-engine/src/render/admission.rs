@@ -750,6 +750,7 @@ struct AdmittedMotionPhases {
     hold_frames: u32,
     exit_frames: u32,
     hold_cycle_frames: Option<u32>,
+    hold_cycle_duration: Option<RationalTime>,
 }
 
 impl AdmittedMotionPhases {
@@ -760,6 +761,7 @@ impl AdmittedMotionPhases {
             hold_frames: layout.hold_frames,
             exit_frames: layout.exit_frames,
             hold_cycle_frames: layout.hold_cycle_frames,
+            hold_cycle_duration: layout.hold_cycle_duration,
         }
     }
 
@@ -815,6 +817,7 @@ enum AdmittedSourcePayload {
     },
     Motion {
         instance: AdmittedMotionInstance,
+        fit: AdmittedRasterFit,
     },
     Solid {
         color: String,
@@ -1848,7 +1851,10 @@ fn admit_visual_source(
                 rate: source.rate,
                 end_behavior: admit_end_behavior(source.end_behavior),
                 dependency_range: AdmittedDependencyRange::Frames { range },
-                payload: AdmittedSourcePayload::Motion { instance },
+                payload: AdmittedSourcePayload::Motion {
+                    instance,
+                    fit: admit_raster_fit(source.fit),
+                },
             }
         }
         VisualSource::Solid(source) => AdmittedSource {
@@ -2062,79 +2068,27 @@ fn admit_motion_phases(
         "source-duration",
         diagnostics,
     );
-    let enter_frames = source.phases.enter_duration.map(|duration| {
-        admit_motion_frame_count(
-            duration,
-            frame_rate,
-            true,
-            &format!("{path}/phases/enterDuration"),
-            "enter-duration",
-            diagnostics,
-        )
-    });
-    let exit_frames = source.phases.exit_duration.map(|duration| {
-        admit_motion_frame_count(
-            duration,
-            frame_rate,
-            true,
-            &format!("{path}/phases/exitDuration"),
-            "exit-duration",
-            diagnostics,
-        )
-    });
-
-    let resolved = match (
-        duration_frames,
-        enter_frames.transpose(),
-        exit_frames.transpose(),
-    ) {
-        (Ok(duration_frames), Ok(enter_frames), Ok(exit_frames)) => match artifact
-            .controls
-            .phase_spec_with_overrides(enter_frames, exit_frames)
-        {
-            Ok(spec) => Some(valle_motion::phase_windows(&spec, duration_frames)),
+    let timing = valle_motion::resolve_timing_seconds(
+        source.phases.enter_duration,
+        source.phases.exit_duration,
+        artifact.controls.timing_seconds,
+    );
+    let resolved = if duration_frames.is_err() {
+        None
+    } else {
+        match valle_motion::phase_windows_seconds(timing, source.source_duration, frame_rate) {
+            Ok(layout) => Some(layout),
             Err(error) => {
-                let (field_path, duration) = if error.field == "enterFrames" {
-                    (
-                        format!("{path}/phases/enterDuration"),
-                        source.phases.enter_duration,
-                    )
-                } else {
-                    (
-                        format!("{path}/phases/exitDuration"),
-                        source.phases.exit_duration,
-                    )
-                };
-                let mut diagnostic_details = details([
-                    (
-                        "reason",
-                        "phase-override-outside-artifact-controls".to_owned(),
-                    ),
-                    ("field", error.field.to_owned()),
-                    ("valueFrames", error.value.to_string()),
-                    ("minFrames", error.min.to_string()),
-                    (
-                        "fps",
-                        format!("{}/{}", frame_rate.numerator(), frame_rate.denominator()),
-                    ),
-                ]);
-                if let Some(max) = error.max {
-                    diagnostic_details.insert("maxFrames".to_owned(), max.to_string());
-                }
-                if let Some(duration) = duration {
-                    diagnostic_details.insert("duration".to_owned(), duration.to_string());
-                }
                 diagnostics.push(diagnostic(
                     EngineOpenDiagnosticCode::MotionTimingMismatch,
-                    field_path,
+                    format!("{path}/phases"),
                     EngineOpenPhase::Admission,
                     None,
-                    diagnostic_details,
+                    details([("reason", error.to_string())]),
                 ));
                 None
             }
-        },
-        _ => None,
+        }
     };
 
     AdmittedMotionPhases::from_layout(resolved.unwrap_or(valle_motion::PhaseLayout {
@@ -2143,6 +2097,7 @@ fn admit_motion_phases(
         hold_frames: 0,
         exit_frames: 0,
         hold_cycle_frames: None,
+        hold_cycle_duration: None,
     }))
 }
 
@@ -3362,6 +3317,43 @@ fn range_details(start: i64, end: i64) -> BTreeMap<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn omitted_and_empty_authored_timing_share_second_boundaries() {
+        let fps = FrameRate::new(24, 1).unwrap();
+        let overrides = MotionPhaseOverrides {
+            enter_duration: None,
+            exit_duration: Some(RationalTime::new(15, 100).unwrap()),
+        };
+        let zero = valle_motion::TimingSeconds {
+            enter_duration: RationalTime::ZERO,
+            exit_duration: RationalTime::ZERO,
+            hold_cycle_duration: None,
+        };
+        let duration = RationalTime::new(46, 10).unwrap();
+        let absent = valle_motion::phase_windows_seconds(
+            valle_motion::resolve_timing_seconds(
+                overrides.enter_duration,
+                overrides.exit_duration,
+                None,
+            ),
+            duration,
+            fps,
+        )
+        .unwrap();
+        let empty = valle_motion::phase_windows_seconds(
+            valle_motion::resolve_timing_seconds(
+                overrides.enter_duration,
+                overrides.exit_duration,
+                Some(zero),
+            ),
+            duration,
+            fps,
+        )
+        .unwrap();
+        assert_eq!(absent, empty);
+        assert_eq!(absent.exit_start(), 107);
+    }
 
     #[test]
     fn production_render_projection_has_exact_canonical_bytes_and_domain_hash() {

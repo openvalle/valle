@@ -54,9 +54,8 @@ Frame indices are zero-based. Frame 44 belongs to the blue clip; frame 45 belong
 to the teal clip. The output has 90 video frames. Output paths must be new files.
 `--frame` requires PNG; without it, the command requires MP4.
 
-The document controls dimensions, FPS and duration. The current Timeline CLI uses
-Native Raster composition and does not expose Motion's `--size`, `--duration`,
-`--backend` or `--workers` options. MP4 encoding and media decoding need compatible
+The document controls dimensions, FPS and duration. The Timeline CLI uses
+Native Raster composition. MP4 encoding and media decoding need compatible
 FFmpeg shared libraries; see [runtime setup](cli.md#runtime-notes).
 
 ## Document structure and resources
@@ -144,7 +143,11 @@ not time values. FPS is the exception that also accepts a rational string.
 | `trimStart` | Source offset, default `0`; video, audio, Lottie and Motion |
 | `rate` | Positive playback multiplier, default `1`; cannot animate or be negative |
 | `end` | Source boundary policy: `error` (default), `hold`, `loop` |
-| Motion `sourceDuration` | Positive duration of the authored Motion source, default clip `duration` |
+| Motion `sourceDuration` | Positive source duration; defaults to the Motion composition's `duration` |
+
+File based Timeline rendering and Studio read the Motion component to resolve that
+default. Hosts that compile a Timeline without access to the component must bind
+the work duration explicitly before compiling it.
 
 For an active clip at output time `t`, before applying the boundary policy:
 
@@ -210,7 +213,7 @@ fields:
 | `image` | `src` | `fit` |
 | `video` | `src` | `trimStart`, `rate`, `end`, `fit` |
 | `lottie` | `src` | `trimStart`, `rate`, `end`, `fit` |
-| `motion` | `component` | `trimStart`, `sourceDuration`, `rate`, `end`, `props`, `cues`, `resources`, `phases` |
+| `motion` | `component` | `fit`, `trimStart`, `sourceDuration`, `rate`, `end`, `props`, `cues`, `resources`, `phases` |
 
 `solid` is a color, not a placeholder requiring an image file. Its `color` is
 static; use separate solids and opacity curves or Motion for an animated color.
@@ -523,7 +526,7 @@ Timeline alias does not have to match that function's name.
 | `resources` | Declared Motion asset slot → root resource alias |
 | `cues` | Declared cue name → `source-range` binding |
 | `phases` | Optional `enterDuration`, `exitDuration`, in source seconds |
-| `sourceDuration` | Source animation duration; also bounds source-time props/cues |
+| `sourceDuration` | Source animation duration; defaults to the component composition's duration and bounds source-time props/cues |
 
 Prop names/types must match `defineControls`. Required bindings must be available;
 unknown props or incompatible curve values are not arbitrary metadata. Root
@@ -547,7 +550,9 @@ Timeline binding path; `nodeTarget` has no completed Native conversion here.
 Leave those controls to a supported host integration instead of assuming every
 Motion control has a usable Timeline override.
 
-The current Timeline CLI prepares Motion at the Timeline canvas size. It does not
+Timeline prepares Motion at its composition canvas size, then fits it to the clip
+target rectangle (the Timeline canvas unless the clip sets `size`). The default
+`fit` is `contain`; `cover`, `fill` and `none` are also available. It does not
 accept a clip `data` field or a `--data` binding; a component requiring external
 structured data through Motion's fourth argument cannot be supplied that data
 through this Timeline command. Use supported props/assets or a suitable host
@@ -558,6 +563,8 @@ integration for that input.
 Save as `overlay.motion.tsx`:
 
 ```tsx
+export const composition = { width: 640, height: 360, fps: 30, duration: 3 };
+
 export const controls = defineControls({
   props: {
     title: string({ default: "Hello, Valle" }),
@@ -617,10 +624,9 @@ Optional cue `enterDuration`/`exitDuration` default to zero. Cues must fit the
 source range; they provide `signals.name` to the component. `phases` changes
 Motion's context phase timing, not the clip's placement or total output duration.
 
-When retiming, keep the source duration explicit. For example, a three-second
-Motion source played at `rate: 2` needs an output `duration: 1.5` to play once.
-Setting only rate leaves the default `sourceDuration` equal to the clip duration
-and can request time beyond that source. Outer clip opacity/position still use
+When retiming, the source duration remains the composition duration unless the
+clip explicitly sets `sourceDuration`. For example, a three-second Motion source
+played at `rate: 2` needs an output `duration: 1.5` to play once. Outer clip opacity/position still use
 clip-local time; its Motion props and cues follow the source clock.
 
 Repeated clips can use the same component alias with different resource bindings.

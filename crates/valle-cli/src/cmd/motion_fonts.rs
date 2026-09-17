@@ -10,6 +10,9 @@ pub(super) fn selected_default_fonts(artifact: &SceneArtifact) -> Vec<Vec<u8>> {
     let mut families = String::from("sans-serif");
     let mut weights = BTreeSet::from([400_u16]);
     let mut all_weights = false;
+    // A node may still name a font-related internal slot or a weight-looking token, so retain the
+    // fixed bundled faces rather than selecting by an unexpanded class name. This never consults
+    // installed system fonts.
     let mut unknown_family = false;
     for node in &artifact.nodes {
         if let NodeKind::Text { text: value, .. } = &node.kind {
@@ -20,6 +23,12 @@ pub(super) fn selected_default_fonts(artifact: &SceneArtifact) -> Vec<Vec<u8>> {
             }
         }
         for style in &node.styles {
+            if style.property.starts_with("--font-")
+                || style.property.starts_with("--text-")
+                    && style.property.ends_with("--font-weight")
+            {
+                unknown_family = true;
+            }
             match (style.property.as_str(), &style.value) {
                 (
                     "font-family",
@@ -77,7 +86,7 @@ pub(super) fn selected_default_fonts(artifact: &SceneArtifact) -> Vec<Vec<u8>> {
                 .rsplit(':')
                 .next()
                 .unwrap_or(class)
-                .trim_start_matches('!');
+                .trim_end_matches('!');
             match class {
                 "font-sans" => families.push_str(",sans-serif"),
                 "font-serif" => families.push_str(",serif"),
@@ -228,11 +237,75 @@ mod tests {
         assert!(bold.iter().any(|font| font == defaults[3]));
         assert!(!bold.iter().any(|font| font == defaults[1]));
     }
+    /// Every removed font-styling path must fail closed instead of silently keeping the palette:
+    /// a variable family, a local `@theme` stylesheet and a custom property have no lowering.
     #[test]
-    fn font_variables_keep_the_palette() {
+    fn removed_font_variable_and_theme_paths_are_rejected() {
+        for (source, needle) in [
+            (
+                "export default function T(){return <Text style={{fontFamily:'var(--brand, sans-serif)'}}>Hello</Text>}",
+                "CSS variable references are not supported",
+            ),
+            (
+                "export default function T(){return <View style={{'--font-sans':'monospace'}}><Text className='font-sans'>Hello</Text></View>}",
+                "author CSS custom properties are not supported",
+            ),
+            (
+                "export default function T(){return <Text className='font-sans md:font-serif!'>Hello</Text>}",
+                "responsive and state variants are not supported",
+            ),
+        ] {
+            let diagnostics = valle_compiler::motion::compile_motion(source)
+                .expect_err("the removed path must not compile");
+            assert!(
+                diagnostics
+                    .iter()
+                    .any(|diagnostic| diagnostic.message.contains(needle)),
+                "{source}: {diagnostics:#?}"
+            );
+        }
+
+        let graph = valle_compiler::motion::MotionModuleGraph::new(
+            "scene.tsx",
+            std::collections::BTreeMap::from([
+                ("scene.tsx".into(), "import './brand.css'; export default function T(){return <Text className='font-sans'>Hello</Text>}".into()),
+                ("brand.css".into(), "@theme {--font-sans:monospace;}".into()),
+            ]),
+        ).unwrap();
+        let error = valle_compiler::motion::compile_motion_modules(&graph)
+            .expect_err("a local stylesheet is a permanent boundary");
+        let message = format!("{error:?}");
+        assert!(message.contains("local CSS is not supported"), "{message}");
+    }
+
+    #[test]
+    fn finite_font_utilities_package_all_candidate_families() {
+        let defaults = valle_motion::default_motion_fonts();
+        let fonts = select(
+            "export default function T(ctx){return <View className={ctx.localFrame<30?'font-serif!':'font-mono'}><Text>Hello</Text></View>}",
+        );
+        assert!(
+            defaults[5..=9]
+                .iter()
+                .all(|font| fonts.iter().any(|loaded| loaded == font))
+        );
+        assert!(!fonts.iter().any(|font| font == defaults[13]));
+        let sans =
+            select("export default function T(){return <Text className='font-sans'>Hello</Text>}");
+        assert_eq!(sans, vec![defaults[0].to_vec()]);
+    }
+
+    /// Variants are gone, so every finite class choice must package all candidate families: the
+    /// frame that selects an inactive branch still needs its face.
+    #[test]
+    fn finite_class_choices_package_inactive_candidates_too() {
         assert_eq!(
-            select("export default function T(){return <Text style={{fontFamily:'var(--brand)'}}>Hello</Text>}").len(),
-            valle_motion::default_motion_fonts().len()
+            select(
+                "export default function T(ctx){return <Text className={ctx.localFrame<30?'font-sans':'font-serif!'}>Hello</Text>}"
+            ),
+            select(
+                "export default function T(){return <Text className='font-sans font-serif!'>Hello</Text>}"
+            )
         );
     }
 

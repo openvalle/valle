@@ -10,6 +10,7 @@ impl<'s> Compiler<'s> {
         measure: Option<&MeasureEnv>,
         shader_registry: Option<&ShaderRegistryEnv>,
         prepare_data: Option<&PrepareDataBinding>,
+        require_composition: bool,
     ) -> Result<Self, Vec<CompilerDiagnostic>> {
         if let Some(span) = module_reserved_theme_binding(program) {
             return Err(vec![diagnostic_at(
@@ -124,6 +125,8 @@ impl<'s> Compiler<'s> {
             has_measure: measure.is_some(),
             shader_registry: shader_registry.cloned(),
             component: None,
+            composition: None,
+            require_composition,
             controls: default_controls(),
             controls_span: None,
             prepare_data: prepare_data.cloned(),
@@ -171,11 +174,12 @@ impl<'s> Compiler<'s> {
                                     _ => self.illegal(DiagCode::ModuleShape, initializer.span(), "component must be a string literal"),
                                 },
                                 "controls" => self.compile_controls(initializer),
-                                other => self.unsupported(initializer.span(), format!("export `{other}` is a valid future authoring surface but the current module contract only admits `component` and `controls`")),
+                                "composition" => self.compile_composition(initializer),
+                                other => self.unsupported(initializer.span(), format!("a Motion module exports its component by default and may declare `controls` and `composition`; `{other}` is not part of the module contract — keep helpers module-local")),
                             }
                         }
                     }
-                    _ => self.illegal(DiagCode::ModuleShape, export.span(), "named exports must be `export const component` or `export const controls`"),
+                    _ => self.illegal(DiagCode::ModuleShape, export.span(), "named exports must be `export const component`, `export const controls`, or `export const composition`"),
                 },
                 Statement::ExportDefaultDeclaration(export) => match &export.declaration {
                     ExportDefaultDeclarationKind::FunctionDeclaration(function) => {
@@ -194,6 +198,20 @@ impl<'s> Compiler<'s> {
         }
 
         self.validate_prepare_data();
+
+        // The delivery contract is mandatory for authored entry files. In-memory compiles without
+        // an entry path stay lenient so style/layout tests do not have to restate a canvas; every
+        // rendering path rejects an artifact without a composition instead of guessing one.
+        if self.composition.is_none() && self.require_composition {
+            self.illegal(
+                DiagCode::ModuleShape,
+                Span::new(0, 0),
+                format!(
+                    "this entry file must declare its delivery contract; add: {}",
+                    valle_motion::COMPOSITION_TEMPLATE
+                ),
+            );
+        }
 
         let Some(component) = self.component.clone() else {
             self.illegal(
@@ -245,6 +263,7 @@ impl<'s> Compiler<'s> {
                 key: "__scene_root__".into(),
                 kind: NodeKind::Group,
                 class_names: Vec::new(),
+                class_conditions: Default::default(),
                 styles: Vec::new(),
                 visibility: None,
                 semantic: None,
@@ -296,6 +315,7 @@ impl<'s> Compiler<'s> {
                     .chain(self.extra_capabilities.iter().cloned()),
             ),
             component,
+            composition: self.composition.clone(),
             controls: self.controls.clone(),
             resource_refs,
             exprs: std::mem::take(&mut self.expr_arena.values),
@@ -309,13 +329,87 @@ impl<'s> Compiler<'s> {
         };
         if let Err(errors) = validation {
             for error in errors {
-                let span = validation_span(
+                let mut span = validation_span(
                     &error.path,
                     &self.expr_arena.spans,
                     &self.source_ledger.node_spans,
                     self.controls_span,
                 );
-                self.illegal(DiagCode::ArtifactInvalid, span, error.to_string());
+                let path: Vec<_> = error.path.split('/').collect();
+                if path.get(1) == Some(&"cssRules") {
+                    let code = error
+                        .style
+                        .as_ref()
+                        .map_or(DiagCode::ArtifactInvalid, |issue| issue.code());
+                    let mut diagnostic = diagnostic_at(self.source, code, span, error.message);
+                    diagnostic.css_rule = path.get(2).and_then(|index| index.parse().ok());
+                    diagnostic.node_path = path
+                        .get(6)
+                        .and_then(|index| index.parse::<usize>().ok())
+                        .and_then(|index| artifact.nodes.get(index))
+                        .map(|node| node.key.clone());
+                    diagnostic.style = error.style;
+                    self.push_diagnostic(diagnostic);
+                    continue;
+                }
+                if path.get(3) == Some(&"classNames")
+                    && let Some(node) = path
+                        .get(2)
+                        .and_then(|index| index.parse::<usize>().ok())
+                        .and_then(|index| artifact.nodes.get(index))
+                    && let Some(class) = path
+                        .get(4)
+                        .and_then(|index| index.parse::<usize>().ok())
+                        .and_then(|index| node.class_names.get(index))
+                {
+                    if let Some(offset) = self
+                        .source
+                        .get(span.start as usize..span.end as usize)
+                        .and_then(|source| source.find(class))
+                    {
+                        span = Span::new(
+                            span.start + offset as u32,
+                            span.start + (offset + class.len()) as u32,
+                        );
+                    }
+                    let code = error
+                        .style
+                        .as_ref()
+                        .map_or(DiagCode::TailwindUnsupported, |issue| issue.code());
+                    let mut diagnostic = diagnostic_at(self.source, code, span, error.message);
+                    diagnostic.node_path = Some(node.key.clone());
+                    diagnostic.utility = Some(class.clone());
+                    diagnostic.style = error.style;
+                    if node.class_conditions.contains_key(class) {
+                        diagnostic.message.push_str(
+                            "; candidate from a conditional className (all branches are validated)",
+                        );
+                    }
+                    self.push_diagnostic(diagnostic);
+                    continue;
+                }
+                if let Some(issue) = error.style {
+                    let parts: Vec<_> = error.path.split('/').collect();
+                    let node = parts
+                        .get(2)
+                        .and_then(|index| index.parse::<usize>().ok())
+                        .and_then(|index| artifact.nodes.get(index));
+                    if parts.get(3) == Some(&"styles")
+                        && let Some(style) = node.and_then(|node| {
+                            parts
+                                .get(4)
+                                .and_then(|index| index.parse::<usize>().ok())
+                                .and_then(|index| node.styles.get(index))
+                        })
+                        && let StyleValue::Expr { expr } = style.value
+                        && let Some(origin) = self.expr_arena.spans.get(expr.0 as usize)
+                    {
+                        span = *origin;
+                    }
+                    self.style_diagnostic(span, node.map(|node| node.key.as_str()), issue);
+                } else {
+                    self.illegal(DiagCode::ArtifactInvalid, span, error.to_string());
+                }
             }
             return Err(std::mem::take(&mut self.diagnostics));
         }
@@ -479,6 +573,10 @@ impl<'s> Compiler<'s> {
                         column: 1,
                     },
                     source_path: Some(source_path.clone()),
+                    node_path: None,
+                    utility: None,
+                    style: None,
+                    css_rule: None,
                     message: error.to_string(),
                 });
             }
@@ -857,6 +955,7 @@ impl<'s> Compiler<'s> {
                         key: self.scoped_key("__component_group__"),
                         kind: NodeKind::Group,
                         class_names: Vec::new(),
+                        class_conditions: Default::default(),
                         styles: Vec::new(),
                         visibility: None,
                         semantic: None,

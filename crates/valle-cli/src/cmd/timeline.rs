@@ -108,6 +108,7 @@ fn render_document_impl(
         if frame.is_some() { "preview" } else { "export" },
         output,
         &summary,
+        None,
     )?;
     Ok(std::process::ExitCode::SUCCESS)
 }
@@ -132,6 +133,7 @@ pub(crate) fn prepare_timeline_package(
     let timeline_json = String::from_utf8(timeline_bytes(&timeline)?)?;
     let mut doc: serde_json::Value = serde_json::from_slice(&timeline_bytes(&timeline)?)?;
     prepare_motion_instances(&mut doc)?;
+    fill_motion_source_durations(&mut doc, base)?;
     let timeline = decode_timeline(&serde_json::to_string(&doc)?)?;
     let compiled = valle_compiler::compile_timeline(timeline)?;
     let canonical = encode_canonical(&compiled)?;
@@ -184,11 +186,7 @@ pub(crate) fn prepare_timeline_package(
                         });
                     }
                 }
-                let canvas = (
-                    doc["canvas"]["width"].as_u64().unwrap_or(1920) as u32,
-                    doc["canvas"]["height"].as_u64().unwrap_or(1080) as u32,
-                );
-                let prepared = super::motion::compile_timeline_component(&path, &specs, canvas)?;
+                let prepared = super::motion::compile_timeline_component(&path, &specs)?;
                 let mut source_map = serde_json::to_value(&prepared.compiled.source_map)?;
                 source_map["entry"] = serde_json::json!(path);
                 let artifact = prepared.compiled.artifact;
@@ -203,25 +201,55 @@ pub(crate) fn prepare_timeline_package(
                             let frame_rate: valle_timeline::FrameRate = serde_json::from_value(
                                 compiled_json["document"]["canvas"]["fps"].clone(),
                             )?;
-                            let frame = |value: &serde_json::Value| -> Result<i64> {
-                                let time: valle_timeline::RationalTime =
-                                    serde_json::from_value(value.clone())?;
-                                Ok(valle_timeline::internal::quantize::quantize_frame_boundary(
-                                    time, frame_rate,
-                                )?)
-                            };
                             let mut cues = serde_json::Map::new();
                             for (name, cue) in
                                 item["source"]["cues"].as_object().into_iter().flatten()
                             {
+                                let time = |field: &str| -> Result<valle_timeline::RationalTime> {
+                                    Ok(serde_json::from_value(cue[field].clone())?)
+                                };
+                                let window = valle_motion::signals::cue_window_seconds(
+                                    time("start")?,
+                                    time("end")?,
+                                    time("enterDuration")?,
+                                    time("exitDuration")?,
+                                    frame_rate,
+                                )?;
                                 cues.insert(name.clone(), serde_json::json!({
-                                    "startFrame": frame(&cue["start"])?, "endFrame": frame(&cue["end"])?,
-                                    "enterFrames": frame(&cue["enterDuration"])?, "exitFrames": frame(&cue["exitDuration"])?
+                                    "startFrame": window.start_frame, "endFrame": window.end_frame,
+                                    "enterFrames": window.enter_frames, "exitFrames": window.exit_frames
                                 }));
                             }
+                            let source = &item["source"];
+                            let phase_override =
+                                |field: &str| -> Result<Option<valle_timeline::RationalTime>> {
+                                    let value = &source["phases"][field];
+                                    if value.is_null() {
+                                        Ok(None)
+                                    } else {
+                                        Ok(Some(serde_json::from_value(value.clone())?))
+                                    }
+                                };
+                            let timing = valle_motion::resolve_timing_seconds(
+                                phase_override("enterDuration")?,
+                                phase_override("exitDuration")?,
+                                artifact.controls.timing_seconds,
+                            );
+                            let source_duration: valle_timeline::RationalTime =
+                                serde_json::from_value(source["sourceDuration"].clone())?;
+                            let phases = valle_motion::phase_windows_seconds(
+                                timing,
+                                source_duration,
+                                frame_rate,
+                            )?;
                             structures.push(serde_json::json!({
                                 "clipId": item["id"],
-                                "authoring": { "sourceMap": source_map, "totalFrames": frame(&item["source"]["sourceDuration"])?, "cues": cues }
+                                "authoring": {
+                                    "sourceMap": source_map,
+                                    "totalFrames": phases.duration_frames,
+                                    "timing": { "enterFrames": phases.enter_frames, "exitFrames": phases.exit_frames },
+                                    "cues": cues
+                                }
                             }));
                         }
                     }
@@ -540,6 +568,52 @@ fn prepare_motion_instances(doc: &mut serde_json::Value) -> Result<()> {
     Ok(())
 }
 
+/// The public document has no source duration default until its executable Motion metadata is known.
+pub(crate) fn fill_motion_source_durations(doc: &mut serde_json::Value, base: &Path) -> Result<()> {
+    let locators = doc["resources"].as_object().cloned().unwrap_or_default();
+    for track in doc["tracks"]["visual"].as_array_mut().into_iter().flatten() {
+        for clip in track["clips"].as_array_mut().into_iter().flatten() {
+            if clip["kind"] != "motion" || clip.get("sourceDuration").is_some() {
+                continue;
+            }
+            let name = clip["component"]
+                .as_str()
+                .ok_or_else(|| anyhow!("missing Motion component"))?;
+            let locator = locators
+                .get(name)
+                .and_then(|value| value.as_str())
+                .ok_or_else(|| anyhow!("missing Motion resource {name}"))?;
+            let mut assets = Vec::new();
+            for (control, alias) in clip["resources"].as_object().into_iter().flatten() {
+                let alias = alias
+                    .as_str()
+                    .ok_or_else(|| anyhow!("invalid Motion asset alias"))?;
+                let asset = locators
+                    .get(alias)
+                    .and_then(|value| value.as_str())
+                    .ok_or_else(|| anyhow!("missing Motion resource {alias}"))?;
+                assets.push(format!("{control}={}", base.join(asset).display()));
+            }
+            let prepared = super::motion::compile_timeline_component(&base.join(locator), &assets)?;
+            let composition = prepared.compiled.artifact.composition.as_ref()
+                .ok_or_else(|| anyhow!("Motion {name} needs composition.duration or an explicit bound work definition"))?;
+            let seconds = composition.duration()?.as_f64();
+            clip["sourceDuration"] = serde_json::json!(seconds);
+        }
+    }
+    Ok(())
+}
+
+/// Freeze composition metadata into a Project revision before its pure Timeline compiler runs.
+pub(crate) fn resolve_project_motion_durations(
+    timeline: Timeline,
+    base: &Path,
+) -> Result<Timeline> {
+    let mut doc: serde_json::Value = serde_json::from_slice(&timeline_bytes(&timeline)?)?;
+    fill_motion_source_durations(&mut doc, base)?;
+    Ok(decode_timeline(&serde_json::to_string(&doc)?)?)
+}
+
 fn collect_used_resources(
     value: &serde_json::Value,
     used: &mut std::collections::BTreeSet<String>,
@@ -572,5 +646,34 @@ fn collect_used_resources(
             }
         }
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod motion_phase_projection_tests {
+    use super::*;
+
+    #[test]
+    fn prepared_timeline_projects_component_defaults_with_clip_override() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("phase.motion.tsx"),
+            "export const composition = { width: 64, height: 64, fps: 24, duration: 4.6 };\nexport const controls = defineControls({ timing: { enterDuration: 0.2 } });\nexport default function Phase() { return <Scene />; }",
+        )
+        .unwrap();
+        let timeline = serde_json::json!({
+            "canvas": {"width": 64, "height": 64, "fps": 24},
+            "resources": {"phase": "phase.motion.tsx"},
+            "tracks": {"visual": [{"clips": [{
+                "kind": "motion", "component": "phase", "start": 0, "duration": 4.6,
+                "phases": {"exitDuration": 0.15}
+            }]}]}
+        });
+        let timeline = decode_timeline(&timeline.to_string()).unwrap();
+        let prepared = prepare_timeline_package(timeline, dir.path()).unwrap();
+        let authoring = &prepared.motion["structures"][0]["authoring"];
+        assert_eq!(authoring["totalFrames"], 110);
+        assert_eq!(authoring["timing"]["enterFrames"], 5);
+        assert_eq!(authoring["timing"]["exitFrames"], 3);
     }
 }

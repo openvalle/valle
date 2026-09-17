@@ -119,6 +119,7 @@ pub(super) fn compile_admitted_timeline(
                 hold_frames: instance.phases.hold_frames,
                 exit_frames: instance.phases.exit_frames,
                 hold_cycle_frames: instance.phases.hold_cycle_frames,
+                hold_cycle_duration: instance.phases.hold_cycle_duration,
             },
             artifact: instance.artifact,
         }
@@ -162,8 +163,9 @@ pub(super) fn compile_admitted_timeline(
             AdmittedSourcePayload::Lottie { fit } => CompiledSourcePayload::Lottie {
                 fit: compile_fit(fit),
             },
-            AdmittedSourcePayload::Motion { instance } => CompiledSourcePayload::Motion {
+            AdmittedSourcePayload::Motion { instance, fit } => CompiledSourcePayload::Motion {
                 instance: compile_motion_instance(instance),
+                fit: compile_fit(fit),
             },
             AdmittedSourcePayload::Solid { color } => CompiledSourcePayload::Solid { color },
             AdmittedSourcePayload::Audio {

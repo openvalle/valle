@@ -95,6 +95,7 @@ test("project environments and models survive frozen-package reopen and arbitrar
       try {textureBytes=Uint8Array.from(textureImage.encodeToBytes()!);} finally {textureImage.delete();}
       await writeFile(join(dir,"map.png"),textureBytes);
       await writeFile(join(dir,"scene.motion.tsx"), `
+        export const composition = { width: 64, height: 64, duration: 3 };
         export const controls=defineControls({assets:{model:asset({kind:"model3d"})${environment?',sky:asset({kind:"environment"})':''}${material?',map:asset({kind:"image"})':''}}});
         export default function T(ctx){return <Scene style={{width:64,height:64}}>
           <Scene3D key="test" camera={{${animated ? 'position:[ctx.seconds*0.1,0.1,3+ctx.seconds*0.1],target:[ctx.seconds*0.05,0,0],near:0.1+ctx.seconds*0.01,far:10+ctx.seconds,fov:45-ctx.seconds,orbitYaw:ctx.seconds*10,orbitPitch:ctx.seconds*2,distance:3.1+ctx.seconds*0.1' : 'position:[0,0,3],target:[0,0,0],fov:45'}}} style={{width:64,height:64}}
@@ -110,7 +111,7 @@ test("project environments and models survive frozen-package reopen and arbitrar
           </Scene3D>
         </Scene>; }
       `);
-      const assets = ["--asset","model=model.glb",...(environment ? ["--asset","sky=sky.png"] : []),...(material ? ["--asset","map=map.png"] : []),"--size","64x64","--duration","3","--fps","30"];
+      const assets = ["--asset","model=model.glb",...(environment ? ["--asset","sky=sky.png"] : []),...(material ? ["--asset","map=map.png"] : []),"--fps","30"];
       const server = spawn(["motion","studio","scene.motion.tsx",...assets,"--port","0","--web-assets-dir",join(root,"web/dist")]);
       try {
         const reader = server.stdout.getReader();
@@ -123,6 +124,7 @@ test("project environments and models survive frozen-package reopen and arbitrar
           }
         } finally { reader.releaseLock(); }
         const ready = JSON.parse(line.split("\n")[0]!);
+        if (!ready.url) throw new Error(JSON.stringify(ready));
         const config = await (await fetch(new URL("/config.json",ready.url))).json() as Record<string,string>;
         const open = () => {
           const engine = new ProductEngine();

@@ -18,6 +18,7 @@ impl<'s> Compiler<'s> {
 
     /// Bind a prepare-time constant and invalidate any dynamic binding with the same name.
     pub(super) fn bind_static(&mut self, name: String, value: serde_json::Value) {
+        self.bindings.objects.remove(&name);
         self.bindings.scalars.remove(&name);
         self.bindings.tuples.remove(&name);
         self.bindings.children.remove(&name);
@@ -27,6 +28,7 @@ impl<'s> Compiler<'s> {
     /// Bind a runtime expression and invalidate static or tuple bindings with the same name.
     /// Otherwise the sandbox could fold a shadowed outer value into a constant.
     pub(super) fn bind_dynamic(&mut self, name: String, expr: ExprId) {
+        self.bindings.objects.remove(&name);
         self.bindings.statics.remove(&name);
         self.bindings.tuples.remove(&name);
         self.bindings.children.remove(&name);
@@ -37,6 +39,7 @@ impl<'s> Compiler<'s> {
     /// only exists while lowering author code; every indexed use resolves back to
     /// one scalar ExprId before the SceneArtifact is emitted.
     pub(super) fn bind_dynamic_tuple(&mut self, name: String, values: Vec<ExprId>) {
+        self.bindings.objects.remove(&name);
         self.bindings.scalars.remove(&name);
         self.bindings.statics.remove(&name);
         self.bindings.children.remove(&name);
@@ -293,6 +296,7 @@ impl<'s> Compiler<'s> {
 
     /// Bind JSX children in the same namespace as scalar and tuple values.
     pub(super) fn bind_children(&mut self, name: String, children: Vec<PendingNode>) {
+        self.bindings.objects.remove(&name);
         self.bindings.scalars.remove(&name);
         self.bindings.tuples.remove(&name);
         self.bindings.statics.remove(&name);
@@ -305,6 +309,7 @@ impl<'s> Compiler<'s> {
         if self.bindings.scalars.is_empty()
             && self.bindings.tuples.is_empty()
             && self.bindings.children.is_empty()
+            && self.bindings.objects.is_empty()
         {
             return false;
         }
@@ -312,6 +317,8 @@ impl<'s> Compiler<'s> {
             self.bindings.scalars.contains_key(name)
                 || self.bindings.tuples.contains_key(name)
                 || self.bindings.children.contains_key(name)
+                || (self.bindings.objects.contains_key(name)
+                    && !self.bindings.statics.contains_key(name))
         })
     }
 
@@ -373,11 +380,22 @@ impl<'s> Compiler<'s> {
                 // Register component-local function declarations as helpers instead of Motion
                 // values.
                 if let Some(authored) = authored_fn_of(initializer) {
+                    self.bindings.objects.remove(&name);
                     self.bindings.local_functions.insert(name, authored);
                     return;
                 }
+                let object = self.capture_authored_object(initializer);
                 if let Some(value) = self.eval_static(initializer) {
-                    self.bind_static(name, value);
+                    self.bind_static(name.clone(), value);
+                    if let Some(object) = object {
+                        self.bindings.objects.insert(name, object);
+                    }
+                } else if let Some(object) = object {
+                    self.bindings.scalars.remove(&name);
+                    self.bindings.tuples.remove(&name);
+                    self.bindings.statics.remove(&name);
+                    self.bindings.children.remove(&name);
+                    self.bindings.objects.insert(name, object);
                 } else if self.is_dynamic_tuple_expression(initializer) {
                     if let Some(values) =
                         self.lower_dynamic_tuple_expression(initializer, "local dynamic tuple")
@@ -452,7 +470,7 @@ impl<'s> Compiler<'s> {
             let Some(local_name) = binding_local_name(&property.value) else {
                 self.unsupported(
                     property.value.span(),
-                    "nested dynamic props destructuring is not yet in the scalar expression IR",
+                    "nested props destructuring is not supported; bind one scalar field at a time",
                 );
                 continue;
             };

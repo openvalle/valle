@@ -8,14 +8,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
-use crate::{MotionAction, MotionBindingArgs, MotionCanvasArgs, MotionRenderTuningArgs};
+use crate::{MotionAction, MotionBindingArgs, MotionRenderTuningArgs};
 use anyhow::{Context, Result, anyhow, bail};
 use serde::Serialize;
 use valle_motion::{
-    ArtifactEnvelope, BuildFingerprint, ContentDigest, CueWindow, MotionViewport, NodeKind,
-    ResourceRef, canonical_bytes,
+    ArtifactEnvelope, BuildFingerprint, ContentDigest, MotionViewport, NodeKind, ResourceRef,
+    canonical_bytes,
 };
-use valle_timeline::internal::quantize::quantize_frame_boundary;
 use valle_timeline::{
     time::{FrameRate, RationalTime},
     wire::timeline::TimelineTimeWire,
@@ -28,11 +27,10 @@ pub fn run(action: MotionAction) -> Result<std::process::ExitCode> {
             assets,
             bindings,
             data,
-            canvas,
             font,
-            duration,
-            fps,
             frame,
+            fps,
+            ..
         } => {
             let temp = tempfile::tempdir()?;
             render(
@@ -42,12 +40,12 @@ pub fn run(action: MotionAction) -> Result<std::process::ExitCode> {
                 &font,
                 data.as_deref(),
                 &bindings,
-                parse_duration(&duration)?,
-                parse_fps(&fps)?,
-                resolve_canvas_size(canvas)?,
                 Some(frame),
                 valle_render::executor::skia::SkiaBackendKind::Raster,
-                MotionRenderTuningArgs::default(),
+                MotionRenderTuningArgs {
+                    fps,
+                    ..Default::default()
+                },
                 true,
             )
         }
@@ -61,9 +59,7 @@ pub fn run(action: MotionAction) -> Result<std::process::ExitCode> {
             bindings,
             font,
             data,
-            duration,
-            fps,
-            canvas,
+            ..
         } => render(
             &input,
             &output,
@@ -71,9 +67,6 @@ pub fn run(action: MotionAction) -> Result<std::process::ExitCode> {
             &font,
             data.as_deref(),
             &bindings,
-            parse_duration(&duration)?,
-            parse_fps(&fps)?,
-            resolve_canvas_size(canvas)?,
             frame,
             backend.into(),
             tuning,
@@ -81,17 +74,17 @@ pub fn run(action: MotionAction) -> Result<std::process::ExitCode> {
         ),
         MotionAction::Studio {
             input,
+            fps,
             assets,
             bindings,
             font,
             data,
             web_assets_dir,
             port,
-            duration,
-            fps,
-            canvas,
+            ..
         } => studio(StudioRequest {
             input,
+            fps,
             preview_files: Arc::new(RwLock::new(BTreeMap::new())),
             asset_specs: assets,
             bindings,
@@ -99,9 +92,6 @@ pub fn run(action: MotionAction) -> Result<std::process::ExitCode> {
             data,
             web_assets_dir,
             port,
-            duration: parse_duration(&duration)?,
-            fps: parse_fps(&fps)?,
-            canvas_size: resolve_canvas_size(canvas)?,
         }),
     }
 }
@@ -115,9 +105,6 @@ fn render(
     font_paths: &[PathBuf],
     data: Option<&Path>,
     bindings: &MotionBindingArgs,
-    duration: RationalTime,
-    fps: FrameRate,
-    canvas: MotionViewport,
     frame: Option<i64>,
     backend: valle_render::executor::skia::SkiaBackendKind,
     tuning: MotionRenderTuningArgs,
@@ -139,20 +126,35 @@ fn render(
     {
         bail!("output must have an .{extension} extension");
     }
-    duration_frames(duration, fps)?;
     let explicit_fonts = read_font_files(font_paths)?;
     let fonts = authoring_font_blobs(&explicit_fonts);
-    let prepared = match compile_and_prepare(input, asset_specs, &fonts, canvas, data, true)? {
+    let prepared = match compile_and_prepare(input, asset_specs, &fonts, data, true)? {
         Ok(prepared) => prepared,
         Err(()) => return Ok(std::process::ExitCode::FAILURE),
     };
     let artifact = &prepared.compiled.artifact;
-    let cues = read_cue_bindings(bindings.cues.as_deref(), fps)?;
+    let delivery = Delivery::of(artifact, tuning.fps.as_deref())?;
+    let (duration, fps, canvas) = (delivery.duration, delivery.fps, delivery.canvas);
+    if let Some((width, height)) = tuning.output_size {
+        // Delivery scaling must preserve the composition's aspect ratio: another shape is another
+        // layout, and layout comes from the composition.
+        if u64::from(width) * u64::from(canvas.height)
+            != u64::from(height) * u64::from(canvas.width)
+        {
+            bail!(
+                "--output-size must scale the composition canvas {}x{} proportionally; {width}x{height} changes the aspect ratio",
+                canvas.width,
+                canvas.height
+            );
+        }
+    }
+    let cues = read_cue_bindings(bindings.cues.as_deref())?;
     let props = read_prop_bindings(bindings.props.as_deref())?;
     let font_blobs = fixed_package_font_blobs(artifact, &explicit_fonts)?;
     let package = super::motion_package::build_standalone_motion_package(
         super::motion_package::StandaloneMotionPackageInput {
             timing: None,
+            timing_seconds: None,
             artifact,
             assets: &prepared.assets,
             font_blobs: &font_blobs,
@@ -213,6 +215,12 @@ fn render(
             if frame.is_some() { "preview" } else { "export" },
             output,
             &summary,
+            Some(serde_json::json!({
+                "targetDurationSeconds": duration.as_f64(),
+                "fps": format!("{}/{}", fps.numerator(), fps.denominator()),
+                "totalFrames": delivery.duration_frames,
+                "actualDurationSeconds": f64::from(delivery.duration_frames) * f64::from(fps.denominator()) / fps.numerator() as f64,
+            })),
         )?;
     }
     Ok(std::process::ExitCode::SUCCESS)
@@ -221,6 +229,7 @@ fn render(
 #[derive(Clone)]
 struct StudioRequest {
     input: PathBuf,
+    fps: Option<String>,
     preview_files: Arc<RwLock<BTreeMap<String, Arc<[u8]>>>>,
     asset_specs: Vec<String>,
     bindings: MotionBindingArgs,
@@ -228,9 +237,6 @@ struct StudioRequest {
     data: Option<PathBuf>,
     web_assets_dir: Option<PathBuf>,
     port: u16,
-    duration: RationalTime,
-    fps: FrameRate,
-    canvas_size: MotionViewport,
 }
 
 fn studio(request: StudioRequest) -> Result<std::process::ExitCode> {
@@ -337,7 +343,6 @@ fn compile_with_font_assets(
     resources: &[ResourceRef],
     assets: &mut BTreeMap<String, BoundAsset>,
     font_blobs: &[Vec<u8>],
-    canvas_size: MotionViewport,
     shaders: &valle_motion::shader::ShaderRegistry,
     data: Option<&valle_compiler::motion::PrepareDataBinding>,
 ) -> Result<
@@ -358,12 +363,10 @@ fn compile_with_font_assets(
         .filter(|(_, asset)| ttf_parser::Face::parse(&asset.bytes, 0).is_ok())
         .map(|(control, asset)| (format!("asset://{control}"), asset.bytes.clone()))
         .collect::<Vec<_>>();
-    let measure = valle_compiler::motion::MeasureEnv::new_with_aliases(
-        font_blobs,
-        &measure_aliases,
-        canvas_size.tuple(),
-    )
-    .map_err(|diagnostic| anyhow!("{}", diagnostic.message))?;
+    // The compiler binds measurement to the entry composition before module constants run.
+    let measure =
+        valle_compiler::motion::MeasureEnv::new_unbound_with_aliases(font_blobs, &measure_aliases)
+            .map_err(|diagnostic| anyhow!("{}", diagnostic.message))?;
     let mut compiled = match valle_compiler::motion::compile_motion_modules_with_full_env_and_data(
         graph,
         resources,
@@ -433,16 +436,16 @@ struct MotionPreviewDraft {
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct MotionPreviewTiming {
-    enter_frames: u32,
-    exit_frames: u32,
+    enter_duration: TimelineTimeWire,
+    exit_duration: TimelineTimeWire,
 }
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct MotionPreviewCue {
-    start_frame: u32,
-    end_frame: u32,
-    enter_frames: u32,
-    exit_frames: u32,
+    start: TimelineTimeWire,
+    end: TimelineTimeWire,
+    enter_duration: TimelineTimeWire,
+    exit_duration: TimelineTimeWire,
 }
 
 fn studio_state_json(request: &StudioRequest, generation: u64) -> Result<String> {
@@ -464,7 +467,7 @@ fn studio_state_json_with_draft(
             content_hash: asset.hash.clone(),
         })
         .collect::<Vec<_>>();
-    // Hot reload must measure with the same fonts and viewport used by Studio preview.
+    // Hot reload uses the same fonts and source composition as Studio preview.
     let explicit_font_blobs = read_font_files(&request.fonts)?;
     let font_blobs = authoring_font_blobs(&explicit_font_blobs);
     let data_binding = load_prepare_data(&request.input, request.data.as_deref())?;
@@ -473,7 +476,6 @@ fn studio_state_json_with_draft(
         &resources,
         &mut assets,
         &font_blobs,
-        request.canvas_size,
         &shaders,
         data_binding.as_ref(),
     )? {
@@ -510,12 +512,13 @@ fn studio_state_json_with_draft(
             );
         }
     };
+    let delivery = Delivery::of(&compiled.artifact, request.fps.as_deref())?;
     let prepared = PreparedInput {
         compiled,
         data_binding,
         assets,
         shaders,
-        canvas_size: request.canvas_size,
+        canvas_size: delivery.canvas,
     };
     let font_hashes = font_blobs
         .iter()
@@ -524,49 +527,49 @@ fn studio_state_json_with_draft(
     let envelope = envelope_for(&prepared, &font_hashes)?;
     let artifact_digest =
         ContentDigest::of_bytes(&canonical_bytes(&prepared.compiled.artifact)?).to_wire();
-    let duration_frames = duration_frames(request.duration, request.fps)?;
-    let timing = if let Some(draft) = draft {
-        prepared
-            .compiled
-            .artifact
-            .controls
-            .timing
-            .resolve_phase_spec(
-                Some(draft.timing.enter_frames),
-                Some(draft.timing.exit_frames),
-            )
-            .map_err(|e| anyhow!("{e:?}"))?
-    } else {
-        prepared.compiled.artifact.controls.phase_spec()
-    };
-    if u64::from(timing.enter_frames) + u64::from(timing.exit_frames) > duration_frames as u64 {
-        bail!("Enter and exit phases exceed the Motion duration");
-    }
+    let duration_frames = delivery.duration_frames;
+    let authored_timing = draft
+        .map(|draft| valle_motion::TimingSeconds {
+            enter_duration: RationalTime::from_exact(draft.timing.enter_duration.to_exact()),
+            exit_duration: RationalTime::from_exact(draft.timing.exit_duration.to_exact()),
+            hold_cycle_duration: prepared
+                .compiled
+                .artifact
+                .controls
+                .timing_seconds
+                .and_then(|timing| timing.hold_cycle_duration),
+        })
+        .or(prepared.compiled.artifact.controls.timing_seconds)
+        .unwrap_or(valle_motion::TimingSeconds {
+            enter_duration: RationalTime::ZERO,
+            exit_duration: RationalTime::ZERO,
+            hold_cycle_duration: None,
+        });
+    let timing =
+        valle_motion::phase_windows_seconds(authored_timing, delivery.duration, delivery.fps)?;
     let cue_bindings = if let Some(draft) = draft {
         draft
             .cues
             .iter()
             .map(|(name, cue)| {
-                if cue.start_frame >= cue.end_frame
-                    || cue.end_frame > duration_frames as u32
-                    || u64::from(cue.enter_frames) + u64::from(cue.exit_frames)
-                        > u64::from(cue.end_frame - cue.start_frame)
-                {
+                let start = RationalTime::from_exact(cue.start.to_exact());
+                let end = RationalTime::from_exact(cue.end.to_exact());
+                if start >= end || end > delivery.duration {
                     bail!("Cue {name} is outside the Motion duration");
                 }
                 Ok((
                     name.clone(),
-                    CueWindow {
-                        start_frame: cue.start_frame,
-                        end_frame: cue.end_frame,
-                        enter_frames: cue.enter_frames,
-                        exit_frames: cue.exit_frames,
+                    super::motion_package::SourceCueBinding {
+                        start,
+                        end,
+                        enter_duration: RationalTime::from_exact(cue.enter_duration.to_exact()),
+                        exit_duration: RationalTime::from_exact(cue.exit_duration.to_exact()),
                     },
                 ))
             })
             .collect::<Result<BTreeMap<_, _>>>()?
     } else {
-        read_cue_bindings(request.bindings.cues.as_deref(), request.fps)?
+        read_cue_bindings(request.bindings.cues.as_deref())?
     };
     let props = if let Some(draft) = draft {
         draft.props.clone()
@@ -576,24 +579,36 @@ fn studio_state_json_with_draft(
     let studio_cue_bindings = cue_bindings
         .iter()
         .map(|(name, cue)| {
-            (
+            let window = valle_motion::signals::cue_window_seconds(
+                cue.start,
+                cue.end,
+                cue.enter_duration,
+                cue.exit_duration,
+                delivery.fps,
+            )?;
+            Ok((
                 name,
                 serde_json::json!({
                     "type": "sourceRange",
-                    "startFrame": cue.start_frame,
-                    "endFrame": cue.end_frame,
-                    "enterFrames": cue.enter_frames,
-                    "exitFrames": cue.exit_frames,
+                    "startFrame": window.start_frame,
+                    "endFrame": window.end_frame,
+                    "enterFrames": window.enter_frames,
+                    "exitFrames": window.exit_frames,
+                    "start": cue.start.as_f64(),
+                    "end": cue.end.as_f64(),
+                    "enterDuration": cue.enter_duration.as_f64(),
+                    "exitDuration": cue.exit_duration.as_f64(),
                 }),
-            )
+            ))
         })
-        .collect::<BTreeMap<_, _>>();
-    let frame_rate = request.fps;
+        .collect::<Result<BTreeMap<_, _>>>()?;
+    let frame_rate = delivery.fps;
     let runtime_font_blobs =
         fixed_package_font_blobs(&prepared.compiled.artifact, &explicit_font_blobs)?;
     let fixed_package = match super::motion_package::build_standalone_motion_package(
         super::motion_package::StandaloneMotionPackageInput {
-            timing: Some(timing),
+            timing: None,
+            timing_seconds: Some(authored_timing),
             artifact: &prepared.compiled.artifact,
             assets: &prepared.assets,
             // Freeze every face that the Motion DrawProgram can request by content digest.
@@ -602,9 +617,9 @@ fn studio_state_json_with_draft(
             font_blobs: &runtime_font_blobs,
             cue_bindings: &cue_bindings,
             prop_bindings: &props,
-            duration: request.duration,
+            duration: delivery.duration,
             frame_rate,
-            canvas: request.canvas_size.tuple(),
+            canvas: delivery.canvas.tuple(),
         },
     ) {
         Ok(package) => package,
@@ -672,6 +687,8 @@ fn studio_state_json_with_draft(
         "timing": {
             "enterFrames": timing.enter_frames,
             "exitFrames": timing.exit_frames,
+            "enterDuration": authored_timing.enter_duration.as_f64(),
+            "exitDuration": authored_timing.exit_duration.as_f64(),
         },
         "cueBindings": studio_cue_bindings,
         "sourceMap": prepared.compiled.source_map,
@@ -686,12 +703,12 @@ fn studio_state_json_with_draft(
         }).collect::<Vec<_>>(),
         "durationFrames": duration_frames,
         "fps": {
-            "num": request.fps.numerator(),
-            "den": request.fps.denominator(),
+            "num": delivery.fps.numerator(),
+            "den": delivery.fps.denominator(),
         },
         "viewport": {
-            "width": request.canvas_size.width,
-            "height": request.canvas_size.height,
+            "width": delivery.canvas.width,
+            "height": delivery.canvas.height,
         },
         "fixedPackageManifestJson": fixed_package.fixed_package_manifest_json,
         "timelineJson": fixed_package.timeline_json,
@@ -848,7 +865,6 @@ fn compile_and_prepare(
     input: &Path,
     asset_specs: &[String],
     font_blobs: &[Vec<u8>],
-    canvas_size: MotionViewport,
     data: Option<&Path>,
     emit_diagnostics: bool,
 ) -> Result<Result<PreparedInput, ()>> {
@@ -870,7 +886,6 @@ fn compile_and_prepare(
         &resources,
         &mut assets,
         font_blobs,
-        canvas_size,
         &shaders,
         data_binding.as_ref(),
     )? {
@@ -945,6 +960,12 @@ fn compile_and_prepare(
             prepare_started.elapsed().as_secs_f64() * 1_000.0,
         );
     }
+    let canvas_size = compiled
+        .artifact
+        .composition
+        .as_ref()
+        .ok_or_else(|| anyhow!("Motion entry requires composition metadata"))?
+        .viewport();
     Ok(Ok(PreparedInput {
         compiled,
         data_binding,
@@ -1095,17 +1116,65 @@ fn ensure_rendered_assets_are_bound(
     Ok(())
 }
 
-fn validate_studio_request(request: &StudioRequest) -> Result<()> {
-    if !request.duration.is_positive() {
-        bail!("--duration must be a positive decimal number of seconds");
-    }
-    validate_pixel_size(request.canvas_size, "canvas")?;
-    duration_frames(request.duration, request.fps).map(|_| ())
+fn validate_studio_request(_request: &StudioRequest) -> Result<()> {
+    Ok(())
 }
 
-fn resolve_canvas_size(args: MotionCanvasArgs) -> Result<MotionViewport> {
-    let (width, height) = args.size.unwrap_or((1920, 1080));
-    validate_pixel_size(MotionViewport::new(width, height), "canvas")
+/// The delivery contract every rendering path reads back from the artifact.
+///
+/// Preview, export, and Studio all take the canvas, frame rate, and duration from here, so a
+/// command line cannot disagree with the file. An artifact without a contract is an in-memory
+/// compile; rendering it would have to guess a canvas, which this project never does.
+#[derive(Clone, Copy)]
+struct Delivery {
+    duration: RationalTime,
+    duration_frames: u32,
+    fps: FrameRate,
+    canvas: MotionViewport,
+}
+
+impl Delivery {
+    fn of(artifact: &valle_motion::SceneArtifact, output_fps: Option<&str>) -> Result<Self> {
+        let Some(composition) = artifact.composition.as_ref() else {
+            bail!(
+                "{}",
+                format!(
+                    "this artifact has no delivery contract; add to the entry file: {}",
+                    valle_motion::COMPOSITION_TEMPLATE
+                )
+            );
+        };
+        let default_fps = composition
+            .frame_rate()
+            .map_err(|error| anyhow!("composition frame rate is invalid: {error}"))?;
+        let fps = output_fps
+            .map(parse_output_fps)
+            .transpose()?
+            .or(default_fps)
+            .ok_or_else(|| anyhow!("provide --fps or composition.fps"))?;
+        let duration = composition
+            .duration()
+            .map_err(|error| anyhow!("composition duration is invalid: {error}"))?;
+        let canvas = validate_pixel_size(composition.viewport(), "canvas")?;
+        Ok(Self {
+            duration,
+            duration_frames: composition
+                .duration_frames(fps)
+                .map_err(|error| anyhow!("composition duration cannot be quantized: {error}"))?,
+            fps,
+            canvas,
+        })
+    }
+}
+
+fn parse_output_fps(input: &str) -> Result<FrameRate> {
+    use valle_timeline::time::ExactRational;
+    let exact = if input.contains('/') {
+        ExactRational::parse_canonical(input)?
+    } else {
+        TimelineTimeWire::new(input)?.to_exact()
+    };
+    FrameRate::from_exact(exact).map_err(Into::into)
 }
 
 fn validate_pixel_size(size: MotionViewport, label: &str) -> Result<MotionViewport> {
@@ -1116,36 +1185,6 @@ fn validate_pixel_size(size: MotionViewport, label: &str) -> Result<MotionViewpo
         bail!("{label} dimensions exceed Skia's i32 domain");
     }
     Ok(size)
-}
-
-fn duration_frames(duration: RationalTime, frame_rate: FrameRate) -> Result<u32> {
-    let frames =
-        quantize_frame_boundary(duration, frame_rate).context("quantize exact Studio duration")?;
-    let frames = u32::try_from(frames).context("duration exceeds the u32 frame domain")?;
-    if frames == 0 {
-        bail!("duration must quantize to at least one frame");
-    }
-    Ok(frames)
-}
-
-fn parse_duration(value: &str) -> Result<RationalTime> {
-    let value = TimelineTimeWire::new(value)
-        .with_context(|| format!("invalid exact --duration `{value}`"))?;
-    Ok(RationalTime::from_exact(value.to_exact()))
-}
-
-fn parse_fps(value: &str) -> Result<FrameRate> {
-    let (num, den) = match value.split_once('/') {
-        Some((num, den)) => (num, den),
-        None => (value, "1"),
-    };
-    let num: i64 = num
-        .parse()
-        .with_context(|| format!("invalid fps numerator `{num}`"))?;
-    let den: u32 = den
-        .parse()
-        .with_context(|| format!("invalid fps denominator `{den}`"))?;
-    FrameRate::new(num, den).map_err(|_| anyhow!("fps numerator and denominator must be positive"))
 }
 
 /// Check frame-zero layout and emission so compilation cannot silently accept text that produces no
@@ -1276,16 +1315,11 @@ fn mount_motion_runtime_fonts(
     Ok(())
 }
 
-pub(super) fn compile_timeline_component(
-    input: &Path,
-    assets: &[String],
-    canvas: (u32, u32),
-) -> Result<PreparedInput> {
-    let size = MotionViewport {
-        width: canvas.0,
-        height: canvas.1,
-    };
-    compile_and_prepare(input, assets, &load_fonts(&[])?, size, None, false)?
+/// Compile a Motion component referenced by a Timeline document.
+///
+/// Compile against the component's own canvas, including module-level text measurement.
+pub(super) fn compile_timeline_component(input: &Path, assets: &[String]) -> Result<PreparedInput> {
+    compile_and_prepare(input, assets, &load_fonts(&[])?, None, false)?
         .map_err(|_| anyhow!("Motion component compilation failed"))
 }
 
@@ -1297,7 +1331,9 @@ fn read_prop_bindings(path: Option<&Path>) -> Result<BTreeMap<String, serde_json
     .map(Option::unwrap_or_default)
 }
 
-fn read_cue_bindings(path: Option<&Path>, fps: FrameRate) -> Result<BTreeMap<String, CueWindow>> {
+fn read_cue_bindings(
+    path: Option<&Path>,
+) -> Result<BTreeMap<String, super::motion_package::SourceCueBinding>> {
     use valle_timeline::wire::timeline::TimelineMotionCueBindingWire;
     let Some(path) = path else {
         return Ok(BTreeMap::new());
@@ -1305,12 +1341,6 @@ fn read_cue_bindings(path: Option<&Path>, fps: FrameRate) -> Result<BTreeMap<Str
     let bindings: BTreeMap<String, TimelineMotionCueBindingWire> =
         serde_json::from_str(&super::read(path)?)
             .context("decode Motion --cues source-range bindings")?;
-    let frame = |time: TimelineTimeWire| -> Result<u32> {
-        Ok(u32::try_from(quantize_frame_boundary(
-            RationalTime::from_exact(time.to_exact()),
-            fps,
-        )?)?)
-    };
     bindings
         .into_iter()
         .map(|(name, cue)| {
@@ -1322,11 +1352,15 @@ fn read_cue_bindings(path: Option<&Path>, fps: FrameRate) -> Result<BTreeMap<Str
             } = cue;
             Ok((
                 name,
-                CueWindow {
-                    start_frame: frame(start)?,
-                    end_frame: frame(end)?,
-                    enter_frames: enter_duration.map(frame).transpose()?.unwrap_or(0),
-                    exit_frames: exit_duration.map(frame).transpose()?.unwrap_or(0),
+                super::motion_package::SourceCueBinding {
+                    start: RationalTime::from_exact(start.to_exact()),
+                    end: RationalTime::from_exact(end.to_exact()),
+                    enter_duration: enter_duration
+                        .map(|v| RationalTime::from_exact(v.to_exact()))
+                        .unwrap_or(RationalTime::ZERO),
+                    exit_duration: exit_duration
+                        .map(|v| RationalTime::from_exact(v.to_exact()))
+                        .unwrap_or(RationalTime::ZERO),
                 },
             ))
         })

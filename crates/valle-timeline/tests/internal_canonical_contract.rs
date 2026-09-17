@@ -157,6 +157,7 @@ fn closed_schema_scalars_quantize_before_validation_and_canonicalization() {
     clip["source"] = json!({
         "type": "motion",
         "component": "motion:quantized",
+        "fit": "contain",
         "sourceStart": "0/1",
         "sourceDuration": "1/1",
         "rate": "1/1",
@@ -970,6 +971,7 @@ fn motion_cues_and_phase_overrides_are_source_clock_invariants() {
     clip["source"] = json!({
         "type": "motion",
         "component": "component:card",
+        "fit": "contain",
         "sourceStart": "0/1",
         "sourceDuration": "4/1",
         "rate": "1/1",
@@ -1002,7 +1004,7 @@ fn motion_cues_and_phase_overrides_are_source_clock_invariants() {
         .map(|diagnostic| diagnostic.code.as_str())
         .collect();
     assert!(codes.contains("motion_cue_range_invalid"));
-    assert!(codes.contains("motion_phase_exceeds_source_duration"));
+    assert!(!codes.contains("motion_phase_exceeds_source_duration"));
 }
 
 #[test]

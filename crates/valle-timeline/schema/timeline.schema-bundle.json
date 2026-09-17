@@ -1382,6 +1382,16 @@
                     }
                   ]
                 },
+                "fit": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/RasterFitWire"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
                 "kind": {
                   "const": "motion",
                   "type": "string"
@@ -3101,6 +3111,16 @@
                   "anyOf": [
                     {
                       "$ref": "#/$defs/MediaEndBehaviorWire"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "fit": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/RasterFitWire"
                     },
                     {
                       "type": "null"

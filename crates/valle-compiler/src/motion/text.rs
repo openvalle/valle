@@ -100,15 +100,15 @@ impl<'s> Compiler<'s> {
                 self.illegal(
                     DiagCode::GrammarForbidden,
                     attribute.span(),
-                    "Span style must be an object literal",
+                    "Span style must be a fixed-shape object expression",
                 );
                 continue;
             };
-            let JSXExpression::ObjectExpression(object) = &container.expression else {
+            let Some(expression) = container.expression.as_expression() else {
                 self.illegal(
                     DiagCode::GrammarForbidden,
                     container.span(),
-                    "Span style must be an object literal",
+                    "Span style must be a fixed-shape object expression",
                 );
                 continue;
             };
@@ -122,30 +122,20 @@ impl<'s> Compiler<'s> {
                 "letter-spacing",
                 "opacity",
             ];
-            for property in &object.properties {
-                let ObjectPropertyKind::ObjectProperty(property) = property else {
-                    // lower_style emits the precise spread diagnostic.
-                    continue;
-                };
-                let name = match &property.key {
-                    PropertyKey::StaticIdentifier(name) => Some(name.name.as_str()),
-                    PropertyKey::StringLiteral(name) => Some(name.value.as_str()),
-                    _ => None,
-                };
-                if let Some(name) = name {
-                    let property_name = camel_to_kebab(name);
-                    if !ALLOWED.contains(&property_name.as_str()) {
-                        self.unsupported(
-                            property.span(),
-                            format!(
-                                "Span style `{name}` is not admitted; allowed: color, fontFamily, fontSize, fontWeight, fontStyle, letterSpacing, opacity"
-                            ),
-                        );
-                    }
+            let object = self.resolve_style(expression);
+            for entry in &object.properties {
+                let name = &entry.name;
+                if !name.starts_with("--") && !ALLOWED.contains(&camel_to_kebab(name).as_str()) {
+                    self.unsupported(
+                        entry.property.span(),
+                        format!("Span style `{name}` is not admitted; allowed: color, fontFamily, fontSize, fontWeight, fontStyle, letterSpacing, opacity and static custom properties"),
+                    );
                 }
             }
-            let mut lowered = self.lower_style(object, path, None);
-            lowered.retain(|style| ALLOWED.contains(&style.property.as_str()));
+            let mut lowered = self.lower_style(&object, path, None);
+            lowered.retain(|style| {
+                style.property.starts_with("--") || ALLOWED.contains(&style.property.as_str())
+            });
             styles.extend(lowered);
         }
 

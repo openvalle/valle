@@ -6,6 +6,7 @@ use valle_draw::Rgba;
 
 use crate::phases::PhaseSpec;
 use crate::value::MotionValue;
+use valle_timeline::RationalTime;
 
 use super::artifact::ValidationError;
 
@@ -644,9 +645,20 @@ pub struct ControlsSchema {
     /// Structured JSON frozen and expanded at prepare time. It never becomes frame-time IR.
     pub data: BTreeMap<String, PrepareDataType>,
     pub timing: TimingControls,
+    /// Authored second-based phase timing. Frame controls remain an internal fixture surface.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timing_seconds: Option<TimingSeconds>,
     pub cues: BTreeMap<String, CueControl>,
     pub assets: BTreeMap<String, AssetControl>,
     pub camera: CameraControls,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TimingSeconds {
+    pub enter_duration: RationalTime,
+    pub exit_duration: RationalTime,
+    pub hold_cycle_duration: Option<RationalTime>,
 }
 
 impl ControlsSchema {
@@ -664,6 +676,28 @@ impl ControlsSchema {
 
     pub(crate) fn validate(&self, errors: &mut Vec<ValidationError>) {
         self.timing.validate(errors);
+        if let Some(timing) = self.timing_seconds {
+            for (name, duration) in [
+                ("enterDuration", timing.enter_duration),
+                ("exitDuration", timing.exit_duration),
+            ] {
+                if duration.is_negative() {
+                    errors.push(ValidationError::new(
+                        format!("/controls/timingSeconds/{name}"),
+                        "duration must be non-negative",
+                    ));
+                }
+            }
+            if timing
+                .hold_cycle_duration
+                .is_some_and(RationalTime::is_non_positive)
+            {
+                errors.push(ValidationError::new(
+                    "/controls/timingSeconds/holdCycleDuration",
+                    "hold cycle duration must be positive",
+                ));
+            }
+        }
         validate_names("/controls/props", self.props.keys(), errors);
         validate_names("/controls/data", self.data.keys(), errors);
         validate_names("/controls/cues", self.cues.keys(), errors);
@@ -781,6 +815,7 @@ mod tests {
                     key: Some("id".into()),
                 },
             )]),
+            timing_seconds: None,
             timing: TimingControls {
                 enter_frames: FrameControl {
                     default: 0,

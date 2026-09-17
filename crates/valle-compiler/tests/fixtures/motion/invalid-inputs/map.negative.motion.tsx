@@ -1,3 +1,4 @@
+export const composition = { width: 1920, height: 1080, fps: 30, duration: 5 };
 const latitude = 31.2;
 const mercatorY = Math.log(Math.tan(Math.PI / 4 + latitude * Math.PI / 360));
 

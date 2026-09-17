@@ -77,7 +77,7 @@ test("frozen shaders align Native/CanvasKit sampling and arbitrary-frame results
   const ck = await CanvasKitInit({ locateFile: () => Bun.resolveSync("canvaskit-wasm/bin/full/canvaskit.wasm", import.meta.dir) });
   initSync({ module: await readFile(new URL("../generated/web/valle_engine_bg.wasm", import.meta.url)) });
   const dir = await mkdtemp(join(tmpdir(), "valle-shader-parity-"));
-  const assets = ["--asset", "effect=effect.shader.json", "--asset", "image=steps.png", "--size", "64x64", "--duration", "3", "--fps", "30"];
+  const assets = ["--asset", "effect=effect.shader.json", "--asset", "image=steps.png", "--fps", "30"];
   const spawn = (args: string[]) => Bun.spawn([cli, "--json", ...args], {
     cwd: dir, env: { ...process.env, VALLE_HOME: join(dir, "home") }, stdout: "pipe", stderr: "pipe",
   });
@@ -95,6 +95,7 @@ test("frozen shaders align Native/CanvasKit sampling and arbitrary-frame results
       float4 tap(float2 uv) { return sample_steps(uv); }
     `);
     await writeFile(join(dir, "effect.motion.tsx"), `
+      export const composition = { width: 64, height: 64, duration: 3 };
       export const controls=defineControls({assets:{effect:asset({kind:"shader"}),image:asset({kind:"image"})}});
       export default function T(ctx) { return <Scene style={{width:64,height:64}}>
         <ShaderLayer source="asset://effect" inputs={{steps:"asset://image"}}
@@ -151,6 +152,7 @@ test("frozen shaders align Native/CanvasKit sampling and arbitrary-frame results
       if (data) await writeFile(join(dir, "steps.png"), numericPng(precision ? [32768,0,0,0, 32769,0,0,65535] : [128,64,32,0, 64,128,192,255], precision ? 16 : 8));
       await writeFile(join(dir, "effect.vsksl"), content ? `float4 valle_main(float2 uv) { ${content.source} }` : fieldSource);
       await writeFile(join(dir, "effect.motion.tsx"), content ? `
+        export const composition = { width: 64, height: 64, duration: 3 };
         export const controls=defineControls({assets:{effect:asset({kind:"shader"}),image:asset({kind:"image"})${scene3d?',model:asset({kind:"model3d"})':''}}});
         export default function T(ctx) { return <Scene style={{width:64,height:64,backgroundColor:"#000"}}>${content.body}</Scene>; }
       ` : fieldMotion);
@@ -159,6 +161,7 @@ test("frozen shaders align Native/CanvasKit sampling and arbitrary-frame results
           ? "float4 valle_main(float2 uv) { float n = (sample_steps(float2(0.75,0.5)).r - sample_steps(float2(0.25,0.5)).r) * 65535.0; return float4(n,n,n,1.0); }"
           : "float4 valle_main(float2 uv) { float2 p = float2(uv.x * 2.0 - 0.5, 0.5); if (uv.y < 0.5) return float4(sample_steps(p).rgb, 1.0); return sample_color(p); }");
         await writeFile(join(dir, "effect.motion.tsx"), `
+          export const composition = { width: 64, height: 64, duration: 3 };
           export const controls=defineControls({assets:{effect:asset({kind:"shader"}),image:asset({kind:"image"})}});
           export default function T(){ return <Scene style={{width:64,height:64,backgroundColor:"#000"}}>
             <ShaderLayer source="asset://effect" inputs={{steps:"asset://image",color:"asset://image"}} style={{width:64,height:64}}/>
@@ -168,6 +171,7 @@ test("frozen shaders align Native/CanvasKit sampling and arbitrary-frame results
       if (optional) {
         await writeFile(join(dir, "effect.vsksl"), "float4 valle_main(float2 uv) { return sample_before(uv) + sample_steps(uv) + sample_after(uv) + float4(0.0,0.25,0.0,1.0); }");
         await writeFile(join(dir, "effect.motion.tsx"), `
+          export const composition = { width: 64, height: 64, duration: 3 };
           export const controls=defineControls({assets:{effect:asset({kind:"shader"}),image:asset({kind:"image"})}});
           export default function T(){ return <Scene style={{width:64,height:64}}>
             <ShaderLayer source="asset://effect" ${sampling === "optional-middle" ? 'inputs={{steps:"asset://image"}}' : ''} style={{width:64,height:64}}/>
@@ -203,6 +207,7 @@ test("frozen shaders align Native/CanvasKit sampling and arbitrary-frame results
           }
         } finally { reader.releaseLock(); }
         const ready = JSON.parse(line.split("\n")[0]!);
+        if (!ready.url) throw new Error(JSON.stringify(ready));
         const config = await (await fetch(new URL("/config.json", ready.url))).json() as Record<string, string>;
         const open = () => {
           const engine = new ProductEngine();

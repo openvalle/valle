@@ -1,3 +1,4 @@
+export const composition = { width: 1920, height: 1080, fps: 30, duration: 5 };
 export const component = "smooth-area";
 
 export const controls = defineControls({
@@ -11,8 +12,8 @@ export const controls = defineControls({
 const DATA = [16, 22, 19, 34, 31, 48, 44, 61, 58, 72];
 const LABELS = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT"];
 const DOMAIN = niceDomain(0, extent(DATA)[1], 4);
-const X = scalePoint({ range: [150, 1180], count: DATA.length });
-const Y = scaleLinear({ domain: DOMAIN, range: [590, 150] });
+const X = scalePoint({ range: [225, 1770], count: DATA.length });
+const Y = scaleLinear({ domain: DOMAIN, range: [885, 225] });
 const BASELINE = Y.map(DOMAIN[0]);
 const TREND = curve(
   DATA.map((value, index) => point(X.at(index), Y.map(value))),
@@ -30,11 +31,11 @@ function Marker(ctx, { index, value, accent, ink }) {
       key="dot"
       className="absolute"
       style={{
-        left: X.at(index) - 7,
-        top: Y.map(value) - 7,
-        width: 14,
-        height: 14,
-        borderRadius: 7,
+        left: X.at(index) - 10.5,
+        top: Y.map(value) - 10.5,
+        width: 21,
+        height: 21,
+        borderRadius: 10.5,
         backgroundColor: accent,
         opacity: show,
       }}
@@ -42,7 +43,7 @@ function Marker(ctx, { index, value, accent, ink }) {
       <Text
         key="month"
         className="absolute"
-        style={{ left: -28, top: 22, width: 70, fontSize: 15, color: ink, textAlign: "center", opacity: 0.8 }}
+        style={{ left: -42, top: 33, width: 105, fontSize: 22.5, color: ink, textAlign: "center", opacity: 0.8 }}
       >
         {LABELS[index]}
       </Text>
@@ -54,24 +55,24 @@ export default function SmoothArea(ctx, props) {
   const draw = interpolate(ctx.progress, [0.08, 0.78], [0, 1], { easing: "easeInOut" });
   return (
     <Scene key="scene" className="relative h-full w-full" style={{ backgroundColor: "#071018" }}>
-      <Text key="eyebrow" className="absolute" style={{ left: 72, top: 40, fontSize: 18, letterSpacing: 3, color: props.accent }}>
+      <Text key="eyebrow" className="absolute" style={{ left: 108, top: 60, fontSize: 27, letterSpacing: 4.5, color: props.accent }}>
         TREND / MONOTONE
       </Text>
-      <Text key="title" className="absolute" style={{ left: 72, top: 72, fontSize: 40, color: props.ink }}>
+      <Text key="title" className="absolute" style={{ left: 108, top: 108, fontSize: 60, color: props.ink }}>
         The line is fitted once, then drawn
       </Text>
       {TICKS.map((value, index) => (
         <View
           key={`grid-${index}`}
           className="absolute"
-          style={{ left: 150, top: Y.map(value), width: 1030, height: 1, backgroundColor: "#1e293b" }}
+          style={{ left: 225, top: Y.map(value), width: 1545, height: 1.5, backgroundColor: "#1e293b" }}
         />
       ))}
       {TICKS.map((value, index) => (
         <Text
           key={`tick-${index}`}
           className="absolute"
-          style={{ left: 48, top: Y.map(value) - 12, width: 90, fontSize: 18, color: "#64748b", textAlign: "right" }}
+          style={{ left: 72, top: Y.map(value) - 18, width: 135, fontSize: 27, color: "#64748b", textAlign: "right" }}
         >
           {`${formatNumber(value, { decimals: 0 })}`}
         </Text>
@@ -82,7 +83,7 @@ export default function SmoothArea(ctx, props) {
         d={TREND}
         fill="none"
         stroke={props.accent}
-        strokeWidth="6"
+        strokeWidth="9"
         strokeLinecap="round"
         trimEnd={draw}
       />

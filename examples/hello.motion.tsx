@@ -1,3 +1,4 @@
+export const composition = { width: 1920, height: 1080, fps: 30, duration: 5 };
 export default function Hello(ctx) {
   const opacity = interpolate(ctx.hold.progress, [0, 0.6], [0, 1]);
 

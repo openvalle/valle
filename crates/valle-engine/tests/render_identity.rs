@@ -130,6 +130,7 @@ fn motion_document(component: &str) -> Value {
         json!({
             "type": "motion",
             "component": component,
+            "fit": "contain",
             "sourceStart": "0/1",
             "sourceDuration": "1/1",
             "rate": "1/1",
@@ -251,6 +252,7 @@ fn motion_artifact() -> Arc<SceneArtifact> {
     Arc::new(
         compile_motion_with_resources(
             r#"
+export const composition = { width: 1920, height: 1080, duration: 1 };
 export const controls = defineControls({
   props: { opacity: number({ default: 1, min: 0, max: 1 }) },
   assets: { logo: asset({ kind: "image", required: true }) },
@@ -273,11 +275,12 @@ fn timed_motion_artifact() -> Arc<SceneArtifact> {
     Arc::new(
         compile_motion_with_resources(
             r#"
+export const composition = { width: 1920, height: 1080, duration: 1 };
 export const controls = defineControls({
   props: { opacity: number({ default: 1, min: 0, max: 1 }) },
   timing: {
-    enterFrames: frames({ default: 0, min: 0, max: 2 }),
-    exitFrames: frames({ default: 0, min: 0, max: 2 }),
+    enterDuration: 0,
+    exitDuration: 0,
   },
   assets: { logo: asset({ kind: "image", required: true }) },
 });
@@ -299,6 +302,7 @@ fn video_motion_artifact() -> Arc<SceneArtifact> {
     Arc::new(
         compile_motion_with_resources(
             r#"
+export const composition = { width: 1920, height: 1080, duration: 1 };
 export const controls = defineControls({
   props: {
     opacity: number({ default: 1, min: 0, max: 1 }),
@@ -1245,7 +1249,7 @@ fn extension_kernel_and_artifact_abi_are_admitted_before_compile() {
 }
 
 #[test]
-fn motion_phase_overrides_are_resolved_and_rejected_during_admission() {
+fn motion_phase_overrides_are_resolved_during_admission() {
     let artifact = timed_motion_artifact();
     let motion_manifest = manifest(json!({
         "component:title": motion_entry(&artifact),
@@ -1272,37 +1276,24 @@ fn motion_phase_overrides_are_resolved_and_rejected_during_admission() {
     let mut outside_controls = motion_document("component:title");
     outside_controls["document"]["visual"]["tracks"][0]["items"][0]["source"]["phases"]["enterDuration"] =
         json!("1/10");
-    let report = open(
+    let render = open(
         &timeline(&outside_controls),
         &motion_manifest,
         &bindings,
         &capabilities,
         &baseline_profile(),
     )
-    .unwrap_err();
-    let diagnostic = report
-        .diagnostics()
-        .iter()
-        .find(|diagnostic| diagnostic.code == EngineOpenDiagnosticCode::MotionTimingMismatch)
-        .expect("3 frames must exceed the Artifact's admitted enterFrames max of 2");
-    assert_eq!(diagnostic.phase, EngineOpenPhase::Admission);
+    .unwrap();
     assert_eq!(
-        diagnostic.details.get("reason").map(String::as_str),
-        Some("phase-override-outside-artifact-controls")
-    );
-    assert_eq!(
-        diagnostic.details.get("field").map(String::as_str),
-        Some("enterFrames")
-    );
-    assert_eq!(
-        diagnostic.details.get("valueFrames").map(String::as_str),
-        Some("3")
-    );
-    assert!(
-        report
-            .diagnostics()
-            .iter()
-            .all(|diagnostic| diagnostic.phase != EngineOpenPhase::Compile)
+        render
+            .sources()
+            .source(0)
+            .unwrap()
+            .motion()
+            .unwrap()
+            .phases()
+            .enter_frames(),
+        3
     );
 
     let mut zero_source_extent = motion_document("component:title");
@@ -2956,6 +2947,7 @@ fn motion_backdrop_fractional_projection_keeps_canonical_sample_bounds() {
     let artifact = Arc::new(
         valle_compiler::motion::compile_motion(
             r##"
+export const composition = { width: 1920, height: 1080, duration: 10 };
 export default function Demo(ctx) {
   const t = ctx.localFrame / 300;
   return <Scene style={{ width: 1920, height: 1080, backgroundColor: "#0891b2" }}>

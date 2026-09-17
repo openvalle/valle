@@ -301,7 +301,10 @@ const TYPED_MARK: &str = "valle:typed:";
 /// measurements always have meaningful font inputs.
 pub struct MeasureEnv {
     fonts: std::rc::Rc<valle_motion::Fonts>,
-    viewport: valle_motion::Viewport,
+    /// `None` until the entry file's delivery contract supplies the canvas. A host that compiles
+    /// a source string with an explicit viewport binds it here; an entry compile takes it from
+    /// `composition` so the canvas cannot drift from what the scene renders at.
+    viewport: Option<valle_motion::Viewport>,
 }
 
 impl MeasureEnv {
@@ -310,8 +313,8 @@ impl MeasureEnv {
         Self::new_with_aliases(font_blobs, &[], viewport)
     }
 
-    /// Project variant constructor. Aliases are the control URIs authors may use inside
-    /// `measureText` CSS, mapped to the exact bytes bound by that clip.
+    /// Project variant constructor. Aliases are the control URIs authors may name as a
+    /// `measureText` font family, mapped to the exact bytes bound by that clip.
     pub fn new_with_aliases(
         font_blobs: &[Vec<u8>],
         aliases: &[(String, Vec<u8>)],
@@ -357,8 +360,37 @@ impl MeasureEnv {
         }
         Ok(MeasureEnv {
             fonts: std::rc::Rc::new(fonts),
-            viewport: valle_motion::Viewport::new(viewport),
+            viewport: Some(valle_motion::Viewport::new(viewport)),
         })
+    }
+
+    /// Fonts without a canvas, for entry compiles that take the canvas from `composition`.
+    ///
+    /// Relative units inside `measureText` must use the canvas the scene renders at. The compiler
+    /// binds it from the parsed contract before evaluating module-level constants and rejects an
+    /// entry that measures text without a literal contract, so an unbound environment can never
+    /// reach a measurement.
+    pub fn new_unbound_with_aliases(
+        font_blobs: &[Vec<u8>],
+        aliases: &[(String, Vec<u8>)],
+    ) -> Result<Self, MotionDiagnostic> {
+        // Reuse the bound constructor for font registration, then drop the placeholder canvas.
+        let mut env = Self::new_with_aliases(font_blobs, aliases, (1, 1))?;
+        env.viewport = None;
+        Ok(env)
+    }
+
+    /// Same fonts bound to the logical canvas of the entry file's delivery contract.
+    pub fn bind_viewport(&self, viewport: (u32, u32)) -> Self {
+        Self {
+            fonts: self.fonts.clone(),
+            viewport: Some(valle_motion::Viewport::new(viewport)),
+        }
+    }
+
+    /// Whether a host or a previous bind already supplied the logical canvas.
+    pub fn has_viewport(&self) -> bool {
+        self.viewport.is_some()
     }
 }
 
@@ -376,13 +408,23 @@ impl Sandbox {
         let rt = JsRuntime::new().map_err(|e| eval_error("", format!("quickjs runtime: {e}")))?;
         let ctx =
             JsContext::full(&rt).map_err(|e| eval_error("", format!("quickjs context: {e}")))?;
+        // An unbound canvas is not a failure here: an entry that never measures text must still be
+        // able to report its real problem (a missing delivery contract) instead of a measurement
+        // error. The call itself reports the missing canvas.
         let measure = measure.map(|env| (env.fonts.clone(), env.viewport));
         ctx.with(|ctx| -> Result<(), String> {
             run(&ctx, HARDEN_JS.as_bytes()).map(|_: Option<String>| ())?;
             // Install host functions before evaluating module-level constants that may call them.
             if let Some((fonts, viewport)) = measure {
                 let host = rquickjs::Function::new(ctx.clone(), move |request: String| -> String {
-                    measure_text_json(&request, &fonts, viewport)
+                    match viewport {
+                        Some(viewport) => measure_text_json(&request, &fonts, viewport),
+                        None => serde_json::json!({
+                            "error": "measureText needs the entry file's `composition` to bind the \
+                                      logical canvas before module constants run"
+                        })
+                        .to_string(),
+                    }
                 })
                 .map_err(|e| format!("cannot install measureText: {e}"))?;
                 ctx.globals()
@@ -527,17 +569,63 @@ fn run<'js, T: rquickjs::FromJs<'js>>(ctx: &rquickjs::Ctx<'js>, src: &[u8]) -> R
 }
 
 /// Expose measureText through a JSON string-to-string bridge.
+///
+/// The wrapper validates the option object before the host sees it: a removed or misspelled key must
+/// name the replacement the author should write, and the options are limited to the typography an
+/// authored `style` object accepts.
 const MEASURE_JS: &str = r#"
 (() => {
+const OPTIONS = ["fontSize", "fontFamily", "fontWeight", "letterSpacing", "lineHeight", "maxWidth"];
+const REMOVED = ["className", "style"];
+const fail = (message) => { throw new Error("valle:measure:" + message); };
+const show = (value) => (typeof value === "number" && !Number.isFinite(value) ? String(value) : JSON.stringify(value));
+const finite = (name, value, positive) => {
+  if (typeof value !== "number" || !Number.isFinite(value) || (positive && value <= 0)) {
+    fail(name + " must be a finite" + (positive ? " positive" : "") + " number, got " + show(value));
+  }
+};
 globalThis.measureText = (text, options = {}) => {
   if (typeof text !== "string") {
-    throw new Error("valle:measure:measureText(text, options) needs a string");
+    fail("measureText(text, options) needs a string");
+  }
+  if (options === null || typeof options !== "object" || Array.isArray(options)) {
+    fail("measureText options must be an object");
+  }
+  for (const key of Object.keys(options)) {
+    if (REMOVED.includes(key)) {
+      fail("measureText does not accept `" + key + "`; pass explicit typography instead: " +
+        "{ fontSize, fontFamily, fontWeight, letterSpacing, lineHeight }");
+    }
+    if (!OPTIONS.includes(key)) {
+      fail("unknown option `" + key + "`; measureText accepts " + OPTIONS.join(", "));
+    }
+  }
+  finite("fontSize", options.fontSize, true);
+  if (options.fontFamily !== undefined && options.fontFamily !== null
+      && typeof options.fontFamily !== "string") {
+    fail("fontFamily must be a string");
+  }
+  if (options.fontWeight !== undefined && options.fontWeight !== null) {
+    finite("fontWeight", options.fontWeight, true);
+  }
+  if (options.letterSpacing !== undefined && options.letterSpacing !== null) {
+    finite("letterSpacing", options.letterSpacing, false);
+  }
+  if (options.lineHeight !== undefined && options.lineHeight !== null) {
+    finite("lineHeight", options.lineHeight, false);
+  }
+  const maxWidth = options.maxWidth ?? null;
+  if (maxWidth !== null) {
+    finite("maxWidth", maxWidth, true);
   }
   const raw = __valle_measure_text(JSON.stringify({
     text,
-    className: options.className ?? "",
-    style: options.style ?? "",
-    maxWidth: options.maxWidth ?? null,
+    fontSize: options.fontSize,
+    fontFamily: options.fontFamily ?? null,
+    fontWeight: options.fontWeight ?? null,
+    letterSpacing: options.letterSpacing ?? null,
+    lineHeight: options.lineHeight ?? null,
+    maxWidth,
   }));
   const result = JSON.parse(raw);
   if (result.error) { throw new Error("valle:measure:" + result.error); }
@@ -742,8 +830,11 @@ pub fn mentions_measure(src: &str) -> bool {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct MeasureRequestJson {
     text: String,
-    class_name: String,
-    style: String,
+    font_size: f64,
+    font_family: Option<String>,
+    font_weight: Option<f64>,
+    letter_spacing: Option<f64>,
+    line_height: Option<f64>,
     max_width: Option<f64>,
 }
 
@@ -763,16 +854,14 @@ fn measure_text_json(
         Ok(request) => request,
         Err(error) => return fail(format!("bad measureText options: {error}")),
     };
-    let class_names = request
-        .class_name
-        .split_whitespace()
-        .map(str::to_owned)
-        .collect::<Vec<_>>();
     match valle_motion::measure_text(
         &valle_motion::TextMeasure {
             text: &request.text,
-            class_names: &class_names,
-            style: &request.style,
+            font_size: request.font_size,
+            font_family: request.font_family.as_deref(),
+            font_weight: request.font_weight,
+            letter_spacing: request.letter_spacing,
+            line_height: request.line_height,
             max_width: request.max_width,
         },
         fonts,

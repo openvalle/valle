@@ -101,7 +101,7 @@ pub fn run(
         }
     };
     lease.release()?;
-    print_delivery_report(&opened, operation, &output, &summary)?;
+    print_delivery_report(&opened, operation, &output, &summary, None)?;
     Ok(std::process::ExitCode::SUCCESS)
 }
 
@@ -203,6 +203,7 @@ pub(super) fn print_delivery_report(
     operation: &str,
     output: &Path,
     summary: &RenderSummary,
+    timing: Option<Value>,
 ) -> Result<()> {
     if summary.render_id != opened.receipt().render_id() {
         bail!("Native delivery returned a different RenderId");
@@ -225,6 +226,9 @@ pub(super) fn print_delivery_report(
             "audioOnly": summary.audio_only,
         }),
     );
+    if let Some(timing) = timing {
+        report.get_mut("delivery").expect("delivery report")["timing"] = timing;
+    }
     if let Some(profile) = summary
         .pipeline
         .as_ref()

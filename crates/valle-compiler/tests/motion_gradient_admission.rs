@@ -8,10 +8,9 @@ fn admitted(property: &str, gradient: &str) -> bool {
     let source = format!(
         r#"export default function Demo() {{ return <Scene><View style={{{{ width: 100, height: 100, {property}: {gradient} }}}} /></Scene>; }}"#,
     );
-    let artifact = compile_motion(&source)
-        .expect("gradient syntax compiles")
-        .artifact;
-    prepare_scene(&artifact).is_ok()
+    compile_motion(&source)
+        .ok()
+        .is_some_and(|compiled| prepare_scene(&compiled.artifact).is_ok())
 }
 
 #[test]
@@ -54,7 +53,9 @@ fn other_interpolation_spaces_and_image_urls_remain_rejected() {
 
 #[test]
 fn mixed_layers_and_escaped_interpolation_keep_the_color_space_boundary() {
-    assert!(admitted(
+    // Takumi cannot parse `none` as one layer of an image list. Previously prepare
+    // admitted this string, only for the first layout to fail. Reject it at compile.
+    assert!(!admitted(
         "backgroundImage",
         "none, linear-gradient(red, blue), linear-gradient(in srgb, white, black)"
     ));

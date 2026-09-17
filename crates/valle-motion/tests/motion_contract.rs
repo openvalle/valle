@@ -44,6 +44,7 @@ fn envelope() -> ArtifactEnvelope {
             ),
         ]),
         data: BTreeMap::new(),
+        timing_seconds: None,
         timing: TimingControls {
             enter_frames: FrameControl {
                 default: 10,
@@ -154,6 +155,7 @@ fn envelope() -> ArtifactEnvelope {
     ];
 
     let artifact = SceneArtifact {
+        composition: None,
         camera: None,
         format_version: ARTIFACT_FORMAT_VERSION,
         capability_set: capability_set.clone(),
@@ -170,6 +172,7 @@ fn envelope() -> ArtifactEnvelope {
                 kind: NodeKind::Group,
                 space: None,
                 class_names: vec!["relative".into()],
+                class_conditions: Default::default(),
                 styles: vec![],
                 visibility: None,
                 children: ChildRange { start: 0, end: 2 },
@@ -184,6 +187,7 @@ fn envelope() -> ArtifactEnvelope {
                 kind: NodeKind::Box,
                 space: None,
                 class_names: vec!["rounded-xl".into()],
+                class_conditions: Default::default(),
                 styles: vec![StyleBinding {
                     property: "opacity".into(),
                     value: StyleValue::Expr { expr: ExprId(12) },
@@ -201,6 +205,7 @@ fn envelope() -> ArtifactEnvelope {
                 },
                 space: None,
                 class_names: vec!["text-white".into()],
+                class_conditions: Default::default(),
                 styles: vec![],
                 visibility: None,
                 children: ChildRange { start: 2, end: 2 },
@@ -304,15 +309,21 @@ fn versions_and_capabilities_are_exact_admission_gates() {
 }
 
 #[test]
-fn tailwind_catalog_rejects_unknown_and_frame_impure_classes_in_artifacts() {
+fn tailwind_artifacts_retain_unknown_utility_and_removed_variant_causes() {
     let mut changed = envelope();
-    changed.artifact.nodes[1].class_names = vec!["gird".into(), "sm:grid".into()];
+    changed.artifact.nodes[1].class_names = vec!["gird".into(), "hover:grid".into()];
     let errors = changed.artifact.validate().unwrap_err();
     assert!(errors.iter().any(|error| {
-        error.path == "/nodes/1/classNames/0" && error.message.contains("tailwind")
+        error.path == "/nodes/1/classNames/0"
+            && error.message.contains("`gird`")
+            && error.message.contains("no implemented utility expansion")
     }));
     assert!(errors.iter().any(|error| {
-        error.path == "/nodes/1/classNames/1" && error.message.contains("forbidden")
+        error.path == "/nodes/1/classNames/1"
+            && error.message.contains("`hover:grid`")
+            && error
+                .message
+                .contains("responsive and state variants are not supported")
     }));
 }
 
@@ -378,6 +389,7 @@ fn expression_types_and_tree_topology_fail_closed() {
         kind: NodeKind::Group,
         space: None,
         class_names: vec![],
+        class_conditions: Default::default(),
         styles: vec![],
         visibility: None,
         children: ChildRange { start: 2, end: 2 },

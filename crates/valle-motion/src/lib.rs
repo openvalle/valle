@@ -15,6 +15,7 @@ pub mod batch;
 pub mod builtin;
 pub mod canonical;
 mod colr;
+pub mod composition;
 pub mod compute;
 pub mod context;
 pub mod controls;
@@ -35,6 +36,7 @@ pub mod scene3d;
 pub mod shader;
 pub mod signals;
 pub mod spring;
+pub mod style;
 pub mod tailwind;
 pub mod text;
 pub mod time;
@@ -62,12 +64,15 @@ pub use artifact::{
 };
 pub use batch::{BatchFieldProgress, resolve_geometry_batch};
 pub use canonical::{CanonicalError, canonical_bytes};
+pub use composition::{
+    COMPOSITION_TEMPLATE, Composition, DEFAULT_DPR, MAX_DURATION_FRAMES, ROOT_FONT_SIZE,
+};
 pub use context::{HoldContext, MotionContext, PhaseContext, PhaseKind};
 pub use controls::{
     AssetControl, AssetKind, CameraControls, ControlType, ControlsSchema, CueControl, CueKind,
     FrameControl, MAX_PREPARE_DATA_ARRAY_ITEMS, MAX_PREPARE_DATA_BYTES, MAX_PREPARE_DATA_DEPTH,
     MAX_PREPARE_DATA_TOTAL_ITEMS, OptionalFrameControl, PrepareDataType, PropControl,
-    TimingControls, TimingError,
+    TimingControls, TimingError, TimingSeconds,
 };
 pub use diag::{DiagClass, DiagCode, MotionDiagnostic, PlanError};
 pub use domain::MotionViewport;
@@ -107,7 +112,8 @@ pub use lock::{
 };
 pub use phases::{
     NarrationRetime, PhaseLayout, PhaseSpec, RetimeError, motion_context_at,
-    motion_context_at_sample, phase_windows, retime_to_narration, round_div,
+    motion_context_at_sample, phase_windows, phase_windows_seconds, resolve_timing_seconds,
+    retime_to_narration, round_div,
 };
 pub use plan::{PlanClip, PlanStep, SignalPlan};
 pub use signals::{CueError, CueSchedule, CueState, CueWindow, ResolvedSignals};

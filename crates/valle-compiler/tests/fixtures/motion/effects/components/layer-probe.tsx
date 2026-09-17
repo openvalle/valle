@@ -4,11 +4,7 @@ export const controls = defineControls({
   props: {
     label: string({ default: "CONTROL", required: false }),
   },
-  timing: {
-    enterFrames: frames({ default: 0, min: 0 }),
-    holdCycleFrames: optionalFrames({ default: null, min: 1 }),
-    exitFrames: frames({ default: 0, min: 0 }),
-  },
+  timing: { enterDuration: 0, exitDuration: 0 },
 });
 
 const bars = defineRepeater({ count: 10, keyPrefix: "bar" });

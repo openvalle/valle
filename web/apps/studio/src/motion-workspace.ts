@@ -63,7 +63,7 @@ export async function startMotionStudio(
 
   let context: GoodMotionContext | null = null;
   let props: Record<string, MotionValue> = structuredClone(projectSession?.props ?? {});
-  let timing = { enterFrames: 0, exitFrames: 0 };
+  let timing: GoodMotionContext["timing"] = { enterFrames: 0, exitFrames: 0 };
   let cues: GoodMotionContext["cueBindings"] = {};
   let lastLocate: LocateResult | null = null;
   let baseline = "";
@@ -162,15 +162,27 @@ export async function startMotionStudio(
     apply: async (next, _draft, isCurrent) => {
       if (next.status === "error") throw new Error(next.diagnostics.map((d) => d.message).join("\n"));
       await player.replaceRenderPackage({ ...buildMotionPreview(next), isCurrent });
-      if (isCurrent()) { context = next; render(); }
+      if (isCurrent()) {
+        const resolved = syncMotionDraftFrames(timing, cues, next);
+        context = next; timing = resolved.timing; cues = resolved.cues; render();
+      }
     },
     updating: () => shell.dispatchIntent({ type: "preview-status", status: "updating", message: null }),
     ready: () => { curvePending = false; render(); shell.dispatchIntent({ type: "preview-status", status: "ready", message: null }); syncTransport(); },
     failed: (error) => shell.dispatchIntent({ type: "preview-status", status: "error", message: error instanceof Error ? error.message : String(error) }),
   });
   const schedule = () => { curvePending = true; render(); draftPreview.schedule({
-    props: Object.fromEntries(Object.entries(props).map(([name, value]) => [name, value.value])), timing,
-    cues: Object.fromEntries(Object.entries(cues).map(([name, { type: _type, ...cue }]) => [name, cue])),
+    props: Object.fromEntries(Object.entries(props).map(([name, value]) => [name, value.value])),
+    timing: {
+      enterDuration: timing.enterDuration ?? frameTime(timing.enterFrames),
+      exitDuration: timing.exitDuration ?? frameTime(timing.exitFrames),
+    },
+    cues: Object.fromEntries(Object.entries(cues).map(([name, cue]) => [name, {
+      start: cue.start ?? frameTime(cue.startFrame),
+      end: cue.end ?? frameTime(cue.endFrame),
+      enterDuration: cue.enterDuration ?? frameTime(cue.enterFrames),
+      exitDuration: cue.exitDuration ?? frameTime(cue.exitFrames),
+    }])),
   }); };
   const applyEdit = async (intent: ProjectMotionEdit) => {
     if (!context || abort.signal.aborted) return;
@@ -182,13 +194,16 @@ export async function startMotionStudio(
       const before = snapshot();
       if (intent.type === "prop") props[intent.name] = intent.value;
       if (intent.type === "phase") {
-        const value = Math.max(0, Math.min(context.durationFrames - (intent.key === "enterFrames" ? timing.exitFrames : timing.enterFrames), intent.value));
-        timing = { ...timing, [intent.key]: value };
+        const value = Math.max(0, Math.min(Number.MAX_SAFE_INTEGER, intent.value));
+        timing = { ...timing, [intent.key]: value,
+          [intent.key === "enterFrames" ? "enterDuration" : "exitDuration"]: frameTime(value) };
       }
       if (intent.type === "cue" && cues[intent.cue]) {
         const cue = cues[intent.cue]!;
         const handle = buildMotionWorkspaceModel(context, props, timing, cues, false).cues.find((h) => h.cue === intent.cue && h.key === intent.key)!;
-        cues = { ...cues, [intent.cue]: { ...cue, [intent.key]: Math.max(handle.min, Math.min(handle.max, intent.value)) } };
+        const value = Math.max(handle.min, Math.min(handle.max, intent.value));
+        const secondsKey = ({ startFrame: "start", endFrame: "end", enterFrames: "enterDuration", exitFrames: "exitDuration" } as const)[intent.key as "startFrame" | "endFrame" | "enterFrames" | "exitFrames"];
+        cues = { ...cues, [intent.cue]: { ...cue, [intent.key]: value, [secondsKey]: frameTime(value) } };
       }
       if (snapshot() !== before) { undo.push(before); if (undo.length > 40) undo.shift(); redo.length = 0; schedule(); }
     }
@@ -368,6 +383,31 @@ export async function startMotionStudio(
   }
 }
 
+/** Refresh renderer-derived frame windows while retaining the draft's authored seconds. */
+export function syncMotionDraftFrames(
+  timing: GoodMotionContext["timing"],
+  cues: GoodMotionContext["cueBindings"],
+  response: GoodMotionContext,
+): { timing: GoodMotionContext["timing"]; cues: GoodMotionContext["cueBindings"] } {
+  return {
+    timing: {
+      ...timing,
+      enterFrames: response.timing.enterFrames,
+      exitFrames: response.timing.exitFrames,
+    },
+    cues: Object.fromEntries(Object.entries(response.cueBindings).map(([name, window]) => {
+      const authored = cues[name];
+      return [name, {
+        ...window,
+        start: authored?.start ?? window.start,
+        end: authored?.end ?? window.end,
+        enterDuration: authored?.enterDuration ?? window.enterDuration,
+        exitDuration: authored?.exitDuration ?? window.exitDuration,
+      }];
+    })),
+  };
+}
+
 function initialMotionProps(context: GoodMotionContext): Record<string, MotionValue> {
   const source = context.timeline.document.visual.tracks[0]?.items[0];
   if (!source || source.type !== "clip" || source.source.type !== "motion") return {};
@@ -415,24 +455,18 @@ export function buildMotionWorkspaceModel(
   });
   const phases: MotionHandleView[] = (["enterFrames", "exitFrames"] as const).map((key) => {
     const schema = record(timingSchemas[key]);
-    return { key, label: key === "enterFrames" ? "enter" : "exit", value: timing[key], min: Number(schema.min ?? 0), max: Math.min(Number(schema.max ?? context.durationFrames), context.durationFrames - timing[key === "enterFrames" ? "exitFrames" : "enterFrames"]) };
+    return { key, label: key === "enterFrames" ? "enter" : "exit", value: timing[key], min: Number(schema.min ?? 0), max: Number(schema.max ?? Number.MAX_SAFE_INTEGER) };
   });
   const cueViews = Object.entries(cues).flatMap(([cue, binding]) => {
-    const rangeFrames = Math.max(0, binding.endFrame - binding.startFrame);
-    const minimumRangeFrames = Math.max(1, binding.enterFrames + binding.exitFrames);
     return (["startFrame", "endFrame", "enterFrames", "exitFrames"] as const).map((key) => ({
       cue,
       key,
       label: `${cue}.${key === "startFrame" ? "start" : key === "endFrame" ? "end" : key === "enterFrames" ? "enter" : "exit"}`,
       value: binding[key],
-      min: key === "endFrame" ? binding.startFrame + minimumRangeFrames : 0,
+      min: key === "endFrame" ? binding.startFrame + 1 : 0,
       max: key === "startFrame"
-        ? Math.max(0, binding.endFrame - minimumRangeFrames)
-        : key === "enterFrames"
-          ? Math.max(0, rangeFrames - binding.exitFrames)
-          : key === "exitFrames"
-            ? Math.max(0, rangeFrames - binding.enterFrames)
-            : context.durationFrames,
+        ? Math.max(0, binding.endFrame - 1)
+        : key === "endFrame" ? context.durationFrames : Number.MAX_SAFE_INTEGER,
       readOnly: false,
     }));
   });

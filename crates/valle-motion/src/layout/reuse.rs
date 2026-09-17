@@ -51,26 +51,20 @@ pub(super) fn eligible(artifact: &SceneArtifact) -> bool {
                 }
         ) && node.space.is_none()
             && node.visibility.is_none()
+            && node.class_names.iter().all(|class| {
+                crate::tailwind::explicit_property(class)
+                    .is_none_or(|name| crate::style::property_spec(name).can_reuse_geometry(true))
+            })
+            && node
+                .class_conditions
+                .values()
+                .all(|expr| stable[expr.0 as usize])
             && node.styles.iter().all(|s| {
-                // Static effects and 3D transforms are excluded as well: keep the first proof small.
-                !matches!(
-                    s.property.as_str(),
-                    "filter"
-                        | "backdrop-filter"
-                        | "transform"
-                        | "rotate-x"
-                        | "rotate-y"
-                        | "perspective"
-                        | "perspective-origin"
-                        | "transform-style"
-                ) && !s.property.starts_with("motion-")
-                    && (match s.value {
-                        StyleValue::Static { .. } => true,
-                        StyleValue::Expr { expr } => stable[expr.0 as usize],
-                    } || matches!(
-                        s.property.as_str(),
-                        "translate" | "scale" | "rotate" | "opacity"
-                    ))
+                let frame_stable = match s.value {
+                    StyleValue::Static { .. } => true,
+                    StyleValue::Expr { expr } => stable[expr.0 as usize],
+                };
+                crate::style::property_spec(&s.property).can_reuse_geometry(frame_stable)
             })
     })
 }

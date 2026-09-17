@@ -129,77 +129,57 @@ impl<'s> Compiler<'s> {
         &mut self,
         expression: &'s Expression<'s>,
     ) -> Option<Vec<StyleBinding>> {
+        // Keep all 2D operations in authored order. Independent translate/rotate/scale
+        // are separate CSS properties and must compose with this list after cascade.
         if let Some(serde_json::Value::String(value)) = self.eval_static(expression) {
-            if let Some(parts) = parse_core_transform(&value) {
-                if !parts.iter().any(|(name, argument)| {
-                    matches!(name.as_str(), "translate" | "translateX" | "translateY")
-                        && argument.contains('%')
-                }) {
-                    return self.lower_transform_parts(expression.span(), parts, &[]);
+            match valle_motion::style::parse_property("transform", &value) {
+                Ok(_) => {
+                    return Some(vec![StyleBinding {
+                        property: "transform".into(),
+                        value: StyleValue::Static {
+                            value: MotionValue::Str(value),
+                        },
+                    }]);
+                }
+                Err(reason) => {
+                    if let Some(parts) = parse_ordered_transform(&value)
+                        && parts.iter().any(|(name, _)| is_css_3d_function(name))
+                    {
+                        self.extra_capabilities
+                            .insert(CSS_3D_TRANSFORM_CAPABILITY.to_owned());
+                        return self.lower_css_3d_transform_parts(expression.span(), parts, &[]);
+                    }
+                    self.style_diagnostic(expression.span(), None, reason);
+                    return None;
                 }
             }
-            if let Some(parts) = parse_ordered_transform(&value) {
+        }
+        if let Expression::TemplateLiteral(template) = strip_parens(expression) {
+            let mut source = String::new();
+            for (index, quasi) in template.quasis.iter().enumerate() {
+                source.push_str(quasi.value.cooked?.as_str());
+                if index < template.expressions.len() {
+                    source.push_str(&format!("__VALLE_HOLE_{index}__"));
+                }
+            }
+            if let Some(parts) = parse_ordered_transform(&source)
+                && parts.iter().any(|(name, _)| is_css_3d_function(name))
+            {
                 self.extra_capabilities
                     .insert(CSS_3D_TRANSFORM_CAPABILITY.to_owned());
-                return self.lower_css_3d_transform_parts(expression.span(), parts, &[]);
-            }
-            self.illegal(
-                DiagCode::GrammarForbidden,
-                expression.span(),
-                "transform must use the supported 2D sequence or ordered CSS 3D translate/rotate/scale functions",
-            );
-            return None;
-        }
-        let Expression::TemplateLiteral(template) = strip_parens(expression) else {
-            self.illegal(
-                DiagCode::GrammarForbidden,
-                expression.span(),
-                "transform must be a static string or a closed template literal",
-            );
-            return None;
-        };
-        if template.quasis.len() != template.expressions.len() + 1 {
-            self.illegal(
-                DiagCode::GrammarForbidden,
-                template.span,
-                "malformed transform template literal",
-            );
-            return None;
-        }
-        let mut source = String::new();
-        for (index, quasi) in template.quasis.iter().enumerate() {
-            let Some(cooked) = quasi.value.cooked else {
-                self.illegal(
-                    DiagCode::GrammarForbidden,
-                    quasi.span,
-                    "transform template contains an invalid escape",
+                return self.lower_css_3d_transform_parts(
+                    template.span,
+                    parts,
+                    &template.expressions,
                 );
-                return None;
-            };
-            source.push_str(cooked.as_str());
-            if index < template.expressions.len() {
-                source.push_str(&format!("__VALLE_HOLE_{index}__"));
             }
         }
-        if let Some(parts) = parse_core_transform(&source) {
-            if !parts.iter().any(|(name, argument)| {
-                matches!(name.as_str(), "translate" | "translateX" | "translateY")
-                    && argument.contains('%')
-            }) {
-                return self.lower_transform_parts(template.span, parts, &template.expressions);
-            }
-        }
-        if let Some(parts) = parse_ordered_transform(&source) {
-            self.extra_capabilities
-                .insert(CSS_3D_TRANSFORM_CAPABILITY.to_owned());
-            return self.lower_css_3d_transform_parts(template.span, parts, &template.expressions);
-        }
-        self.illegal(
-            DiagCode::GrammarForbidden,
-            template.span,
-            "transform must use the supported 2D sequence or ordered CSS 3D translate/rotate/scale functions",
-        );
-        None
+        Some(vec![StyleBinding {
+            property: "transform".into(),
+            value: StyleValue::Expr {
+                expr: self.lower_css_value_expression(expression)?,
+            },
+        }])
     }
 
     pub(super) fn lower_css_3d_transform_parts(
@@ -582,413 +562,18 @@ impl<'s> Compiler<'s> {
             value: MotionValue::Number(value),
         })
     }
+}
 
-    pub(super) fn lower_transform_parts(
-        &mut self,
-        span: Span,
-        parts: Vec<(String, String)>,
-        holes: &[Expression<'s>],
-    ) -> Option<Vec<StyleBinding>> {
-        if parts.iter().any(|(name, _)| name == "translate")
-            && parts
-                .iter()
-                .any(|(name, _)| matches!(name.as_str(), "translateX" | "translateY"))
-        {
-            self.illegal(
-                DiagCode::GrammarForbidden,
-                span,
-                "transform cannot mix translate(...) with translateX(...)/translateY(...) syntax",
-            );
-            return None;
-        }
-        if parts.iter().any(|(name, _)| name == "scale")
-            && parts
-                .iter()
-                .any(|(name, _)| matches!(name.as_str(), "scaleX" | "scaleY"))
-        {
-            self.illegal(
-                DiagCode::GrammarForbidden,
-                span,
-                "transform cannot mix scale(...) with scaleX(...)/scaleY(...)",
-            );
-            return None;
-        }
-        let mut bindings = Vec::with_capacity(parts.len());
-        let mut translate_axis_static = [None, None];
-        let mut translate_axis_expr = [None, None];
-        let mut scale_axis_static = [None, None];
-        let mut scale_axis_expr = [None, None];
-        for (name, argument) in parts {
-            if matches!(name.as_str(), "translateX" | "translateY") {
-                let axis = usize::from(name == "translateY");
-                if let Some((index, suffix)) = transform_hole_parts(&argument) {
-                    if suffix != "px" {
-                        self.illegal(
-                            DiagCode::GrammarForbidden,
-                            span,
-                            format!(
-                                "transform `{name}` dynamic value needs an explicit px suffix, as in `{name}(${{value}}px)`"
-                            ),
-                        );
-                        return None;
-                    }
-                    let Some(expression) = holes.get(index) else {
-                        self.illegal(
-                            DiagCode::GrammarForbidden,
-                            span,
-                            "transform template hole index is out of bounds",
-                        );
-                        return None;
-                    };
-                    translate_axis_expr[axis] = Some(self.lower_expr(expression)?);
-                } else if argument.contains("__VALLE_HOLE_") {
-                    self.illegal(
-                        DiagCode::GrammarForbidden,
-                        span,
-                        format!("transform `{name}` accepts one whole numeric hole followed by px"),
-                    );
-                    return None;
-                } else {
-                    let value = argument
-                        .strip_suffix("px")
-                        .or_else(|| (argument == "0").then_some("0"))
-                        .and_then(|value| value.parse::<f64>().ok())
-                        .filter(|value| value.is_finite());
-                    let Some(value) = value else {
-                        self.illegal(
-                            DiagCode::GrammarForbidden,
-                            span,
-                            format!("transform `{name}` requires a finite px length"),
-                        );
-                        return None;
-                    };
-                    translate_axis_static[axis] = Some(value);
-                }
-                continue;
-            }
-            if matches!(name.as_str(), "scaleX" | "scaleY") {
-                let axis = usize::from(name == "scaleY");
-                if let Some((index, suffix)) = transform_hole_parts(&argument) {
-                    if !suffix.is_empty() {
-                        self.illegal(
-                            DiagCode::GrammarForbidden,
-                            span,
-                            format!("transform `{name}` takes a unitless Number hole"),
-                        );
-                        return None;
-                    }
-                    let Some(expression) = holes.get(index) else {
-                        self.illegal(
-                            DiagCode::GrammarForbidden,
-                            span,
-                            "transform template hole index is out of bounds",
-                        );
-                        return None;
-                    };
-                    scale_axis_expr[axis] = Some(self.lower_expr(expression)?);
-                } else {
-                    let Some(value) = argument
-                        .parse::<f64>()
-                        .ok()
-                        .filter(|value| value.is_finite())
-                    else {
-                        self.illegal(
-                            DiagCode::GrammarForbidden,
-                            span,
-                            format!("transform `{name}` requires a finite unitless number"),
-                        );
-                        return None;
-                    };
-                    scale_axis_static[axis] = Some(value);
-                }
-                continue;
-            }
-            let property = match name.as_str() {
-                "translate" => "translate",
-                "rotate" => "rotate",
-                "scale" => "scale",
-                _ => unreachable!("parse_core_transform closes function names"),
-            };
-            if property == "scale" && argument.contains(',') {
-                if let Some(binding) = self.lower_two_axis_scale_argument(span, &argument, holes) {
-                    self.extra_capabilities
-                        .insert(TRANSFORM_SCALE2D_CAPABILITY.to_owned());
-                    bindings.push(binding);
-                } else {
-                    return None;
-                }
-                continue;
-            }
-            let value = if let Some((index, suffix)) = transform_hole_parts(&argument) {
-                let Some(expression) = holes.get(index) else {
-                    self.illegal(
-                        DiagCode::GrammarForbidden,
-                        span,
-                        "transform template hole index is out of bounds",
-                    );
-                    return None;
-                };
-                let mut expr = self.lower_expr(expression)?;
-                match (property, suffix) {
-                    (_, "") => {
-                        if property == "translate" {
-                            expr = self.push(Expr::ToLength2 { input: expr }, expression.span());
-                        }
-                    }
-                    // Convert numeric transform holes to Angle using identity interpolation with
-                    // Extend extrapolation, preserving exact values without adding an IR variant.
-                    ("rotate", "deg" | "rad" | "turn") => {
-                        let unit = match suffix {
-                            "deg" => AngleUnit::Deg,
-                            "rad" => AngleUnit::Rad,
-                            _ => AngleUnit::Turn,
-                        };
-                        let stop = |value: f64| InterpolateStop {
-                            input: value,
-                            output: MotionValue::Angle(Angle { value, unit }),
-                        };
-                        expr = self.push(
-                            Expr::Interpolate {
-                                input: expr,
-                                stops: vec![stop(0.0), stop(1.0)],
-                                easings: Vec::new(),
-                                extrapolate_left: Extrapolation::Extend,
-                                extrapolate_right: Extrapolation::Extend,
-                            },
-                            expression.span(),
-                        );
-                    }
-                    ("rotate", _) => {
-                        self.illegal(
-                            DiagCode::GrammarForbidden,
-                            span,
-                            "rotate hole accepts only a static `deg`/`rad`/`turn` suffix, \
-                             as in `rotate(${a}deg)`",
-                        );
-                        return None;
-                    }
-                    ("translate", _) => {
-                        self.illegal(
-                            DiagCode::GrammarForbidden,
-                            span,
-                            "translate takes one Length2-valued hole — build pairs with \
-                             `point(x, y)` or interpolate over \"0px 32px\" stops",
-                        );
-                        return None;
-                    }
-                    _ => {
-                        self.illegal(
-                            DiagCode::GrammarForbidden,
-                            span,
-                            "scale takes a unitless Number hole",
-                        );
-                        return None;
-                    }
-                }
-                StyleValue::Expr { expr }
-            } else if argument.contains("__VALLE_HOLE_") {
-                // Reject unsupported hole placement without leaking internal placeholder names into
-                // diagnostics.
-                self.illegal(
-                    DiagCode::GrammarForbidden,
-                    span,
-                    format!(
-                        "transform `{name}` hole must span the whole argument, optionally \
-                         followed by a static angle unit on rotate"
-                    ),
-                );
-                return None;
-            } else {
-                let value = match property {
-                    "translate" => Length2::parse(&argument).map(MotionValue::Length2),
-                    "rotate" => Angle::parse(&argument).map(MotionValue::Angle),
-                    "scale" => argument
-                        .parse::<f64>()
-                        .ok()
-                        .filter(|value| value.is_finite())
-                        .map(MotionValue::Number),
-                    _ => None,
-                };
-                let Some(value) = value else {
-                    self.illegal(
-                        DiagCode::GrammarForbidden,
-                        span,
-                        format!("transform `{name}` has an invalid typed value `{argument}`"),
-                    );
-                    return None;
-                };
-                StyleValue::Static { value }
-            };
-            bindings.push(StyleBinding {
-                property: property.into(),
-                value,
-            });
-        }
-        if translate_axis_static.iter().any(Option::is_some)
-            || translate_axis_expr.iter().any(Option::is_some)
-        {
-            let value = if translate_axis_expr.iter().all(Option::is_none) {
-                StyleValue::Static {
-                    value: MotionValue::Length2(Length2::px(
-                        translate_axis_static[0].unwrap_or(0.0),
-                        translate_axis_static[1].unwrap_or(0.0),
-                    )),
-                }
-            } else {
-                let mut axes = [None, None];
-                for index in 0..2 {
-                    axes[index] = translate_axis_expr[index].or_else(|| {
-                        Some(self.push(
-                            Expr::Const {
-                                value: MotionValue::Number(
-                                    translate_axis_static[index].unwrap_or(0.0),
-                                ),
-                            },
-                            span,
-                        ))
-                    });
-                }
-                let point = self.push(
-                    Expr::MakePoint {
-                        x: axes[0].expect("translate x is synthesized"),
-                        y: axes[1].expect("translate y is synthesized"),
-                    },
-                    span,
-                );
-                StyleValue::Expr {
-                    expr: self.push(Expr::ToLength2 { input: point }, span),
-                }
-            };
-            bindings.insert(
-                0,
-                StyleBinding {
-                    property: "translate".into(),
-                    value,
-                },
-            );
-        }
-        if scale_axis_static.iter().any(Option::is_some)
-            || scale_axis_expr.iter().any(Option::is_some)
-        {
-            self.extra_capabilities
-                .insert(TRANSFORM_SCALE2D_CAPABILITY.to_owned());
-            let value = if scale_axis_expr.iter().all(Option::is_none) {
-                StyleValue::Static {
-                    value: MotionValue::Point(Point::new(
-                        scale_axis_static[0].unwrap_or(1.0),
-                        scale_axis_static[1].unwrap_or(1.0),
-                    )),
-                }
-            } else {
-                let mut axes = [None, None];
-                for index in 0..2 {
-                    axes[index] = scale_axis_expr[index].or_else(|| {
-                        Some(self.push(
-                            Expr::Const {
-                                value: MotionValue::Number(scale_axis_static[index].unwrap_or(1.0)),
-                            },
-                            span,
-                        ))
-                    });
-                }
-                StyleValue::Expr {
-                    expr: self.push(
-                        Expr::MakePoint {
-                            x: axes[0].expect("scale x is synthesized"),
-                            y: axes[1].expect("scale y is synthesized"),
-                        },
-                        span,
-                    ),
-                }
-            };
-            bindings.push(StyleBinding {
-                property: "scale".into(),
-                value,
-            });
-        }
-        Some(bindings)
-    }
-
-    pub(super) fn lower_two_axis_scale_argument(
-        &mut self,
-        span: Span,
-        argument: &str,
-        holes: &[Expression<'s>],
-    ) -> Option<StyleBinding> {
-        let mut parts = argument.split(',').map(str::trim);
-        let first = parts.next()?;
-        let second = parts.next()?;
-        if parts.next().is_some() {
-            self.illegal(
-                DiagCode::GrammarForbidden,
-                span,
-                "scale(x, y) takes exactly two unitless numbers",
-            );
-            return None;
-        }
-        let mut axis = |part: &str| -> Option<ExprId> {
-            if let Some((index, suffix)) = transform_hole_parts(part) {
-                if !suffix.is_empty() {
-                    self.illegal(
-                        DiagCode::GrammarForbidden,
-                        span,
-                        "scale(x, y) holes must be unitless numbers",
-                    );
-                    return None;
-                }
-                let expression = holes.get(index)?;
-                return self.lower_expr(expression);
-            }
-            let value = part.parse::<f64>().ok().filter(|value| value.is_finite())?;
-            Some(self.push(
-                Expr::Const {
-                    value: MotionValue::Number(value),
-                },
-                span,
-            ))
-        };
-        let x = axis(first)?;
-        let y = axis(second)?;
-        if matches!(
-            (
-                self.expr_arena.values.get(x.0 as usize),
-                self.expr_arena.values.get(y.0 as usize)
-            ),
-            (
-                Some(Expr::Const {
-                    value: MotionValue::Number(sx)
-                }),
-                Some(Expr::Const {
-                    value: MotionValue::Number(sy)
-                })
-            ) if sx.is_finite() && sy.is_finite()
-        ) {
-            let (
-                Some(Expr::Const {
-                    value: MotionValue::Number(sx),
-                }),
-                Some(Expr::Const {
-                    value: MotionValue::Number(sy),
-                }),
-            ) = (
-                self.expr_arena.values.get(x.0 as usize).cloned(),
-                self.expr_arena.values.get(y.0 as usize).cloned(),
-            )
-            else {
-                unreachable!("checked above");
-            };
-            return Some(StyleBinding {
-                property: "scale".into(),
-                value: StyleValue::Static {
-                    value: MotionValue::Point(Point::new(sx, sy)),
-                },
-            });
-        }
-        Some(StyleBinding {
-            property: "scale".into(),
-            value: StyleValue::Expr {
-                expr: self.push(Expr::MakePoint { x, y }, span),
-            },
-        })
-    }
+fn is_css_3d_function(name: &str) -> bool {
+    matches!(
+        name,
+        "translateZ"
+            | "translate3d"
+            | "rotateX"
+            | "rotateY"
+            | "rotateZ"
+            | "rotate3d"
+            | "scaleZ"
+            | "scale3d"
+    )
 }

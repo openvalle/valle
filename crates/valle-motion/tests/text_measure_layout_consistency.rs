@@ -1,4 +1,7 @@
 //! Text measurement must tightly match layout, wrapping and shaping.
+//!
+//! Options are explicit numbers with the same meaning as the identically named authored style
+//! property, so every case here can be written once as a request and once as a `Text` style.
 
 use takumi_core::resources::font::{FontResource, Fonts};
 use takumi_core::viewport::Viewport;
@@ -18,13 +21,13 @@ fn viewport() -> Viewport {
     Viewport::new((1920, 1080))
 }
 
-fn measure(text: &str, style: &str, max_width: Option<f64>) -> MeasuredBox {
+fn measure(text: &str, font_size: f64, max_width: Option<f64>) -> MeasuredBox {
     measure_text(
         &TextMeasure {
             text,
-            class_names: &[],
-            style,
+            font_size,
             max_width,
+            ..Default::default()
         },
         &fonts(),
         viewport(),
@@ -36,17 +39,16 @@ fn measure(text: &str, style: &str, max_width: Option<f64>) -> MeasuredBox {
 fn the_measured_width_is_tight_enough_to_size_a_box_with() {
     // A box sized from measured text should fit that text on one line.
     let text = "全球业务网络 Overview";
-    let style = "font-size: 48px";
-    let free = measure(text, style, None);
+    let free = measure(text, 48.0, None);
 
-    let exact = measure(text, style, Some(free.width));
+    let exact = measure(text, 48.0, Some(free.width));
     assert_eq!(
         exact.height, free.height,
         "constraining to the measured width must not wrap: {free:?} vs {exact:?}"
     );
 
     // Reducing the measured width by one pixel must wrap the text.
-    let tighter = measure(text, style, Some(free.width - 1.0));
+    let tighter = measure(text, 48.0, Some(free.width - 1.0));
     assert!(
         tighter.height > free.height,
         "measured width must be tight — one pixel less should wrap ({free:?} vs {tighter:?})"
@@ -55,8 +57,8 @@ fn the_measured_width_is_tight_enough_to_size_a_box_with() {
 
 #[test]
 fn wrapping_grows_height_and_respects_the_constraint() {
-    let free = measure("全球业务网络 Overview", "font-size: 48px", None);
-    let wrapped = measure("全球业务网络 Overview", "font-size: 48px", Some(200.0));
+    let free = measure("全球业务网络 Overview", 48.0, None);
+    let wrapped = measure("全球业务网络 Overview", 48.0, Some(200.0));
     assert!(
         wrapped.width <= 200.0,
         "wrapped width must respect maxWidth"
@@ -70,24 +72,21 @@ fn wrapping_grows_height_and_respects_the_constraint() {
 #[test]
 fn measurement_is_deterministic_across_calls_and_fresh_registries() {
     // Fresh font registries must produce the same measurement regardless of registration timing.
-    assert_eq!(
-        measure("确定性", "font-size: 32px", None),
-        measure("确定性", "font-size: 32px", None)
-    );
+    assert_eq!(measure("确定性", 32.0, None), measure("确定性", 32.0, None));
 }
 
 #[test]
 fn text_and_style_actually_reach_the_shaper() {
     // Both assertions require real layout metrics rather than estimated widths.
-    let small = measure("Aa", "font-size: 20px", None);
-    let large = measure("Aa", "font-size: 40px", None);
+    let small = measure("Aa", 20.0, None);
+    let large = measure("Aa", 40.0, None);
     assert!(
         large.width > small.width && large.height > small.height,
         "font-size must reach the shaper: {small:?} vs {large:?}"
     );
 
-    let short = measure("A", "font-size: 32px", None);
-    let long = measure("AAAAAAAA", "font-size: 32px", None);
+    let short = measure("A", 32.0, None);
+    let long = measure("AAAAAAAA", 32.0, None);
     assert!(
         long.width > short.width,
         "text content must reach the shaper: {short:?} vs {long:?}"
@@ -95,46 +94,58 @@ fn text_and_style_actually_reach_the_shaper() {
 }
 
 #[test]
-fn tailwind_classes_go_through_the_same_catalog_as_scene_nodes() {
-    let plain = measure_text(
-        &TextMeasure {
-            text: "Aa",
-            class_names: &[],
-            style: "font-size: 16px",
-            max_width: None,
-        },
-        &fonts(),
-        viewport(),
-    )
-    .expect("plain measure");
-    let tw = measure_text(
-        &TextMeasure {
-            text: "Aa",
-            class_names: &["text-5xl".to_owned()],
-            style: "",
-            max_width: None,
-        },
-        &fonts(),
-        viewport(),
-    )
-    .expect("tailwind measure");
+fn every_option_reaches_the_shaper() {
+    let fonts = fonts();
+    let options = |request: TextMeasure<'_>| {
+        measure_text(&request, &fonts, viewport()).expect("measure succeeds")
+    };
+    let base = options(TextMeasure {
+        text: "iiii WWWW",
+        font_size: 32.0,
+        ..Default::default()
+    });
+    let spaced = options(TextMeasure {
+        text: "iiii WWWW",
+        font_size: 32.0,
+        letter_spacing: Some(6.0),
+        ..Default::default()
+    });
     assert!(
-        tw.width > plain.width,
-        "className must reach the shaper via the same Tailwind path as Scene nodes: \
-         {plain:?} vs {tw:?}"
+        spaced.width > base.width,
+        "letterSpacing must widen the run: {base:?} vs {spaced:?}"
+    );
+    let tall = options(TextMeasure {
+        text: "iiii WWWW",
+        font_size: 32.0,
+        line_height: Some(3.0),
+        ..Default::default()
+    });
+    assert!(
+        tall.height > base.height,
+        "a unitless line-height multiplier must grow the box: {base:?} vs {tall:?}"
+    );
+    let weighted = options(TextMeasure {
+        text: "iiii WWWW",
+        font_size: 32.0,
+        font_weight: Some(700.0),
+        ..Default::default()
+    });
+    assert!(
+        weighted.width > 0.0 && weighted.height > 0.0,
+        "fontWeight must reach the shaper: {weighted:?}"
     );
 }
 
 #[test]
-fn bad_constraints_and_styles_fail_closed() {
+fn bad_options_and_constraints_fail_closed() {
     let fonts = fonts();
     for bad in [0.0, -1.0, f64::NAN, f64::INFINITY] {
         let result = measure_text(
             &TextMeasure {
                 text: "x",
-                class_names: &[],
-                style: "",
+                font_size: 16.0,
                 max_width: Some(bad),
+                ..Default::default()
             },
             &fonts,
             viewport(),
@@ -148,20 +159,48 @@ fn bad_constraints_and_styles_fail_closed() {
         );
     }
 
-    let bad_style = measure_text(
-        &TextMeasure {
-            text: "x",
-            class_names: &[],
-            style: "font-size: ###",
-            max_width: None,
-        },
-        &fonts,
-        viewport(),
-    );
-    assert!(
-        matches!(bad_style, Err(valle_motion::MeasureError::BadStyle { .. })),
-        "unparseable style must fail closed, got {bad_style:?}"
-    );
+    for (option, request) in [
+        (
+            "fontSize",
+            TextMeasure {
+                text: "x",
+                ..Default::default()
+            },
+        ),
+        (
+            "fontSize",
+            TextMeasure {
+                text: "x",
+                font_size: f64::NAN,
+                ..Default::default()
+            },
+        ),
+        (
+            "fontWeight",
+            TextMeasure {
+                text: "x",
+                font_size: 16.0,
+                font_weight: Some(2000.0),
+                ..Default::default()
+            },
+        ),
+        (
+            "fontFamily",
+            TextMeasure {
+                text: "x",
+                font_size: 16.0,
+                font_family: Some("  "),
+                ..Default::default()
+            },
+        ),
+    ] {
+        let error =
+            measure_text(&request, &fonts, viewport()).expect_err("a bad option must fail closed");
+        assert!(
+            error.to_string().contains(option),
+            "the message must name `{option}`: {error}"
+        );
+    }
 }
 
 #[test]
@@ -180,9 +219,9 @@ fn bundled_noto_fonts_cover_chinese_and_preserve_monospace_metrics() {
         measure_text(
             &TextMeasure {
                 text,
-                class_names: &[],
-                style: "font-family: monospace; font-size: 32px",
-                max_width: None,
+                font_size: 32.0,
+                font_family: Some("monospace"),
+                ..Default::default()
             },
             &fonts,
             viewport(),
@@ -191,4 +230,40 @@ fn bundled_noto_fonts_cover_chinese_and_preserve_monospace_metrics() {
         .width
     };
     assert!((width("iiii") - width("WWWW")).abs() < 0.01);
+}
+
+#[test]
+fn measurement_uses_the_explicit_viewport_without_scaling_by_dpr() {
+    let fonts = fonts();
+    let at = |viewport, max_width| {
+        measure_text(
+            &TextMeasure {
+                text: "全球业务网络 Overview",
+                font_size: 20.0,
+                max_width,
+                ..Default::default()
+            },
+            &fonts,
+            viewport,
+        )
+        .unwrap()
+    };
+    // Layout rounds glyph extents to device pixels, so DPR can change the CSS-pixel rounding by less
+    // than one pixel. It must not multiply either the result or maxWidth by the DPR.
+    for max_width in [None, Some(200.0)] {
+        let a = at(Viewport::new((640, 400)), max_width);
+        let b = at(
+            Viewport::new((1280, 800)).with_device_pixel_ratio(2.0),
+            max_width,
+        );
+        assert!(
+            (a.width - b.width).abs() < 1.0 && (a.height - b.height).abs() < 1.0,
+            "{a:?} vs {b:?}"
+        );
+    }
+    assert_eq!(
+        at(Viewport::new((640, 400)), None),
+        at(Viewport::new((640, 400)), None),
+        "measurement must not leave mutable state"
+    );
 }

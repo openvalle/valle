@@ -724,6 +724,82 @@ fn project_create_persists_one_author_timeline_without_a_manifest() {
 }
 
 #[test]
+fn project_create_and_apply_resolve_missing_motion_source_duration() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    let component = dir.path().join("title.motion.tsx");
+    std::fs::write(&component, "export const composition = { width: 64, height: 64, fps: 24, duration: 1 };\nexport default function Title() { return <Scene />; }").unwrap();
+    let timeline_path = dir.path().join("timeline.json");
+    let timeline = serde_json::json!({
+        "canvas":{"width":64,"height":64,"fps":24},
+        "resources":{"title":"title.motion.tsx"},
+        "tracks":{"visual":[{"clips":[{"kind":"motion","component":"title","start":0,"duration":1}]}]}
+    });
+    std::fs::write(&timeline_path, timeline.to_string()).unwrap();
+    let create = valle()
+        .env("VALLE_HOME", &home)
+        .args([
+            "project",
+            "--json",
+            "create",
+            "motion-duration",
+            "--timeline",
+        ])
+        .arg(&timeline_path)
+        .output()
+        .unwrap();
+    assert!(
+        create.status.success(),
+        "{}",
+        String::from_utf8_lossy(&create.stderr)
+    );
+    let created: Value = serde_json::from_slice(&create.stdout).unwrap();
+    assert_eq!(
+        created["timeline"]["tracks"]["visual"][0]["clips"][0]["sourceDuration"],
+        1
+    );
+
+    let mut edited = timeline;
+    edited["tracks"]["visual"][0]["clips"][0]["duration"] = serde_json::json!(0.5);
+    std::fs::write(&timeline_path, edited.to_string()).unwrap();
+    let apply = valle()
+        .env("VALLE_HOME", &home)
+        .args([
+            "project",
+            "--json",
+            "apply",
+            "motion-duration",
+            "--base-revision",
+            "1",
+            "--timeline",
+        ])
+        .arg(&timeline_path)
+        .output()
+        .unwrap();
+    assert!(
+        apply.status.success(),
+        "{}",
+        String::from_utf8_lossy(&apply.stderr)
+    );
+    let show = valle()
+        .env("VALLE_HOME", &home)
+        .args(["project", "--json", "show", "motion-duration"])
+        .output()
+        .unwrap();
+    assert!(
+        show.status.success(),
+        "{}",
+        String::from_utf8_lossy(&show.stderr)
+    );
+    let snapshot: Value = serde_json::from_slice(&show.stdout).unwrap();
+    assert_eq!(snapshot["revision"], 2);
+    assert_eq!(
+        snapshot["timeline"]["tracks"]["visual"][0]["clips"][0]["sourceDuration"],
+        1
+    );
+}
+
+#[test]
 fn assets_add_human_and_json_outputs_use_the_typed_digest_contract() {
     let temporary = tempfile::tempdir().unwrap();
     let source = temporary.path().join("sample.bin");
@@ -806,6 +882,7 @@ fn motion_render_exports_mp4_and_preserves_existing_output() {
     let source = dir.path().join("demo.motion.tsx");
     let output = dir.path().join("demo.mp4");
     std::fs::write(&source, r##"
+export const composition = { width: 160, height: 90, fps: 10, duration: 0.3 };
 export default function Demo(ctx) {
   return <Scene className="relative h-full w-full" style={{ backgroundColor: "#123456" }}>
     <Text style={{ color: "#ffffff", fontSize: 24 }}>你好 Noto</Text>
@@ -819,7 +896,6 @@ export default function Demo(ctx) {
             .arg(&source)
             .arg("--output")
             .arg(&output)
-            .args(["--duration", "0.3", "--fps", "10", "--size", "160x90"])
             .output()
             .unwrap()
     };
@@ -862,12 +938,6 @@ export default function Demo(ctx) {
             "2",
             "--output-size",
             "320x180",
-            "--duration",
-            "0.3",
-            "--fps",
-            "10",
-            "--size",
-            "160x90",
         ])
         .arg("-o")
         .arg(dir.path().join("raster.mp4"))
@@ -890,13 +960,23 @@ export default function Demo(ctx) {
 }
 
 #[test]
-fn motion_render_rejects_invalid_timing_and_source_without_output() {
+fn motion_render_rejects_invalid_source_and_removed_flags_without_output() {
     let dir = tempfile::tempdir().unwrap();
     let source = dir.path().join("broken.motion.tsx");
     let output = dir.path().join("broken.mp4");
     std::fs::write(&source, "export default function Broken( {").unwrap();
-    for extra in [vec!["--duration", "0"], vec!["--fps", "0"], vec![]] {
-        let result = valle()
+    let result = valle()
+        .args(["motion", "render"])
+        .arg(&source)
+        .arg("-o")
+        .arg(&output)
+        .output()
+        .unwrap();
+    assert!(!result.status.success());
+    assert!(!output.exists());
+
+    for extra in [vec!["--duration", "3"], vec!["--size", "160x90"]] {
+        let moved = valle()
             .args(["motion", "render"])
             .arg(&source)
             .arg("-o")
@@ -904,7 +984,13 @@ fn motion_render_rejects_invalid_timing_and_source_without_output() {
             .args(extra)
             .output()
             .unwrap();
-        assert!(!result.status.success());
+        assert!(!moved.status.success(), "{moved:?}");
+        let message = format!(
+            "{}{}",
+            String::from_utf8_lossy(&moved.stdout),
+            String::from_utf8_lossy(&moved.stderr)
+        );
+        assert!(message.contains("unexpected argument"), "{message}");
         assert!(!output.exists());
     }
 }
@@ -1007,7 +1093,8 @@ fn timeline_and_project_render_without_internal_package_arguments() {
 #[test]
 fn timeline_renders_motion_source_with_internal_fonts() {
     let dir = tempfile::tempdir().unwrap();
-    std::fs::write(dir.path().join("title.motion.tsx"), r##"export default function Title(ctx) { return <Scene><Text style={{ fontSize: 24, color: "#ffffff" }}>Hello</Text></Scene>; }"##).unwrap();
+    std::fs::write(dir.path().join("title.motion.tsx"), r##"export const composition = { width: 160, height: 90, fps: 10, duration: 1 };
+export default function Title(ctx) { return <Scene><Text style={{ fontSize: 24, color: "#ffffff" }}>Hello</Text></Scene>; }"##).unwrap();
     let timeline = dir.path().join("timeline.json");
     std::fs::write(&timeline, serde_json::json!({
         "canvas":{"width":160,"height":90,"fps":10},

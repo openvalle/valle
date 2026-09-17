@@ -23,7 +23,8 @@ fn success(output: &Output) {
     );
 }
 fn scene(directory: &Path) {
-    std::fs::write(directory.join("scene.motion.tsx"), "export default function Test() { return <Scene style={{backgroundColor:'#123456'}}><Text style={{fontSize:24}}>Valle</Text></Scene>; }\n").unwrap();
+    // The delivery contract lives in the file: 160x90 at 30 FPS for six frames.
+    std::fs::write(directory.join("scene.motion.tsx"), "export const composition = { width: 160, height: 90, fps: 30, duration: 0.2 }; export default function Test() { return <Scene style={{backgroundColor:'#123456'}}><Text style={{fontSize:24}}>Valle</Text></Scene>; }\n").unwrap();
 }
 #[test]
 fn non_media_commands_and_png_work_without_ffmpeg() {
@@ -34,14 +35,7 @@ fn non_media_commands_and_png_work_without_ffmpeg() {
     for args in [
         vec!["--version"],
         vec!["--help"],
-        vec![
-            "--json",
-            "motion",
-            "check",
-            "scene.motion.tsx",
-            "--size",
-            "160x90",
-        ],
+        vec!["--json", "motion", "check", "scene.motion.tsx"],
         vec![
             "--json",
             "motion",
@@ -49,8 +43,6 @@ fn non_media_commands_and_png_work_without_ffmpeg() {
             "scene.motion.tsx",
             "--frame",
             "0",
-            "--size",
-            "160x90",
             "--backend",
             "raster",
             "-o",
@@ -71,7 +63,8 @@ fn non_media_commands_and_png_work_without_ffmpeg() {
             .contains("Apache License")
     );
     assert!(std::fs::metadata(dir.join("frame.png")).unwrap().len() > 100);
-    std::fs::write(dir.join("image.motion.tsx"), r#"export const controls = defineControls({assets:{poster:asset({kind:"image"})}});
+    std::fs::write(dir.join("image.motion.tsx"), r#"export const composition = { width: 160, height: 90, fps: 30, duration: 0.2 };
+export const controls = defineControls({assets:{poster:asset({kind:"image"})}});
 export default function Test(){return <Scene style={{width:160,height:90,backgroundColor:"rgb(18,52,86)"}}><Image src="asset://poster" style={{position:"absolute",left:0,top:0,width:160,height:90}} /></Scene>;}"#).unwrap();
     success(&run(
         dir,
@@ -85,8 +78,6 @@ export default function Test(){return <Scene style={{width:160,height:90,backgro
             "poster=frame.png",
             "--frame",
             "0",
-            "--size",
-            "160x90",
             "--backend",
             "raster",
             "-o",
@@ -151,10 +142,6 @@ fn missing_libraries_fail_only_at_media_use_with_json_diagnostic() {
             "motion",
             "render",
             "scene.motion.tsx",
-            "--duration",
-            "0.1",
-            "--size",
-            "160x90",
             "--backend",
             "raster",
             "-o",
@@ -322,10 +309,6 @@ fn missing_named_software_encoder_is_reported_without_selecting_another_h264_enc
             "motion",
             "render",
             "scene.motion.tsx",
-            "--duration",
-            "0.1",
-            "--size",
-            "160x90",
             "--backend",
             "raster",
             "-o",

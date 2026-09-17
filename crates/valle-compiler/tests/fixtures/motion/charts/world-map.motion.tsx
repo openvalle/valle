@@ -1,3 +1,4 @@
+export const composition = { width: 1920, height: 1080, fps: 30, duration: 5 };
 // Map fixture.
 //
 // Use synthetic polygons and sites to test projection, fitting and viewport scaling.

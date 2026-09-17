@@ -285,7 +285,7 @@ fn prepare_endpoint(
             state.layer(&clip, path, source.sample_time())?
         }
         CompiledSourceKind::Solid => {
-            let clip = adapt_program_clip(render, clip_id, track_id, source, layer, path)?;
+            let clip = adapt_program_clip(render, clip_id, track_id, source, layer, path, None)?;
             let program_id = state.next_program_id(path)?;
             let program_path = format!("{path}.solid");
             let viewport = state.local_program_extent(&clip.transform, path)?;
@@ -343,7 +343,6 @@ fn prepare_endpoint(
             )?
         }
         CompiledSourceKind::Motion => {
-            let clip = adapt_program_clip(render, clip_id, track_id, source, layer, path)?;
             let compiled_source =
                 render
                     .sources()
@@ -360,10 +359,42 @@ fn prepare_endpoint(
                     "admitted Motion executable payload missing",
                 )
             })?;
+            let composition = prepared_scene
+                .artifact()
+                .composition
+                .as_ref()
+                .ok_or_else(|| {
+                    PrepareError::at(
+                        format!("{path}.source.component"),
+                        "Motion source has no base canvas",
+                    )
+                })?;
+            let source_extent = (composition.width, composition.height);
+            let mut clip = adapt_program_clip(
+                render,
+                clip_id,
+                track_id,
+                source,
+                layer,
+                path,
+                Some(source_extent),
+            )?;
+            let source_clip = fit_motion_program_clip(
+                &mut clip,
+                render
+                    .sources()
+                    .source(source.source_index())
+                    .and_then(|source| source.raster_fit())
+                    .ok_or_else(|| PrepareError::at(path, "Motion source has no fit"))?,
+                source_extent,
+                (render.canvas().width(), render.canvas().height()),
+                layer.scale(),
+            );
             let frame_address = render
                 .motion_frame_address(render.render_id(), evaluated.frame(), source.source_index())
                 .map_err(|error| PrepareError::at(format!("{path}.source.frame"), error))?;
-            let viewport = state.local_program_extent(&clip.transform, path)?;
+            let viewport = crate::resource::Extent2d::new(source_extent.0, source_extent.1)
+                .map_err(|error| PrepareError::at(path, error))?;
             let program_to_device = super::bounds::layer_device_transform(
                 &clip.transform,
                 &clip.resolved_animation,
@@ -414,7 +445,9 @@ fn prepare_endpoint(
                     instance,
                     evaluated: source,
                     source_frame: frame_address.source_frame(),
+                    source_time: source.sample_time(),
                     viewport,
+                    source_clip,
                     fps: render.canvas().frame_rate(),
                     styles: state.motion_styles,
                     faces: state.motion_faces,
@@ -934,13 +967,25 @@ fn adapt_program_clip(
     source: &EvaluatedSourceRef,
     layer: &EvaluatedRenderLayer,
     path: &str,
+    source_extent: Option<(u32, u32)>,
 ) -> Result<EvaluatedVisualClip, PrepareError> {
     let canvas = render.canvas();
-    let transform =
-        adapt_transform_with_fit(render, layer, canvas.width(), canvas.height(), None, path)?;
+    let (source_width, source_height) = source_extent.unwrap_or((canvas.width(), canvas.height()));
+    let transform = if source_extent.is_some() {
+        adapt_transform(
+            render,
+            layer,
+            source.source_index(),
+            source_width,
+            source_height,
+            path,
+        )?
+    } else {
+        adapt_transform_with_fit(render, layer, source_width, source_height, None, path)?
+    };
     let digest = ContentDigest::from_bytes([0; 32]);
     let descriptor = MediaDescriptor::visual(
-        crate::resource::Extent2d::new(canvas.width(), canvas.height())
+        crate::resource::Extent2d::new(source_width, source_height)
             .expect("compiled canvas is non-empty"),
         None,
         VisualInterpretation::new(
@@ -967,6 +1012,67 @@ fn adapt_program_clip(
         blend: adapt_blend(layer.blend()),
         resolved_animation: ResolvedClipAnimation::RASTER_IDENTITY,
     })
+}
+
+/// Fit a vector Motion program in source pixels before its Timeline layer transform.
+/// The source clip is recorded in the DrawProgram, so cover and none never rasterize a
+/// low-resolution intermediate surface and do not spill outside the requested target box.
+fn fit_motion_program_clip(
+    clip: &mut EvaluatedVisualClip,
+    fit: CompiledRasterFit,
+    source: (u32, u32),
+    canvas: (u32, u32),
+    layer_scale: [f64; 2],
+) -> Option<valle_draw::Rect> {
+    let (canvas_w, canvas_h) = (f64::from(canvas.0), f64::from(canvas.1));
+    // The resolved transform already includes the layer scale. Fit within the authored size,
+    // then apply that scale to the fitted source extent.
+    let target_w = clip.transform.width * canvas_w / layer_scale[0].abs();
+    let target_h = clip.transform.height * canvas_h / layer_scale[1].abs();
+    if target_w <= 0.0 || target_h <= 0.0 {
+        return None;
+    }
+    let (width, height, crop) =
+        motion_fit_geometry(fit, source, (target_w, target_h), layer_scale)?;
+    clip.transform.width = width / canvas_w;
+    clip.transform.height = height / canvas_h;
+    crop
+}
+
+fn motion_fit_geometry(
+    fit: CompiledRasterFit,
+    source: (u32, u32),
+    target: (f64, f64),
+    layer_scale: [f64; 2],
+) -> Option<(f64, f64, Option<valle_draw::Rect>)> {
+    let (source_w, source_h) = (f64::from(source.0), f64::from(source.1));
+    let (target_w, target_h) = target;
+    let (scale, crop) = match fit {
+        CompiledRasterFit::Fill => return None,
+        CompiledRasterFit::Contain => ((target_w / source_w).min(target_h / source_h), false),
+        CompiledRasterFit::Cover => ((target_w / source_w).max(target_h / source_h), true),
+        CompiledRasterFit::None => (1.0, true),
+    };
+    let width = source_w * scale * layer_scale[0].abs();
+    let height = source_h * scale * layer_scale[1].abs();
+    if !crop {
+        return Some((width, height, None));
+    }
+    let visible_w = source_w.min(target_w / scale);
+    let visible_h = source_h.min(target_h / scale);
+    if visible_w >= source_w && visible_h >= source_h {
+        return Some((width, height, None));
+    }
+    Some((
+        width,
+        height,
+        Some(valle_draw::Rect::new(
+            (source_w - visible_w) * 0.5,
+            (source_h - visible_h) * 0.5,
+            visible_w,
+            visible_h,
+        )),
+    ))
 }
 
 fn adapt_mask(mask: &EvaluatedVisualMask) -> ResolvedMask {
@@ -1196,5 +1302,28 @@ fn adapt_blend(blend: CompiledBlendMode) -> CompositeBlendMode {
         CompiledBlendMode::Saturation => CompositeBlendMode::Saturation,
         CompiledBlendMode::Color => CompositeBlendMode::Color,
         CompiledBlendMode::Luminosity => CompositeBlendMode::Luminosity,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn motion_fit_preserves_layer_scale_after_fitting() {
+        let one = motion_fit_geometry(CompiledRasterFit::None, (64, 64), (64.0, 64.0), [1.0, 1.0])
+            .unwrap();
+        let two = motion_fit_geometry(CompiledRasterFit::None, (64, 64), (64.0, 64.0), [2.0, 2.0])
+            .unwrap();
+        assert_eq!((one.0, one.1), (64.0, 64.0));
+        assert_eq!((two.0, two.1), (128.0, 128.0));
+        let stretched = motion_fit_geometry(
+            CompiledRasterFit::Contain,
+            (64, 64),
+            (64.0, 64.0),
+            [2.0, 1.0],
+        )
+        .unwrap();
+        assert_eq!((stretched.0, stretched.1), (128.0, 64.0));
     }
 }

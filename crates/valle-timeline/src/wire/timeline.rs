@@ -693,6 +693,8 @@ pub enum TimelineVisualSourceWire {
     Motion {
         component: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        fit: Option<RasterFitWire>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         trim_start: Option<TimelineTimeWire>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         source_duration: Option<TimelineTimeWire>,
@@ -1071,6 +1073,7 @@ fn parse_visual_source(
         },
         "motion" => TimelineVisualSourceWire::Motion {
             component: required_raw(fields, "component")?,
+            fit: take_raw(fields, "fit")?,
             trim_start: take_raw(fields, "trimStart")?,
             source_duration: take_raw(fields, "sourceDuration")?,
             rate: take_raw(fields, "rate")?,

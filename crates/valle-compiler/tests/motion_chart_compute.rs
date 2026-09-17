@@ -274,6 +274,7 @@ export default function Colors() {
                 "main.motion.tsx".into(),
                 r##"
 import { tone } from "./palette";
+export const composition = { width: 1920, height: 1080, fps: 30, duration: 5 };
 export default function Main() {
   return <Scene key="scene"><View key="rebound" style={{ backgroundColor: tone.map(1) }} /></Scene>;
 }

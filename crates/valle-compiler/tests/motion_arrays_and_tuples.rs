@@ -138,6 +138,7 @@ fn interpolate_cross_module_const_array() {
                 "entry.motion.tsx".into(),
                 r#"
 import { INPUT } from "./stops.motion";
+export const composition = { width: 1920, height: 1080, fps: 30, duration: 5 };
 export default function Card(ctx) {
   return <View style={{ width: interpolate(ctx.hold.progress, INPUT, [0, 1]) }} />;
 }

@@ -82,3 +82,57 @@ export default function Card(ctx) {
     );
     assert!(has_message(&messages, &["brandFont", "no bound resource"]));
 }
+
+#[test]
+fn font_resource_utilities_fail_with_an_inline_replacement() {
+    for class in [
+        "[font-family:'asset://brandFont']",
+        "[font-family:'asset://missing']",
+    ] {
+        let source = format!(
+            "export default function Card(){{return <Text className={class:?}>VALLE</Text>}}"
+        );
+        let messages = diagnostic_messages(&source);
+        assert!(
+            has_message(&messages, &[class, "style.fontFamily"]),
+            "{class}: {messages:#?}"
+        );
+    }
+    compile_motion(
+        "export default function Card(){return <Text className='font-mono'>VALLE</Text>}",
+    )
+    .expect("built-in font utility remains valid");
+
+    let escaped = "[font-family:'asset\\00003a//brandFont']";
+    let error = valle_motion::validate_tailwind_class(escaped).unwrap_err();
+    assert!(
+        error.message(escaped).contains("style.fontFamily"),
+        "{error:?}"
+    );
+
+    let source = r##"
+export const controls=defineControls({assets:{brandFont:asset({kind:'font',required:true})}});
+export default function Card(){return <Text className="[font-family:'asset://brandFont']">VALLE</Text>}
+"##;
+    let hash = ContentDigest::of_bytes(FONT);
+    let env = MeasureEnv::new_with_aliases(
+        &[],
+        &[("asset://brandFont".into(), FONT.to_vec())],
+        (320, 180),
+    )
+    .unwrap();
+    let diagnostics = compile_motion_with_env(
+        source,
+        &[ResourceRef {
+            control: "brandFont".into(),
+            content_hash: hash,
+        }],
+        Some(&env),
+    )
+    .unwrap_err();
+    assert!(
+        diagnostics
+            .iter()
+            .any(|d| d.message.contains("style.fontFamily"))
+    );
+}

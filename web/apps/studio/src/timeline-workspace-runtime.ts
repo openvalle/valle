@@ -21,6 +21,7 @@ export type TimelineWorkspaceRuntimeConfig = Omit<
 > & {
   timeline: Timeline;
   timelineJson: string;
+  motionSourceDurations?: Record<string, number>;
   render: {
     timeline: CanonicalTimelineDocument["timeline"];
     timelineJson: string;
@@ -53,6 +54,19 @@ export interface TimelineWorkspaceRuntime {
     rate?: number | null,
   ): number;
   compileTimeline(timeline: Timeline): CanonicalTimelineDocument;
+  setMotionSourceDurations(durations: Record<string, number>): void;
+}
+
+function bindMotionSourceDurations(timeline: Timeline, durations: Record<string, number>): Timeline {
+  const bound = structuredClone(timeline);
+  for (const track of bound.tracks.visual ?? []) {
+    for (const clip of track.clips) {
+      if (clip.kind !== "motion" || clip.sourceDuration != null) continue;
+      const duration = durations[clip.component];
+      if (duration !== undefined) clip.sourceDuration = duration;
+    }
+  }
+  return bound;
 }
 
 type CompilerRuntimeFactory = (
@@ -75,7 +89,11 @@ export async function initializeTimelineWorkspaceRuntime(
     runtimeAssets: config.runtimeAssets,
     runtimeBaseUrl: config.runtimeBaseUrl,
   });
-  const compiled = compiler.compileTimeline(config.timeline);
+  let motionSourceDurations = config.motionSourceDurations ?? {};
+  const compileTimeline = (timeline: Timeline) => compiler.compileTimeline(
+    bindMotionSourceDurations(timeline, motionSourceDurations),
+  );
+  const compiled = compileTimeline(config.timeline);
   const hostedRender = compiler.canonicalizeTimelineDocument(config.render.timeline);
   if (hostedRender.timelineJson !== compiled.timelineJson) {
     throw new Error("Project render projection does not match the Timeline working copy");
@@ -129,7 +147,8 @@ export async function initializeTimelineWorkspaceRuntime(
       timelineSourceTimeDeltaFromFrames: (frames, fps, rate) => (
         compiler.timelineSourceTimeDeltaFromFrames(frames, fps, rate)
       ),
-      compileTimeline: (timeline) => compiler.compileTimeline(timeline),
+      compileTimeline,
+      setMotionSourceDurations: (durations) => { motionSourceDurations = durations; },
     };
   }
   return {
@@ -141,7 +160,8 @@ export async function initializeTimelineWorkspaceRuntime(
     timelineSourceTimeDeltaFromFrames: (frames, fps, rate) => (
       compiler.timelineSourceTimeDeltaFromFrames(frames, fps, rate)
     ),
-    compileTimeline: (timeline) => compiler.compileTimeline(timeline),
+    compileTimeline,
+    setMotionSourceDurations: (durations) => { motionSourceDurations = durations; },
   };
 }
 

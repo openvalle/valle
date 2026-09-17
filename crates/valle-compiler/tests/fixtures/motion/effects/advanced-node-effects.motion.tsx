@@ -1,20 +1,21 @@
+export const composition = { width: 1920, height: 1080, fps: 30, duration: 5 };
 export const component = "advanced-node-effects";
 const stripes = Array.from({ length: 11 }, (_, index) => ({ index }));
 
 function Pattern(ctx, props) {
   return (
-    <View style={{ position: "absolute", inset: 0, overflow: "hidden", borderRadius: 28 }}>
+    <View style={{ position: "absolute", inset: 0, overflow: "hidden", borderRadius: 24 }}>
       {stripes.map(({ index }) => (
         <View
           key={`stripe-${index}`}
           style={{
-            position: "absolute", left: index * 42 - 40, top: -50, width: 18, height: 330,
+            position: "absolute", left: index * 28 - 28, top: -30, width: 12, height: 220,
             rotate: "18deg", backgroundColor: index % 2 === 0 ? props.accent : "#ffffff",
             opacity: index % 2 === 0 ? 0.95 : 0.22,
           }}
         />
       ))}
-      <View style={{ position: "absolute", left: 78, top: 58, width: 190, height: 86, borderRadius: 43, backgroundColor: "#050816", border: "3px solid #ffffff" }} />
+      <View style={{ position: "absolute", left: 54, top: 34, width: 132, height: 64, borderRadius: 32, backgroundColor: "#050816", border: "2px solid #ffffff" }} />
     </View>
   );
 }
@@ -22,47 +23,47 @@ function Pattern(ctx, props) {
 export default function AdvancedNodeEffects(ctx) {
   const seconds = ctx.localFrame * ctx.fps.den / ctx.fps.num;
   const reveal = interpolate(ctx.enter.progress, [0, 1], [0, 1], { easing: "easeOut" });
-  const displacementScale = 22 + sin(seconds * 2.1) * 12;
+  const displacementScale = 18 + sin(seconds * 2.1) * 10;
   const travel = sin(seconds * 2.4);
-  const travelY = cos(seconds * 1.7) * 26;
+  const travelY = cos(seconds * 1.7) * 18;
   const velocityX = cos(seconds * 2.4) * 230 * 2.4 / 60;
-  const velocityY = -sin(seconds * 1.7) * 26 * 1.7 / 60;
+  const velocityY = -sin(seconds * 1.7) * 18 * 1.7 / 60;
 
   return (
     <Scene style={{ width: "100%", height: "100%", backgroundColor: "#050816", color: "#f8fafc" }}>
-      <Text style={{ position: "absolute", left: 108, top: 96, fontSize: 24, letterSpacing: 4, color: "#22d3ee", opacity: reveal }}>ADVANCED NODE FILTERS</Text>
-      <Text style={{ position: "absolute", left: 108, top: 145, width: 2500, fontSize: 64, fontWeight: 700, opacity: reveal }}>Noise can bend a subtree. Velocity can shape its shutter.</Text>
-      <Text style={{ position: "absolute", left: 112, top: 232, fontSize: 22, color: "#94a3b8", opacity: reveal }}>One bounded BeginFilter chain · deterministic seed · random-access frames · Native / CanvasKit shared wire</Text>
+      <Text style={{ position: "absolute", left: 96, top: 66, fontSize: 26, letterSpacing: 4, color: "#22d3ee", opacity: reveal }}>ADVANCED NODE FILTERS</Text>
+      <Text style={{ position: "absolute", left: 92, top: 120, width: 1720, fontSize: 68, fontWeight: 700, opacity: reveal }}>Noise bends a subtree. Velocity shapes its shutter.</Text>
+      <Text style={{ position: "absolute", left: 98, top: 224, fontSize: 25, color: "#94a3b8", opacity: reveal }}>Bounded filters · deterministic seed · random-access frames · Native / CanvasKit</Text>
 
-      <View style={{ position: "absolute", left: 112, top: 390, width: 1100, height: 1380, borderRadius: 48, border: "2px solid #1e293b", backgroundColor: "#080d1f" }}>
-        <Text style={{ position: "absolute", left: 54, top: 48, fontSize: 22, letterSpacing: 3, color: "#a78bfa" }}>A / DISPLACEMENT FIELD</Text>
-        <Text style={{ position: "absolute", left: 54, top: 90, fontSize: 18, color: "#64748b" }}>turbulence · seed 17 · 3 octaves</Text>
-        <View style={{ position: "absolute", left: 92, top: 310, width: 900, height: 520, borderRadius: 56, backgroundColor: "#0f172a" }}>
-          <View style={{ position: "absolute", left: 275, top: 145, width: 350, height: 210, displacement: displacement(17, point(0.007, 0.011), displacementScale, { octaves: 3, mode: "turbulence" }) }}>
+      <View style={{ position: "absolute", left: 96, top: 316, width: 830, height: 640, borderRadius: 30, border: "2px solid #1e293b", backgroundColor: "#080d1f" }}>
+        <Text style={{ position: "absolute", left: 40, top: 32, fontSize: 28, letterSpacing: 2, color: "#a78bfa" }}>A / DISPLACEMENT FIELD</Text>
+        <Text style={{ position: "absolute", left: 40, top: 78, fontSize: 22, color: "#94a3b8" }}>turbulence · seed 17 · 3 octaves</Text>
+        <View style={{ position: "absolute", left: 42, top: 144, width: 746, height: 274, borderRadius: 28, backgroundColor: "#0f172a" }}>
+          <View style={{ position: "absolute", left: 220, top: 62, width: 306, height: 150, displacement: displacement(17, point(0.007, 0.011), displacementScale, { octaves: 3, mode: "turbulence" }) }}>
             <Pattern accent="#d946ef" />
           </View>
         </View>
-        <Text style={{ position: "absolute", left: 92, top: 890, fontSize: 26 }}>Rasterized descendants bend together.</Text>
-        <Text style={{ position: "absolute", left: 92, top: 940, width: 850, fontSize: 18, lineHeight: 1.6, color: "#94a3b8" }}>Text, paths, images and nested layout can share one local field. Siblings outside the group remain pixel-stable.</Text>
-        <View style={{ position: "absolute", left: 92, bottom: 96, width: 900, height: 5, backgroundColor: "#1e293b" }}>
-          <View style={{ width: `${((displacementScale - 10) / 36) * 100}%`, height: "100%", backgroundColor: "#d946ef" }} />
+        <Text style={{ position: "absolute", left: 42, top: 448, width: 746, fontSize: 30 }}>Rasterized descendants bend together.</Text>
+        <Text style={{ position: "absolute", left: 42, top: 500, width: 736, fontSize: 21, lineHeight: 1.35, color: "#94a3b8" }}>Text, paths and nested layout share one local field. Siblings outside the group stay stable.</Text>
+        <View style={{ position: "absolute", left: 42, bottom: 34, width: 746, height: 5, backgroundColor: "#1e293b" }}>
+          <View style={{ width: `${((displacementScale - 8) / 30) * 100}%`, height: "100%", backgroundColor: "#d946ef" }} />
         </View>
       </View>
 
-      <View style={{ position: "absolute", right: 112, top: 390, width: 2400, height: 1380, borderRadius: 48, border: "2px solid #1e293b", backgroundColor: "#080d1f", overflow: "hidden" }}>
-        <Text style={{ position: "absolute", left: 54, top: 48, fontSize: 22, letterSpacing: 3, color: "#22d3ee" }}>B / VELOCITY + SHUTTER</Text>
-        <Text style={{ position: "absolute", left: 54, top: 90, fontSize: 18, color: "#64748b" }}>explicit px/frame velocity · shutter angle 210°</Text>
-        <View style={{ position: "absolute", left: 100, top: 250, width: 2200, height: 700, borderRadius: 350, backgroundColor: "#060a18", border: "2px solid #172036" }}>
-          <View style={{ position: "absolute", left: `${50 + travel * 31}%`, top: `${44 + travelY / 20}%`, width: 410, height: 210, translate: "-50% -50%", motionBlur: motionBlur(point(velocityX, velocityY), 210) }}>
+      <View style={{ position: "absolute", left: 954, top: 316, width: 870, height: 640, borderRadius: 30, border: "2px solid #1e293b", backgroundColor: "#080d1f", overflow: "hidden" }}>
+        <Text style={{ position: "absolute", left: 40, top: 32, fontSize: 28, letterSpacing: 2, color: "#22d3ee" }}>B / VELOCITY + SHUTTER</Text>
+        <Text style={{ position: "absolute", left: 40, top: 78, fontSize: 22, color: "#94a3b8" }}>explicit px/frame velocity · shutter angle 210°</Text>
+        <View style={{ position: "absolute", left: 42, top: 144, width: 786, height: 274, borderRadius: 137, backgroundColor: "#060a18", border: "2px solid #172036" }}>
+          <View style={{ position: "absolute", left: `${50 + travel * 31}%`, top: `${48 + travelY / 15}%`, width: 250, height: 130, translate: "-50% -50%", motionBlur: motionBlur(point(velocityX, velocityY), 210) }}>
             <Pattern accent="#22d3ee" />
           </View>
-          <View style={{ position: "absolute", left: "50%", top: 54, width: 2, height: 590, backgroundColor: "#1e293b" }} />
+          <View style={{ position: "absolute", left: "50%", top: 28, width: 2, height: 216, backgroundColor: "#1e293b" }} />
         </View>
-        <Text style={{ position: "absolute", left: 104, top: 1020, fontSize: 28 }}>The blur follows the instantaneous velocity vector.</Text>
-        <Text style={{ position: "absolute", left: 104, top: 1075, width: 2050, fontSize: 19, lineHeight: 1.6, color: "#94a3b8" }}>This first contract is a spatial shutter approximation: frame-pure and random-access. Temporal occlusion and rotating-subtree multi-sampling remain a different, more expensive future tier.</Text>
+        <Text style={{ position: "absolute", left: 42, top: 448, width: 786, fontSize: 29 }}>The blur follows the instantaneous velocity vector.</Text>
+        <Text style={{ position: "absolute", left: 42, top: 506, width: 780, fontSize: 21, lineHeight: 1.4, color: "#94a3b8" }}>A spatial shutter approximation keeps each frame pure and available by random seek.</Text>
       </View>
 
-      <Text style={{ position: "absolute", left: 112, bottom: 96, fontSize: 18, letterSpacing: 2, color: "#64748b" }}>CONTENT → CSS FILTER → NOISE DISPLACEMENT → VELOCITY BLUR → OPACITY / BLEND</Text>
+      <Text style={{ position: "absolute", left: 98, bottom: 58, fontSize: 21, letterSpacing: 1.5, color: "#64748b" }}>CONTENT → CSS FILTER → NOISE DISPLACEMENT → VELOCITY BLUR → OPACITY / BLEND</Text>
     </Scene>
   );
 }

@@ -209,6 +209,17 @@ fn reject_paint(
     owner: &str,
     errors: &mut Vec<ValidationError>,
 ) {
+    for class in &artifact.nodes[at].class_names {
+        if crate::tailwind::explicit_property(class).is_some_and(paints_or_reorders) {
+            errors.push(ValidationError::new(
+                format!("{path}/classNames"),
+                format!(
+                    "{owner} '{}' cannot use paint utility `{class}` inside a GlassField",
+                    artifact.nodes[at].key
+                ),
+            ));
+        }
+    }
     for style in &artifact.nodes[at].styles {
         if paints_or_reorders(&style.property) {
             errors.push(ValidationError::new(
@@ -801,6 +812,7 @@ mod tests {
         ControlsSchema {
             props: Default::default(),
             data: Default::default(),
+            timing_seconds: None,
             timing: TimingControls {
                 enter_frames: FrameControl {
                     default: 0,
@@ -853,6 +865,7 @@ mod tests {
             format_version: ARTIFACT_FORMAT_VERSION,
             capability_set: CapabilitySet::base(),
             component: "field-test".into(),
+            composition: None,
             controls: controls(),
             resource_refs: vec![],
             exprs: vec![],
@@ -862,6 +875,7 @@ mod tests {
                     kind: NodeKind::Group,
                     space: None,
                     class_names: vec![],
+                    class_conditions: Default::default(),
                     styles: vec![],
                     visibility: None,
                     children: ChildRange { start: 0, end: 1 },
@@ -872,6 +886,7 @@ mod tests {
                     kind: NodeKind::GlassField(field),
                     space: None,
                     class_names: vec![],
+                    class_conditions: Default::default(),
                     styles: vec![],
                     visibility: None,
                     children: ChildRange { start: 1, end: 2 },
@@ -882,6 +897,7 @@ mod tests {
                     kind: NodeKind::Group,
                     space: None,
                     class_names: vec![],
+                    class_conditions: Default::default(),
                     styles: wrapper_styles,
                     visibility: None,
                     children: ChildRange { start: 2, end: 3 },
@@ -892,6 +908,7 @@ mod tests {
                     kind: NodeKind::Glass(member),
                     space: None,
                     class_names: vec![],
+                    class_conditions: Default::default(),
                     styles: member_styles,
                     visibility: None,
                     children: ChildRange::EMPTY,
@@ -953,6 +970,31 @@ mod tests {
                 .any(|error| error.message.contains("paint style")),
             "{errors:?}"
         );
+    }
+
+    #[test]
+    fn filter_utilities_obey_field_paint_restrictions() {
+        for at in [1, 2, 3] {
+            for class in [
+                "blur-sm",
+                "backdrop-blur-md!",
+                "filter-none",
+                "[filter:blur(2px)]",
+                "[backdrop-filter:blur(2px)]!",
+                "[background-color:red]",
+            ] {
+                let mut artifact = field_artifact(vec![], vec![]);
+                artifact.nodes[at].class_names.push(class.into());
+                let errors = validate_glass_schema(&artifact).unwrap_err();
+                assert!(
+                    errors.iter().any(|error| error.message.contains(class)),
+                    "{errors:?}"
+                );
+            }
+        }
+        let mut artifact = field_artifact(vec![], vec![]);
+        artifact.nodes[2].class_names.push("translate-x-4".into());
+        validate_glass_schema(&artifact).unwrap();
     }
 
     #[test]

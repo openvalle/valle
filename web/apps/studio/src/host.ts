@@ -28,6 +28,7 @@ export interface TimelineContext {
   timelineRevision: StudioTimelineRevision;
   timelineJson: string;
   timeline: Timeline;
+  motionSourceDurations?: Record<string, number>;
   /** Derived execution data. Never use this as the Studio working copy. */
   render: TimelineRenderContext;
   preview?: { status: "unavailable"; code: string };
@@ -111,8 +112,8 @@ export type TimelinePreviewResult =
 
 export interface MotionPreviewRequest {
   props: Record<string, unknown>;
-  timing: { enterFrames: number; exitFrames: number };
-  cues: Record<string, { startFrame: number; endFrame: number; enterFrames: number; exitFrames: number }>;
+  timing: { enterDuration: number; exitDuration: number };
+  cues: Record<string, { start: number; end: number; enterDuration: number; exitDuration: number }>;
 }
 
 export interface StudioHost {
@@ -626,7 +627,7 @@ export function projectMotionContextFromAdmittedPreview(
   // Project Timeline references an artifact whose prepare data is already baked. Raw authoring
   // data is intentionally not reconstructed from the runtime clip contract.
   const preparedData = {};
-  const timing = resolvedMotionTiming(artifact, authoring);
+  const timing = resolvedMotionTiming(artifact, authoring, motionContent);
   const cueBindings = resolvedMotionCues(authoring, motionContent);
   if (!cueBindings) return missingContext("resolved Motion cue windows");
   const totalFrames = motionTotalFrames(authoring);
@@ -692,14 +693,19 @@ function boundMotionAssets(
 function resolvedMotionTiming(
   artifact: Record<string, unknown>,
   authoring: Record<string, unknown>,
-): { enterFrames: number; exitFrames: number } {
+  source: TimelineMotionSource,
+): MotionContextOk["timing"] {
   const prepared = record(authoring.timing);
   const controls = record(record(artifact.controls).timing);
+  const timingSeconds = record(record(artifact.controls).timingSeconds);
+  const phases = record(source.phases);
   const enter = record(controls.enterFrames);
   const exit = record(controls.exitFrames);
   return {
     enterFrames: Number(prepared.enterFrames ?? enter.default ?? 0),
     exitFrames: Number(prepared.exitFrames ?? exit.default ?? 0),
+    enterDuration: exactSeconds(phases.enterDuration ?? timingSeconds.enterDuration),
+    exitDuration: exactSeconds(phases.exitDuration ?? timingSeconds.exitDuration),
   };
 }
 
@@ -727,6 +733,10 @@ function resolvedMotionCues(
       endFrame,
       enterFrames,
       exitFrames,
+      start: exactSeconds(record(binding).start),
+      end: exactSeconds(record(binding).end),
+      enterDuration: exactSeconds(record(binding).enterDuration),
+      exitDuration: exactSeconds(record(binding).exitDuration),
     };
   }
   return result;
@@ -735,8 +745,21 @@ function resolvedMotionCues(
 function isMotionCueBinding(value: unknown): boolean {
   if (!isRecord(value) || value.type !== "sourceRange") return false;
   const fields = ["startFrame", "endFrame", "enterFrames", "exitFrames"] as const;
+  const secondsFields = ["start", "end", "enterDuration", "exitDuration"] as const;
   return fields.every((field) => isNonNegativeSafeInteger(value[field]))
-    && Object.keys(value).every((key) => key === "type" || fields.includes(key as typeof fields[number]));
+    && secondsFields.every((field) => value[field] === undefined || (typeof value[field] === "number" && Number.isFinite(value[field]) && value[field] >= 0))
+    && Object.keys(value).every((key) => key === "type" || fields.includes(key as typeof fields[number]) || secondsFields.includes(key as typeof secondsFields[number]));
+}
+
+function exactSeconds(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value) && value >= 0) return value;
+  if (typeof value !== "string") return undefined;
+  const parts = value.split("/");
+  if (parts.length !== 2) return undefined;
+  const numerator = Number(parts[0]);
+  const denominator = Number(parts[1]);
+  const seconds = numerator / denominator;
+  return Number.isFinite(seconds) && seconds >= 0 && denominator > 0 ? seconds : undefined;
 }
 
 function isNonNegativeSafeInteger(value: unknown): value is number {

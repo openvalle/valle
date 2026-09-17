@@ -27,6 +27,10 @@ const RESOURCE_ID_NAMESPACE: &str = "resource";
 /// retained verbatim through [`CompileTimelineError::InvalidCanonical`].
 #[derive(Debug, Error)]
 pub enum CompileTimelineError {
+    #[error(
+        "Motion at `{path}` needs sourceDuration resolved from its composition metadata before compilation"
+    )]
+    MissingMotionDuration { path: String },
     #[error("resource alias `{alias}` at `{path}` must match [A-Za-z0-9._-]{{1,64}}")]
     InvalidResourceAlias { alias: String, path: String },
     #[error("resource `{alias}` has an empty locator")]
@@ -228,7 +232,7 @@ impl TimelineNormalizer {
     fn visual_source(
         &self,
         source: timeline::TimelineVisualSourceWire,
-        clip_duration: &timeline::TimelineTimeWire,
+        _clip_duration: &timeline::TimelineTimeWire,
         track_index: usize,
         clip_index: usize,
         clip_path: &str,
@@ -293,6 +297,7 @@ impl TimelineNormalizer {
             }),
             timeline::TimelineVisualSourceWire::Motion {
                 component,
+                fit,
                 trim_start,
                 source_duration,
                 rate,
@@ -326,9 +331,14 @@ impl TimelineNormalizer {
                     .collect();
                 document::VisualSourceWire::Motion(document::MotionInstanceWire {
                     component: self.resolve(&component, &format!("{clip_path}/component"))?,
+                    fit: fit
+                        .map(lower_raster_fit)
+                        .unwrap_or(document::RasterFitWire::Contain),
                     source_start: trim_start.as_ref().map_or(ExactRational::ZERO, exact_time),
                     source_duration: source_duration
-                        .unwrap_or_else(|| clip_duration.clone())
+                        .ok_or_else(|| CompileTimelineError::MissingMotionDuration {
+                            path: clip_path.to_owned(),
+                        })?
                         .to_exact(),
                     rate: rate.as_ref().map_or(ExactRational::ONE, exact_time),
                     end_behavior: end

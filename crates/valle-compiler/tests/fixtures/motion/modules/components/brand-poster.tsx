@@ -1,5 +1,7 @@
 import { releaseTheme } from "./shared-theme";
 
+// The delivery contract: Studio opens this fixture as its own entry.
+export const composition = { width: 1920, height: 1080, fps: 30, duration: 6 };
 export const component = "brand-poster";
 
 export const controls = defineControls({

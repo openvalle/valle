@@ -65,6 +65,7 @@ APIs, Remotion imports, or arbitrary JavaScript are supported. Start from existi
 working source when available. A minimal `title.motion.tsx` is:
 
 ```tsx
+export const composition = { width: 640, height: 360, fps: 30, duration: 3 };
 export default function Title(ctx) {
   const opacity = interpolate(ctx.hold.progress, [0, 0.6], [0, 1]);
   return (
@@ -81,17 +82,17 @@ Bind declared assets using repeated
 `--asset name=path`, prepared data with `--data file.json`, and extra fonts with
 `--font path`. Bind constant props with `--props props.json` and Timeline-format
 source-range cues with `--cues cues.json`; required cues must be supplied, optional
-cues stay inactive. Keep canvas size and bindings consistent across checking and rendering;
-use the same duration and FPS for preview frames and final export.
+cues stay inactive. Canvas, fps and duration come from `composition` and must not be
+passed on the command line; keep asset and prop bindings consistent across check and render.
 
 ```sh
-valle motion check title.motion.tsx --size 640x360 --json
-valle motion render title.motion.tsx --duration 3 --fps 30 --size 640x360 --frame 45 -o title.png --json
-valle motion render title.motion.tsx --duration 3 --fps 30 --size 640x360 -o title.mp4 --events
+valle motion check title.motion.tsx --json
+valle motion render title.motion.tsx --frame 45 -o title.png --json
+valle motion render title.motion.tsx -o title.mp4 --events
 ```
 
-`--frame` is zero-based and writes PNG; omitting it writes MP4. `--size` controls
-layout; `--output-size` scales delivery. `--backend raster` selects CPU composition,
+`--frame` is zero-based and writes PNG; omitting it writes MP4. `--output-size`
+scales delivery without changing layout. `--backend raster` selects CPU composition,
 while `auto` may select Metal on macOS. Compositor selection and video encoding
 are independent; `--hardware-encode` explicitly requires a supported encoder.
 

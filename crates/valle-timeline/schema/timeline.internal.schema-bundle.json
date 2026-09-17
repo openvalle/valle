@@ -2382,6 +2382,9 @@
                 "endBehavior": {
                   "$ref": "#/$defs/MediaEndBehaviorWire"
                 },
+                "fit": {
+                  "$ref": "#/$defs/RasterFitWire"
+                },
                 "phases": {
                   "$ref": "#/$defs/MotionPhaseOverridesWire"
                 },
@@ -2414,6 +2417,7 @@
               "required": [
                 "type",
                 "component",
+                "fit",
                 "sourceStart",
                 "sourceDuration",
                 "rate",
