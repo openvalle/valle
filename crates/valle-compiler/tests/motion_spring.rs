@@ -4,11 +4,8 @@
 use std::collections::BTreeMap;
 
 use valle_compiler::motion::compile_motion;
-use valle_motion::{
-    EvalInputs, Expr, MotionValue, ResolvedSignals, motion_context_at, phase_windows,
-    phase_windows_seconds, resolve_props,
-};
-use valle_timeline::{FrameRate, RationalTime};
+use valle_motion::{EvalInputs, Expr, MotionValue, motion_context_at_frame, resolve_props};
+use valle_timeline::FrameRate;
 
 fn diagnostics_of(source: &str) -> Vec<String> {
     compile_motion(source)
@@ -22,7 +19,7 @@ fn diagnostics_of(source: &str) -> Vec<String> {
 const SPRING: &str = r##"
 export default function P(ctx) {
   const enter = spring({
-    elapsedFrames: ctx.enter.elapsedFrames,
+    elapsedFrames: ctx.localFrame,
     fps: ctx.fps,
     damping: 18,
     stiffness: 140,
@@ -39,28 +36,12 @@ fn spring_value(source: &str, fps_num: u32, duration_frames: u32, frame: u32) ->
     let artifact = &compiled.artifact;
     let props = resolve_props(&artifact.controls, &BTreeMap::new()).expect("props");
     let fps = FrameRate::new(i64::from(fps_num), 1).unwrap();
-    let layout = if let Some(timing) = artifact.controls.timing_seconds {
-        phase_windows_seconds(
-            timing,
-            RationalTime::new(i64::from(duration_frames), fps_num).unwrap(),
-            fps,
-        )
-        .unwrap()
-    } else {
-        phase_windows(&artifact.controls.phase_spec(), duration_frames)
-    };
-    let ctx = motion_context_at(
-        frame,
-        &layout,
-        FrameRate::new(i64::from(fps_num), 1).unwrap(),
-    )
-    .expect("frame in range");
+    let ctx = motion_context_at_frame(frame, duration_frames, fps).expect("frame in range");
     let values = valle_motion::eval_all(
         artifact,
         EvalInputs {
             ctx: &ctx,
             props: &props,
-            signals: &ResolvedSignals::default(),
             unit: None,
             viewport: Some((1920.0, 1080.0)),
         },
@@ -127,19 +108,14 @@ fn the_spring_is_frame_rate_invariant_bit_for_bit() {
     }
 }
 
-// Behavior before and after the phase window.
+// Explicit source-frame windows.
 
-/// Continue spring evolution after the enter window using elapsedFrames rather than clamped frame.
+/// Continue spring evolution after an authored window instead of clamping elapsed time.
 #[test]
-fn the_spring_keeps_converging_after_its_phase_window_closes() {
-    let source = SPRING.replace(
-        "export default function P(ctx) {",
-        "export const controls = defineControls({ timing: { enterDuration: 0.2 } });\nexport default function P(ctx) {",
-    );
-    // Samples beyond the enter window must continue changing toward rest.
-    let inside = spring_value(&source, 30, 60, 5);
-    let after = spring_value(&source, 30, 60, 10);
-    let far = spring_value(&source, 30, 60, 40);
+fn the_spring_keeps_converging_after_its_authored_window_closes() {
+    let inside = spring_value(SPRING, 30, 60, 5);
+    let after = spring_value(SPRING, 30, 60, 10);
+    let far = spring_value(SPRING, 30, 60, 40);
     assert!(
         after != inside,
         "the spring froze at the window edge: {inside} then {after}"
@@ -150,14 +126,12 @@ fn the_spring_keeps_converging_after_its_phase_window_closes() {
     );
 }
 
-/// Before a phase starts, return the initial value.
+/// Before an explicit source-frame start, return the initial value.
 #[test]
-fn the_spring_sits_at_its_start_value_before_its_phase_begins() {
-    // Sampling the exit spring at clip start precedes its phase window.
+fn the_spring_sits_at_its_start_value_before_its_authored_window_begins() {
     let source = r##"
-export const controls = defineControls({ timing: { exitDuration: 0.333333 } });
 export default function P(ctx) {
-  const out = spring({ elapsedFrames: ctx.exit.elapsedFrames, fps: ctx.fps, preset: "gentle" });
+  const out = spring({ elapsedFrames: ctx.localFrame - 30, fps: ctx.fps, preset: "gentle" });
   return (<Scene className="h-full w-full">
     <View key="a" style={{ position: "absolute", left: 0, top: 0, width: 10, height: 10, opacity: out }} />
   </Scene>);
@@ -167,9 +141,10 @@ export default function P(ctx) {
         assert_eq!(
             spring_value(source, 30, 60, frame),
             0.0,
-            "frame {frame} is before the exit window, the spring must not have started"
+            "frame {frame} is before the authored window, the spring must not have started"
         );
     }
+    assert!(spring_value(source, 30, 60, 35) > 0.0);
 }
 
 // Reject mixed presets and explicit parameters with source locations.
@@ -179,7 +154,7 @@ fn a_preset_and_bare_parameters_together_are_rejected_at_compile_time() {
     let messages = diagnostics_of(
         r##"
 export default function P(ctx) {
-  const e = spring({ elapsedFrames: ctx.enter.elapsedFrames, fps: ctx.fps, preset: "gentle", stiffness: 200 });
+  const e = spring({ elapsedFrames: ctx.localFrame, fps: ctx.fps, preset: "gentle", stiffness: 200 });
   return (<Scene className="h-full w-full">
     <View key="a" style={{ position: "absolute", left: 0, top: 0, width: 10, height: 10, opacity: e }} />
   </Scene>);
@@ -199,7 +174,7 @@ fn an_unknown_preset_lists_the_ones_that_exist() {
     let messages = diagnostics_of(
         r##"
 export default function P(ctx) {
-  const e = spring({ elapsedFrames: ctx.enter.elapsedFrames, fps: ctx.fps, preset: "springy" });
+  const e = spring({ elapsedFrames: ctx.localFrame, fps: ctx.fps, preset: "springy" });
   return (<Scene className="h-full w-full">
     <View key="a" style={{ position: "absolute", left: 0, top: 0, width: 10, height: 10, opacity: e }} />
   </Scene>);
@@ -222,7 +197,7 @@ fn a_hand_written_frame_rate_is_rejected() {
     let messages = diagnostics_of(
         r##"
 export default function P(ctx) {
-  const e = spring({ elapsedFrames: ctx.enter.elapsedFrames, fps: 60, preset: "gentle" });
+  const e = spring({ elapsedFrames: ctx.localFrame, fps: 60, preset: "gentle" });
   return (<Scene className="h-full w-full">
     <View key="a" style={{ position: "absolute", left: 0, top: 0, width: 10, height: 10, opacity: e }} />
   </Scene>);
@@ -243,7 +218,7 @@ fn frame_varying_physical_parameters_are_rejected() {
     let messages = diagnostics_of(
         r##"
 export default function P(ctx) {
-  const e = spring({ elapsedFrames: ctx.enter.elapsedFrames, fps: ctx.fps, stiffness: ctx.hold.progress * 100 });
+  const e = spring({ elapsedFrames: ctx.localFrame, fps: ctx.fps, stiffness: ctx.progress * 100 });
   return (<Scene className="h-full w-full">
     <View key="a" style={{ position: "absolute", left: 0, top: 0, width: 10, height: 10, opacity: e }} />
   </Scene>);
@@ -266,7 +241,7 @@ fn keyframes_are_multi_stop_interpolate_with_per_segment_easing() {
     let compiled = compile_motion(
         r##"
 export default function P(ctx) {
-  const t = ctx.hold.progress;
+  const t = ctx.progress;
   return (<Scene className="h-full w-full">
     <View key="a" style={{ position: "absolute", left: 0, top: 0, width: 10, height: 10,
                            opacity: interpolate(t, [0, 0.3, 0.7, 1], [0, 1, 1, 0], { easing: ["easeOut", "linear", "easeIn"] }) }} />
@@ -299,7 +274,7 @@ fn staggered_sequences_are_computed_at_compile_time() {
 const CARDS = [0, 1, 2, 3];
 const stagger = (i, each, overlap) => i * (each - overlap);
 export default function P(ctx) {
-  const t = ctx.hold.progress;
+  const t = ctx.progress;
   return (<Scene className="h-full w-full">
     {CARDS.map((c, i) => (
       <View key={`c-${i}`} style={{ position: "absolute", left: i * 100, top: 0, width: 80, height: 80,

@@ -1,5 +1,4 @@
 export const composition = { width: 1920, height: 1080, fps: 30, duration: 5 };
-export const component = "formula-lecture";
 
 export default function Lecture() {
   return (

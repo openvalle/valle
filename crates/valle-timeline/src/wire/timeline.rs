@@ -697,19 +697,15 @@ pub enum TimelineVisualSourceWire {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         trim_start: Option<TimelineTimeWire>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        source_duration: Option<TimelineTimeWire>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
         rate: Option<TimelineTimeWire>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         end: Option<MediaEndBehaviorWire>,
         #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
         props: BTreeMap<String, TimelineParamWire<JsonValue>>,
         #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-        cues: BTreeMap<String, TimelineMotionCueBindingWire>,
+        data: JsonObject,
         #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
         resources: BTreeMap<String, String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        phases: Option<TimelineMotionPhaseOverridesWire>,
     },
     Solid {
         color: String,
@@ -725,67 +721,6 @@ impl<'de> Deserialize<'de> for TimelineVisualSourceWire {
         let mut fields = raw_object(raw.get()).map_err(de::Error::custom)?;
         parse_visual_source(&mut fields).map_err(de::Error::custom)
     }
-}
-
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[cfg_attr(
-    feature = "schema",
-    schemars(
-        tag = "type",
-        rename_all = "kebab-case",
-        rename_all_fields = "camelCase",
-        deny_unknown_fields
-    )
-)]
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(
-    tag = "type",
-    rename_all = "kebab-case",
-    rename_all_fields = "camelCase",
-    deny_unknown_fields
-)]
-pub enum TimelineMotionCueBindingWire {
-    SourceRange {
-        start: TimelineTimeWire,
-        end: TimelineTimeWire,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        enter_duration: Option<TimelineTimeWire>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        exit_duration: Option<TimelineTimeWire>,
-    },
-}
-
-impl<'de> Deserialize<'de> for TimelineMotionCueBindingWire {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let raw = Box::<RawValue>::deserialize(deserializer)?;
-        let mut fields = raw_object(raw.get()).map_err(de::Error::custom)?;
-        let kind: String = required_raw(&mut fields, "type").map_err(de::Error::custom)?;
-        let value = match kind.as_str() {
-            "source-range" => Self::SourceRange {
-                start: required_raw(&mut fields, "start").map_err(de::Error::custom)?,
-                end: required_raw(&mut fields, "end").map_err(de::Error::custom)?,
-                enter_duration: take_raw(&mut fields, "enterDuration")
-                    .map_err(de::Error::custom)?,
-                exit_duration: take_raw(&mut fields, "exitDuration").map_err(de::Error::custom)?,
-            },
-            _ => return Err(de::Error::custom("unknown Timeline author Motion cue type")),
-        };
-        reject_unknown(fields).map_err(de::Error::custom)?;
-        Ok(value)
-    }
-}
-
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct TimelineMotionPhaseOverridesWire {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub enter_duration: Option<TimelineTimeWire>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub exit_duration: Option<TimelineTimeWire>,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -1075,13 +1010,11 @@ fn parse_visual_source(
             component: required_raw(fields, "component")?,
             fit: take_raw(fields, "fit")?,
             trim_start: take_raw(fields, "trimStart")?,
-            source_duration: take_raw(fields, "sourceDuration")?,
             rate: take_raw(fields, "rate")?,
             end: take_raw(fields, "end")?,
             props: take_raw(fields, "props")?.unwrap_or_default(),
-            cues: take_raw(fields, "cues")?.unwrap_or_default(),
+            data: take_raw(fields, "data")?.unwrap_or_default(),
             resources: take_raw(fields, "resources")?.unwrap_or_default(),
-            phases: take_raw(fields, "phases")?,
         },
         "solid" => TimelineVisualSourceWire::Solid {
             color: required_raw(fields, "color")?,

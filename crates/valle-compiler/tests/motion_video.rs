@@ -3,8 +3,7 @@
 use std::collections::BTreeMap;
 use valle_compiler::motion::compile_motion;
 use valle_motion::{
-    EvalInputs, MotionValue, NodeKind, NumberValue, ResolvedSignals, motion_context_at,
-    phase_windows, resolve_props,
+    EvalInputs, MotionValue, NodeKind, NumberValue, motion_context_at_frame, resolve_props,
 };
 use valle_timeline::FrameRate;
 
@@ -12,7 +11,7 @@ fn source(start: &str, speed: &str) -> String {
     format!(
         r#"
 const START = 6;
-export const controls = defineControls({{ assets: {{ clip: asset({{ kind: "video" }}) }} }});
+export const controls = ({{ assets: {{ clip: asset({{ kind: "video" }}) }} }});
 export default function VideoProbe(ctx) {{
     return <Scene><Video src="asset://clip" sourceStart={start} speed={speed} /></Scene>;
 }}
@@ -64,16 +63,13 @@ fn equivalent_video_expressions_have_the_same_values_in_any_frame_order() {
         .unwrap()
         .artifact;
     let props = resolve_props(&artifact.controls, &BTreeMap::new()).unwrap();
-    let windows = phase_windows(&artifact.controls.phase_spec(), 90);
-    let signals = ResolvedSignals::default();
     for frame in [60, 0, 30, 60, 1] {
-        let ctx = motion_context_at(frame, &windows, FrameRate::new(30, 1).unwrap()).unwrap();
+        let ctx = motion_context_at_frame(frame, 90, FrameRate::new(30, 1).unwrap()).unwrap();
         let values = valle_motion::eval_all(
             &artifact,
             EvalInputs {
                 ctx: &ctx,
                 props: &props,
-                signals: &signals,
                 unit: None,
                 viewport: Some((64.0, 64.0)),
             },

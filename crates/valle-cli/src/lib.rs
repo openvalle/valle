@@ -644,9 +644,6 @@ pub struct MotionBindingArgs {
     /// JSON object of constant Motion prop values.
     #[arg(long, value_name = "PATH")]
     props: Option<PathBuf>,
-    /// JSON object of Timeline source-range cue bindings, in seconds.
-    #[arg(long, value_name = "PATH")]
-    cues: Option<PathBuf>,
 }
 
 #[derive(Clone, Copy, clap::ValueEnum)]

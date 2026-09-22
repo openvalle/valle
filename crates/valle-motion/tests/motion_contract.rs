@@ -2,17 +2,14 @@ use std::collections::BTreeMap;
 
 use valle_motion::{
     ARTIFACT_FORMAT_VERSION, ArtifactEnvelope, AssetControl, AssetKind, BuildFingerprint,
-    BundledAsset, BundledFont, BundledSource, CameraControls, CapabilitySet, ChildRange, CompareOp,
-    ContentDigest, ContextInput, ControlType, ControlsSchema, CueControl, CueKind, Expr, ExprId,
-    Extrapolation, FrameControl, InterpolateStop, LockError, MOTION_BUNDLE_FORMAT_VERSION,
-    MotionBundleManifest, MotionEasing, MotionValue, MotionViewport, NodeId, NodeKind, NumberValue,
-    OptionalFrameControl, PropControl, ResourceRef, SceneArtifact, SceneNode, SemanticMeta,
-    StyleBinding, StyleValue, TemplatePart, TextValue, TimingControls, canonical_bytes,
-    motion_context_at, phase_windows,
+    BundledAsset, BundledFont, BundledSource, CapabilitySet, ChildRange, CompareOp, ContentDigest,
+    ContextInput, ControlType, ControlsSchema, Expr, ExprId, Extrapolation, InterpolateStop,
+    LockError, MOTION_BUNDLE_FORMAT_VERSION, MotionBundleManifest, MotionEasing, MotionValue,
+    MotionViewport, NodeId, NodeKind, NumberValue, PropControl, ResourceRef, SceneArtifact,
+    SceneNode, SemanticMeta, StyleBinding, StyleValue, TemplatePart, TextValue, canonical_bytes,
 };
-use valle_timeline::FrameRate;
 
-const ENVELOPE_SHA256: &str = "673aa103e492d0598ed50d6c8a65b693779f6c3f28a185390ed340d93e041365";
+const ENVELOPE_SHA256: &str = "c1e229ec578446035b736b23452df42658e7f0f8955e5aa07fdeecf0e49a1074";
 
 fn prop(control: ControlType, default: MotionValue) -> PropControl {
     PropControl {
@@ -44,31 +41,6 @@ fn envelope() -> ArtifactEnvelope {
             ),
         ]),
         data: BTreeMap::new(),
-        timing_seconds: None,
-        timing: TimingControls {
-            enter_frames: FrameControl {
-                default: 10,
-                min: 0,
-                max: Some(120),
-            },
-            hold_cycle_frames: OptionalFrameControl {
-                default: Some(12),
-                min: 1,
-                max: Some(120),
-            },
-            exit_frames: FrameControl {
-                default: 10,
-                min: 0,
-                max: Some(120),
-            },
-        },
-        cues: BTreeMap::from([(
-            "narration".into(),
-            CueControl {
-                kind: CueKind::Span,
-                required: false,
-            },
-        )]),
         assets: BTreeMap::from([(
             "hero".into(),
             AssetControl {
@@ -76,19 +48,6 @@ fn envelope() -> ArtifactEnvelope {
                 required: true,
             },
         )]),
-        camera: CameraControls {
-            values: BTreeMap::from([(
-                "zoom".into(),
-                prop(
-                    ControlType::Number {
-                        min: Some(0.1),
-                        max: Some(8.0),
-                        step: Some(0.1),
-                    },
-                    MotionValue::Number(1.0),
-                ),
-            )]),
-        },
     };
 
     let exprs = vec![
@@ -132,9 +91,7 @@ fn envelope() -> ArtifactEnvelope {
             when_false: ExprId(9),
         },
         Expr::Context {
-            input: ContextInput::PhaseProgress {
-                phase: valle_motion::PhaseKind::Enter,
-            },
+            input: ContextInput::LocalProgress,
         },
         Expr::Interpolate {
             input: ExprId(11),
@@ -328,31 +285,11 @@ fn tailwind_artifacts_retain_unknown_utility_and_removed_variant_causes() {
 }
 
 #[test]
-fn controls_cover_six_namespaces_and_drive_hold_cycles() {
+fn controls_expose_general_inputs_only() {
     let controls = &envelope().artifact.controls;
     assert!(controls.props.contains_key("label"));
     assert!(controls.data.is_empty());
-    assert_eq!(controls.timing.hold_cycle_frames.default, Some(12));
-    assert!(controls.cues.contains_key("narration"));
     assert!(controls.assets.contains_key("hero"));
-    assert!(controls.camera.values.contains_key("zoom"));
-
-    let layout = phase_windows(&controls.phase_spec(), 60);
-    let ctx = motion_context_at(22, &layout, FrameRate::new(30, 1).unwrap()).unwrap();
-    assert_eq!(ctx.hold.frame, 12);
-    assert_eq!(ctx.hold.iteration, 1);
-    assert_eq!(ctx.hold.cycle_frame, 0);
-    assert_eq!(ctx.hold.cycle_progress.to_bits(), 0.0f64.to_bits());
-
-    let overridden = controls
-        .phase_spec_with_overrides(Some(20), Some(30))
-        .unwrap();
-    assert_eq!((overridden.enter_frames, overridden.exit_frames), (20, 30));
-    let error = controls
-        .phase_spec_with_overrides(Some(121), None)
-        .expect_err("override must honor the declared max");
-    assert_eq!(error.field, "enterFrames");
-    assert_eq!(error.max, Some(120));
 }
 
 /// Video nodes are leaves and must reject child content during artifact admission.
@@ -568,7 +505,7 @@ fn unknown_fields_are_rejected_at_top_level_and_nested_unions() {
     assert!(serde_json::from_value::<ArtifactEnvelope>(changed).is_err());
 
     let mut changed = value;
-    changed["artifact"]["exprs"][11]["input"]["unexpected"] = serde_json::json!(true);
+    changed["artifact"]["exprs"][12]["stops"][0]["unexpected"] = serde_json::json!(true);
     assert!(serde_json::from_value::<ArtifactEnvelope>(changed).is_err());
 }
 

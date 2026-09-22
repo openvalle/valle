@@ -7,7 +7,7 @@ use valle_motion::{
     EmitReport, Fonts, LayoutOptions, Viewport, build_tree, default_font_naming, emit,
     prepare_scene,
 };
-use valle_motion::{ResolvedSignals, motion_context_at, phase_windows, resolve_props};
+use valle_motion::{motion_context_at_frame, resolve_props};
 use valle_timeline::FrameRate;
 
 fn emit_source(source: &str) -> EmitReport {
@@ -16,15 +16,13 @@ fn emit_source(source: &str) -> EmitReport {
         .artifact;
     let prepared = prepare_scene(&artifact).expect("prepare");
     let props = resolve_props(&artifact.controls, &BTreeMap::new()).expect("props");
-    let windows = phase_windows(&artifact.controls.phase_spec(), 30);
-    let ctx = motion_context_at(0, &windows, FrameRate::new(30, 1).unwrap()).expect("ctx");
+    let ctx = motion_context_at_frame(0, 30, FrameRate::new(30, 1).unwrap()).expect("ctx");
     let mut fonts = Fonts::default();
     valle_motion::register_default_motion_fonts(&mut fonts).expect("font");
     let tree = build_tree(
         &prepared,
         &ctx,
         &props,
-        &ResolvedSignals::default(),
         &LayoutOptions {
             viewport: Viewport::new((960, 540)),
             fonts: &fonts,

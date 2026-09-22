@@ -4,8 +4,8 @@ use std::collections::BTreeMap;
 
 use valle_compiler::motion::{MotionModuleGraph, compile_motion, compile_motion_modules};
 use valle_motion::{
-    Fonts, LayoutOptions, ResolvedSignals, Viewport, build_tree, motion_context_at, phase_windows,
-    prepare_scene, resolve_props,
+    Fonts, LayoutOptions, Viewport, build_tree, motion_context_at_frame, prepare_scene,
+    resolve_props,
 };
 use valle_timeline::FrameRate;
 
@@ -99,13 +99,11 @@ fn rem_is_fixed_to_sixteen_source_pixels() {
     let prepared = prepare_scene(&artifact).unwrap();
     let fonts = Fonts::default();
     let props = resolve_props(&artifact.controls, &BTreeMap::new()).unwrap();
-    let windows = phase_windows(&artifact.controls.phase_spec(), 30);
-    let ctx = motion_context_at(0, &windows, FrameRate::new(30, 1).unwrap()).unwrap();
+    let ctx = motion_context_at_frame(0, 30, FrameRate::new(30, 1).unwrap()).unwrap();
     let tree = build_tree(
         &prepared,
         &ctx,
         &props,
-        &ResolvedSignals::default(),
         &LayoutOptions {
             viewport: Viewport::new((320, 180)).with_font_size(24.0),
             fonts: &fonts,

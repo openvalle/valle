@@ -998,9 +998,6 @@ valle-studio-app {
 .stage { width: min(100cqw, calc(100cqh * var(--canvas-aspect, 1.7777778))); aspect-ratio: var(--canvas-aspect, 1.7777778); }
 .stage-area.full-size { overflow: auto; display: block; }
 .full-size .stage { width: var(--canvas-width); height: var(--canvas-height); max-width: none; max-height: none; margin: auto; }
-.track-row.kind-phase { height: 28px; }
-.kind-phase .clip { top: 2px; bottom: 2px; }
-.kind-phase .clip-body { display: none; }
 [aria-invalid="true"] { outline: 1px solid var(--error); }
 .stage-banner { max-width: calc(100% - 24px); }
 .preview-status { flex-shrink: 0; }
@@ -1030,8 +1027,7 @@ studio-motion-curves { display: block; min-width: 0; }
 .curve-channel output { display: block; font: 10px monospace; font-variant-numeric: tabular-nums; min-height: 16px; margin-top: 6px; }
 .curve-plot { display: block; width: 100%; margin: 6px 0; overflow: visible; }
 .curve-plot text { fill: currentColor; font: 9px monospace; }
-.curve-grid, .curve-phase { stroke: currentColor; opacity: .18; }
-.curve-phase { stroke-dasharray: 3 3; }
+.curve-grid { stroke: currentColor; opacity: .18; }
 .curve-axis-0 { stroke: #42be95; }
 circle.curve-axis-0 { fill: #42be95; }
 .curve-axis-1 { stroke: #689dff; }

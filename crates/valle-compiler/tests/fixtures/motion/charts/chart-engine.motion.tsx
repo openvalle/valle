@@ -1,5 +1,4 @@
 export const composition = { width: 1920, height: 1080, fps: 30, duration: 5 };
-export const component = "chart-engine";
 
 const VALUES = [12, 28, 18, 32];
 const LABELS = ["A", "B", "C", "D"];

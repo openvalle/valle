@@ -142,8 +142,11 @@ optional `details`; paths are JSON Pointers rooted at the edit request, commonly
 under `/timeline`. Invalid CLI arguments and unreadable/malformed input files can
 fail before an `outcome` is available.
 
-Project saving validates and compiles the Timeline authoring document. It does
-not decode every referenced file, run every Motion frame or test an encoder.
+Project saving validates and compiles the Timeline authoring document. For Motion
+clips it prepares the bound component and data, resolves the composition duration,
+and stores both the author document and its canonical Timeline in the revision.
+Reading an older revision uses that frozen canonical source duration. Saving does
+not run every Motion frame or test an encoder.
 Use `timeline check` on the candidate file and render a representative frame when
 validating an edit that changes resources or visual behavior.
 

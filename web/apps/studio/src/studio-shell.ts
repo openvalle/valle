@@ -393,11 +393,11 @@ export class ValleStudioApp extends LitElement {
       state.timelineCollapsed ? "Expand timeline" : "Collapse timeline",
     );
 
-    this.#text("timelineTitle", state.workspace.kind === "motion" ? "Phases & cues" : "Timeline");
+    this.#text("timelineTitle", "Timeline");
     this.#text(
       "timelineHint",
       state.workspace.kind === "motion"
-        ? "Adjust enter/exit · Jump to cue bounds"
+        ? "Drag the ruler to seek · Inspect source frames"
         : "Drag the ruler to seek · Select a clip to edit",
     );
 

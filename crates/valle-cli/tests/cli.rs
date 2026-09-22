@@ -754,9 +754,18 @@ fn project_create_and_apply_resolve_missing_motion_source_duration() {
         String::from_utf8_lossy(&create.stderr)
     );
     let created: Value = serde_json::from_slice(&create.stdout).unwrap();
+    assert!(
+        created["timeline"]["tracks"]["visual"][0]["clips"][0]
+            .get("sourceDuration")
+            .is_none()
+    );
+    let canonical: Value = serde_json::from_slice(
+        &std::fs::read(home.join("projects/motion-duration/revisions/1/canonical.json")).unwrap(),
+    )
+    .unwrap();
     assert_eq!(
-        created["timeline"]["tracks"]["visual"][0]["clips"][0]["sourceDuration"],
-        1
+        canonical["document"]["visual"]["tracks"][0]["items"][0]["source"]["sourceDuration"],
+        "1/1"
     );
 
     let mut edited = timeline;
@@ -793,9 +802,88 @@ fn project_create_and_apply_resolve_missing_motion_source_duration() {
     );
     let snapshot: Value = serde_json::from_slice(&show.stdout).unwrap();
     assert_eq!(snapshot["revision"], 2);
+    assert!(
+        snapshot["timeline"]["tracks"]["visual"][0]["clips"][0]
+            .get("sourceDuration")
+            .is_none()
+    );
+    let canonical: Value = serde_json::from_slice(
+        &std::fs::read(home.join("projects/motion-duration/revisions/2/canonical.json")).unwrap(),
+    )
+    .unwrap();
     assert_eq!(
-        snapshot["timeline"]["tracks"]["visual"][0]["clips"][0]["sourceDuration"],
-        1
+        canonical["document"]["visual"]["tracks"][0]["items"][0]["source"]["sourceDuration"],
+        "1/1"
+    );
+}
+
+#[test]
+fn project_create_and_apply_preserve_motion_inline_data() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    std::fs::write(
+        dir.path().join("title.motion.tsx"),
+        r#"export const composition = { width: 64, height: 64, fps: 24, duration: 1 };
+export const controls = { data: { title: string() } };
+export default function Title(ctx, props, data) { return <Scene><Text>{data.title}</Text></Scene>; }"#,
+    )
+    .unwrap();
+    let timeline_path = dir.path().join("timeline.json");
+    let timeline = |title: &str| {
+        serde_json::json!({
+            "canvas":{"width":64,"height":64,"fps":24},
+            "resources":{"title":"title.motion.tsx"},
+            "tracks":{"visual":[{"clips":[{"kind":"motion","component":"title","start":0,"duration":1,
+                "data":{"title":title}}]}]}
+        })
+    };
+    std::fs::write(&timeline_path, timeline("first").to_string()).unwrap();
+    let create = valle()
+        .env("VALLE_HOME", &home)
+        .args(["project", "--json", "create", "motion-data", "--timeline"])
+        .arg(&timeline_path)
+        .output()
+        .unwrap();
+    assert!(
+        create.status.success(),
+        "{}",
+        String::from_utf8_lossy(&create.stderr)
+    );
+    std::fs::write(&timeline_path, timeline("second").to_string()).unwrap();
+    let apply = valle()
+        .env("VALLE_HOME", &home)
+        .args([
+            "project",
+            "--json",
+            "apply",
+            "motion-data",
+            "--base-revision",
+            "1",
+            "--timeline",
+        ])
+        .arg(&timeline_path)
+        .output()
+        .unwrap();
+    assert!(
+        apply.status.success(),
+        "{}",
+        String::from_utf8_lossy(&apply.stderr)
+    );
+    let show = valle()
+        .env("VALLE_HOME", &home)
+        .args(["project", "--json", "show", "motion-data"])
+        .output()
+        .unwrap();
+    assert!(
+        show.status.success(),
+        "{}",
+        String::from_utf8_lossy(&show.stderr)
+    );
+    let loaded: Value = serde_json::from_slice(&show.stdout).unwrap();
+    assert_eq!(loaded["revision"], 2);
+    assert_eq!(
+        loaded["timeline"]["tracks"]["visual"][0]["clips"][0]["data"]["title"],
+        "second"
     );
 }
 
@@ -881,15 +969,19 @@ fn motion_render_exports_mp4_and_preserves_existing_output() {
     let dir = tempfile::tempdir().unwrap();
     let source = dir.path().join("demo.motion.tsx");
     let output = dir.path().join("demo.mp4");
-    std::fs::write(&source, r##"
+    std::fs::write(
+        &source,
+        r##"
 export const composition = { width: 160, height: 90, fps: 10, duration: 0.3 };
 export default function Demo(ctx) {
   return <Scene className="relative h-full w-full" style={{ backgroundColor: "#123456" }}>
     <Text style={{ color: "#ffffff", fontSize: 24 }}>你好 Noto</Text>
-    <View style={{ width: 20, height: 20, backgroundColor: "#ff5500", opacity: ctx.hold.progress }} />
+    <View style={{ width: 20, height: 20, backgroundColor: "#ff5500", opacity: ctx.progress }} />
   </Scene>;
 }
-"##).unwrap();
+"##,
+    )
+    .unwrap();
     let invoke = || {
         valle()
             .args(["motion", "render"])

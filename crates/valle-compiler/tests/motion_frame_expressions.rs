@@ -4,8 +4,8 @@ use std::collections::BTreeMap;
 
 use valle_compiler::motion::compile_motion;
 use valle_motion::{
-    EvalInputs, Expr, MotionValue, NodeKind, ResolvedSignals, StyleValue, TextValue,
-    motion_context_at, phase_windows, resolve_props,
+    EvalInputs, Expr, MotionValue, NodeKind, StyleValue, TextValue, motion_context_at_frame,
+    resolve_props,
 };
 use valle_timeline::FrameRate;
 
@@ -14,14 +14,12 @@ fn evaluate(source: &str) -> (valle_motion::SceneArtifact, Vec<MotionValue>) {
         .expect("frame expression source compiles")
         .artifact;
     let props = resolve_props(&artifact.controls, &BTreeMap::new()).expect("props");
-    let windows = phase_windows(&artifact.controls.phase_spec(), 60);
-    let ctx = motion_context_at(10, &windows, FrameRate::new(30, 1).unwrap()).expect("context");
+    let ctx = motion_context_at_frame(10, 60, FrameRate::new(30, 1).unwrap()).expect("context");
     let values = valle_motion::eval_all(
         &artifact,
         EvalInputs {
             ctx: &ctx,
             props: &props,
-            signals: &ResolvedSignals::default(),
             unit: None,
             viewport: Some((1920.0, 1080.0)),
         },
@@ -51,7 +49,7 @@ fn style_value<'a>(
 #[test]
 fn math_aliases_and_javascript_remainder_share_deterministic_frame_semantics() {
     let source = r##"
-export const controls = defineControls({ props: {
+export const controls = ({ props: {
   angle: number({ default: 0.25 }), value: number({ default: -5.5 }), divisor: number({ default: 2 }),
   huge: number({ default: 1e308 }), tiny: number({ default: 1e-308 }),
 }});
@@ -133,7 +131,7 @@ export default function P(ctx, props) { return <Scene>
 #[test]
 fn dynamic_number_text_angle_helpers_transform_axes_and_wiggle2d_are_author_sugar() {
     let source = r##"
-export const controls = defineControls({ props: {
+export const controls = ({ props: {
   angle: number({ default: 90 }), value: number({ default: -5.5 }), x: number({ default: 24 }), y: number({ default: 12 }),
 }});
 export default function P(ctx, props) { return <Scene>
@@ -141,7 +139,7 @@ export default function P(ctx, props) { return <Scene>
   <Path key="arc" d={arc(point(100, 100), 40, 0, deg(props.angle))} fill="none" stroke="#fff" />
   <View key="transform" style={{ transform: `translateX(${props.x}px) translateY(${props.y}px) rotate(${props.angle}deg) scale(1)` }} />
   <View key="wiggle" style={{ translate: wiggle2D(ctx.localFrame, ctx.fps, { seed: 7, frequency: 2, amplitude: [8, 4] }) }} />
-  <View key="tau" style={{ opacity: (ctx.hold.progress * TAU) / TAU }} />
+  <View key="tau" style={{ opacity: (ctx.progress * TAU) / TAU }} />
 </Scene>; }
 "##;
     let (artifact, values) = evaluate(source);
@@ -181,7 +179,7 @@ export default function P(ctx, props) { return <Scene>
 fn unsupported_math_zero_remainder_and_bad_arc_keep_pointed_diagnostics() {
     let cases = [
         (
-            r#"export default function P(ctx){return <View style={{opacity:Math.log(ctx.hold.progress)}}/>;}"#,
+            r#"export default function P(ctx){return <View style={{opacity:Math.log(ctx.progress)}}/>;}"#,
             "Math.log",
         ),
         (
@@ -222,7 +220,7 @@ fn existing_noise_name_accepts_dynamic_coordinates() {
     let compiled = compile_motion(
         r##"
 export default function Card(ctx) {
-  const n = noise1d(7, ctx.hold.progress * 10);
+  const n = noise1d(7, ctx.progress * 10);
   return <View style={{ opacity: n }} />;
 }
 "##,
@@ -242,9 +240,9 @@ export default function Card(ctx) {
 fn number_formatting_reaches_dynamic_text() {
     let compiled = compile_motion(
         r##"
-export const controls = defineControls({ props: { value: number({ default: 1234 }) } });
+export const controls = ({ props: { value: number({ default: 1234 }) } });
 export default function Card(ctx, props) {
-  const amount = formatNumber(props.value * ctx.hold.progress, { decimals: 1, grouping: true });
+  const amount = formatNumber(props.value * ctx.progress, { decimals: 1, grouping: true });
   return <Text>{amount}</Text>;
 }
 "##,

@@ -21,10 +21,6 @@ export type StudioRuntimeWire = { assetBaseUrl: string, proxyBase?: string, asse
 
 export type StudioBootWire = { protocolVersion: number, session: StudioSessionWire, capabilities: StudioCapabilitiesWire, runtime: StudioRuntimeWire, };
 
-export type MotionTimingWire = { enterFrames: number, exitFrames: number, enterDuration?: number, exitDuration?: number, };
-
-export type MotionCueWindowWire = { "type": "sourceRange", startFrame: number, endFrame: number, enterFrames: number, exitFrames: number, start?: number, end?: number, enterDuration?: number, exitDuration?: number, };
-
 export type MotionViewportWire = { width: number, height: number, };
 
 export type MotionSourceSpanWire = { start: number, end: number, line: number, column: number, };
@@ -41,7 +37,7 @@ export type MotionResourceLocatorWire = { id: string, url: string, };
 
 export type MotionShaderWire = { uri: string, manifestBytes: Array<number>, sourceBytes: Array<number>, };
 
-export type MotionContextWire = { "status": "ok", protocolVersion: number, generation: number, input: string, artifactDigest: ContentDigest, artifact: Record<string, unknown>, preparedData: Record<string, unknown>, dataSource: string | null, timing: MotionTimingWire, cueBindings: { [key in string]: MotionCueWindowWire }, sourceMap: MotionSourceMapWire, assets: Array<MotionAssetWire>, resourceLocators: Array<MotionResourceLocatorWire>, shaders: Array<MotionShaderWire>, durationFrames: number, fps: MotionFrameRateWire, viewport: MotionViewportWire, diagnostics: Array<MotionDiagnosticWire>, runtimeBaseUrl: string, runtimeAssets: Record<string, unknown>, fixedPackageManifestJson: string, timelineJson: string, timeline: TimelineDocument, resourceManifestJson: string, resourceManifest: ResourceManifest, verifiedBindingBundleJson: string, } | { "status": "error", protocolVersion: number, generation: number, input: string, diagnostics: Array<MotionDiagnosticWire>, };
+export type MotionContextWire = { "status": "ok", protocolVersion: number, generation: number, input: string, artifactDigest: ContentDigest, artifact: Record<string, unknown>, preparedData: Record<string, unknown>, dataSource: string | null, sourceMap: MotionSourceMapWire, assets: Array<MotionAssetWire>, resourceLocators: Array<MotionResourceLocatorWire>, shaders: Array<MotionShaderWire>, durationFrames: number, fps: MotionFrameRateWire, viewport: MotionViewportWire, diagnostics: Array<MotionDiagnosticWire>, runtimeBaseUrl: string, runtimeAssets: Record<string, unknown>, fixedPackageManifestJson: string, timelineJson: string, timeline: TimelineDocument, resourceManifestJson: string, resourceManifest: ResourceManifest, verifiedBindingBundleJson: string, } | { "status": "error", protocolVersion: number, generation: number, input: string, diagnostics: Array<MotionDiagnosticWire>, };
 
 export type StudioEventWire = { "type": "ready", generation: number, } | { "type": "seek", timeS: number, } | { "type": "selectClip", clipId: string, };
 

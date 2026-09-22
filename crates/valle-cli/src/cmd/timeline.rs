@@ -133,9 +133,8 @@ pub(crate) fn prepare_timeline_package(
     let timeline_json = String::from_utf8(timeline_bytes(&timeline)?)?;
     let mut doc: serde_json::Value = serde_json::from_slice(&timeline_bytes(&timeline)?)?;
     prepare_motion_instances(&mut doc)?;
-    fill_motion_source_durations(&mut doc, base)?;
-    let timeline = decode_timeline(&serde_json::to_string(&doc)?)?;
-    let compiled = valle_compiler::compile_timeline(timeline)?;
+    let (mut prepared_motions, motion_sources) = prepare_motion_sources(&doc, base)?;
+    let compiled = valle_compiler::compile_timeline_with_motion_sources(timeline, &motion_sources)?;
     let canonical = encode_canonical(&compiled)?;
     let frozen = tempfile::tempdir().context("creating immutable render resources")?;
     let mut resources = super::motion_package::FixedResources::new();
@@ -165,7 +164,6 @@ pub(crate) fn prepare_timeline_package(
             let id = format!("resource:{name}");
             if motion_component(&doc, name).is_some() {
                 let clip = motion_component(&doc, name).unwrap();
-                let mut specs = Vec::new();
                 let mut deps = Vec::new();
                 if let Some(bindings) = clip["resources"].as_object() {
                     for (control, resource) in bindings {
@@ -179,18 +177,26 @@ pub(crate) fn prepare_timeline_package(
                         if locator.contains("://") {
                             bail!("Motion resource {key}: use a local resource locator");
                         }
-                        specs.push(format!("{control}={}", base.join(locator).display()));
                         deps.push(super::motion_package::FixedResourceDependency {
                             role: control.clone(),
                             resource_id: format!("resource:{key}"),
                         });
                     }
                 }
-                let prepared = super::motion::compile_timeline_component(&path, &specs)?;
+                let prepared = prepared_motions
+                    .remove(name)
+                    .ok_or_else(|| anyhow!("missing prepared Motion instance {name}"))?;
                 let mut source_map = serde_json::to_value(&prepared.compiled.source_map)?;
                 source_map["entry"] = serde_json::json!(path);
                 let artifact = prepared.compiled.artifact;
                 let compiled_json: serde_json::Value = serde_json::from_str(&canonical)?;
+                let frame_rate: valle_timeline::FrameRate =
+                    serde_json::from_value(compiled_json["document"]["canvas"]["fps"].clone())?;
+                let total_frames = artifact
+                    .composition
+                    .as_ref()
+                    .ok_or_else(|| anyhow!("Motion {name} needs composition.duration"))?
+                    .duration_frames(frame_rate)?;
                 for track in compiled_json["document"]["visual"]["tracks"]
                     .as_array()
                     .into_iter()
@@ -198,58 +204,9 @@ pub(crate) fn prepare_timeline_package(
                 {
                     for item in track["items"].as_array().into_iter().flatten() {
                         if item["source"]["component"].as_str() == Some(&id) {
-                            let frame_rate: valle_timeline::FrameRate = serde_json::from_value(
-                                compiled_json["document"]["canvas"]["fps"].clone(),
-                            )?;
-                            let mut cues = serde_json::Map::new();
-                            for (name, cue) in
-                                item["source"]["cues"].as_object().into_iter().flatten()
-                            {
-                                let time = |field: &str| -> Result<valle_timeline::RationalTime> {
-                                    Ok(serde_json::from_value(cue[field].clone())?)
-                                };
-                                let window = valle_motion::signals::cue_window_seconds(
-                                    time("start")?,
-                                    time("end")?,
-                                    time("enterDuration")?,
-                                    time("exitDuration")?,
-                                    frame_rate,
-                                )?;
-                                cues.insert(name.clone(), serde_json::json!({
-                                    "startFrame": window.start_frame, "endFrame": window.end_frame,
-                                    "enterFrames": window.enter_frames, "exitFrames": window.exit_frames
-                                }));
-                            }
-                            let source = &item["source"];
-                            let phase_override =
-                                |field: &str| -> Result<Option<valle_timeline::RationalTime>> {
-                                    let value = &source["phases"][field];
-                                    if value.is_null() {
-                                        Ok(None)
-                                    } else {
-                                        Ok(Some(serde_json::from_value(value.clone())?))
-                                    }
-                                };
-                            let timing = valle_motion::resolve_timing_seconds(
-                                phase_override("enterDuration")?,
-                                phase_override("exitDuration")?,
-                                artifact.controls.timing_seconds,
-                            );
-                            let source_duration: valle_timeline::RationalTime =
-                                serde_json::from_value(source["sourceDuration"].clone())?;
-                            let phases = valle_motion::phase_windows_seconds(
-                                timing,
-                                source_duration,
-                                frame_rate,
-                            )?;
                             structures.push(serde_json::json!({
                                 "clipId": item["id"],
-                                "authoring": {
-                                    "sourceMap": source_map,
-                                    "totalFrames": phases.duration_frames,
-                                    "timing": { "enterFrames": phases.enter_frames, "exitFrames": phases.exit_frames },
-                                    "cues": cues
-                                }
+                                "authoring": {"sourceMap": source_map, "totalFrames": total_frames}
                             }));
                         }
                     }
@@ -497,8 +454,7 @@ fn resource_kind(doc: &serde_json::Value, name: &str) -> Option<AssetKind> {
                         _ => None,
                     };
                 }
-                map.iter()
-                    .find_map(|(k, v)| scan(v, name, audio || k == "audio"))
+                resource_fields(map).find_map(|(k, v)| scan(v, name, audio || k == "audio"))
             }
             serde_json::Value::Array(a) => a.iter().find_map(|v| scan(v, name, audio)),
             _ => None,
@@ -515,7 +471,7 @@ fn motion_component<'a>(doc: &'a serde_json::Value, name: &str) -> Option<&'a se
             {
                 Some(doc)
             } else {
-                map.values().find_map(|v| motion_component(v, name))
+                resource_fields(map).find_map(|(_, v)| motion_component(v, name))
             }
         }
         serde_json::Value::Array(a) => a.iter().find_map(|v| motion_component(v, name)),
@@ -528,7 +484,7 @@ fn has_visual_source(value: &serde_json::Value, name: &str, kind: &str) -> bool 
         serde_json::Value::Object(map) => {
             (map.get("kind").and_then(|v| v.as_str()) == Some(kind)
                 && map.get("src").and_then(|v| v.as_str()) == Some(name))
-                || map.values().any(|v| has_visual_source(v, name, kind))
+                || resource_fields(map).any(|(_, v)| has_visual_source(v, name, kind))
         }
         serde_json::Value::Array(values) => values.iter().any(|v| has_visual_source(v, name, kind)),
         _ => false,
@@ -536,7 +492,7 @@ fn has_visual_source(value: &serde_json::Value, name: &str, kind: &str) -> bool 
 }
 
 /// Compilation captures bound resource facts; vary the artifact by its actual preparation inputs.
-fn prepare_motion_instances(doc: &mut serde_json::Value) -> Result<()> {
+pub(crate) fn prepare_motion_instances(doc: &mut serde_json::Value) -> Result<()> {
     let mut locators = doc["resources"].as_object().cloned().unwrap_or_default();
     let original = locators.clone();
     if let Some(tracks) = doc["tracks"]["visual"].as_array_mut() {
@@ -552,7 +508,13 @@ fn prepare_motion_instances(doc: &mut serde_json::Value) -> Result<()> {
                     let locator = original
                         .get(name)
                         .ok_or_else(|| anyhow!("missing Motion component {name}"))?;
-                    let inputs = serde_json::json!([locator, clip["resources"]]);
+                    let resources = clip
+                        .get("resources")
+                        .filter(|value| value.as_object().is_some_and(|map| !map.is_empty()));
+                    let data = clip
+                        .get("data")
+                        .filter(|value| value.as_object().is_some_and(|map| !map.is_empty()));
+                    let inputs = serde_json::json!([locator, resources, data]);
                     let digest = ContentDigest::of_bytes(&serde_json::to_vec(&inputs)?);
                     let key = format!("motion-{}", &digest.as_hex()[..56]);
                     if original.contains_key(&key) {
@@ -568,17 +530,28 @@ fn prepare_motion_instances(doc: &mut serde_json::Value) -> Result<()> {
     Ok(())
 }
 
-/// The public document has no source duration default until its executable Motion metadata is known.
-pub(crate) fn fill_motion_source_durations(doc: &mut serde_json::Value, base: &Path) -> Result<()> {
+/// Prepare each bound Motion instance once and carry its validated composition into normalization.
+pub(crate) fn prepare_motion_sources(
+    doc: &serde_json::Value,
+    base: &Path,
+) -> Result<(
+    std::collections::BTreeMap<String, super::motion::PreparedInput>,
+    std::collections::BTreeMap<String, valle_timeline::RationalTime>,
+)> {
     let locators = doc["resources"].as_object().cloned().unwrap_or_default();
-    for track in doc["tracks"]["visual"].as_array_mut().into_iter().flatten() {
-        for clip in track["clips"].as_array_mut().into_iter().flatten() {
-            if clip["kind"] != "motion" || clip.get("sourceDuration").is_some() {
+    let mut prepared = std::collections::BTreeMap::new();
+    let mut durations = std::collections::BTreeMap::new();
+    for track in doc["tracks"]["visual"].as_array().into_iter().flatten() {
+        for clip in track["clips"].as_array().into_iter().flatten() {
+            if clip["kind"] != "motion" {
                 continue;
             }
             let name = clip["component"]
                 .as_str()
                 .ok_or_else(|| anyhow!("missing Motion component"))?;
+            if prepared.contains_key(name) {
+                continue;
+            }
             let locator = locators
                 .get(name)
                 .and_then(|value| value.as_str())
@@ -594,24 +567,73 @@ pub(crate) fn fill_motion_source_durations(doc: &mut serde_json::Value, base: &P
                     .ok_or_else(|| anyhow!("missing Motion resource {alias}"))?;
                 assets.push(format!("{control}={}", base.join(asset).display()));
             }
-            let prepared = super::motion::compile_timeline_component(&base.join(locator), &assets)?;
-            let composition = prepared.compiled.artifact.composition.as_ref()
-                .ok_or_else(|| anyhow!("Motion {name} needs composition.duration or an explicit bound work definition"))?;
-            let seconds = composition.duration()?.as_f64();
-            clip["sourceDuration"] = serde_json::json!(seconds);
+            let input = super::motion::compile_timeline_component(
+                &base.join(locator),
+                &assets,
+                clip.get("data"),
+            )?;
+            let composition = input
+                .compiled
+                .artifact
+                .composition
+                .as_ref()
+                .ok_or_else(|| anyhow!("Motion {name} needs composition.duration"))?;
+            durations.insert(name.to_owned(), composition.duration()?);
+            prepared.insert(name.to_owned(), input);
         }
     }
-    Ok(())
+    Ok((prepared, durations))
 }
 
-/// Freeze composition metadata into a Project revision before its pure Timeline compiler runs.
-pub(crate) fn resolve_project_motion_durations(
-    timeline: Timeline,
-    base: &Path,
-) -> Result<Timeline> {
-    let mut doc: serde_json::Value = serde_json::from_slice(&timeline_bytes(&timeline)?)?;
-    fill_motion_source_durations(&mut doc, base)?;
-    Ok(decode_timeline(&serde_json::to_string(&doc)?)?)
+pub(crate) fn motion_source_durations(
+    canonical: &serde_json::Value,
+    author: &serde_json::Value,
+) -> Result<std::collections::BTreeMap<String, f64>> {
+    let mut durations = std::collections::BTreeMap::new();
+    for track in canonical["document"]["visual"]["tracks"]
+        .as_array()
+        .into_iter()
+        .flatten()
+    {
+        for item in track["items"].as_array().into_iter().flatten() {
+            let source = &item["source"];
+            if source["type"] != "motion" {
+                continue;
+            }
+            let alias = source["component"]
+                .as_str()
+                .and_then(|id| id.strip_prefix("resource:"))
+                .ok_or_else(|| anyhow!("invalid prepared Motion component"))?;
+            let duration: valle_timeline::RationalTime =
+                serde_json::from_value(source["sourceDuration"].clone())?;
+            durations.insert(alias.to_owned(), duration.as_f64());
+        }
+    }
+    for (track_index, track) in author["tracks"]["visual"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .enumerate()
+    {
+        for (clip_index, clip) in track["clips"].as_array().into_iter().flatten().enumerate() {
+            if clip["kind"] != "motion" {
+                continue;
+            }
+            let id = format!("timeline:visual-track:{track_index}:clip:{clip_index}");
+            let source = canonical["document"]["visual"]["tracks"][track_index]["items"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .find(|item| item["id"] == id)
+                .ok_or_else(|| anyhow!("prepared Motion clip {id} is missing"))?;
+            let duration: valle_timeline::RationalTime =
+                serde_json::from_value(source["source"]["sourceDuration"].clone())?;
+            if let Some(alias) = clip["component"].as_str() {
+                durations.insert(alias.to_owned(), duration.as_f64());
+            }
+        }
+    }
+    Ok(durations)
 }
 
 fn collect_used_resources(
@@ -634,10 +656,8 @@ fn collect_used_resources(
                     );
                 }
             }
-            for (key, child) in map {
-                if key != "props" {
-                    collect_used_resources(child, used);
-                }
+            for (_, child) in resource_fields(map) {
+                collect_used_resources(child, used);
             }
         }
         serde_json::Value::Array(values) => {
@@ -649,16 +669,25 @@ fn collect_used_resources(
     }
 }
 
+/// Data and props are authored values, not Timeline resource declarations.
+fn resource_fields(
+    map: &serde_json::Map<String, serde_json::Value>,
+) -> impl Iterator<Item = (&str, &serde_json::Value)> {
+    map.iter()
+        .filter(|(key, _)| !matches!(key.as_str(), "data" | "props"))
+        .map(|(key, value)| (key.as_str(), value))
+}
+
 #[cfg(test)]
-mod motion_phase_projection_tests {
+mod motion_source_metadata_tests {
     use super::*;
 
     #[test]
-    fn prepared_timeline_projects_component_defaults_with_clip_override() {
+    fn prepared_timeline_projects_composition_duration() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join("phase.motion.tsx"),
-            "export const composition = { width: 64, height: 64, fps: 24, duration: 4.6 };\nexport const controls = defineControls({ timing: { enterDuration: 0.2 } });\nexport default function Phase() { return <Scene />; }",
+            "export const composition = { width: 64, height: 64, fps: 24, duration: 4.6 };\nexport default function Phase() { return <Scene />; }",
         )
         .unwrap();
         let timeline = serde_json::json!({
@@ -666,14 +695,19 @@ mod motion_phase_projection_tests {
             "resources": {"phase": "phase.motion.tsx"},
             "tracks": {"visual": [{"clips": [{
                 "kind": "motion", "component": "phase", "start": 0, "duration": 4.6,
-                "phases": {"exitDuration": 0.15}
+                "data": {}, "resources": {}
             }]}]}
         });
         let timeline = decode_timeline(&timeline.to_string()).unwrap();
         let prepared = prepare_timeline_package(timeline, dir.path()).unwrap();
         let authoring = &prepared.motion["structures"][0]["authoring"];
         assert_eq!(authoring["totalFrames"], 110);
-        assert_eq!(authoring["timing"]["enterFrames"], 5);
-        assert_eq!(authoring["timing"]["exitFrames"], 3);
+        assert!(authoring.get("timing").is_none());
+        let canonical: serde_json::Value =
+            serde_json::from_str(&prepared.canonical_timeline_json).unwrap();
+        assert_eq!(
+            canonical["document"]["visual"]["tracks"][0]["items"][0]["source"]["sourceDuration"],
+            "23/5"
+        );
     }
 }

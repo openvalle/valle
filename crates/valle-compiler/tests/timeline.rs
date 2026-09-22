@@ -1,5 +1,9 @@
 use serde_json::json;
-use valle_compiler::{CompileTimelineError, compile_timeline};
+use std::collections::BTreeMap;
+use valle_compiler::{
+    CompileTimelineError, compile_timeline, compile_timeline_with_motion_sources,
+};
+use valle_timeline::RationalTime;
 use valle_timeline::internal::wire::document;
 use valle_timeline::{Timeline, TimelineDecodeError, decode_timeline};
 
@@ -247,7 +251,7 @@ fn resource_aliases_are_deliberately_small_and_portable() {
 }
 
 #[test]
-fn motion_resources_and_inline_karaoke_timings_lower_to_canonical_data() {
+fn motion_resources_data_and_inline_karaoke_timings_lower_to_canonical_data() {
     let author = decode(json!({
         "canvas": {"width": 1280, "height": 720, "fps": "30000/1001"},
         "resources": {
@@ -262,11 +266,8 @@ fn motion_resources_and_inline_karaoke_timings_lower_to_canonical_data() {
                     "duration": 3,
                     "kind": "motion",
                     "component": "component",
-                    "sourceDuration": 3,
                     "resources": {"hero": "texture"},
-                    "cues": {
-                        "intro": {"type": "source-range", "start": 0, "end": 2}
-                    }
+                    "data": {}
                 }]
             }],
             "caption": [{
@@ -283,7 +284,11 @@ fn motion_resources_and_inline_karaoke_timings_lower_to_canonical_data() {
             }]
         }
     }));
-    let timeline = compile_timeline(author).expect("compile all resource-bearing fields");
+    let timeline = compile_timeline_with_motion_sources(
+        author,
+        &BTreeMap::from([("component".to_owned(), RationalTime::new(3, 1).unwrap())]),
+    )
+    .expect("compile all resource-bearing fields");
     let wire = timeline.to_wire().document;
     let document::VisualItemWire::Clip(clip) = &wire.visual.tracks[0].items[0] else {
         panic!("expected Motion clip")
@@ -291,7 +296,7 @@ fn motion_resources_and_inline_karaoke_timings_lower_to_canonical_data() {
     let document::VisualSourceWire::Motion(motion) = &clip.source else {
         panic!("expected Motion source")
     };
-    assert_eq!(motion.component, "resource:component");
+    assert!(motion.component.starts_with("resource:motion-"));
     assert_eq!(motion.resources["hero"], "resource:texture");
     assert_eq!(motion.source_duration.to_string(), "3/1");
 

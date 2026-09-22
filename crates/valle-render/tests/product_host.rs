@@ -124,6 +124,7 @@ fn motion_seek_pixels_survive_warm_caches_eviction_and_surface_reset() {
         VisualFootprint,
     };
     let artifact = Arc::new(valle_compiler::motion::compile_motion(r##"
+export const composition = { width: 48, height: 48, duration: 12 };
 const UPPER = curve([point(3,35),point(16,28),point(30,33),point(45,27)]);
 const LOWER = curve([point(3,44),point(16,40),point(30,44),point(45,39)]);
 export default function Demo(ctx) {
@@ -175,7 +176,7 @@ export default function Demo(ctx) {
       "background":{"color":"#000000ff"},"visual":{"tracks":[{"id":"track:seek","items":[{
         "type":"clip","id":"clip:seek","duration":"12/1",
         "layer":{"transform":{"position":constant(json!([0.5,0.5])),"scale":constant(json!([1,1])),"rotation":constant(json!(0)),"anchor":[0.5,0.5]},"opacity":constant(json!(1)),"mask":null,"filters":[],"blend":"normal"},
-        "source":{"type":"motion","component":"component:seek","sourceStart":"0/1","sourceDuration":"12/1","rate":"1/1","endBehavior":"hold","props":{},"cues":{},"resources":{},"phases":{"enterDuration":null,"exitDuration":null}}
+        "source":{"type":"motion","component":"component:seek","sourceStart":"0/1","sourceDuration":"12/1","rate":"1/1","endBehavior":"hold","fit":"contain","props":{},"resources":{}}
       }]}]},"audio":{"tracks":[]},"adjustments":[],"captions":{"tracks":[]},"camera":null,"metadata":{}
     }}).to_string()).unwrap();
     let timeline = String::from_utf8(canonical_bytes(&document).unwrap()).unwrap();

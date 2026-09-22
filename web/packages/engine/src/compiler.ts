@@ -7,7 +7,7 @@ import { resolvePlayerRuntimeAssets } from "./runtime-assets.ts";
 interface TimelineCompilerWasmModule {
   default(wasmUrl: string): Promise<unknown>;
   canonicalize_timeline_document(timelineJson: string): string;
-  compile_timeline(timelineJson: string): string;
+  compile_timeline(timelineJson: string, motionSourcesJson: string): string;
   normalize_timeline(timelineJson: string): string;
   timeline_source_time_delta_from_frames(
     frames: number,
@@ -23,15 +23,12 @@ export interface MotionPropertyRequest {
   node: string;
   startFrame: number; endFrame: number; maxPoints: number; durationFrames: number;
   fps: string;
-  phases: { enterFrames: number; exitFrames: number; holdCycleFrames?: number | null };
   props: Record<string, unknown>;
-  cues: Record<string, { startFrame: number; endFrame: number; enterFrames: number; exitFrames: number }>;
   viewport: [number, number];
 }
 export interface MotionPropertySamples {
   node: string;
   frames: number[];
-  phaseBoundaries: [number, number];
   channels: Array<{
     property: string; unit: string; unavailable: string | null;
     samples: Array<{ frame: number; value: number[]; velocity: number[] | null; boundary: string | null }>;
@@ -50,7 +47,7 @@ export interface TimelineCompilerRuntime {
     rate?: number | null,
   ): number;
   /** Read-only projection used by Studio preview and inspection. */
-  compileTimeline(timeline: Timeline): CanonicalTimelineDocument;
+  compileTimeline(timeline: Timeline, motionSources?: Record<string, number>): CanonicalTimelineDocument;
   canonicalizeTimelineDocument(timeline: TimelineDocument): CanonicalTimelineDocument;
 }
 
@@ -76,7 +73,7 @@ export async function createTimelineCompilerRuntime(
     timelineSourceTimeDeltaFromFrames: (frames, fps, rate) => (
       timelineSourceTimeDeltaFromFramesWithWasm(wasm, frames, fps, rate)
     ),
-    compileTimeline: (timeline) => compileTimelineWithWasm(wasm, timeline),
+    compileTimeline: (timeline, motionSources) => compileTimelineWithWasm(wasm, timeline, motionSources),
     canonicalizeTimelineDocument: (timeline) => canonicalizeTimelineDocumentWithWasm(wasm, timeline),
   };
 }
@@ -126,8 +123,9 @@ export function compileTimelineWithWasm(
     "compile_timeline" | "timeline_document_view"
   >,
   timeline: Timeline,
+  motionSources: Record<string, number> = {},
 ): CanonicalTimelineDocument {
-  const timelineJson = wasm.compile_timeline(JSON.stringify(timeline));
+  const timelineJson = wasm.compile_timeline(JSON.stringify(timeline), JSON.stringify(motionSources));
   return canonicalTimelineDocumentFromJson(wasm, timelineJson);
 }
 

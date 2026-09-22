@@ -92,15 +92,11 @@ test("Timeline compiler boots without fixed fulfillment and does not open previe
   expect(runtime.compileTimeline(authored)).toEqual(canonical);
 });
 
-test("file Studio binds Motion composition duration only for compiler projections", async () => {
-  const scene = {
-    ...authored,
-    tracks: { visual: [{ clips: [
-      { kind: "motion", component: "card", start: 0, duration: 1 },
-      { kind: "motion", component: "card", start: 1, duration: 1, sourceDuration: 5 },
-    ] }] },
-  } as Timeline;
-  const compiledInputs: Timeline[] = [];
+test("file Studio passes resolved Motion metadata separately from author clips", async () => {
+  const scene = { ...authored, tracks: { visual: [{ clips: [
+    { kind: "motion", component: "card", start: 0, duration: 1 },
+  ] }] } } as Timeline;
+  const compiledInputs: Array<{ timeline: Timeline; durations: Record<string, number> | undefined }> = [];
   const runtime = await initializeTimelineWorkspaceRuntime(
     { ...config, timeline: scene, motionSourceDurations: { card: 3 } },
     { load: async () => undefined },
@@ -108,17 +104,16 @@ test("file Studio binds Motion composition duration only for compiler projection
       normalizeTimeline: (value) => value,
       timelineTimeFromFrames: (frames, fps) => frames / Number(fps),
       timelineSourceTimeDeltaFromFrames: (frames, fps, rate = 1) => frames / Number(fps) * (rate ?? 1),
-      compileTimeline: (value) => { compiledInputs.push(value); return canonical; },
+      compileTimeline: (timeline, durations) => { compiledInputs.push({ timeline, durations }); return canonical; },
       canonicalizeTimelineDocument: () => canonical,
     }),
   );
-  const clips = compiledInputs[0]!.tracks.visual![0]!.clips;
-  expect(clips[0]).toMatchObject({ sourceDuration: 3 });
-  expect(clips[1]).toMatchObject({ sourceDuration: 5 });
-  expect(scene.tracks.visual![0]!.clips[0]).not.toHaveProperty("sourceDuration");
+  expect(compiledInputs[0]!.timeline).toEqual(scene);
+  expect(compiledInputs[0]!.durations).toEqual({ card: 3 });
   runtime.setMotionSourceDurations({ card: 4 });
   runtime.compileTimeline(scene);
-  expect(compiledInputs[1]!.tracks.visual![0]!.clips[0]).toMatchObject({ sourceDuration: 4 });
+  expect(compiledInputs[1]!.durations).toEqual({ card: 4 });
+  expect(scene.tracks.visual![0]!.clips[0]).not.toHaveProperty("sourceDuration");
 });
 
 test("Timeline compiler rejects a hosted render projection from another working copy", async () => {

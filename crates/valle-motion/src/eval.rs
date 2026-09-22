@@ -9,15 +9,14 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use valle_draw::{Point, Rect, Rgba, Vec2};
 
-use crate::context::{HoldContext, MotionContext, PhaseContext, PhaseKind};
+use crate::context::MotionContext;
 use crate::geometry::{GeometryError, PathData};
 pub use crate::value::css_token;
 use crate::value::{Angle, AngleUnit, Length, Length2, MotionEasing, MotionValue};
 
 use super::{
-    CompareOp, ContextInput, ControlType, ControlsSchema, CueField, Expr, ExprId, Extrapolation,
-    GeometryField, InterpolateStop, MAX_TEMPLATE_OUTPUT_BYTES, ResolvedSignals, SceneArtifact,
-    TemplatePart,
+    CompareOp, ContextInput, ControlType, ControlsSchema, Expr, ExprId, Extrapolation,
+    GeometryField, InterpolateStop, MAX_TEMPLATE_OUTPUT_BYTES, SceneArtifact, TemplatePart,
 };
 
 /// Caller-supplied prop values after schema/default validation.
@@ -39,7 +38,6 @@ impl ResolvedProps {
 pub struct EvalInputs<'a> {
     pub ctx: &'a MotionContext,
     pub props: &'a ResolvedProps,
-    pub signals: &'a ResolvedSignals,
     /// Current text unit; unit fields are undefined outside per-unit evaluation.
     pub unit: Option<UnitContext>,
     /// Optional viewport dimensions from the render request, separate from the time context.
@@ -63,9 +61,6 @@ pub enum EvalError {
         name: String,
     },
     MissingProp {
-        name: String,
-    },
-    MissingCue {
         name: String,
     },
     BadGeometry {
@@ -131,7 +126,6 @@ impl core::fmt::Display for EvalError {
         match self {
             EvalError::UnknownProp { name } => write!(f, "unknown prop `{name}`"),
             EvalError::MissingProp { name } => write!(f, "required prop `{name}` is missing"),
-            EvalError::MissingCue { name } => write!(f, "cue signal `{name}` is not resolved"),
             EvalError::InvalidProp { name } => {
                 write!(f, "prop `{name}` does not match its control schema")
             }
@@ -402,7 +396,6 @@ fn reads_runtime_inputs(expr: &Expr) -> bool {
         // Runtime input leaves.
         Expr::Context { .. }
         | Expr::Prop { .. }
-        | Expr::Cue { .. }
         | Expr::NodeBounds { .. }
         | Expr::Project3D { .. } => true,
         // Spring reads frame rate directly from EvalInputs.
@@ -447,32 +440,12 @@ fn reads_runtime_inputs(expr: &Expr) -> bool {
 /// Dummy folding context required by the evaluator signature; runtime-dependent branches are never
 /// evaluated during folding.
 fn folding_context() -> MotionContext {
-    let phase = PhaseContext {
-        active: false,
-        frame: 0,
-        elapsed_frames: 0,
-        duration_frames: 0,
-        progress: 0.0,
-    };
     MotionContext {
         local_frame: 0,
         sample: valle_timeline::internal::SampleTime::ZERO,
         progress: 0.0,
         duration_frames: 0,
-        fps: valle_timeline::FrameRate::new(1, 1).expect("1/1 is a valid frame rate"),
-        current_phase: PhaseKind::Hold,
-        enter: phase,
-        hold: HoldContext {
-            active: false,
-            frame: 0,
-            elapsed_frames: 0,
-            duration_frames: 0,
-            progress: 0.0,
-            iteration: 0,
-            cycle_frame: 0,
-            cycle_progress: 0.0,
-        },
-        exit: phase,
+        fps: valle_timeline::FrameRate::new(1, 1).expect("valid rate"),
     }
 }
 
@@ -486,7 +459,6 @@ pub fn fold_constants(
     let mut dense: Vec<MotionValue> = Vec::with_capacity(exprs.len());
     let empty_ctx = folding_context();
     let empty_props = crate::ResolvedProps::default();
-    let empty_signals = crate::ResolvedSignals::default();
     // Ask artifact admission before folding so replacing an expression with a constant cannot
     // bypass its type or value restrictions.
     //
@@ -507,7 +479,6 @@ pub fn fold_constants(
                 EvalInputs {
                     ctx: &empty_ctx,
                     props: &empty_props,
-                    signals: &empty_signals,
                     unit: None,
                     // Viewport dimensions are unavailable during compile-time folding.
                     viewport: None,
@@ -572,20 +543,6 @@ fn eval_one(
                     scene_key: scene_key.clone(),
                     anchor_key: anchor_key.clone(),
                 })
-        }
-        Expr::Cue { name, field } => {
-            let cue = inputs
-                .signals
-                .cue(name)
-                .ok_or_else(|| EvalError::MissingCue { name: name.clone() })?;
-            Ok(match field {
-                CueField::Active => MotionValue::Bool(cue.active),
-                CueField::Progress => MotionValue::Number(cue.progress),
-                CueField::Enter => MotionValue::Number(cue.enter),
-                CueField::Hold => MotionValue::Number(cue.hold),
-                CueField::Exit => MotionValue::Number(cue.exit),
-                CueField::LocalFrame => MotionValue::Number(f64::from(cue.local_frame)),
-            })
         }
         Expr::MakePoint { x, y } => Ok(MotionValue::Point(Point::new(
             as_number(at, "point", child(*x)?)?,
@@ -864,26 +821,6 @@ fn context_value(
     unit: Option<UnitContext>,
     viewport: Option<(f64, f64)>,
 ) -> Option<MotionValue> {
-    let phase = |kind: PhaseKind| match kind {
-        PhaseKind::Enter => (
-            ctx.enter.active,
-            ctx.enter.frame,
-            ctx.enter.duration_frames,
-            ctx.enter.progress,
-        ),
-        PhaseKind::Hold => (
-            ctx.hold.active,
-            ctx.hold.frame,
-            ctx.hold.duration_frames,
-            ctx.hold.progress,
-        ),
-        PhaseKind::Exit => (
-            ctx.exit.active,
-            ctx.exit.frame,
-            ctx.exit.duration_frames,
-            ctx.exit.progress,
-        ),
-    };
     let number = |value| MotionValue::Number(f64::from(value));
     Some(match input {
         ContextInput::LocalFrame => number(ctx.local_frame),
@@ -892,20 +829,6 @@ fn context_value(
         ContextInput::DurationFrames => number(ctx.duration_frames),
         ContextInput::FpsNum => MotionValue::Number(ctx.fps.numerator() as f64),
         ContextInput::FpsDen => number(ctx.fps.denominator()),
-        ContextInput::PhaseFrame { phase: kind } => number(phase(kind).1),
-        ContextInput::PhaseDurationFrames { phase: kind } => number(phase(kind).2),
-        ContextInput::PhaseProgress { phase: kind } => MotionValue::Number(phase(kind).3),
-        ContextInput::PhaseElapsedFrames { phase: kind } => {
-            MotionValue::Number(f64::from(match kind {
-                PhaseKind::Enter => ctx.enter.elapsed_frames,
-                PhaseKind::Hold => ctx.hold.elapsed_frames,
-                PhaseKind::Exit => ctx.exit.elapsed_frames,
-            }))
-        }
-        ContextInput::PhaseActive { phase: kind } => MotionValue::Bool(phase(kind).0),
-        ContextInput::HoldIteration => number(ctx.hold.iteration),
-        ContextInput::HoldCycleFrame => number(ctx.hold.cycle_frame),
-        ContextInput::HoldCycleProgress => MotionValue::Number(ctx.hold.cycle_progress),
         ContextInput::UnitIndex => number(unit?.index),
         ContextInput::UnitCount => number(unit?.count),
         ContextInput::UnitStart => number(unit?.start),
@@ -1191,37 +1114,14 @@ mod tests {
     }
 
     use super::*;
-    use crate::{
-        ARTIFACT_FORMAT_VERSION, CapabilitySet, ChildRange, FrameControl, NodeId, NodeKind,
-        OptionalFrameControl, SceneNode, TimingControls,
-    };
+    use crate::{ARTIFACT_FORMAT_VERSION, CapabilitySet, ChildRange, NodeId, NodeKind, SceneNode};
     use valle_timeline::FrameRate;
 
     fn controls() -> ControlsSchema {
         ControlsSchema {
             props: BTreeMap::new(),
             data: BTreeMap::new(),
-            timing_seconds: None,
-            timing: TimingControls {
-                enter_frames: FrameControl {
-                    default: 2,
-                    min: 0,
-                    max: None,
-                },
-                hold_cycle_frames: OptionalFrameControl {
-                    default: Some(2),
-                    min: 1,
-                    max: None,
-                },
-                exit_frames: FrameControl {
-                    default: 2,
-                    min: 0,
-                    max: None,
-                },
-            },
-            cues: BTreeMap::new(),
             assets: BTreeMap::new(),
-            camera: Default::default(),
         }
     }
 
@@ -1252,8 +1152,7 @@ mod tests {
     }
 
     fn context(frame: u32) -> MotionContext {
-        let layout = crate::phase_windows(&controls().phase_spec(), 8);
-        crate::motion_context_at(frame, &layout, FrameRate::new(30, 1).unwrap()).unwrap()
+        crate::motion_context_at_frame(frame, 8, FrameRate::new(30, 1).unwrap()).unwrap()
     }
 
     /// Base evaluation skips unit expressions; per-unit evaluation recomputes only their dependent
@@ -1274,11 +1173,9 @@ mod tests {
         ]);
         let ctx = context(3);
         let props = crate::ResolvedProps::default();
-        let signals = crate::ResolvedSignals::default();
         let inputs = EvalInputs {
             ctx: &ctx,
             props: &props,
-            signals: &signals,
             unit: None,
             viewport: None,
         };
@@ -1321,7 +1218,6 @@ mod tests {
     fn unit_input_without_a_unit_is_an_error_not_a_zero() {
         let ctx = context(3);
         let props = crate::ResolvedProps::default();
-        let signals = crate::ResolvedSignals::default();
         assert_eq!(
             eval_one(
                 0,
@@ -1332,7 +1228,6 @@ mod tests {
                 EvalInputs {
                     ctx: &ctx,
                     props: &props,
-                    signals: &signals,
                     unit: None,
                     viewport: None,
                 },
@@ -1347,9 +1242,7 @@ mod tests {
     fn forward_pass_covers_context_arithmetic_select_and_interpolate() {
         let artifact = artifact(vec![
             Expr::Context {
-                input: ContextInput::PhaseFrame {
-                    phase: PhaseKind::Enter,
-                },
+                input: ContextInput::LocalFrame,
             },
             Expr::Const {
                 value: MotionValue::Number(2.0),
@@ -1400,7 +1293,6 @@ mod tests {
             EvalInputs {
                 ctx: &context(1),
                 props: &ResolvedProps::default(),
-                signals: &ResolvedSignals::default(),
                 unit: None,
                 viewport: None,
             },
@@ -1432,7 +1324,6 @@ mod tests {
             EvalInputs {
                 ctx: &context(0),
                 props: &ResolvedProps::default(),
-                signals: &ResolvedSignals::default(),
                 unit: None,
                 viewport: None,
             },
@@ -1460,7 +1351,6 @@ mod tests {
             EvalInputs {
                 ctx: &context(0),
                 props: &ResolvedProps::default(),
-                signals: &ResolvedSignals::default(),
                 unit: None,
                 viewport: None,
             },
@@ -1509,7 +1399,6 @@ mod tests {
             EvalInputs {
                 ctx: &context(0),
                 props: &ResolvedProps::default(),
-                signals: &ResolvedSignals::default(),
                 unit: None,
                 viewport: None,
             },
@@ -1578,7 +1467,6 @@ mod tests {
             EvalInputs {
                 ctx: &context(1),
                 props: &ResolvedProps::default(),
-                signals: &ResolvedSignals::default(),
                 unit: None,
                 viewport: None,
             },

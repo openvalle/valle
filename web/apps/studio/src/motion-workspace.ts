@@ -5,7 +5,6 @@ import type { VallePlayerElement } from "valle-engine/element";
 
 import { motionControls, type MotionContext, type StudioHost } from "./host.ts";
 import type {
-  MotionHandleView,
   MotionMappingView,
   MotionPropControlView,
   MotionWorkspaceIntent,
@@ -63,8 +62,7 @@ export async function startMotionStudio(
 
   let context: GoodMotionContext | null = null;
   let props: Record<string, MotionValue> = structuredClone(projectSession?.props ?? {});
-  let timing: GoodMotionContext["timing"] = { enterFrames: 0, exitFrames: 0 };
-  let cues: GoodMotionContext["cueBindings"] = {};
+  let data: Record<string, unknown> = {};
   let lastLocate: LocateResult | null = null;
   let baseline = "";
   const undo: string[] = [], redo: string[] = [];
@@ -74,7 +72,7 @@ export async function startMotionStudio(
   let hostVersion = 0;
   let latestGeneration = -1;
   let curvePending = false;
-  const snapshot = () => JSON.stringify({ props, timing, cues });
+  const snapshot = () => JSON.stringify({ props, data });
   const frameTime = (frame: number) => context ? compiler.timelineTimeFromFrames(frame, `${context.fps.num}/${context.fps.den}`) : 0;
   const localTime = () => Math.max(0, (projectSession?.sourceStartS ?? 0) + (player.currentTime() - (projectSession?.clipStartS ?? 0)) * (projectSession?.rate ?? 1));
   const syncTransport = () => {
@@ -114,41 +112,27 @@ export async function startMotionStudio(
   };
   const renderTimeline = () => {
     if (!context) return;
-    const hasContent = timing.enterFrames > 0 || timing.exitFrames > 0 || Object.keys(cues).length > 0;
-    shell.classList.toggle("has-motion-timeline", hasContent);
-    timelinePane.hidden = !hasContent;
-    if (!hasContent) return;
+    shell.classList.add("has-motion-timeline");
+    timelinePane.hidden = false;
     laneWidth = Math.max(1, scroll.clientWidth - 152) * zoom;
     const width = (frames: number) => frames / context!.durationFrames * laneWidth;
-    const clip = (id: string, label: string, start: number, end: number, editable = true) => ({
-      id, kind: "phase", fixedStart: id === "phase-enter", fixedEnd: id === "phase-exit", leftPx: width(start), widthPx: width(Math.max(0, end - start)),
-      title: `${label} · ${start}–${end} f`, label, selected: false, timingEditable: editable,
-      readOnly: !editable,
-    });
-    const enter = timing.enterFrames, exitStart = context.durationFrames - timing.exitFrames;
     const tickStep = Math.max(1, Math.ceil(context.durationFrames / Math.max(1, Math.floor(laneWidth / 80))));
     timeline.renderTimeline({
       widthPx: 152 + laneWidth, laneWidthPx: laneWidth, labelWidthPx: 152, playheadLeftPx: 152,
       ticks: Array.from({ length: Math.floor(context.durationFrames / tickStep) + 1 }, (_, i) => ({ leftPx: width(i * tickStep), label: `${i * tickStep} f` })),
-      tracks: [{ id: "phases", kind: "phase", name: "Phases", clips: [
-        ...(enter > 0 ? [clip("phase-enter", "Enter", 0, enter)] : []),
-        ...(exitStart > enter ? [clip("phase-hold", "Hold", enter, exitStart, false)] : []),
-        ...(timing.exitFrames > 0 ? [clip("phase-exit", "Exit", exitStart, context.durationFrames)] : []),
-      ] }, ...Object.entries(cues).map(([name, cue]) => ({ id: `cue:${name}`, kind: "phase", name,
-        clips: [clip(`cue:${name}`, name, cue.startFrame, cue.endFrame)],
-      }))],
+      tracks: [],
     });
     syncTransport();
   };
   const render = () => {
     if (!context || abort.signal.aborted) return;
-    workspace.renderWorkspace({ ...buildMotionWorkspaceModel(context, props, timing, cues, Boolean(projectSession)), selectedLocation: lastLocate?.location ?? null,
-      curves: curvePending ? undefined : { context, props, timing, cues, selectedKey: lastLocate?.key ?? null } });
+    workspace.renderWorkspace({ ...buildMotionWorkspaceModel(context, props, data, Boolean(projectSession)), selectedLocation: lastLocate?.location ?? null,
+      curves: curvePending ? undefined : { context, props, selectedKey: lastLocate?.key ?? null } });
     renderTimeline();
-    document.getElementById("timelineTitle")!.textContent = "Phases & cues";
+    document.getElementById("timelineTitle")!.textContent = "Source frames";
     document.getElementById("trackCount")!.textContent = "";
     document.getElementById("timelineSelection")!.textContent = "";
-    document.getElementById("timelineHint")!.textContent = "Drag the ruler to seek · Adjust phase and cue boundaries";
+    document.getElementById("timelineHint")!.textContent = "Drag the ruler to seek";
     if (!projectSession) {
       shell.dispatchIntent({ type: "dirty", value: snapshot() !== baseline });
       shell.dispatchIntent({ type: "history", canUndo: undo.length > 0, canRedo: redo.length > 0 });
@@ -163,8 +147,7 @@ export async function startMotionStudio(
       if (next.status === "error") throw new Error(next.diagnostics.map((d) => d.message).join("\n"));
       await player.replaceRenderPackage({ ...buildMotionPreview(next), isCurrent });
       if (isCurrent()) {
-        const resolved = syncMotionDraftFrames(timing, cues, next);
-        context = next; timing = resolved.timing; cues = resolved.cues; render();
+        context = next; render();
       }
     },
     updating: () => shell.dispatchIntent({ type: "preview-status", status: "updating", message: null }),
@@ -173,38 +156,18 @@ export async function startMotionStudio(
   });
   const schedule = () => { curvePending = true; render(); draftPreview.schedule({
     props: Object.fromEntries(Object.entries(props).map(([name, value]) => [name, value.value])),
-    timing: {
-      enterDuration: timing.enterDuration ?? frameTime(timing.enterFrames),
-      exitDuration: timing.exitDuration ?? frameTime(timing.exitFrames),
-    },
-    cues: Object.fromEntries(Object.entries(cues).map(([name, cue]) => [name, {
-      start: cue.start ?? frameTime(cue.startFrame),
-      end: cue.end ?? frameTime(cue.endFrame),
-      enterDuration: cue.enterDuration ?? frameTime(cue.enterFrames),
-      exitDuration: cue.exitDuration ?? frameTime(cue.exitFrames),
-    }])),
+    data,
   }); };
   const applyEdit = async (intent: ProjectMotionEdit) => {
     if (!context || abort.signal.aborted) return;
     if (projectSession) {
       const next = await projectSession.applyEdit(intent);
       if (abort.signal.aborted) return;
-      context = next.context; props = next.props; timing = structuredClone(context.timing); cues = structuredClone(context.cueBindings);
+      context = next.context; props = next.props; data = structuredClone(context.preparedData);
     } else {
       const before = snapshot();
       if (intent.type === "prop") props[intent.name] = intent.value;
-      if (intent.type === "phase") {
-        const value = Math.max(0, Math.min(Number.MAX_SAFE_INTEGER, intent.value));
-        timing = { ...timing, [intent.key]: value,
-          [intent.key === "enterFrames" ? "enterDuration" : "exitDuration"]: frameTime(value) };
-      }
-      if (intent.type === "cue" && cues[intent.cue]) {
-        const cue = cues[intent.cue]!;
-        const handle = buildMotionWorkspaceModel(context, props, timing, cues, false).cues.find((h) => h.cue === intent.cue && h.key === intent.key)!;
-        const value = Math.max(handle.min, Math.min(handle.max, intent.value));
-        const secondsKey = ({ startFrame: "start", endFrame: "end", enterFrames: "enterDuration", exitFrames: "exitDuration" } as const)[intent.key as "startFrame" | "endFrame" | "enterFrames" | "exitFrames"];
-        cues = { ...cues, [intent.cue]: { ...cue, [intent.key]: value, [secondsKey]: frameTime(value) } };
-      }
+      if (intent.type === "data") data = structuredClone(intent.value);
       if (snapshot() !== before) { undo.push(before); if (undo.length > 40) undo.shift(); redo.length = 0; schedule(); }
     }
     render();
@@ -225,7 +188,7 @@ export async function startMotionStudio(
     const intent = (event as CustomEvent<MotionWorkspaceIntent>).detail;
     if (intent.type === "return") { void returnToTimeline(); return; }
     if (intent.type === "copy-props") {
-      const model = context ? buildMotionWorkspaceModel(context, props, timing, cues, Boolean(projectSession)) : null;
+      const model = context ? buildMotionWorkspaceModel(context, props, data, Boolean(projectSession)) : null;
       void navigator.clipboard.writeText(JSON.stringify(Object.fromEntries(model?.props.map((prop) => [prop.name, prop.value]) ?? []), null, 2)); return;
     }
     if (intent.type !== "prop-end") enqueueEdit(intent);
@@ -249,14 +212,14 @@ export async function startMotionStudio(
   shell.addEventListener("studio-draft-updated", () => {
     if (!projectSession) return;
     const next = projectSession.read(); context = next.context; props = next.props;
-    timing = structuredClone(context.timing); cues = structuredClone(context.cueBindings); render();
+    data = structuredClone(context.preparedData); render();
   }, listenerOptions);
   shell.addEventListener("studio-history-intent", (event) => {
     if (projectSession) return;
     const action = (event as CustomEvent<{ type: string }>).detail.type;
     const source = action === "undo" ? undo : redo, target = action === "undo" ? redo : undo;
     const previous = source.pop(); if (!previous) return;
-    target.push(snapshot()); ({ props, timing, cues } = JSON.parse(previous)); render(); schedule();
+    target.push(snapshot()); ({ props, data } = JSON.parse(previous)); render(); schedule();
   }, listenerOptions);
   window.addEventListener("beforeunload", (event) => {
     if (!projectSession && snapshot() !== baseline) { event.preventDefault(); event.returnValue = ""; }
@@ -278,39 +241,21 @@ export async function startMotionStudio(
     observer.disconnect();
     if (resizeFrame !== null) cancelAnimationFrame(resizeFrame);
   }, { once: true });
-  let gesture: { id: string | null; edge: string | undefined; x: number; pointer: number } | null = null;
   timeline.addEventListener("pointerdown", (event) => {
-    const target = event.target as Element;
-    const ruler = target.closest<HTMLElement>(".ruler-lane");
-    const handle = target.closest<HTMLElement>(".trim");
-    if (event.button !== 0 || (!ruler && !handle)) return;
-    const id = handle?.closest<HTMLElement>("[data-clip-id]")?.dataset.clipId ?? null;
-    gesture = { id, edge: handle?.dataset.edge, x: event.clientX, pointer: event.pointerId };
-    timeline.setPointerCapture(event.pointerId); event.preventDefault();
-    if (ruler && context) void seekFrame((event.clientX - ruler.getBoundingClientRect().left) / laneWidth * context.durationFrames);
+    const ruler = (event.target as Element).closest<HTMLElement>(".ruler-lane");
+    if (!ruler || event.button !== 0 || !context) return;
+    timeline.setPointerCapture(event.pointerId);
+    void seekFrame((event.clientX - ruler.getBoundingClientRect().left) / laneWidth * context.durationFrames);
+    event.preventDefault();
   }, listenerOptions);
   timeline.addEventListener("pointermove", (event) => {
-    if (!gesture || !context) return;
-    if (!gesture.id) {
-      const ruler = timeline.querySelector<HTMLElement>(".ruler-lane")!;
-      void seekFrame((event.clientX - ruler.getBoundingClientRect().left) / laneWidth * context.durationFrames);
-    }
+    if (!context || !timeline.hasPointerCapture(event.pointerId)) return;
+    const ruler = timeline.querySelector<HTMLElement>(".ruler-lane");
+    if (ruler) void seekFrame((event.clientX - ruler.getBoundingClientRect().left) / laneWidth * context.durationFrames);
   }, listenerOptions);
   timeline.addEventListener("pointerup", (event) => {
-    const active = gesture; gesture = null;
-    if (!active || !context) return;
     if (timeline.hasPointerCapture(event.pointerId)) timeline.releasePointerCapture(event.pointerId);
-    const delta = Math.round((event.clientX - active.x) / laneWidth * context.durationFrames);
-    if (!active.id || delta === 0) return;
-    if (active.id === "phase-enter") enqueueEdit({ type: "phase", key: "enterFrames", value: timing.enterFrames + delta });
-    else if (active.id === "phase-exit") enqueueEdit({ type: "phase", key: "exitFrames", value: timing.exitFrames - delta });
-    else if (active.id.startsWith("cue:")) {
-      const cue = active.id.slice(4), key = active.edge === "left" ? "startFrame" : "endFrame";
-      enqueueEdit({ type: "cue", cue, key, value: cues[cue]![key] + delta });
-    }
   }, listenerOptions);
-  timeline.addEventListener("pointercancel", () => { gesture = null; }, listenerOptions);
-  window.addEventListener("keydown", (event) => { if (event.key === "Escape") gesture = null; }, listenerOptions);
   await player.updateComplete;
   player.canvas?.addEventListener("click", (event) => {
     if (!context || player.state !== "ready") return;
@@ -348,7 +293,7 @@ export async function startMotionStudio(
     context = next;
     shell.dispatchIntent({ type: "workspace", workspace: { kind: "motion", clipId: projectSession?.clipId, source: next.input } });
     props = structuredClone(projectSession?.props ?? initialMotionProps(next));
-    timing = structuredClone(next.timing); cues = structuredClone(next.cueBindings); baseline = snapshot();
+    data = structuredClone(next.preparedData); baseline = snapshot();
     if (!projectSession) {
       const preview = buildMotionPreview(next);
       if (player.state === "ready") await player.replaceRenderPackage(preview); else await player.load(preview);
@@ -383,31 +328,6 @@ export async function startMotionStudio(
   }
 }
 
-/** Refresh renderer-derived frame windows while retaining the draft's authored seconds. */
-export function syncMotionDraftFrames(
-  timing: GoodMotionContext["timing"],
-  cues: GoodMotionContext["cueBindings"],
-  response: GoodMotionContext,
-): { timing: GoodMotionContext["timing"]; cues: GoodMotionContext["cueBindings"] } {
-  return {
-    timing: {
-      ...timing,
-      enterFrames: response.timing.enterFrames,
-      exitFrames: response.timing.exitFrames,
-    },
-    cues: Object.fromEntries(Object.entries(response.cueBindings).map(([name, window]) => {
-      const authored = cues[name];
-      return [name, {
-        ...window,
-        start: authored?.start ?? window.start,
-        end: authored?.end ?? window.end,
-        enterDuration: authored?.enterDuration ?? window.enterDuration,
-        exitDuration: authored?.exitDuration ?? window.exitDuration,
-      }];
-    })),
-  };
-}
-
 function initialMotionProps(context: GoodMotionContext): Record<string, MotionValue> {
   const source = context.timeline.document.visual.tracks[0]?.items[0];
   if (!source || source.type !== "clip" || source.source.type !== "motion") return {};
@@ -420,14 +340,12 @@ function initialMotionProps(context: GoodMotionContext): Record<string, MotionVa
 export function buildMotionWorkspaceModel(
   context: GoodMotionContext,
   props: Record<string, MotionValue>,
-  timing: GoodMotionContext["timing"],
-  cues: GoodMotionContext["cueBindings"],
+  data: Record<string, unknown>,
   canReturn: boolean,
 ): MotionWorkspaceViewModel {
   const controls = motionControls(context);
   const propSchemas = record(controls.props);
   const dataSchemas = record(controls.data);
-  const timingSchemas = record(controls.timing);
   const propViews: MotionPropControlView[] = Object.entries(propSchemas).map(([name, raw]) => {
     const schema = record(raw);
     const control = record(schema.control);
@@ -443,7 +361,7 @@ export function buildMotionWorkspaceModel(
       values: Array.isArray(control.values) ? control.values.map(String) : undefined,
     };
   });
-  const preparedData = record(context.preparedData);
+  const preparedData = data;
   const dataViews = Object.entries(dataSchemas).map(([name, raw]) => {
     const schema = record(raw);
     return {
@@ -452,23 +370,6 @@ export function buildMotionWorkspaceModel(
       value: preparedData[name],
       maxItems: numberOrUndefined(schema.maxItems),
     };
-  });
-  const phases: MotionHandleView[] = (["enterFrames", "exitFrames"] as const).map((key) => {
-    const schema = record(timingSchemas[key]);
-    return { key, label: key === "enterFrames" ? "enter" : "exit", value: timing[key], min: Number(schema.min ?? 0), max: Number(schema.max ?? Number.MAX_SAFE_INTEGER) };
-  });
-  const cueViews = Object.entries(cues).flatMap(([cue, binding]) => {
-    return (["startFrame", "endFrame", "enterFrames", "exitFrames"] as const).map((key) => ({
-      cue,
-      key,
-      label: `${cue}.${key === "startFrame" ? "start" : key === "endFrame" ? "end" : key === "enterFrames" ? "enter" : "exit"}`,
-      value: binding[key],
-      min: key === "endFrame" ? binding.startFrame + 1 : 0,
-      max: key === "startFrame"
-        ? Math.max(0, binding.endFrame - 1)
-        : key === "endFrame" ? context.durationFrames : Number.MAX_SAFE_INTEGER,
-      readOnly: false,
-    }));
   });
   const mappings: MotionMappingView[] = [
     ...context.sourceMap.nodes.slice(0, 24).map((item) => mappingView(context.input, item)),
@@ -481,9 +382,8 @@ export function buildMotionWorkspaceModel(
     fingerprint: context.artifactDigest,
     props: propViews,
     data: dataViews,
+    dataJson: JSON.stringify(data, null, 2),
     dataSource: context.dataSource,
-    phases,
-    cues: cueViews,
     diagnostics: context.diagnostics.map((item) => ({
       label: `[${item.class}:${item.code}] ${item.message}`,
       location: item.span ? `${item.sourcePath ?? context.input}:${item.span.line}:${item.span.column}` : item.sourcePath ?? context.input,
@@ -591,7 +491,6 @@ async function runMotionSmoke(
     await apply({ type: "prop", name, value: { kind: "number", value: applied } });
     draftPreviewUpdated = !bytesEqual(before, (await player.captureFrame(0)).png);
   }
-  await apply({ type: "phase", key: "enterFrames", value: Math.min(context.durationFrames - context.timing.exitFrames, context.timing.enterFrames + 5) });
   const enter = (await player.captureFrame(0)).png;
   const steady = (await player.captureFrame(Math.min(context.durationFrames - 1, 60) * context.fps.den / context.fps.num)).png;
   await player.seek(0);

@@ -7,7 +7,7 @@ use valle_motion::RICH_TEXT_CAPABILITY;
 fn span_children_lower_to_the_existing_inline_text_path() {
     let compiled = compile_motion(
         r##"
-export const controls = defineControls({ props: { value: number({ default: 42 }) } });
+export const controls = ({ props: { value: number({ default: 42 }) } });
 export default function Card(ctx, props) {
   return (
     <Text style={{ fontSize: 48 }}>

@@ -13,7 +13,7 @@ export function ChartPanel(ctx, { rows, x, y, width, height }) {
         const top = yScale.map(row.value);
         const band = xScale.band(index);
         return (
-          <View key={row.id} className="absolute" style={{ left: band[0], top, width: xScale.bandwidth(), height: baseline - top, borderRadius: theme.radius.mark, backgroundColor: accent, opacity: 0.28 + ctx.enter.progress * 0.72 }}>
+          <View key={row.id} className="absolute" style={{ left: band[0], top, width: xScale.bandwidth(), height: baseline - top, borderRadius: theme.radius.mark, backgroundColor: accent, opacity: 0.28 + ctx.progress * 0.72 }}>
             <Text key={`label-${row.id}`} className="absolute" style={{ left: 0, top: baseline - top + 18, width: xScale.bandwidth(), fontSize: 16, color: ink, textAlign: "center" }}>{row.label}</Text>
           </View>
         );

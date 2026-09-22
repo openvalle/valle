@@ -4,8 +4,8 @@ use std::collections::BTreeMap;
 use valle_compiler::motion::compile_motion;
 use valle_motion::layout::LayoutCache;
 use valle_motion::{
-    Fonts, LayoutOptions, ResolvedSignals, StyleCache, Viewport, build_tree, default_font_naming,
-    emit, motion_context_at, phase_windows, prepare_scene, resolve_props,
+    Fonts, LayoutOptions, StyleCache, Viewport, build_tree, default_font_naming, emit,
+    motion_context_at_frame, prepare_scene, resolve_props,
 };
 use valle_timeline::FrameRate;
 
@@ -28,11 +28,10 @@ fn frames(source: &str, frames: &[u32]) -> Vec<(BTreeMap<String, [f32; 4]>, Vec<
     let styles = StyleCache::new();
     let geometry = LayoutCache::new(&prepared, &fonts);
     let props = resolve_props(&artifact.controls, &BTreeMap::new()).unwrap();
-    let windows = phase_windows(&artifact.controls.phase_spec(), 90);
     frames
         .iter()
         .map(|&frame| {
-            let ctx = motion_context_at(frame, &windows, FrameRate::new(30, 1).unwrap()).unwrap();
+            let ctx = motion_context_at_frame(frame, 90, FrameRate::new(30, 1).unwrap()).unwrap();
             let pack = |tree: &valle_motion::LayoutTree| {
                 let report = emit(tree, &default_font_naming).unwrap();
                 assert!(report.unsupported.is_empty(), "{:?}", report.unsupported);
@@ -45,7 +44,6 @@ fn frames(source: &str, frames: &[u32]) -> Vec<(BTreeMap<String, [f32; 4]>, Vec<
                 &prepared,
                 &ctx,
                 &props,
-                &ResolvedSignals::default(),
                 &LayoutOptions {
                     viewport: Viewport::new((320, 180)),
                     fonts: &fonts,
@@ -54,19 +52,12 @@ fn frames(source: &str, frames: &[u32]) -> Vec<(BTreeMap<String, [f32; 4]>, Vec<
             )
             .unwrap();
             let warm = if let Some(geometry) = &geometry {
-                geometry.build_tree(
-                    &ctx,
-                    &props,
-                    &ResolvedSignals::default(),
-                    Viewport::new((320, 180)),
-                    Some(&styles),
-                )
+                geometry.build_tree(&ctx, &props, Viewport::new((320, 180)), Some(&styles))
             } else {
                 build_tree(
                     &prepared,
                     &ctx,
                     &props,
-                    &ResolvedSignals::default(),
                     &LayoutOptions {
                         viewport: Viewport::new((320, 180)),
                         fonts: &fonts,
@@ -460,13 +451,11 @@ fn finite_transform_arguments_cannot_overflow_into_a_successful_empty_frame() {
     let prepared = prepare_scene(&artifact).unwrap();
     let fonts = Fonts::default();
     let props = resolve_props(&artifact.controls, &BTreeMap::new()).unwrap();
-    let windows = phase_windows(&artifact.controls.phase_spec(), 90);
-    let ctx = motion_context_at(0, &windows, FrameRate::new(30, 1).unwrap()).unwrap();
+    let ctx = motion_context_at_frame(0, 90, FrameRate::new(30, 1).unwrap()).unwrap();
     let tree = build_tree(
         &prepared,
         &ctx,
         &props,
-        &ResolvedSignals::default(),
         &LayoutOptions {
             viewport: Viewport::new((320, 180)),
             fonts: &fonts,

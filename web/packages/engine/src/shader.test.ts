@@ -96,7 +96,7 @@ test("frozen shaders align Native/CanvasKit sampling and arbitrary-frame results
     `);
     await writeFile(join(dir, "effect.motion.tsx"), `
       export const composition = { width: 64, height: 64, duration: 3 };
-      export const controls=defineControls({assets:{effect:asset({kind:"shader"}),image:asset({kind:"image"})}});
+      export const controls={assets:{effect:asset({kind:"shader"}),image:asset({kind:"image"})}};
       export default function T(ctx) { return <Scene style={{width:64,height:64}}>
         <ShaderLayer source="asset://effect" inputs={{steps:"asset://image"}}
           uniforms={{basis:[1,0,0,1],offset:[ctx.seconds*0.1,0,0],amount:ctx.seconds*0.05,tint:"#ff000000",enabled:true}}
@@ -153,7 +153,7 @@ test("frozen shaders align Native/CanvasKit sampling and arbitrary-frame results
       await writeFile(join(dir, "effect.vsksl"), content ? `float4 valle_main(float2 uv) { ${content.source} }` : fieldSource);
       await writeFile(join(dir, "effect.motion.tsx"), content ? `
         export const composition = { width: 64, height: 64, duration: 3 };
-        export const controls=defineControls({assets:{effect:asset({kind:"shader"}),image:asset({kind:"image"})${scene3d?',model:asset({kind:"model3d"})':''}}});
+        export const controls={assets:{effect:asset({kind:"shader"}),image:asset({kind:"image"})${scene3d?',model:asset({kind:"model3d"})':''}}};
         export default function T(ctx) { return <Scene style={{width:64,height:64,backgroundColor:"#000"}}>${content.body}</Scene>; }
       ` : fieldMotion);
       if (data) {
@@ -162,7 +162,7 @@ test("frozen shaders align Native/CanvasKit sampling and arbitrary-frame results
           : "float4 valle_main(float2 uv) { float2 p = float2(uv.x * 2.0 - 0.5, 0.5); if (uv.y < 0.5) return float4(sample_steps(p).rgb, 1.0); return sample_color(p); }");
         await writeFile(join(dir, "effect.motion.tsx"), `
           export const composition = { width: 64, height: 64, duration: 3 };
-          export const controls=defineControls({assets:{effect:asset({kind:"shader"}),image:asset({kind:"image"})}});
+          export const controls={assets:{effect:asset({kind:"shader"}),image:asset({kind:"image"})}};
           export default function T(){ return <Scene style={{width:64,height:64,backgroundColor:"#000"}}>
             <ShaderLayer source="asset://effect" inputs={{steps:"asset://image",color:"asset://image"}} style={{width:64,height:64}}/>
           </Scene>; }
@@ -172,7 +172,7 @@ test("frozen shaders align Native/CanvasKit sampling and arbitrary-frame results
         await writeFile(join(dir, "effect.vsksl"), "float4 valle_main(float2 uv) { return sample_before(uv) + sample_steps(uv) + sample_after(uv) + float4(0.0,0.25,0.0,1.0); }");
         await writeFile(join(dir, "effect.motion.tsx"), `
           export const composition = { width: 64, height: 64, duration: 3 };
-          export const controls=defineControls({assets:{effect:asset({kind:"shader"}),image:asset({kind:"image"})}});
+          export const controls={assets:{effect:asset({kind:"shader"}),image:asset({kind:"image"})}};
           export default function T(){ return <Scene style={{width:64,height:64}}>
             <ShaderLayer source="asset://effect" ${sampling === "optional-middle" ? 'inputs={{steps:"asset://image"}}' : ''} style={{width:64,height:64}}/>
           </Scene>; }

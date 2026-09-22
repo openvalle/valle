@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 
 use valle_compiler::motion::compile_motion;
-use valle_motion::{EvalInputs, MotionValue, ResolvedSignals, motion_context_at, phase_windows};
+use valle_motion::{EvalInputs, MotionValue, motion_context_at_frame};
 use valle_timeline::FrameRate;
 
 fn messages(source: &str) -> Vec<String> {
@@ -19,14 +19,12 @@ fn progress(source: &str, fps: FrameRate, frame: u32, props: BTreeMap<String, Mo
     let compiled = compile_motion(source).expect("Sequence compiles");
     let artifact = &compiled.artifact;
     let props = valle_motion::resolve_props(&artifact.controls, &props).expect("props");
-    let windows = phase_windows(&artifact.controls.phase_spec(), 10_000);
-    let ctx = motion_context_at(frame, &windows, fps).expect("frame");
+    let ctx = motion_context_at_frame(frame, 10_000, fps).expect("frame");
     let values = valle_motion::eval_all(
         artifact,
         EvalInputs {
             ctx: &ctx,
             props: &props,
-            signals: &ResolvedSignals::default(),
             unit: None,
             viewport: Some((1920.0, 1080.0)),
         },
@@ -53,14 +51,13 @@ fn style_number(source: &str, frame: u32, property: &str) -> f64 {
     let artifact = &compiled.artifact;
     let props =
         valle_motion::resolve_props(&artifact.controls, &Default::default()).expect("props");
-    let windows = phase_windows(&artifact.controls.phase_spec(), 10_000);
-    let ctx = motion_context_at(frame, &windows, FrameRate::new(30, 1).unwrap()).expect("frame");
+    let ctx =
+        motion_context_at_frame(frame, 10_000, FrameRate::new(30, 1).unwrap()).expect("frame");
     let values = valle_motion::eval_all(
         artifact,
         EvalInputs {
             ctx: &ctx,
             props: &props,
-            signals: &ResolvedSignals::default(),
             unit: None,
             viewport: Some((1920.0, 1080.0)),
         },
@@ -155,7 +152,7 @@ fn seconds_stages_are_bit_identical_at_shared_sample_times() {
 #[test]
 fn frames_stages_and_dynamic_stagger_use_the_authored_unit() {
     let source = r##"
-export const controls = defineControls({ props: { index: number({ default: 2 }) } });
+export const controls = ({ props: { index: number({ default: 2 }) } });
 const intro = defineSequence({ cards: stage({ at: frames(4), duration: frames(10) }) });
 export default function P(ctx, props) {
   const t = staggerProgress(ctx.localFrame, ctx.fps, intro.cards, props.index, frames(3));
@@ -325,12 +322,12 @@ fn repeat_cycle_count_is_static_and_bounded() {
 fn freeze_frame_holds_one_local_clock_without_new_ir() {
     let sugar = r#"
 export default function P(ctx) {
-  return <View key="v" style={{ width: freezeFrame(ctx.hold.frame, { from: 3, to: 7 }) }} />;
+  return <View key="v" style={{ width: freezeFrame(ctx.localFrame, { from: 3, to: 7 }) }} />;
 }
 "#;
     let manual = r#"
 export default function P(ctx) {
-  const frame = ctx.hold.frame;
+  const frame = ctx.localFrame;
   return <View key="v" style={{ width: frame < 3 ? frame : frame < 7 ? 3 : frame - 4 }} />;
 }
 "#;
@@ -375,23 +372,23 @@ export default function P() { return <View key="v" style={{ width: SAMPLE }} />;
 fn freeze_frame_interval_is_static_integer_and_fail_closed() {
     for (source, needle) in [
         (
-            r#"export default function P(ctx){return <View style={{width:freezeFrame(ctx.hold.frame,{from:3})}}/>;}"#,
+            r#"export default function P(ctx){return <View style={{width:freezeFrame(ctx.localFrame,{from:3})}}/>;}"#,
             "requires both",
         ),
         (
-            r#"export default function P(ctx){return <View style={{width:freezeFrame(ctx.hold.frame,{from:3,to:7,easing:"linear"})}}/>;}"#,
+            r#"export default function P(ctx){return <View style={{width:freezeFrame(ctx.localFrame,{from:3,to:7,easing:"linear"})}}/>;}"#,
             "unknown freezeFrame option",
         ),
         (
-            r#"export default function P(ctx){return <View style={{width:freezeFrame(ctx.hold.frame,{from:3.5,to:7})}}/>;}"#,
+            r#"export default function P(ctx){return <View style={{width:freezeFrame(ctx.localFrame,{from:3.5,to:7})}}/>;}"#,
             "integer frames",
         ),
         (
-            r#"export default function P(ctx){return <View style={{width:freezeFrame(ctx.hold.frame,{from:7,to:3})}}/>;}"#,
+            r#"export default function P(ctx){return <View style={{width:freezeFrame(ctx.localFrame,{from:7,to:3})}}/>;}"#,
             "0 <= from < to",
         ),
         (
-            r#"export const controls=defineControls({props:{from:number({default:3})}});export default function P(ctx,props){return <View style={{width:freezeFrame(ctx.hold.frame,{from:props.from,to:7})}}/>;}"#,
+            r#"export const controls=({props:{from:number({default:3})}});export default function P(ctx,props){return <View style={{width:freezeFrame(ctx.localFrame,{from:props.from,to:7})}}/>;}"#,
             "known at compile time",
         ),
     ] {
@@ -411,7 +408,7 @@ const intro = defineSequence({
   title: stage({ at: seconds(0), duration: seconds(0.6) }),
 });
 export default function Card(ctx) {
-  const t = stageProgress(ctx.enter.frame, ctx.fps, intro.title);
+  const t = stageProgress(ctx.localFrame, ctx.fps, intro.title);
   return <View style={{ opacity: t }} />;
 }
 "##,

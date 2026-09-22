@@ -2,13 +2,11 @@ import { releaseTheme } from "./shared-theme";
 
 // The delivery contract: Studio opens this fixture as its own entry.
 export const composition = { width: 1920, height: 1080, fps: 30, duration: 6 };
-export const component = "code-build";
 
-export const controls = defineControls({
+export const controls = {
   props: { accentStrength: number({ default: 1, min: 0.25, max: 1 }) },
   assets: { dot: asset({ kind: "image" }) },
-  cues: { narration: spanCue() },
-});
+};
 
 const BUILD = defineSequence({
   author: stage({ duration: seconds(1.4) }),
@@ -19,7 +17,7 @@ const BUILD = defineSequence({
 
 const STEPS = ["PARSE TSX", "FREEZE IR", "LAYOUT", "DRAW", "ENCODE"];
 
-export default function CodeBuild(ctx, props, signals) {
+export default function CodeBuild(ctx, props) {
   const author = stageProgress(ctx.localFrame, ctx.fps, BUILD.author);
   const compile = stageProgress(ctx.localFrame, ctx.fps, BUILD.compile);
   const render = stageProgress(ctx.localFrame, ctx.fps, BUILD.render);
@@ -38,7 +36,7 @@ export default function CodeBuild(ctx, props, signals) {
           </View>
           <Text key="code" className="absolute whitespace-pre-wrap tabular-nums line-clamp-12 overflow-hidden text-white" style={{ left: 34, top: 88, width: 970, height: 430, fontSize: 26, lineHeight: "38px", tabSize: 2, textOverflow: "ellipsis" }}>
             {"export default function Film(ctx) {\n"}
-            <Span style={{ color: "#67e8f9" }}>{"  const p = ctx.hold.progress;\n"}</Span>
+            <Span style={{ color: "#67e8f9" }}>{"  const p = ctx.seconds / 6;\n"}</Span>
             {"  return (\n    <Scene className=\"h-full w-full\">\n"}
             <Span style={{ color: "#f9a8d4" }}>{"      <GeometryBatch progress={p} /> "}</Span>
             <Image key="status" src="asset://dot" style={{ width: 22, height: 22, verticalAlign: "middle", opacity: 0.35 + compile * 0.65 }} />
@@ -56,7 +54,7 @@ export default function CodeBuild(ctx, props, signals) {
             return <View key={`step-${index}`} className="absolute" style={{ borderStyle: "solid", left: 34, top: 94 + index * 104, width: 602, height: 78, borderRadius: 16, backgroundColor: useTheme().colors.panelRaised, borderWidth: 1, borderColor: useTheme().colors.accent, opacity: 0.2 + progress * 0.8, translate: point((1 - progress) * 36, 0) }}><Text key={`index-${index}`} className="absolute" style={{ left: 20, top: 24, fontSize: 17, color: useTheme().colors.muted }}>{padNumber(index + 1, { width: 2 })}</Text><Text key={`step-label-${index}`} className="absolute" style={{ left: 86, top: 22, fontSize: 23, letterSpacing: 2, color: useTheme().colors.ink }}>{step}</Text><View key={`step-live-${index}`} className="absolute" style={{ right: 22, top: 29, width: 18, height: 18, borderRadius: 10, backgroundColor: "#86efac", opacity: progress, filter: "drop-shadow(0px 0px 10px #86efac)" }} /></View>;
           })}
         </View>
-        <Text key="cue" className="absolute" style={{ right: 70, bottom: 46, fontSize: 15, letterSpacing: 2, color: useTheme().colors.signal, opacity: 0.5 + signals.narration.progress * 0.5 }}>CUE / AUTHOR → COMPILE → RENDER</Text>
+        <Text key="cue" className="absolute" style={{ right: 70, bottom: 46, fontSize: 15, letterSpacing: 2, color: useTheme().colors.signal, opacity: 0.5 + interpolate(ctx.seconds, [1, 4.5], [0, 1]) * 0.5 }}>AUTHOR → COMPILE → RENDER</Text>
       </Scene>
     </ThemeProvider>
   );

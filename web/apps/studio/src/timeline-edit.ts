@@ -8,7 +8,6 @@ type TimelineVisualClip = TimelineSchema.TimelineVisualClipWire;
 type TimelineAudioClip = TimelineSchema.TimelineAudioClipWire;
 type TimelineCaptionClip = TimelineSchema.TimelineCaptionClipWire;
 type TimelineAdjustmentClip = TimelineSchema.TimelineAdjustmentClipWire;
-type TimelineMotionCue = TimelineSchema.TimelineMotionCueBindingWire;
 
 export type TimelineTrackBand = "visual" | "audio" | "caption" | "adjustment";
 
@@ -199,58 +198,6 @@ export function moveTimelineVisualClipBefore(
   return next;
 }
 
-export function editTimelineMotionFrames(
-  timeline: Timeline,
-  timelinePath: string,
-  edit:
-    | { type: "motionPhaseFrames"; phase: "enter" | "exit"; frames: number }
-    | { type: "motionCueFrames"; cue: string; field: "start" | "end" | "enter" | "exit"; frames: number },
-  timeFromFrames: TimelineTimeFromFrames,
-): Timeline {
-  if (!Number.isSafeInteger(edit.frames) || edit.frames < 0) {
-    throw new Error("Motion frame value must be a non-negative safe integer");
-  }
-  const address = requireAddress(timelinePath);
-  if (address.band !== "visual") {
-    throw new Error(`Timeline clip '${timelinePath}' is not Motion`);
-  }
-  const seconds = timeFromFrames(edit.frames, timeline.canvas.fps);
-  return editTimelineClip(timeline, timelinePath, (target) => {
-    if (target.band !== "visual" || target.clip.kind !== "motion") {
-      throw new Error(`Timeline clip '${timelinePath}' is not Motion`);
-    }
-    const clip = target.clip;
-    if (edit.type === "motionPhaseFrames") {
-      clip.phases = edit.phase === "enter"
-        ? { ...clip.phases, enterDuration: seconds }
-        : { ...clip.phases, exitDuration: seconds };
-      return;
-    }
-    const cues = { ...clip.cues };
-    const cue: TimelineMotionCue | undefined = cues[edit.cue];
-    if (!cue) throw new Error(`Motion cue '${edit.cue}' does not exist`);
-    if ((edit.field === "start" || edit.field === "end") && cue.type !== "source-range") {
-      throw new Error(`Motion cue '${edit.cue}' has no source range`);
-    }
-    if (edit.field === "enter") {
-      cues[edit.cue] = { ...cue, enterDuration: seconds };
-    } else if (edit.field === "exit") {
-      cues[edit.cue] = { ...cue, exitDuration: seconds };
-    } else {
-      // The guard above establishes that source-range cues are the only cues
-      // that can reach this branch. Keep the mutation inside the narrowed
-      // branch so TypeScript cannot manufacture start/end on word cues.
-      if (cue.type !== "source-range") {
-        throw new Error(`Motion cue '${edit.cue}' has no source range`);
-      }
-      cues[edit.cue] = edit.field === "start"
-        ? { ...cue, start: seconds }
-        : { ...cue, end: seconds };
-    }
-    clip.cues = cues;
-  });
-}
-
 export function setTimelineMotionProp(
   timeline: Timeline,
   timelinePath: string,
@@ -270,6 +217,19 @@ export function setTimelineMotionProp(
   const motion: TimelineMotionClip = clip;
   motion.props = { ...motion.props, [name]: structuredClone(value) };
   return next;
+}
+
+export function setTimelineMotionData(
+  timeline: Timeline,
+  timelinePath: string,
+  value: Record<string, JsonValue>,
+): Timeline {
+  return editTimelineClip(timeline, timelinePath, (target) => {
+    if (target.band !== "visual" || target.clip.kind !== "motion") {
+      throw new Error(`Timeline clip '${timelinePath}' is not Motion`);
+    }
+    target.clip.data = structuredClone(value);
+  });
 }
 
 function requireClip(timeline: Timeline, timelinePath: string): TimelineClipTarget {

@@ -12,58 +12,32 @@ use valle_timeline::{Timeline, decode_timeline, timeline_bytes};
 fn bind_file_timeline(
     timeline: &Timeline,
     path: &Path,
-) -> Result<(Timeline, std::collections::BTreeMap<String, f64>)> {
+) -> Result<(
+    valle_timeline::internal::CanonicalTimeline,
+    std::collections::BTreeMap<String, f64>,
+)> {
     let mut document: Value = serde_json::from_slice(&timeline_bytes(timeline)?)?;
-    let missing: std::collections::BTreeSet<(usize, usize)> = document["tracks"]["visual"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .enumerate()
-        .flat_map(|(track_index, track)| {
-            track["clips"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .enumerate()
-                .map(move |(clip_index, clip)| (track_index, clip_index, clip))
-        })
-        .filter(|(_, _, clip)| clip["kind"] == "motion" && clip.get("sourceDuration").is_none())
-        .map(|(track_index, clip_index, _)| (track_index, clip_index))
-        .collect();
-    super::cmd::timeline::fill_motion_source_durations(
-        &mut document,
+    super::cmd::timeline::prepare_motion_instances(&mut document)?;
+    let (_, durations) = super::cmd::timeline::prepare_motion_sources(
+        &document,
         path.parent()
             .ok_or_else(|| anyhow!("Timeline file has no parent directory"))?,
     )?;
-    let mut defaults = std::collections::BTreeMap::new();
-    for (track_index, track) in document["tracks"]["visual"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .enumerate()
-    {
-        for (clip_index, clip) in track["clips"].as_array().into_iter().flatten().enumerate() {
-            if clip["kind"] == "motion" {
-                if let (Some(component), Some(duration)) =
-                    (clip["component"].as_str(), clip["sourceDuration"].as_f64())
-                {
-                    if missing.contains(&(track_index, clip_index)) {
-                        defaults.insert(component.to_owned(), duration);
-                    }
-                }
-            }
-        }
-    }
-    let bound = decode_timeline(&serde_json::to_string(&document)?)?;
-    Ok((bound, defaults))
+    let canonical =
+        valle_compiler::compile_timeline_with_motion_sources(timeline.clone(), &durations)?;
+    let canonical_value: Value =
+        serde_json::from_slice(&valle_timeline::internal::canonical_bytes(&canonical)?)?;
+    let author_value: Value = serde_json::from_slice(&timeline_bytes(timeline)?)?;
+    let source_durations =
+        super::cmd::timeline::motion_source_durations(&canonical_value, &author_value)?;
+    Ok((canonical, source_durations))
 }
 
 fn compile_file_timeline(
     timeline: &Timeline,
     path: &Path,
 ) -> Result<valle_timeline::internal::CanonicalTimeline> {
-    let (bound, _) = bind_file_timeline(timeline, path)?;
-    Ok(valle_compiler::compile_timeline(bound)?)
+    Ok(bind_file_timeline(timeline, path)?.0)
 }
 
 pub(crate) struct TimelineFile {
@@ -128,8 +102,7 @@ impl TimelineFile {
     pub fn snapshot(&self) -> Result<Value> {
         let (revision, timeline) = self.read()?;
         let timeline_json = String::from_utf8(timeline_bytes(&timeline)?)?;
-        let (bound, motion_source_durations) = bind_file_timeline(&timeline, &self.input)?;
-        let canonical = valle_compiler::compile_timeline(bound)?;
+        let (canonical, motion_source_durations) = bind_file_timeline(&timeline, &self.input)?;
         let render_json =
             String::from_utf8(valle_timeline::internal::canonical_bytes(&canonical)?)?;
         Ok(json!({

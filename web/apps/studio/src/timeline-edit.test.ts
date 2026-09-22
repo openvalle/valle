@@ -6,6 +6,7 @@ import {
   editTimelineClip,
   moveTimelineVisualClipBefore,
   setTimelineClipDurationFrames,
+  setTimelineMotionData,
   timelineClipAddress,
   trimTimelineClipFrames,
 } from "./timeline-edit.ts";
@@ -24,6 +25,20 @@ function timeline(): Timeline {
     },
   } as unknown as Timeline;
 }
+
+test("Motion data edit copies the prepared object into one author clip", () => {
+  const original = timeline();
+  original.tracks.visual![0]!.clips[1] = {
+    kind: "motion", component: "chart", start: 1.5, duration: 2,
+    data: { rows: [{ id: "old", value: 3 }] },
+  } as never;
+  const rows = [{ id: "new", value: 8 }];
+  const updated = setTimelineMotionData(original, "/tracks/visual/0/clips/1", { rows });
+  rows[0]!.value = 99;
+  expect(updated.tracks.visual![0]!.clips[1]).toMatchObject({ data: { rows: [{ id: "new", value: 8 }] } });
+  expect(original.tracks.visual![0]!.clips[1]).toMatchObject({ data: { rows: [{ id: "old", value: 3 }] } });
+  expect(() => setTimelineMotionData(original, "/tracks/visual/0/clips/0", { rows })).toThrow("not Motion");
+});
 
 test("compiler source pointers address Timeline clips without parsing internal ids", () => {
   expect(timelineClipAddress("/tracks/caption/3/clips/7")).toEqual({

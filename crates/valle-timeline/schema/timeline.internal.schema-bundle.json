@@ -1562,55 +1562,6 @@
           ],
           "type": "string"
         },
-        "MotionCueBindingWire": {
-          "oneOf": [
-            {
-              "additionalProperties": false,
-              "properties": {
-                "end": {
-                  "$ref": "#/$defs/ExactRational"
-                },
-                "enterDuration": {
-                  "$ref": "#/$defs/ExactRational"
-                },
-                "exitDuration": {
-                  "$ref": "#/$defs/ExactRational"
-                },
-                "start": {
-                  "$ref": "#/$defs/ExactRational"
-                },
-                "type": {
-                  "const": "source-range",
-                  "type": "string"
-                }
-              },
-              "required": [
-                "type",
-                "start",
-                "end",
-                "enterDuration",
-                "exitDuration"
-              ],
-              "type": "object"
-            }
-          ]
-        },
-        "MotionPhaseOverridesWire": {
-          "additionalProperties": false,
-          "properties": {
-            "enterDuration": {
-              "$ref": "#/$defs/RequiredNullable_for_ExactRational"
-            },
-            "exitDuration": {
-              "$ref": "#/$defs/RequiredNullable_for_ExactRational"
-            }
-          },
-          "required": [
-            "enterDuration",
-            "exitDuration"
-          ],
-          "type": "object"
-        },
         "NamedEasingWire": {
           "enum": [
             "linear",
@@ -1903,16 +1854,6 @@
           "anyOf": [
             {
               "$ref": "#/$defs/EasingWire"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "RequiredNullable_for_ExactRational": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ExactRational"
             },
             {
               "type": "null"
@@ -2373,10 +2314,8 @@
                 "component": {
                   "type": "string"
                 },
-                "cues": {
-                  "additionalProperties": {
-                    "$ref": "#/$defs/MotionCueBindingWire"
-                  },
+                "data": {
+                  "additionalProperties": true,
                   "type": "object"
                 },
                 "endBehavior": {
@@ -2384,9 +2323,6 @@
                 },
                 "fit": {
                   "$ref": "#/$defs/RasterFitWire"
-                },
-                "phases": {
-                  "$ref": "#/$defs/MotionPhaseOverridesWire"
                 },
                 "props": {
                   "additionalProperties": {
@@ -2423,9 +2359,7 @@
                 "rate",
                 "endBehavior",
                 "props",
-                "cues",
-                "resources",
-                "phases"
+                "resources"
               ],
               "type": "object"
             },

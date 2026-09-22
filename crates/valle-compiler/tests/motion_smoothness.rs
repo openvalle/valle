@@ -3,19 +3,17 @@
 
 use std::collections::BTreeMap;
 use valle_compiler::motion::compile_motion;
-use valle_motion::{EvalInputs, Expr, MotionValue, ResolvedSignals, SceneArtifact, StyleValue};
+use valle_motion::{EvalInputs, Expr, MotionValue, SceneArtifact, StyleValue};
 use valle_timeline::FrameRate;
 
 fn values(artifact: &SceneArtifact, frame: u32, fps: FrameRate) -> Vec<MotionValue> {
     let props = valle_motion::resolve_props(&artifact.controls, &BTreeMap::new()).unwrap();
-    let windows = valle_motion::phase_windows(&artifact.controls.phase_spec(), 600);
-    let ctx = valle_motion::motion_context_at(frame, &windows, fps).unwrap();
+    let ctx = valle_motion::motion_context_at_frame(frame, 600, fps).unwrap();
     valle_motion::eval_all(
         artifact,
         EvalInputs {
             ctx: &ctx,
             props: &props,
-            signals: &ResolvedSignals::default(),
             unit: None,
             viewport: Some((960.0, 640.0)),
         },

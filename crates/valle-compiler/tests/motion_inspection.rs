@@ -2,10 +2,10 @@
 use std::collections::BTreeMap;
 use valle_compiler::motion::compile_motion;
 use valle_motion::inspect::{PropertySampleRequest, sample_properties};
-use valle_motion::{EvalInputs, MotionValue, ResolvedSignals, StyleValue};
+use valle_motion::{EvalInputs, MotionValue, StyleValue};
 
 const SOURCE: &str = r##"
-export const controls=defineControls({props:{distance:number({default:100,min:0,max:1000})}});
+export const controls=({props:{distance:number({default:100,min:0,max:1000})}});
 export default function Scene(ctx, props) {
  return <Scene className="w-full h-full">
   <View key="track" style={{width:40,height:40,translate:point(props.distance*interpolate(ctx.seconds,[0,.25,.5],[0,1,1.1]),0),scale:point(1,1),rotate:interpolate(ctx.seconds,[0,1],["0deg","90deg"]),opacity:ctx.seconds<.5 ? .2 : 1}}/>
@@ -16,7 +16,7 @@ export default function Scene(ctx, props) {
 "##;
 fn request() -> PropertySampleRequest {
     serde_json::from_value(serde_json::json!({"node":"track","startFrame":0,"endFrame":59,"maxPoints":240,"durationFrames":60,
-        "fps":"60/1","phases":{},"props":{},"cues":{},"viewport":[400,300]})).unwrap()
+        "fps":"60/1","props":{},"viewport":[400,300]})).unwrap()
 }
 
 #[test]
@@ -34,20 +34,20 @@ fn property_points_match_render_evaluator_and_suppress_boundary_velocity() {
         request.fps = serde_json::from_value(serde_json::json!(fps)).unwrap();
         let samples = sample_properties(&artifact, &request).unwrap();
         let props = valle_motion::resolve_props(&artifact.controls, &BTreeMap::new()).unwrap();
-        let phases = valle_motion::phase_windows(&request.phases, request.duration_frames);
         let node = artifact
             .nodes
             .iter()
             .find(|n| n.key == request.node)
             .unwrap();
         for frame in [0, 1, 29, 15, 59, 1] {
-            let ctx = valle_motion::motion_context_at(frame, &phases, request.fps).unwrap();
+            let ctx =
+                valle_motion::motion_context_at_frame(frame, request.duration_frames, request.fps)
+                    .unwrap();
             let values = valle_motion::eval_all(
                 &artifact,
                 EvalInputs {
                     ctx: &ctx,
                     props: &props,
-                    signals: &ResolvedSignals::default(),
                     unit: None,
                     viewport: Some((400.0, 300.0)),
                 },

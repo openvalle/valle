@@ -104,7 +104,6 @@ fn motion_prop_json_numbers_are_recursively_quantized_to_q6() {
                     "duration": 1,
                     "kind": "motion",
                     "component": "motion-main",
-                    "sourceDuration": 1.266666666666,
                     "props": {
                         "amount": 0.133333333333,
                         "nested": {
@@ -123,16 +122,7 @@ fn motion_prop_json_numbers_are_recursively_quantized_to_q6() {
                                 }
                             ]]
                         }
-                    },
-                    "cues": {
-                        "main": {
-                            "type": "source-range",
-                            "start": 0.133333333333,
-                            "end": 0.266666666666,
-                            "enterDuration": 5e-7
-                        }
-                    },
-                    "phases": { "exitDuration": 0.266666666666 }
+                    }
                 }]
             }]
         }
@@ -154,9 +144,6 @@ fn motion_prop_json_numbers_are_recursively_quantized_to_q6() {
     let encoded: serde_json::Value =
         serde_json::from_slice(&timeline_bytes(&timeline).unwrap()).unwrap();
     let source = &encoded["tracks"]["visual"][0]["clips"][0];
-    assert_eq!(source["sourceDuration"], json!(1.266667));
-    assert_eq!(source["cues"]["main"]["enterDuration"], json!(0.000001));
-    assert_eq!(source["phases"]["exitDuration"], json!(0.266667));
     assert_eq!(source["props"]["curve"]["keyframes"][0][1], json!(0.266667));
     assert_eq!(
         source["props"]["curve"]["keyframes"][0][2]["x1"],
@@ -166,7 +153,7 @@ fn motion_prop_json_numbers_are_recursively_quantized_to_q6() {
 }
 
 #[test]
-fn motion_runtime_data_is_not_part_of_timeline() {
+fn motion_preparation_data_is_public_and_closed() {
     let value = json!({
         "canvas": { "width": 1280, "height": 720, "fps": 30 },
         "resources": { "motion-main": "https://cdn.example.com/main.js" },
@@ -177,13 +164,22 @@ fn motion_runtime_data_is_not_part_of_timeline() {
                     "duration": 1,
                     "kind": "motion",
                     "component": "motion-main",
-                    "data": { "title": "already baked into the artifact" }
+                    "data": { "title": "Prepared before compilation" }
                 }]
             }]
         }
     });
+    let decoded = decode_timeline(&serde_json::to_string(&value).unwrap()).unwrap();
+    let serialized: serde_json::Value =
+        serde_json::from_slice(&timeline_bytes(&decoded).unwrap()).unwrap();
+    assert_eq!(
+        serialized["tracks"]["visual"][0]["clips"][0]["data"]["title"],
+        "Prepared before compilation"
+    );
+    let mut invalid = value;
+    invalid["tracks"]["visual"][0]["clips"][0]["sourceDuration"] = json!(2);
     assert!(matches!(
-        decode_timeline(&serde_json::to_string(&value).unwrap()),
+        decode_timeline(&serde_json::to_string(&invalid).unwrap()),
         Err(TimelineDecodeError::InvalidShape { .. })
     ));
 }

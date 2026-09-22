@@ -86,9 +86,6 @@ fn continuity_of(expr: &Expr, prior: &[TemporalContinuity]) -> TemporalContinuit
         Expr::Const { .. } => TemporalContinuity::C2,
         Expr::Context { input } => context_continuity(*input),
         Expr::Prop { .. } => TemporalContinuity::C2,
-        Expr::Cue { .. } => TemporalContinuity::Piecewise {
-            boundaries: Vec::new(),
-        },
         Expr::Spring {
             elapsed_frames,
             initial_velocity,
@@ -139,18 +136,7 @@ fn context_continuity(input: ContextInput) -> TemporalContinuity {
         | ContextInput::FpsDen
         | ContextInput::ViewportWidth
         | ContextInput::ViewportHeight => TemporalContinuity::C2,
-        ContextInput::PhaseProgress { .. } | ContextInput::HoldCycleProgress => {
-            TemporalContinuity::Piecewise {
-                boundaries: Vec::new(),
-            }
-        }
         ContextInput::LocalFrame
-        | ContextInput::PhaseFrame { .. }
-        | ContextInput::PhaseDurationFrames { .. }
-        | ContextInput::PhaseElapsedFrames { .. }
-        | ContextInput::PhaseActive { .. }
-        | ContextInput::HoldIteration
-        | ContextInput::HoldCycleFrame
         | ContextInput::UnitIndex
         | ContextInput::UnitCount
         | ContextInput::UnitStart

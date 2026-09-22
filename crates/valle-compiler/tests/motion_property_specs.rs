@@ -4,9 +4,8 @@ use std::collections::BTreeMap;
 use valle_compiler::motion::compile_motion;
 use valle_motion::diag::DiagClass;
 use valle_motion::{
-    Fonts, LayoutOptions, MotionValue, ResolvedSignals, StyleBinding, StyleCache, StyleValue,
-    Viewport, build_tree, default_font_naming, emit, motion_context_at, phase_windows,
-    prepare_scene, resolve_props,
+    Fonts, LayoutOptions, MotionValue, StyleBinding, StyleCache, StyleValue, Viewport, build_tree,
+    default_font_naming, emit, motion_context_at_frame, prepare_scene, resolve_props,
 };
 use valle_timeline::FrameRate;
 
@@ -30,17 +29,15 @@ fn snapshots(source: &str, frames: &[u32]) -> Vec<(BTreeMap<String, [f32; 4]>, V
     valle_motion::register_default_motion_fonts(&mut fonts).unwrap();
     let cache = StyleCache::new();
     let props = resolve_props(&artifact.controls, &BTreeMap::new()).unwrap();
-    let windows = phase_windows(&artifact.controls.phase_spec(), 90);
     frames
         .iter()
         .map(|&frame| {
-            let ctx = motion_context_at(frame, &windows, FrameRate::new(30, 1).unwrap()).unwrap();
+            let ctx = motion_context_at_frame(frame, 90, FrameRate::new(30, 1).unwrap()).unwrap();
             let render = |styles| {
                 let tree = build_tree(
                     &prepared,
                     &ctx,
                     &props,
-                    &ResolvedSignals::default(),
                     &LayoutOptions {
                         viewport: Viewport::new((320, 180)),
                         fonts: &fonts,
@@ -192,14 +189,12 @@ fn post_layout_css_checks_the_real_frame_after_a_valid_probe() {
     let prepared = prepare_scene(&artifact).unwrap();
     let fonts = Fonts::default();
     let props = resolve_props(&artifact.controls, &BTreeMap::new()).unwrap();
-    let windows = phase_windows(&artifact.controls.phase_spec(), 90);
     for frame in [0, 60, 20, 0] {
-        let ctx = motion_context_at(frame, &windows, FrameRate::new(30, 1).unwrap()).unwrap();
+        let ctx = motion_context_at_frame(frame, 90, FrameRate::new(30, 1).unwrap()).unwrap();
         let tree = build_tree(
             &prepared,
             &ctx,
             &props,
-            &ResolvedSignals::default(),
             &LayoutOptions {
                 viewport: Viewport::new((320, 180)),
                 fonts: &fonts,

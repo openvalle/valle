@@ -9,8 +9,7 @@ use crate::expr::ExprId;
 use crate::glass::ids::GlassSurfaceId;
 use crate::glass::intent::GlassNode;
 use crate::glass::validate::{glass_track_expr_roots, reachable_exprs, validate_glass_schema};
-use crate::signals::ResolvedSignals;
-use crate::{PhaseLayout, motion_context_at_sample};
+use crate::motion_context_at_sample;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct GlassLocalShape {
@@ -65,7 +64,7 @@ pub fn sample_tracks(
     artifact: &SceneArtifact,
     instance: &MotionInstanceId,
     times: &[SampleTime],
-    layout: &PhaseLayout,
+    duration_frames: u32,
     fps: FrameRate,
     epoch: &TrackEpoch,
 ) -> Result<Vec<GlassSurfaceTrackSample>, GlassTrackError> {
@@ -79,14 +78,12 @@ pub fn sample_tracks(
     })?;
     let mut samples = Vec::new();
     let props = ResolvedProps::default();
-    let signals = ResolvedSignals::default();
     for time in times {
-        let ctx = motion_context_at_sample(*time, layout, fps)
+        let ctx = motion_context_at_sample(*time, duration_frames, fps)
             .ok_or(GlassTrackError::Time(TimeError::Overflow))?;
         let inputs = EvalInputs {
             ctx: &ctx,
             props: &props,
-            signals: &signals,
             unit: None,
             viewport: None,
         };
@@ -264,7 +261,7 @@ mod tests {
         ARTIFACT_FORMAT_VERSION, CapabilitySet, ChildRange, NumberValue, SceneArtifact, SceneNode,
         StyleBinding, StyleValue,
     };
-    use crate::controls::{ControlsSchema, FrameControl, OptionalFrameControl, TimingControls};
+    use crate::controls::ControlsSchema;
     use crate::eval::{EvalInputs, eval_all};
     use crate::expr::{ContextInput, Expr, ExprId};
     use crate::glass::ids::GlassSurfaceId;
@@ -274,33 +271,13 @@ mod tests {
     };
     use crate::glass::validate_glass_schema;
     use crate::value::MotionValue;
-    use crate::{NodeId, NodeKind, motion_context_at, phase_windows};
+    use crate::{NodeId, NodeKind, motion_context_at_frame};
 
     fn controls() -> ControlsSchema {
         ControlsSchema {
             props: BTreeMap::new(),
             data: BTreeMap::new(),
-            timing_seconds: None,
-            timing: TimingControls {
-                enter_frames: FrameControl {
-                    default: 0,
-                    min: 0,
-                    max: None,
-                },
-                hold_cycle_frames: OptionalFrameControl {
-                    default: None,
-                    min: 1,
-                    max: None,
-                },
-                exit_frames: FrameControl {
-                    default: 0,
-                    min: 0,
-                    max: None,
-                },
-            },
-            cues: BTreeMap::new(),
             assets: BTreeMap::new(),
-            camera: Default::default(),
         }
     }
 
@@ -391,7 +368,6 @@ mod tests {
         let artifact = fixture(false);
         validate_glass_schema(&artifact).unwrap();
         let fps = FrameRate::new(30, 1).unwrap();
-        let layout = phase_windows(&artifact.controls.phase_spec(), 30);
         let time = crate::sample_time_at_frame(10, fps).unwrap();
         let instance = MotionInstanceId::new("clip-a").unwrap();
         let epoch = TrackEpoch::new(
@@ -401,16 +377,14 @@ mod tests {
             0,
             DiscontinuityIndex::NONE,
         );
-        let samples = sample_tracks(&artifact, &instance, &[time], &layout, fps, &epoch).unwrap();
+        let samples = sample_tracks(&artifact, &instance, &[time], 30, fps, &epoch).unwrap();
         assert_eq!(samples.len(), 1);
         assert_eq!(samples[0].local.rect.width, 80.0);
-        let ctx = motion_context_at(10, &layout, fps).unwrap();
+        let ctx = motion_context_at_frame(10, 30, fps).unwrap();
         let props = ResolvedProps::default();
-        let signals = ResolvedSignals::default();
         let inputs = EvalInputs {
             ctx: &ctx,
             props: &props,
-            signals: &signals,
             unit: None,
             viewport: None,
         };

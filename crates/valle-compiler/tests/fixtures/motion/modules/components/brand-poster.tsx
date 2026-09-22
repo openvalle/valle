@@ -2,11 +2,10 @@ import { releaseTheme } from "./shared-theme";
 
 // The delivery contract: Studio opens this fixture as its own entry.
 export const composition = { width: 1920, height: 1080, fps: 30, duration: 6 };
-export const component = "brand-poster";
 
-export const controls = defineControls({
+export const controls = {
   props: { accentStrength: number({ default: 1, min: 0.25, max: 1 }) },
-});
+};
 
 const COUNT = 10000;
 const GRID = Array.from({ length: COUNT }, (_, index) => {
@@ -21,7 +20,7 @@ const SIGNAL = Array.from({ length: COUNT }, (_, index) => {
 });
 
 export default function BrandPoster(ctx, props) {
-  const progress = ctx.hold.progress;
+  const progress = ctx.progress;
   const viewportScale = Math.min(ctx.viewport.width / 1920, ctx.viewport.height / 1080);
   const metric = 72 + progress * 27.9;
   return (

@@ -903,53 +903,11 @@ impl<'s> Compiler<'s> {
                 }
                 Some(self.push(Expr::Context { input }, expression.span()))
             }
-            [root, name, field] if root == "signals" => {
-                if self.controls.cues.contains_key(name) {
-                    let field = match field.as_str() {
-                        "active" => CueField::Active,
-                        "progress" => CueField::Progress,
-                        "enter" => CueField::Enter,
-                        "hold" => CueField::Hold,
-                        "exit" => CueField::Exit,
-                        "localFrame" => CueField::LocalFrame,
-                        _ => {
-                            self.illegal(
-                                DiagCode::UnknownProp,
-                                expression.span(),
-                                format!("`signals.{name}.{field}` is not a CueState scalar"),
-                            );
-                            return None;
-                        }
-                    };
-                    Some(self.push(
-                        Expr::Cue {
-                            name: name.clone(),
-                            field,
-                        },
-                        expression.span(),
-                    ))
-                } else {
-                    self.illegal(
-                        DiagCode::UnknownProp,
-                        expression.span(),
-                        format!("`signals.{name}` is not a declared cue"),
-                    );
-                    None
-                }
-            }
-            [root, ..] if root == "signals" => {
-                self.illegal(
-                    DiagCode::UnknownProp,
-                    expression.span(),
-                    "signals must use `signals.<cue>.<active|progress|enter|hold|exit|localFrame>`",
-                );
-                None
-            }
             _ => {
                 self.illegal(
                     DiagCode::UnknownIdentifier,
                     expression.span(),
-                    "runtime member access must start with ctx, props, or signals",
+                    "runtime member access must start with ctx or props",
                 );
                 None
             }

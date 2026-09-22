@@ -6,7 +6,7 @@ use valle_motion::{
 };
 
 const SOURCE: &str = r##"
-export const controls=defineControls({assets:{model:asset({kind:"model3d"}),sky:asset({kind:"environment"})}});
+export const controls=({assets:{model:asset({kind:"model3d"}),sky:asset({kind:"environment"})}});
 export default function Pbr(ctx) {
  return <Scene><Scene3D key="scene" camera={{position:[0,0,4],target:[0,0,0]}}
  pbr={{environment:{src:"asset://sky",intensity:1,rotation:ctx.seconds*30,background:false},toneMapping:"aces",exposure:1.1}} style={{width:64,height:64}}>

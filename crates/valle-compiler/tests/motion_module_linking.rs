@@ -21,10 +21,10 @@ export const composition = { width: 1920, height: 1080, fps: 30, duration: 5 };
 import { Card as Panel } from "./components/card.motion";
 import { accent } from "./theme.motion";
 
-export const component = "ModuleDashboard";
-export const controls = defineControls({});
 
-export default function ModuleDashboard(ctx, props, signals) {
+export const controls = ({});
+
+export default function ModuleDashboard(ctx, props) {
   return <Scene key="root">
     <Panel key="panel" label="Linked" color={accent} />
   </Scene>;
@@ -32,7 +32,7 @@ export default function ModuleDashboard(ctx, props, signals) {
 "#;
 
 const CARD: &str = r#"
-export function Card(ctx, props, signals) {
+export function Card(ctx, props) {
   return <View key="card" style={{ backgroundColor: props.color }}>
     <Text key="label">{props.label}</Text>
   </View>;
@@ -274,7 +274,7 @@ fn same_top_level_names_in_separate_modules_are_isolated_by_symbol_identity() {
 export const composition = { width: 1920, height: 1080, fps: 30, duration: 5 };
 import { Left } from "./left";
 import { Right } from "./right";
-export const component = "Twins";
+
 export default function Twins(ctx) {
   return <Scene key="root"><Left key="left" /><Right key="right" /></Scene>;
 }
@@ -476,7 +476,7 @@ fn missing_exports_report_the_complete_import_chain_at_the_import_site() {
     let entry = r#"
 export const composition = { width: 1920, height: 1080, fps: 30, duration: 5 };
 import { Mid } from "./mid";
-export const component = "Broken";
+
 export default function Broken(ctx) { return <Mid />; }
 "#;
     let mid = r#"
@@ -552,7 +552,7 @@ fn reexports_resolve_without_emitting_runtime_module_objects() {
     let entry = r##"
 export const composition = { width: 1920, height: 1080, fps: 30, duration: 5 };
 import { Card } from "./public";
-export const component = "Reexport";
+
 export default function Reexport(ctx) { return <Scene key="root"><Card key="card" label="ok" color="#fff" /></Scene>; }
 "##;
     let public = "export { Card } from './components/card.motion';";
@@ -581,7 +581,6 @@ export const composition = { width: 1920, height: 1080, fps: 30, duration: 5 };
 import { TypedCard } from "./card";
 import type { Theme } from "./types";
 import { accent } from "./theme";
-export const component: string = "Typed";
 export default function Typed(ctx: unknown) {
   return <Scene key="root"><TypedCard key="card" color={accent} /></Scene>;
 }

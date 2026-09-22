@@ -1,7 +1,6 @@
 export const composition = { width: 1920, height: 1080, fps: 30, duration: 5 };
-export const component = "ui-publish-flow";
 
-export const controls = defineControls({
+export const controls = {
   assets: { brandFont: asset({ kind: "font", required: true }) },
   props: {
     background: color({ default: "#07111f" }),
@@ -10,7 +9,7 @@ export const controls = defineControls({
     success: color({ default: "#10b981" }),
     text: color({ default: "#f8fafc" }),
   },
-});
+};
 
 const FLOW = defineSequence({
   idle: stage({ duration: seconds(0.45) }),

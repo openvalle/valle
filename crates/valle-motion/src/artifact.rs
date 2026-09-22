@@ -23,7 +23,6 @@ pub const BASE_CAPABILITIES: &[&str] = &[
     "backdrop-filter",
     "blend",
     "box",
-    "cue-signals",
     "dynamic-path",
     "filter",
     "geometry-path",

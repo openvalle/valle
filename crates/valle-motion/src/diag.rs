@@ -20,14 +20,6 @@ pub enum DiagClass {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "kebab-case")]
 pub enum DiagCode {
-    /// Cycle in the signal dependency graph.
-    SignalCycle,
-    /// Signal references a missing provider clip.
-    SignalProviderMissing,
-    /// Signal references its own clip, whose location depends on its unfinished layout.
-    SignalSelfReference,
-    /// Duplicate clip ID in a plan.
-    DuplicateClip,
     /// Invalid artifact structure.
     ArtifactInvalid,
 
@@ -72,11 +64,7 @@ pub enum DiagCode {
 impl DiagCode {
     pub fn class(self) -> DiagClass {
         match self {
-            DiagCode::SignalCycle
-            | DiagCode::SignalProviderMissing
-            | DiagCode::SignalSelfReference
-            | DiagCode::DuplicateClip
-            | DiagCode::ArtifactInvalid
+            DiagCode::ArtifactInvalid
             | DiagCode::SyntaxError
             | DiagCode::ModuleShape
             | DiagCode::GrammarForbidden
@@ -100,10 +88,6 @@ impl DiagCode {
     /// Stable kebab-case code name matching serialization.
     pub fn as_str(self) -> &'static str {
         match self {
-            DiagCode::SignalCycle => "signal-cycle",
-            DiagCode::SignalProviderMissing => "signal-provider-missing",
-            DiagCode::SignalSelfReference => "signal-self-reference",
-            DiagCode::DuplicateClip => "duplicate-clip",
             DiagCode::ArtifactInvalid => "artifact-invalid",
             DiagCode::SyntaxError => "syntax-error",
             DiagCode::ModuleShape => "module-shape",
@@ -136,9 +120,6 @@ pub struct MotionDiagnostic {
     pub path: String,
     pub message: String,
 }
-
-/// Plan errors share the Motion diagnostic representation.
-pub type PlanError = MotionDiagnostic;
 
 impl MotionDiagnostic {
     pub fn new(code: DiagCode, path: impl Into<String>, message: impl Into<String>) -> Self {
@@ -178,10 +159,6 @@ mod tests {
     fn class_is_a_property_of_the_code() {
         // Every code must have an explicit classification.
         for c in [
-            DiagCode::SignalCycle,
-            DiagCode::SignalProviderMissing,
-            DiagCode::SignalSelfReference,
-            DiagCode::DuplicateClip,
             DiagCode::ArtifactInvalid,
             DiagCode::SyntaxError,
             DiagCode::ModuleShape,
@@ -212,8 +189,6 @@ mod tests {
     #[test]
     fn code_string_and_serde_agree() {
         for c in [
-            DiagCode::SignalCycle,
-            DiagCode::SignalProviderMissing,
             DiagCode::StyleUnknownProperty,
             DiagCode::StyleUnsupportedProperty,
             DiagCode::StyleUnsupportedValue,
@@ -229,16 +204,10 @@ mod tests {
 
     #[test]
     fn display_reads_like_a_compiler_message() {
-        let d = MotionDiagnostic::new(
-            DiagCode::SignalProviderMissing,
-            "clip:intro/signal:targetRect",
-            "no clip named `chart`",
-        );
+        let d = MotionDiagnostic::new(DiagCode::ArtifactInvalid, "node:root", "invalid geometry");
         assert_eq!(
             d.to_string(),
-            "[signal-provider-missing] clip:intro/signal:targetRect: no clip named `chart`"
+            "[artifact-invalid] node:root: invalid geometry"
         );
-        let d = MotionDiagnostic::new(DiagCode::SignalCycle, "", "2 clips in a cycle");
-        assert_eq!(d.to_string(), "[signal-cycle] 2 clips in a cycle");
     }
 }

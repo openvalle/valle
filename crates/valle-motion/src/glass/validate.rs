@@ -798,7 +798,7 @@ mod tests {
         ARTIFACT_FORMAT_VERSION, CapabilitySet, ChildRange, NumberValue, SceneArtifact, SceneNode,
         StyleBinding, StyleValue,
     };
-    use crate::controls::{ControlsSchema, FrameControl, OptionalFrameControl, TimingControls};
+    use crate::controls::ControlsSchema;
     use crate::glass::ids::{GlassFieldId, GlassSurfaceId};
     use crate::glass::intent::{
         GlassEnvironmentBinding, GlassFieldMotionBinding, GlassFieldNode, GlassForegroundIntent,
@@ -812,27 +812,7 @@ mod tests {
         ControlsSchema {
             props: Default::default(),
             data: Default::default(),
-            timing_seconds: None,
-            timing: TimingControls {
-                enter_frames: FrameControl {
-                    default: 0,
-                    min: 0,
-                    max: None,
-                },
-                hold_cycle_frames: OptionalFrameControl {
-                    default: None,
-                    min: 1,
-                    max: None,
-                },
-                exit_frames: FrameControl {
-                    default: 0,
-                    min: 0,
-                    max: None,
-                },
-            },
-            cues: Default::default(),
             assets: Default::default(),
-            camera: Default::default(),
         }
     }
 

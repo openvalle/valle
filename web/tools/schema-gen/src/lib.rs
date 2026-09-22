@@ -71,53 +71,6 @@ pub struct StudioBootWire {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[ts(rename_all = "camelCase")]
-pub struct MotionTimingWire {
-    pub enter_frames: u32,
-    pub exit_frames: u32,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub enter_duration: Option<f64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub exit_duration: Option<f64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
-#[serde(
-    tag = "type",
-    rename_all = "camelCase",
-    rename_all_fields = "camelCase",
-    deny_unknown_fields
-)]
-#[ts(
-    tag = "type",
-    rename_all = "camelCase",
-    rename_all_fields = "camelCase"
-)]
-pub enum MotionCueWindowWire {
-    SourceRange {
-        start_frame: u32,
-        end_frame: u32,
-        enter_frames: u32,
-        exit_frames: u32,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
-        start: Option<f64>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
-        end: Option<f64>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
-        enter_duration: Option<f64>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
-        exit_duration: Option<f64>,
-    },
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-#[ts(rename_all = "camelCase")]
 pub struct MotionViewportWire {
     pub width: u32,
     pub height: u32,
@@ -230,10 +183,6 @@ pub enum MotionContextWire {
         #[serde(rename = "dataSource")]
         #[ts(rename = "dataSource")]
         data_source: Option<String>,
-        timing: MotionTimingWire,
-        #[serde(rename = "cueBindings")]
-        #[ts(rename = "cueBindings")]
-        cue_bindings: BTreeMap<String, MotionCueWindowWire>,
         #[serde(rename = "sourceMap")]
         #[ts(rename = "sourceMap")]
         source_map: MotionSourceMapWire,
@@ -346,8 +295,6 @@ pub fn render_types(include_drift_probe: bool) -> String {
         declaration::<StudioCapabilitiesWire>(),
         declaration::<StudioRuntimeWire>(),
         declaration::<StudioBootWire>(),
-        declaration::<MotionTimingWire>(),
-        declaration::<MotionCueWindowWire>(),
         declaration::<MotionViewportWire>(),
         declaration::<MotionSourceSpanWire>(),
         declaration::<MotionDiagnosticWire>(),

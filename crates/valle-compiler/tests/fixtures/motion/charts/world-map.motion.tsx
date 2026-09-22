@@ -6,7 +6,6 @@ export const composition = { width: 1920, height: 1080, fps: 30, duration: 5 };
 // Derive all geometry from one geoProject call.
 //
 // Project once in fixed canvas coordinates. Draw each polygon edge with a fixed two-point line to preserve frame-time topology.
-export const component = "world-map";
 
 // Synthetic polygons and sites in longitude/latitude coordinates.
 const LAND_A = [
@@ -61,7 +60,7 @@ export default function WorldMap(ctx) {
   const sy = ctx.viewport.height / CANVAS_H;
 
   // Prepare staggered site entrances.
-  const pop = (i) => interpolate(ctx.enter.progress, [0.2 + i * 0.12, 0.6 + i * 0.12], [0, 1]);
+  const pop = (i) => interpolate(ctx.progress, [0.2 + i * 0.12, 0.6 + i * 0.12], [0, 1]);
 
   return (
     <Scene className="h-full w-full bg-slate-950">

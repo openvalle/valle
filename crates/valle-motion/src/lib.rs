@@ -30,11 +30,8 @@ pub mod inspect;
 pub mod layout;
 pub mod lock;
 pub mod math_formula;
-pub mod phases;
-pub mod plan;
 pub mod scene3d;
 pub mod shader;
-pub mod signals;
 pub mod spring;
 pub mod style;
 pub mod tailwind;
@@ -67,14 +64,16 @@ pub use canonical::{CanonicalError, canonical_bytes};
 pub use composition::{
     COMPOSITION_TEMPLATE, Composition, DEFAULT_DPR, MAX_DURATION_FRAMES, ROOT_FONT_SIZE,
 };
-pub use context::{HoldContext, MotionContext, PhaseContext, PhaseKind};
-pub use controls::{
-    AssetControl, AssetKind, CameraControls, ControlType, ControlsSchema, CueControl, CueKind,
-    FrameControl, MAX_PREPARE_DATA_ARRAY_ITEMS, MAX_PREPARE_DATA_BYTES, MAX_PREPARE_DATA_DEPTH,
-    MAX_PREPARE_DATA_TOTAL_ITEMS, OptionalFrameControl, PrepareDataType, PropControl,
-    TimingControls, TimingError, TimingSeconds,
+pub use context::{
+    MotionContext, duration_frames, motion_context_at_frame, motion_context_at_sample,
+    motion_context_at_source,
 };
-pub use diag::{DiagClass, DiagCode, MotionDiagnostic, PlanError};
+pub use controls::{
+    AssetControl, AssetKind, ControlType, ControlsSchema, MAX_PREPARE_DATA_ARRAY_ITEMS,
+    MAX_PREPARE_DATA_BYTES, MAX_PREPARE_DATA_DEPTH, MAX_PREPARE_DATA_TOTAL_ITEMS, PrepareDataType,
+    PropControl,
+};
+pub use diag::{DiagClass, DiagCode, MotionDiagnostic};
 pub use domain::MotionViewport;
 pub use emit::{
     EmitError, EmitReport, FaceCache, default_font_naming, emit, emit_program_with_faces,
@@ -86,9 +85,9 @@ pub use eval::{
     subtree_reads_runtime_inputs,
 };
 pub use expr::{
-    CompareOp, ContextInput, CueField, Expr, ExprId, ExprType, Extrapolation, GeometryField,
-    InterpolateStop, MAX_TEMPLATE_OUTPUT_BYTES, MAX_TEMPLATE_PARTS, MAX_TEMPLATE_STATIC_BYTES,
-    MathBinaryOp, MathUnaryOp, NumberFormat, TemplatePart, bounds_dependent, geometry_eval_policy,
+    CompareOp, ContextInput, Expr, ExprId, ExprType, Extrapolation, GeometryField, InterpolateStop,
+    MAX_TEMPLATE_OUTPUT_BYTES, MAX_TEMPLATE_PARTS, MAX_TEMPLATE_STATIC_BYTES, MathBinaryOp,
+    MathUnaryOp, NumberFormat, TemplatePart, bounds_dependent, geometry_eval_policy,
     post_layout_dependent, projection_dependent,
 };
 pub use geometry::{
@@ -110,13 +109,6 @@ pub use lock::{
     ArtifactEnvelope, BuildFingerprint, BundledAsset, BundledFont, BundledSource, EnvelopeDigest,
     LockError, MOTION_BUNDLE_FORMAT_VERSION, MotionBundleManifest,
 };
-pub use phases::{
-    NarrationRetime, PhaseLayout, PhaseSpec, RetimeError, motion_context_at,
-    motion_context_at_sample, phase_windows, phase_windows_seconds, resolve_timing_seconds,
-    retime_to_narration, round_div,
-};
-pub use plan::{PlanClip, PlanStep, SignalPlan};
-pub use signals::{CueError, CueSchedule, CueState, CueWindow, ResolvedSignals};
 pub use spring::{SpringOutput, SpringParams, SpringSample, spring_at, spring_sample_at};
 pub use tailwind::{TAILWIND_CATALOG, TailwindClassError, validate_tailwind_class};
 pub use text::{

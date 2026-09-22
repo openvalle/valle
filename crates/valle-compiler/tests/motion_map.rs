@@ -6,8 +6,8 @@ use std::collections::BTreeMap;
 use valle_compiler::motion::{MeasureEnv, compile_motion, compile_motion_with_env};
 use valle_motion::{
     ARTIFACT_FORMAT_VERSION, BatchPositions, CAMERA_CAPABILITY, ContentDigest,
-    FONT_ASSET_CAPABILITY, GEOMETRY_BATCH_CAPABILITY, NodeKind, PathValue, ResolvedSignals,
-    ResourceRef, motion_context_at, phase_windows, resolve_props,
+    FONT_ASSET_CAPABILITY, GEOMETRY_BATCH_CAPABILITY, NodeKind, PathValue, ResourceRef,
+    motion_context_at_frame, resolve_props,
 };
 use valle_motion::{
     Fonts, LayoutOptions, Viewport, build_tree, default_font_naming, emit, prepare_scene,
@@ -290,8 +290,7 @@ export default function BadMap(ctx) {
 fn display_at(compiled: &valle_compiler::motion::CompiledMotion, frame: u32) -> Vec<u8> {
     let prepared = prepare_scene(&compiled.artifact).expect("prepare");
     let props = resolve_props(&compiled.artifact.controls, &BTreeMap::new()).expect("props");
-    let windows = phase_windows(&compiled.artifact.controls.phase_spec(), 120);
-    let ctx = motion_context_at(frame, &windows, FrameRate::new(60, 1).unwrap()).expect("context");
+    let ctx = motion_context_at_frame(frame, 120, FrameRate::new(60, 1).unwrap()).expect("context");
     let mut fonts = Fonts::default();
     fonts
         .register(valle_motion::FontResource::new(FONT.to_vec()))
@@ -300,7 +299,6 @@ fn display_at(compiled: &valle_compiler::motion::CompiledMotion, frame: u32) -> 
         &prepared,
         &ctx,
         &props,
-        &ResolvedSignals::default(),
         &LayoutOptions {
             viewport: Viewport::new((1280, 720)),
             fonts: &fonts,

@@ -382,25 +382,8 @@ pub struct MotionInstance {
     pub rate: RationalRate,
     pub end_behavior: MediaEndBehavior,
     pub props: BTreeMap<String, Param<JsonValue>>,
-    pub cues: BTreeMap<String, MotionCueBinding>,
+    pub data: JsonObject,
     pub resources: BTreeMap<String, ResourceId>,
-    pub phases: MotionPhaseOverrides,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum MotionCueBinding {
-    SourceRange {
-        start: RationalTime,
-        end: RationalTime,
-        enter_duration: RationalTime,
-        exit_duration: RationalTime,
-    },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MotionPhaseOverrides {
-    pub enter_duration: Option<RationalTime>,
-    pub exit_duration: Option<RationalTime>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1212,16 +1195,8 @@ fn visual_source_from_wire(
                 .into_iter()
                 .map(|(name, param)| Ok((name, param_from_wire(param, identity)?)))
                 .collect::<Result<_, DocumentConversionError>>()?,
-            cues: source
-                .cues
-                .into_iter()
-                .map(|(name, cue)| (name, motion_cue_from_wire(cue)))
-                .collect(),
+            data: source.data,
             resources: source.resources,
-            phases: MotionPhaseOverrides {
-                enter_duration: source.phases.enter_duration.map(RationalTime::from_exact),
-                exit_duration: source.phases.exit_duration.map(RationalTime::from_exact),
-            },
         })),
         wire::VisualSourceWire::Solid(source) => Ok(VisualSource::Solid(SolidSource {
             color: source.color,
@@ -1270,52 +1245,12 @@ fn visual_source_into_wire(source: VisualSource) -> wire::VisualSourceWire {
                 .into_iter()
                 .map(|(name, param)| (name, param_into_wire(param, std::convert::identity)))
                 .collect(),
-            cues: source
-                .cues
-                .into_iter()
-                .map(|(name, cue)| (name, motion_cue_into_wire(cue)))
-                .collect(),
+            data: source.data,
             resources: source.resources,
-            phases: wire::MotionPhaseOverridesWire {
-                enter_duration: source.phases.enter_duration.map(RationalTime::into_exact),
-                exit_duration: source.phases.exit_duration.map(RationalTime::into_exact),
-            },
         }),
         VisualSource::Solid(source) => wire::VisualSourceWire::Solid(wire::SolidSourceWire {
             color: source.color,
         }),
-    }
-}
-
-fn motion_cue_from_wire(cue: wire::MotionCueBindingWire) -> MotionCueBinding {
-    match cue {
-        wire::MotionCueBindingWire::SourceRange {
-            start,
-            end,
-            enter_duration,
-            exit_duration,
-        } => MotionCueBinding::SourceRange {
-            start: RationalTime::from_exact(start),
-            end: RationalTime::from_exact(end),
-            enter_duration: RationalTime::from_exact(enter_duration),
-            exit_duration: RationalTime::from_exact(exit_duration),
-        },
-    }
-}
-
-fn motion_cue_into_wire(cue: MotionCueBinding) -> wire::MotionCueBindingWire {
-    match cue {
-        MotionCueBinding::SourceRange {
-            start,
-            end,
-            enter_duration,
-            exit_duration,
-        } => wire::MotionCueBindingWire::SourceRange {
-            start: start.into_exact(),
-            end: end.into_exact(),
-            enter_duration: enter_duration.into_exact(),
-            exit_duration: exit_duration.into_exact(),
-        },
     }
 }
 

@@ -10,7 +10,7 @@ use valle_timeline::internal::CanonicalTimeline;
 
 /// Sparse public Timeline → internal canonical normalization.
 pub mod timeline;
-pub use timeline::{CompileTimelineError, compile_timeline};
+pub use timeline::{CompileTimelineError, compile_timeline, compile_timeline_with_motion_sources};
 
 /// Generated Timeline contract types used by timeline/compiler clients and fixture builders.
 /// Runtime hosts must consume `valle_engine::render` instead.

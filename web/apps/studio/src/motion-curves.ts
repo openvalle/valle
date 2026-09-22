@@ -5,8 +5,6 @@ import type { GoodMotionContext } from "./motion-preview.ts";
 export interface MotionCurveInputs {
   context: GoodMotionContext;
   props: Record<string, { kind: string; value: unknown }>;
-  timing: GoodMotionContext["timing"];
-  cues: GoodMotionContext["cueBindings"];
   selectedKey: string | null;
 }
 
@@ -23,14 +21,13 @@ export function curveRequest(inputs: MotionCurveInputs, node: string, start: num
   }));
   return { node, startFrame: Math.max(0, Math.round(start)), endFrame: Math.min(c.durationFrames - 1, Math.round(end)),
     maxPoints: 240, durationFrames: c.durationFrames, fps: `${c.fps.num}/${c.fps.den}`,
-    phases: { ...inputs.timing, holdCycleFrames: Number(record(record(record(c.artifact.controls).timing).holdCycleFrames).default) || null },
-    props, cues: Object.fromEntries(Object.entries(inputs.cues).map(([name, { type: _type, ...cue }]) => [name, cue])),
+    props,
     viewport: [c.viewport.width, c.viewport.height] };
 }
 
 export class StudioMotionCurves extends LitElement {
   static properties = { inputs: { attribute: false }, open: { state: true }, samples: { state: true }, error: { state: true },
-    selected: { state: true }, start: { state: true }, end: { state: true }, axis: { state: true }, phase: { state: true } };
+    selected: { state: true }, start: { state: true }, end: { state: true }, axis: { state: true } };
   declare inputs: MotionCurveInputs | null;
   declare open: boolean;
   declare samples: MotionPropertySamples | null;
@@ -39,10 +36,9 @@ export class StudioMotionCurves extends LitElement {
   declare start: number;
   declare end: number;
   declare axis: "frames" | "seconds";
-  declare phase: string;
   constructor() {
     super(); this.inputs = null; this.open = false; this.samples = null; this.error = "";
-    this.selected = ""; this.start = 0; this.end = 0; this.axis = "frames"; this.phase = "all";
+    this.selected = ""; this.start = 0; this.end = 0; this.axis = "frames";
   }
   #worker: Worker | null = null;
   #fingerprint = "";
@@ -79,18 +75,13 @@ export class StudioMotionCurves extends LitElement {
         this.start = 0; this.end = c.durationFrames - 1; this.#rangeInitialized = true; this.#source = c.input;
       } else { this.end = Math.min(this.end, c.durationFrames - 1); this.start = Math.min(this.start, this.end); }
     }
-    if (changed.has("inputs") || changed.has("phase")) {
-      if (this.phase === "enter") { this.start = 0; this.end = Math.max(0, this.inputs.timing.enterFrames - 1); }
-      if (this.phase === "hold") { this.start = this.inputs.timing.enterFrames; this.end = c.durationFrames - this.inputs.timing.exitFrames - 1; }
-      if (this.phase === "exit") { this.start = c.durationFrames - this.inputs.timing.exitFrames; this.end = c.durationFrames - 1; }
-    }
     if (!this.open || !this.getClientRects().length || this.getBoundingClientRect().width === 0) { this.#cancel(); this.#fingerprint = ""; return; }
     const request = curveRequest(this.inputs, this.selected, this.start, this.end);
-    const identity = JSON.stringify([c.generation, c.artifactDigest, this.phase, request]);
+    const identity = JSON.stringify([c.generation, c.artifactDigest, request]);
     if (identity !== this.#fingerprint) {
       this.#fingerprint = identity; this.#cancel(); this.samples = null; this.error = "";
       if (!this.selected) { this.error = "No explicit opacity / translate / scale / rotate bindings."; return; }
-      if (request.startFrame > request.endFrame || (this.phase === "enter" && this.inputs.timing.enterFrames === 0)) { this.error = "This phase has no frames."; return; }
+      if (request.startFrame > request.endFrame) { this.error = "This range has no frames."; return; }
       const worker = new Worker(new URL("/runtime/workers/motion-curves.js", location.href), { type: "module" });
       this.#worker = worker;
       worker.onmessage = (event: MessageEvent<{ samples?: MotionPropertySamples; error?: string }>) => {
@@ -130,15 +121,11 @@ export class StudioMotionCurves extends LitElement {
     return html`<section class="ins-section motion-curves">
       <button class="button full-width" type="button" aria-expanded=${this.open} @click=${() => { this.open = !this.open; }}>Property curves ${this.open ? "−" : "+"}</button>
       ${!this.open ? "" : html`
-        <div class="ins-note">${c.sourceMap.component} → phase → child → property</div>
-        <label class="field"><span class="field-label">Phase</span><select .value=${this.phase} @change=${(e: Event) => {
-          this.phase = (e.target as HTMLSelectElement).value;
-          if (this.phase === "all") { this.start = 0; this.end = c.durationFrames - 1; }
-        }}>${[["all","Whole scene"],["enter","Enter"],["hold","Hold"],["exit","Exit"]].map(([value,label]) => html`<option value=${value!} .selected=${this.phase === value}>${label}</option>`)}</select></label>
+        <div class="ins-note">${c.sourceMap.component} → child → property</div>
         <label class="field"><span class="field-label">Child / local property owner</span><select aria-label="Curve node" .value=${this.selected} @change=${(e: Event) => { this.selected = (e.target as HTMLSelectElement).value; }}>
           ${this.#nodes().map(n => { const mapping = c.sourceMap.nodes.find(m => m.key === n.key); const stack = mapping?.expansionStack;
             return html`<option value=${String(n.key)} .selected=${this.selected === n.key}>${Array.isArray(stack) && stack.length ? `${stack.join(" / ")} · ` : ""}${String(n.key)}</option>`; })}</select></label>
-        <div class="curve-range">${(["start", "end"] as const).map(key => html`<label>${key} frame<input aria-label=${`Curve ${key} frame`} type="number" min="0" max=${c.durationFrames - 1} .value=${String(this[key])} @input=${(e: Event) => { this.phase = "all"; this[key] = Math.max(0, Math.min(c.durationFrames - 1, Number((e.target as HTMLInputElement).value) || 0)); }} /></label>`)}
+        <div class="curve-range">${(["start", "end"] as const).map(key => html`<label>${key} frame<input aria-label=${`Curve ${key} frame`} type="number" min="0" max=${c.durationFrames - 1} .value=${String(this[key])} @input=${(e: Event) => { this[key] = Math.max(0, Math.min(c.durationFrames - 1, Number((e.target as HTMLInputElement).value) || 0)); }} /></label>`)}
           <label>Axis<select .value=${this.axis} @change=${(e: Event) => { this.axis = (e.target as HTMLSelectElement).value as typeof this.axis; }}><option value="frames" .selected=${this.axis === "frames"}>Frames</option><option value="seconds" .selected=${this.axis === "seconds"}>Seconds</option></select></label></div>
         <p class="ins-note">${location}</p><button class="button" type="button" @click=${() => void navigator.clipboard.writeText(location)}>Copy source location</button>
         <p class="ins-note">Local authored values; parent transforms and inherited CSS are excluded. Dots are actual source frames. Lines only connect samples; they do not prove continuity.</p>
@@ -184,7 +171,6 @@ export class StudioMotionCurves extends LitElement {
     }}>
       <text x="4" y="12">${speed ? "Speed" : "Value"} · ${unit}</text><text x="308" y="12" text-anchor="end">${min.toFixed(2)}–${max.toFixed(2)}</text>
       <line class="curve-grid" x1="28" x2="284" y1=${y(0)} y2=${y(0)} />
-      ${this.samples!.phaseBoundaries.filter(f => f >= this.start && f <= this.end).map(f => svg`<line class="curve-phase" x1=${x(f)} x2=${x(f)} y1="20" y2="106"><title>Phase ${f} f</title></line>`)}
       ${Array.from({ length: dimensions }, (_, axis) => {
         let path = "", drawing = false;
         for (const point of channel.samples) {

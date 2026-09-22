@@ -267,10 +267,9 @@ pub fn build_tree(
     prepared: &PreparedScene,
     ctx: &valle_motion::MotionContext,
     props: &ResolvedProps,
-    signals: &valle_motion::ResolvedSignals,
     opts: &LayoutOptions<'_>,
 ) -> Result<LayoutTree, LayoutError> {
-    build_tree_inner(prepared, ctx, props, signals, opts, None, None)
+    build_tree_inner(prepared, ctx, props, opts, None, None)
 }
 
 /// Native diagnostics only. These timings never enter an Artifact or DrawProgram.
@@ -288,19 +287,10 @@ pub fn build_tree_profiled(
     prepared: &PreparedScene,
     ctx: &valle_motion::MotionContext,
     props: &ResolvedProps,
-    signals: &valle_motion::ResolvedSignals,
     opts: &LayoutOptions<'_>,
 ) -> Result<(LayoutTree, LayoutTimings), LayoutError> {
     let mut timings = LayoutTimings::default();
-    let tree = build_tree_inner(
-        prepared,
-        ctx,
-        props,
-        signals,
-        opts,
-        Some(&mut timings),
-        None,
-    )?;
+    let tree = build_tree_inner(prepared, ctx, props, opts, Some(&mut timings), None)?;
     Ok((tree, timings))
 }
 
@@ -308,7 +298,6 @@ pub(super) fn build_tree_inner(
     prepared: &PreparedScene,
     ctx: &valle_motion::MotionContext,
     props: &ResolvedProps,
-    signals: &valle_motion::ResolvedSignals,
     opts: &LayoutOptions<'_>,
     mut timings: Option<&mut LayoutTimings>,
     geometry_cache: Option<&std::cell::RefCell<Option<super::reuse::GeometrySnapshot>>>,
@@ -337,7 +326,6 @@ pub(super) fn build_tree_inner(
         EvalInputs {
             ctx,
             props,
-            signals,
             // The base pass has no unit context; unit expressions use a separate evaluation pass.
             unit: None,
             viewport: eval_viewport(opts),
@@ -379,7 +367,6 @@ pub(super) fn build_tree_inner(
             EvalInputs {
                 ctx,
                 props,
-                signals,
                 unit: None,
                 viewport: eval_viewport(opts),
             },
@@ -503,7 +490,6 @@ pub(super) fn build_tree_inner(
         EvalInputs {
             ctx,
             props,
-            signals,
             unit: None,
             viewport: eval_viewport(opts),
         },
@@ -517,7 +503,6 @@ pub(super) fn build_tree_inner(
         EvalInputs {
             ctx,
             props,
-            signals,
             unit: None,
             viewport: eval_viewport(opts),
         },
@@ -587,7 +572,6 @@ pub(super) fn build_tree_inner(
         &values,
         ctx,
         props,
-        signals,
         &boxes,
         &projected,
         eval_viewport(opts),
@@ -3631,7 +3615,6 @@ fn resolve_units(
     values: &[MotionValue],
     ctx: &valle_motion::MotionContext,
     props: &ResolvedProps,
-    signals: &valle_motion::ResolvedSignals,
     boxes: &BTreeMap<String, valle_draw::Rect>,
     projected: &BTreeMap<(String, String), valle_draw::Point>,
     viewport: Option<(f64, f64)>,
@@ -3664,7 +3647,6 @@ fn resolve_units(
                 EvalInputs {
                     ctx,
                     props,
-                    signals,
                     unit: None,
                     viewport,
                 },

@@ -4,10 +4,7 @@
 use std::collections::BTreeMap;
 
 use valle_compiler::motion::compile_motion;
-use valle_motion::{
-    EvalInputs, Expr, MotionValue, NodeKind, ResolvedSignals, StyleValue, motion_context_at,
-    phase_windows,
-};
+use valle_motion::{EvalInputs, Expr, MotionValue, NodeKind, StyleValue, motion_context_at_frame};
 use valle_timeline::FrameRate;
 
 fn messages(source: &str) -> Vec<String> {
@@ -21,14 +18,12 @@ fn messages(source: &str) -> Vec<String> {
 fn style_number(source: &str, property: &str, frame: u32, fps: FrameRate) -> f64 {
     let artifact = compile_motion(source).expect("modifier compiles").artifact;
     let props = valle_motion::resolve_props(&artifact.controls, &BTreeMap::new()).expect("props");
-    let windows = phase_windows(&artifact.controls.phase_spec(), 600);
-    let ctx = motion_context_at(frame, &windows, fps).expect("context");
+    let ctx = motion_context_at_frame(frame, 600, fps).expect("context");
     let values = valle_motion::eval_all(
         &artifact,
         EvalInputs {
             ctx: &ctx,
             props: &props,
-            signals: &ResolvedSignals::default(),
             unit: None,
             viewport: Some((1280.0, 720.0)),
         },
@@ -124,7 +119,7 @@ fn follow_is_exact_sugar_for_motion_path() {
             r#"
 const P = path("M 0 0 C 20 0 80 100 100 100");
 export default function Card(ctx) {{
-  return <View key="dot" style={{{{ motionPath: {name}(P, ctx.hold.progress, {{anchor:"center",rotate:"auto",angleOffset:12}}) }}}} />;
+  return <View key="dot" style={{{{ motionPath: {name}(P, ctx.progress, {{anchor:"center",rotate:"auto",angleOffset:12}}) }}}} />;
 }}
 "#
         )
@@ -140,12 +135,12 @@ export default function Card(ctx) {{
 fn trail_clamps_or_wraps_without_frame_history() {
     const CLAMPED: &str = r#"
 export default function P(ctx) {
-  return <View style={{ opacity: trail(ctx.hold.progress, 2, { gap: 0.2, mode: "clamp" }) }} />;
+  return <View style={{ opacity: trail(ctx.progress, 2, { gap: 0.2, mode: "clamp" }) }} />;
 }
 "#;
     const WRAPPED: &str = r#"
 export default function P(ctx) {
-  return <View style={{ opacity: trail(ctx.hold.progress, 2, { gap: 0.2, mode: "wrap" }) }} />;
+  return <View style={{ opacity: trail(ctx.progress, 2, { gap: 0.2, mode: "wrap" }) }} />;
 }
 "#;
     let clamp_artifact = compile_motion(CLAMPED).expect("clamped trail").artifact;
@@ -176,7 +171,7 @@ fn auto_rotate_reuses_the_existing_path_angle_expression() {
         r#"
 const P = path("M 0 0 L 100 100");
 export default function Card(ctx) {
-  return <View style={{ rotate: autoRotate(P, ctx.hold.progress) }} />;
+  return <View style={{ rotate: autoRotate(P, ctx.progress) }} />;
 }
 "#,
     )
@@ -215,15 +210,15 @@ fn modifier_options_and_budgets_fail_closed() {
             "seed",
         ),
         (
-            r#"export default function P(ctx){return <View style={{opacity:trail(ctx.hold.progress,1,{gap:-.1})}}/>;}"#,
+            r#"export default function P(ctx){return <View style={{opacity:trail(ctx.progress,1,{gap:-.1})}}/>;}"#,
             "gap",
         ),
         (
-            r#"export default function P(ctx){return <View style={{opacity:trail(ctx.hold.progress,1,{gap:.1,mode:"bounce"})}}/>;}"#,
+            r#"export default function P(ctx){return <View style={{opacity:trail(ctx.progress,1,{gap:.1,mode:"bounce"})}}/>;}"#,
             "clamp",
         ),
         (
-            r#"const P=path("M0 0L1 1"); export default function C(ctx){return <View style={{rotate:autoRotate(P,ctx.hold.progress,{angleOffset:1})}}/>;}"#,
+            r#"const P=path("M0 0L1 1"); export default function C(ctx){return <View style={{rotate:autoRotate(P,ctx.progress,{angleOffset:1})}}/>;}"#,
             "exactly two arguments",
         ),
     ];
@@ -244,7 +239,7 @@ const ROUTE = path("M 0 0 C 40 0 60 80 100 80");
 export default function P(ctx) {
   return <View key="dot" style={{
     width: 10, height: 10,
-    motionPath: motionPath(ROUTE, ctx.hold.progress),
+    motionPath: motionPath(ROUTE, ctx.progress),
   }} />;
 }
 "##,

@@ -5,9 +5,7 @@ use serde::{Deserialize, Serialize};
 use valle_timeline::FrameRate;
 
 use crate::value::{Angle, Length2, LengthUnit};
-use crate::{
-    CueSchedule, CueWindow, EvalInputs, Expr, MotionValue, PhaseSpec, SceneArtifact, StyleValue,
-};
+use crate::{EvalInputs, Expr, MotionValue, SceneArtifact, StyleValue};
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -18,9 +16,7 @@ pub struct PropertySampleRequest {
     pub max_points: u32,
     pub duration_frames: u32,
     pub fps: FrameRate,
-    pub phases: PhaseSpec,
     pub props: BTreeMap<String, MotionValue>,
-    pub cues: BTreeMap<String, CueWindow>,
     pub viewport: [u32; 2],
 }
 
@@ -30,7 +26,6 @@ pub struct PropertySamples {
     pub node: String,
     pub channels: Vec<PropertyChannel>,
     pub frames: Vec<u32>,
-    pub phase_boundaries: [u32; 2],
 }
 
 #[derive(Debug, Serialize)]
@@ -74,9 +69,6 @@ pub fn sample_properties(
         .ok_or("unknown Motion node")?;
     let props =
         crate::resolve_props(&artifact.controls, &request.props).map_err(|e| e.to_string())?;
-    let cues =
-        CueSchedule::resolve(&artifact.controls, &request.cues).map_err(|e| e.to_string())?;
-    let phases = crate::phase_windows(&request.phases, request.duration_frames);
     let span = request.end_frame - request.start_frame;
     let count = request.max_points.min(span.saturating_add(1));
     let frames: Vec<_> = (0..count)
@@ -89,10 +81,6 @@ pub fn sample_properties(
         node: node.key.clone(),
         channels: Vec::new(),
         frames: frames.clone(),
-        phase_boundaries: [
-            phases.enter_frames,
-            phases.enter_frames + phases.hold_frames,
-        ],
     };
     let post = crate::post_layout_dependent(&artifact.exprs);
     let unit = crate::expr::unit_dependent(&artifact.exprs);
@@ -131,15 +119,13 @@ pub fn sample_properties(
             continue;
         }
         let at = |frame| -> Result<(Vec<f64>, Vec<MotionValue>), String> {
-            let ctx = crate::motion_context_at(frame, &phases, request.fps)
+            let ctx = crate::motion_context_at_frame(frame, request.duration_frames, request.fps)
                 .ok_or("frame outside scene")?;
-            let signals = cues.sample(frame, request.fps);
             let values = crate::eval::eval_slice(
                 artifact,
                 EvalInputs {
                     ctx: &ctx,
                     props: &props,
-                    signals: &signals,
                     unit: None,
                     viewport: Some((request.viewport[0] as f64, request.viewport[1] as f64)),
                 },

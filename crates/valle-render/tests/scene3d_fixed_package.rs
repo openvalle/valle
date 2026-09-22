@@ -107,7 +107,7 @@ fn verify_fixed_model_package(pbr: bool) {
       "background":{"color":"#000000ff"},"visual":{"tracks":[{"id":"track:model","items":[{
         "type":"clip","id":"clip:model","duration":"3/5",
         "layer":{"transform":{"position":constant(json!([0.5,0.5])),"scale":constant(json!([1,1])),"rotation":constant(json!(0)),"anchor":[0.5,0.5]},"opacity":constant(json!(1)),"mask":null,"filters":[],"blend":"normal"},
-        "source":{"type":"motion","component":"component:model","sourceStart":"0/1","sourceDuration":"3/5","rate":"1/1","endBehavior":"hold","props":{},"cues":{},"resources":{"model":"asset:model"},"phases":{"enterDuration":null,"exitDuration":null}}
+        "source":{"type":"motion","component":"component:model","sourceStart":"0/1","sourceDuration":"5/1","rate":"1/1","endBehavior":"hold","fit":"contain","props":{},"resources":{"model":"asset:model"}}
       }]}]},"audio":{"tracks":[]},"adjustments":[],"captions":{"tracks":[]},"camera":null,"metadata":{}
     }}).to_string()).unwrap();
     let timeline = String::from_utf8(canonical_bytes(&document).unwrap()).unwrap();

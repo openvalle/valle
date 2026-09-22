@@ -1,13 +1,12 @@
 export const composition = { width: 1920, height: 1080, fps: 30, duration: 5 };
-export const component = "chart-contract";
 
-export const controls = defineControls({
+export const controls = {
   props: {
     accent: color({ default: "#38bdf8" }),
     grid: color({ default: "#334155" }),
     label: color({ default: "#cbd5e1" }),
   },
-});
+};
 
 const FROM = [28, 46, 38, 62];
 const TO = [42, 31, 72, 88];
@@ -59,7 +58,7 @@ function Legend(ctx, { accent, labelColor }) {
 }
 
 function BarChart(ctx, { accent, grid, label }) {
-  const progress = ctx.hold.progress;
+  const progress = ctx.progress;
   return (
     <View key="chart" className="absolute" style={{ left: 0, top: 0, width: 1920, height: 1080 }}>
       <Axis key="from-axis" values={TICKS_FROM} positions={TICK_Y_FROM} opacity={1 - progress} grid={grid} label={label} />

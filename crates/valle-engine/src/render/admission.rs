@@ -734,43 +734,6 @@ enum AdmittedMotionParam {
 }
 
 #[derive(Debug, Clone)]
-enum AdmittedMotionCue {
-    SourceRange {
-        start: RationalTime,
-        end: RationalTime,
-        enter_duration: RationalTime,
-        exit_duration: RationalTime,
-    },
-}
-
-#[derive(Debug, Clone, Copy)]
-struct AdmittedMotionPhases {
-    duration_frames: u32,
-    enter_frames: u32,
-    hold_frames: u32,
-    exit_frames: u32,
-    hold_cycle_frames: Option<u32>,
-    hold_cycle_duration: Option<RationalTime>,
-}
-
-impl AdmittedMotionPhases {
-    fn from_layout(layout: valle_motion::PhaseLayout) -> Self {
-        Self {
-            duration_frames: layout.duration_frames,
-            enter_frames: layout.enter_frames,
-            hold_frames: layout.hold_frames,
-            exit_frames: layout.exit_frames,
-            hold_cycle_frames: layout.hold_cycle_frames,
-            hold_cycle_duration: layout.hold_cycle_duration,
-        }
-    }
-
-    const fn duration_frames(self) -> u32 {
-        self.duration_frames
-    }
-}
-
-#[derive(Debug, Clone)]
 struct AdmittedMotionArtifactDependency {
     role: String,
     target: u32,
@@ -781,17 +744,9 @@ struct AdmittedMotionInstance {
     component_target: u32,
     reads_destination: bool,
     props: BTreeMap<String, AdmittedMotionParam>,
-    cues: BTreeMap<String, AdmittedMotionCue>,
     resources: BTreeMap<String, u32>,
     artifact_dependencies: Vec<AdmittedMotionArtifactDependency>,
-    phases: AdmittedMotionPhases,
     artifact: Arc<SceneArtifact>,
-}
-
-impl AdmittedMotionInstance {
-    const fn phases(&self) -> AdmittedMotionPhases {
-        self.phases
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1831,8 +1786,7 @@ fn admit_visual_source(
                 diagnostics,
             );
             let source_duration = source.source_duration;
-            let hold_end_time = (source.end_behavior == MediaEndBehavior::Hold
-                && instance.phases().duration_frames() > 0)
+            let hold_end_time = (source.end_behavior == MediaEndBehavior::Hold)
                 .then(|| {
                     motion_hold_end_frame_time(source_duration, frame_rate)
                         .map_err(|_| {
@@ -1898,11 +1852,24 @@ fn admit_motion_instance(
         _ => unreachable!("resolver admitted a Motion component without Motion facts"),
     };
 
-    if !artifact.controls.camera.values.is_empty() {
-        diagnostics.push(motion_schema_diagnostic(
-            EngineOpenDiagnosticCode::MotionControlSchemaMismatch,
-            &format!("{path}/component/controls/camera"),
-            "camera-controls-not-supported",
+    let authored_duration = artifact
+        .composition
+        .as_ref()
+        .and_then(|composition| composition.duration().ok());
+    if authored_duration != Some(source.source_duration) {
+        diagnostics.push(diagnostic(
+            EngineOpenDiagnosticCode::MotionTimingMismatch,
+            format!("{path}/sourceDuration"),
+            EngineOpenPhase::Admission,
+            None,
+            details([
+                ("reason", "source-duration-differs-from-composition".into()),
+                ("sourceDuration", source.source_duration.to_string()),
+                (
+                    "compositionDuration",
+                    authored_duration.map_or_else(|| "missing".into(), |value| value.to_string()),
+                ),
+            ]),
         ));
     }
 
@@ -1936,43 +1903,6 @@ fn admit_motion_instance(
         }
         if let Some(param) = admit_motion_param(param, &control.control, &prop_path, diagnostics) {
             props.insert(name.clone(), param);
-        }
-    }
-
-    let mut cues = BTreeMap::new();
-    for (name, control) in &artifact.controls.cues {
-        if control.required && !source.cues.contains_key(name) {
-            diagnostics.push(motion_schema_diagnostic(
-                EngineOpenDiagnosticCode::MotionCueSchemaMismatch,
-                &format!("{path}/cues/{name}"),
-                "missing-required-cue",
-            ));
-        }
-    }
-    for (name, cue) in &source.cues {
-        let cue_path = format!("{path}/cues/{name}");
-        let Some(_control) = artifact.controls.cues.get(name) else {
-            diagnostics.push(motion_schema_diagnostic(
-                EngineOpenDiagnosticCode::MotionCueSchemaMismatch,
-                &cue_path,
-                "unknown-cue",
-            ));
-            continue;
-        };
-        let MotionCueBinding::SourceRange {
-            start,
-            end,
-            enter_duration,
-            exit_duration,
-        } = cue;
-        let compiled = Some(AdmittedMotionCue::SourceRange {
-            start: *start,
-            end: *end,
-            enter_duration: *enter_duration,
-            exit_duration: *exit_duration,
-        });
-        if let Some(compiled) = compiled {
-            cues.insert(name.clone(), compiled);
         }
     }
 
@@ -2036,31 +1966,7 @@ fn admit_motion_instance(
         })
         .unwrap_or_default();
 
-    let phases = admit_motion_phases(source, artifact.as_ref(), frame_rate, path, diagnostics);
-
-    AdmittedMotionInstance {
-        component_target,
-        reads_destination: descriptor.reads_destination,
-        props,
-        cues,
-        resources: compiled_resources,
-        artifact_dependencies,
-        phases,
-        artifact,
-    }
-}
-
-/// Resolve author phase durations against the executable Artifact exactly once, while the
-/// document clock and verified Artifact controls are both available. Prepare consumes the frozen
-/// layout and therefore cannot rediscover a timing rejection from author input.
-fn admit_motion_phases(
-    source: &MotionInstance,
-    artifact: &SceneArtifact,
-    frame_rate: FrameRate,
-    path: &str,
-    diagnostics: &mut Vec<EngineOpenDiagnostic>,
-) -> AdmittedMotionPhases {
-    let duration_frames = admit_motion_frame_count(
+    let _ = admit_motion_frame_count(
         source.source_duration,
         frame_rate,
         false,
@@ -2068,37 +1974,15 @@ fn admit_motion_phases(
         "source-duration",
         diagnostics,
     );
-    let timing = valle_motion::resolve_timing_seconds(
-        source.phases.enter_duration,
-        source.phases.exit_duration,
-        artifact.controls.timing_seconds,
-    );
-    let resolved = if duration_frames.is_err() {
-        None
-    } else {
-        match valle_motion::phase_windows_seconds(timing, source.source_duration, frame_rate) {
-            Ok(layout) => Some(layout),
-            Err(error) => {
-                diagnostics.push(diagnostic(
-                    EngineOpenDiagnosticCode::MotionTimingMismatch,
-                    format!("{path}/phases"),
-                    EngineOpenPhase::Admission,
-                    None,
-                    details([("reason", error.to_string())]),
-                ));
-                None
-            }
-        }
-    };
 
-    AdmittedMotionPhases::from_layout(resolved.unwrap_or(valle_motion::PhaseLayout {
-        duration_frames: 0,
-        enter_frames: 0,
-        hold_frames: 0,
-        exit_frames: 0,
-        hold_cycle_frames: None,
-        hold_cycle_duration: None,
-    }))
+    AdmittedMotionInstance {
+        component_target,
+        reads_destination: descriptor.reads_destination,
+        props,
+        resources: compiled_resources,
+        artifact_dependencies,
+        artifact,
+    }
 }
 
 fn admit_motion_frame_count(
@@ -2175,11 +2059,10 @@ fn motion_json_matches_artifact_control(value: &JsonValue, control: &ControlType
         ControlType::Color => motion_color_value(value).is_some(),
         ControlType::Rect => finite_array(value, 4),
         ControlType::Bool => value.is_boolean(),
-        ControlType::String | ControlType::NodeTarget => value.is_string(),
+        ControlType::String => value.is_string(),
         ControlType::Select { values } => value
             .as_str()
             .is_some_and(|value| values.iter().any(|allowed| allowed == value)),
-        ControlType::PathData => false,
     }
 }
 
@@ -2225,7 +2108,7 @@ fn admit_motion_param(
                 .or_else(|| motion_param_type_error(path, diagnostics)),
             Param::Curve(_) => motion_param_type_error(path, diagnostics),
         },
-        ControlType::String | ControlType::NodeTarget | ControlType::Select { .. } => match param {
+        ControlType::String | ControlType::Select { .. } => match param {
             Param::Constant(constant) => constant
                 .value
                 .as_str()
@@ -2235,7 +2118,6 @@ fn admit_motion_param(
                 .or_else(|| motion_param_type_error(path, diagnostics)),
             Param::Curve(_) => motion_param_type_error(path, diagnostics),
         },
-        ControlType::PathData => motion_param_type_error(path, diagnostics),
     }
 }
 
@@ -3317,43 +3199,6 @@ fn range_details(start: i64, end: i64) -> BTreeMap<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn omitted_and_empty_authored_timing_share_second_boundaries() {
-        let fps = FrameRate::new(24, 1).unwrap();
-        let overrides = MotionPhaseOverrides {
-            enter_duration: None,
-            exit_duration: Some(RationalTime::new(15, 100).unwrap()),
-        };
-        let zero = valle_motion::TimingSeconds {
-            enter_duration: RationalTime::ZERO,
-            exit_duration: RationalTime::ZERO,
-            hold_cycle_duration: None,
-        };
-        let duration = RationalTime::new(46, 10).unwrap();
-        let absent = valle_motion::phase_windows_seconds(
-            valle_motion::resolve_timing_seconds(
-                overrides.enter_duration,
-                overrides.exit_duration,
-                None,
-            ),
-            duration,
-            fps,
-        )
-        .unwrap();
-        let empty = valle_motion::phase_windows_seconds(
-            valle_motion::resolve_timing_seconds(
-                overrides.enter_duration,
-                overrides.exit_duration,
-                Some(zero),
-            ),
-            duration,
-            fps,
-        )
-        .unwrap();
-        assert_eq!(absent, empty);
-        assert_eq!(absent.exit_start(), 107);
-    }
 
     #[test]
     fn production_render_projection_has_exact_canonical_bytes_and_domain_hash() {

@@ -187,7 +187,7 @@ impl PropType {
     }
 }
 
-/// A typed value. Rect values also carry target bounds for cross-clip locate signals.
+/// A typed value. Rect values also carry target bounds for cross-clip locate.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(

@@ -221,14 +221,7 @@ fn all_visual_source_variants_have_closed_shapes() {
             "type": "motion", "component": "component:Title", "fit": "contain", "sourceStart": "0/1",
             "sourceDuration": "4/1", "rate": "1/1", "endBehavior": "hold",
             "props": { "title": { "type": "constant", "value": "VALLE" } },
-            "cues": {
-                "intro": {
-                    "type": "source-range", "start": "0/1", "end": "1/1",
-                    "enterDuration": "1/10", "exitDuration": "1/10"
-                }
-            },
-            "resources": { "hero": "asset:i" },
-            "phases": { "enterDuration": null, "exitDuration": "1/2" }
+            "resources": { "hero": "asset:i" }
         }),
         json!({ "type": "solid", "color": "#ff0000ff" }),
     ];
@@ -408,23 +401,14 @@ fn canonical_nullable_and_default_fields_are_explicitly_required() {
     let motion = json!({
         "type": "motion", "component": "component:card", "fit": "contain", "sourceStart": "0/1",
         "sourceDuration": "2/1", "rate": "1/1", "endBehavior": "hold",
-        "props": {}, "cues": {}, "resources": {},
-        "phases": { "enterDuration": null, "exitDuration": null }
+        "props": {}, "resources": {}
     });
-    for required in ["cues", "phases"] {
+    for retired in ["cues", "phases"] {
         let mut missing = motion.clone();
-        missing.as_object_mut().unwrap().remove(required);
+        missing[retired] = json!({});
         assert!(
             serde_json::from_value::<VisualSourceWire>(missing).is_err(),
-            "canonical Motion must require {required}"
-        );
-    }
-    for required in ["enterDuration", "exitDuration"] {
-        let mut missing = motion.clone();
-        missing["phases"].as_object_mut().unwrap().remove(required);
-        assert!(
-            serde_json::from_value::<VisualSourceWire>(missing).is_err(),
-            "canonical Motion phases must require {required}"
+            "canonical Motion must reject {retired}"
         );
     }
 }

@@ -28,23 +28,22 @@ use valle_motion::{
     BACKDROP_DISPLACEMENT_CAPABILITY, BASE_CAPABILITIES, BatchColorField, BatchNumberField,
     BatchPointField, BatchPositions, BoolValue, CAMERA_CAPABILITY,
     CSS_3D_PERSPECTIVE_ORIGIN_CAPABILITY, CSS_3D_TRANSFORM_CAPABILITY,
-    CSS_TRANSFORM_PERCENT_CAPABILITY, CameraBinding, CameraControls, CapabilitySet, ChildRange,
-    ColorValue, CompareOp, ContentDigest, ContextInput, ControlType, ControlsSchema,
-    CoordinateSpace, CueControl, CueField, CueKind, DISPLACEMENT_SEED_EXPR_CAPABILITY, Expr,
-    ExprId, Extrapolation, FLIP_CAPABILITY, FONT_ASSET_CAPABILITY, FrameControl,
-    GEOMETRY_BATCH_CAPABILITY, GEOMETRY_BATCH_FIELD_CAPABILITY, GeometryBatchGeometry,
-    GeometryBatchSpec, GeometryField, GradientStopValue, InterpolateStop, MATH_FORMULA_CAPABILITY,
-    MOTION_MATH_CAPABILITY, MaskValue, MathBinaryOp, MathUnaryOp, MotionEasing, MotionValue,
-    NUMBER_FORMAT_CAPABILITY, NodeId, NodeKind, NumberFormat, NumberValue, OptionalFrameControl,
-    PARTICLE_FIELD_CAPABILITY, PaintValue, ParticleSpec, PathBooleanOp, PathData, PathStroke,
-    PathValue, PerUnit, PointValue, PrepareDataType, PropControl, RICH_TEXT_CAPABILITY, RectValue,
-    ResourceRef, SCENE3D_LAYER_CAPABILITY, SHADER_LAYER_CAPABILITY, Scene3DCameraBinding,
-    Scene3DFrameBinding, Scene3DLightBinding, Scene3DMaterialBinding,
+    CSS_TRANSFORM_PERCENT_CAPABILITY, CameraBinding, CapabilitySet, ChildRange, ColorValue,
+    CompareOp, ContentDigest, ContextInput, ControlType, ControlsSchema, CoordinateSpace,
+    DISPLACEMENT_SEED_EXPR_CAPABILITY, Expr, ExprId, Extrapolation, FLIP_CAPABILITY,
+    FONT_ASSET_CAPABILITY, GEOMETRY_BATCH_CAPABILITY, GEOMETRY_BATCH_FIELD_CAPABILITY,
+    GeometryBatchGeometry, GeometryBatchSpec, GeometryField, GradientStopValue, InterpolateStop,
+    MATH_FORMULA_CAPABILITY, MOTION_MATH_CAPABILITY, MaskValue, MathBinaryOp, MathUnaryOp,
+    MotionEasing, MotionValue, NUMBER_FORMAT_CAPABILITY, NodeId, NodeKind, NumberFormat,
+    NumberValue, PARTICLE_FIELD_CAPABILITY, PaintValue, ParticleSpec, PathBooleanOp, PathData,
+    PathStroke, PathValue, PerUnit, PointValue, PrepareDataType, PropControl, RICH_TEXT_CAPABILITY,
+    RectValue, ResourceRef, SCENE3D_LAYER_CAPABILITY, SHADER_LAYER_CAPABILITY,
+    Scene3DCameraBinding, Scene3DFrameBinding, Scene3DLightBinding, Scene3DMaterialBinding,
     Scene3DMaterialOverrideBinding, Scene3DMeshBinding, Scene3DNodeBinding,
     Scene3DTransformBinding, SceneArtifact, SceneNode, SemanticMeta, ShaderProgramRef,
     ShaderTextureInput, ShaderUniformBinding, ShaderUniformValue, StyleBinding, StyleValue,
-    TRANSFORM_SCALE2D_CAPABILITY, TextSplit, TextValue, TimingControls, UnitStyle,
-    VIEWPORT_CAPABILITY, font_family_alias, geometry_eval_policy,
+    TRANSFORM_SCALE2D_CAPABILITY, TextSplit, TextValue, UnitStyle, VIEWPORT_CAPABILITY,
+    font_family_alias, geometry_eval_policy,
 };
 
 use crate::motion_sandbox::{Sandbox, THEME_SCOPE_BINDING, scan_forbidden};
@@ -277,7 +276,7 @@ pub struct CompiledMotion {
     pub source_map: MotionSourceMap,
     pub normalized_source: String,
     pub normalized_ast_digest: ContentDigest,
-    /// Canonical hash of the validated prepare binding, including its declared source identity.
+    /// Canonical hash of the validated prepare value. The source is diagnostic provenance only.
     pub prepared_data_digest: ContentDigest,
 }
 
@@ -393,7 +392,8 @@ fn compile_motion_impl(
     )?;
     let artifact = compiler.compile(&program)?;
     let prepared_data_bytes =
-        valle_motion::canonical_bytes(&data).expect("validated prepare data binding is canonical");
+        valle_motion::canonical_bytes(&data.as_ref().map(|binding| &binding.value))
+            .expect("validated prepare data binding is canonical");
     let prepared_data_digest = ContentDigest::of_bytes(&prepared_data_bytes);
     let source_map = MotionSourceMap {
         version: MOTION_SOURCE_MAP_VERSION,

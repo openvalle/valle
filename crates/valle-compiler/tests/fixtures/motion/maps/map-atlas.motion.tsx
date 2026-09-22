@@ -1,7 +1,6 @@
 export const composition = { width: 1920, height: 1080, fps: 30, duration: 5 };
-export const component = "map-atlas";
 
-export const controls = defineControls({
+export const controls = {
   assets: { brandFont: asset({ kind: "font", required: true }) },
   props: {
     ocean: color({ default: "#07111f" }),
@@ -10,7 +9,7 @@ export const controls = defineControls({
     signal: color({ default: "#f59e0b" }),
     label: color({ default: "#dbeafe" }),
   },
-});
+};
 
 // Synthetic geography: it deliberately exercises a hole and an antimeridian crossing without
 // pretending to be a political boundary dataset.
@@ -39,12 +38,12 @@ const FLOWS = FLOW_PAIRS.map((pair, index) => {
 });
 
 function Region(ctx, { geometry, fill, stroke, strokeWidth, index }) {
-  const reveal = interpolate(ctx.enter.progress - index * 0.035, [0, 0.48], [0, 1], { easing: "easeOut" });
+  const reveal = interpolate(ctx.progress - index * 0.035, [0, 0.48], [0, 1], { easing: "easeOut" });
   return <Path key="shape" d={path(geometry.d)} fill={fill} stroke={stroke} strokeWidth={strokeWidth} style={{ opacity: 0.34 + reveal * 0.66 }} />;
 }
 
 function Marker(ctx, { pointValue, color, index }) {
-  const reveal = interpolate(ctx.hold.progress, [0.08 + index * 0.08, 0.22 + index * 0.08], [0, 1], { easing: "easeOut" });
+  const reveal = interpolate(ctx.progress, [0.08 + index * 0.08, 0.22 + index * 0.08], [0, 1], { easing: "easeOut" });
   return (
     <View key="marker" className="absolute" style={{ left: pointValue[0] - 12, top: pointValue[1] - 12, width: 24, height: 24, borderRadius: 12, backgroundColor: color, opacity: reveal, transform: `scale(${0.45 + reveal * 0.55})`, filter: `drop-shadow(0px 0px ${12 + reveal * 18}px ${color})` }}>
       <View key="core" className="absolute" style={{ left: 7.5, top: 7.5, width: 9, height: 9, borderRadius: 4.5, backgroundColor: "#ffffff" }} />
@@ -53,12 +52,12 @@ function Marker(ctx, { pointValue, color, index }) {
 }
 
 function Flow(ctx, { route, color, index }) {
-  const reveal = interpolate(ctx.hold.progress, [0.1 + index * 0.12, 0.52 + index * 0.12], [0, 1], { easing: "easeInOut" });
+  const reveal = interpolate(ctx.progress, [0.1 + index * 0.12, 0.52 + index * 0.12], [0, 1], { easing: "easeInOut" });
   return <Path key="route" d={route} fill="none" stroke={color} strokeWidth="4.5" strokeLinecap="round" trimEnd={reveal} arrowEnd="triangle" arrowSize="16.5" style={{ opacity: 0.92 }} />;
 }
 
 function MapLabel(ctx, { region, placement, color, index }) {
-  const reveal = interpolate(ctx.hold.progress, [0.22 + index * 0.035, 0.4 + index * 0.035], [0, 1]);
+  const reveal = interpolate(ctx.progress, [0.22 + index * 0.035, 0.4 + index * 0.035], [0, 1]);
   return (
     <View key="label" className="absolute" style={{ borderStyle: "solid", left: placement.x, top: placement.y, height: 37.5, paddingLeft: 13.5, paddingRight: 13.5, borderRadius: 18, backgroundColor: "#020617c9", borderWidth: 1.5, borderColor: "#ffffff1f", opacity: placement.visible ? reveal : 0 }}>
       <Text key="text" style={{ marginTop: 6, fontFamily: "asset://brandFont", fontSize: 22.5, letterSpacing: 2.7, color }}>{region.name}</Text>

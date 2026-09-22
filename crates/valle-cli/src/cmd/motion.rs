@@ -128,7 +128,7 @@ fn render(
     }
     let explicit_fonts = read_font_files(font_paths)?;
     let fonts = authoring_font_blobs(&explicit_fonts);
-    let prepared = match compile_and_prepare(input, asset_specs, &fonts, data, true)? {
+    let prepared = match compile_and_prepare(input, asset_specs, &fonts, data, None, true)? {
         Ok(prepared) => prepared,
         Err(()) => return Ok(std::process::ExitCode::FAILURE),
     };
@@ -148,17 +148,13 @@ fn render(
             );
         }
     }
-    let cues = read_cue_bindings(bindings.cues.as_deref())?;
     let props = read_prop_bindings(bindings.props.as_deref())?;
     let font_blobs = fixed_package_font_blobs(artifact, &explicit_fonts)?;
     let package = super::motion_package::build_standalone_motion_package(
         super::motion_package::StandaloneMotionPackageInput {
-            timing: None,
-            timing_seconds: None,
             artifact,
             assets: &prepared.assets,
             font_blobs: &font_blobs,
-            cue_bindings: &cues,
             prop_bindings: &props,
             duration,
             frame_rate: fps,
@@ -330,7 +326,7 @@ pub(super) struct BoundAsset {
     pub(super) hash: ContentDigest,
 }
 
-pub(super) struct PreparedInput {
+pub(crate) struct PreparedInput {
     pub(super) compiled: valle_compiler::motion::CompiledMotion,
     data_binding: Option<valle_compiler::motion::PrepareDataBinding>,
     pub(super) assets: BTreeMap<String, BoundAsset>,
@@ -430,22 +426,7 @@ struct FingerprintInputs<'a> {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct MotionPreviewDraft {
     props: BTreeMap<String, serde_json::Value>,
-    timing: MotionPreviewTiming,
-    cues: BTreeMap<String, MotionPreviewCue>,
-}
-#[derive(serde::Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct MotionPreviewTiming {
-    enter_duration: TimelineTimeWire,
-    exit_duration: TimelineTimeWire,
-}
-#[derive(serde::Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct MotionPreviewCue {
-    start: TimelineTimeWire,
-    end: TimelineTimeWire,
-    enter_duration: TimelineTimeWire,
-    exit_duration: TimelineTimeWire,
+    data: Option<serde_json::Value>,
 }
 
 fn studio_state_json(request: &StudioRequest, generation: u64) -> Result<String> {
@@ -470,7 +451,14 @@ fn studio_state_json_with_draft(
     // Hot reload uses the same fonts and source composition as Studio preview.
     let explicit_font_blobs = read_font_files(&request.fonts)?;
     let font_blobs = authoring_font_blobs(&explicit_font_blobs);
-    let data_binding = load_prepare_data(&request.input, request.data.as_deref())?;
+    let data_binding = if let Some(value) = draft.and_then(|draft| draft.data.as_ref()) {
+        Some(valle_compiler::motion::PrepareDataBinding {
+            source: "studio:draft".into(),
+            value: value.clone(),
+        })
+    } else {
+        load_prepare_data(&request.input, request.data.as_deref())?
+    };
     let (compiled, _) = match compile_with_font_assets(
         &module_graph,
         &resources,
@@ -528,94 +516,22 @@ fn studio_state_json_with_draft(
     let artifact_digest =
         ContentDigest::of_bytes(&canonical_bytes(&prepared.compiled.artifact)?).to_wire();
     let duration_frames = delivery.duration_frames;
-    let authored_timing = draft
-        .map(|draft| valle_motion::TimingSeconds {
-            enter_duration: RationalTime::from_exact(draft.timing.enter_duration.to_exact()),
-            exit_duration: RationalTime::from_exact(draft.timing.exit_duration.to_exact()),
-            hold_cycle_duration: prepared
-                .compiled
-                .artifact
-                .controls
-                .timing_seconds
-                .and_then(|timing| timing.hold_cycle_duration),
-        })
-        .or(prepared.compiled.artifact.controls.timing_seconds)
-        .unwrap_or(valle_motion::TimingSeconds {
-            enter_duration: RationalTime::ZERO,
-            exit_duration: RationalTime::ZERO,
-            hold_cycle_duration: None,
-        });
-    let timing =
-        valle_motion::phase_windows_seconds(authored_timing, delivery.duration, delivery.fps)?;
-    let cue_bindings = if let Some(draft) = draft {
-        draft
-            .cues
-            .iter()
-            .map(|(name, cue)| {
-                let start = RationalTime::from_exact(cue.start.to_exact());
-                let end = RationalTime::from_exact(cue.end.to_exact());
-                if start >= end || end > delivery.duration {
-                    bail!("Cue {name} is outside the Motion duration");
-                }
-                Ok((
-                    name.clone(),
-                    super::motion_package::SourceCueBinding {
-                        start,
-                        end,
-                        enter_duration: RationalTime::from_exact(cue.enter_duration.to_exact()),
-                        exit_duration: RationalTime::from_exact(cue.exit_duration.to_exact()),
-                    },
-                ))
-            })
-            .collect::<Result<BTreeMap<_, _>>>()?
-    } else {
-        read_cue_bindings(request.bindings.cues.as_deref())?
-    };
     let props = if let Some(draft) = draft {
         draft.props.clone()
     } else {
         read_prop_bindings(request.bindings.props.as_deref())?
     };
-    let studio_cue_bindings = cue_bindings
-        .iter()
-        .map(|(name, cue)| {
-            let window = valle_motion::signals::cue_window_seconds(
-                cue.start,
-                cue.end,
-                cue.enter_duration,
-                cue.exit_duration,
-                delivery.fps,
-            )?;
-            Ok((
-                name,
-                serde_json::json!({
-                    "type": "sourceRange",
-                    "startFrame": window.start_frame,
-                    "endFrame": window.end_frame,
-                    "enterFrames": window.enter_frames,
-                    "exitFrames": window.exit_frames,
-                    "start": cue.start.as_f64(),
-                    "end": cue.end.as_f64(),
-                    "enterDuration": cue.enter_duration.as_f64(),
-                    "exitDuration": cue.exit_duration.as_f64(),
-                }),
-            ))
-        })
-        .collect::<Result<BTreeMap<_, _>>>()?;
     let frame_rate = delivery.fps;
     let runtime_font_blobs =
         fixed_package_font_blobs(&prepared.compiled.artifact, &explicit_font_blobs)?;
     let fixed_package = match super::motion_package::build_standalone_motion_package(
         super::motion_package::StandaloneMotionPackageInput {
-            timing: None,
-            timing_seconds: Some(authored_timing),
             artifact: &prepared.compiled.artifact,
             assets: &prepared.assets,
             // Freeze every face that the Motion DrawProgram can request by content digest.
             // Formula faces are needed only when RaTeX glyph runs are merged into the final
             // ProgramRecording; ordinary Motion packages keep the smaller default closure.
             font_blobs: &runtime_font_blobs,
-            cue_bindings: &cue_bindings,
             prop_bindings: &props,
             duration: delivery.duration,
             frame_rate,
@@ -684,13 +600,6 @@ fn studio_state_json_with_draft(
             |binding| binding.value.clone(),
         ),
         "dataSource": prepared.data_binding.as_ref().map(|binding| binding.source.clone()),
-        "timing": {
-            "enterFrames": timing.enter_frames,
-            "exitFrames": timing.exit_frames,
-            "enterDuration": authored_timing.enter_duration.as_f64(),
-            "exitDuration": authored_timing.exit_duration.as_f64(),
-        },
-        "cueBindings": studio_cue_bindings,
         "sourceMap": prepared.compiled.source_map,
         "assets": asset_urls,
         "resourceLocators": resource_locators,
@@ -799,7 +708,6 @@ fn motion_watch_paths(request: &StudioRequest) -> Vec<PathBuf> {
     paths.extend(request.fonts.iter().cloned());
     paths.extend(request.data.iter().cloned());
     paths.extend(request.bindings.props.iter().cloned());
-    paths.extend(request.bindings.cues.iter().cloned());
     paths.extend(
         request
             .asset_specs
@@ -866,6 +774,7 @@ fn compile_and_prepare(
     asset_specs: &[String],
     font_blobs: &[Vec<u8>],
     data: Option<&Path>,
+    inline_data: Option<&valle_compiler::motion::PrepareDataBinding>,
     emit_diagnostics: bool,
 ) -> Result<Result<PreparedInput, ()>> {
     let perf = perf_enabled();
@@ -880,7 +789,14 @@ fn compile_and_prepare(
             content_hash: asset.hash.clone(),
         })
         .collect::<Vec<_>>();
-    let data_binding = load_prepare_data(input, data)?;
+    let data_binding = if let Some(binding) = inline_data {
+        if data.is_some() {
+            bail!("Motion data cannot be bound from a file and inline at the same time");
+        }
+        Some(binding.clone())
+    } else {
+        load_prepare_data(input, data)?
+    };
     let (compiled, _) = match compile_with_font_assets(
         &module_graph,
         &resources,
@@ -1230,7 +1146,7 @@ pub(super) fn fixed_package_font_blobs(
 /// Exact, artifact-wide formula font closure for the immutable Studio fixed package.
 ///
 /// `latex` and `display` are static in `SceneArtifact`. Formula `fontSize`, color, visibility,
-/// props and cues may vary by frame, but they cannot change the RaTeX face selected for a glyph.
+/// Props may vary by frame, but they cannot change the RaTeX face selected for a glyph.
 /// Inspecting the emitted `ProgramRecording` also avoids freezing Size faces for delimiters that
 /// RaTeX already lowered to paths.
 fn used_formula_font_blobs(artifact: &valle_motion::SceneArtifact) -> Result<Vec<Vec<u8>>> {
@@ -1318,9 +1234,24 @@ fn mount_motion_runtime_fonts(
 /// Compile a Motion component referenced by a Timeline document.
 ///
 /// Compile against the component's own canvas, including module-level text measurement.
-pub(super) fn compile_timeline_component(input: &Path, assets: &[String]) -> Result<PreparedInput> {
-    compile_and_prepare(input, assets, &load_fonts(&[])?, None, false)?
-        .map_err(|_| anyhow!("Motion component compilation failed"))
+pub(super) fn compile_timeline_component(
+    input: &Path,
+    assets: &[String],
+    data: Option<&serde_json::Value>,
+) -> Result<PreparedInput> {
+    let binding = data.map(|value| valle_compiler::motion::PrepareDataBinding {
+        source: "timeline-inline".into(),
+        value: value.clone(),
+    });
+    compile_and_prepare(
+        input,
+        assets,
+        &load_fonts(&[])?,
+        None,
+        binding.as_ref(),
+        false,
+    )?
+    .map_err(|_| anyhow!("Motion component compilation failed"))
 }
 
 fn read_prop_bindings(path: Option<&Path>) -> Result<BTreeMap<String, serde_json::Value>> {
@@ -1329,40 +1260,4 @@ fn read_prop_bindings(path: Option<&Path>) -> Result<BTreeMap<String, serde_json
     })
     .transpose()
     .map(Option::unwrap_or_default)
-}
-
-fn read_cue_bindings(
-    path: Option<&Path>,
-) -> Result<BTreeMap<String, super::motion_package::SourceCueBinding>> {
-    use valle_timeline::wire::timeline::TimelineMotionCueBindingWire;
-    let Some(path) = path else {
-        return Ok(BTreeMap::new());
-    };
-    let bindings: BTreeMap<String, TimelineMotionCueBindingWire> =
-        serde_json::from_str(&super::read(path)?)
-            .context("decode Motion --cues source-range bindings")?;
-    bindings
-        .into_iter()
-        .map(|(name, cue)| {
-            let TimelineMotionCueBindingWire::SourceRange {
-                start,
-                end,
-                enter_duration,
-                exit_duration,
-            } = cue;
-            Ok((
-                name,
-                super::motion_package::SourceCueBinding {
-                    start: RationalTime::from_exact(start.to_exact()),
-                    end: RationalTime::from_exact(end.to_exact()),
-                    enter_duration: enter_duration
-                        .map(|v| RationalTime::from_exact(v.to_exact()))
-                        .unwrap_or(RationalTime::ZERO),
-                    exit_duration: exit_duration
-                        .map(|v| RationalTime::from_exact(v.to_exact()))
-                        .unwrap_or(RationalTime::ZERO),
-                },
-            ))
-        })
-        .collect()
 }

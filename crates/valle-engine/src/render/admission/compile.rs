@@ -74,22 +74,6 @@ pub(super) fn compile_admitted_timeline(
         }
     }
 
-    fn compile_motion_cue(cue: AdmittedMotionCue) -> CompiledMotionCue {
-        match cue {
-            AdmittedMotionCue::SourceRange {
-                start,
-                end,
-                enter_duration,
-                exit_duration,
-            } => CompiledMotionCue::SourceRange {
-                start,
-                end,
-                enter_duration,
-                exit_duration,
-            },
-        }
-    }
-
     fn compile_motion_instance(instance: AdmittedMotionInstance) -> CompiledMotionInstance {
         CompiledMotionInstance {
             component_target: instance.component_target,
@@ -98,11 +82,6 @@ pub(super) fn compile_admitted_timeline(
                 .props
                 .into_iter()
                 .map(|(name, param)| (name, compile_motion_param(param)))
-                .collect(),
-            cues: instance
-                .cues
-                .into_iter()
-                .map(|(name, cue)| (name, compile_motion_cue(cue)))
                 .collect(),
             resources: instance.resources,
             artifact_dependencies: instance
@@ -113,14 +92,6 @@ pub(super) fn compile_admitted_timeline(
                     target: dependency.target,
                 })
                 .collect(),
-            phases: CompiledMotionPhases {
-                duration_frames: instance.phases.duration_frames,
-                enter_frames: instance.phases.enter_frames,
-                hold_frames: instance.phases.hold_frames,
-                exit_frames: instance.phases.exit_frames,
-                hold_cycle_frames: instance.phases.hold_cycle_frames,
-                hold_cycle_duration: instance.phases.hold_cycle_duration,
-            },
             artifact: instance.artifact,
         }
     }

@@ -3,13 +3,13 @@ use std::{collections::BTreeMap, sync::Arc};
 use valle_compiler::motion::compile_motion;
 use valle_motion::layout::LayoutCache;
 use valle_motion::{
-    FontResource, Fonts, LayoutOptions, MotionValue, ResolvedSignals, StyleCache, Viewport,
-    default_font_naming, emit, prepare_scene,
+    FontResource, Fonts, LayoutOptions, MotionValue, StyleCache, Viewport, default_font_naming,
+    emit, prepare_scene,
 };
 use valle_timeline::FrameRate;
 
 const SOURCE: &str = r##"
-export const controls=defineControls({props:{alpha:number({default:1,min:0,max:1})}});
+export const controls=({props:{alpha:number({default:1,min:0,max:1})}});
 const items=defineRepeater({count:12,keyPrefix:"row"});
 export default function Scene(ctx,props) {
  return <Scene className="w-full h-full flex flex-wrap" style={{padding:12,gap:6}}>
@@ -45,7 +45,6 @@ fn cached_geometry_matches_cold_programs_for_reverse_seeks_fps_and_viewport_chan
     let cache = LayoutCache::new(&p, &fonts).unwrap();
     let styles = StyleCache::new();
     let props = valle_motion::resolve_props(&a.controls, &BTreeMap::new()).unwrap();
-    let phase = valle_motion::phase_windows(&a.controls.phase_spec(), 300);
     for rate in [
         FrameRate::new(24, 1).unwrap(),
         FrameRate::new(30, 1).unwrap(),
@@ -61,12 +60,11 @@ fn cached_geometry_matches_cold_programs_for_reverse_seeks_fps_and_viewport_chan
         ] {
             cache.clear();
             for (i, frame) in [0, 60, 149, 1, 77, 60, 0].into_iter().enumerate() {
-                let ctx = valle_motion::motion_context_at(frame, &phase, rate).unwrap();
+                let ctx = valle_motion::motion_context_at_frame(frame, 300, rate).unwrap();
                 let plain = valle_motion::build_tree(
                     &p,
                     &ctx,
                     &props,
-                    &ResolvedSignals::default(),
                     &LayoutOptions {
                         viewport,
                         fonts: &fonts,
@@ -75,13 +73,7 @@ fn cached_geometry_matches_cold_programs_for_reverse_seeks_fps_and_viewport_chan
                 )
                 .unwrap();
                 let (reused, timing) = cache
-                    .build_tree_profiled(
-                        &ctx,
-                        &props,
-                        &ResolvedSignals::default(),
-                        viewport,
-                        Some(&styles),
-                    )
+                    .build_tree_profiled(&ctx, &props, viewport, Some(&styles))
                     .unwrap();
                 assert_eq!(timing.layout_reused, i > 0);
                 assert_eq!(bytes(&plain), bytes(&reused), "frame={frame} rate={rate:?}");
@@ -96,8 +88,8 @@ fn cache_replaces_geometry_on_configuration_change_and_does_not_retain_old_frame
     let p = prepare_scene(&a).unwrap();
     let fonts = fonts("NotoSans-Regular.ttf");
     let cache = LayoutCache::new(&p, &fonts).unwrap();
-    let phase = valle_motion::phase_windows(&a.controls.phase_spec(), 300);
-    let ctx = valle_motion::motion_context_at(30, &phase, FrameRate::new(30, 1).unwrap()).unwrap();
+    let ctx =
+        valle_motion::motion_context_at_frame(30, 300, FrameRate::new(30, 1).unwrap()).unwrap();
     let default = valle_motion::resolve_props(&a.controls, &BTreeMap::new()).unwrap();
     let override_props = valle_motion::resolve_props(
         &a.controls,
@@ -106,39 +98,21 @@ fn cache_replaces_geometry_on_configuration_change_and_does_not_retain_old_frame
     .unwrap();
     let view = Viewport::new((960, 620));
     let (first, _) = cache
-        .build_tree_profiled(&ctx, &default, &ResolvedSignals::default(), view, None)
+        .build_tree_profiled(&ctx, &default, view, None)
         .unwrap();
     let old = Arc::downgrade(&first.layout);
     drop(first);
     let (_, timings) = cache
-        .build_tree_profiled(
-            &ctx,
-            &override_props,
-            &ResolvedSignals::default(),
-            view,
-            None,
-        )
+        .build_tree_profiled(&ctx, &override_props, view, None)
         .unwrap();
     assert!(!timings.layout_reused);
     assert!(old.upgrade().is_none());
     let (_, timings) = cache
-        .build_tree_profiled(
-            &ctx,
-            &override_props,
-            &ResolvedSignals::default(),
-            view,
-            None,
-        )
+        .build_tree_profiled(&ctx, &override_props, view, None)
         .unwrap();
     assert!(timings.layout_reused);
     let (_, timings) = cache
-        .build_tree_profiled(
-            &ctx,
-            &override_props,
-            &ResolvedSignals::default(),
-            Viewport::new((800, 600)),
-            None,
-        )
+        .build_tree_profiled(&ctx, &override_props, Viewport::new((800, 600)), None)
         .unwrap();
     assert!(!timings.layout_reused);
     assert!(!cache.is_for(&prepare_scene(&a).unwrap()));
@@ -150,25 +124,18 @@ fn fonts_are_frozen_per_cache_and_new_font_configuration_rebuilds_geometry() {
     let p = prepare_scene(&a).unwrap();
     let regular = fonts("NotoSans-Regular.ttf");
     let mono = fonts("NotoSansMono-Regular.ttf");
-    let phase = valle_motion::phase_windows(&a.controls.phase_spec(), 300);
-    let ctx = valle_motion::motion_context_at(30, &phase, FrameRate::new(30, 1).unwrap()).unwrap();
+    let ctx =
+        valle_motion::motion_context_at_frame(30, 300, FrameRate::new(30, 1).unwrap()).unwrap();
     let props = valle_motion::resolve_props(&a.controls, &BTreeMap::new()).unwrap();
     let render = |fonts: &Fonts| {
         let cache = LayoutCache::new(&p, fonts).unwrap();
         let cached = cache
-            .build_tree(
-                &ctx,
-                &props,
-                &ResolvedSignals::default(),
-                Viewport::new((960, 620)),
-                None,
-            )
+            .build_tree(&ctx, &props, Viewport::new((960, 620)), None)
             .unwrap();
         let full = valle_motion::build_tree(
             &p,
             &ctx,
             &props,
-            &ResolvedSignals::default(),
             &LayoutOptions {
                 viewport: Viewport::new((960, 620)),
                 fonts,
@@ -207,20 +174,18 @@ fn independent_worker_caches_preserve_the_requested_frame() {
     let a = compile_motion(SOURCE).unwrap().artifact;
     let p = prepare_scene(&a).unwrap();
     let props = valle_motion::resolve_props(&a.controls, &BTreeMap::new()).unwrap();
-    let phases = valle_motion::phase_windows(&a.controls.phase_spec(), 300);
     let regular = fonts("NotoSans-Regular.ttf");
     let fps = FrameRate::new(60, 1).unwrap();
     let viewport = Viewport::new((960, 620));
     let expected: Vec<_> = [0, 17, 60, 149]
         .into_iter()
         .map(|frame| {
-            let ctx = valle_motion::motion_context_at(frame, &phases, fps).unwrap();
+            let ctx = valle_motion::motion_context_at_frame(frame, 300, fps).unwrap();
             bytes(
                 &valle_motion::build_tree(
                     &p,
                     &ctx,
                     &props,
-                    &ResolvedSignals::default(),
                     &LayoutOptions {
                         viewport,
                         fonts: &regular,
@@ -237,20 +202,13 @@ fn independent_worker_caches_preserve_the_requested_frame() {
             .map(|frame| {
                 let p = &p;
                 let props = &props;
-                let phases = &phases;
                 scope.spawn(move || {
                     let fonts = fonts("NotoSans-Regular.ttf");
                     let cache = LayoutCache::new(p, &fonts).unwrap();
-                    let warm = valle_motion::motion_context_at(90, phases, fps).unwrap();
-                    let _ = cache
-                        .build_tree(&warm, props, &ResolvedSignals::default(), viewport, None)
-                        .unwrap();
-                    let ctx = valle_motion::motion_context_at(frame, phases, fps).unwrap();
-                    bytes(
-                        &cache
-                            .build_tree(&ctx, props, &ResolvedSignals::default(), viewport, None)
-                            .unwrap(),
-                    )
+                    let warm = valle_motion::motion_context_at_frame(90, 300, fps).unwrap();
+                    let _ = cache.build_tree(&warm, props, viewport, None).unwrap();
+                    let ctx = valle_motion::motion_context_at_frame(frame, 300, fps).unwrap();
+                    bytes(&cache.build_tree(&ctx, props, viewport, None).unwrap())
                 })
             })
             .collect();
@@ -269,8 +227,8 @@ fn static_layout_props_invalidate_geometry_instead_of_reusing_old_sizes() {
     let fonts = fonts("NotoSans-Regular.ttf");
     let cache = LayoutCache::new(&prepared, &fonts).unwrap();
     let viewport = Viewport::new((960, 620));
-    let phases = valle_motion::phase_windows(&artifact.controls.phase_spec(), 300);
-    let ctx = valle_motion::motion_context_at(30, &phases, FrameRate::new(60, 1).unwrap()).unwrap();
+    let ctx =
+        valle_motion::motion_context_at_frame(30, 300, FrameRate::new(60, 1).unwrap()).unwrap();
     let mut previous = None;
     for alpha in [1.0, 0.0, 0.5, 1.0] {
         let props = valle_motion::resolve_props(
@@ -279,14 +237,13 @@ fn static_layout_props_invalidate_geometry_instead_of_reusing_old_sizes() {
         )
         .unwrap();
         let (cached, timing) = cache
-            .build_tree_profiled(&ctx, &props, &ResolvedSignals::default(), viewport, None)
+            .build_tree_profiled(&ctx, &props, viewport, None)
             .unwrap();
         assert!(!timing.layout_reused);
         let full = valle_motion::build_tree(
             &prepared,
             &ctx,
             &props,
-            &ResolvedSignals::default(),
             &LayoutOptions {
                 viewport,
                 fonts: &fonts,
@@ -301,7 +258,7 @@ fn static_layout_props_invalidate_geometry_instead_of_reusing_old_sizes() {
         previous = Some(bytes(&cached));
         assert!(
             cache
-                .build_tree_profiled(&ctx, &props, &ResolvedSignals::default(), viewport, None)
+                .build_tree_profiled(&ctx, &props, viewport, None)
                 .unwrap()
                 .1
                 .layout_reused

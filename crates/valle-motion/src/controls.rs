@@ -4,9 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use valle_draw::Rgba;
 
-use crate::phases::PhaseSpec;
 use crate::value::MotionValue;
-use valle_timeline::RationalTime;
 
 use super::artifact::ValidationError;
 
@@ -361,9 +359,6 @@ pub enum ControlType {
     Angle,
     Point,
     Rect,
-    PathData,
-    /// Stable authored node address for scene-camera controls.
-    NodeTarget,
     Select {
         values: Vec<String>,
     },
@@ -381,13 +376,7 @@ impl ControlType {
                 | (ControlType::Angle, MotionValue::Angle(_))
                 | (ControlType::Point, MotionValue::Point(_))
                 | (ControlType::Rect, MotionValue::Rect(_))
-                | (ControlType::NodeTarget, MotionValue::Str(_))
         ) || matches!((self, value), (ControlType::Select { values }, MotionValue::Enum(v)) if values.contains(v))
-            || matches!(
-                (self, value),
-                (ControlType::PathData, MotionValue::PathData(path))
-                    if path.points.len() <= crate::geometry::MAX_FRAME_GEOMETRY_POINTS
-            )
     }
 
     pub(crate) fn validate(&self, path: &str, errors: &mut Vec<ValidationError>) {
@@ -469,151 +458,6 @@ impl PropControl {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct FrameControl {
-    pub default: u32,
-    pub min: u32,
-    pub max: Option<u32>,
-}
-
-impl FrameControl {
-    fn validate(&self, path: &str, errors: &mut Vec<ValidationError>) {
-        if self.max.is_some_and(|max| self.min > max)
-            || self.default < self.min
-            || self.max.is_some_and(|max| self.default > max)
-        {
-            errors.push(ValidationError::new(
-                path,
-                "frame default must lie inside min/max",
-            ));
-        }
-    }
-
-    fn resolve(self, field: &'static str, override_value: Option<u32>) -> Result<u32, TimingError> {
-        let value = override_value.unwrap_or(self.default);
-        if value < self.min || self.max.is_some_and(|max| value > max) {
-            return Err(TimingError {
-                field,
-                value,
-                min: self.min,
-                max: self.max,
-            });
-        }
-        Ok(value)
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct TimingError {
-    pub field: &'static str,
-    pub value: u32,
-    pub min: u32,
-    pub max: Option<u32>,
-}
-
-impl core::fmt::Display for TimingError {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self.max {
-            Some(max) => write!(
-                f,
-                "{} override {} is outside {}..={}",
-                self.field, self.value, self.min, max
-            ),
-            None => write!(
-                f,
-                "{} override {} is below minimum {}",
-                self.field, self.value, self.min
-            ),
-        }
-    }
-}
-
-impl std::error::Error for TimingError {}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct OptionalFrameControl {
-    pub default: Option<u32>,
-    pub min: u32,
-    pub max: Option<u32>,
-}
-
-impl OptionalFrameControl {
-    fn validate(&self, path: &str, errors: &mut Vec<ValidationError>) {
-        if self.min == 0 {
-            errors.push(ValidationError::new(
-                format!("{path}/min"),
-                "optional frame minimum must be positive",
-            ));
-        }
-        if self.max.is_some_and(|max| self.min > max)
-            || self.default.is_some_and(|value| value < self.min)
-            || self
-                .default
-                .zip(self.max)
-                .is_some_and(|(value, max)| value > max)
-        {
-            errors.push(ValidationError::new(
-                path,
-                "optional frame default must lie inside min/max",
-            ));
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct TimingControls {
-    pub enter_frames: FrameControl,
-    pub hold_cycle_frames: OptionalFrameControl,
-    pub exit_frames: FrameControl,
-}
-
-impl TimingControls {
-    pub fn phase_spec(&self) -> PhaseSpec {
-        PhaseSpec {
-            enter_frames: self.enter_frames.default,
-            exit_frames: self.exit_frames.default,
-            hold_cycle_frames: self.hold_cycle_frames.default,
-        }
-    }
-
-    pub fn resolve_phase_spec(
-        &self,
-        enter_frames: Option<u32>,
-        exit_frames: Option<u32>,
-    ) -> Result<PhaseSpec, TimingError> {
-        Ok(PhaseSpec {
-            enter_frames: self.enter_frames.resolve("enterFrames", enter_frames)?,
-            exit_frames: self.exit_frames.resolve("exitFrames", exit_frames)?,
-            hold_cycle_frames: self.hold_cycle_frames.default,
-        })
-    }
-
-    fn validate(&self, errors: &mut Vec<ValidationError>) {
-        self.enter_frames
-            .validate("/controls/timing/enterFrames", errors);
-        self.hold_cycle_frames
-            .validate("/controls/timing/holdCycleFrames", errors);
-        self.exit_frames
-            .validate("/controls/timing/exitFrames", errors);
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum CueKind {
-    Span,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct CueControl {
-    pub kind: CueKind,
-    pub required: bool,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum AssetKind {
     Image,
@@ -632,85 +476,25 @@ pub struct AssetControl {
     pub required: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct CameraControls {
-    pub values: BTreeMap<String, PropControl>,
-}
-
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ControlsSchema {
     pub props: BTreeMap<String, PropControl>,
-    /// Structured JSON frozen and expanded at prepare time. It never becomes frame-time IR.
+    /// Structured JSON frozen and expanded at prepare time.
     pub data: BTreeMap<String, PrepareDataType>,
-    pub timing: TimingControls,
-    /// Authored second-based phase timing. Frame controls remain an internal fixture surface.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub timing_seconds: Option<TimingSeconds>,
-    pub cues: BTreeMap<String, CueControl>,
     pub assets: BTreeMap<String, AssetControl>,
-    pub camera: CameraControls,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct TimingSeconds {
-    pub enter_duration: RationalTime,
-    pub exit_duration: RationalTime,
-    pub hold_cycle_duration: Option<RationalTime>,
 }
 
 impl ControlsSchema {
-    pub fn phase_spec(&self) -> PhaseSpec {
-        self.timing.phase_spec()
-    }
-
-    pub fn phase_spec_with_overrides(
-        &self,
-        enter_frames: Option<u32>,
-        exit_frames: Option<u32>,
-    ) -> Result<PhaseSpec, TimingError> {
-        self.timing.resolve_phase_spec(enter_frames, exit_frames)
-    }
-
     pub(crate) fn validate(&self, errors: &mut Vec<ValidationError>) {
-        self.timing.validate(errors);
-        if let Some(timing) = self.timing_seconds {
-            for (name, duration) in [
-                ("enterDuration", timing.enter_duration),
-                ("exitDuration", timing.exit_duration),
-            ] {
-                if duration.is_negative() {
-                    errors.push(ValidationError::new(
-                        format!("/controls/timingSeconds/{name}"),
-                        "duration must be non-negative",
-                    ));
-                }
-            }
-            if timing
-                .hold_cycle_duration
-                .is_some_and(RationalTime::is_non_positive)
-            {
-                errors.push(ValidationError::new(
-                    "/controls/timingSeconds/holdCycleDuration",
-                    "hold cycle duration must be positive",
-                ));
-            }
-        }
         validate_names("/controls/props", self.props.keys(), errors);
         validate_names("/controls/data", self.data.keys(), errors);
-        validate_names("/controls/cues", self.cues.keys(), errors);
         validate_names("/controls/assets", self.assets.keys(), errors);
-        validate_names("/controls/camera", self.camera.values.keys(), errors);
         for (name, control) in &self.props {
             control.validate(&format!("/controls/props/{name}"), errors);
         }
         for (name, schema) in &self.data {
             schema.validate_schema(&format!("/controls/data/{name}"), 1, errors);
-        }
-        for (name, control) in &self.camera.values {
-            control.validate(&format!("/controls/camera/{name}"), errors);
         }
     }
 
@@ -815,27 +599,7 @@ mod tests {
                     key: Some("id".into()),
                 },
             )]),
-            timing_seconds: None,
-            timing: TimingControls {
-                enter_frames: FrameControl {
-                    default: 0,
-                    min: 0,
-                    max: None,
-                },
-                hold_cycle_frames: OptionalFrameControl {
-                    default: None,
-                    min: 1,
-                    max: None,
-                },
-                exit_frames: FrameControl {
-                    default: 0,
-                    min: 0,
-                    max: None,
-                },
-            },
-            cues: BTreeMap::new(),
             assets: BTreeMap::new(),
-            camera: CameraControls::default(),
         }
     }
 

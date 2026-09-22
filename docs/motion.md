@@ -73,15 +73,14 @@ Keep data, assets and fonts consistent between previews and export; a rational
 
 ### Module and function shape
 
-The entry module needs a default function declaration. Name it, or supply
-`export const component = "name"`. Optional `export const controls =
-defineControls(...)` declares external inputs. The entry module may export
-`composition`, `component`, and `controls`; helper modules may export reusable
-values and components.
+The entry module needs a named default function declaration and a
+`composition` with its canvas and duration. Optional `export const controls =
+{ ... }` declares external inputs. Helper modules may export reusable values
+and components.
 
-The root parameter positions are `(ctx, props, signals, data)`. Omit unused trailing
+The root parameter positions are `(ctx, props, data)`. Omit unused trailing
 parameters. `props` and `data` may be destructured in their positions. An authored
-child component uses `(ctx, props, signals)`; pass prepared data through its props.
+child component uses `(ctx, props)`; pass prepared data through its props.
 The first parameter is the Motion context, including in child components.
 
 Module declarations use `const` and functions. Component bodies use `const`
@@ -104,7 +103,7 @@ construct a new tree on every frame.
 | JSX fragments | Use a `Group` or `View` to give multiple children one root |
 | Spread | Fixed-shape style objects support spreads. JSX prop/per-unit spread and list/interpolation array spreads or holes are not admitted |
 
-Prepare-time means independent of `ctx`, runtime `props` and cue signals. Module
+Prepare-time means independent of `ctx` and runtime `props`. Module
 constants, bound `data`, static component arguments, a theme and explicit resources
 can participate in preparation. `props` have typed runtime bindings even when a
 default exists; use `data` for a collection that determines node count.
@@ -218,37 +217,26 @@ with `viewBox`, `<defs>`, CSS selectors or arbitrary SVG attributes.
 | Namespace | Declaration and use |
 | --- | --- |
 | `props` | Typed scalar/geometric controls read through `props.name` |
-| `data` | Validated structured JSON available during prepare through the fourth root argument |
-| `timing` | `enterDuration`, `exitDuration`, optional `holdCycleDuration`, all in seconds |
-| `cues` | Named `spanCue({ required })` declarations, read through `signals.name` |
+| `data` | Validated structured JSON available during prepare through the third root argument |
 | `assets` | `asset({ kind, required })`, referenced by `asset://name` |
-| `camera` | Typed camera controls for host integration; the scene's authored camera is `Scene camera={{...}}` |
 
 Prop constructors: `number`, `string`, `boolean`, `color`, `length`, `angle`,
-`point`, `rect`, `path`, `nodeTarget`, `select`. Common options are `default`,
+`point`, `rect`, `select`. Common options are `default`,
 `required`, `label`; numbers add `min`, `max`, `step`; `select` requires a string
 `values` array. Examples: `number({ default: 24, min: 0 })`,
 `select({ default: "light", values: ["light", "dark"] })`,
 `point({ default: point(40, 60) })`.
 
-The constructors `point`, `rect`, `path`, `boolean` and `frames` are overloaded:
-their schema forms differ from geometry/sequence forms described later.
+The constructors `point`, `rect` and `boolean` have schema forms
+distinct from their geometry forms. `path(svgD)` draws path geometry, and
+`frames(n)` supplies a sequence time value.
 Length and angle defaults are strings such as `"24px"` and `"15deg"`.
 
-Use `--props props.json` for a JSON object of constant prop values and
-`--cues cues.json` for a JSON object of Timeline cue bindings. These options work
-with `check`, `render` and `studio`, alongside `--asset`, `--data` and `--font`.
-Required inputs without defaults must be supplied. Missing optional cues stay
-inactive; declaring a cue does not schedule narration automatically.
-
-For example, `cues.json` can contain:
-
-```json
-{ "reveal": { "type": "source-range", "start": 0, "end": 2.5 } }
-```
-
-Cue times are seconds in the Motion source. See [Timeline integration](timeline.md#motion-integration)
-for animated prop curves and clip placement. `motion check` uses the same preparation
+Use `--props props.json` for constant prop values and `--data data.json` for
+structured preparation input, alongside `--asset` and `--font`.
+Required inputs without defaults must be supplied. See
+[Timeline integration](timeline.md#motion-integration) for animated prop curves
+and clip placement. `motion check` uses the same preparation
 and Native Raster rendering path for one frame (default `--frame 0`); pass the same
 data, asset and font bindings as the intended render, and keep them consistent with the
 file's `composition`. It creates no persistent output and does not prove that every frame
@@ -259,15 +247,15 @@ or encoder will succeed.
 Save as `bars.motion.tsx`:
 
 ```tsx
-export const controls = defineControls({
+export const controls = {
   data: {
     rows: array(record({
       id: string(), label: string(), value: number({ min: 0, max: 100 }),
     }), { minItems: 1, maxItems: 5, key: "id" }),
   },
-});
+};
 
-export default function Bars(ctx, props, signals, data) {
+export default function Bars(ctx, props, data) {
   const reveal = interpolate(ctx.progress, [0, 0.5], [0, 1]);
   return (
     <Scene className="h-full w-full flex flex-col justify-center"
@@ -313,9 +301,9 @@ wrapper. A data change requires preparation again; Studio watches the bound JSON
 Save as `poster.motion.tsx` and provide your own `poster.png`:
 
 ```tsx
-export const controls = defineControls({
+export const controls = {
   assets: { poster: asset({ kind: "image", required: true }) },
-});
+};
 export default function Poster(ctx) {
   return (
     <Scene className="relative h-full w-full" style={{ backgroundColor: "#0f172a" }}>
@@ -371,30 +359,16 @@ Formula faces and explicit `asset://` font bindings remain resources of the work
 
 | Expression | Meaning |
 | --- | --- |
-| `ctx.localFrame` | Zero-based integer frame in the local clip |
-| `ctx.seconds` | Continuous local sample time in seconds |
-| `ctx.progress` | Local time / clip duration, in `[0, 1)` |
-| `ctx.durationFrames` | Clip duration in frames |
+| `ctx.localFrame` | Clamped zero-based source frame |
+| `ctx.seconds` | Exact mapped source sample time in seconds, including subframes |
+| `ctx.progress` | `clamp(sourceTime × actualFPS / durationFrames, 0, 1)` |
+| `ctx.durationFrames` | Composition duration quantized at the actual FPS |
 | `ctx.fps.num`, `ctx.fps.den` | Rational frame-rate numerator/denominator |
 | `ctx.viewport.width`, `.height` | Logical canvas dimensions in pixels |
-| `ctx.enter`, `ctx.hold`, `ctx.exit` | Phase fields listed below |
 | `ctx.unit.index`, `.count`, `.start`, `.end` | Only inside `Text perUnit`; start/end are text byte offsets |
 
-Each phase exposes `active`, `frame`, `elapsedFrames`, `durationFrames`, `progress`.
-`frame` and `progress` clamp to the phase window. `elapsedFrames` is unclamped,
-negative before a phase and increasing after it ends. Hold additionally exposes
-`iteration`, `cycleFrame`, `cycleProgress`.
-
-These are the author-readable fields; internal context serialization also contains
-fields that are not exposed as expressions. Test phases with `ctx.enter.active`
-etc., rather than assuming `ctx.currentPhase` is available.
-
-With no timing declaration, enter/exit lengths are zero and hold fills the clip.
-Otherwise hold receives `duration − enter − exit`. If the clip is shorter than
-enter plus exit, those windows compress proportionally and hold becomes empty.
-Progress is `frame / windowLength`: the last active frame normally does not equal
-1. Entry reaches 1 after its window; an exit ending with the clip has no later
-frame. End keyframes earlier if the final displayed frame must show a settled state.
+Define animation windows explicitly with `ctx.seconds`, sequences and expressions.
+The last displayed source frame precedes the quantized duration boundary.
 
 ### Interpolation and springs
 
@@ -416,12 +390,10 @@ string or an array with one entry per segment. Other option names, including
 Save as `spring.motion.tsx`:
 
 ```tsx
-export const controls = defineControls({
-  timing: { enterDuration: 0.6, exitDuration: 0.4 },
-});
+export const composition = { width: 1920, height: 1080, fps: 30, duration: 5 };
 export default function SpringTitle(ctx) {
-  const enter = spring({ elapsedFrames: ctx.enter.elapsedFrames, fps: ctx.fps, preset: "gentle" });
-  const exit = interpolate(ctx.exit.progress, [0, 0.8], [1, 0]);
+  const enter = spring({ elapsedFrames: ctx.seconds * ctx.fps.num / ctx.fps.den, fps: ctx.fps, preset: "gentle" });
+  const exit = interpolate(ctx.seconds, [4.4, 4.8], [1, 0]);
   return (
     <Scene className="h-full w-full flex items-center justify-center"
       style={{ backgroundColor: "#0f172a" }}>
@@ -433,7 +405,7 @@ export default function SpringTitle(ctx) {
 ```
 
 `spring({ elapsedFrames, fps: ctx.fps, preset })` starts at 0 with zero velocity by default
-and converges to 1; it can overshoot. It continues settling after a phase when
+and converges to 1; it can overshoot. It continues settling after its authored window when
 given `elapsedFrames`. Presets: `gentle`, `wobbly`, `stiff`, `slow`, `bouncy`.
 Alternatively provide static `mass`, `stiffness`, `damping` (defaults 1, 100, 10).
 Mass/stiffness must be positive; damping must be non-negative. A preset and physical
@@ -454,8 +426,8 @@ velocity are zero; at zero the velocity equals `initialVelocity`. Neither functi
 uses iterative simulation or a settling threshold, including for zero damping.
 
 ```tsx
-const p = spring({ elapsedFrames: ctx.enter.elapsedFrames, fps: ctx.fps, preset: "gentle" });
-const v = springVelocity({ elapsedFrames: ctx.enter.elapsedFrames, fps: ctx.fps, preset: "gentle" });
+const p = spring({ elapsedFrames: ctx.localFrame, fps: ctx.fps, preset: "gentle" });
+const v = springVelocity({ elapsedFrames: ctx.localFrame, fps: ctx.fps, preset: "gentle" });
 // For a 120px horizontal movement:
 // translate: point(120 * p, 0)
 // motionBlur: motionBlur(point(120 * v * ctx.fps.den / ctx.fps.num, 0), 180)
@@ -508,10 +480,6 @@ Sequence stages do not extend the render duration automatically.
 | `trail(progress, index, { gap, mode? })` | Offset normalized progress; mode `clamp` (default) or `wrap` |
 | `wiggle(frame, ctx.fps, { seed, frequency, amplitude, phase? })` | Seeded scalar displacement; frequency in seconds, non-negative amplitude |
 | `wiggle2D(frame, ctx.fps, { seed, frequency, amplitude: [x,y], phase? })` | Seeded point displacement; suitable for `style.translate` |
-
-Cue signals expose `active`, `progress`, `enter`, `hold`, `exit`, `localFrame`.
-Their windows come from host-supplied cue data. Use `visible={signals.name.active}`
-or animate with the numeric fields once those cues are bound.
 
 ### Deterministic math and formatting
 
@@ -1336,7 +1304,7 @@ export default function GlassCard(ctx) {
 ```
 
 For bindings that affect the material's motion history, use continuous
-`ctx.seconds`/`ctx.progress`; discrete `localFrame` and phase clocks are restricted
+`ctx.seconds`/`ctx.progress`; discrete `localFrame` is restricted
 there. The engine owns causal material sampling. Avoid using a frame counter as a
 replacement for this time contract. Surface IDs remain stable across frames.
 
@@ -1635,12 +1603,12 @@ package. Author files declare inputs, uniform types/defaults/ranges, and the
 output contract; they carry no versions or hand-maintained hashes.
 
 ```tsx
-export const controls = defineControls({
+export const controls = {
   assets: {
     effect: asset({ kind: "shader", required: true }),
     noise: asset({ kind: "image", required: true }),
   },
-});
+};
 export default function Dissolve(ctx) {
   return (
     <Scene>
@@ -1792,7 +1760,7 @@ This reference follows the compiler, layout adapter and native renderer. The
 [authoring regression tests](../crates/valle-compiler/tests/motion_authoring_regressions.rs)
 cover list identity and unknown style fields. The
 [CLI regression tests](../crates/valle-cli/tests/timeline_motion_regressions.rs)
-exercise Glass, ShaderLayer, explicit cues and per-instance image bindings.
+exercise Glass, ShaderLayer and per-instance image bindings.
 Use actual previews for property combinations and frames beyond these cases.
 
 Existing examples provide larger compositions without duplicating them here:
@@ -1831,7 +1799,7 @@ Props and stable viewport/FPS/duration expressions may participate in layout;
 changing these inputs invalidates the snapshot. Fonts are frozen at preparation,
 and a replacement artifact or font set creates a new cache.
 
-Unsupported nodes, dynamic layout/text, cues affecting layout, post-layout
+Unsupported nodes, dynamic layout/text, post-layout
 dependencies, 3D and complex effects use the full layout path. A hit skips tree
 construction and layout solving, while evaluating the requested frame and
 rebuilding its current paint state and DrawProgram. It never reuses a previous
@@ -1843,12 +1811,12 @@ and presentation costs remain separate.
 
 The Motion inspector's **Property curves** panel samples explicit `opacity`,
 `translate`, `scale` and `rotate` bindings for the selected child. Choose an
-enter/hold/exit phase or local frame window; switch between frames and seconds.
+source frame window; switch between frames and seconds.
 Click a plotted source frame to seek the existing preview and use its source
-location to inspect the authoring code. An empty phase has no samples.
+location to inspect the authoring code.
 
 Sampling runs in a separate worker through the existing Rust/Wasm evaluator,
-using the active artifact, exact FPS, phase mapping, props, cues and viewport.
+using the active artifact, exact FPS, props and viewport.
 The request is bounded to one node, four properties and at most 240 actual source
 frames. Closing/hiding the panel or changing inputs cancels obsolete work.
 Playback only updates the playhead; it does not resample the curves.

@@ -7,7 +7,7 @@ use valle_motion::{
     EmitReport, Fonts, LayoutOptions, Viewport, build_tree, default_font_naming, emit,
     prepare_scene,
 };
-use valle_motion::{ResolvedSignals, motion_context_at, phase_windows, resolve_props};
+use valle_motion::{motion_context_at_frame, resolve_props};
 use valle_timeline::FrameRate;
 
 fn emit_source(source: &str) -> EmitReport {
@@ -16,15 +16,13 @@ fn emit_source(source: &str) -> EmitReport {
         .artifact;
     let prepared = prepare_scene(&artifact).expect("prepare");
     let props = resolve_props(&artifact.controls, &BTreeMap::new()).expect("props");
-    let windows = phase_windows(&artifact.controls.phase_spec(), 30);
-    let ctx = motion_context_at(0, &windows, FrameRate::new(30, 1).unwrap()).expect("ctx");
+    let ctx = motion_context_at_frame(0, 30, FrameRate::new(30, 1).unwrap()).expect("ctx");
     let mut fonts = Fonts::default();
     valle_motion::register_default_motion_fonts(&mut fonts).expect("font");
     let tree = build_tree(
         &prepared,
         &ctx,
         &props,
-        &ResolvedSignals::default(),
         &LayoutOptions {
             viewport: Viewport::new((320, 180)),
             fonts: &fonts,
@@ -196,7 +194,7 @@ fn explicit_newline_after_inline_image_starts_a_new_line() {
         r##"<Text key="code" className="line-clamp-12 overflow-hidden" style={{ whiteSpace: "pre-wrap", fontSize: 24, lineHeight: "32px", height: 128, textOverflow: "ellipsis" }}>{"A "}<Image key="dot" src="asset://dot" style={{ width: 16, height: 16 }} />{"\nB"}</Text>"##,
     );
     let report = emit_source(&format!(
-        r#"export const controls = defineControls({{ assets: {{ dot: asset({{ kind: "image" }}) }} }}); {source}"#
+        r#"export const controls = ({{ assets: {{ dot: asset({{ kind: "image" }}) }} }}); {source}"#
     ));
     assert!(report.unsupported.is_empty(), "{:?}", report.unsupported);
     let glyphs: Vec<_> = report
@@ -222,7 +220,7 @@ fn multiline_code_preserves_newline_after_styled_spans_and_image() {
         r##"
 <Text key="code" className="absolute whitespace-pre-wrap tabular-nums line-clamp-12 overflow-hidden text-white" style={{ left: 34, top: 88, width: 970, height: 430, fontSize: 26, lineHeight: "38px", tabSize: 2, textOverflow: "ellipsis" }}>
 {"export default function Film(ctx) {\n"}
-<Span style={{ color: "#67e8f9" }}>{"  const p = ctx.hold.progress;\n"}</Span>
+<Span style={{ color: "#67e8f9" }}>{"  const p = ctx.progress;\n"}</Span>
 {"  return (\n    <Scene className=\"h-full w-full\">\n"}
 <Span style={{ color: "#f9a8d4" }}>{"      <GeometryBatch progress={p} /> "}</Span>
 <Image key="status" src="asset://dot" style={{ width: 22, height: 22, verticalAlign: "middle" }} />
@@ -230,7 +228,7 @@ fn multiline_code_preserves_newline_after_styled_spans_and_image() {
 </Text>"##,
     );
     let report = emit_source(&format!(
-        r#"export const controls = defineControls({{ assets: {{ dot: asset({{ kind: "image" }}) }} }}); {source}"#
+        r#"export const controls = ({{ assets: {{ dot: asset({{ kind: "image" }}) }} }}); {source}"#
     ));
     assert!(report.unsupported.is_empty(), "{:?}", report.unsupported);
     let glyphs: Vec<_> = report

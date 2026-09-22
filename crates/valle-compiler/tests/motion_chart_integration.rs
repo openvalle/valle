@@ -7,7 +7,7 @@ use valle_compiler::motion::{MeasureEnv, compile_motion, compile_motion_with_env
 use valle_motion::{
     ARTIFACT_FORMAT_VERSION, BatchPositions, CAMERA_CAPABILITY, ContentDigest,
     FONT_ASSET_CAPABILITY, GEOMETRY_BATCH_CAPABILITY, NODE_ADVANCED_FILTER_CAPABILITY, NodeKind,
-    ResolvedSignals, ResourceRef, motion_context_at, phase_windows, resolve_props,
+    ResourceRef, motion_context_at_frame, resolve_props,
 };
 use valle_motion::{
     Fonts, LayoutOptions, StyleCache, Viewport, build_tree, default_font_naming, emit,
@@ -83,8 +83,7 @@ fn chart_integration_combines_font_camera_spaces_batch_and_advanced_filter() {
 fn display_at(compiled: &valle_compiler::motion::CompiledMotion, frame: u32) -> Vec<u8> {
     let prepared = prepare_scene(&compiled.artifact).expect("prepare");
     let props = resolve_props(&compiled.artifact.controls, &BTreeMap::new()).expect("props");
-    let windows = phase_windows(&compiled.artifact.controls.phase_spec(), 120);
-    let ctx = motion_context_at(frame, &windows, FrameRate::new(60, 1).unwrap()).expect("context");
+    let ctx = motion_context_at_frame(frame, 120, FrameRate::new(60, 1).unwrap()).expect("context");
     let mut fonts = Fonts::default();
     fonts
         .register(valle_motion::FontResource::new(FONT.to_vec()))
@@ -93,7 +92,6 @@ fn display_at(compiled: &valle_compiler::motion::CompiledMotion, frame: u32) -> 
         &prepared,
         &ctx,
         &props,
-        &ResolvedSignals::default(),
         &LayoutOptions {
             viewport: Viewport::new((1280, 720)),
             fonts: &fonts,
@@ -155,14 +153,12 @@ fn chart_engine_frames_survive_random_seek_and_cold_warm_instances() {
     for source in sources {
         let compiled = compile_motion(source).expect("chart compiles");
         let props = resolve_props(&compiled.artifact.controls, &BTreeMap::new()).unwrap();
-        let windows = phase_windows(&compiled.artifact.controls.phase_spec(), 120);
         let render = |prepared: &valle_motion::PreparedScene, frame, styles| {
-            let ctx = motion_context_at(frame, &windows, FrameRate::new(60, 1).unwrap()).unwrap();
+            let ctx = motion_context_at_frame(frame, 120, FrameRate::new(60, 1).unwrap()).unwrap();
             let tree = build_tree(
                 prepared,
                 &ctx,
                 &props,
-                &ResolvedSignals::default(),
                 &LayoutOptions {
                     viewport: Viewport::new((1280, 720)),
                     fonts: &fonts,

@@ -1,12 +1,10 @@
 export const composition = { width: 1920, height: 1080, fps: 30, duration: 5 };
-export const component = "project-font-brand";
 
-export const controls = defineControls({
-  timing: { enterDuration: 0, exitDuration: 0 },
+export const controls = {
   assets: {
     brandFont: asset({ kind: "font", required: true }),
   },
-});
+};
 
 const intro = defineSequence({
   mark: stage({ duration: seconds(1.1) }),

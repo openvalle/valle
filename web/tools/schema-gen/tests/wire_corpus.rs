@@ -14,35 +14,11 @@ fn fixed_motion_context() -> Value {
         "controls": {
           "props": {},
           "data": {},
-          "timing": {
-            "enterFrames": {"default": 0, "min": 0, "max": null},
-            "holdCycleFrames": {"default": null, "min": 1, "max": null},
-            "exitFrames": {"default": 0, "min": 0, "max": null}
-          },
-          "cues": {},
-          "assets": {},
-          "camera": {"values": {}}
+          "assets": {}
         }
       },
       "preparedData": {},
       "dataSource": null,
-      "timing": {"enterFrames": 0, "exitFrames": 0},
-      "cueBindings": {
-        "beat": {
-          "type": "sourceRange",
-          "startFrame": 0,
-          "endFrame": 20,
-          "enterFrames": 2,
-          "exitFrames": 3
-        },
-        "title": {
-          "type": "sourceRange",
-          "startFrame": 5,
-          "endFrame": 18,
-          "enterFrames": 1,
-          "exitFrames": 1
-        }
-      },
       "sourceMap": {
         "version": 1,
         "component": "Card",
@@ -217,32 +193,13 @@ fn motion_digests_have_one_exact_wire_spelling() {
 }
 
 #[test]
-fn motion_cues_require_an_explicit_closed_discriminator() {
+fn removed_motion_editor_fields_are_rejected_by_the_closed_protocol() {
     let value = fixed_motion_context();
-    serde_json::from_value::<MotionContextWire>(value.clone())
-        .expect("canonical Motion source-range cues");
-
-    let mut missing_type = value.clone();
-    missing_type["cueBindings"]["beat"]
-        .as_object_mut()
-        .expect("cue object")
-        .remove("type");
-    assert!(serde_json::from_value::<MotionContextWire>(missing_type).is_err());
-
-    let mut unknown_type = value;
-    unknown_type["cueBindings"]["title"]["type"] = Value::String("unsupported".to_owned());
-    assert!(serde_json::from_value::<MotionContextWire>(unknown_type).is_err());
-
-    for required in ["startFrame", "endFrame"] {
-        let mut missing_resolved_bound = fixed_motion_context();
-        missing_resolved_bound["cueBindings"]["title"]
-            .as_object_mut()
-            .expect("source-range cue object")
-            .remove(required);
-        assert!(
-            serde_json::from_value::<MotionContextWire>(missing_resolved_bound).is_err(),
-            "source-range cue admitted missing resolved `{required}`"
-        );
+    serde_json::from_value::<MotionContextWire>(value.clone()).expect("current Motion protocol");
+    for field in ["timing", "cueBindings"] {
+        let mut invalid = value.clone();
+        invalid[field] = serde_json::json!({});
+        assert!(serde_json::from_value::<MotionContextWire>(invalid).is_err());
     }
 }
 

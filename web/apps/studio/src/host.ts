@@ -112,8 +112,7 @@ export type TimelinePreviewResult =
 
 export interface MotionPreviewRequest {
   props: Record<string, unknown>;
-  timing: { enterDuration: number; exitDuration: number };
-  cues: Record<string, { start: number; end: number; enterDuration: number; exitDuration: number }>;
+  data?: Record<string, unknown>;
 }
 
 export interface StudioHost {
@@ -396,8 +395,6 @@ export function assertMotionContext(value: unknown): MotionContext {
       "artifact",
       "preparedData",
       "dataSource",
-      "timing",
-      "cueBindings",
       "sourceMap",
       "assets",
       "resourceLocators",
@@ -420,9 +417,6 @@ export function assertMotionContext(value: unknown): MotionContext {
     || "controls" in value
     || !isObjectRecord(value.preparedData)
     || (value.dataSource !== null && typeof value.dataSource !== "string")
-    || !isRecord(value.timing)
-    || !isRecord(value.cueBindings)
-    || !Object.values(value.cueBindings).every(isMotionCueBinding)
     || !isMotionSourceMap(value.sourceMap)
     || value.sourceMap.component !== value.artifact.component
     || !Array.isArray(value.assets)
@@ -624,12 +618,7 @@ export function projectMotionContextFromAdmittedPreview(
         }]
       : []
   ));
-  // Project Timeline references an artifact whose prepare data is already baked. Raw authoring
-  // data is intentionally not reconstructed from the runtime clip contract.
-  const preparedData = {};
-  const timing = resolvedMotionTiming(artifact, authoring, motionContent);
-  const cueBindings = resolvedMotionCues(authoring, motionContent);
-  if (!cueBindings) return missingContext("resolved Motion cue windows");
+  const preparedData = record(motionContent.data);
   const totalFrames = motionTotalFrames(authoring);
   return assertMotionContext({
     status: "ok",
@@ -640,8 +629,6 @@ export function projectMotionContextFromAdmittedPreview(
     artifact,
     preparedData,
     dataSource: null,
-    timing,
-    cueBindings,
     sourceMap,
     assets,
     resourceLocators,
@@ -688,78 +675,6 @@ function boundMotionAssets(
       ? [{ name, kind, url: resolveHostedAssetUrl(asset.url, assetBaseUrl) }]
       : [];
   });
-}
-
-function resolvedMotionTiming(
-  artifact: Record<string, unknown>,
-  authoring: Record<string, unknown>,
-  source: TimelineMotionSource,
-): MotionContextOk["timing"] {
-  const prepared = record(authoring.timing);
-  const controls = record(record(artifact.controls).timing);
-  const timingSeconds = record(record(artifact.controls).timingSeconds);
-  const phases = record(source.phases);
-  const enter = record(controls.enterFrames);
-  const exit = record(controls.exitFrames);
-  return {
-    enterFrames: Number(prepared.enterFrames ?? enter.default ?? 0),
-    exitFrames: Number(prepared.exitFrames ?? exit.default ?? 0),
-    enterDuration: exactSeconds(phases.enterDuration ?? timingSeconds.enterDuration),
-    exitDuration: exactSeconds(phases.exitDuration ?? timingSeconds.exitDuration),
-  };
-}
-
-function resolvedMotionCues(
-  authoring: Record<string, unknown>,
-  source: TimelineMotionSource,
-): MotionContextOk["cueBindings"] | null {
-  const resolved = record(authoring.cues);
-  const result: MotionContextOk["cueBindings"] = {};
-  for (const [name, binding] of Object.entries(
-    source.cues as Record<string, { type: string }>,
-  )) {
-    const prepared = record(resolved[name]);
-    const startFrame = Number(prepared.startFrame);
-    const endFrame = Number(prepared.endFrame);
-    const enterFrames = Number(prepared.enterFrames ?? 0);
-    const exitFrames = Number(prepared.exitFrames ?? 0);
-    if (![startFrame, endFrame, enterFrames, exitFrames].every(isNonNegativeSafeInteger)) {
-      return null;
-    }
-    if (binding.type !== "source-range") return null;
-    result[name] = {
-      type: "sourceRange",
-      startFrame,
-      endFrame,
-      enterFrames,
-      exitFrames,
-      start: exactSeconds(record(binding).start),
-      end: exactSeconds(record(binding).end),
-      enterDuration: exactSeconds(record(binding).enterDuration),
-      exitDuration: exactSeconds(record(binding).exitDuration),
-    };
-  }
-  return result;
-}
-
-function isMotionCueBinding(value: unknown): boolean {
-  if (!isRecord(value) || value.type !== "sourceRange") return false;
-  const fields = ["startFrame", "endFrame", "enterFrames", "exitFrames"] as const;
-  const secondsFields = ["start", "end", "enterDuration", "exitDuration"] as const;
-  return fields.every((field) => isNonNegativeSafeInteger(value[field]))
-    && secondsFields.every((field) => value[field] === undefined || (typeof value[field] === "number" && Number.isFinite(value[field]) && value[field] >= 0))
-    && Object.keys(value).every((key) => key === "type" || fields.includes(key as typeof fields[number]) || secondsFields.includes(key as typeof secondsFields[number]));
-}
-
-function exactSeconds(value: unknown): number | undefined {
-  if (typeof value === "number" && Number.isFinite(value) && value >= 0) return value;
-  if (typeof value !== "string") return undefined;
-  const parts = value.split("/");
-  if (parts.length !== 2) return undefined;
-  const numerator = Number(parts[0]);
-  const denominator = Number(parts[1]);
-  const seconds = numerator / denominator;
-  return Number.isFinite(seconds) && seconds >= 0 && denominator > 0 ? seconds : undefined;
 }
 
 function isNonNegativeSafeInteger(value: unknown): value is number {
@@ -905,16 +820,7 @@ function isMotionArtifact(value: unknown): value is Record<string, unknown> {
 
 function isMotionControlsSchema(value: unknown): value is Record<string, unknown> {
   if (!isObjectRecord(value)) return false;
-  const timing = value.timing;
-  const camera = value.camera;
   return isObjectRecord(value.props)
     && isObjectRecord(value.data)
-    && isObjectRecord(timing)
-    && isObjectRecord(timing.enterFrames)
-    && isObjectRecord(timing.holdCycleFrames)
-    && isObjectRecord(timing.exitFrames)
-    && isObjectRecord(value.cues)
-    && isObjectRecord(value.assets)
-    && isObjectRecord(camera)
-    && isObjectRecord(camera.values);
+    && isObjectRecord(value.assets);
 }

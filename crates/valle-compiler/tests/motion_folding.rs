@@ -11,7 +11,7 @@ const BASE = 120;
 const scaled = (v) => BASE - v;
 
 export default function Bars(ctx) {
-  const t = ctx.hold.progress;
+  const t = ctx.progress;
   return (
     <Scene className="h-full w-full">
       {VALUES.map((v, i) => (
@@ -35,7 +35,7 @@ export default function Bars(ctx) {
 /// Equivalent scene using literal values.
 const LITERAL: &str = r##"
 export default function Bars(ctx) {
-  const t = ctx.hold.progress;
+  const t = ctx.progress;
   return (
     <Scene className="h-full w-full">
       <View key="bar-0" style={{ position: "absolute", left: 100, top: 78, width: 60, height: 42, opacity: interpolate(t, [0, 1], [0, 0.42]) }} />
@@ -92,7 +92,7 @@ export default function Probe(ctx) {
   return (
     <Scene className="h-full w-full">
       <View key="b" style={{ position: "absolute", left: 0, top: 0, width: 10, height: 10,
-                             opacity: ctx.hold.progress * 0.5 }} />
+                             opacity: ctx.progress * 0.5 }} />
     </Scene>
   );
 }
@@ -129,7 +129,7 @@ fn a_stop_that_depends_on_context_still_fails_with_a_pointed_diagnostic() {
     let diagnostics = compile_motion(
         r##"
 export default function Probe(ctx) {
-  const t = ctx.hold.progress;
+  const t = ctx.progress;
   return (
     <Scene className="h-full w-full">
       <View key="b" style={{ position: "absolute", left: 0, top: 0, width: 10, height: 10,

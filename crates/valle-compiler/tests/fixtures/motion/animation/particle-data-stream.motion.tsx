@@ -1,12 +1,7 @@
 export const composition = { width: 1920, height: 1080, fps: 30, duration: 5 };
-export const component = "particle-data-stream";
-
-export const controls = defineControls({
-  timing: { enterDuration: 0, exitDuration: 0 },
-});
 
 export default function ParticleDataStream(ctx) {
-  const t = ctx.hold.progress;
+  const t = ctx.progress;
   const reveal = interpolate(t, [0, 0.14], [0, 1], { easing: "easeOut" });
   return (
     <Scene className="relative h-full w-full" style={{ backgroundColor: "#020617" }}>

@@ -130,17 +130,6 @@ export interface TimelineSequenceView {
     sourceStartSeconds: number | null;
     sourceStartFrame: number | null;
     sourceRate: number | null;
-    motionFrames?: {
-      sourceDurationFrames: number;
-      enterFrames: number | null;
-      exitFrames: number | null;
-      enterDuration?: number | null;
-      exitDuration?: number | null;
-      cues: Record<string,
-        { type: "sourceRange"; startFrame: number; endFrame: number; enterFrames: number; exitFrames: number;
-          start?: number; end?: number; enterDuration?: number; exitDuration?: number }
-      >;
-    };
   }>;
 }
 

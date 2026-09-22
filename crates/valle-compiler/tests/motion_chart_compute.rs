@@ -97,7 +97,7 @@ fn malformed_or_runtime_stack_inputs_fail_closed() {
             "rectangular",
         ),
         (
-            r#"export default function P(ctx){const S=stack([[ctx.hold.progress]]);return <View style={{left:S.layers[0][0][1]}}/>;}"#,
+            r#"export default function P(ctx){const S=stack([[ctx.progress]]);return <View style={{left:S.layers[0][0][1]}}/>;}"#,
             "prepare",
         ),
         (

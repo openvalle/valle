@@ -5,9 +5,9 @@
 use ts_rs::{Config, TS};
 use valle_draw::program::recording::{Paint, ProgramRecording, RecordCmd};
 use valle_motion::{
-    ArrowKind, ArrowSpec, ColorValue, CueState, CueWindow, GeometryEvalPolicy, GradientStopValue,
-    MaskValue, MotionContext, MotionDiagnostic, MotionValue, NarrationRetime, PaintValue,
-    PathBooleanOp, PathData, PathStroke, PointValue, RectValue, SignalPlan,
+    ArrowKind, ArrowSpec, ColorValue, GeometryEvalPolicy, GradientStopValue, MaskValue,
+    MotionContext, MotionDiagnostic, MotionValue, PaintValue, PathBooleanOp, PathData, PathStroke,
+    PointValue, RectValue,
 };
 
 fn decl<T: TS + ?Sized>() -> String {
@@ -24,51 +24,11 @@ fn motion_context_ts_matches_the_wire_shape() {
         declaration.contains("durationFrames: number"),
         "{declaration}"
     );
-    assert!(
-        declaration.contains("currentPhase: PhaseKind"),
-        "{declaration}"
-    );
     assert!(declaration.contains("fps: string"), "{declaration}");
     assert!(
         declaration.contains("sample: { composition: string }"),
         "{declaration}"
     );
-}
-
-#[test]
-fn cue_signal_ts_matches_the_author_and_host_wire_shapes() {
-    let state = decl::<CueState>();
-    for field in [
-        "active: boolean",
-        "progress: number",
-        "enter: number",
-        "hold: number",
-        "exit: number",
-        "localFrame: number",
-    ] {
-        assert!(state.contains(field), "{state}");
-    }
-
-    let window = decl::<CueWindow>();
-    for field in [
-        "startFrame: number",
-        "endFrame: number",
-        "enterFrames: number",
-        "exitFrames: number",
-    ] {
-        assert!(window.contains(field), "{window}");
-    }
-
-    let retime = NarrationRetime::export_to_string(&Config::default()).expect("retime export");
-    assert!(retime.contains("durationFrames: number"), "{retime}");
-    assert!(retime.contains("phases: PhaseLayout"), "{retime}");
-}
-
-#[test]
-fn signal_plan_ts_matches_the_prepare_wire() {
-    let plan = SignalPlan::export_to_string(&Config::default()).expect("plan export");
-    assert!(plan.contains("export type SignalPlan"), "{plan}");
-    assert!(plan.contains("steps: Array<PlanStep>"), "{plan}");
 }
 
 #[test]

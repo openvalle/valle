@@ -84,8 +84,7 @@ Timeline also lays out on its own base canvas and is fitted into the clip size.
 `composition` and `--fps` accept a rational rate such as `"30000/1001"`. Bind
 declared asset controls with repeated `--asset name=path`, prepared data with
 `--data file.json`, and extra fonts with repeated `--font path`.
-Use `--props props.json` for constant prop values and `--cues cues.json` for Timeline
-source-range cue bindings. `check` accepts the same bindings and fonts, and validates
+Use `--props props.json` for constant prop values. `check` accepts the same bindings and fonts, and validates
 one Native Raster frame (`--frame 0` by default).
 
 For video delivery, `--workers 1..8`, `--encode-threads N`, or `--hardware-encode`

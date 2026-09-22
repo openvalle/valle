@@ -1,16 +1,14 @@
-export const component = "effect-layering-probe";
 
-export const controls = defineControls({
+export const controls = {
   props: {
     label: string({ default: "CONTROL", required: false }),
   },
-  timing: { enterDuration: 0, exitDuration: 0 },
-});
+};
 
 const bars = defineRepeater({ count: 10, keyPrefix: "bar" });
 
 export default function LayerProbe(ctx, props) {
-  const t = ctx.hold.progress;
+  const t = ctx.progress;
   const pulse = (sin(t * 12.566370614) + 1) * 0.5;
   const localBlur = 2 + pulse * 11;
 

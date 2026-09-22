@@ -4,9 +4,8 @@ import { DiagramPanel } from "./panels/diagram.motion";
 import { MapPanel } from "./panels/map.motion";
 import { brandTheme } from "./theme.motion";
 
-export const component = "DataDashboard";
 
-export const controls = defineControls({
+export const controls = {
   data: {
     metrics: array(
       record({ id: string(), label: string(), value: number({ min: 0 }) }),
@@ -28,9 +27,9 @@ export const controls = defineControls({
       { maxItems: 12, key: "id" },
     ),
   },
-});
+};
 
-export default function DataDashboard(ctx, props, signals, data) {
+export default function DataDashboard(ctx, props, data) {
   return (
     <ThemeProvider value={brandTheme}>
       <Scene key="scene" className="relative h-full w-full" style={{ backgroundColor: useTheme().colors.background }}>

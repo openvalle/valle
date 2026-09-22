@@ -412,7 +412,7 @@ fn a_builtin_rejection_survives_the_folding_probe_in_a_stop_position() {
 export default function P(ctx) {
   return (<Scene className="h-full w-full">
     <View key="a" style={{ position: "absolute", left: 0, top: 0, height: 10,
-      width: interpolate(ctx.hold.progress, [0, scaleLinear({ domain: [0] }).map(0)], [0, 1]) }} />
+      width: interpolate(ctx.progress, [0, scaleLinear({ domain: [0] }).map(0)], [0, 1]) }} />
   </Scene>);
 }
 "##,

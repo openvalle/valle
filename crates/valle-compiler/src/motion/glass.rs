@@ -817,7 +817,7 @@ mod tests {
     #[test]
     fn glass_circle_lowers_with_expanded_defaults() {
         let source = r##"
-export const component = "glass-circle";
+
 export default function Scene() {
   return (
     <Glass surfaceId="hero-lens" shape={{ kind: "circle" }}
@@ -839,7 +839,7 @@ export default function Scene() {
     #[test]
     fn glass_full_props_lower() {
         let source = r##"
-export const component = "glass-full";
+
 export default function Scene() {
   return (
     <Glass surfaceId="lens"
@@ -871,7 +871,7 @@ export default function Scene() {
     #[test]
     fn glass_field_lowers() {
         let source = r##"
-export const component = "glass-field";
+
 export default function Scene() {
   return (
     <GlassField fieldId="orbit" material={{ clarity: 0.82 }}
@@ -929,7 +929,7 @@ export default function Scene() {
     #[test]
     fn member_field_id_is_derived_and_repeated_author_prop_is_rejected() {
         let source = r##"
-export const component = "glass-field";
+
 export default function Scene() {
   return (
     <GlassField fieldId="orbit">
@@ -952,7 +952,7 @@ export default function Scene() {
         for tone in ["auto", "light", "dark", "none"] {
             let source = format!(
                 r##"
-export const component = "tone";
+
 export default function Scene() {{
   return <Glass surfaceId="lens" shape={{{{ kind: "circle" }}}}
     foreground={{{{ tone: "{tone}" }}}} />;
@@ -967,7 +967,7 @@ export default function Scene() {{
     fn production_entry_compiles_glass_and_declares_capability() {
         // G4.7: production admission is open; compiled artifacts declare motion-glass.
         let source = r##"
-export const component = "glass-open";
+
 export default function Scene() {
   return <Glass surfaceId="hero-lens" shape={{ kind: "circle" }} />;
 }
@@ -995,7 +995,7 @@ export default function Scene() {
     #[test]
     fn missing_surface_id_diagnostic() {
         let source = r##"
-export const component = "diag";
+
 export default function Scene() {
   return <Glass shape={{ kind: "circle" }} />;
 }
@@ -1007,7 +1007,7 @@ export default function Scene() {
     #[test]
     fn missing_shape_diagnostic() {
         let source = r##"
-export const component = "diag";
+
 export default function Scene() {
   return <Glass surfaceId="lens" />;
 }
@@ -1019,7 +1019,7 @@ export default function Scene() {
     #[test]
     fn bad_shape_kind_diagnostic() {
         let source = r##"
-export const component = "diag";
+
 export default function Scene() {
   return <Glass surfaceId="lens" shape={{ kind: "blob" }} />;
 }
@@ -1031,7 +1031,7 @@ export default function Scene() {
     #[test]
     fn unknown_glass_attribute_diagnostic() {
         let source = r##"
-export const component = "diag";
+
 export default function Scene() {
   return <Glass surfaceId="lens" shape={{ kind: "circle" }} shader="x" />;
 }
@@ -1048,7 +1048,7 @@ export default function Scene() {
     #[test]
     fn bad_character_diagnostic() {
         let source = r##"
-export const component = "diag";
+
 export default function Scene() {
   return (
     <Glass surfaceId="lens" shape={{ kind: "circle" }}
@@ -1063,7 +1063,7 @@ export default function Scene() {
     #[test]
     fn settle_out_of_range_diagnostic() {
         let source = r##"
-export const component = "diag";
+
 export default function Scene() {
   return (
     <Glass surfaceId="lens" shape={{ kind: "circle" }}
@@ -1084,7 +1084,7 @@ export default function Scene() {
     #[test]
     fn duplicate_surface_id_rejected() {
         let source = r##"
-export const component = "diag";
+
 export default function Scene() {
   return (
     <Group>
@@ -1109,7 +1109,7 @@ export default function Scene() {
     #[test]
     fn path_shape_lowers_with_closed_polygon() {
         let source = r##"
-export const component = "path-glass";
+
 export default function Scene() {
   return (
     <Glass surfaceId="plate" shape={{ kind: "path", path: line([point(40, 40), point(120, 40), point(120, 120), point(40, 120)]) }}
@@ -1128,7 +1128,7 @@ export default function Scene() {
     #[test]
     fn usage_lint_accepts_valid_and_rejects_unknown_role() {
         let valid = r##"
-export const component = "usage";
+
 export default function Scene() {
   return (
     <Glass surfaceId="lens" shape={{ kind: "circle" }}
@@ -1144,7 +1144,7 @@ export default function Scene() {
         };
         let _ = glass;
         let bad = r##"
-export const component = "usage";
+
 export default function Scene() {
   return (
     <Glass surfaceId="lens" shape={{ kind: "circle" }}

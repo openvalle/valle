@@ -17,7 +17,7 @@ fn exactly_specified_math_members_work_at_frame_time_without_new_ir() {
     let compiled = compile_motion(
         r##"
 export default function P(ctx) {
-  const t = ctx.hold.progress;
+  const t = ctx.progress;
   return (<Scene className="h-full w-full">
     <View key="a" style={{ position: "absolute", left: 0, top: 0, width: 10, height: 10,
                            opacity: clamp(Math.abs(t - 0.5) * Math.min(2, 3) + Math.max(0, t), 0, 1) }} />
@@ -51,7 +51,7 @@ fn approximated_math_members_stay_rejected() {
     let messages = diagnostics_of(
         r##"
 export default function P(ctx) {
-  const t = ctx.hold.progress;
+  const t = ctx.progress;
   return (<Scene className="h-full w-full">
     <View key="a" style={{ position: "absolute", left: 0, top: 0, width: 10, height: 10,
                            opacity: Math.log(t) }} />
@@ -72,7 +72,7 @@ fn comparing_a_length_against_a_number_names_the_call_the_author_wrote() {
     let messages = diagnostics_of(
         r##"
 export default function P(ctx) {
-  const t = ctx.hold.progress;
+  const t = ctx.progress;
   return (<Scene className="h-full w-full">
     <View key="a" style={{ position: "absolute", left: Math.min(t, "10px"), top: 0, width: 10, height: 10 }} />
   </Scene>);
@@ -125,7 +125,7 @@ fn branching_on_a_context_value_points_at_the_two_shapes_that_keep_one_topology(
     let messages = diagnostics_of(
         r##"
 export default function P(ctx) {
-  const t = ctx.hold.progress;
+  const t = ctx.progress;
   if (t > 0.5) { return (<Scene className="h-full w-full" />); }
   return (<Scene className="h-full w-full" />);
 }
@@ -201,7 +201,7 @@ export default function P(ctx) {
 export default function P(ctx) {
   return (<Scene className="h-full w-full">
     <View key="a" style={{ position: "absolute", left: 0, top: 0, height: 10,
-                           width: clamp(ctx.hold.progress, 10, 3) }} />
+                           width: clamp(ctx.progress, 10, 3) }} />
   </Scene>);
 }
 "##,
@@ -222,7 +222,7 @@ const x = clamp(5, 0, 3);
 export default function P(ctx) {
   return (<Scene className="h-full w-full">
     <View key="a" style={{ position: "absolute", left: 0, top: 0, height: 10, width: x,
-                           opacity: clamp(ctx.hold.progress, 0, 1) }} />
+                           opacity: clamp(ctx.progress, 0, 1) }} />
   </Scene>);
 }
 "##,

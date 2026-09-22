@@ -64,7 +64,7 @@ fn non_media_commands_and_png_work_without_ffmpeg() {
     );
     assert!(std::fs::metadata(dir.join("frame.png")).unwrap().len() > 100);
     std::fs::write(dir.join("image.motion.tsx"), r#"export const composition = { width: 160, height: 90, fps: 30, duration: 0.2 };
-export const controls = defineControls({assets:{poster:asset({kind:"image"})}});
+export const controls = ({assets:{poster:asset({kind:"image"})}});
 export default function Test(){return <Scene style={{width:160,height:90,backgroundColor:"rgb(18,52,86)"}}><Image src="asset://poster" style={{position:"absolute",left:0,top:0,width:160,height:90}} /></Scene>;}"#).unwrap();
     success(&run(
         dir,

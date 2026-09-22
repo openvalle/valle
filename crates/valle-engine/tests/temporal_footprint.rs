@@ -63,9 +63,7 @@ fn motion_clip(id: &str, filter_id: &str) -> Value {
             "rate": "1/1",
             "endBehavior": "hold",
             "props": {},
-            "cues": {},
             "resources": {},
-            "phases": {"enterDuration": null, "exitDuration": null}
         }
     })
 }
@@ -114,7 +112,7 @@ fn timeline() -> valle_timeline::internal::CanonicalTimeline {
 fn glass_artifact() -> Arc<SceneArtifact> {
     let artifact = compile_motion(
         r#"
-export const component = "glass-history";
+export const composition = { width: 1920, height: 1080, duration: 1 };
 export default function Scene() {
   return <Glass surfaceId="history-lens" shape={{ kind: "circle" }} />;
 }

@@ -73,7 +73,7 @@ fn environment_assets_are_frozen_and_render_in_arbitrary_frame_order() {
     write_environment(false);
     png(dir, "map.png", [128, 128, 255]);
     let source = r##"export const composition = { width: 64, height: 64, fps: 30, duration: 3 };
-export const controls=defineControls({assets:{model:asset({kind:"model3d"}),sky:asset({kind:"environment"}),map:asset({kind:"image"})}});
+export const controls=({assets:{model:asset({kind:"model3d"}),sky:asset({kind:"environment"}),map:asset({kind:"image"})}});
 export default function T(ctx){return <Scene style={{width:64,height:64}}><Scene3D key="scene" camera={{position:[ctx.seconds*0.1,0,4],target:[0,ctx.seconds*0.05,0],near:0.1+ctx.seconds*0.01,far:10+ctx.seconds}} pbr={{environment:{src:"asset://sky",intensity:1,rotation:ctx.seconds*90,background:true},toneMapping:"aces",exposure:0.7+ctx.seconds*0.2}} style={{width:64,height:64}}><Mesh key="mesh" src="asset://model" nodes={[{id:0,position:[ctx.seconds*0.01,0,0],rotation:[0,ctx.seconds*5,0],scale:[-1,1,1]}]} material={{type:"pbr",color:interpolate(ctx.seconds,[0,2],["#ffaaaa","#aaaaff"]),metallic:ctx.seconds*0.2,roughness:0.3+ctx.seconds*0.2,emissive:"#ffffff",emissiveIntensity:ctx.seconds*0.1,normalScale:ctx.seconds*0.2,textures:{baseColor:"asset://map",normal:"asset://map",emissive:"asset://map"}}}/><DirectionalLight color={interpolate(ctx.seconds,[0,2],["#ff0000","#0000ff"])} direction={[ctx.seconds*0.1,0,1]} intensity={0.5+ctx.seconds*0.1}/></Scene3D></Scene>;}"##;
     std::fs::write(dir.join("scene.motion.tsx"), source).unwrap();
     put(
@@ -437,7 +437,7 @@ export default function Numbered(ctx) {return <Scene style={{width:80,height:32,
         };
         std::fs::write(dir.join("video.motion.tsx"), format!(r#"
 export const composition = {{ width: 80, height: 32, fps: 10, duration: 9 }};
-export const controls = defineControls({{assets:{{clip:asset({{kind:"video"}})}}}});
+export const controls = ({{assets:{{clip:asset({{kind:"video"}})}}}});
 export default function Clip(ctx) {{return <Scene style={{{{width:80,height:32}}}}><Video src="asset://clip" sourceStart={{{}}} speed={{{}}} style={{{{width:80,height:32}}}} /></Scene>;}}
 "#,attr(start),attr(speed))).unwrap();
         put(
@@ -509,7 +509,7 @@ export default function T(){return <Scene style={{width:64,height:64,backgroundC
         (
             "shader.motion.tsx",
             r##"export const composition = { width: 64, height: 64, fps: 30, duration: 3 };
-export const controls=defineControls({assets:{noise:asset({kind:"image"}),effect:asset({kind:"shader"})}}); export default function T(ctx){return <Scene style={{width:64,height:64}}><ShaderLayer source="asset://effect" inputs={{noise:"asset://noise"}} uniforms={{progress:ctx.progress,edgeWidth:0.06,edgeColor:"#38bdf8"}} style={{width:64,height:64}}><View style={{width:64,height:64,background:"#ffffff"}}/></ShaderLayer></Scene>; }"##,
+export const controls=({assets:{noise:asset({kind:"image"}),effect:asset({kind:"shader"})}}); export default function T(ctx){return <Scene style={{width:64,height:64}}><ShaderLayer source="asset://effect" inputs={{noise:"asset://noise"}} uniforms={{progress:ctx.progress,edgeWidth:0.06,edgeColor:"#38bdf8"}} style={{width:64,height:64}}><View style={{width:64,height:64,background:"#ffffff"}}/></ShaderLayer></Scene>; }"##,
         ),
     ];
     for (name, source) in sources {
@@ -528,35 +528,28 @@ export const controls=defineControls({assets:{noise:asset({kind:"image"}),effect
 }
 
 #[test]
-fn motion_cues_are_explicit_and_optional_cues_stay_inactive() {
+fn motion_time_window_uses_ordinary_numeric_props() {
     let temp = tempfile::tempdir().unwrap();
     let dir = temp.path();
     let source = r##"export const composition = { width: 64, height: 64, fps: 30, duration: 3 };
-export const controls=defineControls({cues:{voice:spanCue({required:true})}});export default function T(ctx,props,signals){return <Scene><View style={{width:64,height:64,backgroundColor:"#ffffff",opacity:signals.voice.progress}}/></Scene>;}"##;
-    std::fs::write(dir.join("cue.motion.tsx"), source).unwrap();
-    let output = run(dir, &["motion", "check", "cue.motion.tsx"]);
-    assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stdout).contains("voice"));
+export const controls = { props: { highlightStart: number({default:2,min:0}), highlightEnd: number({default:3,min:0}) } };
+export default function T(ctx, props) {
+  const active = ctx.seconds >= props.highlightStart && ctx.seconds < props.highlightEnd;
+  return <Scene><View style={{width:64,height:64,backgroundColor:"#ffffff",opacity:active ? 1 : 0}}/></Scene>;
+}"##;
+    std::fs::write(dir.join("window.motion.tsx"), source).unwrap();
+    success(run(dir, &["motion", "check", "window.motion.tsx"]));
     put(
         dir,
-        "cues.json",
-        json!({"voice":{"type":"source-range","start":0,"end":1}}),
+        "props.json",
+        json!({"highlightStart":0,"highlightEnd":1}),
     );
-    success(run(
-        dir,
-        &["motion", "check", "cue.motion.tsx", "--cues", "cues.json"],
-    ));
-    std::fs::write(
-        dir.join("optional.motion.tsx"),
-        source.replace("required:true", "required:false"),
-    )
-    .unwrap();
     success(run(
         dir,
         &[
             "motion",
             "render",
-            "optional.motion.tsx",
+            "window.motion.tsx",
             "--frame",
             "15",
             "--backend",
@@ -571,11 +564,11 @@ export const controls=defineControls({cues:{voice:spanCue({required:true})}});ex
         &[
             "motion",
             "render",
-            "optional.motion.tsx",
+            "window.motion.tsx",
             "--frame",
             "15",
-            "--cues",
-            "cues.json",
+            "--props",
+            "props.json",
             "--backend",
             "raster",
             "-o",
@@ -592,7 +585,7 @@ fn repeated_motion_instances_bind_their_own_images_and_unused_files_are_not_load
     png(dir, "red.png", [255, 0, 0]);
     png(dir, "blue.png", [0, 0, 255]);
     std::fs::write(dir.join("image.motion.tsx"),r#"export const composition = { width: 64, height: 64, fps: 10, duration: 9 };
-export const controls=defineControls({assets:{hero:asset({kind:"image"})}});export default function T(){return <Scene style={{width:64,height:64}}><Image src="asset://hero" style={{width:64,height:64}}/></Scene>;}"#).unwrap();
+export const controls=({assets:{hero:asset({kind:"image"})}});export default function T(){return <Scene style={{width:64,height:64}}><Image src="asset://hero" style={{width:64,height:64}}/></Scene>;}"#).unwrap();
     put(
         dir,
         "timeline.json",
@@ -622,7 +615,7 @@ export const controls=defineControls({assets:{hero:asset({kind:"image"})}});expo
     }
     // Explicit inline images still render when the line contains no text glyphs.
     std::fs::write(dir.join("image.motion.tsx"),r#"export const composition = { width: 64, height: 64, fps: 10, duration: 9 };
-export const controls=defineControls({assets:{hero:asset({kind:"image"})}});export default function T(){return <Scene style={{width:64,height:64}}><Image src="asset://hero" style={{display:"inline",width:32,height:32}}/></Scene>;}"#).unwrap();
+export const controls=({assets:{hero:asset({kind:"image"})}});export default function T(){return <Scene style={{width:64,height:64}}><Image src="asset://hero" style={{display:"inline",width:32,height:32}}/></Scene>;}"#).unwrap();
     success(run(
         dir,
         &[
@@ -742,7 +735,7 @@ fn motion_props_use_css_values_in_both_cli_and_timeline() {
     let temp = tempfile::tempdir().unwrap();
     let dir = temp.path();
     std::fs::write(dir.join("props.motion.tsx"),r##"export const composition = { width: 64, height: 64, fps: 30, duration: 3 };
-export const controls=defineControls({props:{ink:color({default:"#ff0000"}),extent:length({default:"8px"}),turn:angle({default:"0deg"})}});export default function T(ctx,props){return <Scene style={{width:64,height:64}}><View style={{width:props.extent,height:32,background:props.ink,rotate:props.turn}}/></Scene>;}"##).unwrap();
+export const controls=({props:{ink:color({default:"#ff0000"}),extent:length({default:"8px"}),turn:angle({default:"0deg"})}});export default function T(ctx,props){return <Scene style={{width:64,height:64}}><View style={{width:props.extent,height:32,background:props.ink,rotate:props.turn}}/></Scene>;}"##).unwrap();
     let props = json!({"ink":"#00ff00","extent":"64px","turn":"0deg"});
     put(dir, "props.json", props.clone());
     success(run(
@@ -903,7 +896,7 @@ fn shader_file_assets_render_vectors_and_matrices_in_arbitrary_frame_order() {
     let shader = "float4 valle_main(float2 uv) { float2 p = basis * uv; if (enabled) { return float4(float3(amount + offset.z + p.x * 0.05), 1.0); } return float4(0.0); }";
     std::fs::write(dir.join("field.vsksl"), shader).unwrap();
     let source = r##"export const composition = { width: 64, height: 64, fps: 30, duration: 3 };
-export const controls=defineControls({assets:{effect:asset({kind:"shader",required:true})}});
+export const controls=({assets:{effect:asset({kind:"shader",required:true})}});
 export default function T(ctx) { return <Scene style={{width:64,height:64}}><ShaderLayer source="asset://effect" uniforms={{amount:ctx.seconds*0.1,offset:[0,0,ctx.seconds*0.05],basis:[1,0,0,1],enabled:true}} style={{width:64,height:64}}><View style={{width:64,height:64,backgroundColor:"#fff"}}/></ShaderLayer></Scene>; }"##;
     std::fs::write(dir.join("effect.motion.tsx"), source).unwrap();
     put(
@@ -1015,7 +1008,7 @@ fn shader_frame_budget_counts_nested_layers_and_separate_clips() {
     let arithmetic = "float4 valle_main(float2 uv) { float4 value = float4(uv,0.0,1.0); for (int i = 0; i < 128; ++i) { value = value * 0.999 + float4(0.0001); } return value; }";
     let source = |body: &str| {
         format!(
-            r#"export const controls=defineControls({{assets:{{effect:asset({{kind:"shader"}})}}}});export default function T(ctx){{return <Scene style={{{{width:ctx.viewport.width,height:ctx.viewport.height}}}}>{body}</Scene>;}}"#
+            r#"export const controls=({{assets:{{effect:asset({{kind:"shader"}})}}}});export default function T(ctx){{return <Scene style={{{{width:ctx.viewport.width,height:ctx.viewport.height}}}}>{body}</Scene>;}}"#
         )
     };
     let layer = |body: &str| {
@@ -1097,7 +1090,7 @@ fn shader_sampling_uses_each_texture_size_filter_and_wrap() {
     )
     .unwrap();
     std::fs::write(dir.join("sample.motion.tsx"), r##"export const composition = { width: 64, height: 64, fps: 30, duration: 3 };
-export const controls=defineControls({assets:{effect:asset({kind:"shader"}),image:asset({kind:"image"})}});export default function T(){return <Scene style={{width:64,height:64}}><ShaderLayer source="asset://effect" inputs={{steps:"asset://image"}} style={{width:64,height:64}}><View style={{width:64,height:64,backgroundColor:"#fff"}}/></ShaderLayer></Scene>; }"##).unwrap();
+export const controls=({assets:{effect:asset({kind:"shader"}),image:asset({kind:"image"})}});export default function T(){return <Scene style={{width:64,height:64}}><ShaderLayer source="asset://effect" inputs={{steps:"asset://image"}} style={{width:64,height:64}}><View style={{width:64,height:64,backgroundColor:"#fff"}}/></ShaderLayer></Scene>; }"##).unwrap();
     let render = |filter: &str, wrap: &str| {
         put(
             dir,
@@ -1165,7 +1158,7 @@ fn shader_content_preserves_local_coordinates_and_complete_input() {
         std::fs::write(dir.join("effect.vsksl"), shader).unwrap();
         std::fs::write(dir.join("effect.motion.tsx"), format!(r##"
             export const composition = {{ width: 64, height: 64, fps: 30, duration: 3 }};
-            export const controls=defineControls({{assets:{{effect:asset({{kind:"shader"}})}}}});
+            export const controls=({{assets:{{effect:asset({{kind:"shader"}})}}}});
             export default function T() {{ return <Scene style={{{{width:64,height:64,backgroundColor:"#000"}}}}>{body}</Scene>; }}
         "##)).unwrap();
         success(run(
@@ -1276,6 +1269,7 @@ fn timeline_accepts_a_component_whose_composition_differs_from_the_canvas() {
 export default function Card() {
   return <Scene className="h-full w-full" style={{ backgroundColor: "#102030" }} />;
 }
+
 "##,
     )
     .unwrap();
@@ -1289,4 +1283,119 @@ export default function Card() {
         }),
     );
     success(run(dir, &["timeline", "check", "card.timeline.json"]));
+}
+
+#[test]
+fn timeline_inline_data_prepares_distinct_instances_and_rejects_missing_data() {
+    let temp = tempfile::tempdir().unwrap();
+    let dir = temp.path();
+    std::fs::write(
+        dir.join("data.motion.tsx"),
+        r##"export const composition = { width: 32, height: 32, fps: 10, duration: 1 };
+export const controls = { data: { rows: array(record({ id: string(), color: color() }), { minItems: 1, maxItems: 4, key: "id" }) } };
+export default function DataScene(ctx, props, data) {
+  return <Scene style={{ width: 32, height: 32 }}>
+    {data.rows.map((row) => <View key={row.id} style={{ width: 32, height: 32, backgroundColor: row.color }} />)}
+  </Scene>;
+}"##,
+    )
+    .unwrap();
+    let timeline = |first: &str| {
+        json!({
+            "canvas": {"width": 32, "height": 32, "fps": 10},
+            "resources": {"scene": "data.motion.tsx"},
+            "tracks": {"visual": [{"clips": [
+                {"kind": "motion", "component": "scene", "start": 0, "duration": 1,
+                 "data": {"rows": [{"id": "first", "color": first}]}},
+                {"kind": "motion", "component": "scene", "start": 1, "duration": 1,
+                 "data": {"rows": [{"id": "second", "color": "#0000ff"}]}}
+            ]}]}
+        })
+    };
+    put(dir, "data.timeline.json", timeline("#ff0000"));
+    for (frame, file, color) in [
+        ("0", "red.png", vec![255, 0, 0]),
+        ("10", "blue.png", vec![0, 0, 255]),
+    ] {
+        success(run(
+            dir,
+            &[
+                "timeline",
+                "render",
+                "data.timeline.json",
+                "--frame",
+                frame,
+                "-o",
+                file,
+            ],
+        ));
+        assert_eq!(pixel(dir, file, 16, 16), color);
+    }
+    put(dir, "data.timeline.json", timeline("#00ff00"));
+    success(run(
+        dir,
+        &[
+            "timeline",
+            "render",
+            "data.timeline.json",
+            "--frame",
+            "0",
+            "-o",
+            "green.png",
+        ],
+    ));
+    assert_eq!(pixel(dir, "green.png", 16, 16), vec![1, 255, 0]);
+    let mut missing = timeline("#ff0000");
+    missing["tracks"]["visual"][0]["clips"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("data");
+    put(dir, "data.timeline.json", missing);
+    let output = run(dir, &["timeline", "check", "data.timeline.json"]);
+    assert!(!output.status.success());
+
+    let mut mismatched = timeline("#ff0000");
+    mismatched["tracks"]["visual"][0]["clips"][0]["sourceDuration"] = json!(2);
+    put(dir, "data.timeline.json", mismatched);
+    let output = run(dir, &["timeline", "check", "data.timeline.json"]);
+    assert!(
+        !output.status.success(),
+        "source duration must match the bound work"
+    );
+}
+
+#[test]
+fn timeline_data_fields_do_not_bind_or_reclassify_resources() {
+    let temp = tempfile::tempdir().unwrap();
+    let dir = temp.path();
+    std::fs::write(
+        dir.join("metadata.motion.tsx"),
+        r##"export const composition = { width: 8, height: 8, fps: 10, duration: 1 };
+export const controls = { data: {
+  item: record({ kind: string(), component: string(), font: string() }),
+  decoy: record({ kind: string(), src: string() }),
+} };
+export default function Metadata(ctx, props, data) {
+  return <Scene style={{ width: 8, height: 8, backgroundColor: "#ff0000" }} />;
+}"##,
+    )
+    .unwrap();
+    png(dir, "picture.png", [0, 0, 255]);
+    put(
+        dir,
+        "metadata.timeline.json",
+        json!({
+            "canvas": {"width": 8, "height": 8, "fps": 10},
+            "resources": {"scene": "metadata.motion.tsx", "picture": "picture.png"},
+            "tracks": {"visual": [
+                {"clips": [{"kind": "motion", "component": "scene", "start": 0, "duration": 1,
+                    "data": {
+                        "item": {"kind": "motion", "component": "scene", "font": "picture"},
+                        "decoy": {"kind": "lottie", "src": "picture"}
+                    }}]},
+                {"clips": [{"kind": "image", "src": "picture", "start": 0, "duration": 1}]}
+            ]}
+        }),
+    );
+    success(run(dir, &["timeline", "check", "metadata.timeline.json"]));
 }

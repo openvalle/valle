@@ -10,7 +10,6 @@ export const composition = { width: 1920, height: 1080, fps: 30, duration: 5 };
 // Compute functions run during preparation; viewport dimensions are frame-time inputs.
 //
 // Prepare scales and ticks in fixed canvas coordinates, then apply SX and SY at frame time.
-export const component = "bar-chart";
 
 // Input data.
 //
@@ -62,7 +61,7 @@ export default function BarChart(ctx) {
   const sy = ctx.viewport.height / CANVAS_H;
 
   // Prepare staggered bar entrance timing.
-  const grow = (i) => interpolate(ctx.enter.progress, [i * 0.08, i * 0.08 + 0.45], [0, 1]);
+  const grow = (i) => interpolate(ctx.progress, [i * 0.08, i * 0.08 + 0.45], [0, 1]);
 
   return (
     <Scene className="h-full w-full bg-slate-950">

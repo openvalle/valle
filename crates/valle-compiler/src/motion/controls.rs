@@ -1,34 +1,12 @@
 //! Folded controls schema and structured prepare-data parsing.
 
 use super::*;
-use valle_motion::TimingSeconds;
-use valle_timeline::RationalTime;
 
 pub(super) fn default_controls() -> ControlsSchema {
     ControlsSchema {
         props: BTreeMap::new(),
         data: BTreeMap::new(),
-        timing: TimingControls {
-            enter_frames: FrameControl {
-                default: 0,
-                min: 0,
-                max: None,
-            },
-            hold_cycle_frames: OptionalFrameControl {
-                default: None,
-                min: 1,
-                max: None,
-            },
-            exit_frames: FrameControl {
-                default: 0,
-                min: 0,
-                max: None,
-            },
-        },
-        timing_seconds: None,
-        cues: BTreeMap::new(),
         assets: BTreeMap::new(),
-        camera: CameraControls::default(),
     }
 }
 
@@ -36,63 +14,13 @@ pub(super) fn controls_from_json(value: &serde_json::Value) -> Result<ControlsSc
     let object = value
         .as_object()
         .ok_or("controls must evaluate to an object")?;
-    ensure_keys(
-        object,
-        &["props", "data", "timing", "cues", "assets", "camera"],
-    )
-    .map_err(str::to_string)?;
+    ensure_keys(object, &["props", "data", "assets"]).map_err(str::to_string)?;
     let mut controls = default_controls();
     if let Some(props) = object.get("props") {
         controls.props = parse_named(props, parse_prop)?;
     }
     if let Some(data) = object.get("data") {
         controls.data = parse_named_data(data)?;
-    }
-    if let Some(timing) = object.get("timing") {
-        let timing = timing
-            .as_object()
-            .ok_or("controls.timing must be an object")?;
-        ensure_keys(
-            timing,
-            &["enterDuration", "holdCycleDuration", "exitDuration"],
-        )
-        .map_err(str::to_string)?;
-        let seconds = |field: &str, positive: bool| -> Result<Option<RationalTime>, String> {
-            let Some(value) = timing.get(field) else {
-                return Ok(None);
-            };
-            let number = value
-                .as_number()
-                .ok_or_else(|| format!("{field} must be a number of seconds"))?;
-            let exact = valle_timeline::wire::timeline::TimelineTimeWire::new(number.to_string())
-                .map_err(|error| format!("{field}: {error}"))?
-                .to_exact();
-            if positive && !exact.is_positive() {
-                return Err(format!("{field} must be positive"));
-            }
-            Ok(Some(RationalTime::from_exact(exact)))
-        };
-        controls.timing_seconds = Some(TimingSeconds {
-            enter_duration: seconds("enterDuration", false)?.unwrap_or(RationalTime::ZERO),
-            exit_duration: seconds("exitDuration", false)?.unwrap_or(RationalTime::ZERO),
-            hold_cycle_duration: seconds("holdCycleDuration", true)?,
-        });
-    }
-    if let Some(cues) = object.get("cues") {
-        controls.cues = parse_named(cues, |value| {
-            let object = value.as_object().ok_or("cue must be a helper call")?;
-            ensure_keys(object, &["kind", "required"])?;
-            match object.get("kind").and_then(serde_json::Value::as_str) {
-                Some("spanCue") => Ok(CueControl {
-                    kind: CueKind::Span,
-                    required: object
-                        .get("required")
-                        .and_then(serde_json::Value::as_bool)
-                        .unwrap_or(false),
-                }),
-                _ => Err("only spanCue() is supported"),
-            }
-        })?;
     }
     if let Some(assets) = object.get("assets") {
         controls.assets = parse_named(assets, |value| {
@@ -129,9 +57,6 @@ pub(super) fn controls_from_json(value: &serde_json::Value) -> Result<ControlsSc
                     .unwrap_or(false),
             })
         })?;
-    }
-    if let Some(camera) = object.get("camera") {
-        controls.camera.values = parse_named(camera, parse_prop)?;
     }
     Ok(controls)
 }
@@ -324,8 +249,6 @@ pub(super) fn parse_prop(value: &serde_json::Value) -> Result<PropControl, &'sta
         "angle" => ControlType::Angle,
         "point" => ControlType::Point,
         "rect" => ControlType::Rect,
-        "pathData" => ControlType::PathData,
-        "nodeTarget" => ControlType::NodeTarget,
         "select" => ControlType::Select {
             values: object
                 .get("values")
@@ -399,14 +322,6 @@ pub(super) fn control_default(
         ControlType::Rect => motion_value_from_json(value)
             .filter(|value| matches!(value, MotionValue::Rect(_)))
             .ok_or("rect default must use rect(x, y, width, height)"),
-        ControlType::PathData => motion_value_from_json(value)
-            .filter(|value| matches!(value, MotionValue::PathData(_)))
-            .ok_or("path default must use path(svgD)"),
-        ControlType::NodeTarget => value
-            .as_str()
-            .filter(|value| !value.is_empty())
-            .map(|value| MotionValue::Str(value.into()))
-            .ok_or("node target default must be non-empty text"),
         ControlType::Select { .. } => value
             .as_str()
             .map(|value| MotionValue::Enum(value.into()))

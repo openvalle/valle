@@ -1002,77 +1002,6 @@
           ],
           "description": "Compact `[time, value]` or `[time, value, easing]` keyframe."
         },
-        "TimelineMotionCueBindingWire": {
-          "oneOf": [
-            {
-              "additionalProperties": false,
-              "properties": {
-                "end": {
-                  "$ref": "#/$defs/TimelineTimeWire"
-                },
-                "enterDuration": {
-                  "anyOf": [
-                    {
-                      "$ref": "#/$defs/TimelineTimeWire"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "exitDuration": {
-                  "anyOf": [
-                    {
-                      "$ref": "#/$defs/TimelineTimeWire"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "start": {
-                  "$ref": "#/$defs/TimelineTimeWire"
-                },
-                "type": {
-                  "const": "source-range",
-                  "type": "string"
-                }
-              },
-              "required": [
-                "type",
-                "start",
-                "end"
-              ],
-              "type": "object"
-            }
-          ]
-        },
-        "TimelineMotionPhaseOverridesWire": {
-          "additionalProperties": false,
-          "properties": {
-            "enterDuration": {
-              "anyOf": [
-                {
-                  "$ref": "#/$defs/TimelineTimeWire"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "exitDuration": {
-              "anyOf": [
-                {
-                  "$ref": "#/$defs/TimelineTimeWire"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            }
-          },
-          "type": "object"
-        },
         "TimelineParamWire": {
           "anyOf": [
             {
@@ -1366,10 +1295,8 @@
                 "component": {
                   "type": "string"
                 },
-                "cues": {
-                  "additionalProperties": {
-                    "$ref": "#/$defs/TimelineMotionCueBindingWire"
-                  },
+                "data": {
+                  "additionalProperties": true,
                   "type": "object"
                 },
                 "end": {
@@ -1396,16 +1323,6 @@
                   "const": "motion",
                   "type": "string"
                 },
-                "phases": {
-                  "anyOf": [
-                    {
-                      "$ref": "#/$defs/TimelineMotionPhaseOverridesWire"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
                 "props": {
                   "additionalProperties": {
                     "$ref": "#/$defs/TimelineParamWire2"
@@ -1427,16 +1344,6 @@
                     "type": "string"
                   },
                   "type": "object"
-                },
-                "sourceDuration": {
-                  "anyOf": [
-                    {
-                      "$ref": "#/$defs/TimelineTimeWire"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
                 },
                 "trimStart": {
                   "anyOf": [
@@ -2737,77 +2644,6 @@
           ],
           "description": "Compact `[time, value]` or `[time, value, easing]` keyframe."
         },
-        "TimelineMotionCueBindingWire": {
-          "oneOf": [
-            {
-              "additionalProperties": false,
-              "properties": {
-                "end": {
-                  "$ref": "#/$defs/TimelineTimeWire"
-                },
-                "enterDuration": {
-                  "anyOf": [
-                    {
-                      "$ref": "#/$defs/TimelineTimeWire"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "exitDuration": {
-                  "anyOf": [
-                    {
-                      "$ref": "#/$defs/TimelineTimeWire"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "start": {
-                  "$ref": "#/$defs/TimelineTimeWire"
-                },
-                "type": {
-                  "const": "source-range",
-                  "type": "string"
-                }
-              },
-              "required": [
-                "type",
-                "start",
-                "end"
-              ],
-              "type": "object"
-            }
-          ]
-        },
-        "TimelineMotionPhaseOverridesWire": {
-          "additionalProperties": false,
-          "properties": {
-            "enterDuration": {
-              "anyOf": [
-                {
-                  "$ref": "#/$defs/TimelineTimeWire"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "exitDuration": {
-              "anyOf": [
-                {
-                  "$ref": "#/$defs/TimelineTimeWire"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            }
-          },
-          "type": "object"
-        },
         "TimelineParamWire": {
           "anyOf": [
             {
@@ -3101,10 +2937,8 @@
                 "component": {
                   "type": "string"
                 },
-                "cues": {
-                  "additionalProperties": {
-                    "$ref": "#/$defs/TimelineMotionCueBindingWire"
-                  },
+                "data": {
+                  "additionalProperties": true,
                   "type": "object"
                 },
                 "end": {
@@ -3131,16 +2965,6 @@
                   "const": "motion",
                   "type": "string"
                 },
-                "phases": {
-                  "anyOf": [
-                    {
-                      "$ref": "#/$defs/TimelineMotionPhaseOverridesWire"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
                 "props": {
                   "additionalProperties": {
                     "$ref": "#/$defs/TimelineParamWire2"
@@ -3162,16 +2986,6 @@
                     "type": "string"
                   },
                   "type": "object"
-                },
-                "sourceDuration": {
-                  "anyOf": [
-                    {
-                      "$ref": "#/$defs/TimelineTimeWire"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
                 },
                 "trimStart": {
                   "anyOf": [

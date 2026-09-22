@@ -191,9 +191,7 @@ fn closed_schema_scalars_quantize_before_validation_and_canonicalization() {
                 "extrapolation": "clamp"
             }
         },
-        "cues": {},
-        "resources": {},
-        "phases": {"enterDuration": null, "exitDuration": null}
+        "resources": {}
     });
     value["document"]["visual"]["tracks"] = json!([{
         "id": "visual:quantized",
@@ -965,46 +963,25 @@ fn sequence_structure_and_track_duration_are_local_invariants() {
 }
 
 #[test]
-fn motion_cues_and_phase_overrides_are_source_clock_invariants() {
+fn motion_source_duration_must_be_positive() {
     let mut value = empty_document();
     let mut clip = solid_clip("clip:motion", "4/1");
     clip["source"] = json!({
-        "type": "motion",
-        "component": "component:card",
-        "fit": "contain",
-        "sourceStart": "0/1",
-        "sourceDuration": "4/1",
-        "rate": "1/1",
-        "endBehavior": "hold",
-        "props": {},
-        "cues": {
-            "bad-range": {
-                "type": "source-range",
-                "start": "3/1",
-                "end": "2/1",
-                "enterDuration": "1/1",
-                "exitDuration": "1/1"
-            }
-        },
-        "resources": {},
-        "phases": { "enterDuration": "3/1", "exitDuration": "2/1" }
+        "type": "motion", "component": "component:card", "fit": "contain",
+        "sourceStart": "0/1", "sourceDuration": "0/1", "rate": "1/1",
+        "endBehavior": "hold", "props": {}, "resources": {}
     });
-    value["document"]["visual"]["tracks"] = json!([{
-        "id": "visual:main",
-        "items": [clip]
-    }]);
-
+    value["document"]["visual"]["tracks"] = json!([{ "id": "visual:main", "items": [clip] }]);
     let report = match decode_value(&value).unwrap_err() {
         CanonicalDecodeError::InvalidDocument(report) => report,
         other => panic!("unexpected error: {other:?}"),
     };
-    let codes: std::collections::BTreeSet<_> = report
-        .diagnostics
-        .iter()
-        .map(|diagnostic| diagnostic.code.as_str())
-        .collect();
-    assert!(codes.contains("motion_cue_range_invalid"));
-    assert!(!codes.contains("motion_phase_exceeds_source_duration"));
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|item| item.code == "duration_non_positive")
+    );
 }
 
 #[test]

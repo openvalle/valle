@@ -1,15 +1,10 @@
 export const composition = { width: 1920, height: 1080, fps: 30, duration: 5 };
-export const component = "temporal-trail-proxy";
-
-export const controls = defineControls({
-  timing: { enterDuration: 0, exitDuration: 0 },
-});
 
 const samples = defineRepeater({ count: 30, keyPrefix: "sample" });
 const ROUTE = path("M 267 567 C 240 255 627 138 933 363 C 1230 582 1659 390 1653 738 C 1647 999 1203 945 945 750 C 684 555 294 915 267 567 Z");
 
 export default function TemporalTrailProxy(ctx) {
-  const t = ctx.hold.progress;
+  const t = ctx.progress;
   const head = t * 1.22;
   const reveal = interpolate(t, [0, 0.16], [0, 1], { easing: "easeOut" });
 

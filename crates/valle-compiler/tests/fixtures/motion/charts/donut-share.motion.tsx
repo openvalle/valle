@@ -1,12 +1,11 @@
 export const composition = { width: 1920, height: 1080, fps: 30, duration: 5 };
-export const component = "donut-share";
 
-export const controls = defineControls({
+export const controls = {
   props: {
     ink: color({ default: "#e2e8f0" }),
     mute: color({ default: "#64748b" }),
   },
-});
+};
 
 const SHARE = [
   { id: "core", label: "Core", value: 42, color: "#38bdf8" },

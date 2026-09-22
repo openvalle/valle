@@ -65,6 +65,8 @@ fn project_snapshot_json(project: &ProjectStudioCtx) -> Result<String> {
     )?)
     .context("compiled Timeline was not UTF-8")?;
     let render_timeline: serde_json::Value = serde_json::from_str(&render_timeline_json)?;
+    let motion_source_durations =
+        crate::cmd::timeline::motion_source_durations(&render_timeline, &timeline)?;
     let revision = snapshot.revision();
     let timeline_revision = serde_json::json!({
         "revision": revision.revision,
@@ -79,6 +81,7 @@ fn project_snapshot_json(project: &ProjectStudioCtx) -> Result<String> {
         "timelineRevision": timeline_revision,
         "timelineJson": timeline_json,
         "timeline": timeline,
+        "motionSourceDurations": motion_source_durations,
         "render": {
             "timelineJson": render_timeline_json,
             "timeline": render_timeline,

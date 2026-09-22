@@ -1,9 +1,4 @@
 export const composition = { width: 1920, height: 1080, fps: 30, duration: 5 };
-export const component = "sequence-product-tour";
-
-export const controls = defineControls({
-  timing: { enterDuration: 0, exitDuration: 0 },
-});
 
 const tour = defineSequence({
   chrome: stage({ duration: seconds(0.8) }),

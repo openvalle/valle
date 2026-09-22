@@ -38,13 +38,6 @@ pub(super) fn emit_node(
 }
 
 pub(super) fn context_input(segments: &[String]) -> Option<ContextInput> {
-    use valle_motion::PhaseKind;
-    let phase = |name: &str| match name {
-        "enter" => Some(PhaseKind::Enter),
-        "hold" => Some(PhaseKind::Hold),
-        "exit" => Some(PhaseKind::Exit),
-        _ => None,
-    };
     match segments {
         [name] if name == "localFrame" => Some(ContextInput::LocalFrame),
         [name] if name == "progress" => Some(ContextInput::LocalProgress),
@@ -65,17 +58,6 @@ pub(super) fn context_input(segments: &[String]) -> Option<ContextInput> {
         [viewport, field] if viewport == "viewport" => match field.as_str() {
             "width" => Some(ContextInput::ViewportWidth),
             "height" => Some(ContextInput::ViewportHeight),
-            _ => None,
-        },
-        [phase_name, field] => match (phase(phase_name), field.as_str()) {
-            (Some(phase), "frame") => Some(ContextInput::PhaseFrame { phase }),
-            (Some(phase), "durationFrames") => Some(ContextInput::PhaseDurationFrames { phase }),
-            (Some(phase), "progress") => Some(ContextInput::PhaseProgress { phase }),
-            (Some(phase), "elapsedFrames") => Some(ContextInput::PhaseElapsedFrames { phase }),
-            (Some(phase), "active") => Some(ContextInput::PhaseActive { phase }),
-            (Some(PhaseKind::Hold), "iteration") => Some(ContextInput::HoldIteration),
-            (Some(PhaseKind::Hold), "cycleFrame") => Some(ContextInput::HoldCycleFrame),
-            (Some(PhaseKind::Hold), "cycleProgress") => Some(ContextInput::HoldCycleProgress),
             _ => None,
         },
         _ => None,

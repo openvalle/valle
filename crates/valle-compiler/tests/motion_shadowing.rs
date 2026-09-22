@@ -65,7 +65,7 @@ export default function P(ctx) {
   const f = (gap) => gap * 2;
   return (<Scene className="h-full w-full">
     <View key="a" style={{ position: "absolute", left: 0, top: 0, height: 10,
-                           width: f(ctx.hold.progress) }} />
+                           width: f(ctx.progress) }} />
   </Scene>);
 }
 "##,
@@ -84,7 +84,7 @@ fn a_component_local_binding_shadows_the_module_constant_it_is_named_after() {
         r##"
 const size = 40;
 export default function P(ctx) {
-  const size = ctx.hold.progress * 100;
+  const size = ctx.progress * 100;
   return (<Scene className="h-full w-full">
     <View key="a" style={{ position: "absolute", left: 0, top: 0, height: 10, width: size }} />
   </Scene>);
@@ -104,7 +104,7 @@ fn an_unshadowed_module_constant_still_folds_in_the_same_component() {
 const size = 40;
 const other = 7;
 export default function P(ctx) {
-  const size = ctx.hold.progress * 100;
+  const size = ctx.progress * 100;
   return (<Scene className="h-full w-full">
     <View key="a" style={{ position: "absolute", left: 0, top: 0, height: other, width: size }} />
   </Scene>);
@@ -131,7 +131,7 @@ fn an_inner_constant_shadows_an_outer_frame_time_binding_of_the_same_name() {
     let compiled = compile_motion(
         r##"
 export default function P(ctx) {
-  const v = ctx.hold.progress * 100;
+  const v = ctx.progress * 100;
   const box = (i) => {
     const v = 33;
     return v + i;
@@ -164,7 +164,7 @@ export default function P(ctx) {
   const h2 = (v) => h1(v) + 1;
   return (<Scene className="h-full w-full">
     <View key="a" style={{ position: "absolute", left: 0, top: 0, height: 10,
-                           width: h2(ctx.hold.progress) }} />
+                           width: h2(ctx.progress) }} />
   </Scene>);
 }
 "##,
@@ -197,7 +197,7 @@ export default function P(ctx) {
   const g = (v) => f(v) * 2;
   return (<Scene className="h-full w-full">
     <View key="a" style={{ position: "absolute", left: 0, top: 0, height: 10,
-                           width: f(ctx.hold.progress) }} />
+                           width: f(ctx.progress) }} />
   </Scene>);
 }
 "##,
@@ -222,7 +222,7 @@ fn a_static_map_parameter_shadows_the_outer_frame_time_binding() {
     let compiled = compile_motion(
         r##"
 export default function P(ctx) {
-  const v = ctx.hold.progress * 100;
+  const v = ctx.progress * 100;
   return (<Scene className="h-full w-full">
     {[1, 2].map((v, i) => <View key={`k-${i}`} style={{ position: "absolute", left: 0, top: 0,
                                                         height: 10, width: v * 2 }} />)}
@@ -248,7 +248,7 @@ fn the_outer_frame_time_binding_survives_the_map_when_not_shadowed() {
     let compiled = compile_motion(
         r##"
 export default function P(ctx) {
-  const v = ctx.hold.progress * 100;
+  const v = ctx.progress * 100;
   return (<Scene className="h-full w-full">
     {[1, 2].map((k, i) => <View key={`k-${i}`} style={{ position: "absolute", left: 0, top: 0,
                                                         height: 10, width: v + k }} />)}
@@ -286,7 +286,7 @@ fn an_arrow_parameter_sharing_a_frame_time_name_does_not_block_static_folding() 
     let compiled = compile_motion(
         r##"
 export default function P(ctx) {
-  const t = ctx.hold.progress;
+  const t = ctx.progress;
   const DOUBLED = [1, 2, 3].map((t) => t * 2);
   return (<Scene className="h-full w-full">
     <View key="a" style={{ position: "absolute", left: 0, top: 0, height: 10,
@@ -310,7 +310,7 @@ fn a_free_use_outside_the_arrow_still_blocks_static_folding() {
     let compiled = compile_motion(
         r##"
 export default function P(ctx) {
-  const t = ctx.hold.progress * 50;
+  const t = ctx.progress * 50;
   return (<Scene className="h-full w-full">
     <View key="a" style={{ position: "absolute", left: 0, top: 0, height: 10,
                            width: t + [1].map((t) => t)[0] }} />

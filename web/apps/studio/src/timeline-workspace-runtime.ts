@@ -57,18 +57,6 @@ export interface TimelineWorkspaceRuntime {
   setMotionSourceDurations(durations: Record<string, number>): void;
 }
 
-function bindMotionSourceDurations(timeline: Timeline, durations: Record<string, number>): Timeline {
-  const bound = structuredClone(timeline);
-  for (const track of bound.tracks.visual ?? []) {
-    for (const clip of track.clips) {
-      if (clip.kind !== "motion" || clip.sourceDuration != null) continue;
-      const duration = durations[clip.component];
-      if (duration !== undefined) clip.sourceDuration = duration;
-    }
-  }
-  return bound;
-}
-
 type CompilerRuntimeFactory = (
   options: TimelineCompilerRuntimeOptions,
 ) => Promise<TimelineCompilerRuntime>;
@@ -90,9 +78,7 @@ export async function initializeTimelineWorkspaceRuntime(
     runtimeBaseUrl: config.runtimeBaseUrl,
   });
   let motionSourceDurations = config.motionSourceDurations ?? {};
-  const compileTimeline = (timeline: Timeline) => compiler.compileTimeline(
-    bindMotionSourceDurations(timeline, motionSourceDurations),
-  );
+  const compileTimeline = (timeline: Timeline) => compiler.compileTimeline(timeline, motionSourceDurations);
   const compiled = compileTimeline(config.timeline);
   const hostedRender = compiler.canonicalizeTimelineDocument(config.render.timeline);
   if (hostedRender.timelineJson !== compiled.timelineJson) {

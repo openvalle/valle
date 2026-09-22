@@ -1,13 +1,12 @@
 export const composition = { width: 1920, height: 1080, fps: 30, duration: 5 };
-export const component = "smooth-area";
 
-export const controls = defineControls({
+export const controls = {
   props: {
     accent: color({ default: "#22d3ee" }),
     fill: color({ default: "#155e75" }),
     ink: color({ default: "#e2e8f0" }),
   },
-});
+};
 
 const DATA = [16, 22, 19, 34, 31, 48, 44, 61, 58, 72];
 const LABELS = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT"];

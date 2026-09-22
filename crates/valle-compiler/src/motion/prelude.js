@@ -16,7 +16,6 @@ const __typed = (value) => {
   });
   return value;
 };
-const defineControls = (value) => value;
 const __control = (kind, options = {}) => ({ kind, ...options });
 const number = (options = {}) => __control("number", options);
 const string = (options = {}) => __control("string", options);
@@ -35,9 +34,7 @@ const point = (x = {}, y) => y === undefined && typeof x === "object"
 const rect = (x = {}, y, width, height) => y === undefined && typeof x === "object"
   ? __control("rect", x)
   : __typed({ __valleType: "rect", x, y, width, height });
-const path = (value = {}) => typeof value === "object" && value.__valleType === undefined
-  ? __control("pathData", value)
-  : __typed({ __valleType: "pathData", d: value });
+const path = (value) => __typed({ __valleType: "pathData", d: value });
 const line = (points) => __typed({ __valleType: "pathLine", points });
 const cubic = (from, control1, control2, to) => __typed({
   __valleType: "pathCubic", from, control1, control2, to,
@@ -121,15 +118,9 @@ const radialGradient = (center, radius, stops, spread = "pad") => __typed({
 const conicGradient = (center, startAngle, stops, spread = "pad") => __typed({
   __valleType: "conicGradient", center, startAngle, stops, spread,
 });
-const nodeTarget = (options = {}) => __control("nodeTarget", options);
 const select = (options = {}) => __control("select", options);
-// `frames` is intentionally overloaded: object input remains the existing controls constructor;
-// a finite number is a Sequence time literal. Both are prepare-only values, so no runtime
-// ambiguity reaches the Artifact.
 const __sequenceTime = (unit, value) => ({ __valleType: "sequenceTime", unit, value });
-const frames = (value = {}) => typeof value === "number"
-  ? __sequenceTime("frames", value)
-  : __control("frames", value);
+const frames = (value) => __sequenceTime("frames", value);
 const seconds = (value) => __sequenceTime("seconds", value);
 const stage = (options = {}) => ({ __valleType: "sequenceStageInput", ...options });
 const defineSequence = (input) => {
@@ -270,6 +261,4 @@ const defineLayoutStates = (input) => {
   }
   return { __valleType: "layoutStates", states: input, ids };
 };
-const optionalFrames = (options = {}) => __control("optionalFrames", options);
-const spanCue = (options = {}) => __control("spanCue", options);
 const asset = (options = {}) => ({ kind: "asset", assetKind: options.kind, required: options.required ?? false });

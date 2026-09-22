@@ -3,9 +3,8 @@
 use std::collections::BTreeMap;
 use valle_compiler::motion::compile_motion;
 use valle_motion::{
-    Fonts, LayoutOptions, MotionValue, ResolvedSignals, StyleBinding, StyleCache, StyleValue,
-    Viewport, build_tree, default_font_naming, emit, motion_context_at, phase_windows,
-    prepare_scene, resolve_props,
+    Fonts, LayoutOptions, MotionValue, StyleBinding, StyleCache, StyleValue, Viewport, build_tree,
+    default_font_naming, emit, motion_context_at_frame, prepare_scene, resolve_props,
 };
 use valle_timeline::FrameRate;
 
@@ -110,15 +109,13 @@ fn grid_geometry_and_programs_are_identical_for_cold_warm_and_reverse_seeks() {
     let fonts = Fonts::default();
     let cache = StyleCache::new();
     let props = resolve_props(&artifact.controls, &BTreeMap::new()).unwrap();
-    let windows = phase_windows(&artifact.controls.phase_spec(), 60);
     for frame in [0, 30, 12, 59, 0, 30] {
-        let ctx = motion_context_at(frame, &windows, FrameRate::new(30, 1).unwrap()).unwrap();
+        let ctx = motion_context_at_frame(frame, 60, FrameRate::new(30, 1).unwrap()).unwrap();
         let render = |styles| {
             let tree = build_tree(
                 &prepared,
                 &ctx,
                 &props,
-                &ResolvedSignals::default(),
                 &LayoutOptions {
                     viewport: Viewport::new((320, 180)),
                     fonts: &fonts,
@@ -149,13 +146,11 @@ fn snapshot(attributes: &str) -> (BTreeMap<String, [f32; 4]>, Vec<u8>) {
     let prepared = prepare_scene(&artifact).unwrap();
     let fonts = Fonts::default();
     let props = resolve_props(&artifact.controls, &BTreeMap::new()).unwrap();
-    let windows = phase_windows(&artifact.controls.phase_spec(), 60);
-    let ctx = motion_context_at(0, &windows, FrameRate::new(30, 1).unwrap()).unwrap();
+    let ctx = motion_context_at_frame(0, 60, FrameRate::new(30, 1).unwrap()).unwrap();
     let tree = build_tree(
         &prepared,
         &ctx,
         &props,
-        &ResolvedSignals::default(),
         &LayoutOptions {
             viewport: Viewport::new((320, 180)),
             fonts: &fonts,
@@ -296,13 +291,11 @@ fn numeric_flex_and_order_classes_change_real_layout() {
         let prepared = prepare_scene(&artifact).unwrap();
         let fonts = Fonts::default();
         let props = resolve_props(&artifact.controls, &BTreeMap::new()).unwrap();
-        let windows = phase_windows(&artifact.controls.phase_spec(), 60);
-        let ctx = motion_context_at(0, &windows, FrameRate::new(30, 1).unwrap()).unwrap();
+        let ctx = motion_context_at_frame(0, 60, FrameRate::new(30, 1).unwrap()).unwrap();
         let tree = build_tree(
             &prepared,
             &ctx,
             &props,
-            &ResolvedSignals::default(),
             &LayoutOptions {
                 viewport: Viewport::new((300, 80)),
                 fonts: &fonts,
@@ -333,13 +326,11 @@ fn automatic_self_alignment_uses_parent_alignment() {
         let prepared = prepare_scene(&artifact).unwrap();
         let fonts = Fonts::default();
         let props = resolve_props(&artifact.controls, &BTreeMap::new()).unwrap();
-        let windows = phase_windows(&artifact.controls.phase_spec(), 60);
-        let ctx = motion_context_at(0, &windows, FrameRate::new(30, 1).unwrap()).unwrap();
+        let ctx = motion_context_at_frame(0, 60, FrameRate::new(30, 1).unwrap()).unwrap();
         let tree = build_tree(
             &prepared,
             &ctx,
             &props,
-            &ResolvedSignals::default(),
             &LayoutOptions {
                 viewport: Viewport::new((300, 100)),
                 fonts: &fonts,

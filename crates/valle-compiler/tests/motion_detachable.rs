@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 
 use valle_compiler::motion::compile_motion;
 use valle_motion::{FontResource, Fonts, LayoutOptions, Viewport, build_tree, prepare_scene};
-use valle_motion::{ResolvedSignals, motion_context_at, phase_windows, resolve_props};
+use valle_motion::{motion_context_at_frame, resolve_props};
 use valle_timeline::FrameRate;
 
 const FONT: &[u8] = include_bytes!("../../../assets/fonts/noto/NotoSansCJKsc-Regular.otf");
@@ -33,14 +33,12 @@ fn boxes_at(source: &str, width: u32, height: u32) -> BTreeMap<String, [f32; 4]>
     let compiled = compile_motion(source).expect("reference film compiles");
     let prepared = prepare_scene(&compiled.artifact).expect("prepare");
     let props = resolve_props(&compiled.artifact.controls, &Default::default()).expect("props");
-    let phases = phase_windows(&compiled.artifact.controls.phase_spec(), 60);
-    let ctx = motion_context_at(30, &phases, FrameRate::new(30, 1).unwrap()).expect("frame 30");
+    let ctx = motion_context_at_frame(30, 60, FrameRate::new(30, 1).unwrap()).expect("frame 30");
     let fonts = fonts();
     let tree = build_tree(
         &prepared,
         &ctx,
         &props,
-        &ResolvedSignals::default(),
         &LayoutOptions {
             viewport: Viewport::new((width, height)),
             fonts: &fonts,
@@ -177,9 +175,7 @@ fn the_reference_films_only_use_the_public_surface() {
         "linearGradient",
         "radialGradient",
         "gradientStop",
-        "defineControls",
         "frames",
-        "optionalFrames",
         "number",
         "string",
         "boolean",
@@ -187,9 +183,7 @@ fn the_reference_films_only_use_the_public_surface() {
         "length",
         "angle",
         "select",
-        "nodeTarget",
         "asset",
-        "spanCue",
     ];
 
     for (name, source) in FILMS {

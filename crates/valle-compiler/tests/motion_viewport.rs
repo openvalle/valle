@@ -3,7 +3,7 @@
 
 use valle_compiler::motion::compile_motion;
 use valle_motion::{FontResource, Fonts, LayoutOptions, Viewport, build_tree, prepare_scene};
-use valle_motion::{ResolvedSignals, motion_context_at, phase_windows, resolve_props};
+use valle_motion::{motion_context_at_frame, resolve_props};
 use valle_timeline::FrameRate;
 
 const FONT: &[u8] = include_bytes!("../../../assets/fonts/noto/NotoSansCJKsc-Regular.otf");
@@ -26,14 +26,12 @@ fn lay_out(source: &str, width: u32, height: u32) -> Laid {
     let compiled = compile_motion(source).expect("compiles");
     let prepared = prepare_scene(&compiled.artifact).expect("prepare");
     let props = resolve_props(&compiled.artifact.controls, &Default::default()).expect("props");
-    let phases = phase_windows(&compiled.artifact.controls.phase_spec(), 30);
-    let ctx = motion_context_at(0, &phases, FrameRate::new(30, 1).unwrap()).expect("frame 0");
+    let ctx = motion_context_at_frame(0, 30, FrameRate::new(30, 1).unwrap()).expect("frame 0");
     let fonts = fonts();
     let tree = build_tree(
         &prepared,
         &ctx,
         &props,
-        &ResolvedSignals::default(),
         &LayoutOptions {
             viewport: Viewport::new((width, height)),
             fonts: &fonts,
@@ -189,14 +187,12 @@ export default function P(ctx) {
 fn evaluating_without_a_viewport_fails_closed_with_its_own_error() {
     let compiled = compile_motion(RESOLUTION_INDEPENDENT).expect("compiles");
     let props = resolve_props(&compiled.artifact.controls, &Default::default()).expect("props");
-    let phases = phase_windows(&compiled.artifact.controls.phase_spec(), 30);
-    let ctx = motion_context_at(0, &phases, FrameRate::new(30, 1).unwrap()).expect("frame 0");
+    let ctx = motion_context_at_frame(0, 30, FrameRate::new(30, 1).unwrap()).expect("frame 0");
     let error = valle_motion::eval_all(
         &compiled.artifact,
         valle_motion::EvalInputs {
             ctx: &ctx,
             props: &props,
-            signals: &ResolvedSignals::default(),
             unit: None,
             viewport: None,
         },

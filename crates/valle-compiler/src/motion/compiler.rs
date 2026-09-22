@@ -169,24 +169,18 @@ impl<'s> Compiler<'s> {
                                 continue;
                             };
                             match name.as_str() {
-                                "component" => match initializer {
-                                    Expression::StringLiteral(value) => self.component = Some(value.value.to_string()),
-                                    _ => self.illegal(DiagCode::ModuleShape, initializer.span(), "component must be a string literal"),
-                                },
                                 "controls" => self.compile_controls(initializer),
                                 "composition" => self.compile_composition(initializer),
                                 other => self.unsupported(initializer.span(), format!("a Motion module exports its component by default and may declare `controls` and `composition`; `{other}` is not part of the module contract — keep helpers module-local")),
                             }
                         }
                     }
-                    _ => self.illegal(DiagCode::ModuleShape, export.span(), "named exports must be `export const component`, `export const controls`, or `export const composition`"),
+                    _ => self.illegal(DiagCode::ModuleShape, export.span(), "named exports must be `export const controls` or `export const composition`"),
                 },
                 Statement::ExportDefaultDeclaration(export) => match &export.declaration {
                     ExportDefaultDeclarationKind::FunctionDeclaration(function) => {
                         self.default_function = Some(function.as_ref());
-                        if self.component.is_none() {
-                            self.component = function.id.as_ref().map(|id| id.name.to_string());
-                        }
+                        self.component = function.id.as_ref().map(|id| id.name.to_string());
                         self.validate_root_params(&function.params);
                     }
                     _ => self.illegal(DiagCode::ModuleShape, export.span(), "default export must be a named function declaration"),
@@ -217,7 +211,7 @@ impl<'s> Compiler<'s> {
             self.illegal(
                 DiagCode::ModuleShape,
                 Span::new(0, 0),
-                "give the default export a function name or export `component`",
+                "give the default export a function name",
             );
             return Err(std::mem::take(&mut self.diagnostics));
         };
@@ -519,16 +513,6 @@ impl<'s> Compiler<'s> {
         {
             Ok(value) => match controls_from_json(&value) {
                 Ok(controls) => {
-                    // Scene camera expressions are supported; reject camera controls that require
-                    // unsupported target selection or fit behavior.
-                    if !controls.camera.values.is_empty() {
-                        self.unsupported(
-                            named_control_span(self.source, span, "camera"),
-                            "camera *controls* (target / fit knobs) are not implemented yet; \
-                             the scene-level camera itself is available as `<Scene camera={...}>` \
-                             with center / zoom / rotation",
-                        );
-                    }
                     self.controls = controls;
                 }
                 Err(message) => self.illegal(DiagCode::ModuleShape, span, message),
@@ -555,7 +539,7 @@ impl<'s> Compiler<'s> {
             self.illegal(
                 DiagCode::ModuleShape,
                 self.controls_span.unwrap_or(Span::new(0, 0)),
-                "prepare data binding source must be non-empty so it can enter the fingerprint",
+                "prepare data binding source must be non-empty for diagnostics",
             );
             return;
         }
@@ -584,11 +568,11 @@ impl<'s> Compiler<'s> {
     }
 
     pub(super) fn validate_root_params(&mut self, params: &FormalParameters<'_>) {
-        if params.rest.is_some() || params.items.len() > 4 {
+        if params.rest.is_some() || params.items.len() > 3 {
             self.illegal(
                 DiagCode::ModuleShape,
                 params.span(),
-                "component parameters must be `(ctx, props, signals, data)`; props and data may be destructured in their positions",
+                "component parameters must be `(ctx, props, data)`; props and data may be destructured in their positions",
             );
             return;
         }
@@ -620,24 +604,11 @@ impl<'s> Compiler<'s> {
             );
         }
         if let Some(third) = params.items.get(2)
-            && third
-                .pattern
-                .get_identifier_name()
-                .map(|name| name.as_str())
-                != Some("signals")
-        {
-            self.illegal(
-                DiagCode::ModuleShape,
-                third.span(),
-                "the third component parameter must be `signals`",
-            );
-        }
-        if let Some(fourth) = params.items.get(3)
             && !matches!(
-                fourth.pattern,
+                third.pattern,
                 BindingPattern::ObjectPattern(_) | BindingPattern::ArrayPattern(_)
             )
-            && fourth
+            && third
                 .pattern
                 .get_identifier_name()
                 .map(|name| name.as_str())
@@ -645,8 +616,8 @@ impl<'s> Compiler<'s> {
         {
             self.illegal(
                 DiagCode::ModuleShape,
-                fourth.span(),
-                "the fourth component parameter must be `data` or a data destructure",
+                third.span(),
+                "the third component parameter must be `data` or a data destructure",
             );
         }
     }
@@ -691,12 +662,12 @@ impl<'s> Compiler<'s> {
                 self.bind_dynamic(local_name, expr);
             }
         }
-        if let Some(fourth) = params.items.get(3) {
+        if let Some(third) = params.items.get(2) {
             let value = self
                 .prepare_data
                 .as_ref()
                 .map_or_else(|| serde_json::json!({}), |binding| binding.value.clone());
-            self.bind_static_pattern(&fourth.pattern, value);
+            self.bind_static_pattern(&third.pattern, value);
         }
     }
 

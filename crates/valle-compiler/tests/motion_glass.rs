@@ -8,7 +8,7 @@ fn production_compiler_admits_glass_tags_and_declares_capability() {
     for tag in ["Glass", "GlassField"] {
         let source = if tag == "Glass" {
             r#"
-export const component = "glass-open";
+
 export default function Scene() {
   return <Glass surfaceId="hero-lens" shape={{ kind: "circle" }} />;
 }
@@ -16,7 +16,7 @@ export default function Scene() {
             .to_string()
         } else {
             r#"
-export const component = "glass-open";
+
 export default function Scene() {
   return (
     <GlassField fieldId="orbit">
@@ -51,7 +51,7 @@ fn production_capability_registry_lists_motion_glass() {
 #[test]
 fn artifact_requires_motion_glass_capability_exactly_when_used() {
     let glass_source = r#"
-export const component = "glass";
+
 export default function Scene() {
   return <Glass surfaceId="lens" shape={{ kind: "circle" }} />;
 }
@@ -70,7 +70,7 @@ export default function Scene() {
     );
 
     let plain_source = r#"
-export const component = "plain";
+
 export default function Scene() { return <Group />; }
 "#;
     let mut plain = compile_motion(plain_source).unwrap().artifact;

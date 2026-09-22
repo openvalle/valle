@@ -67,7 +67,7 @@ working source when available. A minimal `title.motion.tsx` is:
 ```tsx
 export const composition = { width: 640, height: 360, fps: 30, duration: 3 };
 export default function Title(ctx) {
-  const opacity = interpolate(ctx.hold.progress, [0, 0.6], [0, 1]);
+  const opacity = interpolate(ctx.seconds, [0, 0.6], [0, 1]);
   return (
     <Scene className="relative h-full w-full flex items-center justify-center"
       style={{ backgroundColor: "#102030" }}>
@@ -80,10 +80,12 @@ export default function Title(ctx) {
 Use literal or immutable compile-time constant interpolation stop arrays.
 Bind declared assets using repeated
 `--asset name=path`, prepared data with `--data file.json`, and extra fonts with
-`--font path`. Bind constant props with `--props props.json` and Timeline-format
-source-range cues with `--cues cues.json`; required cues must be supplied, optional
-cues stay inactive. Canvas, fps and duration come from `composition` and must not be
-passed on the command line; keep asset and prop bindings consistent across check and render.
+`--font path`. Bind ordinary parameters with `--props props.json`; a Motion work
+can use numeric props for adjustable time windows or `--data file.json` for a
+list of timestamped items. The source evaluates them against `ctx.seconds`.
+Canvas and duration come from `composition`. Its optional `fps` supplies the
+standalone default; `--fps` can supply or override the output frame rate.
+Keep asset, data and prop bindings consistent across check and render.
 
 ```sh
 valle motion check title.motion.tsx --json

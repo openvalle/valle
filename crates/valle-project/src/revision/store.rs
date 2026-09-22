@@ -11,7 +11,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use valle_compiler::{CompileTimelineError, compile_timeline};
-use valle_timeline::internal::{CanonicalTimeline, ContentDigest, DiagnosticSeverity};
+use valle_timeline::internal::{
+    CanonicalTimeline, ContentDigest, DiagnosticSeverity, canonical_bytes, decode_canonical,
+};
 use valle_timeline::{Timeline, decode_timeline, timeline_bytes, wire::edit::EditErrorWire};
 
 use super::{
@@ -25,20 +27,32 @@ const STORE_FORMAT_FILE: &str = "FORMAT";
 const STORE_FORMAT_LOCK_FILE: &str = ".project-store-format.lock";
 const STORE_FORMAT_TMP_FILE: &str = "FORMAT.tmp";
 const STORE_FORMAT_TMP_PREFIX: &str = ".FORMAT.tmp-";
-const STORE_FORMAT: &[u8] = b"valle.project-store@1\n";
+const STORE_FORMAT: &[u8] = b"valle.project-store@2\n";
 const REVISIONS_DIR: &str = "revisions";
 const TIMELINE_FILE: &str = "timeline.json";
+const CANONICAL_FILE: &str = "canonical.json";
 const REVISION_FILE: &str = "revision.json";
 const OWNER_LOCK_FILE: &str = ".owner.lock";
 const INTENT_MAX_BYTES: usize = 2_048;
 const DEFAULT_PAGE_SIZE: usize = 50;
-const STORED_SNAPSHOT_DIGEST_DOMAIN: &[u8] = b"valle.project-snapshot/1\0";
+const STORED_SNAPSHOT_DIGEST_DOMAIN: &[u8] = b"valle.project-snapshot/2\0";
 
 /// Filesystem-backed single-owner Project revision store.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ProjectStore {
     root: PathBuf,
     owners: Arc<Mutex<BTreeMap<ProjectId, Arc<ProjectOwner>>>>,
+    motion_compiler: Option<
+        Arc<dyn Fn(&Timeline) -> Result<CanonicalTimeline, CompileTimelineError> + Send + Sync>,
+    >,
+}
+
+impl std::fmt::Debug for ProjectStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProjectStore")
+            .field("root", &self.root)
+            .finish()
+    }
 }
 
 impl ProjectStore {
@@ -47,6 +61,28 @@ impl ProjectStore {
         Self {
             root: root.into(),
             owners: Arc::new(Mutex::new(BTreeMap::new())),
+            motion_compiler: None,
+        }
+    }
+
+    pub fn with_motion_compiler(
+        mut self,
+        compiler: impl Fn(&Timeline) -> Result<CanonicalTimeline, CompileTimelineError>
+        + Send
+        + Sync
+        + 'static,
+    ) -> Self {
+        self.motion_compiler = Some(Arc::new(compiler));
+        self
+    }
+
+    fn compile_timeline(
+        &self,
+        timeline: &Timeline,
+    ) -> Result<CanonicalTimeline, CompileTimelineError> {
+        match &self.motion_compiler {
+            Some(compiler) => compiler(timeline),
+            None => compile_timeline_document(timeline),
         }
     }
 
@@ -138,8 +174,9 @@ impl ProjectStore {
         auth: &AuthenticatedContext,
     ) -> Result<ProjectTimelineSnapshot, StoreFault> {
         validate_intent(intent)?;
-        let canonical =
-            compile_timeline_document(timeline).map_err(StoreFault::InvalidTimelineInput)?;
+        let canonical = self
+            .compile_timeline(timeline)
+            .map_err(StoreFault::InvalidTimelineInput)?;
         self.initialize_or_validate_store_format()?;
         create_or_validate_directory(&self.projects_dir())?;
         let project_dir = self.project_dir(project_id);
@@ -172,7 +209,12 @@ impl ProjectStore {
         sweep_all_unpublished_revisions(&project_dir)?;
         let revision = self.build_revision(None, 1, RevisionCause::Genesis, intent, auth)?;
         let snapshot = close_snapshot(project_id.clone(), revision, timeline.clone(), canonical);
-        self.persist_revision(project_id, snapshot.revision(), snapshot.timeline())?;
+        self.persist_revision(
+            project_id,
+            snapshot.revision(),
+            snapshot.timeline(),
+            snapshot.canonical(),
+        )?;
         Ok(snapshot)
     }
 
@@ -334,7 +376,7 @@ impl ProjectStore {
 
         let (timeline, canonical, cause) = match mutation {
             SnapshotMutation::TimelineEdit { timeline } => {
-                let canonical = match compile_timeline_document(&timeline) {
+                let canonical = match self.compile_timeline(&timeline) {
                     Ok(canonical) => canonical,
                     Err(error) => {
                         return Ok(SnapshotWriteResult::Rejected {
@@ -357,7 +399,7 @@ impl ProjectStore {
             }
         };
 
-        if timeline == *head.timeline() {
+        if timeline == *head.timeline() && canonical == *head.canonical() {
             return Ok(SnapshotWriteResult::Unchanged { snapshot: head });
         }
         let revision = head
@@ -367,7 +409,12 @@ impl ProjectStore {
             .ok_or(StoreFault::Corrupt("revision overflow"))?;
         let revision = self.build_revision(Some(&head.revision), revision, cause, intent, auth)?;
         let snapshot = close_snapshot(project_id.clone(), revision, timeline, canonical);
-        self.persist_revision(project_id, snapshot.revision(), snapshot.timeline())?;
+        self.persist_revision(
+            project_id,
+            snapshot.revision(),
+            snapshot.timeline(),
+            snapshot.canonical(),
+        )?;
         Ok(SnapshotWriteResult::Committed { snapshot })
     }
 
@@ -402,6 +449,7 @@ impl ProjectStore {
         project_id: &ProjectId,
         revision: &TimelineRevision,
         timeline: &Timeline,
+        canonical: &CanonicalTimeline,
     ) -> Result<(), StoreFault> {
         let project_dir = self.project_dir(project_id);
         let revisions_dir = project_dir.join(REVISIONS_DIR);
@@ -414,13 +462,22 @@ impl ProjectStore {
         std::fs::create_dir(&temporary_dir)?;
 
         let timeline_bytes = timeline_bytes(timeline).map_err(|_| StoreFault::Canonicalization)?;
-        let snapshot_digest = snapshot_digest_for_revision(revision, &timeline_bytes)?;
+        let canonical_bytes =
+            canonical_bytes(canonical).map_err(|_| StoreFault::Canonicalization)?;
+        let snapshot_digest =
+            snapshot_digest_for_revision(revision, &timeline_bytes, &canonical_bytes)?;
 
         write_new_synced(
             &temporary_dir.join(TIMELINE_FILE),
             &timeline_bytes,
             "after-timeline-write",
             "after-timeline-fsync",
+        )?;
+        write_new_synced(
+            &temporary_dir.join(CANONICAL_FILE),
+            &canonical_bytes,
+            "after-canonical-write",
+            "after-canonical-fsync",
         )?;
         write_new_synced(
             &temporary_dir.join(REVISION_FILE),
@@ -502,12 +559,21 @@ impl ProjectStore {
         {
             return Err(StoreFault::Corrupt("timeline.json is not canonical"));
         }
-        let expected_digest = snapshot_digest_for_stored(&stored, &stored_timeline_bytes)?;
+        let stored_canonical_bytes = std::fs::read(revision_dir.join(CANONICAL_FILE))?;
+        let canonical_text = std::str::from_utf8(&stored_canonical_bytes)
+            .map_err(|_| StoreFault::Corrupt("canonical.json is not UTF-8"))?;
+        let canonical = decode_canonical(canonical_text)
+            .map_err(|_| StoreFault::Corrupt("invalid canonical.json"))?;
+        if canonical_bytes(&canonical).map_err(|_| StoreFault::Canonicalization)?
+            != stored_canonical_bytes
+        {
+            return Err(StoreFault::Corrupt("canonical.json is not canonical"));
+        }
+        let expected_digest =
+            snapshot_digest_for_stored(&stored, &stored_timeline_bytes, &stored_canonical_bytes)?;
         if expected_digest != stored.snapshot_digest {
             return Err(StoreFault::Corrupt("snapshot digest mismatch"));
         }
-        let canonical = compile_timeline_document(&timeline)
-            .map_err(|_| StoreFault::Corrupt("stored Timeline failed to compile"))?;
 
         let digest = stored.snapshot_digest;
         let snapshot = close_snapshot(project_id.clone(), stored.into(), timeline, canonical);
@@ -605,6 +671,7 @@ struct LoadedSnapshot {
 fn snapshot_digest_for_revision(
     revision: &TimelineRevision,
     timeline_bytes: &[u8],
+    canonical_bytes: &[u8],
 ) -> Result<ContentDigest, StoreFault> {
     let metadata = StoredSnapshotMetadata {
         revision: revision.revision,
@@ -614,12 +681,13 @@ fn snapshot_digest_for_revision(
         cause: &revision.cause,
         intent: revision.intent.as_deref(),
     };
-    snapshot_digest_from_parts(&canonical_json(&metadata)?, timeline_bytes)
+    snapshot_digest_from_parts(&canonical_json(&metadata)?, timeline_bytes, canonical_bytes)
 }
 
 fn snapshot_digest_for_stored(
     revision: &StoredTimelineRevision,
     timeline_bytes: &[u8],
+    canonical_bytes: &[u8],
 ) -> Result<ContentDigest, StoreFault> {
     let metadata = StoredSnapshotMetadata {
         revision: revision.revision,
@@ -629,17 +697,19 @@ fn snapshot_digest_for_stored(
         cause: &revision.cause,
         intent: revision.intent.as_deref(),
     };
-    snapshot_digest_from_parts(&canonical_json(&metadata)?, timeline_bytes)
+    snapshot_digest_from_parts(&canonical_json(&metadata)?, timeline_bytes, canonical_bytes)
 }
 
 fn snapshot_digest_from_parts(
     metadata: &[u8],
     timeline: &[u8],
+    canonical: &[u8],
 ) -> Result<ContentDigest, StoreFault> {
     let mut hasher = Sha256::new();
     hasher.update(STORED_SNAPSHOT_DIGEST_DOMAIN);
     update_length_framed(&mut hasher, metadata)?;
     update_length_framed(&mut hasher, timeline)?;
+    update_length_framed(&mut hasher, canonical)?;
     Ok(ContentDigest::from_bytes(hasher.finalize().into()))
 }
 
@@ -933,6 +1003,11 @@ fn compile_timeline_errors(error: CompileTimelineError) -> Vec<EditErrorWire> {
         }]
     };
     match error {
+        CompileTimelineError::MotionPreparation { reason } => one(
+            "motion_preparation",
+            "/tracks/visual",
+            BTreeMap::from([("reason".to_owned(), json!(reason))]),
+        ),
         CompileTimelineError::MissingMotionDuration { path } => {
             one("missing_motion_duration", &path, BTreeMap::new())
         }
@@ -1014,14 +1089,17 @@ fn validate_revision_directory(revision_dir: &Path) -> Result<(), StoreFault> {
         let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
             return Err(StoreFault::Corrupt("revision member name is not UTF-8"));
         };
-        if name != TIMELINE_FILE && name != REVISION_FILE {
+        if name != TIMELINE_FILE && name != REVISION_FILE && name != CANONICAL_FILE {
             return Err(StoreFault::Corrupt("revision directory has unknown member"));
         }
         if !entry.file_type()?.is_file() || members.insert(name, ()).is_some() {
             return Err(StoreFault::Corrupt("revision member is not a regular file"));
         }
     }
-    if !members.contains_key(TIMELINE_FILE) || !members.contains_key(REVISION_FILE) {
+    if !members.contains_key(TIMELINE_FILE)
+        || !members.contains_key(REVISION_FILE)
+        || !members.contains_key(CANONICAL_FILE)
+    {
         return Err(StoreFault::Corrupt("revision directory is incomplete"));
     }
     Ok(())
@@ -1033,10 +1111,15 @@ mod tests {
 
     #[test]
     fn snapshot_digest_preimage_framing_is_stable() {
-        let digest = snapshot_digest_from_parts(br#"{"revision":1}"#, br#"{"tracks":{}}"#).unwrap();
+        let digest = snapshot_digest_from_parts(
+            br#"{"revision":1}"#,
+            br#"{"tracks":{}}"#,
+            br#"{"document":{}}"#,
+        )
+        .unwrap();
         assert_eq!(
             digest.to_string(),
-            "sha256:f7c726218b06aeaf7383f8398cf51cf1abebe682d546c8921b7b27dc3fb9cca9"
+            "sha256:4a019a3ed089560a4c5434b5f8211de6deb1016fa2dc075e1b6cfb143dab8be1"
         );
     }
 }

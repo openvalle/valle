@@ -39,24 +39,13 @@ use super::motion::BoundAsset;
 const COMPONENT_RESOURCE_ID: &str = "component:standalone-motion";
 
 pub(super) struct StandaloneMotionPackageInput<'a> {
-    pub timing: Option<valle_motion::PhaseSpec>,
-    pub timing_seconds: Option<valle_motion::TimingSeconds>,
     pub artifact: &'a SceneArtifact,
     pub assets: &'a BTreeMap<String, BoundAsset>,
     pub font_blobs: &'a [Vec<u8>],
-    pub cue_bindings: &'a BTreeMap<String, SourceCueBinding>,
     pub prop_bindings: &'a BTreeMap<String, Value>,
     pub duration: RationalTime,
     pub frame_rate: FrameRate,
     pub canvas: (u32, u32),
-}
-
-#[derive(Debug, Clone, Copy)]
-pub(super) struct SourceCueBinding {
-    pub start: RationalTime,
-    pub end: RationalTime,
-    pub enter_duration: RationalTime,
-    pub exit_duration: RationalTime,
 }
 
 #[derive(Debug)]
@@ -183,39 +172,6 @@ fn build_timeline(
     artifact_digest: &ContentDigest,
 ) -> Result<CanonicalTimeline> {
     let props = authored_default_props(input.artifact, input.prop_bindings)?;
-    let cues = input
-        .cue_bindings
-        .iter()
-        .map(|(name, cue)| {
-            Ok((
-                name.clone(),
-                json!({
-                    "type": "source-range",
-                    "start": cue.start,
-                    "end": cue.end,
-                    "enterDuration": cue.enter_duration,
-                    "exitDuration": cue.exit_duration,
-                }),
-            ))
-        })
-        .collect::<Result<BTreeMap<_, _>>>()?;
-    let (enter_duration, exit_duration) = if let Some(timing) = input.timing {
-        (
-            frame_time(timing.enter_frames, input.frame_rate)?,
-            frame_time(timing.exit_frames, input.frame_rate)?,
-        )
-    } else if let Some(timing) = input
-        .timing_seconds
-        .or(input.artifact.controls.timing_seconds)
-    {
-        (timing.enter_duration, timing.exit_duration)
-    } else {
-        let phase = input.artifact.controls.phase_spec();
-        (
-            frame_time(phase.enter_frames, input.frame_rate)?,
-            frame_time(phase.exit_frames, input.frame_rate)?,
-        )
-    };
     let document = json!({
         "document": {
             "canvas": {
@@ -245,12 +201,7 @@ fn build_timeline(
                             "rate": "1/1",
                             "endBehavior": "hold",
                             "props": props,
-                            "cues": cues,
                             "resources": resource_ids,
-                            "phases": {
-                                "enterDuration": enter_duration,
-                                "exitDuration": exit_duration,
-                            },
                         },
                     }],
                 }],
@@ -326,12 +277,9 @@ fn motion_value(value: &MotionValue, control: &ControlType) -> Result<Value> {
             json!([value.x, value.y, value.width, value.height])
         }
         (MotionValue::Bool(value), ControlType::Bool) => json!(value),
-        (MotionValue::Str(value), ControlType::String | ControlType::NodeTarget) => json!(value),
+        (MotionValue::Str(value), ControlType::String) => json!(value),
         (MotionValue::Enum(value), ControlType::Select { values }) if values.contains(value) => {
             json!(value)
-        }
-        (MotionValue::PathData(_), ControlType::PathData) => {
-            bail!("PathData Motion props are not admitted by Timeline")
         }
         _ => bail!("Motion prop default does not match its fixed-package control type"),
     };
@@ -356,15 +304,6 @@ fn asset_resource_ids(
         ids.insert(control.clone(), format!("asset:{control}"));
     }
     Ok(ids)
-}
-
-pub(super) fn frame_time(frame: u32, frame_rate: FrameRate) -> Result<RationalTime> {
-    let numerator = i64::from(frame)
-        .checked_mul(i64::from(frame_rate.denominator()))
-        .ok_or_else(|| anyhow!("Motion frame time overflow"))?;
-    let denominator = u32::try_from(frame_rate.numerator())
-        .map_err(|_| anyhow!("Motion frame rate exceeds u32"))?;
-    Ok(RationalTime::new(numerator, denominator)?)
 }
 
 fn motion_digest(bytes: &[u8]) -> ContentDigest {
@@ -757,12 +696,9 @@ mod tests {
             .artifact;
         let fonts = super::super::motion::fixed_package_font_blobs(&artifact, &[]).unwrap();
         build_standalone_motion_package(StandaloneMotionPackageInput {
-            timing: None,
-            timing_seconds: None,
             artifact: &artifact,
             assets: &BTreeMap::new(),
             font_blobs: &fonts,
-            cue_bindings: &BTreeMap::new(),
             prop_bindings: &BTreeMap::new(),
             duration: RationalTime::ONE,
             frame_rate: FrameRate::new(30, 1).unwrap(),
@@ -775,7 +711,8 @@ mod tests {
     fn host_fonts_replace_text_stack_and_preserve_formula_resources() {
         use base64::{Engine as _, engine::general_purpose::STANDARD};
         let package = text_package(
-            r#"export default function T(){return <Scene><Text>Hello</Text><MathFormula latex="x^2" /></Scene>}"#,
+            r#"export const composition = { width: 320, height: 180, duration: 1 };
+export default function T(){return <Scene><Text>Hello</Text><MathFormula latex="x^2" /></Scene>}"#,
         );
         let font = valle_motion::DEFAULT_MOTION_FONT_WEIGHTS[9];
         let selected = valle_engine::fixed_package::with_motion_fonts(

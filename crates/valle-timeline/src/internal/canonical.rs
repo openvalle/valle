@@ -644,90 +644,6 @@ impl<'a> Validator<'a> {
                         &format!("{path}/source/resources/{}", pointer_token(name)),
                     );
                 }
-                for (name, cue) in &source.cues {
-                    let cue_path = format!("{path}/source/cues/{}", pointer_token(name));
-                    if name.is_empty() || name.len() > 256 || name.chars().any(char::is_control) {
-                        self.error(
-                            "invalid_motion_cue_name",
-                            &cue_path,
-                            Some(&clip.id),
-                            JsonObject::new(),
-                        );
-                    }
-                    match cue {
-                        MotionCueBindingWire::SourceRange {
-                            start,
-                            end,
-                            enter_duration,
-                            exit_duration,
-                        } => {
-                            self.require_non_negative(
-                                *start,
-                                &format!("{cue_path}/start"),
-                                Some(&clip.id),
-                            );
-                            if *end <= *start || *end > source.source_duration {
-                                self.error(
-                                    "motion_cue_range_invalid",
-                                    &cue_path,
-                                    Some(&clip.id),
-                                    JsonObject::new(),
-                                );
-                            }
-                            self.validate_motion_phase_duration(
-                                *enter_duration,
-                                source.source_duration,
-                                &format!("{cue_path}/enterDuration"),
-                                &clip.id,
-                            );
-                            self.validate_motion_phase_duration(
-                                *exit_duration,
-                                source.source_duration,
-                                &format!("{cue_path}/exitDuration"),
-                                &clip.id,
-                            );
-                            if enter_duration.checked_add(*exit_duration).is_err()
-                                || end.checked_sub(*start).is_err()
-                            {
-                                self.error(
-                                    "exact_time_overflow",
-                                    &cue_path,
-                                    Some(&clip.id),
-                                    JsonObject::new(),
-                                );
-                            }
-                        }
-                    }
-                }
-                if let Some(enter) = source.phases.enter_duration {
-                    self.validate_motion_phase_duration(
-                        enter,
-                        source.source_duration,
-                        &format!("{path}/source/phases/enterDuration"),
-                        &clip.id,
-                    );
-                }
-                if let Some(exit) = source.phases.exit_duration {
-                    self.validate_motion_phase_duration(
-                        exit,
-                        source.source_duration,
-                        &format!("{path}/source/phases/exitDuration"),
-                        &clip.id,
-                    );
-                }
-                if let (Some(enter), Some(exit)) =
-                    (source.phases.enter_duration, source.phases.exit_duration)
-                {
-                    match enter.checked_add(exit) {
-                        Ok(_) => {}
-                        Err(_) => self.error(
-                            "exact_time_overflow",
-                            &format!("{path}/source/phases"),
-                            Some(&clip.id),
-                            JsonObject::new(),
-                        ),
-                    }
-                }
             }
             VisualSourceWire::Solid(source) => {
                 if !crate::internal::Color(source.color.clone()).is_valid() {
@@ -799,23 +715,6 @@ impl<'a> Validator<'a> {
                 &filter.id,
                 "visual-filter",
                 &format!("{path}/filters/{index}/id"),
-            );
-        }
-    }
-
-    fn validate_motion_phase_duration(
-        &mut self,
-        value: ExactRational,
-        _source_duration: ExactRational,
-        path: &str,
-        entity_id: &str,
-    ) {
-        if value.is_negative() {
-            self.error(
-                "motion_phase_duration_out_of_range",
-                path,
-                Some(entity_id),
-                JsonObject::new(),
             );
         }
     }

@@ -43,7 +43,7 @@ export default function P(ctx) {{
 {chain}
   return (<Scene className="h-full w-full">
     <View key="a" style={{{{ position: "absolute", left: 0, top: 0, height: 10,
-                           width: h1(ctx.hold.progress) }}}} />
+                           width: h1(ctx.progress) }}}} />
   </Scene>);
 }}
 "##
@@ -65,7 +65,7 @@ fn deep_expression_chain_hits_the_nesting_budget_instead_of_the_stack() {
   return (<Scene key="s" className="relative" style={{{{ width: "64px", height: "64px" }}}}>
     <View key="b" className="absolute" style={{{{ left: "0px", top: "0px", width: "8px",
       height: "8px", backgroundColor: "#22c55e",
-      opacity: interpolate(ctx.enter.progress{chain}, [0, 300], [0, 1]) }}}} />
+      opacity: interpolate(ctx.progress{chain}, [0, 300], [0, 1]) }}}} />
   </Scene>);
 }}
 "##
@@ -92,7 +92,7 @@ fn chains_inside_the_nesting_budget_still_compile() {
   return (<Scene key="s" className="relative" style={{{{ width: "64px", height: "64px" }}}}>
     <View key="b" className="absolute" style={{{{ left: "0px", top: "0px", width: "8px",
       height: "8px", backgroundColor: "#22c55e",
-      opacity: interpolate(ctx.enter.progress{chain}, [0, 200], [0, 1]) }}}} />
+      opacity: interpolate(ctx.progress{chain}, [0, 200], [0, 1]) }}}} />
   </Scene>);
 }}
 "##

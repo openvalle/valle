@@ -48,7 +48,7 @@ fn genesis_persists_sparse_author_truth_and_exposes_compiled_internal_view() {
     );
     assert_eq!(
         std::fs::read(store.root().join("FORMAT")).unwrap(),
-        b"valle.project-store@1\n"
+        b"valle.project-store@2\n"
     );
 
     let revision_dir = store
@@ -485,7 +485,7 @@ fn head_digest_rejects_a_valid_canonical_pointer_replacement() {
 fn store_format_is_exact_and_missing_committed_format_fails_closed() {
     for (format, expected) in [
         (
-            Some(b"valle.project-store@2\n".as_slice()),
+            Some(b"valle.project-store@3\n".as_slice()),
             "unsupported project store FORMAT",
         ),
         (None, "project store FORMAT is missing"),
@@ -591,7 +591,7 @@ fn store_format_initialization_is_safe_across_independent_stores() {
     }
     assert_eq!(
         std::fs::read(temporary.path().join("FORMAT")).unwrap(),
-        b"valle.project-store@1\n"
+        b"valle.project-store@2\n"
     );
     assert!(
         std::fs::read_dir(temporary.path())
@@ -682,7 +682,7 @@ fn pre_head_artifacts_are_reclaimed_and_genesis_can_be_retried() {
     let store = ProjectStore::at(temporary.path());
     let id = ProjectId::new("p1").unwrap();
     let auth = AuthenticatedContext::new(Actor::new("agent:test").unwrap());
-    std::fs::write(temporary.path().join("FORMAT"), b"valle.project-store@1\n").unwrap();
+    std::fs::write(temporary.path().join("FORMAT"), b"valle.project-store@2\n").unwrap();
     let project_dir = store.project_dir(&id);
     let revisions = project_dir.join("revisions");
     std::fs::create_dir_all(&revisions).unwrap();
@@ -729,7 +729,7 @@ fn project_directory_symlink_is_rejected_without_sweeping_its_target() {
     let store = ProjectStore::at(temporary.path());
     let id = ProjectId::new("p1").unwrap();
     let auth = AuthenticatedContext::new(Actor::new("agent:test").unwrap());
-    std::fs::write(temporary.path().join("FORMAT"), b"valle.project-store@1\n").unwrap();
+    std::fs::write(temporary.path().join("FORMAT"), b"valle.project-store@2\n").unwrap();
     std::fs::create_dir(temporary.path().join("projects")).unwrap();
     let outside = temporary.path().join("outside-project");
     let sentinel = outside.join("revisions/1/sentinel");
@@ -755,7 +755,7 @@ fn revisions_directory_symlink_is_rejected_without_sweeping_its_target() {
     let store = ProjectStore::at(temporary.path());
     let id = ProjectId::new("p1").unwrap();
     let auth = AuthenticatedContext::new(Actor::new("agent:test").unwrap());
-    std::fs::write(temporary.path().join("FORMAT"), b"valle.project-store@1\n").unwrap();
+    std::fs::write(temporary.path().join("FORMAT"), b"valle.project-store@2\n").unwrap();
     std::fs::create_dir_all(store.project_dir(&id)).unwrap();
     let outside = temporary.path().join("outside-revisions");
     let sentinel = outside.join("1/sentinel");
@@ -779,7 +779,7 @@ fn stable_store_files_must_not_be_symlinks() {
 
     let temporary = tempfile::tempdir().unwrap();
     let outside = temporary.path().join("outside-format");
-    std::fs::write(&outside, b"valle.project-store@1\n").unwrap();
+    std::fs::write(&outside, b"valle.project-store@2\n").unwrap();
     symlink(&outside, temporary.path().join("FORMAT")).unwrap();
     let store = ProjectStore::at(temporary.path());
     let id = ProjectId::new("p1").unwrap();
@@ -791,7 +791,7 @@ fn stable_store_files_must_not_be_symlinks() {
             "project store FORMAT is not a regular file"
         ))
     ));
-    assert_eq!(std::fs::read(outside).unwrap(), b"valle.project-store@1\n");
+    assert_eq!(std::fs::read(outside).unwrap(), b"valle.project-store@2\n");
 }
 
 #[cfg(unix)]

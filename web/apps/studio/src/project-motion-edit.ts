@@ -1,53 +1,14 @@
 import type { JsonValue } from "valle-engine";
-import type { TimelineDocumentView } from "valle-engine";
 import type { TimelineDocument } from "valle-engine/internal";
 import type { GoodMotionContext } from "./motion-preview.ts";
 
 export type ProjectMotionEdit =
   | { type: "prop"; name: string; value: { kind: string; value: JsonValue } }
-  | { type: "phase"; key: string; value: number }
-  | { type: "cue"; cue: string; key: string; value: number };
+  | { type: "data"; value: Record<string, JsonValue> };
 
 type VisualItem = TimelineDocument["document"]["visual"]["tracks"][number]["items"][number];
 type VisualClip = Extract<VisualItem, { type: "clip" }>;
 type MotionSource = Extract<VisualClip["source"], { type: "motion" }>;
-
-type MotionFrameProjection = NonNullable<
-  TimelineDocumentView["sequences"][number]["items"][number]["motionFrames"]
->;
-
-/** Keep the prepared renderer phase layout; overlay canonical source seconds and cue windows. */
-export function motionContextWithTimelineFrames(
-  context: GoodMotionContext,
-  motionFrames: MotionFrameProjection | undefined,
-): GoodMotionContext {
-  if (!motionFrames) return context;
-  const cueBindings: GoodMotionContext["cueBindings"] = {};
-  for (const [name, cue] of Object.entries(motionFrames.cues)) {
-    cueBindings[name] = {
-      type: "sourceRange",
-      startFrame: cue.startFrame,
-      endFrame: cue.endFrame,
-      enterFrames: cue.enterFrames,
-      exitFrames: cue.exitFrames,
-      start: cue.start,
-      end: cue.end,
-      enterDuration: cue.enterDuration,
-      exitDuration: cue.exitDuration,
-    };
-  }
-  return {
-    ...context,
-    durationFrames: motionFrames.sourceDurationFrames,
-    timing: {
-      enterFrames: context.timing.enterFrames,
-      exitFrames: context.timing.exitFrames,
-      enterDuration: motionFrames.enterDuration ?? context.timing.enterDuration,
-      exitDuration: motionFrames.exitDuration ?? context.timing.exitDuration,
-    },
-    cueBindings,
-  };
-}
 
 /** Resolve editor values from generated Timeline overrides plus admitted Artifact defaults. */
 export function preparedMotionProps(
@@ -101,7 +62,6 @@ function findTimelineClip(timeline: TimelineDocument, clipId: string): VisualCli
 function motionValueKind(controlKind: string): string {
   switch (controlKind) {
     case "string":
-    case "nodeTarget":
       return "str";
     case "select":
       return "enum";

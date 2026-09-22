@@ -10,7 +10,7 @@ use valle_compiler::motion::{
 use valle_motion::NodeKind;
 
 const SOURCE: &str = r#"
-export const controls = defineControls({
+export const controls = ({
   data: {
     rows: array(
       record({ id: string(), label: string(), value: number({ min: 0 }) }),
@@ -21,7 +21,7 @@ export const controls = defineControls({
   },
 });
 
-export default function DataBars(ctx, props, signals, data) {
+export default function DataBars(ctx, props, data) {
   const visible = data.rows.filter((item) => item.value > 0);
   const total = data.rows.reduce((sum, item) => sum + item.value, 0);
   return <Group key="root">
@@ -93,6 +93,18 @@ fn data_content_and_cardinality_invalidate_prepare_without_changing_source_hash(
 }
 
 #[test]
+fn data_provenance_does_not_change_prepared_content_identity() {
+    let rows = json!([{"id": "a", "label": "A", "value": 2}]);
+    let first = binding(rows.clone());
+    let mut second = binding(rows);
+    second.source = "a/different/path.json".into();
+    let a = compile_motion_with_full_env_and_data(SOURCE, &[], None, None, Some(&first)).unwrap();
+    let b = compile_motion_with_full_env_and_data(SOURCE, &[], None, None, Some(&second)).unwrap();
+    assert_eq!(a.prepared_data_digest, b.prepared_data_digest);
+    assert_eq!(a.artifact, b.artifact);
+}
+
+#[test]
 fn data_binding_is_required_and_reports_json_pointer_against_its_source() {
     let missing = valle_compiler::motion::compile_motion(SOURCE).unwrap_err();
     assert!(
@@ -136,12 +148,12 @@ export default function IllegalTopology(ctx) {
 #[test]
 fn bounded_for_of_expands_an_explicit_jsx_accumulator() {
     let source = r#"
-export const controls = defineControls({
+export const controls = ({
   data: {
     rows: array(record({ id: string(), value: number() }), { maxItems: 8, key: "id" }),
   },
 });
-export default function ForOfBars(ctx, props, signals, data) {
+export default function ForOfBars(ctx, props, data) {
   const bars = [];
   for (const item of data.rows) {
     const width = item.value * 10;

@@ -12,7 +12,6 @@ import {
 import type { GoodMotionContext } from "./motion-preview.ts";
 import type { ProjectMotionSession } from "./motion-workspace.ts";
 import {
-  motionContextWithTimelineFrames,
   preparedMotionProps,
   type ProjectMotionEdit,
 } from "./project-motion-edit.ts";
@@ -34,9 +33,9 @@ import { TimelineSaveQueue } from "./timeline-save-queue.ts";
 import {
   deleteTimelineClip,
   editTimelineClip,
-  editTimelineMotionFrames,
   moveTimelineVisualClipBefore,
   setTimelineMotionProp,
+  setTimelineMotionData,
   setTimelineClipDurationFrames,
   setTimelineSourceStartFrames,
   trimTimelineClipFrames,
@@ -1478,8 +1477,7 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
       compiledCopy.timeline,
     );
     if (context.status !== "ok") throw new Error(context.diagnostics.map((item) => item.message).join("\n"));
-    const motionFrames = findProjectedItem(compiledCopy.timeline, documentView, clipId)?.motionFrames;
-    return motionContextWithTimelineFrames(context, motionFrames);
+    return context;
   }
 
   async function openMotionClip(clipId: string): Promise<void> {
@@ -1513,31 +1511,9 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
       rate: projected.sourceRate ?? 1,
       clipDurationS: projected.durationSeconds,
       applyEdit: async (edit: ProjectMotionEdit) => {
-        const next = edit.type === "phase"
-          ? editTimelineMotionFrames(workingCopy, timelinePath, {
-            type: "motionPhaseFrames",
-            phase: edit.key === "enterFrames" ? "enter" : edit.key === "exitFrames" ? "exit" : (() => {
-              throw new Error(`unknown Motion phase field '${edit.key}'`);
-            })(),
-            frames: edit.value,
-          }, timelineTimeFromFrames)
-          : edit.type === "cue"
-            ? editTimelineMotionFrames(workingCopy, timelinePath, {
-              type: "motionCueFrames",
-              cue: edit.cue,
-              field: edit.key === "startFrame" ? "start"
-                : edit.key === "endFrame" ? "end"
-                : edit.key === "enterFrames" ? "enter"
-                : edit.key === "exitFrames" ? "exit"
-                : (() => { throw new Error(`unknown Motion cue field '${edit.key}'`); })(),
-              frames: edit.value,
-            }, timelineTimeFromFrames)
-            : setTimelineMotionProp(
-              workingCopy,
-              timelinePath,
-              edit.name,
-              edit.value.value,
-            );
+        const next = edit.type === "data"
+          ? setTimelineMotionData(workingCopy, timelinePath, edit.value)
+          : setTimelineMotionProp(workingCopy, timelinePath, edit.name, edit.value.value);
         await commitWorkingCopy(next);
         const context = currentMotionContext(clipId);
         return {

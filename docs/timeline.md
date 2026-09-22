@@ -143,11 +143,10 @@ not time values. FPS is the exception that also accepts a rational string.
 | `trimStart` | Source offset, default `0`; video, audio, Lottie and Motion |
 | `rate` | Positive playback multiplier, default `1`; cannot animate or be negative |
 | `end` | Source boundary policy: `error` (default), `hold`, `loop` |
-| Motion `sourceDuration` | Positive source duration; defaults to the Motion composition's `duration` |
-
-File based Timeline rendering and Studio read the Motion component to resolve that
-default. Hosts that compile a Timeline without access to the component must bind
-the work duration explicitly before compiling it.
+Motion source duration comes from the referenced component's `composition.duration`.
+Timeline preparation compiles the bound component and carries that duration into
+its internal canonical document. A host compiling a Motion Timeline must supply
+the resolved component metadata.
 
 For an active clip at output time `t`, before applying the boundary policy:
 
@@ -213,7 +212,7 @@ fields:
 | `image` | `src` | `fit` |
 | `video` | `src` | `trimStart`, `rate`, `end`, `fit` |
 | `lottie` | `src` | `trimStart`, `rate`, `end`, `fit` |
-| `motion` | `component` | `fit`, `trimStart`, `sourceDuration`, `rate`, `end`, `props`, `cues`, `resources`, `phases` |
+| `motion` | `component` | `fit`, `trimStart`, `rate`, `end`, `props`, `data`, `resources` |
 
 `solid` is a color, not a placeholder requiring an image file. Its `color` is
 static; use separate solids and opacity curves or Motion for an animated color.
@@ -524,11 +523,9 @@ Timeline alias does not have to match that function's name.
 | --- | --- |
 | `props` | Declared Motion prop name → constant or typed source-time curve |
 | `resources` | Declared Motion asset slot → root resource alias |
-| `cues` | Declared cue name → `source-range` binding |
-| `phases` | Optional `enterDuration`, `exitDuration`, in source seconds |
-| `sourceDuration` | Source animation duration; defaults to the component composition's duration and bounds source-time props/cues |
+| `data` | Inline JSON object matching the component's prepared `controls.data` schema |
 
-Prop names/types must match `defineControls`. Required bindings must be available;
+Prop names/types must match `controls.props`. Required bindings must be available;
 unknown props or incompatible curve values are not arbitrary metadata. Root
 `resources` locates files; clip `resources` connects those files to named Motion
 asset slots. Inside the JSX, an image slot `hero` is read as `asset://hero`.
@@ -545,18 +542,26 @@ Timeline supplies Motion props using the same color and unit vocabulary as JSX:
 | `color` | CSS color such as `"#38bdf8"`; curves interpolate color channels |
 | `string`, `boolean`, `select` | Constant string/boolean/allowed select string; no curves |
 
-For example, use `"#38bdf8"` both in a JSX color default and in a Timeline color prop. `path` props are not admitted through this
-Timeline binding path; `nodeTarget` has no completed Native conversion here.
-Leave those controls to a supported host integration instead of assuming every
-Motion control has a usable Timeline override.
+For example, use `"#38bdf8"` both in a JSX color default and in a Timeline color prop.
+Path geometry is authored with `path(svgD)` in the component.
 
 Timeline prepares Motion at its composition canvas size, then fits it to the clip
 target rectangle (the Timeline canvas unless the clip sets `size`). The default
-`fit` is `contain`; `cover`, `fill` and `none` are also available. It does not
-accept a clip `data` field or a `--data` binding; a component requiring external
-structured data through Motion's fourth argument cannot be supplied that data
-through this Timeline command. Use supported props/assets or a suitable host
-integration for that input.
+`fit` is `contain`; `cover`, `fill` and `none` are also available. A clip's
+`data` is validated and bound before component preparation; clips with distinct
+data or resources produce distinct prepared instances.
+
+For a component declaring `controls.data.rows`, a clip can bind the full
+prepared object inline:
+
+```json
+{ "kind": "motion", "component": "chart", "start": 0, "duration": 3,
+  "data": { "rows": [{ "id": "a", "label": "Alpha", "value": 80 }] } }
+```
+
+The component receives `data.rows` as its third root argument. The values are
+validated against its bounded data schema and can determine prepared node
+topology. Source-time visibility can still use `ctx.seconds` for each row.
 
 ### Complete Motion overlay example
 
@@ -565,18 +570,17 @@ Save as `overlay.motion.tsx`:
 ```tsx
 export const composition = { width: 640, height: 360, fps: 30, duration: 3 };
 
-export const controls = defineControls({
+export const controls = {
   props: {
     title: string({ default: "Hello, Valle" }),
     accent: color({ default: "#38bdf8" }),
     amount: number({ default: 0, min: 0, max: 1 }),
   },
-  cues: { reveal: spanCue({ required: true }) },
   assets: { hero: asset({ kind: "image", required: true }) },
-});
+};
 
-export default function Overlay(ctx, props, signals) {
-  const opacity = interpolate(signals.reveal.progress, [0,0.3], [0,1]);
+export default function Overlay(ctx, props) {
+  const opacity = interpolate(ctx.seconds, [0,0.9], [0,1]);
   return (
     <Scene className="relative h-full w-full">
       <Image src="asset://hero" style={{ position: "absolute", left: 32, top: 32,
@@ -598,14 +602,11 @@ Save as `motion.timeline.json` beside that source and `poster.png`:
   "resources": { "overlay": "overlay.motion.tsx", "poster": "poster.png" },
   "tracks": { "visual": [{ "clips": [{
     "kind": "motion", "component": "overlay", "start": 0.5, "duration": 3,
-    "sourceDuration": 3,
     "props": {
       "title": "Built on a timeline", "accent": "#38bdf8",
       "amount": { "keyframes": [[0,0],[3,1]] }
     },
-    "resources": { "hero": "poster" },
-    "cues": { "reveal": { "type": "source-range", "start": 0, "end": 2.5 } },
-    "phases": { "enterDuration": 0.3, "exitDuration": 0.3 }
+    "resources": { "hero": "poster" }
   }] }] }
 }
 ```
@@ -619,17 +620,12 @@ The output lasts 3.5 seconds. At frame 60 (output second 2), this Motion source 
 at second 1.5. Its prop curve is therefore halfway complete. The first half second
 shows the canvas background.
 
-`source-range` cue `start`/`end` are source seconds, not output placement times.
-Optional cue `enterDuration`/`exitDuration` default to zero. Cues must fit the
-source range; they provide `signals.name` to the component. `phases` changes
-Motion's context phase timing, not the clip's placement or total output duration.
-
-When retiming, the source duration remains the composition duration unless the
-clip explicitly sets `sourceDuration`. For example, a three-second Motion source
+When retiming, the source duration remains the composition duration. For example,
+a three-second Motion source
 played at `rate: 2` needs an output `duration: 1.5` to play once. Outer clip opacity/position still use
-clip-local time; its Motion props and cues follow the source clock.
+clip-local time; its Motion props and data expressions follow the source clock.
 
-Repeated clips can use the same component alias with different resource bindings.
+Repeated clips can use the same component alias with different data or resource bindings.
 The CLI prepares each distinct binding set internally; no duplicate aliases are needed.
 Use the [Motion limitations](motion.md#troubleshooting-and-limits) when selecting
 advanced effects; Timeline placement does not remove their rendering constraints.
@@ -704,8 +700,8 @@ and exit codes see the [CLI output contract](cli.md#output-contract-for-scripts-
 | Track overlap | Sort clips and keep each track non-overlapping; split simultaneous clips across tracks |
 | Video has no sound | Check whether the source has audio and whether its video `gain` is zero |
 | Video/image does not fill canvas | Use `fit: "cover"`; check any explicit `size`, `scale` and `position` |
-| Motion source range failure | Check `sourceDuration`, `trimStart`, `rate`, output `duration` and `end` together |
-| Animation starts at the wrong time | Distinguish output time, clip-local keyframes and Motion source-time props/cues |
+| Motion source range failure | Check the component duration, `trimStart`, `rate`, output `duration` and `end` together |
+| Animation starts at the wrong time | Distinguish output time, clip-local keyframes and Motion source-time props/data |
 | Rotation is unexpectedly large | Timeline rotation and numeric Motion angle props are degrees |
 | Invalid keyframe | Strictly increasing times within the owning duration; no easing on the last keyframe |
 | Caption is rejected | Exactly one of `text`/non-empty `runs`; choose presets or custom `presentation` |

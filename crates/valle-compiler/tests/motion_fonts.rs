@@ -29,7 +29,7 @@ fn font_control_lowers_to_a_content_addressed_family() {
     .expect("aliased measure font");
     let compiled = compile_motion_with_env(
         r##"
-export const controls = defineControls({
+export const controls = ({
   assets: { brandFont: asset({ kind: "font", required: true }) },
 });
 export default function Card(ctx) {
@@ -72,7 +72,7 @@ export default function Card(ctx) {
 fn used_font_control_without_a_binding_still_fails_closed() {
     let messages = diagnostic_messages(
         r##"
-export const controls = defineControls({
+export const controls = ({
   assets: { brandFont: asset({ kind: "font", required: true }) },
 });
 export default function Card(ctx) {
@@ -111,7 +111,7 @@ fn font_resource_utilities_fail_with_an_inline_replacement() {
     );
 
     let source = r##"
-export const controls=defineControls({assets:{brandFont:asset({kind:'font',required:true})}});
+export const controls=({assets:{brandFont:asset({kind:'font',required:true})}});
 export default function Card(){return <Text className="[font-family:'asset://brandFont']">VALLE</Text>}
 "##;
     let hash = ContentDigest::of_bytes(FONT);

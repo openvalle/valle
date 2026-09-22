@@ -1014,7 +1014,7 @@ mod tests {
 
     #[test]
     fn forbidden_global_names_are_allowed_as_member_properties() {
-        assert!(scan_forbidden("signals.process", "t").is_none());
+        assert!(scan_forbidden("props.process", "t").is_none());
         assert!(scan_forbidden("props.window", "t").is_none());
         assert!(scan_forbidden("process.env", "t").is_some());
         assert!(scan_forbidden("Math.random()", "t").is_some());

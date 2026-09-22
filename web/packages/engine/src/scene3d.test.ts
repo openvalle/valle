@@ -96,7 +96,7 @@ test("project environments and models survive frozen-package reopen and arbitrar
       await writeFile(join(dir,"map.png"),textureBytes);
       await writeFile(join(dir,"scene.motion.tsx"), `
         export const composition = { width: 64, height: 64, duration: 3 };
-        export const controls=defineControls({assets:{model:asset({kind:"model3d"})${environment?',sky:asset({kind:"environment"})':''}${material?',map:asset({kind:"image"})':''}}});
+        export const controls={assets:{model:asset({kind:"model3d"})${environment?',sky:asset({kind:"environment"})':''}${material?',map:asset({kind:"image"})':''}}};
         export default function T(ctx){return <Scene style={{width:64,height:64}}>
           <Scene3D key="test" camera={{${animated ? 'position:[ctx.seconds*0.1,0.1,3+ctx.seconds*0.1],target:[ctx.seconds*0.05,0,0],near:0.1+ctx.seconds*0.01,far:10+ctx.seconds,fov:45-ctx.seconds,orbitYaw:ctx.seconds*10,orbitPitch:ctx.seconds*2,distance:3.1+ctx.seconds*0.1' : 'position:[0,0,3],target:[0,0,0],fov:45'}}} style={{width:64,height:64}}
             pbr={{toneMapping:"${unlit ? "none" : "aces"}"${animated ? ",exposure:0.7+ctx.seconds*0.2" : ""}${environment?',environment:{src:"asset://sky",rotation:ctx.seconds*90,intensity:1,background:true}':''}}}>

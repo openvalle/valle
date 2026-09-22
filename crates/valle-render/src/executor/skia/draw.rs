@@ -2241,16 +2241,14 @@ mod tests {
         let artifact = valle_compiler::motion::compile_motion(r##"export default function Border(){return <Scene style={{width:1920,height:1080,backgroundColor:"#000000"}}><View style={{position:"absolute",left:64,top:64,width:1792,height:952,borderRadius:24,borderStyle:"solid",borderWidth:2,borderColor:"#ffffff33",backgroundColor:"transparent"}} /></Scene>;}"##).unwrap().artifact;
         let prepared = valle_motion::prepare_scene(&artifact).unwrap();
         let props = valle_motion::resolve_props(&artifact.controls, &BTreeMap::new()).unwrap();
-        let windows = valle_motion::phase_windows(&artifact.controls.phase_spec(), 30);
         let ctx =
-            valle_motion::motion_context_at(0, &windows, serde_json::from_str("\"30/1\"").unwrap())
+            valle_motion::motion_context_at_frame(0, 30, serde_json::from_str("\"30/1\"").unwrap())
                 .unwrap();
         let fonts = valle_motion::Fonts::default();
         let tree = valle_motion::build_tree(
             &prepared,
             &ctx,
             &props,
-            &valle_motion::ResolvedSignals::default(),
             &valle_motion::LayoutOptions {
                 viewport: valle_motion::Viewport::new((1920, 1080)),
                 fonts: &fonts,

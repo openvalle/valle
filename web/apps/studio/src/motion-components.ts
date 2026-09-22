@@ -21,16 +21,6 @@ export interface MotionDataControlView {
   maxItems?: number;
 }
 
-export interface MotionHandleView {
-  key: string;
-  label: string;
-  value: number;
-  min: number;
-  max: number;
-  unit?: string;
-  readOnly?: boolean;
-}
-
 export interface MotionMappingView {
   key: string;
   location: string;
@@ -45,8 +35,7 @@ export interface MotionWorkspaceViewModel {
   props: ReadonlyArray<MotionPropControlView>;
   data: ReadonlyArray<MotionDataControlView>;
   dataSource?: string | null;
-  phases: ReadonlyArray<MotionHandleView>;
-  cues: ReadonlyArray<MotionHandleView & { cue: string }>;
+  dataJson: string;
   diagnostics: ReadonlyArray<{ label: string; location: string }>;
   mappings: ReadonlyArray<MotionMappingView>;
   canReturn: boolean;
@@ -57,8 +46,7 @@ export interface MotionWorkspaceViewModel {
 export type MotionWorkspaceIntent =
   | { type: "prop"; name: string; value: { kind: string; value: JsonValue } }
   | { type: "prop-end"; name: string }
-  | { type: "phase"; key: string; value: number }
-  | { type: "cue"; cue: string; key: string; value: number }
+  | { type: "data"; value: Record<string, JsonValue> }
   | { type: "copy-props" }
   | { type: "return" };
 
@@ -129,28 +117,6 @@ export class StudioMotionWorkspace extends LitElement {
           `
         : ""}
 
-      ${model.phases.length
-        ? html`
-            <section class="ins-section">
-              <h2 class="section-label">Phases</h2>
-              ${model.phases.map((phase) => this.#renderHandle(phase, (value) => {
-                this.#emit({ type: "phase", key: phase.key, value });
-              }))}
-            </section>
-          `
-        : ""}
-
-      ${model.cues.length
-        ? html`
-            <section class="ins-section">
-              <h2 class="section-label">Cues</h2>
-              ${model.cues.map((cue) => this.#renderHandle(cue, (value) => {
-                this.#emit({ type: "cue", cue: cue.cue, key: cue.key, value });
-              }, cue.label))}
-            </section>
-          `
-        : ""}
-
       ${model.selectedLocation
         ? html`
             <section class="ins-section">
@@ -183,17 +149,15 @@ export class StudioMotionWorkspace extends LitElement {
           `
         : ""}
 
-      ${model.data.length
-        ? html`
-            <details class="details">
-              <summary>Prepared data</summary>
-              <code>
-                ${model.dataSource ? `source: ${model.dataSource}\n` : ""}
-                ${model.data.map((item) => `${item.name}: ${safeJson(item.value)}`).join("\n")}
-              </code>
-            </details>
-          `
-        : ""}
+      ${model.data.length || model.dataJson !== "{}"
+        ? html`<section class="ins-section">
+            <h2 class="section-label">Prepared data</h2>
+            ${model.dataSource ? html`<p class="ins-note">source: ${model.dataSource}</p>` : ""}
+            <label class="field"><span class="field-label">JSON object</span>
+              <textarea aria-label="Motion data JSON" .value=${model.dataJson}
+                @change=${this.#onData}></textarea>
+            </label>
+          </section>` : ""}
 
       <details class="details">
         <summary>Technical details</summary>
@@ -267,35 +231,22 @@ export class StudioMotionWorkspace extends LitElement {
     `;
   }
 
-  #renderHandle(
-    handle: MotionHandleView,
-    commit: (value: number) => void,
-    labelOverride?: string,
-  ): TemplateResult {
-    const label = labelOverride ?? handle.label;
-    if (handle.readOnly) {
-      return html`
-        <div class="inspector-metric">
-          <span>${label}</span>
-          <span>${handle.value} ${handle.unit ?? "f"}</span>
-        </div>
-      `;
-    }
-    const submit = (event: Event) => {
-      const input = event.currentTarget as HTMLInputElement;
-      if (input.value === "" || !input.validity.valid) { input.setAttribute("aria-invalid", "true"); return; }
+  #onData = (event: Event): void => {
+    const input = event.currentTarget as HTMLTextAreaElement;
+    try {
+      const value: unknown = JSON.parse(input.value);
+      if (value === null || typeof value !== "object" || Array.isArray(value)) {
+        throw new Error("Data must be a JSON object");
+      }
       input.removeAttribute("aria-invalid");
-      const next = Number(input.value);
-      if (Number.isFinite(next) && next !== handle.value) commit(Math.round(next));
-    };
-    return html`<label class="field"><span class="field-label">${label}</span><span class="number-field">
-      <input type="number" .value=${String(handle.value)} min=${handle.min} max=${handle.max} step="1"
-        @change=${submit} @blur=${submit} @keydown=${(event: KeyboardEvent) => {
-          const input = event.currentTarget as HTMLInputElement;
-          if (event.key === "Escape") { input.value = String(handle.value); input.removeAttribute("aria-invalid"); event.stopPropagation(); }
-          if (event.key === "Enter" || event.key === "Escape") input.blur();
-        }} /><span class="field-unit">${handle.unit ?? "f"}</span></span></label>`;
-  }
+      this.#emit({ type: "data", value: value as Record<string, JsonValue> });
+    } catch (error) {
+      input.setAttribute("aria-invalid", "true");
+      input.setCustomValidity(error instanceof Error ? error.message : String(error));
+      input.reportValidity();
+      input.setCustomValidity("");
+    }
+  };
 
   #emit(intent: MotionWorkspaceIntent): void {
     this.dispatchEvent(new CustomEvent("motion-workspace-intent", {

@@ -454,44 +454,9 @@ pub struct MotionInstanceWire {
     pub rate: ExactRational,
     pub end_behavior: MediaEndBehaviorWire,
     pub props: BTreeMap<String, ParamWire<JsonValue>>,
-    pub cues: BTreeMap<String, MotionCueBindingWire>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub data: BTreeMap<String, JsonValue>,
     pub resources: BTreeMap<String, ResourceId>,
-    pub phases: MotionPhaseOverridesWire,
-}
-
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(
-    tag = "type",
-    rename_all = "kebab-case",
-    rename_all_fields = "camelCase",
-    deny_unknown_fields
-)]
-pub enum MotionCueBindingWire {
-    SourceRange {
-        start: ExactRational,
-        end: ExactRational,
-        enter_duration: ExactRational,
-        exit_duration: ExactRational,
-    },
-}
-
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct MotionPhaseOverridesWire {
-    #[cfg_attr(
-        feature = "schema",
-        schemars(with = "crate::internal::schema::RequiredNullable<ExactRational>")
-    )]
-    #[serde(deserialize_with = "required_option")]
-    pub enter_duration: Option<ExactRational>,
-    #[cfg_attr(
-        feature = "schema",
-        schemars(with = "crate::internal::schema::RequiredNullable<ExactRational>")
-    )]
-    #[serde(deserialize_with = "required_option")]
-    pub exit_duration: Option<ExactRational>,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]

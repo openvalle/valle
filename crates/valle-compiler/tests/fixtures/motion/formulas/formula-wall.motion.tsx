@@ -5,11 +5,6 @@ export const composition = { width: 1920, height: 1080, fps: 30, duration: 5 };
 //     crates/valle-compiler/tests/fixtures/motion/formulas/formula-wall.motion.tsx \
 //     --canvas-width 1920 --canvas-height 1080
 
-export const component = "formula-wall";
-
-export const controls = defineControls({
-  timing: { enterDuration: 0, exitDuration: 0 },
-});
 
 const CARDS = [
   {
@@ -76,7 +71,7 @@ const CARDS = [
 const FORMULA_SIZES = [48, 38, 48, 34, 40, 38, 34, 38, 42, 48, 34, 48];
 
 export default function FormulaWall(ctx) {
-  const t = ctx.hold.progress;
+  const t = ctx.progress;
   const header = interpolate(t, [0, 0.08], [0, 1], { easing: "easeOut" });
 
   return (

@@ -2,12 +2,10 @@ import { releaseTheme } from "./shared-theme";
 
 // The delivery contract: Studio opens this fixture as its own entry.
 export const composition = { width: 1920, height: 1080, fps: 30, duration: 6 };
-export const component = "route-network";
 
-export const controls = defineControls({
+export const controls = {
   props: { accentStrength: number({ default: 1, min: 0.25, max: 1 }) },
-  cues: { narration: spanCue() },
-});
+};
 
 const REGIONS = [
   { id: "west", rings: [[[-150, 56], [-103, 67], [-76, 42], [-111, 24], [-150, 56]]] },
@@ -33,9 +31,9 @@ const NODES = [
   { id: "render", label: "RENDER", x: 1580, y: 270 },
 ];
 
-export default function RouteNetwork(ctx, props, signals) {
-  const reveal = interpolate(ctx.enter.progress, [0, 1], [0, 1], { easing: "easeOut" });
-  const flow = ctx.hold.progress;
+export default function RouteNetwork(ctx, props) {
+  const reveal = interpolate(ctx.seconds, [0, 0.6], [0, 1], { easing: "easeOut" });
+  const flow = interpolate(ctx.seconds, [1.4, 5], [0, 1]);
   const center = interpolate(flow, [0, 1], [760, 1160], { easing: "easeInOut" });
   return (
     <ThemeProvider value={releaseTheme}>
@@ -62,7 +60,7 @@ export default function RouteNetwork(ctx, props, signals) {
         <Screen key="hud">
           <Text key="eyebrow" className="absolute" style={{ left: 64, top: 44, fontSize: 17, letterSpacing: 4, color: useTheme().colors.accent }}>ROUTE / NETWORK NARRATIVE</Text>
           <Text key="title" className="absolute" style={{ left: 62, top: 78, width: 1200, fontSize: 52, color: useTheme().colors.ink, opacity: props.accentStrength }}>The signal moves where the story needs it.</Text>
-          <Text key="cue" className="absolute" style={{ right: 66, top: 54, fontSize: 14, letterSpacing: 2, color: useTheme().colors.signal, opacity: 0.55 + signals.narration.progress * 0.45 }}>NARRATION ALIGNED</Text>
+          <Text key="cue" className="absolute" style={{ right: 66, top: 54, fontSize: 14, letterSpacing: 2, color: useTheme().colors.signal, opacity: 0.55 + interpolate(ctx.seconds, [1, 4], [0, 1]) * 0.45 }}>NARRATION ALIGNED</Text>
         </Screen>
       </Scene>
     </ThemeProvider>

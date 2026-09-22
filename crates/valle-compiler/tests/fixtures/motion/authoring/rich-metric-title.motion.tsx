@@ -1,12 +1,10 @@
 export const composition = { width: 1920, height: 1080, fps: 30, duration: 5 };
-export const component = "rich-metric-title";
 
-export const controls = defineControls({
-  timing: { enterDuration: 0, exitDuration: 0 },
+export const controls = {
   assets: {
     brandFont: asset({ kind: "font", required: true }),
   },
-});
+};
 
 const reveal = defineSequence({
   label: stage({ duration: seconds(0.75) }),

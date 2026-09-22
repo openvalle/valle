@@ -11,22 +11,18 @@ use std::time::{Duration, Instant};
 
 const SOURCE: &str = r##"export const composition = { width: 240, height: 140, fps: 30, duration: 3 };
 
-export const controls = defineControls({
+export const controls = {
   props: { size: number({ default: 40, min: 10, max: 200 }) },
-  timing: {
-    enterDuration: 0.1,
-    exitDuration: 0.066667,
-  },
-});
+};
 
 export default function Knob(ctx, props) {
-  // Animate opacity so phase timing changes are visible in engine output bytes.
+  // Animate opacity so sampled frames differ in engine output bytes.
   return (
     <Scene key="s" className="relative" style={{ width: "240px", height: "140px" }}>
       <View
         key="box"
         className="absolute"
-        style={{ left: "10px", top: "10px", width: `${props.size}px`, height: `${props.size}px`, backgroundColor: "#67e8f9", opacity: interpolate(ctx.enter.progress, [0, 1], [0.2, 1]) }}
+        style={{ left: "10px", top: "10px", width: `${props.size}px`, height: `${props.size}px`, backgroundColor: "#67e8f9", opacity: interpolate(ctx.progress, [0, 1], [0.2, 1]) }}
       />
     </Scene>
   );
@@ -413,7 +409,7 @@ fn motion_studio_controls_are_authoring_state_until_a_new_package_is_published()
     );
     assert_eq!(
         probe["playbackVariesAcrossFrames"], true,
-        "pinned package phase samples must vary across frames: {report}"
+        "pinned package samples must vary across frames: {report}"
     );
 
     // Canvas selection resolves source locations using the displayed frame's layout boxes.

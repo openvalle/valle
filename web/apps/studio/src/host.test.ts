@@ -47,11 +47,8 @@ function canonicalTimeline(motion = false): TimelineDocument {
         type: "motion",
         component: "component:Card",
         props: {},
-        cues: {},
         resources: { model: "asset:product" },
-        phases: { enterDuration: null, exitDuration: null },
         sourceStart: "0/1",
-        sourceDuration: "2/1",
         rate: "1/1",
         endBehavior: "hold",
       }
@@ -463,22 +460,7 @@ describe("Studio host adapters", () => {
       throw new Error("expected Motion fixture");
     }
     hero.source.resources = { poster: "asset:poster" };
-    hero.source.cues = {
-      beat: {
-        type: "source-range",
-        start: "1/3",
-        end: "4/3",
-        enterDuration: "1/10",
-        exitDuration: "1/10",
-      },
-      title: {
-        type: "source-range",
-        start: "1/2",
-        end: "7/6",
-        enterDuration: "1/10",
-        exitDuration: "1/10",
-      },
-    };
+    hero.source.data = { windows: [{ id: "beat", start: 1 / 3, end: 4 / 3 }] };
     const artifactDigest = `sha256:${"a".repeat(64)}`;
     const fontDigest = `sha256:${"b".repeat(64)}`;
     const verifiedArtifact = {
@@ -488,13 +470,6 @@ describe("Studio host adapters", () => {
         props: {},
         data: {},
         assets: { poster: { kind: "image", required: true } },
-        timing: {
-          enterFrames: { default: 1 },
-          holdCycleFrames: { default: null },
-          exitFrames: { default: 1 },
-        },
-        cues: {},
-        camera: { values: {} },
       },
       capabilitySet: {
         names: [
@@ -502,7 +477,6 @@ describe("Studio host adapters", () => {
           "blend",
           "box",
           "clip-mask",
-          "cue-signals",
           "dynamic-path",
           "filter",
           "geometry-path",
@@ -557,11 +531,6 @@ describe("Studio host adapters", () => {
           artifact: {},
           authoring: {
             props: {},
-            timing: { enterFrames: 4, exitFrames: 5 },
-            cues: {
-              beat: { startFrame: 10, endFrame: 40, enterFrames: 3, exitFrames: 3 },
-              title: { startFrame: 15, endFrame: 35, enterFrames: 2, exitFrames: 4 },
-            },
             sourceMap: { version: 1, component: "Card", entry: "components/Card.tsx", closureDigest: `sha256:${"c".repeat(64)}`, modules: [], nodes: [], exprs: [], objects: [] },
             totalFrames: 60,
           },
@@ -587,13 +556,7 @@ describe("Studio host adapters", () => {
       generation: 9,
       input: "components/Card.tsx",
       artifactDigest,
-      timing: { enterFrames: 4, exitFrames: 5 },
-      assets: [{ name: "poster", kind: "image", url: "/passets/p1/images/poster.png" }],
-      cueBindings: {
-        beat: { type: "sourceRange", startFrame: 10, endFrame: 40, enterFrames: 3, exitFrames: 3 },
-        title: { type: "sourceRange", startFrame: 15, endFrame: 35, enterFrames: 2, exitFrames: 4 },
-      },
-      preparedData: {},
+      preparedData: { windows: [{ id: "beat", start: 1 / 3, end: 4 / 3 }] },
       dataSource: null,
     });
     expect(context.artifact).toEqual(verifiedArtifact);
@@ -718,22 +681,11 @@ describe("Studio host adapters", () => {
         controls: {
           props: {},
           data: {},
-          timing: {
-            enterFrames: {},
-            holdCycleFrames: {},
-            exitFrames: {},
-          },
-          cues: {},
           assets: {},
-          camera: { values: {} },
         },
       },
       preparedData: {},
       dataSource: null,
-      timing: {},
-      cueBindings: {
-        beat: { type: "sourceRange", startFrame: 0, endFrame: 20, enterFrames: 2, exitFrames: 3 },
-      },
       sourceMap: {
         version: 1,
         component: "Card",
@@ -776,7 +728,7 @@ describe("Studio host adapters", () => {
     delete (missingArtifactControls.artifact as { controls?: unknown }).controls;
     expect(() => assertMotionContext(missingArtifactControls)).toThrow("successful MotionContext");
     const malformedArtifactControls = structuredClone(success);
-    malformedArtifactControls.artifact.controls.timing = [] as never;
+    malformedArtifactControls.artifact.controls.data = [] as never;
     expect(() => assertMotionContext(malformedArtifactControls)).toThrow("successful MotionContext");
     const mismatchedSourceMap = structuredClone(success);
     mismatchedSourceMap.sourceMap.component = "OtherCard";
@@ -802,12 +754,7 @@ describe("Studio host adapters", () => {
     const malformedModuleDigest = structuredClone(success);
     malformedModuleDigest.sourceMap.modules[0].sourceDigest = "sha256:source";
     expect(() => assertMotionContext(malformedModuleDigest)).toThrow("successful MotionContext");
-    const missingCueType = structuredClone(success);
-    delete (missingCueType.cueBindings.beat as { type?: string }).type;
-    expect(() => assertMotionContext(missingCueType)).toThrow("successful MotionContext");
-    const unknownCueType = structuredClone(success);
-    unknownCueType.cueBindings.beat.type = "unsupported";
-    expect(() => assertMotionContext(unknownCueType)).toThrow("successful MotionContext");
+    expect(() => assertMotionContext({ ...success, timing: {} })).toThrow("successful MotionContext");
     expect(() => assertMotionContext({ status: "ok", generation: 3 })).toThrow("protocolVersion 1");
   });
 });

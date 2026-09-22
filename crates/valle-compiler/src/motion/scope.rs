@@ -1199,11 +1199,11 @@ impl<'s> Compiler<'s> {
             return None;
         }
         let params = function.params();
-        if params.rest.is_some() || params.items.len() > 3 {
+        if params.rest.is_some() || params.items.len() > 2 {
             self.illegal(
                 DiagCode::ModuleShape,
                 params.span(),
-                format!("component `{name}` must use `(ctx, props, signals)` parameters"),
+                format!("component `{name}` must use `(ctx, props)` parameters"),
             );
             return None;
         }
@@ -1234,16 +1234,6 @@ impl<'s> Compiler<'s> {
                 ),
             }
         }
-        if let Some(third) = params.items.get(2)
-            && third.pattern.get_identifier_name().map(|id| id.as_str()) != Some("signals")
-        {
-            self.illegal(
-                DiagCode::ModuleShape,
-                third.span(),
-                "component third parameter must be `signals`",
-            );
-        }
-
         let result = if let Some(expression) = function.expression_body() {
             self.compile_root_expression(expression)
         } else {

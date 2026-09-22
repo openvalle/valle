@@ -105,10 +105,10 @@ impl MotionFontCache {
 
 pub(crate) struct CompiledMotionProgramContext<'a> {
     pub prepared: &'a valle_motion::PreparedScene,
-    pub instance: &'a crate::render::CompiledMotionInstance,
     pub evaluated: &'a crate::render::EvaluatedSourceRef,
     pub source_frame: u32,
     pub source_time: valle_timeline::RationalTime,
+    pub source_duration: RationalTime,
     pub viewport: Extent2d,
     pub source_clip: Option<valle_draw::Rect>,
     pub fps: FrameRate,
@@ -144,8 +144,33 @@ pub(crate) fn build_compiled_motion_program(
         }
     })?;
 
-    let phase_windows = context.instance.phases().layout();
-    let total_frames = phase_windows.duration_frames;
+    let composition =
+        artifact
+            .composition
+            .as_ref()
+            .ok_or_else(|| ProgramPrepareError::CompiledInvariant {
+                reason: "Motion source has no composition".into(),
+            })?;
+    let authored_duration =
+        composition
+            .duration()
+            .map_err(|error| ProgramPrepareError::CompiledInvariant {
+                reason: format!("invalid Motion composition duration: {error}"),
+            })?;
+    if context.source_duration != authored_duration {
+        return Err(ProgramPrepareError::CompiledInvariant {
+            reason: format!(
+                "compiled Motion source duration {} differs from its composition duration {}",
+                context.source_duration, authored_duration
+            ),
+        });
+    }
+
+    let total_frames = composition.duration_frames(context.fps).map_err(|error| {
+        ProgramPrepareError::CompiledInvariant {
+            reason: format!("invalid Motion frame count: {error}"),
+        }
+    })?;
     let local_frame = context.source_frame;
     if local_frame >= total_frames {
         return Err(ProgramPrepareError::CompiledInvariant {
@@ -154,29 +179,15 @@ pub(crate) fn build_compiled_motion_program(
             ),
         });
     }
-    let mut motion_context = valle_motion::motion_context_at(
+    let motion_context = valle_motion::motion_context_at_source(
         local_frame,
-        &phase_windows,
+        valle_timeline::internal::SampleTime::new(context.source_time),
+        total_frames,
         context.fps,
     )
     .ok_or_else(|| ProgramPrepareError::CompiledInvariant {
         reason: format!("local frame {local_frame} is outside Motion duration {total_frames}"),
     })?;
-    motion_context.sample = valle_timeline::internal::SampleTime::new(context.source_time);
-    motion_context.progress = (context.source_time.as_f64()
-        * (context.fps.numerator() as f64 / context.fps.denominator() as f64)
-        / f64::from(total_frames))
-    .clamp(0.0, 1.0);
-
-    let cue_windows = compiled_cue_windows(context.instance, context.fps)?;
-    let cues =
-        valle_motion::CueSchedule::resolve(&artifact.controls, &cue_windows).map_err(|error| {
-            ProgramPrepareError::MotionSignals {
-                reason: error.to_string(),
-            }
-        })?;
-    let signals = cues.sample(local_frame, context.fps);
-
     let options = valle_motion::LayoutOptions {
         viewport: valle_motion::Viewport::new((
             context.viewport.width(),
@@ -196,24 +207,12 @@ pub(crate) fn build_compiled_motion_program(
             *cache = valle_motion::layout::LayoutCache::new(context.prepared, &context.fonts.text);
         }
         cache.as_ref().map(|cache| {
-            cache.build_tree(
-                &motion_context,
-                &props,
-                &signals,
-                options.viewport,
-                options.styles,
-            )
+            cache.build_tree(&motion_context, &props, options.viewport, options.styles)
         })
     };
     let mut tree = reused
         .unwrap_or_else(|| {
-            valle_motion::build_tree(
-                context.prepared,
-                &motion_context,
-                &props,
-                &signals,
-                &options,
-            )
+            valle_motion::build_tree(context.prepared, &motion_context, &props, &options)
         })
         .map_err(|error| ProgramPrepareError::MotionLayout {
             reason: error.to_string(),
@@ -363,34 +362,6 @@ fn compiled_motion_overrides(
             }
         };
         output.insert(name.clone(), converted);
-    }
-    Ok(output)
-}
-
-fn compiled_cue_windows(
-    instance: &crate::render::CompiledMotionInstance,
-    fps: FrameRate,
-) -> Result<BTreeMap<String, valle_motion::CueWindow>, ProgramPrepareError> {
-    let mut output = BTreeMap::new();
-    for (name, cue) in instance.cues() {
-        let (start, end, enter, exit) = match cue {
-            crate::render::CompiledMotionCue::SourceRange {
-                start,
-                end,
-                enter_duration,
-                exit_duration,
-            } => (*start, *end, *enter_duration, *exit_duration),
-        };
-        let window = valle_motion::signals::cue_window_seconds(start, end, enter, exit, fps)
-            .map_err(|error| ProgramPrepareError::MotionSignals {
-                reason: error.to_string(),
-            })?;
-        if window.end_frame <= window.start_frame {
-            return Err(ProgramPrepareError::MotionSignals {
-                reason: format!("cue {name} has no frame at this fps"),
-            });
-        }
-        output.insert(name.clone(), window);
     }
     Ok(output)
 }
@@ -1384,8 +1355,6 @@ pub enum ProgramPrepareError {
     MotionProps { reason: String },
     #[error("compiled Motion invariant failed: {reason}")]
     CompiledInvariant { reason: String },
-    #[error("Motion signals are invalid: {reason}")]
-    MotionSignals { reason: String },
     #[error("Motion layout failed: {reason}")]
     MotionLayout { reason: String },
     #[error("Motion Glass preparation failed: {reason}")]
@@ -1445,14 +1414,12 @@ export default function Card() {{
         let prepared = valle_motion::prepare_scene(&compiled.artifact).expect("prepare font scene");
         let props = valle_motion::resolve_props(&compiled.artifact.controls, &BTreeMap::new())
             .expect("resolve font fixture props");
-        let windows = valle_motion::phase_windows(&compiled.artifact.controls.phase_spec(), 30);
-        let context = valle_motion::motion_context_at(0, &windows, FrameRate::new(30, 1).unwrap())
+        let context = valle_motion::motion_context_at_frame(0, 30, FrameRate::new(30, 1).unwrap())
             .expect("font fixture frame zero");
         let tree = valle_motion::build_tree(
             &prepared,
             &context,
             &props,
-            &valle_motion::ResolvedSignals::default(),
             &valle_motion::LayoutOptions {
                 viewport: valle_motion::Viewport::new((320, 180)),
                 fonts,

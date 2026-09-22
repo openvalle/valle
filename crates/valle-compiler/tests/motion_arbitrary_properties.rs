@@ -4,8 +4,8 @@ use std::collections::BTreeMap;
 use valle_compiler::motion::compile_motion;
 use valle_motion::layout::LayoutCache;
 use valle_motion::{
-    Fonts, LayoutOptions, ResolvedSignals, StyleCache, Viewport, build_tree, default_font_naming,
-    emit, motion_context_at, phase_windows, prepare_scene, resolve_props,
+    Fonts, LayoutOptions, StyleCache, Viewport, build_tree, default_font_naming, emit,
+    motion_context_at_frame, prepare_scene, resolve_props,
 };
 use valle_timeline::FrameRate;
 
@@ -35,17 +35,15 @@ fn snapshots(source: &str, frames: &[u32]) -> Vec<(BTreeMap<String, [f32; 4]>, V
         .unwrap();
     let styles = StyleCache::new();
     let props = resolve_props(&artifact.controls, &BTreeMap::new()).unwrap();
-    let windows = phase_windows(&artifact.controls.phase_spec(), 90);
     frames
         .iter()
         .map(|&frame| {
-            let ctx = motion_context_at(frame, &windows, FrameRate::new(30, 1).unwrap()).unwrap();
+            let ctx = motion_context_at_frame(frame, 90, FrameRate::new(30, 1).unwrap()).unwrap();
             let render = |styles| {
                 let tree = build_tree(
                     &prepared,
                     &ctx,
                     &props,
-                    &ResolvedSignals::default(),
                     &LayoutOptions {
                         viewport: Viewport::new((320, 180)),
                         fonts: &fonts,
@@ -191,17 +189,10 @@ fn finite_arbitrary_property_choices_seek_directly_and_control_geometry_reuse() 
             continue;
         };
         let props = resolve_props(&artifact.controls, &BTreeMap::new()).unwrap();
-        let windows = phase_windows(&artifact.controls.phase_spec(), 90);
-        let ctx = motion_context_at(0, &windows, FrameRate::new(30, 1).unwrap()).unwrap();
+        let ctx = motion_context_at_frame(0, 90, FrameRate::new(30, 1).unwrap()).unwrap();
         for repeat in 0..2 {
             let (_, timing) = cache
-                .build_tree_profiled(
-                    &ctx,
-                    &props,
-                    &ResolvedSignals::default(),
-                    Viewport::new((320, 180)),
-                    None,
-                )
+                .build_tree_profiled(&ctx, &props, Viewport::new((320, 180)), None)
                 .unwrap();
             assert_eq!(timing.layout_reused, reusable && repeat > 0, "{classes}");
         }
@@ -337,7 +328,7 @@ fn arbitrary_inline_display_keeps_replaced_media_atomic_and_retains_rule_order()
     let source = |classes: &str, style: &str| {
         format!(
             r#"
-        export const controls=defineControls({{assets:{{dot:asset({{kind:'image'}})}}}});
+        export const controls=({{assets:{{dot:asset({{kind:'image'}})}}}});
         export default function Demo() {{return <Scene style={{{{width:320,height:180}}}}>
             <Text key="prefix" style={{{{display:'inline',fontSize:20}}}}>A</Text>
             <Image key="image" src="asset://dot" {} style={{{{width:40,height:24,{style}}}}}/>
@@ -378,7 +369,7 @@ fn rich_inline_image_defaults_and_bounds_follow_current_frame_choices() {
     let source = |classes: &str, bound: &str| {
         format!(
             r#"
-        export const controls=defineControls({{assets:{{dot:asset({{kind:'image'}})}}}});
+        export const controls=({{assets:{{dot:asset({{kind:'image'}})}}}});
         export default function Demo(ctx) {{return <Scene style={{{{width:320,height:180}}}}>
             <Text key="label" style={{{{fontSize:20,lineHeight:'30px'}}}}>A<Image key="image" src="asset://dot"
                 className={{{classes}}} style={{{{width:40,height:24}}}}/>B</Text>

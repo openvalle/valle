@@ -51,7 +51,7 @@ fn static_transform_preserves_the_list_without_overwriting_individual_properties
 
 #[test]
 fn numeric_transform_holes_keep_closed_css_structure() {
-    let artifact = compile_motion(&scene("transform: `rotate(${ctx.enter.progress * 90}deg)`"))
+    let artifact = compile_motion(&scene("transform: `rotate(${ctx.progress * 90}deg)`"))
         .unwrap()
         .artifact;
     assert!(
@@ -96,7 +96,7 @@ fn transform_functions_require_valid_css_arguments_and_check_inactive_branches()
     ] {
         reject(&format!("transform:'{value}'"), "transform");
     }
-    reject("transform: `scale(${ctx.enter.progress}x)`", "transform");
+    reject("transform: `scale(${ctx.progress}x)`", "transform");
     reject(
         "transform: ctx.localFrame < 30 ? 'none' : 'translate(auto)'",
         "transform",
@@ -139,7 +139,7 @@ fn approximated_math_is_rejected_at_the_module_gate() {
 
 #[test]
 fn deterministic_sqrt_works_with_frame_time_inputs() {
-    let compiled = compile_motion(&scene("opacity: Math.sqrt(ctx.enter.progress)"))
+    let compiled = compile_motion(&scene("opacity: Math.sqrt(ctx.progress)"))
         .expect("dynamic Math.sqrt lowers through deterministic Rust math");
     assert!(compiled.artifact.exprs.iter().any(|expression| matches!(
         expression,
@@ -167,7 +167,7 @@ fn deterministic_pow_folds_and_works_with_frame_time_inputs() {
             })
     );
 
-    let dynamic_pow = compile_motion(&scene("opacity: Math.pow(ctx.enter.progress, 0.8)"))
+    let dynamic_pow = compile_motion(&scene("opacity: Math.pow(ctx.progress, 0.8)"))
         .expect("dynamic Math.pow lowers through deterministic Rust math");
     assert!(dynamic_pow.artifact.exprs.iter().any(|expression| matches!(
         expression,

@@ -442,10 +442,16 @@ fn prepare_endpoint(
             let built =
                 motion::build_compiled_motion_program(motion::CompiledMotionProgramContext {
                     prepared: prepared_scene,
-                    instance,
                     evaluated: source,
                     source_frame: frame_address.source_frame(),
                     source_time: source.sample_time(),
+                    source_duration: render
+                        .sources()
+                        .source(source.source_index())
+                        .and_then(|compiled| compiled.source_duration())
+                        .ok_or_else(|| {
+                            PrepareError::at(path, "Motion source duration is missing")
+                        })?,
                     viewport,
                     source_clip,
                     fps: render.canvas().frame_rate(),

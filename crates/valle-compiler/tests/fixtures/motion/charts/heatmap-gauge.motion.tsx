@@ -1,5 +1,4 @@
 export const composition = { width: 1920, height: 1080, fps: 30, duration: 5 };
-export const component = "heatmap-gauge";
 
 const DAYS = ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"];
 const HOURS = ["9", "12", "15", "18", "21"];

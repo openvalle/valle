@@ -475,7 +475,6 @@ export class StudioProjectControls extends LitElement {
 
 export function kindClassOf(kind: string): string {
   const value = kind.toLowerCase();
-  if (value === "phase") return "kind-phase";
   if (value.includes("motion") || value.includes("lottie")) return "kind-motion";
   if (value.includes("audio")) return "kind-audio";
   if (value.includes("caption") || value.includes("text")) return "kind-caption";

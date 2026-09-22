@@ -100,7 +100,7 @@ fn an_empty_font_list_uses_the_canonical_default_font() {
 fn frame_varying_measure_inputs_fail_closed() {
     // A ctx-dependent measureText argument must produce a preparation-time capability diagnostic.
     let source = "export default function Card(ctx) {\n  \
-                  const m = measureText(\"x\", { maxWidth: ctx.enter.progress * 100 });\n  \
+                  const m = measureText(\"x\", { maxWidth: ctx.progress * 100 });\n  \
                   return <Scene key=\"scene\" style={{ opacity: m.width }} />;\n}\n";
     let diagnostics =
         compile_motion_with_env(source, &[], Some(&env())).expect_err("frame-varying measure");
@@ -183,7 +183,7 @@ fn assert_measured_box_matches_text(
     aliases: &[(String, &[u8])],
 ) {
     use std::collections::BTreeMap;
-    use valle_motion::{Fonts, LayoutOptions, ResolvedSignals, Viewport};
+    use valle_motion::{Fonts, LayoutOptions, Viewport};
     let mut fonts = Fonts::default();
     valle_motion::register_default_motion_fonts(&mut fonts).unwrap();
     for (alias, bytes) in aliases {
@@ -200,12 +200,11 @@ fn assert_measured_box_matches_text(
     }
     let prepared = valle_motion::prepare_scene(artifact).unwrap();
     let props = valle_motion::resolve_props(&artifact.controls, &BTreeMap::new()).unwrap();
-    let windows = valle_motion::phase_windows(&artifact.controls.phase_spec(), 90);
     let mut programs = Vec::new();
     for frame in [60, 0, 60] {
-        let ctx = valle_motion::motion_context_at(
+        let ctx = valle_motion::motion_context_at_frame(
             frame,
-            &windows,
+            90,
             valle_timeline::FrameRate::new(30, 1).unwrap(),
         )
         .unwrap();
@@ -213,7 +212,6 @@ fn assert_measured_box_matches_text(
             &prepared,
             &ctx,
             &props,
-            &ResolvedSignals::default(),
             &LayoutOptions {
                 viewport: Viewport::new(viewport),
                 fonts: &fonts,
@@ -354,7 +352,7 @@ fn literal_font_alias_matches_rendering() {
     )
     .unwrap();
     let source = r#"
-export const controls=defineControls({assets:{brandFont:asset({kind:'font',required:true})}});
+export const controls=({assets:{brandFont:asset({kind:'font',required:true})}});
 const label='iiii WWWW';
 const M=measureText(label,{fontFamily:'asset://brandFont',fontSize:32,lineHeight:1.5});
 export default function Card(ctx){return <Scene style={{width:960,height:480}}>

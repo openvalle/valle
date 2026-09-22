@@ -1,16 +1,11 @@
 export const composition = { width: 1920, height: 1080, fps: 30, duration: 5 };
-export const component = "procedural-dashboard";
-
-export const controls = defineControls({
-  timing: { enterDuration: 0, exitDuration: 0 },
-});
 
 const BARS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
 const GRID = [0, 1, 2, 3, 4, 5];
 const RING = path("M 307.5 217.5 C 438 217.5 540 319.5 540 450 C 540 580.5 438 682.5 307.5 682.5 C 177 682.5 75 580.5 75 450 C 75 319.5 177 217.5 307.5 217.5 Z");
 
 export default function ProceduralDashboard(ctx) {
-  const t = ctx.hold.progress;
+  const t = ctx.progress;
   const wave = (sin(t * 6.283185307 + 0.4) + 1) * 0.5;
   const health = 0.91 + sin(t * 12.566370614) * 0.035;
   const orbit = fract(t * 1.6);

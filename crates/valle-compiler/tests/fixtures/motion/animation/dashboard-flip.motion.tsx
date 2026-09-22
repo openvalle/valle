@@ -1,9 +1,4 @@
 export const composition = { width: 1920, height: 1080, fps: 30, duration: 5 };
-export const component = "dashboard-flip";
-
-export const controls = defineControls({
-  timing: { enterDuration: 0, exitDuration: 0 },
-});
 
 const layouts = defineLayoutStates({
   overview: {
@@ -23,7 +18,7 @@ const layouts = defineLayoutStates({
 const BARS = [87, 123, 100.5, 141, 114, 162, 189, 177, 217.5];
 
 export default function DashboardFlip(ctx) {
-  const p = interpolate(ctx.hold.progress, [0, 0.24, 0.76, 1], [0, 1, 1, 0], { easing: "easeInOut" });
+  const p = interpolate(ctx.progress, [0, 0.24, 0.76, 1], [0, 1, 1, 0], { easing: "easeInOut" });
   return (
     <Scene className="relative h-full w-full" style={{ backgroundColor: "#080b12" }}>
       <Text key="eyebrow" className="absolute" style={{ left: 105, top: 72, fontSize: 22.5, letterSpacing: 6, color: "#f59e0b" }}>CONTROL ROOM / FLIP LAYOUT</Text>

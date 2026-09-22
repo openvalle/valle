@@ -23,7 +23,7 @@ use valle_timeline::{
 use crate::ProjectAction;
 
 pub(crate) fn run(json_output: bool, action: ProjectAction) -> Result<ExitCode> {
-    let store = ProjectStore::at(project_root()?);
+    let store = ProjectStore::at(project_root()?).with_motion_compiler(compile_project_timeline);
     let auth = AuthenticatedContext::new(
         Actor::new("cli:local").map_err(|error| anyhow!(error.to_string()))?,
     );
@@ -35,9 +35,7 @@ pub(crate) fn run(json_output: bool, action: ProjectAction) -> Result<ExitCode> 
             intent,
         } => {
             let project_id = parse_project_id(project_id)?;
-            let base = timeline.parent().unwrap_or(Path::new("."));
-            let timeline =
-                super::timeline::resolve_project_motion_durations(load_timeline(&timeline)?, base)?;
+            let timeline = load_timeline(&timeline)?;
             let snapshot = store
                 .create_project(&project_id, &timeline, intent.as_deref(), &auth)
                 .context("creating project genesis")?;
@@ -246,17 +244,27 @@ fn load_timeline(path: &Path) -> Result<Timeline> {
         .with_context(|| format!("decoding Timeline {}", path.display()))
 }
 
+fn compile_project_timeline(
+    timeline: &Timeline,
+) -> Result<valle_timeline::internal::CanonicalTimeline, valle_compiler::CompileTimelineError> {
+    let prepare = || -> Result<_> {
+        let mut document: Value = serde_json::from_slice(&timeline_bytes(timeline)?)?;
+        super::timeline::prepare_motion_instances(&mut document)?;
+        let (_, sources) = super::timeline::prepare_motion_sources(&document, Path::new("."))?;
+        Ok(sources)
+    };
+    let sources = prepare().map_err(|error: anyhow::Error| {
+        valle_compiler::CompileTimelineError::MotionPreparation {
+            reason: error.to_string(),
+        }
+    })?;
+    valle_compiler::compile_timeline_with_motion_sources(timeline.clone(), &sources)
+}
+
 fn load_edit_request(path: &Path, base_revision: u64, intent: Option<&str>) -> Result<String> {
     let timeline =
         std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
-    let mut timeline: Value = serde_json::from_str(&normalize_resource_paths(&timeline, path)?)?;
-    if decode_timeline(&serde_json::to_string(&timeline)?).is_ok() {
-        super::timeline::fill_motion_source_durations(
-            &mut timeline,
-            path.parent().unwrap_or(Path::new(".")),
-        )?;
-    }
-    let timeline = serde_json::to_string(&timeline)?;
+    let timeline = normalize_resource_paths(&timeline, path)?;
     let intent = serde_json::to_string(&intent)?;
     Ok(format!(
         "{{\"baseRevision\":{base_revision},\"timeline\":{timeline},\"intent\":{intent}}}"
@@ -278,9 +286,7 @@ pub(crate) fn resolve_studio_edit_request(body: &str, base: &Path) -> Result<Str
     if decode_timeline(&document).is_err() {
         return Ok(body.to_owned());
     }
-    let mut timeline: Value = serde_json::from_str(&document)?;
-    super::timeline::fill_motion_source_durations(&mut timeline, base)?;
-    request["timeline"] = timeline;
+    request["timeline"] = serde_json::from_str(&document)?;
     Ok(serde_json::to_string(&request)?)
 }
 
@@ -321,9 +327,10 @@ mod motion_duration_tests {
         });
         let resolved = resolve_studio_edit_request(&request.to_string(), dir.path()).unwrap();
         let resolved: Value = serde_json::from_str(&resolved).unwrap();
-        assert_eq!(
-            resolved["timeline"]["tracks"]["visual"][0]["clips"][0]["sourceDuration"].as_f64(),
-            Some(1.0)
+        assert!(
+            resolved["timeline"]["tracks"]["visual"][0]["clips"][0]
+                .get("sourceDuration")
+                .is_none()
         );
         assert!(
             Path::new(resolved["timeline"]["resources"]["title"].as_str().unwrap()).is_absolute()

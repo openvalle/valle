@@ -136,9 +136,7 @@ fn motion_document(component: &str) -> Value {
             "rate": "1/1",
             "endBehavior": "hold",
             "props": {"opacity": constant(json!(0.75))},
-            "cues": {},
             "resources": {"logo": "asset:logo"},
-            "phases": {"enterDuration": null, "exitDuration": null}
         }),
         json!([]),
         "track:main",
@@ -253,7 +251,7 @@ fn motion_artifact() -> Arc<SceneArtifact> {
         compile_motion_with_resources(
             r#"
 export const composition = { width: 1920, height: 1080, duration: 1 };
-export const controls = defineControls({
+export const controls = ({
   props: { opacity: number({ default: 1, min: 0, max: 1 }) },
   assets: { logo: asset({ kind: "image", required: true }) },
 });
@@ -271,39 +269,12 @@ export default function Title(ctx, props) {
     )
 }
 
-fn timed_motion_artifact() -> Arc<SceneArtifact> {
-    Arc::new(
-        compile_motion_with_resources(
-            r#"
-export const composition = { width: 1920, height: 1080, duration: 1 };
-export const controls = defineControls({
-  props: { opacity: number({ default: 1, min: 0, max: 1 }) },
-  timing: {
-    enterDuration: 0,
-    exitDuration: 0,
-  },
-  assets: { logo: asset({ kind: "image", required: true }) },
-});
-export default function Title(ctx, props) {
-  return <View style={{ width: 1920, height: 1080, opacity: props.opacity }} />;
-}
-"#,
-            &[ResourceRef {
-                control: "logo".to_owned(),
-                content_hash: ContentDigest::parse(IMAGE_DIGEST).unwrap(),
-            }],
-        )
-        .expect("timed Motion fixture must compile")
-        .artifact,
-    )
-}
-
 fn video_motion_artifact() -> Arc<SceneArtifact> {
     Arc::new(
         compile_motion_with_resources(
             r#"
 export const composition = { width: 1920, height: 1080, duration: 1 };
-export const controls = defineControls({
+export const controls = ({
   props: {
     opacity: number({ default: 1, min: 0, max: 1 }),
     linear: number({ default: 0, min: 0, max: 1 }),
@@ -1249,8 +1220,8 @@ fn extension_kernel_and_artifact_abi_are_admitted_before_compile() {
 }
 
 #[test]
-fn motion_phase_overrides_are_resolved_during_admission() {
-    let artifact = timed_motion_artifact();
+fn motion_source_duration_is_resolved_and_validated_during_admission() {
+    let artifact = motion_artifact();
     let motion_manifest = manifest(json!({
         "component:title": motion_entry(&artifact),
         "asset:logo": image_entry()
@@ -1273,11 +1244,9 @@ fn motion_phase_overrides_are_resolved_during_admission() {
         .unwrap();
     let capabilities = Capabilities::new().with_artifact_abi("valle.motion/artifact@1");
 
-    let mut outside_controls = motion_document("component:title");
-    outside_controls["document"]["visual"]["tracks"][0]["items"][0]["source"]["phases"]["enterDuration"] =
-        json!("1/10");
+    let valid = motion_document("component:title");
     let render = open(
-        &timeline(&outside_controls),
+        &timeline(&valid),
         &motion_manifest,
         &bindings,
         &capabilities,
@@ -1291,9 +1260,14 @@ fn motion_phase_overrides_are_resolved_during_admission() {
             .unwrap()
             .motion()
             .unwrap()
-            .phases()
-            .enter_frames(),
-        3
+            .artifact()
+            .composition
+            .as_ref()
+            .unwrap()
+            .duration()
+            .unwrap()
+            .to_string(),
+        "1/1"
     );
 
     let mut zero_source_extent = motion_document("component:title");
@@ -1313,35 +1287,23 @@ fn motion_phase_overrides_are_resolved_during_admission() {
                 == Some("duration-quantized-to-zero-frames")
             && diagnostic.phase == EngineOpenPhase::Admission
     }));
-    assert!(
-        report
-            .diagnostics()
-            .iter()
-            .all(|diagnostic| diagnostic.phase != EngineOpenPhase::Compile)
-    );
 
-    let mut valid = motion_document("component:title");
-    valid["document"]["visual"]["tracks"][0]["items"][0]["source"]["phases"]["enterDuration"] =
-        json!("1/30");
-    let render = open(
-        &timeline(&valid),
+    let mut mismatched = motion_document("component:title");
+    mismatched["document"]["visual"]["tracks"][0]["items"][0]["source"]["sourceDuration"] =
+        json!("2/1");
+    let report = open(
+        &timeline(&mismatched),
         &motion_manifest,
         &bindings,
         &capabilities,
         &baseline_profile(),
     )
-    .unwrap();
-    let phases = render
-        .sources()
-        .source(0)
-        .unwrap()
-        .motion()
-        .unwrap()
-        .phases();
-    assert_eq!(phases.duration_frames(), 30);
-    assert_eq!(phases.enter_frames(), 1);
-    assert_eq!(phases.hold_frames(), 29);
-    assert_eq!(phases.exit_frames(), 0);
+    .unwrap_err();
+    assert!(
+        report.diagnostics().iter().any(|diagnostic| {
+            diagnostic.code == EngineOpenDiagnosticCode::MotionTimingMismatch
+        })
+    );
 }
 
 #[test]

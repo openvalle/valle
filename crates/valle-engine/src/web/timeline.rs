@@ -9,8 +9,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use valle_timeline::internal::{
     quantize::{quantize_frame_boundary, quantize_sample_boundary},
     wire::document::{
-        AudioItemWire, AudioSourceWire, CaptionItemWire, MotionCueBindingWire, TimedAdjustmentWire,
-        TimelineDocumentWire, VisualItemWire, VisualSourceWire,
+        AudioItemWire, AudioSourceWire, CaptionItemWire, TimedAdjustmentWire, TimelineDocumentWire,
+        VisualItemWire, VisualSourceWire,
     },
 };
 use valle_timeline::{
@@ -66,46 +66,15 @@ struct TimelineSequenceItemView {
     source_start_seconds: Option<f64>,
     source_start_frame: Option<i64>,
     source_rate: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    motion_frames: Option<MotionAuthoringFramesView>,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct MotionAuthoringFramesView {
-    source_duration_frames: i64,
-    enter_frames: Option<i64>,
-    exit_frames: Option<i64>,
-    enter_duration: Option<f64>,
-    exit_duration: Option<f64>,
-    cues: BTreeMap<String, MotionCueFramesView>,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(
-    tag = "type",
-    rename_all = "camelCase",
-    rename_all_fields = "camelCase"
-)]
-enum MotionCueFramesView {
-    SourceRange {
-        start_frame: i64,
-        end_frame: i64,
-        enter_frames: i64,
-        exit_frames: i64,
-        start: f64,
-        end: f64,
-        enter_duration: f64,
-        exit_duration: f64,
-    },
 }
 
 /// Compile one sparse public Timeline into the expanded canonical document
 /// consumed by the browser renderer. The returned document is a derived view;
 /// Studio must keep and save the public Timeline as its working copy.
 #[wasm_bindgen]
-pub fn compile_timeline(json: &str) -> Result<String, JsError> {
-    compile_timeline_native(json).map_err(|error| JsError::new(&error))
+pub fn compile_timeline(json: &str, motion_sources_json: &str) -> Result<String, JsError> {
+    compile_timeline_with_sources_native(json, motion_sources_json)
+        .map_err(|error| JsError::new(&error))
 }
 
 /// Normalize one sparse public Timeline with the exact same Rust admission
@@ -158,10 +127,25 @@ fn canonicalize_timeline_document_native(json: &str) -> Result<String, String> {
         .map_err(|error| timeline_error("timeline_document_encode", error))
 }
 
+#[cfg(test)]
 fn compile_timeline_native(json: &str) -> Result<String, String> {
+    compile_timeline_with_sources_native(json, "{}")
+}
+
+fn compile_timeline_with_sources_native(
+    json: &str,
+    motion_sources_json: &str,
+) -> Result<String, String> {
     let timeline = valle_timeline::decode_timeline(json)
         .map_err(|error| timeline_error("timeline_decode", error))?;
-    let timeline = valle_compiler::compile_timeline(timeline)
+    let durations: BTreeMap<String, TimelineTimeWire> =
+        serde_json::from_str(motion_sources_json)
+            .map_err(|error| timeline_error("motion_source_metadata", error))?;
+    let durations = durations
+        .into_iter()
+        .map(|(alias, time)| (alias, RationalTime::from_exact(time.to_exact())))
+        .collect();
+    let timeline = valle_compiler::compile_timeline_with_motion_sources(timeline, &durations)
         .map_err(|error| timeline_error("timeline_compile", error))?;
     valle_timeline::internal::encode_canonical(&timeline)
         .map_err(|error| timeline_error("timeline_document_encode", error))
@@ -266,7 +250,7 @@ fn timeline_document_view_native(json: &str) -> Result<String, String> {
     let mut sequences = Vec::new();
     for (track_index, track) in document.visual.tracks.iter().enumerate() {
         let compiler_track = compiler_track_id("visual", track_index);
-        let mut sequence = project_sequence(
+        let sequence = project_sequence(
             "visual",
             track.id.clone(),
             track_index,
@@ -306,13 +290,6 @@ fn timeline_document_view_native(json: &str) -> Result<String, String> {
                 )
             }),
         )?;
-        for (item, view) in track.items.iter().zip(&mut sequence.items) {
-            if let VisualItemWire::Clip(clip) = item
-                && let VisualSourceWire::Motion(source) = &clip.source
-            {
-                view.motion_frames = Some(project_motion_frames(source, frame_rate)?);
-            }
-        }
         sequences.push(sequence);
     }
     for (track_index, track) in document.audio.tracks.iter().enumerate() {
@@ -447,7 +424,6 @@ where
                 .transpose()
                 .map_err(|error| timeline_error("timeline_document_view", error))?,
             source_rate: source_clock.map(|value| value.1.as_f64()),
-            motion_frames: None,
         });
         cursor = end;
     }
@@ -588,7 +564,6 @@ where
             source_start_seconds: None,
             source_start_frame: None,
             source_rate: None,
-            motion_frames: None,
         });
     }
     Ok(TimelineSequenceView {
@@ -597,76 +572,6 @@ where
         track_index,
         duration_seconds: duration.as_f64(),
         items,
-    })
-}
-
-fn project_motion_frames(
-    source: &valle_timeline::internal::wire::document::MotionInstanceWire,
-    frame_rate: FrameRate,
-) -> Result<MotionAuthoringFramesView, String> {
-    let frame = |value: ExactRational| {
-        quantize_frame_boundary(RationalTime::from_exact(value), frame_rate)
-            .map_err(|error| timeline_error("timeline_document_view", error))
-    };
-    let cues = source
-        .cues
-        .iter()
-        .map(|(name, cue)| {
-            let view = match cue {
-                MotionCueBindingWire::SourceRange {
-                    start,
-                    end,
-                    enter_duration,
-                    exit_duration,
-                } => {
-                    let window = valle_motion::signals::cue_window_seconds(
-                        RationalTime::from_exact(*start),
-                        RationalTime::from_exact(*end),
-                        RationalTime::from_exact(*enter_duration),
-                        RationalTime::from_exact(*exit_duration),
-                        frame_rate,
-                    )
-                    .map_err(|error| timeline_error("timeline_document_view", error))?;
-                    MotionCueFramesView::SourceRange {
-                        start_frame: i64::from(window.start_frame),
-                        end_frame: i64::from(window.end_frame),
-                        enter_frames: i64::from(window.enter_frames),
-                        exit_frames: i64::from(window.exit_frames),
-                        start: start.as_f64(),
-                        end: end.as_f64(),
-                        enter_duration: enter_duration.as_f64(),
-                        exit_duration: exit_duration.as_f64(),
-                    }
-                }
-            };
-            Ok((name.clone(), view))
-        })
-        .collect::<Result<_, String>>()?;
-    // A canonical Timeline does not contain component timing defaults. Only a pair of explicit
-    // clip overrides can be resolved here; Project's prepared Motion projection supplies the
-    // complete layout when either side inherits its component default.
-    let phases = match (source.phases.enter_duration, source.phases.exit_duration) {
-        (Some(enter), Some(exit)) => Some(
-            valle_motion::phase_windows_seconds(
-                valle_motion::resolve_timing_seconds(
-                    Some(RationalTime::from_exact(enter)),
-                    Some(RationalTime::from_exact(exit)),
-                    None,
-                ),
-                RationalTime::from_exact(source.source_duration),
-                frame_rate,
-            )
-            .map_err(|error| timeline_error("timeline_document_view", error))?,
-        ),
-        _ => None,
-    };
-    Ok(MotionAuthoringFramesView {
-        source_duration_frames: frame(source.source_duration)?,
-        enter_frames: phases.map(|layout| i64::from(layout.enter_frames)),
-        exit_frames: phases.map(|layout| i64::from(layout.exit_frames)),
-        enter_duration: source.phases.enter_duration.map(|value| value.as_f64()),
-        exit_duration: source.phases.exit_duration.map(|value| value.as_f64()),
-        cues,
     })
 }
 
@@ -705,31 +610,6 @@ mod tests {
         ]}]
       }
     }"##;
-
-    #[test]
-    fn motion_phase_view_uses_absolute_boundaries_and_short_duration_compression() {
-        let view = |duration: f64, enter: f64, exit: f64| {
-            let timeline = serde_json::json!({
-                "canvas": {"width": 64, "height": 64, "fps": 24},
-                "resources": {"motion": "unused.motion.tsx"},
-                "tracks": {"visual": [{"clips": [{
-                    "kind": "motion", "component": "motion", "start": 0,
-                    "duration": duration, "sourceDuration": duration,
-                    "phases": {"enterDuration": enter, "exitDuration": exit}
-                }]}]}
-            });
-            let compiled = compile_timeline_native(&timeline.to_string()).unwrap();
-            let view: serde_json::Value =
-                serde_json::from_str(&timeline_document_view_native(&compiled).unwrap()).unwrap();
-            view["sequences"][0]["items"][0]["motionFrames"].clone()
-        };
-        let long = view(4.6, 0.0, 0.15);
-        assert_eq!(long["sourceDurationFrames"], 110);
-        assert_eq!(long["exitFrames"], 3);
-        let short = view(0.5, 1.0, 1.0);
-        assert_eq!(short["enterFrames"], 6);
-        assert_eq!(short["exitFrames"], 6);
-    }
 
     #[test]
     fn compile_timeline_uses_the_reserved_timeline_identity_namespace() {

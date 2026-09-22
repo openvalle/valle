@@ -1,17 +1,12 @@
 export const composition = { width: 1920, height: 1080, fps: 30, duration: 5 };
-export const component = "modifier-logo-echo";
-
-export const controls = defineControls({
-  timing: { enterDuration: 0, exitDuration: 0 },
-});
 
 const echoes = defineRepeater({ count: 18, keyPrefix: "echo" });
 const ROTATION_ROUTE = path("M 0 0 C 120 -180 240 180 360 0");
 
 export default function ModifierLogoEcho(ctx) {
-  const t = ctx.hold.progress;
+  const t = ctx.progress;
   const reveal = interpolate(t, [0, 0.16], [0, 1], { easing: "easeOut" });
-  const settle = spring({ elapsedFrames: ctx.hold.elapsedFrames, fps: ctx.fps, preset: "bouncy" });
+  const settle = spring({ elapsedFrames: ctx.localFrame, fps: ctx.fps, preset: "bouncy" });
   const drift = wiggle(ctx.localFrame, ctx.fps, {
     seed: 808, frequency: 0.55, amplitude: 11, phase: 0.2,
   });

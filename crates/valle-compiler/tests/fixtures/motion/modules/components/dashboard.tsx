@@ -5,9 +5,8 @@ import { brandTheme } from "./dashboard/theme";
 
 // The delivery contract: Studio opens this fixture as its own entry.
 export const composition = { width: 1920, height: 1080, fps: 30, duration: 6 };
-export const component = "release-dashboard";
 
-export const controls = defineControls({
+export const controls = {
   props: {
     accentStrength: number({ default: 1, min: 0.25, max: 1 }),
   },
@@ -29,10 +28,10 @@ export const controls = defineControls({
       { maxItems: 12, key: "id" },
     ),
   },
-});
+};
 
-export default function ReleaseDashboard(ctx, props, signals, data) {
-  const reveal = interpolate(ctx.enter.progress, [0, 1], [0, 1], { easing: "easeOut" });
+export default function ReleaseDashboard(ctx, props, data) {
+  const reveal = interpolate(ctx.progress, [0, 1], [0, 1], { easing: "easeOut" });
   return (
     <ThemeProvider value={brandTheme}>
       <Scene key="scene" className="relative h-full w-full" style={{ backgroundColor: useTheme().colors.background }}>

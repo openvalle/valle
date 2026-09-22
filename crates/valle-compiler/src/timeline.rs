@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use thiserror::Error;
 use valle_timeline::internal::{
-    CanonicalTimeline, ExactRational, FrameRate, LocalInvariantReport, RationalTime,
+    CanonicalTimeline, ContentDigest, ExactRational, FrameRate, LocalInvariantReport, RationalTime,
     time::TimeError, wire::document,
 };
 use valle_timeline::{Timeline, wire::timeline};
@@ -27,8 +27,10 @@ const RESOURCE_ID_NAMESPACE: &str = "resource";
 /// retained verbatim through [`CompileTimelineError::InvalidCanonical`].
 #[derive(Debug, Error)]
 pub enum CompileTimelineError {
+    #[error("Motion preparation failed: {reason}")]
+    MotionPreparation { reason: String },
     #[error(
-        "Motion at `{path}` needs sourceDuration resolved from its composition metadata before compilation"
+        "Motion at `{path}` needs its composition duration resolved before Timeline compilation"
     )]
     MissingMotionDuration { path: String },
     #[error("resource alias `{alias}` at `{path}` must match [A-Za-z0-9._-]{{1,64}}")]
@@ -68,8 +70,72 @@ pub enum CompileTimelineError {
 /// This function performs no I/O. URLs stay in the persisted Timeline; Canonical resource
 /// references are deterministic `resource:<alias>` IDs that can be resolved by the project layer.
 pub fn compile_timeline(timeline: Timeline) -> Result<CanonicalTimeline, CompileTimelineError> {
-    let timeline = timeline.into_wire();
-    TimelineNormalizer::new(&timeline)?.compile(NormalizationInput { timeline })
+    compile_timeline_with_motion_sources(timeline, &BTreeMap::new())
+}
+
+/// Compile a public Timeline with source durations obtained from its prepared Motion artifacts.
+pub fn compile_timeline_with_motion_sources(
+    timeline: Timeline,
+    motion_sources: &BTreeMap<String, RationalTime>,
+) -> Result<CanonicalTimeline, CompileTimelineError> {
+    let mut timeline = timeline.into_wire();
+    let mut resolved_sources = motion_sources.clone();
+    bind_motion_instances(&mut timeline, &mut resolved_sources)?;
+    TimelineNormalizer::new(&timeline, &resolved_sources)?.compile(NormalizationInput { timeline })
+}
+
+fn bind_motion_instances(
+    timeline: &mut timeline::TimelineWire,
+    motion_sources: &mut BTreeMap<String, RationalTime>,
+) -> Result<(), CompileTimelineError> {
+    let original = timeline.resources.clone();
+    for track in &mut timeline.tracks.visual {
+        for clip in &mut track.clips {
+            let timeline::TimelineVisualSourceWire::Motion {
+                component,
+                resources,
+                data,
+                ..
+            } = &mut clip.source
+            else {
+                continue;
+            };
+            let Some(locator) = original.get(component) else {
+                continue;
+            };
+            let inputs = serde_json::json!([
+                locator,
+                if resources.is_empty() {
+                    serde_json::Value::Null
+                } else {
+                    serde_json::to_value(resources).expect("resource aliases serialize")
+                },
+                if data.is_empty() {
+                    serde_json::Value::Null
+                } else {
+                    serde_json::to_value(data).expect("JSON data serializes")
+                },
+            ]);
+            let digest = ContentDigest::of_bytes(
+                &serde_json::to_vec(&inputs).expect("JSON inputs serialize"),
+            );
+            let key = format!("motion-{}", &digest.as_hex()[..56]);
+            if original.contains_key(&key) {
+                return Err(CompileTimelineError::InvalidResourceAlias {
+                    alias: key,
+                    path: "/resources".into(),
+                });
+            }
+            if !motion_sources.contains_key(&key) {
+                if let Some(duration) = motion_sources.get(component).copied() {
+                    motion_sources.insert(key.clone(), duration);
+                }
+            }
+            timeline.resources.insert(key.clone(), locator.clone());
+            *component = key;
+        }
+    }
+    Ok(())
 }
 
 /// Private normalization carrier. It intentionally has no serde/schema surface.
@@ -79,16 +145,21 @@ struct NormalizationInput {
 
 struct TimelineNormalizer {
     resources: BTreeSet<String>,
+    motion_sources: BTreeMap<String, RationalTime>,
     frame_rate: FrameRate,
     canvas_size: [u32; 2],
 }
 
 impl TimelineNormalizer {
-    fn new(timeline: &timeline::TimelineWire) -> Result<Self, CompileTimelineError> {
+    fn new(
+        timeline: &timeline::TimelineWire,
+        motion_sources: &BTreeMap<String, RationalTime>,
+    ) -> Result<Self, CompileTimelineError> {
         validate_resources(&timeline.resources)?;
         let frame_rate = frame_rate(&timeline.canvas.fps)?;
         Ok(Self {
             resources: timeline.resources.keys().cloned().collect(),
+            motion_sources: motion_sources.clone(),
             frame_rate,
             canvas_size: [timeline.canvas.width, timeline.canvas.height],
         })
@@ -299,13 +370,11 @@ impl TimelineNormalizer {
                 component,
                 fit,
                 trim_start,
-                source_duration,
                 rate,
                 end,
                 props,
-                cues,
+                data,
                 resources,
-                phases,
             } => {
                 let owner = clip_id("visual", track_index, clip_index);
                 let props = props
@@ -325,35 +394,25 @@ impl TimelineNormalizer {
                         self.resolve(&alias, &path).map(|resource| (slot, resource))
                     })
                     .collect::<Result<_, _>>()?;
-                let cues = cues
-                    .into_iter()
-                    .map(|(name, cue)| (name, timeline_motion_cue_to_canonical(cue)))
-                    .collect();
+                let source_duration = self.motion_sources.get(&component).ok_or_else(|| {
+                    CompileTimelineError::MissingMotionDuration {
+                        path: clip_path.to_owned(),
+                    }
+                })?;
                 document::VisualSourceWire::Motion(document::MotionInstanceWire {
                     component: self.resolve(&component, &format!("{clip_path}/component"))?,
                     fit: fit
                         .map(lower_raster_fit)
                         .unwrap_or(document::RasterFitWire::Contain),
                     source_start: trim_start.as_ref().map_or(ExactRational::ZERO, exact_time),
-                    source_duration: source_duration
-                        .ok_or_else(|| CompileTimelineError::MissingMotionDuration {
-                            path: clip_path.to_owned(),
-                        })?
-                        .to_exact(),
+                    source_duration: source_duration.into_exact(),
                     rate: rate.as_ref().map_or(ExactRational::ONE, exact_time),
                     end_behavior: end
                         .map(lower_media_end)
                         .unwrap_or(document::MediaEndBehaviorWire::Error),
                     props,
-                    cues,
+                    data,
                     resources,
-                    phases: phases.map_or(
-                        document::MotionPhaseOverridesWire {
-                            enter_duration: None,
-                            exit_duration: None,
-                        },
-                        timeline_motion_phases_to_canonical,
-                    ),
                 })
             }
             timeline::TimelineVisualSourceWire::Solid { color } => {
@@ -607,37 +666,6 @@ fn frame_rate(value: &timeline::TimelineFrameRateWire) -> Result<FrameRate, Comp
 
 fn exact_time(value: &timeline::TimelineTimeWire) -> ExactRational {
     value.to_exact()
-}
-
-fn timeline_motion_cue_to_canonical(
-    cue: timeline::TimelineMotionCueBindingWire,
-) -> document::MotionCueBindingWire {
-    match cue {
-        timeline::TimelineMotionCueBindingWire::SourceRange {
-            start,
-            end,
-            enter_duration,
-            exit_duration,
-        } => document::MotionCueBindingWire::SourceRange {
-            start: start.to_exact(),
-            end: end.to_exact(),
-            enter_duration: enter_duration
-                .as_ref()
-                .map_or(ExactRational::ZERO, exact_time),
-            exit_duration: exit_duration
-                .as_ref()
-                .map_or(ExactRational::ZERO, exact_time),
-        },
-    }
-}
-
-fn timeline_motion_phases_to_canonical(
-    phases: timeline::TimelineMotionPhaseOverridesWire,
-) -> document::MotionPhaseOverridesWire {
-    document::MotionPhaseOverridesWire {
-        enter_duration: phases.enter_duration.as_ref().map(exact_time),
-        exit_duration: phases.exit_duration.as_ref().map(exact_time),
-    }
 }
 
 fn timeline_duration(

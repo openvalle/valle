@@ -3,8 +3,8 @@
 use std::collections::BTreeMap;
 use valle_compiler::motion::compile_motion;
 use valle_motion::{
-    Fonts, LayoutOptions, ResolvedSignals, Viewport, build_tree, default_font_naming, emit,
-    motion_context_at, phase_windows, prepare_scene, resolve_props,
+    Fonts, LayoutOptions, Viewport, build_tree, default_font_naming, emit, motion_context_at_frame,
+    prepare_scene, resolve_props,
 };
 use valle_timeline::FrameRate;
 
@@ -23,14 +23,12 @@ fn display(source: &str, frame: u32) -> Vec<u8> {
     let artifact = compile_motion(source).expect("compile").artifact;
     let prepared = prepare_scene(&artifact).expect("prepare");
     let props = resolve_props(&artifact.controls, &BTreeMap::new()).unwrap();
-    let windows = phase_windows(&artifact.controls.phase_spec(), 30);
-    let ctx = motion_context_at(frame, &windows, FrameRate::new(30, 1).unwrap()).unwrap();
+    let ctx = motion_context_at_frame(frame, 30, FrameRate::new(30, 1).unwrap()).unwrap();
     let fonts = Fonts::default();
     let tree = build_tree(
         &prepared,
         &ctx,
         &props,
-        &ResolvedSignals::default(),
         &LayoutOptions {
             viewport: Viewport::new((320, 180)),
             fonts: &fonts,

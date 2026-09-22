@@ -5,8 +5,8 @@ use std::collections::BTreeMap;
 
 use valle_compiler::motion::compile_motion;
 use valle_motion::{
-    EvalInputs, Expr, MotionValue, NodeKind, ResolvedSignals, StyleValue, TextValue,
-    motion_context_at, phase_windows, resolve_props,
+    EvalInputs, Expr, MotionValue, NodeKind, StyleValue, TextValue, motion_context_at_frame,
+    resolve_props,
 };
 use valle_timeline::FrameRate;
 
@@ -16,14 +16,12 @@ fn evaluate(
 ) -> (valle_motion::SceneArtifact, Vec<MotionValue>) {
     let artifact = compile_motion(source).expect("compile").artifact;
     let props = resolve_props(&artifact.controls, &overrides).expect("props");
-    let windows = phase_windows(&artifact.controls.phase_spec(), 60);
-    let ctx = motion_context_at(10, &windows, FrameRate::new(30, 1).unwrap()).expect("ctx");
+    let ctx = motion_context_at_frame(10, 60, FrameRate::new(30, 1).unwrap()).expect("ctx");
     let values = valle_motion::eval_all(
         &artifact,
         EvalInputs {
             ctx: &ctx,
             props: &props,
-            signals: &ResolvedSignals::default(),
             unit: None,
             viewport: Some((1920.0, 1080.0)),
         },
@@ -71,7 +69,7 @@ fn text_value(artifact: &valle_motion::SceneArtifact, values: &[MotionValue], ke
 #[test]
 fn every_math_primitive_and_dynamic_noise_reaches_the_shared_evaluator() {
     let source = r##"
-export const controls = defineControls({ props: {
+export const controls = ({ props: {
   x: number({ default: -1.25 }), y: number({ default: 0.75 }), period: number({ default: 5 })
 }});
 export default function P(ctx, props) {
@@ -144,7 +142,7 @@ fn ecmascript_round_keeps_negative_zero_on_static_and_dynamic_paths() {
     let static_source =
         r#"export default function P(){return <View key="v" style={{opacity:round(-0.5)}}/>;}"#;
     let dynamic_source = r#"
-export const controls=defineControls({props:{x:number({default:-0.5})}});
+export const controls=({props:{x:number({default:-0.5})}});
 export default function P(ctx,props){return <View key="v" style={{opacity:round(props.x)}}/>;}
 "#;
     let (static_artifact, static_values) = evaluate(static_source, BTreeMap::new());
@@ -166,7 +164,7 @@ export default function P(ctx,props){return <View key="v" style={{opacity:round(
 #[test]
 fn formatting_is_locale_free_bounded_and_composes_with_text() {
     let source = r##"
-export const controls=defineControls({props:{n:number({default:1234.5}),p:number({default:.125}),i:number({default:-7})}});
+export const controls=({props:{n:number({default:1234.5}),p:number({default:.125}),i:number({default:-7})}});
 export default function P(ctx,props){return <Scene>
   <Text key="number">{formatNumber(props.n,{decimals:2,grouping:true})}</Text>
   <Text key="percent">{formatPercent(props.p,{decimals:1})}</Text>

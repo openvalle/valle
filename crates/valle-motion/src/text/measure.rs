@@ -15,9 +15,9 @@ use takumi_core::style::{ComputedStyle, SizingContext};
 use takumi_core::viewport::Viewport;
 
 use crate::{
-    ARTIFACT_FORMAT_VERSION, CapabilitySet, ChildRange, ControlsSchema, FrameControl,
-    LayoutOptions, MotionValue, NodeId, NodeKind, OptionalFrameControl, SceneArtifact, SceneNode,
-    StyleBinding, StyleValue, TextValue, TimingControls, prepare_owned_scene,
+    ARTIFACT_FORMAT_VERSION, CapabilitySet, ChildRange, ControlsSchema, LayoutOptions, MotionValue,
+    NodeId, NodeKind, SceneArtifact, SceneNode, StyleBinding, StyleValue, TextValue,
+    prepare_owned_scene,
 };
 
 /// Text measurement request, corresponding to `measureText(text, options)`.
@@ -262,11 +262,6 @@ pub fn measure_text(
 // This artifact only exists during measurement. It has no frame inputs or resources, and passes
 // exactly the same variable, utility and property admission as an authored Text node.
 fn text_artifact(request: &TextMeasure<'_>, styles: Vec<StyleBinding>) -> SceneArtifact {
-    let boundary = FrameControl {
-        default: 0,
-        min: 0,
-        max: None,
-    };
     SceneArtifact {
         format_version: ARTIFACT_FORMAT_VERSION,
         capability_set: CapabilitySet::base(),
@@ -276,19 +271,7 @@ fn text_artifact(request: &TextMeasure<'_>, styles: Vec<StyleBinding>) -> SceneA
         controls: ControlsSchema {
             props: BTreeMap::new(),
             data: BTreeMap::new(),
-            timing_seconds: None,
-            timing: TimingControls {
-                enter_frames: boundary.clone(),
-                hold_cycle_frames: OptionalFrameControl {
-                    default: None,
-                    min: 1,
-                    max: None,
-                },
-                exit_frames: boundary,
-            },
-            cues: BTreeMap::new(),
             assets: BTreeMap::new(),
-            camera: Default::default(),
         },
         camera: None,
         resource_refs: vec![],

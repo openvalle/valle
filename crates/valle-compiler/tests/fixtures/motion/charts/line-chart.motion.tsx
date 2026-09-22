@@ -1,13 +1,12 @@
 export const composition = { width: 1920, height: 1080, fps: 30, duration: 5 };
-export const component = "line-chart";
 
-export const controls = defineControls({
+export const controls = {
   props: {
     accent: color({ default: "#22d3ee" }),
     area: color({ default: "#164e63" }),
     label: color({ default: "#cbd5e1" }),
   },
-});
+};
 
 const DATA = [18, 27, 24, 41, 38, 56, 64, 58, 76];
 const LABELS = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP"];
@@ -24,7 +23,7 @@ function Grid(ctx, { color }) {
 }
 
 function Marker(ctx, { index, value, accent, label }) {
-  const reveal = interpolate(ctx.enter.progress - index * 0.045, [0, 0.45], [0, 1], { easing: "easeOut" });
+  const reveal = interpolate(ctx.progress - index * 0.045, [0, 0.45], [0, 1], { easing: "easeOut" });
   return (
     <View key="marker" style={{ position: "absolute", left: X.at(index) - 12, top: Y.map(value) - 12, width: 24, height: 24, borderRadius: 12, backgroundColor: accent, opacity: reveal, filter: `drop-shadow(0px 0px ${12 + reveal * 15}px ${accent})` }}>
       <Text key="label" style={{ position: "absolute", left: -42, top: 42, width: 108, fontSize: 24, color: label, textAlign: "center" }}>{LABELS[index]}</Text>
@@ -41,7 +40,7 @@ function Line(ctx, { pathValue, stroke, reveal }) {
 }
 
 function LineChart(ctx, { accent, areaColor, label }) {
-  const reveal = interpolate(ctx.enter.progress, [0.08, 0.88], [0, 1], { easing: "easeInOut" });
+  const reveal = interpolate(ctx.progress, [0.08, 0.88], [0, 1], { easing: "easeInOut" });
   return (
     <View key="chart" className="absolute" style={{ left: 0, top: 0, width: 1920, height: 1080 }}>
       <Grid key="grid" color="#334155" />

@@ -1,6 +1,5 @@
 use serde::{Deserialize, Serialize};
 
-use crate::context::PhaseKind;
 use crate::geometry::{
     GeometryEvalPolicy, MAX_FRAME_GEOMETRY_POINTS, MAX_GEOMETRY_TRAJECTORY_FRAMES, PathData,
 };
@@ -31,26 +30,6 @@ pub enum ContextInput {
     DurationFrames,
     FpsNum,
     FpsDen,
-    PhaseFrame {
-        phase: PhaseKind,
-    },
-    PhaseDurationFrames {
-        phase: PhaseKind,
-    },
-    PhaseProgress {
-        phase: PhaseKind,
-    },
-    /// Unclamped frames since phase start for spring timing, negative before the phase and
-    /// increasing after it ends.
-    PhaseElapsedFrames {
-        phase: PhaseKind,
-    },
-    PhaseActive {
-        phase: PhaseKind,
-    },
-    HoldIteration,
-    HoldCycleFrame,
-    HoldCycleProgress,
     /// Current text-unit index, valid only in per-unit Text styles. Admission rejects use
     /// elsewhere.
     UnitIndex,
@@ -78,17 +57,6 @@ impl ContextInput {
                 | ContextInput::UnitEnd
         )
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum CueField {
-    Active,
-    Progress,
-    Enter,
-    Hold,
-    Exit,
-    LocalFrame,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -210,10 +178,6 @@ pub enum Expr {
     },
     Prop {
         name: String,
-    },
-    Cue {
-        name: String,
-        field: CueField,
     },
     MakePoint {
         x: ExprId,
@@ -450,7 +414,6 @@ impl Expr {
             Expr::Const { .. }
             | Expr::Context { .. }
             | Expr::Prop { .. }
-            | Expr::Cue { .. }
             | Expr::NodeBounds { .. }
             | Expr::Project3D { .. } => Vec::new(),
             Expr::MakePoint { x, y } => vec![*x, *y],
@@ -559,14 +522,13 @@ impl ExprType {
     fn of_control(control: &ControlType) -> Self {
         match control {
             ControlType::Number { .. } => ExprType::Number,
-            ControlType::String | ControlType::NodeTarget => ExprType::String,
+            ControlType::String => ExprType::String,
             ControlType::Bool => ExprType::Bool,
             ControlType::Color => ExprType::Color,
             ControlType::Length => ExprType::Length,
             ControlType::Angle => ExprType::Angle,
             ControlType::Point => ExprType::Point,
             ControlType::Rect => ExprType::Rect,
-            ControlType::PathData => ExprType::PathData,
             ControlType::Select { .. } => ExprType::Enum,
         }
     }
@@ -627,10 +589,7 @@ pub(crate) fn validate_exprs(
                 }
                 Some(ExprType::of_value(value))
             }
-            Expr::Context { input } => Some(match input {
-                ContextInput::PhaseActive { .. } => ExprType::Bool,
-                _ => ExprType::Number,
-            }),
+            Expr::Context { .. } => Some(ExprType::Number),
             Expr::Prop { name } => match controls.props.get(name) {
                 Some(control) => Some(ExprType::of_control(&control.control)),
                 None => {
@@ -641,21 +600,6 @@ pub(crate) fn validate_exprs(
                     None
                 }
             },
-            Expr::Cue { name, field } => {
-                if controls.cues.contains_key(name) {
-                    Some(if *field == CueField::Active {
-                        ExprType::Bool
-                    } else {
-                        ExprType::Number
-                    })
-                } else {
-                    errors.push(ValidationError::new(
-                        format!("{path}/name"),
-                        "unknown cue control",
-                    ));
-                    None
-                }
-            }
             Expr::Project3D {
                 scene_key,
                 anchor_key,

@@ -1,9 +1,7 @@
 //! Whole-scene geometry reuse for fixed text/layout and dynamic 2D transforms/opacity only.
 use super::scene::{LayoutTimings, build_tree_inner};
 use super::{LayoutError, LayoutOptions, LayoutTree, PreparedScene, StyleCache};
-use crate::{
-    MotionContext, NodeKind, ResolvedProps, ResolvedSignals, SceneArtifact, StyleValue, TextValue,
-};
+use crate::{MotionContext, NodeKind, ResolvedProps, SceneArtifact, StyleValue, TextValue};
 use std::{
     cell::RefCell,
     collections::{BTreeMap, HashMap},
@@ -32,9 +30,7 @@ pub(super) fn eligible(artifact: &SceneArtifact) -> bool {
                     | crate::ContextInput::FpsDen
                     | crate::ContextInput::DurationFrames
             ),
-            crate::Expr::Cue { .. }
-            | crate::Expr::NodeBounds { .. }
-            | crate::Expr::Project3D { .. } => false,
+            crate::Expr::NodeBounds { .. } | crate::Expr::Project3D { .. } => false,
             _ => true,
         };
         stable.push(own && expr.children().iter().all(|id| stable[id.0 as usize]));
@@ -131,30 +127,27 @@ impl LayoutCache {
         &self,
         ctx: &MotionContext,
         props: &ResolvedProps,
-        signals: &ResolvedSignals,
         viewport: Viewport,
         styles: Option<&StyleCache>,
     ) -> Result<LayoutTree, LayoutError> {
-        self.build(ctx, props, signals, viewport, styles, None)
+        self.build(ctx, props, viewport, styles, None)
     }
     #[cfg(not(target_arch = "wasm32"))]
     pub fn build_tree_profiled(
         &self,
         ctx: &MotionContext,
         props: &ResolvedProps,
-        signals: &ResolvedSignals,
         viewport: Viewport,
         styles: Option<&StyleCache>,
     ) -> Result<(LayoutTree, LayoutTimings), LayoutError> {
         let mut timings = LayoutTimings::default();
-        let tree = self.build(ctx, props, signals, viewport, styles, Some(&mut timings))?;
+        let tree = self.build(ctx, props, viewport, styles, Some(&mut timings))?;
         Ok((tree, timings))
     }
     fn build(
         &self,
         ctx: &MotionContext,
         props: &ResolvedProps,
-        signals: &ResolvedSignals,
         viewport: Viewport,
         styles: Option<&StyleCache>,
         timings: Option<&mut LayoutTimings>,
@@ -170,7 +163,6 @@ impl LayoutCache {
             &self.prepared,
             ctx,
             props,
-            signals,
             &opts,
             timings,
             Some(&self.geometry),

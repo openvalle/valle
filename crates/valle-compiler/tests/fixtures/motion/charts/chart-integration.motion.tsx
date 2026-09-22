@@ -1,9 +1,8 @@
 export const composition = { width: 1920, height: 1080, fps: 30, duration: 5 };
-export const component = "chart-integration";
 
-export const controls = defineControls({
+export const controls = {
   assets: { brandFont: asset({ kind: "font", required: true }) },
-});
+};
 
 const TITLE_METRICS = measureText("TWO THEMES / ONE CONTRACT", { fontFamily: "asset://brandFont", fontSize: 57 });
 const VALUES = [26, 51, 43, 78];
@@ -20,7 +19,7 @@ function CardBar(ctx, { index, accent, progress }) {
 }
 
 function ChartCard(ctx, { accent, title }) {
-  const p = ctx.hold.progress;
+  const p = ctx.progress;
   return (
     <View key="card" className="absolute" style={{ borderStyle: "solid", width: 810, height: 660, borderRadius: 42, backgroundColor: "#0f172acc", borderWidth: 1.5, borderColor: accent, displacement: displacement(19, point(0.008, 0.006), 4.5 + p * 3, { octaves: 2, mode: "fractal" }) }}>
       <Text key="title" style={{ marginLeft: 51, marginTop: 42, fontFamily: "asset://brandFont", fontSize: 42, color: accent }}>{title}</Text>
@@ -30,7 +29,7 @@ function ChartCard(ctx, { accent, title }) {
 }
 
 export default function ChartIntegration(ctx) {
-  const p = ctx.hold.progress;
+  const p = ctx.progress;
   const first = bounds("primary/card");
   const second = bounds("secondary/card");
   const ax = first.x + first.width * 0.5;

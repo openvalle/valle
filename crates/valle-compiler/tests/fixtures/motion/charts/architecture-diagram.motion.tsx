@@ -6,7 +6,6 @@ export const composition = { width: 1920, height: 1080, fps: 30, duration: 5 };
 // graphLayout derives layers, ordering and alignment from node sizes and edges.
 //
 // Use public compute functions and visual primitives with resolution-independent coordinates.
-export const component = "architecture-diagram";
 
 // Input nodes and edges.
 const NODES = [
@@ -58,7 +57,7 @@ export default function ArchitectureDiagram(ctx) {
 
   // Stagger entrance by the computed layer index.
   const appear = (i) =>
-    interpolate(ctx.enter.progress, [G.ranks[i] * 0.12, G.ranks[i] * 0.12 + 0.4], [0, 1]);
+    interpolate(ctx.progress, [G.ranks[i] * 0.12, G.ranks[i] * 0.12 + 0.4], [0, 1]);
 
   return (
     <Scene className="h-full w-full bg-slate-950">

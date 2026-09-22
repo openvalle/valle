@@ -3,9 +3,8 @@
 use std::collections::BTreeMap;
 use valle_compiler::motion::compile_motion;
 use valle_motion::{
-    Expr, ExprId, Fonts, LayoutOptions, MotionValue, ResolvedSignals, StyleCache, Viewport,
-    build_tree, default_font_naming, emit, motion_context_at, phase_windows, prepare_scene,
-    resolve_props,
+    Expr, ExprId, Fonts, LayoutOptions, MotionValue, StyleCache, Viewport, build_tree,
+    default_font_naming, emit, motion_context_at_frame, prepare_scene, resolve_props,
 };
 use valle_timeline::FrameRate;
 
@@ -27,17 +26,15 @@ fn snapshots(source: &str, frames: &[u32]) -> Vec<(BTreeMap<String, [f32; 4]>, V
     let fonts = Fonts::default();
     let cache = StyleCache::new();
     let props = resolve_props(&artifact.controls, &BTreeMap::new()).unwrap();
-    let windows = phase_windows(&artifact.controls.phase_spec(), 90);
     frames
         .iter()
         .map(|&frame| {
-            let ctx = motion_context_at(frame, &windows, FrameRate::new(30, 1).unwrap()).unwrap();
+            let ctx = motion_context_at_frame(frame, 90, FrameRate::new(30, 1).unwrap()).unwrap();
             let render = |styles| {
                 let tree = build_tree(
                     &prepared,
                     &ctx,
                     &props,
-                    &ResolvedSignals::default(),
                     &LayoutOptions {
                         viewport: Viewport::new((320, 180)),
                         fonts: &fonts,

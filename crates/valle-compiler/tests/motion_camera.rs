@@ -4,10 +4,7 @@
 #![cfg(feature = "motion")]
 
 use valle_compiler::motion::compile_motion;
-use valle_motion::{
-    CAMERA_CAPABILITY, NumberValue, ResolvedSignals, motion_context_at, phase_windows,
-    resolve_props,
-};
+use valle_motion::{CAMERA_CAPABILITY, NumberValue, motion_context_at_frame, resolve_props};
 use valle_motion::{
     FontResource, Fonts, LayoutOptions, Viewport, build_tree, layout_boxes, prepare_scene,
 };
@@ -26,7 +23,7 @@ fn fonts() -> Fonts {
 /// A world-space box and screen-space HUD with an animated camera pan and zoom.
 const SOURCE: &str = r##"
 export default function Probe(ctx) {
-  const t = ctx.hold.progress;
+  const t = ctx.progress;
   const cx = interpolate(t, [0, 1], [260, 660], { easing: "linear" });
   const zoom = interpolate(t, [0, 1], [1, 2], { easing: "linear" });
   return (
@@ -46,14 +43,12 @@ fn boxes_at(source: &str, frame: u32) -> std::collections::BTreeMap<String, [f32
     let compiled = compile_motion(source).expect("probe compiles");
     let prepared = prepare_scene(&compiled.artifact).expect("prepare");
     let props = resolve_props(&compiled.artifact.controls, &Default::default()).expect("props");
-    let phases = phase_windows(&compiled.artifact.controls.phase_spec(), 30);
-    let ctx = motion_context_at(frame, &phases, FrameRate::new(30, 1).unwrap()).expect("frame");
+    let ctx = motion_context_at_frame(frame, 30, FrameRate::new(30, 1).unwrap()).expect("frame");
     let fonts = fonts();
     let tree = build_tree(
         &prepared,
         &ctx,
         &props,
-        &ResolvedSignals::default(),
         &LayoutOptions {
             viewport: Viewport::new((960, 540)),
             fonts: &fonts,
@@ -174,14 +169,12 @@ fn a_non_positive_zoom_fails_closed() {
     let compiled = compile_motion(&source).expect("compiles; zoom is a frame expression");
     let prepared = prepare_scene(&compiled.artifact).expect("prepare");
     let props = resolve_props(&compiled.artifact.controls, &Default::default()).expect("props");
-    let phases = phase_windows(&compiled.artifact.controls.phase_spec(), 30);
-    let ctx = motion_context_at(29, &phases, FrameRate::new(30, 1).unwrap()).expect("last frame");
+    let ctx = motion_context_at_frame(29, 30, FrameRate::new(30, 1).unwrap()).expect("last frame");
     let fonts = fonts();
     let result = build_tree(
         &prepared,
         &ctx,
         &props,
-        &ResolvedSignals::default(),
         &LayoutOptions {
             viewport: Viewport::new((960, 540)),
             fonts: &fonts,

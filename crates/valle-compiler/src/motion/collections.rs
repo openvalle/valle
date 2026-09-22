@@ -22,7 +22,7 @@ impl<'s> Compiler<'s> {
                                 item.span(),
                                 "interpolate input stops must be finite numbers known at compile time \
                                  (literals, or arithmetic over module constants — anything depending on \
-                                 ctx/props/cues cannot be a stop)",
+                                 ctx/props cannot be a stop)",
                             );
                             None
                         })
@@ -80,7 +80,7 @@ impl<'s> Compiler<'s> {
                                 DiagCode::GrammarForbidden,
                                 item.span(),
                                 "interpolate outputs must be scalars known at compile time (literals, or \
-                                 arithmetic over module constants — anything depending on ctx/props/cues \
+                                 arithmetic over module constants — anything depending on ctx/props \
                                  cannot be an output stop)",
                             );
                             None
@@ -191,7 +191,7 @@ impl<'s> Compiler<'s> {
         self.shadowed_by_dynamic(expression)
             || referenced_identifiers(expression)
                 .iter()
-                .any(|name| matches!(name.as_str(), "ctx" | "props" | "signals" | "data"))
+                .any(|name| matches!(name.as_str(), "ctx" | "props" | "data"))
     }
 
     /// Lower a fixed-length collection to frame-time Exprs.
@@ -228,9 +228,7 @@ impl<'s> Compiler<'s> {
             self.illegal(
                 DiagCode::GrammarForbidden,
                 expression.span(),
-                format!(
-                    "{role} length cannot depend on ctx, props, data, cues, or other frame values"
-                ),
+                format!("{role} length cannot depend on ctx, props, data, or other frame values"),
             );
             return None;
         }
@@ -301,7 +299,7 @@ impl<'s> Compiler<'s> {
                 DiagCode::GrammarForbidden,
                 member.object.span(),
                 format!(
-                    "{role} .map() length cannot depend on ctx, props, data, cues, or other frame values; the expanded topology is fixed at compile time"
+                    "{role} .map() length cannot depend on ctx, props, data, or other frame values; the expanded topology is fixed at compile time"
                 ),
             );
             return None;

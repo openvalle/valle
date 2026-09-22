@@ -744,7 +744,6 @@ pub enum EngineOpenDiagnosticCode {
     UnprovenAudioResampler,
     MotionArtifactPayloadMismatch,
     MotionControlSchemaMismatch,
-    MotionCueSchemaMismatch,
     MotionResourceSchemaMismatch,
     MotionTimingMismatch,
     FontPayloadMismatch,
@@ -1462,61 +1461,6 @@ enum CompiledMotionParam {
     String { value: String },
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(tag = "type", rename_all = "kebab-case", deny_unknown_fields)]
-pub enum CompiledMotionCue {
-    SourceRange {
-        start: RationalTime,
-        end: RationalTime,
-        enter_duration: RationalTime,
-        exit_duration: RationalTime,
-    },
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct CompiledMotionPhases {
-    duration_frames: u32,
-    enter_frames: u32,
-    hold_frames: u32,
-    exit_frames: u32,
-    hold_cycle_frames: Option<u32>,
-    hold_cycle_duration: Option<RationalTime>,
-}
-
-impl CompiledMotionPhases {
-    pub const fn duration_frames(self) -> u32 {
-        self.duration_frames
-    }
-
-    pub const fn enter_frames(self) -> u32 {
-        self.enter_frames
-    }
-
-    pub const fn hold_frames(self) -> u32 {
-        self.hold_frames
-    }
-
-    pub const fn exit_frames(self) -> u32 {
-        self.exit_frames
-    }
-
-    pub const fn hold_cycle_frames(self) -> Option<u32> {
-        self.hold_cycle_frames
-    }
-
-    pub const fn layout(self) -> valle_motion::PhaseLayout {
-        valle_motion::PhaseLayout {
-            duration_frames: self.duration_frames,
-            enter_frames: self.enter_frames,
-            hold_frames: self.hold_frames,
-            exit_frames: self.exit_frames,
-            hold_cycle_frames: self.hold_cycle_frames,
-            hold_cycle_duration: self.hold_cycle_duration,
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CompiledMotionArtifactDependency {
@@ -1540,10 +1484,8 @@ pub struct CompiledMotionInstance {
     component_target: u32,
     reads_destination: bool,
     props: BTreeMap<String, CompiledMotionParam>,
-    cues: BTreeMap<String, CompiledMotionCue>,
     resources: BTreeMap<String, u32>,
     artifact_dependencies: Vec<CompiledMotionArtifactDependency>,
-    phases: CompiledMotionPhases,
     #[serde(skip)]
     artifact: Arc<SceneArtifact>,
 }
@@ -1563,20 +1505,12 @@ impl CompiledMotionInstance {
         self.artifact.as_ref()
     }
 
-    pub fn cues(&self) -> &BTreeMap<String, CompiledMotionCue> {
-        &self.cues
-    }
-
     pub fn resources(&self) -> &BTreeMap<String, u32> {
         &self.resources
     }
 
     pub fn artifact_dependencies(&self) -> &[CompiledMotionArtifactDependency] {
         &self.artifact_dependencies
-    }
-
-    pub const fn phases(&self) -> CompiledMotionPhases {
-        self.phases
     }
 
     fn evaluate_props(

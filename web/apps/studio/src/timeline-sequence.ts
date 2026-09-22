@@ -25,7 +25,6 @@ export interface ProjectedSequenceItem<I extends TimelineSequenceItem = Timeline
   sourceStartSeconds: number | null;
   sourceStartFrame: number | null;
   sourceRate: number | null;
-  motionFrames?: TimelineDocumentView["sequences"][number]["items"][number]["motionFrames"];
 }
 
 export interface ProjectedSequenceTrack {
@@ -76,7 +75,6 @@ export function projectTimelineSequences(
         sourceStartSeconds: itemView.sourceStartSeconds,
         sourceStartFrame: itemView.sourceStartFrame,
         sourceRate: itemView.sourceRate,
-        motionFrames: itemView.motionFrames,
       };
     });
     return {

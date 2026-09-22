@@ -6,7 +6,7 @@ use valle_motion::NodeKind;
 fn compile_one(latex: &str) -> String {
     let src = format!(
         r#"
-export const component = "mj12-cap";
+
 export default function F() {{
   return <Scene><MathFormula latex={{String.raw`{latex}`}} displayMode="display" /></Scene>;
 }}

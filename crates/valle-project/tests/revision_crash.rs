@@ -101,7 +101,7 @@ fn every_store_format_publish_boundary_can_retry_genesis() {
         assert_eq!(snapshot.revision().revision, 1, "{label}");
         assert_eq!(
             std::fs::read(root.path().join("FORMAT")).unwrap(),
-            b"valle.project-store@1\n",
+            b"valle.project-store@2\n",
             "{label}"
         );
         assert!(!root.path().join("FORMAT.tmp").exists(), "{label}");
