@@ -33,7 +33,7 @@ js-sys = { workspace = true, optional = true }
 default = []
 # Pure Rust shaping and glyph rendering shared by native and Wasm hosts.
 text = ["dep:cosmic-text", "dep:swash"]
-web = ["text", "dep:wasm-bindgen", "dep:js-sys"]
+web = ["text", "dep:wasm-bindgen", "dep:js-sys", "valle-compiler/motion"]
 
 [dev-dependencies]
 png.workspace = true

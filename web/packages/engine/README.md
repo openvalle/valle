@@ -1,6 +1,6 @@
 # valle-engine
 
-A programmable video engine for the browser. One SDK provides Motion playback, Timeline compilation, resource management, and CanvasKit rendering. It does not include the Studio application.
+A programmable video engine for the browser. One SDK provides Motion playback, Motion JSX and Timeline compilation, resource management, and CanvasKit rendering. It does not include the Studio application.
 
 ## Playback
 
@@ -41,7 +41,31 @@ Deploy this package's `wasm/` and `workers/` directories at the example `/valle/
 
 The SDK archive contains one Engine WASM and no CanvasKit WASM, bundled font pack, or Studio files. Fonts and project assets are supplied by the host. The local CLI runtime separately keeps its CanvasKit and fonts available for offline Studio use.
 
-Motion source (`.motion.tsx`) must first be compiled and prepared by the Native CLI/backend. The browser plays the prepared Motion artifact; this package does not expose a browser TSX compiler or the Native FFmpeg export pipeline.
+The same Engine Wasm also compiles Motion TSX/JSX in the browser. Compilation produces an artifact
+and source map; playback still opens a verified fixed package with its Timeline and bound resources.
+The Native FFmpeg export pipeline is outside this browser package.
+
+```ts
+import { createTimelineCompilerRuntime } from "valle-engine/compiler";
+
+const compiler = await createTimelineCompilerRuntime({
+  runtimeAssets: { engine: {
+    glue: "/valle/wasm/valle_engine.js",
+    wasm: "/valle/wasm/valle_engine_bg.wasm",
+  } },
+});
+const compiled = compiler.compileMotionModules("card.motion.tsx", {
+  "card.motion.tsx": `export const composition = { width: 640, height: 360, duration: 2 };
+    export default function Card() { return <Scene><Text>Hello</Text></Scene>; }`,
+});
+console.log(compiled.artifact, compiled.sourceMap);
+```
+
+For one source string, use `compiler.compileMotionJsx(source, options)`. Both methods accept explicit
+resource content hashes, prepare data, TTF/OTF font bytes, `asset://` font aliases, and frozen shader
+packages in `options`. Supply the same font bytes at rendering time when `measureText()` is used;
+the measured values are constants in the artifact. Compilation diagnostics throw `MotionCompileError`
+with a `diagnostics` array. The compiler entry needs only the two Engine asset URLs.
 
 ## Optional element
 
@@ -59,7 +83,7 @@ This registers `<valle-player>`. The default `valle-engine` entry neither import
 | --- | --- |
 | `valle-engine` | Playback, lifecycle controller, Timeline compiler, and rendering APIs |
 | `valle-engine/element` | Optional Lit Web Component and its options |
-| `valle-engine/compiler` | Timeline compile/normalize helpers without loading the playback JavaScript |
+| `valle-engine/compiler` | Timeline and Motion JSX compilation without loading the playback JavaScript |
 | `valle-engine/runtime-assets` | Runtime URL types and validation |
 | `valle-engine/wasm/*` | Engine WASM and matching generated bindings |
 | `valle-engine/workers/*` | Browser frame-planning worker |
@@ -108,5 +132,9 @@ bun run build
 cd packages/engine/dist
 npm pack
 ```
+
+Building the merged Engine Wasm compiles QuickJS C sources. On macOS, install Homebrew LLVM
+(`brew install llvm`); the build selects its WebAssembly-capable clang unless a C compiler is
+already configured explicitly. Other hosts need a clang toolchain with a wasm32 target.
 
 `build` produces both the local runtime in `web/dist/` and the npm SDK in `web/packages/engine/dist/`. Once the WASM bindings exist, `bun run build:sdk` rebuilds only the npm SDK. The generated npm manifest takes its version from the Cargo workspace and replaces workspace/catalog dependency references with published versions. Building or packing does not publish to npm.

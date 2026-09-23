@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import { BrowserValleWebPlayer } from "valle-engine";
-import { resolvePlayerRuntimeAssets } from "valle-engine/runtime-assets";
+import { resolveEngineRuntimeAssets, resolvePlayerRuntimeAssets } from "valle-engine/runtime-assets";
 
 const runtimeAssets = {
   engine: { glue: "engine/engine.js", wasm: "engine/engine.wasm" },
@@ -12,6 +12,13 @@ const runtimeAssets = {
 };
 
 describe("player runtime asset map", () => {
+  test("compiler accepts only the Engine URLs", () => {
+    expect(resolveEngineRuntimeAssets({ engine: runtimeAssets.engine }, "https://example.test/runtime/")).toEqual({
+      glue: "https://example.test/runtime/engine/engine.js",
+      wasm: "https://example.test/runtime/engine/engine.wasm",
+    });
+    expect(() => resolveEngineRuntimeAssets({ engine: { glue: "engine.js" } })).toThrow(/engine\.wasm/);
+  });
   test("resolves every executable runtime URL against one explicit base", () => {
     expect(resolvePlayerRuntimeAssets(runtimeAssets, "https://example.test/runtime/")).toEqual({
       engine: {

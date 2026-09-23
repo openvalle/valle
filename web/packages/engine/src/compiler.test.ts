@@ -4,11 +4,53 @@ import type { TimelineDocument } from "./internal-timeline.ts";
 
 import {
   canonicalizeTimelineDocumentWithWasm,
+  compileMotionJsxWithWasm,
+  compileMotionModulesWithWasm,
   compileTimelineWithWasm,
+  MotionCompileError,
   normalizeTimelineWithWasm,
   timelineSourceTimeDeltaFromFramesWithWasm,
   timelineTimeFromFramesWithWasm,
 } from "./compiler.ts";
+
+test("Motion compiler forwards explicit bytes and preserves structured diagnostics", () => {
+  const font = new Uint8Array([1, 2, 3]);
+  const shader = { frozenBytes: new Uint8Array([4]) };
+  const options = {
+    resources: [{ control: "logo", contentHash: `sha256:${"a".repeat(64)}` }],
+    data: { source: "fixture", value: { count: 2 } },
+    fonts: [font],
+    fontAliases: { "asset://brand": font },
+    shaders: [shader],
+  };
+  const compiled = compileMotionJsxWithWasm({
+    compile_motion_jsx: (source, optionsJson, fonts, aliases, shaders) => {
+      expect(source).toBe("source");
+      expect(JSON.parse(optionsJson)).toEqual({ resources: options.resources, data: options.data });
+      expect(fonts).toEqual([font]);
+      expect(aliases).toEqual([["asset://brand", font]]);
+      expect(shaders).toEqual([shader]);
+      return JSON.stringify({
+        status: "ok", artifact: { component: "Card" }, artifactDigest: "sha256:artifact", sourceMap: { entry: "Card.tsx" },
+        normalizedSource: "source", normalizedAstDigest: "sha256:one", preparedDataDigest: "sha256:two",
+      });
+    },
+  }, "source", options);
+  expect(compiled.artifact.component).toBe("Card");
+  expect(compiled.artifactDigest).toBe("sha256:artifact");
+
+  const diagnostic = {
+    class: "error", code: "syntaxError", span: { start: 0, end: 1, line: 1, column: 1 },
+    sourcePath: "card.motion.tsx", message: "invalid Motion source",
+  };
+  expect(() => compileMotionModulesWithWasm({
+    compile_motion_modules: (entry, modulesJson) => {
+      expect(entry).toBe("card.motion.tsx");
+      expect(JSON.parse(modulesJson)).toEqual({ "card.motion.tsx": "bad" });
+      return JSON.stringify({ status: "error", diagnostics: [diagnostic] });
+    },
+  }, "card.motion.tsx", { "card.motion.tsx": "bad" })).toThrow(MotionCompileError);
+});
 
 const timeline = {
   document: { metadata: {} },

@@ -6,6 +6,8 @@ export interface PlayerRuntimeAssets {
   workers: { productFrame: string };
 }
 
+export type EngineRuntimeAssets = PlayerRuntimeAssets["engine"];
+
 type RuntimeAssetsInput = {
   engine?: Partial<PlayerRuntimeAssets["engine"]>;
   canvasKit?: {
@@ -58,6 +60,27 @@ export function resolvePlayerRuntimeAssets(
     workers: {
       productFrame: resolve(assets.workers.productFrame),
     },
+  };
+}
+
+/** Compiler-only callers need the Engine module, but never load CanvasKit or a worker. */
+export function resolveEngineRuntimeAssets(
+  value: unknown,
+  baseUrl: string | URL = import.meta.url,
+): EngineRuntimeAssets {
+  if (!isRecord(value)) throw new TypeError("runtimeAssets is required");
+  const engine = value.engine;
+  if (!isRecord(engine)) throw new TypeError("runtimeAssets.engine.glue must be a non-empty URL");
+  for (const name of ["glue", "wasm"] as const) {
+    if (typeof engine[name] !== "string" || engine[name].length === 0) {
+      throw new TypeError(`runtimeAssets.engine.${name} must be a non-empty URL`);
+    }
+  }
+  const documentUrl = typeof location === "undefined" ? import.meta.url : location.href;
+  const resolvedBaseUrl = new URL(baseUrl, documentUrl);
+  return {
+    glue: new URL(engine.glue as string, resolvedBaseUrl).href,
+    wasm: new URL(engine.wasm as string, resolvedBaseUrl).href,
   };
 }
 

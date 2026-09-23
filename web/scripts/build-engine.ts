@@ -6,6 +6,19 @@ const root = path.resolve(import.meta.dir, "..");
 const workspace = path.resolve(root, "..");
 const outDir = path.resolve(root, "packages", "engine", "generated", "web");
 
+async function wasmCompilerEnv(): Promise<typeof process.env> {
+  if (process.platform !== "darwin" || process.env.CC_wasm32_unknown_unknown
+    || process.env.TARGET_CC || process.env.CC) return process.env;
+  const brew = Bun.which("brew");
+  if (!brew) return process.env;
+  const child = Bun.spawn([brew, "--prefix", "llvm"], { stdout: "pipe", stderr: "pipe" });
+  const prefix = (await new Response(child.stdout).text()).trim();
+  if (await child.exited !== 0) return process.env;
+  const clang = path.join(prefix, "bin", "clang");
+  if (!await Bun.file(clang).exists()) return process.env;
+  return { ...process.env, CC_wasm32_unknown_unknown: clang };
+}
+
 async function run(args: string[], env = process.env): Promise<void> {
   const child = Bun.spawn(args, { cwd: workspace, env, stdout: "inherit", stderr: "inherit" });
   if (await child.exited !== 0) throw new Error(`engine build failed: ${args.join(" ")}`);
@@ -86,7 +99,7 @@ else {
 }
 
 await withBuildDirectory(outDir, async (next) => {
-  await run(["cargo", "build", "--release", "--locked", "-p", "valle-engine", "--target", "wasm32-unknown-unknown", "--features", "web"]);
+  await run(["cargo", "build", "--release", "--locked", "-p", "valle-engine", "--target", "wasm32-unknown-unknown", "--features", "web"], await wasmCompilerEnv());
   await run([bindgen, path.join(metadata.target_directory, "wasm32-unknown-unknown", "release", "valle_engine.wasm"),
     "--target", "web", "--out-dir", next, "--out-name", "valle_engine"]);
   await Bun.write(path.join(next, "LICENSE"), Bun.file(path.join(workspace, "LICENSE")));

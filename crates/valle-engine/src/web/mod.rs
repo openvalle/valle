@@ -1,10 +1,12 @@
 //! Thin WASM host for the Product Compositor.
 //!
 //! `ProductEngine` is the sole browser semantic engine. JavaScript fulfills platform resources
-//! and executes the packed RenderPlan; it never receives a Scene or Motion recording language.
+//! and executes the packed RenderPlan; the adjacent authoring entry compiles Motion JSX in Rust.
 
+mod motion_compiler;
 mod product;
 mod timeline;
+pub use motion_compiler::{compile_motion_jsx, compile_motion_modules};
 pub use product::ProductEngine;
 
 /// Read-only Studio samples, evaluated by the same Rust expressions as rendering.

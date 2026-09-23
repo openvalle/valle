@@ -297,8 +297,8 @@ const COMPUTE_MARK: &str = "valle:compute:";
 /// Marker for invalid typed-value coercions, which must not be treated as failed constant folding.
 const TYPED_MARK: &str = "valle:typed:";
 
-/// Prepare-time intrinsic measurement environment. Reject empty font sets so successful
-/// measurements always have meaningful font inputs.
+/// Prepare-time intrinsic measurement environment. Native uses its canonical font fallback for
+/// empty inputs; Web requires host-provided bytes so successful measurements bind real fonts.
 pub struct MeasureEnv {
     fonts: std::rc::Rc<valle_motion::Fonts>,
     /// `None` until the entry file's delivery contract supplies the canvas. A host that compiles
@@ -322,6 +322,15 @@ impl MeasureEnv {
     ) -> Result<Self, MotionDiagnostic> {
         let mut fonts = valle_motion::Fonts::default();
         if font_blobs.is_empty() {
+            #[cfg(target_arch = "wasm32")]
+            if aliases.is_empty() {
+                return Err(MotionDiagnostic::new(
+                    DiagCode::StaticEvalFailed,
+                    "module",
+                    "measureText on Web requires host-provided font bytes",
+                ));
+            }
+            #[cfg(not(target_arch = "wasm32"))]
             valle_motion::register_default_motion_fonts(&mut fonts).map_err(|error| {
                 MotionDiagnostic::new(
                     DiagCode::StaticEvalFailed,
@@ -406,6 +415,8 @@ impl Sandbox {
     /// fonts.
     pub fn new(prelude: &str, measure: Option<&MeasureEnv>) -> Result<Sandbox, MotionDiagnostic> {
         let rt = JsRuntime::new().map_err(|e| eval_error("", format!("quickjs runtime: {e}")))?;
+        #[cfg(target_arch = "wasm32")]
+        rt.set_max_stack_size(256 * 1024);
         let ctx =
             JsContext::full(&rt).map_err(|e| eval_error("", format!("quickjs context: {e}")))?;
         // An unbound canvas is not a failure here: an entry that never measures text must still be

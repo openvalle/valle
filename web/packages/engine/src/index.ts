@@ -22,12 +22,23 @@ export * from "./executor/canvaskit/index.ts";
 export * from "./runtime/controller.ts";
 export * from "./controller.ts";
 export { createDecoderRing, keyframeThumbnails } from "./media/decoder-ring.ts";
-export { resolvePlayerRuntimeAssets, type PlayerRuntimeAssets } from "./runtime-assets.ts";
+export {
+  resolveEngineRuntimeAssets,
+  resolvePlayerRuntimeAssets,
+  type EngineRuntimeAssets,
+  type PlayerRuntimeAssets,
+} from "./runtime-assets.ts";
 export {
   canonicalizeTimelineDocumentWithWasm,
   compileTimelineWithWasm,
   createTimelineCompilerRuntime,
+  MotionCompileError,
+  type CompiledMotion,
+  type MotionCompileOptions,
+  type MotionCompilerDiagnostic,
+  type MotionShaderPackage,
   type TimelineCompilerRuntime,
+  type WebCompilerRuntime,
   type TimelineCompilerRuntimeOptions,
 } from "./compiler.ts";
 

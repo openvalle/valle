@@ -2,7 +2,7 @@ import type { Timeline } from "./timeline.ts";
 import type { TimelineDocument } from "./internal-timeline.ts";
 
 import type { CanonicalTimelineDocument } from "./runtime/product-controller.ts";
-import { resolvePlayerRuntimeAssets } from "./runtime-assets.ts";
+import { resolveEngineRuntimeAssets } from "./runtime-assets.ts";
 
 interface TimelineCompilerWasmModule {
   default(wasmUrl: string): Promise<unknown>;
@@ -17,6 +17,60 @@ interface TimelineCompilerWasmModule {
   timeline_time_from_frames(frames: number, fpsJson: string): number;
   timeline_document_view(timelineJson: string): string;
   sample_motion_properties(artifactJson: string, requestJson: string): string;
+  compile_motion_jsx(
+    source: string, optionsJson: string, fonts: Uint8Array[],
+    aliases: Array<[string, Uint8Array]>, shaders: MotionShaderPackage[],
+  ): string;
+  compile_motion_modules(
+    entry: string, modulesJson: string, optionsJson: string, fonts: Uint8Array[],
+    aliases: Array<[string, Uint8Array]>, shaders: MotionShaderPackage[],
+  ): string;
+}
+
+export interface MotionCompilerDiagnostic {
+  class: string;
+  code: string;
+  span: { start: number; end: number; line: number; column: number };
+  sourcePath?: string;
+  nodePath?: string;
+  utility?: string;
+  style?: unknown;
+  message: string;
+}
+
+export class MotionCompileError extends Error {
+  readonly diagnostics: MotionCompilerDiagnostic[];
+
+  constructor(diagnostics: MotionCompilerDiagnostic[]) {
+    super(diagnostics.map((diagnostic) => diagnostic.message).join("\n"));
+    this.name = "MotionCompileError";
+    this.diagnostics = diagnostics;
+  }
+}
+
+/** Frozen packages must have the same bytes when the artifact is rendered. */
+export interface MotionShaderPackage {
+  frozenBytes: Uint8Array;
+  assetControl?: string;
+}
+
+export interface MotionCompileOptions {
+  resources?: readonly { control: string; contentHash: string }[];
+  data?: { source: string; value: unknown };
+  /** TTF/OTF bytes in the same order used by the renderer. */
+  fonts?: readonly Uint8Array[];
+  /** Asset font family aliases such as `asset://brandFont`. */
+  fontAliases?: Readonly<Record<string, Uint8Array>>;
+  shaders?: readonly MotionShaderPackage[];
+}
+
+export interface CompiledMotion {
+  artifact: Record<string, unknown>;
+  artifactDigest: string;
+  sourceMap: Record<string, unknown>;
+  normalizedSource: string;
+  normalizedAstDigest: string;
+  preparedDataDigest: string;
 }
 
 export interface MotionPropertyRequest {
@@ -51,6 +105,13 @@ export interface TimelineCompilerRuntime {
   canonicalizeTimelineDocument(timeline: TimelineDocument): CanonicalTimelineDocument;
 }
 
+export interface WebCompilerRuntime extends TimelineCompilerRuntime {
+  /** Compile a standalone Motion TSX/JSX source to a Scene artifact. */
+  compileMotionJsx(source: string, options?: MotionCompileOptions): CompiledMotion;
+  /** Compile an explicit project-relative module closure to a Scene artifact. */
+  compileMotionModules(entry: string, modules: Record<string, string>, options?: MotionCompileOptions): CompiledMotion;
+}
+
 export interface TimelineCompilerRuntimeOptions {
   runtimeAssets: unknown;
   runtimeBaseUrl?: string | URL;
@@ -59,14 +120,14 @@ export interface TimelineCompilerRuntimeOptions {
 const moduleLoads = new Map<string, Promise<TimelineCompilerWasmModule>>();
 
 /**
- * Load only the Rust/WASM Timeline compiler surface. This intentionally does not initialize the
- * product renderer, CanvasKit, media decoders, or a fixed package.
+ * Load the Rust/WASM Timeline and Motion compiler surface without initializing the product
+ * renderer, CanvasKit, media decoders, or a fixed package.
  */
 export async function createTimelineCompilerRuntime(
   options: TimelineCompilerRuntimeOptions,
-): Promise<TimelineCompilerRuntime> {
-  const runtimeAssets = resolvePlayerRuntimeAssets(options.runtimeAssets, options.runtimeBaseUrl);
-  const wasm = await loadTimelineCompilerWasm(runtimeAssets.engine.glue, runtimeAssets.engine.wasm);
+): Promise<WebCompilerRuntime> {
+  const engine = resolveEngineRuntimeAssets(options.runtimeAssets, options.runtimeBaseUrl);
+  const wasm = await loadTimelineCompilerWasm(engine.glue, engine.wasm);
   return {
     normalizeTimeline: (timeline) => normalizeTimelineWithWasm(wasm, timeline),
     timelineTimeFromFrames: (frames, fps) => timelineTimeFromFramesWithWasm(wasm, frames, fps),
@@ -75,14 +136,71 @@ export async function createTimelineCompilerRuntime(
     ),
     compileTimeline: (timeline, motionSources) => compileTimelineWithWasm(wasm, timeline, motionSources),
     canonicalizeTimelineDocument: (timeline) => canonicalizeTimelineDocumentWithWasm(wasm, timeline),
+    compileMotionJsx: (source, compileOptions) => compileMotionJsxWithWasm(wasm, source, compileOptions),
+    compileMotionModules: (entry, modules, compileOptions) => (
+      compileMotionModulesWithWasm(wasm, entry, modules, compileOptions)
+    ),
   };
 }
 
 /** Bounded local-property inspection; no layout or rendering. Run in a diagnostic worker. */
 export async function sampleMotionProperties(options: TimelineCompilerRuntimeOptions, artifact: Record<string, unknown>, request: MotionPropertyRequest): Promise<MotionPropertySamples> {
-  const assets = resolvePlayerRuntimeAssets(options.runtimeAssets, options.runtimeBaseUrl);
-  const wasm = await loadTimelineCompilerWasm(assets.engine.glue, assets.engine.wasm);
+  const engine = resolveEngineRuntimeAssets(options.runtimeAssets, options.runtimeBaseUrl);
+  const wasm = await loadTimelineCompilerWasm(engine.glue, engine.wasm);
   return JSON.parse(wasm.sample_motion_properties(JSON.stringify(artifact), JSON.stringify(request))) as MotionPropertySamples;
+}
+
+export function compileMotionJsxWithWasm(
+  wasm: Pick<TimelineCompilerWasmModule, "compile_motion_jsx">,
+  source: string,
+  options: MotionCompileOptions = {},
+): CompiledMotion {
+  const inputs = motionCompileInputs(options);
+  return readMotionCompileResult(wasm.compile_motion_jsx(
+    source, inputs.optionsJson, inputs.fonts, inputs.aliases, inputs.shaders,
+  ));
+}
+
+export function compileMotionModulesWithWasm(
+  wasm: Pick<TimelineCompilerWasmModule, "compile_motion_modules">,
+  entry: string,
+  modules: Record<string, string>,
+  options: MotionCompileOptions = {},
+): CompiledMotion {
+  const inputs = motionCompileInputs(options);
+  return readMotionCompileResult(wasm.compile_motion_modules(
+    entry, JSON.stringify(modules), inputs.optionsJson, inputs.fonts, inputs.aliases, inputs.shaders,
+  ));
+}
+
+function motionCompileInputs(options: MotionCompileOptions): {
+  optionsJson: string;
+  fonts: Uint8Array[];
+  aliases: Array<[string, Uint8Array]>;
+  shaders: MotionShaderPackage[];
+} {
+  return {
+    optionsJson: JSON.stringify({ resources: options.resources ?? [], data: options.data ?? null }),
+    fonts: [...options.fonts ?? []],
+    aliases: Object.entries(options.fontAliases ?? {}),
+    shaders: [...options.shaders ?? []],
+  };
+}
+
+function readMotionCompileResult(json: string): CompiledMotion {
+  const result = JSON.parse(json) as
+    | ({ status: "ok" } & CompiledMotion)
+    | { status: "error"; diagnostics: MotionCompilerDiagnostic[] };
+  if (result.status === "error") throw new MotionCompileError(result.diagnostics);
+  if (result.status !== "ok") throw new TypeError("invalid Motion compiler response");
+  return {
+    artifact: result.artifact,
+    artifactDigest: result.artifactDigest,
+    sourceMap: result.sourceMap,
+    normalizedSource: result.normalizedSource,
+    normalizedAstDigest: result.normalizedAstDigest,
+    preparedDataDigest: result.preparedDataDigest,
+  };
 }
 
 /** Normalize one sparse Timeline without introducing a JavaScript q6 implementation. */
