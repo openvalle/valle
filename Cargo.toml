@@ -47,13 +47,13 @@ objc2 = "0.6.4"
 objc2-core-ml = "0.3.2"
 objc2-foundation = "0.3.2"
 objc2-metal = { version = "0.3.2", default-features = false }
-oxc = "0.148.0"
+oxc = "0.151.0"
 ort = { version = "=2.0.0-rc.13", default-features = false, features = ["api-28", "ndarray", "std", "load-dynamic"] }
 png = "0.18.1"
 qwen-asr = { version = "=0.11.0", default-features = false }
 reflink-copy = "0.1.30"
 reqwest = { version = "0.13.4", default-features = false, features = ["blocking", "rustls"] }
-rquickjs = "0.12.2"
+rquickjs = "0.14.0"
 rusqlite = "0.40.2"
 rustfft = "6.4.1"
 semver = "1.0.28"
