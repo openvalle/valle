@@ -172,7 +172,7 @@ pub(crate) fn serve(
     let state = Arc::new(crate::webhost::StudioHost {
         runtime_files: runtime.serving_map(),
         assets_dir: None,
-        preview_files: Arc::new(RwLock::new(Default::default())),
+        preview_files: Arc::new(Default::default()),
         motion_preview: None,
         config_json: Arc::new(RwLock::new(config.to_string())),
         sse: Default::default(),

@@ -1,5 +1,8 @@
 //! File and project Timeline delivery through the fixed-package admission path.
-use crate::TimelineAction;
+use crate::{
+    TimelineAction,
+    preview_store::{FrozenMediaCache, PreviewFile},
+};
 use anyhow::{Context, Result, anyhow, bail};
 use std::{path::Path, sync::Arc};
 use valle_engine::fixed_package::*;
@@ -121,22 +124,41 @@ pub(crate) struct TimelinePreviewPackage {
     pub resource_manifest_json: String,
     pub verified_binding_bundle_json: String,
     pub motion: serde_json::Value,
-    pub blobs: std::collections::BTreeMap<String, Vec<u8>>,
+    pub blobs: std::collections::BTreeMap<String, PreviewFile>,
     catalog: NativeResourceCatalog,
-    _frozen: tempfile::TempDir,
 }
 
 pub(crate) fn prepare_timeline_package(
     timeline: Timeline,
     base: &Path,
 ) -> Result<TimelinePreviewPackage> {
+    prepare_timeline_package_impl(timeline, base, None)
+}
+
+pub(crate) fn prepare_timeline_preview(
+    timeline: Timeline,
+    base: &Path,
+    media: &mut FrozenMediaCache,
+) -> Result<TimelinePreviewPackage> {
+    prepare_timeline_package_impl(timeline, base, Some(media))
+}
+
+fn prepare_timeline_package_impl(
+    timeline: Timeline,
+    base: &Path,
+    media: Option<&mut FrozenMediaCache>,
+) -> Result<TimelinePreviewPackage> {
+    // The browser consumes HTTP snapshots, so it needs no native catalog rehash.
+    let native = media.is_none();
+    let mut fresh_media = FrozenMediaCache::default();
+    let media = media.unwrap_or(&mut fresh_media);
     let timeline_json = String::from_utf8(timeline_bytes(&timeline)?)?;
     let mut doc: serde_json::Value = serde_json::from_slice(&timeline_bytes(&timeline)?)?;
     prepare_motion_instances(&mut doc)?;
     let (mut prepared_motions, motion_sources) = prepare_motion_sources(&doc, base)?;
     let compiled = valle_compiler::compile_timeline_with_motion_sources(timeline, &motion_sources)?;
     let canonical = encode_canonical(&compiled)?;
-    let frozen = tempfile::tempdir().context("creating immutable render resources")?;
+    let frozen = Arc::new(tempfile::tempdir().context("creating immutable render resources")?);
     let mut resources = super::motion_package::FixedResources::new();
     let mut catalog = NativeResourceCatalog::new();
     let mut blobs = std::collections::BTreeMap::new();
@@ -241,9 +263,15 @@ pub(crate) fn prepare_timeline_package(
                         role: super::motion_package::font_dependency_role(&artifact, bytes, i),
                         resource_id: font_id,
                     });
+                    let digest = ContentDigest::of_bytes(bytes);
+                    let path = frozen.path().join(digest.as_hex());
+                    std::fs::write(&path, bytes)?;
                     blobs.insert(
-                        ContentDigest::of_bytes(bytes).as_hex().to_owned(),
-                        bytes.to_vec(),
+                        digest.as_hex().to_owned(),
+                        PreviewFile::File {
+                            path,
+                            _directory: Arc::clone(&frozen),
+                        },
                     );
                     catalog.insert_bytes(ContentDigest::of_bytes(bytes), bytes.to_vec())?;
                 }
@@ -270,18 +298,38 @@ pub(crate) fn prepare_timeline_package(
                 )?;
                 continue;
             }
-            let bound_asset = if let Some(asset) = motion_environments.remove(name) {
-                asset
-            } else {
-                super::motion::load_asset(&path)
-                    .with_context(|| format!("reading resource {name}: {}", path.display()))?
+            let declared_kind =
+                resource_kind(&doc, name).or_else(|| motion_asset_kinds.get(name).copied());
+            // Media metadata/decoders consume paths, never a full in-memory file.
+            let (bytes, hash, file) =
+                if matches!(declared_kind, Some(AssetKind::Video | AssetKind::Audio)) {
+                    let (hash, file) = media.get(&path)?;
+                    (Vec::new(), hash, file)
+                } else {
+                    let asset = if let Some(asset) = motion_environments.remove(name) {
+                        asset
+                    } else {
+                        super::motion::load_asset(&path).with_context(|| {
+                            format!("reading resource {name}: {}", path.display())
+                        })?
+                    };
+                    let path = frozen.path().join(asset.hash.as_hex());
+                    std::fs::write(&path, &asset.bytes)?;
+                    (
+                        asset.bytes,
+                        asset.hash,
+                        PreviewFile::File {
+                            path,
+                            _directory: Arc::clone(&frozen),
+                        },
+                    )
+                };
+            // Identical bytes share one owner/path, including in the native catalog.
+            let file = blobs.entry(hash.as_hex().to_owned()).or_insert(file);
+            let path = match file {
+                PreviewFile::File { path, .. } => path.clone(),
+                PreviewFile::Bytes(_) => unreachable!(),
             };
-            let bytes = bound_asset.bytes;
-            let hash = bound_asset.hash;
-            blobs.insert(hash.as_hex().to_owned(), bytes.clone());
-            let frozen_path = frozen.path().join(hash.as_hex());
-            std::fs::write(&frozen_path, &bytes)?;
-            let path = frozen_path;
             let id = format!("resource:{name}");
             if has_visual_source(&doc["tracks"], name, "lottie") {
                 let value: serde_json::Value = serde_json::from_slice(&bytes)?;
@@ -337,11 +385,12 @@ pub(crate) fn prepare_timeline_package(
                     },
                     Vec::new(),
                 )?;
-                catalog.insert_file(hash, path)?;
+                if native {
+                    catalog.insert_file(hash, path)?;
+                }
                 continue;
             }
-            let kind = resource_kind(&doc, name)
-                .or_else(|| motion_asset_kinds.get(name).copied())
+            let kind = declared_kind
                 .or_else(|| {
                     if ttf_parser::Face::parse(&bytes, 0).is_ok() {
                         Some(AssetKind::Font)
@@ -354,14 +403,14 @@ pub(crate) fn prepare_timeline_package(
                 .ok_or_else(|| anyhow!("resource {name} has no supported Timeline consumer"))?;
             let asset = super::motion::BoundAsset {
                 path: path.clone(),
-                bytes: bytes.clone(),
+                bytes,
                 hash,
             };
             if kind == AssetKind::Video {
                 let probe = valle_media::codec::decode::probe_video_presentation(&path)?;
                 let audio = valle_media::codec::audio::probe_audio_stream(&path)?;
                 let mut deps = Vec::new();
-                if audio.is_some() {
+                if audio.is_some() && video_audio_used(&doc, name) {
                     let audio_id = format!("{id}:audio");
                     resources.add_asset(&audio_id, AssetKind::Audio, &asset)?;
                     deps.push(super::motion_package::FixedResourceDependency {
@@ -412,7 +461,9 @@ pub(crate) fn prepare_timeline_package(
             } else {
                 resources.add_asset(&id, kind, &asset)?;
             }
-            catalog.insert_file(hash, path)?;
+            if native {
+                catalog.insert_file(hash, path)?;
+            }
         }
     }
     let capabilities = resources.capabilities();
@@ -435,8 +486,39 @@ pub(crate) fn prepare_timeline_package(
         motion: serde_json::json!({"structures": structures, "problems": [], "shaders": []}),
         blobs,
         catalog,
-        _frozen: frozen,
     })
+}
+
+fn video_audio_used(doc: &serde_json::Value, name: &str) -> bool {
+    fn scan(value: &serde_json::Value, name: &str) -> bool {
+        match value {
+            serde_json::Value::Object(map) => {
+                if map.get("src").and_then(|v| v.as_str()) == Some(name) {
+                    return map.get("gain").and_then(|v| v.as_f64()) != Some(0.0);
+                }
+                map.values().any(|value| scan(value, name))
+            }
+            serde_json::Value::Array(values) => values.iter().any(|value| scan(value, name)),
+            _ => false,
+        }
+    }
+    // Motion controls may consume the video dynamically; preserve their dependencies.
+    scan(&doc["tracks"], name) || has_motion_resource(&doc["tracks"], name)
+}
+
+fn has_motion_resource(value: &serde_json::Value, name: &str) -> bool {
+    match value {
+        serde_json::Value::Object(map) => {
+            map.get("resources")
+                .and_then(|v| v.as_object())
+                .is_some_and(|bindings| bindings.values().any(|v| v.as_str() == Some(name)))
+                || map.values().any(|value| has_motion_resource(value, name))
+        }
+        serde_json::Value::Array(values) => {
+            values.iter().any(|value| has_motion_resource(value, name))
+        }
+        _ => false,
+    }
 }
 
 fn resource_kind(doc: &serde_json::Value, name: &str) -> Option<AssetKind> {
@@ -709,5 +791,64 @@ mod motion_source_metadata_tests {
             canonical["document"]["visual"]["tracks"][0]["items"][0]["source"]["sourceDuration"],
             "23/5"
         );
+    }
+}
+
+#[cfg(test)]
+mod preview_tests {
+    use super::*;
+
+    #[test]
+    fn duplicate_media_keeps_the_native_catalog_file_alive() {
+        let dir = tempfile::tempdir().unwrap();
+        // One second of mono PCM16 silence, authored under two resource paths.
+        let mut wav = b"RIFF".to_vec();
+        wav.extend_from_slice(&96_036_u32.to_le_bytes());
+        wav.extend_from_slice(b"WAVEfmt ");
+        wav.extend_from_slice(&16_u32.to_le_bytes());
+        wav.extend_from_slice(&1_u16.to_le_bytes());
+        wav.extend_from_slice(&1_u16.to_le_bytes());
+        wav.extend_from_slice(&48_000_u32.to_le_bytes());
+        wav.extend_from_slice(&96_000_u32.to_le_bytes());
+        wav.extend_from_slice(&2_u16.to_le_bytes());
+        wav.extend_from_slice(&16_u16.to_le_bytes());
+        wav.extend_from_slice(b"data");
+        wav.extend_from_slice(&96_000_u32.to_le_bytes());
+        wav.resize(96_044, 0);
+        std::fs::write(dir.path().join("a.wav"), &wav).unwrap();
+        std::fs::write(dir.path().join("b.wav"), &wav).unwrap();
+        let timeline = serde_json::json!({
+            "canvas": {"width": 64, "height": 64, "fps": 24},
+            "resources": {"a": "a.wav", "b": "b.wav"},
+            "tracks": {"audio": [{"clips": [
+                {"src": "a", "start": 0, "duration": 1},
+                {"src": "b", "start": 1, "duration": 1}
+            ]}]}
+        });
+        let prepared =
+            prepare_timeline_package(decode_timeline(&timeline.to_string()).unwrap(), dir.path())
+                .unwrap();
+        let digest = ContentDigest::of_bytes(&wav);
+        assert_eq!(prepared.blobs.len(), 1);
+        let Some(valle_render::host::NativeResourceSource::File(path)) =
+            prepared.catalog.source(&digest)
+        else {
+            panic!("missing native media source");
+        };
+        assert_eq!(std::fs::read(path).unwrap(), wav);
+    }
+
+    #[test]
+    fn muted_video_dependencies_are_pruned_only_when_all_uses_are_silent() {
+        let mut doc = serde_json::json!({"tracks":{"visual":[{"clips":[
+            {"kind":"video","src":"camera","gain":0},
+            {"kind":"video","src":"camera","gain":0}
+        ]}]}});
+        assert!(!video_audio_used(&doc, "camera"));
+        doc["tracks"]["visual"][0]["clips"][1]["gain"] = serde_json::json!(1);
+        assert!(video_audio_used(&doc, "camera"));
+        doc["tracks"]["visual"][0]["clips"][1] =
+            serde_json::json!({"kind":"motion","resources":{"video":"camera"}});
+        assert!(video_audio_used(&doc, "camera"));
     }
 }

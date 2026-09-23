@@ -604,21 +604,45 @@ fn decode_audio_corpus(asset: &BoundAsset) -> Result<DecodedAudioCorpus> {
     }
     let mut decoder =
         valle_media::codec::LibavAudioStream::open(&asset.path, 48_000, info.channels)?;
-    let mut samples = Vec::new();
+    // The digest prefix includes the final frame count. Spool PCM instead of retaining
+    // all samples (hundreds of MiB for an interview) while determining that count.
+    use sha2::{Digest, Sha256};
+    use std::io::{Read, Seek, SeekFrom, Write};
+    let mut pcm = tempfile::tempfile()?;
+    let mut sample_count = 0_i64;
     loop {
         let block = decoder.read(48_000)?;
         if block.samples.is_empty() {
             break;
         }
-        samples.extend_from_slice(&block.samples);
+        sample_count += i64::try_from(block.samples.len() / usize::from(info.channels))?;
+        let mut bytes = Vec::with_capacity(block.samples.len() * 4);
+        for sample in block.samples {
+            if !sample.is_finite() {
+                bail!("decoded PCM contains a non-finite sample");
+            }
+            bytes.extend_from_slice(&sample.to_le_bytes());
+        }
+        pcm.write_all(&bytes)?;
     }
-    let sample_count = i64::try_from(samples.len() / usize::from(info.channels))
-        .map_err(|_| anyhow!("decoded common-profile PCM exceeds the exact time domain"))?;
     if sample_count == 0 {
         bail!("decoded common-profile PCM must contain at least one sample");
     }
-    let digest = valle_engine::render::common_audio_pcm_digest(48_000, info.channels, &samples)
-        .map_err(|error| anyhow!("hash common-profile decoded PCM: {error}"))?;
+    let mut hasher = Sha256::new();
+    hasher.update(b"valle.audio/common@1/decoded-interleaved-f32le@1\0");
+    hasher.update(48_000_u32.to_le_bytes());
+    hasher.update(info.channels.to_le_bytes());
+    hasher.update((sample_count as u64).to_le_bytes());
+    pcm.seek(SeekFrom::Start(0))?;
+    let mut bytes = vec![0; 1024 * 1024];
+    loop {
+        let count = pcm.read(&mut bytes)?;
+        if count == 0 {
+            break;
+        }
+        hasher.update(&bytes[..count]);
+    }
+    let digest = ContentDigest::from_bytes(hasher.finalize().into());
     Ok(DecodedAudioCorpus {
         channels: info.channels,
         stream: info.stream,
@@ -645,6 +669,38 @@ fn entry_digest(entry: &ResourceEntryWire) -> &ContentDigest {
 mod tests {
     use super::*;
     use valle_engine::render::common_audio_pcm_digest;
+
+    #[test]
+    fn streamed_pcm_proof_matches_exact_integer_wav_samples() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let mut bytes = b"RIFF".to_vec();
+        bytes.extend_from_slice(&42_u32.to_le_bytes());
+        bytes.extend_from_slice(b"WAVEfmt ");
+        bytes.extend_from_slice(&16_u32.to_le_bytes());
+        bytes.extend_from_slice(&1_u16.to_le_bytes());
+        bytes.extend_from_slice(&1_u16.to_le_bytes());
+        bytes.extend_from_slice(&48_000_u32.to_le_bytes());
+        bytes.extend_from_slice(&96_000_u32.to_le_bytes());
+        bytes.extend_from_slice(&2_u16.to_le_bytes());
+        bytes.extend_from_slice(&16_u16.to_le_bytes());
+        bytes.extend_from_slice(b"data");
+        bytes.extend_from_slice(&6_u32.to_le_bytes());
+        for sample in [-32768_i16, 0, 32767] {
+            bytes.extend_from_slice(&sample.to_le_bytes());
+        }
+        std::fs::write(file.path(), &bytes).unwrap();
+        let corpus = decode_audio_corpus(&BoundAsset {
+            path: file.path().to_path_buf(),
+            hash: ContentDigest::of_bytes(&bytes),
+            bytes: Vec::new(),
+        })
+        .unwrap();
+        assert_eq!(corpus.sample_count, 3);
+        assert_eq!(
+            corpus.digest,
+            common_audio_pcm_digest(48_000, 1, &[-1.0, 0.0, 32767.0 / 32768.0]).unwrap()
+        );
+    }
 
     #[test]
     fn dependency_fonts_share_one_resource_and_preserve_distinct_faces() {

@@ -7,6 +7,7 @@ mod embedded {
     include!(concat!(env!("OUT_DIR"), "/embedded.rs"));
 }
 mod output;
+mod preview_store;
 mod timeline_file;
 mod webhost;
 pub mod webruntime;

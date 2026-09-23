@@ -147,7 +147,7 @@ pub(crate) fn run(json_output: bool, action: ProjectAction) -> Result<ExitCode> 
                     ),
                 }),
                 last_report: RwLock::new(None),
-                preview_files: Arc::new(RwLock::new(std::collections::BTreeMap::new())),
+                preview_files: Arc::new(Default::default()),
                 motion_preview: None,
             });
             let (server, addr) = crate::webhost::bind(port)?;

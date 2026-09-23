@@ -3,7 +3,6 @@ import { BrowserResourceCache } from "./resource-cache.ts";
 
 import {
   BrowserValleWebPlayer,
-  commonAudioPcmDigestHex,
   mixCommonAudioBlockPcm,
   type AudioBlockWire,
   type AudioEndpointWire,
@@ -180,24 +179,36 @@ test("slow preview follows the media clock and still presents the final frame", 
   expect(player.playing).toBe(false);
 });
 
-test("common audio decoded PCM digest matches the cross-platform byte domain", async () => {
-  const samples = Float32Array.from([0.1, 0.2]);
-  const buffer = {
-    sampleRate: 4,
-    numberOfChannels: 1,
-    length: 2,
-    getChannelData(channel: number) {
-      expect(channel).toBe(0);
-      return samples;
-    },
-  } as AudioBuffer;
-  expect(await commonAudioPcmDigestHex(buffer)).toBe(
-    "cfe5b3919c9c55851665cf86e0cc1c9409b64e94f9854e6ea8729ad2c9499960",
-  );
-});
-
 const LEFT_DIGEST = "1111111111111111111111111111111111111111111111111111111111111111";
 const RIGHT_DIGEST = "2222222222222222222222222222222222222222222222222222222222222222";
+
+test("preview uses native audio decoding without requiring identical PCM bytes", async () => {
+  const player = Object.create(BrowserValleWebPlayer.prototype) as any;
+  const encoded = Uint8Array.from([1, 2, 3]);
+  const decoded = { sampleRate: 48000, numberOfChannels: 2 };
+  let decodes = 0;
+  Object.assign(player, {
+    audioBuffers: new Map(),
+    assetByDigest: new Map([[LEFT_DIGEST, { id: "dialogue" }]]),
+    async fetchAssetBytes() { return encoded; },
+  });
+  const context = {
+    sampleRate: 48000,
+    async decodeAudioData(bytes: ArrayBuffer) {
+      decodes++;
+      expect(new Uint8Array(bytes)).toEqual(encoded);
+      expect(bytes).not.toBe(encoded.buffer); // Native decoding can detach its input.
+      return decoded;
+    },
+  } as unknown as BaseAudioContext;
+  expect(await player.audioBufferForDigest(context, `sha256:${LEFT_DIGEST}`, 2)).toBe(decoded);
+  expect(await player.audioBufferForDigest(context, `sha256:${LEFT_DIGEST}`, 2)).toBe(decoded);
+  expect(decodes).toBe(1);
+  await expect(player.audioBufferForDigest(context, `sha256:${LEFT_DIGEST}`, 1)).rejects.toThrow("channels; expected");
+  decoded.sampleRate = 44100;
+  player.audioBuffers.clear();
+  await expect(player.audioBufferForDigest(context, `sha256:${LEFT_DIGEST}`, 2)).rejects.toThrow("44100 Hz");
+});
 
 function pcmBuffer(channels: number[][]): AudioBuffer {
   const data = channels.map((channel) => Float32Array.from(channel));

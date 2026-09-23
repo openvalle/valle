@@ -85,7 +85,7 @@ pub fn run(action: MotionAction) -> Result<std::process::ExitCode> {
         } => studio(StudioRequest {
             input,
             fps,
-            preview_files: Arc::new(RwLock::new(BTreeMap::new())),
+            preview_files: Arc::new(Default::default()),
             asset_specs: assets,
             bindings,
             fonts: font,
@@ -226,7 +226,7 @@ fn render(
 struct StudioRequest {
     input: PathBuf,
     fps: Option<String>,
-    preview_files: Arc<RwLock<BTreeMap<String, Arc<[u8]>>>>,
+    preview_files: Arc<crate::preview_store::PreviewStore>,
     asset_specs: Vec<String>,
     bindings: MotionBindingArgs,
     fonts: Vec<PathBuf>,
@@ -549,13 +549,23 @@ fn studio_state_json_with_draft(
         }
     };
     // Serve the prepared bytes, including normalized environment maps, rather than mutable files.
-    for asset in prepared.assets.values() {
-        request
-            .preview_files
-            .write()
-            .map_err(|_| anyhow!("preview files poisoned"))?
-            .insert(asset.hash.to_string(), Arc::from(asset.bytes.clone()));
-    }
+    request
+        .preview_files
+        .files
+        .write()
+        .map_err(|_| anyhow!("preview files poisoned"))?
+        .replace(
+            prepared
+                .assets
+                .values()
+                .map(|asset| {
+                    (
+                        asset.hash.to_string(),
+                        crate::preview_store::PreviewFile::Bytes(Arc::from(asset.bytes.clone())),
+                    )
+                })
+                .collect(),
+        );
     let asset_urls = prepared
         .assets
         .iter()

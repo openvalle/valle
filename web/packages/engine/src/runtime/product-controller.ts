@@ -1,3 +1,4 @@
+import { MediaBlobCache } from "../media/media-blob-cache.ts";
 import { createMotionFontLoader, type MotionFontSource } from "../fonts.ts";
 import canvasKitPackage from "canvaskit-wasm/package.json";
 // Browser Product Compositor host.
@@ -553,8 +554,10 @@ export class BrowserValleWebPlayer {
   private readonly assetsById = new Map<string, AdmittedBrowserAsset>();
   private readonly assetByDigest = new Map<string, AdmittedBrowserAsset>();
   private readonly assetBytes = new Map<string, Promise<Uint8Array>>();
+  private readonly videoBlobs = new MediaBlobCache();
   private readonly scene3dResourceTasks = new Map<string, Promise<void>>();
   private readonly videoRings = new Map<string, DecoderRing>();
+  private readonly videoRingUsers = new Map<string, number>();
   private readonly lottie = new Map<string, LottieRuntime>();
   private readonly fontBytes = new Map<string, Uint8Array>();
   private readonly modelBytes = new Map<string, Uint8Array>();
@@ -1082,9 +1085,9 @@ export class BrowserValleWebPlayer {
     { height = 26, maxCount = 60 }: { height?: number; maxCount?: number } = {},
   ) {
     const asset = this.requireAsset(assetId, "video");
-    const bytes = await this.fetchAssetBytes(asset);
+    const blob = await this.videoBlobs.get(this.assetUrl(asset), contentDigestHex(asset.contentDigest, "video digest"));
     this.stats.videoThumbExtracts += 1;
-    return keyframeThumbnails({ buffer: Uint8Array.from(bytes).buffer, height, maxCount });
+    return keyframeThumbnails({ blob, height, maxCount });
   }
 
   async audioPeaks(assetId: string, { buckets = 2000 }: { buckets?: number } = {}) {
@@ -1158,6 +1161,8 @@ export class BrowserValleWebPlayer {
     this.videoRings.clear();
     this.lottie.clear();
     this.assetBytes.clear();
+    this.videoBlobs.clear();
+    this.audioBuffers.clear();
     this.fontBytes.clear();
     this.modelBytes.clear();
     this.environmentBytes.clear();
@@ -1309,6 +1314,7 @@ export class BrowserValleWebPlayer {
     this.videoRings.clear();
     this.lottie.clear();
     this.assetBytes.clear();
+    this.videoBlobs.clear();
     this.audioBuffers.clear();
     this.playbackFrame = null;
     this.hitRects = [];
@@ -1635,8 +1641,16 @@ export class BrowserValleWebPlayer {
     gpu: boolean,
   ): Promise<{ image: Image; texture: boolean; dispose: () => void }> {
     const started = performance.now();
-    const ring = await this.videoRing(asset);
-    const frame = await ring.frameAt(timeS);
+    this.videoRingUsers.set(asset.id, (this.videoRingUsers.get(asset.id) ?? 0) + 1);
+    let frame: VideoFrame;
+    try {
+      const ring = await this.videoRing(asset);
+      frame = await ring.frameAt(timeS);
+    } finally {
+      const users = (this.videoRingUsers.get(asset.id) ?? 1) - 1;
+      if (users) this.videoRingUsers.set(asset.id, users); else this.videoRingUsers.delete(asset.id);
+      this.trimVideoRings();
+    }
     this.stats.perfVideoDecodeMs += performance.now() - started;
     if (gpu) {
       const image = makeLazyVideoFrameImage(this.CanvasKit, frame, {
@@ -1666,11 +1680,25 @@ export class BrowserValleWebPlayer {
   private async videoRing(asset: AdmittedBrowserAsset): Promise<DecoderRing> {
     let ring = this.videoRings.get(asset.id);
     if (!ring) {
-      const bytes = await this.fetchAssetBytes(asset);
-      ring = createDecoderRing({ buffer: Uint8Array.from(bytes).buffer });
-      this.videoRings.set(asset.id, ring);
+      const blob = await this.videoBlobs.get(this.assetUrl(asset), contentDigestHex(asset.contentDigest, "video digest"));
+      if (this.closed) throw new Error("player closed during video load");
+      ring = this.videoRings.get(asset.id);
+      if (!ring) {
+        ring = createDecoderRing({ blob });
+        this.videoRings.set(asset.id, ring);
+      }
     }
+    this.videoRings.delete(asset.id);
+    this.videoRings.set(asset.id, ring);
     return ring;
+  }
+
+  private trimVideoRings(): void {
+    for (const [id, ring] of this.videoRings) {
+      if (this.videoRings.size <= 2) break;
+      if (this.videoRingUsers.has(id)) continue;
+      ring.close(); this.videoRings.delete(id);
+    }
   }
 
   private async lottieImage(asset: AdmittedBrowserAsset, timeS: number): Promise<Image> {
@@ -1847,33 +1875,30 @@ export class BrowserValleWebPlayer {
   private audioBufferForDigest(
     context: BaseAudioContext,
     declaredDigest: ContentDigestWire,
-    decodedPcmDigest: string,
     sourceChannels: 1 | 2,
   ): Promise<AudioBuffer> {
     const digest = contentDigestHex(declaredDigest, "audio resource digest");
-    const expectedPcm = contentDigestHex(decodedPcmDigest, "decoded PCM digest");
-    const key = `${digest}@${context.sampleRate}/${sourceChannels}/${expectedPcm}`;
+    const key = `${digest}@${context.sampleRate}/${sourceChannels}`;
     let promise = this.audioBuffers.get(key);
     if (!promise) {
       const asset = this.assetByDigest.get(digest);
       if (!asset) throw new Error(`compiled audio resource sha256:${digest} has no browser source`);
       promise = this.fetchAssetBytes(asset, digest)
         .then((bytes) => context.decodeAudioData(bytes.slice().buffer))
-        .then(async (buffer) => {
+        .then((buffer) => {
           if (buffer.sampleRate !== context.sampleRate || buffer.numberOfChannels !== sourceChannels) {
             throw new Error(
               `decoded audio sha256:${digest} is ${buffer.sampleRate} Hz/${buffer.numberOfChannels} channels; expected ${context.sampleRate} Hz/${sourceChannels}`,
             );
           }
-          const actualPcm = await commonAudioPcmDigestHex(buffer);
-          if (actualPcm !== expectedPcm) {
-            throw new Error(
-              `decoded audio sha256:${digest} PCM digest mismatch: expected ${expectedPcm}, got ${actualPcm}`,
-            );
-          }
           return buffer;
         });
       this.audioBuffers.set(key, promise);
+      void promise.catch(() => { if (this.audioBuffers.get(key) === promise) this.audioBuffers.delete(key); });
+      // Long files are decoded once, but retired sources must not accumulate across the timeline.
+      while (this.audioBuffers.size > 2) this.audioBuffers.delete(this.audioBuffers.keys().next().value!);
+    } else {
+      this.audioBuffers.delete(key); this.audioBuffers.set(key, promise);
     }
     return promise;
   }
@@ -1950,7 +1975,6 @@ export class BrowserValleWebPlayer {
         decoded.set(digest, await this.audioBufferForDigest(
           context,
           proof.declaredDigest,
-          proof.decodedPcmDigest,
           proof.sourceChannels,
         ));
       }));
@@ -2040,18 +2064,19 @@ export class BrowserValleWebPlayer {
 
   private async fetchAssetBytes(asset: AdmittedBrowserAsset, expectedDigest?: string): Promise<Uint8Array> {
     const url = this.assetUrl(asset);
-    let promise = this.assetBytes.get(url);
+    const expected = expectedDigest ?? contentDigestHex(asset.contentDigest, `asset '${asset.id}' digest`);
+    const key = `${expected}:${url}`;
+    let promise = this.assetBytes.get(key);
     if (!promise) {
       promise = fetchBytes(url);
-      this.assetBytes.set(url, promise);
+      this.assetBytes.set(key, promise);
+      void promise.catch(() => { if (this.assetBytes.get(key) === promise) this.assetBytes.delete(key); });
+      // Keep small shared resources, but do not retain every long encoded audio source.
+      void promise.then((bytes) => {
+        if (bytes.byteLength > 32 * 1024 * 1024 && this.assetBytes.get(key) === promise) this.assetBytes.delete(key);
+      }, () => {});
     }
-    const bytes = await promise;
-    const expected = expectedDigest ?? contentDigestHex(asset.contentDigest, `asset '${asset.id}' digest`);
-    if (expected) {
-      const actual = await sha256Hex(bytes);
-      if (actual !== expected) throw new Error(`asset '${asset.id}' digest mismatch: expected ${expected}, got ${actual}`);
-    }
-    return bytes;
+    return promise;
   }
 
   private assetUrl(asset: AdmittedBrowserAsset): string {
@@ -2402,44 +2427,6 @@ async function fetchBytes(url: string): Promise<Uint8Array> {
   const response = await fetch(url);
   if (!response.ok) throw new Error(`fetch ${url}: HTTP ${response.status}`);
   return new Uint8Array(await response.arrayBuffer());
-}
-
-async function sha256Hex(bytes: Uint8Array): Promise<string> {
-  const buffer = bytes.slice().buffer as ArrayBuffer;
-  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", buffer));
-  return [...digest].map((value) => value.toString(16).padStart(2, "0")).join("");
-}
-
-export async function commonAudioPcmDigestHex(buffer: AudioBuffer): Promise<string> {
-  const domain = new TextEncoder().encode("valle.audio/common@1/decoded-interleaved-f32le@1\0");
-  const headerBytes = 4 + 2 + 8;
-  const sampleBytes = buffer.length * buffer.numberOfChannels * 4;
-  if (!Number.isSafeInteger(sampleBytes)) {
-    throw new Error("decoded audio PCM exceeds the Web hashing range");
-  }
-  const bytes = new Uint8Array(domain.length + headerBytes + sampleBytes);
-  bytes.set(domain);
-  const view = new DataView(bytes.buffer);
-  let offset = domain.length;
-  view.setUint32(offset, buffer.sampleRate, true);
-  offset += 4;
-  view.setUint16(offset, buffer.numberOfChannels, true);
-  offset += 2;
-  view.setBigUint64(offset, BigInt(buffer.length), true);
-  offset += 8;
-  const channels = Array.from(
-    { length: buffer.numberOfChannels },
-    (_, channel) => buffer.getChannelData(channel),
-  );
-  for (let frame = 0; frame < buffer.length; frame += 1) {
-    for (const channel of channels) {
-      const sample = channel[frame]!;
-      if (!Number.isFinite(sample)) throw new Error("decoded audio PCM contains a non-finite sample");
-      view.setFloat32(offset, sample, true);
-      offset += 4;
-    }
-  }
-  return sha256Hex(bytes);
 }
 
 /**

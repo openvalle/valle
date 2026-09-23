@@ -1,4 +1,4 @@
-import { demux, type Mp4InputBuffer } from "./mp4-demux.ts";
+import { demux, demuxBlob, type DemuxResult, type Mp4InputBuffer } from "./mp4-demux.ts";
 import type { DemuxSample as ValleMp4Sample } from "./mp4-demux.ts";
 // Browser-resident streaming video decoder.
 //
@@ -36,9 +36,11 @@ export interface KeyframeThumbnail {
 
 export function createDecoderRing({
   buffer,
+  blob,
   lookahead = 8,
 }: {
-  buffer: Mp4InputBuffer;
+  buffer?: Mp4InputBuffer;
+  blob?: Blob;
   lookahead?: number;
 }): DecoderRing {
   if (!Number.isInteger(lookahead) || lookahead < 1) {
@@ -58,6 +60,7 @@ export function createDecoderRing({
   let ring: VideoFrame[] = []; // decoded VideoFrames, presentation-ordered, owned by the ring
   let decodeError: Error | null = null;
   let initPromise: Promise<void> | null = null;
+  let readSample: DemuxResult["readSample"];
   let queue: Promise<unknown> = Promise.resolve(); // serializes frameAt calls
 
   function onFrame(frame: VideoFrame): void {
@@ -78,7 +81,9 @@ export function createDecoderRing({
   }
 
   async function init(): Promise<void> {
-    const demuxed = await demux(buffer);
+    const demuxed = blob ? await demuxBlob(blob) : await demux(buffer!);
+    if (closed) throw new Error("decoder ring closed during initialization");
+    readSample = demuxed.readSample;
     samples = demuxed.samples;
     if (samples.length === 0) throw new Error("video track has no samples");
     order = samples
@@ -113,13 +118,14 @@ export function createDecoderRing({
     decoder.configure(decoderConfig);
   }
 
-  function feed(sample: ValleMp4Sample): void {
+  async function feed(sample: ValleMp4Sample): Promise<void> {
+    const data = readSample ? await readSample(sample) : sample.data;
     requireDecoder().decode(
       new EncodedVideoChunk({
         type: sample.is_sync ? "key" : "delta",
         timestamp: (sample.cts * 1_000_000) / sample.timescale,
         duration: (sample.duration * 1_000_000) / sample.timescale,
-        data: sample.data,
+        data,
       }),
     );
   }
@@ -183,7 +189,7 @@ export function createDecoderRing({
       if (decodeError) throw decodeError;
       if (closed) throw new Error("decoder ring closed during decode");
       if (cursor < samples.length) {
-        feed(samples[cursor]);
+        await feed(samples[cursor]);
         cursor += 1;
         if (cursor > target.decodeIndex || cursor % 16 === 0) await tick();
       } else {
@@ -218,6 +224,8 @@ export function createDecoderRing({
       closed = true;
       for (const frame of ring) frame.close();
       ring = [];
+      samples = []; order = []; syncBefore = []; readSample = undefined;
+      buffer = undefined; blob = undefined;
       if (decoder && decoder.state !== "closed") decoder.close();
     },
   };
@@ -235,14 +243,16 @@ export function createDecoderRing({
 // the first displayed frame.
 export async function keyframeThumbnails({
   buffer,
+  blob,
   height = 26,
   maxCount = 60,
 }: {
-  buffer: Mp4InputBuffer;
+  buffer?: Mp4InputBuffer;
+  blob?: Blob;
   height?: number;
   maxCount?: number;
 }): Promise<KeyframeThumbnail[]> {
-  const demuxed = await demux(buffer);
+  const demuxed = blob ? await demuxBlob(blob) : await demux(buffer!);
   const samples = demuxed.samples;
   if (samples.length === 0) throw new Error("video track has no samples");
   let baseTsUs = Infinity;
@@ -291,7 +301,7 @@ export async function keyframeThumbnails({
             type: "key",
             timestamp: (s.cts * 1_000_000) / s.timescale,
             duration: (s.duration * 1_000_000) / s.timescale,
-            data: s.data,
+            data: demuxed.readSample ? await demuxed.readSample(s) : s.data,
           }),
         );
       }

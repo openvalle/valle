@@ -29,8 +29,8 @@ pub struct StudioHost {
     /// Allowlisted public runtime URLs mapped to verified bytes or explicit local assets.
     pub runtime_files: BTreeMap<String, crate::webruntime::HostedFile>,
     pub assets_dir: Option<PathBuf>,
-    /// Immutable bytes retained for the lifetime of this local preview session.
-    pub preview_files: Arc<RwLock<BTreeMap<String, Arc<[u8]>>>>,
+    /// Immutable disk resources retained for the current and previous preview.
+    pub preview_files: Arc<crate::preview_store::PreviewStore>,
     pub motion_preview: Option<Box<dyn Fn(&str) -> Result<String> + Send + Sync>>,
     /// Contents of `/config.json`, replaced atomically before notifying SSE clients.
     pub config_json: Arc<RwLock<String>>,
@@ -564,12 +564,20 @@ fn handle_connection(stream: TcpStream, state: &Arc<StudioHost>) -> Result<()> {
     }
 
     if let Some(digest) = path.strip_prefix("/preview-assets/") {
-        let files = state
+        let file = state
             .preview_files
+            .files
             .read()
-            .map_err(|_| anyhow::anyhow!("preview files poisoned"))?;
-        return match files.get(digest) {
-            Some(bytes) => serve_bytes(&mut out, &headers, bytes, "application/octet-stream"),
+            .map_err(|_| anyhow::anyhow!("preview files poisoned"))?
+            .get(digest)
+            .cloned();
+        return match file {
+            Some(crate::preview_store::PreviewFile::Bytes(bytes)) => {
+                serve_bytes(&mut out, &headers, &bytes, "application/octet-stream")
+            }
+            Some(crate::preview_store::PreviewFile::File { path, _directory }) => {
+                serve_file(&mut out, &headers, &path, "application/octet-stream")
+            }
             None => write_simple(&mut out, 404, "Not Found", &[], b""),
         };
     }
@@ -870,6 +878,11 @@ fn prepare_project_preview(
     timeline: valle_timeline::Timeline,
     state: &StudioHost,
 ) -> Result<serde_json::Value> {
+    let mut media = state
+        .preview_files
+        .prepare
+        .lock()
+        .map_err(|_| anyhow::anyhow!("preview preparation poisoned"))?;
     let base = state
         .timeline_file
         .as_ref()
@@ -881,7 +894,7 @@ fn prepare_project_preview(
                 .map(|home| PathBuf::from(home).join(".valle"))
         })
         .unwrap_or_else(|| PathBuf::from("."));
-    let package = crate::cmd::timeline::prepare_timeline_package(timeline, &base)?;
+    let package = crate::cmd::timeline::prepare_timeline_preview(timeline, &base, &mut media)?;
     let manifest: serde_json::Value = serde_json::from_str(&package.resource_manifest_json)?;
     let assets = manifest["entries"]
         .as_object()
@@ -898,11 +911,10 @@ fn prepare_project_preview(
     {
         let mut files = state
             .preview_files
+            .files
             .write()
             .map_err(|_| anyhow::anyhow!("preview files poisoned"))?;
-        for (digest, bytes) in package.blobs {
-            files.entry(digest).or_insert_with(|| Arc::from(bytes));
-        }
+        files.replace(package.blobs);
     }
     Ok(serde_json::json!({
         "status": "ok",
@@ -1578,7 +1590,7 @@ mod tests {
                 auth,
             }),
             last_report: RwLock::new(None),
-            preview_files: Arc::new(RwLock::new(std::collections::BTreeMap::new())),
+            preview_files: Arc::new(Default::default()),
             motion_preview: None,
         });
         let events = state.sse.subscribe();
@@ -1692,7 +1704,7 @@ mod tests {
                 auth,
             }),
             last_report: RwLock::new(None),
-            preview_files: Arc::new(RwLock::new(std::collections::BTreeMap::new())),
+            preview_files: Arc::new(Default::default()),
             motion_preview: None,
         });
 
@@ -1770,7 +1782,7 @@ mod tests {
             timeline_file: None,
             project: None,
             last_report: RwLock::new(None),
-            preview_files: Arc::new(RwLock::new(std::collections::BTreeMap::new())),
+            preview_files: Arc::new(Default::default()),
             motion_preview: None,
         });
         let (listener, addr) = bind(0).unwrap();
@@ -1891,7 +1903,7 @@ mod tests {
             timeline_file: None,
             project: None,
             last_report: RwLock::new(None),
-            preview_files: Arc::new(RwLock::new(std::collections::BTreeMap::new())),
+            preview_files: Arc::new(Default::default()),
             motion_preview: None,
         });
         let (listener, addr) = bind(0).unwrap();
@@ -2033,7 +2045,7 @@ mod tests {
             timeline_file: None,
             project: None,
             last_report: RwLock::new(None),
-            preview_files: Arc::new(RwLock::new(std::collections::BTreeMap::new())),
+            preview_files: Arc::new(Default::default()),
             motion_preview: None,
         });
         let (listener, addr) = bind(0).unwrap();
@@ -2136,7 +2148,7 @@ mod tests {
             timeline_file: None,
             project: None,
             last_report: RwLock::new(None),
-            preview_files: Arc::new(RwLock::new(std::collections::BTreeMap::new())),
+            preview_files: Arc::new(Default::default()),
             motion_preview: None,
         });
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();

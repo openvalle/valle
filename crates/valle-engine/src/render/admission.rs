@@ -3358,6 +3358,10 @@ fn with_video_audio(
             match item {
                 VisualItem::Clip(clip) => {
                     if let VisualSource::Video(video) = &clip.source {
+                        if matches!(&video.gain, Some(Param::Constant(gain)) if gain.value == 0.0) {
+                            cursor = cursor.checked_add(clip.duration).ok()?;
+                            continue;
+                        }
                         let target = targets.get(video.resource.as_str()).copied();
                         let audio_target =
                             target.and_then(|target| video_audio_target(resources, target));

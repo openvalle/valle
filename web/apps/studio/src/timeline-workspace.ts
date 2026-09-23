@@ -469,6 +469,7 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
   async function seek(timeS: number): Promise<void> {
     if (previewAvailable) {
       await player.seek(timeS);
+      requiredElement("errbox").hidden = true;
       return;
     }
     editingTimeS = Math.max(0, Math.min(timeS, documentView.canvas.durationSeconds));
@@ -595,6 +596,7 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
   type Samples = { kind: "video"; frames: Awaited<ReturnType<Player["videoKeyframeThumbnails"]>> }
     | { kind: "audio"; peaks: Float32Array; durationS: number };
   const mediaSamples = new Map<string, Promise<Samples>>();
+  let mediaQueue: Promise<unknown> = Promise.resolve();
   function mediaFor(entry: ProjectedSequenceItem): MediaView | undefined {
     const kind = entry.band === "audio" && "type" in entry.item && entry.item.type === "clip" ? "audio" : sourceKind(entry.item) === "video" ? "video" : null;
     if (!kind || !previewAvailable) return undefined;
@@ -606,6 +608,15 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
   }
   async function paintTimelineMedia(model: TimelineViewModel): Promise<void> {
     await timelineView.updateComplete;
+    const keys = new Set(model.tracks.flatMap((track) => track.clips).flatMap(({ media }) => {
+      if (!media) return [];
+      const url = config.assets?.find((asset) => asset.id === media.assetId)?.url ?? media.assetId;
+      return [`${media.kind}:${url}`];
+    }));
+    for (const [key, samples] of mediaSamples) if (!keys.has(key)) {
+      mediaSamples.delete(key);
+      void samples.then((data) => { if (data.kind === "video") data.frames.forEach((frame) => frame.bitmap.close()); }, () => {});
+    }
     for (const clip of model.tracks.flatMap((track) => track.clips)) {
       const media = clip.media;
       if (!media) continue;
@@ -616,9 +627,13 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
       const key = `${media.kind}:${url}`;
       let samples = mediaSamples.get(key);
       if (!samples) {
-        samples = media.kind === "video"
+        samples = mediaQueue.then(() => {
+          if (mediaSamples.get(key) !== samples) throw new Error("thumbnail request superseded");
+          return media.kind === "video"
           ? player.videoKeyframeThumbnails(media.assetId, { height: 30, maxCount: 48 }).then((frames) => ({ kind: "video" as const, frames }))
           : player.audioPeaks(media.assetId).then((result) => ({ kind: "audio" as const, ...result }));
+        });
+        mediaQueue = samples.catch(() => {});
         mediaSamples.set(key, samples);
       }
       void samples.then((data) => {

@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { createFile } from "mp4box";
-import { demux } from "./mp4-demux.ts";
+import { demux, demuxBlob } from "./mp4-demux.ts";
 
 test("extracts all batches and preserves encoded bytes, decode times and presentation order", async () => {
   const file = createFile();
@@ -16,6 +16,13 @@ test("extracts all batches and preserves encoded bytes, decode times and present
     });
   }
   const result = await demux(file.getBuffer().buffer);
+  const seekable = await demuxBlob(new Blob([file.getBuffer().buffer]));
+  expect(seekable.samples).toHaveLength(result.samples.length);
+  expect(seekable.description).toEqual(result.description);
+  for (const index of [0, 42, 1004]) {
+    expect(await seekable.readSample!(seekable.samples[index]!)).toEqual(result.samples[index]!.data);
+    expect(seekable.samples[index]!.data.byteLength).toBe(0);
+  }
   expect(result.track.timescale).toBe(30);
   expect(result.description).toEqual(description);
   expect(result.samples).toHaveLength(1005);
