@@ -1,0 +1,97 @@
+name: Package Web engine SDK
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: package-web-engine-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  package:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    env:
+      CARGO_BUILD_JOBS: '2'
+      CARGO_NET_RETRY: '3'
+    steps:
+      - name: Set Bun cache directory
+        run: echo "BUN_INSTALL_CACHE_DIR=$RUNNER_TEMP/valle-bun-cache" >> "$GITHUB_ENV"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: web/package.json
+      - name: Cache build dependencies
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          key: web-engine-ubuntu-24.04-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml', 'web/bun.lock', 'web/package.json') }}
+          restore-keys: web-engine-ubuntu-24.04-${{ runner.arch }}-
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/debug
+            target/wasm32-unknown-unknown
+            target/tools
+            ${{ runner.temp }}/valle-bun-cache
+      - name: Install Web dependencies
+        working-directory: web
+        run: bun install --frozen-lockfile
+      - name: Build Web engine and SDK
+        working-directory: web
+        run: |
+          bun run build:engine
+          bun run build:sdk
+      - name: Verify SDK and generated contracts
+        working-directory: web
+        run: |
+          bun run typecheck
+          bun run verify:boundaries
+          bun test scripts/sdk-package.test.ts
+      - name: Pack and verify npm archive
+        working-directory: web/packages/engine/dist
+        run: |
+          package_dir="$GITHUB_WORKSPACE/target/package-web-engine"
+          mkdir -p "$package_dir"
+          archive="$(bun pm pack --destination "$package_dir" --quiet)"
+          test -f "$archive"
+          version="$(bun -p 'require("./package.json").version')"
+          test "$(basename "$archive")" = "valle-engine-${version}.tgz"
+          extracted="$(mktemp -d "$RUNNER_TEMP/valle-web-engine.XXXXXX")"
+          tar -xzf "$archive" -C "$extracted"
+          cmp package.json "$extracted/package/package.json"
+          for file in index.mjs compiler.mjs types/index.d.ts wasm/valle_engine.js wasm/valle_engine_bg.wasm workers/product-frame.js LICENSE NOTICE.txt README.md; do
+            test -f "$extracted/package/$file"
+          done
+          bun -e '
+            const root = process.argv[1];
+            const manifest = await Bun.file(`${root}/package.json`).json();
+            for (const [name, entry] of Object.entries(manifest.exports)) {
+              if (typeof entry !== "object" || entry === null) continue;
+              for (const [condition, file] of Object.entries(entry)) {
+                if (typeof file !== "string" || !await Bun.file(`${root}/${file}`).exists()) {
+                  throw new Error(`missing packed export ${name} ${condition}: ${file}`);
+                }
+              }
+            }
+          ' "$extracted/package"
+          (cd "$package_dir" && sha256sum "$(basename "$archive")" > "$(basename "$archive").sha256")
+          (cd "$package_dir" && sha256sum -c "$(basename "$archive").sha256")
+      - name: Upload SDK archive and checksum
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: valle-engine-${{ github.sha }}
+          path: |
+            target/package-web-engine/valle-engine-*.tgz
+            target/package-web-engine/valle-engine-*.tgz.sha256
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30

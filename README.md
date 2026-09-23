@@ -73,6 +73,10 @@ The macOS workflow requires `MACOS_CERT_P12_BASE64`, `MACOS_CERT_PASSWORD`, `MAC
 
 `valle licenses` (or `valle --json licenses`) displays embedded notices and versioned dependency source links. Sources are available separately; publish the corresponding Valle source commit before distributing a build. See [third-party acknowledgements](THIRD_PARTY.md#binary-distribution-notices).
 
+### Web engine SDK
+
+Run **Package Web engine SDK** under **Actions → Run workflow** to build the browser SDK on Linux and download `valle-engine-VERSION.tgz` with its `.sha256` checksum. The workflow checks the generated protocol, package entries, type declarations, WASM and worker before uploading. The npm archive contains the Engine WASM and worker, without Studio or CanvasKit WASM; it declares `canvaskit-wasm` as a dependency. See the [SDK guide](web/packages/engine/README.md). This workflow does not publish to npm.
+
 ## Use the CLI
 
 | Command | Capability |
