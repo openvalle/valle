@@ -551,6 +551,14 @@ target rectangle (the Timeline canvas unless the clip sets `size`). The default
 `data` is validated and bound before component preparation; clips with distinct
 data or resources produce distinct prepared instances.
 
+In Studio, selecting a Motion clip shows its instance overrides alongside the
+component defaults. Changing an override edits only that clip's author `props`;
+**Restore default** removes the override. Editing a component default or JSX
+source updates every instance that uses it after browser preparation. Timeline
+canvas and clip placement remain independent of the component's composition
+canvas. A broken source reports a preview diagnostic while the Timeline and code
+remain editable.
+
 For a component declaring `controls.data.rows`, a clip can bind the full
 prepared object inline:
 

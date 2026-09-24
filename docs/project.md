@@ -225,6 +225,14 @@ base-revision check. Opening a historical revision does not reset project histor
 The packaged CLI supplies the Web runtime; `--web-assets-dir PATH` is an explicit
 runtime override and must match the CLI's runtime contract.
 
+Project Studio uses the same Timeline, inspector, code editor and browser preview
+as file and standalone Motion sessions. Source changes save to the referenced
+files; arrangement and instance changes save as a complete author Timeline under
+the current project revision. A source write can succeed while the project save
+is rejected, in which case Studio keeps the unsaved arrangement for review.
+Older revisions preserve their saved Timeline and canonical projection; their
+external Motion source and media files are not versioned with the revision.
+
 ## Results and troubleshooting
 
 Use `--json` for one result or `--events` for progress and a final report. Studio

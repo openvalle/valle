@@ -84,6 +84,20 @@ pub fn compile_timeline_with_motion_sources(
     TimelineNormalizer::new(&timeline, &resolved_sources)?.compile(NormalizationInput { timeline })
 }
 
+/// Identity of one Motion instance's preparation inputs. Native and Web hosts use this
+/// same key when binding a compiled Artifact to the normalized Timeline resource.
+pub fn motion_instance_key(
+    locator: &str,
+    resources: &serde_json::Value,
+    data: &serde_json::Value,
+) -> String {
+    let inputs = serde_json::json!([locator, resources, data]);
+    let digest = ContentDigest::of_bytes(
+        &serde_json::to_vec(&inputs).expect("Motion instance inputs serialize"),
+    );
+    format!("motion-{}", &digest.as_hex()[..56])
+}
+
 fn bind_motion_instances(
     timeline: &mut timeline::TimelineWire,
     motion_sources: &mut BTreeMap<String, RationalTime>,
@@ -103,23 +117,19 @@ fn bind_motion_instances(
             let Some(locator) = original.get(component) else {
                 continue;
             };
-            let inputs = serde_json::json!([
+            let key = motion_instance_key(
                 locator,
-                if resources.is_empty() {
+                &if resources.is_empty() {
                     serde_json::Value::Null
                 } else {
                     serde_json::to_value(resources).expect("resource aliases serialize")
                 },
-                if data.is_empty() {
+                &if data.is_empty() {
                     serde_json::Value::Null
                 } else {
                     serde_json::to_value(data).expect("JSON data serializes")
                 },
-            ]);
-            let digest = ContentDigest::of_bytes(
-                &serde_json::to_vec(&inputs).expect("JSON inputs serialize"),
             );
-            let key = format!("motion-{}", &digest.as_hex()[..56]);
             if original.contains_key(&key) {
                 return Err(CompileTimelineError::InvalidResourceAlias {
                     alias: key,

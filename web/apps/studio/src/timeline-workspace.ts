@@ -1,5 +1,7 @@
 import { DraftPreview } from "./draft-preview.ts";
+import type { StudioSourceEditor } from "./source-editor.ts";
 import type { Timeline } from "valle-engine";
+import { createTimelineCompilerRuntime } from "valle-engine";
 import type { TimelineDocumentView } from "valle-engine";
 import type { VallePlayerElement, VallePlayerElementOptions } from "valle-engine/element";
 import type { TimelineDocument } from "valle-engine/internal";
@@ -8,13 +10,9 @@ import {
   projectMotionContextFromAdmittedPreview,
   type StudioHost,
   type TimelineContext,
+  type TimelinePreviewResult,
 } from "./host.ts";
 import type { GoodMotionContext } from "./motion-preview.ts";
-import type { ProjectMotionSession } from "./motion-workspace.ts";
-import {
-  preparedMotionProps,
-  type ProjectMotionEdit,
-} from "./project-motion-edit.ts";
 import type { ValleStudioApp } from "./studio-shell.ts";
 import type {
   InspectorSectionView,
@@ -32,18 +30,22 @@ import { TimelineEditQueue } from "./timeline-edit-queue.ts";
 import { TimelineSaveQueue } from "./timeline-save-queue.ts";
 import {
   deleteTimelineClip,
+  clearTimelineMotionProp,
   editTimelineClip,
   moveTimelineVisualClipBefore,
   setTimelineMotionProp,
   setTimelineMotionData,
+  setTimelineMotionResource,
   setTimelineClipDurationFrames,
   setTimelineSourceStartFrames,
   trimTimelineClipFrames,
+  timelineClipAddress,
 } from "./timeline-edit.ts";
 import { initializeTimelineWorkspaceRuntime } from "./timeline-workspace-runtime.ts";
 import {
   assertReloadedTimelineSave,
   captureTimelineSaveSnapshot,
+  reconcileLostProjectSave,
 } from "./timeline-save-snapshot.ts";
 import { hitAtDisplayPoint, topHitForClip } from "./timeline-selection.ts";
 import {
@@ -122,7 +124,16 @@ declare global {
 }
 
 export interface TimelineWorkspaceOptions {
-  openMotion?(session: ProjectMotionSession): Promise<void>;
+  sourceEditor?: StudioSourceEditor;
+  loadTimeline?: () => Promise<TimelineContext>;
+  preparePreview?: (timeline: Timeline) => Promise<TimelinePreviewResult>;
+  saveTimeline?: (edit: Parameters<NonNullable<StudioHost["saveTimeline"]>>[0]) => Promise<Awaited<ReturnType<NonNullable<StudioHost["saveTimeline"]>>>>;
+  prepareTimelineSave?: () => Promise<boolean>;
+  beforeReload?: () => Promise<void>;
+  motionInstance?: (clipPath: string) => {
+    artifact: Record<string, unknown>;
+    sourceMap: Record<string, unknown>;
+  } | null;
 }
 
 function requiredElement<T extends HTMLElement = HTMLElement>(id: string): T {
@@ -137,6 +148,15 @@ function errorText(error: unknown): string {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function displayControlValue(value: unknown): string | number | boolean | null {
+  const raw = isRecord(value) && "value" in value ? value.value : value;
+  if (typeof raw === "string" || typeof raw === "number" || typeof raw === "boolean") return raw;
+  if (Array.isArray(raw) && raw.length >= 3 && raw.every((channel) => typeof channel === "number")) {
+    return `#${raw.slice(0, 3).map((channel) => Math.round(channel).toString(16).padStart(2, "0")).join("")}`;
+  }
+  return null;
 }
 
 function isMotionProjection(value: unknown): value is MotionProjection {
@@ -218,12 +238,14 @@ function constantVec2(
 }
 
 async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
+  const sourceEditor = options.sourceEditor;
   const studioHost: StudioHost | undefined = globalThis.valleStudioHost;
-  if (!studioHost?.loadTimeline) throw new Error("Studio Timeline host is unavailable");
-  const loadTimeline = studioHost.loadTimeline.bind(studioHost);
-  const saveTimeline = studioHost.saveTimeline?.bind(studioHost);
+  if (!studioHost) throw new Error("Studio host is unavailable");
+  const configuredLoadTimeline = options.loadTimeline ?? studioHost.loadTimeline?.bind(studioHost);
+  if (!configuredLoadTimeline) throw new Error("Studio Timeline host is unavailable");
+  const loadTimeline: () => Promise<TimelineContext> = configuredLoadTimeline;
+  const saveTimeline = options.saveTimeline ?? studioHost.saveTimeline?.bind(studioHost);
   const boot = studioHost.boot;
-  if (boot.session.kind === "motion-file") throw new Error("Motion session cannot open Timeline workspace");
 
   const shell = requiredElement<ValleStudioApp>("studioShell");
   const transport = requiredElement<StudioTransport>("studioTransport");
@@ -232,7 +254,6 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
   const projectControls = requiredElement<StudioProjectControls>("projectControls");
   const player = requiredElement<VallePlayerElement>("studioPlayer");
   const inspectorBody = requiredElement<HTMLElement>("inspectorBody");
-  const motionWorkspaceEl = requiredElement<HTMLElement>("motionWorkspace");
   const timelinePane = requiredElement<HTMLElement>("timelinePane");
   const zoomInput = requiredElement<HTMLInputElement>("timelineZoom");
   await Promise.all([
@@ -243,7 +264,6 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
     player.updateComplete,
   ]);
   inspectorBody.hidden = false;
-  motionWorkspaceEl.hidden = true;
   timelinePane.hidden = false;
   shell.dispatchIntent({ type: "panel", inspectorVisible: true });
   shell.restorePanelPrefs();
@@ -253,8 +273,11 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
   let motionProjection: MotionProjection | null = isMotionProjection(config.motion)
     ? structuredClone(config.motion)
     : null;
+  let motionInstances = new Map((config.motionInstances ?? []).map((instance) => [instance.clipPath, instance]));
   let baseRevision = config.timelineRevision.revision;
+  let confirmedDependencies = config.inputDependencies ? { ...config.inputDependencies } : null;
   let selectedItemId: string | null = shell.shellState.selectedClipId;
+  let sourceCompiler: ReturnType<typeof createTimelineCompilerRuntime> | null = null;
   let dirty = shell.shellState.dirty;
   let savedSnapshotJson = JSON.stringify(workingCopy);
   let saving = false;
@@ -265,8 +288,10 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
   let sequenceDragPath: string | null = null;
   let timelineTrim: TimelineTrimState | null = null;
   const editQueue = new TimelineEditQueue();
-  const canSaveTimeline = boot.capabilities.saveTimeline;
-  const storageKind = boot.session.kind === "timeline-file" ? "file" : "project";
+  const canSaveTimeline = boot.capabilities.saveTimeline || Boolean(options.saveTimeline);
+  let forceConversion = false;
+  const storageKind = boot.session.kind === "timeline-file" ? "file"
+    : boot.session.kind === "motion-file" ? "motion" : "project";
   const canvas = workingCopy.canvas;
   player.style.aspectRatio = `${canvas.width} / ${canvas.height}`;
 
@@ -274,12 +299,18 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
   const redoStack: string[] = [];
   let restoringHistory = false;
   let historyTransaction: string | null = null;
+  let sourceHistoryTimer: ReturnType<typeof setTimeout> | null = null;
 
   function snapshotJson(): string {
-    return JSON.stringify(workingCopy);
+    return JSON.stringify({ timeline: workingCopy, sources: sourceEditor?.snapshot() ?? {} });
   }
 
   function beginHistory(): void {
+    if (sourceHistoryTimer !== null) {
+      clearTimeout(sourceHistoryTimer);
+      sourceHistoryTimer = null;
+      commitHistory();
+    }
     if (restoringHistory || historyTransaction !== null) return;
     historyTransaction = snapshotJson();
   }
@@ -307,10 +338,17 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
   function restoreHistory(nextJson: string): void {
     restoringHistory = true;
     try {
-      const next = JSON.parse(nextJson) as Timeline;
-      const normalized = normalizeTimeline(next);
-      const compiled = compileTimeline(normalized);
+      const next = JSON.parse(nextJson) as { timeline: Timeline; sources: Record<string, string> };
+      const normalized = normalizeTimeline(next.timeline);
+      let compiled = compiledCopy;
+      try {
+        compiled = compileTimeline(normalized);
+      } catch (error) {
+        if (!options.preparePreview || !(error instanceof Error)
+          || !error.message.includes("needs its composition duration resolved")) throw error;
+      }
       workingCopy = structuredClone(normalized);
+      sourceEditor?.restore(next.sources);
       compiledCopy = compiled;
       documentView = compiled.view;
       fps = documentView.canvas.framesPerSecond;
@@ -320,7 +358,11 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
         : null;
       markDirty();
       renderWorkingCopy();
-      scheduleDraftPreview();
+      if (sourceEditor?.dirty && !options.preparePreview) {
+        shell.dispatchIntent({ type: "preview-status", status: "unavailable", message: "Source text is not reflected in this preview" });
+      } else {
+        scheduleDraftPreview();
+      }
       shell.dispatchEvent(new CustomEvent("studio-draft-updated"));
     } finally {
       restoringHistory = false;
@@ -329,6 +371,11 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
   }
 
   function undoHistory(): void {
+    if (sourceHistoryTimer !== null) {
+      clearTimeout(sourceHistoryTimer);
+      sourceHistoryTimer = null;
+      commitHistory();
+    }
     if (!historyStack.length) return;
     const current = snapshotJson();
     const previous = historyStack.pop()!;
@@ -337,6 +384,11 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
   }
 
   function redoHistory(): void {
+    if (sourceHistoryTimer !== null) {
+      clearTimeout(sourceHistoryTimer);
+      sourceHistoryTimer = null;
+      commitHistory();
+    }
     if (!redoStack.length) return;
     const current = snapshotJson();
     const next = redoStack.pop()!;
@@ -350,25 +402,18 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
     else redoHistory();
   });
 
-  shell.addEventListener("studio-return-timeline", () => {
-    // Timeline is already the active workspace in this module.
-  });
 
   document.getElementById("fitTimeline")?.addEventListener("click", () => {
-    if (shell.workspace.kind !== "timeline") return;
     setTimelineZoom(1);
     requiredElement<HTMLElement>("timelineScroll").scrollLeft = 0;
   });
   document.getElementById("zoomIn")?.addEventListener("click", () => {
-    if (shell.workspace.kind !== "timeline") return;
     setTimelineZoom(zoomScale + 0.25);
   });
   document.getElementById("zoomOut")?.addEventListener("click", () => {
-    if (shell.workspace.kind !== "timeline") return;
     setTimelineZoom(zoomScale - 0.25);
   });
   zoomInput.addEventListener("input", () => {
-    if (shell.workspace.kind !== "timeline") return;
     setTimelineZoom(Number(zoomInput.value));
   });
 
@@ -409,35 +454,90 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
   const timelineTimeFromFrames = workspaceRuntime.timelineTimeFromFrames;
   const timelineSourceTimeDeltaFromFrames = workspaceRuntime.timelineSourceTimeDeltaFromFrames;
   let compiledCopy = workspaceRuntime.compiledTimeline;
+  if (boot.session.kind === "motion-file" && !selectedItemId) {
+    const first = compiledCopy.timeline.document.visual.tracks
+      .flatMap((track) => track.items).find((item) => item.type === "clip" && item.source.type === "motion");
+    selectedItemId = first?.id ?? null;
+  }
   let playerLoaded = workspaceRuntime.previewAvailable;
   let previewAvailable = workspaceRuntime.previewAvailable;
   let rendererMessage: string | null = workspaceRuntime.rendererMessage;
   let editError: string | null = null;
   if (!previewAvailable) player.loadingLabel = "Preparing preview…";
 
-  const preparePreview = studioHost.prepareTimelinePreview?.bind(studioHost);
-  const draftPreview = new DraftPreview<Timeline, Awaited<ReturnType<NonNullable<StudioHost["prepareTimelinePreview"]>>>>({
+  const preparePreview = options.preparePreview;
+  const measureInteraction = new URLSearchParams(location.search).has("perf");
+  let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  let heartbeatFinishTimer: ReturnType<typeof setTimeout> | null = null;
+  let heartbeatLast = 0;
+  let maxHeartbeatGapMs = 0;
+  function startHeartbeat(): void {
+    if (heartbeatFinishTimer !== null) {
+      clearTimeout(heartbeatFinishTimer);
+      heartbeatFinishTimer = null;
+    }
+    if (!measureInteraction || heartbeatTimer !== null) return;
+    heartbeatLast = performance.now();
+    maxHeartbeatGapMs = 0;
+    heartbeatTimer = setInterval(() => {
+      const now = performance.now();
+      maxHeartbeatGapMs = Math.max(maxHeartbeatGapMs, now - heartbeatLast - 16);
+      heartbeatLast = now;
+    }, 16);
+  }
+  function finishHeartbeat(): void {
+    if (heartbeatTimer === null || heartbeatFinishTimer !== null) return;
+    heartbeatFinishTimer = setTimeout(() => {
+      heartbeatFinishTimer = null;
+      if (heartbeatTimer === null) return;
+      maxHeartbeatGapMs = Math.max(maxHeartbeatGapMs, performance.now() - heartbeatLast - 16);
+      shell.dataset.previewMainThreadGapMs = String(maxHeartbeatGapMs);
+      clearInterval(heartbeatTimer);
+      heartbeatTimer = null;
+    }, 0);
+  }
+  const draftPreview = new DraftPreview<Timeline, TimelinePreviewResult>({
     prepare: (draft) => {
       if (!preparePreview) throw new Error("Draft preview is unavailable for this session");
-      return preparePreview({ timeline: draft });
+      return preparePreview(draft);
     },
     apply: async (result, draft, isCurrent) => {
       if (result.status === "error") throw new Error(result.diagnostics.map((item) => item.message).join("\n"));
-      const next: StudioConfig = { ...config, timeline: draft, timelineJson: JSON.stringify(draft),
-        render: result.render, assets: result.assets as StudioConfig["assets"], motion: result.motion };
+      const nextAuthor = result.generatedWrapper ? result.timeline : draft;
+      const next: StudioConfig = { ...config, timeline: nextAuthor, timelineJson: JSON.stringify(nextAuthor),
+        render: result.render, assets: result.assets as StudioConfig["assets"], motion: result.motion,
+        motionSourceDurations: result.motionSourceDurations ?? config.motionSourceDurations };
       if (!await replacePreview(next, isCurrent) || !isCurrent()) return;
       config = next;
+      if (result.motionSourceDurations) workspaceRuntime.setMotionSourceDurations(result.motionSourceDurations);
+      if (JSON.stringify(workingCopy) === JSON.stringify(draft)) {
+        if (result.generatedWrapper) workingCopy = structuredClone(nextAuthor);
+        compiledCopy = compileTimeline(workingCopy);
+        documentView = compiledCopy.view;
+        fps = documentView.canvas.framesPerSecond;
+        if (result.generatedWrapper) savedSnapshotJson = JSON.stringify(workingCopy);
+        renderWorkingCopy();
+      }
+      confirmedDependencies = { ...(result.inputDependencies ?? {}) };
       motionProjection = isMotionProjection(result.motion) ? structuredClone(result.motion) : null;
+      if (result.motionInstances) {
+        motionInstances = new Map(result.motionInstances.map((instance) => [instance.clipPath, instance]));
+      }
       syncTransport();
-      if (shell.workspace.kind === "timeline") renderTimeline();
+      renderTimeline();
       shell.dispatchEvent(new CustomEvent("studio-draft-updated"));
     },
-    updating: () => shell.dispatchIntent({ type: "preview-status", status: "updating", message: null }),
+    updating: () => {
+      startHeartbeat();
+      shell.dispatchIntent({ type: "preview-status", status: "updating", message: null });
+    },
     failed: (error) => {
+      finishHeartbeat();
       rendererMessage = error instanceof Error ? error.message : String(error);
       shell.dispatchIntent({ type: "preview-status", status: "error", message: rendererMessage });
     },
     ready: () => {
+      finishHeartbeat();
       rendererMessage = null;
       requiredElement("errbox").hidden = true;
       shell.dispatchIntent({ type: "preview-status", status: "ready", message: null });
@@ -475,21 +575,49 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
     editingTimeS = Math.max(0, Math.min(timeS, documentView.canvas.durationSeconds));
   }
 
+  function recordPreviewTimings(workspaceReplaceMs?: number): void {
+    const latestMark = (name: string): unknown =>
+      (performance.getEntriesByName(name, "mark").at(-1) as PerformanceMark | undefined)?.detail;
+    shell.dataset.previewTimings = JSON.stringify({
+      compile: latestMark("valle-studio-compile"),
+      packageStage: latestMark("valle-player-package-stage"),
+      firstFrame: latestMark("valle-player-first-frame"),
+      playerLoad: latestMark("valle-studio-player-load"),
+      ...(workspaceReplaceMs === undefined ? {} : { workspaceReplaceMs }),
+      marks: performance.getEntriesByType("mark")
+        .filter((entry) => entry.name.startsWith("valle-"))
+        .slice(-40).map((entry) => ({ name: entry.name, atMs: entry.startTime,
+          detail: (entry as PerformanceMark).detail })),
+    });
+  }
+
   async function replacePreview(next: StudioConfig, isCurrent: () => boolean = () => true): Promise<boolean> {
     const replacement = fixedPackageReplacement(next);
     if (!replacement) return false;
+    const replaceStarted = performance.now();
     if (playerLoaded) {
       await player.replaceRenderPackage({ ...replacement, isCurrent });
     } else {
+      const loadStarted = performance.now();
       await player.load({ ...replacement, runtimeAssets: next.runtimeAssets, runtimeBaseUrl: next.runtimeBaseUrl ?? location.href });
+      performance.mark("valle-studio-player-load", { detail: {
+        durationMs: performance.now() - loadStarted,
+      } });
       playerLoaded = true;
-      if (isCurrent()) await player.seek(editingTimeS);
+      if (isCurrent()) {
+        const frameStarted = performance.now();
+        await player.seek(editingTimeS);
+        performance.mark("valle-player-first-frame", { detail: {
+          mode: "initial", durationMs: performance.now() - frameStarted,
+        } });
+      }
     }
     if (!isCurrent()) return false;
     previewAvailable = true;
     transport.disabled = false;
     player.setMuted(transport.muted);
     globalThis.valleStudioPlayer = player;
+    recordPreviewTimings(performance.now() - replaceStarted);
     return true;
   }
 
@@ -504,18 +632,18 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
   }
 
   function renderMeta(): void {
-    if (shell.workspace.kind === "timeline") {
-      shell.style.setProperty("--canvas-width", `${workingCopy.canvas.width}px`);
-      shell.style.setProperty("--canvas-height", `${workingCopy.canvas.height}px`);
-      shell.style.setProperty("--canvas-aspect", String(workingCopy.canvas.width / workingCopy.canvas.height));
-    }
+    shell.style.setProperty("--canvas-width", `${workingCopy.canvas.width}px`);
+    shell.style.setProperty("--canvas-height", `${workingCopy.canvas.height}px`);
+    shell.style.setProperty("--canvas-aspect", String(workingCopy.canvas.width / workingCopy.canvas.height));
     document.getElementById("stageMeta")!.textContent = stageMetaText();
     document.getElementById("trackCount")!.textContent = `${countTracks()} tracks`;
     document.getElementById("timelineSelection")!.textContent = selectedItemId
       ? `Selected · ${selectedItemId}`
       : "";
     document.getElementById("statusbarRight")!.textContent = canSaveTimeline
-      ? storageKind === "file" ? "Save writes the opened JSON file" : `Revision ${baseRevision}`
+      ? storageKind === "file" ? "Save writes the opened JSON file"
+        : storageKind === "motion" ? "Source file · Save as Timeline for arrangement edits"
+          : `Revision ${baseRevision}`
       : "Read-only preview session";
     projectControls.sync({ visible: canSaveTimeline, dirty, saving, conflictMessage });
     shell.dispatchIntent({ type: "dirty", value: dirty });
@@ -523,10 +651,32 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
   }
 
   function markDirty(): void {
-    dirty = JSON.stringify(workingCopy) !== savedSnapshotJson;
+    dirty = JSON.stringify(workingCopy) !== savedSnapshotJson || Boolean(sourceEditor?.dirty);
     shell.dispatchIntent({ type: "dirty", value: dirty });
     renderMeta();
   }
+
+  sourceEditor?.addEventListener("before-edit", () => {
+    if (sourceHistoryTimer === null) beginHistory();
+    else clearTimeout(sourceHistoryTimer);
+  });
+  sourceEditor?.addEventListener("edited", () => {
+    sourceHistoryTimer = setTimeout(() => {
+      sourceHistoryTimer = null;
+      commitHistory();
+    }, 500);
+    markDirty();
+    saveQueue.noteEdit();
+    if (options.preparePreview) scheduleDraftPreview();
+    else shell.dispatchIntent({
+      type: "preview-status",
+      status: "unavailable",
+      message: "Unsaved source changes are not reflected in this preview",
+    });
+  });
+  sourceEditor?.addEventListener("saved", () => markDirty());
+  sourceEditor?.addEventListener("reloaded", () => { markDirty(); if (options.preparePreview) scheduleDraftPreview(); });
+  sourceEditor?.addEventListener("reconciled", () => { markDirty(); if (options.preparePreview) scheduleDraftPreview(); });
 
   function setConflict(message: string | null): void {
     conflictMessage = message;
@@ -573,7 +723,7 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
           title: durationBearing
             ? `${entry.item.id} · ${formatSeconds(entry.startSeconds)} · ${entry.item.duration}`
             : `${entry.item.id} · cut ${formatSeconds(entry.startSeconds)} · nominal ${entry.item.duration}`,
-          label: itemLabel(entry.item),
+          label: projectedLabel(entry),
           selected: selectedItemId === entry.item.id,
           timingEditable: durationBearing && entry.timelinePath !== null,
           readOnly: entry.timelinePath === null,
@@ -637,7 +787,7 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
         mediaSamples.set(key, samples);
       }
       void samples.then((data) => {
-        if (!canvas.isConnected || shell.workspace.kind !== "timeline") return;
+        if (!canvas.isConnected) return;
         const width = Math.max(1, Math.ceil(clip.widthPx)), height = 28;
         canvas.width = width; canvas.height = height;
         const drawing = canvas.getContext("2d");
@@ -668,7 +818,12 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
       });
     }
   }
-  window.addEventListener("beforeunload", () => { for (const samples of mediaSamples.values()) void samples.then((data) => { if (data.kind === "video") data.frames.forEach((frame) => frame.bitmap.close()); }).catch(() => {}); });
+  window.addEventListener("pagehide", (event) => {
+    if (event.persisted) return;
+    for (const samples of mediaSamples.values()) void samples.then((data) => {
+      if (data.kind === "video") data.frames.forEach((frame) => frame.bitmap.close());
+    }).catch(() => {});
+  });
 
   function renderTimeline(): void {
     const model = sequenceView();
@@ -688,6 +843,45 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
     return selectedItemId
       ? findProjectedItem(compiledCopy.timeline, documentView, selectedItemId)
       : null;
+  }
+
+  function projectedLabel(projected: ProjectedSequenceItem): string {
+    if (sourceKind(projected.item) === "motion" && projected.timelinePath) {
+      const address = timelineClipAddress(projected.timelinePath);
+      const clip = address?.band === "visual"
+        ? workingCopy.tracks.visual?.[address.trackIndex]?.clips[address.clipIndex] : null;
+      if (clip?.kind === "motion") {
+        const locator = workingCopy.resources?.[clip.component] ?? clip.component;
+        return locator.split(/[\\/]/).pop() || locator;
+      }
+    }
+    return itemLabel(projected.item);
+  }
+
+  function selectedMotionAuthoring(projected: ProjectedSequenceItem): {
+    artifact: Record<string, unknown>;
+    sourceMap: Record<string, unknown>;
+  } | null {
+    if (!projected.timelinePath || sourceKind(projected.item) !== "motion") return null;
+    const fromBrowser = options.motionInstance?.(projected.timelinePath);
+    const prepared = motionInstances.get(projected.timelinePath) ?? fromBrowser;
+    if (prepared) return prepared;
+    if (!motionProjection || !previewAvailable) return null;
+    try {
+      const context = currentMotionContext(projected.item.id);
+      return { artifact: context.artifact as unknown as Record<string, unknown>,
+        sourceMap: context.sourceMap as unknown as Record<string, unknown> };
+    } catch { return null; }
+  }
+
+  function motionSourcePath(projected: ProjectedSequenceItem, composition = false): string | null {
+    const info = selectedMotionAuthoring(projected);
+    if (!info || !sourceEditor) return null;
+    const sourceMap = info.sourceMap;
+    const relative = composition ? sourceMap.entry : sourceMap.controlsSourcePath ?? sourceMap.entry;
+    if (typeof relative !== "string") return null;
+    try { return sourceEditor.resolvePath(relative); }
+    catch { return null; }
   }
 
   function renderInspector(): void {
@@ -813,8 +1007,90 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
       } else {
         rows.push({ kind: "value", label: "Rotation", value: "Curve-driven · read only" });
       }
-      if (visual.source.type === "motion") motionSource = visual.source.component;
+      if (visual.source.type === "motion") motionSource = projectedLabel(projected);
       sections.push({ title: "Appearance", rows });
+    }
+    if (visual?.source.type === "motion" && projected.timelinePath) {
+      const info = selectedMotionAuthoring(projected);
+      const address = timelineClipAddress(projected.timelinePath);
+      const authoredClip = address?.band === "visual"
+        ? workingCopy.tracks.visual?.[address.trackIndex]?.clips[address.clipIndex] : null;
+      const overrides = authoredClip?.kind === "motion" ? authoredClip.props ?? {} : {};
+      const controls = isRecord(info?.artifact.controls) ? info.artifact.controls : {};
+      const declared = isRecord(controls.props) ? controls.props : {};
+      const componentRows: InspectorSectionView["rows"][number][] = [];
+      const instanceRows: InspectorSectionView["rows"][number][] = [];
+      for (const [name, raw] of Object.entries(declared)) {
+        const schema = isRecord(raw) ? raw : {};
+        const control = isRecord(schema.control) ? schema.control : {};
+        const kind = String(control.kind ?? "");
+        const defaultValue = displayControlValue(schema.default);
+        const hasOverride = Object.hasOwn(overrides, name);
+        const overrideValue = hasOverride ? displayControlValue(overrides[name]) : null;
+        const fieldKind = kind === "number" ? "number" : kind === "bool" ? "checkbox"
+          : kind === "select" ? "select" : kind === "color" ? "color" : "textarea";
+        const common = {
+          kind: fieldKind, label: name, min: typeof control.min === "number" ? control.min : undefined,
+          max: typeof control.max === "number" ? control.max : undefined,
+          step: typeof control.step === "number" ? control.step : undefined,
+          values: Array.isArray(control.values) ? control.values.map(String) : undefined,
+        } as const;
+        if (defaultValue !== null) {
+          componentRows.push({ ...common, key: `component:default:${name}`, value: defaultValue,
+            readOnly: !motionSourcePath(projected) || shell.shellState.previewStatus === "error" });
+        } else componentRows.push({ kind: "value", label: name, value: "Required or computed · edit source" });
+        if (hasOverride && overrideValue !== null) {
+          instanceRows.push({ ...common, key: `instance:prop:${name}`, value: overrideValue });
+          instanceRows.push({ kind: "action", key: `instance:reset:${name}`, label: `Restore ${name} default` });
+        } else if (defaultValue !== null) {
+          if (boot.session.kind === "motion-file") {
+            instanceRows.push({ kind: "value", label: name, value: `${String(defaultValue)} · component default` });
+          } else {
+            instanceRows.push({ ...common, key: `instance:prop:${name}`, label: `${name} · default`, value: defaultValue });
+          }
+        }
+      }
+      if (boot.session.kind === "motion-file") {
+        const composition = isRecord(info?.artifact.composition) ? info.artifact.composition : {};
+        const sourceDuration = typeof composition.duration === "string"
+          ? composition.duration.split("/").map(Number).reduce((a, b) => a / b)
+          : Number(composition.duration);
+        const compositionRows: InspectorSectionView["rows"][number][] = [
+          { kind: "number", key: "component:composition:width", label: "Canvas width",
+            value: Number(composition.width ?? workingCopy.canvas.width), min: 1, step: 1 },
+          { kind: "number", key: "component:composition:height", label: "Canvas height",
+            value: Number(composition.height ?? workingCopy.canvas.height), min: 1, step: 1 },
+          { kind: "number", key: "component:composition:duration", label: "Source duration",
+            value: Number.isFinite(sourceDuration) ? sourceDuration : authoredClip?.duration ?? 0,
+            min: 0.001, step: 0.01 },
+        ];
+        sections.push({ title: "Composition", rows: compositionRows });
+      }
+      if (componentRows.length) sections.push({ title: "Component defaults", rows: componentRows });
+      if (instanceRows.length) sections.push({ title: "Instance overrides", rows: instanceRows });
+      if (authoredClip?.kind === "motion") {
+        const externalDataPath = boot.session.kind === "motion-file"
+          ? boot.session.authorInputs?.dataPath : undefined;
+        sections.push({ title: "Data", rows: externalDataPath
+          ? [
+              { kind: "value", label: "Source", value: externalDataPath },
+              { kind: "action", key: "data:open-source", label: "Edit data file" },
+              { kind: "value", label: "Timeline conversion", value: "Current data is copied into the clip" },
+            ]
+          : [{ kind: "textarea", key: "data:inline", label: "Clip JSON",
+              value: JSON.stringify(authoredClip.data ?? {}, null, 2) }] });
+        const componentAliases = new Set((workingCopy.tracks.visual ?? [])
+          .flatMap((track) => track.clips)
+          .filter((clip) => clip.kind === "motion")
+          .map((clip) => clip.component));
+        const aliases = Object.keys(workingCopy.resources ?? {})
+          .filter((alias) => !componentAliases.has(alias));
+        const bindings = Object.entries(authoredClip.resources ?? {});
+        if (bindings.length) sections.push({ title: "Resources", rows: bindings.map(([slot, alias]) =>
+          aliases.length > 0
+            ? { kind: "select" as const, key: `resource:${slot}`, label: slot, value: alias, values: aliases }
+            : { kind: "value" as const, label: slot, value: alias }) });
+      }
     }
     const audio = audioClip(item);
     if (audio) {
@@ -857,7 +1133,7 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
       clipId: item.id,
       kindLabel: kind,
       kindClass,
-      title: itemLabel(item),
+      title: projectedLabel(projected),
       subtitle: item.id,
       sections,
       rawJson: JSON.stringify(item, null, 2),
@@ -871,14 +1147,13 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
     selectedItemId = itemId && findProjectedItem(compiledCopy.timeline, documentView, itemId)
       ? itemId
       : null;
-    shell.dispatchIntent({ type: "select", clipId: selectedItemId, canOpenMotion: Boolean(selectedProjection() && sourceKind(selectedProjection()!.item) === "motion") });
+    shell.dispatchIntent({ type: "select", clipId: selectedItemId });
     renderTimeline();
     renderInspector();
     positionSelectionBox();
   }
 
   function renderWorkingCopy(): void {
-    if (shell.workspace.kind !== "timeline") { renderMeta(); return; }
     renderTimeline();
     renderInspector();
     renderMeta();
@@ -891,7 +1166,15 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
     // never rolls it back.
     const normalized = normalizeTimeline(next);
     if (JSON.stringify(normalized) === JSON.stringify(workingCopy)) return;
-    const compiled = compileTimeline(normalized);
+    let compiled = compiledCopy;
+    try {
+      compiled = compileTimeline(normalized);
+    } catch (error) {
+      if (!options.preparePreview || !(error instanceof Error)
+        || !error.message.includes("needs its composition duration resolved")) throw error;
+      // Data and resource bindings change the Motion instance key. The Worker will
+      // provide its new composition duration before this UI projection can compile.
+    }
     beginHistory();
     editError = null;
     workingCopy = structuredClone(normalized);
@@ -926,6 +1209,66 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
   }
 
   function editItem(itemId: string, key: string, value: string | number | boolean): Promise<void> {
+    if (key === "data:open-source") {
+      const path = boot.session.kind === "motion-file" ? boot.session.authorInputs?.dataPath : undefined;
+      if (path && sourceEditor) sourceEditor.open(sourceEditor.resolvePath(path));
+      return Promise.resolve();
+    }
+    if (key === "data:inline" || key.startsWith("resource:")) {
+      return queueWorkingCopy(() => {
+        const projected = findProjectedItem(compiledCopy.timeline, documentView, itemId);
+        if (!projected?.timelinePath) throw new Error(`Timeline clip '${itemId}' does not exist`);
+        if (key.startsWith("resource:")) {
+          return setTimelineMotionResource(workingCopy, projected.timelinePath, key.slice("resource:".length), String(value));
+        }
+        const parsed: unknown = JSON.parse(String(value));
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+          throw new Error("Motion clip data must be a JSON object");
+        }
+        return setTimelineMotionData(workingCopy, projected.timelinePath, parsed as Record<string, never>);
+      });
+    }
+    if (key.startsWith("component:")) {
+      return (async () => {
+        try {
+          if (!sourceEditor) throw new Error("Motion source editor is unavailable");
+          const projected = findProjectedItem(compiledCopy.timeline, documentView, itemId);
+          if (!projected) throw new Error(`Timeline clip '${itemId}' does not exist`);
+          if (shell.shellState.previewStatus === "error") {
+            throw new Error("Fix the source diagnostics before using parameter controls");
+          }
+          const composition = key.startsWith("component:composition:");
+          const path = motionSourcePath(projected, composition);
+          if (!path) throw new Error("Component source location is unavailable; edit the source directly");
+          const source = sourceEditor.drafts.files.get(path)?.text;
+          if (source === undefined) throw new Error(`Motion source is not loaded: ${path}`);
+          const target = composition
+            ? { kind: "composition" as const, field: key.slice("component:composition:".length) }
+            : { kind: "prop-default" as const, name: key.slice("component:default:".length) };
+          sourceCompiler ??= createTimelineCompilerRuntime({
+            runtimeAssets: config.runtimeAssets, runtimeBaseUrl: config.runtimeBaseUrl ?? location.href,
+          });
+          const compiler = await sourceCompiler;
+          const edited = compiler.rewriteMotionSource({ source, target, value });
+          sourceEditor.replace(path, edited.source);
+          editError = null;
+        } catch (error) {
+          editError = error instanceof Error ? error.message : String(error);
+          renderInspector();
+        }
+      })();
+    }
+    if (key.startsWith("instance:")) {
+      return queueWorkingCopy(() => {
+        const projected = findProjectedItem(compiledCopy.timeline, documentView, itemId);
+        if (!projected?.timelinePath) throw new Error(`Timeline clip '${itemId}' does not exist`);
+        if (key.startsWith("instance:reset:")) {
+          return clearTimelineMotionProp(workingCopy, projected.timelinePath, key.slice("instance:reset:".length));
+        }
+        return setTimelineMotionProp(workingCopy, projected.timelinePath,
+          key.slice("instance:prop:".length), value);
+      });
+    }
     return queueWorkingCopy(() => {
       const projected = findProjectedItem(compiledCopy.timeline, documentView, itemId);
       if (!projected) throw new Error(`Timeline clip '${itemId}' does not exist`);
@@ -1057,7 +1400,7 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
       if (isPlaying()) animationFrame = requestAnimationFrame(tick);
       else {
         animationFrame = null;
-        if (shell.workspace.kind === "timeline" && transport.looping && player.currentTime() >= player.lastFrameTimeS() - 1e-6) {
+        if (transport.looping && player.currentTime() >= player.lastFrameTimeS() - 1e-6) {
           void player.seek(0).then(() => player.play()).then(startTransportPoll);
         }
       }
@@ -1066,7 +1409,6 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
   }
 
   transport.addEventListener("studio-transport-intent", (event) => {
-    if (shell.workspace.kind !== "timeline") return;
     const intent = (event as CustomEvent<StudioTransportIntent>).detail;
     if (intent.type === "toggle-play") {
       if (!previewAvailable) {
@@ -1097,10 +1439,9 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
       void seek(intent.timeS).then(syncTransport);
     }
   });
-  player.addEventListener("time", () => { if (shell.workspace.kind === "timeline") syncTransport(); });
+  player.addEventListener("time", () => { syncTransport(); });
 
   timelineView.addEventListener("click", (event) => {
-    if (shell.workspace.kind !== "timeline") return;
     const target = event.target instanceof Element ? event.target : null;
     const itemElement = target?.closest<HTMLElement>("[data-clip-id]");
     if (itemElement?.dataset.clipId) {
@@ -1115,7 +1456,6 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
   });
 
   timelineView.addEventListener("pointerdown", (event) => {
-    if (shell.workspace.kind !== "timeline") return;
     const target = event.target instanceof Element ? event.target : null;
     const handle = target?.closest<HTMLElement>(".trim");
     if (handle) {
@@ -1164,7 +1504,6 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
     }
   });
   timelineView.addEventListener("pointermove", (event) => {
-    if (shell.workspace.kind !== "timeline") return;
     if (!timelineTrim) return;
     const pixelsPerFrame = pixelsPerSecond / documentView.canvas.framesPerSecond;
     const deltaFrames = Math.round((event.clientX - timelineTrim.startX) / pixelsPerFrame);
@@ -1174,7 +1513,6 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
     timelineTrim = null; sequenceDragPath = null; hideDragTip();
   });
   timelineView.addEventListener("pointerup", (event) => {
-    if (shell.workspace.kind !== "timeline") return;
     hideDragTip();
     const trim = timelineTrim;
     timelineTrim = null;
@@ -1232,7 +1570,7 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
   const selectionBox = requiredElement<HTMLElement>("selBox");
   const stageWrap = requiredElement<HTMLElement>("stageWrap");
   requiredElement("stageArea").addEventListener("pointerdown", (event) => {
-    if (shell.workspace.kind === "timeline" && event.target === event.currentTarget) setSelected(null);
+    if (event.target === event.currentTarget) setSelected(null);
   });
   function selectedHit(): PlayerHitRect | null {
     return previewAvailable && selectedItemId
@@ -1258,7 +1596,7 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
   }
 
   playerCanvas.addEventListener("pointerdown", (event) => {
-    if (shell.workspace.kind !== "timeline" || !previewAvailable || !event.isPrimary) return;
+    if (!previewAvailable || !event.isPrimary) return;
     const rect = playerCanvas.getBoundingClientRect();
     const hit = hitAtDisplayPoint(
       player.hitRects ?? [],
@@ -1372,51 +1710,95 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
 
   async function saveOneSnapshot(): Promise<boolean> {
     if (!saveTimeline) throw new Error("Studio save capability is unavailable");
-    const localSnapshotJson = JSON.stringify(workingCopy);
     const submitted = captureTimelineSaveSnapshot(workingCopy);
-    const response = await saveTimeline({
-      baseRevision,
-      timeline: submitted.timeline,
-      intent: "studio save",
-    });
+    const localSnapshotJson = submitted.timelineJson;
+    const saveArrangement = forceConversion || localSnapshotJson !== savedSnapshotJson;
+    forceConversion = false;
+    if (saveArrangement && options.prepareTimelineSave && !await options.prepareTimelineSave()) return false;
+    const sourceResult = await sourceEditor?.saveDirty();
+    if (sourceResult) {
+      confirmedDependencies = { ...(confirmedDependencies ?? {}), ...sourceEditor!.confirmedDigests() };
+    }
+    if (sourceResult?.failed) {
+      setConflict(`Source save failed (${sourceResult.failed.path}): ${sourceResult.failed.message}`);
+      markDirty();
+      return false;
+    }
+    if (!saveArrangement) {
+      markDirty();
+      setConflict(null);
+      scheduleDraftPreview();
+      return true;
+    }
+    let response;
+    try {
+      response = await saveTimeline({
+        baseRevision,
+        timeline: submitted.timeline,
+        intent: "studio save",
+        expectedDependencies: confirmedDependencies ?? undefined,
+      });
+    } catch (error) {
+      if (storageKind !== "project") throw error;
+      let revision: number | null = null;
+      try {
+        revision = reconcileLostProjectSave(baseRevision, submitted, await loadTimeline());
+      } catch { /* The outcome remains unconfirmed. */ }
+      if (revision === null) {
+        throw new Error(`Project save outcome is unconfirmed; reload HEAD before retrying: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      response = { outcome: "committed" as const, revision };
+    }
     if (response.outcome === "staleBase") {
       setConflict(
-        storageKind === "file" ? "The JSON file changed externally; reload explicitly before saving again" : `stale base · HEAD is revision ${response.revision}; reload explicitly before saving again`,
+        `${Object.keys(sourceResult?.saved ?? {}).length ? "Source saved; " : ""}${storageKind === "file" ? "The JSON file changed externally; reload explicitly before saving again" : `stale base · HEAD is revision ${response.revision}; reload explicitly before saving again`}`,
       );
       return false;
     }
     if (response.outcome === "rejected") {
-      setConflict(response.errors.map((error) => error.code).join(", ") || "edit rejected");
+      const reason = response.errors.map((error) => error.code).join(", ") || "edit rejected";
+      setConflict(`${Object.keys(sourceResult?.saved ?? {}).length ? "Source saved; Timeline not saved: " : ""}${reason}`);
       return false;
     }
     const next = await loadTimeline() as StudioConfig;
     let committed;
     try {
-      committed = assertReloadedTimelineSave(
-        response,
-        next,
-        submitted,
-      );
+      committed = storageKind === "motion" ? next.timeline
+        : assertReloadedTimelineSave(response, next, submitted);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       setConflict(`saved revision reload failed: ${message}`);
       return false;
     }
     baseRevision = next.timelineRevision.revision;
+    confirmedDependencies = next.inputDependencies ? { ...next.inputDependencies } : null;
     savedSnapshotJson = JSON.stringify(committed);
     const unchanged = JSON.stringify(workingCopy) === localSnapshotJson;
-    if (unchanged) workingCopy = structuredClone(committed);
+    if (unchanged) {
+      workingCopy = structuredClone(committed);
+      workspaceRuntime.setMotionSourceDurations(next.motionSourceDurations ?? {});
+      compiledCopy = compileTimeline(workingCopy);
+      documentView = compiledCopy.view;
+      if (storageKind === "motion" && selectedItemId
+        && !findProjectedItem(compiledCopy.timeline, documentView, selectedItemId)) {
+        selectedItemId = compiledCopy.timeline.document.visual.tracks
+          .flatMap((track) => track.items).find((item) => item.type === "clip" && item.source.type === "motion")?.id ?? null;
+      }
+    }
+    config = next;
     markDirty();
     setConflict(null);
     renderWorkingCopy();
     renderMeta();
+    if (storageKind === "motion") scheduleDraftPreview();
     return true;
   }
 
   const saveQueue = new TimelineSaveQueue(saveOneSnapshot, consumeExternalUpdate);
 
-  async function requestSave(): Promise<boolean> {
-    if (!canSaveTimeline || !dirty || saving) return false;
+  async function requestSave(force = false): Promise<boolean> {
+    if (!canSaveTimeline || (!dirty && !force) || saving) return false;
+    forceConversion = force;
     saving = true;
     renderMeta();
     try { return await saveQueue.request(); }
@@ -1434,9 +1816,12 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
   }
 
   async function reloadSavedSnapshot(): Promise<void> {
+    if (sourceEditor && !await sourceEditor.reload()) return;
+    await options.beforeReload?.();
     const next = await loadTimeline() as StudioConfig;
     draftPreview.invalidate();
     config = next;
+    confirmedDependencies = next.inputDependencies ? { ...next.inputDependencies } : null;
     workspaceRuntime.setMotionSourceDurations(next.motionSourceDurations ?? {});
     savedSnapshotJson = JSON.stringify(next.timeline);
     workingCopy = structuredClone(next.timeline);
@@ -1445,6 +1830,7 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
     fps = documentView.canvas.framesPerSecond;
     player.style.aspectRatio = `${documentView.canvas.width} / ${documentView.canvas.height}`;
     motionProjection = isMotionProjection(next.motion) ? structuredClone(next.motion) : null;
+    motionInstances = new Map((next.motionInstances ?? []).map((instance) => [instance.clipPath, instance]));
     baseRevision = next.timelineRevision.revision;
     dirty = false;
     shell.dispatchIntent({ type: "dirty", value: false });
@@ -1464,6 +1850,7 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
     if (intent.type === "save") void requestSave();
     else if (!dirty || confirm(`Discard unsaved changes and reload the saved ${storageKind}?`)) void reloadProject();
   });
+  shell.addEventListener("studio-save-as-timeline", () => { void requestSave(true); });
 
   shell.addEventListener("studio-host-event", (event) => {
     const detail = (event as CustomEvent<{ type: string; data: unknown }>).detail;
@@ -1496,75 +1883,14 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
   }
 
   async function openMotionClip(clipId: string): Promise<void> {
-    if (!options.openMotion || !motionProjection) {
-      throw new Error("Motion editing requires a prepared Timeline session");
-    }
-    if (!previewAvailable) {
-      throw new Error("Motion editing requires a successfully admitted fixed-package preview");
-    }
+    if (!sourceEditor) throw new Error("Motion source editor is unavailable");
     const projected = findProjectedItem(compiledCopy.timeline, documentView, clipId);
-    const clip = projected && visualClip(projected.item);
-    if (!projected?.timelinePath || !clip || clip.source.type !== "motion") {
+    if (!projected || sourceKind(projected.item) !== "motion") {
       throw new Error(`'${clipId}' is not a Motion visual clip`);
     }
-    const timelinePath = projected.timelinePath;
-    const context = currentMotionContext(clipId);
-    const returnTime = currentTime();
-    const tlScroll = requiredElement<HTMLElement>("timelineScroll");
-    const returnScroll = { left: tlScroll.scrollLeft, top: tlScroll.scrollTop };
-    player.pause();
-    if (animationFrame !== null) cancelAnimationFrame(animationFrame);
-    animationFrame = null;
-    await player.seek(projected.startSeconds);
-    const session: ProjectMotionSession = {
-      read: () => ({ context: currentMotionContext(clipId), props: preparedMotionProps(compiledCopy.timeline, motionProjection, clipId, currentMotionContext(clipId).artifact) }),
-      clipId,
-      context,
-      props: preparedMotionProps(compiledCopy.timeline, motionProjection, clipId, context.artifact),
-      clipStartS: projected.startSeconds,
-      sourceStartS: projected.sourceStartSeconds ?? 0,
-      rate: projected.sourceRate ?? 1,
-      clipDurationS: projected.durationSeconds,
-      applyEdit: async (edit: ProjectMotionEdit) => {
-        const next = edit.type === "data"
-          ? setTimelineMotionData(workingCopy, timelinePath, edit.value)
-          : setTimelineMotionProp(workingCopy, timelinePath, edit.name, edit.value.value);
-        await commitWorkingCopy(next);
-        const context = currentMotionContext(clipId);
-        return {
-          context,
-          props: preparedMotionProps(
-            compiledCopy.timeline,
-            motionProjection,
-            clipId,
-            context.artifact,
-          ),
-        };
-      },
-      returnToTimeline: async () => {
-        await flushDraftPreview();
-        zoomInput.value = String(zoomScale);
-        shell.dispatchIntent({ type: "workspace", workspace: { kind: "timeline" } });
-        shell.classList.remove("has-motion-timeline");
-        timelinePane.hidden = false;
-        inspectorBody.hidden = false;
-        motionWorkspaceEl.hidden = true;
-        document.getElementById("timelineTitle")!.textContent = "Timeline";
-        document.getElementById("timelineHint")!.textContent = "Drag the ruler to seek · Select a clip to edit";
-        renderWorkingCopy();
-        if (previewAvailable) {
-          await player.seek(Math.min(returnTime, player.lastFrameTimeS()));
-        }
-        tlScroll.scrollLeft = returnScroll.left;
-        tlScroll.scrollTop = returnScroll.top;
-        syncTransport();
-      },
-    };
-    shell.dispatchIntent({
-      type: "workspace",
-      workspace: { kind: "motion", clipId, source: clip.source.component },
-    });
-    await options.openMotion(session);
+    const path = motionSourcePath(projected);
+    if (!path) throw new Error("Motion component source is not loaded");
+    sourceEditor.open(path);
   }
 
   async function runSmoke(): Promise<void> {
@@ -1628,30 +1954,28 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
   }
 
   const layoutObserver = new ResizeObserver(() => {
-    if (shell.workspace.kind !== "timeline") return;
     setTimelineZoom(zoomScale); positionSelectionBox();
   });
   layoutObserver.observe(requiredElement("timelineScroll"));
   layoutObserver.observe(requiredElement("stageArea"));
-  window.addEventListener("beforeunload", () => layoutObserver.disconnect());
+  window.addEventListener("pagehide", (event) => { if (!event.persisted) layoutObserver.disconnect(); });
   fitPixelsPerSecond(1);
   renderWorkingCopy();
   setSelected(selectedItemId);
   requiredElement("loading").hidden = true;
+  const initialFrameStarted = performance.now();
   await seek(config.initialTimeS ?? 0);
+  if (previewAvailable) {
+    performance.mark("valle-player-first-frame", { detail: {
+      mode: "initial", durationMs: performance.now() - initialFrameStarted,
+    } });
+    recordPreviewTimings();
+  }
   syncTransport();
   shell.dispatchIntent({ type: "preview-status", status: previewAvailable ? "ready" : "loading", message: null });
   transport.disabled = !previewAvailable;
   window.addEventListener("beforeunload", (event) => { if (dirty) { event.preventDefault(); event.returnValue = ""; } });
-  scheduleDraftPreview();
-  shell.addEventListener("studio-open-motion", () => {
-    if (selectedItemId) {
-      void openMotionClip(selectedItemId).catch((error) => {
-        rendererMessage = error instanceof Error ? error.message : String(error);
-        renderMeta();
-      });
-    }
-  });
+  if (!previewAvailable || sourceEditor?.dirty) scheduleDraftPreview();
   const search = new URLSearchParams(location.search);
   const authoringSmokeToken = search.get("authoringSmoke");
   if (authoringSmokeToken !== null) {

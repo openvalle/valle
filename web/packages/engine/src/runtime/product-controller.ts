@@ -619,8 +619,12 @@ export class BrowserValleWebPlayer {
       loadWasmModule(this.wasmModuleUrl, this.wasmUrl),
       loadCanvasKit(this.runtimeAssets.canvasKit),
     ]).then(([wasm, canvasKit]) => [wasm, canvasKit]);
+    const stageStarted = performance.now();
     const staged = await this.stageRenderPackage(this.currentRenderPackage());
     this.commitStagedRenderPackage(staged);
+    performance.mark("valle-player-package-stage", { detail: {
+      mode: "initial", durationMs: performance.now() - stageStarted,
+    } });
     return this;
   }
 
@@ -1052,6 +1056,7 @@ export class BrowserValleWebPlayer {
     this.pause();
     if (this.renderInFlight) await this.renderInFlight.catch(() => undefined);
     let staged: StagedRenderPackage;
+    const stageStarted = performance.now();
     try {
       staged = await this.stageRenderPackage(next);
     } catch (error) {
@@ -1068,8 +1073,15 @@ export class BrowserValleWebPlayer {
       return undefined;
     }
     this.commitStagedRenderPackage(staged);
+    performance.mark("valle-player-package-stage", { detail: {
+      mode: "replace", durationMs: performance.now() - stageStarted,
+    } });
     this.timeS = clamp(this.timeS, 0, this.lastFrameTimeS());
+    const frameStarted = performance.now();
     const rendered = await this.seek(this.timeS);
+    performance.mark("valle-player-first-frame", { detail: {
+      mode: "replace", durationMs: performance.now() - frameStarted,
+    } });
     if (resume) await this.play();
     return rendered;
   }
@@ -1191,20 +1203,29 @@ export class BrowserValleWebPlayer {
   }
 
   private async stageRenderPackage(next: RenderPackageReplacement): Promise<StagedRenderPackage> {
+    const markPhase = (phase: string, started: number): void => {
+      performance.mark("valle-player-package-phase", { detail: {
+        phase, durationMs: performance.now() - started,
+      } });
+    };
     if (this.loadMotionFonts) {
+      const fontsStarted = performance.now();
       const fontsJson = await this.loadMotionFonts();
       const selected = JSON.parse(this.wasm.with_motion_fonts(
         next.fixedPackageManifestJson, next.timelineJson, next.resourceManifestJson,
         next.verifiedBindingBundleJson, fontsJson,
       )) as RenderPackageReplacement;
       next = { ...next, ...selected };
+      markPhase("fonts", fontsStarted);
     }
+    const canonicalStarted = performance.now();
     const canonical = this.canonicalizeTimelineDocument(
       JSON.parse(next.timelineJson) as TimelineDocument,
     );
     if (next.timelineJson !== canonical.timelineJson) {
       throw new Error("timelineJson must contain the exact canonical Timeline bytes");
     }
+    markPhase("canonical", canonicalStarted);
     const fixedPackageManifestJson = next.fixedPackageManifestJson;
     const resourceManifestJson = next.resourceManifestJson;
     const verifiedBindingBundleJson = next.verifiedBindingBundleJson;
@@ -1224,17 +1245,21 @@ export class BrowserValleWebPlayer {
         resourceManifestJson,
         verifiedBindingBundleJson,
       );
+      const openStarted = performance.now();
       const receipt = parseProductRenderReceipt(engine.open_fixed_package(
         bootstrap.fixedPackageManifestJson,
         bootstrap.timelineJson,
         bootstrap.resourceManifestJson,
         bootstrap.verifiedBindingBundleJson,
       ));
+      markPhase("open", openStarted);
+      const indexStarted = performance.now();
       frozenResources = indexCompiledExecutionResources(engine, receipt.renderId);
       bootstrap.expectedRenderId = receipt.renderId;
       const audioProgram = parseCompiledAudioProgram(JSON.parse(
         engine.audio_program_json(receipt.renderId),
       ));
+      markPhase("index", indexStarted);
       if (
         audioProgram.sampleRate !== receipt.sampleRate
         || audioProgram.sampleCount !== receipt.sampleCount
@@ -1245,7 +1270,9 @@ export class BrowserValleWebPlayer {
         workerUrl: this.runtimeAssets.workers.productFrame,
         allocateGeneration: () => this.allocateGeneration(),
       });
+      const plannerStarted = performance.now();
       await planner.init(bootstrap);
+      markPhase("planner", plannerStarted);
       compositor = new CanvasKitExecutor(this.CanvasKit, engine);
       return {
         fixedPackageManifestJson,

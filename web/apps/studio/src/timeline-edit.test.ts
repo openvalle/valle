@@ -7,6 +7,7 @@ import {
   moveTimelineVisualClipBefore,
   setTimelineClipDurationFrames,
   setTimelineMotionData,
+  setTimelineMotionResource,
   timelineClipAddress,
   trimTimelineClipFrames,
 } from "./timeline-edit.ts";
@@ -38,6 +39,20 @@ test("Motion data edit copies the prepared object into one author clip", () => {
   expect(updated.tracks.visual![0]!.clips[1]).toMatchObject({ data: { rows: [{ id: "new", value: 8 }] } });
   expect(original.tracks.visual![0]!.clips[1]).toMatchObject({ data: { rows: [{ id: "old", value: 3 }] } });
   expect(() => setTimelineMotionData(original, "/tracks/visual/0/clips/0", { rows })).toThrow("not Motion");
+});
+
+test("Motion resource binding edits one clip and requires a declared alias", () => {
+  const original = timeline();
+  original.resources = { first: "one.png", second: "two.png" };
+  original.tracks.visual![0]!.clips[1] = {
+    kind: "motion", component: "chart", start: 1.5, duration: 2,
+    resources: { poster: "first" },
+  } as never;
+  const updated = setTimelineMotionResource(original, "/tracks/visual/0/clips/1", "poster", "second");
+  expect(updated.tracks.visual![0]!.clips[1]).toMatchObject({ resources: { poster: "second" } });
+  expect(original.tracks.visual![0]!.clips[1]).toMatchObject({ resources: { poster: "first" } });
+  expect(() => setTimelineMotionResource(original, "/tracks/visual/0/clips/1", "poster", "missing"))
+    .toThrow("does not exist");
 });
 
 test("compiler source pointers address Timeline clips without parsing internal ids", () => {

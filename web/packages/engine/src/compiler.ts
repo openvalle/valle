@@ -25,6 +25,8 @@ interface TimelineCompilerWasmModule {
     entry: string, modulesJson: string, optionsJson: string, fonts: Uint8Array[],
     aliases: Array<[string, Uint8Array]>, shaders: MotionShaderPackage[],
   ): string;
+  prepare_preview_package(inputJson: string): string;
+  rewrite_motion_source(inputJson: string): string;
 }
 
 export interface MotionCompilerDiagnostic {
@@ -73,6 +75,48 @@ export interface CompiledMotion {
   preparedDataDigest: string;
 }
 
+export interface PreviewMotionInstance {
+  clipPath: string;
+  artifact: Record<string, unknown>;
+  artifactDigest: string;
+  fonts: readonly { bytesBase64: string; role: "font" | "formula-font" }[];
+}
+
+export interface PreviewResourceInput {
+  id: string;
+  entry: Record<string, unknown>;
+  facts: Record<string, unknown>;
+  dependencies?: readonly { role: string; resourceId: string }[];
+}
+
+export interface PreviewPackageInput {
+  authorTimeline: Timeline;
+  motionInstances: readonly PreviewMotionInstance[];
+  resourceInputs?: readonly PreviewResourceInput[];
+}
+
+export interface PreparedPreviewPackage {
+  fixedPackageManifestJson: string;
+  timelineJson: string;
+  resourceManifestJson: string;
+  verifiedBindingBundleJson: string;
+  executionProfileJson: string;
+  externalResources: readonly { id: string; digest: string }[];
+  motionSourceDurations: Record<string, number>;
+}
+
+export interface MotionSourceEdit {
+  source: string;
+  target: { kind: "composition"; field: string } | { kind: "prop-default"; name: string };
+  value: unknown;
+}
+
+export interface MotionSourceEditResult {
+  source: string;
+  /** Byte offsets in the previous UTF-8 source. */
+  replacedSpan: [number, number];
+}
+
 export interface MotionPropertyRequest {
   node: string;
   startFrame: number; endFrame: number; maxPoints: number; durationFrames: number;
@@ -110,6 +154,8 @@ export interface WebCompilerRuntime extends TimelineCompilerRuntime {
   compileMotionJsx(source: string, options?: MotionCompileOptions): CompiledMotion;
   /** Compile an explicit project-relative module closure to a Scene artifact. */
   compileMotionModules(entry: string, modules: Record<string, string>, options?: MotionCompileOptions): CompiledMotion;
+  preparePreviewPackage(input: PreviewPackageInput): PreparedPreviewPackage;
+  rewriteMotionSource(input: MotionSourceEdit): MotionSourceEditResult;
 }
 
 export interface TimelineCompilerRuntimeOptions {
@@ -140,7 +186,23 @@ export async function createTimelineCompilerRuntime(
     compileMotionModules: (entry, modules, compileOptions) => (
       compileMotionModulesWithWasm(wasm, entry, modules, compileOptions)
     ),
+    preparePreviewPackage: (input) => preparePreviewPackageWithWasm(wasm, input),
+    rewriteMotionSource: (input) => rewriteMotionSourceWithWasm(wasm, input),
   };
+}
+
+export function rewriteMotionSourceWithWasm(
+  wasm: Pick<TimelineCompilerWasmModule, "rewrite_motion_source">,
+  input: MotionSourceEdit,
+): MotionSourceEditResult {
+  return JSON.parse(wasm.rewrite_motion_source(JSON.stringify(input))) as MotionSourceEditResult;
+}
+
+export function preparePreviewPackageWithWasm(
+  wasm: Pick<TimelineCompilerWasmModule, "prepare_preview_package">,
+  input: PreviewPackageInput,
+): PreparedPreviewPackage {
+  return JSON.parse(wasm.prepare_preview_package(JSON.stringify(input))) as PreparedPreviewPackage;
 }
 
 /** Bounded local-property inspection; no layout or rendering. Run in a diagnostic worker. */

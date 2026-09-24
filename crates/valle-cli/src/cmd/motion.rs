@@ -240,6 +240,9 @@ fn studio(request: StudioRequest) -> Result<std::process::ExitCode> {
 
     let runtime = crate::webruntime::resolve(request.web_assets_dir.as_deref())?;
     let generation = Arc::new(AtomicU64::new(1));
+    let mut source_token = [0_u8; 32];
+    getrandom::fill(&mut source_token).context("generating Motion Studio source token")?;
+    let source_token = hex::encode(source_token);
     let config = studio_state_json(&request, 1)?;
 
     let mut runtime_files = runtime.serving_map();
@@ -284,14 +287,13 @@ fn studio(request: StudioRequest) -> Result<std::process::ExitCode> {
         library: None,
         timeline_file: None,
         project: None,
+        source_paths: std::sync::Mutex::new(Default::default()),
         last_report: RwLock::new(None),
         preview_files: Arc::clone(&request.preview_files),
-        motion_preview: Some({
-            let request = request.clone();
-            Box::new(move |body| {
-                let draft: MotionPreviewDraft = serde_json::from_str(body)?;
-                studio_state_json_with_draft(&request, 1, Some(&draft))
-            })
+        motion_source: Some(crate::webhost::MotionSourceCtx {
+            token: source_token,
+            input: request.input.clone(),
+            data: request.data.clone(),
         }),
     });
     let (server, addr) = crate::webhost::bind(request.port)?;
@@ -322,7 +324,7 @@ fn studio(request: StudioRequest) -> Result<std::process::ExitCode> {
 #[derive(Debug, Clone)]
 pub(super) struct BoundAsset {
     pub(super) path: PathBuf,
-    pub(super) bytes: Vec<u8>,
+    pub(super) bytes: Arc<[u8]>,
     pub(super) hash: ContentDigest,
 }
 
@@ -332,6 +334,145 @@ pub(crate) struct PreparedInput {
     pub(super) assets: BTreeMap<String, BoundAsset>,
     pub(super) shaders: valle_motion::shader::ShaderRegistry,
     canvas_size: MotionViewport,
+}
+
+/// Source closure and asset bytes captured before a Timeline save starts compiling.
+/// Compilation may clone these values, but never reopens the author paths.
+pub(crate) struct CapturedTimelineComponent {
+    graph: valle_compiler::motion::MotionModuleGraph,
+    assets: BTreeMap<String, BoundAsset>,
+    data_binding: Option<valle_compiler::motion::PrepareDataBinding>,
+    dependencies: Vec<(PathBuf, ContentDigest)>,
+}
+
+impl CapturedTimelineComponent {
+    pub(crate) fn dependency_digests(&self) -> impl Iterator<Item = (&Path, ContentDigest)> {
+        self.dependencies
+            .iter()
+            .map(|(path, digest)| (path.as_path(), *digest))
+    }
+
+    pub(crate) fn verify_dependencies(&self) -> Result<()> {
+        for (path, expected) in &self.dependencies {
+            let bytes = std::fs::read(path)
+                .with_context(|| format!("reading Motion dependency {}", path.display()))?;
+            if ContentDigest::of_bytes(&bytes) != *expected {
+                bail!("Motion dependency changed during save: {}", path.display());
+            }
+        }
+        Ok(())
+    }
+}
+
+pub(crate) fn capture_timeline_component(
+    input: &Path,
+    asset_specs: &[String],
+    data: Option<&serde_json::Value>,
+) -> Result<CapturedTimelineComponent> {
+    let graph = load_motion_module_graph(input)?;
+    let root = input.parent().unwrap_or_else(|| Path::new("."));
+    let mut dependencies = Vec::new();
+    for (module, source) in &graph.modules {
+        let path = root.join(module);
+        let bytes = std::fs::read(&path)
+            .with_context(|| format!("reading Motion module {}", path.display()))?;
+        if bytes != source.as_bytes() {
+            bail!("Motion module changed during capture: {}", path.display());
+        }
+        dependencies.push((path, ContentDigest::of_bytes(&bytes)));
+    }
+    let mut assets = BTreeMap::new();
+    for spec in asset_specs {
+        let (name, path) = spec
+            .split_once('=')
+            .ok_or_else(|| anyhow!("asset binding `{spec}` must use NAME=PATH"))?;
+        if name.is_empty() || path.is_empty() {
+            bail!("asset binding `{spec}` must use non-empty NAME=PATH");
+        }
+        if assets.contains_key(name) {
+            bail!("asset control `{name}` is bound more than once");
+        }
+        let path = PathBuf::from(path);
+        let (asset, asset_dependencies) = load_asset_with_dependencies(&path)?;
+        dependencies.extend(asset_dependencies);
+        assets.insert(name.to_owned(), asset);
+    }
+    let captured = CapturedTimelineComponent {
+        graph,
+        assets,
+        data_binding: data.map(|value| valle_compiler::motion::PrepareDataBinding {
+            source: "timeline-inline".into(),
+            value: value.clone(),
+        }),
+        dependencies,
+    };
+    captured.verify_dependencies()?;
+    Ok(captured)
+}
+
+pub(crate) fn compile_captured_timeline_component(
+    captured: &CapturedTimelineComponent,
+) -> Result<PreparedInput> {
+    let mut assets = captured.assets.clone();
+    let shaders = shader_registry(&assets)?;
+    let resources = assets
+        .iter()
+        .map(|(control, asset)| ResourceRef {
+            control: control.clone(),
+            content_hash: asset.hash.clone(),
+        })
+        .collect::<Vec<_>>();
+    let fonts = load_fonts(&[])?;
+    let (compiled, _) = compile_with_font_assets(
+        &captured.graph,
+        &resources,
+        &mut assets,
+        &fonts,
+        &shaders,
+        captured.data_binding.as_ref(),
+    )?
+    .map_err(|diagnostics| {
+        anyhow!(
+            "Motion compilation failed: {}",
+            diagnostics
+                .into_iter()
+                .map(|diagnostic| diagnostic.message)
+                .collect::<Vec<_>>()
+                .join("; ")
+        )
+    })?;
+    finish_prepared_input(compiled, captured.data_binding.clone(), assets, shaders)
+}
+
+fn finish_prepared_input(
+    compiled: valle_compiler::motion::CompiledMotion,
+    data_binding: Option<valle_compiler::motion::PrepareDataBinding>,
+    assets: BTreeMap<String, BoundAsset>,
+    shaders: valle_motion::shader::ShaderRegistry,
+) -> Result<PreparedInput> {
+    ensure_rendered_assets_are_bound(&compiled.artifact, &assets)?;
+    compiled
+        .artifact
+        .validate_with_shaders(&shaders)
+        .map_err(|errors| {
+            anyhow!("compiler produced a scene that failed shader admission: {errors:?}")
+        })?;
+    valle_motion::prepare_scene(&compiled.artifact).map_err(|error| {
+        anyhow!("compiler produced a scene that failed capability admission: {error}")
+    })?;
+    let canvas_size = compiled
+        .artifact
+        .composition
+        .as_ref()
+        .ok_or_else(|| anyhow!("Motion entry requires composition metadata"))?
+        .viewport();
+    Ok(PreparedInput {
+        compiled,
+        data_binding,
+        assets,
+        shaders,
+        canvas_size,
+    })
 }
 
 fn compile_with_font_assets(
@@ -357,7 +498,7 @@ fn compile_with_font_assets(
     let measure_aliases = assets
         .iter()
         .filter(|(_, asset)| ttf_parser::Face::parse(&asset.bytes, 0).is_ok())
-        .map(|(control, asset)| (format!("asset://{control}"), asset.bytes.clone()))
+        .map(|(control, asset)| (format!("asset://{control}"), asset.bytes.to_vec()))
         .collect::<Vec<_>>();
     // The compiler binds measurement to the entry composition before module constants run.
     let measure =
@@ -380,7 +521,7 @@ fn compile_with_font_assets(
                     &asset.bytes,
                     Default::default(),
                 )?;
-                asset.bytes = environment.frozen_bytes()?;
+                asset.bytes = environment.frozen_bytes()?.into();
                 asset.hash = environment.content_digest();
                 for resource in &mut compiled.artifact.resource_refs {
                     if resource.control == *control {
@@ -409,7 +550,7 @@ fn compile_with_font_assets(
         }
         render_aliases.push((
             valle_motion::font_family_alias(&asset.hash),
-            asset.bytes.clone(),
+            asset.bytes.to_vec(),
         ));
     }
     Ok(Ok((compiled, render_aliases)))
@@ -422,22 +563,38 @@ struct FingerprintInputs<'a> {
     fonts: Vec<&'a ContentDigest>,
 }
 
-#[derive(serde::Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct MotionPreviewDraft {
-    props: BTreeMap<String, serde_json::Value>,
-    data: Option<serde_json::Value>,
-}
-
 fn studio_state_json(request: &StudioRequest, generation: u64) -> Result<String> {
-    studio_state_json_with_draft(request, generation, None)
+    let mut state: serde_json::Value =
+        serde_json::from_str(&studio_native_state_json(request, generation)?)?;
+    let data =
+        load_prepare_data(&request.input, request.data.as_deref())?.map(|binding| binding.value);
+    state["authorInputs"] = serde_json::json!({
+        "fpsOverride": request.fps,
+        "props": read_prop_bindings(request.bindings.props.as_deref())?,
+        "data": data,
+        "dataPath": request.data,
+        "assetSpecs": request.asset_specs,
+        "inputDigests": motion_watch_paths(request).iter().map(|path| -> Result<(String, ContentDigest)> {
+            let path = path.canonicalize()?;
+            Ok((path.to_string_lossy().into_owned(), ContentDigest::of_bytes(&std::fs::read(&path)?)))
+        }).collect::<Result<BTreeMap<_, _>>>()?,
+        "extraFonts": (0..request.fonts.len())
+            .map(|index| format!("/motion-fonts/{index}"))
+            .collect::<Vec<_>>(),
+        "fontUrls": (0..request.fonts.len())
+            .map(|index| serde_json::json!({"url":format!("/motion-fonts/{index}"),"role":"font"}))
+            .chain(valle_motion::DEFAULT_MOTION_FONT_FILES.iter().map(|name| {
+                serde_json::json!({"url":format!("/runtime/fonts/{name}"),"role":"font"})
+            }))
+            .chain(valle_motion::math_formula::formula_font_pack().map(|(face, _)| {
+                serde_json::json!({"url":format!("/runtime/fonts/katex/{}",face.file_name),"role":"formula-font"})
+            }))
+            .collect::<Vec<_>>(),
+    });
+    Ok(state.to_string())
 }
 
-fn studio_state_json_with_draft(
-    request: &StudioRequest,
-    generation: u64,
-    draft: Option<&MotionPreviewDraft>,
-) -> Result<String> {
+fn studio_native_state_json(request: &StudioRequest, generation: u64) -> Result<String> {
     let module_graph = load_motion_module_graph(&request.input)?;
     let mut assets = load_assets(&request.asset_specs)?;
     let shaders = shader_registry(&assets)?;
@@ -451,14 +608,7 @@ fn studio_state_json_with_draft(
     // Hot reload uses the same fonts and source composition as Studio preview.
     let explicit_font_blobs = read_font_files(&request.fonts)?;
     let font_blobs = authoring_font_blobs(&explicit_font_blobs);
-    let data_binding = if let Some(value) = draft.and_then(|draft| draft.data.as_ref()) {
-        Some(valle_compiler::motion::PrepareDataBinding {
-            source: "studio:draft".into(),
-            value: value.clone(),
-        })
-    } else {
-        load_prepare_data(&request.input, request.data.as_deref())?
-    };
+    let data_binding = load_prepare_data(&request.input, request.data.as_deref())?;
     let (compiled, _) = match compile_with_font_assets(
         &module_graph,
         &resources,
@@ -516,11 +666,7 @@ fn studio_state_json_with_draft(
     let artifact_digest =
         ContentDigest::of_bytes(&canonical_bytes(&prepared.compiled.artifact)?).to_wire();
     let duration_frames = delivery.duration_frames;
-    let props = if let Some(draft) = draft {
-        draft.props.clone()
-    } else {
-        read_prop_bindings(request.bindings.props.as_deref())?
-    };
+    let props = read_prop_bindings(request.bindings.props.as_deref())?;
     let frame_rate = delivery.fps;
     let runtime_font_blobs =
         fixed_package_font_blobs(&prepared.compiled.artifact, &explicit_font_blobs)?;
@@ -561,7 +707,7 @@ fn studio_state_json_with_draft(
                 .map(|asset| {
                     (
                         asset.hash.to_string(),
-                        crate::preview_store::PreviewFile::Bytes(Arc::from(asset.bytes.clone())),
+                        crate::preview_store::PreviewFile::Bytes(Arc::clone(&asset.bytes)),
                     )
                 })
                 .collect(),
@@ -759,7 +905,7 @@ fn load_motion_module_graph(input: &Path) -> Result<valle_compiler::motion::Moti
     })
 }
 
-fn motion_module_paths(input: &Path) -> Result<Vec<PathBuf>> {
+pub(crate) fn motion_module_paths(input: &Path) -> Result<Vec<PathBuf>> {
     let root = input.parent().unwrap_or_else(|| Path::new("."));
     let graph = load_motion_module_graph(input)?;
     Ok(graph.modules.keys().map(|path| root.join(path)).collect())
@@ -866,19 +1012,9 @@ fn compile_and_prepare(
         }
     };
 
-    ensure_rendered_assets_are_bound(&compiled.artifact, &assets)?;
-
-    compiled
-        .artifact
-        .validate_with_shaders(&shaders)
-        .map_err(|errors| {
-            anyhow!("compiler produced a scene that failed shader admission: {errors:?}")
-        })?;
     let compile_elapsed = compile_started.map(|started| started.elapsed());
     let prepare_started = perf.then(Instant::now);
-    valle_motion::prepare_scene(&compiled.artifact).map_err(|error| {
-        anyhow!("compiler produced a scene that failed capability admission: {error}")
-    })?;
+    let prepared = finish_prepared_input(compiled, data_binding, assets, shaders)?;
     if let (Some(compile), Some(prepare_started)) = (compile_elapsed, prepare_started) {
         eprintln!(
             "[valle motion prepare] compile+admit {:.3} ms; prepare {:.3} ms",
@@ -886,19 +1022,7 @@ fn compile_and_prepare(
             prepare_started.elapsed().as_secs_f64() * 1_000.0,
         );
     }
-    let canvas_size = compiled
-        .artifact
-        .composition
-        .as_ref()
-        .ok_or_else(|| anyhow!("Motion entry requires composition metadata"))?
-        .viewport();
-    Ok(Ok(PreparedInput {
-        compiled,
-        data_binding,
-        assets,
-        shaders,
-        canvas_size,
-    }))
+    Ok(Ok(prepared))
 }
 
 fn perf_enabled() -> bool {
@@ -926,16 +1050,34 @@ fn load_assets(specs: &[String]) -> Result<BTreeMap<String, BoundAsset>> {
 }
 
 pub(super) fn load_asset(path: &Path) -> Result<BoundAsset> {
-    let bytes = if path.to_string_lossy().ends_with(".shader.json") {
-        valle_compiler::load_shader_asset(path)?.frozen_bytes()?
+    Ok(load_asset_with_dependencies(path)?.0)
+}
+
+pub(super) fn load_asset_with_dependencies(
+    path: &Path,
+) -> Result<(BoundAsset, Vec<(PathBuf, ContentDigest)>)> {
+    let bytes = std::fs::read(path).with_context(|| format!("reading asset {}", path.display()))?;
+    let mut dependencies = vec![(path.to_owned(), ContentDigest::of_bytes(&bytes))];
+    let frozen = if path.to_string_lossy().ends_with(".shader.json") {
+        valle_motion::shader::ShaderPackage::admit_with_resolver(&bytes, |entry| {
+            let source_path = path.parent().unwrap_or_else(|| Path::new(".")).join(entry);
+            let source = std::fs::read(&source_path)
+                .map_err(|error| format!("reading {}: {error}", source_path.display()))?;
+            dependencies.push((source_path, ContentDigest::of_bytes(&source)));
+            Ok(source)
+        })?
+        .frozen_bytes()?
     } else {
-        std::fs::read(path).with_context(|| format!("reading asset {}", path.display()))?
+        bytes
     };
-    Ok(BoundAsset {
-        path: path.to_owned(),
-        hash: ContentDigest::of_bytes(&bytes),
-        bytes,
-    })
+    Ok((
+        BoundAsset {
+            path: path.to_owned(),
+            hash: ContentDigest::of_bytes(&frozen),
+            bytes: frozen.into(),
+        },
+        dependencies,
+    ))
 }
 
 fn shader_registry(
@@ -1217,7 +1359,7 @@ fn deduplicate_font_blobs(blobs: &mut Vec<Vec<u8>>) {
 }
 
 /// Serve every built-in Motion and formula font from memory, sharing the native font bytes.
-fn mount_motion_runtime_fonts(
+pub(crate) fn mount_motion_runtime_fonts(
     files: &mut BTreeMap<String, crate::webruntime::HostedFile>,
 ) -> Result<()> {
     use crate::webruntime::HostedFile;
@@ -1241,33 +1383,52 @@ fn mount_motion_runtime_fonts(
     Ok(())
 }
 
-/// Compile a Motion component referenced by a Timeline document.
-///
-/// Compile against the component's own canvas, including module-level text measurement.
-pub(super) fn compile_timeline_component(
-    input: &Path,
-    assets: &[String],
-    data: Option<&serde_json::Value>,
-) -> Result<PreparedInput> {
-    let binding = data.map(|value| valle_compiler::motion::PrepareDataBinding {
-        source: "timeline-inline".into(),
-        value: value.clone(),
-    });
-    compile_and_prepare(
-        input,
-        assets,
-        &load_fonts(&[])?,
-        None,
-        binding.as_ref(),
-        false,
-    )?
-    .map_err(|_| anyhow!("Motion component compilation failed"))
-}
-
 fn read_prop_bindings(path: Option<&Path>) -> Result<BTreeMap<String, serde_json::Value>> {
     path.map(|path| {
         serde_json::from_str(&super::read(path)?).context("decode Motion --props object")
     })
     .transpose()
     .map(Option::unwrap_or_default)
+}
+
+#[cfg(test)]
+mod capture_tests {
+    use super::*;
+
+    #[test]
+    fn captured_component_tracks_imports_and_bound_asset_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let entry = dir.path().join("card.motion.tsx");
+        let imported = dir.path().join("theme.motion.ts");
+        let asset = dir.path().join("logo.bin");
+        std::fs::write(
+            &entry,
+            "import { accent } from './theme.motion'; export const composition = { width: 64, height: 64, duration: 1 }; export default function Card() { return <Scene />; }",
+        ).unwrap();
+        let original_import = "export const accent = '#123456';";
+        std::fs::write(&imported, original_import).unwrap();
+        std::fs::write(&asset, b"original asset").unwrap();
+        let captured =
+            capture_timeline_component(&entry, &[format!("logo={}", asset.display())], None)
+                .unwrap();
+        assert_eq!(captured.dependency_digests().count(), 3);
+        captured.verify_dependencies().unwrap();
+        std::fs::write(&imported, "export const accent = '#abcdef';").unwrap();
+        assert!(
+            captured
+                .verify_dependencies()
+                .unwrap_err()
+                .to_string()
+                .contains("theme.motion.ts")
+        );
+        std::fs::write(&imported, original_import).unwrap();
+        std::fs::write(&asset, b"replacement asset").unwrap();
+        assert!(
+            captured
+                .verify_dependencies()
+                .unwrap_err()
+                .to_string()
+                .contains("logo.bin")
+        );
+    }
 }

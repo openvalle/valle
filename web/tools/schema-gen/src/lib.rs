@@ -34,7 +34,41 @@ pub enum StudioSessionWire {
     MotionFile {
         input: String,
         generation: u64,
+        token: String,
+        #[serde(rename = "authorInputs", default, skip_serializing_if = "Option::is_none")]
+        #[ts(rename = "authorInputs", optional)]
+        author_inputs: Option<StudioMotionInputsWire>,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(rename_all = "camelCase")]
+pub struct StudioMotionInputsWire {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub fps_override: Option<String>,
+    #[ts(type = "Record<string, unknown>")]
+    pub props: BTreeMap<String, Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "Record<string, unknown>")]
+    pub data: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub data_path: Option<String>,
+    pub asset_specs: Vec<String>,
+    #[ts(type = "Record<string, string>")]
+    pub input_digests: BTreeMap<String, String>,
+    pub extra_fonts: Vec<String>,
+    pub font_urls: Vec<StudioFontUrlWire>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(rename_all = "camelCase")]
+pub struct StudioFontUrlWire {
+    pub url: String,
+    pub role: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
@@ -56,6 +90,7 @@ pub struct StudioRuntimeWire {
     #[ts(optional)]
     pub proxy_base: Option<String>,
     pub asset_urls: BTreeMap<String, String>,
+    pub font_urls: Vec<StudioFontUrlWire>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
@@ -292,6 +327,8 @@ pub fn render_types(include_drift_probe: bool) -> String {
         declaration::<MotionFrameRateWire>(),
         declaration::<CodeWire>(),
         declaration::<StudioSessionWire>(),
+        declaration::<StudioMotionInputsWire>(),
+        declaration::<StudioFontUrlWire>(),
         declaration::<StudioCapabilitiesWire>(),
         declaration::<StudioRuntimeWire>(),
         declaration::<StudioBootWire>(),

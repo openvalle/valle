@@ -13,7 +13,6 @@ anyhow.workspace = true
 # OXC owns syntax and source spans; QuickJS executes preparation code.
 oxc = { workspace = true, features = [
     "semantic",
-    "transformer",
     "codegen",
     "ast_visit",
 ], optional = true }

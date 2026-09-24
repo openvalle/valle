@@ -692,7 +692,7 @@ mod tests {
         let corpus = decode_audio_corpus(&BoundAsset {
             path: file.path().to_path_buf(),
             hash: ContentDigest::of_bytes(&bytes),
-            bytes: Vec::new(),
+            bytes: Vec::new().into(),
         })
         .unwrap();
         assert_eq!(corpus.sample_count, 3);

@@ -139,6 +139,11 @@ invalid source ranges; it does not test every frame or encoder.
 from that file's directory. Edits preview without changing the file; **Save** atomically
 writes the complete JSON back to the opened path. External file changes cause a conflict
 until explicitly reloaded. This session does not create a project or persistent revisions.
+Studio shows the authored Timeline and referenced Motion source in one editor. JSX
+changes update the browser preview before saving; **Save** writes changed source
+files first, then the Timeline when its arrangement or instance bindings changed.
+If a source file cannot compile, the author document and code editor stay open so
+the error can be corrected. Source and Timeline conflicts keep the local draft.
 Use `--web-assets-dir web/dist` when running a development binary without embedded assets.
 
 ## Project: versioned timeline editing

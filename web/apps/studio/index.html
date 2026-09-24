@@ -14,10 +14,10 @@
     </a>
     <span class="top-divider"></span>
     <span class="project-name" id="projectName">Studio</span>
-    <span class="crumb" id="workspaceCrumb" hidden></span>
     <span class="session-badge" id="sessionBadge"></span>
     <div class="top-actions">
       <span id="saveStatus" class="save-status"></span>
+      <button class="button quiet" id="saveAsTimeline" type="button" hidden>Save as Timeline</button>
       <studio-project-controls id="projectControls"></studio-project-controls>
       <button class="icon-button" id="undoBtn" type="button" title="Undo (⌘Z)" aria-label="Undo" disabled data-icon="undo"></button>
       <button class="icon-button" id="redoBtn" type="button" title="Redo (⇧⌘Z)" aria-label="Redo" disabled data-icon="redo"></button>
@@ -29,18 +29,16 @@
     <section class="preview-pane">
       <div class="stage-toolbar">
         <div class="workspace-tabs" aria-label="Workspace">
-          <button class="workspace-tab active" id="timelineMode" type="button" aria-pressed="true">
+          <span class="workspace-tab active">
             <span data-icon="timeline"></span>Timeline
-          </button>
-          <button class="workspace-tab" id="motionMode" type="button" aria-pressed="false" disabled>
-            <span data-icon="motion"></span>Motion
-          </button>
+          </span>
         </div>
         <span class="preview-status info" id="previewStatus" role="status">
           <span class="status-dot"></span><span id="previewStatusText">Loading…</span>
         </span>
         <div class="stage-options">
           <span class="stage-meta" id="stageMeta"></span>
+          <button class="button quiet" id="sourceToggle" type="button" hidden>Code</button>
           <button class="button quiet fit-control" id="stageFit" type="button" title="Fit canvas / actual size">
             Fit
           </button>
@@ -69,6 +67,17 @@
         <div class="stage-banner" id="stageBanner" role="status" hidden></div>
       </div>
 
+      <section class="source-pane" id="sourcePane" aria-label="Motion source editor" hidden>
+        <div class="source-toolbar">
+          <label for="sourceFile">Source</label>
+          <select id="sourceFile" aria-label="Source file"></select>
+          <span id="sourceStatus" role="status"></span>
+          <button class="button quiet" id="sourceReload" type="button">Reload</button>
+          <button class="button" id="sourceSave" type="button">Save</button>
+        </div>
+        <textarea id="sourceText" aria-label="Motion source code" spellcheck="false" autocapitalize="off" autocomplete="off" autocorrect="off"></textarea>
+      </section>
+
       <studio-transport class="transport" id="studioTransport"></studio-transport>
     </section>
 
@@ -81,7 +90,6 @@
       </div>
       <div class="inspector-scroll" id="inspectorScroll">
         <studio-inspector id="inspectorBody"></studio-inspector>
-        <studio-motion-workspace id="motionWorkspace" hidden></studio-motion-workspace>
       </div>
     </aside>
   </section>
@@ -112,6 +120,19 @@
       <span id="statusbarRight"></span>
     </footer>
   </section>
+
+  <dialog id="saveAsTimelineDialog" class="studio-dialog" aria-labelledby="saveAsTimelineTitle">
+    <form id="saveAsTimelineForm">
+      <h2 id="saveAsTimelineTitle">Save as Timeline</h2>
+      <label for="saveAsTimelinePath">Timeline JSON path</label>
+      <input id="saveAsTimelinePath" type="text" required />
+      <p>The JSX files and bound assets remain external references.</p>
+      <div class="dialog-actions">
+        <button class="button quiet" id="saveAsTimelineCancel" type="button">Cancel</button>
+        <button class="button primary" type="submit">Save Timeline</button>
+      </div>
+    </form>
+  </dialog>
 </valle-studio-app>
 
 <div class="drag-tip" id="dragTip" hidden></div>

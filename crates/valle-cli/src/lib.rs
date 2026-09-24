@@ -8,6 +8,7 @@ mod embedded {
 }
 mod output;
 mod preview_store;
+mod source_files;
 mod timeline_file;
 mod webhost;
 pub mod webruntime;

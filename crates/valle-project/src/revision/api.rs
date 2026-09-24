@@ -2,12 +2,13 @@ use std::collections::BTreeMap;
 
 use valle_timeline::{
     Timeline, TimelineValidationReport, decode_edit_request,
+    internal::CanonicalTimeline,
     wire::edit::{
         EditErrorWire, EditTimelineRequestWire, EditTimelineResponseWire, EditTimelineResultWire,
     },
 };
 
-use super::store::ProjectStore;
+use super::store::{ProjectStore, compile_timeline_document};
 use super::{
     AuthenticatedContext, ProjectId, SnapshotWriteResult, StoreFault, validate_public_revision,
 };
@@ -32,6 +33,21 @@ impl ProjectStore {
         Ok(self.edit_timeline(project_id, &request, auth)?)
     }
 
+    /// Use a compiler bound to one immutable set of source inputs for this write.
+    pub fn edit_timeline_json_with_compiler(
+        &self,
+        project_id: &ProjectId,
+        request_json: &str,
+        auth: &AuthenticatedContext,
+        compiler: &dyn Fn(
+            &Timeline,
+        )
+            -> Result<CanonicalTimeline, valle_compiler::CompileTimelineError>,
+    ) -> Result<EditTimelineResponseWire, EditTimelineServiceError> {
+        let request = decode_edit_request(request_json)?;
+        Ok(self.edit_timeline_with_compiler(project_id, &request, auth, compiler)?)
+    }
+
     /// Replace the complete sparse Timeline against one known HEAD.
     /// This is the only public write that accepts Timeline content.
     pub fn edit_timeline(
@@ -40,18 +56,32 @@ impl ProjectStore {
         request: &EditTimelineRequestWire,
         auth: &AuthenticatedContext,
     ) -> Result<EditTimelineResponseWire, StoreFault> {
+        self.edit_timeline_with_compiler(project_id, request, auth, &compile_timeline_document)
+    }
+
+    pub fn edit_timeline_with_compiler(
+        &self,
+        project_id: &ProjectId,
+        request: &EditTimelineRequestWire,
+        auth: &AuthenticatedContext,
+        compiler: &dyn Fn(
+            &Timeline,
+        )
+            -> Result<CanonicalTimeline, valle_compiler::CompileTimelineError>,
+    ) -> Result<EditTimelineResponseWire, StoreFault> {
         validate_public_revision(request.base_revision)?;
         let timeline = match Timeline::from_wire(request.timeline.clone()) {
             Ok(timeline) => timeline,
             Err(report) => return Ok(rejected(timeline_report(report))),
         };
 
-        match self.write_timeline_snapshot(
+        match self.write_timeline_snapshot_with_compiler(
             project_id,
             request.base_revision,
             &timeline,
             request.intent.as_deref(),
             auth,
+            compiler,
         ) {
             Ok(result) => Ok(edit_response(result)),
             Err(StoreFault::InvalidIntent) => Ok(rejected(vec![EditErrorWire {

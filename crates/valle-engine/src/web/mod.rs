@@ -9,6 +9,26 @@ mod timeline;
 pub use motion_compiler::{compile_motion_jsx, compile_motion_modules};
 pub use product::ProductEngine;
 
+/// Build and self-admit a complete preview package from captured author inputs.
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn prepare_preview_package(input_json: &str) -> Result<String, wasm_bindgen::JsError> {
+    let input: crate::preview_package::PreviewPackageInput = serde_json::from_str(input_json)
+        .map_err(|error| wasm_bindgen::JsError::new(&error.to_string()))?;
+    let prepared = crate::preview_package::prepare_preview_package(input)
+        .map_err(|error| wasm_bindgen::JsError::new(&error))?;
+    serde_json::to_string(&prepared).map_err(|error| wasm_bindgen::JsError::new(&error.to_string()))
+}
+
+/// Rewrite one directly authored declaration in the current source bytes.
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn rewrite_motion_source(input_json: &str) -> Result<String, wasm_bindgen::JsError> {
+    let input: valle_compiler::motion::MotionSourceEdit = serde_json::from_str(input_json)
+        .map_err(|error| wasm_bindgen::JsError::new(&error.to_string()))?;
+    let edited = valle_compiler::motion::rewrite_motion_source(input)
+        .map_err(|error| wasm_bindgen::JsError::new(&error))?;
+    serde_json::to_string(&edited).map_err(|error| wasm_bindgen::JsError::new(&error.to_string()))
+}
+
 /// Read-only Studio samples, evaluated by the same Rust expressions as rendering.
 #[wasm_bindgen::prelude::wasm_bindgen]
 pub fn sample_motion_properties(

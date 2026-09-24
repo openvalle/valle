@@ -110,6 +110,7 @@ export async function initializeTimelineWorkspaceRuntime(
     && resourceManifest !== undefined
     && verifiedBindingBundleJson !== undefined
   ) {
+    const loadStarted = performance.now();
     await player.load({
       fixedPackageManifestJson,
       timelineJson: config.render.timelineJson,
@@ -124,6 +125,9 @@ export async function initializeTimelineWorkspaceRuntime(
       gpu: config.gpu,
       audioContext: config.audioContext,
     });
+    performance.mark("valle-studio-player-load", { detail: {
+      durationMs: performance.now() - loadStarted,
+    } });
     return {
       previewAvailable: true,
       rendererMessage: null,
@@ -134,7 +138,7 @@ export async function initializeTimelineWorkspaceRuntime(
         compiler.timelineSourceTimeDeltaFromFrames(frames, fps, rate)
       ),
       compileTimeline,
-      setMotionSourceDurations: (durations) => { motionSourceDurations = durations; },
+      setMotionSourceDurations: (durations) => { motionSourceDurations = { ...motionSourceDurations, ...durations }; },
     };
   }
   return {
@@ -147,7 +151,7 @@ export async function initializeTimelineWorkspaceRuntime(
       compiler.timelineSourceTimeDeltaFromFrames(frames, fps, rate)
     ),
     compileTimeline,
-    setMotionSourceDurations: (durations) => { motionSourceDurations = durations; },
+    setMotionSourceDurations: (durations) => { motionSourceDurations = { ...motionSourceDurations, ...durations }; },
   };
 }
 

@@ -6,6 +6,7 @@ pub mod compositor;
 pub mod fixed_package;
 pub mod frame;
 pub mod prepare;
+pub mod preview_package;
 pub mod product;
 pub mod render;
 pub mod resource;

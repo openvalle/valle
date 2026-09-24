@@ -69,6 +69,18 @@ boundary at the actual FPS. For example, 4.6 seconds at 24 FPS produces 110 fram
 Keep data, assets and fonts consistent between previews and export; a rational
 `fps` such as `30000/1001` is accepted in `composition` and `--fps`.
 
+`motion studio` opens the same Timeline editor as `timeline studio` and
+`project studio`. A standalone file starts with one selected Motion visual clip.
+The component panel writes supported `composition` values and declared prop
+defaults back to JSX; the code pane edits the source directly. Preview compiles
+the current source in a browser Worker. The ordinary **Save** action writes source
+files; arrangement changes can be stored with **Save as Timeline**. The resulting
+JSON contains the explicit `--props`, inline `--data`, `--asset` bindings and
+effective frame rate, with resource paths resolved relative to the saved JSON.
+Extra `--font` stacks cannot be represented by a Timeline clip, so Studio disables
+that conversion until those fonts are declared and bound as font assets. Source
+editing and source saving remain available.
+
 ## Language and components
 
 ### Module and function shape

@@ -42,9 +42,6 @@ const STORED_SNAPSHOT_DIGEST_DOMAIN: &[u8] = b"valle.project-snapshot/2\0";
 pub struct ProjectStore {
     root: PathBuf,
     owners: Arc<Mutex<BTreeMap<ProjectId, Arc<ProjectOwner>>>>,
-    motion_compiler: Option<
-        Arc<dyn Fn(&Timeline) -> Result<CanonicalTimeline, CompileTimelineError> + Send + Sync>,
-    >,
 }
 
 impl std::fmt::Debug for ProjectStore {
@@ -61,28 +58,6 @@ impl ProjectStore {
         Self {
             root: root.into(),
             owners: Arc::new(Mutex::new(BTreeMap::new())),
-            motion_compiler: None,
-        }
-    }
-
-    pub fn with_motion_compiler(
-        mut self,
-        compiler: impl Fn(&Timeline) -> Result<CanonicalTimeline, CompileTimelineError>
-        + Send
-        + Sync
-        + 'static,
-    ) -> Self {
-        self.motion_compiler = Some(Arc::new(compiler));
-        self
-    }
-
-    fn compile_timeline(
-        &self,
-        timeline: &Timeline,
-    ) -> Result<CanonicalTimeline, CompileTimelineError> {
-        match &self.motion_compiler {
-            Some(compiler) => compiler(timeline),
-            None => compile_timeline_document(timeline),
         }
     }
 
@@ -173,10 +148,26 @@ impl ProjectStore {
         intent: Option<&str>,
         auth: &AuthenticatedContext,
     ) -> Result<ProjectTimelineSnapshot, StoreFault> {
+        self.create_project_with_compiler(
+            project_id,
+            timeline,
+            intent,
+            auth,
+            &compile_timeline_document,
+        )
+    }
+
+    /// Compile one genesis from the inputs captured for this request.
+    pub fn create_project_with_compiler(
+        &self,
+        project_id: &ProjectId,
+        timeline: &Timeline,
+        intent: Option<&str>,
+        auth: &AuthenticatedContext,
+        compiler: &dyn Fn(&Timeline) -> Result<CanonicalTimeline, CompileTimelineError>,
+    ) -> Result<ProjectTimelineSnapshot, StoreFault> {
         validate_intent(intent)?;
-        let canonical = self
-            .compile_timeline(timeline)
-            .map_err(StoreFault::InvalidTimelineInput)?;
+        let canonical = compiler(timeline).map_err(StoreFault::InvalidTimelineInput)?;
         self.initialize_or_validate_store_format()?;
         create_or_validate_directory(&self.projects_dir())?;
         let project_dir = self.project_dir(project_id);
@@ -297,13 +288,14 @@ impl ProjectStore {
         })
     }
 
-    pub(super) fn write_timeline_snapshot(
+    pub(super) fn write_timeline_snapshot_with_compiler(
         &self,
         project_id: &ProjectId,
         base_revision: u64,
         timeline: &Timeline,
         intent: Option<&str>,
         auth: &AuthenticatedContext,
+        compiler: &dyn Fn(&Timeline) -> Result<CanonicalTimeline, CompileTimelineError>,
     ) -> Result<SnapshotWriteResult, StoreFault> {
         self.mutate(
             project_id,
@@ -313,6 +305,7 @@ impl ProjectStore {
             },
             intent,
             auth,
+            compiler,
         )
     }
 
@@ -330,6 +323,7 @@ impl ProjectStore {
             SnapshotMutation::Restore { source_revision },
             intent,
             auth,
+            &compile_timeline_document,
         )
     }
 
@@ -340,6 +334,7 @@ impl ProjectStore {
         mutation: SnapshotMutation,
         intent: Option<&str>,
         auth: &AuthenticatedContext,
+        compiler: &dyn Fn(&Timeline) -> Result<CanonicalTimeline, CompileTimelineError>,
     ) -> Result<SnapshotWriteResult, StoreFault> {
         validate_public_revision(base_revision)?;
         if let SnapshotMutation::Restore { source_revision } = &mutation {
@@ -376,7 +371,7 @@ impl ProjectStore {
 
         let (timeline, canonical, cause) = match mutation {
             SnapshotMutation::TimelineEdit { timeline } => {
-                let canonical = match self.compile_timeline(&timeline) {
+                let canonical = match compiler(&timeline) {
                     Ok(canonical) => canonical,
                     Err(error) => {
                         return Ok(SnapshotWriteResult::Rejected {
@@ -988,7 +983,7 @@ where
     Option::<T>::deserialize(deserializer)
 }
 
-fn compile_timeline_document(
+pub(super) fn compile_timeline_document(
     timeline: &Timeline,
 ) -> Result<CanonicalTimeline, CompileTimelineError> {
     compile_timeline(timeline.clone())

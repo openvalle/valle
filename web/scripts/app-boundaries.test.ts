@@ -7,15 +7,15 @@ const root = path.resolve(import.meta.dir, "..");
 
 describe("app boundaries", () => {
   test("keep Timeline and Motion inside the single Studio app", async () => {
-    const [timeline, timelineRuntime, motion] = await Promise.all([
+    const [timeline, timelineRuntime, main] = await Promise.all([
       Bun.file(path.join(root, "apps/studio/src/timeline-workspace.ts")).text(),
       Bun.file(path.join(root, "apps/studio/src/timeline-workspace-runtime.ts")).text(),
-      Bun.file(path.join(root, "apps/studio/src/motion-workspace.ts")).text(),
+      Bun.file(path.join(root, "apps/studio/src/main.ts")).text(),
     ]);
     expect(timeline).toContain('from "valle-engine/element"');
     expect(timelineRuntime).toContain("runtimeAssets: config.runtimeAssets");
-    expect(motion).toContain('from "valle-engine/element"');
-    expect(motion).toContain("startMotionStudio");
+    expect(main).toContain("startTimelineStudio");
+    expect(main).toContain("StandaloneTimelineSession");
   });
 
   test("routes demo and console through their app-local entries", async () => {
@@ -34,7 +34,7 @@ describe("app boundaries", () => {
     expect(`${demoHtml}\n${demo}\n${consoleHtml}\n${consoleApp}`).not.toMatch(/["'`]\/(?:wasm|vendor|src)\//);
   });
 
-  test("publishes Motion only as a workspace in the single Studio app", () => {
+  test("publishes one Studio app for all entry types", () => {
     expect(APP_BUILDS.filter(([name]) => name.includes("studio"))).toEqual([
       ["studio", "apps/studio/index.html"],
     ]);

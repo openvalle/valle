@@ -19,6 +19,7 @@ import {
 const runtime = {
   assetBaseUrl: "/assets/",
   proxyBase: "/proxy/",
+  fontUrls: [],
   assetUrls: {
     engineGlue: "/runtime/engine/valle_engine.js",
     engineWasm: "/runtime/engine/valle_engine_bg.wasm",
@@ -134,7 +135,27 @@ function fixedPackage() {
 }
 
 describe("Studio host adapters", () => {
-  test("file sessions load their snapshot and authenticate preview and explicit saves", async () => {
+  test("source file reads and writes carry the bound Studio token", async () => {
+    const boot = assertStudioBoot({
+      protocolVersion: 1,
+      session: { kind: "project", projectId: "p1", revision: 1, token: "secret" },
+      capabilities, runtime,
+    });
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const host = new ProjectHost(boot as ConstructorParameters<typeof ProjectHost>[0], async (url, init) => {
+      calls.push({ url: String(url), init });
+      return json(String(url) === "/source/files"
+        ? { files: [{ path: "/card.motion.tsx", status: "ok", text: "hello", baseDigest: "sha256:a" }] }
+        : { status: "saved", digest: "sha256:b" });
+    });
+    expect((await host.loadSourceFiles())[0]).toMatchObject({ path: "/card.motion.tsx", text: "hello" });
+    expect(await host.writeSourceFile({ path: "/card.motion.tsx", baseDigest: "sha256:a", text: "updated" }))
+      .toEqual({ status: "saved", digest: "sha256:b" });
+    expect(calls.map((call) => call.url)).toEqual(["/source/files", "/source/write"]);
+    expect(calls.every((call) => new Headers(call.init?.headers).get("x-valle-token") === "secret")).toBe(true);
+  });
+
+  test("file sessions load their snapshot and authenticate media facts and explicit saves", async () => {
     const boot = assertStudioBoot({
       protocolVersion: 1, session: { kind: "timeline-file", input: "/cuts/edit.json", token: "file-token" },
       capabilities: { ...capabilities, saveTimeline: true }, runtime,
@@ -142,13 +163,14 @@ describe("Studio host adapters", () => {
     const calls: Array<{ url: string; init?: RequestInit }> = [];
     const host = new TimelineFileHost(boot, async (url, init) => {
       calls.push({ url: String(url), init });
-      return json(String(url) === "/timeline/edit" ? { outcome: "committed", revision: 2 } : fixedPackage());
+      return json(String(url) === "/timeline/edit" ? { outcome: "committed", revision: 2 }
+        : String(url) === "/timeline/media-facts" ? { status: "ok", resources: [], assets: [], inputDependencies: {} } : fixedPackage());
     });
     expect((await host.loadTimeline()).timeline).toEqual(sparseTimeline());
-    await host.prepareTimelinePreview({ timeline: sparseTimeline() });
+    expect(await host.loadMediaFacts({ timeline: sparseTimeline() })).toEqual({ status: "ok", resources: [], assets: [], inputDependencies: {} });
     const edit = { baseRevision: 1, timeline: sparseTimeline(), intent: "Save file" };
     expect(await host.saveTimeline(edit)).toEqual({ outcome: "committed", revision: 2 });
-    expect(calls.map((call) => call.url)).toEqual(["/timeline/get", "/timeline/preview", "/timeline/edit"]);
+    expect(calls.map((call) => call.url)).toEqual(["/timeline/get", "/timeline/media-facts", "/timeline/edit"]);
     for (const call of calls.slice(1)) {
       expect(call.init?.method).toBe("POST");
       expect(new Headers(call.init?.headers).get("x-valle-token")).toBe("file-token");
@@ -160,7 +182,7 @@ describe("Studio host adapters", () => {
     const fixtures = [
       [{ kind: "project", projectId: "p1", revision: 3, token: "tok" }, ProjectHost],
       [{ kind: "timeline-file", input: "cut.valle.json", token: "file-token" }, TimelineFileHost],
-      [{ kind: "motion-file", input: "card.motion.tsx", generation: 2 }, MotionFileHost],
+      [{ kind: "motion-file", input: "card.motion.tsx", generation: 2, token: "motion-token" }, MotionFileHost],
     ] as const;
     for (const [session, Host] of fixtures) {
       const fetcher = async () => json({ protocolVersion: 1, session, capabilities, runtime });
@@ -240,7 +262,7 @@ describe("Studio host adapters", () => {
     expect(report).toMatchObject({ outcome: "committed", revision: 8 });
   });
 
-  test("project host prepares a one-shot draft preview without persisting", async () => {
+  test("project host requests frozen media facts without persisting", async () => {
     const calls: Array<{ url: string; init?: RequestInit }> = [];
     const boot = assertStudioBoot({
       protocolVersion: 1,
@@ -248,16 +270,10 @@ describe("Studio host adapters", () => {
       capabilities: { ...capabilities, saveTimeline: true, editProject: true },
       runtime,
     });
-    const packageJson = fixedPackage();
     const fetcher = (async (input: string | URL | Request, init?: RequestInit) => {
       const url = String(input);
       calls.push({ url, init });
-      return json({
-        status: "ok",
-        timelineJson: packageJson.timelineJson,
-        timeline: packageJson.timeline,
-        render: packageJson.render,
-      });
+      return json({ status: "ok", resources: [], assets: [], inputDependencies: {} });
     });
     const host = new ProjectHost(
       boot as typeof boot & { session: Extract<typeof boot.session, { kind: "project" }> },
@@ -265,18 +281,13 @@ describe("Studio host adapters", () => {
     );
 
     const draft = sparseTimeline();
-    const result = await host.prepareTimelinePreview?.({ timeline: draft });
+    const result = await host.loadMediaFacts?.({ timeline: draft });
 
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.url).toBe("/timeline/preview?project=p1");
+    expect(calls[0]?.url).toBe("/timeline/media-facts?project=p1");
     expect(new Headers(calls[0]?.init?.headers).get("x-valle-token")).toBe("secret");
     expect(JSON.parse(String(calls[0]?.init?.body))).toEqual({ timeline: draft });
-    expect(result).toMatchObject({
-      status: "ok",
-      render: {
-        fixedPackageManifestJson: packageJson.render.fixedPackageManifestJson,
-      },
-    });
+    expect(result).toEqual({ status: "ok", resources: [], assets: [], inputDependencies: {} });
   });
 
   test("Timeline host fails closed on the unsupported versioned track-list shape", async () => {

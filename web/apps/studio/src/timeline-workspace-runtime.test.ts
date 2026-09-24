@@ -110,9 +110,12 @@ test("file Studio passes resolved Motion metadata separately from author clips",
   );
   expect(compiledInputs[0]!.timeline).toEqual(scene);
   expect(compiledInputs[0]!.durations).toEqual({ card: 3 });
+  runtime.setMotionSourceDurations({ otherData: 2 });
+  runtime.compileTimeline(scene);
+  expect(compiledInputs[1]!.durations).toEqual({ card: 3, otherData: 2 });
   runtime.setMotionSourceDurations({ card: 4 });
   runtime.compileTimeline(scene);
-  expect(compiledInputs[1]!.durations).toEqual({ card: 4 });
+  expect(compiledInputs[2]!.durations).toEqual({ card: 4, otherData: 2 });
   expect(scene.tracks.visual![0]!.clips[0]).not.toHaveProperty("sourceDuration");
 });
 

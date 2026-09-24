@@ -49,6 +49,12 @@ export interface InspectorValueRow {
   value: string;
 }
 
+export interface InspectorActionRow {
+  kind: "action";
+  key: string;
+  label: string;
+}
+
 export interface InspectorFieldRow {
   kind: "number" | "textarea" | "color" | "select" | "checkbox";
   key: string;
@@ -64,7 +70,7 @@ export interface InspectorFieldRow {
   readOnly?: boolean;
 }
 
-export type InspectorRow = InspectorValueRow | InspectorFieldRow;
+export type InspectorRow = InspectorValueRow | InspectorFieldRow | InspectorActionRow;
 
 export interface InspectorSectionView {
   title?: string;
@@ -299,6 +305,10 @@ export class StudioInspector extends LitElement {
         </div>
       `;
     }
+    if (row.kind === "action") {
+      return html`<button class="button full-width" type="button"
+        @click=${() => this.#emit({ type: "edit", clipId, key: row.key, value: "" })}>${row.label}</button>`;
+    }
     if (row.readOnly) {
       return html`
         <div class="inspector-metric">
@@ -372,8 +382,8 @@ export class StudioInspector extends LitElement {
     const key = input.dataset.editKey;
     const clipId = input.dataset.clipId;
     if (!key || !clipId) return;
-    const previous = this.viewModel?.sections.flatMap((section) => section.rows).find((row) => row.kind !== "value" && row.key === key);
-    if (previous && String(previous.value) === input.value && input.type !== "checkbox") return;
+    const previous = this.viewModel?.sections.flatMap((section) => section.rows).find((row) => row.kind !== "value" && row.kind !== "action" && row.key === key);
+    if (previous && previous.kind !== "action" && String(previous.value) === input.value && input.type !== "checkbox") return;
     if (input instanceof HTMLInputElement && input.type === "number") {
       if (input.value === "" || !input.validity.valid) { input.setAttribute("aria-invalid", "true"); input.title = input.validationMessage || "Enter a valid number"; return; }
       const parsed = Number(input.value);
@@ -386,7 +396,7 @@ export class StudioInspector extends LitElement {
       this.#emit({ type: "edit", clipId, key, value: input.checked });
       return;
     }
-    const value = input.type === "color" && previous && String(previous.value).length === 9
+    const value = input.type === "color" && previous && previous.kind !== "action" && String(previous.value).length === 9
       ? input.value + String(previous.value).slice(7) : input.value;
     this.#emit({ type: "edit", clipId, key, value });
   };
@@ -403,8 +413,8 @@ export class StudioInspector extends LitElement {
     if (event.key === "Escape") {
       const input = event.currentTarget as HTMLInputElement | HTMLTextAreaElement;
       const field = this.viewModel?.sections.flatMap((section) => section.rows)
-        .find((row) => row.kind !== "value" && row.key === input.dataset.editKey);
-      if (field) input.value = String(field.value);
+        .find((row) => row.kind !== "value" && row.kind !== "action" && row.key === input.dataset.editKey);
+      if (field && field.kind !== "action") input.value = String(field.value);
       input.removeAttribute("aria-invalid"); input.title = "";
       input.blur();
       event.stopPropagation();

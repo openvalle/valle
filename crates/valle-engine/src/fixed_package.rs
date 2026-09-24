@@ -369,6 +369,18 @@ enum VerifiedResourceFactsWire {
     },
 }
 
+pub(crate) fn prepared_resource_facts(
+    entry: &ResourceEntryWire,
+    value: Value,
+) -> Result<VerifiedResourceFacts, String> {
+    let wire: VerifiedResourceFactsWire = serde_json::from_value(value)
+        .map_err(|error| format!("[preview_package] invalid resource facts: {error}"))?;
+    if !wire.matches_manifest_entry(entry) {
+        return Err("[preview_package] resource facts disagree with the manifest entry".into());
+    }
+    wire.into_domain()
+}
+
 /// Return the four closed files used by the fixed-package inner wire.
 /// The outer manifest binds these exact bytes and paths.
 pub fn fixed_package_files<'a>(
@@ -1180,7 +1192,7 @@ fn decode_base64_payload(encoded: String, field: &str) -> Result<Arc<[u8]>, Stri
     Ok(Arc::from(bytes))
 }
 
-fn resource_entry_digest(entry: &ResourceEntryWire) -> &ContentDigest {
+pub(crate) fn resource_entry_digest(entry: &ResourceEntryWire) -> &ContentDigest {
     match entry {
         ResourceEntryWire::Video { digest, .. }
         | ResourceEntryWire::Audio { digest, .. }

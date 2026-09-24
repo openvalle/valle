@@ -1,6 +1,7 @@
 import type {
   EditTimelineRequest,
   EditTimelineResponse,
+  PreviewResourceInput,
   Timeline,
 } from "valle-engine";
 import type {
@@ -29,6 +30,9 @@ export interface TimelineContext {
   timelineJson: string;
   timeline: Timeline;
   motionSourceDurations?: Record<string, number>;
+  /** Digests of Motion files confirmed for this loaded author input. */
+  inputDependencies?: Record<string, string> | null;
+  inputDependencyError?: string | null;
   /** Derived execution data. Never use this as the Studio working copy. */
   render: TimelineRenderContext;
   preview?: { status: "unavailable"; code: string };
@@ -38,6 +42,7 @@ export interface TimelineContext {
   assetBaseUrl: string;
   proxyBase?: string | null;
   generation?: number;
+  motionInstances?: Array<{ clipPath: string; artifact: Record<string, unknown>; sourceMap: Record<string, unknown> }>;
 }
 
 export interface StudioTimelineRevision {
@@ -82,12 +87,34 @@ type TimelineVisualItem = TimelineDocument["document"]["visual"]["tracks"][numbe
 type TimelineVisualClip = Extract<TimelineVisualItem, { type: "clip" }>;
 type TimelineMotionSource = Extract<TimelineVisualClip["source"], { type: "motion" }>;
 
-export type TimelineEdit = EditTimelineRequest;
+export type TimelineEdit = EditTimelineRequest & {
+  expectedDependencies?: Record<string, string>;
+};
 export type SaveReport = EditTimelineResponse;
+
+export type SourceFile =
+  | { path: string; status: "ok"; text: string; baseDigest: string }
+  | { path: string; status: "error"; message: string; baseDigest: null };
+
+export interface WriteSourceRequest {
+  path: string;
+  baseDigest: string | null;
+  text: string;
+}
+
+export type WriteSourceResult =
+  | { status: "saved" | "unchanged"; digest: string }
+  | { status: "conflict"; currentDigest: string | null }
+  | { status: "changedAfterWrite"; digest: string };
 
 export interface TimelinePreviewRequest {
   timeline: Timeline;
 }
+
+export type MediaFactsResult =
+  | { status: "ok"; resources: PreviewResourceInput[]; assets: Array<{ id: string; url: string }>;
+      inputDependencies: Record<string, string> }
+  | { status: "error"; diagnostics: ReadonlyArray<{ class: string; code: string; message: string }> };
 
 export type TimelinePreviewResult =
   | {
@@ -104,16 +131,15 @@ export type TimelinePreviewResult =
       resourceManifest: ResourceManifest;
       verifiedBindingBundleJson: string;
     };
+    inputDependencies?: Record<string, string>;
+    motionSourceDurations?: Record<string, number>;
+    generatedWrapper?: boolean;
+    motionInstances?: Array<{ clipPath: string; artifact: Record<string, unknown>; sourceMap: Record<string, unknown> }>;
   }
   | {
     status: "error";
     diagnostics: ReadonlyArray<{ class: string; code: string; message: string }>;
   };
-
-export interface MotionPreviewRequest {
-  props: Record<string, unknown>;
-  data?: Record<string, unknown>;
-}
 
 export interface StudioHost {
   readonly boot: StudioBoot;
@@ -122,8 +148,19 @@ export interface StudioHost {
   loadTimeline?(): Promise<TimelineContext>;
   saveTimeline?(edit: TimelineEdit): Promise<SaveReport>;
   loadMotion?(request: MotionRequest): Promise<MotionContext>;
-  prepareMotionPreview?(request: MotionPreviewRequest): Promise<MotionContext>;
-  prepareTimelinePreview?(request: TimelinePreviewRequest): Promise<TimelinePreviewResult>;
+  loadMediaFacts?(request: TimelinePreviewRequest): Promise<MediaFactsResult>;
+  loadSourceFiles(drafts?: Record<string, string>): Promise<SourceFile[]>;
+  writeSourceFile(request: WriteSourceRequest): Promise<WriteSourceResult>;
+  saveStandaloneTimeline?(request: {
+    target: string;
+    baseDigest: string | null;
+    timeline: Timeline;
+    expectedDependencies: Record<string, string>;
+  }): Promise<
+    | { status: "saved"; target: string; digest: string; timeline: Timeline }
+    | { status: "conflict"; currentDigest: string | null }
+  >;
+  loadSavedStandaloneTimeline?(target: string): Promise<{ target: string; digest: string; timeline: Timeline }>;
 }
 
 interface EventSourceLike {
@@ -153,6 +190,31 @@ abstract class BaseStudioHost implements StudioHost {
 
   async load(): Promise<StudioBoot> {
     return this.boot;
+  }
+
+  async loadSourceFiles(drafts?: Record<string, string>): Promise<SourceFile[]> {
+    const result = await this.fetchJson("/source/files", {
+      ...(drafts && Object.keys(drafts).length ? {
+        method: "POST", body: JSON.stringify({ drafts }),
+        headers: { "content-type": "application/json", "x-valle-token": this.boot.session.token },
+      } : {
+      headers: { "x-valle-token": this.boot.session.token },
+      }),
+    });
+    if (!Array.isArray(result.files)) throw new Error("Studio source manifest is invalid");
+    return result.files as SourceFile[];
+  }
+
+  async writeSourceFile(request: WriteSourceRequest): Promise<WriteSourceResult> {
+    const result = await this.fetchJson("/source/write", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-valle-token": this.boot.session.token,
+      },
+      body: JSON.stringify(request),
+    });
+    return result as WriteSourceResult;
   }
 
   subscribe(onEvent: (event: StudioEvent) => void): () => void {
@@ -225,11 +287,11 @@ export class ProjectHost extends BaseStudioHost {
     return report as unknown as SaveReport;
   }
 
-  async prepareTimelinePreview(
+  async loadMediaFacts(
     request: TimelinePreviewRequest,
-  ): Promise<TimelinePreviewResult> {
+  ): Promise<MediaFactsResult> {
     const report = await this.fetchJson(
-      `/timeline/preview?project=${encodeURIComponent(this.boot.session.projectId)}`,
+      `/timeline/media-facts?project=${encodeURIComponent(this.boot.session.projectId)}`,
       {
         method: "POST",
         headers: {
@@ -239,7 +301,7 @@ export class ProjectHost extends BaseStudioHost {
         body: JSON.stringify({ timeline: request.timeline }),
       },
     );
-    return report as unknown as TimelinePreviewResult;
+    return report as unknown as MediaFactsResult;
   }
 
 }
@@ -291,22 +353,33 @@ export class TimelineFileHost extends BaseStudioHost {
     return await this.post("/timeline/edit", edit) as unknown as SaveReport;
   }
 
-  async prepareTimelinePreview(request: TimelinePreviewRequest): Promise<TimelinePreviewResult> {
-    return await this.post("/timeline/preview", request) as unknown as TimelinePreviewResult;
+  async loadMediaFacts(request: TimelinePreviewRequest): Promise<MediaFactsResult> {
+    return await this.post("/timeline/media-facts", request) as unknown as MediaFactsResult;
   }
 }
 
 export class MotionFileHost extends BaseStudioHost {
-  async prepareMotionPreview(request: MotionPreviewRequest): Promise<MotionContext> {
-    return assertMotionContext(await this.fetchJson("/motion/preview", {
+  async loadSavedStandaloneTimeline(target: string) {
+    if (this.boot.session.kind !== "motion-file") throw new Error("Motion file session required");
+    return await this.fetchJson("/motion/saved-timeline", {
       method: "POST",
-      headers: { "content-type": "application/json", "x-valle-preview": "1" },
+      headers: { "content-type": "application/json", "x-valle-token": this.boot.session.token },
+      body: JSON.stringify({ target }),
+    }) as { target: string; digest: string; timeline: Timeline };
+  }
+
+  async saveStandaloneTimeline(request: Parameters<NonNullable<StudioHost["saveStandaloneTimeline"]>>[0]) {
+    if (this.boot.session.kind !== "motion-file") throw new Error("Motion file session required");
+    return await this.fetchJson("/motion/save-timeline", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-valle-token": this.boot.session.token },
       body: JSON.stringify(request),
-    }));
+    }) as Awaited<ReturnType<NonNullable<StudioHost["saveStandaloneTimeline"]>>>;
   }
 
   async loadMotion(_request: MotionRequest = {}): Promise<MotionContext> {
-    return assertMotionContext(await this.fetchJson("/config.json"));
+    const { authorInputs: _authorInputs, ...context } = await this.fetchJson("/config.json");
+    return assertMotionContext(context);
   }
 }
 
@@ -358,7 +431,7 @@ export function assertStudioBoot(value: unknown): StudioBoot {
   } else if (kind === "timeline-file") {
     if (typeof value.session.input !== "string" || typeof value.session.token !== "string") throw new Error("timeline-file input and token are required");
   } else if (kind === "motion-file") {
-    if (typeof value.session.input !== "string" || typeof value.session.generation !== "number") {
+    if (typeof value.session.input !== "string" || typeof value.session.generation !== "number" || typeof value.session.token !== "string") {
       throw new Error("motion-file session is incomplete");
     }
   } else {

@@ -80,6 +80,15 @@ impl MotionModuleGraph {
     /// Load exactly the statically reachable closure rooted at one standalone source file.
     /// Unrelated siblings are never scanned, read or fingerprinted.
     pub fn from_entry_path(input: &Path) -> Result<Self, Vec<CompilerDiagnostic>> {
+        Self::from_entry_path_with_overrides(input, &BTreeMap::new())
+    }
+
+    /// Resolve a disk-backed closure using current editor text for the named modules.
+    /// Override keys are relative to the entry directory, exactly like graph module keys.
+    pub fn from_entry_path_with_overrides(
+        input: &Path,
+        overrides: &BTreeMap<String, String>,
+    ) -> Result<Self, Vec<CompilerDiagnostic>> {
         let root = input.parent().unwrap_or_else(|| Path::new("."));
         let entry = input
             .file_name()
@@ -94,7 +103,7 @@ impl MotionModuleGraph {
             })?
             .to_owned();
         let mut modules = BTreeMap::new();
-        load_disk_module(root, &entry, &mut modules, &mut Vec::new())?;
+        load_disk_module(root, &entry, overrides, &mut modules, &mut Vec::new())?;
         Self::new(entry, modules)
     }
 }
@@ -481,6 +490,7 @@ fn discover_dependencies(
 fn load_disk_module(
     root: &Path,
     module: &str,
+    overrides: &BTreeMap<String, String>,
     modules: &mut BTreeMap<String, String>,
     chain: &mut Vec<String>,
 ) -> Result<(), Vec<CompilerDiagnostic>> {
@@ -514,14 +524,19 @@ fn load_disk_module(
             format!("Motion module `{module}` must be a regular file inside the project root"),
         )]);
     }
-    let source = std::fs::read_to_string(&disk_path).map_err(|error| {
-        vec![path_diagnostic(
-            module,
-            "",
-            Span::new(0, 0),
-            format!("cannot read Motion module `{module}`: {error}"),
-        )]
-    })?;
+    let source = overrides
+        .get(module)
+        .cloned()
+        .map(Ok)
+        .unwrap_or_else(|| std::fs::read_to_string(&disk_path))
+        .map_err(|error| {
+            vec![path_diagnostic(
+                module,
+                "",
+                Span::new(0, 0),
+                format!("cannot read Motion module `{module}`: {error}"),
+            )]
+        })?;
     if module.ends_with(".css") {
         return Err(vec![path_diagnostic(
             module,
@@ -542,7 +557,7 @@ fn load_disk_module(
                 format!("{message}; import chain: {}", chain.join(" -> ")),
             )]
         })?;
-        load_disk_module(root, &dependency, modules, chain)?;
+        load_disk_module(root, &dependency, overrides, modules, chain)?;
     }
     chain.pop();
     modules.insert(module.to_owned(), source);

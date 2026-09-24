@@ -30,6 +30,37 @@ fn edit(
 }
 
 #[test]
+fn request_compiler_is_used_only_after_base_revision_matches() {
+    let (_temporary, store, id, auth) = fixture();
+    store
+        .create_project(&id, &timeline(0), None, &auth)
+        .unwrap();
+    let request = EditTimelineRequestWire {
+        base_revision: 1,
+        timeline: timeline(1).to_wire(),
+        intent: None,
+    };
+    let committed = store
+        .edit_timeline_with_compiler(&id, &request, &auth, &|document| {
+            valle_compiler::compile_timeline(document.clone())
+        })
+        .unwrap();
+    assert!(matches!(
+        committed.result,
+        EditTimelineResultWire::Committed { .. }
+    ));
+    let stale = store
+        .edit_timeline_with_compiler(&id, &request, &auth, &|_| {
+            panic!("a stale request must not compile from its captured inputs")
+        })
+        .unwrap();
+    assert!(matches!(
+        stale.result,
+        EditTimelineResultWire::StaleBase { .. }
+    ));
+}
+
+#[test]
 fn genesis_persists_sparse_author_truth_and_exposes_compiled_internal_view() {
     let (_temporary, store, id, auth) = fixture();
     let authored = timeline(0);

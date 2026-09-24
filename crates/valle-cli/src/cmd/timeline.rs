@@ -125,6 +125,7 @@ pub(crate) struct TimelinePreviewPackage {
     pub verified_binding_bundle_json: String,
     pub motion: serde_json::Value,
     pub blobs: std::collections::BTreeMap<String, PreviewFile>,
+    pub input_dependencies: std::collections::BTreeMap<String, ContentDigest>,
     catalog: NativeResourceCatalog,
 }
 
@@ -143,6 +144,265 @@ pub(crate) fn prepare_timeline_preview(
     prepare_timeline_package_impl(timeline, base, Some(media))
 }
 
+/// Capture only the media inputs consumed by browser preparation. Motion source
+/// evaluation stays in the Studio Worker, including when a clip binds assets.
+pub(crate) fn prepare_timeline_media_facts(
+    timeline: Timeline,
+    base: &Path,
+    media: &mut FrozenMediaCache,
+) -> Result<(
+    Vec<serde_json::Value>,
+    std::collections::BTreeMap<String, PreviewFile>,
+    std::collections::BTreeMap<String, ContentDigest>,
+)> {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    let original_doc: serde_json::Value = serde_json::from_slice(&timeline_bytes(&timeline)?)?;
+    let mut doc = original_doc.clone();
+    let mut motion_assets = BTreeSet::new();
+    for track in doc["tracks"]["visual"].as_array_mut().into_iter().flatten() {
+        if let Some(clips) = track["clips"].as_array_mut() {
+            clips.retain(|clip| {
+                if clip["kind"] != "motion" {
+                    return true;
+                }
+                if let Some(bindings) = clip["resources"].as_object() {
+                    motion_assets.extend(
+                        bindings
+                            .values()
+                            .filter_map(|value| value.as_str().map(str::to_owned)),
+                    );
+                }
+                false
+            });
+        }
+    }
+    let mut used_by_media = BTreeSet::new();
+    collect_used_resources(&doc["tracks"], &mut used_by_media);
+    let mut inputs = Vec::new();
+    let mut blobs = BTreeMap::new();
+    let mut input_dependencies = BTreeMap::new();
+    let mut record_dependency = |path: &Path, digest: ContentDigest| -> Result<()> {
+        let key = path.canonicalize()?.to_string_lossy().into_owned();
+        if input_dependencies
+            .insert(key.clone(), digest)
+            .is_some_and(|old| old != digest)
+        {
+            bail!("Motion asset changed during preview: {key}");
+        }
+        Ok(())
+    };
+    if !used_by_media.is_empty() {
+        let package = prepare_timeline_preview(decode_timeline(&doc.to_string())?, base, media)?;
+        let manifest: serde_json::Value = serde_json::from_str(&package.resource_manifest_json)?;
+        let bundle: serde_json::Value =
+            serde_json::from_str(&package.verified_binding_bundle_json)?;
+        let entries = manifest["entries"]
+            .as_object()
+            .context("media entries missing")?;
+        let bindings = bundle["bindings"]
+            .as_object()
+            .context("media bindings missing")?;
+        for (id, entry) in entries {
+            let binding = bindings
+                .get(id)
+                .with_context(|| format!("media binding {id} missing"))?;
+            inputs.push(serde_json::json!({
+                "id": id, "entry": entry, "facts": binding["facts"],
+                "dependencies": binding["dependencies"],
+            }));
+        }
+        blobs = package.blobs;
+    }
+
+    let frozen = Arc::new(tempfile::tempdir().context("freezing Motion preview assets")?);
+    let mut resources = super::motion_package::FixedResources::new();
+    for alias in motion_assets {
+        let id = format!("resource:{alias}");
+        let locator = original_doc["resources"][&alias]
+            .as_str()
+            .with_context(|| format!("missing Motion resource {alias}"))?;
+        if locator.contains("://") {
+            bail!("Motion resource {alias}: use a local resource locator");
+        }
+        let path = base.join(locator);
+        // Probe only media containers. FFmpeg probing an arbitrary image or
+        // font can block the preview request.
+        let extension = path
+            .extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        let video_candidate = matches!(
+            extension.as_str(),
+            "mp4" | "mov" | "mkv" | "webm" | "avi" | "m4v"
+        );
+        let audio_candidate = video_candidate
+            || matches!(
+                extension.as_str(),
+                "wav" | "mp3" | "m4a" | "aac" | "flac" | "ogg" | "opus"
+            );
+        if inputs.iter().any(|input| input["id"] == id) {
+            if audio_candidate {
+                let (digest, _) = media.get(&path)?;
+                record_dependency(&path, digest)?;
+            } else {
+                let (_, dependencies) = super::motion::load_asset_with_dependencies(&path)?;
+                for (path, digest) in dependencies {
+                    record_dependency(&path, digest)?;
+                }
+            }
+            continue;
+        }
+        let video =
+            video_candidate && valle_media::codec::decode::probe_video_presentation(&path).is_ok();
+        let audio = !video
+            && audio_candidate
+            && matches!(
+                valle_media::codec::audio::probe_audio_stream(&path),
+                Ok(Some(_))
+            );
+        if video || audio {
+            let (hash, file) = media.get(&path)?;
+            record_dependency(&path, hash)?;
+            let frozen_path = match &file {
+                PreviewFile::File { path, .. } => path.clone(),
+                PreviewFile::Bytes(_) => unreachable!(),
+            };
+            blobs.entry(hash.as_hex().to_owned()).or_insert(file);
+            if video {
+                add_video_resource(
+                    &mut resources,
+                    &id,
+                    hash,
+                    &frozen_path,
+                    has_motion_resource(&original_doc["tracks"], &alias),
+                )?;
+            } else {
+                let asset = super::motion::BoundAsset {
+                    path: frozen_path,
+                    bytes: Arc::from([]),
+                    hash,
+                };
+                resources.add_asset(&id, AssetKind::Audio, &asset)?;
+            }
+            continue;
+        }
+        let (mut asset, dependencies) = super::motion::load_asset_with_dependencies(&path)?;
+        for (path, digest) in dependencies {
+            record_dependency(&path, digest)?;
+        }
+        let kind = if locator.ends_with(".shader.json") {
+            AssetKind::Shader
+        } else if ttf_parser::Face::parse(&asset.bytes, 0).is_ok() {
+            AssetKind::Font
+        } else if valle_render::host::probe_image_extent(&asset.bytes).is_ok() {
+            AssetKind::Image
+        } else if valle_motion::scene3d::admit_glb(&asset.bytes).is_ok() {
+            AssetKind::Model3d
+        } else {
+            let environment = valle_motion::scene3d::EnvironmentAsset::from_encoded(
+                &asset.bytes,
+                Default::default(),
+            )
+            .with_context(|| format!("unsupported Motion resource {alias}"))?;
+            asset.bytes = environment.frozen_bytes()?.into();
+            AssetKind::Environment
+        };
+        asset.hash = ContentDigest::of_bytes(&asset.bytes);
+        let frozen_path = frozen.path().join(asset.hash.as_hex());
+        std::fs::write(&frozen_path, &asset.bytes)?;
+        asset.path = frozen_path.clone();
+        blobs
+            .entry(asset.hash.as_hex().to_owned())
+            .or_insert(PreviewFile::File {
+                path: frozen_path,
+                _directory: Arc::clone(&frozen),
+            });
+        resources.add_asset(&id, kind, &asset)?;
+    }
+    let capabilities = resources.capabilities();
+    let bindings = canonical_verified_binding_bundle(&resources.domain_bindings, &capabilities)
+        .map_err(|error| anyhow!(error))?;
+    let bindings: serde_json::Value = serde_json::from_str(&bindings)?;
+    for (id, entry) in resources.entries {
+        let binding = &bindings["bindings"][&id];
+        inputs.push(serde_json::json!({
+            "id": id, "entry": entry, "facts": binding["facts"],
+            "dependencies": binding["dependencies"],
+        }));
+    }
+    Ok((inputs, blobs, input_dependencies))
+}
+
+fn add_video_resource(
+    resources: &mut super::motion_package::FixedResources,
+    id: &str,
+    hash: ContentDigest,
+    path: &Path,
+    include_audio: bool,
+) -> Result<()> {
+    use valle_timeline::internal::wire::resource::*;
+    let probe = valle_media::codec::decode::probe_video_presentation(path)?;
+    let audio = valle_media::codec::audio::probe_audio_stream(path)?;
+    let mut dependencies = Vec::new();
+    if audio.is_some() && include_audio {
+        let audio_id = format!("{id}:audio");
+        resources.add_asset(
+            &audio_id,
+            AssetKind::Audio,
+            &super::motion::BoundAsset {
+                path: path.to_path_buf(),
+                bytes: Arc::from([]),
+                hash,
+            },
+        )?;
+        dependencies.push(super::motion_package::FixedResourceDependency {
+            role: "audio".into(),
+            resource_id: audio_id,
+        });
+    }
+    let descriptor = VideoResourceDescriptorWire {
+        duration: valle_timeline::RationalTime::new(
+            probe
+                .duration_ticks
+                .checked_mul(i64::from(probe.time_base.0))
+                .ok_or_else(|| anyhow!("video duration overflow"))?,
+            probe.time_base.1 as u32,
+        )?,
+        time_base: valle_timeline::time::ExactRational::new(
+            i64::from(probe.time_base.0),
+            probe.time_base.1 as u32,
+        )?,
+        presentation_index_digest: ContentDigest::of_bytes(&serde_json::to_vec(
+            &probe.presentation,
+        )?),
+        width: probe.display.width,
+        height: probe.display.height,
+        orientation: MediaOrientationWire::Identity,
+        color: MediaColorDescriptorWire {
+            primaries: ColorPrimariesWire::Srgb,
+            transfer: ColorTransferWire::Srgb,
+            matrix: ColorMatrixWire::Identity,
+            full_range: true,
+        },
+        video_stream: probe.stream,
+        audio_stream: audio.map(|audio| audio.stream),
+    };
+    resources.add(
+        id,
+        ResourceEntryWire::Video {
+            digest: hash,
+            descriptor: descriptor.clone(),
+        },
+        valle_engine::render::VerifiedResourceFacts::Video {
+            descriptor,
+            temporal_footprint: Default::default(),
+        },
+        dependencies,
+    )
+}
+
 fn prepare_timeline_package_impl(
     timeline: Timeline,
     base: &Path,
@@ -155,7 +415,9 @@ fn prepare_timeline_package_impl(
     let timeline_json = String::from_utf8(timeline_bytes(&timeline)?)?;
     let mut doc: serde_json::Value = serde_json::from_slice(&timeline_bytes(&timeline)?)?;
     prepare_motion_instances(&mut doc)?;
-    let (mut prepared_motions, motion_sources) = prepare_motion_sources(&doc, base)?;
+    let captured_motions = capture_motion_sources(&doc, base)?;
+    let input_dependencies = captured_motions.dependency_digests()?;
+    let (mut prepared_motions, motion_sources) = captured_motions.prepare()?;
     let compiled = valle_compiler::compile_timeline_with_motion_sources(timeline, &motion_sources)?;
     let canonical = encode_canonical(&compiled)?;
     let frozen = Arc::new(tempfile::tempdir().context("creating immutable render resources")?);
@@ -316,7 +578,7 @@ fn prepare_timeline_package_impl(
                     let path = frozen.path().join(asset.hash.as_hex());
                     std::fs::write(&path, &asset.bytes)?;
                     (
-                        asset.bytes,
+                        asset.bytes.to_vec(),
                         asset.hash,
                         PreviewFile::File {
                             path,
@@ -403,60 +665,16 @@ fn prepare_timeline_package_impl(
                 .ok_or_else(|| anyhow!("resource {name} has no supported Timeline consumer"))?;
             let asset = super::motion::BoundAsset {
                 path: path.clone(),
-                bytes,
+                bytes: bytes.into(),
                 hash,
             };
             if kind == AssetKind::Video {
-                let probe = valle_media::codec::decode::probe_video_presentation(&path)?;
-                let audio = valle_media::codec::audio::probe_audio_stream(&path)?;
-                let mut deps = Vec::new();
-                if audio.is_some() && video_audio_used(&doc, name) {
-                    let audio_id = format!("{id}:audio");
-                    resources.add_asset(&audio_id, AssetKind::Audio, &asset)?;
-                    deps.push(super::motion_package::FixedResourceDependency {
-                        role: "audio".into(),
-                        resource_id: audio_id,
-                    });
-                }
-                use valle_timeline::internal::wire::resource::*;
-                let descriptor = VideoResourceDescriptorWire {
-                    duration: valle_timeline::RationalTime::new(
-                        probe
-                            .duration_ticks
-                            .checked_mul(i64::from(probe.time_base.0))
-                            .ok_or_else(|| anyhow!("video duration overflow"))?,
-                        probe.time_base.1 as u32,
-                    )?,
-                    time_base: valle_timeline::time::ExactRational::new(
-                        i64::from(probe.time_base.0),
-                        probe.time_base.1 as u32,
-                    )?,
-                    presentation_index_digest: ContentDigest::of_bytes(&serde_json::to_vec(
-                        &probe.presentation,
-                    )?),
-                    width: probe.display.width,
-                    height: probe.display.height,
-                    orientation: MediaOrientationWire::Identity,
-                    color: MediaColorDescriptorWire {
-                        primaries: ColorPrimariesWire::Srgb,
-                        transfer: ColorTransferWire::Srgb,
-                        matrix: ColorMatrixWire::Identity,
-                        full_range: true,
-                    },
-                    video_stream: probe.stream,
-                    audio_stream: audio.map(|audio| audio.stream),
-                };
-                resources.add(
+                add_video_resource(
+                    &mut resources,
                     &id,
-                    ResourceEntryWire::Video {
-                        digest: hash,
-                        descriptor: descriptor.clone(),
-                    },
-                    valle_engine::render::VerifiedResourceFacts::Video {
-                        descriptor,
-                        temporal_footprint: Default::default(),
-                    },
-                    deps,
+                    hash,
+                    &path,
+                    video_audio_used(&doc, name),
                 )?;
             } else {
                 resources.add_asset(&id, kind, &asset)?;
@@ -477,6 +695,7 @@ fn prepare_timeline_package_impl(
     let files = fixed_package_files(&canonical, manifest, &bindings, &profile);
     let package = canonical_fixed_package_manifest(&files).map_err(|e| anyhow!(e))?;
     open_verified_fixed_package(&package, &files).map_err(|e| anyhow!(e))?;
+    captured_motions.verify_dependencies()?;
     Ok(TimelinePreviewPackage {
         timeline_json,
         canonical_timeline_json: canonical,
@@ -485,6 +704,7 @@ fn prepare_timeline_package_impl(
         verified_binding_bundle_json: bindings,
         motion: serde_json::json!({"structures": structures, "problems": [], "shaders": []}),
         blobs,
+        input_dependencies,
         catalog,
     })
 }
@@ -592,13 +812,21 @@ pub(crate) fn prepare_motion_instances(doc: &mut serde_json::Value) -> Result<()
                         .ok_or_else(|| anyhow!("missing Motion component {name}"))?;
                     let resources = clip
                         .get("resources")
-                        .filter(|value| value.as_object().is_some_and(|map| !map.is_empty()));
+                        .filter(|value| value.as_object().is_some_and(|map| !map.is_empty()))
+                        .unwrap_or(&serde_json::Value::Null)
+                        .clone();
                     let data = clip
                         .get("data")
-                        .filter(|value| value.as_object().is_some_and(|map| !map.is_empty()));
-                    let inputs = serde_json::json!([locator, resources, data]);
-                    let digest = ContentDigest::of_bytes(&serde_json::to_vec(&inputs)?);
-                    let key = format!("motion-{}", &digest.as_hex()[..56]);
+                        .filter(|value| value.as_object().is_some_and(|map| !map.is_empty()))
+                        .unwrap_or(&serde_json::Value::Null)
+                        .clone();
+                    let key = valle_compiler::motion_instance_key(
+                        locator
+                            .as_str()
+                            .ok_or_else(|| anyhow!("invalid Motion locator"))?,
+                        &resources,
+                        &data,
+                    );
                     if original.contains_key(&key) {
                         bail!("resource alias {key} collides with a prepared Motion instance");
                     }
@@ -613,16 +841,88 @@ pub(crate) fn prepare_motion_instances(doc: &mut serde_json::Value) -> Result<()
 }
 
 /// Prepare each bound Motion instance once and carry its validated composition into normalization.
-pub(crate) fn prepare_motion_sources(
+pub(crate) struct CapturedMotionSources {
+    instances: std::collections::BTreeMap<String, super::motion::CapturedTimelineComponent>,
+}
+
+impl CapturedMotionSources {
+    pub(crate) fn dependency_digests(
+        &self,
+    ) -> Result<std::collections::BTreeMap<String, ContentDigest>> {
+        let mut digests = std::collections::BTreeMap::new();
+        for instance in self.instances.values() {
+            for (path, digest) in instance.dependency_digests() {
+                let key = path.canonicalize()?.to_string_lossy().into_owned();
+                if digests
+                    .insert(key.clone(), digest)
+                    .is_some_and(|old| old != digest)
+                {
+                    bail!("Motion dependency changed during capture: {key}");
+                }
+            }
+        }
+        Ok(digests)
+    }
+
+    pub(crate) fn verify_expected_dependencies(
+        &self,
+        expected: Option<&std::collections::BTreeMap<String, ContentDigest>>,
+    ) -> Result<()> {
+        let actual = self.dependency_digests()?;
+        if actual.is_empty() {
+            return Ok(());
+        }
+        let expected = expected.ok_or_else(|| {
+            anyhow!("Motion dependency digests are required; reload the Studio inputs")
+        })?;
+        for (path, digest) in actual {
+            match expected.get(&path) {
+                Some(confirmed) if *confirmed == digest => {}
+                Some(_) => bail!("Motion dependency changed since it was loaded: {path}"),
+                None => bail!("Motion dependency was not confirmed by Studio: {path}"),
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn verify_dependencies(&self) -> Result<()> {
+        for instance in self.instances.values() {
+            instance.verify_dependencies()?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn prepare(
+        &self,
+    ) -> Result<(
+        std::collections::BTreeMap<String, super::motion::PreparedInput>,
+        std::collections::BTreeMap<String, valle_timeline::RationalTime>,
+    )> {
+        self.verify_dependencies()?;
+        let mut prepared = std::collections::BTreeMap::new();
+        let mut durations = std::collections::BTreeMap::new();
+        for (name, instance) in &self.instances {
+            let input = super::motion::compile_captured_timeline_component(instance)?;
+            let composition = input
+                .compiled
+                .artifact
+                .composition
+                .as_ref()
+                .ok_or_else(|| anyhow!("Motion {name} needs composition.duration"))?;
+            durations.insert(name.clone(), composition.duration()?);
+            prepared.insert(name.clone(), input);
+        }
+        self.verify_dependencies()?;
+        Ok((prepared, durations))
+    }
+}
+
+pub(crate) fn capture_motion_sources(
     doc: &serde_json::Value,
     base: &Path,
-) -> Result<(
-    std::collections::BTreeMap<String, super::motion::PreparedInput>,
-    std::collections::BTreeMap<String, valle_timeline::RationalTime>,
-)> {
+) -> Result<CapturedMotionSources> {
     let locators = doc["resources"].as_object().cloned().unwrap_or_default();
-    let mut prepared = std::collections::BTreeMap::new();
-    let mut durations = std::collections::BTreeMap::new();
+    let mut instances = std::collections::BTreeMap::new();
     for track in doc["tracks"]["visual"].as_array().into_iter().flatten() {
         for clip in track["clips"].as_array().into_iter().flatten() {
             if clip["kind"] != "motion" {
@@ -631,7 +931,7 @@ pub(crate) fn prepare_motion_sources(
             let name = clip["component"]
                 .as_str()
                 .ok_or_else(|| anyhow!("missing Motion component"))?;
-            if prepared.contains_key(name) {
+            if instances.contains_key(name) {
                 continue;
             }
             let locator = locators
@@ -649,22 +949,51 @@ pub(crate) fn prepare_motion_sources(
                     .ok_or_else(|| anyhow!("missing Motion resource {alias}"))?;
                 assets.push(format!("{control}={}", base.join(asset).display()));
             }
-            let input = super::motion::compile_timeline_component(
+            let input = super::motion::capture_timeline_component(
                 &base.join(locator),
                 &assets,
                 clip.get("data"),
             )?;
-            let composition = input
-                .compiled
-                .artifact
-                .composition
-                .as_ref()
-                .ok_or_else(|| anyhow!("Motion {name} needs composition.duration"))?;
-            durations.insert(name.to_owned(), composition.duration()?);
-            prepared.insert(name.to_owned(), input);
+            instances.insert(name.to_owned(), input);
         }
     }
-    Ok((prepared, durations))
+    Ok(CapturedMotionSources { instances })
+}
+
+/// Files in the current author's Motion module closure. Keep the entry available
+/// even when its imports cannot be resolved, so a broken source remains editable.
+pub(crate) fn motion_source_paths(
+    timeline: &Timeline,
+    base: &Path,
+) -> Result<std::collections::BTreeSet<std::path::PathBuf>> {
+    let document: serde_json::Value = serde_json::from_slice(&timeline_bytes(timeline)?)?;
+    let locators = document["resources"].as_object();
+    let mut paths = std::collections::BTreeSet::new();
+    for track in document["tracks"]["visual"]
+        .as_array()
+        .into_iter()
+        .flatten()
+    {
+        for clip in track["clips"].as_array().into_iter().flatten() {
+            if clip["kind"] != "motion" {
+                continue;
+            }
+            let name = clip["component"]
+                .as_str()
+                .ok_or_else(|| anyhow!("missing Motion component"))?;
+            let locator = locators
+                .and_then(|locators| locators.get(name))
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| anyhow!("missing Motion resource {name}"))?;
+            if locator.contains("://") {
+                bail!("Motion source {name} must be a local file");
+            }
+            let entry = base.join(locator);
+            paths
+                .extend(super::motion::motion_module_paths(&entry).unwrap_or_else(|_| vec![entry]));
+        }
+    }
+    Ok(paths)
 }
 
 pub(crate) fn motion_source_durations(
@@ -797,6 +1126,44 @@ mod motion_source_metadata_tests {
 #[cfg(test)]
 mod preview_tests {
     use super::*;
+
+    #[test]
+    fn media_facts_for_motion_asset_do_not_compile_the_component() {
+        let dir = tempfile::tempdir().unwrap();
+        let image =
+            include_bytes!("../../../valle-compiler/tests/fixtures/motion/modules/assets/dot.png");
+        std::fs::write(dir.path().join("poster.png"), image).unwrap();
+        // The component does not exist. The browser Worker owns its compilation.
+        let timeline = serde_json::json!({
+            "canvas": {"width": 64, "height": 64, "fps": 24},
+            "resources": {"component": "missing.motion.tsx", "poster": "poster.png"},
+            "tracks": {"visual": [{"clips": [{
+                "kind": "motion", "component": "component", "start": 0, "duration": 1,
+                "resources": {"image": "poster"}
+            }]}]}
+        });
+        let mut cache = FrozenMediaCache::default();
+        let (facts, blobs, input_dependencies) = prepare_timeline_media_facts(
+            decode_timeline(&timeline.to_string()).unwrap(),
+            dir.path(),
+            &mut cache,
+        )
+        .unwrap();
+        assert_eq!(facts.len(), 1);
+        assert_eq!(facts[0]["id"], "resource:poster");
+        assert_eq!(facts[0]["entry"]["kind"], "image");
+        assert!(blobs.contains_key(&ContentDigest::of_bytes(image).as_hex()));
+        assert_eq!(
+            input_dependencies[&dir
+                .path()
+                .join("poster.png")
+                .canonicalize()
+                .unwrap()
+                .to_string_lossy()
+                .to_string()],
+            ContentDigest::of_bytes(image),
+        );
+    }
 
     #[test]
     fn duplicate_media_keeps_the_native_catalog_file_alive() {

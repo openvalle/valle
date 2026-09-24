@@ -58,7 +58,7 @@ fn non_timeline_host_protocols_remain_closed() {
         "editMotionProps":false,
         "writeMotionSource":false
       },
-      "runtime":{"assetBaseUrl":"/assets/","assetUrls":{}}
+      "runtime":{"assetBaseUrl":"/assets/","assetUrls":{},"fontUrls":[]}
     }"#;
     serde_json::from_str::<StudioBootWire>(boot).expect("generated Studio boot accepts its DTO");
 

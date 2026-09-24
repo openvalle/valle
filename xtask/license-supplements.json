@@ -80,36 +80,25 @@
   },
   {
     "packages": [
-      "oxc@0.148.0",
-      "oxc_allocator@0.148.0",
-      "oxc_ast@0.148.0",
-      "oxc_ast_macros@0.148.0",
-      "oxc_ast_visit@0.148.0",
-      "oxc_codegen@0.148.0",
-      "oxc_compat@0.148.0",
-      "oxc_data_structures@0.148.0",
-      "oxc_diagnostics@0.148.0",
-      "oxc_ecmascript@0.148.0",
-      "oxc_estree@0.148.0",
-      "oxc_parser@0.148.0",
-      "oxc_regular_expression@0.148.0",
-      "oxc_semantic@0.148.0",
-      "oxc_span@0.148.0",
-      "oxc_str@0.148.0",
-      "oxc_syntax@0.148.0",
-      "oxc_transformer@0.148.0",
-      "oxc_transformer_plugins@0.148.0",
-      "oxc_traverse@0.148.0"
+      "oxc@0.151.0",
+      "oxc_allocator@0.151.0",
+      "oxc_ast@0.151.0",
+      "oxc_ast_macros@0.151.0",
+      "oxc_ast_visit@0.151.0",
+      "oxc_codegen@0.151.0",
+      "oxc_data_structures@0.151.0",
+      "oxc_diagnostics@0.151.0",
+      "oxc_ecmascript@0.151.0",
+      "oxc_estree@0.151.0",
+      "oxc_parser@0.151.0",
+      "oxc_regular_expression@0.151.0",
+      "oxc_semantic@0.151.0",
+      "oxc_span@0.151.0",
+      "oxc_str@0.151.0",
+      "oxc_syntax@0.151.0"
     ],
-    "source": "https://raw.githubusercontent.com/oxc-project/oxc/894c8f9cd89508391b01eb26a4b5ac2b846ab39b/LICENSE",
+    "source": "https://raw.githubusercontent.com/oxc-project/oxc/crates_v0.151.0/LICENSE",
     "text": "MIT License\n\nCopyright (c) 2024-present VoidZero Inc. & Contributors\nCopyright (c) 2023 Boshen\n\nPermission is hereby granted, free of charge, to any person obtaining a copy\nof this software and associated documentation files (the \"Software\"), to deal\nin the Software without restriction, including without limitation the rights\nto use, copy, modify, merge, publish, distribute, sublicense, and/or sell\ncopies of the Software, and to permit persons to whom the Software is\nfurnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in all\ncopies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\nIMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\nFITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\nAUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\nLIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\nOUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\nSOFTWARE.\n"
-  },
-  {
-    "packages": [
-      "oxc-browserslist@5.0.1"
-    ],
-    "source": "https://raw.githubusercontent.com/oxc-project/oxc-browserslist/a9b49a18042671c91811dc1074e01b9c08331327/LICENSE",
-    "text": "MIT License\n\nCopyright (c) 2021-present Pig Fang\nCopyright (c) 2024-present Boshen\n\nPermission is hereby granted, free of charge, to any person obtaining a copy\nof this software and associated documentation files (the \"Software\"), to deal\nin the Software without restriction, including without limitation the rights\nto use, copy, modify, merge, publish, distribute, sublicense, and/or sell\ncopies of the Software, and to permit persons to whom the Software is\nfurnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in all\ncopies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\nIMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\nFITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\nAUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\nLIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\nOUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\nSOFTWARE.\n"
   },
   {
     "packages": [
@@ -138,10 +127,10 @@
   },
   {
     "packages": [
-      "rquickjs-core@0.12.2",
-      "rquickjs-sys@0.12.2"
+      "rquickjs-core@0.14.0",
+      "rquickjs-sys@0.14.0"
     ],
-    "source": "https://raw.githubusercontent.com/DelSkayn/rquickjs/635f9322ccc875e3f9851e7f75ec538cf3274fd5/LICENSE",
+    "source": "https://raw.githubusercontent.com/DelSkayn/rquickjs/v0.14.0/LICENSE",
     "text": "MIT License\n\nCopyright (c) 2020 Mees Delzenne\nCopyright (c) 2025 Rquickjs Contributors\n\nPermission is hereby granted, free of charge, to any person obtaining a copy\nof this software and associated documentation files (the \"Software\"), to deal\nin the Software without restriction, including without limitation the rights\nto use, copy, modify, merge, publish, distribute, sublicense, and/or sell\ncopies of the Software, and to permit persons to whom the Software is\nfurnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in all\ncopies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\nIMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\nFITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\nAUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\nLIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\nOUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\nSOFTWARE.\n"
   },
   {

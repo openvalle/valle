@@ -8,7 +8,6 @@ import {
   type PreviewStatusKind,
   type StudioIntent,
   type StudioShellState,
-  type StudioWorkspace,
 } from "./shell-state.ts";
 
 const PREVIEW_LABELS: Record<PreviewStatusKind, string> = {
@@ -50,10 +49,6 @@ export class ValleStudioApp extends LitElement {
     return this.#host;
   }
 
-  get workspace(): StudioWorkspace {
-    return this.shellState.workspace;
-  }
-
   get root(): HTMLElement {
     return this;
   }
@@ -68,7 +63,6 @@ export class ValleStudioApp extends LitElement {
       projectName: this.#projectLabel(this.boot),
     };
     this.dataset.sessionKind = this.boot.session.kind;
-    this.dataset.workspace = this.shellState.workspace.kind;
     this.#unsubscribe = host.subscribe((event) => this.#onHostEvent(event));
     try {
       const preferences = JSON.parse(localStorage.getItem("valle.studio.panels") ?? "{}");
@@ -90,7 +84,6 @@ export class ValleStudioApp extends LitElement {
 
   dispatchIntent(intent: StudioIntent): void {
     this.shellState = reduceStudioIntent(this.shellState, intent);
-    this.dataset.workspace = this.shellState.workspace.kind;
     this.#applyShellChrome();
     if (intent.type === "panel") this.#savePreferences();
     this.dispatchEvent(new CustomEvent("studio-statechange", {
@@ -155,8 +148,6 @@ export class ValleStudioApp extends LitElement {
       const full = this.#req<HTMLElement>("stageArea").classList.toggle("full-size");
       (event.currentTarget as HTMLButtonElement).textContent = full ? "100%" : "Fit";
     });
-    const timelineMode = this.#req<HTMLButtonElement>("timelineMode");
-    const motionMode = this.#req<HTMLButtonElement>("motionMode");
     const undoBtn = this.#req<HTMLButtonElement>("undoBtn");
     const redoBtn = this.#req<HTMLButtonElement>("redoBtn");
     const inspectorToggle = this.#req<HTMLButtonElement>("inspectorToggle");
@@ -164,22 +155,6 @@ export class ValleStudioApp extends LitElement {
     const collapseTimeline = this.#req<HTMLButtonElement>("collapseTimeline");
     const splitV = this.#req<HTMLElement>("splitV");
     const splitH = this.#req<HTMLElement>("splitH");
-
-    timelineMode.addEventListener("click", () => {
-      if (this.shellState.workspace.kind !== "timeline") {
-        this.dispatchEvent(new CustomEvent("studio-return-timeline", {
-          bubbles: true,
-          composed: true,
-        }));
-      }
-    });
-
-    motionMode.addEventListener("click", () => {
-      this.dispatchEvent(new CustomEvent("studio-open-motion", {
-        bubbles: true,
-        composed: true,
-      }));
-    });
 
     undoBtn.addEventListener("click", () => {
       this.dispatchEvent(new CustomEvent("studio-history-intent", {
@@ -273,8 +248,6 @@ export class ValleStudioApp extends LitElement {
 
   #applyShellChrome(): void {
     const state = this.shellState;
-    this.dataset.workspace = state.workspace.kind;
-    this.classList.toggle("motion-workspace", state.workspace.kind === "motion");
     this.classList.toggle("hide-inspector", !state.inspectorVisible);
     this.classList.toggle("timeline-collapsed", state.timelineCollapsed);
     this.classList.toggle("preview-focus", state.previewFocus);
@@ -290,27 +263,8 @@ export class ValleStudioApp extends LitElement {
           : "";
     badge.hidden = !state.session;
 
-    const crumb = this.#req<HTMLElement>("workspaceCrumb");
-    if (state.workspace.kind === "motion" && state.session?.kind !== "motion-file") {
-      crumb.hidden = false;
-      crumb.textContent = state.workspace.source
-        ? ` / ${state.workspace.source.split(/[\\/]/).pop()}`
-        : " / Motion";
-    } else {
-      crumb.hidden = true;
-      crumb.textContent = "";
-    }
-
-    const timelineTab = this.#req<HTMLButtonElement>("timelineMode");
-    const motionTab = this.#req<HTMLButtonElement>("motionMode");
-    const isTimeline = state.workspace.kind === "timeline";
-    this.#text("inspectorKind", isTimeline ? state.session?.kind === "timeline-file" ? "Timeline file" : "Project" : "Motion");
-    timelineTab.classList.toggle("active", isTimeline);
-    motionTab.classList.toggle("active", !isTimeline);
-    timelineTab.disabled = state.session?.kind === "motion-file";
-    motionTab.disabled = isTimeline && !state.canOpenMotion;
-    timelineTab.setAttribute("aria-pressed", String(isTimeline));
-    motionTab.setAttribute("aria-pressed", String(!isTimeline));
+    this.#text("inspectorKind", state.session?.kind === "timeline-file" ? "Timeline file"
+      : state.session?.kind === "motion-file" ? "Motion clip" : "Project");
 
     const undo = this.#req<HTMLButtonElement>("undoBtn");
     const redo = this.#req<HTMLButtonElement>("redoBtn");
@@ -322,9 +276,8 @@ export class ValleStudioApp extends LitElement {
     saveStatus.classList.toggle("error", state.conflict);
     saveStatus.textContent = state.conflict
       ? (state.conflictMessage ?? "External change conflict")
-      : state.session?.kind === "project" || state.session?.kind === "timeline-file"
-        ? state.dirty ? "Unsaved changes" : "Saved"
-        : state.dirty ? "Modified parameters · source unchanged" : "Temporary parameters · source unchanged";
+      : state.sourceDirty ? "Unsaved source"
+        : state.dirty ? "Unsaved changes" : "Saved";
 
     const previewStatus = this.#req<HTMLElement>("previewStatus");
     const previewText = this.#req<HTMLElement>("previewStatusText");
@@ -394,12 +347,7 @@ export class ValleStudioApp extends LitElement {
     );
 
     this.#text("timelineTitle", "Timeline");
-    this.#text(
-      "timelineHint",
-      state.workspace.kind === "motion"
-        ? "Drag the ruler to seek · Inspect source frames"
-        : "Drag the ruler to seek · Select a clip to edit",
-    );
+    this.#text("timelineHint", "Drag the ruler to seek · Select a clip to edit");
 
     this.#persistPanelPrefs();
   }

@@ -5,6 +5,7 @@ import type { StudioTimelineRevision } from "./host.ts";
 import {
   assertReloadedTimelineSave,
   captureTimelineSaveSnapshot,
+  reconcileLostProjectSave,
   type ReloadedTimelineSnapshot,
 } from "./timeline-save-snapshot.ts";
 
@@ -78,4 +79,14 @@ test("save rejects timelineJson that disagrees with the reloaded Timeline", () =
     reloaded({ timelineJson: JSON.stringify(document("#000000ff")) }),
     submitted,
   )).toThrow("reloaded timelineJson drift");
+});
+
+test("lost Project save response only accepts the submitted HEAD from the expected base", () => {
+  const submitted = captureTimelineSaveSnapshot(document("#14532dff"));
+  expect(reconcileLostProjectSave(7, submitted, reloaded())).toBe(8);
+  expect(reconcileLostProjectSave(6, submitted, reloaded())).toBeNull();
+  expect(reconcileLostProjectSave(7, submitted, reloaded({
+    timeline: document("#000000ff"), timelineJson: JSON.stringify(document("#000000ff")),
+  }))).toBeNull();
+  expect(reconcileLostProjectSave(7, submitted, reloaded({ timelineJson: "broken" }))).toBeNull();
 });

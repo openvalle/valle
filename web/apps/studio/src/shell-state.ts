@@ -1,9 +1,5 @@
 import type { StudioSession } from "./host.ts";
 
-export type StudioWorkspace =
-  | { kind: "timeline" }
-  | { kind: "motion"; clipId?: string; source: string };
-
 export type PreviewStatusKind =
   | "loading"
   | "ready"
@@ -12,25 +8,14 @@ export type PreviewStatusKind =
   | "unavailable"
   | "empty";
 
-export interface StudioReturnPoint {
-  timeS: number;
-  playing: boolean;
-  selectedClipId: string | null;
-  scrollLeft: number;
-  zoom: number;
-  dirty: boolean;
-}
-
 export interface StudioShellState {
   session: StudioSession | null;
-  workspace: StudioWorkspace;
   selectedClipId: string | null;
-  canOpenMotion?: boolean;
   dirty: boolean;
+  sourceDirty: boolean;
   conflict: boolean;
   conflictMessage: string | null;
   diagnostics: ReadonlyArray<string>;
-  returnPoint: StudioReturnPoint | null;
   previewStatus: PreviewStatusKind;
   previewMessage: string | null;
   canUndo: boolean;
@@ -42,10 +27,10 @@ export interface StudioShellState {
 }
 
 export type StudioIntent =
-  | { type: "select"; clipId: string | null; canOpenMotion?: boolean }
+  | { type: "select"; clipId: string | null }
   | { type: "dirty"; value: boolean }
+  | { type: "source-dirty"; value: boolean }
   | { type: "conflict"; value: boolean; message?: string | null }
-  | { type: "workspace"; workspace: StudioWorkspace; returnPoint?: StudioReturnPoint }
   | { type: "diagnostics"; messages: ReadonlyArray<string> }
   | { type: "preview-status"; status: PreviewStatusKind; message?: string | null }
   | { type: "history"; canUndo: boolean; canRedo: boolean }
@@ -54,13 +39,12 @@ export type StudioIntent =
 
 export const initialStudioShellState: StudioShellState = {
   session: null,
-  workspace: { kind: "timeline" },
   selectedClipId: null,
   dirty: false,
+  sourceDirty: false,
   conflict: false,
   conflictMessage: null,
   diagnostics: [],
-  returnPoint: null,
   previewStatus: "loading",
   previewMessage: null,
   canUndo: false,
@@ -77,9 +61,11 @@ export function reduceStudioIntent(
 ): StudioShellState {
   switch (intent.type) {
     case "select":
-      return { ...state, selectedClipId: intent.clipId, canOpenMotion: intent.canOpenMotion ?? false };
+      return { ...state, selectedClipId: intent.clipId };
     case "dirty":
       return { ...state, dirty: intent.value };
+    case "source-dirty":
+      return { ...state, sourceDirty: intent.value };
     case "conflict":
       return {
         ...state,
@@ -88,14 +74,6 @@ export function reduceStudioIntent(
       };
     case "diagnostics":
       return { ...state, diagnostics: [...intent.messages] };
-    case "workspace":
-      return {
-        ...state,
-        workspace: intent.workspace,
-        returnPoint: intent.workspace.kind === "timeline"
-          ? null
-          : intent.returnPoint ?? state.returnPoint,
-      };
     case "preview-status":
       return {
         ...state,

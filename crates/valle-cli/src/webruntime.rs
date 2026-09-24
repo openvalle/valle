@@ -32,6 +32,7 @@ pub const ENGINE_WASM_PATH: &str = "runtime/engine/valle_engine_bg.wasm";
 pub const CANVASKIT_FULL_GLUE_PATH: &str = "runtime/canvaskit/canvaskit.js";
 pub const CANVASKIT_FULL_WASM_PATH: &str = "runtime/canvaskit/canvaskit.wasm";
 pub const PRODUCT_FRAME_WORKER_PATH: &str = "runtime/workers/product-frame.js";
+pub const STUDIO_COMPILE_WORKER_PATH: &str = "runtime/workers/studio-compile.js";
 
 /// Rust hosts and the admitted root manifest use one canonical runtime URL map.
 pub fn runtime_assets_json() -> serde_json::Value {
@@ -40,7 +41,10 @@ pub fn runtime_assets_json() -> serde_json::Value {
         "canvasKit": {
             "full": { "glue": CANVASKIT_FULL_GLUE_PATH, "wasm": CANVASKIT_FULL_WASM_PATH }
         },
-        "workers": { "productFrame": PRODUCT_FRAME_WORKER_PATH }
+        "workers": {
+            "productFrame": PRODUCT_FRAME_WORKER_PATH,
+            "studioCompile": STUDIO_COMPILE_WORKER_PATH
+        }
     })
 }
 
@@ -103,6 +107,7 @@ struct BuildCanvasKitBindings {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct BuildWorkerBindings {
     product_frame: String,
+    studio_compile: String,
 }
 
 #[derive(Debug, PartialEq, Eq, Deserialize)]
@@ -400,6 +405,12 @@ fn verify_files(read: impl Fn(&str) -> Result<Vec<u8>>) -> Result<VerifiedBuild>
         (
             build.runtime_assets.workers.product_frame.as_str(),
             PRODUCT_FRAME_WORKER_PATH,
+            "worker",
+            None,
+        ),
+        (
+            build.runtime_assets.workers.studio_compile.as_str(),
+            STUDIO_COMPILE_WORKER_PATH,
             "worker",
             None,
         ),
@@ -816,7 +827,7 @@ mod tests {
         let dist = temp_dir("valle_webruntime_source");
         let html_path = "apps/preview/index.html";
         let chunk_path = "apps/preview/chunk-test.js";
-        let specs: [(&str, &str, &str, &[u8], Option<&str>); 7] = [
+        let specs: [(&str, &str, &str, &[u8], Option<&str>); 8] = [
             (
                 "html",
                 "html",
@@ -858,6 +869,13 @@ mod tests {
                 "worker",
                 PRODUCT_FRAME_WORKER_PATH,
                 b"worker",
+                None,
+            ),
+            (
+                "studio-worker",
+                "worker",
+                STUDIO_COMPILE_WORKER_PATH,
+                b"studio worker",
                 None,
             ),
         ];
@@ -902,7 +920,10 @@ mod tests {
                 { "id": "engine-core", "glue": ENGINE_GLUE_PATH, "wasm": [ENGINE_WASM_PATH] },
                 { "id": "canvaskit-full", "glue": CANVASKIT_FULL_GLUE_PATH, "wasm": [CANVASKIT_FULL_WASM_PATH] },
             ],
-            "workers": [{ "id": "product-frame", "path": PRODUCT_FRAME_WORKER_PATH }],
+            "workers": [
+                { "id": "product-frame", "path": PRODUCT_FRAME_WORKER_PATH },
+                { "id": "studio-compile", "path": STUDIO_COMPILE_WORKER_PATH }
+            ],
             "apps": [{ "id": "preview", "html": html_path }],
             "routes": { "preview.html": html_path, "chunk-test.js": chunk_path },
             "runtimeAssets": runtime_assets_json(),

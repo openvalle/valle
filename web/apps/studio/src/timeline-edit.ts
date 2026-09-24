@@ -219,6 +219,21 @@ export function setTimelineMotionProp(
   return next;
 }
 
+export function clearTimelineMotionProp(
+  timeline: Timeline,
+  timelinePath: string,
+  name: string,
+): Timeline {
+  return editTimelineClip(timeline, timelinePath, (target) => {
+    if (target.band !== "visual" || target.clip.kind !== "motion") {
+      throw new Error(`Timeline clip '${timelinePath}' is not Motion`);
+    }
+    if (!target.clip.props || !Object.hasOwn(target.clip.props, name)) return;
+    delete target.clip.props[name];
+    if (!Object.keys(target.clip.props).length) delete target.clip.props;
+  });
+}
+
 export function setTimelineMotionData(
   timeline: Timeline,
   timelinePath: string,
@@ -229,6 +244,23 @@ export function setTimelineMotionData(
       throw new Error(`Timeline clip '${timelinePath}' is not Motion`);
     }
     target.clip.data = structuredClone(value);
+  });
+}
+
+export function setTimelineMotionResource(
+  timeline: Timeline,
+  timelinePath: string,
+  slot: string,
+  alias: string,
+): Timeline {
+  if (!Object.hasOwn(timeline.resources ?? {}, alias)) {
+    throw new Error(`Timeline resource '${alias}' does not exist`);
+  }
+  return editTimelineClip(timeline, timelinePath, (target) => {
+    if (target.band !== "visual" || target.clip.kind !== "motion") {
+      throw new Error(`Timeline clip '${timelinePath}' is not Motion`);
+    }
+    target.clip.resources = { ...(target.clip.resources ?? {}), [slot]: alias };
   });
 }
 

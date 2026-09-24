@@ -50,6 +50,22 @@ export function assertReloadedTimelineSave(
   return structuredClone(reloaded.timeline);
 }
 
+/** A lost Project response is accepted only when HEAD is this exact submitted document. */
+export function reconcileLostProjectSave(
+  baseRevision: number,
+  submitted: CapturedTimelineSave,
+  reloaded: ReloadedTimelineSnapshot,
+): number | null {
+  if (reloaded.timelineRevision.parentRevision !== baseRevision
+    || reloaded.timelineRevision.revision <= baseRevision) return null;
+  try {
+    const fromBytes = JSON.parse(reloaded.timelineJson) as Timeline;
+    if (jsonEqual(submitted.timeline, reloaded.timeline)
+      && jsonEqual(submitted.timeline, fromBytes)) return reloaded.timelineRevision.revision;
+  } catch { /* A malformed reload cannot confirm the save. */ }
+  return null;
+}
+
 function assertSame(label: string, expected: number, actual: number): void {
   if (actual !== expected) {
     throw new Error(`saved snapshot ${label} drift: expected ${expected}, got ${actual}`);

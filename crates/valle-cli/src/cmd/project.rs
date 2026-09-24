@@ -23,7 +23,7 @@ use valle_timeline::{
 use crate::ProjectAction;
 
 pub(crate) fn run(json_output: bool, action: ProjectAction) -> Result<ExitCode> {
-    let store = ProjectStore::at(project_root()?).with_motion_compiler(compile_project_timeline);
+    let store = ProjectStore::at(project_root()?);
     let auth = AuthenticatedContext::new(
         Actor::new("cli:local").map_err(|error| anyhow!(error.to_string()))?,
     );
@@ -36,8 +36,15 @@ pub(crate) fn run(json_output: bool, action: ProjectAction) -> Result<ExitCode> 
         } => {
             let project_id = parse_project_id(project_id)?;
             let timeline = load_timeline(&timeline)?;
+            let captured = capture_project_sources(&timeline)?;
             let snapshot = store
-                .create_project(&project_id, &timeline, intent.as_deref(), &auth)
+                .create_project_with_compiler(
+                    &project_id,
+                    &timeline,
+                    intent.as_deref(),
+                    &auth,
+                    &|document| captured.compile(document),
+                )
                 .context("creating project genesis")?;
             print_value(&snapshot_value(&snapshot)?, json_output);
             Ok(ExitCode::SUCCESS)
@@ -89,8 +96,18 @@ pub(crate) fn run(json_output: bool, action: ProjectAction) -> Result<ExitCode> 
         } => {
             let project_id = parse_project_id(project_id)?;
             let request = load_edit_request(&timeline, base_revision, intent.as_deref())?;
+            let captured = capture_project_sources_from_edit_request(&request);
             let response = store
-                .edit_timeline_json(&project_id, &request, &auth)
+                .edit_timeline_json_with_compiler(&project_id, &request, &auth, &|document| {
+                    match &captured {
+                        Ok(captured) => captured.compile(document),
+                        Err(error) => {
+                            Err(valle_compiler::CompileTimelineError::MotionPreparation {
+                                reason: error.to_string(),
+                            })
+                        }
+                    }
+                })
                 .context("submitting complete Timeline document")?;
             let success = matches!(
                 response.result,
@@ -122,8 +139,10 @@ pub(crate) fn run(json_output: bool, action: ProjectAction) -> Result<ExitCode> 
             })
             .to_string();
             let library_home = valle_project::assets::Home::resolve()?;
+            let mut runtime_files = runtime.serving_map();
+            super::motion::mount_motion_runtime_fonts(&mut runtime_files)?;
             let state = Arc::new(crate::webhost::StudioHost {
-                runtime_files: runtime.serving_map(),
+                runtime_files,
                 assets_dir: None,
                 config_json: Arc::new(RwLock::new(config)),
                 sse: crate::webhost::SseBroadcaster::default(),
@@ -146,9 +165,10 @@ pub(crate) fn run(json_output: bool, action: ProjectAction) -> Result<ExitCode> 
                             .map_err(|error| anyhow!(error.to_string()))?,
                     ),
                 }),
+                source_paths: std::sync::Mutex::new(Default::default()),
                 last_report: RwLock::new(None),
                 preview_files: Arc::new(Default::default()),
-                motion_preview: None,
+                motion_source: None,
             });
             let (server, addr) = crate::webhost::bind(port)?;
             let url = format!("http://{addr}/studio?project={project_id}");
@@ -244,21 +264,70 @@ fn load_timeline(path: &Path) -> Result<Timeline> {
         .with_context(|| format!("decoding Timeline {}", path.display()))
 }
 
-fn compile_project_timeline(
-    timeline: &Timeline,
-) -> Result<valle_timeline::internal::CanonicalTimeline, valle_compiler::CompileTimelineError> {
-    let prepare = || -> Result<_> {
-        let mut document: Value = serde_json::from_slice(&timeline_bytes(timeline)?)?;
-        super::timeline::prepare_motion_instances(&mut document)?;
-        let (_, sources) = super::timeline::prepare_motion_sources(&document, Path::new("."))?;
-        Ok(sources)
-    };
-    let sources = prepare().map_err(|error: anyhow::Error| {
-        valle_compiler::CompileTimelineError::MotionPreparation {
-            reason: error.to_string(),
-        }
-    })?;
-    valle_compiler::compile_timeline_with_motion_sources(timeline.clone(), &sources)
+pub(crate) struct CapturedProjectSources {
+    author_bytes: Vec<u8>,
+    motion: super::timeline::CapturedMotionSources,
+}
+
+pub(crate) fn capture_project_sources_from_edit_request(
+    request: &str,
+) -> Result<CapturedProjectSources> {
+    let value: Value = serde_json::from_str(request)?;
+    let timeline = decode_timeline(&value["timeline"].to_string())?;
+    capture_project_sources(&timeline)
+}
+
+pub(crate) fn capture_project_sources(timeline: &Timeline) -> Result<CapturedProjectSources> {
+    let author_bytes = timeline_bytes(timeline)?;
+    let mut document: Value = serde_json::from_slice(&author_bytes)?;
+    super::timeline::prepare_motion_instances(&mut document)?;
+    let motion = super::timeline::capture_motion_sources(&document, Path::new("."))?;
+    Ok(CapturedProjectSources {
+        author_bytes,
+        motion,
+    })
+}
+
+impl CapturedProjectSources {
+    pub(crate) fn dependency_digests(
+        &self,
+    ) -> Result<std::collections::BTreeMap<String, valle_motion::ContentDigest>> {
+        self.motion.dependency_digests()
+    }
+
+    pub(crate) fn verify_expected_dependencies(
+        &self,
+        expected: Option<&std::collections::BTreeMap<String, valle_motion::ContentDigest>>,
+    ) -> Result<()> {
+        self.motion.verify_expected_dependencies(expected)
+    }
+
+    pub(crate) fn compile(
+        &self,
+        timeline: &Timeline,
+    ) -> Result<valle_timeline::internal::CanonicalTimeline, valle_compiler::CompileTimelineError>
+    {
+        let prepare = || -> Result<_> {
+            if timeline_bytes(timeline)? != self.author_bytes {
+                anyhow::bail!("Project Timeline changed after Motion inputs were captured");
+            }
+            let (_, sources) = self.motion.prepare()?;
+            Ok(sources)
+        };
+        let sources = prepare().map_err(|error: anyhow::Error| {
+            valle_compiler::CompileTimelineError::MotionPreparation {
+                reason: error.to_string(),
+            }
+        })?;
+        let canonical =
+            valle_compiler::compile_timeline_with_motion_sources(timeline.clone(), &sources)?;
+        self.motion.verify_dependencies().map_err(|error| {
+            valle_compiler::CompileTimelineError::MotionPreparation {
+                reason: error.to_string(),
+            }
+        })?;
+        Ok(canonical)
+    }
 }
 
 fn load_edit_request(path: &Path, base_revision: u64, intent: Option<&str>) -> Result<String> {
@@ -335,6 +404,49 @@ mod motion_duration_tests {
         assert!(
             Path::new(resolved["timeline"]["resources"]["title"].as_str().unwrap()).is_absolute()
         );
+    }
+
+    #[test]
+    fn project_compiler_rejects_source_changes_after_capture() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("title.motion.tsx");
+        std::fs::write(
+            &source,
+            "export const composition = { width: 64, height: 64, fps: 24, duration: 1 };\nexport default function Title() { return <Scene />; }",
+        )
+        .unwrap();
+        let timeline = decode_timeline(
+            &json!({
+                "canvas": {"width":64,"height":64,"fps":24},
+                "resources": {"title":source},
+                "tracks": {"visual":[{"clips":[{"kind":"motion","component":"title","start":0,"duration":1}]}]}
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let captured = capture_project_sources(&timeline).unwrap();
+        let confirmed = captured.dependency_digests().unwrap();
+        captured
+            .verify_expected_dependencies(Some(&confirmed))
+            .unwrap();
+        let compiled = captured.compile(&timeline).unwrap();
+        assert!(
+            !valle_timeline::internal::canonical_bytes(&compiled)
+                .unwrap()
+                .is_empty()
+        );
+        std::fs::write(
+            &source,
+            "export const composition = { width: 64, height: 64, fps: 24, duration: 2 };\nexport default function Title() { return <Scene />; }",
+        )
+        .unwrap();
+        let newly_captured = capture_project_sources(&timeline).unwrap();
+        let mismatch = newly_captured
+            .verify_expected_dependencies(Some(&confirmed))
+            .unwrap_err();
+        assert!(mismatch.to_string().contains("changed since it was loaded"));
+        let error = captured.compile(&timeline).unwrap_err();
+        assert!(error.to_string().contains("changed during save"));
     }
 }
 

@@ -71,6 +71,7 @@ mod jsx;
 mod modules;
 mod output;
 mod prelude;
+mod rewrite;
 mod scene3d;
 mod scope;
 mod shader;
@@ -91,6 +92,9 @@ pub use modules::{
 };
 use output::*;
 use prelude::STATIC_HELPERS;
+pub use rewrite::{
+    MotionSourceEdit, MotionSourceEditResult, MotionSourceEditTarget, rewrite_motion_source,
+};
 use syntax::*;
 use theme_provider::*;
 use values::*;
