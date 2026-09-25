@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test";
 
-import { sha256 } from "../../abi/sha256.ts";
 import {
   BATCH_INSTANCE_BYTES,
   DRAW_PROGRAM_ABI,
@@ -57,14 +56,7 @@ function fixture(): Uint8Array {
     bytes.set(section, offset);
     offset += section.byteLength;
   }
-  seal(bytes);
   return bytes;
-}
-
-function seal(bytes: Uint8Array): void {
-  const end = DRAW_PROGRAM_ABI.checksumOffset + DRAW_PROGRAM_ABI.checksumBytes;
-  bytes.fill(0, DRAW_PROGRAM_ABI.checksumOffset, end);
-  bytes.set(sha256(bytes), DRAW_PROGRAM_ABI.checksumOffset);
 }
 
 function findBytes(haystack: Uint8Array, needle: Uint8Array): number {
@@ -98,26 +90,23 @@ describe("DrawProgram packed GeometryBatch", () => {
     expect(applyDrawProgramPatch(bytes, identityPatch(bytes))).toEqual(bytes);
   });
 
-  test("rejects malformed instance values and non-canonical ranges after checksum admission", async () => {
+  test("rejects malformed instance values and non-canonical ranges", async () => {
     const invalidSize = fixture();
     const view = new DataView(invalidSize.buffer);
-    const batchOffset = Number(view.getBigUint64(60 + 2 * ENTRY_BYTES + 8, true));
+    const batchOffset = Number(view.getBigUint64(HEADER_BYTES + 2 * ENTRY_BYTES + 8, true));
     view.setFloat64(batchOffset + 16, 0, true);
-    seal(invalidSize);
     await expect(decodeDrawProgram(invalidSize)).rejects.toBeInstanceOf(PackedDrawProgramError);
 
     const invalidRange = fixture();
     const rangeOffset = findBytes(invalidRange, new TextEncoder().encode('"start":0'));
     expect(rangeOffset).toBeGreaterThan(0);
     invalidRange[rangeOffset + 8] = "1".charCodeAt(0);
-    seal(invalidRange);
     await expect(decodeDrawProgram(invalidRange)).rejects.toThrow("canonically partition");
   });
 
-  test("rejects the wrong exact format version even with a valid checksum", async () => {
+  test("rejects the wrong exact format version", async () => {
     const bytes = fixture();
     new DataView(bytes.buffer).setUint32(8, DRAW_PROGRAM_ABI.formatVersion + 1, true);
-    seal(bytes);
 
     await expect(decodeDrawProgram(bytes)).rejects.toThrow(
       `unsupported format version ${DRAW_PROGRAM_ABI.formatVersion + 1}`,
@@ -127,8 +116,7 @@ describe("DrawProgram packed GeometryBatch", () => {
   test("rejects impossible section lengths and escaping patch copies", async () => {
     const invalidSection = fixture();
     const view = new DataView(invalidSection.buffer);
-    view.setBigUint64(60 + 2 * ENTRY_BYTES + 16, BigInt(BATCH_INSTANCE_BYTES - 1), true);
-    seal(invalidSection);
+    view.setBigUint64(HEADER_BYTES + 2 * ENTRY_BYTES + 16, BigInt(BATCH_INSTANCE_BYTES - 1), true);
     await expect(decodeDrawProgram(invalidSection)).rejects.toThrow("47 bytes");
 
     const bytes = fixture();

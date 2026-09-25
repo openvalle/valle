@@ -44,8 +44,6 @@ export async function loadPackedAbiSources(
 }
 
 export function renderPackedAbi(sources: PackedAbiSources): string {
-  const drawChecksum = rustChecksumRange(sources.drawPacked, "DrawProgram");
-  const engineChecksum = rustRange(sources.enginePacked, "CHECKSUM_RANGE");
   const drawEndianness = rustInteger(sources.drawPacked, "ENDIAN_MARKER");
   const engineEndianness = rustInteger(sources.enginePacked, "ENDIAN_MARKER");
   if (drawEndianness !== engineEndianness) {
@@ -55,13 +53,7 @@ export function renderPackedAbi(sources: PackedAbiSources): string {
   }
 
   const engineHeaderBytes = rustInteger(sources.enginePacked, "HEADER_LEN");
-  if (engineChecksum.end !== engineHeaderBytes || engineChecksum.end - engineChecksum.start !== 32) {
-    throw new Error("Engine packed checksum must be the final 32 bytes of its header");
-  }
   const drawHeaderBytes = rustInteger(sources.drawPacked, "HEADER_LEN");
-  if (drawChecksum.end !== drawHeaderBytes || drawChecksum.end - drawChecksum.start !== 32) {
-    throw new Error("DrawProgram checksum must be the final 32 bytes of its header");
-  }
 
   requireMatch(
     sources.enginePacked,
@@ -81,8 +73,6 @@ export function renderPackedAbi(sources: PackedAbiSources): string {
       magic: rustMagic(sources.drawPacked, "MAGIC"),
       formatVersion: rustInteger(sources.drawPacked, "DRAW_PROGRAM_FORMAT_VERSION"),
       headerBytes: drawHeaderBytes,
-      checksumOffset: drawChecksum.start,
-      checksumBytes: drawChecksum.end - drawChecksum.start,
       endianness: "little",
       endiannessMarker: drawEndianness,
       maximumBytes: rustInteger(sources.drawValidate, "MAX_PACKED_BYTES"),
@@ -96,7 +86,6 @@ export function renderPackedAbi(sources: PackedAbiSources): string {
       rustInteger(sources.renderPlan, "RENDER_PLAN_FORMAT_VERSION"),
       rustInteger(sources.enginePacked, "MAX_PACKED_PLAN_BYTES"),
       engineHeaderBytes,
-      engineChecksum,
       engineEndianness,
     ),
     renderBindings: envelopeModel(
@@ -105,7 +94,6 @@ export function renderPackedAbi(sources: PackedAbiSources): string {
       rustInteger(sources.renderBindings, "RENDER_BINDINGS_FORMAT_VERSION"),
       rustInteger(sources.enginePacked, "MAX_PACKED_BINDINGS_BYTES"),
       engineHeaderBytes,
-      engineChecksum,
       engineEndianness,
     ),
     resourceRequests: envelopeModel(
@@ -114,7 +102,6 @@ export function renderPackedAbi(sources: PackedAbiSources): string {
       rustInteger(sources.resourceRequests, "RESOURCE_REQUESTS_FORMAT_VERSION"),
       rustInteger(sources.enginePacked, "MAX_PACKED_REQUESTS_BYTES"),
       engineHeaderBytes,
-      engineChecksum,
       engineEndianness,
     ),
     boundSchedules: envelopeModel(
@@ -123,7 +110,6 @@ export function renderPackedAbi(sources: PackedAbiSources): string {
       rustInteger(sources.boundSchedules, "BOUND_PROGRAM_SCHEDULES_FORMAT_VERSION"),
       rustInteger(sources.enginePacked, "MAX_PACKED_SCHEDULE_BYTES"),
       engineHeaderBytes,
-      engineChecksum,
       engineEndianness,
     ),
     programPatch: {
@@ -143,8 +129,6 @@ export interface PackedAbiDescriptor {
   readonly magic: string;
   readonly formatVersion: number;
   readonly headerBytes: number;
-  readonly checksumOffset: number;
-  readonly checksumBytes: number;
   readonly endianness: "little";
   readonly endiannessMarker: number;
   readonly maximumBytes: number;
@@ -180,7 +164,6 @@ function envelopeModel(
   formatVersion: number,
   maximumBytes: number,
   headerBytes: number,
-  checksum: { readonly start: number; readonly end: number },
   endiannessMarker: number,
 ) {
   return {
@@ -188,8 +171,6 @@ function envelopeModel(
     magic,
     formatVersion,
     headerBytes,
-    checksumOffset: checksum.start,
-    checksumBytes: checksum.end - checksum.start,
     endianness: "little",
     endiannessMarker,
     maximumBytes,
@@ -245,24 +226,6 @@ function decodeRustByteString(value: string): string {
     if (code === "t") return "\t";
     return code;
   });
-}
-
-function rustRange(source: string, name: string): { start: number; end: number } {
-  const match = requireMatch(
-    source,
-    new RegExp(`const\\s+${name}\\s*:\\s*std::ops::Range<usize>\\s*=\\s*(\\d+)\\s*\\.\\.\\s*(\\d+)\\s*;`),
-    name,
-  );
-  return { start: Number(match[1]), end: Number(match[2]) };
-}
-
-function rustChecksumRange(source: string, label: string): { start: number; end: number } {
-  const match = requireMatch(
-    source,
-    /wire\[(\d+)\s*\.\.\s*(\d+)\]\.copy_from_slice\(&checksum\)/,
-    `${label} checksum range`,
-  );
-  return { start: Number(match[1]), end: Number(match[2]) };
 }
 
 function requireMatch(source: string, pattern: RegExp, label: string): RegExpMatchArray {

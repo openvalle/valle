@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
 import { PackedAbiError, RENDER_PLAN_ABI, decodePackedAbi } from "./packed.ts";
-import { sha256 } from "./sha256.ts";
 
 describe("packed compositor ABI", () => {
   test("validates and decodes one canonical envelope", async () => {
@@ -16,16 +15,9 @@ describe("packed compositor ABI", () => {
     expect(decoded).toEqual({ a: "ok", n: 7 });
   });
 
-  test("rejects corruption before decoding values", async () => {
-    const bytes = await envelope(Uint8Array.of(0));
-    bytes[bytes.length - 1] ^= 1;
-    await expect(decodePackedAbi(bytes, RENDER_PLAN_ABI)).rejects.toThrow("checksum mismatch");
-  });
-
-  test("rejects the wrong exact u32 format version even with a valid checksum", async () => {
+  test("rejects the wrong exact u32 format version", async () => {
     const bytes = await envelope(Uint8Array.of(0));
     new DataView(bytes.buffer).setUint32(8, RENDER_PLAN_ABI.formatVersion + 1, true);
-    seal(bytes);
 
     await expect(decodePackedAbi(bytes, RENDER_PLAN_ABI)).rejects.toThrow(
       `unsupported format version ${RENDER_PLAN_ABI.formatVersion + 1}`,
@@ -53,12 +45,5 @@ async function envelope(payload: Uint8Array): Promise<Uint8Array> {
   view.setUint32(12, RENDER_PLAN_ABI.endiannessMarker, true);
   view.setBigUint64(16, BigInt(bytes.byteLength), true);
   bytes.set(payload, RENDER_PLAN_ABI.headerBytes);
-  seal(bytes);
   return bytes;
-}
-
-function seal(bytes: Uint8Array): void {
-  const end = RENDER_PLAN_ABI.checksumOffset + RENDER_PLAN_ABI.checksumBytes;
-  bytes.fill(0, RENDER_PLAN_ABI.checksumOffset, end);
-  bytes.set(sha256(bytes), RENDER_PLAN_ABI.checksumOffset);
 }

@@ -158,7 +158,7 @@ fn load_resource_catalog(
     }
     let lease = store.import_and_lease(resources)?;
     for digest in lease.resource_digests() {
-        catalog.insert_file(*digest, home.object_path(&digest.as_hex(), None))?;
+        catalog.insert_file(*digest, home.object_path(&digest.as_hex(), None));
     }
     Ok((catalog, lease))
 }

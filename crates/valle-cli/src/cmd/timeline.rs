@@ -76,15 +76,8 @@ fn render_document_impl(
         bail!("output must have an .{extension} extension");
     }
     let prepared = prepare_timeline_package(timeline, base)?;
-    let profile = canonical_fixed_execution_profile(COMMON_PROFILE_KEY).map_err(|e| anyhow!(e))?;
-    let files = fixed_package_files(
-        &prepared.canonical_timeline_json,
-        &prepared.resource_manifest_json,
-        &prepared.verified_binding_bundle_json,
-        &profile,
-    );
-    let opened = open_verified_fixed_package(&prepared.fixed_package_manifest_json, &files)
-        .map_err(|e| anyhow!(e))?;
+    // Package preparation already admitted and opened the closed package; reuse it.
+    let opened = prepared.opened;
     let catalog = prepared.catalog;
     let renderer = NativeRenderer::new(
         NativeProject::from_render(opened.engine_render(), Arc::new(catalog)),
@@ -127,6 +120,8 @@ pub(crate) struct TimelinePreviewPackage {
     pub blobs: std::collections::BTreeMap<String, PreviewFile>,
     pub input_dependencies: std::collections::BTreeMap<String, ContentDigest>,
     catalog: NativeResourceCatalog,
+    /// The package opened by the closed-package admission check, reused by native renders.
+    opened: OpenedFixedPackage,
 }
 
 pub(crate) fn prepare_timeline_package(
@@ -520,12 +515,12 @@ fn prepare_timeline_package_impl(
                 }
                 let font_blobs = super::motion::fixed_package_font_blobs(&artifact, &[])?;
                 for (i, bytes) in font_blobs.iter().enumerate() {
-                    let font_id = resources.intern_font(bytes)?;
+                    let digest = resources.intern_font(bytes)?;
                     deps.push(super::motion_package::FixedResourceDependency {
                         role: super::motion_package::font_dependency_role(&artifact, bytes, i),
-                        resource_id: font_id,
+                        resource_id: super::motion_package::font_resource_id(&digest),
                     });
-                    let digest = ContentDigest::of_bytes(bytes);
+                    catalog.insert_bytes(digest, bytes.to_vec());
                     let path = frozen.path().join(digest.as_hex());
                     std::fs::write(&path, bytes)?;
                     blobs.insert(
@@ -535,7 +530,6 @@ fn prepare_timeline_package_impl(
                             _directory: Arc::clone(&frozen),
                         },
                     );
-                    catalog.insert_bytes(ContentDigest::of_bytes(bytes), bytes.to_vec())?;
                 }
                 use valle_timeline::internal::wire::resource::*;
                 let descriptor = MotionArtifactDescriptorWire {
@@ -648,7 +642,7 @@ fn prepare_timeline_package_impl(
                     Vec::new(),
                 )?;
                 if native {
-                    catalog.insert_file(hash, path)?;
+                    catalog.insert_file(hash, path);
                 }
                 continue;
             }
@@ -680,7 +674,7 @@ fn prepare_timeline_package_impl(
                 resources.add_asset(&id, kind, &asset)?;
             }
             if native {
-                catalog.insert_file(hash, path)?;
+                catalog.insert_file(hash, path);
             }
         }
     }
@@ -693,8 +687,7 @@ fn prepare_timeline_package_impl(
     let manifest = std::str::from_utf8(manifest.canonical_bytes())?;
     let profile = canonical_fixed_execution_profile(COMMON_PROFILE_KEY).map_err(|e| anyhow!(e))?;
     let files = fixed_package_files(&canonical, manifest, &bindings, &profile);
-    let package = canonical_fixed_package_manifest(&files).map_err(|e| anyhow!(e))?;
-    open_verified_fixed_package(&package, &files).map_err(|e| anyhow!(e))?;
+    let (package, opened) = build_fixed_package(&files).map_err(|e| anyhow!(e))?;
     captured_motions.verify_dependencies()?;
     Ok(TimelinePreviewPackage {
         timeline_json,
@@ -706,6 +699,7 @@ fn prepare_timeline_package_impl(
         blobs,
         input_dependencies,
         catalog,
+        opened,
     })
 }
 

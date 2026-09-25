@@ -148,7 +148,7 @@ impl AssetCache {
         if resp.status() == reqwest::StatusCode::NOT_MODIFIED {
             if let Some(cached) = cached {
                 let path = locator_blob_path(&self.root, cached);
-                if blob_matches_locator(&path, cached) {
+                if published_blob(&path) {
                     return Ok(path);
                 }
             }
@@ -192,7 +192,7 @@ impl AssetCache {
         })?;
         let content_digest = ContentDigest::from_bytes(hasher.finalize().into());
         let path = self.root.join(BLOBS_DIR).join(content_digest.as_hex());
-        publish_content_blob(part, &path, content_digest)?;
+        publish_content_blob(part, &path)?;
         let locator = UrlCacheLocator {
             url: url.to_owned(),
             content_digest,
@@ -297,15 +297,12 @@ fn new_download_part(root: &Path) -> std::io::Result<tempfile::NamedTempFile> {
 fn publish_content_blob(
     part: tempfile::NamedTempFile,
     path: &Path,
-    expected_digest: ContentDigest,
 ) -> std::result::Result<(), DownloadError> {
-    if path.exists() {
-        if file_content_digest(path) == Some(expected_digest) {
-            return part.close().map_err(|error| DownloadError {
-                transient: false,
-                source: anyhow!("remove duplicate download: {error}"),
-            });
-        }
+    if published_blob(path) {
+        return part.close().map_err(|error| DownloadError {
+            transient: false,
+            source: anyhow!("remove duplicate download: {error}"),
+        });
     }
 
     // `NamedTempFile::persist` atomically replaces the directory entry. The staging filename is
@@ -321,25 +318,10 @@ fn publish_content_blob(
         })
 }
 
-fn blob_matches_locator(path: &Path, locator: &UrlCacheLocator) -> bool {
-    file_content_digest(path) == Some(locator.content_digest)
-}
-
-fn file_content_digest(path: &Path) -> Option<ContentDigest> {
-    if !std::fs::symlink_metadata(path).ok()?.file_type().is_file() {
-        return None;
-    }
-    let mut file = std::fs::File::open(path).ok()?;
-    let mut hasher = Sha256::new();
-    let mut buffer = [0u8; 64 * 1024];
-    loop {
-        let read = file.read(&mut buffer).ok()?;
-        if read == 0 {
-            break;
-        }
-        hasher.update(&buffer[..read]);
-    }
-    Some(ContentDigest::from_bytes(hasher.finalize().into()))
+/// Blobs are named by the digest of their downloaded bytes and never rewritten in place, so a
+/// regular file at that name is the content. A missing or non-regular entry is refetched.
+fn published_blob(path: &Path) -> bool {
+    std::fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_file())
 }
 
 fn read_locator(path: &Path, expected_url: &str) -> Option<UrlCacheLocator> {
@@ -562,7 +544,7 @@ mod tests {
         assert_ne!(current.path(), orphan_path);
         let digest = ContentDigest::of_bytes(b"published bytes");
         let blob = root.join(BLOBS_DIR).join(digest.as_hex());
-        publish_content_blob(current, &blob, digest).unwrap();
+        publish_content_blob(current, &blob).unwrap();
 
         assert_eq!(std::fs::read(&orphan_path).unwrap(), b"crash orphan");
         assert_eq!(std::fs::read(&blob).unwrap(), b"published bytes");
@@ -614,7 +596,7 @@ mod tests {
     }
 
     #[test]
-    fn corrupt_blob_is_atomically_replaced_after_validator_refetch() {
+    fn missing_blob_is_refetched_after_validator_match() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         let server = thread::spawn(move || {
@@ -644,12 +626,12 @@ mod tests {
                 )
                 .unwrap();
         });
-        let root = test_root("repair-corrupt");
+        let root = test_root("repair-missing");
         let cache = AssetCache::new(root.clone()).unwrap();
         let url = format!("http://{address}/asset");
 
         let blob = cache.fetch(&url, "bin").unwrap();
-        std::fs::write(&blob, b"broken").unwrap();
+        std::fs::remove_file(&blob).unwrap();
         let repaired = cache.fetch(&url, "bin").unwrap();
         assert_eq!(repaired, blob);
         assert_eq!(std::fs::read(repaired).unwrap(), b"stable");

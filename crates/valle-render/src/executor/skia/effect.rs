@@ -16,10 +16,6 @@ use valle_engine::{
         PreparedBlurAxis, PreparedEffectKernel, PreparedEffectSpace, PreparedMask,
         PreparedMaskShape, PreparedTransitionKernel, PreparedUnitRect,
     },
-    render::{
-        EXTENSION_COLOR_GAIN_ABI, EXTENSION_CROSS_FADE_ABI,
-        engine_owned_kernel_implementation_sha256,
-    },
     resource::{
         ColorPrimaries, Dither, GamutMap, OutputAlphaMode, OutputBitDepth, OutputSpec, ToneMap,
         TransferFunction,
@@ -205,18 +201,7 @@ impl EffectRuntime {
                 }
             }
             PreparedEffectKernel::GaussianBlur { .. } => {}
-            PreparedEffectKernel::ExtensionColorGain {
-                implementation_sha256,
-                ..
-            } => {
-                if implementation_sha256
-                    != engine_owned_kernel_implementation_sha256(EXTENSION_COLOR_GAIN_ABI)
-                        .expect("color-gain ABI has an engine-owned implementation")
-                {
-                    return Err(DrawError::ExtensionImplementationMismatch {
-                        abi: EXTENSION_COLOR_GAIN_ABI,
-                    });
-                }
+            PreparedEffectKernel::ExtensionColorGain { .. } => {
                 if self.extension_color_gain.is_none() {
                     self.counters.misses = self.counters.misses.saturating_add(1);
                     self.extension_color_gain = Some(Arc::new(compile(
@@ -674,18 +659,7 @@ fn transition_source(kernel: PreparedTransitionKernel) -> Result<&'static str, D
         PreparedTransitionKernel::Perlin => {
             include_str!("../../../../valle-draw/assets/shaders/perlin.sksl")
         }
-        PreparedTransitionKernel::ExtensionCrossFade {
-            implementation_sha256,
-            ..
-        } => {
-            if implementation_sha256
-                != engine_owned_kernel_implementation_sha256(EXTENSION_CROSS_FADE_ABI)
-                    .expect("cross-fade ABI has an engine-owned implementation")
-            {
-                return Err(DrawError::ExtensionImplementationMismatch {
-                    abi: EXTENSION_CROSS_FADE_ABI,
-                });
-            }
+        PreparedTransitionKernel::ExtensionCrossFade { .. } => {
             include_str!("../../../../valle-draw/assets/shaders/fade.sksl")
         }
     })
@@ -1329,6 +1303,10 @@ mod tests {
         surface::working_color_space,
     };
     use skia_safe::{AlphaType, ColorType, ImageInfo, images, surfaces};
+    use valle_engine::render::{
+        EXTENSION_COLOR_GAIN_ABI, EXTENSION_CROSS_FADE_ABI,
+        engine_owned_kernel_implementation_sha256,
+    };
     use valle_engine::resource::{Extent2d, OutputBackground};
 
     #[test]
@@ -1472,18 +1450,6 @@ mod tests {
 
     #[test]
     fn extension_color_gain_is_admitted_cached_and_executable() {
-        let rejected = PreparedEffectKernel::ExtensionColorGain {
-            implementation_sha256: [2; 32],
-            gain: 1.5,
-            past_frames: 0,
-            future_frames: 0,
-        };
-        assert!(matches!(
-            EffectRuntime::new().admit_kernel(rejected),
-            Err(DrawError::ExtensionImplementationMismatch {
-                abi: EXTENSION_COLOR_GAIN_ABI
-            })
-        ));
         let kernel = PreparedEffectKernel::ExtensionColorGain {
             implementation_sha256: engine_owned_kernel_implementation_sha256(
                 EXTENSION_COLOR_GAIN_ABI,
@@ -1526,17 +1492,6 @@ mod tests {
 
     #[test]
     fn extension_cross_fade_executes_the_builtin_linear_law() {
-        let rejected = PreparedTransitionKernel::ExtensionCrossFade {
-            implementation_sha256: [4; 32],
-            past_frames: 0,
-            future_frames: 0,
-        };
-        assert!(matches!(
-            transition_source(rejected),
-            Err(DrawError::ExtensionImplementationMismatch {
-                abi: EXTENSION_CROSS_FADE_ABI
-            })
-        ));
         let kernel = PreparedTransitionKernel::ExtensionCrossFade {
             implementation_sha256: engine_owned_kernel_implementation_sha256(
                 EXTENSION_CROSS_FADE_ABI,

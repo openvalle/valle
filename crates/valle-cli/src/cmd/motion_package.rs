@@ -9,8 +9,8 @@ use std::{collections::BTreeMap, sync::Arc};
 use anyhow::{Context, Result, anyhow, bail};
 use serde_json::{Value, json};
 use valle_engine::fixed_package::{
-    COMMON_PROFILE_KEY, canonical_fixed_execution_profile, canonical_fixed_package_manifest,
-    canonical_verified_binding_bundle, fixed_package_files, open_verified_fixed_package,
+    COMMON_PROFILE_KEY, OpenedFixedPackage, build_fixed_package, canonical_fixed_execution_profile,
+    canonical_verified_binding_bundle, fixed_package_files,
 };
 use valle_engine::render::{
     AudioFootprint, Capabilities, ResourceBinding, ResourceBindings, ResourceDependency,
@@ -56,7 +56,9 @@ pub(super) struct StandaloneMotionPackage {
     pub resource_manifest_json: String,
     pub resource_manifest: Value,
     pub verified_binding_bundle_json: String,
-    pub execution_profile_json: String,
+    /// The package opened by the closed-package admission check above, so a native render reuses
+    /// it instead of parsing, decoding and hashing the same members a second time.
+    pub opened: OpenedFixedPackage,
 }
 
 pub(super) fn font_dependency_role(artifact: &SceneArtifact, bytes: &[u8], index: usize) -> String {
@@ -100,10 +102,10 @@ pub(super) fn build_standalone_motion_package(
     }
 
     for (index, bytes) in input.font_blobs.iter().enumerate() {
-        let resource_id = resources.intern_font(bytes)?;
+        let digest = resources.intern_font(bytes)?;
         component_dependencies.push(FixedResourceDependency {
             role: font_dependency_role(input.artifact, bytes, index),
-            resource_id,
+            resource_id: font_resource_id(&digest),
         });
     }
 
@@ -142,15 +144,9 @@ pub(super) fn build_standalone_motion_package(
         &verified_binding_bundle_json,
         &execution_profile_json,
     );
-    let fixed_package_manifest_json =
-        canonical_fixed_package_manifest(&files).map_err(|error| anyhow!(error))?;
-    let opened =
-        open_verified_fixed_package(&fixed_package_manifest_json, &files).map_err(|error| {
-            anyhow!("standalone Motion fixed package failed closed-package admission: {error}")
-        })?;
-    if opened.compiled().canvas().frame_rate() != input.frame_rate {
-        bail!("standalone Motion fixed package self-check returned a different frame rate");
-    }
+    let (fixed_package_manifest_json, opened) = build_fixed_package(&files).map_err(|error| {
+        anyhow!("standalone Motion fixed package failed closed-package admission: {error}")
+    })?;
 
     let timeline_value: Value = serde_json::from_str(&timeline_json)?;
     let manifest_value: Value = serde_json::from_str(&manifest_json)?;
@@ -162,7 +158,7 @@ pub(super) fn build_standalone_motion_package(
         resource_manifest_json: manifest_json,
         resource_manifest: manifest_value,
         verified_binding_bundle_json,
-        execution_profile_json,
+        opened,
     })
 }
 
@@ -306,6 +302,10 @@ fn asset_resource_ids(
     Ok(ids)
 }
 
+pub(super) fn font_resource_id(digest: &ContentDigest) -> String {
+    format!("font:{}:0", digest.as_hex())
+}
+
 fn motion_digest(bytes: &[u8]) -> ContentDigest {
     ContentDigest::of_bytes(bytes)
 }
@@ -369,7 +369,6 @@ impl FixedResources {
                     VerifiedResourceFacts::Audio {
                         descriptor: descriptor.clone(),
                         temporal_footprint: AudioFootprint::default(),
-                        decoded_pcm_digest: decoded.digest,
                     },
                     Vec::new(),
                 )
@@ -423,14 +422,15 @@ impl FixedResources {
     }
 
     /// Share dependency fonts across Motion components without changing each component's
-    /// ordered font roles. Font descriptors currently admit face index zero only.
-    pub(super) fn intern_font(&mut self, bytes: &[u8]) -> Result<String> {
+    /// ordered font roles, returning the font's digest. Font descriptors currently admit face
+    /// index zero only.
+    pub(super) fn intern_font(&mut self, bytes: &[u8]) -> Result<ContentDigest> {
         let digest = motion_digest(bytes);
-        let resource_id = format!("font:{}:0", digest.as_hex());
+        let resource_id = font_resource_id(&digest);
         if !self.entries.contains_key(&resource_id) {
             self.add_font_with_digest(&resource_id, digest, bytes)?;
         }
-        Ok(resource_id)
+        Ok(digest)
     }
 
     fn add_font_with_digest(
@@ -559,7 +559,6 @@ struct DecodedAudioCorpus {
     channels: u16,
     stream: u32,
     sample_count: i64,
-    digest: ContentDigest,
 }
 
 const STANDALONE_AUDIO_PRESENTATION_INDEX_DOMAIN: &[u8] =
@@ -602,13 +601,10 @@ fn decode_audio_corpus(asset: &BoundAsset) -> Result<DecodedAudioCorpus> {
             info.channels
         );
     }
+    // The descriptor duration is the exact decoded sample count, which container metadata
+    // does not guarantee.
     let mut decoder =
         valle_media::codec::LibavAudioStream::open(&asset.path, 48_000, info.channels)?;
-    // The digest prefix includes the final frame count. Spool PCM instead of retaining
-    // all samples (hundreds of MiB for an interview) while determining that count.
-    use sha2::{Digest, Sha256};
-    use std::io::{Read, Seek, SeekFrom, Write};
-    let mut pcm = tempfile::tempfile()?;
     let mut sample_count = 0_i64;
     loop {
         let block = decoder.read(48_000)?;
@@ -616,38 +612,14 @@ fn decode_audio_corpus(asset: &BoundAsset) -> Result<DecodedAudioCorpus> {
             break;
         }
         sample_count += i64::try_from(block.samples.len() / usize::from(info.channels))?;
-        let mut bytes = Vec::with_capacity(block.samples.len() * 4);
-        for sample in block.samples {
-            if !sample.is_finite() {
-                bail!("decoded PCM contains a non-finite sample");
-            }
-            bytes.extend_from_slice(&sample.to_le_bytes());
-        }
-        pcm.write_all(&bytes)?;
     }
     if sample_count == 0 {
         bail!("decoded common-profile PCM must contain at least one sample");
     }
-    let mut hasher = Sha256::new();
-    hasher.update(b"valle.audio/common@1/decoded-interleaved-f32le@1\0");
-    hasher.update(48_000_u32.to_le_bytes());
-    hasher.update(info.channels.to_le_bytes());
-    hasher.update((sample_count as u64).to_le_bytes());
-    pcm.seek(SeekFrom::Start(0))?;
-    let mut bytes = vec![0; 1024 * 1024];
-    loop {
-        let count = pcm.read(&mut bytes)?;
-        if count == 0 {
-            break;
-        }
-        hasher.update(&bytes[..count]);
-    }
-    let digest = ContentDigest::from_bytes(hasher.finalize().into());
     Ok(DecodedAudioCorpus {
         channels: info.channels,
         stream: info.stream,
         sample_count,
-        digest,
     })
 }
 
@@ -668,10 +640,10 @@ fn entry_digest(entry: &ResourceEntryWire) -> &ContentDigest {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use valle_engine::render::common_audio_pcm_digest;
+    use valle_engine::fixed_package::open_verified_fixed_package;
 
     #[test]
-    fn streamed_pcm_proof_matches_exact_integer_wav_samples() {
+    fn audio_corpus_counts_exact_decoded_samples() {
         let file = tempfile::NamedTempFile::new().unwrap();
         let mut bytes = b"RIFF".to_vec();
         bytes.extend_from_slice(&42_u32.to_le_bytes());
@@ -696,10 +668,7 @@ mod tests {
         })
         .unwrap();
         assert_eq!(corpus.sample_count, 3);
-        assert_eq!(
-            corpus.digest,
-            common_audio_pcm_digest(48_000, 1, &[-1.0, 0.0, 32767.0 / 32768.0]).unwrap()
-        );
+        assert_eq!(corpus.channels, 1);
     }
 
     #[test]
@@ -880,7 +849,6 @@ export default function T(){return <Scene><Text>Hello</Text><MathFormula latex="
                     VerifiedResourceFacts::Audio {
                         descriptor,
                         temporal_footprint: AudioFootprint::default(),
-                        decoded_pcm_digest: common_audio_pcm_digest(48_000, 1, &[0.0]).unwrap(),
                     },
                 ),
             )
@@ -899,11 +867,6 @@ export default function T(){return <Scene><Text>Hello</Text><MathFormula latex="
                 .get("envelope")
                 .is_none()
         );
-        assert!(
-            value["bindings"]["audio:test"]["facts"]["decodedPcmDigest"]
-                .as_str()
-                .is_some_and(|digest| digest.starts_with("sha256:"))
-        );
     }
 
     #[test]
@@ -912,7 +875,6 @@ export default function T(){return <Scene><Text>Hello</Text><MathFormula latex="
             channels: 1,
             stream: 0,
             sample_count: 48_001,
-            digest: common_audio_pcm_digest(48_000, 1, &vec![0.0; 48_001]).unwrap(),
         };
         let descriptor = analyzed_audio_descriptor(&decoded).unwrap();
         assert_eq!(
@@ -922,13 +884,11 @@ export default function T(){return <Scene><Text>Hello</Text><MathFormula latex="
         assert_eq!(descriptor.time_base, ExactRational::new(1, 48_000).unwrap());
         assert_eq!(descriptor.sample_rate, 48_000);
         assert_eq!(descriptor.channel_layout, AudioChannelLayoutWire::Mono);
-        assert_ne!(descriptor.presentation_index_digest, decoded.digest);
 
         let next = analyzed_audio_descriptor(&DecodedAudioCorpus {
             channels: 1,
             stream: 0,
             sample_count: 48_002,
-            digest: decoded.digest,
         })
         .unwrap();
         assert_ne!(

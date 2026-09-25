@@ -225,7 +225,7 @@ fn staged_product_api_pins_one_compiled_render_through_execution() {
         .collect::<String>();
     assert_eq!(
         packed_digest,
-        "fd5a942092a3dae7f0a70bcc1987718e6026a60448bf78242045298a38c78d8c"
+        "9a0a379f6f4aaa8f926c64fdae32b2ed555086192425b17c0ca7db7abe539024"
     );
     assert_eq!(
         ResourceRequestSet::from_packed(&request_bytes)

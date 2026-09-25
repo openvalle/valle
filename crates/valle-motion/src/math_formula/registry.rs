@@ -40,7 +40,7 @@ impl FormulaFontRegistry {
         ttf_parser::Face::parse(&bytes, 0).map_err(|err| AdmitError::UnknownFont {
             name: format!("{}: {err}", spec.file_name),
         })?;
-        let family = default_font_naming(&bytes, 0, 0.0).family;
+        let family = default_font_naming(&bytes, 0);
         self.by_ratex_name.insert(
             spec.ratex_name,
             LoadedFace {

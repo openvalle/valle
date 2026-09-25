@@ -235,6 +235,10 @@ pub fn write_png(path: &Path, frame: &RgbaFrame) -> Result<()> {
     let mut encoder = png::Encoder::new(BufWriter::new(file), frame.width, frame.height);
     encoder.set_color(png::ColorType::Rgba);
     encoder.set_depth(png::BitDepth::Eight);
+    // The default level spends ~100 ms on a 1080p frame of smooth gradients or blur in lazy
+    // match searching, a fifth of a preview. Level 2 encodes those 4-5x faster for 25-45%
+    // larger files, and flat or text frames grow ~5%.
+    encoder.set_deflate_compression(png::DeflateCompression::Level(2));
     let mut writer = encoder.write_header().context("write PNG header")?;
     writer
         .write_image_data(&frame.data)

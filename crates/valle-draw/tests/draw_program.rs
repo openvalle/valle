@@ -1,6 +1,5 @@
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
-use sha2::{Digest, Sha256};
 use valle_draw::Rect;
 use valle_draw::program::{
     BackdropRead, BackdropScope, BlendMode, Clip, DrawProgram, DrawProgramBuilder,
@@ -605,15 +604,12 @@ fn invalid_ids_cycles_depth_and_undefined_reservations_fail_before_execution() {
 }
 
 #[test]
-fn packed_header_format_version_length_endianness_and_checksum_fail_closed() {
+fn packed_header_format_version_length_and_endianness_fail_closed() {
     let bytes = fixture(false).packed_bytes().unwrap();
 
     let mut format_version = bytes.clone();
     format_version[8..12]
         .copy_from_slice(&(valle_draw::program::DRAW_PROGRAM_FORMAT_VERSION + 1).to_le_bytes());
-    format_version[28..60].fill(0);
-    let checksum: [u8; 32] = Sha256::digest(&format_version).into();
-    format_version[28..60].copy_from_slice(&checksum);
     assert!(matches!(
         DrawProgram::from_packed(&format_version),
         Err(valle_draw::program::PackedDrawError::UnsupportedFormatVersion { .. })
@@ -626,18 +622,11 @@ fn packed_header_format_version_length_endianness_and_checksum_fail_closed() {
         Err(valle_draw::program::PackedDrawError::WrongEndianness { .. })
     ));
 
-    let mut length = bytes.clone();
+    let mut length = bytes;
     length[20..28].copy_from_slice(&0_u64.to_le_bytes());
     assert!(matches!(
         DrawProgram::from_packed(&length),
         Err(valle_draw::program::PackedDrawError::LengthMismatch { .. })
-    ));
-
-    let mut checksum = bytes;
-    *checksum.last_mut().unwrap() ^= 0x80;
-    assert!(matches!(
-        DrawProgram::from_packed(&checksum),
-        Err(valle_draw::program::PackedDrawError::ChecksumMismatch)
     ));
 }
 

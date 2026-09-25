@@ -1344,7 +1344,16 @@ export default function DataScene(ctx, props, data) {
             "green.png",
         ],
     ));
-    assert_eq!(pixel(dir, "green.png", 16, 16), vec![1, 255, 0]);
+    // CPU raster pipelines can quantize this color one 8-bit code differently. This test
+    // checks that changed instance data is used, so compare with the authored green.
+    let green = pixel(dir, "green.png", 16, 16);
+    assert!(
+        green
+            .iter()
+            .zip([0, 255, 0])
+            .all(|(actual, expected)| actual.abs_diff(expected) <= 1),
+        "updated inline data should render green: {green:?}"
+    );
     let mut missing = timeline("#ff0000");
     missing["tracks"]["visual"][0]["clips"][0]
         .as_object_mut()

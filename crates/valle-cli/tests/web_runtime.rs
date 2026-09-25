@@ -19,7 +19,7 @@ fn fake_runtime() -> PathBuf {
     let root = temp_dir("valle_wrt");
     let html_path = "apps/preview/index.html";
     let js_path = "apps/preview/app.js";
-    let specs: [(&str, &str, &str, &[u8], Option<&str>); 7] = [
+    let specs: [(&str, &str, &str, &[u8], Option<&str>); 8] = [
         (
             "html",
             "html",
@@ -63,6 +63,13 @@ fn fake_runtime() -> PathBuf {
             b"worker",
             None,
         ),
+        (
+            "studio-compile-worker",
+            "worker",
+            valle_cli::webruntime::STUDIO_COMPILE_WORKER_PATH,
+            b"compile worker",
+            None,
+        ),
     ];
     let mut assets = Vec::new();
     for (id, role, path, bytes, group) in specs {
@@ -100,10 +107,10 @@ fn fake_runtime() -> PathBuf {
                     "wasm": [valle_cli::webruntime::CANVASKIT_FULL_WASM_PATH]
                 },
             ],
-            "workers": [{
-                "id": "product-frame",
-                "path": valle_cli::webruntime::PRODUCT_FRAME_WORKER_PATH,
-            }],
+            "workers": [
+                {"id": "product-frame", "path": valle_cli::webruntime::PRODUCT_FRAME_WORKER_PATH},
+                {"id": "studio-compile", "path": valle_cli::webruntime::STUDIO_COMPILE_WORKER_PATH},
+            ],
             "apps": [{"id": "preview", "html": html_path}],
             "routes": {"preview.html": html_path, "app.js": js_path},
             "runtimeAssets": valle_cli::webruntime::runtime_assets_json(),

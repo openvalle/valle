@@ -477,12 +477,9 @@ fn verified_facts(entry: &ResourceEntryWire) -> VerifiedResourceFacts {
             descriptor: descriptor.clone(),
             temporal_footprint: VisualFootprint::new(1, 1),
         },
-        ResourceEntryWire::Audio {
-            descriptor, digest, ..
-        } => VerifiedResourceFacts::Audio {
+        ResourceEntryWire::Audio { descriptor, .. } => VerifiedResourceFacts::Audio {
             descriptor: descriptor.clone(),
             temporal_footprint: AudioFootprint::new(8, 8).unwrap(),
-            decoded_pcm_digest: digest.clone(),
         },
         ResourceEntryWire::Image { descriptor, .. } => VerifiedResourceFacts::Image {
             descriptor: descriptor.clone(),
@@ -2372,38 +2369,6 @@ fn audio_gain_effect_is_frozen_before_gain_pan_and_crossfade_and_is_seek_chunk_i
         0x3f78_9374_bc6a_7efa
     );
     assert_ne!(render.render_id(), reordered.render_id());
-
-    let ResourceEntryWire::Audio {
-        descriptor,
-        digest: resource_digest,
-        ..
-    } = stereo_manifest.entries().get("audio:music").unwrap()
-    else {
-        unreachable!()
-    };
-    let changed_pcm_bindings = ResourceBindings::new()
-        .with_binding(
-            "audio:music",
-            ResourceBinding::new(
-                resource_digest.clone(),
-                VerifiedHandleId::new(11).unwrap(),
-                VerifiedResourceFacts::Audio {
-                    descriptor: descriptor.clone(),
-                    temporal_footprint: AudioFootprint::new(8, 8).unwrap(),
-                    decoded_pcm_digest: digest(OTHER_KERNEL_DIGEST),
-                },
-            ),
-        )
-        .unwrap();
-    let changed_pcm = open(
-        &timeline(&value),
-        &stereo_manifest,
-        &changed_pcm_bindings,
-        &capabilities,
-        &baseline_profile(),
-    )
-    .unwrap();
-    assert_ne!(render.render_id(), changed_pcm.render_id());
 }
 
 #[test]

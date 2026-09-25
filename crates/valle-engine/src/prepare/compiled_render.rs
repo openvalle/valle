@@ -215,16 +215,6 @@ fn prepare_transition(
                     "compiled transition ABI is not executable",
                 ));
             }
-            let expected = crate::render::engine_owned_kernel_implementation_digest(
-                crate::render::EXTENSION_CROSS_FADE_ABI,
-            )
-            .expect("cross-fade ABI has an engine-owned implementation");
-            if descriptor.implementation_digest() != &expected {
-                return Err(PrepareError::at(
-                    format!("{path}.kernel"),
-                    "compiled transition implementation is not executable",
-                ));
-            }
             PreparedTransitionKernel::ExtensionCrossFade {
                 implementation_sha256: digest_bytes(descriptor.implementation_digest())?,
                 past_frames: descriptor.visual_footprint().past_frames(),
@@ -877,16 +867,6 @@ fn prepared_extension_effect(
         return Err(PrepareError::at(
             path,
             "compiled extension ABI is not executable",
-        ));
-    }
-    let expected = crate::render::engine_owned_kernel_implementation_digest(
-        crate::render::EXTENSION_COLOR_GAIN_ABI,
-    )
-    .expect("color-gain ABI has an engine-owned implementation");
-    if descriptor.implementation_digest() != &expected {
-        return Err(PrepareError::at(
-            path,
-            "compiled extension implementation is not executable",
         ));
     }
     let gain = call

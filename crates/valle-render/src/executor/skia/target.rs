@@ -117,7 +117,7 @@ impl SkiaExternalObject {
             working_info(extent).map_err(|_| SkiaObjectError::InvalidWorkingPayload)?;
         let mut surface =
             raster_surface(&working_info).map_err(|_| SkiaObjectError::InvalidWorkingPayload)?;
-        surface.canvas().clear(Color4f::new(0.0, 0.0, 0.0, 0.0));
+        // A same-extent Src draw writes every pixel, alpha included, so no clear is needed.
         let mut paint = Paint::default();
         paint.set_blend_mode(BlendMode::Src);
         surface
@@ -239,18 +239,10 @@ impl SkiaExternalObject {
                 expected: "fontFace",
             });
         };
-        let bytes = bytes.into();
-        let actual = valle_engine::resource::ContentDigest::of_bytes(bytes.as_ref());
-        if actual != key.content {
-            return Err(SkiaObjectError::DigestMismatch {
-                expected: key.content.to_string(),
-                actual: actual.to_string(),
-            });
-        }
         Ok(Self {
             key,
             descriptor: ExternalResourceDesc::FontBytes,
-            payload: SkiaObjectPayload::FontBytes(bytes),
+            payload: SkiaObjectPayload::FontBytes(bytes.into()),
         })
     }
 
@@ -352,7 +344,7 @@ impl SkiaExternalObject {
             working_info(extent).map_err(|_| SkiaObjectError::InvalidWorkingPayload)?;
         let mut surface =
             raster_surface(&working_info).map_err(|_| SkiaObjectError::InvalidWorkingPayload)?;
-        surface.canvas().clear(Color4f::new(0.0, 0.0, 0.0, 0.0));
+        // A same-extent Src draw writes every pixel, alpha included, so no clear is needed.
         let mut paint = Paint::default();
         paint.set_blend_mode(BlendMode::Src);
         surface

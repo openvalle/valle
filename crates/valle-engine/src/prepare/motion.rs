@@ -1125,7 +1125,6 @@ pub(crate) fn prepare_program(
     context: ProgramPrepareContext<'_>,
     requests: &mut RequestAllocator,
 ) -> Result<PreparedProgram, ProgramPrepareError> {
-    context.fixture.program.validate()?;
     let requirements = context.fixture.program.requirements().clone();
     let mut bindings = ProgramResourceBindings::default();
 
@@ -1379,8 +1378,6 @@ pub enum ProgramPrepareError {
     StructureKindMismatch { key: String },
     #[error("DrawProgram structure {key:?} digest or ABI does not match")]
     StructureDigestMismatch { key: String },
-    #[error(transparent)]
-    Program(#[from] valle_draw::program::DrawProgramError),
     #[error(transparent)]
     Packed(#[from] valle_draw::program::PackedDrawError),
     #[error(transparent)]

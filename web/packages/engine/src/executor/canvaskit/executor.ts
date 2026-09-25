@@ -24,7 +24,6 @@ import {
   decodePackedAbi,
   type PackedValue,
 } from "../../abi/packed.ts";
-import { sha256Hex } from "../../abi/sha256.ts";
 import {
   BATCH_INSTANCE_BYTES,
   applyDrawProgramPatch,
@@ -342,14 +341,9 @@ export class CanvasKitExecutor {
       return cached;
     }
     const packed = decodeBase64Bytes(encoded, "program.baselinePacked");
-    const pending = Promise.all([
-      packedHash(packed).then((actual) => {
-        if (actual !== key) fail("program_contract", "baseline content hash mismatch");
-      }),
-      // Decode the template-owned baseline once at the Web trust boundary. This also primes the
-      // exact DrawProgram cache when the baseline is itself the requested frame.
-      this.drawProgram(key, packed),
-    ]).then(() => packed);
+    // Decoding the template-owned baseline once also primes the exact DrawProgram cache when the
+    // baseline is itself the requested frame.
+    const pending = this.drawProgram(key, packed).then(() => packed);
     this.baselinePrograms.set(key, pending);
     try { return await pending; }
     catch (error) { this.baselinePrograms.delete(key); throw error; }
@@ -362,13 +356,8 @@ export class CanvasKitExecutor {
       return cached;
     }
     const packed = decodeBase64Bytes(encoded, "program.baselineFramePacked");
-    const pending = packedHash(packed).then((actual) => {
-      if (actual !== key) fail("program_contract", "baseline frame hash mismatch");
-      return packed;
-    });
-    this.baselineFrames.set(key, pending);
-    try { return await pending; }
-    catch (error) { this.baselineFrames.delete(key); throw error; }
+    this.baselineFrames.set(key, Promise.resolve(packed));
+    return packed;
   }
 
   async planTemplate(
@@ -384,12 +373,8 @@ export class CanvasKitExecutor {
       touch(this.planTemplates, key, cached);
       return cached.admitted;
     }
-    const admitted = Promise.all([
-      packedHash(packet).then((actual) => {
-        if (actual !== key) fail("template_hash", "bindings do not name the supplied plan packet");
-      }),
-      decodePackedAbi(packet, RENDER_PLAN_ABI),
-    ]).then(([, value]) => record(value, "RenderPlanTemplate"));
+    const admitted = decodePackedAbi(packet, RENDER_PLAN_ABI)
+      .then((value) => record(value, "RenderPlanTemplate"));
     const entry = { packet, admitted };
     this.planTemplates.set(key, entry);
     try { return await admitted; }
@@ -483,16 +468,15 @@ async function executeCanvasKitFrame(
   const packetAdmissionStarted = performance.now();
   executor.trimCaches();
   const cacheBefore = executor.cacheSnapshot();
-  const [bindingsValue, scheduleValue, bindingHash] = await Promise.all([
+  const [bindingsValue, scheduleValue] = await Promise.all([
     decodePackedAbi(bindingPacket, RENDER_BINDINGS_ABI),
     decodePackedAbi(schedulePacket, BOUND_PROGRAM_SCHEDULES_ABI),
-    packedHash(bindingPacket),
   ]);
   const bindings = record(bindingsValue, "RenderBindings");
   const schedule = record(scheduleValue, "BoundProgramSchedules");
   const templateHash = digestString(bindings.templateHash, "bindings.templateHash");
   const plan = await executor.planTemplate(templateHash, planPacket);
-  validatePacketTriple(plan, bindings, schedule, templateHash, bindingHash);
+  validatePacketTriple(plan, schedule, templateHash);
   const generation = exactPositiveInteger(bindings.externalGeneration, "bindings.externalGeneration");
   if (generation !== BigInt(objectTable.generation)) {
     fail("stale_generation", `binding generation ${generation} does not match object table ${objectTable.generation}`);
@@ -842,21 +826,10 @@ async function admitProgram(
   ]);
   const framePatch = decodeBase64Bytes(plan.framePatch, "program.framePatch");
   const framePacked = applyDrawProgramPatch(baselineFrame, framePatch);
-  const frameHash = digestString(plan.frameHash, "program.frameHash");
   const patch = decodeBase64Bytes(plan.patch, "program.patch");
   const packed = applyDrawProgramPatch(baseline, patch);
   const contentHash = digestString(plan.contentHash, "program.contentHash");
-  const [actualFrameHash, actualContentHash, draw] = await Promise.all([
-    packedHash(framePacked),
-    packedHash(packed),
-    executor.drawProgram(contentHash, packed),
-  ]);
-  if (actualFrameHash !== frameHash) {
-    fail("program_contract", `program ${String(plan.id)} reconstructed frame hash mismatch`);
-  }
-  if (actualContentHash !== contentHash) {
-    fail("program_contract", `program ${String(plan.id)} reconstructed content hash mismatch`);
-  }
+  const draw = await executor.drawProgram(contentHash, packed);
   let frameValue: unknown;
   try {
     frameValue = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(framePacked));
@@ -3634,20 +3607,9 @@ function blendCode(mode: string): number {
   return code;
 }
 
-async function packedHash(packet: ArrayBuffer | ArrayBufferView): Promise<string> {
-  const bytes = packet instanceof ArrayBuffer ? new Uint8Array(packet) : new Uint8Array(packet.buffer, packet.byteOffset, packet.byteLength);
-  return `sha256:${await sha256Hex(bytes)}`;
-}
-
-function validatePacketTriple(
-  plan: Wire,
-  bindings: Wire,
-  schedule: Wire,
-  templateHash: string,
-  bindingHash: string,
-): void {
-  if (schedule.templateHash !== templateHash || schedule.bindingHash !== bindingHash) {
-    fail("schedule_hash", "bound schedule does not name the supplied plan/binding pair");
+function validatePacketTriple(plan: Wire, schedule: Wire, templateHash: string): void {
+  if (schedule.templateHash !== templateHash) {
+    fail("schedule_hash", "bound schedule does not name the supplied plan");
   }
   if (schedule.capabilityFingerprint !== plan.capabilityFingerprint) {
     fail("schedule_capability", "bound schedule capability fingerprint does not match the plan");

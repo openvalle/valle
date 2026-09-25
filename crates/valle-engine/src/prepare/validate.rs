@@ -915,6 +915,8 @@ pub(crate) fn validate_prepared_program_table(
                 "program ids must be contiguous and index ordered",
             ));
         }
+        // Constructed frames pack and hash each program in this process; only wire input needs
+        // its payload re-derived.
         if verify_packed {
             let decoded = DrawProgram::from_packed(&program.packed)
                 .map_err(|error| invalid(format!("programs[{index}].packed"), error))?;
@@ -926,12 +928,12 @@ pub(crate) fn validate_prepared_program_table(
                     "packed DrawProgram, viewport and derived requirements disagree",
                 ));
             }
-        }
-        if program.content_hash != ContentDigest::of_bytes(&program.packed) {
-            return Err(invalid(
-                format!("programs[{index}].contentHash"),
-                "program content hash does not match canonical packed bytes",
-            ));
+            if program.content_hash != ContentDigest::of_bytes(&program.packed) {
+                return Err(invalid(
+                    format!("programs[{index}].contentHash"),
+                    "program content hash does not match canonical packed bytes",
+                ));
+            }
         }
         if program.semantic_path.is_empty() {
             return Err(invalid(

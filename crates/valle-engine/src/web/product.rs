@@ -116,7 +116,6 @@ struct AudioEndpointPacket {
     mapped_time: MappedSourceTimePacket,
     digest: Option<ContentDigest>,
     handle: Option<u64>,
-    decoded_pcm_digest: ContentDigest,
     source_channels: u16,
     crossfade_gain: f64,
     gain: f64,
@@ -1123,25 +1122,19 @@ fn audio_sample_packet(
                     .iter()
                     .map(|endpoint| {
                         let resource = endpoint.source().resource();
-                        let (decoded_pcm_digest, source_channels) =
-                            match resource.map(|resource| resource.facts()) {
-                                Some(VerifiedResourceFacts::Audio {
-                                    descriptor,
-                                    decoded_pcm_digest,
-                                    ..
-                                }) => {
-                                    let channels = match descriptor.channel_layout {
-                                        AudioChannelLayoutWire::Mono => 1,
-                                        AudioChannelLayoutWire::Stereo => 2,
-                                        AudioChannelLayoutWire::Surround51
-                                        | AudioChannelLayoutWire::Surround71 => unreachable!(
-                                            "audio admission rejects unsupported channel layouts"
-                                        ),
-                                    };
-                                    (*decoded_pcm_digest, channels)
+                        let source_channels = match resource.map(|resource| resource.facts()) {
+                            Some(VerifiedResourceFacts::Audio { descriptor, .. }) => {
+                                match descriptor.channel_layout {
+                                    AudioChannelLayoutWire::Mono => 1,
+                                    AudioChannelLayoutWire::Stereo => 2,
+                                    AudioChannelLayoutWire::Surround51
+                                    | AudioChannelLayoutWire::Surround71 => unreachable!(
+                                        "audio admission rejects unsupported channel layouts"
+                                    ),
                                 }
-                                _ => unreachable!("admitted audio endpoint carries audio facts"),
-                            };
+                            }
+                            _ => unreachable!("admitted audio endpoint carries audio facts"),
+                        };
                         AudioEndpointPacket {
                             source_index: endpoint.source_index(),
                             source_sample_index: endpoint.source_sample_index(),
@@ -1155,7 +1148,6 @@ fn audio_sample_packet(
                             },
                             digest: resource.map(|resource| *resource.digest()),
                             handle: resource.map(|resource| resource.handle().get()),
-                            decoded_pcm_digest,
                             source_channels,
                             crossfade_gain: endpoint.crossfade_gain(),
                             gain: endpoint.gain(),

@@ -36,9 +36,7 @@ fn project() -> NativeProject {
     let digest_wire = digest.to_wire();
     let render = support::opened_image_render(&digest_wire);
     let mut catalog = NativeResourceCatalog::new();
-    catalog
-        .insert_bytes(digest, Arc::<[u8]>::from(image))
-        .unwrap();
+    catalog.insert_bytes(digest, Arc::<[u8]>::from(image));
     NativeProject::from_render(render, Arc::new(catalog))
 }
 

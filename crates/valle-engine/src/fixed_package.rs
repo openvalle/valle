@@ -340,7 +340,6 @@ enum VerifiedResourceFactsWire {
     Audio {
         descriptor: AudioResourceDescriptorWire,
         temporal_footprint: AudioFootprintWire,
-        decoded_pcm_digest: ContentDigest,
     },
     Image {
         descriptor: ImageResourceDescriptorWire,
@@ -411,8 +410,42 @@ pub fn fixed_package_files<'a>(
 /// bound by the four member digests but are not falsely advertised as CAS
 /// objects to the package GC.
 pub fn canonical_fixed_package_manifest(files: &[FixedPackageFile<'_>]) -> Result<String, String> {
+    build_fixed_package_manifest(files).map(|(manifest, _, _)| manifest)
+}
+
+/// Build the outer manifest for member files produced in this process and admit them.
+///
+/// The manifest is derived from these exact bytes, so it is not parsed back and verified against
+/// them; packages read from storage go through [`open_verified_fixed_package`]. Returns the
+/// canonical manifest JSON with the opened package.
+pub fn build_fixed_package(
+    files: &[FixedPackageFile<'_>],
+) -> Result<(String, OpenedFixedPackage), FixedPackageOpenError> {
+    let (manifest, members, profile) = build_fixed_package_manifest(files)?;
+    let text = |role: FixedPackageMemberRole| {
+        std::str::from_utf8(members[&role]).map_err(|_| {
+            format!(
+                "[fixed_package] member {:?} is not valid UTF-8",
+                role.path()
+            )
+        })
+    };
+    let opened = open_fixed_package_members_with_profile(
+        text(FixedPackageMemberRole::CanonicalTimeline)?,
+        text(FixedPackageMemberRole::ResourceManifest)?,
+        text(FixedPackageMemberRole::VerifiedBindingBundle)?,
+        &profile,
+    )?;
+    Ok((manifest, opened))
+}
+
+type FixedPackageMembers<'a> = BTreeMap<FixedPackageMemberRole, &'a [u8]>;
+
+fn build_fixed_package_manifest<'a>(
+    files: &[FixedPackageFile<'a>],
+) -> Result<(String, FixedPackageMembers<'a>, ExecutionProfile), String> {
     let files = collect_fixed_package_files(files)?;
-    decode_fixed_execution_profile(
+    let profile = decode_fixed_execution_profile(
         files
             .get(&FixedPackageMemberRole::ExecutionProfile)
             .expect("closed member collection contains execution profile"),
@@ -445,8 +478,9 @@ pub fn canonical_fixed_package_manifest(files: &[FixedPackageFile<'_>]) -> Resul
         resource_digests,
     };
     let canonical = canonical_fixed_package_manifest_bytes(&manifest)?;
-    String::from_utf8(canonical)
-        .map_err(|error| format!("[fixed_package_manifest] JCS was not UTF-8: {error}"))
+    let canonical = String::from_utf8(canonical)
+        .map_err(|error| format!("[fixed_package_manifest] JCS was not UTF-8: {error}"))?;
+    Ok((canonical, files, profile))
 }
 
 /// Verify a canonical outer manifest against the exact package files.
@@ -528,7 +562,7 @@ pub fn open_verified_fixed_package(
 
 fn collect_fixed_package_files<'a>(
     files: &[FixedPackageFile<'a>],
-) -> Result<BTreeMap<FixedPackageMemberRole, &'a [u8]>, String> {
+) -> Result<FixedPackageMembers<'a>, String> {
     let mut by_role = BTreeMap::new();
     let mut paths = BTreeSet::new();
     for file in files {
@@ -735,11 +769,9 @@ impl VerifiedResourceFactsWire {
             VerifiedResourceFacts::Audio {
                 descriptor,
                 temporal_footprint,
-                decoded_pcm_digest,
             } => Self::Audio {
                 descriptor: descriptor.clone(),
                 temporal_footprint: AudioFootprintWire::from_domain(*temporal_footprint),
-                decoded_pcm_digest: decoded_pcm_digest.clone(),
             },
             VerifiedResourceFacts::Image {
                 descriptor,
@@ -1114,11 +1146,9 @@ impl VerifiedResourceFactsWire {
             Self::Audio {
                 descriptor,
                 temporal_footprint,
-                decoded_pcm_digest,
             } => VerifiedResourceFacts::Audio {
                 descriptor,
                 temporal_footprint: temporal_footprint.into_domain()?,
-                decoded_pcm_digest,
             },
             Self::Image {
                 descriptor,
@@ -1412,11 +1442,11 @@ mod tests {
 
     use super::{
         CANONICAL_TIMELINE_MEMBER_PATH, COMMON_PROFILE_KEY, FIXED_PACKAGE_FORMAT, FixedPackageFile,
-        FixedPackageManifest, RESOURCE_MANIFEST_MEMBER_PATH, VerifiedResourceFactsWire,
-        canonical_fixed_execution_profile, canonical_fixed_package_manifest,
-        canonical_fixed_package_manifest_bytes, canonical_verified_binding_bundle, content_digest,
-        decode_base64_payload, empty_fixed_package_fixtures, fixed_package_files,
-        open_verified_fixed_package, parse_strict_json, verify_fixed_package,
+        FixedPackageManifest, RESOURCE_MANIFEST_MEMBER_PATH, canonical_fixed_execution_profile,
+        canonical_fixed_package_manifest, canonical_fixed_package_manifest_bytes,
+        canonical_verified_binding_bundle, content_digest, decode_base64_payload,
+        empty_fixed_package_fixtures, fixed_package_files, open_verified_fixed_package,
+        parse_strict_json, verify_fixed_package,
     };
     use crate::render::{Capabilities, ResourceBindings};
 
@@ -1821,8 +1851,6 @@ mod tests {
             "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         const INDEX_DIGEST: &str =
             "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
-        const PCM_DIGEST: &str =
-            "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
         let (_, _, _, profile) = empty_fixed_package_fixtures();
         let timeline = json!({
             "document": {
@@ -1870,8 +1898,7 @@ mod tests {
                     "facts": {
                         "kind": "audio",
                         "descriptor": descriptor,
-                        "temporalFootprint": {"pastSamples": 0, "futureSamples": 0},
-                        "decodedPcmDigest": PCM_DIGEST
+                        "temporalFootprint": {"pastSamples": 0, "futureSamples": 0}
                     },
                     "dependencies": []
                 }
@@ -2015,30 +2042,5 @@ mod tests {
             b"{}"
         );
         assert!(decode_base64_payload("e30".to_owned(), "font.bytesBase64").is_err());
-    }
-
-    #[test]
-    fn audio_decoded_pcm_digest_is_required_in_the_closed_bundle() {
-        let facts = serde_json::json!({
-            "kind": "audio",
-            "descriptor": {
-                "duration": "1/1",
-                "timeBase": "1/48000",
-                "presentationIndexDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                "sampleRate": 48000,
-                "channelLayout": "mono",
-                "audioStream": 0
-            },
-            "temporalFootprint": {"pastSamples": 0, "futureSamples": 0}
-        });
-        assert!(
-            serde_json::from_value::<VerifiedResourceFactsWire>(facts.clone()).is_err(),
-            "decodedPcmDigest must never default or be inferred from the encoded resource digest"
-        );
-        let mut complete = facts;
-        complete["decodedPcmDigest"] = serde_json::json!(
-            "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-        );
-        assert!(serde_json::from_value::<VerifiedResourceFactsWire>(complete).is_ok());
     }
 }

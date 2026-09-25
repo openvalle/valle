@@ -23,9 +23,9 @@ use valle_timeline::{decode_timeline, timeline_bytes};
 
 use crate::{
     fixed_package::{
-        COMMON_PROFILE_KEY, canonical_fixed_execution_profile, canonical_fixed_package_manifest,
-        canonical_verified_binding_bundle, fixed_package_files, open_verified_fixed_package,
-        prepared_resource_facts, resource_entry_digest,
+        COMMON_PROFILE_KEY, build_fixed_package, canonical_fixed_execution_profile,
+        canonical_verified_binding_bundle, fixed_package_files, prepared_resource_facts,
+        resource_entry_digest,
     },
     render::{
         Capabilities, ResourceBinding, ResourceBindings, ResourceDependency, VerifiedHandleId,
@@ -382,8 +382,7 @@ pub fn prepare_preview_package(input: PreviewPackageInput) -> Result<PreparedPre
         &verified_binding_bundle_json,
         &execution_profile_json,
     );
-    let fixed_package_manifest_json = canonical_fixed_package_manifest(&files)?;
-    open_verified_fixed_package(&fixed_package_manifest_json, &files)
+    let (fixed_package_manifest_json, _) = build_fixed_package(&files)
         .map_err(|error| format!("preview package admission failed: {error}"))?;
     // Every locator is bound by digest. The browser host supplies the URL only after this succeeds.
     external_resources.sort_by(|a, b| a.id.cmp(&b.id));
@@ -431,6 +430,7 @@ fn font_descriptor(bytes: &[u8]) -> Result<FontResourceDescriptorWire, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::fixed_package::open_verified_fixed_package;
     use serde_json::json;
 
     fn simple_input() -> PreviewPackageInput {

@@ -26,9 +26,6 @@ pub fn composite_transition(
     from_opacity: f32,
     to_opacity: f32,
 ) -> Result<ReferenceImage, ReferenceTransitionError> {
-    kernel
-        .validate_wire()
-        .map_err(|_| ReferenceTransitionError::ExtensionImplementationMismatch)?;
     validate_unit(progress, "transition progress")?;
     validate_unit(from_opacity, "from opacity")?;
     validate_unit(to_opacity, "to opacity")?;
@@ -345,8 +342,6 @@ fn fract(value: f64) -> f64 {
 
 #[derive(Debug, Error, Clone, PartialEq)]
 pub enum ReferenceTransitionError {
-    #[error("extension transition implementation digest is not executable")]
-    ExtensionImplementationMismatch,
     #[error(transparent)]
     Pixel(#[from] PixelError),
     #[error(transparent)]
@@ -380,29 +375,6 @@ mod tests {
 
     fn solid(extent: Extent2d, rgb: [f32; 3], alpha: f32) -> ReferenceImage {
         ReferenceImage::solid(extent, PremulRgba32::from_straight(rgb, alpha).unwrap()).unwrap()
-    }
-
-    #[test]
-    fn extension_cross_fade_rejects_an_unbound_implementation_digest() {
-        let extent = extent(1, 1);
-        let transparent = ReferenceImage::transparent(extent).unwrap();
-        let kernel = PreparedTransitionKernel::ExtensionCrossFade {
-            implementation_sha256: [2; 32],
-            past_frames: 0,
-            future_frames: 0,
-        };
-        assert_eq!(
-            composite_transition(
-                &transparent,
-                &transparent,
-                &transparent,
-                kernel,
-                0.0,
-                1.0,
-                1.0,
-            ),
-            Err(ReferenceTransitionError::ExtensionImplementationMismatch)
-        );
     }
 
     #[test]

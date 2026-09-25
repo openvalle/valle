@@ -25,7 +25,7 @@ use super::{
     draw::{DrawError, ProgramRuntime, ProgramTerminal},
     effect::{EffectCacheCounters, EffectRuntime, apply_prepared_mask, set_working_color},
     import::render_import,
-    output::{prefers_cached_output, stage_output, stage_sdr_output, validate_target},
+    output::{prefers_cached_output, stage_output_into, stage_sdr_output_into, validate_target},
     surface::{
         PlanImage, SurfaceAllocationScope, SurfaceArena, SurfaceError, SurfaceFrame,
         SurfaceFrameReport, working_info,
@@ -44,6 +44,8 @@ pub struct SkiaExecutor {
 
 impl SkiaExecutor {
     pub fn new(capabilities: BackendCapabilities) -> Result<Self, SkiaExecuteError> {
+        // Selects Skia's CPU-specific raster pipeline (e.g. AVX2/F16C); idempotent.
+        skia_safe::graphics::init();
         capabilities.validate()?;
         Ok(Self {
             capabilities,
@@ -1472,8 +1474,10 @@ fn commit_output(
         && spec.bit_depth() == valle_engine::resource::OutputBitDepth::Eight
         && !prefers_cached_output(image)
     {
-        if let Some(staging) = stage_sdr_output(image, spec, &target.image_info())? {
-            if !target.commit_pixels(staging.pixels(), staging.row_bytes()) {
+        let staging = surface_frame.output_staging_mut();
+        if let Some(row_bytes) = stage_sdr_output_into(image, spec, &target.image_info(), staging)?
+        {
+            if !target.commit_pixels(staging.pixels(), row_bytes) {
                 return Err(SkiaExecuteError::TargetCommit);
             }
         } else if !target.commit_shader(effects.output_shader(image, spec)?) {
@@ -1483,8 +1487,9 @@ fn commit_output(
     }
     let image = surface_frame.prepare_cpu_image(image)?;
     let target_info = target.image_info();
-    let staging = stage_output(&image, spec, &target_info)?;
-    if !target.commit_pixels(staging.pixels(), staging.row_bytes()) {
+    let staging = surface_frame.output_staging_mut();
+    let row_bytes = stage_output_into(&image, spec, &target_info, staging)?;
+    if !target.commit_pixels(staging.pixels(), row_bytes) {
         return Err(SkiaExecuteError::TargetCommit);
     }
     Ok(())

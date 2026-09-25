@@ -113,7 +113,7 @@ fn make_runtime(root: &Path) -> PathBuf {
     let html_path = "runtime/apps/studio.html";
     let html = b"<!doctype html><title>Studio acceptance</title>";
     let js_path = "runtime/apps/studio.js";
-    let specs: [(&str, &str, &str, &[u8], Option<&str>); 7] = [
+    let specs: [(&str, &str, &str, &[u8], Option<&str>); 8] = [
         ("studio-html", "html", html_path, html, None),
         ("studio-js", "app", js_path, b"void 0", None),
         (
@@ -149,6 +149,13 @@ fn make_runtime(root: &Path) -> PathBuf {
             "worker",
             valle_cli::webruntime::PRODUCT_FRAME_WORKER_PATH,
             b"worker",
+            None,
+        ),
+        (
+            "studio-compile-worker",
+            "worker",
+            valle_cli::webruntime::STUDIO_COMPILE_WORKER_PATH,
+            b"compile worker",
             None,
         ),
     ];
@@ -203,10 +210,10 @@ fn make_runtime(root: &Path) -> PathBuf {
                     "wasm":[valle_cli::webruntime::CANVASKIT_FULL_WASM_PATH]
                 }
             ],
-            "workers":[{
-                "id":"product-frame",
-                "path":valle_cli::webruntime::PRODUCT_FRAME_WORKER_PATH
-            }],
+            "workers":[
+                {"id":"product-frame", "path":valle_cli::webruntime::PRODUCT_FRAME_WORKER_PATH},
+                {"id":"studio-compile", "path":valle_cli::webruntime::STUDIO_COMPILE_WORKER_PATH}
+            ],
             "apps":[{"id":"studio","html":html_path}],
             "routes":{"studio.html":html_path,"studio.js":js_path},
             "runtimeAssets":valle_cli::webruntime::runtime_assets_json()

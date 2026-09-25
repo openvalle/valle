@@ -506,8 +506,23 @@ impl ProgramRuntime {
             return snapshot_program_target(target, target_location, output_roi);
         }
 
-        let target = program_target_mut(surfaces, target_location)?;
-        self.render_program_pass_into(
+        let (target, clip) = match target_location {
+            ProgramTerminal::Scratch(index) if draws_within_roi(pass) => {
+                // A program's final pass may render into a root-sized scratch at origin zero.
+                let bounds = IRect::from_xywh(
+                    output_roi.x - target_origin[0],
+                    output_roi.y - target_origin[1],
+                    i32::try_from(output_roi.width)
+                        .map_err(|_| DrawError::Internal("program ROI width overflow".into()))?,
+                    i32::try_from(output_roi.height)
+                        .map_err(|_| DrawError::Internal("program ROI height overflow".into()))?,
+                );
+                let (target, count) = surfaces.bounded_surface_mut(index, bounds)?;
+                (target, Some(count))
+            }
+            _ => (program_target_mut(surfaces, target_location)?, None),
+        };
+        let rendered = self.render_program_pass_into(
             target,
             plan,
             pass,
@@ -518,7 +533,11 @@ impl ProgramRuntime {
             extent,
             info,
             target_origin,
-        )?;
+        );
+        if let Some(count) = clip {
+            target.canvas().restore_to_count(count);
+        }
+        rendered?;
         snapshot_program_target(target, target_location, output_roi)
     }
 
@@ -1455,6 +1474,25 @@ fn resource(
         .ok_or(DrawError::MissingProgramResource(id.get()))
 }
 
+/// Pass kinds whose result is their output ROI, drawn through the canvas, so a scratch target
+/// may be clipped to that ROI. Clipping renders exactly as a ROI-sized surface would; without
+/// it, Skia's antialiasing and wide blurs near the ROI edge depended on how large a slot
+/// surface other resources had made. Blends can write whole surfaces directly, and shader,
+/// glass and mask passes keep the unclipped path.
+fn draws_within_roi(pass: &ProgramPassKind) -> bool {
+    matches!(
+        pass,
+        ProgramPassKind::Clear { .. }
+            | ProgramPassKind::RasterNode { .. }
+            | ProgramPassKind::RasterTree { .. }
+            | ProgramPassKind::SourceOver { .. }
+            | ProgramPassKind::ApplyClip { .. }
+            | ProgramPassKind::ApplyFilter { .. }
+            | ProgramPassKind::ApplyOpacity { .. }
+            | ProgramPassKind::ApplyTransform { .. }
+    )
+}
+
 fn clear_surface(surface: &mut Surface) -> Result<(), DrawError> {
     surface.canvas().clear(Color4f::new(0.0, 0.0, 0.0, 0.0));
     Ok(())
@@ -1527,12 +1565,40 @@ fn draw_program_image_with_paint(
     );
 }
 
+/// Whether an unscaled `Src` draw of `image` overwrites every pixel the canvas can write, making
+/// a clear before it redundant. Accumulating layers copy a full-frame destination this way for
+/// every source they add.
+fn covers_target(surface: &mut Surface, image: &ProgramImage, target_origin: [i32; 2]) -> bool {
+    let (Ok(width), Ok(height)) = (
+        i32::try_from(image.roi.width),
+        i32::try_from(image.roi.height),
+    ) else {
+        return false;
+    };
+    let canvas = surface.canvas();
+    let drawn = IRect::from_xywh(
+        image.roi.x - target_origin[0],
+        image.roi.y - target_origin[1],
+        width,
+        height,
+    );
+    canvas.local_to_device_as_3x3().is_identity()
+        && canvas.device_clip_bounds().is_some_and(|target| {
+            drawn.left <= target.left
+                && drawn.top <= target.top
+                && drawn.right >= target.right
+                && drawn.bottom >= target.bottom
+        })
+}
+
 fn copy_optional_into(
     surface: &mut Surface,
     image: Option<&ProgramImage>,
     target_origin: [i32; 2],
 ) -> Result<(), DrawError> {
-    clear_surface(surface)?;
+    if !image.is_some_and(|image| covers_target(surface, image, target_origin)) {
+        clear_surface(surface)?;
+    }
     if let Some(image) = image {
         draw_program_image_with_mode(surface, image, target_origin, SkBlendMode::Src, 1.0);
     }
@@ -1545,7 +1611,9 @@ fn source_over_into(
     destination: Option<&ProgramImage>,
     target_origin: [i32; 2],
 ) -> Result<(), DrawError> {
-    clear_surface(surface)?;
+    if !destination.is_some_and(|destination| covers_target(surface, destination, target_origin)) {
+        clear_surface(surface)?;
+    }
     if let Some(destination) = destination {
         draw_program_image_with_mode(surface, destination, target_origin, SkBlendMode::Src, 1.0);
     }
@@ -1561,7 +1629,10 @@ fn opacity_image_into(
     opacity: f32,
     target_origin: [i32; 2],
 ) -> Result<(), DrawError> {
-    clear_surface(surface)?;
+    if !(opacity == 1.0 && input.is_some_and(|input| covers_target(surface, input, target_origin)))
+    {
+        clear_surface(surface)?;
+    }
     if let Some(input) = input
         && opacity > 0.0
     {
@@ -2082,8 +2153,6 @@ fn inverse3(value: [f64; 9]) -> Option<[f64; 9]> {
 pub(crate) enum DrawError {
     #[error("DrawProgram decode failed: {0}")]
     ProgramDecode(String),
-    #[error("DrawProgram content identity {content_hash} resolves to different packed bytes")]
-    ProgramCacheCollision { content_hash: String },
     #[error("DrawProgram {program} differs from its admitted plan metadata")]
     ProgramContractMismatch { program: u32 },
     #[error("missing DrawProgram texture {0}")]
@@ -2100,8 +2169,6 @@ pub(crate) enum DrawError {
     ShaderCompile { uri: String, message: String },
     #[error("runtime shader {uri} does not match the Product Compositor ABI")]
     ShaderAbi { uri: String },
-    #[error("extension implementation digest does not match engine-owned ABI {abi}")]
-    ExtensionImplementationMismatch { abi: &'static str },
     #[error("missing Scene3D raster {0}")]
     MissingScene(String),
     #[error("missing {kind} structure {key}")]

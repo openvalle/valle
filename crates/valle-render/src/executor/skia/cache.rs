@@ -45,12 +45,6 @@ impl BackendCacheCounters {
 }
 
 #[derive(Debug)]
-struct CachedProgram {
-    packed_digest: ContentDigest,
-    program: Arc<DrawProgram>,
-}
-
-#[derive(Debug)]
 struct CacheEntry<V> {
     value: V,
     last_use: u64,
@@ -134,7 +128,7 @@ impl<K: Ord + Clone, V> BoundedCache<K, V> {
 /// admission cost, never pixels or plan identity.
 #[derive(Debug)]
 pub(crate) struct BackendCaches {
-    programs: BoundedCache<ContentDigest, CachedProgram>,
+    programs: BoundedCache<ContentDigest, Arc<DrawProgram>>,
     fonts: BoundedCache<(ContentDigest, u32), Typeface>,
     shaders: BoundedCache<ResourceKey, Arc<RuntimeEffect>>,
     counters: BackendCacheCounters,
@@ -160,16 +154,11 @@ impl BackendCaches {
         }
     }
 
+    /// Programs are keyed by the plan's content hash, the digest of their packed bytes.
     pub(crate) fn program(&mut self, plan: &PlanProgram) -> Result<Arc<DrawProgram>, DrawError> {
-        let packed_digest = ContentDigest::of_bytes(plan.packed());
         if let Some(cached) = self.programs.get(plan.content_hash()) {
             self.counters.program_hits = self.counters.program_hits.saturating_add(1);
-            if cached.packed_digest != packed_digest {
-                return Err(DrawError::ProgramCacheCollision {
-                    content_hash: plan.content_hash().to_string(),
-                });
-            }
-            return Ok(Arc::clone(&cached.program));
+            return Ok(Arc::clone(cached));
         }
 
         self.counters.program_misses = self.counters.program_misses.saturating_add(1);
@@ -186,14 +175,8 @@ impl BackendCaches {
                 std::mem::size_of::<valle_draw::program::Node>()
                     + std::mem::size_of::<valle_draw::program::NodeGeometry>(),
             ));
-        self.programs.insert_weighted(
-            *plan.content_hash(),
-            CachedProgram {
-                packed_digest,
-                program: Arc::clone(&program),
-            },
-            weight,
-        );
+        self.programs
+            .insert_weighted(*plan.content_hash(), Arc::clone(&program), weight);
         Ok(program)
     }
 

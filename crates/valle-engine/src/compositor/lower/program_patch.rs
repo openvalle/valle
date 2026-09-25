@@ -467,9 +467,9 @@ mod tests {
         for (index, byte) in target[1024..ALIGNED_FAST_PATH_BYTES].iter_mut().enumerate() {
             *byte = (index as u8).wrapping_mul(31);
         }
-        // Model the mutable packed checksum as well as the dense instance table.
-        base[28..60].fill(0x22);
-        target[28..60].fill(0x33);
+        // Model the mutable packed length as well as the dense instance table.
+        base[20..28].fill(0x22);
+        target[20..28].fill(0x33);
         let patch = encode(&base, &target).unwrap();
         assert_eq!(apply(&base, &patch).unwrap(), target);
         assert!(patch.len() < target.len());

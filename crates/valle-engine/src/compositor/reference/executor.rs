@@ -97,9 +97,8 @@ impl ReferenceExternalObject {
         }
     }
 
-    /// Creates an immutable font fulfillment. Unlike an interpreted visual frame, font bytes are
-    /// the content-addressed payload itself, so construction re-hashes them instead of trusting a
-    /// host-supplied key. Face parsing remains an executor preflight concern.
+    /// Creates an immutable font fulfillment from bytes the host resolved by the key's digest.
+    /// Face parsing remains an executor preflight concern.
     pub fn font_bytes(
         key: ResourceKey,
         bytes: impl Into<Arc<[u8]>>,
@@ -107,18 +106,10 @@ impl ReferenceExternalObject {
         if !matches!(key.interpretation, ResourceInterpretation::FontFace { .. }) {
             return Err(ReferenceObjectError::FontKeyRequired);
         }
-        let bytes = bytes.into();
-        let actual = crate::resource::ContentDigest::of_bytes(bytes.as_ref());
-        if actual != key.content {
-            return Err(ReferenceObjectError::FontDigestMismatch {
-                expected: key.content.clone(),
-                actual,
-            });
-        }
         Ok(Self {
             descriptor: ExternalResourceDesc::FontBytes,
             key,
-            payload: ReferenceObjectPayload::FontBytes(bytes),
+            payload: ReferenceObjectPayload::FontBytes(bytes.into()),
         })
     }
 
@@ -3679,7 +3670,6 @@ fn prepare_reference_effect_runtime(
     effect: &PlanEffect,
     bindings: &RenderBindings,
 ) -> Result<ReferenceEffectRuntime, ReferenceExecuteError> {
-    validate_reference_effect_implementation(pass, effect.kernel)?;
     match effect.kernel {
         PreparedEffectKernel::ColorGrade {
             brightness,
@@ -3747,25 +3737,6 @@ fn prepare_reference_effect_runtime(
             Err(ReferenceExecuteError::UnsupportedPass { pass })
         }
     }
-}
-
-fn validate_reference_effect_implementation(
-    pass: ExecutionPassId,
-    kernel: PreparedEffectKernel,
-) -> Result<(), ReferenceExecuteError> {
-    if let PreparedEffectKernel::ExtensionColorGain {
-        implementation_sha256,
-        ..
-    } = kernel
-        && implementation_sha256
-            != crate::render::engine_owned_kernel_implementation_sha256(
-                crate::render::EXTENSION_COLOR_GAIN_ABI,
-            )
-            .expect("color-gain ABI has an engine-owned implementation")
-    {
-        return Err(ReferenceExecuteError::ExtensionImplementationMismatch { pass });
-    }
-    Ok(())
 }
 
 fn apply_reference_effect(
@@ -4762,11 +4733,6 @@ pub enum ReferenceObjectError {
     VisualKeyRequired,
     #[error("reference font object requires a font-face ResourceKey")]
     FontKeyRequired,
-    #[error("reference font bytes digest mismatch: expected {expected}, got {actual}")]
-    FontDigestMismatch {
-        expected: crate::resource::ContentDigest,
-        actual: crate::resource::ContentDigest,
-    },
 }
 
 #[derive(Debug, Error, Clone, PartialEq)]
@@ -4798,8 +4764,6 @@ pub enum ReferenceExecuteError {
     BoundTemplateMismatch,
     #[error("reference executor does not support pass {pass:?}")]
     UnsupportedPass { pass: ExecutionPassId },
-    #[error("extension implementation digest is not executable in pass {pass:?}")]
-    ExtensionImplementationMismatch { pass: ExecutionPassId },
     #[error("reference kernel sample budget exceeded in pass {pass:?}: {required} > {maximum}")]
     KernelSampleBudgetExceeded {
         pass: ExecutionPassId,
@@ -4902,38 +4866,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn extension_color_gain_rejects_an_unbound_implementation_digest() {
-        let pass = ExecutionPassId::try_from(1_u32).unwrap();
-        let kernel = PreparedEffectKernel::ExtensionColorGain {
-            implementation_sha256: [2; 32],
-            gain: 1.0,
-            past_frames: 0,
-            future_frames: 0,
-        };
-        let bindings = RenderBindings::new(
-            valle_timeline::internal::RenderId::from_bytes([0; 32]),
-            crate::resource::ContentDigest::from_bytes([0; 32]),
-            crate::prepare::DynamicBindings::default(),
-            crate::resource::ExternalGeneration::new(1).unwrap(),
-            Vec::new(),
-            Vec::new(),
-        )
-        .unwrap();
-        let effect = PlanEffect {
-            semantic_path: "test.extensionColorGain".to_owned(),
-            space: PreparedEffectSpace::Root,
-            kernel,
-        };
-        assert!(matches!(
-            prepare_reference_effect_runtime(pass, &effect, &bindings),
-            Err(ReferenceExecuteError::ExtensionImplementationMismatch {
-                pass: rejected_pass
-            }) if rejected_pass == pass
-        ));
-    }
-
-    #[test]
-    fn font_object_rehashes_bytes_and_freezes_face_identity() {
+    fn font_object_freezes_face_identity() {
         let bytes = b"deterministic reference font".to_vec();
         let digest = crate::resource::ContentDigest::of_bytes(bytes.as_slice());
         let key = ResourceKey::new(
@@ -4954,17 +4887,9 @@ mod tests {
             },
         );
         assert_eq!(
-            ReferenceExternalObject::font_bytes(wrong_kind, bytes.clone()).unwrap_err(),
+            ReferenceExternalObject::font_bytes(wrong_kind, bytes).unwrap_err(),
             ReferenceObjectError::FontKeyRequired
         );
-        let wrong_digest = ResourceKey::new(
-            crate::resource::ContentDigest::from_bytes([0; 32]),
-            ResourceInterpretation::FontFace { face_index: 3 },
-        );
-        assert!(matches!(
-            ReferenceExternalObject::font_bytes(wrong_digest, bytes),
-            Err(ReferenceObjectError::FontDigestMismatch { .. })
-        ));
     }
 
     #[test]

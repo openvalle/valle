@@ -6,8 +6,6 @@ export interface PackedAbiDescriptor {
   readonly magic: string;
   readonly formatVersion: number;
   readonly headerBytes: number;
-  readonly checksumOffset: number;
-  readonly checksumBytes: number;
   readonly endianness: "little";
   readonly endiannessMarker: number;
   readonly maximumBytes: number;
@@ -32,9 +30,7 @@ export const DRAW_PROGRAM_ABI = Object.freeze({
   "kind": "DrawProgram",
   "magic": "VLDRAW\u0000\u0000",
   "formatVersion": 1,
-  "headerBytes": 60,
-  "checksumOffset": 28,
-  "checksumBytes": 32,
+  "headerBytes": 28,
   "endianness": "little",
   "endiannessMarker": 16909060,
   "maximumBytes": 67108864,
@@ -47,9 +43,7 @@ export const RENDER_PLAN_ABI = Object.freeze({
   "kind": "RenderPlanTemplate",
   "magic": "VLPLAN\u0000\u0000",
   "formatVersion": 1,
-  "headerBytes": 56,
-  "checksumOffset": 24,
-  "checksumBytes": 32,
+  "headerBytes": 24,
   "endianness": "little",
   "endiannessMarker": 16909060,
   "maximumBytes": 67108864
@@ -59,9 +53,7 @@ export const RENDER_BINDINGS_ABI = Object.freeze({
   "kind": "RenderBindings",
   "magic": "VLBIND\u0000\u0000",
   "formatVersion": 1,
-  "headerBytes": 56,
-  "checksumOffset": 24,
-  "checksumBytes": 32,
+  "headerBytes": 24,
   "endianness": "little",
   "endiannessMarker": 16909060,
   "maximumBytes": 67108864
@@ -71,9 +63,7 @@ export const RESOURCE_REQUESTS_ABI = Object.freeze({
   "kind": "ResourceRequestSet",
   "magic": "VLREQ\u0000\u0000\u0000",
   "formatVersion": 1,
-  "headerBytes": 56,
-  "checksumOffset": 24,
-  "checksumBytes": 32,
+  "headerBytes": 24,
   "endianness": "little",
   "endiannessMarker": 16909060,
   "maximumBytes": 8388608
@@ -83,9 +73,7 @@ export const BOUND_PROGRAM_SCHEDULES_ABI = Object.freeze({
   "kind": "BoundProgramSchedules",
   "magic": "VLSCHED\u0000",
   "formatVersion": 1,
-  "headerBytes": 56,
-  "checksumOffset": 24,
-  "checksumBytes": 32,
+  "headerBytes": 24,
   "endianness": "little",
   "endiannessMarker": 16909060,
   "maximumBytes": 16777216

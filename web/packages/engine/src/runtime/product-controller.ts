@@ -209,7 +209,6 @@ export interface AudioEndpointWire {
     | { type: "hold-end" };
   digest: string | null;
   handle: number | null;
-  decodedPcmDigest: string;
   sourceChannels: 1 | 2;
   crossfadeGain: number;
   gain: number;
@@ -1972,7 +1971,6 @@ export class BrowserValleWebPlayer {
       }
       const requirements = new Map<string, {
         declaredDigest: ContentDigestWire;
-        decodedPcmDigest: string;
         sourceChannels: 1 | 2;
       }>();
       for (const sample of block.samples) {
@@ -1985,24 +1983,22 @@ export class BrowserValleWebPlayer {
             );
             const digest = declaredDigest.slice("sha256:".length);
             const prior = requirements.get(digest);
-            if (prior && (prior.decodedPcmDigest !== endpoint.decodedPcmDigest
-              || prior.sourceChannels !== endpoint.sourceChannels)) {
-              throw new Error(`audio source sha256:${digest} has conflicting decoded PCM proofs`);
+            if (prior && prior.sourceChannels !== endpoint.sourceChannels) {
+              throw new Error(`audio source sha256:${digest} has conflicting source channels`);
             }
             requirements.set(digest, {
               declaredDigest,
-              decodedPcmDigest: endpoint.decodedPcmDigest,
               sourceChannels: endpoint.sourceChannels,
             });
           }
         }
       }
       const decoded = new Map<string, AudioBuffer>();
-      await Promise.all([...requirements].map(async ([digest, proof]) => {
+      await Promise.all([...requirements].map(async ([digest, requirement]) => {
         decoded.set(digest, await this.audioBufferForDigest(
           context,
-          proof.declaredDigest,
-          proof.sourceChannels,
+          requirement.declaredDigest,
+          requirement.sourceChannels,
         ));
       }));
       const mixed = mixCommonAudioBlockPcm(block, decoded);
@@ -2728,10 +2724,6 @@ function parseAudioBlock(value: unknown): AudioBlockWire {
       }
       for (const [endpointIndex, endpointValue] of track.endpoints.entries()) {
         const endpoint = record(endpointValue, `compiled audio endpoint ${endpointIndex}`);
-        if (typeof endpoint.decodedPcmDigest !== "string"
-          || !/^sha256:[0-9a-f]{64}$/.test(endpoint.decodedPcmDigest)) {
-          throw new TypeError(`compiled audio endpoint ${endpointIndex} has no decoded PCM proof`);
-        }
         if (endpoint.sourceChannels !== 1 && endpoint.sourceChannels !== 2) {
           throw new TypeError(`compiled audio endpoint ${endpointIndex} has invalid source channels`);
         }

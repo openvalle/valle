@@ -66,10 +66,19 @@ pub fn tune_process_allocators() {
             mi::mi_option_set(mi::mi_option_os_tag, 240);
         }
     }
-    #[cfg(target_os = "linux")]
+    // FFmpeg frames and Skia surfaces are glibc allocations of several MiB that recur every frame.
+    // Behind a small mmap threshold each one is a fresh mmap that page-faults and is zeroed by the
+    // kernel. In the original Linux amd64 measurements this cost ~10% of video export wall time.
+    // Serve them from the heap instead and keep up to 256 MiB of freed top-of-heap for reuse; the
+    // measured peak RSS cost was 6-9%. These measurements do not establish gains on other hosts.
+    // The values are fixed so glibc's dynamic threshold adjustment stays disabled.
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
     if std::env::var_os("MALLOC_MMAP_THRESHOLD_").is_none() {
-        // Pin glibc's initial 128 KiB mmap threshold to prevent automatic increases.
-        unsafe { libc::mallopt(libc::M_MMAP_THRESHOLD, 131072) };
+        unsafe { libc::mallopt(libc::M_MMAP_THRESHOLD, 64 * 1024 * 1024) };
+    }
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    if std::env::var_os("MALLOC_TRIM_THRESHOLD_").is_none() {
+        unsafe { libc::mallopt(libc::M_TRIM_THRESHOLD, 256 * 1024 * 1024) };
     }
 }
 

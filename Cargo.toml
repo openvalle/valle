@@ -142,6 +142,9 @@ opt-level = 3
 opt-level = 3
 [profile.dev.package.sha2]
 opt-level = 3
+# skia-bindings forwards its opt-level to the C++ Skia build as -O<n>.
+[profile.dev.package.skia-bindings]
+opt-level = 3
 
 [profile.test.package.valle-timeline]
 opt-level = 3
@@ -174,4 +177,6 @@ opt-level = 3
 [profile.test.package.serde_json]
 opt-level = 3
 [profile.test.package.sha2]
+opt-level = 3
+[profile.test.package.skia-bindings]
 opt-level = 3

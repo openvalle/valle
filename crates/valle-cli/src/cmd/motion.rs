@@ -110,7 +110,6 @@ fn render(
     tuning: MotionRenderTuningArgs,
     checking: bool,
 ) -> Result<std::process::ExitCode> {
-    use valle_engine::fixed_package::{fixed_package_files, open_verified_fixed_package};
     use valle_render::host::{
         NativeProject, NativeRenderOptions, NativeRenderer, NativeResourceCatalog,
     };
@@ -161,24 +160,18 @@ fn render(
             canvas: canvas.tuple(),
         },
     )?;
-    let files = fixed_package_files(
-        &package.timeline_json,
-        &package.resource_manifest_json,
-        &package.verified_binding_bundle_json,
-        &package.execution_profile_json,
-    );
-    let opened = open_verified_fixed_package(&package.fixed_package_manifest_json, &files)
-        .map_err(|error| anyhow!(error))?;
+    // The builder already admitted and opened the closed package; reuse it.
+    let opened = package.opened;
     // Freeze resources for the job; streaming decoders require stable files.
     let mut catalog = NativeResourceCatalog::new();
     let frozen = tempfile::tempdir().context("creating immutable render resources")?;
     for bytes in &font_blobs {
-        catalog.insert_bytes(ContentDigest::of_bytes(bytes), bytes.clone())?;
+        catalog.admit_bytes(bytes.clone());
     }
     for asset in prepared.assets.values() {
         let path = frozen.path().join(asset.hash.as_hex());
         std::fs::write(&path, &asset.bytes)?;
-        catalog.insert_file(asset.hash, path)?;
+        catalog.insert_file(asset.hash, path);
     }
     let project = NativeProject::from_render(opened.engine_render(), Arc::new(catalog));
     let renderer = NativeRenderer::new(
@@ -436,7 +429,16 @@ pub(crate) fn compile_captured_timeline_component(
             "Motion compilation failed: {}",
             diagnostics
                 .into_iter()
-                .map(|diagnostic| diagnostic.message)
+                .map(|diagnostic| {
+                    format!(
+                        "{}: {}",
+                        diagnostic
+                            .source_path
+                            .as_deref()
+                            .unwrap_or(&captured.graph.entry),
+                        diagnostic.message,
+                    )
+                })
                 .collect::<Vec<_>>()
                 .join("; ")
         )
@@ -1353,9 +1355,17 @@ fn used_formula_font_blobs(artifact: &valle_motion::SceneArtifact) -> Result<Vec
     Ok(blobs)
 }
 
+/// Keep the first occurrence of each distinct font. Byte equality is the same identity as the
+/// content digest, but it avoids hashing every built-in face (~28 MB) on each invocation:
+/// different lengths compare in O(1) and the handful of fonts makes the pairwise scan trivial.
 fn deduplicate_font_blobs(blobs: &mut Vec<Vec<u8>>) {
-    let mut identities = std::collections::BTreeSet::new();
-    blobs.retain(|bytes| identities.insert(ContentDigest::of_bytes(bytes)));
+    let mut kept: Vec<Vec<u8>> = Vec::with_capacity(blobs.len());
+    for blob in blobs.drain(..) {
+        if !kept.contains(&blob) {
+            kept.push(blob);
+        }
+    }
+    *blobs = kept;
 }
 
 /// Serve every built-in Motion and formula font from memory, sharing the native font bytes.

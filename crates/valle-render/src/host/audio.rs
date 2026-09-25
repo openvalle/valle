@@ -1,17 +1,12 @@
 //! Fixed-package PCM mixing from [`CompiledAudioProgram`].
 
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    path::Path,
-    sync::Arc,
-};
+use std::{collections::BTreeMap, sync::Arc};
 
-use sha2::{Digest, Sha256};
 use thiserror::Error;
 use valle_engine::{
     render::{
-        COMMON_AUDIO_PCM_DIGEST_DOMAIN, CanvasClockError, CompiledAudioChannelMap, CompiledRender,
-        ResourceKind, RuntimeFault, SampleRange, VerifiedResourceFacts,
+        CanvasClockError, CompiledAudioChannelMap, CompiledRender, ResourceKind, RuntimeFault,
+        SampleRange,
     },
     resource::ContentDigest,
 };
@@ -35,7 +30,6 @@ pub struct CompiledAudioMixer {
     render: Arc<CompiledRender>,
     catalog: Arc<NativeResourceCatalog>,
     live: BTreeMap<u32, Box<dyn AudioSource>>,
-    verified_live: BTreeSet<u32>,
     sample_rate: u32,
     channels: u16,
     cursor: i64,
@@ -62,7 +56,6 @@ impl CompiledAudioMixer {
             render,
             catalog,
             live: BTreeMap::new(),
-            verified_live: BTreeSet::new(),
             sample_rate,
             channels,
             cursor,
@@ -97,8 +90,7 @@ impl CompiledAudioMixer {
         // quantizes exactly once after the terminal clamp. Decoder PCM remains f32, but no
         // endpoint gain or partial sum is rounded back to f32 along the way.
         let mut mixed = vec![0.0_f64; frames.checked_mul(2).ok_or(AudioMixError::Budget)?];
-        let mut lanes =
-            BTreeMap::<(u32, usize, u32), (ContentDigest, ContentDigest, Vec<MixPoint>)>::new();
+        let mut lanes = BTreeMap::<(u32, usize, u32), (ContentDigest, Vec<MixPoint>)>::new();
 
         for (output, sample) in block.samples().iter().enumerate() {
             for track in sample.tracks() {
@@ -114,20 +106,10 @@ impl CompiledAudioMixer {
                         });
                     }
                     let digest = *resource.digest();
-                    let decoded_pcm_digest = match resource.facts() {
-                        VerifiedResourceFacts::Audio {
-                            decoded_pcm_digest, ..
-                        } => *decoded_pcm_digest,
-                        _ => {
-                            return Err(AudioMixError::WrongResourceFacts {
-                                source_index: endpoint.source_index(),
-                            });
-                        }
-                    };
                     lanes
                         .entry((track.track_order(), endpoint_index, endpoint.source_index()))
-                        .or_insert_with(|| (digest, decoded_pcm_digest, Vec::new()))
-                        .2
+                        .or_insert_with(|| (digest, Vec::new()))
+                        .1
                         .push(MixPoint {
                             output,
                             source_sample_index: endpoint.source_sample_index(),
@@ -138,7 +120,7 @@ impl CompiledAudioMixer {
             }
         }
 
-        for ((_, _, source_index), (digest, decoded_pcm_digest, points)) in lanes {
+        for ((_, _, source_index), (digest, points)) in lanes {
             let channel_map = self
                 .render
                 .sources()
@@ -149,19 +131,7 @@ impl CompiledAudioMixer {
                 CompiledAudioChannelMap::StereoIdentity => 2,
                 CompiledAudioChannelMap::MonoToStereo => 1,
             };
-            let source_sample_count = self
-                .render
-                .sources()
-                .source(source_index)
-                .and_then(|source| source.audio_source_sample_count())
-                .ok_or(AudioMixError::MissingCompiledSampleCount { source_index })?;
-            self.ensure_decoder(
-                source_index,
-                &digest,
-                expected_channels,
-                source_sample_count,
-                &decoded_pcm_digest,
-            )?;
+            self.ensure_decoder(source_index, &digest, expected_channels)?;
             let decoder = self
                 .live
                 .get_mut(&source_index)
@@ -210,6 +180,11 @@ impl CompiledAudioMixer {
                         // WebAudio may choose an implementation-specific mixing coefficient.
                         CompiledAudioChannelMap::MonoToStereo => left,
                     };
+                    // Decoder output is still an input boundary. Check only the samples being
+                    // mixed, without decoding or hashing the rest of the track up front.
+                    if !left.is_finite() || !right.is_finite() {
+                        return Err(AudioMixError::NonFiniteDecodedPcm { source_index });
+                    }
                     mixed[point.output * 2] += left * point.left_gain;
                     mixed[point.output * 2 + 1] += right * point.right_gain;
                 }
@@ -233,15 +208,9 @@ impl CompiledAudioMixer {
         source_index: u32,
         digest: &ContentDigest,
         decoded_channels: u16,
-        source_sample_count: i64,
-        expected_pcm_digest: &ContentDigest,
     ) -> Result<(), AudioMixError> {
         if self.live.contains_key(&source_index) {
-            return self
-                .verified_live
-                .contains(&source_index)
-                .then_some(())
-                .ok_or(AudioMixError::UnverifiedLiveSource { source_index });
+            return Ok(());
         }
         let path = match self.catalog.source(digest) {
             Some(NativeResourceSource::File(path)) => path.clone(),
@@ -250,86 +219,16 @@ impl CompiledAudioMixer {
             }
             None => return Err(AudioMixError::MissingSource { source_index }),
         };
-        let decoder = open_verified_file_pcm(
-            &path,
-            self.sample_rate,
-            decoded_channels,
-            source_sample_count,
-            expected_pcm_digest,
-            source_index,
-        )?;
+        let decoder =
+            LibavAudioSource::open(&path, self.sample_rate, decoded_channels).map_err(|error| {
+                AudioMixError::Decode {
+                    source_index,
+                    reason: error.to_string(),
+                }
+            })?;
         self.live.insert(source_index, Box::new(decoder));
-        self.verified_live.insert(source_index);
         Ok(())
     }
-}
-
-/// Open, verify, and retain one decoder instance.
-///
-/// Keeping the verified `LibavAudioSource` avoids a path-based verify/drop/reopen window: later
-/// seeks and reads stay on the same libav input context that produced the admitted PCM digest.
-fn open_verified_file_pcm(
-    path: &Path,
-    sample_rate: u32,
-    channels: u16,
-    sample_count: i64,
-    expected_digest: &ContentDigest,
-    source_index: u32,
-) -> Result<LibavAudioSource, AudioMixError> {
-    let frame_count = u64::try_from(sample_count).map_err(|_| AudioMixError::Budget)?;
-    let mut decoder = LibavAudioSource::open(path, sample_rate, channels).map_err(|error| {
-        AudioMixError::Decode {
-            source_index,
-            reason: error.to_string(),
-        }
-    })?;
-    let mut hasher = Sha256::new();
-    hasher.update(COMMON_AUDIO_PCM_DIGEST_DOMAIN);
-    hasher.update(sample_rate.to_le_bytes());
-    hasher.update(channels.to_le_bytes());
-    hasher.update(frame_count.to_le_bytes());
-    let mut start = 0_i64;
-    while start < sample_count {
-        let end = sample_count.min(start.saturating_add(8_192));
-        let decoded =
-            decoder
-                .samples_by_index(start, end)
-                .map_err(|error| AudioMixError::Decode {
-                    source_index,
-                    reason: format!("PCM verification: {error}"),
-                })?;
-        let requested_frames = usize::try_from(end - start).map_err(|_| AudioMixError::Budget)?;
-        if decoded.frames() != requested_frames {
-            return Err(AudioMixError::DecodedRangeMismatch {
-                source_index,
-                requested_frames,
-                decoded_frames: decoded.frames(),
-            });
-        }
-        if decoded.channels != channels {
-            return Err(AudioMixError::DecodedChannelLayoutMismatch {
-                source_index,
-                expected_channels: channels,
-                actual_channels: decoded.channels,
-            });
-        }
-        for sample in decoded.samples {
-            if !sample.is_finite() {
-                return Err(AudioMixError::NonFiniteDecodedPcm { source_index });
-            }
-            hasher.update(sample.to_bits().to_le_bytes());
-        }
-        start = end;
-    }
-    let actual = ContentDigest::from_bytes(hasher.finalize().into());
-    if actual != *expected_digest {
-        return Err(AudioMixError::DecodedPcmDigestMismatch {
-            source_index,
-            expected: expected_digest.to_string(),
-            actual: actual.to_string(),
-        });
-    }
-    Ok(decoder)
 }
 
 fn contiguous_runs(points: &[MixPoint]) -> Vec<&[MixPoint]> {
@@ -366,18 +265,12 @@ pub enum AudioMixError {
     MissingCompiledResource { source_index: u32 },
     #[error("compiled source {source_index} did not resolve to audio")]
     WrongResourceKind { source_index: u32 },
-    #[error("compiled audio source {source_index} has non-audio verified facts")]
-    WrongResourceFacts { source_index: u32 },
     #[error("compiled audio source {source_index} has no frozen channel map")]
     MissingCompiledChannelMap { source_index: u32 },
-    #[error("compiled audio source {source_index} has no frozen sample count")]
-    MissingCompiledSampleCount { source_index: u32 },
     #[error("audio source {source_index} is absent from the Native fulfillment catalog")]
     MissingSource { source_index: u32 },
     #[error("in-memory audio source {source_index} is not supported by the Native decoder")]
     InMemoryAudio { source_index: u32 },
-    #[error("injected audio source {source_index} has no decoded-PCM verification proof")]
-    UnverifiedLiveSource { source_index: u32 },
     #[error("audio source {source_index} decode failed: {reason}")]
     Decode { source_index: u32, reason: String },
     #[error(
@@ -396,16 +289,8 @@ pub enum AudioMixError {
         expected_channels: u16,
         actual_channels: u16,
     },
-    #[error("audio source {source_index} decoded to non-finite PCM")]
+    #[error("audio source {source_index} decoded non-finite PCM")]
     NonFiniteDecodedPcm { source_index: u32 },
-    #[error(
-        "audio source {source_index} decoded PCM digest mismatch: expected {expected}, got {actual}"
-    )]
-    DecodedPcmDigestMismatch {
-        source_index: u32,
-        expected: String,
-        actual: String,
-    },
     #[error("audio chunk exceeds addressable memory")]
     Budget,
     #[error("audio sample boundary {sample} is outside [0, {sample_count}]")]
@@ -428,8 +313,7 @@ mod tests {
     use valle_engine::render::{
         AUDIO_GAIN_EFFECT_ABI, AUDIO_GAIN_EFFECT_KIND, AudioFootprint, Capabilities,
         CompiledAudioItem, ExtensionKernelCapability, ResourceBinding, ResourceBindings,
-        VerifiedHandleId, VerifiedResourceFacts, common_audio_pcm_digest,
-        engine_owned_kernel_implementation_digest,
+        VerifiedHandleId, VerifiedResourceFacts, engine_owned_kernel_implementation_digest,
     };
     use valle_engine::{
         fixed_package::{
@@ -584,12 +468,7 @@ mod tests {
             .unwrap(),
         )
         .unwrap();
-        let source_channels = if source_channel_layout == "mono" {
-            1
-        } else {
-            2
-        };
-        let bindings = audio_bindings(&manifest, source_channels);
+        let bindings = audio_bindings(&manifest);
         let capabilities = Capabilities::new()
             .with_extension_kernel(
                 AUDIO_GAIN_EFFECT_KIND,
@@ -626,13 +505,9 @@ mod tests {
         })
     }
 
-    fn audio_bindings(manifest: &ResourceManifest, source_channels: u16) -> ResourceBindings {
-        let (left_pcm, right_pcm) = pcm_sources(source_channels);
+    fn audio_bindings(manifest: &ResourceManifest) -> ResourceBindings {
         let mut bindings = ResourceBindings::new();
-        for (handle, resource_id, pcm) in [
-            (1, "audio:left", left_pcm.as_ref()),
-            (2, "audio:right", right_pcm.as_ref()),
-        ] {
+        for (handle, resource_id) in [(1, "audio:left"), (2, "audio:right")] {
             let ResourceEntryWire::Audio {
                 digest, descriptor, ..
             } = manifest.entries().get(resource_id).unwrap()
@@ -648,8 +523,6 @@ mod tests {
                         VerifiedResourceFacts::Audio {
                             descriptor: descriptor.clone(),
                             temporal_footprint: AudioFootprint::default(),
-                            decoded_pcm_digest: common_audio_pcm_digest(4, source_channels, pcm)
-                                .unwrap(),
                         },
                     ),
                 )
@@ -730,7 +603,6 @@ mod tests {
                 requests: Arc::clone(&right_requests),
             }),
         );
-        mixer.verified_live.extend([0, 1]);
         (mixer, left_requests, right_requests)
     }
 
@@ -751,6 +623,34 @@ mod tests {
             },
         ];
         assert_eq!(contiguous_runs(&points).len(), 2);
+    }
+
+    #[test]
+    fn non_finite_decoded_samples_fail_before_advancing_the_mix_cursor() {
+        for (layout, channels) in [("mono", 1), ("stereo", 2)] {
+            let render = audio_render(layout);
+            for channel in 0..channels {
+                for invalid in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+                    let (mut mixer, _, _) = mixer_with_memory_pcm(render.compiled_arc(), 0);
+                    let mut samples = vec![0.0; usize::from(channels)];
+                    samples[usize::from(channel)] = invalid;
+                    mixer.live.insert(
+                        0,
+                        Box::new(MemoryAudioSource {
+                            samples: samples.into(),
+                            sample_rate: 4,
+                            channels,
+                            requests: Arc::new(Mutex::new(Vec::new())),
+                        }),
+                    );
+                    assert!(matches!(
+                        mixer.mix_until_sample(1),
+                        Err(AudioMixError::NonFiniteDecodedPcm { source_index: 0 })
+                    ));
+                    assert_eq!(mixer.cursor, 0);
+                }
+            }
+        }
     }
 
     #[test]
@@ -821,17 +721,6 @@ mod tests {
             *right_requests.lock().expect("right request log poisoned"),
             vec![(2, 4), (0, 1), (0, 2)]
         );
-    }
-
-    #[test]
-    fn unverified_decoded_pcm_never_enters_the_native_mixer() {
-        let render = audio_render("stereo");
-        let (mut mixer, _, _) = mixer_with_memory_pcm(render.compiled_arc(), 0);
-        mixer.verified_live.remove(&0);
-        assert!(matches!(
-            mixer.mix_until_sample(1),
-            Err(AudioMixError::UnverifiedLiveSource { source_index: 0 })
-        ));
     }
 
     #[test]

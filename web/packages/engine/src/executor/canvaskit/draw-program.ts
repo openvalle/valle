@@ -1,4 +1,3 @@
-import { sha256 } from "../../abi/sha256.ts";
 import {
   DRAW_PROGRAM_ABI,
   PROGRAM_PATCH_ABI,
@@ -114,7 +113,7 @@ export function applyDrawProgramPatch(
   return output;
 }
 
-/** Decode the sealed DrawProgram arena before any CanvasKit object or surface is allocated. */
+/** Decode the DrawProgram arena before any CanvasKit object or surface is allocated. */
 export async function decodeDrawProgram(input: ArrayBuffer | ArrayBufferView): Promise<DrawProgramWire> {
   const bytes = exactBytes(input);
   if (bytes.byteLength > DRAW_PROGRAM_ABI.maximumBytes) {
@@ -142,7 +141,6 @@ export async function decodeDrawProgram(input: ArrayBuffer | ArrayBufferView): P
   if (view.getBigUint64(20, DRAW_LITTLE_ENDIAN) !== BigInt(bytes.byteLength)) {
     fail("declared length mismatch");
   }
-  verifyChecksum(bytes);
 
   const decoder = new TextDecoder("utf-8", { fatal: true });
   const sections: unknown[] = [];
@@ -271,15 +269,6 @@ function exactRecord(value: unknown, keys: string[], label: string): Record<stri
 function exactNonNegativeInteger(value: unknown, label: string): number {
   if (!positiveIntegerOrZero(value)) fail(`${label} must be an exact non-negative integer`);
   return value;
-}
-
-function verifyChecksum(bytes: Uint8Array): void {
-  const copy = bytes.slice();
-  const checksumEnd = DRAW_PROGRAM_ABI.checksumOffset + DRAW_PROGRAM_ABI.checksumBytes;
-  const expected = copy.slice(DRAW_PROGRAM_ABI.checksumOffset, checksumEnd);
-  copy.fill(0, DRAW_PROGRAM_ABI.checksumOffset, checksumEnd);
-  const actual = sha256(copy);
-  if (!equal(expected, actual)) fail("checksum mismatch");
 }
 
 function exactBytes(input: ArrayBuffer | ArrayBufferView): Uint8Array {

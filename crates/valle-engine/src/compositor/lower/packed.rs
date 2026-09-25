@@ -8,12 +8,10 @@ use std::collections::BTreeMap;
 
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Map, Number, Value};
-use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 const ENDIAN_MARKER: u32 = 0x0102_0304;
-const HEADER_LEN: usize = 56;
-const CHECKSUM_RANGE: std::ops::Range<usize> = 24..56;
+const HEADER_LEN: usize = 24;
 const MAX_DEPTH: usize = 128;
 // The packet envelope already has a stricter per-format byte cap. RenderPlan carries nested
 // DrawProgram packets as base64 strings, so a single legitimate string may exceed 1 MiB without
@@ -74,8 +72,6 @@ pub enum PackedPlanError {
         declared: u64,
         actual: usize,
     },
-    #[error("packed {kind} checksum mismatch")]
-    ChecksumMismatch { kind: &'static str },
     #[error("packed {kind} value is invalid: {reason}")]
     InvalidValue { kind: &'static str, reason: String },
     #[error("packed {kind} is not the canonical binary representation")]
@@ -119,10 +115,7 @@ pub(crate) fn encode<T: Serialize>(
     bytes.extend_from_slice(&contract.version.to_le_bytes());
     bytes.extend_from_slice(&ENDIAN_MARKER.to_le_bytes());
     bytes.extend_from_slice(&(total as u64).to_le_bytes());
-    bytes.extend_from_slice(&[0; 32]);
     bytes.extend_from_slice(&payload);
-    let checksum = checksum(&bytes);
-    bytes[CHECKSUM_RANGE].copy_from_slice(&checksum);
     Ok(bytes)
 }
 
@@ -231,11 +224,6 @@ fn envelope<'a>(bytes: &'a [u8], contract: Contract) -> Result<&'a [u8], PackedP
             actual: bytes.len(),
         });
     }
-    if bytes[CHECKSUM_RANGE] != checksum(bytes) {
-        return Err(PackedPlanError::ChecksumMismatch {
-            kind: contract.kind,
-        });
-    }
     Ok(&bytes[HEADER_LEN..])
 }
 
@@ -249,16 +237,6 @@ fn check_size(actual: usize, contract: Contract) -> Result<(), PackedPlanError> 
     } else {
         Ok(())
     }
-}
-
-fn checksum(bytes: &[u8]) -> [u8; 32] {
-    let mut hasher = Sha256::new();
-    hasher.update(&bytes[..bytes.len().min(CHECKSUM_RANGE.start)]);
-    hasher.update([0; 32]);
-    if bytes.len() > CHECKSUM_RANGE.end {
-        hasher.update(&bytes[CHECKSUM_RANGE.end..]);
-    }
-    hasher.finalize().into()
 }
 
 fn normalize(value: Value) -> Value {
@@ -554,7 +532,7 @@ mod tests {
     }
 
     #[test]
-    fn envelope_round_trip_is_canonical_and_checked() {
+    fn envelope_round_trip_is_canonical() {
         let contract = Contract::plan(1);
         let probe = Probe {
             z: -0.0,
@@ -565,17 +543,10 @@ mod tests {
             decode::<Probe>(&bytes, contract).unwrap(),
             Probe { z: 0.0, a: probe.a }
         );
-
-        let mut corrupt = bytes.clone();
-        *corrupt.last_mut().unwrap() ^= 1;
-        assert!(matches!(
-            decode::<Probe>(&corrupt, contract),
-            Err(PackedPlanError::ChecksumMismatch { .. })
-        ));
     }
 
     #[test]
-    fn envelope_rejects_a_wrong_exact_format_version_with_a_valid_checksum() {
+    fn envelope_rejects_a_wrong_exact_format_version() {
         let probe = Probe {
             z: 1.0,
             a: vec!["version".into()],
@@ -588,8 +559,6 @@ mod tests {
         ] {
             let mut bytes = encode(&probe, contract).unwrap();
             bytes[8..12].copy_from_slice(&2_u32.to_le_bytes());
-            let digest = checksum(&bytes);
-            bytes[CHECKSUM_RANGE].copy_from_slice(&digest);
 
             assert!(matches!(
                 decode::<Probe>(&bytes, contract),
@@ -610,11 +579,8 @@ mod tests {
         bytes.extend_from_slice(&contract.version.to_le_bytes());
         bytes.extend_from_slice(&ENDIAN_MARKER.to_le_bytes());
         bytes.extend_from_slice(&((HEADER_LEN + 5) as u64).to_le_bytes());
-        bytes.extend_from_slice(&[0; 32]);
         bytes.push(ARRAY);
         bytes.extend_from_slice(&u32::MAX.to_le_bytes());
-        let checksum = checksum(&bytes);
-        bytes[CHECKSUM_RANGE].copy_from_slice(&checksum);
         assert!(matches!(
             decode::<Vec<u8>>(&bytes, contract),
             Err(PackedPlanError::InvalidValue { .. })

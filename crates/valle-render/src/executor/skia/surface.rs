@@ -677,6 +677,7 @@ pub(crate) struct SurfaceArena {
     entries: Vec<SurfaceEntry>,
     scratch_free: Vec<SurfaceEntry>,
     delivery_surface: Option<SurfaceEntry>,
+    output_staging: super::output::OutputStaging,
     #[cfg(all(target_os = "macos", feature = "native"))]
     pending_external_imports: Vec<ImportedMetalImage>,
 }
@@ -725,6 +726,7 @@ impl SurfaceArena {
             entries: Vec::new(),
             scratch_free: Vec::new(),
             delivery_surface: None,
+            output_staging: super::output::OutputStaging::default(),
             #[cfg(all(target_os = "macos", feature = "native"))]
             pending_external_imports: Vec::new(),
         }
@@ -792,6 +794,7 @@ impl SurfaceArena {
             entries: Vec::new(),
             scratch_free: Vec::new(),
             delivery_surface: None,
+            output_staging: super::output::OutputStaging::default(),
             #[cfg(feature = "native")]
             pending_external_imports: Vec::new(),
         })
@@ -1295,6 +1298,11 @@ impl<'arena> SurfaceFrame<'arena> {
         self.arena.backend_kind()
     }
 
+    /// CPU output staging buffers retained by the executor across frames.
+    pub(crate) fn output_staging_mut(&mut self) -> &mut super::output::OutputStaging {
+        &mut self.arena.output_staging
+    }
+
     #[cfg(feature = "native")]
     pub(crate) fn import_decoded_video(
         &mut self,
@@ -1645,10 +1653,16 @@ impl<'arena> SurfaceFrame<'arena> {
             .scratch_peak_surfaces
             .max(self.scratch_checked_out_surfaces);
         self.scratch_peak_bytes = self.scratch_peak_bytes.max(self.scratch_checked_out_bytes);
+        // Pooled surfaces keep whatever an earlier user drew.
+        let painted = entries
+            .iter()
+            .map(|entry| IRect::from_wh(entry.surface.width(), entry.surface.height()))
+            .collect();
         Ok(ScratchSurfaces {
             frame: self,
             entries,
             bytes,
+            painted,
         })
     }
 
@@ -1700,14 +1714,51 @@ pub(crate) struct ScratchSurfaces<'frame, 'arena> {
     frame: &'frame mut SurfaceFrame<'arena>,
     entries: Vec<SurfaceEntry>,
     bytes: u64,
+    /// Per entry, a rectangle containing every pixel that may be non-transparent.
+    painted: Vec<IRect>,
 }
 
 impl ScratchSurfaces<'_, '_> {
     pub(crate) fn surface_mut(&mut self, index: usize) -> Result<&mut Surface, SurfaceError> {
-        self.entries
+        let entry = self
+            .entries
             .get_mut(index)
-            .map(|entry| &mut entry.surface)
-            .ok_or(SurfaceError::MissingScratchSurface { index })
+            .ok_or(SurfaceError::MissingScratchSurface { index })?;
+        // The caller may draw anywhere.
+        self.painted[index] = IRect::from_wh(entry.surface.width(), entry.surface.height());
+        Ok(&mut entry.surface)
+    }
+
+    /// Borrows a scratch surface for a pass that draws only inside `bounds`, with the canvas
+    /// clipped to them; the caller restores the canvas to the returned save count.
+    ///
+    /// Program slots are shared by resources of different sizes, so a slot surface can be many
+    /// times larger than the ROI a pass renders. Clearing all of it for every pass dominated
+    /// frames with many small filtered layers. Instead, pixels outside `bounds` are cleared
+    /// only where an earlier pass may have painted, which leaves them transparent exactly as a
+    /// full clear did.
+    pub(crate) fn bounded_surface_mut(
+        &mut self,
+        index: usize,
+        bounds: IRect,
+    ) -> Result<(&mut Surface, usize), SurfaceError> {
+        let entry = self
+            .entries
+            .get_mut(index)
+            .ok_or(SurfaceError::MissingScratchSurface { index })?;
+        let painted = &mut self.painted[index];
+        let canvas = entry.surface.canvas();
+        if !painted.is_empty() && !covers(bounds, *painted) {
+            canvas.save();
+            canvas.clip_irect(*painted, skia_safe::ClipOp::Intersect);
+            canvas.clip_irect(bounds, skia_safe::ClipOp::Difference);
+            canvas.clear(skia_safe::Color4f::new(0.0, 0.0, 0.0, 0.0));
+            canvas.restore();
+        }
+        *painted = bounds;
+        let count = canvas.save();
+        canvas.clip_irect(bounds, skia_safe::ClipOp::Intersect);
+        Ok((&mut entry.surface, count))
     }
 
     pub(crate) fn output_mut(&mut self, slot: SurfaceSlotId) -> Result<&mut Surface, SurfaceError> {
@@ -1721,6 +1772,13 @@ impl ScratchSurfaces<'_, '_> {
     ) -> Result<PlanImage, SurfaceError> {
         self.frame.snapshot(slot, roi)
     }
+}
+
+fn covers(outer: IRect, inner: IRect) -> bool {
+    outer.left <= inner.left
+        && outer.top <= inner.top
+        && outer.right >= inner.right
+        && outer.bottom >= inner.bottom
 }
 
 impl Drop for ScratchSurfaces<'_, '_> {
@@ -1920,6 +1978,150 @@ mod capacity_tests {
                 assert_eq!(bytes, prior, "solid paint depends on preceding colors");
             }
         }
+    }
+
+    fn test_frame(arena: &mut SurfaceArena, max_bytes: u64) -> SurfaceFrame<'_> {
+        SurfaceFrame {
+            arena,
+            assignments: BTreeMap::new(),
+            report: SurfaceFrameReport {
+                generation: 0,
+                generation_invalidations: 0,
+                plan_slots: 0,
+                logical_allocations: 0,
+                allocations: 0,
+                reuses: 0,
+                physical_bytes: 0,
+                logical_bytes: 0,
+                alias_saved_bytes: 0,
+                estimated_peak_bytes: 0,
+                pool_surfaces: 0,
+                pool_bytes: 0,
+                scratch_allocations: 0,
+                scratch_reuses: 0,
+                scratch_peak_surfaces: 0,
+                scratch_peak_bytes: 0,
+                scratch_pool_surfaces: 0,
+                scratch_pool_bytes: 0,
+                pool_evictions: 0,
+            },
+            scratch_allocations: 0,
+            scratch_reuses: 0,
+            scratch_checked_out_surfaces: 0,
+            scratch_checked_out_bytes: 0,
+            scratch_peak_surfaces: 0,
+            scratch_peak_bytes: 0,
+            max_surface_bytes: max_bytes,
+            max_frame_bytes: max_bytes,
+            pool_evictions: 0,
+        }
+    }
+
+    fn read_working(surface: &mut Surface, bounds: IRect) -> Vec<f32> {
+        let info = ImageInfo::new(
+            bounds.size(),
+            ColorType::RGBAF32,
+            AlphaType::Premul,
+            Some(working_color_space().unwrap()),
+        );
+        let mut pixels = vec![0.0_f32; (bounds.width() * bounds.height() * 4) as usize];
+        assert!(surface.image_snapshot().read_pixels(
+            &info,
+            &mut pixels,
+            bounds.width() as usize * 16,
+            (bounds.left, bounds.top),
+            skia_safe::image::CachingHint::Disallow,
+        ));
+        pixels
+    }
+
+    fn covers_pixel(rect: IRect, x: i32, y: i32) -> bool {
+        x >= rect.left && x < rect.right && y >= rect.top && y < rect.bottom
+    }
+
+    #[test]
+    fn bounded_scratch_passes_clear_stale_pixels_and_render_like_exact_surfaces() {
+        let mut arena = SurfaceArena::new();
+        let mut frame = test_frame(&mut arena, 64 * 1024 * 1024);
+        let extent = Extent2d::new(96, 64).unwrap();
+        let mut scratch = frame.scratch(&[extent]).unwrap();
+        let everything = IRect::from_wh(96, 64);
+        let mut fill = skia_safe::Paint::default();
+        fill.set_color(skia_safe::Color::GREEN);
+        let draw_disc = |canvas: &skia_safe::Canvas| {
+            let mut paint = skia_safe::Paint::default();
+            paint.set_anti_alias(true);
+            paint.set_color4f(skia_safe::Color4f::new(0.1, 0.8, 0.9, 0.9), None);
+            // Crosses the bottom and right edges of a 30x20 ROI.
+            canvas.draw_circle((27.3, 17.6), 6.4, &paint);
+        };
+
+        // An unbounded user can leave pixels anywhere.
+        scratch
+            .surface_mut(0)
+            .unwrap()
+            .canvas()
+            .clear(skia_safe::Color::RED);
+        let first = IRect::from_xywh(0, 0, 30, 20);
+        let (surface, count) = scratch.bounded_surface_mut(0, first).unwrap();
+        surface.canvas().clear(skia_safe::Color::TRANSPARENT);
+        draw_disc(surface.canvas());
+        surface
+            .canvas()
+            .draw_rect(skia_safe::Rect::from_xywh(0.0, 0.0, 4.0, 4.0), &fill);
+        surface.canvas().restore_to_count(count);
+
+        let mut exact = arena_surface(30, 20);
+        exact.canvas().clear(skia_safe::Color::TRANSPARENT);
+        draw_disc(exact.canvas());
+        exact
+            .canvas()
+            .draw_rect(skia_safe::Rect::from_xywh(0.0, 0.0, 4.0, 4.0), &fill);
+        let surface = scratch.surface_mut(0).unwrap();
+        let everything_pixels = read_working(surface, everything);
+        let clipped = read_working(surface, first);
+        assert_eq!(
+            clipped
+                .iter()
+                .map(|value| value.to_bits())
+                .collect::<Vec<_>>(),
+            read_working(&mut exact, IRect::from_wh(30, 20))
+                .iter()
+                .map(|value| value.to_bits())
+                .collect::<Vec<_>>(),
+            "a clipped pass must render exactly like a ROI-sized surface"
+        );
+        for y in 0..64 {
+            for x in 0..96 {
+                if !covers_pixel(first, x, y) {
+                    let pixel = &everything_pixels[((y * 96 + x) * 4) as usize..][..4];
+                    assert_eq!(pixel, [0.0; 4], "stale pixel at {x},{y}");
+                }
+            }
+        }
+
+        // A later, disjoint ROI leaves nothing from earlier passes outside it.
+        let second = IRect::from_xywh(50, 30, 20, 20);
+        let (surface, count) = scratch.bounded_surface_mut(0, second).unwrap();
+        surface
+            .canvas()
+            .draw_rect(skia_safe::Rect::from_xywh(0.0, 0.0, 96.0, 64.0), &fill);
+        surface.canvas().restore_to_count(count);
+        let surface = scratch.surface_mut(0).unwrap();
+        let pixels = read_working(surface, everything);
+        for y in 0..64 {
+            for x in 0..96 {
+                let pixel = &pixels[((y * 96 + x) * 4) as usize..][..4];
+                let expected = if covers_pixel(second, x, y) { 1.0 } else { 0.0 };
+                assert_eq!(pixel[3], expected, "pixel at {x},{y}");
+            }
+        }
+    }
+
+    fn arena_surface(width: u32, height: u32) -> Surface {
+        SurfaceArena::new()
+            .create_surface(&working_info(Extent2d::new(width, height).unwrap()).unwrap())
+            .unwrap()
     }
 
     #[test]

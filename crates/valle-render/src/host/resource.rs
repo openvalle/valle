@@ -3,16 +3,8 @@
 //! This module owns paths, bytes, decoder cursors and generated Scene3D rasters. It never sees a
 //! authoring document or RenderGraph: every decision is driven by one immutable [`ResourceRequest`].
 
-use std::{
-    collections::BTreeMap,
-    fs::File,
-    io::Read,
-    path::{Path, PathBuf},
-    sync::Arc,
-    time::Instant,
-};
+use std::{collections::BTreeMap, path::PathBuf, sync::Arc, time::Instant};
 
-use sha2::{Digest, Sha256};
 use skia_safe::{Data, images};
 use thiserror::Error;
 use valle_engine::{
@@ -36,7 +28,8 @@ use super::frame::{
 use crate::executor::skia::{SkiaBackendKind, SkiaExternalObject, SkiaObjectError};
 
 /// A content-addressed host source. File-backed entries keep large video bytes out of memory;
-/// immutable byte entries support bundle/in-memory projects.
+/// immutable byte entries support bundle/in-memory projects. A digest names one content, so a
+/// second source for a known digest is redundant and ignored.
 #[derive(Debug, Clone)]
 pub enum NativeResourceSource {
     File(PathBuf),
@@ -54,76 +47,43 @@ impl NativeResourceCatalog {
         Self::default()
     }
 
-    /// Admit a local file after streaming its SHA-256. No decoder is opened during render
-    /// construction, but an incorrect authored digest cannot survive into a frame request.
-    pub fn insert_file(
-        &mut self,
-        digest: ContentDigest,
-        path: impl Into<PathBuf>,
-    ) -> Result<(), NativeResourceError> {
-        let path = path.into();
-        let actual = digest_file(&path)?;
-        if actual != digest {
-            return Err(NativeResourceError::DigestMismatch {
-                expected: digest.to_string(),
-                actual: actual.to_string(),
-            });
-        }
-        self.insert_source(digest, NativeResourceSource::File(path))
+    /// Register a file under the digest its caller computed from it. Bytes read back for
+    /// rendering are checked against the digest, so a file edited mid-render fails the frame.
+    pub fn insert_file(&mut self, digest: ContentDigest, path: impl Into<PathBuf>) {
+        self.sources
+            .entry(digest)
+            .or_insert_with(|| NativeResourceSource::File(path.into()));
     }
 
-    /// Admit immutable bytes after verifying their content address.
-    pub fn insert_bytes(
-        &mut self,
-        digest: ContentDigest,
-        bytes: impl Into<Arc<[u8]>>,
-    ) -> Result<(), NativeResourceError> {
+    /// Register in-memory bytes under the digest its caller computed from them.
+    pub fn insert_bytes(&mut self, digest: ContentDigest, bytes: impl Into<Arc<[u8]>>) {
+        self.sources
+            .entry(digest)
+            .or_insert_with(|| NativeResourceSource::Bytes(bytes.into()));
+    }
+
+    /// Hash and admit in-memory bytes once, returning their digest.
+    pub fn admit_bytes(&mut self, bytes: impl Into<Arc<[u8]>>) -> ContentDigest {
         let bytes = bytes.into();
-        let actual = content_digest(&bytes)?;
-        if actual != digest {
-            return Err(NativeResourceError::DigestMismatch {
-                expected: digest.to_string(),
-                actual: actual.to_string(),
-            });
-        }
-        self.insert_source(digest, NativeResourceSource::Bytes(bytes))
-    }
-
-    /// Hash and admit a file when the caller has not precomputed its digest.
-    pub fn admit_file(
-        &mut self,
-        path: impl Into<PathBuf>,
-    ) -> Result<ContentDigest, NativeResourceError> {
-        let path = path.into();
-        let digest = digest_file(&path)?;
-        self.insert_source(digest.clone(), NativeResourceSource::File(path))?;
-        Ok(digest)
+        let digest = ContentDigest::of_bytes(&bytes);
+        self.sources
+            .entry(digest)
+            .or_insert(NativeResourceSource::Bytes(bytes));
+        digest
     }
 
     pub fn source(&self, digest: &ContentDigest) -> Option<&NativeResourceSource> {
         self.sources.get(digest)
     }
-
-    fn insert_source(
-        &mut self,
-        digest: ContentDigest,
-        source: NativeResourceSource,
-    ) -> Result<(), NativeResourceError> {
-        if let Some(existing) = self.sources.get(&digest) {
-            if same_source(existing, &source)? {
-                return Ok(());
-            }
-            return Err(NativeResourceError::ConflictingSource {
-                digest: digest.to_string(),
-            });
-        }
-        self.sources.insert(digest, source);
-        Ok(())
-    }
 }
 
 const DEFAULT_RESOURCE_CACHE_ENTRIES: usize = 256;
 const DEFAULT_RESOURCE_CACHE_BYTES: u64 = 512 * 1024 * 1024;
+/// Time-varying objects (a video or Lottie frame at one source time, a Scene3D frame raster) are
+/// seldom requested twice: parallel workers take interleaved frames, so reuse only happens when a
+/// held or slowed source repeats within one worker. Keeping only the most recent few stops them
+/// from filling the byte budget with full-frame working-space copies (~16.6 MB each at 1080p).
+const MAX_TRANSIENT_RESOURCE_ENTRIES: usize = 4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NativeResourceCacheLimits {
@@ -170,12 +130,14 @@ struct CachedResourceObject {
     object: SkiaExternalObject,
     bytes: u64,
     last_used: u64,
+    transient: bool,
 }
 
 struct NativeResourceObjectCache {
     limits: NativeResourceCacheLimits,
     entries: BTreeMap<NativeResourceCacheIdentity, CachedResourceObject>,
     resident_bytes: u64,
+    transient_entries: usize,
     clock: u64,
 }
 
@@ -185,6 +147,7 @@ impl NativeResourceObjectCache {
             limits,
             entries: BTreeMap::new(),
             resident_bytes: 0,
+            transient_entries: 0,
             clock: 0,
         }
     }
@@ -206,11 +169,16 @@ impl NativeResourceObjectCache {
         identity: NativeResourceCacheIdentity,
         object: SkiaExternalObject,
         bytes: u64,
+        transient: bool,
         counters: &mut ResourceCacheCounters,
     ) -> Result<(), NativeResourceError> {
         if bytes > self.limits.max_bytes {
             increment(&mut counters.bypasses)?;
             return Ok(());
+        }
+        while transient && self.transient_entries >= MAX_TRANSIENT_RESOURCE_ENTRIES {
+            self.evict_lru(true)?;
+            increment(&mut counters.evictions)?;
         }
         while self.entries.len() >= self.limits.max_entries
             || self
@@ -218,7 +186,7 @@ impl NativeResourceObjectCache {
                 .checked_add(bytes)
                 .is_none_or(|required| required > self.limits.max_bytes)
         {
-            self.evict_lru()?;
+            self.evict_lru(false)?;
             increment(&mut counters.evictions)?;
         }
         if self.entries.contains_key(&identity) {
@@ -235,16 +203,22 @@ impl NativeResourceObjectCache {
                 object,
                 bytes,
                 last_used: clock,
+                transient,
             },
         );
+        if transient {
+            self.transient_entries += 1;
+        }
         increment(&mut counters.insertions)?;
         Ok(())
     }
 
-    fn evict_lru(&mut self) -> Result<(), NativeResourceError> {
+    /// Evict the least recently used entry, or the least recently used transient one.
+    fn evict_lru(&mut self, transient_only: bool) -> Result<(), NativeResourceError> {
         let identity = self
             .entries
             .iter()
+            .filter(|(_, entry)| !transient_only || entry.transient)
             .min_by_key(|(identity, entry)| (entry.last_used, *identity))
             .map(|(identity, _)| identity.clone())
             .ok_or(NativeResourceError::CacheEvictionInvariant)?;
@@ -256,12 +230,16 @@ impl NativeResourceObjectCache {
             .resident_bytes
             .checked_sub(removed.bytes)
             .ok_or(NativeResourceError::CacheEvictionInvariant)?;
+        if removed.transient {
+            self.transient_entries -= 1;
+        }
         Ok(())
     }
 
     fn clear(&mut self) {
         self.entries.clear();
         self.resident_bytes = 0;
+        self.transient_entries = 0;
         self.clock = 0;
     }
 
@@ -643,12 +621,6 @@ impl NativeResourceProvider {
                 reason: error.to_string(),
             }
         })?);
-        if texture.content_digest() != *digest {
-            return Err(NativeResourceError::Texture {
-                digest: digest.to_string(),
-                reason: "material texture digest differs from bound bytes".into(),
-            });
-        }
         self.textures.insert((*digest, role), Arc::clone(&texture));
         Ok(texture)
     }
@@ -671,22 +643,24 @@ impl NativeResourceProvider {
             return Ok(Arc::clone(bytes));
         }
         let bytes: Arc<[u8]> = match source {
-            NativeResourceSource::File(path) => Arc::from(std::fs::read(path).map_err(
-                |error| NativeResourceError::Io {
+            NativeResourceSource::File(path) => {
+                let bytes = std::fs::read(path).map_err(|error| NativeResourceError::Io {
                     path: path.clone(),
                     reason: error.to_string(),
-                },
-            )?),
+                })?;
+                let actual = ContentDigest::of_bytes(&bytes);
+                if &actual != digest {
+                    return Err(NativeResourceError::DigestMismatch {
+                        expected: digest.to_string(),
+                        actual: actual.to_string(),
+                    });
+                }
+                Arc::from(bytes)
+            }
+            // Admitted bytes were hashed into their digest.
             NativeResourceSource::Bytes(bytes) => Arc::clone(bytes),
         };
-        let actual = content_digest(&bytes)?;
-        if &actual != digest {
-            return Err(NativeResourceError::DigestMismatch {
-                expected: digest.to_string(),
-                actual: actual.to_string(),
-            });
-        }
-        self.bytes.insert(digest.clone(), Arc::clone(&bytes));
+        self.bytes.insert(*digest, Arc::clone(&bytes));
         Ok(bytes)
     }
 
@@ -787,8 +761,15 @@ impl ResourceProvider for NativeResourceProvider {
         let bytes = object
             .resident_bytes()
             .ok_or(NativeResourceError::CacheByteOverflow)?;
-        self.objects
-            .insert(identity, object.clone(), bytes, &mut self.frame_cache)?;
+        let transient = matches!(request.sample(), ResourceSample::SourceTime(_))
+            || matches!(request.expected(), ExternalResourceDesc::Scene3d);
+        self.objects.insert(
+            identity,
+            object.clone(),
+            bytes,
+            transient,
+            &mut self.frame_cache,
+        )?;
         Ok(object)
     }
 
@@ -881,53 +862,6 @@ fn source_path(source: &NativeResourceSource) -> Result<PathBuf, NativeResourceE
     }
 }
 
-fn same_source(
-    left: &NativeResourceSource,
-    right: &NativeResourceSource,
-) -> Result<bool, NativeResourceError> {
-    match (left, right) {
-        (NativeResourceSource::Bytes(left), NativeResourceSource::Bytes(right)) => {
-            Ok(left.as_ref() == right.as_ref())
-        }
-        (NativeResourceSource::File(left), NativeResourceSource::File(right)) => {
-            Ok(left == right || digest_file(left)? == digest_file(right)?)
-        }
-        (NativeResourceSource::File(path), NativeResourceSource::Bytes(bytes))
-        | (NativeResourceSource::Bytes(bytes), NativeResourceSource::File(path)) => Ok(
-            std::fs::read(path).map_err(|error| NativeResourceError::Io {
-                path: path.clone(),
-                reason: error.to_string(),
-            })? == bytes.as_ref(),
-        ),
-    }
-}
-
-fn digest_file(path: &Path) -> Result<ContentDigest, NativeResourceError> {
-    let mut file = File::open(path).map_err(|error| NativeResourceError::Io {
-        path: path.to_owned(),
-        reason: error.to_string(),
-    })?;
-    let mut hasher = Sha256::new();
-    let mut buffer = [0_u8; 64 * 1024];
-    loop {
-        let read = file
-            .read(&mut buffer)
-            .map_err(|error| NativeResourceError::Io {
-                path: path.to_owned(),
-                reason: error.to_string(),
-            })?;
-        if read == 0 {
-            break;
-        }
-        hasher.update(&buffer[..read]);
-    }
-    Ok(ContentDigest::from_bytes(hasher.finalize().into()))
-}
-
-fn content_digest(bytes: &[u8]) -> Result<ContentDigest, NativeResourceError> {
-    Ok(ContentDigest::from_bytes(Sha256::digest(bytes).into()))
-}
-
 #[derive(Debug, Error)]
 pub enum NativeResourceError {
     #[error("resource cache limits must have non-zero entry and byte capacity")]
@@ -946,8 +880,6 @@ pub enum NativeResourceError {
     BackendConfiguredAfterDecode,
     #[error("resource {digest} has no admitted host source")]
     MissingSource { digest: String },
-    #[error("resource {digest} was admitted from conflicting sources")]
-    ConflictingSource { digest: String },
     #[error("resource digest mismatch: expected {expected}, got {actual}")]
     DigestMismatch { expected: String, actual: String },
     #[error("resource I/O failed for {path}: {reason}")]
@@ -1004,4 +936,107 @@ pub fn probe_image_extent(bytes: &[u8]) -> Result<(u32, u32), NativeResourceErro
             }
         })?;
     Ok((image.width() as u32, image.height() as u32))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use valle_engine::resource::{
+        ColorDescription, ExternalHandleId, InputAlphaMode, ResourceKey, SignalLuminance,
+        VisualInterpretation,
+    };
+
+    fn cached_frame(id: u8) -> (NativeResourceCacheIdentity, SkiaExternalObject) {
+        let key = ResourceKey::new(
+            ContentDigest::of_bytes(&[id]),
+            ResourceInterpretation::Visual {
+                interpretation: VisualInterpretation::new(
+                    ColorDescription::SRGB,
+                    SignalLuminance::SDR_100,
+                    InputAlphaMode::StraightCoverage,
+                ),
+            },
+        );
+        let extent = Extent2d::new(1, 1).unwrap();
+        let request = ResourceRequest::new(
+            ExternalHandleId::new(1).unwrap(),
+            key.clone(),
+            ResourceSample::Static,
+            ExternalResourceDesc::VisualFrame {
+                extent,
+                pixel_layout: ExternalPixelLayout::Rgba8,
+            },
+        )
+        .unwrap();
+        (
+            NativeResourceCacheIdentity {
+                generation: 1,
+                request: request.cache_identity().unwrap(),
+            },
+            SkiaExternalObject::visual_rgba8(key, extent, &[id, 0, 0, 255]).unwrap(),
+        )
+    }
+
+    #[test]
+    fn transient_limit_evicts_the_oldest_transient_and_preserves_static_resources() {
+        let mut cache = NativeResourceObjectCache::new(NativeResourceCacheLimits::default());
+        let mut counters = ResourceCacheCounters::default();
+        let (static_id, object) = cached_frame(0);
+        cache
+            .insert(static_id.clone(), object, 8, false, &mut counters)
+            .unwrap();
+        let mut transient_ids = Vec::new();
+        for id in 1..=4 {
+            let (identity, object) = cached_frame(id);
+            cache
+                .insert(identity.clone(), object, 8, true, &mut counters)
+                .unwrap();
+            transient_ids.push(identity);
+        }
+        assert!(cache.get(&transient_ids[0]).unwrap().is_some());
+        let (identity, object) = cached_frame(5);
+        cache
+            .insert(identity, object, 8, true, &mut counters)
+            .unwrap();
+        assert!(cache.get(&static_id).unwrap().is_some());
+        assert!(cache.get(&transient_ids[0]).unwrap().is_some());
+        assert!(cache.get(&transient_ids[1]).unwrap().is_none());
+        assert_eq!(cache.transient_entries, 4);
+        assert_eq!(cache.entries.len(), 5);
+        assert_eq!(cache.resident_bytes, 40);
+        assert_eq!(counters.evictions, 1);
+    }
+
+    #[test]
+    fn transient_accounting_survives_global_eviction_and_generation_reset() {
+        for limits in [
+            NativeResourceCacheLimits::new(2, 1024).unwrap(),
+            NativeResourceCacheLimits::new(100, 16).unwrap(),
+        ] {
+            let mut cache = NativeResourceObjectCache::new(limits);
+            let mut counters = ResourceCacheCounters::default();
+            for id in 0..12 {
+                let (identity, object) = cached_frame(id);
+                cache
+                    .insert(identity, object, 8, id % 3 != 0, &mut counters)
+                    .unwrap();
+                assert!(cache.entries.len() <= 2);
+                assert_eq!(cache.resident_bytes, cache.entries.len() as u64 * 8);
+                assert_eq!(
+                    cache.transient_entries,
+                    cache.entries.values().filter(|e| e.transient).count()
+                );
+            }
+            cache.clear();
+            assert!(cache.entries.is_empty());
+            assert_eq!(cache.resident_bytes, 0);
+            assert_eq!(cache.transient_entries, 0);
+            let (identity, object) = cached_frame(20);
+            cache
+                .insert(identity, object, 8, true, &mut counters)
+                .unwrap();
+            assert_eq!(cache.transient_entries, 1);
+            assert_eq!(cache.resident_bytes, 8);
+        }
+    }
 }

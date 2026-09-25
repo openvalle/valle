@@ -77,27 +77,21 @@ impl core::fmt::Display for EmitError {
 
 impl std::error::Error for EmitError {}
 
-/// Host callback mapping shaped font bytes, face index, and size to semantic font identity using
-/// the host registry.
-pub type FontNaming<'a> = &'a dyn Fn(&[u8], u32, f32) -> FontFace;
+/// Host callback mapping shaped font bytes and face index to the semantic font family.
+pub type FontNaming<'a> = &'a dyn Fn(&[u8], u32) -> String;
 
-/// Shared stable font naming from content hash and face index for native/web parity.
-pub fn default_font_naming(bytes: &[u8], index: u32, size: f32) -> FontFace {
+/// Shared stable font family from content hash and face index for native/web parity.
+pub fn default_font_naming(bytes: &[u8], index: u32) -> String {
     let digest = crate::ContentDigest::of_bytes(bytes).as_hex();
-    FontFace {
-        family: format!("valle-face-{digest}-{index}"),
-        weight: 400,
-        italic: false,
-        size: f64::from(size),
-    }
+    format!("valle-face-{digest}-{index}")
 }
 
-/// Cross-frame font-name cache keyed by stable blob ID, face index, and size bits. Stable IDs avoid
-/// pointer-reuse collisions; size remains part of the callback contract. Caching must preserve
-/// identical FontFace results.
+/// Cross-frame font family cache keyed by stable blob ID and face index, so each face is named
+/// (and its bytes hashed) once whatever sizes it is shaped at. Stable IDs avoid pointer-reuse
+/// collisions.
 #[derive(Default)]
 pub struct FaceCache {
-    inner: std::cell::RefCell<std::collections::HashMap<(u64, u32, u32), FontFace>>,
+    inner: std::cell::RefCell<std::collections::HashMap<(u64, u32), String>>,
 }
 
 impl FaceCache {
@@ -108,17 +102,17 @@ impl FaceCache {
         Self::default()
     }
 
-    fn get_or_insert(&self, key: (u64, u32, u32), build: impl FnOnce() -> FontFace) -> FontFace {
-        if let Some(face) = self.inner.borrow().get(&key) {
-            return face.clone();
+    fn get_or_insert(&self, key: (u64, u32), build: impl FnOnce() -> String) -> String {
+        if let Some(family) = self.inner.borrow().get(&key) {
+            return family.clone();
         }
-        let face = build();
+        let family = build();
         let mut inner = self.inner.borrow_mut();
         if inner.len() >= Self::MAX_ENTRIES {
             inner.clear();
         }
-        inner.insert(key, face.clone());
-        face
+        inner.insert(key, family.clone());
+        family
     }
 }
 
@@ -1904,18 +1898,22 @@ impl Emitter<'_> {
         let shaped = &run.glyph_run;
         let size = shaped.font_size;
         let key = (shaped.font_id(), shaped.font_index, size.to_bits());
-        // Call font naming only on cache misses to avoid repeated full-font hashing.
         let font = if let Some(id) = self.fonts.get(&key) {
             *id
         } else {
             let bytes = shaped.font_data();
             let index = shaped.font_index;
-            let build = || (self.naming)(bytes, index, size);
-            let face = match self.faces {
-                Some(cache) => cache.get_or_insert(key, build),
+            let build = || (self.naming)(bytes, index);
+            let family = match self.faces {
+                Some(cache) => cache.get_or_insert((key.0, key.1), build),
                 None => build(),
             };
-            let id = self.out.recording.intern_font(face);
+            let id = self.out.recording.intern_font(FontFace {
+                family,
+                weight: 400,
+                italic: false,
+                size: f64::from(size),
+            });
             self.fonts.insert(key, id);
             id
         };
@@ -3784,9 +3782,8 @@ mod tests {
     #[test]
     fn default_font_family_carries_the_exact_font_content_digest() {
         let bytes = b"font bytes";
-        let face = default_font_naming(bytes, 3, 24.0);
         assert_eq!(
-            face.family,
+            default_font_naming(bytes, 3),
             format!(
                 "valle-face-{}-3",
                 crate::ContentDigest::of_bytes(bytes).as_hex()

@@ -177,6 +177,44 @@ fn convolve(
     x: &[f32],
     y: &[f32],
 ) -> Vec<f32> {
+    #[cfg(target_arch = "x86_64")]
+    if std::arch::is_x86_feature_detected!("avx") {
+        // SAFETY: AVX support was detected at runtime.
+        return unsafe { convolve_avx(source, width, height, channels, x, y) };
+    }
+    convolve_blocked(source, width, height, channels, x, y)
+}
+
+// The portable x86-64 build targets SSE2, where each multiply-add costs a 128-bit load/store pair.
+// The same loops compiled for 256-bit AVX vectors run up to twice as fast. Products and sums
+// stay separate single-precision operations (no FMA contraction), so results are
+// bit-identical at every vector width.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx")]
+unsafe fn convolve_avx(
+    source: &[f32],
+    width: usize,
+    height: usize,
+    channels: usize,
+    x: &[f32],
+    y: &[f32],
+) -> Vec<f32> {
+    convolve_blocked(source, width, height, channels, x, y)
+}
+
+// Both passes walk column blocks so every tap reuses a cache-resident span instead of
+// streaming whole rows once per tap. Each output element still receives its products in
+// the same order (ascending tap horizontally, ascending input row vertically), so blocking
+// does not change results either.
+#[inline(always)]
+fn convolve_blocked(
+    source: &[f32],
+    width: usize,
+    height: usize,
+    channels: usize,
+    x: &[f32],
+    y: &[f32],
+) -> Vec<f32> {
     let output_width = width + x.len() - 1;
     let input_stride = width * channels;
     let stride = output_width * channels;
@@ -185,27 +223,47 @@ fn convolve(
         .chunks_exact(input_stride)
         .zip(horizontal.chunks_exact_mut(stride))
     {
-        for (tap, weight) in x.iter().enumerate() {
-            accumulate(
-                &mut output[tap * channels..tap * channels + input_stride],
-                input,
-                *weight,
-            );
+        for start in (0..stride).step_by(HORIZONTAL_BLOCK) {
+            let end = (start + HORIZONTAL_BLOCK).min(stride);
+            for (tap, weight) in x.iter().enumerate() {
+                let offset = tap * channels;
+                let from = start.max(offset);
+                let to = end.min(offset + input_stride);
+                if from < to {
+                    accumulate(
+                        &mut output[from..to],
+                        &input[from - offset..to - offset],
+                        *weight,
+                    );
+                }
+            }
         }
     }
     let mut output = vec![0.0; stride * (height + y.len() - 1)];
-    for (row, input) in horizontal.chunks_exact(stride).enumerate() {
-        for (tap, weight) in y.iter().enumerate() {
-            accumulate(
-                &mut output[(row + tap) * stride..(row + tap + 1) * stride],
-                input,
-                *weight,
-            );
+    // One input row feeds y.len() output rows; size blocks so those spans stay in L2.
+    let block = (VERTICAL_WINDOW / y.len()).next_multiple_of(8).max(64);
+    for start in (0..stride).step_by(block) {
+        let end = (start + block).min(stride);
+        for (row, input) in horizontal.chunks_exact(stride).enumerate() {
+            for (tap, weight) in y.iter().enumerate() {
+                let base = (row + tap) * stride;
+                accumulate(
+                    &mut output[base + start..base + end],
+                    &input[start..end],
+                    *weight,
+                );
+            }
         }
     }
     output
 }
 
+/// Horizontal-pass output block in floats: the block plus its input span fit in L1.
+const HORIZONTAL_BLOCK: usize = 2048;
+/// Floats across all output rows touched by one vertical-pass block (256 KiB).
+const VERTICAL_WINDOW: usize = 64 * 1024;
+
+#[inline(always)]
 fn accumulate(output: &mut [f32], input: &[f32], weight: f32) {
     for (output, input) in output.iter_mut().zip(input) {
         *output += *input * weight;
@@ -218,6 +276,104 @@ mod tests {
     use super::*;
     use skia_safe::{Color4f, Rect, Surface, surfaces};
     use valle_draw::program::LinearColor;
+
+    /// The previous unblocked convolution at the portable vector width.
+    fn convolve_unblocked(
+        source: &[f32],
+        width: usize,
+        height: usize,
+        channels: usize,
+        x: &[f32],
+        y: &[f32],
+    ) -> Vec<f32> {
+        let output_width = width + x.len() - 1;
+        let input_stride = width * channels;
+        let stride = output_width * channels;
+        let mut horizontal = vec![0.0; stride * height];
+        for (input, output) in source
+            .chunks_exact(input_stride)
+            .zip(horizontal.chunks_exact_mut(stride))
+        {
+            for (tap, weight) in x.iter().enumerate() {
+                accumulate(
+                    &mut output[tap * channels..tap * channels + input_stride],
+                    input,
+                    *weight,
+                );
+            }
+        }
+        let mut output = vec![0.0; stride * (height + y.len() - 1)];
+        for (row, input) in horizontal.chunks_exact(stride).enumerate() {
+            for (tap, weight) in y.iter().enumerate() {
+                accumulate(
+                    &mut output[(row + tap) * stride..(row + tap + 1) * stride],
+                    input,
+                    *weight,
+                );
+            }
+        }
+        output
+    }
+
+    #[test]
+    fn blocked_and_vectorized_convolution_is_bit_identical_to_unblocked() {
+        let mut state = 0x9e37_79b9_u32;
+        let mut next = || {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            // Include signed zeros and subnormals alongside ordinary premultiplied values.
+            match state % 9 {
+                0 => 0.0,
+                1 => -0.0,
+                2 => f32::from_bits(state % 0x0080_0000),
+                _ => (state % 20_000) as f32 / 10_000.0 - 0.5,
+            }
+        };
+        for (width, height, channels, sigma_x, sigma_y) in [
+            (1, 1, 4, 0.0, 0.0),
+            (3, 2, 1, 5.0, 0.0),
+            (37, 3, 4, 2.4, 12.0),
+            (61, 50, 1, 15.0, 0.5),
+            (700, 9, 4, 32.0, 1.0),
+            (2100, 4, 1, 3.0, 8.0),
+            (5, 90, 4, 0.0, 32.0),
+            (400, 20, 4, 1.0, 30.0),
+        ] {
+            let source = (0..width * height * channels)
+                .map(|_| next())
+                .collect::<Vec<_>>();
+            let x = kernel(sigma_x).unwrap();
+            let y = kernel(sigma_y).unwrap();
+            let expected = convolve_unblocked(&source, width, height, channels, &x, &y);
+            let check = |path, actual: Vec<f32>| {
+                assert_eq!(actual.len(), expected.len());
+                assert!(
+                    actual
+                        .iter()
+                        .zip(&expected)
+                        .all(|(a, b)| a.to_bits() == b.to_bits()),
+                    "{path}: {width}x{height}x{channels} sigma {sigma_x}/{sigma_y}"
+                );
+            };
+            // Exercise the fallback even on an AVX host, as well as the selected runtime path.
+            check(
+                "portable",
+                convolve_blocked(&source, width, height, channels, &x, &y),
+            );
+            check(
+                "dispatched",
+                convolve(&source, width, height, channels, &x, &y),
+            );
+            #[cfg(target_arch = "x86_64")]
+            if std::arch::is_x86_feature_detected!("avx") {
+                // SAFETY: AVX support was detected at runtime.
+                check("avx", unsafe {
+                    convolve_avx(&source, width, height, channels, &x, &y)
+                });
+            }
+        }
+    }
 
     #[test]
     fn separable_float_blur_matches_direct_2d_gaussian_with_transparent_edges() {

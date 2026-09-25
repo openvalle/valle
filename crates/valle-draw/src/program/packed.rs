@@ -15,7 +15,7 @@ pub const DRAW_PROGRAM_FORMAT_VERSION: u32 = 1;
 
 const MAGIC: &[u8; 8] = b"VLDRAW\0\0";
 const ENDIAN_MARKER: u32 = 0x0102_0304;
-const HEADER_LEN: usize = 60;
+const HEADER_LEN: usize = 28;
 const ENTRY_LEN: usize = 24;
 const SECTION_COUNT: usize = 7;
 const TABLE_END: usize = HEADER_LEN + ENTRY_LEN * SECTION_COUNT;
@@ -100,8 +100,6 @@ pub enum PackedDrawError {
         actual: usize,
         limit: usize,
     },
-    #[error("packed DrawProgram checksum mismatch")]
-    ChecksumMismatch,
     #[error("could not serialize DrawProgram section: {0}")]
     Serialize(#[source] serde_json::Error),
     #[error("could not deserialize DrawProgram section {kind}: {source}")]
@@ -168,7 +166,6 @@ pub(crate) fn encode(program: &DrawProgram) -> Result<Vec<u8>, PackedDrawError> 
     wire.extend_from_slice(&(SECTION_COUNT as u16).to_le_bytes());
     wire.extend_from_slice(&0u16.to_le_bytes());
     wire.extend_from_slice(&(total_len as u64).to_le_bytes());
-    wire.extend_from_slice(&[0u8; 32]);
 
     let mut offset = TABLE_END;
     for section in &sections {
@@ -185,9 +182,6 @@ pub(crate) fn encode(program: &DrawProgram) -> Result<Vec<u8>, PackedDrawError> 
         wire.extend_from_slice(&section.bytes);
     }
     debug_assert_eq!(wire.len(), total_len);
-
-    let checksum = wire_checksum(&wire);
-    wire[28..60].copy_from_slice(&checksum);
     Ok(wire)
 }
 
@@ -285,10 +279,6 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<DrawProgram, PackedDrawError> {
         return Err(PackedDrawError::InvalidSectionTable(
             "trailing bytes are not owned by a section".into(),
         ));
-    }
-
-    if bytes[28..60] != wire_checksum(bytes) {
-        return Err(PackedDrawError::ChecksumMismatch);
     }
 
     for entry_index in [0usize, 1, 3, 4] {
@@ -679,14 +669,6 @@ fn skip_ws(bytes: &[u8], index: &mut usize) {
     }
 }
 
-fn wire_checksum(bytes: &[u8]) -> [u8; 32] {
-    let mut digest = Sha256::new();
-    digest.update(&bytes[..28]);
-    digest.update([0u8; 32]);
-    digest.update(&bytes[60..]);
-    digest.finalize().into()
-}
-
 fn usize_from_u64(value: u64, field: &str) -> Result<usize, PackedDrawError> {
     usize::try_from(value).map_err(|_| {
         PackedDrawError::InvalidSectionTable(format!("{field} does not fit this platform"))
@@ -759,15 +741,13 @@ mod tests {
     }
 
     #[test]
-    fn a_valid_checksum_cannot_make_forged_requirements_authoritative() {
+    fn forged_requirements_are_never_authoritative() {
         let mut bytes = encode(&backdrop_fixture()).unwrap();
         let start = bytes
             .windows(b"linearClamp".len())
             .position(|window| window == b"linearClamp")
             .expect("fixture sampling mode");
         bytes[start..start + b"linearDecal".len()].copy_from_slice(b"linearDecal");
-        let checksum = wire_checksum(&bytes);
-        bytes[28..60].copy_from_slice(&checksum);
 
         assert!(matches!(
             decode(&bytes),
@@ -778,7 +758,7 @@ mod tests {
     }
 
     #[test]
-    fn declared_arena_budget_is_checked_before_checksum_or_deserialization() {
+    fn declared_arena_budget_is_checked_before_deserialization() {
         let mut bytes = encode(&backdrop_fixture()).unwrap();
         let node_entry = HEADER_LEN + ENTRY_LEN;
         bytes[node_entry + 4..node_entry + 8]

@@ -1,4 +1,3 @@
-import { sha256 } from "./sha256.ts";
 import {
   BOUND_PROGRAM_SCHEDULES_ABI,
   PACKED_VALUE_LIMITS,
@@ -62,7 +61,6 @@ export async function decodePackedAbi(
 ): Promise<PackedValue> {
   const bytes = exactBytes(input);
   validateEnvelopeShape(bytes, contract);
-  validateChecksum(bytes, contract);
 
   const cursor = new Cursor(bytes.subarray(contract.headerBytes), contract);
   const node = cursor.node(0);
@@ -107,15 +105,6 @@ function validateEnvelopeShape(bytes: Uint8Array, contract: PackedAbiContract): 
   if (declared !== BigInt(bytes.byteLength)) {
     throw new PackedAbiError(contract.kind, `length mismatch (${declared} != ${bytes.byteLength})`);
   }
-}
-
-function validateChecksum(bytes: Uint8Array, contract: PackedAbiContract): void {
-  const copy = bytes.slice();
-  const checksumEnd = contract.checksumOffset + contract.checksumBytes;
-  const expected = copy.slice(contract.checksumOffset, checksumEnd);
-  copy.fill(0, contract.checksumOffset, checksumEnd);
-  const digest = sha256(copy);
-  if (!equalBytes(expected, digest)) throw new PackedAbiError(contract.kind, "checksum mismatch");
 }
 
 class Cursor {

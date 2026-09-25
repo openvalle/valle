@@ -20,7 +20,6 @@ use valle_timeline::internal::wire::resource::EnvironmentResourceDescriptorWire;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
-use sha2::{Digest, Sha256};
 use valle_motion::{AssetKind, ControlType, SceneArtifact, shader::ShaderPackage};
 use valle_timeline::Color;
 use valle_timeline::internal::quantize::{
@@ -59,12 +58,6 @@ pub const EXTENSION_CROSS_FADE_ABI: &str = "valle.compositor/cross-fade@1";
 /// The only currently admitted audio execution profile. Its PCM conformance is bit-exact:
 /// f64 endpoint/track accumulation, one terminal clamp, then one f32 conversion.
 pub const COMMON_AUDIO_ABI: &str = "valle.audio/common@1";
-/// Hash domain for profile-specific decoded PCM facts. The byte stream is:
-/// this NUL-terminated domain, `sample_rate` as little-endian u32, `channels`
-/// as little-endian u16, frame count as little-endian u64, then finite
-/// interleaved samples as their IEEE-754 f32 bits in little-endian order.
-pub const COMMON_AUDIO_PCM_DIGEST_DOMAIN: &[u8] =
-    b"valle.audio/common@1/decoded-interleaved-f32le@1\0";
 /// Author-facing namespaced kind for the first sample-local, stateless audio effect.
 pub const AUDIO_GAIN_EFFECT_KIND: &str = "valle.audio/gain@1";
 /// Executor ABI for [`AUDIO_GAIN_EFFECT_KIND`]. The closed parameter packet is
@@ -101,49 +94,6 @@ pub fn engine_owned_kernel_implementation_digest(abi: &str) -> Option<ContentDig
 /// Raw form of [`engine_owned_kernel_implementation_digest`] carried by prepared kernel packets.
 pub fn engine_owned_kernel_implementation_sha256(abi: &str) -> Option<[u8; 32]> {
     engine_owned_kernel_implementation_digest(abi).map(|digest| *digest.as_bytes())
-}
-
-/// Computes the semantic digest asserted by a verified common-profile audio
-/// binding. Decoder/probe code calls this once during fulfillment admission;
-/// render-time mixers trust the frozen fact and never rescan the source.
-pub fn common_audio_pcm_digest(
-    sample_rate: u32,
-    channels: u16,
-    interleaved_samples: &[f32],
-) -> Result<ContentDigest, CommonAudioPcmDigestError> {
-    if sample_rate == 0 || channels == 0 {
-        return Err(CommonAudioPcmDigestError::InvalidFormat);
-    }
-    let channel_count = usize::from(channels);
-    if !interleaved_samples.len().is_multiple_of(channel_count) {
-        return Err(CommonAudioPcmDigestError::PartialFrame);
-    }
-    let frames = u64::try_from(interleaved_samples.len() / channel_count)
-        .map_err(|_| CommonAudioPcmDigestError::TooManyFrames)?;
-    let mut hasher = Sha256::new();
-    hasher.update(COMMON_AUDIO_PCM_DIGEST_DOMAIN);
-    hasher.update(sample_rate.to_le_bytes());
-    hasher.update(channels.to_le_bytes());
-    hasher.update(frames.to_le_bytes());
-    for sample in interleaved_samples {
-        if !sample.is_finite() {
-            return Err(CommonAudioPcmDigestError::NonFiniteSample);
-        }
-        hasher.update(sample.to_bits().to_le_bytes());
-    }
-    Ok(ContentDigest::from_bytes(hasher.finalize().into()))
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-pub enum CommonAudioPcmDigestError {
-    #[error("decoded PCM format must have a non-zero sample rate and channel count")]
-    InvalidFormat,
-    #[error("decoded PCM contains a partial interleaved frame")]
-    PartialFrame,
-    #[error("decoded PCM frame count exceeds u64")]
-    TooManyFrames,
-    #[error("decoded PCM contains a non-finite sample")]
-    NonFiniteSample,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
@@ -243,9 +193,6 @@ pub enum VerifiedResourceFacts {
     Audio {
         descriptor: AudioResourceDescriptorWire,
         temporal_footprint: AudioFootprint,
-        /// Profile-specific semantic digest of the verified decoded PCM. For
-        /// [`COMMON_AUDIO_ABI`] this uses [`COMMON_AUDIO_PCM_DIGEST_DOMAIN`].
-        decoded_pcm_digest: ContentDigest,
     },
     Image {
         descriptor: ImageResourceDescriptorWire,
@@ -4515,24 +4462,6 @@ mod compiled_canvas_tests {
         assert_eq!(
             evaluate_source_sample_index(&looping, wrapped_end).unwrap(),
             0
-        );
-    }
-
-    #[test]
-    fn common_audio_pcm_digest_has_a_fixed_cross_platform_byte_domain() {
-        assert_eq!(
-            common_audio_pcm_digest(4, 1, &[0.1, 0.2])
-                .unwrap()
-                .to_wire(),
-            "sha256:cfe5b3919c9c55851665cf86e0cc1c9409b64e94f9854e6ea8729ad2c9499960"
-        );
-        assert_eq!(
-            common_audio_pcm_digest(4, 2, &[0.0]),
-            Err(CommonAudioPcmDigestError::PartialFrame)
-        );
-        assert_eq!(
-            common_audio_pcm_digest(4, 1, &[f32::NAN]),
-            Err(CommonAudioPcmDigestError::NonFiniteSample)
         );
     }
 

@@ -11,18 +11,33 @@ use valle_engine::{
 
 use super::{draw::DrawError, surface::working_color_space};
 
+#[cfg(test)]
 pub(crate) struct StagedOutput {
     pixels: Vec<u8>,
-    row_bytes: usize,
 }
 
+#[cfg(test)]
 impl StagedOutput {
     pub(crate) fn pixels(&self) -> &[u8] {
         &self.pixels
     }
+}
 
-    pub(crate) const fn row_bytes(&self) -> usize {
-        self.row_bytes
+/// Largest staged target pixel: four 16-bit channels.
+const MAX_STAGED_PIXEL_BYTES: usize = 8;
+type EncodedPixel = [u8; MAX_STAGED_PIXEL_BYTES];
+
+/// Reusable CPU buffers for exact output staging. Capacity persists across frames; contents never
+/// do, because every use fully overwrites the working readback and rebuilds the pixel bytes.
+#[derive(Debug, Default)]
+pub(crate) struct OutputStaging {
+    working: Vec<f32>,
+    pixels: Vec<u8>,
+}
+
+impl OutputStaging {
+    pub(crate) fn pixels(&self) -> &[u8] {
+        &self.pixels
     }
 }
 
@@ -60,11 +75,27 @@ pub(crate) fn prefers_cached_output(image: &Image) -> bool {
 
 /// Materializes the terminal OutputSpec exactly. Skia color-space defaults are intentionally not
 /// involved: tone/gamut/transfer/alpha/dither/quantization are plan semantics, not target policy.
+#[cfg(test)]
 pub(crate) fn stage_output(
     image: &Image,
     spec: OutputSpec,
     target_info: &ImageInfo,
 ) -> Result<StagedOutput, DrawError> {
+    let mut staging = OutputStaging::default();
+    stage_output_into(image, spec, target_info, &mut staging)?;
+    Ok(StagedOutput {
+        pixels: staging.pixels,
+    })
+}
+
+/// Stage exact output into caller-owned buffers, returning the target row bytes. The pixels are
+/// available through [`OutputStaging::pixels`] until the next call.
+pub(crate) fn stage_output_into(
+    image: &Image,
+    spec: OutputSpec,
+    target_info: &ImageInfo,
+    staging: &mut OutputStaging,
+) -> Result<usize, DrawError> {
     validate_target(spec, target_info)?;
     let width = usize::try_from(image.width())
         .map_err(|_| DrawError::Surface("negative output width".into()))?;
@@ -87,10 +118,12 @@ pub(crate) fn stage_output(
         .checked_mul(height)
         .and_then(|value| value.checked_mul(4))
         .ok_or_else(|| DrawError::Surface("output image is too large".into()))?;
-    let mut working = vec![0.0_f32; sample_count];
+    // read_pixels overwrites every sample, so stale contents from a prior frame are never read.
+    let working = &mut staging.working;
+    working.resize(sample_count, 0.0);
     if !image.read_pixels(
         &read_info,
-        &mut working,
+        working.as_mut_slice(),
         row_bytes,
         (0, 0),
         CachingHint::Disallow,
@@ -98,25 +131,53 @@ pub(crate) fn stage_output(
         return Err(DrawError::Surface("working output readback failed".into()));
     }
 
-    let mut pixels = Vec::with_capacity(target_info.compute_min_byte_size());
+    let color_type = target_info.color_type();
+    let pixel_bytes = color_type.bytes_per_pixel();
+    if pixel_bytes == 0 || pixel_bytes > MAX_STAGED_PIXEL_BYTES {
+        return Err(DrawError::Surface(format!(
+            "unsupported staged output pixel size for {color_type:?}"
+        )));
+    }
+    let pixels = &mut staging.pixels;
+    pixels.clear();
+    pixels.resize(sample_count / 4 * pixel_bytes, 0);
     // Non-dithered conversion is position-independent. A small, frame-local cache avoids
     // repeating transfer/gamut math for flat fills and text without approximating any pixels.
-    let mut cache = [None::<([u32; 4], DeliveryStorage)>; 1024];
-    for (index, channels) in working.chunks_exact(4).enumerate() {
+    // Entries hold the final encoded bytes, so hits are a single fixed-size copy.
+    let cacheable = spec.dither() == Dither::None;
+    // Sized for a full row of a horizontal gradient (1920 distinct inputs at 1080p), which a
+    // smaller direct-mapped cache would evict every row.
+    let mut cache = vec![None::<([u32; 4], EncodedPixel)>; SDR_CACHE_SLOTS];
+    // Flat regions repeat the previous pixel; check it before hashing.
+    let mut previous = None::<([u32; 4], EncodedPixel)>;
+    let mut encode_buffer = Vec::with_capacity(MAX_STAGED_PIXEL_BYTES);
+    for (index, (channels, output)) in working
+        .chunks_exact(4)
+        .zip(pixels.chunks_exact_mut(pixel_bytes))
+        .enumerate()
+    {
         let channels = [channels[0], channels[1], channels[2], channels[3]];
         let key = channels.map(f32::to_bits);
+        if cacheable {
+            if let Some((prior, encoded)) = &previous {
+                if *prior == key {
+                    output.copy_from_slice(&encoded[..pixel_bytes]);
+                    continue;
+                }
+            }
+        }
         let hash = key
             .iter()
             .fold(0_u32, |hash, bits| hash.rotate_left(5) ^ bits)
             .wrapping_mul(0x9e3779b9);
-        let slot = (hash >> 22) as usize;
-        let cached = if spec.dither() == Dither::None {
+        let slot = (hash >> (32 - SDR_CACHE_BITS)) as usize;
+        let cached = if cacheable {
             cache[slot].filter(|(prior, _)| *prior == key)
         } else {
             None
         };
-        let storage = if let Some((_, storage)) = cached {
-            storage
+        let encoded = if let Some((_, encoded)) = cached {
+            encoded
         } else {
             let sample = transform_working_pixel(
                 canonical_rgba(channels)?,
@@ -124,30 +185,56 @@ pub(crate) fn stage_output(
                 [(index % width) as u32, (index / width) as u32],
             )
             .map_err(|error| DrawError::Surface(error.to_string()))?;
-            if spec.dither() == Dither::None {
-                cache[slot] = Some((key, sample.storage));
+            encode_buffer.clear();
+            append_storage(&mut encode_buffer, sample.storage, color_type, spec)?;
+            if encode_buffer.len() != pixel_bytes {
+                return Err(DrawError::Surface(format!(
+                    "{color_type:?} staging produced {} bytes per pixel",
+                    encode_buffer.len()
+                )));
             }
-            sample.storage
+            let mut encoded = [0_u8; MAX_STAGED_PIXEL_BYTES];
+            encoded[..pixel_bytes].copy_from_slice(&encode_buffer);
+            if cacheable {
+                cache[slot] = Some((key, encoded));
+            }
+            encoded
         };
-        append_storage(&mut pixels, storage, target_info.color_type(), spec)?;
+        output.copy_from_slice(&encoded[..pixel_bytes]);
+        if cacheable {
+            previous = Some((key, encoded));
+        }
     }
-    let target_row_bytes = width
-        .checked_mul(target_info.color_type().bytes_per_pixel())
-        .ok_or_else(|| DrawError::Surface("target row is too large".into()))?;
-    Ok(StagedOutput {
-        pixels,
-        row_bytes: target_row_bytes,
-    })
+    width
+        .checked_mul(color_type.bytes_per_pixel())
+        .ok_or_else(|| DrawError::Surface("target row is too large".into()))
 }
 
 /// Batch SDR output: Skia converts the linear primaries, shared delivery math maps the gamut,
 /// then a bounded curve lookup replaces per-pixel transfer powers. No platform gamma defaults
 /// are involved; Skia's named Rec.709 transfer is a display EOTF, not our output OETF.
+#[cfg(test)]
 pub(crate) fn stage_sdr_output(
     image: &Image,
     spec: OutputSpec,
     target_info: &ImageInfo,
 ) -> Result<Option<StagedOutput>, DrawError> {
+    let mut staging = OutputStaging::default();
+    Ok(
+        stage_sdr_output_into(image, spec, target_info, &mut staging)?.map(|_| StagedOutput {
+            pixels: staging.pixels,
+        }),
+    )
+}
+
+/// Stage SDR output into caller-owned buffers, returning the target row bytes when the SDR
+/// path applies. The pixels are available through [`OutputStaging::pixels`] until the next call.
+pub(crate) fn stage_sdr_output_into(
+    image: &Image,
+    spec: OutputSpec,
+    target_info: &ImageInfo,
+    staging: &mut OutputStaging,
+) -> Result<Option<usize>, DrawError> {
     use valle_engine::resource::ToneMap;
     if spec.bit_depth() != OutputBitDepth::Eight
         || spec.dither() != Dither::None
@@ -177,46 +264,101 @@ pub(crate) fn stage_sdr_output(
         Some(linear),
     );
     let width = image.width() as usize;
-    let mut samples = vec![0.0_f32; width * image.height() as usize * 4];
+    let pixel_count = width * image.height() as usize;
+    // read_pixels overwrites every sample, so stale contents from a prior frame are never read.
+    let samples = &mut staging.working;
+    samples.resize(pixel_count * 4, 0.0);
     if !image.read_pixels(
         &info,
-        &mut samples,
+        samples.as_mut_slice(),
         width * 16,
         (0, 0),
         CachingHint::Disallow,
     ) {
         return Err(DrawError::Surface("linear output conversion failed".into()));
     }
+    // Loop invariants, queried once rather than per pixel.
     let maximum = f32::from(spec.reference_white().get()) / 100.0;
     let curve = transfer_lut(spec.target().transfer);
+    let primaries = spec.target().primaries;
+    let gamut_map = spec.gamut_map();
+    let alpha_mode = spec.alpha();
+    let swap_red_blue = target_info.color_type() == ColorType::BGRA8888;
     let row_bytes = target_info.min_row_bytes();
-    let mut pixels = Vec::with_capacity(target_info.compute_min_byte_size());
-    for pixel in samples.chunks_exact(4) {
+    let pixels = &mut staging.pixels;
+    pixels.clear();
+    pixels.resize(pixel_count * 4, 0);
+    // Continuous-tone frames still repeat neighbors in flat regions; an identical input reuses
+    // the previous pixel's already validated codes.
+    let mut previous: Option<([u32; 4], [u8; 4])> = None;
+    // Gradients repeat a color down a column rather than along a row, so a small exact-key cache
+    // catches what the previous-pixel check misses. Keys are the input bits, so hits are exact.
+    let mut cache = vec![None::<([u32; 4], [u8; 4])>; SDR_CACHE_SLOTS];
+    for (pixel, output) in samples.chunks_exact(4).zip(pixels.chunks_exact_mut(4)) {
+        let key = [
+            pixel[0].to_bits(),
+            pixel[1].to_bits(),
+            pixel[2].to_bits(),
+            pixel[3].to_bits(),
+        ];
+        if let Some((prior, codes)) = previous
+            && prior == key
+        {
+            output.copy_from_slice(&codes);
+            continue;
+        }
+        let slot = (key
+            .iter()
+            .fold(0_u32, |hash, bits| hash.rotate_left(5) ^ bits)
+            .wrapping_mul(0x9e37_79b9)
+            >> (32 - SDR_CACHE_BITS)) as usize;
+        if let Some((prior, codes)) = cache[slot]
+            && prior == key
+        {
+            output.copy_from_slice(&codes);
+            previous = Some((key, codes));
+            continue;
+        }
         let pixel = canonical_rgba([pixel[0], pixel[1], pixel[2], pixel[3]])?;
-        if spec.alpha() == OutputAlphaMode::Opaque && pixel[3] != 1.0 {
+        if alpha_mode == OutputAlphaMode::Opaque && pixel[3] != 1.0 {
             return Err(DrawError::Surface("opaque output has transparency".into()));
         }
         let mapped = valle_engine::compositor::delivery::map_output_gamut(
             [pixel[0], pixel[1], pixel[2]],
-            spec.target().primaries,
+            primaries,
             maximum,
-            spec.gamut_map(),
+            gamut_map,
         )
         .map_err(|error| DrawError::Surface(error.to_string()))?;
-        let coverage = if spec.alpha() == OutputAlphaMode::PremultipliedCoverage {
+        let coverage = if alpha_mode == OutputAlphaMode::PremultipliedCoverage {
             pixel[3]
         } else {
             1.0
         };
-        let mut codes =
-            mapped.map(|value| (transfer_code(value / maximum, curve) * coverage).round() as u8);
-        if target_info.color_type() == ColorType::BGRA8888 {
-            codes.swap(0, 2);
-        }
-        pixels.extend_from_slice(&codes);
-        pixels.push((pixel[3] * 255.0).round() as u8);
+        let code = |value: f32| round_code(transfer_code(value / maximum, curve) * coverage);
+        let (red, blue) = if swap_red_blue { (2, 0) } else { (0, 2) };
+        let codes = [
+            code(mapped[red]),
+            code(mapped[1]),
+            code(mapped[blue]),
+            round_code(pixel[3] * 255.0),
+        ];
+        output.copy_from_slice(&codes);
+        previous = Some((key, codes));
+        cache[slot] = Some((key, codes));
     }
-    Ok(Some(StagedOutput { pixels, row_bytes }))
+    Ok(Some(row_bytes))
+}
+
+const SDR_CACHE_BITS: u32 = 12;
+const SDR_CACHE_SLOTS: usize = 1 << SDR_CACHE_BITS;
+
+/// `value.round() as u8` for the non-negative code range, without a libm `roundf` call: the
+/// truncation and its remainder are exact in f32 here, so ties still round away from zero.
+fn round_code(value: f32) -> u8 {
+    let truncated = value as u32;
+    let rounded = truncated + u32::from(value - truncated as f32 >= 0.5);
+    rounded.min(255) as u8
 }
 
 // The bounded [0,1] SDR curve is shared across frames and output primaries/white levels.
@@ -645,6 +787,199 @@ mod tests {
                 append_storage(&mut expected, sample.storage, target.color_type(), spec).unwrap();
             }
             assert_eq!(actual.pixels(), expected, "dither={dither:?}");
+        }
+    }
+
+    #[test]
+    fn repeated_pixels_match_per_pixel_math_for_every_staged_format() {
+        let formats = [
+            (OutputBitDepth::Eight, ColorType::RGBA8888),
+            (OutputBitDepth::Eight, ColorType::BGRA8888),
+            (OutputBitDepth::Ten, ColorType::RGBA1010102),
+            (OutputBitDepth::Sixteen, ColorType::R16G16B16A16UNorm),
+            (OutputBitDepth::Float16, ColorType::RGBAF16),
+        ];
+        // Runs of identical pixels exercise the previous-pixel path; the varied segments between
+        // them exercise the hashed cache and misses.
+        let palette = [
+            [0.18, 0.18, 0.18, 1.0],
+            [0.9, 0.1, 0.05, 1.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ];
+        let samples = (0..1024)
+            .map(|i| {
+                let run = i / 7;
+                if run % 2 == 0 {
+                    palette[run % palette.len()]
+                } else {
+                    [(i % 13) as f32 / 12.0, (i % 5) as f32 / 4.0, 0.5, 1.0]
+                }
+            })
+            .collect::<Vec<_>>();
+        let data = samples
+            .iter()
+            .flatten()
+            .flat_map(|value| value.to_ne_bytes())
+            .collect::<Vec<_>>();
+        let source = ImageInfo::new(
+            (32, 32),
+            ColorType::RGBAF32,
+            AlphaType::Premul,
+            Some(working_color_space().unwrap()),
+        );
+        let image = images::raster_from_data(&source, Data::new_copy(&data), 32 * 16).unwrap();
+        let mut checked = 0;
+        for (bit_depth, color_type) in formats {
+            for dither in [Dither::None, Dither::Triangular { seed: 5 }] {
+                let Ok(spec) = OutputSpec::new(
+                    OutputColorEncoding::SRGB,
+                    OutputAlphaMode::Opaque,
+                    OutputBackground::opaque_srgb([0, 0, 0]),
+                    ToneMap::None,
+                    GamutMap::ChromaCompress,
+                    dither,
+                    bit_depth,
+                    SignalLuminance::SDR_100,
+                ) else {
+                    continue;
+                };
+                let target = ImageInfo::new(
+                    (32, 32),
+                    color_type,
+                    AlphaType::Opaque,
+                    Some(output_color_space(spec).unwrap()),
+                );
+                let actual = stage_output(&image, spec, &target).unwrap();
+                let mut expected = Vec::new();
+                for (index, pixel) in samples.iter().enumerate() {
+                    let sample = transform_working_pixel(
+                        *pixel,
+                        spec,
+                        [(index % 32) as u32, (index / 32) as u32],
+                    )
+                    .unwrap();
+                    append_storage(&mut expected, sample.storage, color_type, spec).unwrap();
+                }
+                assert_eq!(
+                    actual.pixels(),
+                    expected,
+                    "{bit_depth:?} {color_type:?} dither={dither:?}"
+                );
+                checked += 1;
+            }
+        }
+        // Float16 cannot dither; every other format runs both modes.
+        assert_eq!(checked, formats.len() * 2 - 1);
+    }
+
+    #[test]
+    fn staging_reuse_overwrites_pixels_across_sizes_formats_and_output_paths() {
+        let mut staging = OutputStaging::default();
+        // Grow and shrink the same buffers, switch both delivery paths, then reuse a prior size.
+        for (width, height, bit_depth, color_type, transfer) in [
+            (
+                32,
+                8,
+                OutputBitDepth::Eight,
+                ColorType::RGBA8888,
+                TransferFunction::Srgb,
+            ),
+            (
+                1,
+                1,
+                OutputBitDepth::Sixteen,
+                ColorType::R16G16B16A16UNorm,
+                TransferFunction::Linear,
+            ),
+            (
+                17,
+                3,
+                OutputBitDepth::Eight,
+                ColorType::BGRA8888,
+                TransferFunction::Rec709,
+            ),
+            (
+                64,
+                9,
+                OutputBitDepth::Float16,
+                ColorType::RGBAF16,
+                TransferFunction::Linear,
+            ),
+            (
+                32,
+                8,
+                OutputBitDepth::Eight,
+                ColorType::RGBA8888,
+                TransferFunction::Srgb,
+            ),
+        ] {
+            let spec = OutputSpec::new(
+                OutputColorEncoding {
+                    primaries: ColorPrimaries::Rec709,
+                    transfer,
+                },
+                OutputAlphaMode::Opaque,
+                OutputBackground::opaque_srgb([0, 0, 0]),
+                ToneMap::None,
+                GamutMap::ChromaCompress,
+                Dither::None,
+                bit_depth,
+                SignalLuminance::SDR_100,
+            )
+            .unwrap();
+            let samples = (0..width * height)
+                .map(|i| {
+                    [
+                        (i % 7) as f32 / 8.0,
+                        (i % 5) as f32 / 6.0,
+                        (i % 3) as f32 / 4.0,
+                        1.0,
+                    ]
+                })
+                .collect::<Vec<_>>();
+            let data = samples
+                .iter()
+                .flatten()
+                .flat_map(|value| value.to_ne_bytes())
+                .collect::<Vec<_>>();
+            let source = ImageInfo::new(
+                (width, height),
+                ColorType::RGBAF32,
+                AlphaType::Premul,
+                Some(working_color_space().unwrap()),
+            );
+            let image =
+                images::raster_from_data(&source, Data::new_copy(&data), width as usize * 16)
+                    .unwrap();
+            let target = ImageInfo::new(
+                (width, height),
+                color_type,
+                AlphaType::Opaque,
+                Some(output_color_space(spec).unwrap()),
+            );
+            let mut expected = Vec::new();
+            for pixel in &samples {
+                let sample = transform_working_pixel(*pixel, spec, [0, 0]).unwrap();
+                append_storage(&mut expected, sample.storage, color_type, spec).unwrap();
+            }
+            // Poison both buffers so an incomplete overwrite is visible in this frame.
+            staging.working.fill(f32::NAN);
+            staging.pixels.fill(0xa5);
+            assert_eq!(
+                stage_output_into(&image, spec, &target, &mut staging).unwrap(),
+                target.min_row_bytes()
+            );
+            assert_eq!(staging.pixels(), expected);
+            if bit_depth == OutputBitDepth::Eight {
+                let fresh = stage_sdr_output(&image, spec, &target).unwrap().unwrap();
+                staging.working.fill(f32::NAN);
+                staging.pixels.fill(0xa5);
+                assert_eq!(
+                    stage_sdr_output_into(&image, spec, &target, &mut staging).unwrap(),
+                    Some(target.min_row_bytes())
+                );
+                assert_eq!(staging.pixels(), fresh.pixels());
+            }
         }
     }
 }

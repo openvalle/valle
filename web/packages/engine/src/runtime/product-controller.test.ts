@@ -234,7 +234,6 @@ function endpoint(
     mappedTime: { type: "exact", time: `${sourceSampleIndex}/4` },
     digest: `sha256:${left ? LEFT_DIGEST : RIGHT_DIGEST}`,
     handle: left ? 1 : 2,
-    decodedPcmDigest: `sha256:${"3".repeat(64)}`,
     sourceChannels: 2,
     crossfadeGain: 1,
     gain: left ? 0.7 : 0.6,
