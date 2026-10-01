@@ -16,6 +16,10 @@ pub enum OverlayHold {
 #[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
 pub enum MotionRole {
     Clip,
+    CaptionPresenter {
+        intro: RationalTime,
+        outro: RationalTime,
+    },
     Overlay {
         intro: RationalTime,
         outro: RationalTime,
@@ -40,31 +44,47 @@ impl MotionRole {
         if !source.is_positive() {
             return Err("template duration must be positive");
         }
-        if let Self::Overlay { intro, outro, .. } = self {
+        if let Some((intro, outro, _)) = self.template_timing() {
             if intro.is_negative() || outro.is_negative() {
-                return Err("overlay intro and outro must be non-negative");
+                return Err("template intro and outro must be non-negative");
             }
             let minimum = intro
                 .checked_add(outro)
-                .map_err(|_| "overlay timing overflows")?;
+                .map_err(|_| "template timing overflows")?;
             if minimum > source {
-                return Err("overlay intro + outro exceeds template duration");
+                return Err("template intro + outro exceeds template duration");
             }
             if host.is_some_and(|host| host < minimum) {
-                return Err("overlay host duration is shorter than intro + outro");
+                return Err("template host duration is shorter than intro + outro");
             }
         }
         Ok(())
     }
 
-    /// Only overlay callers use this map. Its logical right endpoint is handled by the source ABI.
-    pub fn overlay_time(
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Clip => "clip",
+            Self::Overlay { .. } => "overlay",
+            Self::CaptionPresenter { .. } => "captionPresenter",
+        }
+    }
+
+    fn template_timing(self) -> Option<(RationalTime, RationalTime, OverlayHold)> {
+        match self {
+            Self::Clip => None,
+            Self::Overlay { intro, outro, hold } => Some((intro, outro, hold)),
+            Self::CaptionPresenter { intro, outro } => Some((intro, outro, OverlayHold::Once)),
+        }
+    }
+
+    /// Templates share one exact map. The logical right endpoint is handled by the source ABI.
+    pub fn template_time(
         self,
         sample: RationalTime,
         host: RationalTime,
         source: RationalTime,
     ) -> Result<RationalTime, TimeError> {
-        let Self::Overlay { intro, outro, hold } = self else {
+        let Some((intro, outro, hold)) = self.template_timing() else {
             return Ok(sample);
         };
         let t = sample.max(RationalTime::ZERO).min(host);
@@ -114,37 +134,40 @@ mod tests {
             let role = role(hold);
             for host in [t(1, 1), t(3, 2), t(2, 1), t(4, 1)] {
                 role.validate(t(2, 1), Some(host)).unwrap();
-                assert_eq!(role.overlay_time(t(-1, 4), host, t(2, 1)).unwrap(), t(0, 1));
-                assert_eq!(role.overlay_time(t(1, 4), host, t(2, 1)).unwrap(), t(1, 4));
                 assert_eq!(
-                    role.overlay_time(host.checked_sub(t(1, 4)).unwrap(), host, t(2, 1))
+                    role.template_time(t(-1, 4), host, t(2, 1)).unwrap(),
+                    t(0, 1)
+                );
+                assert_eq!(role.template_time(t(1, 4), host, t(2, 1)).unwrap(), t(1, 4));
+                assert_eq!(
+                    role.template_time(host.checked_sub(t(1, 4)).unwrap(), host, t(2, 1))
                         .unwrap(),
                     t(7, 4)
                 );
-                assert_eq!(role.overlay_time(host, host, t(2, 1)).unwrap(), t(2, 1));
+                assert_eq!(role.template_time(host, host, t(2, 1)).unwrap(), t(2, 1));
             }
         }
         assert_eq!(
             role(OverlayHold::Once)
-                .overlay_time(t(5, 2), t(4, 1), t(2, 1))
+                .template_time(t(5, 2), t(4, 1), t(2, 1))
                 .unwrap(),
             t(3, 2)
         );
         assert_eq!(
             role(OverlayHold::Loop)
-                .overlay_time(t(5, 2), t(4, 1), t(2, 1))
+                .template_time(t(5, 2), t(4, 1), t(2, 1))
                 .unwrap(),
             t(1, 2)
         );
         assert_eq!(
             role(OverlayHold::Stretch)
-                .overlay_time(t(5, 2), t(4, 1), t(2, 1))
+                .template_time(t(5, 2), t(4, 1), t(2, 1))
                 .unwrap(),
             t(7, 6)
         );
         assert_eq!(
             role(OverlayHold::Stretch)
-                .overlay_time(t(3, 4), t(3, 2), t(2, 1))
+                .template_time(t(3, 4), t(3, 2), t(2, 1))
                 .unwrap(),
             t(1, 1)
         );
@@ -158,11 +181,11 @@ mod tests {
                 hold,
             };
             assert_eq!(
-                no_hold.overlay_time(t(3, 2), t(3, 1), t(1, 1)).unwrap(),
+                no_hold.template_time(t(3, 2), t(3, 1), t(1, 1)).unwrap(),
                 t(1, 2)
             );
             assert_eq!(
-                no_hold.overlay_time(t(1, 2), t(1, 1), t(1, 1)).unwrap(),
+                no_hold.template_time(t(1, 2), t(1, 1), t(1, 1)).unwrap(),
                 t(1, 2)
             );
             let no_edges = MotionRole::Overlay {
@@ -171,12 +194,12 @@ mod tests {
                 hold,
             };
             assert_eq!(
-                no_edges.overlay_time(t(4, 1), t(4, 1), t(2, 1)).unwrap(),
+                no_edges.template_time(t(4, 1), t(4, 1), t(2, 1)).unwrap(),
                 t(2, 1)
             );
             assert_eq!(
                 role(hold)
-                    .overlay_time(t(299 * 1001, 30000), t(10, 1), t(2, 1))
+                    .template_time(t(299 * 1001, 30000), t(10, 1), t(2, 1))
                     .unwrap(),
                 t(59299, 30000)
             );
@@ -187,7 +210,7 @@ mod tests {
             };
             assert_eq!(
                 role(hold)
-                    .overlay_time(t(19 * 1001, 30000), t(10, 1), t(2, 1))
+                    .template_time(t(19 * 1001, 30000), t(10, 1), t(2, 1))
                     .unwrap(),
                 expected
             );

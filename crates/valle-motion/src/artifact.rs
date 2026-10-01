@@ -2312,7 +2312,7 @@ impl SceneArtifact {
         } else if !matches!(self.role, valle_timeline::MotionRole::Clip) {
             errors.push(ValidationError::new(
                 "/role",
-                "overlay needs composition.duration",
+                "template role needs composition.duration",
             ));
         }
 
@@ -2359,6 +2359,32 @@ impl SceneArtifact {
             ));
         }
         self.controls.validate(&mut errors);
+        if matches!(
+            self.role,
+            valle_timeline::MotionRole::CaptionPresenter { .. }
+        ) {
+            if !self.controls.data.is_empty() {
+                errors.push(ValidationError::new(
+                    "/controls/data",
+                    "captionPresenter cannot declare data controls",
+                ));
+            }
+            let expected = crate::controls::AssetControl {
+                kind: crate::controls::AssetKind::Font,
+                required: true,
+            };
+            if self
+                .controls
+                .assets
+                .get(crate::caption::CAPTION_FONT_CONTROL)
+                != Some(&expected)
+            {
+                errors.push(ValidationError::new(
+                    "/controls/assets/caption",
+                    "captionPresenter needs its reserved required font control",
+                ));
+            }
+        }
         self.validate_resources(&mut errors);
         let expr_types = validate_exprs(&self.exprs, &self.controls, &mut errors).types;
         self.validate_instance_groups(&mut errors);

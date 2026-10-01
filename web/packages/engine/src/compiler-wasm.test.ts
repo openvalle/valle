@@ -244,3 +244,30 @@ test("merged Engine Wasm rewrites a current declaration while preserving surroun
     target: { kind: "prop-default", name: "title" }, value: "new",
   })).toThrow(/computed/);
 });
+
+test("Wasm compiles the same closed caption role and frozen input as Native", async () => {
+  const fixture = new URL("../../../../crates/valle-compiler/tests/fixtures/motion/caption/", import.meta.url);
+  const source = await readFile(new URL("timed-word-bars.motion.tsx", fixture), "utf8");
+  const data = JSON.parse(await readFile(new URL("timed-word-bars.data.json", fixture), "utf8"));
+  const compiled = compileMotionJsxWithWasm({compile_motion_jsx}, source,
+    {data:{source:"captions.json",value:data}});
+  expect(compiled.artifact.role).toEqual({type:"captionPresenter",intro:"3/20",outro:"3/20"});
+  expect(compiled.artifact.controls).toEqual({props:{},data:{},assets:{caption:{kind:"font",required:true}}});
+  expect(compiled.artifactDigest).toBe("sha256:d90151d0b0c9cb726ba76b4c1d42c214edcb0d0536ce51c51df14a0c3f17797f");
+  const movedOrigin = compileMotionJsxWithWasm({compile_motion_jsx}, source,
+    {data:{source:"elsewhere.json",value:data}});
+  expect(movedOrigin.artifactDigest).toBe(compiled.artifactDigest);
+  expect(movedOrigin.preparedDataDigest).toBe(compiled.preparedDataDigest);
+  const changed = compileMotionJsxWithWasm({compile_motion_jsx}, source,
+    {data:{source:"captions.json",value:{...data,runs:[data.runs[0],{...data.runs[1],end:1.4}]}}});
+  expect(changed.preparedDataDigest).not.toBe(compiled.preparedDataDigest);
+  expect(()=>compileMotionJsxWithWasm({compile_motion_jsx},source)).toThrow("caption data");
+  expect(()=>compileMotionJsxWithWasm({compile_motion_jsx},source,
+    {data:{source:"captions.json",value:{...data,unknown:true}}})).toThrow("unknown");
+  expect(()=>compileMotionJsxWithWasm({compile_motion_jsx},source,
+    {data:{source:"captions.json",value:{...data,runs:[data.runs[0],{...data.runs[1],start:0.4000004}]}}})).toThrow("normalized");
+  expect(()=>compileMotionJsxWithWasm({compile_motion_jsx},source,
+    {data:{source:"captions.json",value:{...data,text:"",runs:Array.from({length:9500},()=>({text:"",start:0,end:1,fontSize:24,color:"#ffffff"}))}}})).toThrow("value budget");
+  expect(()=>compileMotionJsxWithWasm({compile_motion_jsx},source.replace("export const role", "export const controls={data:{}}; export const role"),
+    {data:{source:"captions.json",value:data}})).toThrow("controls.data");
+});

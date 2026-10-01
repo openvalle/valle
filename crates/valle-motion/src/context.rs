@@ -120,12 +120,12 @@ pub fn motion_context_at_host(
     role.validate(source_duration, Some(host.duration)).ok()?;
     let frames = duration_frames(source_duration, fps)?;
     let mapped = role
-        .overlay_time(host.sample.composition(), host.duration, source_duration)
+        .template_time(host.sample.composition(), host.duration, source_duration)
         .ok()?;
     let end = sample_time_at_frame(i64::from(frames), fps)
         .ok()?
         .composition();
-    let boundary = if matches!(role, valle_timeline::MotionRole::Overlay { .. }) {
+    let boundary = if !matches!(role, valle_timeline::MotionRole::Clip) {
         end.min(source_duration)
     } else {
         end

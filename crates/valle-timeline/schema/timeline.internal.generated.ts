@@ -47,7 +47,7 @@ export namespace TimelineDocumentSchema {
   export type LayerTransformWire = { "anchor": [number, number]; "position": ParamWire; "rotation": ParamWire2; "scale": ParamWire; "size"?: (ParamWire | null) };
   export type LottieSamplingWire = { "fit": RasterFitWire };
   export type MediaEndBehaviorWire = ("error" | "hold" | "loop");
-  export type MotionRole = ({ "type": "clip" } | { "hold": OverlayHold; "intro": RationalTime; "outro": RationalTime; "type": "overlay" });
+  export type MotionRole = ({ "type": "clip" } | { "intro": RationalTime; "outro": RationalTime; "type": "captionPresenter" } | { "hold": OverlayHold; "intro": RationalTime; "outro": RationalTime; "type": "overlay" });
   export type NamedEasingWire = ("linear" | "ease" | "ease-in" | "ease-out" | "ease-in-out");
   export type NamespacedKernelTypeWire = string;
   export type OverlayHold = ("once" | "loop" | "stretch");

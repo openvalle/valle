@@ -3954,7 +3954,7 @@ fn temporal_context_at_sample(
     sample: valle_timeline::internal::SampleTime,
 ) -> Option<valle_motion::MotionContext> {
     let artifact = prepared.artifact();
-    if matches!(artifact.role, valle_timeline::MotionRole::Overlay { .. })
+    if !matches!(artifact.role, valle_timeline::MotionRole::Clip)
         && sample.composition() >= artifact.composition.as_ref()?.duration().ok()?
     {
         return None;

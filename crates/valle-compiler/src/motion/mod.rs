@@ -855,6 +855,7 @@ struct Compiler<'s> {
     require_composition: bool,
     controls: ControlsSchema,
     controls_span: Option<Span>,
+    declares_data_controls: bool,
     prepare_data: Option<PrepareDataBinding>,
     audio: Option<AudioAnalysisEnv>,
     simulation_tables: BTreeMap<String, std::sync::Arc<simulation::SimulationTable>>,

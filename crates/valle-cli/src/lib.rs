@@ -608,7 +608,7 @@ pub enum MotionAction {
         /// Host clip duration in decimal seconds; source timing remains composition-based.
         #[arg(long, value_name = "SECONDS")]
         host_duration: Option<String>,
-        /// Overlay layout viewport; defaults to the composition canvas.
+        /// Template layout viewport; defaults to the composition canvas.
         #[arg(long, value_parser = parse_canvas_size)]
         host_size: Option<(u32, u32)>,
         /// Bind an asset control as name=path; may be repeated.
@@ -636,7 +636,7 @@ pub enum MotionAction {
         /// Host clip duration in decimal seconds; source timing remains composition-based.
         #[arg(long, value_name = "SECONDS")]
         host_duration: Option<String>,
-        /// Overlay layout viewport; defaults to the composition canvas.
+        /// Template layout viewport; defaults to the composition canvas.
         #[arg(long, value_parser = parse_canvas_size)]
         host_size: Option<(u32, u32)>,
         /// Bind an asset control as name=path; may be repeated.
@@ -670,7 +670,7 @@ pub enum MotionAction {
         /// Host clip duration in decimal seconds; source timing remains composition-based.
         #[arg(long, value_name = "SECONDS")]
         host_duration: Option<String>,
-        /// Overlay layout viewport; defaults to the composition canvas.
+        /// Template layout viewport; defaults to the composition canvas.
         #[arg(long, value_parser = parse_canvas_size)]
         host_size: Option<(u32, u32)>,
         #[command(flatten)]

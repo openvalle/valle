@@ -375,6 +375,7 @@ fn prepare_endpoint(
             let overlay = matches!(
                 prepared_scene.artifact().role,
                 valle_timeline::MotionRole::Overlay { .. }
+                    | valle_timeline::MotionRole::CaptionPresenter { .. }
             );
             let source_extent = if overlay {
                 let size = layer.size().unwrap_or([
@@ -1026,7 +1027,13 @@ fn adapt_program_clip(
         .sources()
         .source(source.source_index())
         .and_then(|s| s.motion())
-        .is_some_and(|m| matches!(m.role(), valle_timeline::MotionRole::Overlay { .. }));
+        .is_some_and(|m| {
+            matches!(
+                m.role(),
+                valle_timeline::MotionRole::Overlay { .. }
+                    | valle_timeline::MotionRole::CaptionPresenter { .. }
+            )
+        });
     let canvas = render.canvas();
     let (source_width, source_height) = source_extent.unwrap_or((canvas.width(), canvas.height()));
     let transform = if source_extent.is_some() && !overlay {

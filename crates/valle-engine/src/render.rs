@@ -1577,11 +1577,11 @@ impl CompiledSource {
             .checked_sub(self.placement_start)
             .map_err(|_| RuntimeFault::ExactTimeOverflow)?;
         if let Some(motion) = self.motion() {
-            if matches!(motion.role, valle_timeline::MotionRole::Overlay { .. }) {
+            if !matches!(motion.role, valle_timeline::MotionRole::Clip) {
                 let duration = self.source_duration.expect("admitted Motion duration");
                 let sample = motion
                     .role
-                    .overlay_time(clip_local, motion.host_duration, duration)
+                    .template_time(clip_local, motion.host_duration, duration)
                     .map_err(|_| RuntimeFault::ExactTimeOverflow)?;
                 let frames = quantized_motion_source_frame_count(duration, motion.host_fps)
                     .map_err(|_| RuntimeFault::ExactTimeOverflow)?;

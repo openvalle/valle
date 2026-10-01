@@ -658,7 +658,7 @@ impl<'a> Validator<'a> {
                 );
             }
             VisualSourceWire::Motion(source) => {
-                if matches!(source.role, crate::MotionRole::Overlay { .. }) {
+                if !matches!(source.role, crate::MotionRole::Clip) {
                     for (field, valid) in [
                         ("fit", matches!(source.fit, RasterFitWire::Contain)),
                         ("sourceStart", source.source_start == ExactRational::ZERO),

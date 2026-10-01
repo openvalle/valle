@@ -157,6 +157,7 @@ impl<'s> Compiler<'s> {
             require_composition,
             controls: default_controls(),
             controls_span: None,
+            declares_data_controls: false,
             prepare_data: prepare_data.cloned(),
             audio: audio.cloned(),
             audio_tables: BTreeMap::new(),
@@ -228,7 +229,11 @@ impl<'s> Compiler<'s> {
             }
         }
 
+        self.bind_caption_contract();
         self.validate_prepare_data();
+        if !self.diagnostics.is_empty() {
+            return Err(std::mem::take(&mut self.diagnostics));
+        }
 
         // The delivery contract is mandatory for authored entry files. In-memory compiles without
         // an entry path stay lenient so style/layout tests do not have to restate a canvas; every
@@ -552,6 +557,7 @@ impl<'s> Compiler<'s> {
         {
             Ok(value) => match controls_from_json(&value) {
                 Ok(controls) => {
+                    self.declares_data_controls = value.get("data").is_some();
                     self.controls = controls;
                 }
                 Err(message) => self.illegal(DiagCode::ModuleShape, span, message),
@@ -563,9 +569,53 @@ impl<'s> Compiler<'s> {
         }
     }
 
+    fn bind_caption_contract(&mut self) {
+        if !matches!(
+            self.role,
+            valle_timeline::MotionRole::CaptionPresenter { .. }
+        ) {
+            return;
+        }
+        let span = self.controls_span.unwrap_or(Span::new(0, 0));
+        if self.declares_data_controls {
+            self.illegal(
+                DiagCode::ModuleShape,
+                span,
+                "captionPresenter cannot declare controls.data; its host supplies caption input",
+            );
+        }
+        if self
+            .controls
+            .assets
+            .contains_key(valle_motion::caption::CAPTION_FONT_CONTROL)
+        {
+            self.illegal(
+                DiagCode::ModuleShape,
+                span,
+                "captionPresenter cannot declare the reserved caption asset control",
+            );
+        }
+        self.controls.assets.insert(
+            valle_motion::caption::CAPTION_FONT_CONTROL.into(),
+            AssetControl {
+                kind: AssetKind::Font,
+                required: true,
+            },
+        );
+    }
+
     pub(super) fn validate_prepare_data(&mut self) {
         let Some(binding) = self.prepare_data.as_ref() else {
-            if !self.controls.data.is_empty() {
+            if matches!(
+                self.role,
+                valle_timeline::MotionRole::CaptionPresenter { .. }
+            ) {
+                self.illegal(
+                    DiagCode::ModuleShape,
+                    Span::new(0, 0),
+                    "captionPresenter needs frozen caption data from its host",
+                );
+            } else if !self.controls.data.is_empty() {
                 self.illegal(
                     DiagCode::ModuleShape,
                     self.controls_span.unwrap_or(Span::new(0, 0)),
@@ -584,6 +634,22 @@ impl<'s> Compiler<'s> {
         }
         let source_path = binding.source.clone();
         let value = binding.value.clone();
+        if matches!(
+            self.role,
+            valle_timeline::MotionRole::CaptionPresenter { .. }
+        ) {
+            let result =
+                serde_json::from_value::<valle_motion::caption::CaptionPresenterData>(value)
+                    .map_err(|error| error.to_string())
+                    .and_then(|data| data.validate(None));
+            if let Err(message) = result {
+                let mut diagnostic =
+                    diagnostic_at(self.source, DiagCode::ModuleShape, Span::new(0, 0), message);
+                diagnostic.source_path = Some(source_path);
+                self.push_diagnostic(diagnostic);
+            }
+            return;
+        }
         if let Err(errors) = self.controls.validate_data(&value) {
             for error in errors {
                 self.push_diagnostic(CompilerDiagnostic {

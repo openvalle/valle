@@ -14,6 +14,7 @@ pub mod artifact;
 pub mod batch;
 pub mod builtin;
 pub mod canonical;
+pub mod caption;
 mod colr;
 pub mod composition;
 pub mod compute;

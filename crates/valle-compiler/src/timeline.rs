@@ -442,14 +442,18 @@ impl TimelineNormalizer {
                 })?;
                 let role_error = |reason: String| CompileTimelineError::MotionRole {
                     component: component.clone(),
-                    role: match metadata.role {
-                        valle_timeline::MotionRole::Clip => "clip",
-                        _ => "overlay",
-                    }
-                    .into(),
+                    role: metadata.role.name().into(),
                     path: clip_path.to_owned(),
                     reason,
                 };
+                if matches!(
+                    metadata.role,
+                    valle_timeline::MotionRole::CaptionPresenter { .. }
+                ) {
+                    return Err(role_error(
+                        "captionPresenter belongs on a caption track".into(),
+                    ));
+                }
                 metadata
                     .role
                     .validate(
@@ -1052,6 +1056,92 @@ fn caption_runs(
             }
         })
         .collect())
+}
+
+/// Freeze one caption's text, timed runs and inherited style/layout for Motion preparation.
+/// Placement start is deliberately absent; duration only validates timed input.
+#[cfg(feature = "motion")]
+pub fn prepare_caption_presenter_data(
+    style: &timeline::TimelineCaptionStyleWire,
+    track_layout: Option<&timeline::TimelineCaptionLayoutWire>,
+    clip: &timeline::TimelineCaptionClipWire,
+    canvas: [u32; 2],
+    path: &str,
+) -> Result<valle_motion::caption::CaptionPresenterData, CompileTimelineError> {
+    use valle_motion::caption::*;
+    let error = |reason: String| CompileTimelineError::MotionPreparation {
+        reason: format!("{path}: {reason}"),
+    };
+    for (name, present) in [
+        ("enter", clip.enter.is_some()),
+        ("display", clip.display.is_some()),
+        ("exit", clip.exit.is_some()),
+        ("presentation", clip.presentation.is_some()),
+        ("behavior", clip.behavior.is_some()),
+    ] {
+        if present {
+            return Err(error(format!("captionPresenter does not admit `{name}`")));
+        }
+    }
+    let authored_runs = match (&clip.text, &clip.runs) {
+        (Some(text), None) => vec![timeline::TimelineTextRunWire {
+            text: text.clone(),
+            start: None,
+            end: None,
+            font_size: None,
+            color: None,
+        }],
+        (None, Some(runs)) if !runs.is_empty() => runs.clone(),
+        _ => return Err(CompileTimelineError::InvalidCaptionContent { path: path.into() }),
+    };
+    let layout = merge_layout(track_layout, clip.layout.as_ref());
+    let [x, y, width, height] = layout.region;
+    if layout.region.iter().any(|value| !value.is_finite())
+        || x < 0.0
+        || y < 0.0
+        || width <= 0.0
+        || height <= 0.0
+        || x + width > 1.0
+        || y + height > 1.0
+        || canvas.contains(&0)
+    {
+        return Err(error(
+            "caption region must lie within a positive canvas".into(),
+        ));
+    }
+    let data = CaptionPresenterData {
+        text: authored_runs.iter().map(|run| run.text.as_str()).collect(),
+        runs: authored_runs
+            .into_iter()
+            .map(|run| CaptionPresenterRun {
+                text: run.text,
+                start: run.start.map(|time| time.to_exact().as_f64()),
+                end: run.end.map(|time| time.to_exact().as_f64()),
+                font_size: run.font_size,
+                color: run.color,
+            })
+            .collect(),
+        style: CaptionPresenterStyle {
+            font: CAPTION_FONT_URI.into(),
+            font_size: style.font_size.unwrap_or(64.0),
+            color: style.color.clone().unwrap_or_else(|| "#ffffffff".into()),
+            shadow: style.shadow.as_ref().map(|shadow| CaptionPresenterShadow {
+                color: shadow.color.clone(),
+                offset: shadow.offset,
+                blur: shadow.blur.unwrap_or(0.0),
+            }),
+        },
+        region: [
+            x * f64::from(canvas[0]),
+            y * f64::from(canvas[1]),
+            width * f64::from(canvas[0]),
+            height * f64::from(canvas[1]),
+        ],
+        align: layout.align,
+    };
+    data.validate(Some(RationalTime::from_exact(clip.duration.to_exact())))
+        .map_err(error)?;
+    Ok(data)
 }
 
 fn merge_layout(

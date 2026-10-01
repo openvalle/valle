@@ -3331,7 +3331,7 @@ export default function Main(ctx) {{return <Scene><View key="bar" className="abs
                     };
                     let source = artifact
                         .role
-                        .overlay_time(
+                        .template_time(
                             RationalTime::new(frame, 4).unwrap(),
                             RationalTime::from_exact(host),
                             RationalTime::new(2, 1).unwrap(),

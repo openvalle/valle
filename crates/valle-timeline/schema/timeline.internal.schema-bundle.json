@@ -1581,6 +1581,27 @@
             {
               "additionalProperties": false,
               "properties": {
+                "intro": {
+                  "$ref": "#/$defs/RationalTime"
+                },
+                "outro": {
+                  "$ref": "#/$defs/RationalTime"
+                },
+                "type": {
+                  "const": "captionPresenter",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "intro",
+                "outro"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
                 "hold": {
                   "$ref": "#/$defs/OverlayHold"
                 },

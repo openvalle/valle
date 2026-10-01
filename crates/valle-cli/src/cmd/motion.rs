@@ -155,7 +155,8 @@ fn review(
     let artifact = &prepared.compiled.artifact;
     let delivery = Delivery::of(artifact, output_fps)?
         .with_host_duration(host_duration)?
-        .with_host_size(host_size, artifact)?;
+        .with_host_size(host_size, artifact)?
+        .with_caption_data(&prepared)?;
     let prop_bindings = read_prop_bindings(bindings.props.as_deref())?;
     let overrides = review_prop_overrides(artifact, &prop_bindings)?;
     let props = valle_motion::resolve_props(&artifact.controls, &overrides)?;
@@ -267,7 +268,8 @@ fn render(
     let artifact = &prepared.compiled.artifact;
     let delivery = Delivery::of(artifact, tuning.fps.as_deref())?
         .with_host_duration(host_duration)?
-        .with_host_size(host_size, artifact)?;
+        .with_host_size(host_size, artifact)?
+        .with_caption_data(&prepared)?;
     let (duration, fps, canvas) = (delivery.duration, delivery.fps, delivery.canvas);
     if let Some((width, height)) = tuning.output_size {
         // Delivery scaling must preserve the composition's aspect ratio: another shape is another
@@ -1520,10 +1522,27 @@ impl Delivery {
         if let Some((width, height)) = size {
             if matches!(artifact.role, valle_timeline::MotionRole::Clip) {
                 bail!(
-                    "--host-size requires an overlay role; clip layout uses its composition canvas"
+                    "--host-size requires a template role; clip layout uses its composition canvas"
                 )
             }
             self.canvas = validate_pixel_size(MotionViewport { width, height }, "host viewport")?;
+        }
+        Ok(self)
+    }
+
+    fn with_caption_data(self, prepared: &PreparedInput) -> Result<Self> {
+        if matches!(
+            prepared.compiled.artifact.role,
+            valle_timeline::MotionRole::CaptionPresenter { .. }
+        ) {
+            let binding = prepared
+                .data_binding
+                .as_ref()
+                .context("captionPresenter needs frozen caption input")?;
+            let data: valle_motion::caption::CaptionPresenterData =
+                serde_json::from_value(binding.value.clone())?;
+            data.validate(Some(self.duration))
+                .map_err(|reason| anyhow!("{}: {reason}", binding.source))?;
         }
         Ok(self)
     }
