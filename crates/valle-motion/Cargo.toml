@@ -13,8 +13,12 @@ publish.workspace = true
 valle-timeline.workspace = true
 valle-draw.workspace = true
 cssparser.workspace = true
-geo.workspace = true
+geo = { workspace = true, features = ["earcut"] }
+i_overlay.workspace = true
 libm.workspace = true
+num-bigint = "0.4.8"
+num-rational = "0.4.2"
+num-traits = "0.2.19"
 serde.workspace = true
 sha2.workspace = true
 hex.workspace = true

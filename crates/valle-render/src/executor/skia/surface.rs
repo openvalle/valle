@@ -1719,6 +1719,14 @@ pub(crate) struct ScratchSurfaces<'frame, 'arena> {
 }
 
 impl ScratchSurfaces<'_, '_> {
+    pub(crate) fn backend_kind(&self) -> SkiaBackendKind {
+        self.frame.backend_kind()
+    }
+
+    pub(crate) fn prepare_cpu_image(&mut self, image: &Image) -> Result<Image, SurfaceError> {
+        self.frame.prepare_cpu_image(image)
+    }
+
     pub(crate) fn surface_mut(&mut self, index: usize) -> Result<&mut Surface, SurfaceError> {
         let entry = self
             .entries

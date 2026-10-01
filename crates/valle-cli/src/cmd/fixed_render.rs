@@ -101,7 +101,9 @@ pub fn run(
         }
     };
     lease.release()?;
-    print_delivery_report(&opened, operation, &output, &summary, None)?;
+    crate::output::emit(delivery_report(
+        &opened, operation, &output, &summary, None,
+    )?);
     Ok(std::process::ExitCode::SUCCESS)
 }
 
@@ -198,13 +200,13 @@ pub(super) fn require_new_output(output: &Path) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn print_delivery_report(
+pub(super) fn delivery_report(
     opened: &OpenedFixedPackage,
     operation: &str,
     output: &Path,
     summary: &RenderSummary,
     timing: Option<Value>,
-) -> Result<()> {
+) -> Result<Value> {
     if summary.render_id != opened.receipt().render_id() {
         bail!("Native delivery returned a different RenderId");
     }
@@ -241,8 +243,7 @@ pub(super) fn print_delivery_report(
                 SkiaBackendKind::Metal => "metal",
             });
     }
-    crate::output::emit(Value::Object(report));
-    Ok(())
+    Ok(Value::Object(report))
 }
 
 #[cfg(test)]

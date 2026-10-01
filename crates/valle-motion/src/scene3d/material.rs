@@ -82,6 +82,7 @@ pub struct MaterialTexture {
 pub enum AlphaMode {
     Opaque,
     Mask,
+    Blend,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]

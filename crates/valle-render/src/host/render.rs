@@ -18,13 +18,18 @@ use valle_engine::{
         OutputSpec, SignalLuminance, ToneMap,
     },
 };
-use valle_media::codec::{AudioMuxer, Muxer, VideoFrameTransport};
+use valle_media::codec::{
+    AudioMuxer, Muxer, TransparentVideoCodec, TransparentVideoMuxer, VideoFrameTransport,
+};
 
 use crate::executor::skia::SkiaBackendKind;
 
 use super::{
     CompiledAudioMixer, FrameSchedule, Mp4Sink, NativeProject, PipelineError, PipelineReport,
-    PngSink, ProgressCallback, RenderControl, StoryboardSink, render_schedule,
+    ProgressCallback, RenderControl, StoryboardSink,
+    delivery::OutputTransaction,
+    render_schedule,
+    sink::{PngFramesSink, TransparentVideoSink},
 };
 
 #[derive(Clone)]
@@ -108,6 +113,28 @@ impl NativeRenderer {
         frame: FrameKey,
         output: &Path,
     ) -> Result<RenderSummary, NativeRenderError> {
+        self.render_png_frames(&[frame], &[output.to_owned()], None)
+    }
+
+    /// Deliver exact frame keys in caller order, retaining duplicates for contact sheets.
+    /// A sequence and a sheet share the same frame evaluations and RGBA pixels. All paths are
+    /// staged before publication; existing outputs and invalid keys fail without partial output.
+    pub fn render_png_frames(
+        &self,
+        frames: &[FrameKey],
+        outputs: &[PathBuf],
+        storyboard: Option<(&Path, u32)>,
+    ) -> Result<RenderSummary, NativeRenderError> {
+        if frames.is_empty()
+            || (!outputs.is_empty() && outputs.len() != frames.len())
+            || (outputs.is_empty() && storyboard.is_none())
+        {
+            return Err(anyhow::anyhow!(
+                "PNG delivery requires frames and matching output paths or a storyboard"
+            )
+            .into());
+        }
+        self.validate_frames(frames)?;
         let (width, height) = self.output_extent()?;
         let spec = RenderSpec::new(
             width,
@@ -115,36 +142,78 @@ impl NativeRenderer {
             RenderQuality::Preview,
             OutputSpec::srgb_preview(self.options.background)?,
         )?;
-        let frame_count = self.project.compiled().canvas().frame_count();
-        if frame.index() < 0 || frame.index() >= frame_count {
-            return Err(NativeRenderError::FrameOutOfRange {
-                frame: frame.index(),
-                frame_count,
-            });
+        let mut paths = outputs.to_vec();
+        if let Some((path, _)) = storyboard {
+            paths.push(path.to_owned());
         }
-        let frames = [frame];
-        let temporary = temporary_output(output)?;
-        let mut sink = PngSink::new(&temporary);
-        let rendered = render_schedule(
+        let transaction = OutputTransaction::new(&paths)?;
+        let sheet = storyboard
+            .map(|(_, columns)| {
+                StoryboardSink::new(
+                    transaction.temporary(outputs.len()),
+                    frames.len(),
+                    columns,
+                    width,
+                    height,
+                )
+            })
+            .transpose()?;
+        let (delivered_width, delivered_height) = if let Some((_, columns)) = storyboard {
+            (
+                width
+                    .checked_mul(columns)
+                    .ok_or(NativeRenderError::InvalidStoryboard)?,
+                height
+                    .checked_mul(
+                        u32::try_from(frames.len())
+                            .map_err(|_| NativeRenderError::InvalidStoryboard)?
+                            .div_ceil(columns),
+                    )
+                    .ok_or(NativeRenderError::InvalidStoryboard)?,
+            )
+        } else {
+            (width, height)
+        };
+        let mut sink = PngFramesSink {
+            paths: (0..outputs.len())
+                .map(|index| transaction.temporary(index).to_owned())
+                .collect(),
+            storyboard: sheet,
+        };
+        let report = render_schedule(
             &self.project,
-            &frames,
+            frames,
             spec,
             &mut sink,
             &self.options.control,
             self.options.progress.as_ref(),
             self.options.backend,
             self.options.raster_workers,
-        );
-        let report = finish_delivery(rendered, &temporary, output)?;
+        )?;
         self.validate_report_render_id(&report)?;
+        self.options.control.check()?;
+        transaction.publish()?;
         Ok(RenderSummary {
             render_id: self.project.render_id(),
             frames: report.frames,
-            width,
-            height,
+            width: delivered_width,
+            height: delivered_height,
             audio_only: false,
             pipeline: Some(report),
         })
+    }
+
+    fn validate_frames(&self, frames: &[FrameKey]) -> Result<(), NativeRenderError> {
+        let frame_count = self.project.compiled().canvas().frame_count();
+        for frame in frames {
+            if frame.index() < 0 || frame.index() >= frame_count {
+                return Err(NativeRenderError::FrameOutOfRange {
+                    frame: frame.index(),
+                    frame_count,
+                });
+            }
+        }
+        Ok(())
     }
 
     pub fn storyboard(
@@ -167,16 +236,63 @@ impl NativeRenderer {
         }
         .frames(canvas)?;
         let [cell_width, cell_height] = storyboard_extent(canvas.width(), canvas.height());
+        let mut options = self.options.clone();
+        options.output_size = Some((cell_width, cell_height));
+        NativeRenderer::new(self.project.clone(), options).render_png_frames(
+            &frames,
+            &[],
+            Some((output, columns)),
+        )
+    }
+
+    /// Lossless qtrle MOV using the same straight sRGB RGBA conversion as PNG delivery.
+    pub fn export_transparent_mov(
+        &self,
+        output: &Path,
+    ) -> Result<RenderSummary, NativeRenderError> {
+        self.export_transparent_mov_with_codec(output, TransparentVideoCodec::Qtrle)
+    }
+
+    /// Transparent MOV using qtrle or ProRes 4444.
+    pub fn export_transparent_mov_with_codec(
+        &self,
+        output: &Path,
+        codec: TransparentVideoCodec,
+    ) -> Result<RenderSummary, NativeRenderError> {
+        if self.options.hardware_encode
+            || self.options.bitrate.is_some()
+            || self.options.encode_threads.is_some()
+        {
+            return Err(
+                anyhow::anyhow!("transparent MOV does not accept H.264 encoder options").into(),
+            );
+        }
+        if self.project.has_audio() {
+            return Err(anyhow::anyhow!("transparent MOV currently delivers video only; export audio separately or use MP4 for an audio/video mix").into());
+        }
+        let (width, height) = self.output_extent()?;
         let spec = RenderSpec::new(
-            cell_width,
-            cell_height,
-            RenderQuality::Preview,
-            OutputSpec::srgb_preview(OutputBackground::opaque_srgb([0, 0, 0]))?,
+            width,
+            height,
+            RenderQuality::Final,
+            OutputSpec::srgb_preview(self.options.background)?,
         )?;
-        let temporary = temporary_output(output)?;
-        let mut sink =
-            StoryboardSink::new(&temporary, frames.len(), columns, cell_width, cell_height)?;
-        let rendered = render_schedule(
+        let canvas = self.project.compiled().canvas();
+        let frames = FrameSchedule::All.frames(canvas)?;
+        let transaction = OutputTransaction::new(&[output.to_owned()])?;
+        let fps = canvas.frame_rate();
+        let fps_num =
+            u32::try_from(fps.numerator()).map_err(|_| NativeRenderError::InvalidFrameRate)?;
+        let muxer = TransparentVideoMuxer::open_with_codec(
+            transaction.temporary(0),
+            width,
+            height,
+            fps_num,
+            fps.denominator(),
+            codec,
+        )?;
+        let mut sink = TransparentVideoSink(muxer);
+        let report = render_schedule(
             &self.project,
             &frames,
             spec,
@@ -185,23 +301,16 @@ impl NativeRenderer {
             self.options.progress.as_ref(),
             self.options.backend,
             self.options.raster_workers,
-        );
-        let report = finish_delivery(rendered, &temporary, output)?;
+        )?;
+        drop(sink);
         self.validate_report_render_id(&report)?;
-        let actual_rows = u32::try_from(frames.len())
-            .map_err(|_| NativeRenderError::InvalidStoryboard)?
-            .div_ceil(columns);
-        let output_width = cell_width
-            .checked_mul(columns)
-            .ok_or(NativeRenderError::InvalidStoryboard)?;
-        let output_height = cell_height
-            .checked_mul(actual_rows)
-            .ok_or(NativeRenderError::InvalidStoryboard)?;
+        self.options.control.check()?;
+        transaction.publish()?;
         Ok(RenderSummary {
             render_id: self.project.render_id(),
             frames: report.frames,
-            width: output_width,
-            height: output_height,
+            width,
+            height,
             audio_only: false,
             pipeline: Some(report),
         })

@@ -119,6 +119,10 @@ fn render_spec() -> RenderSpec {
     .unwrap()
 }
 fn template() -> RenderPlanTemplate {
+    template_with_fingerprint(digest('e'))
+}
+
+fn template_with_fingerprint(fingerprint: ContentDigest) -> RenderPlanTemplate {
     let working = PlanResourceId::try_from(1).unwrap();
     let output = PlanResourceId::try_from(2).unwrap();
     let surface = SurfaceSlotId::try_from(1).unwrap();
@@ -189,7 +193,7 @@ fn template() -> RenderPlanTemplate {
 
     RenderPlanTemplate::new(
         render_id('d'),
-        digest('e'),
+        fingerprint,
         render_spec(),
         2,
         2,
@@ -204,6 +208,44 @@ fn template() -> RenderPlanTemplate {
         estimated_bytes,
     )
     .unwrap()
+}
+
+#[test]
+fn bound_passes_share_output_roi_surface_owner_and_retirement() {
+    let capabilities = capabilities();
+    let template = template_with_fingerprint(capabilities.fingerprint().unwrap());
+    let bindings = RenderBindings::new(
+        *template.render_id(),
+        template.template_hash().unwrap(),
+        DynamicBindings::default(),
+        generation(),
+        Vec::new(),
+        Vec::new(),
+    )
+    .unwrap();
+    let schedule = template
+        .bind_program_schedules(&bindings, &capabilities)
+        .unwrap();
+    let passes = schedule.passes();
+    assert_eq!(passes.len(), 2);
+    assert_eq!(passes[0].pass(), ExecutionPassId::try_from(1).unwrap());
+    assert_eq!(passes[0].output(), PlanResourceId::try_from(1).unwrap());
+    assert_eq!(passes[0].device_roi().width, 64);
+    assert_eq!(passes[0].device_roi().height, 48);
+    assert_eq!(
+        passes[0].surface_slot(),
+        Some(SurfaceSlotId::try_from(1).unwrap())
+    );
+    assert!(passes[0].retire_after().is_empty());
+    assert_eq!(passes[1].output(), template.output());
+    assert_eq!(passes[1].surface_slot(), None);
+    assert_eq!(
+        passes[1].retire_after(),
+        &[PlanResourceId::try_from(1).unwrap()]
+    );
+    let wire = serde_json::to_value(&schedule).unwrap();
+    assert_eq!(wire["passes"][1]["retireAfter"], serde_json::json!([1]));
+    assert!(!schedule.packed_bytes().unwrap().is_empty());
 }
 
 #[test]

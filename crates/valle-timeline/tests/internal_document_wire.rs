@@ -38,7 +38,7 @@ fn canonical_document() -> Value {
                             "type": "transition",
                             "id": "x-main",
                             "duration": "1/2",
-                            "kernel": { "type": "cross-fade" }
+                            "kernel": { "type": "fade" }
                         },
                         {
                             "type": "clip",
@@ -450,7 +450,7 @@ fn effect_domains_and_transition_kernels_are_distinct() {
     assert!(serde_json::from_value::<VisualFilterWire>(grade.clone()).is_err());
     assert!(serde_json::from_value::<AudioEffectWire>(grade).is_err());
 
-    let cross_fade = json!({ "type": "cross-fade" });
+    let cross_fade = json!({ "type": "fade" });
     assert!(serde_json::from_value::<TransitionKernelWire>(cross_fade.clone()).is_ok());
     assert!(serde_json::from_value::<AdjustmentEffectWire>(cross_fade.clone()).is_err());
     assert!(serde_json::from_value::<VisualFilterWire>(cross_fade).is_err());
@@ -503,7 +503,7 @@ fn effect_domains_and_transition_kernels_are_distinct() {
 
     assert!(
         serde_json::from_value::<TransitionKernelWire>(json!({
-            "type": "cross-fade", "parameters": {}
+            "type": "fade", "parameters": {}
         }))
         .is_err()
     );

@@ -41,7 +41,7 @@ const COMPONENT_RESOURCE_ID: &str = "component:standalone-motion";
 pub(super) struct StandaloneMotionPackageInput<'a> {
     pub artifact: &'a SceneArtifact,
     pub assets: &'a BTreeMap<String, BoundAsset>,
-    pub font_blobs: &'a [Vec<u8>],
+    pub font_blobs: &'a [std::sync::Arc<[u8]>],
     pub prop_bindings: &'a BTreeMap<String, Value>,
     pub duration: RationalTime,
     pub frame_rate: FrameRate,
@@ -67,7 +67,7 @@ pub(super) fn font_dependency_role(artifact: &SceneArtifact, bytes: &[u8], index
         .iter()
         .any(|node| matches!(node.kind, valle_motion::NodeKind::MathFormula { .. }));
     let is_formula = has_formula
-        && valle_motion::math_formula::formula_font_pack().any(|(_, font)| font == bytes);
+        && valle_motion::math_formula::formula_font_pack().any(|(_, font)| font.as_ref() == bytes);
     format!(
         "{}:{index}",
         if is_formula { "formula-font" } else { "font" }
@@ -102,7 +102,7 @@ pub(super) fn build_standalone_motion_package(
     }
 
     for (index, bytes) in input.font_blobs.iter().enumerate() {
-        let digest = resources.intern_font(bytes)?;
+        let digest = resources.intern_shared_font(bytes.clone())?;
         component_dependencies.push(FixedResourceDependency {
             role: font_dependency_role(input.artifact, bytes, index),
             resource_id: font_resource_id(&digest),
@@ -179,7 +179,7 @@ fn build_timeline(
                 "colorSpace": "srgb",
                 "duration": input.duration,
             },
-            "background": {"color": "#000000ff"},
+            "background": {"color": "#00000000"},
             "visual": {
                 "tracks": [{
                     "id": "visual:motion",
@@ -267,6 +267,7 @@ fn motion_value(value: &MotionValue, control: &ControlType) -> Result<Value> {
         }
         (MotionValue::Point(value), ControlType::Point) => json!([value.x, value.y]),
         (MotionValue::Color(value), ControlType::Color) => {
+            let value = value.to_srgb8();
             json!([value.r, value.g, value.b, value.a])
         }
         (MotionValue::Rect(value), ControlType::Rect) => {
@@ -356,7 +357,7 @@ impl FixedResources {
                     Vec::new(),
                 )
             }
-            AssetKind::Font => self.add_font_with_digest(resource_id, digest, &asset.bytes),
+            AssetKind::Font => self.add_font_with_digest(resource_id, digest, asset.bytes.clone()),
             AssetKind::Audio => {
                 let decoded = decode_audio_corpus(asset)?;
                 let descriptor = analyzed_audio_descriptor(&decoded)?;
@@ -428,6 +429,15 @@ impl FixedResources {
         let digest = motion_digest(bytes);
         let resource_id = font_resource_id(&digest);
         if !self.entries.contains_key(&resource_id) {
+            self.add_font_with_digest(&resource_id, digest, Arc::from(bytes))?;
+        }
+        Ok(digest)
+    }
+
+    fn intern_shared_font(&mut self, bytes: Arc<[u8]>) -> Result<ContentDigest> {
+        let digest = motion_digest(&bytes);
+        let resource_id = font_resource_id(&digest);
+        if !self.entries.contains_key(&resource_id) {
             self.add_font_with_digest(&resource_id, digest, bytes)?;
         }
         Ok(digest)
@@ -437,9 +447,9 @@ impl FixedResources {
         &mut self,
         resource_id: &str,
         digest: ContentDigest,
-        bytes: &[u8],
+        bytes: Arc<[u8]>,
     ) -> Result<()> {
-        let descriptor = font_descriptor(bytes)?;
+        let descriptor = font_descriptor(&bytes)?;
         self.add(
             resource_id,
             ResourceEntryWire::Font {
@@ -448,7 +458,7 @@ impl FixedResources {
             },
             VerifiedResourceFacts::Font {
                 descriptor: descriptor.clone(),
-                bytes: Arc::from(bytes),
+                bytes,
             },
             Vec::new(),
         )
@@ -711,7 +721,7 @@ mod tests {
         assert!(formula_fonts.len() < plain_fonts.len() + all_formula_count);
         assert_eq!(plain_fonts.len(), 1);
         assert!(formula_fonts.iter().all(|font| {
-            valle_motion::math_formula::formula_font_pack().any(|(_, bytes)| font == bytes)
+            valle_motion::math_formula::formula_font_pack().any(|(_, bytes)| font.as_ref() == bytes)
         }));
     }
 
@@ -739,7 +749,12 @@ mod tests {
             r#"export const composition = { width: 320, height: 180, duration: 1 };
 export default function T(){return <Scene><Text>Hello</Text><MathFormula latex="x^2" /></Scene>}"#,
         );
-        let font = valle_motion::DEFAULT_MOTION_FONT_WEIGHTS[9];
+        let font = valle_motion::DEFAULT_MOTION_FONT_FILES
+            .iter()
+            .zip(valle_motion::DEFAULT_MOTION_FONT_WEIGHTS)
+            .find(|(name, _)| **name == "NotoSansMono-Regular.ttf")
+            .unwrap()
+            .1;
         let selected = valle_engine::fixed_package::with_motion_fonts(
             &package.fixed_package_manifest_json,
             &package.timeline_json,

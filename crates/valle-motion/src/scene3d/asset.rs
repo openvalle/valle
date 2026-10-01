@@ -1,7 +1,10 @@
 use serde::Deserialize;
+mod animation;
 mod geometry;
 mod material;
 mod nodes;
+mod skin;
+pub use animation::ModelAnimation;
 pub use material::{MaterialImage, ModelMaterial};
 pub(crate) use material::{ModelTextureBinding, linear_to_srgb, srgb_to_linear};
 pub(crate) use nodes::Affine;
@@ -31,10 +34,13 @@ pub struct ModelVertex {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PrimitiveRange {
+    pub first_vertex: u32,
+    pub vertex_count: u32,
     pub first_index: u32,
     pub index_count: u32,
     pub material_index: Option<u32>,
     pub has_uv: bool,
+    pub has_normal: bool,
 }
 
 /// A source mesh owns geometry once, regardless of the number of nodes that instance it.
@@ -44,6 +50,19 @@ pub struct ModelMesh {
     pub primitive_count: u32,
     pub vertex_count: u32,
     pub triangle_count: u32,
+    pub morph_target_count: u8,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct MorphTarget {
+    pub positions: Option<Vec<[f32; 3]>>,
+    pub normals: Option<Vec<[f32; 3]>>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct SkinVertex {
+    pub joints: [u16; 4],
+    pub weights: [f32; 4],
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -54,10 +73,15 @@ pub struct AdmittedModel {
     pub(crate) indices: Vec<u32>,
     pub(crate) primitives: Vec<PrimitiveRange>,
     pub(crate) meshes: Vec<ModelMesh>,
+    pub(crate) morph_targets: Vec<Vec<MorphTarget>>,
+    pub(crate) skin_vertices: Vec<Option<Vec<SkinVertex>>>,
+    pub(crate) skins: Vec<skin::ModelSkin>,
     pub(crate) nodes: Vec<ModelNode>,
     pub(crate) instances: Vec<ModelInstance>,
     pub(crate) materials: Vec<ModelMaterial>,
     pub(crate) images: Vec<MaterialImage>,
+    pub(crate) animations: Vec<ModelAnimation>,
+    pub(crate) source_trs: Vec<Option<animation::ModelTrs>>,
 }
 
 impl AdmittedModel {
@@ -117,12 +141,15 @@ impl AdmittedModel {
     pub fn images(&self) -> &[MaterialImage] {
         &self.images
     }
+    pub fn animations(&self) -> &[ModelAnimation] {
+        &self.animations
+    }
 }
 
-/// Admit closed static glTF geometry, materials and node instances. Geometry stays in source
+/// Admit closed glTF geometry, materials, skins, node instances and TRS/weight animations. Geometry stays in source
 /// coordinates; transforms are immutable hierarchy data, evaluated without a previous frame.
 /// Embedded images are decoded and mipmapped within fixed budgets. External URIs, extensions,
-/// skins, morphs and imported animation are outside the supported profile.
+/// unsupported extensions are outside the admitted profile.
 pub fn admit_glb(bytes: &[u8]) -> Result<AdmittedModel, ContractErrors> {
     let mut errors = ContractErrors::default();
     if bytes.len() as u64 > MAX_MODEL_BYTES {
@@ -220,8 +247,20 @@ pub fn admit_glb(bytes: &[u8]) -> Result<AdmittedModel, ContractErrors> {
     validate_root(&root, bin, &mut errors);
     errors.finish()?;
     let (materials, images) = material::admit_materials(&root, bin)?;
-    let (vertices, indices, primitives, meshes) = geometry::admit_geometry(&root, bin, &materials)?;
-    let (nodes, instances) = nodes::admit_nodes(&root, &meshes, &primitives, &indices, &vertices)?;
+    let (vertices, indices, primitives, meshes, morph_targets, mesh_weights, skin_vertices) =
+        geometry::admit_geometry(&root, bin, &materials)?;
+    let skins = skin::admit_skins(&root, bin)?;
+    let (nodes, instances) = nodes::admit_nodes(
+        &root,
+        &meshes,
+        &mesh_weights,
+        &primitives,
+        &indices,
+        &vertices,
+        &skin_vertices,
+        &skins,
+    )?;
+    let (animations, source_trs) = animation::admit_animations(&root, bin, &meshes)?;
     Ok(AdmittedModel {
         content_digest: ContentDigest::of_bytes(bytes),
         source_bytes: bytes.len() as u64,
@@ -229,10 +268,15 @@ pub fn admit_glb(bytes: &[u8]) -> Result<AdmittedModel, ContractErrors> {
         indices,
         primitives,
         meshes,
+        morph_targets,
+        skin_vertices,
+        skins,
         nodes,
         instances,
         materials,
         images,
+        animations,
+        source_trs,
     })
 }
 
@@ -242,11 +286,11 @@ fn reject_forbidden_root_features(value: &serde_json::Value) -> Result<(), Contr
         errors.push("/glb/json", "glTF root must be an object");
         return Err(errors);
     };
-    for name in ["animations", "cameras", "skins"] {
+    for name in ["cameras"] {
         if object.contains_key(name) {
             errors.push(
                 format!("/glb/{name}"),
-                "imported animations, cameras and skins are outside the static GLB profile",
+                "imported cameras are outside the admitted GLB profile",
             );
         }
     }
@@ -302,6 +346,9 @@ fn validate_root(root: &Root, bin: &[u8], errors: &mut ContractErrors) {
             "/glb/budget/nodes",
             "model node and mesh counts exceed the fixed budget",
         );
+    }
+    if root.skins.len() > super::MAX_MODEL_NODES {
+        errors.push("/glb/budget/skins", "skin count exceeds the fixed budget");
     }
     for (index, view) in root.buffer_views.iter().enumerate() {
         if view.buffer != 0 {
@@ -364,8 +411,16 @@ fn validate_root(root: &Root, bin: &[u8], errors: &mut ContractErrors) {
             }
             for accessor in std::iter::once(primitive.attributes.position)
                 .chain(primitive.attributes.normal)
+                .chain(primitive.attributes.tangent)
+                .chain(primitive.attributes.joints_0)
+                .chain(primitive.attributes.weights_0)
                 .chain(primitive.attributes.texcoord_0)
                 .chain(primitive.indices)
+                .chain(primitive.targets.iter().flat_map(|target| {
+                    [target.position, target.normal, target.tangent]
+                        .into_iter()
+                        .flatten()
+                }))
             {
                 if accessor >= root.accessors.len() {
                     errors.push(
@@ -421,6 +476,10 @@ struct Root {
     textures: Vec<material::GltfTexture>,
     #[serde(default)]
     samplers: Vec<material::GltfSampler>,
+    #[serde(default)]
+    animations: Vec<animation::GltfAnimation>,
+    #[serde(default)]
+    skins: Vec<skin::GltfSkin>,
     #[serde(default)]
     extensions_used: Vec<String>,
     #[serde(default)]
@@ -504,6 +563,8 @@ struct Accessor {
 struct Mesh {
     primitives: Vec<Primitive>,
     #[serde(default)]
+    weights: Option<Vec<f32>>,
+    #[serde(default)]
     name: Option<String>,
     #[serde(default, rename = "extras")]
     _extras: Option<serde_json::Value>,
@@ -514,6 +575,8 @@ struct Mesh {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Primitive {
     attributes: Attributes,
+    #[serde(default)]
+    targets: Vec<TargetAttributes>,
     #[serde(default)]
     indices: Option<usize>,
     #[serde(default)]
@@ -532,8 +595,25 @@ struct Attributes {
     position: usize,
     #[serde(default, rename = "NORMAL")]
     normal: Option<usize>,
+    #[serde(default, rename = "TANGENT")]
+    tangent: Option<usize>,
+    #[serde(default, rename = "JOINTS_0")]
+    joints_0: Option<usize>,
+    #[serde(default, rename = "WEIGHTS_0")]
+    weights_0: Option<usize>,
     #[serde(default, rename = "TEXCOORD_0")]
     texcoord_0: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TargetAttributes {
+    #[serde(default, rename = "POSITION")]
+    position: Option<usize>,
+    #[serde(default, rename = "NORMAL")]
+    normal: Option<usize>,
+    #[serde(default, rename = "TANGENT")]
+    tangent: Option<usize>,
 }
 
 #[allow(dead_code)]
@@ -542,6 +622,10 @@ struct Attributes {
 struct Node {
     #[serde(default)]
     mesh: Option<usize>,
+    #[serde(default)]
+    skin: Option<usize>,
+    #[serde(default)]
+    weights: Option<Vec<f32>>,
     #[serde(default)]
     name: Option<String>,
     #[serde(default)]

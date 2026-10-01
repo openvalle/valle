@@ -89,7 +89,7 @@ fn stroke_only_fill_none_and_intentional_black_compile() {
                 color: ColorValue::Static { value },
             }),
             ..
-        } if *value == Rgba::rgb(0, 0, 0)
+        } if value.to_srgb8() == Rgba::rgb(0, 0, 0)
     ));
 }
 
@@ -111,7 +111,7 @@ fn closed_path_keeps_svg_default_black_without_fill_attr() {
                 color: ColorValue::Static { value },
             }),
             ..
-        } if *value == Rgba::rgb(0, 0, 0)
+        } if value.to_srgb8() == Rgba::rgb(0, 0, 0)
     ));
 }
 

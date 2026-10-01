@@ -30,6 +30,19 @@ pub fn frame_rate_as_f64(frame_rate: FrameRate) -> f64 {
     frame_rate.numerator() as f64 / f64::from(frame_rate.denominator())
 }
 
+/// Quantize a floating-point frame address without dropping exact frame boundaries after a
+/// seconds/rate round trip. The tolerance is a small relative rounding bound, not a time epsilon:
+/// meaningful subframe samples still select the preceding frame. Ordinary author `floor()` is
+/// unchanged. This is also the addressing rule for frozen audio-analysis bins.
+pub(crate) fn frame_index_floor(frames: f64) -> f64 {
+    let nearest = frames.round();
+    if (frames - nearest).abs() <= 4.0 * f64::EPSILON * frames.abs().max(1.0) {
+        nearest
+    } else {
+        frames.floor()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -47,5 +60,27 @@ mod tests {
         let rate = FrameRate::new(30, 1).unwrap();
         let sample = SampleTime::new(RationalTime::new(1, 20).unwrap());
         assert_eq!(frame_at_sample_floor(sample, rate), Ok(1));
+    }
+}
+
+#[cfg(test)]
+mod frame_boundary_regressions {
+    use super::frame_index_floor;
+    #[test]
+    fn frame_boundaries_survive_seconds_round_trip_without_moving_subframes() {
+        for fps in [25.0, 30.0, 60.0, 30000.0 / 1001.0] {
+            for frame in -10_000..10_000 {
+                let time = f64::from(frame) / fps;
+                assert_eq!(
+                    frame_index_floor(time * fps),
+                    f64::from(frame),
+                    "{fps}, {frame}"
+                );
+                assert_eq!(
+                    frame_index_floor(f64::from(frame) - 1e-8),
+                    f64::from(frame - 1)
+                );
+            }
+        }
     }
 }

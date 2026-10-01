@@ -16,6 +16,7 @@ export namespace TimelineDocumentSchema {
   export type AudioTrackWire = { "id": string; "items": Array<AudioItemWire> };
   export type BackgroundWire = { "color": string };
   export type BlendModeWire = ("normal" | "screen" | "lighten" | "color-dodge" | "multiply" | "darken" | "color-burn" | "linear-burn" | "overlay" | "soft-light" | "hard-light" | "difference" | "exclusion" | "hue" | "saturation" | "color" | "luminosity");
+  export type BuiltinTransitionKernelWire = { "params"?: Record<string, number>; "type": TransitionKind };
   export type CameraTrackWire = { "centerX": ParamWire2; "centerY": ParamWire2; "rotation": ParamWire2; "zoom": ParamWire2 };
   export type CanvasWire = { "channelLayout": ChannelLayoutWire; "colorSpace": ColorSpaceWire; "duration": ExactRational; "fps": ExactRational; "height": number; "sampleRate": number; "width": number };
   export type CaptionAlignWire = ("top-left" | "top-center" | "top-right" | "center-left" | "center" | "center-right" | "bottom-left" | "bottom-center" | "bottom-right");
@@ -31,8 +32,6 @@ export namespace TimelineDocumentSchema {
   export type ColorGradeEffectTag = "color-grade";
   export type ColorGradeEffectWire = { "temperature": number; "type": ColorGradeEffectTag };
   export type ColorSpaceWire = "srgb";
-  export type CrossFadeTransitionKernelTag = "cross-fade";
-  export type CrossFadeTransitionKernelWire = { "type": CrossFadeTransitionKernelTag };
   export type CubicBezierEasingWire = { "type": CubicBezierTag; "x1": number; "x2": number; "y1": number; "y2": number };
   export type CubicBezierTag = "cubic-bezier";
   export type EasingWire = (NamedEasingWire | CubicBezierEasingWire);
@@ -72,7 +71,8 @@ export namespace TimelineDocumentSchema {
   export type TimedAdjustmentWire = { "duration": ExactRational; "effect": AdjustmentEffectWire; "id": string; "start": ExactRational };
   export type TimelineDocumentWire = { "adjustments": Array<TimedAdjustmentWire>; "audio": AudioCompositionWire; "background": BackgroundWire; "camera": RequiredNullable_for_CameraTrackWire; "canvas": CanvasWire; "captions": CaptionCompositionWire; "metadata": Record<string, JsonValue>; "visual": VisualCompositionWire };
   export type TransitionKernelExtensionWire = { "parameters": Record<string, JsonValue>; "type": NamespacedKernelTypeWire };
-  export type TransitionKernelWire = (CrossFadeTransitionKernelWire | TransitionKernelExtensionWire);
+  export type TransitionKernelWire = (BuiltinTransitionKernelWire | TransitionKernelExtensionWire);
+  export type TransitionKind = ("fade" | "wipeLeft" | "wipeRight" | "circleOpen" | "simpleZoom" | "crossWarp" | "linearBlur" | "directionalWarp" | "dreamyZoom" | "ripple" | "flyEye" | "multiplyBlend" | "perlin");
   export type VisualCompositionWire = { "tracks": Array<VisualTrackWire> };
   export type VisualFilterWire = { "id": string; "parameters": Record<string, JsonValue>; "type": NamespacedKernelTypeWire };
   export type VisualItemWire = ({ "duration": ExactRational; "id": string; "layer": VisualLayerWire; "source": VisualSourceWire; "type": "clip" } | { "duration": ExactRational; "id": string; "type": "gap" } | { "duration": ExactRational; "id": string; "kernel": TransitionKernelWire; "type": "transition" });

@@ -8,7 +8,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
-use crate::{MotionAction, MotionBindingArgs, MotionRenderTuningArgs};
+use super::render_delivery::{DeliveryObservation, DeliveryPlan};
+use crate::{
+    MotionAction, MotionBindingArgs, MotionRenderTuningArgs, RenderOutputArgs, RenderVideoCodec,
+};
 use anyhow::{Context, Result, anyhow, bail};
 use serde::Serialize;
 use valle_motion::{
@@ -35,12 +38,15 @@ pub fn run(action: MotionAction) -> Result<std::process::ExitCode> {
             let temp = tempfile::tempdir()?;
             render(
                 &input,
-                &temp.path().join("check.png"),
+                RenderOutputArgs {
+                    output: Some(temp.path().join("check.png")),
+                    frame: Some(frame),
+                    ..Default::default()
+                },
                 &assets,
                 &font,
                 data.as_deref(),
                 &bindings,
-                Some(frame),
                 valle_render::executor::skia::SkiaBackendKind::Raster,
                 MotionRenderTuningArgs {
                     fps,
@@ -49,10 +55,30 @@ pub fn run(action: MotionAction) -> Result<std::process::ExitCode> {
                 true,
             )
         }
-        MotionAction::Render {
-            frame,
+        MotionAction::Review {
             input,
-            output,
+            assets,
+            bindings,
+            data,
+            font,
+            fps,
+            max_frames,
+            trajectories,
+            trajectory_sheet,
+        } => review(
+            &input,
+            &assets,
+            &font,
+            data.as_deref(),
+            &bindings,
+            fps.as_deref(),
+            max_frames,
+            trajectories,
+            trajectory_sheet.as_deref(),
+        ),
+        MotionAction::Render {
+            input,
+            delivery,
             backend,
             tuning,
             assets,
@@ -62,12 +88,11 @@ pub fn run(action: MotionAction) -> Result<std::process::ExitCode> {
             ..
         } => render(
             &input,
-            &output,
+            delivery,
             &assets,
             &font,
             data.as_deref(),
             &bindings,
-            frame,
             backend.into(),
             tuning,
             false,
@@ -96,16 +121,105 @@ pub fn run(action: MotionAction) -> Result<std::process::ExitCode> {
     }
 }
 
-/// Compile once and hand the same verified package used by Studio to Native delivery.
-#[allow(clippy::too_many_arguments)]
-fn render(
+fn review(
     input: &Path,
-    output: &Path,
     asset_specs: &[String],
     font_paths: &[PathBuf],
     data: Option<&Path>,
     bindings: &MotionBindingArgs,
-    frame: Option<i64>,
+    output_fps: Option<&str>,
+    max_frames: Option<u32>,
+    trajectories: bool,
+    trajectory_sheet: Option<&Path>,
+) -> Result<std::process::ExitCode> {
+    let explicit_fonts = read_font_files(font_paths)?;
+    let font_blobs = authoring_font_blobs(&explicit_fonts);
+    let prepared = match compile_and_prepare(input, asset_specs, &font_blobs, data, None, true)? {
+        Ok(prepared) => prepared,
+        Err(()) => return Ok(std::process::ExitCode::FAILURE),
+    };
+    let artifact = &prepared.compiled.artifact;
+    let delivery = Delivery::of(artifact, output_fps)?;
+    let prop_bindings = read_prop_bindings(bindings.props.as_deref())?;
+    let overrides = review_prop_overrides(artifact, &prop_bindings)?;
+    let props = valle_motion::resolve_props(&artifact.controls, &overrides)?;
+    let mut fonts = valle_motion::Fonts::default();
+    for bytes in fixed_package_font_blobs(artifact, &explicit_fonts)? {
+        fonts.register(valle_motion::motion_font_resource(
+            valle_motion::FontSource::from_shared(Arc::new(bytes)),
+        ))?;
+    }
+    for (name, asset) in &prepared.assets {
+        if artifact
+            .controls
+            .assets
+            .get(name)
+            .is_some_and(|control| control.kind == valle_motion::AssetKind::Font)
+        {
+            fonts.register(
+                valle_motion::motion_font_resource(valle_motion::FontSource::from_shared(
+                    Arc::new(asset.bytes.clone()),
+                ))
+                .override_info(valle_motion::FontOverride {
+                    family_name: Some(valle_motion::font_family_alias(&asset.hash).into()),
+                    ..Default::default()
+                }),
+            )?;
+        }
+    }
+    let styles = valle_motion::StyleCache::new();
+    let opts = valle_motion::LayoutOptions {
+        viewport: valle_motion::Viewport::new(delivery.canvas.tuple()),
+        fonts: &fonts,
+        styles: Some(&styles),
+    };
+    let report = valle_motion::review_motion(
+        &prepared.scene,
+        &props,
+        &opts,
+        delivery.fps,
+        delivery.duration_frames,
+        max_frames.unwrap_or(delivery.duration_frames.max(2)),
+        trajectories || trajectory_sheet.is_some(),
+    )
+    .map_err(|error| anyhow!(error))?;
+    let mut output = serde_json::json!({
+        "status": "ok",
+        "component": artifact.component,
+        "fps": format!("{}/{}", delivery.fps.numerator(), delivery.fps.denominator()),
+        "framesAnalyzed": report.frames_analyzed,
+        "nodesAnalyzed": report.nodes_analyzed,
+        "issues": report.issues,
+    });
+    if trajectories {
+        output["trajectories"] = serde_json::json!(report.trajectories);
+    }
+    if let Some(path) = trajectory_sheet {
+        output["trajectorySheet"] = trajectory_sheet::render(
+            path,
+            artifact,
+            &prepared.assets,
+            &explicit_fonts,
+            &prop_bindings,
+            &report.trajectories,
+            &delivery,
+        )?;
+    }
+    crate::output::emit(output);
+    Ok(std::process::ExitCode::SUCCESS)
+}
+
+mod trajectory_sheet;
+
+/// Compile once and hand the same verified package used by Studio to Native delivery.
+#[allow(clippy::too_many_arguments)]
+fn render(
+    input: &Path,
+    output: RenderOutputArgs,
+    asset_specs: &[String],
+    font_paths: &[PathBuf],
+    data: Option<&Path>,
+    bindings: &MotionBindingArgs,
     backend: valle_render::executor::skia::SkiaBackendKind,
     tuning: MotionRenderTuningArgs,
     checking: bool,
@@ -117,14 +231,14 @@ fn render(
     if let Some((width, height)) = tuning.output_size {
         validate_pixel_size(MotionViewport::new(width, height), "output")?;
     }
-    super::fixed_render::require_new_output(output)?;
-    let extension = if frame.is_some() { "png" } else { "mp4" };
-    if !output
-        .extension()
-        .is_some_and(|ext| ext.eq_ignore_ascii_case(extension))
+    let frame = output.frame;
+    let plan = DeliveryPlan::new(output)?;
+    if plan.codec != Some(RenderVideoCodec::H264)
+        && (tuning.hardware_encode || tuning.bitrate.is_some() || tuning.encode_threads.is_some())
     {
-        bail!("output must have an .{extension} extension");
+        bail!("H.264 encoder options require .mp4 output");
     }
+    let observation = DeliveryObservation::new();
     let explicit_fonts = read_font_files(font_paths)?;
     let fonts = authoring_font_blobs(&explicit_fonts);
     let prepared = match compile_and_prepare(input, asset_specs, &fonts, data, None, true)? {
@@ -178,6 +292,11 @@ fn render(
         project,
         NativeRenderOptions {
             backend,
+            background: if plan.codec == Some(RenderVideoCodec::H264) {
+                valle_engine::resource::OutputBackground::opaque_srgb([0, 0, 0])
+            } else {
+                valle_engine::resource::OutputBackground::Transparent
+            },
             raster_workers: tuning.workers.map(usize::from),
             hardware_encode: tuning.hardware_encode,
             bitrate: tuning.bitrate.map(|value| value as usize),
@@ -187,32 +306,101 @@ fn render(
             ..NativeRenderOptions::default()
         },
     );
-    let summary = match frame {
-        Some(frame) => {
-            renderer.preview_frame_key(valle_engine::render::FrameKey::new(frame), output)?
-        }
-        None => renderer.export_mp4(output)?,
-    };
     if checking {
+        let (summary, _) = plan
+            .execute(&renderer)
+            .map_err(|error| source_error(error, &prepared.compiled))?;
+        let checked_frame = frame.unwrap_or(0);
+        let motion_context = valle_motion::motion_context_at_frame(
+            u32::try_from(checked_frame).context("checked frame must be nonnegative")?,
+            delivery.duration_frames,
+            fps,
+        )
+        .context("checked frame is outside the Motion duration")?;
+        let evaluation = prepared.scene.frame_evaluation_stats(&motion_context);
+        let compilation = observation.trace.metrics();
         crate::output::emit(
             serde_json::json!({"status":"ok", "component":artifact.component,
-            "nodes":artifact.nodes.len(), "expressions":artifact.exprs.len(), "frame":frame.unwrap_or(0)}),
+            "warnings":prepared.compiled.warnings,
+            "nodes":artifact.nodes.len(),
+            "expressions":artifact.exprs.len() + artifact.instance_groups.iter().map(|group| group.exprs.len()).sum::<usize>(),
+            "fullEvaluationExpressions":artifact.exprs.len() + artifact.instance_groups.iter().map(valle_motion::InstanceGroup::frame_expression_evaluations).sum::<usize>(),
+            "frame":checked_frame,
+            "templates":artifact.instance_groups.len(),
+            "instanceRows":artifact.instance_groups.iter().map(valle_motion::InstanceGroup::rows).sum::<usize>(),
+            "evaluatedExpressions":evaluation.evaluated_expressions,
+            "activeNodes":evaluation.active_nodes,
+            "layoutNodes":evaluation.layout_nodes,
+            "compilations": compilation.compilations,
+            "timings": {
+                "compile": compilation.elapsed.as_secs_f64() * 1000.0,
+                "templateCompile": compilation.template_compile.as_secs_f64() * 1000.0,
+                "instanceData": compilation.instance_data.as_secs_f64() * 1000.0,
+                "framePrepare": summary.pipeline.as_ref().map(|pipeline| pipeline.evaluate_prepare_us as f64 / 1000.0),
+            }}),
         );
     } else {
-        super::fixed_render::print_delivery_report(
+        plan.deliver_and_report(
+            &renderer,
             &opened,
-            if frame.is_some() { "preview" } else { "export" },
-            output,
-            &summary,
+            &observation,
             Some(serde_json::json!({
+                "warnings": prepared.compiled.warnings,
                 "targetDurationSeconds": duration.as_f64(),
                 "fps": format!("{}/{}", fps.numerator(), fps.denominator()),
                 "totalFrames": delivery.duration_frames,
                 "actualDurationSeconds": f64::from(delivery.duration_frames) * f64::from(fps.denominator()) / fps.numerator() as f64,
             })),
-        )?;
+        ).map_err(|error| source_error(error,&prepared.compiled))?;
     }
     Ok(std::process::ExitCode::SUCCESS)
+}
+
+/// Runtime artifacts intentionally contain no source text. Attach the source
+/// map at the authoring boundary, where the same frozen compilation is present.
+fn source_error(
+    error: anyhow::Error,
+    compiled: &valle_compiler::motion::CompiledMotion,
+) -> anyhow::Error {
+    let message = format!("{error:#}");
+    let expression = message
+        .split("expression ")
+        .nth(1)
+        .and_then(|s| s.split_once(':'))
+        .and_then(|(id, _)| id.parse::<u32>().ok());
+    let instance = message
+        .split("instance group ")
+        .nth(1)
+        .and_then(|s| s.split_once(':'))
+        .and_then(|(id, _)| id.parse::<usize>().ok());
+    let expressions = match instance {
+        Some(group) => compiled
+            .source_map
+            .instance_exprs
+            .get(group)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]),
+        None => &compiled.source_map.exprs,
+    };
+    let location = expression
+        .and_then(|id| expressions.iter().find(|m| m.id.0 == id))
+        .map(|m| (&m.source_path, &m.span))
+        .or_else(|| {
+            compiled
+                .source_map
+                .nodes
+                .iter()
+                .find(|node| {
+                    message.contains(&format!("node `{}`", node.key))
+                        || message.contains(&format!("Transition '{}'", node.key))
+                })
+                .map(|m| (&m.source_path, &m.span))
+        });
+    if let Some((path, span)) = location {
+        anyhow!("{message} ({path}:{}:{})", span.line, span.column)
+    } else {
+        error
+    }
 }
 
 #[derive(Clone)]
@@ -322,6 +510,7 @@ pub(super) struct BoundAsset {
 }
 
 pub(crate) struct PreparedInput {
+    scene: valle_motion::PreparedScene,
     pub(super) compiled: valle_compiler::motion::CompiledMotion,
     data_binding: Option<valle_compiler::motion::PrepareDataBinding>,
     pub(super) assets: BTreeMap<String, BoundAsset>,
@@ -416,7 +605,7 @@ pub(crate) fn compile_captured_timeline_component(
         })
         .collect::<Vec<_>>();
     let fonts = load_fonts(&[])?;
-    let (compiled, _) = compile_with_font_assets(
+    let compiled = compile_with_font_assets(
         &captured.graph,
         &resources,
         &mut assets,
@@ -459,7 +648,7 @@ fn finish_prepared_input(
         .map_err(|errors| {
             anyhow!("compiler produced a scene that failed shader admission: {errors:?}")
         })?;
-    valle_motion::prepare_scene(&compiled.artifact).map_err(|error| {
+    let scene = valle_motion::prepare_scene(&compiled.artifact).map_err(|error| {
         anyhow!("compiler produced a scene that failed capability admission: {error}")
     })?;
     let canvas_size = compiled
@@ -469,6 +658,7 @@ fn finish_prepared_input(
         .ok_or_else(|| anyhow!("Motion entry requires composition metadata"))?
         .viewport();
     Ok(PreparedInput {
+        scene,
         compiled,
         data_binding,
         assets,
@@ -481,17 +671,11 @@ fn compile_with_font_assets(
     graph: &valle_compiler::motion::MotionModuleGraph,
     resources: &[ResourceRef],
     assets: &mut BTreeMap<String, BoundAsset>,
-    font_blobs: &[Vec<u8>],
+    font_blobs: &[Arc<[u8]>],
     shaders: &valle_motion::shader::ShaderRegistry,
     data: Option<&valle_compiler::motion::PrepareDataBinding>,
 ) -> Result<
-    Result<
-        (
-            valle_compiler::motion::CompiledMotion,
-            Vec<(String, Vec<u8>)>,
-        ),
-        Vec<valle_compiler::motion::CompilerDiagnostic>,
-    >,
+    Result<valle_compiler::motion::CompiledMotion, Vec<valle_compiler::motion::CompilerDiagnostic>>,
 > {
     // Asset-control kinds live in the compiled schema, but measureText needs font aliases while
     // compiling. Detect font containers from their bytes first, so the authoritative compile sees
@@ -500,22 +684,52 @@ fn compile_with_font_assets(
     let measure_aliases = assets
         .iter()
         .filter(|(_, asset)| ttf_parser::Face::parse(&asset.bytes, 0).is_ok())
-        .map(|(control, asset)| (format!("asset://{control}"), asset.bytes.to_vec()))
+        .map(|(control, asset)| (format!("asset://{control}"), asset.bytes.clone()))
         .collect::<Vec<_>>();
     // The compiler binds measurement to the entry composition before module constants run.
-    let measure =
-        valle_compiler::motion::MeasureEnv::new_unbound_with_aliases(font_blobs, &measure_aliases)
-            .map_err(|diagnostic| anyhow!("{}", diagnostic.message))?;
-    let mut compiled = match valle_compiler::motion::compile_motion_modules_with_full_env_and_data(
-        graph,
-        resources,
-        Some(&measure),
-        Some(shaders),
-        data,
-    ) {
-        Ok(compiled) => compiled,
-        Err(diagnostics) => return Ok(Err(diagnostics)),
+    let measure = valle_compiler::motion::MeasureEnv::new_unbound_shared_with_aliases(
+        font_blobs,
+        &measure_aliases,
+    )
+    .map_err(|diagnostic| anyhow!("{}", diagnostic.message))?;
+    let audio = if graph
+        .modules
+        .values()
+        .any(|source| source.contains("audioAnalysis"))
+    {
+        let captured = assets.clone();
+        Some(valle_compiler::motion::AudioAnalysisEnv::with_resolver(
+            move |control| {
+                let asset = captured
+                    .get(control)
+                    .ok_or_else(|| format!("asset `{control}` is not bound"))?;
+                let frozen = tempfile::tempdir().map_err(|error| error.to_string())?;
+                let path = frozen.path().join(asset.hash.as_hex());
+                std::fs::write(&path, &asset.bytes).map_err(|error| error.to_string())?;
+                let samples = valle_media::codec::decode_audio_mono_f32(&path, 48_000)
+                    .map_err(|error| error.to_string())?;
+                Ok(valle_compiler::motion::AudioPcm {
+                    content_hash: asset.hash,
+                    sample_rate: 48_000,
+                    samples,
+                })
+            },
+        ))
+    } else {
+        None
     };
+    let mut compiled =
+        match valle_compiler::motion::compile_motion_modules_with_full_env_and_data_and_audio(
+            graph,
+            resources,
+            Some(&measure),
+            Some(shaders),
+            data,
+            audio.as_ref(),
+        ) {
+            Ok(compiled) => compiled,
+            Err(diagnostics) => return Ok(Err(diagnostics)),
+        };
     for (control, schema) in &compiled.artifact.controls.assets {
         if schema.kind == valle_motion::AssetKind::Environment {
             if let Some(asset) = assets.get_mut(control) {
@@ -537,7 +751,6 @@ fn compile_with_font_assets(
         .artifact
         .validate()
         .map_err(|e| anyhow!("invalid frozen Motion asset bindings: {e:?}"))?;
-    let mut render_aliases = Vec::new();
     for (control, schema) in &compiled.artifact.controls.assets {
         if schema.kind != valle_motion::AssetKind::Font {
             continue;
@@ -550,12 +763,8 @@ fn compile_with_font_assets(
                 "asset control `{control}` is declared as a font, but its bound bytes are not a valid font"
             );
         }
-        render_aliases.push((
-            valle_motion::font_family_alias(&asset.hash),
-            asset.bytes.to_vec(),
-        ));
     }
-    Ok(Ok((compiled, render_aliases)))
+    Ok(Ok(compiled))
 }
 
 #[derive(Serialize)]
@@ -611,7 +820,7 @@ fn studio_native_state_json(request: &StudioRequest, generation: u64) -> Result<
     let explicit_font_blobs = read_font_files(&request.fonts)?;
     let font_blobs = authoring_font_blobs(&explicit_font_blobs);
     let data_binding = load_prepare_data(&request.input, request.data.as_deref())?;
-    let (compiled, _) = match compile_with_font_assets(
+    let compiled = match compile_with_font_assets(
         &module_graph,
         &resources,
         &mut assets,
@@ -641,7 +850,7 @@ fn studio_native_state_json(request: &StudioRequest, generation: u64) -> Result<
             &anyhow!(format!("{errors:?}")),
         );
     }
-    let _prepared_scene = match valle_motion::prepare_scene(&compiled.artifact) {
+    let scene = match valle_motion::prepare_scene(&compiled.artifact) {
         Ok(prepared) => prepared,
         Err(error) => {
             return studio_runtime_error_json(
@@ -654,6 +863,7 @@ fn studio_native_state_json(request: &StudioRequest, generation: u64) -> Result<
     };
     let delivery = Delivery::of(&compiled.artifact, request.fps.as_deref())?;
     let prepared = PreparedInput {
+        scene,
         compiled,
         data_binding,
         assets,
@@ -783,7 +993,7 @@ fn studio_native_state_json(request: &StudioRequest, generation: u64) -> Result<
         "resourceManifestJson": fixed_package.resource_manifest_json,
         "resourceManifest": fixed_package.resource_manifest,
         "verifiedBindingBundleJson": fixed_package.verified_binding_bundle_json,
-        "diagnostics": [],
+        "diagnostics": prepared.compiled.warnings,
         // Use the shared runtime asset map.
         "runtimeBaseUrl": "/",
         "runtimeAssets": crate::webruntime::runtime_assets_json(),
@@ -930,7 +1140,7 @@ fn path_fingerprints(paths: &[PathBuf]) -> Vec<(PathBuf, Option<(std::time::Syst
 fn compile_and_prepare(
     input: &Path,
     asset_specs: &[String],
-    font_blobs: &[Vec<u8>],
+    font_blobs: &[Arc<[u8]>],
     data: Option<&Path>,
     inline_data: Option<&valle_compiler::motion::PrepareDataBinding>,
     emit_diagnostics: bool,
@@ -955,7 +1165,7 @@ fn compile_and_prepare(
     } else {
         load_prepare_data(input, data)?
     };
-    let (compiled, _) = match compile_with_font_assets(
+    let compiled = match compile_with_font_assets(
         &module_graph,
         &resources,
         &mut assets,
@@ -1005,6 +1215,7 @@ fn compile_and_prepare(
                     match diagnostic.class {
                         valle_motion::DiagClass::Illegal => "illegal",
                         valle_motion::DiagClass::Unsupported => "unsupported",
+                        valle_motion::DiagClass::Warning => "warning",
                     },
                     diagnostic.code,
                     diagnostic.message
@@ -1013,6 +1224,17 @@ fn compile_and_prepare(
             return Ok(Err(()));
         }
     };
+
+    for warning in &compiled.warnings {
+        let diagnostic_path = warning
+            .source_path
+            .as_deref()
+            .map_or_else(|| input.display().to_string(), ToOwned::to_owned);
+        eprintln!(
+            "{}:{}:{} [warning:{:?}] {}",
+            diagnostic_path, warning.span.line, warning.span.column, warning.code, warning.message
+        );
+    }
 
     let compile_elapsed = compile_started.map(|started| started.elapsed());
     let prepare_started = perf.then(Instant::now);
@@ -1170,6 +1392,12 @@ fn ensure_rendered_assets_are_bound(
         // Require explicit asset bindings for both images and videos.
         let (label, source) = match &node.kind {
             NodeKind::Image { source } => ("image", source),
+            NodeKind::GeometryBatch { batch } => match &batch.geometry {
+                valle_motion::GeometryBatchGeometry::Image { source, .. } => {
+                    ("atlas image", source)
+                }
+                _ => continue,
+            },
             NodeKind::Video { source, .. } => ("video", source),
             _ => continue,
         };
@@ -1259,28 +1487,38 @@ fn validate_pixel_size(size: MotionViewport, label: &str) -> Result<MotionViewpo
 
 /// Check frame-zero layout and emission so compilation cannot silently accept text that produces no
 /// glyphs.
-fn load_fonts(paths: &[PathBuf]) -> Result<Vec<Vec<u8>>> {
+fn load_fonts(paths: &[PathBuf]) -> Result<Vec<Arc<[u8]>>> {
     let explicit = read_font_files(paths)?;
     Ok(authoring_font_blobs(&explicit))
 }
 
-fn read_font_files(paths: &[PathBuf]) -> Result<Vec<Vec<u8>>> {
+fn read_font_files(paths: &[PathBuf]) -> Result<Vec<Arc<[u8]>>> {
     paths
         .iter()
-        .map(|path| std::fs::read(path).with_context(|| format!("reading font {}", path.display())))
+        .map(|path| {
+            std::fs::read(path)
+                .map(Arc::<[u8]>::from)
+                .with_context(|| format!("reading font {}", path.display()))
+        })
         .collect()
 }
 
-fn authoring_font_blobs(explicit: &[Vec<u8>]) -> Vec<Vec<u8>> {
-    // User faces are preferred; the built-in palette supplies missing families/scripts.
-    let mut blobs = explicit.to_vec();
-    blobs.extend(
+pub(super) fn shared_default_fonts() -> &'static [Arc<[u8]>] {
+    static FONTS: std::sync::OnceLock<Vec<Arc<[u8]>>> = std::sync::OnceLock::new();
+    FONTS.get_or_init(|| {
         valle_motion::default_motion_fonts()
             .iter()
-            .map(|bytes| bytes.to_vec()),
-    );
+            .map(|bytes| Arc::from(*bytes))
+            .collect()
+    })
+}
+
+fn authoring_font_blobs(explicit: &[Arc<[u8]>]) -> Vec<Arc<[u8]>> {
+    // User faces are preferred; the built-in palette supplies missing families/scripts.
+    let mut blobs = explicit.to_vec();
+    blobs.extend(shared_default_fonts().iter().cloned());
     for (_, bytes) in valle_motion::math_formula::formula_font_pack() {
-        blobs.push(bytes.to_vec());
+        blobs.push(Arc::<[u8]>::from(bytes));
     }
     deduplicate_font_blobs(&mut blobs);
     blobs
@@ -1288,8 +1526,8 @@ fn authoring_font_blobs(explicit: &[Vec<u8>]) -> Vec<Vec<u8>> {
 
 pub(super) fn fixed_package_font_blobs(
     artifact: &valle_motion::SceneArtifact,
-    explicit: &[Vec<u8>],
-) -> Result<Vec<Vec<u8>>> {
+    explicit: &[Arc<[u8]>],
+) -> Result<Vec<Arc<[u8]>>> {
     let mut blobs = explicit.to_vec();
     blobs.extend(super::motion_fonts::selected_default_fonts(artifact));
     blobs.extend(used_formula_font_blobs(artifact)?);
@@ -1303,7 +1541,7 @@ pub(super) fn fixed_package_font_blobs(
 /// Props may vary by frame, but they cannot change the RaTeX face selected for a glyph.
 /// Inspecting the emitted `ProgramRecording` also avoids freezing Size faces for delimiters that
 /// RaTeX already lowered to paths.
-fn used_formula_font_blobs(artifact: &valle_motion::SceneArtifact) -> Result<Vec<Vec<u8>>> {
+fn used_formula_font_blobs(artifact: &valle_motion::SceneArtifact) -> Result<Vec<Arc<[u8]>>> {
     if !artifact
         .nodes
         .iter()
@@ -1341,7 +1579,7 @@ fn used_formula_font_blobs(artifact: &valle_motion::SceneArtifact) -> Result<Vec
             .clone();
         if used_families.contains(&family) {
             matched_families.insert(family);
-            blobs.push(bytes.to_vec());
+            blobs.push(Arc::<[u8]>::from(bytes));
         }
     }
     if matched_families != used_families {
@@ -1358,8 +1596,8 @@ fn used_formula_font_blobs(artifact: &valle_motion::SceneArtifact) -> Result<Vec
 /// Keep the first occurrence of each distinct font. Byte equality is the same identity as the
 /// content digest, but it avoids hashing every built-in face (~28 MB) on each invocation:
 /// different lengths compare in O(1) and the handful of fonts makes the pairwise scan trivial.
-fn deduplicate_font_blobs(blobs: &mut Vec<Vec<u8>>) {
-    let mut kept: Vec<Vec<u8>> = Vec::with_capacity(blobs.len());
+fn deduplicate_font_blobs(blobs: &mut Vec<Arc<[u8]>>) {
+    let mut kept: Vec<Arc<[u8]>> = Vec::with_capacity(blobs.len());
     for blob in blobs.drain(..) {
         if !kept.contains(&blob) {
             kept.push(blob);
@@ -1399,6 +1637,93 @@ fn read_prop_bindings(path: Option<&Path>) -> Result<BTreeMap<String, serde_json
     })
     .transpose()
     .map(Option::unwrap_or_default)
+}
+
+fn review_prop_overrides(
+    artifact: &valle_motion::SceneArtifact,
+    bindings: &BTreeMap<String, serde_json::Value>,
+) -> Result<BTreeMap<String, valle_motion::MotionValue>> {
+    fn numbers<const N: usize>(name: &str, raw: &serde_json::Value) -> Result<[f64; N]> {
+        let values = raw
+            .as_array()
+            .filter(|values| values.len() == N)
+            .ok_or_else(|| anyhow!("Motion prop `{name}` must be an array of {N} numbers"))?;
+        let parsed = values
+            .iter()
+            .map(|value| value.as_f64().filter(|number| number.is_finite()))
+            .collect::<Option<Vec<_>>>()
+            .ok_or_else(|| anyhow!("Motion prop `{name}` must contain finite numbers"))?;
+        parsed
+            .try_into()
+            .map_err(|_| anyhow!("invalid Motion prop `{name}`"))
+    }
+
+    let mut overrides = BTreeMap::new();
+    for (name, raw) in bindings {
+        let control = &artifact
+            .controls
+            .props
+            .get(name)
+            .ok_or_else(|| anyhow!("unknown Motion prop `{name}`"))?
+            .control;
+        let (kind, payload) = match control {
+            valle_motion::ControlType::Number { .. } => ("number", raw.clone()),
+            valle_motion::ControlType::Length => {
+                let value =
+                    valle_motion::controls::scalar_binding(raw, control).ok_or_else(|| {
+                        anyhow!("Motion prop `{name}` requires a finite pixel length")
+                    })?;
+                ("length", serde_json::json!({"value": value, "unit": "px"}))
+            }
+            valle_motion::ControlType::Angle => {
+                let value = valle_motion::controls::scalar_binding(raw, control)
+                    .ok_or_else(|| anyhow!("Motion prop `{name}` requires a finite CSS angle"))?;
+                ("angle", serde_json::json!({"value": value, "unit": "deg"}))
+            }
+            valle_motion::ControlType::Point => {
+                let [x, y] = numbers::<2>(name, raw)?;
+                ("point", serde_json::json!({"x": x, "y": y}))
+            }
+            valle_motion::ControlType::Rect => {
+                let [x, y, width, height] = numbers::<4>(name, raw)?;
+                (
+                    "rect",
+                    serde_json::json!({"x": x, "y": y, "width": width, "height": height}),
+                )
+            }
+            valle_motion::ControlType::Color => {
+                let color = if let Some(color) = raw.as_str() {
+                    color.to_owned()
+                } else {
+                    let values = raw
+                        .as_array()
+                        .filter(|values| values.len() == 4)
+                        .ok_or_else(|| {
+                            anyhow!("Motion prop `{name}` must be an RGBA array or CSS color")
+                        })?;
+                    let channels = values
+                        .iter()
+                        .map(|value| value.as_u64().filter(|channel| *channel <= 255))
+                        .collect::<Option<Vec<_>>>()
+                        .ok_or_else(|| {
+                            anyhow!("Motion prop `{name}` must contain 8-bit RGBA channels")
+                        })?;
+                    format!(
+                        "#{:02x}{:02x}{:02x}{:02x}",
+                        channels[0], channels[1], channels[2], channels[3]
+                    )
+                };
+                ("color", serde_json::Value::String(color))
+            }
+            valle_motion::ControlType::Bool => ("bool", raw.clone()),
+            valle_motion::ControlType::String => ("str", raw.clone()),
+            valle_motion::ControlType::Select { .. } => ("enum", raw.clone()),
+        };
+        let value = serde_json::from_value(serde_json::json!({"kind": kind, "value": payload}))
+            .with_context(|| format!("Motion prop `{name}` has the wrong type"))?;
+        overrides.insert(name.clone(), value);
+    }
+    Ok(overrides)
 }
 
 #[cfg(test)]

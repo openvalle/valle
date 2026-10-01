@@ -2,6 +2,44 @@
 
 use super::*;
 
+#[derive(Default)]
+pub(super) struct GeometryReferences {
+    pub keys: BTreeSet<String>,
+    pub unknown_key: bool,
+}
+
+/// Find author references before JSX maps are lowered. An instance row cannot replace a layout
+/// node whose box is read elsewhere; nonliteral keys conservatively disable that replacement.
+pub(super) fn geometry_references(program: &Program<'_>) -> GeometryReferences {
+    use oxc::ast_visit::{Visit, walk};
+
+    #[derive(Default)]
+    struct Scan(GeometryReferences);
+    impl<'a> Visit<'a> for Scan {
+        fn visit_call_expression(&mut self, call: &oxc::ast::ast::CallExpression<'a>) {
+            if matches!(&call.callee, Expression::Identifier(id) if matches!(id.name.as_str(), "bounds" | "anchor"))
+            {
+                match call
+                    .arguments
+                    .first()
+                    .and_then(Argument::as_expression)
+                    .map(peel_expr)
+                {
+                    Some(Expression::StringLiteral(value)) => {
+                        self.0.keys.insert(value.value.to_string());
+                    }
+                    _ => self.0.unknown_key = true,
+                }
+            }
+            walk::walk_call_expression(self, call);
+        }
+    }
+
+    let mut scan = Scan::default();
+    scan.visit_program(program);
+    scan.0
+}
+
 /// Reject exponentiation through the AST because host-dependent results break deterministic
 /// artifacts. Text and CSS containing the same characters must remain valid.
 pub(super) fn scan_exponentiation(program: &Program<'_>) -> Option<Span> {

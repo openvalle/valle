@@ -26,8 +26,8 @@ export default function ModifierLogoEcho(ctx) {
           borderWidth: copy.index < 3 ? 3 : 1,
           borderColor: copy.index % 2 === 0 ? "#67e8f9" : "#a78bfa",
           backgroundColor: copy.index % 2 === 0 ? "#22d3ee22" : "#8b5cf622",
-          opacity: (1 - copy.progress) * trail(t, copy.index, { gap: 0.038, mode: "wrap" }) * 0.72,
-          rotate: autoRotate(ROTATION_ROUTE, trail(t, copy.index, { gap: 0.025, mode: "wrap" })),
+          opacity: (1 - copy.progress) * trail(t, copy.index, { gap: -0.038, mode: "wrap" }) * 0.72,
+          rotate: autoRotate(ROTATION_ROUTE, trail(t, copy.index, { gap: -0.025, mode: "wrap" })),
         }} />
       ))}
 

@@ -1,0 +1,9 @@
+uniform shader mask;
+
+// Children supply premultiplied linear Rec.2020. Keeping RGB premultiplied includes
+// the source's alpha exactly once; a color matrix on straight RGB loses that alpha.
+half4 main(float2 xy) {
+    float4 value = float4(mask.eval(xy));
+    float coverage = clamp(dot(value.rgb, float3(0.2627, 0.6780, 0.0593)), 0.0, 1.0);
+    return half4(0.0, 0.0, 0.0, coverage);
+}

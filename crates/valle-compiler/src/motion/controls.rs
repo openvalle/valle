@@ -304,6 +304,7 @@ pub(super) fn control_default(
         ControlType::Color => value
             .as_str()
             .and_then(Rgba::parse)
+            .map(valle_draw::program::AuthorColor::from_srgb8)
             .map(MotionValue::Color)
             .ok_or("color default is invalid"),
         ControlType::Length => value

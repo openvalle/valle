@@ -10,12 +10,84 @@ use valle_engine::{
     resource::{ContentDigest, ResourceKey},
 };
 
-use super::{SkiaExternalObject, draw::DrawError};
+use super::{SkiaExternalObject, draw::DrawError, surface::PlanImage};
 
 const PROGRAM_CACHE_LIMIT: usize = 256;
 const PROGRAM_CACHE_BYTES: usize = 32 * 1024 * 1024;
 const FONT_CACHE_LIMIT: usize = 256;
 const SHADER_CACHE_LIMIT: usize = 128;
+const RASTER_LAYER_CACHE_LIMIT: usize = 64;
+const RASTER_LAYER_CACHE_BYTES: usize = 64 * 1024 * 1024;
+
+/// A destination-independent RasterProgram result in the executor's working color space.
+/// Full device-matrix bits retain subpixel phase; ROI retains tile clipping and origin.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct RasterLayerKey {
+    pub(crate) program: ContentDigest,
+    pub(crate) frame: ContentDigest,
+    pub(crate) render_spec: ContentDigest,
+    pub(crate) transform: [u64; 9],
+    pub(crate) roi: (i32, i32, u32, u32),
+}
+
+pub(crate) struct RasterLayerCache {
+    images: BoundedCache<RasterLayerKey, PlanImage>,
+    hits: u64,
+    misses: u64,
+}
+
+impl std::fmt::Debug for RasterLayerCache {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("RasterLayerCache")
+            .field("entries", &self.images.values.len())
+            .field("bytes", &self.images.weight)
+            .finish()
+    }
+}
+
+impl RasterLayerCache {
+    pub(crate) fn new() -> Self {
+        Self {
+            images: BoundedCache::new(RASTER_LAYER_CACHE_LIMIT)
+                .with_weight_limit(RASTER_LAYER_CACHE_BYTES),
+            hits: 0,
+            misses: 0,
+        }
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.images =
+            BoundedCache::new(RASTER_LAYER_CACHE_LIMIT).with_weight_limit(RASTER_LAYER_CACHE_BYTES);
+    }
+
+    pub(crate) fn get(&mut self, key: &RasterLayerKey) -> Option<PlanImage> {
+        match self.images.get(key) {
+            Some(image) => {
+                self.hits = self.hits.saturating_add(1);
+                Some(image.clone())
+            }
+            None => {
+                self.misses = self.misses.saturating_add(1);
+                None
+            }
+        }
+    }
+
+    pub(crate) fn insert(&mut self, key: RasterLayerKey, image: PlanImage) {
+        let weight = usize::try_from(image.roi().pixels().saturating_mul(8)).unwrap_or(usize::MAX);
+        self.images.insert_weighted(key, image, weight);
+    }
+
+    pub(crate) fn counters(&self) -> (u64, u64, usize, usize) {
+        (
+            self.hits,
+            self.misses,
+            self.images.values.len(),
+            self.images.weight,
+        )
+    }
+}
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct BackendCacheCounters {
@@ -129,7 +201,7 @@ impl<K: Ord + Clone, V> BoundedCache<K, V> {
 #[derive(Debug)]
 pub(crate) struct BackendCaches {
     programs: BoundedCache<ContentDigest, Arc<DrawProgram>>,
-    fonts: BoundedCache<(ContentDigest, u32), Typeface>,
+    fonts: BoundedCache<(ContentDigest, u32), Arc<Typeface>>,
     shaders: BoundedCache<ResourceKey, Arc<RuntimeEffect>>,
     counters: BackendCacheCounters,
     font_manager: FontMgr,
@@ -187,7 +259,7 @@ impl BackendCaches {
     ) -> Result<Typeface, DrawError> {
         if let Some(cached) = self.fonts.get(&key) {
             self.counters.font_hits = self.counters.font_hits.saturating_add(1);
-            return Ok(cached.clone());
+            return Ok(cached.as_ref().clone());
         }
 
         self.counters.font_misses = self.counters.font_misses.saturating_add(1);
@@ -198,6 +270,21 @@ impl BackendCaches {
                 index: key.1,
             });
         }
+        // Typeface owns Skia's immutable font data. Share it between render workers while any
+        // worker retains the face; weak entries never pin a retired font collection in memory.
+        type Key = (ContentDigest, u32);
+        static SHARED: std::sync::OnceLock<
+            std::sync::Mutex<BTreeMap<Key, std::sync::Weak<Typeface>>>,
+        > = std::sync::OnceLock::new();
+        let mut shared = SHARED
+            .get_or_init(Default::default)
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if let Some(face) = shared.get(&key).and_then(std::sync::Weak::upgrade) {
+            self.fonts.insert(key, face.clone());
+            return Ok(face.as_ref().clone());
+        }
+        shared.retain(|_, face| face.strong_count() > 0);
         let face = self
             .font_manager
             .new_from_bytes(bytes, key.1)
@@ -205,8 +292,10 @@ impl BackendCaches {
                 hash: key.0.to_string(),
                 index: key.1,
             })?;
+        let face = Arc::new(face);
+        shared.insert(key, Arc::downgrade(&face));
         self.fonts.insert(key, face.clone());
-        Ok(face)
+        Ok(face.as_ref().clone())
     }
 
     pub(crate) fn shader(

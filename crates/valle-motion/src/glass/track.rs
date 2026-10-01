@@ -1,14 +1,16 @@
+use std::collections::BTreeMap;
+
 use valle_draw::{Point, Rect};
 use valle_timeline::internal::{MotionInstanceId, SampleTime, TrackEpoch};
 use valle_timeline::{FrameRate, TimeError};
 
 use crate::NodeKind;
 use crate::artifact::{NumberValue, PointValue, SceneArtifact, StyleValue};
-use crate::eval::{EvalError, EvalInputs, ResolvedProps, eval_slice};
+use crate::eval::{EvalError, EvalInputs, EvalPlan, ResolvedProps, eval_roots_planned_into};
 use crate::expr::ExprId;
 use crate::glass::ids::GlassSurfaceId;
 use crate::glass::intent::GlassNode;
-use crate::glass::validate::{glass_track_expr_roots, reachable_exprs, validate_glass_schema};
+use crate::glass::validate::{glass_track_expr_roots, validate_glass_schema};
 use crate::motion_context_at_sample;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -78,6 +80,22 @@ pub fn sample_tracks(
     })?;
     let mut samples = Vec::new();
     let props = ResolvedProps::default();
+    let plan = EvalPlan::new(&artifact.exprs);
+    let tracks: Vec<_> = artifact
+        .nodes
+        .iter()
+        .enumerate()
+        .filter_map(|(at, node)| match &node.kind {
+            NodeKind::Glass(glass) => Some((
+                at,
+                glass,
+                plan.schedule(glass_track_expr_roots(artifact, at)),
+            )),
+            _ => None,
+        })
+        .collect();
+    let mut shared = BTreeMap::new();
+    let cache_across_times = times.len() > 1;
     for time in times {
         let ctx = motion_context_at_sample(*time, duration_frames, fps)
             .ok_or(GlassTrackError::Time(TimeError::Overflow))?;
@@ -87,14 +105,18 @@ pub fn sample_tracks(
             unit: None,
             viewport: None,
         };
-        for (at, node) in artifact.nodes.iter().enumerate() {
-            let NodeKind::Glass(glass) = &node.kind else {
-                continue;
-            };
-            let roots = glass_track_expr_roots(artifact, at);
-            let slice = reachable_exprs(artifact, &roots);
-            let values = eval_slice(artifact, inputs, &slice).map_err(GlassTrackError::Eval)?;
-            let local = local_shape(artifact, at, glass, &values)?;
+        let mut values = BTreeMap::new();
+        for (at, glass, order) in &tracks {
+            eval_roots_planned_into(
+                artifact,
+                &plan,
+                inputs,
+                order,
+                &mut values,
+                cache_across_times.then_some(&mut shared),
+            )
+            .map_err(GlassTrackError::Eval)?;
+            let local = local_shape(artifact, *at, glass, &values)?;
             samples.push(GlassSurfaceTrackSample {
                 surface_id: glass.surface_id.clone(),
                 instance: instance.clone(),
@@ -111,7 +133,7 @@ fn local_shape(
     artifact: &SceneArtifact,
     at: usize,
     glass: &GlassNode,
-    values: &[Option<crate::value::MotionValue>],
+    values: &BTreeMap<ExprId, crate::value::MotionValue>,
 ) -> Result<GlassLocalShape, GlassTrackError> {
     let node = &artifact.nodes[at];
     let number = |property: &str, fallback: Option<f64>| -> Result<f64, GlassTrackError> {
@@ -160,7 +182,7 @@ fn local_shape(
 
 fn read_style_number(
     style: &crate::artifact::StyleBinding,
-    values: &[Option<crate::value::MotionValue>],
+    values: &BTreeMap<ExprId, crate::value::MotionValue>,
     surface: &GlassSurfaceId,
     property: &str,
 ) -> Result<f64, GlassTrackError> {
@@ -181,7 +203,7 @@ fn read_style_number(
 
 fn read_number(
     value: &NumberValue,
-    values: &[Option<crate::value::MotionValue>],
+    values: &BTreeMap<ExprId, crate::value::MotionValue>,
     surface: &GlassSurfaceId,
     property: &str,
 ) -> Result<f64, GlassTrackError> {
@@ -193,7 +215,7 @@ fn read_number(
 
 fn read_optional_number(
     value: Option<&NumberValue>,
-    values: &[Option<crate::value::MotionValue>],
+    values: &BTreeMap<ExprId, crate::value::MotionValue>,
     surface: &GlassSurfaceId,
     property: &str,
 ) -> Result<f64, GlassTrackError> {
@@ -205,32 +227,30 @@ fn read_optional_number(
 
 fn read_point(
     value: Option<&PointValue>,
-    values: &[Option<crate::value::MotionValue>],
+    values: &BTreeMap<ExprId, crate::value::MotionValue>,
     fallback: Point,
 ) -> Result<Point, GlassTrackError> {
     match value {
         None => Ok(fallback),
         Some(PointValue::Static { value }) => Ok(*value),
-        Some(PointValue::Expr { expr }) => {
-            match values.get(expr.0 as usize).and_then(Option::as_ref) {
-                Some(crate::value::MotionValue::Point(point)) => Ok(*point),
-                Some(crate::value::MotionValue::Vec2(vec)) => Ok(Point::new(vec.x, vec.y)),
-                _ => Err(GlassTrackError::Unbound {
-                    node: "drive".into(),
-                    property: "translation".into(),
-                }),
-            }
-        }
+        Some(PointValue::Expr { expr }) => match values.get(expr) {
+            Some(crate::value::MotionValue::Point(point)) => Ok(*point),
+            Some(crate::value::MotionValue::Vec2(vec)) => Ok(Point::new(vec.x, vec.y)),
+            _ => Err(GlassTrackError::Unbound {
+                node: "drive".into(),
+                property: "translation".into(),
+            }),
+        },
     }
 }
 
 fn read_expr_number(
     expr: ExprId,
-    values: &[Option<crate::value::MotionValue>],
+    values: &BTreeMap<ExprId, crate::value::MotionValue>,
     surface: &GlassSurfaceId,
     property: &str,
 ) -> Result<f64, GlassTrackError> {
-    match values.get(expr.0 as usize).and_then(Option::as_ref) {
+    match values.get(&expr) {
         Some(crate::value::MotionValue::Number(value)) => finite(*value, surface, property),
         Some(crate::value::MotionValue::Length(length)) => finite(length.value, surface, property),
         _ => Err(GlassTrackError::IncompleteSlice {
@@ -300,6 +320,7 @@ mod tests {
             controls: controls(),
             resource_refs: vec![],
             exprs: vec![time],
+            instance_groups: vec![],
             nodes: vec![
                 SceneNode {
                     key: "root".into(),
@@ -395,6 +416,36 @@ mod tests {
         };
         assert!((slice_presence - *full_presence).abs() < 1e-12);
         let _ = DEFAULT_PRESENCE;
+    }
+
+    #[test]
+    fn shared_track_expressions_stay_correct_across_surfaces_and_reordered_samples() {
+        let mut artifact = fixture(false);
+        let mut second = artifact.nodes[1].clone();
+        second.key = "lens-2".into();
+        if let NodeKind::Glass(glass) = &mut second.kind {
+            glass.surface_id = GlassSurfaceId::new("second-lens").unwrap();
+        }
+        artifact.nodes.push(second);
+        artifact.node_children.push(NodeId(2));
+        artifact.nodes[0].children.end = 2;
+        let fps = FrameRate::new(30, 1).unwrap();
+        let times = [2, 5, 2].map(|frame| crate::sample_time_at_frame(frame, fps).unwrap());
+        let instance = MotionInstanceId::new("clip-a").unwrap();
+        let epoch = TrackEpoch::new(
+            1,
+            instance.clone(),
+            TimeMapSegment::new(0),
+            0,
+            DiscontinuityIndex::NONE,
+        );
+        let samples = sample_tracks(&artifact, &instance, &times, 30, fps, &epoch).unwrap();
+        assert_eq!(samples.len(), 6);
+        for pair in samples.chunks_exact(2) {
+            assert_eq!(pair[0].local, pair[1].local);
+        }
+        assert_ne!(samples[0].local.presence, samples[2].local.presence);
+        assert_eq!(samples[0].local.presence, samples[4].local.presence);
     }
 
     #[test]

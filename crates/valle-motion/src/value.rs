@@ -4,7 +4,7 @@
 //! share the same representation.
 
 use serde::{Deserialize, Serialize};
-use valle_draw::{Point, Rect, Rgba, Vec2};
+use valle_draw::{Point, Rect, Vec2, program::AuthorColor};
 
 use crate::geometry::PathData;
 
@@ -201,7 +201,7 @@ pub enum MotionValue {
     Length(Length),
     Length2(Length2),
     Angle(Angle),
-    Color(Rgba),
+    Color(AuthorColor),
     Point(Point),
     Vec2(Vec2),
     Rect(Rect),
@@ -263,10 +263,8 @@ impl MotionValue {
                 r.x.is_finite() && r.y.is_finite() && r.width.is_finite() && r.height.is_finite()
             }
             MotionValue::PathData(path) => path.validate().is_ok(),
-            MotionValue::Color(_)
-            | MotionValue::Bool(_)
-            | MotionValue::Str(_)
-            | MotionValue::Enum(_) => true,
+            MotionValue::Color(color) => color.is_finite(),
+            MotionValue::Bool(_) | MotionValue::Str(_) | MotionValue::Enum(_) => true,
         }
     }
 }
@@ -290,7 +288,7 @@ pub fn css_token(value: &MotionValue) -> String {
             };
             format!("{}{unit}", number_token(value.value))
         }
-        MotionValue::Color(value) => value.to_hex(),
+        MotionValue::Color(value) => value.to_srgb8().to_hex(),
         MotionValue::Point(value) => format!("{} {}", number_token(value.x), number_token(value.y)),
         MotionValue::Vec2(value) => format!("{} {}", number_token(value.x), number_token(value.y)),
         MotionValue::Rect(value) => format!(
@@ -344,10 +342,29 @@ pub enum MotionEasing {
     EaseOut,
     EaseInOut,
     Exp,
+    EaseInBack,
+    EaseOutBack,
+    EaseInOutBack,
+    /// Exponentially decaying oscillation, with exact endpoints.
+    Elastic,
+    /// Piecewise quadratic bounce-out curve.
+    Bounce,
+    Steps {
+        count: u32,
+        position: StepPosition,
+    },
     /// CSS cubic Bezier with fixed endpoints (0,0) and (1,1).
     CubicBezier {
         p: [f64; 4],
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(rename_all = "camelCase")]
+pub enum StepPosition {
+    Start,
+    End,
 }
 
 impl MotionEasing {
@@ -372,17 +389,72 @@ impl MotionEasing {
                     valle_draw::math::pow(2.0, 10.0 * (t - 1.0))
                 }
             }
+            MotionEasing::EaseInBack => back_in(t),
+            MotionEasing::EaseOutBack => 1.0 - back_in(1.0 - t),
+            MotionEasing::EaseInOutBack => {
+                const C: f64 = 1.70158 * 1.525;
+                let x = if t < 0.5 { 2.0 * t } else { 2.0 * t - 2.0 };
+                if t < 0.5 {
+                    x * x * ((C + 1.0) * x - C) * 0.5
+                } else {
+                    (x * x * ((C + 1.0) * x + C) + 2.0) * 0.5
+                }
+            }
+            MotionEasing::Elastic => {
+                if t == 0.0 || t == 1.0 {
+                    t
+                } else {
+                    valle_draw::math::pow(2.0, -10.0 * t)
+                        * valle_draw::math::sin((10.0 * t - 0.75) * (std::f64::consts::TAU / 3.0))
+                        + 1.0
+                }
+            }
+            MotionEasing::Bounce => bounce_out(t),
+            MotionEasing::Steps { count, position } => {
+                let count = f64::from(count);
+                let jump = if position == StepPosition::Start {
+                    1.0
+                } else {
+                    0.0
+                };
+                ((t * count).floor() + jump).min(count) / count
+            }
             MotionEasing::CubicBezier { p } => unit_bezier(p, t),
         }
     }
 
-    /// Require finite control points for custom cubic Bezier curves.
-    pub fn is_finite(&self) -> bool {
+    /// Check the curve domain before evaluation, including deserialized artifacts and tracks.
+    pub fn is_valid(&self) -> bool {
         match self {
-            MotionEasing::CubicBezier { p } => p.iter().all(|v| v.is_finite()),
+            MotionEasing::CubicBezier { p } => {
+                p.iter().all(|v| v.is_finite())
+                    && (0.0..=1.0).contains(&p[0])
+                    && (0.0..=1.0).contains(&p[2])
+            }
+            MotionEasing::Steps { count, .. } => *count > 0,
             _ => true,
         }
     }
+}
+
+fn back_in(t: f64) -> f64 {
+    // Polynomial form preserves both endpoints exactly.
+    t * t * (t + 1.70158 * (t - 1.0))
+}
+
+fn bounce_out(t: f64) -> f64 {
+    const N: f64 = 7.5625;
+    const D: f64 = 2.75;
+    let (x, offset) = if t < 1.0 / D {
+        (t, 0.0)
+    } else if t < 2.0 / D {
+        (t - 1.5 / D, 0.75)
+    } else if t < 2.5 / D {
+        (t - 2.25 / D, 0.9375)
+    } else {
+        (t - 2.625 / D, 0.984375)
+    };
+    N * x * x + offset
 }
 
 /// WebKit-style unit cubic Bézier solve with fixed iteration and convergence constants.
@@ -477,8 +549,11 @@ pub enum TrackError {
     TypeMismatch {
         at: usize,
     },
-    /// Non-finite value or easing control point. Tracks validate these independently of Artifacts.
+    /// Non-finite keyframe value. Tracks validate independently of Artifacts.
     NonFinite {
+        at: usize,
+    },
+    InvalidEasing {
         at: usize,
     },
     /// An enum track must declare at least one allowed value.
@@ -502,6 +577,7 @@ impl core::fmt::Display for TrackError {
             TrackError::NonFinite { at } => {
                 write!(f, "keyframe {at}: NaN/infinity is not representable")
             }
+            TrackError::InvalidEasing { at } => write!(f, "keyframe {at}: invalid easing curve"),
             TrackError::EmptyEnum => f.write_str("track enum type needs at least one variant"),
             TrackError::PathTopologyMismatch { at } => {
                 write!(
@@ -531,8 +607,11 @@ impl MotionTrack {
             if !k.value.matches(&self.ty) {
                 return Err(TrackError::TypeMismatch { at: i });
             }
-            if !k.value.is_finite() || !k.easing.is_finite() {
+            if !k.value.is_finite() {
                 return Err(TrackError::NonFinite { at: i });
+            }
+            if !k.easing.is_valid() {
+                return Err(TrackError::InvalidEasing { at: i });
             }
             if i > 0 && k.frame <= self.keyframes[i - 1].frame {
                 return Err(TrackError::NotMonotonic { at: i });
@@ -610,6 +689,72 @@ mod tests {
     }
 
     #[test]
+    fn motion_presets_have_exact_endpoints_and_distinct_shapes() {
+        for easing in [
+            MotionEasing::EaseInBack,
+            MotionEasing::EaseOutBack,
+            MotionEasing::EaseInOutBack,
+            MotionEasing::Elastic,
+            MotionEasing::Bounce,
+        ] {
+            assert_eq!(easing.evaluate(0.0), 0.0, "{easing:?}");
+            assert_eq!(easing.evaluate(1.0), 1.0, "{easing:?}");
+            assert_eq!(easing.evaluate(-1.0), 0.0);
+            assert_eq!(easing.evaluate(2.0), 1.0);
+        }
+        assert!(MotionEasing::EaseInBack.evaluate(0.25) < 0.0);
+        assert!(MotionEasing::EaseOutBack.evaluate(0.75) > 1.0);
+        assert!(MotionEasing::EaseInOutBack.evaluate(0.25) < 0.0);
+        assert!(MotionEasing::EaseInOutBack.evaluate(0.75) > 1.0);
+        assert!(MotionEasing::Elastic.evaluate(0.15) > 1.3);
+        assert_eq!(MotionEasing::Bounce.evaluate(1.5 / 2.75), 0.75);
+        assert_eq!(MotionEasing::Bounce.evaluate(2.25 / 2.75), 0.9375);
+        assert_eq!(MotionEasing::Bounce.evaluate(2.625 / 2.75), 0.984375);
+        for step in 0..4 {
+            let t = f64::from(step) / 4.0;
+            assert_eq!(
+                MotionEasing::Steps {
+                    count: 4,
+                    position: StepPosition::End
+                }
+                .evaluate(t),
+                t
+            );
+            assert_eq!(
+                MotionEasing::Steps {
+                    count: 4,
+                    position: StepPosition::Start
+                }
+                .evaluate(t),
+                t + 0.25
+            );
+        }
+    }
+
+    #[test]
+    fn invalid_easing_parameters_cannot_enter_a_track() {
+        for easing in [
+            MotionEasing::Steps {
+                count: 0,
+                position: StepPosition::End,
+            },
+            MotionEasing::CubicBezier {
+                p: [-0.1, 0.0, 1.0, 1.0],
+            },
+        ] {
+            let track = MotionTrack {
+                ty: PropType::Number,
+                keyframes: vec![MotionKeyframe {
+                    frame: 0,
+                    value: MotionValue::Number(0.0),
+                    easing,
+                }],
+            };
+            assert_eq!(track.validate(), Err(TrackError::InvalidEasing { at: 0 }));
+        }
+    }
+
+    #[test]
     fn unknown_easing_name_is_rejected_at_the_serde_layer() {
         // Unknown easing variants must fail during deserialization.
         assert!(serde_json::from_str::<MotionEasing>(r#"{"kind":"wobble"}"#).is_err());
@@ -658,7 +803,7 @@ mod tests {
             MotionValue::Length(Length::px(4.0)),
             MotionValue::Length2(Length2::px(4.0, 8.0)),
             MotionValue::Angle(Angle::deg(90.0)),
-            MotionValue::Color(Rgba::rgb(1, 2, 3)),
+            MotionValue::Color(AuthorColor::from_srgb8(valle_draw::Rgba::rgb(1, 2, 3))),
             MotionValue::Point(Point::new(1.0, 2.0)),
             MotionValue::Vec2(Vec2::new(1.0, 2.0)),
             MotionValue::Rect(Rect::new(0.0, 0.0, 1.0, 1.0)),
@@ -695,7 +840,7 @@ mod tests {
         t.keyframes[0].easing = MotionEasing::CubicBezier {
             p: [0.0, f64::INFINITY, 1.0, 1.0],
         };
-        assert_eq!(t.validate(), Err(TrackError::NonFinite { at: 0 }));
+        assert_eq!(t.validate(), Err(TrackError::InvalidEasing { at: 0 }));
 
         let empty_enum = MotionTrack {
             ty: PropType::Enum { variants: vec![] },

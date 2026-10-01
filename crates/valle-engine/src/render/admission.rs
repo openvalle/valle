@@ -897,16 +897,18 @@ struct AdmittedVisualGap {
 
 #[derive(Debug, Clone)]
 enum AdmittedTransitionKernel {
-    CrossFade,
-    Extension { call: AdmittedKernelCall },
+    Builtin {
+        kind: valle_draw::transition::TransitionKind,
+        params: valle_draw::transition::TransitionValues,
+    },
+    Extension {
+        call: AdmittedKernelCall,
+    },
 }
 
 #[derive(Debug, Clone)]
 struct AdmittedVisualTransition {
     window: FrameRange,
-    cut_frame: i64,
-    left_frames: i64,
-    right_frames: i64,
     from_item: u32,
     to_item: u32,
     from_source: u32,
@@ -1354,10 +1356,8 @@ fn admit_visual_program(
 
     for (track_index, track) in visual.tracks.iter().enumerate() {
         let mut cursor = RationalTime::ZERO;
-        let mut cut_times = Vec::with_capacity(track.items.len());
         let mut items: Vec<Option<AdmittedVisualItem>> = Vec::with_capacity(track.items.len());
         for (item_index, item) in track.items.iter().enumerate() {
-            cut_times.push(cursor);
             let path = format!("/document/visual/tracks/{track_index}/items/{item_index}");
             match item {
                 VisualItem::Clip(clip) => {
@@ -1413,7 +1413,10 @@ fn admit_visual_program(
                     }));
                     cursor = cursor.checked_add(duration).ok()?;
                 }
-                VisualItem::Transition(_) => items.push(None),
+                VisualItem::Transition(transition) => {
+                    cursor = cursor.checked_sub(transition.duration).ok()?;
+                    items.push(None);
+                }
             }
         }
 
@@ -1440,18 +1443,7 @@ fn admit_visual_program(
                 diagnostics.push(admit_fault(&path, "transition-right-endpoint"));
                 continue;
             };
-            let duration = transition.duration;
-            let n = quantize_frame_interval(RationalTime::ZERO, duration, canvas.frame_rate)
-                .ok()?
-                .duration_frames;
-            let cut_frame =
-                quantize_frame_boundary(cut_times[item_index], canvas.frame_rate).ok()?;
-            let left_frames = n / 2;
-            let right_frames = n - left_frames;
-            let window = FrameRange::new(
-                cut_frame.checked_sub(left_frames)?,
-                cut_frame.checked_add(right_frames)?,
-            );
+            let window = FrameRange::new(to_clip.range.start, from_clip.range.end);
             if window.start < 0 || window.end > canvas.frame_count {
                 diagnostics.push(diagnostic(
                     EngineOpenDiagnosticCode::TransitionWindowOutOfCanvas,
@@ -1461,17 +1453,11 @@ fn admit_visual_program(
                     range_details(window.start, window.end),
                 ));
             }
-            if left_frames > from_clip.range.len() || right_frames > to_clip.range.len() {
-                diagnostics.push(diagnostic(
-                    EngineOpenDiagnosticCode::TransitionInsufficientHandle,
-                    &path,
-                    EngineOpenPhase::Admission,
-                    None,
-                    details([
-                        ("leftFrames", left_frames.to_string()),
-                        ("rightFrames", right_frames.to_string()),
-                    ]),
-                ));
+            if window.is_empty()
+                || window.start < from_clip.range.start
+                || window.end > to_clip.range.end
+            {
+                diagnostics.push(admit_fault(&path, "invalid-transition-overlap"));
             }
             if from_clip.layer.blend != AdmittedBlendMode::Normal
                 || to_clip.layer.blend != AdmittedBlendMode::Normal
@@ -1501,7 +1487,10 @@ fn admit_visual_program(
             }
 
             let kernel = match &transition.kernel {
-                TransitionKernel::CrossFade => AdmittedTransitionKernel::CrossFade,
+                TransitionKernel::Builtin { kind, params } => AdmittedTransitionKernel::Builtin {
+                    kind: *kind,
+                    params: *params,
+                },
                 TransitionKernel::Extension(extension) => AdmittedTransitionKernel::Extension {
                     call: admit_kernel_call(
                         &format!("{path}/kernel"),
@@ -1513,7 +1502,7 @@ fn admit_visual_program(
                 },
             };
             let transition_footprint = match &kernel {
-                AdmittedTransitionKernel::CrossFade => VisualFootprint::default(),
+                AdmittedTransitionKernel::Builtin { .. } => VisualFootprint::default(),
                 AdmittedTransitionKernel::Extension { call } => kernels
                     .get(call.kernel as usize)
                     .map(|kernel| kernel.visual_footprint)
@@ -1537,9 +1526,6 @@ fn admit_visual_program(
             items[item_index] = Some(AdmittedVisualItem::Transition {
                 transition: AdmittedVisualTransition {
                     window,
-                    cut_frame,
-                    left_frames,
-                    right_frames,
                     from_item: from_index as u32,
                     to_item: to_index as u32,
                     from_source: from_clip.source,
@@ -3405,7 +3391,9 @@ fn with_video_audio(
                     cursor = cursor.checked_add(clip.duration).ok()?;
                 }
                 VisualItem::Gap(gap) => cursor = cursor.checked_add(gap.duration).ok()?,
-                VisualItem::Transition(_) => {}
+                VisualItem::Transition(transition) => {
+                    cursor = cursor.checked_sub(transition.duration).ok()?
+                }
             }
         }
     }
@@ -3413,22 +3401,7 @@ fn with_video_audio(
 }
 
 fn motion_scalar_value(value: &JsonValue, control: &ControlType) -> Option<f64> {
-    value
-        .as_f64()
-        .filter(|value| value.is_finite())
-        .or_else(|| {
-            let source = value.as_str()?;
-            match control {
-                ControlType::Length => valle_motion::value::Length::parse(source)
-                    .filter(|length| length.unit == valle_motion::value::LengthUnit::Px)
-                    .map(|length| length.value),
-                ControlType::Angle => {
-                    valle_motion::value::Angle::parse(source).map(|angle| angle.as_degrees())
-                }
-                _ => None,
-            }
-        })
-        .filter(|value| value.is_finite())
+    valle_motion::controls::scalar_binding(value, control)
 }
 
 fn motion_color_value(value: &JsonValue) -> Option<[f64; 4]> {

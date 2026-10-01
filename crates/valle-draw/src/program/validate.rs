@@ -11,9 +11,9 @@ use crate::{
 };
 
 use super::{
-    BackdropScope, Clip, DrawProgram, FILTER_GAUSSIAN_SUPPORT_SIGMAS, Filter, GradientStop, Group,
-    LinearColor, Node, NodeGeometry, NodeId, Paint, PaintId, PathData, PathId, RoundRect,
-    ShaderLayer, ShaderUniformValue, Transform2d,
+    Affine2d, BackdropScope, Clip, DrawProgram, FILTER_GAUSSIAN_SUPPORT_SIGMAS, Filter,
+    GradientStop, Group, LinearColor, Node, NodeGeometry, NodeId, Paint, PaintId, PathData, PathId,
+    RoundRect, ShaderLayer, ShaderUniformValue, Transform2d,
 };
 
 pub const MAX_NODES: usize = 65_536;
@@ -277,27 +277,143 @@ fn validate_raw(
                     )?;
                 }
             }
-            Node::GeometryBatch(batch) => {
-                batch_instances = batch_instances.saturating_add(batch.instances.len());
-                for (instance_index, instance) in batch.instances.iter().enumerate() {
-                    validate_point(
-                        instance.position,
-                        &format!("node[{index}].instances[{instance_index}].position"),
-                    )?;
-                    validate_point(
-                        instance.size,
-                        &format!("node[{index}].instances[{instance_index}].size"),
-                    )?;
-                    if instance.size[0] <= 0.0 || instance.size[1] <= 0.0 {
+            Node::InstanceBatch(batch) => {
+                match &batch.shape {
+                    super::InstanceShape::Path(path) => check_path_id(id, *path, paths.len())?,
+                    super::InstanceShape::RoundRect(round_rect) => {
+                        validate_round_rect(*round_rect, &format!("node[{index}].shape"))?
+                    }
+                    super::InstanceShape::Image(region) => {
+                        validate_texture(&region.texture, &format!("node[{index}].shape.texture"))?;
+                        if region.texture.color_domain == ColorDomain::Data {
+                            return invalid(
+                                format!("node[{index}].shape.texture"),
+                                "data textures are only valid as Shader inputs",
+                            );
+                        }
+                        validate_normalized_rect(region.src, &format!("node[{index}].shape.src"))?;
+                    }
+                    super::InstanceShape::Circle | super::InstanceShape::Rect => {}
+                }
+                if let Some(style) = &batch.path_style {
+                    if !matches!(batch.shape, super::InstanceShape::Path(_)) {
                         return invalid(
-                            format!("node[{index}].instances[{instance_index}].size"),
-                            "both dimensions must be positive",
+                            format!("node[{index}].pathStyle"),
+                            "only Path instances may have a Path style",
                         );
                     }
-                    validate_color(
-                        instance.color,
-                        &format!("node[{index}].instances[{instance_index}].color"),
+                    finite_f32(
+                        style.miter_limit,
+                        &format!("node[{index}].pathStyle.miterLimit"),
                     )?;
+                    if style.miter_limit < 1.0 {
+                        return invalid(
+                            format!("node[{index}].pathStyle.miterLimit"),
+                            "must be at least 1",
+                        );
+                    }
+                    validate_dash(
+                        &style.dash,
+                        style.dash_offset,
+                        &format!("node[{index}].pathStyle"),
+                    )?;
+                }
+                if matches!(batch.shape, super::InstanceShape::Image(_))
+                    && batch
+                        .instances
+                        .stroke_widths
+                        .iter()
+                        .any(|width| *width != 0.0)
+                {
+                    return invalid(
+                        format!("node[{index}].instances.strokeWidths"),
+                        "image instances cannot have a stroke",
+                    );
+                }
+                batch_instances = batch_instances.saturating_add(batch.instances.len());
+                let rows = batch.instances.len();
+                if batch.instances.colors.len() != rows
+                    || !batch.instances.stroke_colors.is_empty()
+                        && batch.instances.stroke_colors.len() != rows
+                    || !batch.instances.dash_offsets.is_empty()
+                        && batch.instances.dash_offsets.len() != rows
+                    || batch.instances.opacities.len() != rows
+                    || batch.instances.stroke_widths.len() != rows
+                {
+                    return invalid(
+                        format!("node[{index}].instances"),
+                        "column lengths must match",
+                    );
+                }
+                if !batch.instances.dash_offsets.is_empty() && batch.path_style.is_none() {
+                    return invalid(
+                        format!("node[{index}].instances.dashOffsets"),
+                        "dash offsets require a Path style",
+                    );
+                }
+                for instance_index in 0..rows {
+                    let transform = batch.instances.transforms[instance_index];
+                    if transform
+                        .0
+                        .iter()
+                        .any(|value| !value.is_finite() || value.abs() > MAX_LOCAL_COORDINATE)
+                    {
+                        return invalid(
+                            format!("node[{index}].instances[{instance_index}].transform"),
+                            "matrix entries must be finite and within the coordinate limit",
+                        );
+                    }
+                    let [a, b, c, d, _, _] = transform.0;
+                    let determinant = a * d - b * c;
+                    if !determinant.is_finite()
+                        || determinant == 0.0
+                        || !(1.0 / determinant).is_finite()
+                    {
+                        return invalid(
+                            format!("node[{index}].instances[{instance_index}].transform"),
+                            "transform must be invertible",
+                        );
+                    }
+                    let color = batch.instances.colors[instance_index];
+                    if !color.red.is_finite()
+                        || !color.green.is_finite()
+                        || !color.blue.is_finite()
+                        || !color.alpha.is_finite()
+                        || !(0.0..=1.0).contains(&color.alpha)
+                        || color.alpha == 0.0
+                            && (color.red != 0.0 || color.green != 0.0 || color.blue != 0.0)
+                    {
+                        validate_color(
+                            color,
+                            &format!("node[{index}].instances[{instance_index}].color"),
+                        )?;
+                    }
+                    if let Some(stroke_color) = batch.instances.stroke_colors.get(instance_index) {
+                        validate_color(
+                            *stroke_color,
+                            &format!("node[{index}].instances[{instance_index}].strokeColor"),
+                        )?;
+                    }
+                    if let Some(offset) = batch.instances.dash_offsets.get(instance_index) {
+                        finite_f32(
+                            *offset,
+                            &format!("node[{index}].instances[{instance_index}].dashOffset"),
+                        )?;
+                    }
+                    let opacity = batch.instances.opacities[instance_index];
+                    if !opacity.is_finite() || !(0.0..=1.0).contains(&opacity) {
+                        return invalid(
+                            format!("node[{index}].instances[{instance_index}].opacity"),
+                            "opacity must be finite and within [0,1]",
+                        );
+                    }
+                    let stroke_width = batch.instances.stroke_widths[instance_index];
+                    if !stroke_width.is_finite() || stroke_width < 0.0 {
+                        return invalid(
+                            format!("node[{index}].instances[{instance_index}].strokeWidth"),
+                            "stroke width must be finite and non-negative",
+                        );
+                    }
                 }
             }
             Node::Image(image) => {
@@ -470,6 +586,28 @@ fn validate_group(
             )?;
         }
     }
+    if let Some(transition) = &group.transition {
+        let path = format!("node[{}].transition", owner.raw());
+        validate_rect(transition.bounds, &path)?;
+        validate_unit(transition.progress, &path)?;
+        if let Err(error) = transition.kind.validate_values(transition.params) {
+            return invalid(path, error.to_string());
+        }
+        if group.children.len() != 2
+            || !group.isolated
+            || transition.bounds.x != 0.0
+            || transition.bounds.y != 0.0
+            || transition.bounds.width <= 0.0
+            || transition.bounds.height <= 0.0
+            || group.backdrop.is_some()
+            || group.glass.is_some()
+        {
+            return invalid(
+                path,
+                "transition requires two isolated inputs and a positive origin-anchored canvas, without an owner backdrop",
+            );
+        }
+    }
     if let Some(shader) = &group.shader {
         validate_shader_layer(shader, &format!("node[{}].shader", owner.raw()))?;
     }
@@ -492,6 +630,7 @@ fn validate_glass_topology(
             || group.internal_blend != super::BlendMode::Normal
             || group.isolated
             || group.backdrop.is_some()
+            || group.transition.is_some()
             || group.shader.is_some()
             || group.layer_bounds.is_some()
     }
@@ -595,6 +734,7 @@ fn validate_glass_topology(
                 || group.internal_blend != super::BlendMode::Normal
                 || group.isolated
                 || group.backdrop.is_some()
+                || group.transition.is_some()
                 || group.shader.is_some();
             if paints_between {
                 return invalid(
@@ -747,6 +887,95 @@ fn validate_filter(filter: &Filter, location: &str) -> Result<(), DrawProgramErr
                 );
             }
             validate_color(*color, &format!("{location}.color"))?;
+        }
+        Filter::Glow {
+            color,
+            radius,
+            intensity,
+        } => {
+            if !color.is_finite()
+                || [color.red, color.green, color.blue]
+                    .iter()
+                    .any(|channel| !(0.0..=1.0).contains(channel))
+            {
+                return invalid(
+                    format!("{location}.color"),
+                    "glow color must be finite sRGB",
+                );
+            }
+            finite_nonnegative(*radius, &format!("{location}.radius"))?;
+            finite_nonnegative(*intensity, &format!("{location}.intensity"))?;
+            if *radius > 128.0 || *intensity > 4.0 {
+                return invalid(
+                    location,
+                    "glow radius must be at most 128px and intensity at most 4",
+                );
+            }
+        }
+        Filter::Bloom {
+            threshold,
+            knee,
+            intensity,
+            radius,
+        } => {
+            for (name, value, max) in [
+                ("threshold", threshold, 1.0),
+                ("knee", knee, 1.0),
+                ("intensity", intensity, 4.0),
+                ("radius", radius, 128.0),
+            ] {
+                finite_nonnegative(*value, &format!("{location}.{name}"))?;
+                if *value > max {
+                    return invalid(
+                        format!("{location}.{name}"),
+                        format!("must be at most {max}"),
+                    );
+                }
+            }
+        }
+        Filter::RadialBlur { center, amount } => {
+            for (axis, value) in center.iter().copied().enumerate() {
+                finite_f32(value, &format!("{location}.center[{axis}]"))?;
+                if value.abs() > 10_000_000.0 {
+                    return invalid(
+                        format!("{location}.center[{axis}]"),
+                        "must be within ±10,000,000 pixels",
+                    );
+                }
+            }
+            finite_nonnegative(*amount, &format!("{location}.amount"))?;
+            if *amount > 128.0 {
+                return invalid(format!("{location}.amount"), "must be at most 128 pixels");
+            }
+        }
+        Filter::FilmGrain { amount, size, .. } => {
+            finite_nonnegative(*amount, &format!("{location}.amount"))?;
+            if *amount > 1.0 {
+                return invalid(format!("{location}.amount"), "must be at most 1");
+            }
+            finite_f32(*size, &format!("{location}.size"))?;
+            if !(1.0..=64.0).contains(size) {
+                return invalid(format!("{location}.size"), "must be in 1..=64 pixels");
+            }
+        }
+        Filter::LensDistortion { k1, k2 } => {
+            for (name, value) in [("k1", k1), ("k2", k2)] {
+                finite_f32(*value, &format!("{location}.{name}"))?;
+                if value.abs() > 0.5 {
+                    return invalid(format!("{location}.{name}"), "must be within ±0.5");
+                }
+            }
+        }
+        Filter::ChromaticAberration { offset } => {
+            for (axis, value) in offset.iter().copied().enumerate() {
+                finite_f32(value, &format!("{location}.offset[{axis}]"))?;
+                if value.abs() > 256.0 {
+                    return invalid(
+                        format!("{location}.offset[{axis}]"),
+                        "must be within ±256 pixels",
+                    );
+                }
+            }
         }
         Filter::NoiseDisplacement {
             frequency,
@@ -1004,6 +1233,12 @@ impl<'a> Canonicalizer<'a> {
                 });
                 Node::Path(path)
             }
+            Node::InstanceBatch(mut batch) => {
+                if let super::InstanceShape::Path(path) = &mut batch.shape {
+                    *path = self.remap_path(*path);
+                }
+                Node::InstanceBatch(batch)
+            }
             Node::GlyphRun(mut run) => {
                 run.outline = run.outline.map(|outline| self.remap_path(outline));
                 run.paint = self.remap_paint(run.paint);
@@ -1084,8 +1319,10 @@ fn derive_requirements(
                 }
                 if let Some(mask) = &group.mask {
                     capabilities.insert(match mask.mode {
-                        super::MaskMode::Alpha => crate::requirements::DrawCapability::MaskAlpha,
-                        super::MaskMode::Luminance => {
+                        super::MaskMode::Alpha | super::MaskMode::AlphaInverted => {
+                            crate::requirements::DrawCapability::MaskAlpha
+                        }
+                        super::MaskMode::Luminance | super::MaskMode::LuminanceInverted => {
                             crate::requirements::DrawCapability::MaskLuminance
                         }
                     });
@@ -1099,6 +1336,9 @@ fn derive_requirements(
                 }
                 if group.glass_foreground.is_some() {
                     capabilities.insert(crate::requirements::DrawCapability::MotionGlass);
+                }
+                if group.transition.is_some() {
+                    capabilities.insert(crate::requirements::DrawCapability::Transition);
                 }
                 if group.internal_blend != super::BlendMode::Normal {
                     capabilities.insert(crate::requirements::DrawCapability::Blend);
@@ -1123,8 +1363,14 @@ fn derive_requirements(
                 alpha_modes.insert(image.texture.alpha);
                 capabilities.insert(crate::requirements::DrawCapability::ExternalTexture);
             }
-            Node::GeometryBatch(_) => {
-                capabilities.insert(crate::requirements::DrawCapability::GeometryBatch);
+            Node::InstanceBatch(batch) => {
+                capabilities.insert(crate::requirements::DrawCapability::InstanceBatch);
+                if let super::InstanceShape::Image(region) = &batch.shape {
+                    insert_texture(&mut textures, &mut texture_formats, &region.texture)?;
+                    color_domains.insert(region.texture.color_domain);
+                    alpha_modes.insert(region.texture.alpha);
+                    capabilities.insert(crate::requirements::DrawCapability::ExternalTexture);
+                }
             }
             Node::GlyphRun(run) => {
                 fonts.insert(run.font.clone());
@@ -1218,6 +1464,12 @@ fn insert_filter_capability(
         | Filter::Saturate { .. }
         | Filter::Sepia { .. } => DrawCapability::FilterColorMatrix,
         Filter::DropShadow { .. } => DrawCapability::FilterDropShadow,
+        Filter::Glow { .. } => DrawCapability::FilterGlow,
+        Filter::Bloom { .. } => DrawCapability::FilterBloom,
+        Filter::RadialBlur { .. } => DrawCapability::FilterRadialBlur,
+        Filter::FilmGrain { .. } => DrawCapability::FilterFilmGrain,
+        Filter::LensDistortion { .. } => DrawCapability::FilterLensDistortion,
+        Filter::ChromaticAberration { .. } => DrawCapability::FilterChromaticAberration,
         Filter::NoiseDisplacement { .. } => DrawCapability::FilterNoiseDisplacement,
         Filter::VelocityBlur { .. } => DrawCapability::FilterVelocityBlur,
     });
@@ -1263,8 +1515,11 @@ fn derive_destination_uses(
         let local_to_program = group.transform.then(parent_to_program);
         let group_is_visible = geometry[id.index()].output_bounds.rect().is_some();
         if let Some(glass) = &group.glass
-            && entry_is_external
             && group_is_visible
+            && match glass.backdrop.scope {
+                BackdropScope::Current => entry_is_external,
+                BackdropScope::LayerEntry(_) | BackdropScope::ScopeEntry(_) => true,
+            }
         {
             let footprint = glass_footprint(glass);
             uses.push(DestinationUse {
@@ -1332,6 +1587,7 @@ fn derive_destination_uses(
                 sample_bounds: map_required_bounds(bounds, parent_to_program)?,
                 operation: DestinationOperation::Blend {
                     mode: group.internal_blend,
+                    space: group.blend_space,
                 },
             });
         }
@@ -1424,23 +1680,37 @@ fn derive_node_geometry(
                 NodeGeometry::EMPTY
             }
         }
-        Node::GeometryBatch(node) => {
+        Node::InstanceBatch(node) => {
             let mut bounds = LocalBounds::Empty;
-            for instance in &node.instances {
-                let rect = match node.geometry {
-                    super::BatchGeometry::Circle => Rect::new(
-                        instance.position[0] - instance.size[0] * 0.5,
-                        instance.position[1] - instance.size[1] * 0.5,
-                        instance.size[0],
-                        instance.size[1],
-                    ),
-                    super::BatchGeometry::Rect => Rect::new(
-                        instance.position[0],
-                        instance.position[1],
-                        instance.size[0],
-                        instance.size[1],
-                    ),
+            let local = match &node.shape {
+                super::InstanceShape::Circle => Some(Rect::new(-1.0, -1.0, 2.0, 2.0)),
+                super::InstanceShape::Rect => Some(Rect::new(0.0, 0.0, 1.0, 1.0)),
+                super::InstanceShape::RoundRect(round_rect) => Some(round_rect.rect),
+                super::InstanceShape::Path(path) => path_bounds(&program.paths[path.index()]),
+                super::InstanceShape::Image(_) => Some(Rect::new(0.0, 0.0, 1.0, 1.0)),
+            };
+            let Some(local) = local else {
+                return Ok(NodeGeometry::EMPTY);
+            };
+            for (transform, stroke_width) in node
+                .instances
+                .transforms
+                .iter()
+                .zip(&node.instances.stroke_widths)
+            {
+                let local = if *stroke_width > 0.0 {
+                    let join_scale =
+                        node.path_style
+                            .as_ref()
+                            .map_or(4.0, |style| match style.join {
+                                super::StrokeJoin::Miter => style.miter_limit,
+                                super::StrokeJoin::Round | super::StrokeJoin::Bevel => 1.0,
+                            });
+                    outset_rect(local, Insets::uniform(*stroke_width * 0.5 * join_scale))?
+                } else {
+                    local
                 };
+                let rect = map_affine_rect(*transform, local);
                 bounds = union_bounds(bounds, LocalBounds::from_rect(rect));
             }
             bounds.rect().map_or(NodeGeometry::EMPTY, leaf)
@@ -1515,6 +1785,10 @@ fn derive_node_geometry(
                     .max_intermediate_pixels
                     .max(child.max_intermediate_pixels);
             }
+            if let Some(transition) = &group.transition {
+                result.output_bounds = LocalBounds::from_rect(transition.bounds);
+                peak_local_pixels = bounds_pixels(result.output_bounds)?;
+            }
             if let Some(glass) = &group.glass {
                 let output = LocalBounds::from_rect(glass.backdrop.output_bounds);
                 result.content_bounds = union_bounds(result.content_bounds, output);
@@ -1570,9 +1844,13 @@ fn derive_node_geometry(
             }
             peak_local_pixels = peak_local_pixels.max(bounds_pixels(result.output_bounds)?);
             if let Some(mask) = &group.mask {
+                let inverted = mask.mode.is_inverted();
                 let mask =
                     derive_node_geometry(program, mask.source, geometry, glass_owner_to_group)?;
-                result.output_bounds = intersect_bounds(result.output_bounds, mask.output_bounds);
+                if !inverted {
+                    result.output_bounds =
+                        intersect_bounds(result.output_bounds, mask.output_bounds);
+                }
                 result.max_intermediate_pixels = result
                     .max_intermediate_pixels
                     .max(mask.max_intermediate_pixels);
@@ -1598,6 +1876,7 @@ fn derive_node_geometry(
                 || group.backdrop.is_some()
                 || group.glass.is_some()
                 || group.glass_foreground.is_some()
+                || group.transition.is_some()
                 || group.shader.is_some();
             if needs_intermediate {
                 result.max_intermediate_pixels = result
@@ -1652,7 +1931,19 @@ fn apply_filter_bounds(
                 .rect()
                 .unwrap_or(rect)
         }
+        Filter::Glow { radius, .. } => outset_rect(rect, Insets::uniform(5.0 * *radius + 1.0))?,
+        Filter::Bloom { radius, .. } => outset_rect(rect, Insets::uniform(4.0 * *radius + 1.0))?,
+        Filter::RadialBlur { amount, .. } => outset_rect(rect, Insets::uniform(*amount + 1.0))?,
         Filter::NoiseDisplacement { scale, .. } => outset_rect(rect, Insets::uniform(*scale))?,
+        Filter::ChromaticAberration { offset } => outset_rect(
+            rect,
+            Insets::new(
+                offset[0].abs() * 0.5 + 1.0,
+                offset[1].abs() * 0.5 + 1.0,
+                offset[0].abs() * 0.5 + 1.0,
+                offset[1].abs() * 0.5 + 1.0,
+            ),
+        )?,
         Filter::VelocityBlur {
             velocity,
             shutter_angle_degrees,
@@ -1667,7 +1958,9 @@ fn apply_filter_bounds(
                 rect.bottom() + f64::from(dy),
             )
         }
-        Filter::ColorMatrix { .. }
+        Filter::FilmGrain { .. }
+        | Filter::LensDistortion { .. }
+        | Filter::ColorMatrix { .. }
         | Filter::Brightness { .. }
         | Filter::Contrast { .. }
         | Filter::Grayscale { .. }
@@ -1710,6 +2003,22 @@ fn path_bounds(path: &PathData) -> Option<Rect> {
         bottom = bottom.max(y);
     }
     Some(Rect::from_edges(left, top, right, bottom))
+}
+
+fn map_affine_rect(transform: Affine2d, rect: Rect) -> Rect {
+    let [a, b, c, d, e, f] = transform.0;
+    let origin_x = e + a * rect.x + c * rect.y;
+    let origin_y = f + b * rect.x + d * rect.y;
+    let edge_x = a * rect.width;
+    let cross_x = c * rect.height;
+    let edge_y = b * rect.width;
+    let cross_y = d * rect.height;
+    Rect::from_edges(
+        origin_x + edge_x.min(0.0) + cross_x.min(0.0),
+        origin_y + edge_y.min(0.0) + cross_y.min(0.0),
+        origin_x + edge_x.max(0.0) + cross_x.max(0.0),
+        origin_y + edge_y.max(0.0) + cross_y.max(0.0),
+    )
 }
 
 fn union_bounds(left: LocalBounds, right: LocalBounds) -> LocalBounds {
@@ -1816,7 +2125,16 @@ fn filter_footprint(filter: &Filter) -> Insets {
             (FILTER_GAUSSIAN_SUPPORT_SIGMAS * *sigma_x + offset[0]).max(0.0),
             (FILTER_GAUSSIAN_SUPPORT_SIGMAS * *sigma_y + offset[1]).max(0.0),
         ),
+        Filter::Glow { radius, .. } => Insets::uniform(5.0 * *radius + 1.0),
+        Filter::Bloom { radius, .. } => Insets::uniform(4.0 * *radius + 1.0),
+        Filter::RadialBlur { amount, .. } => Insets::uniform(*amount + 1.0),
         Filter::NoiseDisplacement { scale, .. } => Insets::uniform(*scale),
+        Filter::ChromaticAberration { offset } => Insets::new(
+            offset[0].abs() * 0.5 + 1.0,
+            offset[1].abs() * 0.5 + 1.0,
+            offset[0].abs() * 0.5 + 1.0,
+            offset[1].abs() * 0.5 + 1.0,
+        ),
         Filter::VelocityBlur {
             velocity,
             shutter_angle_degrees,
@@ -1826,7 +2144,9 @@ fn filter_footprint(filter: &Filter) -> Insets {
             let dy = velocity[1].abs() * scale;
             Insets::new(dx, dy, dx, dy)
         }
-        Filter::ColorMatrix { .. }
+        Filter::FilmGrain { .. }
+        | Filter::LensDistortion { .. }
+        | Filter::ColorMatrix { .. }
         | Filter::Brightness { .. }
         | Filter::Contrast { .. }
         | Filter::Grayscale { .. }

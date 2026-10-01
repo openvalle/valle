@@ -22,7 +22,7 @@ export default function LocalFilterIsolation(ctx) {
 
       <Path key="orbit-line" d={ORBIT} fill="none" stroke="#334155b3" strokeWidth="1.5" strokeDasharray="6 12" />
       {satellites.map((dot) => (
-        <View key={dot.key} className="absolute" style={{ width: 10.5 + (1 - dot.progress) * 10.5, height: 10.5 + (1 - dot.progress) * 10.5, borderRadius: 15, backgroundColor: dot.index % 2 === 0 ? "#67e8f9" : "#c4b5fd", opacity: 0.24 + (1 - dot.progress) * 0.56, motionPath: follow(ORBIT, trail(t, dot.index, { gap: 0.052, mode: "wrap" })) }} />
+        <View key={dot.key} className="absolute" style={{ width: 10.5 + (1 - dot.progress) * 10.5, height: 10.5 + (1 - dot.progress) * 10.5, borderRadius: 15, backgroundColor: dot.index % 2 === 0 ? "#67e8f9" : "#c4b5fd", opacity: 0.24 + (1 - dot.progress) * 0.56, motionPath: follow(ORBIT, trail(t, dot.index, { gap: -0.052, mode: "wrap" })) }} />
       ))}
 
       <View key="left-reference" className="absolute" style={{ borderStyle: "solid", left: 138, top: 379.5, width: 387, height: 333, borderRadius: 42, backgroundColor: "#0b1222ee", borderWidth: 1.5, borderColor: "#334155" }}>

@@ -13,6 +13,7 @@ use oxc::ast::ast::{
     ExportDefaultDeclarationKind, Expression, FormalParameters, Function, FunctionBody,
     JSXAttributeItem, JSXAttributeName, JSXAttributeValue, JSXChild, JSXElement, JSXElementName,
     JSXExpression, ObjectExpression, ObjectPropertyKind, Program, PropertyKey, Statement,
+    UnaryOperator,
 };
 use oxc::codegen::{Codegen, CodegenOptions, CommentOptions};
 use oxc::parser::Parser;
@@ -26,24 +27,25 @@ use valle_motion::value::{Angle, Length, Length2};
 use valle_motion::{
     ARTIFACT_FORMAT_VERSION, ArrowKind, ArrowSpec, AssetControl, AssetKind,
     BACKDROP_DISPLACEMENT_CAPABILITY, BASE_CAPABILITIES, BatchColorField, BatchNumberField,
-    BatchPointField, BatchPositions, BoolValue, CAMERA_CAPABILITY,
+    BatchPointField, BatchPositions, BatchStagger, BoolValue, CAMERA_CAPABILITY,
     CSS_3D_PERSPECTIVE_ORIGIN_CAPABILITY, CSS_3D_TRANSFORM_CAPABILITY,
     CSS_TRANSFORM_PERCENT_CAPABILITY, CameraBinding, CapabilitySet, ChildRange, ColorValue,
     CompareOp, ContentDigest, ContextInput, ControlType, ControlsSchema, CoordinateSpace,
     DISPLACEMENT_SEED_EXPR_CAPABILITY, Expr, ExprId, Extrapolation, FLIP_CAPABILITY,
     FONT_ASSET_CAPABILITY, GEOMETRY_BATCH_CAPABILITY, GEOMETRY_BATCH_FIELD_CAPABILITY,
-    GeometryBatchGeometry, GeometryBatchSpec, GeometryField, GradientStopValue, InterpolateStop,
-    MATH_FORMULA_CAPABILITY, MOTION_MATH_CAPABILITY, MaskValue, MathBinaryOp, MathUnaryOp,
-    MotionEasing, MotionValue, NUMBER_FORMAT_CAPABILITY, NodeId, NodeKind, NumberFormat,
-    NumberValue, PARTICLE_FIELD_CAPABILITY, PaintValue, ParticleSpec, PathBooleanOp, PathData,
-    PathStroke, PathValue, PerUnit, PointValue, PrepareDataType, PropControl, RICH_TEXT_CAPABILITY,
-    RectValue, ResourceRef, SCENE3D_LAYER_CAPABILITY, SHADER_LAYER_CAPABILITY,
-    Scene3DCameraBinding, Scene3DFrameBinding, Scene3DLightBinding, Scene3DMaterialBinding,
-    Scene3DMaterialOverrideBinding, Scene3DMeshBinding, Scene3DNodeBinding,
-    Scene3DTransformBinding, SceneArtifact, SceneNode, SemanticMeta, ShaderProgramRef,
-    ShaderTextureInput, ShaderUniformBinding, ShaderUniformValue, StyleBinding, StyleValue,
-    TRANSFORM_SCALE2D_CAPABILITY, TextSplit, TextValue, UnitStyle, VIEWPORT_CAPABILITY,
-    font_family_alias, geometry_eval_policy,
+    GeometryBatchGeometry, GeometryBatchSpec, GeometryField, GradientStopValue, IndexFormula,
+    InstanceColumn, InstanceColumnValues, InstanceGroup, InstanceKeys, InstanceTemplateNode,
+    InterpolateStop, MATH_FORMULA_CAPABILITY, MOTION_MATH_CAPABILITY, MaskValue, MathBinaryOp,
+    MathUnaryOp, MotionEasing, MotionValue, NUMBER_FORMAT_CAPABILITY, NodeId, NodeKind,
+    NumberFormat, NumberValue, PARTICLE_FIELD_CAPABILITY, PaintValue, ParticleSpec, PathBooleanOp,
+    PathData, PathStroke, PathValue, PerUnit, PointValue, PrepareDataType, PropControl,
+    RICH_TEXT_CAPABILITY, RangeShape, RectValue, ResourceRef, SCENE3D_LAYER_CAPABILITY,
+    SHADER_LAYER_CAPABILITY, Scene3DCameraBinding, Scene3DDepthOfFieldBinding, Scene3DFrameBinding,
+    Scene3DLightBinding, Scene3DMaterialBinding, Scene3DMaterialOverrideBinding,
+    Scene3DMeshBinding, Scene3DNodeBinding, Scene3DTransformBinding, SceneArtifact, SceneNode,
+    SemanticMeta, ShaderProgramRef, ShaderTextureInput, ShaderUniformBinding, ShaderUniformValue,
+    StyleBinding, StyleValue, TRANSFORM_SCALE2D_CAPABILITY, TextSplit, TextValue, UnitStyle,
+    VIEWPORT_CAPABILITY, font_family_alias, geometry_eval_policy,
 };
 
 use crate::motion_sandbox::{Sandbox, THEME_SCOPE_BINDING, scan_forbidden};
@@ -54,6 +56,7 @@ pub use crate::motion_sandbox::MeasureEnv;
 pub type ShaderRegistryEnv = valle_motion::shader::ShaderRegistry;
 
 mod attrs;
+mod audio;
 mod builtins;
 mod classes;
 mod collections;
@@ -67,7 +70,13 @@ mod expr;
 mod frontend;
 mod geometry;
 mod glass;
+mod instance_capture;
+mod instance_formula;
 mod jsx;
+// Native delivery observations use the host clock. Browser compilation must not call the
+// unsupported std::time::Instant implementation on wasm32-unknown-unknown.
+#[cfg(not(target_family = "wasm"))]
+mod metrics;
 mod modules;
 mod output;
 mod prelude;
@@ -75,6 +84,7 @@ mod rewrite;
 mod scene3d;
 mod scope;
 mod shader;
+mod simulation;
 mod style;
 mod style_objects;
 mod syntax;
@@ -82,13 +92,17 @@ mod text;
 mod theme_provider;
 mod transform;
 mod values;
+pub use audio::{AudioAnalysisEnv, AudioPcm};
 use controls::*;
 use css::*;
 use diagnostics::*;
 use frontend::*;
+#[cfg(not(target_family = "wasm"))]
+pub use metrics::{CompilationEvent, CompilationMetrics, CompilationTrace};
 pub use modules::{
     MotionModuleGraph, compile_motion_modules, compile_motion_modules_with_full_env,
     compile_motion_modules_with_full_env_and_data,
+    compile_motion_modules_with_full_env_and_data_and_audio,
 };
 use output::*;
 use prelude::STATIC_HELPERS;
@@ -122,6 +136,8 @@ const THEME_TYPED_TOKEN_KINDS: &[&str] = &[
     "pathData",
     "pathLine",
     "pathOffset",
+    "pathResample",
+    "pathReverse",
     "pathSector",
     "point",
     "radialGradient",
@@ -271,12 +287,17 @@ pub struct MotionSourceMap {
     pub controls: Option<SourceSpan>,
     pub nodes: Vec<NodeSourceMapping>,
     pub exprs: Vec<ExprSourceMapping>,
+    /// Each template owns its own ExprId namespace.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub instance_exprs: Vec<Vec<ExprSourceMapping>>,
     pub objects: Vec<ObjectSourceMapping>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct CompiledMotion {
     pub artifact: SceneArtifact,
+    /// Nonfatal authoring diagnostics emitted during preparation.
+    pub warnings: Vec<CompilerDiagnostic>,
     pub source_map: MotionSourceMap,
     pub normalized_source: String,
     pub normalized_ast_digest: ContentDigest,
@@ -338,7 +359,18 @@ pub fn compile_motion_with_full_env_and_data(
     shaders: Option<&ShaderRegistryEnv>,
     data: Option<&PrepareDataBinding>,
 ) -> Result<CompiledMotion, Vec<CompilerDiagnostic>> {
-    compile_motion_impl(source, resources, measure, shaders, data, None)
+    compile_motion_with_full_env_and_data_and_audio(source, resources, measure, shaders, data, None)
+}
+
+pub fn compile_motion_with_full_env_and_data_and_audio(
+    source: &str,
+    resources: &[ResourceRef],
+    measure: Option<&MeasureEnv>,
+    shaders: Option<&ShaderRegistryEnv>,
+    data: Option<&PrepareDataBinding>,
+    audio: Option<&AudioAnalysisEnv>,
+) -> Result<CompiledMotion, Vec<CompilerDiagnostic>> {
+    compile_motion_impl(source, resources, measure, shaders, data, audio, None)
 }
 
 fn compile_motion_impl(
@@ -347,8 +379,11 @@ fn compile_motion_impl(
     measure: Option<&MeasureEnv>,
     shaders: Option<&ShaderRegistryEnv>,
     data: Option<&PrepareDataBinding>,
+    audio: Option<&AudioAnalysisEnv>,
     _entry: Option<&str>,
 ) -> Result<CompiledMotion, Vec<CompilerDiagnostic>> {
+    #[cfg(not(target_family = "wasm"))]
+    let _compilation = metrics::record_compilation(_entry.unwrap_or("<inline>"));
     let allocator = Allocator::default();
     let parsed = Parser::new(&allocator, source, SourceType::tsx()).parse();
     if !parsed.diagnostics.is_empty() {
@@ -392,6 +427,7 @@ fn compile_motion_impl(
         measure,
         shaders,
         data,
+        audio,
         require_composition,
     )?;
     let artifact = compiler.compile(&program)?;
@@ -442,6 +478,24 @@ fn compile_motion_impl(
                 span: source_span_at(source, *span),
             })
             .collect(),
+        instance_exprs: compiler
+            .source_ledger
+            .instance_exprs
+            .iter()
+            .map(|(spans, stacks)| {
+                spans
+                    .iter()
+                    .zip(stacks)
+                    .enumerate()
+                    .map(|(index, (span, expansion_stack))| ExprSourceMapping {
+                        id: ExprId(index as u32),
+                        source_path: "<inline>".into(),
+                        expansion_stack: expansion_stack.clone(),
+                        span: source_span_at(source, *span),
+                    })
+                    .collect()
+            })
+            .collect(),
         objects: compiler
             .source_ledger
             .object_spans
@@ -463,6 +517,7 @@ fn compile_motion_impl(
     };
     Ok(CompiledMotion {
         artifact,
+        warnings: compiler.warnings,
         source_map,
         normalized_source,
         normalized_ast_digest,
@@ -492,6 +547,11 @@ struct PendingNode {
 enum AuthorValue {
     Static(serde_json::Value),
     Dynamic(ExprId),
+    /// A frame-time path paint remains a typed compiler value until a Path consumes it.
+    Paint(PaintValue),
+    /// One prepared map item forwarded through a component prop. Each field stays a
+    /// column reference until the component actually reads it.
+    InstanceObject(BTreeMap<String, (u32, valle_motion::expr::ExprType)>),
     /// A compile-time-fixed collection whose elements are frame-time expressions.
     /// It is expanded by the compiler and never becomes an Artifact/runtime array.
     DynamicTuple(Vec<ExprId>),
@@ -617,7 +677,7 @@ struct BatchFieldParts<'s> {
     from: &'s Expression<'s>,
     to: &'s Expression<'s>,
     progress: &'s Expression<'s>,
-    stagger: f64,
+    stagger: BatchStagger,
 }
 
 #[derive(Clone, Default)]
@@ -627,9 +687,11 @@ struct Bindings<'s> {
     local_functions: BTreeMap<String, AuthoredFn<'s>>,
     /// Scalar frame-time expressions.
     scalars: BTreeMap<String, ExprId>,
+    paints: BTreeMap<String, PaintValue>,
     /// Fixed-length frame-time tuples. These are compiler-only and never enter
     /// the runtime Artifact as arrays.
     tuples: BTreeMap<String, Vec<ExprId>>,
+    instance_objects: BTreeMap<String, BTreeMap<String, (u32, valle_motion::expr::ExprType)>>,
     /// Prepare-time JSON values visible to the deterministic sandbox.
     statics: BTreeMap<String, serde_json::Value>,
     /// Fixed-shape object syntax with its declaration scope. Kept compiler-only.
@@ -644,7 +706,9 @@ struct Bindings<'s> {
 struct BindingFrame<'s> {
     local_functions: BTreeMap<String, AuthoredFn<'s>>,
     scalars: BTreeMap<String, ExprId>,
+    paints: BTreeMap<String, PaintValue>,
     tuples: BTreeMap<String, Vec<ExprId>>,
+    instance_objects: BTreeMap<String, BTreeMap<String, (u32, valle_motion::expr::ExprType)>>,
     statics: BTreeMap<String, serde_json::Value>,
     objects: BTreeMap<String, style_objects::AuthoredObject<'s>>,
     children: BTreeMap<String, Vec<PendingNode>>,
@@ -667,10 +731,20 @@ impl<'s> Bindings<'s> {
             } else {
                 std::mem::take(&mut self.scalars)
             },
+            paints: if captures_scope {
+                self.paints.clone()
+            } else {
+                std::mem::take(&mut self.paints)
+            },
             tuples: if captures_scope {
                 self.tuples.clone()
             } else {
                 std::mem::take(&mut self.tuples)
+            },
+            instance_objects: if captures_scope {
+                self.instance_objects.clone()
+            } else {
+                std::mem::take(&mut self.instance_objects)
             },
             statics: if captures_scope {
                 self.statics.clone()
@@ -702,7 +776,9 @@ impl<'s> Bindings<'s> {
         BindingFrame {
             local_functions: self.local_functions.clone(),
             scalars: self.scalars.clone(),
+            paints: self.paints.clone(),
             tuples: self.tuples.clone(),
+            instance_objects: self.instance_objects.clone(),
             statics: self.statics.clone(),
             objects: self.objects.clone(),
             children: self.children.clone(),
@@ -712,16 +788,19 @@ impl<'s> Bindings<'s> {
     fn restore_frame(&mut self, frame: BindingFrame<'s>) {
         self.local_functions = frame.local_functions;
         self.scalars = frame.scalars;
+        self.paints = frame.paints;
         self.tuples = frame.tuples;
+        self.instance_objects = frame.instance_objects;
         self.statics = frame.statics;
         self.objects = frame.objects;
         self.children = frame.children;
     }
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct ExprArena {
     values: Vec<Expr>,
+    types: Vec<Option<valle_motion::expr::ExprType>>,
     spans: Vec<Span>,
     expansion_stacks: Vec<Vec<String>>,
     /// Incremental mirror of `expr_reads_runtime_inputs` for each expression.
@@ -730,12 +809,29 @@ struct ExprArena {
     depth: usize,
 }
 
+impl ExprArena {
+    fn truncate(&mut self, len: usize) {
+        self.values.truncate(len);
+        self.types.truncate(len);
+        self.spans.truncate(len);
+        self.expansion_stacks.truncate(len);
+        self.reads_runtime.truncate(len);
+    }
+}
+
 #[derive(Default)]
 struct SourceLedger {
     node_spans: Vec<Span>,
+    instance_exprs: Vec<(Vec<Span>, Vec<Vec<String>>)>,
     node_expansion_stacks: Vec<Vec<String>>,
     /// Scene3D authored object spans, keyed by stable scene/object identity.
     object_spans: Vec<(String, String, Span, Vec<String>)>,
+}
+
+#[derive(Clone, Copy)]
+struct TimeTransform {
+    offset_seconds: f64,
+    speed: f64,
 }
 
 struct Compiler<'s> {
@@ -758,11 +854,17 @@ struct Compiler<'s> {
     controls: ControlsSchema,
     controls_span: Option<Span>,
     prepare_data: Option<PrepareDataBinding>,
+    audio: Option<AudioAnalysisEnv>,
+    simulation_tables: BTreeMap<String, std::sync::Arc<simulation::SimulationTable>>,
+    audio_tables: BTreeMap<(String, u8, u32), std::sync::Arc<audio::AudioTable>>,
     default_function: Option<&'s Function<'s>>,
     functions: BTreeMap<String, AuthoredFn<'s>>,
     /// Expression values and their parallel source/runtime metadata are one
     /// append-only arena so truncation and insertion cannot drift apart.
     expr_arena: ExprArena,
+    instance_groups: Vec<InstanceGroup>,
+    instance_scope: Option<InstanceCompileScope>,
+    geometry_references: GeometryReferences,
     /// Node/object source provenance used to build the standalone source-map format.
     source_ledger: SourceLedger,
     resource_refs: Vec<ResourceRef>,
@@ -779,6 +881,8 @@ struct Compiler<'s> {
     /// Nested providers merge into a preparation-only theme scope accessed by `useTheme()`, absent
     /// from SceneArtifact.
     current_theme: Option<serde_json::Value>,
+    /// Nested TimeScope transforms, ordered from outermost to innermost.
+    time_scopes: Vec<TimeTransform>,
     key_prefix: String,
     component_stack: Vec<String>,
     helper_stack: Vec<String>,
@@ -789,4 +893,12 @@ struct Compiler<'s> {
     /// Scoped layout identities are compile-time-only and must be unique.
     layout_ids: BTreeSet<String>,
     diagnostics: Vec<CompilerDiagnostic>,
+    warnings: Vec<CompilerDiagnostic>,
+}
+
+struct InstanceCompileScope {
+    parameter: String,
+    key_field: String,
+    template_key: String,
+    fields: BTreeMap<String, (u32, valle_motion::expr::ExprType)>,
 }

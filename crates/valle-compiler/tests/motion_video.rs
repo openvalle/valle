@@ -3,7 +3,8 @@
 use std::collections::BTreeMap;
 use valle_compiler::motion::compile_motion;
 use valle_motion::{
-    EvalInputs, MotionValue, NodeKind, NumberValue, motion_context_at_frame, resolve_props,
+    EvalInputs, Fonts, LayoutOptions, MotionValue, NodeKind, NumberValue, Viewport, build_tree,
+    motion_context_at_frame, prepare_scene, resolve_props,
 };
 use valle_timeline::FrameRate;
 
@@ -121,4 +122,46 @@ fn video_nonfinite_constants_fail_and_path_trim_bounds_are_unchanged() {
         e.message
             .contains("trimStart must be a finite number in 0..=1")
     }));
+}
+
+#[test]
+fn time_scope_maps_video_source_clock() {
+    let source = r#"
+export const controls = { assets: { clip: asset({ kind: "video" }) } };
+export default function VideoScope(ctx) {
+    return <Scene style={{width:640,height:360}}>
+        <TimeScope key="scope" offset={0.5} speed={2}>
+            <Video key="video" src="asset://clip" sourceStart={1} speed={1} style={{width:20,height:20}} />
+        </TimeScope>
+    </Scene>;
+}"#;
+    let check = |source: &str, samples: &[(u32, f64)]| {
+        let artifact = compile_motion(source).unwrap().artifact;
+        let prepared = prepare_scene(&artifact).unwrap();
+        let props = resolve_props(&artifact.controls, &BTreeMap::new()).unwrap();
+        let fonts = Fonts::default();
+        for &(frame, expected) in samples {
+            let ctx = motion_context_at_frame(frame, 60, FrameRate::new(30, 1).unwrap()).unwrap();
+            let tree = build_tree(
+                &prepared,
+                &ctx,
+                &props,
+                &LayoutOptions {
+                    viewport: Viewport::new((640, 360)),
+                    fonts: &fonts,
+                    styles: None,
+                },
+            )
+            .unwrap();
+            assert_eq!(tree.video_source_time_seconds("video"), Some(expected));
+        }
+    };
+    check(source, &[(45, 3.0), (15, 1.0), (45, 3.0)]);
+    let nested = source
+        .replace(
+            "<Video key=\"video\"",
+            "<TimeScope key=\"inner\" offset={0.25} speed={0.5}><Video key=\"video\"",
+        )
+        .replace("</TimeScope>", "</TimeScope></TimeScope>");
+    check(&nested, &[(45, 1.875), (15, 0.875), (45, 1.875)]);
 }

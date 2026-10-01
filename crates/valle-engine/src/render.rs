@@ -1773,17 +1773,19 @@ impl CompiledVisualGap {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum CompiledTransitionKernel {
-    CrossFade,
-    Extension { call: CompiledKernelCall },
+    Builtin {
+        kind: valle_draw::transition::TransitionKind,
+        params: valle_draw::transition::TransitionValues,
+    },
+    Extension {
+        call: CompiledKernelCall,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CompiledVisualTransition {
     window: FrameRange,
-    cut_frame: i64,
-    left_frames: i64,
-    right_frames: i64,
     from_item: u32,
     to_item: u32,
     from_source: u32,
@@ -1795,18 +1797,6 @@ pub struct CompiledVisualTransition {
 impl CompiledVisualTransition {
     pub const fn window(&self) -> FrameRange {
         self.window
-    }
-
-    pub const fn cut_frame(&self) -> i64 {
-        self.cut_frame
-    }
-
-    pub const fn left_frames(&self) -> i64 {
-        self.left_frames
-    }
-
-    pub const fn right_frames(&self) -> i64 {
-        self.right_frames
     }
 
     pub fn progress_at(&self, frame: i64) -> Option<RationalTime> {
@@ -3819,8 +3809,11 @@ fn validate_quantized_intervals(
                     );
                 }
                 VisualItem::Transition(transition) => {
+                    cursor = cursor
+                        .checked_sub(transition.duration)
+                        .expect("canonical transition overlap");
                     validate_frame_interval(
-                        RationalTime::ZERO,
+                        cursor,
                         transition.duration,
                         canvas.frame_rate,
                         &path,

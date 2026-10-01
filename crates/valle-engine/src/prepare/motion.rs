@@ -56,7 +56,7 @@ impl MotionFontCache {
 
     pub(super) fn get(
         &mut self,
-        dependencies: &[(ContentDigest, &[u8], bool)],
+        dependencies: &[(ContentDigest, Arc<[u8]>, bool)],
     ) -> Result<&MotionFontSet, ProgramPrepareError> {
         let key: Vec<_> = dependencies
             .iter()
@@ -215,7 +215,7 @@ pub(crate) fn build_compiled_motion_program(
             valle_motion::build_tree(context.prepared, &motion_context, &props, &options)
         })
         .map_err(|error| ProgramPrepareError::MotionLayout {
-            reason: error.to_string(),
+            reason: format!("{error} at frame {local_frame}"),
         })?;
     if !tree.glass.surfaces.is_empty() {
         let glass = tree.glass.clone();
@@ -277,16 +277,20 @@ pub(crate) fn build_compiled_motion_program(
 
 fn register_motion_dependency_font(
     fonts: &mut valle_motion::Fonts,
-    bytes: &[u8],
+    bytes: &Arc<[u8]>,
     digest: &ContentDigest,
     generic: bool,
 ) -> Result<(), ProgramPrepareError> {
     let resource = if generic {
-        valle_motion::motion_font_resource(bytes.to_vec())
+        valle_motion::motion_font_resource(valle_motion::FontSource::from_shared(Arc::new(
+            bytes.clone(),
+        )))
     } else {
         // Asset-bound and formula faces keep their own names without selecting a
         // default family for ordinary text elsewhere in the component.
-        valle_motion::FontResource::new(bytes.to_vec())
+        valle_motion::FontResource::new(valle_motion::FontSource::from_shared(Arc::new(
+            bytes.clone(),
+        )))
     };
     fonts
         .register(resource)
@@ -295,12 +299,13 @@ fn register_motion_dependency_font(
         })?;
     fonts
         .register(
-            valle_motion::FontResource::new(bytes.to_vec()).override_info(
-                valle_motion::FontOverride {
-                    family_name: Some(Arc::<str>::from(valle_motion::font_family_alias(digest))),
-                    ..Default::default()
-                },
-            ),
+            valle_motion::FontResource::new(valle_motion::FontSource::from_shared(Arc::new(
+                bytes.clone(),
+            )))
+            .override_info(valle_motion::FontOverride {
+                family_name: Some(Arc::<str>::from(valle_motion::font_family_alias(digest))),
+                ..Default::default()
+            }),
         )
         .map_err(|error| ProgramPrepareError::MotionLayout {
             reason: error.to_string(),
@@ -337,14 +342,14 @@ fn compiled_motion_overrides(
             (ControlType::Point, EvaluatedMotionValue::Vec2(value)) => {
                 MotionValue::Point(valle_draw::Point::new(value[0], value[1]))
             }
-            (ControlType::Color, EvaluatedMotionValue::Vec4(value)) => {
-                MotionValue::Color(valle_draw::Rgba::new(
+            (ControlType::Color, EvaluatedMotionValue::Vec4(value)) => MotionValue::Color(
+                valle_draw::program::AuthorColor::from_srgb8(valle_draw::Rgba::new(
                     value[0].round().clamp(0.0, 255.0) as u8,
                     value[1].round().clamp(0.0, 255.0) as u8,
                     value[2].round().clamp(0.0, 255.0) as u8,
                     value[3].round().clamp(0.0, 255.0) as u8,
-                ))
-            }
+                )),
+            ),
             (ControlType::Rect, EvaluatedMotionValue::Vec4(value)) => MotionValue::Rect(
                 valle_draw::Rect::new(value[0], value[1], value[2], value[3]),
             ),
@@ -701,20 +706,27 @@ fn foreground_tone(
     }
 }
 
-fn linear_tint(color: valle_draw::Rgba) -> Result<[f32; 4], ProgramPrepareError> {
-    let pixel =
-        crate::compositor::reference::decode_author_srgb(crate::resource::AuthorSrgbStraight([
-            color.r, color.g, color.b, color.a,
-        ]))
-        .map_err(|error| ProgramPrepareError::MotionGlass {
-            reason: error.to_string(),
-        })?;
-    let [r, g, b, a] = pixel.channels();
-    Ok(if a > 0.0 {
-        [r / a, g / a, b / a, a]
-    } else {
-        [0.0, 0.0, 0.0, 0.0]
-    })
+fn linear_tint(color: valle_draw::program::AuthorColor) -> Result<[f32; 4], ProgramPrepareError> {
+    if !color.is_finite() {
+        return Err(ProgramPrepareError::MotionGlass {
+            reason: "Glass tint must be finite with alpha in 0..=1".into(),
+        });
+    }
+    // The material kernel takes straight linear Rec.2020. Clip out-of-gamut author channels to
+    // the sRGB gamut before conversion, without reducing any channel to an 8-bit CSS color.
+    let straight = valle_draw::program::AuthorColor {
+        red: color.red.clamp(0.0, 1.0),
+        green: color.green.clamp(0.0, 1.0),
+        blue: color.blue.clamp(0.0, 1.0),
+        alpha: 1.0,
+    }
+    .to_working();
+    Ok([
+        straight.red,
+        straight.green,
+        straight.blue,
+        color.alpha as f32,
+    ])
 }
 
 fn qualify_program_light(
@@ -1391,6 +1403,42 @@ mod tests {
     const DEPENDENCY_FONT: &[u8] =
         include_bytes!("../../../../assets/fonts/katex/KaTeX_AMS-Regular.ttf");
 
+    #[test]
+    fn glass_tint_reaches_packed_material_without_byte_rounding() {
+        use valle_draw::program::{
+            AuthorColor, GradientInterpolation, HueDirection, interpolate_author_colors,
+        };
+
+        let midpoint = interpolate_author_colors(
+            AuthorColor::from_srgb8(valle_draw::Rgba::rgb(0x21, 0x40, 0xff)),
+            AuthorColor::from_srgb8(valle_draw::Rgba::rgb(0xff, 0xd0, 0)),
+            0.5,
+            GradientInterpolation::Oklch {
+                hue: HueDirection::Shorter,
+            },
+        );
+        let tint = linear_tint(midpoint).unwrap();
+        let rounded = linear_tint(AuthorColor::from_srgb8(midpoint.to_srgb8())).unwrap();
+        assert_ne!(tint, rounded);
+        let straight = AuthorColor {
+            red: midpoint.red.clamp(0.0, 1.0),
+            green: midpoint.green.clamp(0.0, 1.0),
+            blue: midpoint.blue.clamp(0.0, 1.0),
+            alpha: 1.0,
+        }
+        .to_working();
+        assert_eq!(tint, [straight.red, straight.green, straight.blue, 1.0]);
+
+        let material = crate::compositor::glass::resolve_material_base_with_geometry(
+            0.85, 0.7, tint, 1.0, 1.0, 28.0,
+        )
+        .unwrap();
+        let packed = crate::compositor::glass::pack_material_base(&material);
+        assert_eq!(&packed.tint_linear[..3], &tint[..3]);
+        assert!(packed.tint_linear[3] > 0.0);
+        assert!(packed.tint_linear[3] < 1.0);
+    }
+
     fn emitted_font_request(
         fonts: &valle_motion::Fonts,
         family: &str,
@@ -1443,7 +1491,7 @@ export default function Card() {{
     fn cached_fonts_preserve_content_aliases_after_font_changes_and_eviction() {
         let mut cache = MotionFontCache::default();
         let digest = ContentDigest::of_bytes(DEPENDENCY_FONT);
-        let dependencies = [(digest, DEPENDENCY_FONT, true)];
+        let dependencies = [(digest, Arc::<[u8]>::from(DEPENDENCY_FONT), true)];
         let alias = valle_motion::font_family_alias(&digest);
         let cold = emitted_font_request(cache.get(&dependencies).unwrap(), &alias);
         assert_eq!(cold.face_hash.into_bytes(), *digest.as_bytes());
@@ -1452,7 +1500,9 @@ export default function Card() {{
         // alternating clips can do. Every set must resolve its own immutable font bytes.
         for bytes in valle_motion::default_motion_fonts().iter().take(5) {
             let replacement = ContentDigest::of_bytes(bytes);
-            let fonts = cache.get(&[(replacement, bytes, true)]).unwrap();
+            let fonts = cache
+                .get(&[(replacement, Arc::<[u8]>::from(*bytes), true)])
+                .unwrap();
             let request =
                 emitted_font_request(fonts, &valle_motion::font_family_alias(&replacement));
             assert_eq!(request.face_hash.into_bytes(), *replacement.as_bytes());
@@ -1474,20 +1524,30 @@ export default function Card() {{
         custom.extend_from_slice(b"host font revision");
         let digest = ContentDigest::of_bytes(&custom);
         let mut cache = MotionFontCache::default();
-        let fonts = cache.get(&[(digest, custom.as_slice(), true)]).unwrap();
+        let fonts = cache
+            .get(&[(digest, Arc::<[u8]>::from(custom.as_slice()), true)])
+            .unwrap();
         let request = emitted_font_request(fonts, "sans-serif");
         assert_eq!(request.face_hash.into_bytes(), *digest.as_bytes());
     }
 
     #[test]
     fn bound_font_does_not_override_the_host_default_family() {
-        let mono = valle_motion::DEFAULT_MOTION_FONT_WEIGHTS[9];
+        let mono = valle_motion::DEFAULT_MOTION_FONT_FILES
+            .iter()
+            .zip(valle_motion::DEFAULT_MOTION_FONT_WEIGHTS)
+            .find(|(name, _)| **name == "NotoSansMono-Regular.ttf")
+            .unwrap()
+            .1;
         let brand = include_bytes!("../../../../assets/fonts/katex/KaTeX_Fraktur-Regular.ttf");
         let mono_digest = ContentDigest::of_bytes(mono);
         let brand_digest = ContentDigest::of_bytes(brand);
         let mut cache = MotionFontCache::default();
         let fonts = cache
-            .get(&[(mono_digest, mono, true), (brand_digest, brand, false)])
+            .get(&[
+                (mono_digest, Arc::from(*mono), true),
+                (brand_digest, Arc::from(brand.as_slice()), false),
+            ])
             .unwrap();
         assert_eq!(
             emitted_font_request(fonts, "sans-serif")
@@ -1503,7 +1563,10 @@ export default function Card() {{
         );
         // Changing the role must select a different cache entry for the same bytes.
         let fonts = cache
-            .get(&[(mono_digest, mono, true), (brand_digest, brand, true)])
+            .get(&[
+                (mono_digest, Arc::from(*mono), true),
+                (brand_digest, Arc::from(brand.as_slice()), true),
+            ])
             .unwrap();
         assert_eq!(
             emitted_font_request(fonts, "sans-serif")
@@ -1534,7 +1597,7 @@ export default function Card() {{
 
         let mut fonts = valle_motion::Fonts::default();
         valle_motion::register_default_motion_fonts(&mut fonts).expect("register default fonts");
-        register_motion_dependency_font(&mut fonts, DEPENDENCY_FONT, &digest, false)
+        register_motion_dependency_font(&mut fonts, &Arc::from(DEPENDENCY_FONT), &digest, false)
             .expect("register dependency font under both families");
 
         let internal_request = emitted_font_request(&fonts, &internal_family);

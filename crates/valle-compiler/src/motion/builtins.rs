@@ -3,6 +3,139 @@
 use super::*;
 
 impl<'s> Compiler<'s> {
+    /// Lower a spatial selection profile into one unit-dependent expression. Shape is static;
+    /// the numeric window may move with the frame or authored controls.
+    pub(super) fn lower_range_selector(
+        &mut self,
+        arguments: &[Argument<'_>],
+        span: Span,
+    ) -> Option<ExprId> {
+        let [argument] = arguments else {
+            self.illegal(
+                DiagCode::GrammarForbidden,
+                span,
+                "rangeSelector({ start, end, offset?, softness?, shape? }) takes one object",
+            );
+            return None;
+        };
+        let Some(Expression::ObjectExpression(options)) =
+            argument.as_expression().map(strip_parens)
+        else {
+            self.illegal(
+                DiagCode::GrammarForbidden,
+                argument.span(),
+                "rangeSelector options must be an object literal",
+            );
+            return None;
+        };
+        let mut start = None;
+        let mut end = None;
+        let mut offset = None;
+        let mut softness = None;
+        let mut shape = None;
+        for entry in &options.properties {
+            let ObjectPropertyKind::ObjectProperty(property) = entry else {
+                self.illegal(
+                    DiagCode::GrammarForbidden,
+                    entry.span(),
+                    "rangeSelector options cannot spread",
+                );
+                return None;
+            };
+            let Some(name) = static_property_name(&property.key) else {
+                self.illegal(
+                    DiagCode::GrammarForbidden,
+                    property.key.span(),
+                    "rangeSelector option names must be static",
+                );
+                return None;
+            };
+            if name == "shape" {
+                if shape.is_some() {
+                    self.illegal(
+                        DiagCode::GrammarForbidden,
+                        property.key.span(),
+                        "rangeSelector shape is duplicated",
+                    );
+                    return None;
+                }
+                let value = self.eval_static(&property.value);
+                shape = match value.as_ref().and_then(serde_json::Value::as_str) {
+                    Some("square") => Some(RangeShape::Square),
+                    Some("ramp") => Some(RangeShape::Ramp),
+                    Some("triangle") => Some(RangeShape::Triangle),
+                    Some("smooth") => Some(RangeShape::Smooth),
+                    _ => {
+                        self.illegal(
+                            DiagCode::BuiltinRejected,
+                            property.value.span(),
+                            "rangeSelector shape must be static: square, ramp, triangle, or smooth",
+                        );
+                        return None;
+                    }
+                };
+                continue;
+            }
+            let slot = match name.as_str() {
+                "start" => &mut start,
+                "end" => &mut end,
+                "offset" => &mut offset,
+                "softness" => &mut softness,
+                other => {
+                    self.illegal(
+                        DiagCode::GrammarForbidden,
+                        property.key.span(),
+                        format!("unknown rangeSelector option `{other}`"),
+                    );
+                    return None;
+                }
+            };
+            if slot.is_some() {
+                self.illegal(
+                    DiagCode::GrammarForbidden,
+                    property.key.span(),
+                    format!("rangeSelector option `{name}` is duplicated"),
+                );
+                return None;
+            }
+            if matches!(name.as_str(), "start" | "end" | "softness")
+                && let Some(value) = self.eval_static(&property.value)
+                && let Some(value) = value.as_f64()
+                && !(0.0..=1.0).contains(&value)
+            {
+                self.illegal(
+                    DiagCode::BuiltinRejected,
+                    property.value.span(),
+                    format!("rangeSelector `{name}` must be within 0..=1"),
+                );
+                return None;
+            }
+            *slot = Some(self.lower_expr(&property.value)?);
+        }
+        let constant = |compiler: &mut Self, value: f64| {
+            compiler.push(
+                Expr::Const {
+                    value: MotionValue::Number(value),
+                },
+                span,
+            )
+        };
+        let start = start.unwrap_or_else(|| constant(self, 0.0));
+        let end = end.unwrap_or_else(|| constant(self, 1.0));
+        let offset = offset.unwrap_or_else(|| constant(self, 0.0));
+        let softness = softness.unwrap_or_else(|| constant(self, 0.0));
+        Some(self.push(
+            Expr::RangeSelector {
+                start,
+                end,
+                offset,
+                softness,
+                shape: shape.unwrap_or(RangeShape::Square),
+            },
+            span,
+        ))
+    }
+
     /// Freeze a component-local frame clock over one compile-time interval.
     ///
     /// This is authoring sugar for
@@ -1148,12 +1281,12 @@ impl<'s> Compiler<'s> {
         let Some(gap) = options
             .get("gap")
             .and_then(serde_json::Value::as_f64)
-            .filter(|value| value.is_finite() && *value >= 0.0)
+            .filter(|value| value.is_finite())
         else {
             self.illegal(
                 DiagCode::BuiltinRejected,
                 options_expression.span(),
-                "trail gap must be finite and non-negative",
+                "trail gap must be finite",
             );
             return None;
         };
@@ -1184,7 +1317,7 @@ impl<'s> Compiler<'s> {
             span,
         );
         let raw = self.push(
-            Expr::Sub {
+            Expr::Add {
                 lhs: progress,
                 rhs: offset,
             },

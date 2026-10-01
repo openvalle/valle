@@ -15,9 +15,10 @@ use crate::{
 
 use super::{
     BackendCapabilities, CapabilityContractError, ExecutionPassId, ExecutionPassKind, PassInterval,
-    PlanResourceId, PlanValidationError, ProgramAllocationReason, ProgramPassInterval,
-    ProgramPassKind, ProgramResourceId, ProgramStorageKind, ProgramSurfaceSlotId, RenderBindings,
-    RenderPlanTemplate, SurfaceAllocationReason, SurfaceSlotId,
+    PlanResourceId, PlanResourceKind, PlanValidationError, ProgramAllocationReason, ProgramPassId,
+    ProgramPassInterval, ProgramPassKind, ProgramResourceId, ProgramStorageKind,
+    ProgramSurfaceSlotId, RenderBindings, RenderPlanTemplate, SurfaceAllocationReason,
+    SurfaceSlotId,
 };
 
 pub const BOUND_PROGRAM_SCHEDULES_FORMAT_VERSION: u32 = 1;
@@ -175,6 +176,7 @@ pub struct BoundProgramSchedule {
     bounds_reason: BoundsReason,
     resources: Vec<BoundProgramResource>,
     surface_slots: Vec<BoundProgramSurfaceSlot>,
+    passes: Vec<BoundProgramExecutionPass>,
     estimated_surface_bytes: u64,
 }
 
@@ -202,8 +204,79 @@ impl BoundProgramSchedule {
         &self.surface_slots
     }
 
+    pub fn passes(&self) -> &[BoundProgramExecutionPass] {
+        &self.passes
+    }
+
     pub const fn estimated_surface_bytes(&self) -> u64 {
         self.estimated_surface_bytes
+    }
+}
+
+/// Backend-independent work for one DrawProgram pass, bound to this frame's device ROI.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BoundProgramExecutionPass {
+    pass: ProgramPassId,
+    output: ProgramResourceId,
+    device_roi: DeviceRect,
+    storage: ProgramStorageKind,
+    retire_after: Vec<ProgramResourceId>,
+}
+
+impl BoundProgramExecutionPass {
+    pub const fn pass(&self) -> ProgramPassId {
+        self.pass
+    }
+
+    pub const fn output(&self) -> ProgramResourceId {
+        self.output
+    }
+
+    pub const fn device_roi(&self) -> DeviceRect {
+        self.device_roi
+    }
+
+    pub const fn storage(&self) -> ProgramStorageKind {
+        self.storage
+    }
+
+    pub fn retire_after(&self) -> &[ProgramResourceId] {
+        &self.retire_after
+    }
+}
+
+/// Backend-independent work for one outer pass. The bound ROI and physical owner are decided
+/// once during frame admission; both executors retire the same completed surface allocations.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BoundExecutionPass {
+    pass: ExecutionPassId,
+    output: PlanResourceId,
+    device_roi: DeviceRect,
+    surface_slot: Option<SurfaceSlotId>,
+    retire_after: Vec<PlanResourceId>,
+}
+
+impl BoundExecutionPass {
+    pub const fn pass(&self) -> ExecutionPassId {
+        self.pass
+    }
+
+    pub const fn output(&self) -> PlanResourceId {
+        self.output
+    }
+
+    pub const fn device_roi(&self) -> DeviceRect {
+        self.device_roi
+    }
+
+    pub const fn surface_slot(&self) -> Option<SurfaceSlotId> {
+        self.surface_slot
+    }
+
+    pub fn retire_after(&self) -> &[PlanResourceId] {
+        &self.retire_after
     }
 }
 
@@ -221,6 +294,7 @@ pub struct BoundProgramSchedules {
     resources: Vec<BoundPlanResource>,
     surface_slots: Vec<BoundSurfaceSlot>,
     programs: Vec<BoundProgramSchedule>,
+    passes: Vec<BoundExecutionPass>,
     outer_peak_surface_bytes: u64,
     estimated_peak_surface_bytes: u64,
 }
@@ -251,6 +325,10 @@ impl BoundProgramSchedules {
 
     pub fn programs(&self) -> &[BoundProgramSchedule] {
         &self.programs
+    }
+
+    pub fn passes(&self) -> &[BoundExecutionPass] {
+        &self.passes
     }
 
     pub const fn outer_peak_surface_bytes(&self) -> u64 {
@@ -413,6 +491,7 @@ impl RenderPlanTemplate {
             });
         }
 
+        let passes = bind_execution_passes(self, &resources)?;
         Ok(BoundProgramSchedules {
             shader_work,
             template_hash,
@@ -421,10 +500,76 @@ impl RenderPlanTemplate {
             resources,
             surface_slots,
             programs,
+            passes,
             outer_peak_surface_bytes,
             estimated_peak_surface_bytes,
         })
     }
+}
+
+fn bind_execution_passes(
+    template: &RenderPlanTemplate,
+    resources: &[BoundPlanResource],
+) -> Result<Vec<BoundExecutionPass>, ProgramBindingError> {
+    let mut retire_after = vec![Vec::new(); template.passes().len()];
+    for slot in template.surface_slots() {
+        for allocation in &slot.allocations {
+            if allocation.resource == template.output() {
+                continue;
+            }
+            let pass = allocation.interval.last.index();
+            let retired =
+                retire_after
+                    .get_mut(pass)
+                    .ok_or_else(|| ProgramBindingError::InvalidContract {
+                        path: "surfaceSlots".to_owned(),
+                        reason: "allocation ends outside the pass list".to_owned(),
+                    })?;
+            retired.push(allocation.resource);
+        }
+    }
+    for retired in &mut retire_after {
+        retired.sort_unstable();
+        retired.dedup();
+    }
+    template
+        .passes()
+        .iter()
+        .zip(retire_after)
+        .map(|(pass, retire_after)| {
+            let output = pass.kind.output();
+            let resource = template.resources().get(output.index()).ok_or_else(|| {
+                ProgramBindingError::InvalidContract {
+                    path: pass.semantic_path.clone(),
+                    reason: "pass output resource is undefined".to_owned(),
+                }
+            })?;
+            let device_roi = resources
+                .get(output.index())
+                .ok_or_else(|| ProgramBindingError::InvalidContract {
+                    path: pass.semantic_path.clone(),
+                    reason: "pass output has no bound ROI".to_owned(),
+                })?
+                .device_roi;
+            let surface_slot = match resource.kind {
+                PlanResourceKind::Surface { slot } => Some(slot),
+                PlanResourceKind::Alias { .. } | PlanResourceKind::OutputTarget {} => None,
+                PlanResourceKind::External { .. } => {
+                    return invalid(
+                        &pass.semantic_path,
+                        "pass cannot write an external resource",
+                    );
+                }
+            };
+            Ok(BoundExecutionPass {
+                pass: pass.id,
+                output,
+                device_roi,
+                surface_slot,
+                retire_after,
+            })
+        })
+        .collect()
 }
 
 fn bind_plan_resources(
@@ -576,13 +721,30 @@ fn bind_program(
     let destination_rois =
         resolve_destination_rois(program, bounds_reason, transform, root, bindings)?;
 
-    // Shader UVs can address any part of the content. Retain every predecessor's full
-    // region, including nested effects, instead of clipping their pixels to the viewport.
+    // Shader UVs and lens distortion can address pixels outside the output ROI. Retain
+    // every predecessor's full region, including nested effects, instead of clipping
+    // their pixels to the viewport.
     // The final program output and external destination reads keep their output ROI.
     let mut full_inputs = BTreeSet::new();
     for pass in program.local_plan().passes().iter().rev() {
         if let ProgramPassKind::ApplyShader { input, .. } = pass.kind {
             full_inputs.insert(input);
+        }
+        if let ProgramPassKind::ApplyFilter {
+            input,
+            filter:
+                valle_draw::program::Filter::LensDistortion { .. }
+                | valle_draw::program::Filter::Glow { .. }
+                | valle_draw::program::Filter::Bloom { .. }
+                | valle_draw::program::Filter::RadialBlur { .. }
+                | valle_draw::program::Filter::ChromaticAberration { .. },
+            ..
+        } = pass.kind
+        {
+            full_inputs.insert(input);
+        }
+        if let ProgramPassKind::ApplyTransition { from, to, .. } = pass.kind {
+            full_inputs.extend([from, to]);
         }
         if full_inputs.contains(&pass.kind.output()) {
             full_inputs.extend(pass.kind.reads());
@@ -705,16 +867,54 @@ fn bind_program(
         });
     }
 
-    let mut shader_work = ShaderWork::default();
+    let mut last_uses = BTreeMap::new();
     for pass in program.local_plan().passes() {
-        let output = resources.get(pass.kind.output().index()).ok_or_else(|| {
-            ProgramBindingError::InvalidContract {
+        last_uses.insert(pass.kind.output(), pass.id);
+        for input in pass.kind.reads() {
+            last_uses.insert(input, pass.id);
+        }
+        if let Some(ProgramStorageKind::Alias { source }) =
+            program.local_schedule().storage(pass.kind.output())
+        {
+            last_uses
+                .entry(source)
+                .and_modify(|last| *last = (*last).max(pass.id))
+                .or_insert(pass.id);
+        }
+    }
+    let mut retirements = BTreeMap::<_, Vec<_>>::new();
+    for (resource, last) in last_uses {
+        if resource != program.local_plan().output() {
+            retirements.entry(last).or_default().push(resource);
+        }
+    }
+
+    let mut shader_work = ShaderWork::default();
+    let mut passes = Vec::with_capacity(program.local_plan().passes().len());
+    for pass in program.local_plan().passes() {
+        let output = resources
+            .get(pass.kind.output().index())
+            .filter(|resource| resource.resource == pass.kind.output())
+            .ok_or_else(|| ProgramBindingError::InvalidContract {
                 path: pass.semantic_path.clone(),
                 reason: "shader output resource is missing".into(),
-            }
-        })?;
+            })?;
+        let storage = program
+            .local_schedule()
+            .storage(output.resource)
+            .ok_or_else(|| ProgramBindingError::InvalidContract {
+                path: pass.semantic_path.clone(),
+                reason: "shader output storage is missing".into(),
+            })?;
         let pixels = u64::from(output.device_roi.width) * u64::from(output.device_roi.height);
         shader_work.add_pixels(pass.shader_work_per_pixel, pixels);
+        passes.push(BoundProgramExecutionPass {
+            pass: pass.id,
+            output: output.resource,
+            device_roi: output.device_roi,
+            storage,
+            retire_after: retirements.remove(&pass.id).unwrap_or_default(),
+        });
     }
     Ok(BoundProgramSchedule {
         shader_work,
@@ -723,6 +923,7 @@ fn bind_program(
         bounds_reason,
         resources,
         surface_slots,
+        passes,
         estimated_surface_bytes,
     })
 }

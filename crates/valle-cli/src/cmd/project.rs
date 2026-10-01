@@ -201,16 +201,14 @@ pub(crate) fn run(json_output: bool, action: ProjectAction) -> Result<ExitCode> 
         ProjectAction::Render {
             project_id,
             revision,
-            output,
-            frame,
+            delivery,
         } => {
             let id = parse_project_id(project_id)?;
             let snapshot = store.get_timeline(&id, revision)?;
             super::timeline::render_document(
                 snapshot.timeline().clone(),
                 &std::env::current_dir()?,
-                &output,
-                frame,
+                delivery,
             )
         }
         ProjectAction::RestoreTimelineRevision {

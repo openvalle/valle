@@ -1,14 +1,11 @@
 use thiserror::Error;
 use valle_draw::math::{cos, sin, sqrt};
+use valle_draw::transition::TransitionKind;
 
 use crate::prepare::PreparedTransitionKernel;
 
-use super::{
-    BlendError, PixelError, PremulRgba32, ReferenceBlendMode, ReferenceImage, blend_over,
-    validate_unit,
-};
+use super::{BlendError, PixelError, PremulRgba32, ReferenceImage, validate_unit};
 
-const CIRCLE_COVERAGE_SAMPLES_PER_AXIS: u32 = 4;
 const LINEAR_BLUR_SAMPLES_PER_AXIS: u32 = 6;
 
 /// Executes one compositor-owned transition between two local premultiplied sources and places
@@ -26,6 +23,7 @@ pub fn composite_transition(
     from_opacity: f32,
     to_opacity: f32,
 ) -> Result<ReferenceImage, ReferenceTransitionError> {
+    kernel.builtin().validate_values(kernel.params())?;
     validate_unit(progress, "transition progress")?;
     validate_unit(from_opacity, "from opacity")?;
     validate_unit(to_opacity, "to opacity")?;
@@ -75,78 +73,80 @@ fn transition_pixel(
     let direct_from = pixel(from, x, y);
     let direct_to = pixel(to, x, y);
 
-    match kernel {
-        PreparedTransitionKernel::Fade | PreparedTransitionKernel::ExtensionCrossFade { .. } => {
-            mix_pixel(direct_from, direct_to, progress)
-        }
-        PreparedTransitionKernel::WipeLeft => {
-            let coverage = (progress * width - f64::from(x)).clamp(0.0, 1.0);
+    let params = kernel.params().0.map(f64::from);
+    match kernel.builtin() {
+        TransitionKind::Fade => mix_pixel(direct_from, direct_to, progress),
+        TransitionKind::WipeLeft => {
+            let coverage = if params[0] == 0.0 {
+                (progress * width - f64::from(x)).clamp(0.0, 1.0)
+            } else {
+                let front = -params[0] + progress * (1.0 + 2.0 * params[0]);
+                1.0 - smoothstep(front - params[0], front + params[0], uv[0])
+            };
             mix_pixel(direct_from, direct_to, coverage)
         }
-        PreparedTransitionKernel::WipeRight => {
+        TransitionKind::WipeRight => {
             let front = (1.0 - progress) * width;
-            let coverage = (f64::from(x) + 1.0 - front).clamp(0.0, 1.0);
+            let coverage = if params[0] == 0.0 {
+                (f64::from(x) + 1.0 - front).clamp(0.0, 1.0)
+            } else {
+                let front = -params[0] + progress * (1.0 + 2.0 * params[0]);
+                1.0 - smoothstep(front - params[0], front + params[0], 1.0 - uv[0])
+            };
             mix_pixel(direct_from, direct_to, coverage)
         }
-        PreparedTransitionKernel::CircleOpen => {
-            let center = [width * 0.5, height * 0.5];
-            let radius = progress * 0.5 * sqrt(width * width + height * height);
-            let mut inside = 0_u32;
-            for sample_y in 0..CIRCLE_COVERAGE_SAMPLES_PER_AXIS {
-                for sample_x in 0..CIRCLE_COVERAGE_SAMPLES_PER_AXIS {
-                    let sample = [
-                        f64::from(x)
-                            + (f64::from(sample_x) + 0.5)
-                                / f64::from(CIRCLE_COVERAGE_SAMPLES_PER_AXIS),
-                        f64::from(y)
-                            + (f64::from(sample_y) + 0.5)
-                                / f64::from(CIRCLE_COVERAGE_SAMPLES_PER_AXIS),
-                    ];
-                    let delta = [sample[0] - center[0], sample[1] - center[1]];
-                    if sqrt(delta[0] * delta[0] + delta[1] * delta[1]) <= radius {
-                        inside += 1;
-                    }
-                }
-            }
-            let samples = CIRCLE_COVERAGE_SAMPLES_PER_AXIS * CIRCLE_COVERAGE_SAMPLES_PER_AXIS;
+        TransitionKind::CircleOpen => {
+            let center = [width * params[0], height * params[1]];
+            let far = [
+                center[0].max(width - center[0]),
+                center[1].max(height - center[1]),
+            ];
+            let radius =
+                progress * (sqrt(far[0] * far[0] + far[1] * far[1]) + 2.0 * params[2]) - params[2];
+            let delta = [
+                f64::from(x) + 0.5 - center[0],
+                f64::from(y) + 0.5 - center[1],
+            ];
+            let distance = sqrt(delta[0] * delta[0] + delta[1] * delta[1]);
+            let outside = if params[2] == 0.0 {
+                f64::from(distance >= radius)
+            } else {
+                smoothstep(radius - params[2], radius + params[2], distance)
+            };
+            mix_pixel(direct_to, direct_from, outside)
+        }
+        TransitionKind::SimpleZoom => {
+            let amount = smoothstep(0.0, params[0], progress);
+            let from_uv = scale_about(uv, 1.0 - amount, [params[1], params[2]]);
             mix_pixel(
-                direct_from,
+                sample_normalized(from, from_uv)?,
                 direct_to,
-                f64::from(inside) / f64::from(samples),
+                smoothstep(params[0] - 0.2, 1.0, progress),
             )
         }
-        PreparedTransitionKernel::SimpleZoom => {
-            let zoom = 1.0 + 0.5 * (1.0 - progress);
-            let to_uv = [(uv[0] - 0.5) / zoom + 0.5, (uv[1] - 0.5) / zoom + 0.5];
-            mix_pixel(
-                direct_from,
-                sample_normalized(to, to_uv)?,
-                smoothstep(0.0, 1.0, progress),
-            )
-        }
-        PreparedTransitionKernel::CrossWarp => {
+        TransitionKind::CrossWarp => {
             let amount = smoothstep(0.0, 1.0, progress * 2.0 + uv[0] - 1.0);
-            let from_uv = scale_about_center(uv, 1.0 - amount);
-            let to_uv = scale_about_center(uv, amount);
+            let from_uv = scale_about(uv, 1.0 - amount, [params[0], params[1]]);
+            let to_uv = scale_about(uv, amount, [params[0], params[1]]);
             mix_pixel(
                 sample_normalized(from, from_uv)?,
                 sample_normalized(to, to_uv)?,
                 amount,
             )
         }
-        PreparedTransitionKernel::LinearBlur => {
-            let displacement = 0.1 * progress.min(1.0 - progress);
+        TransitionKind::LinearBlur => {
+            let displacement = params[0] * progress.min(1.0 - progress);
             let blurred_from = linear_blur_sample(from, uv, displacement)?;
             let blurred_to = linear_blur_sample(to, uv, displacement)?;
             mix_pixel(blurred_from, blurred_to, progress)
         }
-        PreparedTransitionKernel::DirectionalWarp => {
-            // L1-normalized (-1, 1) direction. Moving the feathered front outside the complete
-            // projection domain makes both endpoints exact without a near-end discontinuity.
-            let projection = -0.5 * (uv[0] - 0.5) + 0.5 * (uv[1] - 0.5);
-            let edge = 0.08;
-            let front = -0.5 - edge + progress * (1.0 + 2.0 * edge);
-            let amount = 1.0 - smoothstep(front - edge, front + edge, projection);
+        TransitionKind::DirectionalWarp => {
+            let length = params[0].abs() + params[1].abs();
+            let direction = [params[0] / length, params[1] / length];
+            let center = direction[0] * 0.5 + direction[1] * 0.5;
+            let projection = direction[0] * uv[0] + direction[1] * uv[1];
+            let front = center - 0.5 + progress * (1.0 + params[2]);
+            let amount = 1.0 - smoothstep(-params[2], 0.0, projection - front);
             let from_uv = scale_about_center(uv, 1.0 - amount);
             let to_uv = scale_about_center(uv, amount);
             mix_pixel(
@@ -155,30 +155,37 @@ fn transition_pixel(
                 amount,
             )
         }
-        PreparedTransitionKernel::DreamyZoom => {
-            let from_uv = scale_about_center(uv, 1.0 + progress * 0.5);
-            let to_uv = scale_about_center(uv, 1.5 - progress * 0.5);
+        TransitionKind::DreamyZoom => {
+            let from_uv = scale_about(uv, 1.0 + progress * params[0], [params[1], params[2]]);
+            let to_uv = scale_about(
+                uv,
+                1.0 + (1.0 - progress) * params[0],
+                [params[1], params[2]],
+            );
             mix_pixel(
                 sample_normalized(from, from_uv)?,
                 sample_normalized(to, to_uv)?,
                 smoothstep(0.0, 1.0, progress),
             )
         }
-        PreparedTransitionKernel::Ripple => {
+        TransitionKind::Ripple => {
             let direction = [uv[0] - 0.5, uv[1] - 0.5];
             let distance = sqrt(direction[0] * direction[0] + direction[1] * direction[1]);
-            let envelope = sin(std::f64::consts::PI * progress);
-            let wave = sin(distance * 100.0 - progress * 50.0) * envelope / 30.0;
+            let envelope = 4.0 * progress * (1.0 - progress);
+            let wave = sin(distance * params[0] - progress * params[1]) * params[2] * envelope;
             let from_uv = [uv[0] + direction[0] * wave, uv[1] + direction[1] * wave];
             mix_pixel(
                 sample_normalized(from, from_uv)?,
                 direct_to,
-                smoothstep(0.0, 1.0, progress),
+                smoothstep(0.2, 1.0, progress),
             )
         }
-        PreparedTransitionKernel::FlyEye => {
+        TransitionKind::FlyEye => {
             let inverse = 1.0 - progress;
-            let displacement = [0.04 * cos(50.0 * uv[0]), 0.04 * sin(50.0 * uv[1])];
+            let displacement = [
+                params[0] * cos(params[1] * uv[0]),
+                params[0] * sin(params[1] * uv[1]),
+            ];
             let displaced_to = sample_normalized(
                 to,
                 [
@@ -186,20 +193,29 @@ fn transition_pixel(
                     uv[1] + inverse * displacement[1],
                 ],
             )?;
-            let separated_from = fly_eye_from(from, uv, displacement, progress)?;
+            let separated_from = fly_eye_from(from, uv, displacement, progress, params[2])?;
             mix_pixel(separated_from, displaced_to, progress)
         }
-        PreparedTransitionKernel::MultiplyBlend => {
-            let bridge = blend_over(direct_to, direct_from, ReferenceBlendMode::Multiply)?;
-            if progress < 0.5 {
-                mix_pixel(direct_from, bridge, progress * 2.0)
+        TransitionKind::MultiplyBlend => {
+            let left = direct_from.channels();
+            let right = direct_to.channels();
+            let bridge = PremulRgba32::from_premultiplied(std::array::from_fn(|index| {
+                left[index] * right[index]
+            }))?;
+            if progress < params[0] {
+                mix_pixel(direct_from, bridge, progress / params[0])
             } else {
-                mix_pixel(bridge, direct_to, (progress - 0.5) * 2.0)
+                mix_pixel(
+                    bridge,
+                    direct_to,
+                    (progress - params[0]) / (1.0 - params[0]),
+                )
             }
         }
-        PreparedTransitionKernel::Perlin => {
-            let noise = value_noise([uv[0] * 5.0, uv[1] * 5.0]);
-            let amount = smoothstep(noise - 0.1, noise + 0.1, progress);
+        TransitionKind::Perlin => {
+            let noise = value_noise([uv[0] * params[0], uv[1] * params[0]]);
+            let front = -params[1] + progress * (1.0 + 2.0 * params[1]);
+            let amount = smoothstep(noise - params[1], noise + params[1], front);
             mix_pixel(direct_from, direct_to, amount)
         }
     }
@@ -214,8 +230,8 @@ fn linear_blur_sample(
     for sample_y in 0..LINEAR_BLUR_SAMPLES_PER_AXIS {
         for sample_x in 0..LINEAR_BLUR_SAMPLES_PER_AXIS {
             let offset = [
-                (f64::from(sample_x) + 0.5) / f64::from(LINEAR_BLUR_SAMPLES_PER_AXIS) - 0.5,
-                (f64::from(sample_y) + 0.5) / f64::from(LINEAR_BLUR_SAMPLES_PER_AXIS) - 0.5,
+                f64::from(sample_x) / f64::from(LINEAR_BLUR_SAMPLES_PER_AXIS) - 0.5,
+                f64::from(sample_y) / f64::from(LINEAR_BLUR_SAMPLES_PER_AXIS) - 0.5,
             ];
             let sample = sample_normalized(
                 image,
@@ -239,8 +255,9 @@ fn fly_eye_from(
     uv: [f64; 2],
     displacement: [f64; 2],
     progress: f64,
+    separation: f64,
 ) -> Result<PremulRgba32, ReferenceTransitionError> {
-    let scales = [0.7, 1.0, 1.3];
+    let scales = [1.0 - separation, 1.0, 1.0 + separation];
     let [red, green, blue] = scales.map(|scale| {
         sample_normalized(
             image,
@@ -307,7 +324,13 @@ fn pixel(image: &ReferenceImage, x: u32, y: u32) -> PremulRgba32 {
 }
 
 fn scale_about_center(uv: [f64; 2], scale: f64) -> [f64; 2] {
-    [(uv[0] - 0.5) * scale + 0.5, (uv[1] - 0.5) * scale + 0.5]
+    scale_about(uv, scale, [0.5, 0.5])
+}
+fn scale_about(uv: [f64; 2], scale: f64, center: [f64; 2]) -> [f64; 2] {
+    [
+        (uv[0] - center[0]) * scale + center[0],
+        (uv[1] - center[1]) * scale + center[1],
+    ]
 }
 
 fn smoothstep(start: f64, end: f64, value: f64) -> f64 {
@@ -329,21 +352,18 @@ fn value_noise(point: [f64; 2]) -> f64 {
 }
 
 fn hash21(point: [f64; 2]) -> f64 {
-    let mut point = [fract(point[0] * 123.34), fract(point[1] * 456.21)];
-    let dot = point[0] * (point[0] + 45.32) + point[1] * (point[1] + 45.32);
-    point[0] += dot;
-    point[1] += dot;
-    fract(point[0] * point[1])
-}
-
-fn fract(value: f64) -> f64 {
-    value - value.floor()
+    let mut hash = ((point[0] as u32) * 157 + (point[1] as u32) * 113) % 1024;
+    hash = hash * (hash + 31) % 1024;
+    hash = hash * (hash + 71) % 1024;
+    f64::from(hash) / 1024.0
 }
 
 #[derive(Debug, Error, Clone, PartialEq)]
 pub enum ReferenceTransitionError {
     #[error(transparent)]
     Pixel(#[from] PixelError),
+    #[error(transparent)]
+    Params(#[from] valle_draw::transition::TransitionParamError),
     #[error(transparent)]
     Blend(#[from] BlendError),
 }
@@ -354,19 +374,19 @@ mod tests {
     use crate::resource::Extent2d;
 
     const KERNELS: [PreparedTransitionKernel; 13] = [
-        PreparedTransitionKernel::Fade,
-        PreparedTransitionKernel::WipeLeft,
-        PreparedTransitionKernel::WipeRight,
-        PreparedTransitionKernel::CircleOpen,
-        PreparedTransitionKernel::SimpleZoom,
-        PreparedTransitionKernel::CrossWarp,
-        PreparedTransitionKernel::LinearBlur,
-        PreparedTransitionKernel::DirectionalWarp,
-        PreparedTransitionKernel::DreamyZoom,
-        PreparedTransitionKernel::Ripple,
-        PreparedTransitionKernel::FlyEye,
-        PreparedTransitionKernel::MultiplyBlend,
-        PreparedTransitionKernel::Perlin,
+        PreparedTransitionKernel::default_builtin(TransitionKind::Fade),
+        PreparedTransitionKernel::default_builtin(TransitionKind::WipeLeft),
+        PreparedTransitionKernel::default_builtin(TransitionKind::WipeRight),
+        PreparedTransitionKernel::default_builtin(TransitionKind::CircleOpen),
+        PreparedTransitionKernel::default_builtin(TransitionKind::SimpleZoom),
+        PreparedTransitionKernel::default_builtin(TransitionKind::CrossWarp),
+        PreparedTransitionKernel::default_builtin(TransitionKind::LinearBlur),
+        PreparedTransitionKernel::default_builtin(TransitionKind::DirectionalWarp),
+        PreparedTransitionKernel::default_builtin(TransitionKind::DreamyZoom),
+        PreparedTransitionKernel::default_builtin(TransitionKind::Ripple),
+        PreparedTransitionKernel::default_builtin(TransitionKind::FlyEye),
+        PreparedTransitionKernel::default_builtin(TransitionKind::MultiplyBlend),
+        PreparedTransitionKernel::default_builtin(TransitionKind::Perlin),
     ];
 
     fn extent(width: u32, height: u32) -> Extent2d {
@@ -421,7 +441,7 @@ mod tests {
             &backdrop,
             &from,
             &to,
-            PreparedTransitionKernel::Fade,
+            PreparedTransitionKernel::default_builtin(TransitionKind::Fade),
             0.5,
             0.5,
             0.5,
@@ -441,7 +461,7 @@ mod tests {
             &transparent,
             &from,
             &to,
-            PreparedTransitionKernel::WipeLeft,
+            PreparedTransitionKernel::default_builtin(TransitionKind::WipeLeft),
             0.375,
             1.0,
             1.0,
@@ -451,7 +471,7 @@ mod tests {
             &transparent,
             &from,
             &to,
-            PreparedTransitionKernel::WipeRight,
+            PreparedTransitionKernel::default_builtin(TransitionKind::WipeRight),
             0.375,
             1.0,
             1.0,
@@ -478,7 +498,7 @@ mod tests {
             &transparent,
             &from,
             &to,
-            PreparedTransitionKernel::CircleOpen,
+            PreparedTransitionKernel::default_builtin(TransitionKind::CircleOpen),
             0.35,
             1.0,
             1.0,
@@ -541,6 +561,111 @@ mod tests {
             let result =
                 composite_transition(&backdrop, &from, &to, kernel, 0.43, 0.8, 0.65).unwrap();
             assert_eq!(result.extent(), extent, "{kernel:?}");
+            if kernel.builtin() == TransitionKind::SimpleZoom {
+                let end =
+                    composite_transition(&backdrop, &from, &to, kernel, 1.0, 0.8, 0.65).unwrap();
+                let near_end =
+                    composite_transition(&backdrop, &from, &to, kernel, 0.9999, 0.8, 0.65).unwrap();
+                for (a, b) in near_end.pixels().iter().zip(end.pixels()) {
+                    assert!(
+                        a.approx_eq(*b, 1.0e-5),
+                        "SimpleZoom must converge to the unscaled incoming image"
+                    );
+                }
+            }
+            for (slot, spec) in kernel.builtin().parameter_specs().iter().enumerate() {
+                for value in [spec.min, spec.max]
+                    .into_iter()
+                    .filter(|value| *value != spec.default)
+                {
+                    let mut params = kernel.params();
+                    params.0[slot] = value;
+                    let changed = PreparedTransitionKernel::Builtin {
+                        kind: kernel.builtin(),
+                        params,
+                    };
+                    let sampled =
+                        composite_transition(&backdrop, &from, &to, changed, 0.43, 0.8, 0.65)
+                            .unwrap();
+                    assert_ne!(sampled, result, "{kernel:?} must use {}", spec.name);
+                    for progress in [0.0, 1.0] {
+                        let boundary = composite_transition(
+                            &backdrop, &from, &to, changed, progress, 0.8, 0.65,
+                        )
+                        .unwrap();
+                        let nearby = composite_transition(
+                            &backdrop,
+                            &from,
+                            &to,
+                            changed,
+                            if progress == 0.0 {
+                                1.0e-7
+                            } else {
+                                1.0 - 1.0e-7
+                            },
+                            0.8,
+                            0.65,
+                        )
+                        .unwrap();
+                        let farther = composite_transition(
+                            &backdrop,
+                            &from,
+                            &to,
+                            changed,
+                            if progress == 0.0 {
+                                1.0e-5
+                            } else {
+                                1.0 - 1.0e-5
+                            },
+                            0.8,
+                            0.65,
+                        )
+                        .unwrap();
+                        for (index, (a, b)) in
+                            nearby.pixels().iter().zip(boundary.pixels()).enumerate()
+                        {
+                            // A zero-softness disk is point sampled: its exact center switches as
+                            // soon as radius becomes positive. All other pixels must converge.
+                            let hard_circle_center = kernel.builtin() == TransitionKind::CircleOpen
+                                && params.0[2] == 0.0
+                                && progress == 0.0
+                                && (index % extent.width() as usize) as f32 + 0.5
+                                    == extent.width() as f32 * params.0[0]
+                                && (index / extent.width() as usize) as f32 + 0.5
+                                    == extent.height() as f32 * params.0[1];
+                            if hard_circle_center {
+                                continue;
+                            }
+                            let error = |pixel: PremulRgba32| {
+                                pixel
+                                    .channels()
+                                    .into_iter()
+                                    .zip(b.channels())
+                                    .map(|(a, b)| (a - b).abs())
+                                    .fold(0.0_f32, f32::max)
+                            };
+                            // Reducing the time step by ~100 must reduce the error. This also
+                            // admits a steep but continuous multiply midpoint near 0 or 1.
+                            assert!(
+                                error(*a) <= 5.0e-7 + 0.05 * error(farther.pixels()[index]),
+                                "{changed:?} must approach endpoint {progress}"
+                            );
+                        }
+                        assert_eq!(
+                            composite_transition(
+                                &backdrop, &from, &to, changed, progress, 0.8, 0.65
+                            )
+                            .unwrap(),
+                            composite_transition(
+                                &backdrop, &from, &to, kernel, progress, 0.8, 0.65
+                            )
+                            .unwrap(),
+                            "{kernel:?} {} must preserve endpoint {progress}",
+                            spec.name,
+                        );
+                    }
+                }
+            }
             assert!(
                 result
                     .pixels()

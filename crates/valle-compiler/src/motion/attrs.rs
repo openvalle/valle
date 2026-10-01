@@ -3,6 +3,25 @@
 use super::*;
 
 impl<'s> Compiler<'s> {
+    pub(super) fn bound_paint(&self, expression: &Expression<'_>) -> Option<PaintValue> {
+        match peel_expr(expression) {
+            Expression::Identifier(identifier) => {
+                self.bindings.paints.get(identifier.name.as_str()).cloned()
+            }
+            Expression::StaticMemberExpression(member) if matches!(&member.object, Expression::Identifier(root) if root.name == "props") => {
+                self.bindings
+                    .component_props
+                    .as_ref()
+                    .and_then(|props| props.get(member.property.name.as_str()))
+                    .and_then(|value| match value {
+                        AuthorValue::Paint(paint) => Some(paint.clone()),
+                        _ => None,
+                    })
+            }
+            _ => None,
+        }
+    }
+
     pub(super) fn attr_paint_value(
         &mut self,
         value: &Option<JSXAttributeValue<'_>>,
@@ -25,6 +44,10 @@ impl<'s> Compiler<'s> {
                 return None;
             }
         };
+
+        if let Some(paint) = self.bound_paint(expression) {
+            return Some(paint);
+        }
 
         if let Some(value) = self.eval_static(expression) {
             if let Some(text) = value.as_str() {
@@ -61,7 +84,9 @@ impl<'s> Compiler<'s> {
         }
         Rgba::parse(value)
             .map(|value| PaintValue::Solid {
-                color: ColorValue::Static { value },
+                color: ColorValue::Static {
+                    value: valle_draw::program::AuthorColor::from_srgb8(value),
+                },
             })
             .or_else(|| {
                 self.illegal(
@@ -283,6 +308,94 @@ impl<'s> Compiler<'s> {
                 );
                 None
             })
+    }
+
+    pub(super) fn attr_batch_geometry(
+        &mut self,
+        value: &Option<JSXAttributeValue<'_>>,
+        span: Span,
+    ) -> Option<GeometryBatchGeometry> {
+        let name = match value {
+            Some(JSXAttributeValue::StringLiteral(value)) => Some(value.value.to_string()),
+            Some(JSXAttributeValue::ExpressionContainer(container)) => container
+                .expression
+                .as_expression()
+                .and_then(|expression| self.eval_static(expression))
+                .and_then(|value| value.as_str().map(str::to_owned)),
+            _ => None,
+        };
+        if let Some(name) = name {
+            return match name.as_str() {
+                "circle" => Some(GeometryBatchGeometry::Circle),
+                "rect" => Some(GeometryBatchGeometry::Rect),
+                _ => {
+                    self.illegal(
+                        DiagCode::GrammarForbidden,
+                        span,
+                        "GeometryBatch geometry must be circle, rect, atlasRegion(...), or a prepared PathData",
+                    );
+                    None
+                }
+            };
+        }
+        if let Some(JSXAttributeValue::ExpressionContainer(container)) = value
+            && let Some(expression) = container.expression.as_expression()
+            && let Some(static_value) = self.eval_static(expression)
+            && static_value
+                .get("__valleType")
+                .and_then(serde_json::Value::as_str)
+                == Some("atlasRegion")
+        {
+            let source = static_value
+                .get("source")
+                .and_then(serde_json::Value::as_str);
+            let src = static_value
+                .get("src")
+                .and_then(motion_value_from_json)
+                .and_then(|value| match value {
+                    MotionValue::Rect(rect) => Some(rect),
+                    _ => None,
+                });
+            if let (Some(source), Some(src)) = (source, src)
+                && source.starts_with("asset://")
+                && !source.trim_start_matches("asset://").is_empty()
+                && src.x.is_finite()
+                && src.y.is_finite()
+                && src.width.is_finite()
+                && src.height.is_finite()
+                && src.x >= 0.0
+                && src.y >= 0.0
+                && src.width > 0.0
+                && src.height > 0.0
+                && src.x + src.width <= 1.0
+                && src.y + src.height <= 1.0
+            {
+                return Some(GeometryBatchGeometry::Image {
+                    source: source.to_owned(),
+                    src,
+                });
+            }
+            self.illegal(
+                DiagCode::GrammarForbidden,
+                span,
+                "atlasRegion(source, rect) requires a static asset:// image and a positive normalized rect inside [0,1]",
+            );
+            return None;
+        }
+        match self.attr_path_value(value, span) {
+            Some(PathValue::Static { value }) if !value.verbs.is_empty() => {
+                Some(GeometryBatchGeometry::Path { path: value })
+            }
+            Some(_) => {
+                self.illegal(
+                    DiagCode::GrammarForbidden,
+                    span,
+                    "GeometryBatch path must be nonempty prepare-time PathData",
+                );
+                None
+            }
+            None => None,
+        }
     }
 
     pub(super) fn attr_path_value(
@@ -770,7 +883,7 @@ impl<'s> Compiler<'s> {
             None
         })?;
         let items = value.as_array().cloned().unwrap_or_else(|| vec![value]);
-        items
+        let points = items
             .iter()
             .map(|value| {
                 allow_scalar
@@ -796,14 +909,26 @@ impl<'s> Compiler<'s> {
                     ),
                 );
                 None
-            })
+            })?;
+        if name.starts_with("sizes")
+            && points
+                .iter()
+                .any(|p| !p.x.is_finite() || !p.y.is_finite() || p.x < 0.0 || p.y < 0.0)
+        {
+            self.illegal(DiagCode::GrammarForbidden, span, format!("GeometryBatch `{name}` requires finite non-negative sizes; zero hides the instance"));
+            return None;
+        }
+        Some(points)
     }
 
     pub(super) fn attr_batch_fills(
         &mut self,
         value: &'s Option<JSXAttributeValue<'s>>,
         span: Span,
-    ) -> Option<(Vec<Rgba>, Option<BatchColorField>)> {
+    ) -> Option<(
+        Vec<valle_draw::program::AuthorColor>,
+        Option<BatchColorField>,
+    )> {
         if let Some(JSXAttributeValue::StringLiteral(literal)) = value {
             let value = serde_json::Value::String(literal.value.to_string());
             return match motion_value_from_json(&value) {
@@ -842,7 +967,7 @@ impl<'s> Compiler<'s> {
         expression: &'s Expression<'s>,
         span: Span,
         name: &str,
-    ) -> Option<Vec<Rgba>> {
+    ) -> Option<Vec<valle_draw::program::AuthorColor>> {
         let value = self.eval_static(expression).or_else(|| {
             self.illegal(
                 DiagCode::BuiltinRejected,
@@ -874,11 +999,44 @@ impl<'s> Compiler<'s> {
         value: &'s Option<JSXAttributeValue<'s>>,
         span: Span,
     ) -> Option<(Vec<f64>, Option<BatchNumberField>)> {
-        let expression = self.attr_batch_expression(value, span, "opacities")?;
+        self.attr_batch_numbers(value, span, "opacities")
+    }
+
+    pub(super) fn attr_batch_rotations(
+        &mut self,
+        value: &'s Option<JSXAttributeValue<'s>>,
+        span: Span,
+    ) -> Option<(Vec<f64>, Option<BatchNumberField>)> {
+        self.attr_batch_numbers(value, span, "rotations")
+    }
+
+    pub(super) fn attr_batch_skew_xs(
+        &mut self,
+        value: &'s Option<JSXAttributeValue<'s>>,
+        span: Span,
+    ) -> Option<(Vec<f64>, Option<BatchNumberField>)> {
+        self.attr_batch_numbers(value, span, "skewXs")
+    }
+
+    pub(super) fn attr_batch_stroke_widths(
+        &mut self,
+        value: &'s Option<JSXAttributeValue<'s>>,
+        span: Span,
+    ) -> Option<(Vec<f64>, Option<BatchNumberField>)> {
+        self.attr_batch_numbers(value, span, "strokeWidths")
+    }
+
+    fn attr_batch_numbers(
+        &mut self,
+        value: &'s Option<JSXAttributeValue<'s>>,
+        span: Span,
+        name: &str,
+    ) -> Option<(Vec<f64>, Option<BatchNumberField>)> {
+        let expression = self.attr_batch_expression(value, span, name)?;
         if self.is_batch_field_call(expression) {
-            let field = self.batch_field_parts(expression, "opacities")?;
-            let from = self.static_batch_numbers(field.from, span, "opacities.from")?;
-            let to = self.static_batch_numbers(field.to, span, "opacities.to")?;
+            let field = self.batch_field_parts(expression, name)?;
+            let from = self.static_batch_numbers(field.from, span, &format!("{name}.from"))?;
+            let to = self.static_batch_numbers(field.to, span, &format!("{name}.to"))?;
             let progress = self.lower_expr(field.progress)?;
             return Some((
                 from,
@@ -889,7 +1047,7 @@ impl<'s> Compiler<'s> {
                 }),
             ));
         }
-        let values = self.static_batch_numbers(expression, span, "opacities")?;
+        let values = self.static_batch_numbers(expression, span, name)?;
         Some((values, None))
     }
 
@@ -1034,6 +1192,68 @@ impl<'s> Compiler<'s> {
                 self.illegal(DiagCode::GrammarForbidden, options_expression.span(), "particles needs integer seed/count, birth.interval, lifetime, and velocity.x/y two-number ranges");
                 return None;
             };
+            let force_from_json =
+                |value: &serde_json::Value| -> Option<valle_motion::ParticleForce> {
+                    let force = value.as_object()?;
+                    match force.get("__valleType")?.as_str()? {
+                        "particleCurlNoise" if force.len() == 4 => {
+                            let seed = force.get("seed")?.as_u64()?;
+                            let scale = force.get("scale")?.as_f64()?;
+                            let strength = force.get("strength")?.as_f64()?;
+                            (seed <= 9_007_199_254_740_991
+                                && scale.is_finite()
+                                && scale > 0.0
+                                && strength.is_finite())
+                            .then_some(valle_motion::ParticleForce::CurlNoise {
+                                seed,
+                                scale,
+                                strength,
+                            })
+                        }
+                        "particleDrag" if force.len() == 2 => {
+                            let coefficient = force.get("coefficient")?.as_f64()?;
+                            (coefficient.is_finite() && coefficient >= 0.0)
+                                .then_some(valle_motion::ParticleForce::Drag { coefficient })
+                        }
+                        _ => None,
+                    }
+                };
+            let forces = match object.get("forces") {
+                None => Vec::new(),
+                Some(serde_json::Value::Array(values)) if values.len() <= 8 => {
+                    let Some(forces) = values
+                        .iter()
+                        .map(force_from_json)
+                        .collect::<Option<Vec<_>>>()
+                    else {
+                        self.illegal(
+                            DiagCode::GrammarForbidden,
+                            options_expression.span(),
+                            "particles forces must be curlNoise({ seed, scale, strength }) or drag(nonnegativeCoefficient)",
+                        );
+                        return None;
+                    };
+                    forces
+                        .into_iter()
+                        .filter(|force| match force {
+                            valle_motion::ParticleForce::CurlNoise { strength, .. } => {
+                                *strength != 0.0
+                            }
+                            valle_motion::ParticleForce::Drag { coefficient } => {
+                                *coefficient != 0.0
+                            }
+                        })
+                        .collect()
+                }
+                _ => {
+                    self.illegal(
+                        DiagCode::GrammarForbidden,
+                        options_expression.span(),
+                        "particles forces must be an array of at most 8 supported forces",
+                    );
+                    return None;
+                }
+            };
             return Some((
                 BatchPositions::Particles {
                     frame,
@@ -1050,6 +1270,7 @@ impl<'s> Compiler<'s> {
                             .get("loop")
                             .and_then(serde_json::Value::as_bool)
                             .unwrap_or(false),
+                        forces,
                     },
                 },
                 None,
@@ -1124,8 +1345,7 @@ impl<'s> Compiler<'s> {
         let mut from = None;
         let mut to = None;
         let mut progress = None;
-        let mut stagger = 0.0;
-        let mut saw_stagger = false;
+        let mut stagger = BatchStagger::default();
         let mut saw = BTreeSet::new();
         for property in &object.properties {
             let ObjectPropertyKind::ObjectProperty(property) = property else {
@@ -1157,19 +1377,39 @@ impl<'s> Compiler<'s> {
                 "to" => to = Some(&property.value),
                 "progress" => progress = Some(&property.value),
                 "stagger" => {
-                    saw_stagger = true;
-                    stagger = self
+                    let value = self
                         .eval_static(&property.value)
-                        .and_then(|value| value.as_f64())
-                        .filter(|value| value.is_finite() && *value >= 0.0)
-                        .unwrap_or_else(|| {
-                            self.illegal(
-                                DiagCode::GrammarForbidden,
-                                property.value.span(),
-                                "GeometryBatch field stagger must be a prepare-time finite number >= 0",
-                            );
-                            f64::NAN
+                        .and_then(|value| match value {
+                            serde_json::Value::Number(number) => number
+                                .as_f64()
+                                .filter(|step| step.is_finite() && *step >= 0.0)
+                                .map(BatchStagger::Step),
+                            serde_json::Value::Array(values)
+                                if !values.is_empty()
+                                    && values.len()
+                                        <= valle_motion::MAX_GEOMETRY_BATCH_INSTANCES_PER_NODE =>
+                            {
+                                values
+                                    .iter()
+                                    .map(|value| {
+                                        value.as_f64().filter(|delay| {
+                                            delay.is_finite() && (0.0..1.0).contains(delay)
+                                        })
+                                    })
+                                    .collect::<Option<Vec<_>>>()
+                                    .map(BatchStagger::PerInstance)
+                            }
+                            _ => None,
                         });
+                    let Some(value) = value else {
+                        self.illegal(
+                            DiagCode::GrammarForbidden,
+                            property.value.span(),
+                            "GeometryBatch field stagger must be a prepare-time nonnegative number or an array of delays in [0,1)",
+                        );
+                        return None;
+                    };
+                    stagger = value;
                 }
                 _ => self.illegal(
                     DiagCode::UnknownProp,
@@ -1177,9 +1417,6 @@ impl<'s> Compiler<'s> {
                     format!("GeometryBatch field does not admit `{key}`"),
                 ),
             }
-        }
-        if saw_stagger && !stagger.is_finite() {
-            return None;
         }
         let (Some(from), Some(to), Some(progress)) = (from, to, progress) else {
             self.illegal(
@@ -1250,6 +1487,31 @@ impl<'s> Compiler<'s> {
         name: &str,
     ) -> Option<NumberValue> {
         self.attr_number_value_in_range(value, span, name, Some(0.0..=1.0))
+    }
+
+    pub(super) fn attr_static_number(
+        &mut self,
+        value: &Option<JSXAttributeValue<'_>>,
+        span: Span,
+        name: &str,
+    ) -> Option<f64> {
+        let number = match value {
+            Some(JSXAttributeValue::StringLiteral(value)) => value.value.parse::<f64>().ok(),
+            Some(JSXAttributeValue::ExpressionContainer(container)) => container
+                .expression
+                .as_expression()
+                .and_then(|expression| self.eval_static(expression))
+                .and_then(|value| value.as_f64()),
+            _ => None,
+        };
+        number.filter(|number| number.is_finite()).or_else(|| {
+            self.illegal(
+                DiagCode::GrammarForbidden,
+                span,
+                format!("{name} must be a finite prepare-time number"),
+            );
+            None
+        })
     }
 
     /// Seconds and playback multipliers are finite scalars, not normalized fractions.

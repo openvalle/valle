@@ -25,8 +25,8 @@ use valle_motion::diag::DiagCode;
 use valle_motion::{ContentDigest, ResourceRef};
 
 use super::{
-    CompiledMotion, CompilerDiagnostic, MeasureEnv, ModuleSourceInfo, PrepareDataBinding,
-    ShaderRegistryEnv, SourceSpan, compile_motion_impl,
+    AudioAnalysisEnv, CompiledMotion, CompilerDiagnostic, MeasureEnv, ModuleSourceInfo,
+    PrepareDataBinding, ShaderRegistryEnv, SourceSpan, compile_motion_impl,
 };
 
 /// Complete, explicit source closure accepted by every Motion host.
@@ -89,6 +89,17 @@ impl MotionModuleGraph {
         input: &Path,
         overrides: &BTreeMap<String, String>,
     ) -> Result<Self, Vec<CompilerDiagnostic>> {
+        // `Path::parent("main.motion.tsx")` is the empty path, whose read_dir fails.
+        // Make the root absolute without resolving symlinks: module admission still needs to
+        // reject symlinks and retain the author's spelling for diagnostics.
+        let input = std::path::absolute(input).map_err(|error| {
+            vec![path_diagnostic(
+                "<module-graph>",
+                "",
+                Span::new(0, 0),
+                format!("cannot resolve Motion input path: {error}"),
+            )]
+        })?;
         let root = input.parent().unwrap_or_else(|| Path::new("."));
         let entry = input
             .file_name()
@@ -130,6 +141,19 @@ pub fn compile_motion_modules_with_full_env_and_data(
     shaders: Option<&ShaderRegistryEnv>,
     data: Option<&PrepareDataBinding>,
 ) -> Result<CompiledMotion, Vec<CompilerDiagnostic>> {
+    compile_motion_modules_with_full_env_and_data_and_audio(
+        graph, resources, measure, shaders, data, None,
+    )
+}
+
+pub fn compile_motion_modules_with_full_env_and_data_and_audio(
+    graph: &MotionModuleGraph,
+    resources: &[ResourceRef],
+    measure: Option<&MeasureEnv>,
+    shaders: Option<&ShaderRegistryEnv>,
+    data: Option<&PrepareDataBinding>,
+    audio: Option<&AudioAnalysisEnv>,
+) -> Result<CompiledMotion, Vec<CompilerDiagnostic>> {
     let linked = Linker::new(graph).link()?;
     let mut compiled = match compile_motion_impl(
         &linked.source,
@@ -137,6 +161,7 @@ pub fn compile_motion_modules_with_full_env_and_data(
         measure,
         shaders,
         data,
+        audio,
         Some(&graph.entry),
     ) {
         Ok(compiled) => compiled,
@@ -155,6 +180,9 @@ pub fn compile_motion_modules_with_full_env_and_data(
     compiled.source_map.entry = graph.entry.clone();
     compiled.source_map.closure_digest = closure_digest;
     compiled.source_map.modules = linked.module_infos.clone();
+    for warning in &mut compiled.warnings {
+        linked.remap_diagnostic(warning);
+    }
 
     if let Some(span) = compiled.source_map.controls {
         let mapped = linked.remap_span(span);
@@ -169,7 +197,12 @@ pub fn compile_motion_modules_with_full_env_and_data(
         mapping.span = mapped.span;
         linked.remap_expansion_stack(&mut mapping.expansion_stack);
     }
-    for mapping in &mut compiled.source_map.exprs {
+    for mapping in compiled
+        .source_map
+        .exprs
+        .iter_mut()
+        .chain(compiled.source_map.instance_exprs.iter_mut().flatten())
+    {
         let mapped = linked.remap_span(mapping.span);
         mapping.source_path = mapped.path;
         mapping.span = mapped.span;

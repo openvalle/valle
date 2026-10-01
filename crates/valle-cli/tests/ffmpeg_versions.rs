@@ -76,6 +76,55 @@ fn one_binary_renders_with_all_ffmpeg_abis() {
         assert_eq!(report["ffmpegMajor"], major);
         assert_eq!(report["libraries"].as_array().unwrap().len(), 5);
         render(dir, &libraries, false);
+        // Exercise the same qtrle delivery path on each selected ABI. The regular delivery
+        // suite checks decoded RGBA equality; this matrix also checks that each ABI can decode
+        // and import the produced MOV through its own CLI process.
+        std::fs::write(dir.join("alpha.motion.tsx"), "export const composition = { width: 65, height: 33, fps: 30, duration: 0.2 }; export default function Alpha(){return <Scene><View style={{width:20,height:20,backgroundColor:'#ff804080'}}/></Scene>;}").unwrap();
+        let alpha = success(&run(
+            dir,
+            &libraries,
+            &[
+                "--json",
+                "motion",
+                "render",
+                "alpha.motion.tsx",
+                "--backend",
+                "raster",
+                "-o",
+                "alpha.mov",
+            ],
+        ));
+        assert_eq!(alpha["compilations"], 1);
+        assert_eq!(alpha["delivery"]["codec"], "qtrle");
+        assert_eq!(alpha["delivery"]["frames"], 6);
+        success(&run(
+            dir,
+            &libraries,
+            &["--json", "assets", "add", "alpha.mov", "--mode", "copy"],
+        ));
+        let prores = success(&run(
+            dir,
+            &libraries,
+            &[
+                "--json",
+                "motion",
+                "render",
+                "alpha.motion.tsx",
+                "--backend",
+                "raster",
+                "-o",
+                "prores.mov",
+                "--codec",
+                "prores4444",
+            ],
+        ));
+        assert_eq!(prores["delivery"]["codec"], "prores4444");
+        assert_eq!(prores["delivery"]["frames"], 6);
+        success(&run(
+            dir,
+            &libraries,
+            &["--json", "assets", "add", "prores.mov", "--mode", "copy"],
+        ));
         std::thread::sleep(Duration::from_secs(2));
     }
 }

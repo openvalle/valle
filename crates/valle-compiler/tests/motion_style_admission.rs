@@ -50,6 +50,47 @@ fn unsupported_intrinsic_utilities_and_inactive_css_animations_fail_early() {
 }
 
 #[test]
+fn blend_admission_and_emission_share_the_supported_set() {
+    // Cover every keyword in Takumi's BlendMode parser, including its unsupported operator.
+    let normal = snapshot(r#"style={{mixBlendMode:"normal"}}"#).1;
+    for mode in [
+        "multiply",
+        "screen",
+        "overlay",
+        "darken",
+        "lighten",
+        "color-dodge",
+        "color-burn",
+        "hard-light",
+        "soft-light",
+        "difference",
+        "exclusion",
+        "hue",
+        "saturation",
+        "color",
+        "luminosity",
+        "plus-lighter",
+    ] {
+        assert_ne!(
+            normal,
+            snapshot(&format!(r#"style={{{{mixBlendMode:"{mode}"}}}}"#)).1,
+            "{mode} was silently ignored"
+        );
+    }
+    for attributes in [
+        r#"style={{mixBlendMode:"plus-darker"}}"#,
+        r#"className="mix-blend-plus-darker""#,
+        r#"style={{mixBlendMode:ctx.progress<0.5?"normal":"plus-darker"}}"#,
+    ] {
+        let errors = compile_motion(&scene(attributes)).unwrap_err();
+        assert!(
+            errors.iter().any(|error| error.message.contains("blend")),
+            "{errors:?}"
+        );
+    }
+}
+
+#[test]
 fn compiler_and_direct_artifacts_reject_invalid_css_values() {
     for (property, value) in [
         ("grid-template-columns", "subgrid"),
@@ -205,11 +246,44 @@ fn fraction_and_arbitrary_classes_match_inline_geometry_and_programs() {
             "display:'grid',width:'100%',gridTemplateColumns:'repeat(2,minmax(0,1fr))',columnGap:12,rowGap:8",
         ),
     ] {
-        assert_eq!(
-            snapshot(&format!("className=\"{classes}\"")),
-            snapshot(&format!("style={{{{{style}}}}}")),
-            "{classes}"
-        );
+        let class = snapshot(&format!("className=\"{classes}\""));
+        let inline = snapshot(&format!("style={{{{{style}}}}}"));
+        if classes.contains("bg-[#") {
+            // Utility colors enter through the CSS byte-color decoder; inline Motion colors
+            // retain f64 author channels. Their working colors can differ by one f32 ULP.
+            assert_eq!(class.0, inline.0, "{classes}");
+            let left = valle_draw::program::DrawProgram::from_packed(&class.1).unwrap();
+            let right = valle_draw::program::DrawProgram::from_packed(&inline.1).unwrap();
+            assert_eq!(left.roots(), right.roots());
+            assert_eq!(left.nodes(), right.nodes());
+            assert_eq!(left.paths(), right.paths());
+            assert_eq!(left.geometries(), right.geometries());
+            assert_eq!(left.requirements(), right.requirements());
+            assert_eq!(left.paints().len(), right.paints().len());
+            for (class_paint, inline_paint) in left.paints().iter().zip(right.paints()) {
+                match (class_paint, inline_paint) {
+                    (
+                        valle_draw::program::Paint::Solid(a),
+                        valle_draw::program::Paint::Solid(b),
+                    ) => {
+                        for (x, y) in [
+                            (a.red, b.red),
+                            (a.green, b.green),
+                            (a.blue, b.blue),
+                            (a.alpha, b.alpha),
+                        ] {
+                            assert!(
+                                (x - y).abs() <= 1e-7,
+                                "{classes}: {class_paint:?} != {inline_paint:?}"
+                            );
+                        }
+                    }
+                    _ => assert_eq!(class_paint, inline_paint, "{classes}"),
+                }
+            }
+        } else {
+            assert_eq!(class, inline, "{classes}");
+        }
     }
     for class in [
         "w-[137px_junk]",

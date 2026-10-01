@@ -25,6 +25,15 @@ fn every_motion_fixture_has_a_consumer() {
             files_under(&tests, &mut files);
         }
     }
+    // Native/CanvasKit pixel acceptance tests also consume the shared Motion fixtures.
+    let web_tests = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../web/packages/engine/src");
+    let mut web_files = Vec::new();
+    files_under(&web_tests, &mut web_files);
+    files.extend(
+        web_files
+            .into_iter()
+            .filter(|path| path.to_string_lossy().ends_with(".test.ts")),
+    );
     let sources: Vec<_> = files
         .iter()
         .filter(|path| {

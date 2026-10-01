@@ -11,6 +11,8 @@ use super::{
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", ts(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 pub enum StrokeCap {
     Butt,
@@ -19,6 +21,8 @@ pub enum StrokeCap {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", ts(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 pub enum StrokeJoin {
     Miter,
@@ -73,26 +77,103 @@ pub struct ImageNode {
     pub opacity: f32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum BatchGeometry {
-    Circle,
-    Rect,
+/// One normalized sprite region shared by the rows of an image instance batch. Its local
+/// geometry is the unit rectangle; each row's affine column places that rectangle.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AtlasRegion {
+    pub texture: ExternalTexture,
+    pub src: Rect,
+    pub sampling: SamplingMode,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct BatchInstance {
-    pub position: [f64; 2],
-    pub size: [f64; 2],
-    pub color: LinearColor,
+/// The local geometry drawn by every row of an instance table. The transform column places it
+/// in program-local coordinates; a Rect uses the unit box and a Circle uses the unit radius.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    content = "value",
+    rename_all = "camelCase",
+    deny_unknown_fields
+)]
+pub enum InstanceShape {
+    Circle,
+    Rect,
+    RoundRect(RoundRect),
+    Path(PathId),
+    Image(AtlasRegion),
+}
+
+/// Parallel, fixed-width instance columns. All columns have the same row count. A zero stroke
+/// width means fill only. An empty stroke color column inherits the fill color; otherwise it
+/// contains one independently evaluated stroke color per row.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct InstanceColumns {
+    pub transforms: Vec<super::Affine2d>,
+    pub colors: Vec<LinearColor>,
+    pub stroke_colors: Vec<LinearColor>,
+    /// Empty uses the shared Path style offset; otherwise one offset per row.
+    pub dash_offsets: Vec<f32>,
+    pub opacities: Vec<f32>,
+    pub stroke_widths: Vec<f32>,
+}
+
+impl InstanceColumns {
+    pub fn with_capacity(rows: usize) -> Self {
+        Self {
+            transforms: Vec::with_capacity(rows),
+            colors: Vec::with_capacity(rows),
+            stroke_colors: Vec::new(),
+            dash_offsets: Vec::new(),
+            opacities: Vec::with_capacity(rows),
+            stroke_widths: Vec::with_capacity(rows),
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.transforms.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.transforms.is_empty()
+    }
+}
+
+/// Path paint geometry shared by every instance; width, color, and optionally dash phase are
+/// carried by the parallel instance columns.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", ts(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct InstancePathStyle {
+    pub fill: bool,
+    pub dash: Vec<f32>,
+    pub dash_offset: f32,
+    pub cap: StrokeCap,
+    pub join: StrokeJoin,
+    pub miter_limit: f32,
+}
+
+impl Default for InstancePathStyle {
+    fn default() -> Self {
+        Self {
+            fill: true,
+            dash: Vec::new(),
+            dash_offset: 0.0,
+            cap: StrokeCap::Butt,
+            join: StrokeJoin::Miter,
+            miter_limit: 4.0,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct GeometryBatchNode {
-    pub geometry: BatchGeometry,
-    pub instances: Vec<BatchInstance>,
+pub struct InstanceBatchNode {
+    pub shape: InstanceShape,
+    pub instances: InstanceColumns,
+    pub path_style: Option<InstancePathStyle>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -163,7 +244,7 @@ pub struct ShadowNode {
 pub enum Node {
     Group(Group),
     Path(PathNode),
-    GeometryBatch(GeometryBatchNode),
+    InstanceBatch(InstanceBatchNode),
     Image(ImageNode),
     GlyphRun(GlyphRun),
     Shadow(ShadowNode),

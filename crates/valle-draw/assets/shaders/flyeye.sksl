@@ -3,20 +3,28 @@ uniform shader from_tex;
 uniform shader to_tex;
 uniform float2 resolution;
 uniform float progress;
+// Resolved slots are defined by TransitionKind::parameter_specs in Rust.
+uniform float4 params;
 
 half4 main(float2 xy) {
+    if (progress <= 0.0) return from_tex.eval(xy);
+    if (progress >= 1.0) return to_tex.eval(xy);
     float p = clamp(progress, 0.0, 1.0);
     float inv = 1.0 - p;
     float2 uv = xy / resolution;
-    float size = 0.04;
-    float zoom = 50.0;
-    float color_sep = 0.3;
+    float size = params.x;
+    float zoom = params.y;
+    float color_sep = params.z;
     float2 disp = size * float2(cos(zoom * uv.x), sin(zoom * uv.y));
 
     half4 b = to_tex.eval(clamp(uv + inv * disp, 0.0, 1.0) * resolution);
-    half ar = from_tex.eval(clamp(uv + p * disp * (1.0 - color_sep), 0.0, 1.0) * resolution).r;
-    half ag = from_tex.eval(clamp(uv + p * disp, 0.0, 1.0) * resolution).g;
-    half ab = from_tex.eval(clamp(uv + p * disp * (1.0 + color_sep), 0.0, 1.0) * resolution).b;
-    half4 a = half4(ar, ag, ab, 1.0);
+    half4 ar = from_tex.eval(clamp(uv + p * disp * (1.0 - color_sep), 0.0, 1.0) * resolution);
+    half4 ag = from_tex.eval(clamp(uv + p * disp, 0.0, 1.0) * resolution);
+    half4 ab = from_tex.eval(clamp(uv + p * disp * (1.0 + color_sep), 0.0, 1.0) * resolution);
+    half alpha = (ar.a + ag.a + ab.a) / 3.0;
+    half3 rgb = half3(ar.a > 0.0 ? ar.r / ar.a : 0.0,
+                     ag.a > 0.0 ? ag.g / ag.a : 0.0,
+                     ab.a > 0.0 ? ab.b / ab.a : 0.0);
+    half4 a = half4(rgb * alpha, alpha);
     return b * half(p) + a * half(inv);
 }

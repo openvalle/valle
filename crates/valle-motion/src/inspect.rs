@@ -1,9 +1,10 @@
 //! Bounded, read-only local property samples. Uses the render evaluator, never playback history.
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 use valle_timeline::FrameRate;
 
+use crate::eval::{EvalPlan, eval_roots_planned};
 use crate::value::{Angle, Length2, LengthUnit};
 use crate::{EvalInputs, Expr, MotionValue, SceneArtifact, StyleValue};
 
@@ -82,8 +83,7 @@ pub fn sample_properties(
         channels: Vec::new(),
         frames: frames.clone(),
     };
-    let post = crate::post_layout_dependent(&artifact.exprs);
-    let unit = crate::expr::unit_dependent(&artifact.exprs);
+    let plan = EvalPlan::new(&artifact.exprs);
     for property in ["opacity", "translate", "scale", "rotate"] {
         // Only explicit bindings are inspected. Absent/inherited CSS is not fabricated as a default.
         let Some(binding) = node.styles.iter().rev().find(|s| s.property == property) else {
@@ -99,19 +99,14 @@ pub fn sample_properties(
             samples: Vec::new(),
             unavailable: None,
         };
-        let mut live = BTreeSet::new();
-        if let StyleValue::Expr { expr } = binding.value {
-            let mut todo = vec![expr];
-            while let Some(id) = todo.pop() {
-                if live.insert(id) {
-                    todo.extend(artifact.exprs[id.0 as usize].children());
-                }
-            }
-        }
-        if live.len() > 4096
-            || live
+        let order = match binding.value {
+            StyleValue::Expr { expr } => plan.schedule([expr]),
+            StyleValue::Static { .. } => Vec::new(),
+        };
+        if order.len() > 4096
+            || order
                 .iter()
-                .any(|id| post[id.0 as usize] || unit[id.0 as usize])
+                .any(|id| plan.post_layout_dependent(*id) || plan.unit_dependent(*id))
         {
             channel.unavailable =
                 Some("Requires layout/per-unit context or exceeds the inspection budget".into());
@@ -121,33 +116,32 @@ pub fn sample_properties(
         let at = |frame| -> Result<(Vec<f64>, Vec<MotionValue>), String> {
             let ctx = crate::motion_context_at_frame(frame, request.duration_frames, request.fps)
                 .ok_or("frame outside scene")?;
-            let values = crate::eval::eval_slice(
+            let values = eval_roots_planned(
                 artifact,
+                &plan,
                 EvalInputs {
                     ctx: &ctx,
                     props: &props,
                     unit: None,
                     viewport: Some((request.viewport[0] as f64, request.viewport[1] as f64)),
                 },
-                &live,
+                &order,
             )
             .map_err(|e| e.to_string())?;
             let value = match &binding.value {
                 StyleValue::Static { value } => value,
-                StyleValue::Expr { expr } => values[expr.0 as usize]
-                    .as_ref()
-                    .ok_or("missing expression")?,
+                StyleValue::Expr { expr } => values.get(expr).ok_or("missing expression")?,
             };
             let numeric = numeric(property, value)
                 .ok_or("Requires resolved CSS units or a nonnumeric value")?;
             let mut branches = Vec::new();
-            for id in &live {
+            for id in &order {
                 match &artifact.exprs[id.0 as usize] {
                     Expr::Select { condition, .. } => {
-                        branches.push(values[condition.0 as usize].clone().unwrap())
+                        branches.push(values.get(condition).cloned().ok_or("missing expression")?)
                     }
                     Expr::Interpolate { input, stops, .. } => {
-                        if let Some(MotionValue::Number(x)) = &values[input.0 as usize] {
+                        if let Some(MotionValue::Number(x)) = values.get(input) {
                             branches.push(MotionValue::Number(
                                 stops.partition_point(|s| s.input <= *x) as f64,
                             ));
@@ -159,11 +153,12 @@ pub fn sample_properties(
             Ok((numeric, branches))
         };
         // A conservative guard, not an assertion that all other expressions are continuous.
-        let discrete = live.iter().any(|id| {
+        let discrete = order.iter().any(|id| {
             matches!(
                 &artifact.exprs[id.0 as usize],
                 Expr::MathUnary {
                     op: crate::expr::MathUnaryOp::Floor
+                        | crate::expr::MathUnaryOp::FrameFloor
                         | crate::expr::MathUnaryOp::Ceil
                         | crate::expr::MathUnaryOp::Round
                         | crate::expr::MathUnaryOp::Trunc

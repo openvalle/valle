@@ -3,15 +3,20 @@ uniform shader from_tex;
 uniform shader to_tex;
 uniform float2 resolution;
 uniform float progress;
+// Resolved slots are defined by TransitionKind::parameter_specs in Rust.
+uniform float4 params;
 
 half4 main(float2 xy) {
+    if (progress <= 0.0) return from_tex.eval(xy);
+    if (progress >= 1.0) return to_tex.eval(xy);
     float p = clamp(progress, 0.0, 1.0);
     float2 uv = xy / resolution;
     float2 dir = uv - float2(0.5, 0.5);
     float dist = length(dir);
-    float amplitude = 100.0;
-    float speed = 50.0;
-    float2 offset = dir * sin(dist * amplitude - p * speed) / 30.0;
+    float frequency = params.x;
+    float speed = params.y;
+    float envelope = 4.0 * p * (1.0 - p);
+    float2 offset = dir * sin(dist * frequency - p * speed) * params.z * envelope;
     half4 a = from_tex.eval(clamp(uv + offset, 0.0, 1.0) * resolution);
     half4 b = to_tex.eval(xy);
     return mix(a, b, half(smoothstep(0.2, 1.0, p)));

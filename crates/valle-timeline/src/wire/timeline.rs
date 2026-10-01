@@ -13,6 +13,8 @@ use serde::{
 };
 use serde_json::{Value as JsonValue, value::RawValue};
 
+pub use valle_draw::transition::TransitionKind;
+
 use crate::caption_presets::{
     DisplayCaptionPresetName, EnterCaptionPresetName, ExitCaptionPresetName,
 };
@@ -258,6 +260,20 @@ impl<'de> Deserialize<'de> for TimelineTracksWire {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TimelineVisualTrackWire {
     pub clips: Vec<TimelineVisualClipWire>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub transitions: Vec<TimelineTransitionWire>,
+}
+
+/// A transition occupies the intersection of two adjacent visual clips.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TimelineTransitionWire {
+    pub from: usize,
+    pub to: usize,
+    pub kind: TransitionKind,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub params: valle_draw::transition::TransitionParams,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]

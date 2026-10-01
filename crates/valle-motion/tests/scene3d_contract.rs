@@ -1,11 +1,12 @@
 use valle_motion::scene3d::{
     AnchorSpec, BudgetUsage, CameraFrameState, Color4, Frame3DState, LightFrameState, LightKind,
-    MAX_ABS_POSITION, MAX_ABS_ROTATION_DEGREES, MAX_ANCHORS, MAX_CAMERA_FAR,
-    MAX_DIRECTIONAL_LIGHTS, MAX_FRAME_BUFFER_BYTES, MAX_FRAME_SCALARS, MAX_LAYER_EDGE,
-    MAX_LAYER_PIXELS, MAX_MATERIALS, MAX_MESHES, MAX_MODEL_BYTES, MAX_SCALE, MAX_TEXTURE_PIXELS,
-    MAX_TEXTURE_STORAGE_BYTES, MAX_TEXTURES, MAX_TRIANGLES, MAX_VERTICES, MaterialFrameState,
-    MaterialKind, MaterialSpec, MaterialTexture, MaterialTextureSlot, MeshFrameState, MeshSpec,
-    MipmapFilter, Scene3DSpec, TextureFilter, TextureWrap, Transform3D, Vec3,
+    MAX_ABS_POSITION, MAX_ABS_ROTATION_DEGREES, MAX_ANCHORS, MAX_ANIMATION_CHANNELS,
+    MAX_ANIMATION_KEYS, MAX_ANIMATIONS, MAX_CAMERA_FAR, MAX_DIRECTIONAL_LIGHTS,
+    MAX_FRAME_BUFFER_BYTES, MAX_FRAME_SCALARS, MAX_LAYER_EDGE, MAX_LAYER_PIXELS, MAX_MATERIALS,
+    MAX_MESHES, MAX_MODEL_BYTES, MAX_SCALE, MAX_TEXTURE_PIXELS, MAX_TEXTURE_STORAGE_BYTES,
+    MAX_TEXTURES, MAX_TRIANGLES, MAX_VERTICES, MaterialFrameState, MaterialKind, MaterialSpec,
+    MaterialTexture, MaterialTextureSlot, MeshFrameState, MeshSpec, MipmapFilter, Scene3DSpec,
+    TextureFilter, TextureWrap, Transform3D, Vec3,
 };
 
 fn spec() -> Scene3DSpec {
@@ -13,7 +14,8 @@ fn spec() -> Scene3DSpec {
         pbr: Default::default(),
         meshes: vec![MeshSpec {
             key: "product".into(),
-            model_control: "productModel".into(),
+            model_control: Some("productModel".into()),
+            geometry: None,
             material: MaterialSpec {
                 kind: Some(MaterialKind::Lambert),
                 textures: [(
@@ -31,6 +33,7 @@ fn spec() -> Scene3DSpec {
                 ..MaterialSpec::default()
             },
             material_overrides: Vec::new(),
+            animation_clip: None,
             node_ids: Vec::new(),
         }],
         lights: vec![LightKind::Ambient, LightKind::Directional],
@@ -53,6 +56,7 @@ fn frame() -> Frame3DState {
             fov_y_degrees: 38.0,
             near: 0.1,
             far: 100.0,
+            depth_of_field: None,
         }
         .with_orbit(26.0, 0.0, Some(4.5))
         .unwrap(),
@@ -63,6 +67,7 @@ fn frame() -> Frame3DState {
                 ..MaterialFrameState::default()
             },
             material_overrides: Vec::new(),
+            animation_time: None,
             transform: Transform3D {
                 rotation_degrees: Vec3::new(0.0, 10.92, 0.0),
                 ..Transform3D::default()
@@ -86,7 +91,7 @@ fn frame() -> Frame3DState {
 #[test]
 fn scene_contract_wire_is_exact_strict_and_wasm_clean() {
     let scene = spec();
-    assert_eq!(scene.frame_scalar_count(), 48);
+    assert_eq!(scene.frame_scalar_count(), 50);
     scene.validate().unwrap();
     let json = serde_json::to_value(&scene).unwrap();
     assert_eq!(
@@ -215,8 +220,8 @@ fn camera_projection_orbit_and_light_values_validate_the_complete_frame() {
 #[test]
 fn one_aggregate_budget_unit_is_shared_by_all_three_admission_layers() {
     let exact = BudgetUsage {
-        width: 1_250,
-        height: 1_600,
+        width: 4_096,
+        height: 2_048,
         model_bytes: MAX_MODEL_BYTES,
         vertices: MAX_VERTICES,
         triangles: MAX_TRIANGLES,
@@ -237,8 +242,8 @@ fn one_aggregate_budget_unit_is_shared_by_all_three_admission_layers() {
             ..exact
         },
         BudgetUsage {
-            width: 1_401,
-            height: 1_429,
+            width: 4_096,
+            height: 2_049,
             ..exact
         },
         BudgetUsage {
@@ -297,24 +302,44 @@ fn object_addresses_are_two_keys_not_an_ambiguous_flat_string() {
 
 #[test]
 fn constants_lock_the_bounded_pbr_product_budget() {
-    assert_eq!(MAX_LAYER_EDGE, 2_048);
-    assert_eq!(MAX_LAYER_PIXELS, 2_000_000);
-    assert_eq!(MAX_FRAME_BUFFER_BYTES, 20_000_000);
-    assert_eq!(MAX_MODEL_BYTES, 16_777_216);
-    assert_eq!(MAX_VERTICES, 65_535);
-    assert_eq!(MAX_TRIANGLES, 20_000);
+    assert_eq!(MAX_LAYER_EDGE, 4_096);
+    assert_eq!(MAX_LAYER_PIXELS, 8_388_608);
+    assert_eq!(MAX_FRAME_BUFFER_BYTES, 167_772_160);
+    assert_eq!(MAX_MODEL_BYTES, 67_108_864);
+    assert_eq!(MAX_VERTICES, 262_144);
+    assert_eq!(MAX_TRIANGLES, 131_072);
     assert_eq!(MAX_MESHES, 8);
+    assert_eq!(MAX_ANIMATIONS, 32);
+    assert_eq!(MAX_ANIMATION_CHANNELS, 1_024);
+    assert_eq!(MAX_ANIMATION_KEYS, 131_072);
     assert_eq!(MAX_MATERIALS, 8);
     assert_eq!(MAX_TEXTURES, 8);
     assert_eq!(MAX_TEXTURE_PIXELS, 25_165_824);
     assert_eq!(MAX_TEXTURE_STORAGE_BYTES, 134_217_728);
     assert_eq!(MAX_ANCHORS, 32);
     assert_eq!(MAX_DIRECTIONAL_LIGHTS, 2);
-    assert_eq!(MAX_FRAME_SCALARS, 19_557);
+    assert_eq!(MAX_FRAME_SCALARS, 19_567);
     assert_eq!(MAX_ABS_POSITION, 10_000.0);
     assert_eq!(MAX_SCALE, 1_000.0);
     assert_eq!(MAX_ABS_ROTATION_DEGREES, 1_000_000.0);
     assert_eq!(MAX_CAMERA_FAR, 100_000.0);
+}
+
+#[test]
+fn imported_animation_requires_one_finite_time_for_the_selected_clip() {
+    let mut scene = spec();
+    scene.meshes[0].animation_clip = Some(0);
+    scene.validate().unwrap();
+    let mut state = frame();
+    assert!(state.validate_for(&scene).is_err());
+    state.meshes[0].animation_time = Some(1.25);
+    state.validate_for(&scene).unwrap();
+    state.meshes[0].animation_time = Some(f32::NAN);
+    assert!(state.validate_for(&scene).is_err());
+    state.meshes[0].animation_time = Some(-1.0);
+    assert!(state.validate_for(&scene).is_err());
+    scene.meshes[0].animation_clip = Some(MAX_ANIMATIONS as u32);
+    assert!(scene.validate().is_err());
 }
 
 #[test]
@@ -331,7 +356,7 @@ fn node_bindings_have_stable_distinct_ids_and_complete_bounded_frame_transforms(
         .to_vec();
     state.meshes[0].nodes[0].transform.scale.0[0] = -2.0;
     state.validate_for(&scene).unwrap();
-    assert_eq!(scene.frame_scalar_count(), 66);
+    assert_eq!(scene.frame_scalar_count(), 68);
     state.meshes[0].nodes.swap(0, 1);
     assert!(state.validate_for(&scene).is_err());
     state.meshes[0].nodes.swap(0, 1);

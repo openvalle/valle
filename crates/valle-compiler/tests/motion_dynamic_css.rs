@@ -48,8 +48,8 @@ fn dynamic_gradient_geometry_and_finite_filter_branches_are_seek_pure() {
     let source = source(
         r##"
         backgroundImage: t < 0.5
-            ? `linear-gradient(${30 + t * 90}deg in srgb, red ${t * 20}%, blue)`
-            : `radial-gradient(circle at ${20 + t * 60}% 50% in srgb, red, blue)`,
+            ? `linear-gradient(${30 + t * 90}deg in oklab, red ${t * 20}%, blue)`
+            : `radial-gradient(circle at ${20 + t * 60}% 50% in oklch longer hue, red, blue)`,
         filter: t < 0.25 ? "none" : t < 0.5 ? `blur(${t * 4}px)` : `brightness(${0.5 + t}) contrast(1.2)`
     "##,
     );
@@ -65,8 +65,8 @@ fn dynamic_gradient_geometry_and_finite_filter_branches_are_seek_pure() {
 fn every_gradient_branch_is_checked_and_css_structure_injection_stays_closed() {
     for style in [
         r##"backgroundImage: t < 0.5 ? `linear-gradient(${t}deg, red, blue)` : "url(https://example.com/image.png)""##,
-        r##"backgroundImage: `linear-gradient(${t}deg in oklab, red, blue)`"##,
-        r##"backgroundImage: `linear-gradient(${t < 0.5 ? "in srgb" : "in oklab"}, red, blue)`"##,
+        r##"backgroundImage: `linear-gradient(${t}deg in lab, red, blue)`"##,
+        r##"backgroundImage: `linear-gradient(${t < 0.5 ? "in srgb" : "in lab"}, red, blue)`"##,
         r##"filter: `${t < 0.5 ? "blur(2px)" : "brightness(2)"}`"##,
     ] {
         let admitted = compile_motion(&source(style))

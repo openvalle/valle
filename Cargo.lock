@@ -678,6 +678,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 
 [[package]]
+name = "earcut"
+version = "0.4.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "88459a2a8e3a514b6e6de38cf3aaa9250a894cb098f74a932db77fcc8341b6d0"
+dependencies = [
+ "num-traits",
+]
+
+[[package]]
 name = "either"
 version = "1.18.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -961,6 +970,7 @@ version = "0.33.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "30eb1fdc57c1e5cfd11826fe0caec4b9dc7901f3758263bb506228d88c8d9e9a"
 dependencies = [
+ "earcut",
  "float_next_after",
  "geo-types",
  "geographiclib-rs",
@@ -4272,6 +4282,7 @@ dependencies = [
  "ctrlc",
  "getrandom 0.4.3",
  "hex",
+ "image",
  "libc",
  "libmimalloc-sys",
  "mimalloc",
@@ -4300,11 +4311,13 @@ dependencies = [
  "libm",
  "oxc",
  "rquickjs",
+ "rustfft",
  "serde",
  "serde_json",
  "tempfile",
  "thiserror 2.0.20",
  "valle-draw",
+ "valle-media",
  "valle-motion",
  "valle-timeline",
 ]
@@ -4315,6 +4328,7 @@ version = "0.1.0"
 dependencies = [
  "hex",
  "libm",
+ "schemars",
  "serde",
  "serde_json",
  "sha2",
@@ -4409,8 +4423,12 @@ dependencies = [
  "cssparser",
  "geo",
  "hex",
+ "i_overlay",
  "image",
  "libm",
+ "num-bigint 0.4.8",
+ "num-rational",
+ "num-traits",
  "parley",
  "ratex-font",
  "ratex-layout",
@@ -4488,6 +4506,7 @@ dependencies = [
  "sha2",
  "thiserror 2.0.20",
  "toml",
+ "valle-draw",
 ]
 
 [[package]]

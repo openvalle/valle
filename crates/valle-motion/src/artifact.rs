@@ -12,7 +12,7 @@ use super::expr::{
 use super::tailwind::TAILWIND_CATALOG;
 use crate::ContentDigest;
 use valle_draw::program::recording::{FillRule, MaskMode, SpreadMode};
-use valle_draw::{Point, Rgba};
+use valle_draw::{Point, Rect, program::AuthorColor};
 
 /// Exact decoder format for the complete canonical Motion artifact.
 ///
@@ -94,6 +94,14 @@ pub const CSS_TRANSFORM_PERCENT_CAPABILITY: &str = "css-transform-percent";
 pub const CSS_3D_PERSPECTIVE_ORIGIN_CAPABILITY: &str = "css-3d-perspective-origin";
 /// A controlled, content-addressed shader package applied to one component-local child surface.
 pub const SHADER_LAYER_CAPABILITY: &str = "shader-layer";
+/// Two independently rendered subtrees combined by a shared built-in transition.
+pub const TRANSITION_CAPABILITY: &str = "motion-transition";
+/// A subtree evaluated at fixed output-time shutter samples and accumulated in linear light.
+pub const SHUTTER_CAPABILITY: &str = "motion-shutter";
+/// Past output-time subframes composited behind the current subtree with geometric decay.
+pub const ECHO_CAPABILITY: &str = "motion-echo";
+/// A child subtree whose time inputs are mapped by a static affine clock transform.
+pub const TIME_SCOPE_CAPABILITY: &str = "motion-time-scope";
 /// A fixed Scene3D contract rendered into one generated 2D texture.
 pub const SCENE3D_LAYER_CAPABILITY: &str = "scene3d-layer";
 /// Prepare-time RaTeX `MathFormula` leaf, declared only when present.
@@ -118,6 +126,10 @@ pub const OPTIONAL_CAPABILITIES: &[&str] = &[
     RICH_TEXT_INLINE_IMAGE_CAPABILITY,
     PARTICLE_FIELD_CAPABILITY,
     SHADER_LAYER_CAPABILITY,
+    TRANSITION_CAPABILITY,
+    SHUTTER_CAPABILITY,
+    ECHO_CAPABILITY,
+    TIME_SCOPE_CAPABILITY,
     SCENE3D_LAYER_CAPABILITY,
     VIEWPORT_CAPABILITY,
     VIDEO_CAPABILITY,
@@ -192,6 +204,9 @@ pub enum TextSplit {
 pub struct PerUnit {
     pub split: TextSplit,
     pub style: UnitStyle,
+    /// Owning rich Text key. Its inline Text runs share one logical unit index and source range.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group_key: Option<String>,
 }
 
 /// Closed set of per-unit paint and transform properties, each handled during emission.
@@ -212,6 +227,9 @@ pub struct UnitStyle {
     pub rotate: Option<NumberValue>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color: Option<ColorValue>,
+    /// Unit-local Gaussian blur sigma in CSS pixels.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blur: Option<NumberValue>,
 }
 
 impl UnitStyle {
@@ -321,13 +339,8 @@ pub enum RectValue {
     deny_unknown_fields
 )]
 pub enum ColorValue {
-    Static {
-        #[cfg_attr(feature = "ts", ts(type = "string"))]
-        value: Rgba,
-    },
-    Expr {
-        expr: ExprId,
-    },
+    Static { value: AuthorColor },
+    Expr { expr: ExprId },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -445,8 +458,7 @@ pub enum MaskValue {
     Image {
         source: String,
     },
-    /// An authored `<MaskSource>` subtree. The referenced node is the final direct child of the
-    /// mask and is composited with destination-in after the ordinary mask contents.
+    /// An authored `<MaskSource>` subtree, rendered separately from the mask's content.
     Subtree {
         source: String,
     },
@@ -486,12 +498,14 @@ pub const MAX_GEOMETRY_BATCH_INSTANCES_PER_NODE: usize = 100_000;
 pub const MAX_GEOMETRY_BATCH_INSTANCES_PER_DISPLAY: usize =
     valle_draw::program::recording::MAX_BATCH_INSTANCES_PER_RECORDING;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 pub enum GeometryBatchGeometry {
     Circle,
     Rect,
+    Path { path: PathData },
+    Image { source: String, src: Rect },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -508,6 +522,23 @@ pub struct ParticleSpec {
     pub gravity: valle_draw::Point,
     #[serde(default)]
     pub looping: bool,
+    #[serde(default)]
+    pub forces: Vec<ParticleForce>,
+}
+
+/// Forces are evaluated in the authored order during fixed-step trajectory baking.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
+pub enum ParticleForce {
+    CurlNoise {
+        seed: u64,
+        scale: f64,
+        strength: f64,
+    },
+    Drag {
+        coefficient: f64,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -528,18 +559,33 @@ pub enum BatchPositions {
 pub struct BatchPointField {
     pub to: Vec<valle_draw::Point>,
     pub progress: ExprId,
-    /// Normalized phase offset added per instance. Instance `i` starts at `i * stagger`, then
-    /// remaps the remaining progress interval so every instance reaches `to` at progress 1.
-    pub stagger: f64,
+    /// Delay schedule applied before remapping the remaining progress interval.
+    pub stagger: BatchStagger,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(untagged)]
+pub enum BatchStagger {
+    /// Instance `i` starts at `i * step`.
+    Step(f64),
+    /// Explicit normalized delay for each instance, allowing non-monotonic waves.
+    PerInstance(Vec<f64>),
+}
+
+impl Default for BatchStagger {
+    fn default() -> Self {
+        Self::Step(0.0)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BatchColorField {
-    pub to: Vec<Rgba>,
+    pub to: Vec<valle_draw::program::AuthorColor>,
     pub progress: ExprId,
-    pub stagger: f64,
+    pub stagger: BatchStagger,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -548,7 +594,7 @@ pub struct BatchColorField {
 pub struct BatchNumberField {
     pub to: Vec<f64>,
     pub progress: ExprId,
-    pub stagger: f64,
+    pub stagger: BatchStagger,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -560,10 +606,19 @@ pub struct GeometryBatchSpec {
     /// One value broadcasts. Particle batches additionally accept two endpoints as a life curve.
     pub sizes: Vec<valle_draw::Point>,
     /// One value broadcasts. Particle batches additionally accept two endpoints as a life curve.
-    pub fills: Vec<Rgba>,
+    pub fills: Vec<valle_draw::program::AuthorColor>,
     /// One value broadcasts. Particle batches additionally accept two endpoints as a life curve.
     #[serde(default)]
     pub opacities: Vec<f64>,
+    /// Degrees clockwise around each primitive's center. One value broadcasts.
+    #[serde(default)]
+    pub rotations: Vec<f64>,
+    /// Horizontal shear angle in degrees. One value broadcasts.
+    #[serde(default)]
+    pub skew_xs: Vec<f64>,
+    /// Stroke width in shape-local units. One value broadcasts; zero disables stroke.
+    #[serde(default)]
+    pub stroke_widths: Vec<f64>,
     #[serde(default)]
     pub semantic_keys: Vec<String>,
     /// Optional fixed-count frame fields. Their `from` values are the corresponding base arrays
@@ -576,6 +631,12 @@ pub struct GeometryBatchSpec {
     pub fill_field: Option<BatchColorField>,
     #[serde(default)]
     pub opacity_field: Option<BatchNumberField>,
+    #[serde(default)]
+    pub rotation_field: Option<BatchNumberField>,
+    #[serde(default)]
+    pub skew_x_field: Option<BatchNumberField>,
+    #[serde(default)]
+    pub stroke_width_field: Option<BatchNumberField>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -618,8 +679,34 @@ pub enum NodeKind {
     GeometryBatch {
         batch: GeometryBatchSpec,
     },
+    /// One prepared homogeneous template evaluated over a columnar instance table.
+    InstanceBatch {
+        group: u32,
+    },
+    /// One shared Box-rooted subtree projected as separate siblings in the layout tree.
+    InstanceLayout {
+        group: u32,
+    },
     Image {
         source: String,
+    },
+    Transition {
+        effect: valle_draw::transition::TransitionKind,
+        progress: NumberValue,
+        params: BTreeMap<String, NumberValue>,
+    },
+    Shutter {
+        samples: u8,
+        angle_degrees: u16,
+    },
+    Echo {
+        count: u8,
+        interval_frames: u32,
+        decay: f64,
+    },
+    TimeScope {
+        offset_seconds: f64,
+        speed: f64,
     },
     ShaderLayer {
         program: ShaderProgramRef,
@@ -676,6 +763,16 @@ pub struct Scene3DCameraBinding {
     pub orbit_pitch_degrees: NumberValue,
     pub distance: Option<NumberValue>,
     pub fov_y_degrees: NumberValue,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub depth_of_field: Option<Scene3DDepthOfFieldBinding>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Scene3DDepthOfFieldBinding {
+    pub focus_distance: NumberValue,
+    pub max_blur_radius: NumberValue,
 }
 
 impl Scene3DCameraBinding {
@@ -695,6 +792,10 @@ impl Scene3DCameraBinding {
         ];
         if let Some(distance) = &self.distance {
             values.push(("distance", distance));
+        }
+        if let Some(dof) = &self.depth_of_field {
+            values.push(("depthOfField/focusDistance", &dof.focus_distance));
+            values.push(("depthOfField/maxBlurRadius", &dof.max_blur_radius));
         }
         values
     }
@@ -721,6 +822,14 @@ impl Scene3DCameraBinding {
             near: number(&self.near)?,
             far: number(&self.far)?,
             fov_y_degrees: number(&self.fov_y_degrees)?,
+            depth_of_field: if let Some(dof) = &self.depth_of_field {
+                Some(crate::scene3d::DepthOfFieldState {
+                    focus_distance: number(&dof.focus_distance)?,
+                    max_blur_radius: number(&dof.max_blur_radius)?,
+                })
+            } else {
+                None
+            },
         };
         let distance = match &self.distance {
             Some(n) => Some(number(n)?),
@@ -770,9 +879,7 @@ impl Scene3DLightBinding {
         };
         let color = |c: &ColorValue| {
             if let ColorValue::Static { value } = c {
-                Some(crate::scene3d::Color4(
-                    [value.r, value.g, value.b, value.a].map(|v| f32::from(v) / 255.0),
-                ))
+                Some(crate::scene3d::Color4(value.to_srgb_straight()))
             } else {
                 None
             }
@@ -866,6 +973,8 @@ pub struct Scene3DMeshBinding {
     pub material: Scene3DMaterialBinding,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub material_overrides: Vec<Scene3DMaterialOverrideBinding>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub animation_time: Option<NumberValue>,
     pub transform: Scene3DTransformBinding,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub nodes: Vec<Scene3DNodeBinding>,
@@ -968,9 +1077,9 @@ impl Scene3DMaterialBinding {
             _ => None,
         };
         let c = |value: &Option<ColorValue>| match value {
-            Some(ColorValue::Static { value }) => Some(crate::scene3d::Color4(
-                [value.r, value.g, value.b, value.a].map(|v| v as f32 / 255.0),
-            )),
+            Some(ColorValue::Static { value }) => {
+                Some(crate::scene3d::Color4(value.to_srgb_straight()))
+            }
             _ => None,
         };
         crate::scene3d::MaterialFrameState {
@@ -1127,6 +1236,11 @@ impl SceneNode {
         match &self.kind {
             NodeKind::Group
             | NodeKind::Box
+            | NodeKind::Shutter { .. }
+            | NodeKind::Echo { .. }
+            | NodeKind::TimeScope { .. }
+            | NodeKind::InstanceBatch { .. }
+            | NodeKind::InstanceLayout { .. }
             | NodeKind::Image { .. }
             | NodeKind::MathFormula { .. } => {}
             NodeKind::GlassField(field) => {
@@ -1250,6 +1364,7 @@ impl SceneNode {
                 }
                 if let Some(value) = stroke {
                     paint("/kind/stroke/paint".into(), &value.paint, &mut refs);
+                    number("/kind/stroke/width".into(), &value.width, &mut refs);
                     number(
                         "/kind/stroke/dashOffset".into(),
                         &value.dash_offset,
@@ -1280,10 +1395,33 @@ impl SceneNode {
                         "/kind/batch/opacityField/progress",
                         batch.opacity_field.as_ref().map(|field| field.progress),
                     ),
+                    (
+                        "/kind/batch/rotationField/progress",
+                        batch.rotation_field.as_ref().map(|field| field.progress),
+                    ),
+                    (
+                        "/kind/batch/skewXField/progress",
+                        batch.skew_x_field.as_ref().map(|field| field.progress),
+                    ),
+                    (
+                        "/kind/batch/strokeWidthField/progress",
+                        batch
+                            .stroke_width_field
+                            .as_ref()
+                            .map(|field| field.progress),
+                    ),
                 ] {
                     if let Some(expr) = expr {
                         refs.push((path.into(), expr));
                     }
+                }
+            }
+            NodeKind::Transition {
+                progress, params, ..
+            } => {
+                number("/kind/progress".into(), progress, &mut refs);
+                for (name, value) in params {
+                    number(format!("/kind/params/{name}"), value, &mut refs);
                 }
             }
             NodeKind::ShaderLayer { uniforms, .. } => {
@@ -1343,6 +1481,13 @@ impl SceneNode {
                     number(format!("/kind/frame/camera/{name}"), value, &mut refs);
                 }
                 for (at, mesh) in frame.meshes.iter().enumerate() {
+                    if let Some(time) = &mesh.animation_time {
+                        number(
+                            format!("/kind/frame/meshes/{at}/animationTime"),
+                            time,
+                            &mut refs,
+                        );
+                    }
                     for (name, value) in mesh.transform.numbers() {
                         number(
                             format!("/kind/frame/meshes/{at}/transform/{name}"),
@@ -1426,6 +1571,9 @@ impl SceneNode {
         if let Some(ColorValue::Expr { expr }) = &style.color {
             refs.push(("/kind/perUnit/style/color".into(), *expr));
         }
+        if let Some(NumberValue::Expr { expr }) = &style.blur {
+            refs.push(("/kind/perUnit/style/blur".into(), *expr));
+        }
         refs
     }
 }
@@ -1451,12 +1599,655 @@ pub struct SceneArtifact {
     pub composition: Option<crate::composition::Composition>,
     pub resource_refs: Vec<ResourceRef>,
     pub exprs: Vec<Expr>,
+    /// Prepared instance tables and their single expression/template program.
+    pub instance_groups: Vec<InstanceGroup>,
     pub nodes: Vec<SceneNode>,
     pub node_children: Vec<NodeId>,
     pub root: NodeId,
     /// Optional scene camera; absent cameras leave World and Screen aligned.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub camera: Option<CameraBinding>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct InstanceColumn {
+    pub name: String,
+    pub values: InstanceColumnValues,
+}
+
+/// A closed numeric function of the instance row. Producers verify its output against every
+/// prepared row before replacing the authored numeric column.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(
+    tag = "op",
+    content = "args",
+    rename_all = "camelCase",
+    deny_unknown_fields
+)]
+pub enum IndexFormula {
+    Constant(f64),
+    Index,
+    Add(Box<Self>, Box<Self>),
+    Sub(Box<Self>, Box<Self>),
+    Mul(Box<Self>, Box<Self>),
+    Div(Box<Self>, Box<Self>),
+    Rem(Box<Self>, Box<Self>),
+    Neg(Box<Self>),
+    Floor(Box<Self>),
+    Sqrt(Box<Self>),
+}
+
+impl IndexFormula {
+    pub fn evaluate(&self, index: usize) -> f64 {
+        match self {
+            Self::Constant(value) => *value,
+            Self::Index => index as f64,
+            Self::Add(a, b) => a.evaluate(index) + b.evaluate(index),
+            Self::Sub(a, b) => a.evaluate(index) - b.evaluate(index),
+            Self::Mul(a, b) => a.evaluate(index) * b.evaluate(index),
+            Self::Div(a, b) => a.evaluate(index) / b.evaluate(index),
+            Self::Rem(a, b) => a.evaluate(index) % b.evaluate(index),
+            Self::Neg(value) => -value.evaluate(index),
+            Self::Floor(value) => value.evaluate(index).floor(),
+            Self::Sqrt(value) => valle_draw::math::sqrt(value.evaluate(index)),
+        }
+    }
+
+    /// Keep externally supplied formulas within a small, predictable evaluation budget.
+    pub fn is_bounded(&self) -> bool {
+        self.structure_size(0).is_some()
+    }
+
+    fn structure_size(&self, depth: usize) -> Option<usize> {
+        if depth > 32 {
+            return None;
+        }
+        let children = match self {
+            Self::Constant(value) => {
+                if !value.is_finite() {
+                    return None;
+                }
+                0
+            }
+            Self::Index => 0,
+            Self::Add(a, b)
+            | Self::Sub(a, b)
+            | Self::Mul(a, b)
+            | Self::Div(a, b)
+            | Self::Rem(a, b) => a
+                .structure_size(depth + 1)?
+                .checked_add(b.structure_size(depth + 1)?)?,
+            Self::Neg(value) | Self::Floor(value) | Self::Sqrt(value) => {
+                value.structure_size(depth + 1)?
+            }
+        };
+        (children < 256).then_some(children + 1)
+    }
+}
+
+/// Homogeneous instance data stays in fixed-width columns instead of storing a tagged
+/// MotionValue for every numeric row. Less common value types retain their typed values.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    content = "values",
+    rename_all = "camelCase",
+    deny_unknown_fields
+)]
+pub enum InstanceColumnValues {
+    Numbers(Vec<f64>),
+    Points(Vec<Point>),
+    Colors(Vec<AuthorColor>),
+    Rects(Vec<Rect>),
+    Bools(Vec<bool>),
+    Strings(Vec<String>),
+    Formula { rows: u32, expression: IndexFormula },
+    Other(Vec<MotionValue>),
+}
+
+impl InstanceColumnValues {
+    pub fn from_values(values: Vec<MotionValue>) -> Option<Self> {
+        let first = values.first()?;
+        let ty = ExprType::of_value(first);
+        if values
+            .iter()
+            .any(|value| !value.is_finite() || ExprType::of_value(value) != ty)
+        {
+            return None;
+        }
+        Some(match ty {
+            ExprType::Number => Self::Numbers(
+                values
+                    .into_iter()
+                    .map(|value| match value {
+                        MotionValue::Number(value) => value,
+                        _ => unreachable!("checked instance column type"),
+                    })
+                    .collect(),
+            ),
+            ExprType::Point => Self::Points(
+                values
+                    .into_iter()
+                    .map(|value| match value {
+                        MotionValue::Point(value) => value,
+                        _ => unreachable!("checked instance column type"),
+                    })
+                    .collect(),
+            ),
+            ExprType::Color => Self::Colors(
+                values
+                    .into_iter()
+                    .map(|value| match value {
+                        MotionValue::Color(value) => value,
+                        _ => unreachable!("checked instance column type"),
+                    })
+                    .collect(),
+            ),
+            ExprType::Rect => Self::Rects(
+                values
+                    .into_iter()
+                    .map(|value| match value {
+                        MotionValue::Rect(value) => value,
+                        _ => unreachable!("checked instance column type"),
+                    })
+                    .collect(),
+            ),
+            ExprType::Bool => Self::Bools(
+                values
+                    .into_iter()
+                    .map(|value| match value {
+                        MotionValue::Bool(value) => value,
+                        _ => unreachable!("checked instance column type"),
+                    })
+                    .collect(),
+            ),
+            ExprType::String => Self::Strings(
+                values
+                    .into_iter()
+                    .map(|value| match value {
+                        MotionValue::Str(value) => value,
+                        _ => unreachable!("checked instance column type"),
+                    })
+                    .collect(),
+            ),
+            _ => Self::Other(values),
+        })
+    }
+
+    pub fn len(&self) -> usize {
+        match self {
+            Self::Numbers(values) => values.len(),
+            Self::Points(values) => values.len(),
+            Self::Colors(values) => values.len(),
+            Self::Rects(values) => values.len(),
+            Self::Bools(values) => values.len(),
+            Self::Strings(values) => values.len(),
+            Self::Formula { rows, .. } => *rows as usize,
+            Self::Other(values) => values.len(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    pub fn get(&self, index: usize) -> Option<MotionValue> {
+        match self {
+            Self::Numbers(values) => values.get(index).copied().map(MotionValue::Number),
+            Self::Points(values) => values.get(index).copied().map(MotionValue::Point),
+            Self::Colors(values) => values.get(index).copied().map(MotionValue::Color),
+            Self::Rects(values) => values.get(index).copied().map(MotionValue::Rect),
+            Self::Bools(values) => values.get(index).copied().map(MotionValue::Bool),
+            Self::Strings(values) => values.get(index).cloned().map(MotionValue::Str),
+            Self::Formula { rows, expression } => {
+                (index < *rows as usize).then(|| MotionValue::Number(expression.evaluate(index)))
+            }
+            Self::Other(values) => values.get(index).cloned(),
+        }
+    }
+
+    pub fn value_type(&self) -> Option<ExprType> {
+        Some(match self {
+            Self::Numbers(_) => ExprType::Number,
+            Self::Points(_) => ExprType::Point,
+            Self::Colors(_) => ExprType::Color,
+            Self::Rects(_) => ExprType::Rect,
+            Self::Bools(_) => ExprType::Bool,
+            Self::Strings(_) => ExprType::String,
+            Self::Formula { .. } => ExprType::Number,
+            Self::Other(values) => ExprType::of_value(values.first()?),
+        })
+    }
+
+    fn is_canonical_and_finite(&self) -> bool {
+        match self {
+            Self::Numbers(values) => values.iter().all(|value| value.is_finite()),
+            Self::Points(values) => values
+                .iter()
+                .all(|value| value.x.is_finite() && value.y.is_finite()),
+            Self::Colors(values) => values.iter().all(|value| value.is_finite()),
+            Self::Bools(_) | Self::Strings(_) => true,
+            Self::Formula { rows, expression } => {
+                *rows > 0
+                    && *rows <= MAX_GEOMETRY_BATCH_INSTANCES_PER_NODE as u32
+                    && expression.is_bounded()
+                    && (0..*rows as usize).all(|index| expression.evaluate(index).is_finite())
+            }
+            Self::Rects(values) => values.iter().all(|value| {
+                value.x.is_finite()
+                    && value.y.is_finite()
+                    && value.width.is_finite()
+                    && value.height.is_finite()
+            }),
+            Self::Other(values) => values.first().is_some_and(|first| {
+                let ty = ExprType::of_value(first);
+                !matches!(
+                    ty,
+                    ExprType::Number
+                        | ExprType::Point
+                        | ExprType::Color
+                        | ExprType::Rect
+                        | ExprType::Bool
+                        | ExprType::String
+                ) && values
+                    .iter()
+                    .all(|value| value.is_finite() && ExprType::of_value(value) == ty)
+            }),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct InstanceGroup {
+    /// Root of one authored template. Its expression ids address this group's `exprs`.
+    pub template: SceneNode,
+    /// Shared key scope of the template root and descendants. A component may give its
+    /// returned root a key distinct from the key on the component call.
+    pub template_key_prefix: String,
+    /// Authored descendants, stored once regardless of the number of rows.
+    pub template_children: Vec<InstanceTemplateNode>,
+    /// Stable identities keep list semantics independent of table order.
+    pub keys: InstanceKeys,
+    /// One fixed typed array per referenced instance field.
+    pub columns: Vec<InstanceColumn>,
+    pub exprs: Vec<Expr>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct InstanceTemplateNode {
+    pub node: SceneNode,
+    pub children: Vec<InstanceTemplateNode>,
+}
+
+fn validate_node_classes(
+    node: &SceneNode,
+    types: &[Option<ExprType>],
+    path: &str,
+    errors: &mut Vec<ValidationError>,
+) {
+    for (at, class) in node.class_names.iter().enumerate() {
+        if let Err(reason) = crate::tailwind::validate_tailwind_class(class) {
+            errors.push(
+                ValidationError::new(format!("{path}/classNames/{at}"), reason.message(class))
+                    .with_style(reason.style_issue().cloned()),
+            );
+        }
+    }
+    for (class, condition) in &node.class_conditions {
+        if !node.class_names.contains(class) {
+            errors.push(ValidationError::new(
+                format!("{path}/classConditions/{class}"),
+                "conditional utility must be present in classNames",
+            ));
+        }
+        if types.get(condition.0 as usize) != Some(&Some(ExprType::Bool)) {
+            errors.push(ValidationError::new(
+                format!("{path}/classConditions/{class}"),
+                "conditional utility must reference a bool expression",
+            ));
+        }
+    }
+}
+
+fn layout_instance_descendant_style_supported(
+    style: &StyleBinding,
+    types: &[Option<ExprType>],
+    is_text: bool,
+) -> bool {
+    let value_type = match &style.value {
+        StyleValue::Static { value } if value.is_finite() => ExprType::of_value(value),
+        StyleValue::Static { .. } => return false,
+        StyleValue::Expr { expr } => match types.get(expr.0 as usize).copied().flatten() {
+            Some(value_type) => value_type,
+            None => return false,
+        },
+    };
+    let pixel_length = value_type == ExprType::Number
+        || matches!(&style.value,
+        StyleValue::Static { value: MotionValue::Length(length) }
+            if length.unit == crate::value::LengthUnit::Px && length.value.is_finite());
+    match style.property.as_str() {
+        "width" | "height" | "min-width" | "min-height" | "max-width" | "max-height"
+        | "margin-top" | "margin-right" | "margin-bottom" | "margin-left" | "padding-top"
+        | "padding-right" | "padding-bottom" | "padding-left" | "border-radius" | "gap"
+        | "left" | "top" | "right" | "bottom" => pixel_length,
+        "font-size" | "letter-spacing" | "line-height" if is_text => pixel_length,
+        "background-color" if !is_text => matches!(value_type, ExprType::Color | ExprType::String),
+        "color" if is_text => matches!(value_type, ExprType::Color | ExprType::String),
+        "opacity" => value_type == ExprType::Number,
+        "font-weight" if is_text => matches!(value_type, ExprType::Number | ExprType::String),
+        "text-align" | "white-space" if is_text => value_type == ExprType::String,
+        "display" | "position" | "flex-direction" | "justify-content" | "align-items"
+        | "flex-wrap"
+            if !is_text =>
+        {
+            value_type == ExprType::String
+        }
+        _ => false,
+    }
+}
+
+/// Read the single CSS skewX(deg) operation supported by a shared Path instance.
+pub fn path_instance_skew_x(transform: &str) -> Option<f32> {
+    let degrees = transform
+        .trim()
+        .strip_prefix("skewX(")?
+        .strip_suffix(')')?
+        .trim()
+        .strip_suffix("deg")?
+        .trim()
+        .parse::<f32>()
+        .ok()?;
+    degrees.is_finite().then_some(degrees)
+}
+
+impl InstanceGroup {
+    pub fn rows(&self) -> usize {
+        self.keys.len()
+    }
+
+    pub fn template_node_count(&self) -> usize {
+        let mut count = 1;
+        let mut pending = self.template_children.iter().collect::<Vec<_>>();
+        while let Some(child) = pending.pop() {
+            count += 1;
+            pending.extend(&child.children);
+        }
+        count
+    }
+
+    pub fn key_for_node(&self, row: usize, template_key: &str) -> Option<String> {
+        let root = self.keys.key_at(row)?;
+        let root_suffix = self.template.key.strip_prefix(&self.template_key_prefix)?;
+        let suffix = template_key.strip_prefix(&self.template_key_prefix)?;
+        let scoped =
+            |suffix: &str| suffix.is_empty() || suffix.starts_with('.') || suffix.starts_with('/');
+        if !scoped(root_suffix) || !scoped(suffix) {
+            return None;
+        }
+        let row_prefix = root.strip_suffix(root_suffix)?;
+        if row_prefix.is_empty() && !root_suffix.is_empty() {
+            return None;
+        }
+        Some(format!("{row_prefix}{suffix}"))
+    }
+
+    /// Static solid paths can share one geometry resource across translated rows.
+    pub fn static_path_template(&self) -> Option<&PathData> {
+        let template = &self.template;
+        if !self.template_children.is_empty()
+            || template.space.is_some()
+            || !template.class_names.is_empty()
+            || !template.class_conditions.is_empty()
+            || template.semantic.is_some()
+            || template
+                .styles
+                .iter()
+                .filter(|style| style.property == "translate")
+                .count()
+                != 1
+            || template
+                .styles
+                .iter()
+                .filter(|style| style.property == "opacity")
+                .count()
+                > 1
+            || template
+                .styles
+                .iter()
+                .filter(|style| style.property == "rotate")
+                .count()
+                > 1
+            || template
+                .styles
+                .iter()
+                .filter(|style| style.property == "scale")
+                .count()
+                > 1
+            || template
+                .styles
+                .iter()
+                .filter(|style| style.property == "transform")
+                .count()
+                > 1
+            || template
+                .styles
+                .iter()
+                .filter(|style| style.property == "transform-origin")
+                .count()
+                > 1
+            || template.styles.iter().any(|style| {
+                !matches!(
+                    style.property.as_str(),
+                    "translate" | "opacity" | "rotate" | "scale" | "transform" | "transform-origin"
+                )
+            })
+        {
+            return None;
+        }
+        if template
+            .styles
+            .iter()
+            .any(|style| matches!(style.property.as_str(), "rotate" | "scale" | "transform"))
+            && !template.styles.iter().any(|style| {
+                style.property == "transform-origin"
+                    && (matches!(&style.value,
+                        StyleValue::Static { value: MotionValue::Point(point) }
+                            if point.x == 0.0 && point.y == 0.0)
+                        || matches!(&style.value,
+                            StyleValue::Static { value: MotionValue::Length2(lengths) }
+                                if lengths.x.unit == crate::value::LengthUnit::Px
+                                    && lengths.y.unit == crate::value::LengthUnit::Px
+                                    && lengths.x.value == 0.0 && lengths.y.value == 0.0))
+            })
+        {
+            return None;
+        }
+        let NodeKind::Path {
+            d: PathValue::Static { value },
+            fill,
+            stroke,
+            trim_start: NumberValue::Static { value: trim_start },
+            trim_end: NumberValue::Static { value: trim_end },
+            arrow_start: None,
+            arrow_end: None,
+        } = &template.kind
+        else {
+            return None;
+        };
+        if !matches!(fill, Some(PaintValue::Solid { .. }) | None)
+            || fill.is_none() && stroke.is_none()
+        {
+            return None;
+        }
+        if stroke.as_ref().is_some_and(|stroke| {
+            !matches!(stroke.paint, PaintValue::Solid { .. })
+                || !match &stroke.width {
+                    NumberValue::Static { value } => {
+                        *value > 0.0 && (*value as f32) > 0.0 && (*value as f32).is_finite()
+                    }
+                    NumberValue::Expr { .. } => true,
+                }
+                || !(stroke.miter_limit as f32).is_finite()
+                || stroke.miter_limit < 1.0
+                || stroke.dash.as_ref().is_some_and(|dash| dash.iter().any(|value| !(*value as f32).is_finite()))
+                || matches!(&stroke.dash_offset, NumberValue::Static { value } if !(*value as f32).is_finite())
+        }) {
+            return None;
+        }
+        (*trim_start == 0.0 && *trim_end == 1.0 && !value.verbs.is_empty()).then_some(value)
+    }
+
+    /// Recognize the exact full-circle path emitted for a homogeneous `<Circle>` template.
+    /// Rendering evaluates center/radius per row and rebuilds the authored arc exactly.
+    pub fn circle_template_parameters(&self) -> Option<(ExprId, ExprId)> {
+        let template = &self.template;
+        if !self.template_children.is_empty()
+            || template.space.is_some()
+            || !template.class_names.is_empty()
+            || !template.class_conditions.is_empty()
+            || template.semantic.is_some()
+            || template
+                .styles
+                .iter()
+                .any(|style| style.property != "opacity")
+        {
+            return None;
+        }
+        let NodeKind::Path {
+            d: PathValue::Expr { expr, .. },
+            fill: Some(PaintValue::Solid { .. }),
+            stroke: None,
+            trim_start: NumberValue::Static { value: trim_start },
+            trim_end: NumberValue::Static { value: trim_end },
+            arrow_start: None,
+            arrow_end: None,
+        } = &template.kind
+        else {
+            return None;
+        };
+        if *trim_start != 0.0 || *trim_end != 1.0 {
+            return None;
+        }
+        let Expr::PathArc {
+            center,
+            radius,
+            start_angle,
+            end_angle,
+        } = self.exprs.get(expr.0 as usize)?
+        else {
+            return None;
+        };
+        let constant_is = |id: ExprId, expected: f64| matches!(self.exprs.get(id.0 as usize), Some(Expr::Const { value: MotionValue::Number(value) }) if *value == expected);
+        (constant_is(*start_angle, 0.0) && constant_is(*end_angle, core::f64::consts::TAU))
+            .then_some((*center, *radius))
+    }
+
+    /// Number of expression executions for one frame of this group. Shared expressions run
+    /// once; expressions reading an instance field or index run once per row.
+    pub fn frame_expression_evaluations(&self) -> usize {
+        self.frame_expression_evaluations_for_rows(self.rows())
+    }
+
+    pub fn frame_expression_evaluations_for_rows(&self, rows: usize) -> usize {
+        if rows == 0 {
+            return 0;
+        }
+        let mut dependent = Vec::with_capacity(self.exprs.len());
+        let mut shared = 0;
+        let mut per_row = 0;
+        for expr in &self.exprs {
+            let row_dependent = matches!(expr, Expr::InstanceField { .. } | Expr::InstanceIndex)
+                || expr.children().iter().any(|id| dependent[id.0 as usize]);
+            dependent.push(row_dependent);
+            if row_dependent {
+                per_row += 1;
+            } else {
+                shared += 1;
+            }
+        }
+        shared + per_row * rows
+    }
+}
+
+/// Stable authored identities, either stored explicitly or reconstructed from a verified
+/// decimal row index. The compiler only selects `Indexed` after matching every authored key.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    content = "values",
+    rename_all = "camelCase",
+    deny_unknown_fields
+)]
+pub enum InstanceKeys {
+    Explicit(Vec<String>),
+    Indexed {
+        rows: u32,
+        prefix: String,
+        suffix: String,
+    },
+}
+
+impl InstanceKeys {
+    pub fn from_values(keys: Vec<String>) -> Self {
+        let Ok(rows) = u32::try_from(keys.len()) else {
+            return Self::Explicit(keys);
+        };
+        if let Some(first) = keys.first() {
+            for (position, _) in first.match_indices('0') {
+                let (prefix, tail) = first.split_at(position);
+                let suffix = &tail[1..];
+                if keys.iter().enumerate().all(|(index, key)| {
+                    key.strip_prefix(prefix)
+                        .and_then(|value| value.strip_suffix(suffix))
+                        .is_some_and(|value| value == index.to_string())
+                }) {
+                    return Self::Indexed {
+                        rows,
+                        prefix: prefix.to_owned(),
+                        suffix: suffix.to_owned(),
+                    };
+                }
+            }
+        }
+        Self::Explicit(keys)
+    }
+
+    pub fn len(&self) -> usize {
+        match self {
+            Self::Explicit(keys) => keys.len(),
+            Self::Indexed { rows, .. } => *rows as usize,
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    pub fn key_at(&self, index: usize) -> Option<String> {
+        match self {
+            Self::Explicit(keys) => keys.get(index).cloned(),
+            Self::Indexed {
+                rows,
+                prefix,
+                suffix,
+            } if index < *rows as usize => Some(format!("{prefix}{index}{suffix}")),
+            Self::Indexed { .. } => None,
+        }
+    }
+
+    fn is_valid(&self) -> bool {
+        match self {
+            Self::Explicit(keys) => {
+                keys.iter().all(|key| !key.is_empty())
+                    && keys.iter().collect::<BTreeSet<_>>().len() == keys.len()
+            }
+            Self::Indexed { rows, .. } => *rows > 0,
+        }
+    }
 }
 
 /// Inspectable scene-camera bindings lowered to ordinary transform groups after layout, sharing the
@@ -1478,7 +2269,7 @@ impl SceneArtifact {
     /// backdrop. This is derived from the admitted IR so package builders and
     /// Engine admission cannot disagree about Glass/backdrop semantics.
     pub fn reads_destination(&self) -> bool {
-        self.nodes.iter().any(|node| {
+        let reads_node = |node: &SceneNode| {
             matches!(node.kind, NodeKind::Glass(_) | NodeKind::GlassField(_))
                 || node.class_names.iter().any(|class| {
                     crate::tailwind::explicit_property(class)
@@ -1488,7 +2279,21 @@ impl SceneArtifact {
                     .styles
                     .iter()
                     .any(|style| crate::style::property_spec(&style.property).reads_destination)
-        })
+        };
+        self.nodes.iter().any(reads_node)
+            || self.instance_groups.iter().any(|group| {
+                if reads_node(&group.template) {
+                    return true;
+                }
+                let mut stack = group.template_children.iter().collect::<Vec<_>>();
+                while let Some(child) = stack.pop() {
+                    if reads_node(&child.node) {
+                        return true;
+                    }
+                    stack.extend(&child.children);
+                }
+                false
+            })
     }
 
     pub fn validate(&self) -> Result<(), Vec<ValidationError>> {
@@ -1542,6 +2347,7 @@ impl SceneArtifact {
         self.controls.validate(&mut errors);
         self.validate_resources(&mut errors);
         let expr_types = validate_exprs(&self.exprs, &self.controls, &mut errors).types;
+        self.validate_instance_groups(&mut errors);
         self.validate_nodes(&expr_types, &mut errors);
         self.validate_unit_scope(&mut errors);
         self.validate_bounds_scope(&expr_types, &mut errors);
@@ -1551,6 +2357,66 @@ impl SceneArtifact {
         self.validate_batch_capabilities(&mut errors);
         self.validate_advanced_filter_capability(&mut errors);
         self.validate_shader_capability(&mut errors);
+        let uses_transition = self
+            .nodes
+            .iter()
+            .any(|node| matches!(node.kind, NodeKind::Transition { .. }));
+        let declares_transition = self
+            .capability_set
+            .names
+            .iter()
+            .any(|name| name == TRANSITION_CAPABILITY);
+        if uses_transition != declares_transition {
+            errors.push(ValidationError::new(
+                "/capabilitySet/names",
+                "motion-transition capability must match the presence of Transition nodes",
+            ));
+        }
+        let uses_shutter = self
+            .nodes
+            .iter()
+            .any(|node| matches!(node.kind, NodeKind::Shutter { .. }));
+        let declares_shutter = self
+            .capability_set
+            .names
+            .iter()
+            .any(|name| name == SHUTTER_CAPABILITY);
+        if uses_shutter != declares_shutter {
+            errors.push(ValidationError::new(
+                "/capabilitySet/names",
+                "motion-shutter capability must match the presence of Shutter nodes",
+            ));
+        }
+        let uses_echo = self
+            .nodes
+            .iter()
+            .any(|node| matches!(node.kind, NodeKind::Echo { .. }));
+        let declares_echo = self
+            .capability_set
+            .names
+            .iter()
+            .any(|name| name == ECHO_CAPABILITY);
+        if uses_echo != declares_echo {
+            errors.push(ValidationError::new(
+                "/capabilitySet/names",
+                "motion-echo capability must match the presence of Echo nodes",
+            ));
+        }
+        let uses_time_scope = self
+            .nodes
+            .iter()
+            .any(|node| matches!(node.kind, NodeKind::TimeScope { .. }));
+        let declares_time_scope = self
+            .capability_set
+            .names
+            .iter()
+            .any(|name| name == TIME_SCOPE_CAPABILITY);
+        if uses_time_scope != declares_time_scope {
+            errors.push(ValidationError::new(
+                "/capabilitySet/names",
+                "motion-time-scope capability must match the presence of TimeScope nodes",
+            ));
+        }
         self.validate_scene3d_capability(&mut errors);
         self.validate_math_formula_capability(&mut errors);
         self.validate_motion_glass_capability(&mut errors);
@@ -1561,6 +2427,492 @@ impl SceneArtifact {
             Ok(())
         } else {
             Err(errors)
+        }
+    }
+
+    fn validate_instance_groups(&self, errors: &mut Vec<ValidationError>) {
+        let mut references = vec![0usize; self.instance_groups.len()];
+        let mut layout_references = vec![0usize; self.instance_groups.len()];
+        let mut identities = self
+            .nodes
+            .iter()
+            .map(|node| node.key.clone())
+            .collect::<BTreeSet<_>>();
+        for (index, node) in self.nodes.iter().enumerate() {
+            if let NodeKind::InstanceBatch { group } | NodeKind::InstanceLayout { group } =
+                node.kind
+            {
+                if let Some(count) = references.get_mut(group as usize) {
+                    *count += 1;
+                    if matches!(node.kind, NodeKind::InstanceLayout { .. }) {
+                        layout_references[group as usize] += 1;
+                        if node.space.is_some()
+                            || !node.class_names.is_empty()
+                            || !node.class_conditions.is_empty()
+                            || !node.styles.is_empty()
+                            || node.visibility.is_some()
+                            || node.semantic.is_some()
+                        {
+                            errors.push(ValidationError::new(
+                                format!("/nodes/{index}"),
+                                "layout instance placeholder cannot carry styles or semantic attributes",
+                            ));
+                        }
+                    }
+                } else {
+                    errors.push(ValidationError::new(
+                        format!("/nodes/{index}/kind/group"),
+                        "instance group index is out of range",
+                    ));
+                }
+            }
+        }
+        for (at, expr) in self.exprs.iter().enumerate() {
+            if matches!(
+                expr,
+                Expr::InstanceField { .. } | Expr::InstanceIndex | Expr::InstanceCount
+            ) {
+                errors.push(ValidationError::new(
+                    format!("/exprs/{at}"),
+                    "instance expressions must belong to an instance template",
+                ));
+            }
+        }
+        for (index, group) in self.instance_groups.iter().enumerate() {
+            let path = format!("/instanceGroups/{index}");
+            if references[index] != 1 {
+                errors.push(ValidationError::new(
+                    &path,
+                    "instance group must be referenced by exactly one batch node",
+                ));
+            }
+            let rows = group.rows();
+            if rows == 0 || rows > MAX_GEOMETRY_BATCH_INSTANCES_PER_NODE {
+                errors.push(ValidationError::new(
+                    format!("{path}/keys"),
+                    "instance table row count is outside the allowed range",
+                ));
+            }
+            if !group.keys.is_valid() {
+                errors.push(ValidationError::new(
+                    format!("{path}/keys"),
+                    "instance keys must be nonempty and unique",
+                ));
+            }
+            for row in 0..rows {
+                if let Some(key) = group.keys.key_at(row) {
+                    if !identities.insert(key) {
+                        errors.push(ValidationError::new(
+                            format!("{path}/keys"),
+                            "instance row key conflicts with another scene or instance key",
+                        ));
+                        break;
+                    }
+                }
+            }
+            if group.circle_template_parameters().is_some() && rows > 10_000 {
+                errors.push(ValidationError::new(
+                    format!("{path}/keys"),
+                    "exact Circle template exceeds the 10,000 row path budget",
+                ));
+            }
+            let layout_group = layout_references[index] != 0;
+            let layout_text = matches!(
+                group.template.kind,
+                NodeKind::Text {
+                    per_unit: None,
+                    path: None,
+                    ..
+                }
+            ) && group.template_children.is_empty();
+            if group.template_key_prefix.is_empty()
+                || (0..rows).any(|row| {
+                    group.key_for_node(row, &group.template.key) != group.keys.key_at(row)
+                })
+            {
+                errors.push(ValidationError::new(
+                    format!("{path}/templateKeyPrefix"),
+                    "template key scope must reproduce every instance root key",
+                ));
+            }
+            if (layout_group
+                && !matches!(group.template.kind, NodeKind::Box | NodeKind::Group)
+                && !layout_text)
+                || (!layout_group
+                    && !matches!(group.template.kind, NodeKind::Box)
+                    && group.circle_template_parameters().is_none()
+                    && group.static_path_template().is_none())
+                || group.template.children != ChildRange::EMPTY
+                || !layout_group && !group.template_children.is_empty()
+            {
+                errors.push(ValidationError::new(
+                    format!("{path}/template"),
+                    "instance template must be a Box/Group/Text layout tree, leaf Box, full solid Circle, or translated solid static Path",
+                ));
+            }
+            if let Some(static_path) = group.static_path_template() {
+                if static_path.validate().is_err() {
+                    errors.push(ValidationError::new(
+                        format!("{path}/template/kind/d"),
+                        "instance Path geometry must be valid",
+                    ));
+                }
+            }
+            if layout_group {
+                if group.template.space.is_some()
+                    || group.template.semantic.is_some()
+                    || !layout_text
+                        && group.template.styles.iter().any(|style| {
+                            !matches!(
+                                style.property.as_str(),
+                                "width"
+                                    | "height"
+                                    | "min-width"
+                                    | "min-height"
+                                    | "max-width"
+                                    | "max-height"
+                                    | "margin-top"
+                                    | "margin-right"
+                                    | "margin-bottom"
+                                    | "margin-left"
+                                    | "padding-top"
+                                    | "padding-right"
+                                    | "padding-bottom"
+                                    | "padding-left"
+                                    | "border-radius"
+                                    | "background-color"
+                                    | "opacity"
+                            )
+                        })
+                {
+                    errors.push(ValidationError::new(
+                        format!("{path}/template"),
+                        "layout instance template needs a Box, Group, or plain Text with supported inline styles and no semantic scope",
+                    ));
+                }
+            }
+            let mut names = BTreeSet::new();
+            for (column_index, column) in group.columns.iter().enumerate() {
+                if column.name.is_empty()
+                    || !names.insert(&column.name)
+                    || column.values.len() != rows
+                {
+                    errors.push(ValidationError::new(
+                        format!("{path}/columns/{column_index}"),
+                        "instance column needs a unique name and one value per row",
+                    ));
+                }
+                if !column.values.is_canonical_and_finite() {
+                    errors.push(ValidationError::new(
+                        format!("{path}/columns/{column_index}/values"),
+                        "instance column values must be finite, homogeneous and canonically typed",
+                    ));
+                }
+            }
+            let mut group_errors = Vec::new();
+            let types = validate_exprs(&group.exprs, &self.controls, &mut group_errors).types;
+            for mut error in group_errors {
+                error.path = format!("{path}{}", error.path);
+                errors.push(error);
+            }
+            if layout_group {
+                validate_node_classes(&group.template, &types, &format!("{path}/template"), errors);
+                let mut stack = group
+                    .template_children
+                    .iter()
+                    .enumerate()
+                    .map(|(at, child)| (child, format!("{path}/templateChildren/{at}"), 1usize))
+                    .collect::<Vec<_>>();
+                let mut child_keys = BTreeSet::new();
+                let mut count = 0usize;
+                while let Some((child, child_path, depth)) = stack.pop() {
+                    count += 1;
+                    if depth > 32 || count > 1024 {
+                        errors.push(ValidationError::new(
+                            &child_path,
+                            "instance template subtree exceeds the depth or node limit",
+                        ));
+                        break;
+                    }
+                    let node = &child.node;
+                    if group.key_for_node(0, &node.key).is_none()
+                        || !child_keys.insert(node.key.as_str())
+                    {
+                        errors.push(ValidationError::new(
+                            format!("{child_path}/node/key"),
+                            "instance descendant key must be unique and rooted at the template key",
+                        ));
+                    }
+                    let is_text = matches!(
+                        node.kind,
+                        NodeKind::Text {
+                            per_unit: None,
+                            path: None,
+                            ..
+                        }
+                    );
+                    if !matches!(node.kind, NodeKind::Box | NodeKind::Group) && !is_text
+                        || is_text && !child.children.is_empty()
+                        || node.children != ChildRange::EMPTY
+                        || node.space.is_some()
+                        || node.semantic.is_some()
+                    {
+                        errors.push(ValidationError::new(
+                            format!("{child_path}/node"),
+                            "layout instance descendant needs a plain Box, Group, or leaf Text with no semantic scope",
+                        ));
+                    }
+                    validate_node_classes(node, &types, &format!("{child_path}/node"), errors);
+                    if let NodeKind::Text {
+                        text: TextValue::Expr { expr },
+                        ..
+                    } = &node.kind
+                        && types.get(expr.0 as usize).copied().flatten() != Some(ExprType::String)
+                    {
+                        errors.push(ValidationError::new(
+                            format!("{child_path}/node/kind/text"),
+                            "instance Text content must reference a string expression",
+                        ));
+                    }
+                    for (reference_path, id) in node.expr_refs_outside_per_unit() {
+                        if types.get(id.0 as usize).copied().flatten().is_none() {
+                            errors.push(ValidationError::new(
+                                format!("{child_path}/node{reference_path}"),
+                                "template expression reference is invalid",
+                            ));
+                        }
+                    }
+                    if let Some(visibility) = node.visibility
+                        && types.get(visibility.0 as usize).copied().flatten()
+                            != Some(ExprType::Bool)
+                    {
+                        errors.push(ValidationError::new(
+                            format!("{child_path}/node/visibility"),
+                            "instance visibility must reference a bool expression",
+                        ));
+                    }
+                    for (style_at, style) in node.styles.iter().enumerate() {
+                        if !layout_instance_descendant_style_supported(style, &types, is_text) {
+                            errors.push(ValidationError::new(
+                                format!("{child_path}/node/styles/{style_at}"),
+                                "layout instance descendant style is unsupported",
+                            ));
+                        }
+                    }
+                    stack.extend(child.children.iter().enumerate().map(|(at, descendant)| {
+                        (descendant, format!("{child_path}/children/{at}"), depth + 1)
+                    }));
+                }
+                if rows.saturating_mul(count + 1) > 1_000_000 {
+                    errors.push(ValidationError::new(
+                        format!("{path}/keys"),
+                        "layout instance tree exceeds the one million projected node limit",
+                    ));
+                } else {
+                    for row in 0..rows {
+                        for template_key in &child_keys {
+                            if let Some(key) = group.key_for_node(row, template_key)
+                                && !identities.insert(key)
+                            {
+                                errors.push(ValidationError::new(
+                                    format!("{path}/keys"),
+                                    "instance descendant key conflicts with another scene or instance key",
+                                ));
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            if layout_group {
+                if let NodeKind::Text {
+                    text: TextValue::Expr { expr },
+                    ..
+                } = &group.template.kind
+                    && types.get(expr.0 as usize).copied().flatten() != Some(ExprType::String)
+                {
+                    errors.push(ValidationError::new(
+                        format!("{path}/template/kind/text"),
+                        "instance Text content must reference a string expression",
+                    ));
+                }
+                for (style_at, style) in group.template.styles.iter().enumerate() {
+                    if layout_text {
+                        if !layout_instance_descendant_style_supported(style, &types, true) {
+                            errors.push(ValidationError::new(
+                                format!("{path}/template/styles/{style_at}"),
+                                "layout instance Text style is unsupported",
+                            ));
+                        }
+                        continue;
+                    }
+                    let value_type = match &style.value {
+                        StyleValue::Static { value } => ExprType::of_value(value),
+                        StyleValue::Expr { expr } => {
+                            match types.get(expr.0 as usize).copied().flatten() {
+                                Some(value_type) => value_type,
+                                None => continue,
+                            }
+                        }
+                    };
+                    let supported = match style.property.as_str() {
+                        "background-color" => {
+                            matches!(value_type, ExprType::Color | ExprType::String)
+                        }
+                        "opacity" => value_type == ExprType::Number,
+                        _ => {
+                            value_type == ExprType::Number
+                                || matches!(&style.value,
+                            StyleValue::Static { value: MotionValue::Length(length) }
+                                if length.unit == crate::value::LengthUnit::Px && length.value.is_finite())
+                        }
+                    };
+                    if !supported {
+                        errors.push(ValidationError::new(
+                            format!("{path}/template/styles/{style_at}/value"),
+                            "layout instance style has an unsupported value type",
+                        ));
+                    }
+                }
+            }
+            for (expr_index, expr) in group.exprs.iter().enumerate() {
+                if let Expr::InstanceField { column, value_type } = expr
+                    && group
+                        .columns
+                        .get(*column as usize)
+                        .and_then(|column| column.values.value_type())
+                        .is_none_or(|ty| ty != *value_type)
+                {
+                    errors.push(ValidationError::new(
+                        format!("{path}/exprs/{expr_index}/column"),
+                        "instance field type does not match its column",
+                    ));
+                }
+            }
+            for (reference_path, id) in group.template.expr_refs_outside_per_unit() {
+                if types.get(id.0 as usize).copied().flatten().is_none() {
+                    errors.push(ValidationError::new(
+                        format!("{path}/template{reference_path}"),
+                        "template expression reference is invalid",
+                    ));
+                }
+            }
+            if let Some(visibility) = group.template.visibility
+                && types.get(visibility.0 as usize).copied().flatten() != Some(ExprType::Bool)
+            {
+                errors.push(ValidationError::new(
+                    format!("{path}/template/visibility"),
+                    "instance visibility must reference a bool expression",
+                ));
+            }
+            if group.circle_template_parameters().is_some()
+                && group.template.styles.iter().any(|style| match &style.value {
+                    StyleValue::Static { value } => {
+                        !matches!(value, MotionValue::Number(opacity) if (0.0..=1.0).contains(opacity))
+                    }
+                    StyleValue::Expr { expr } => {
+                        types.get(expr.0 as usize).copied().flatten() != Some(ExprType::Number)
+                    }
+                })
+            {
+                errors.push(ValidationError::new(
+                    format!("{path}/template/styles"),
+                    "circle instance opacity must be a number in [0, 1]",
+                ));
+            }
+            if group.static_path_template().is_some()
+                && let NodeKind::Path {
+                    stroke: Some(stroke),
+                    ..
+                } = &group.template.kind
+                && let NumberValue::Expr { expr } = &stroke.width
+                && types.get(expr.0 as usize).copied().flatten() != Some(ExprType::Number)
+            {
+                errors.push(ValidationError::new(
+                    format!("{path}/template/kind/stroke/width"),
+                    "Path instance stroke width must evaluate to a number",
+                ));
+            }
+            if group.static_path_template().is_some()
+                && group
+                    .template
+                    .styles
+                    .iter()
+                    .any(|style| match (style.property.as_str(), &style.value) {
+                        ("translate", StyleValue::Static { value }) => match value {
+                            MotionValue::Point(point) => {
+                                !point.x.is_finite() || !point.y.is_finite()
+                            }
+                            MotionValue::Vec2(vector) => {
+                                !vector.x.is_finite() || !vector.y.is_finite()
+                            }
+                            MotionValue::Length2(lengths) => {
+                                lengths.x.unit != crate::value::LengthUnit::Px
+                                    || lengths.y.unit != crate::value::LengthUnit::Px
+                                    || !lengths.x.value.is_finite()
+                                    || !lengths.y.value.is_finite()
+                            }
+                            _ => true,
+                        },
+                        ("translate", StyleValue::Expr { expr }) => !matches!(
+                            types.get(expr.0 as usize).copied().flatten(),
+                            Some(ExprType::Point | ExprType::Vec2)
+                        ),
+                        ("opacity", StyleValue::Static { value }) => {
+                            !matches!(value, MotionValue::Number(opacity) if (0.0..=1.0).contains(opacity))
+                        }
+                        ("opacity", StyleValue::Expr { expr }) => {
+                            types.get(expr.0 as usize).copied().flatten() != Some(ExprType::Number)
+                        }
+                        ("rotate", StyleValue::Static { value }) => match value {
+                            MotionValue::Angle(angle) => !(angle.as_degrees() as f32).is_finite(),
+                            MotionValue::Str(value) => crate::value::Angle::parse(value)
+                                .is_none_or(|angle| !(angle.as_degrees() as f32).is_finite()),
+                            _ => true,
+                        },
+                        ("rotate", StyleValue::Expr { expr }) => !matches!(
+                            types.get(expr.0 as usize).copied().flatten(),
+                            Some(ExprType::Angle | ExprType::String)
+                        ),
+                        ("scale", StyleValue::Static { value }) => match value {
+                            MotionValue::Number(value) => {
+                                *value == 0.0 || !(*value as f32).is_finite()
+                            }
+                            MotionValue::Point(point) => {
+                                point.x == 0.0
+                                    || point.y == 0.0
+                                    || !(point.x as f32).is_finite()
+                                    || !(point.y as f32).is_finite()
+                            }
+                            _ => true,
+                        },
+                        ("scale", StyleValue::Expr { expr }) => !matches!(
+                            types.get(expr.0 as usize).copied().flatten(),
+                            Some(ExprType::Number | ExprType::Point)
+                        ),
+                        ("transform", StyleValue::Static { value }) => {
+                            !matches!(value, MotionValue::Str(value)
+                                if path_instance_skew_x(value).is_some())
+                        }
+                        ("transform", StyleValue::Expr { expr }) => {
+                            types.get(expr.0 as usize).copied().flatten() != Some(ExprType::String)
+                        }
+                        ("transform-origin", StyleValue::Static { value }) => {
+                            !matches!(value, MotionValue::Point(point)
+                                if point.x == 0.0 && point.y == 0.0)
+                                && !matches!(value, MotionValue::Length2(lengths)
+                                    if lengths.x.unit == crate::value::LengthUnit::Px
+                                        && lengths.y.unit == crate::value::LengthUnit::Px
+                                        && lengths.x.value == 0.0 && lengths.y.value == 0.0)
+                        }
+                        _ => true,
+                    })
+            {
+                errors.push(ValidationError::new(
+                    format!("{path}/template/styles"),
+                    "static Path instance needs finite pixel translation, zero transform origin, and valid opacity/angle/scale/skew",
+                ));
+            }
         }
     }
 
@@ -1754,12 +3106,7 @@ impl SceneArtifact {
                     }
                     ShaderUniformValue::Color {
                         value: ColorValue::Static { value },
-                    } => Some(crate::shader::UniformValue::Color([
-                        f32::from(value.r) / 255.0,
-                        f32::from(value.g) / 255.0,
-                        f32::from(value.b) / 255.0,
-                        f32::from(value.a) / 255.0,
-                    ])),
+                    } => Some(crate::shader::UniformValue::Color(value.to_srgb_straight())),
                     ShaderUniformValue::Bool {
                         value: BoolValue::Static { value },
                     } => Some(crate::shader::UniformValue::Bool(*value)),
@@ -1875,11 +3222,22 @@ impl SceneArtifact {
                 .copied()
                 .unwrap_or(false)
         };
-        let keys = self
+        let mut keys = self
             .nodes
             .iter()
-            .map(|node| node.key.as_str())
+            .map(|node| node.key.clone())
             .collect::<BTreeSet<_>>();
+        for node in &self.nodes {
+            if let NodeKind::InstanceLayout { group } = node.kind {
+                if let Some(group) = self.instance_groups.get(group as usize) {
+                    for row in 0..group.rows() {
+                        if let Some(key) = group.keys.key_at(row) {
+                            keys.insert(key);
+                        }
+                    }
+                }
+            }
+        }
 
         // Require bounds target keys to exist at admission time.
         for (at, expr) in self.exprs.iter().enumerate() {
@@ -1959,7 +3317,13 @@ impl SceneArtifact {
                             && let Err(reason) =
                                 spec.validate_post_layout(expr, &self.exprs, expr_types)
                         {
-                            errors.push(ValidationError::new(format!("{path}{slot}"), reason));
+                            let issue = crate::style::StyleIssue::new(
+                                crate::style::StyleIssueKind::InvalidValue,
+                                &style.property,
+                                "<expression>",
+                                reason,
+                            ).with_suggestion("a transform with fixed presence and priority, for example rotate: `${bounds('target').width}deg`");
+                            errors.push(ValidationError::new(format!("{path}{slot}"), issue.to_string()).with_style(Some(issue)));
                         }
                         !spec.accepts_post_layout()
                     })
@@ -2092,10 +3456,14 @@ impl SceneArtifact {
     }
 
     fn validate_batch_capabilities(&self, errors: &mut Vec<ValidationError>) {
-        let uses_batch = self
-            .nodes
-            .iter()
-            .any(|node| matches!(node.kind, NodeKind::GeometryBatch { .. }));
+        let uses_batch = self.nodes.iter().any(|node| {
+            matches!(
+                node.kind,
+                NodeKind::GeometryBatch { .. }
+                    | NodeKind::InstanceBatch { .. }
+                    | NodeKind::InstanceLayout { .. }
+            )
+        });
         let uses_particles = self.nodes.iter().any(|node| {
             matches!(
                 node.kind,
@@ -2115,6 +3483,9 @@ impl SceneArtifact {
                         || batch.size_field.is_some()
                         || batch.fill_field.is_some()
                         || batch.opacity_field.is_some()
+                        || batch.rotation_field.is_some()
+                        || batch.skew_x_field.is_some()
+                        || batch.stroke_width_field.is_some()
             )
         });
         for (uses, capability, label) in [
@@ -2151,6 +3522,10 @@ impl SceneArtifact {
                     BatchPositions::Static { values } => values.len(),
                     BatchPositions::Particles { spec, .. } => spec.count as usize,
                 }),
+                NodeKind::InstanceBatch { group } | NodeKind::InstanceLayout { group } => self
+                    .instance_groups
+                    .get(*group as usize)
+                    .map(InstanceGroup::rows),
                 _ => None,
             })
             .try_fold(0usize, usize::checked_add);
@@ -2259,10 +3634,6 @@ impl SceneArtifact {
             "motion-displacement-octaves",
             "motion-displacement-mode",
         ];
-        const VELOCITY_BLUR: &[&str] = &[
-            "motion-velocity-blur-velocity",
-            "motion-velocity-blur-shutter",
-        ];
         const BACKDROP_DISPLACEMENT: &[&str] = &[
             "motion-backdrop-displacement-seed",
             "motion-backdrop-displacement-frequency",
@@ -2271,10 +3642,24 @@ impl SceneArtifact {
             "motion-backdrop-displacement-mode",
         ];
         let uses = self.nodes.iter().any(|node| {
-            node.styles.iter().any(|style| {
-                style.property.starts_with("motion-displacement-")
-                    || style.property.starts_with("motion-velocity-blur-")
-            })
+            node.class_names
+                .iter()
+                .any(|class| crate::tailwind::advanced_filter(class).is_some())
+                || node.styles.iter().any(|style| {
+                    style.property == "motion-filter-frame"
+                        || (style.property == "filter"
+                            && matches!(&style.value,
+                        StyleValue::Static { value: MotionValue::Str(value) }
+                        if crate::style::advanced_filter::parse(value).ok().flatten().is_some()))
+                        || style.property.starts_with("motion-displacement-")
+                        || style.property.starts_with("motion-velocity-blur-")
+                        || style.property == "motion-chromatic-aberration-offset"
+                        || style.property.starts_with("motion-glow-")
+                        || style.property.starts_with("motion-bloom-")
+                        || style.property.starts_with("motion-radial-blur-")
+                        || style.property.starts_with("motion-film-grain-")
+                        || style.property.starts_with("motion-lens-distortion-")
+                })
         });
         let declared = self
             .capability_set
@@ -2300,10 +3685,144 @@ impl SceneArtifact {
         }
 
         for (at, node) in self.nodes.iter().enumerate() {
-            for (prefix, required) in [
-                ("motion-displacement-", DISPLACEMENT),
-                ("motion-velocity-blur-", VELOCITY_BLUR),
-            ] {
+            for style in &node.styles {
+                if style.property == "motion-chromatic-aberration-offset"
+                    && !matches!(
+                        &style.value,
+                        StyleValue::Static { value: MotionValue::Number(value) }
+                            if value.is_finite() && value.abs() <= 256.0
+                    )
+                {
+                    errors.push(ValidationError::new(
+                        format!("/nodes/{at}/styles"),
+                        "chromatic aberration needs a static finite offset within ±256px",
+                    ));
+                }
+            }
+            let glow_styles: Vec<_> = node
+                .styles
+                .iter()
+                .filter(|style| style.property.starts_with("motion-glow-"))
+                .collect();
+            if !glow_styles.is_empty() {
+                let complete = glow_styles.len() == 3
+                    && glow_styles.iter().any(|style| {
+                        style.property == "motion-glow-radius"
+                            && matches!(&style.value, StyleValue::Static { value: MotionValue::Number(value) } if value.is_finite() && (0.0..=128.0).contains(value))
+                    })
+                    && glow_styles.iter().any(|style| {
+                        style.property == "motion-glow-intensity"
+                            && matches!(&style.value, StyleValue::Static { value: MotionValue::Number(value) } if value.is_finite() && (0.0..=4.0).contains(value))
+                    })
+                    && glow_styles.iter().any(|style| {
+                        style.property == "motion-glow-color"
+                            && matches!(&style.value, StyleValue::Static { value: MotionValue::Color(_) })
+                    });
+                if !complete {
+                    errors.push(ValidationError::new(
+                        format!("/nodes/{at}/styles"),
+                        "glow needs static radius, intensity, and color slots within bounds",
+                    ));
+                }
+            }
+            let bloom_styles: Vec<_> = node
+                .styles
+                .iter()
+                .filter(|style| style.property.starts_with("motion-bloom-"))
+                .collect();
+            if !bloom_styles.is_empty() {
+                let complete = bloom_styles.len() == 4
+                    && [
+                        ("motion-bloom-threshold", 1.0),
+                        ("motion-bloom-knee", 1.0),
+                        ("motion-bloom-intensity", 4.0),
+                        ("motion-bloom-radius", 128.0),
+                    ]
+                    .iter()
+                    .all(|(property, max)| {
+                        bloom_styles.iter().any(|style| {
+                            style.property == *property
+                                && matches!(&style.value, StyleValue::Static { value: MotionValue::Number(value) }
+                                    if value.is_finite() && (0.0..=*max).contains(value))
+                        })
+                    });
+                if !complete {
+                    errors.push(ValidationError::new(
+                        format!("/nodes/{at}/styles"),
+                        "bloom needs static threshold, knee, intensity, and radius slots within bounds",
+                    ));
+                }
+            }
+            let radial_styles: Vec<_> = node
+                .styles
+                .iter()
+                .filter(|style| style.property.starts_with("motion-radial-blur-"))
+                .collect();
+            if !radial_styles.is_empty() {
+                let complete = radial_styles.len() == 3
+                    && ["motion-radial-blur-center-x", "motion-radial-blur-center-y"]
+                        .iter()
+                        .all(|property| radial_styles.iter().any(|style| {
+                            style.property == *property
+                                && matches!(&style.value, StyleValue::Static { value: MotionValue::Number(value) }
+                                    if value.is_finite() && value.abs() <= 10_000_000.0)
+                        }))
+                    && radial_styles.iter().any(|style| {
+                        style.property == "motion-radial-blur-amount"
+                            && matches!(&style.value, StyleValue::Static { value: MotionValue::Number(value) }
+                                if value.is_finite() && (0.0..=128.0).contains(value))
+                    });
+                if !complete {
+                    errors.push(ValidationError::new(
+                        format!("/nodes/{at}/styles"),
+                        "radial blur needs static center x/y and amount slots within bounds",
+                    ));
+                }
+            }
+            let film_styles: Vec<_> = node
+                .styles
+                .iter()
+                .filter(|style| style.property.starts_with("motion-film-grain-"))
+                .collect();
+            if !film_styles.is_empty() {
+                let complete = film_styles.len() == 3
+                    && film_styles.iter().any(|style| style.property == "motion-film-grain-seed"
+                        && matches!(&style.value, StyleValue::Static { value: MotionValue::Number(value) }
+                            if value.is_finite() && value.fract() == 0.0 && (0.0..=u32::MAX as f64).contains(value)))
+                    && film_styles.iter().any(|style| style.property == "motion-film-grain-amount"
+                        && matches!(&style.value, StyleValue::Static { value: MotionValue::Number(value) }
+                            if value.is_finite() && (0.0..=1.0).contains(value)))
+                    && film_styles.iter().any(|style| style.property == "motion-film-grain-size"
+                        && matches!(&style.value, StyleValue::Static { value: MotionValue::Number(value) }
+                            if value.is_finite() && (1.0..=64.0).contains(value)));
+                if !complete {
+                    errors.push(ValidationError::new(
+                        format!("/nodes/{at}/styles"),
+                        "film grain needs static seed, amount, and size slots within bounds",
+                    ));
+                }
+            }
+            let lens_styles: Vec<_> = node
+                .styles
+                .iter()
+                .filter(|style| style.property.starts_with("motion-lens-distortion-"))
+                .collect();
+            if !lens_styles.is_empty() {
+                let complete = lens_styles.len() == 2
+                    && ["motion-lens-distortion-k1", "motion-lens-distortion-k2"]
+                        .iter().all(|property| lens_styles.iter().any(|style| {
+                            style.property == *property
+                                && matches!(&style.value, StyleValue::Static { value: MotionValue::Number(value) }
+                                    if value.is_finite() && value.abs() <= 0.5)
+                        }));
+                if !complete {
+                    errors.push(ValidationError::new(
+                        format!("/nodes/{at}/styles"),
+                        "lens distortion needs static k1 and k2 slots within ±0.5",
+                    ));
+                }
+            }
+            for (prefix, required) in [("motion-displacement-", DISPLACEMENT)] {
                 let authored: Vec<&str> = node
                     .styles
                     .iter()
@@ -2329,6 +3848,38 @@ impl SceneArtifact {
                     errors.push(ValidationError::new(
                         format!("/nodes/{at}/styles"),
                         format!("advanced filter slot set is incomplete; missing `{missing}`"),
+                    ));
+                }
+            }
+            let blur_slots = node
+                .styles
+                .iter()
+                .filter(|style| style.property.starts_with("motion-velocity-blur-"))
+                .collect::<Vec<_>>();
+            if !blur_slots.is_empty() {
+                let has = |name: &str| blur_slots.iter().any(|style| style.property == name);
+                let velocity = "motion-velocity-blur-velocity";
+                let auto = "motion-velocity-blur-auto";
+                let shutter = "motion-velocity-blur-shutter";
+                if blur_slots
+                    .iter()
+                    .any(|style| ![velocity, auto, shutter].contains(&style.property.as_str()))
+                    || has(velocity) == has(auto)
+                    || !has(shutter)
+                    || blur_slots.len() != 2
+                    || blur_slots.iter().any(|style| {
+                        style.property == auto
+                            && !matches!(
+                                &style.value,
+                                StyleValue::Static {
+                                    value: MotionValue::Bool(true)
+                                }
+                            )
+                    })
+                {
+                    errors.push(ValidationError::new(
+                        format!("/nodes/{at}/styles"),
+                        "velocity blur needs shutter and exactly one of a velocity point or static auto=true",
                     ));
                 }
             }
@@ -2540,29 +4091,7 @@ impl SceneArtifact {
                     "node keys must be non-empty and globally unique",
                 ));
             }
-            for (class_index, class_name) in node.class_names.iter().enumerate() {
-                if let Err(reason) = crate::tailwind::validate_tailwind_class(class_name) {
-                    let message = reason.message(class_name);
-                    errors.push(
-                        ValidationError::new(format!("{path}/classNames/{class_index}"), message)
-                            .with_style(reason.style_issue().cloned()),
-                    );
-                }
-            }
-            for (class, condition) in &node.class_conditions {
-                if !node.class_names.contains(class) {
-                    errors.push(ValidationError::new(
-                        format!("{path}/classConditions/{class}"),
-                        "conditional utility must be present in classNames",
-                    ));
-                }
-                if expr_types.get(condition.0 as usize) != Some(&Some(ExprType::Bool)) {
-                    errors.push(ValidationError::new(
-                        format!("{path}/classConditions/{class}"),
-                        "conditional utility must reference a bool expression",
-                    ));
-                }
-            }
+            validate_node_classes(node, expr_types, &path, errors);
             if node.children.start > node.children.end
                 || node.children.end as usize > self.node_children.len()
             {
@@ -2577,6 +4106,8 @@ impl SceneArtifact {
                 NodeKind::Text { .. }
                     | NodeKind::Path { .. }
                     | NodeKind::GeometryBatch { .. }
+                    | NodeKind::InstanceBatch { .. }
+                    | NodeKind::InstanceLayout { .. }
                     | NodeKind::Image { .. }
                     | NodeKind::Video { .. }
                     | NodeKind::Scene3D { .. }
@@ -2600,6 +4131,25 @@ impl SceneArtifact {
                     format!("{path}/kind/path"),
                     "text path must be finite path data or a PathData expression",
                 ));
+            }
+            if let NodeKind::Text {
+                per_unit: Some(per_unit),
+                ..
+            } = &node.kind
+                && let Some(blur) = &per_unit.style.blur
+            {
+                let valid = match blur {
+                    NumberValue::Static { value } => (0.0..=128.0).contains(value),
+                    NumberValue::Expr { expr } => {
+                        expr_types.get(expr.0 as usize) == Some(&Some(ExprType::Number))
+                    }
+                };
+                if !valid {
+                    errors.push(ValidationError::new(
+                        format!("{path}/kind/perUnit/style/blur"),
+                        "per-unit blur must be a numeric expression or finite sigma within 0..=128",
+                    ));
+                }
             }
             if let NodeKind::Path {
                 d,
@@ -2667,6 +4217,39 @@ impl SceneArtifact {
                 }
             }
             if let NodeKind::GeometryBatch { batch } = &node.kind {
+                if let GeometryBatchGeometry::Path { path: geometry } = &batch.geometry
+                    && (geometry.verbs.is_empty() || geometry.validate().is_err())
+                {
+                    errors.push(ValidationError::new(
+                        format!("{path}/kind/batch/geometry"),
+                        "batch path must be nonempty valid finite path data",
+                    ));
+                }
+                if let GeometryBatchGeometry::Image { source, src } = &batch.geometry {
+                    let source_valid = source
+                        .strip_prefix("asset://")
+                        .and_then(|name| self.controls.assets.get(name))
+                        .is_some_and(|asset| asset.kind == crate::controls::AssetKind::Image);
+                    if !source_valid
+                        || !src.x.is_finite()
+                        || !src.y.is_finite()
+                        || !src.width.is_finite()
+                        || !src.height.is_finite()
+                        || src.x < 0.0
+                        || src.y < 0.0
+                        || src.width <= 0.0
+                        || src.height <= 0.0
+                        || src.x + src.width > 1.0
+                        || src.y + src.height > 1.0
+                        || batch.stroke_widths.iter().any(|width| *width != 0.0)
+                        || batch.stroke_width_field.is_some()
+                    {
+                        errors.push(ValidationError::new(
+                            format!("{path}/kind/batch/geometry"),
+                            "atlasRegion requires a bound image asset, a positive normalized source rect, and no stroke",
+                        ));
+                    }
+                }
                 let count = match &batch.positions {
                     BatchPositions::Static { values } => values.len(),
                     BatchPositions::Particles { frame, spec } => {
@@ -2705,6 +4288,17 @@ impl SceneArtifact {
                             && spec.gravity.y.is_finite()
                             && (!spec.looping
                                 || spec.count as f64 * spec.birth_interval >= spec.lifetime)
+                            && spec.forces.len() <= 8
+                            && spec.forces.iter().all(|force| match force {
+                                ParticleForce::CurlNoise {
+                                    scale, strength, ..
+                                } => scale.is_finite() && *scale > 0.0 && strength.is_finite(),
+                                ParticleForce::Drag { coefficient } => {
+                                    coefficient.is_finite() && *coefficient >= 0.0
+                                }
+                            })
+                            && (spec.forces.is_empty()
+                                || crate::batch::particle_bake_samples(spec).is_some())
                     }
                 };
                 let arity = |len: usize, curve: bool| len == 1 || len == count || curve && len == 2;
@@ -2712,17 +4306,28 @@ impl SceneArtifact {
                 let has_fields = batch.position_field.is_some()
                     || batch.size_field.is_some()
                     || batch.fill_field.is_some()
-                    || batch.opacity_field.is_some();
+                    || batch.opacity_field.is_some()
+                    || batch.rotation_field.is_some()
+                    || batch.skew_x_field.is_some()
+                    || batch.stroke_width_field.is_some();
                 let field_progress_valid =
                     |expr: ExprId| expr_types.get(expr.0 as usize) == Some(&Some(ExprType::Number));
-                let field_stagger_valid = |stagger: f64| {
-                    stagger.is_finite()
-                        && stagger >= 0.0
-                        && (count <= 1 || stagger * ((count - 1) as f64) < 1.0)
+                let field_stagger_valid = |stagger: &BatchStagger| match stagger {
+                    BatchStagger::Step(step) => {
+                        step.is_finite()
+                            && *step >= 0.0
+                            && (count <= 1 || step * ((count - 1) as f64) < 1.0)
+                    }
+                    BatchStagger::PerInstance(delays) => {
+                        delays.len() == count
+                            && delays
+                                .iter()
+                                .all(|delay| delay.is_finite() && (0.0..1.0).contains(delay))
+                    }
                 };
                 let point_field_valid = |field: &BatchPointField, exact: bool| {
                     field_progress_valid(field.progress)
-                        && field_stagger_valid(field.stagger)
+                        && field_stagger_valid(&field.stagger)
                         && if exact {
                             field.to.len() == count
                         } else {
@@ -2735,17 +4340,17 @@ impl SceneArtifact {
                 };
                 let color_field_valid = |field: &BatchColorField| {
                     field_progress_valid(field.progress)
-                        && field_stagger_valid(field.stagger)
+                        && field_stagger_valid(&field.stagger)
                         && (field.to.len() == 1 || field.to.len() == count)
+                        && field.to.iter().all(|color| color.is_finite())
                 };
-                let number_field_valid = |field: &BatchNumberField| {
+                let number_field_valid = |field: &BatchNumberField, unit_range: bool| {
                     field_progress_valid(field.progress)
-                        && field_stagger_valid(field.stagger)
+                        && field_stagger_valid(&field.stagger)
                         && (field.to.len() == 1 || field.to.len() == count)
-                        && field
-                            .to
-                            .iter()
-                            .all(|value| value.is_finite() && (0.0..=1.0).contains(value))
+                        && field.to.iter().all(|value| {
+                            value.is_finite() && (!unit_range || (0.0..=1.0).contains(value))
+                        })
                 };
                 if count == 0
                     || count > MAX_GEOMETRY_BATCH_INSTANCES_PER_NODE
@@ -2753,23 +4358,37 @@ impl SceneArtifact {
                     || particle && has_fields
                     || !arity(batch.sizes.len(), particle)
                     || !arity(batch.fills.len(), particle)
+                    || batch.fills.iter().any(|color| !color.is_finite())
                     || !(batch.opacities.is_empty() || arity(batch.opacities.len(), particle))
+                    || !(batch.rotations.is_empty() || arity(batch.rotations.len(), particle))
+                    || !(batch.skew_xs.is_empty() || arity(batch.skew_xs.len(), particle))
+                    || !(batch.stroke_widths.is_empty()
+                        || arity(batch.stroke_widths.len(), particle))
                     || !(batch.semantic_keys.is_empty() || batch.semantic_keys.len() == count)
                     || batch
                         .sizes
                         .iter()
-                        .any(|s| !s.x.is_finite() || !s.y.is_finite() || s.x <= 0.0 || s.y <= 0.0)
+                        .any(|s| !s.x.is_finite() || !s.y.is_finite() || s.x < 0.0 || s.y < 0.0)
                     || batch
                         .opacities
                         .iter()
                         .any(|a| !a.is_finite() || !(0.0..=1.0).contains(a))
+                    || batch.rotations.iter().any(|angle| !angle.is_finite())
+                    || batch
+                        .skew_xs
+                        .iter()
+                        .any(|angle| !angle.is_finite() || (*angle as f32).abs() >= 89.0)
+                    || batch
+                        .stroke_widths
+                        .iter()
+                        .any(|width| !width.is_finite() || *width < 0.0 || *width > f32::MAX as f64)
                     || batch
                         .position_field
                         .as_ref()
                         .is_some_and(|field| !point_field_valid(field, true))
                     || batch.size_field.as_ref().is_some_and(|field| {
                         !point_field_valid(field, false)
-                            || field.to.iter().any(|size| size.x <= 0.0 || size.y <= 0.0)
+                            || field.to.iter().any(|size| size.x < 0.0 || size.y < 0.0)
                     })
                     || batch
                         .fill_field
@@ -2778,14 +4397,29 @@ impl SceneArtifact {
                     || batch
                         .opacity_field
                         .as_ref()
-                        .is_some_and(|field| !number_field_valid(field))
+                        .is_some_and(|field| !number_field_valid(field, true))
+                    || batch
+                        .rotation_field
+                        .as_ref()
+                        .is_some_and(|field| !number_field_valid(field, false))
+                    || batch.skew_x_field.as_ref().is_some_and(|field| {
+                        !number_field_valid(field, false)
+                            || field.to.iter().any(|angle| (*angle as f32).abs() >= 89.0)
+                    })
+                    || batch.stroke_width_field.as_ref().is_some_and(|field| {
+                        !number_field_valid(field, false)
+                            || field
+                                .to
+                                .iter()
+                                .any(|width| *width < 0.0 || *width > f32::MAX as f64)
+                    })
                     || batch.semantic_keys.iter().any(String::is_empty)
                     || batch.semantic_keys.iter().collect::<BTreeSet<_>>().len()
                         != batch.semantic_keys.len()
                 {
                     errors.push(ValidationError::new(
                         format!("{path}/kind/batch"),
-                        "geometry batch needs 1..=100000 finite instances; side arrays must broadcast, match count, or be a two-point particle life curve; fixed fields need Number progress, valid target arity, and a stagger whose final delay is < 1",
+                        "geometry batch needs 1..=100000 finite instances; side arrays must broadcast, match count, or be a two-point particle life curve; fixed fields need Number progress, valid target arity, and either a nonnegative stagger step or one delay in [0,1) per instance",
                     ));
                 }
             }
@@ -2797,27 +4431,167 @@ impl SceneArtifact {
                     "clip path must be valid typed PathData with matching geometry policy",
                 ));
             }
-            if let NodeKind::Mask { source, mode, rect } = &node.kind {
+            if let NodeKind::Transition {
+                effect,
+                progress,
+                params,
+            } = &node.kind
+            {
+                let mut static_params = BTreeMap::new();
+                for (name, value) in params {
+                    if !scalar_value_valid(value, expr_types)
+                        || !effect
+                            .parameter_specs()
+                            .iter()
+                            .any(|spec| spec.name == name)
+                    {
+                        errors.push(ValidationError::new(
+                            format!("{path}/kind/params/{name}"),
+                            "parameter must be a supported finite numeric value",
+                        ));
+                    }
+                    if let NumberValue::Static { value } = value {
+                        static_params.insert(name.clone(), *value);
+                    }
+                }
+                if let Err(error) = effect.resolve_params(&static_params) {
+                    errors.push(ValidationError::new(
+                        format!("{path}/kind/params/{}", error.parameter),
+                        error.reason,
+                    ));
+                }
+                let children = self
+                    .node_children
+                    .get(node.children.start as usize..node.children.end as usize);
+                if !children.is_some_and(|ids| {
+                    ids.len() == 2
+                        && ids.iter().all(|id| {
+                            self.nodes
+                                .get(id.0 as usize)
+                                .is_some_and(|child| !matches!(child.kind, NodeKind::GlassField(_)))
+                        })
+                }) || !scalar_value_valid(progress, expr_types)
+                    || matches!(progress, NumberValue::Static { value } if !(0.0..=1.0).contains(value))
+                {
+                    errors.push(ValidationError::new(format!("{path}/kind"),
+                        "Transition needs two child layout boxes and finite numeric progress in [0, 1]"));
+                }
+            }
+            if let NodeKind::Shutter {
+                samples,
+                angle_degrees,
+            } = &node.kind
+            {
+                let has_children = self
+                    .node_children
+                    .get(node.children.start as usize..node.children.end as usize)
+                    .is_some_and(|ids| {
+                        !ids.is_empty()
+                            && ids.iter().all(|id| {
+                                self.nodes.get(id.0 as usize).is_some_and(|child| {
+                                    !matches!(child.kind, NodeKind::GlassField(_))
+                                })
+                            })
+                    });
+                if !(1..=32).contains(samples)
+                    || *angle_degrees > 360
+                    || !has_children
+                    || !node.styles.is_empty()
+                    || !node.class_names.is_empty()
+                    || !node.class_conditions.is_empty()
+                    || node.visibility.is_some()
+                {
+                    errors.push(ValidationError::new(
+                        format!("{path}/kind"),
+                        "Shutter needs 1..=32 samples, integer angle in 0..=360, child layout boxes, and no wrapper styles or visibility",
+                    ));
+                }
+            }
+            if let NodeKind::Echo {
+                count,
+                interval_frames,
+                decay,
+            } = &node.kind
+            {
+                let has_children = self
+                    .node_children
+                    .get(node.children.start as usize..node.children.end as usize)
+                    .is_some_and(|ids| {
+                        !ids.is_empty()
+                            && ids.iter().all(|id| {
+                                self.nodes.get(id.0 as usize).is_some_and(|child| {
+                                    !matches!(child.kind, NodeKind::GlassField(_))
+                                })
+                            })
+                    });
+                if !(1..=32).contains(count)
+                    || *interval_frames == 0
+                    || !decay.is_finite()
+                    || !(0.0..=1.0).contains(decay)
+                    || !has_children
+                    || !node.styles.is_empty()
+                    || !node.class_names.is_empty()
+                    || !node.class_conditions.is_empty()
+                    || node.visibility.is_some()
+                {
+                    errors.push(ValidationError::new(
+                        format!("{path}/kind"),
+                        "Echo needs 1..=32 past samples, a positive integer frame interval, finite decay in [0,1], child layout boxes, and no wrapper styles or visibility",
+                    ));
+                }
+            }
+            if let NodeKind::TimeScope {
+                offset_seconds,
+                speed,
+            } = &node.kind
+            {
+                let has_children = self
+                    .node_children
+                    .get(node.children.start as usize..node.children.end as usize)
+                    .is_some_and(|ids| {
+                        !ids.is_empty()
+                            && ids.iter().all(|id| {
+                                self.nodes.get(id.0 as usize).is_some_and(|child| {
+                                    !matches!(child.kind, NodeKind::GlassField(_))
+                                })
+                            })
+                    });
+                if !offset_seconds.is_finite()
+                    || !speed.is_finite()
+                    || !has_children
+                    || !node.styles.is_empty()
+                    || !node.class_names.is_empty()
+                    || !node.class_conditions.is_empty()
+                    || node.visibility.is_some()
+                {
+                    errors.push(ValidationError::new(
+                        format!("{path}/kind"),
+                        "TimeScope needs finite offset and speed, child layout boxes, and no wrapper styles or visibility",
+                    ));
+                }
+            }
+            if let NodeKind::Mask { source, rect, .. } = &node.kind {
                 let source_valid = match source {
                     MaskValue::Paint { paint } => paint_value_valid(paint, expr_types),
                     MaskValue::Image { source } => source
                         .strip_prefix("asset://")
                         .and_then(|name| self.controls.assets.get(name))
                         .is_some_and(|asset| asset.kind == crate::controls::AssetKind::Image),
-                    MaskValue::Subtree { source } => {
-                        *mode == MaskMode::Alpha
-                            && self
-                                .node_children
-                                .get(node.children.start as usize..node.children.end as usize)
-                                .and_then(|children| children.last())
-                                .and_then(|child| self.nodes.get(child.0 as usize))
-                                .is_some_and(|child| child.key == *source)
-                    }
+                    MaskValue::Subtree { source } => self
+                        .node_children
+                        .get(node.children.start as usize..node.children.end as usize)
+                        .is_some_and(|children| {
+                            children.iter().any(|child| {
+                                self.nodes
+                                    .get(child.0 as usize)
+                                    .is_some_and(|child| child.key == *source)
+                            })
+                        }),
                 };
                 if !source_valid || !rect_value_valid(rect, expr_types) {
                     errors.push(ValidationError::new(
                         format!("{path}/kind"),
-                        "mask needs a valid paint/image source or a final direct alpha subtree source, plus a positive typed rect",
+                        "mask needs a valid paint/image source or a direct subtree source, plus a positive typed rect",
                     ));
                 }
             }
@@ -3088,11 +4862,20 @@ impl SceneArtifact {
                     light.numbers().into_iter().all(|(_, n)| scalar(n))
                         && light.colors().into_iter().all(|(_, c)| {
                             color_value_valid(c, expr_types)
-                                && !matches!(c,ColorValue::Static {value} if value.a != 255)
+                                && !matches!(c,ColorValue::Static {value} if value.alpha != 1.0)
                         })
                 });
                 let mut meshes_valid = true;
                 for (at, mesh) in frame.meshes.iter().enumerate() {
+                    if scene.meshes.get(at).is_some_and(|spec| {
+                        spec.animation_clip.is_some() != mesh.animation_time.is_some()
+                    }) || mesh
+                        .animation_time
+                        .as_ref()
+                        .is_some_and(|time| !scalar(time))
+                    {
+                        meshes_valid = false;
+                    }
                     if scene.meshes.get(at).is_some_and(|spec| {
                         spec.node_ids != mesh.nodes.iter().map(|n| n.id).collect::<Vec<_>>()
                     }) {
@@ -3154,23 +4937,26 @@ impl SceneArtifact {
                     ));
                 }
                 for (mesh_at, mesh) in scene.meshes.iter().enumerate() {
-                    let model = self.controls.assets.get(&mesh.model_control);
-                    if !model.is_some_and(|asset| asset.kind == crate::controls::AssetKind::Model3d)
-                    {
-                        errors.push(ValidationError::new(
-                            format!("{path}/kind/scene/meshes/{mesh_at}/modelControl"),
-                            "Scene3D modelControl must name a model3d asset control",
-                        ));
-                    }
-                    if !self
-                        .resource_refs
-                        .iter()
-                        .any(|resource| resource.control == mesh.model_control)
-                    {
-                        errors.push(ValidationError::new(
-                            format!("{path}/kind/scene/meshes/{mesh_at}/modelControl"),
-                            "Scene3D model control needs a content-addressed resourceRef",
-                        ));
+                    if let Some(control) = &mesh.model_control {
+                        let model = self.controls.assets.get(control);
+                        if !model
+                            .is_some_and(|asset| asset.kind == crate::controls::AssetKind::Model3d)
+                        {
+                            errors.push(ValidationError::new(
+                                format!("{path}/kind/scene/meshes/{mesh_at}/modelControl"),
+                                "Scene3D modelControl must name a model3d asset control",
+                            ));
+                        }
+                        if !self
+                            .resource_refs
+                            .iter()
+                            .any(|resource| resource.control == *control)
+                        {
+                            errors.push(ValidationError::new(
+                                format!("{path}/kind/scene/meshes/{mesh_at}/modelControl"),
+                                "Scene3D model control needs a content-addressed resourceRef",
+                            ));
+                        }
                     }
                     for (texture, _) in mesh.texture_controls() {
                         if !self
@@ -3237,12 +5023,35 @@ impl SceneArtifact {
                 ));
             }
             for (style_index, style) in node.styles.iter().enumerate() {
+                if style.property == "mix-blend-space" {
+                    let variants = match &style.value {
+                        StyleValue::Static {
+                            value: MotionValue::Str(value) | MotionValue::Enum(value),
+                        } => Some(vec![value.clone()]),
+                        StyleValue::Expr { expr } => {
+                            css_expression_variants(*expr, &self.exprs, expr_types)
+                        }
+                        _ => None,
+                    };
+                    if !variants.is_some_and(|values| {
+                        !values.is_empty()
+                            && values
+                                .iter()
+                                .all(|value| crate::style::blend::space(value).is_ok())
+                    }) {
+                        errors.push(ValidationError::new(
+                            format!("{path}/styles/{style_index}/value"),
+                            "mixBlendSpace must be `linear` or `srgb`, or a finite choice between them",
+                        ));
+                    }
+                }
                 if !crate::style::is_motion_property(&style.property) {
                     let valid = match &style.value {
-                        StyleValue::Static { value } => {
-                            crate::style::parse_property(&style.property, &crate::css_token(value))
-                                .map(|_| ())
-                        }
+                        StyleValue::Static { value } => crate::style::parse_property(
+                            &style.property,
+                            &crate::style::value_token(&style.property, value),
+                        )
+                        .map(|_| ()),
                         StyleValue::Expr { expr }
                             if crate::style::supports_property(&style.property) =>
                         {
@@ -3362,13 +5171,16 @@ impl SceneArtifact {
                     StyleValue::Static { value } => Some(ExprType::of_value(value)),
                     StyleValue::Expr { expr } => expr_types.get(expr.0 as usize).copied().flatten(),
                 };
-                if !crate::style::property_spec(&style.property)
-                    .accepts_typed_value(actual, &style.value)
+                if let Err(issue) = crate::style::property_spec(&style.property)
+                    .check_type(&style.value, expr_types)
                 {
-                    errors.push(ValidationError::new(
-                        format!("{path}/styles/{style_index}/value"),
-                        format!("style `{}` has the wrong typed value", style.property),
-                    ));
+                    errors.push(
+                        ValidationError::new(
+                            format!("{path}/styles/{style_index}/value"),
+                            issue.to_string(),
+                        )
+                        .with_style(Some(issue)),
+                    );
                 }
                 if style.property == "scale"
                     && actual == Some(ExprType::Point)
@@ -3490,18 +5302,20 @@ impl SceneArtifact {
                         ));
                     }
                 }
-                if crate::style::property_spec(&style.property).closed_css
+                if crate::style::property_spec(&style.property).requires_css_structure(actual)
                     && let StyleValue::Expr { expr } = &style.value
                 {
                     let valid = css_expression_variants(*expr, &self.exprs, expr_types).is_some();
                     if !valid {
-                        errors.push(ValidationError::new(
-                            format!("{path}/styles/{style_index}/value"),
-                            format!(
-                                "dynamic `{}` must use literal strings, typed templates, or finite conditional branches",
-                                style.property
-                            ),
-                        ));
+                        let issue =
+                            crate::style::property_spec(&style.property).css_structure_issue();
+                        errors.push(
+                            ValidationError::new(
+                                format!("{path}/styles/{style_index}/value"),
+                                issue.to_string(),
+                            )
+                            .with_style(Some(issue)),
+                        );
                     }
                 }
             }
@@ -3526,18 +5340,86 @@ impl SceneArtifact {
             }
         }
 
+        let by_key = self
+            .nodes
+            .iter()
+            .enumerate()
+            .map(|(index, node)| (node.key.as_str(), index))
+            .collect::<BTreeMap<_, _>>();
+        let mut checked_groups = BTreeSet::new();
+        for (index, node) in self.nodes.iter().enumerate() {
+            let NodeKind::Text {
+                per_unit: Some(per_unit),
+                ..
+            } = &node.kind
+            else {
+                continue;
+            };
+            let Some(group_key) = &per_unit.group_key else {
+                continue;
+            };
+            let path = format!("/nodes/{index}/kind/perUnit/groupKey");
+            let Some(&group_at) = by_key.get(group_key.as_str()) else {
+                errors.push(ValidationError::new(
+                    path,
+                    "rich text unit group does not exist",
+                ));
+                continue;
+            };
+            let group = &self.nodes[group_at];
+            let range = group.children.start as usize..group.children.end as usize;
+            if !matches!(&group.kind, NodeKind::Group)
+                || range.start > range.end
+                || range.end > self.node_children.len()
+                || !self.node_children[range.clone()].contains(&NodeId(index as u32))
+            {
+                errors.push(ValidationError::new(
+                    path,
+                    "rich text unit group must be the direct parent Group",
+                ));
+                continue;
+            }
+            if checked_groups.insert(group_key)
+                && self.node_children[range].iter().any(|child| {
+                    !self.nodes.get(child.0 as usize).is_some_and(|sibling| {
+                        matches!(&sibling.kind,
+                            NodeKind::Text { per_unit: Some(binding), .. } if binding == per_unit)
+                            || matches!(&sibling.kind, NodeKind::Image { .. })
+                    })
+                })
+            {
+                errors.push(ValidationError::new(
+                    path,
+                    "rich text unit group must contain only Text runs with the same perUnit binding or inline Images",
+                ));
+            }
+        }
+
         let mut reachable = vec![false; self.nodes.len()];
-        let mut stack = vec![self.root];
-        while let Some(node_id) = stack.pop() {
+        let mut stack = vec![(self.root, false)];
+        while let Some((node_id, inside_temporal_effect)) = stack.pop() {
             let index = node_id.0 as usize;
             if index >= self.nodes.len() || reachable[index] {
                 continue;
             }
             reachable[index] = true;
+            let is_temporal_effect = matches!(
+                self.nodes[index].kind,
+                NodeKind::Shutter { .. } | NodeKind::Echo { .. }
+            );
+            if inside_temporal_effect && is_temporal_effect {
+                errors.push(ValidationError::new(
+                    format!("/nodes/{index}/kind"),
+                    "nested Shutter/Echo scopes require recursive temporal sampling and are not admitted",
+                ));
+            }
             let range = self.nodes[index].children;
             if range.start <= range.end && range.end as usize <= self.node_children.len() {
-                stack.extend_from_slice(
-                    &self.node_children[range.start as usize..range.end as usize],
+                stack.extend(
+                    self.node_children[range.start as usize..range.end as usize]
+                        .iter()
+                        .copied()
+                        .map(|child| (child, inside_temporal_effect || is_temporal_effect)),
                 );
             }
         }
@@ -3582,7 +5464,7 @@ fn point_value_valid(value: &PointValue, expr_types: &[Option<ExprType>]) -> boo
 
 fn color_value_valid(value: &ColorValue, expr_types: &[Option<ExprType>]) -> bool {
     match value {
-        ColorValue::Static { .. } => true,
+        ColorValue::Static { value } => value.is_finite(),
         ColorValue::Expr { expr } => {
             expr_types.get(expr.0 as usize) == Some(&Some(ExprType::Color))
         }
@@ -3722,7 +5604,17 @@ pub(crate) fn css_expression_variants(
                     match part {
                         TemplatePart::Text { value } => text.push_str(value),
                         TemplatePart::Expr { expr } => {
+                            if let Some(Expr::Const { value }) = exprs.get(expr.0 as usize) {
+                                text.push_str(&crate::css_token(value));
+                                continue;
+                            }
                             text.push_str(match types.get(expr.0 as usize)? {
+                                // A structural probe must itself fit the function's domain.
+                                Some(ExprType::Number)
+                                    if text.trim_start().starts_with("lens-distortion(") =>
+                                {
+                                    "0"
+                                }
                                 Some(ExprType::Number) => "1",
                                 Some(ExprType::Length) => "1px",
                                 Some(ExprType::Angle) => "1deg",

@@ -91,6 +91,11 @@ pub struct PipelineReport {
     pub scene3d_composite_us: u64,
     pub program_cache_hits: u64,
     pub program_cache_misses: u64,
+    pub raster_layer_cache_hits: u64,
+    pub raster_layer_cache_misses: u64,
+    pub maximum_raster_layer_cache_entries: usize,
+    /// Largest per-worker retained ROI pixel estimate, not process or GPU allocation size.
+    pub maximum_raster_layer_cache_bytes: usize,
     /// Largest per-worker cache observed; these are not summed across concurrent workers.
     pub maximum_program_cache_entries: usize,
     pub maximum_program_cache_cost_bytes: usize,
@@ -134,7 +139,7 @@ pub struct PipelineReport {
     pub maximum_frame_us: u64,
 }
 
-/// Executes a sorted frame schedule through the same staged Product Compositor runner.
+/// Executes frame keys in caller order through the same staged Product Compositor runner.
 pub fn render_schedule(
     project: &NativeProject,
     frames: &[FrameKey],
@@ -556,6 +561,10 @@ struct PipelineAccumulator {
     scene3d_composite_us: u64,
     program_cache_hits: u64,
     program_cache_misses: u64,
+    raster_layer_cache_hits: u64,
+    raster_layer_cache_misses: u64,
+    maximum_raster_layer_cache_entries: usize,
+    maximum_raster_layer_cache_bytes: usize,
     maximum_program_cache_entries: usize,
     maximum_program_cache_cost_bytes: usize,
     font_cache_hits: u64,
@@ -691,6 +700,20 @@ impl PipelineAccumulator {
         self.program_cache_hits = add_u64(self.program_cache_hits, execution.program_cache_hits)?;
         self.program_cache_misses =
             add_u64(self.program_cache_misses, execution.program_cache_misses)?;
+        self.raster_layer_cache_hits = add_u64(
+            self.raster_layer_cache_hits,
+            execution.raster_layer_cache_hits,
+        )?;
+        self.raster_layer_cache_misses = add_u64(
+            self.raster_layer_cache_misses,
+            execution.raster_layer_cache_misses,
+        )?;
+        self.maximum_raster_layer_cache_entries = self
+            .maximum_raster_layer_cache_entries
+            .max(execution.raster_layer_cache_entries);
+        self.maximum_raster_layer_cache_bytes = self
+            .maximum_raster_layer_cache_bytes
+            .max(execution.raster_layer_cache_bytes);
         self.font_cache_hits = add_u64(self.font_cache_hits, execution.font_cache_hits)?;
         self.font_cache_misses = add_u64(self.font_cache_misses, execution.font_cache_misses)?;
         self.shader_cache_hits = add_u64(self.shader_cache_hits, execution.shader_cache_hits)?;
@@ -815,7 +838,7 @@ impl PipelineAccumulator {
         }
         if std::env::var_os("VALLE_PERF").is_some() {
             eprintln!(
-                "[valle pipeline] frames={frames} workers={raster_workers} evaluate-prepare={:.3}ms fulfill-lower-wall={:.3}ms bind={:.3}ms execute={:.3}ms readback={:.3}ms gpu-wait={:.3}ms max-frame={:.3}ms template-hits={} template-misses={} scratch-allocations={} scratch-reuses={} max-scratch-bytes={} max-program-cache-entries={} max-program-cache-cost-bytes={}",
+                "[valle pipeline] frames={frames} workers={raster_workers} evaluate-prepare={:.3}ms fulfill-lower-wall={:.3}ms bind={:.3}ms execute={:.3}ms readback={:.3}ms gpu-wait={:.3}ms max-frame={:.3}ms template-hits={} template-misses={} scratch-allocations={} scratch-reuses={} max-scratch-bytes={} max-program-cache-entries={} max-program-cache-cost-bytes={} raster-layer-hits={} raster-layer-misses={} max-raster-layer-bytes={}",
                 self.evaluate_prepare_us as f64 / 1000.0,
                 self.fulfill_lower_wall_us as f64 / 1000.0,
                 self.bind_us as f64 / 1000.0,
@@ -830,6 +853,9 @@ impl PipelineAccumulator {
                 self.maximum_scratch_bytes,
                 self.maximum_program_cache_entries,
                 self.maximum_program_cache_cost_bytes,
+                self.raster_layer_cache_hits,
+                self.raster_layer_cache_misses,
+                self.maximum_raster_layer_cache_bytes,
             );
         }
         Ok(PipelineReport {
@@ -861,6 +887,10 @@ impl PipelineAccumulator {
             scene3d_composite_us: self.scene3d_composite_us,
             program_cache_hits: self.program_cache_hits,
             program_cache_misses: self.program_cache_misses,
+            raster_layer_cache_hits: self.raster_layer_cache_hits,
+            raster_layer_cache_misses: self.raster_layer_cache_misses,
+            maximum_raster_layer_cache_entries: self.maximum_raster_layer_cache_entries,
+            maximum_raster_layer_cache_bytes: self.maximum_raster_layer_cache_bytes,
             maximum_program_cache_entries: self.maximum_program_cache_entries,
             maximum_program_cache_cost_bytes: self.maximum_program_cache_cost_bytes,
             font_cache_hits: self.font_cache_hits,

@@ -1,7 +1,8 @@
 #![cfg(feature = "motion")]
 
 use valle_compiler::motion::compile_motion;
-use valle_motion::glass::MOTION_GLASS_CAPABILITY;
+use valle_motion::layout::SceneReferenceKind;
+use valle_motion::{NodeId, glass::MOTION_GLASS_CAPABILITY, prepare_scene};
 
 #[test]
 fn production_compiler_admits_glass_tags_and_declares_capability() {
@@ -46,6 +47,49 @@ export default function Scene() {
 #[test]
 fn production_capability_registry_lists_motion_glass() {
     assert!(valle_motion::OPTIONAL_CAPABILITIES.contains(&MOTION_GLASS_CAPABILITY));
+}
+
+#[test]
+fn scene_dependencies_mark_glass_field_and_backdrop_displacement_reads() {
+    let source = r#"
+export default function Scene() {
+  return <Scene style={{width:320,height:180}}>
+    <GlassField key="field" fieldId="orbit">
+      <Glass key="glass" surfaceId="lens" shape={{kind:"circle"}}
+        style={{width:80,height:80}} />
+    </GlassField>
+    <View key="displaced" style={{width:80,height:80,
+      backdropDisplacement:displacement(17,point(0.01,0.02),4)}} />
+  </Scene>;
+}
+"#;
+    let artifact = compile_motion(source).unwrap().artifact;
+    assert!(artifact.reads_destination());
+    let prepared = prepare_scene(&artifact).unwrap();
+    for key in ["field", "glass", "displaced"] {
+        let at = artifact
+            .nodes
+            .iter()
+            .position(|node| node.key == key)
+            .unwrap();
+        let facts = prepared.dependencies().node(NodeId(at as u32)).unwrap();
+        assert!(facts.reads_backdrop, "{key}");
+        assert!(facts.composition_boundary, "{key}");
+    }
+    let node_id = |key: &str| {
+        NodeId(
+            artifact
+                .nodes
+                .iter()
+                .position(|node| node.key == key)
+                .unwrap() as u32,
+        )
+    };
+    assert!(prepared.dependencies().references().iter().any(|edge| {
+        edge.consumer == node_id("glass")
+            && edge.source == node_id("field")
+            && edge.kind == SceneReferenceKind::GlassField
+    }));
 }
 
 #[test]

@@ -943,7 +943,7 @@ fn sequence_structure_and_track_duration_are_local_invariants() {
         "items": [
             {"type":"gap","id":"gap:a","duration":"1/1"},
             {"type":"gap","id":"gap:b","duration":"1/1"},
-            {"type":"transition","id":"transition:orphan","duration":"1/2","kernel":{"type":"cross-fade"}},
+            {"type":"transition","id":"transition:orphan","duration":"1/2","kernel":{"type":"fade"}},
             solid_clip("clip:too-long", "9/1")
         ]
     }]);
@@ -1030,5 +1030,51 @@ fn canonical_construction_enforces_hard_timeline_budgets() {
             .diagnostics
             .iter()
             .any(|diagnostic| diagnostic.code == "track_budget_exceeded")
+    );
+}
+
+#[test]
+fn transitions_subtract_the_overlap_and_reject_containment_and_triple_overlap() {
+    let mut value = empty_document();
+    value["document"]["canvas"]["duration"] = json!("4/1");
+    value["document"]["visual"]["tracks"] = json!([{
+        "id":"track",
+        "items":[
+            solid_clip("a","5/2"),
+            {"type":"transition","id":"ab","duration":"1/1","kernel":{"type":"circleOpen"}},
+            solid_clip("b","5/2")
+        ]
+    }]);
+    decode_value(&value).unwrap();
+    for duration in ["5/2", "3/1"] {
+        let mut invalid = value.clone();
+        invalid["document"]["visual"]["tracks"][0]["items"][1]["duration"] = json!(duration);
+        let CanonicalDecodeError::InvalidDocument(report) = decode_value(&invalid).unwrap_err()
+        else {
+            panic!()
+        };
+        assert!(
+            report
+                .diagnostics
+                .iter()
+                .any(|d| d.code == "invalid_transition_overlap")
+        );
+    }
+    value["document"]["canvas"]["duration"] = json!("10/1");
+    value["document"]["visual"]["tracks"][0]["items"]
+        .as_array_mut()
+        .unwrap()
+        .extend([
+            json!({"type":"transition","id":"bc","duration":"7/4","kernel":{"type":"wipeLeft"}}),
+            solid_clip("c", "5/2"),
+        ]);
+    let CanonicalDecodeError::InvalidDocument(report) = decode_value(&value).unwrap_err() else {
+        panic!()
+    };
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|d| d.code == "overlapping_transitions")
     );
 }

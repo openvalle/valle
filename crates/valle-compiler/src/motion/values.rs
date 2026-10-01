@@ -174,6 +174,77 @@ pub(super) fn motion_value_from_json(value: &serde_json::Value) -> Option<Motion
                     .ok()
                     .map(MotionValue::PathData)
             }
+            "pathResample" => {
+                let MotionValue::PathData(path) = motion_value_from_json(object.get("input")?)?
+                else {
+                    return None;
+                };
+                let count = object.get("count")?.as_u64()?;
+                path.resample(usize::try_from(count).ok()?)
+                    .ok()
+                    .map(MotionValue::PathData)
+            }
+            "pathReverse" => {
+                let MotionValue::PathData(path) = motion_value_from_json(object.get("input")?)?
+                else {
+                    return None;
+                };
+                path.reverse().ok().map(MotionValue::PathData)
+            }
+            "pathRoundCorners" => {
+                let MotionValue::PathData(path) = motion_value_from_json(object.get("input")?)?
+                else {
+                    return None;
+                };
+                path.round_corners(object.get("radius")?.as_f64()?)
+                    .ok()
+                    .map(MotionValue::PathData)
+            }
+            "pathZigzag" => {
+                let MotionValue::PathData(path) = motion_value_from_json(object.get("input")?)?
+                else {
+                    return None;
+                };
+                let options = object.get("options")?.as_object()?;
+                path.zigzag(
+                    options.get("size")?.as_f64()?,
+                    usize::try_from(options.get("ridges")?.as_u64()?).ok()?,
+                )
+                .ok()
+                .map(MotionValue::PathData)
+            }
+            "pathNoiseDisplace" => {
+                let MotionValue::PathData(path) = motion_value_from_json(object.get("input")?)?
+                else {
+                    return None;
+                };
+                let options = object.get("options")?.as_object()?;
+                path.noise_displace(
+                    options.get("seed")?.as_u64()?,
+                    options.get("amount")?.as_f64()?,
+                    options.get("frequency")?.as_f64()?,
+                    options
+                        .get("phase")
+                        .and_then(serde_json::Value::as_f64)
+                        .unwrap_or(0.0),
+                )
+                .ok()
+                .map(MotionValue::PathData)
+            }
+            "pathPuckerBloat" | "pathTwist" | "pathSimplify" | "pathStrokeToPath" => {
+                let MotionValue::PathData(path) = motion_value_from_json(object.get("input")?)?
+                else {
+                    return None;
+                };
+                let result = match object.get("__valleType")?.as_str()? {
+                    "pathPuckerBloat" => path.pucker_bloat(object.get("amount")?.as_f64()?),
+                    "pathTwist" => path.twist(object.get("angle")?.as_f64()?),
+                    "pathSimplify" => path.simplify(object.get("tolerance")?.as_f64()?),
+                    "pathStrokeToPath" => path.stroke_to_path(object.get("width")?.as_f64()?),
+                    _ => unreachable!(),
+                };
+                result.ok().map(MotionValue::PathData)
+            }
             "pathBoolean" => {
                 let MotionValue::PathData(left) = motion_value_from_json(object.get("left")?)?
                 else {
@@ -266,7 +337,9 @@ pub(super) fn static_gradient_stop_from_json(
     let color = object.get("color")?.as_str().and_then(Rgba::parse)?;
     Some(GradientStopValue {
         offset: NumberValue::Static { value: offset },
-        color: ColorValue::Static { value: color },
+        color: ColorValue::Static {
+            value: valle_draw::program::AuthorColor::from_srgb8(color),
+        },
     })
 }
 
@@ -311,8 +384,19 @@ pub(super) fn expr_path_topology(expr: ExprId, exprs: &[Expr]) -> PathTopology {
         Expr::PathArc { .. }
         | Expr::PathArea { .. }
         | Expr::PathSector { .. }
-        | Expr::PathAreaBand { .. } => PathTopology::Closed,
+        | Expr::PathAreaBand { .. }
+        | Expr::PathCompatibleMorph { .. }
+        | Expr::PathCompatibleMorphSequence { .. }
+        | Expr::PathStrokeToPath { .. } => PathTopology::Closed,
         Expr::PathOffset { path, .. }
+        | Expr::PathResample { path, .. }
+        | Expr::PathReverse { path }
+        | Expr::PathRoundCorners { path, .. }
+        | Expr::PathZigzag { path, .. }
+        | Expr::PathNoiseDisplace { path, .. }
+        | Expr::PathPuckerBloat { path, .. }
+        | Expr::PathTwist { path, .. }
+        | Expr::PathSimplify { path, .. }
         | Expr::PathMorph { from: path, .. }
         | Expr::PathPointAt { path, .. } => expr_path_topology(*path, exprs),
         _ => PathTopology::Unknown,

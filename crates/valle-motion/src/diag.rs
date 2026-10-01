@@ -13,6 +13,8 @@ pub enum DiagClass {
     Illegal,
     /// Valid input unsupported by the implementation.
     Unsupported,
+    /// Valid input with a geometric event that may need author review.
+    Warning,
 }
 
 /// Closed diagnostic code vocabulary. Add an explicit classification for every new code.
@@ -55,6 +57,14 @@ pub enum DiagCode {
     /// Prepare-time builtin explicitly rejected its arguments. Preserve this diagnostic instead of
     /// treating it as ordinary failed constant folding.
     BuiltinRejected,
+    /// A path morph reaches a zero-width contact without crossing.
+    MorphContact,
+    /// Beat tracking has insufficient periodic support for a reliable phase.
+    AudioBeatUncertain,
+    /// A dynamic parameter may leave its admitted interval.
+    ParameterRange,
+    /// A static JSX map is valid but cannot use the current instance template path.
+    InstanceFallback,
     /// Valid syntax not supported by the current implementation.
     UnsupportedSyntax,
     /// Motion Glass syntax without production admission.
@@ -82,6 +92,10 @@ impl DiagCode {
             | DiagCode::UnsupportedSyntax
             | DiagCode::StyleUnsupportedProperty
             | DiagCode::StyleUnsupportedValue => DiagClass::Unsupported,
+            DiagCode::MorphContact
+            | DiagCode::InstanceFallback
+            | DiagCode::AudioBeatUncertain
+            | DiagCode::ParameterRange => DiagClass::Warning,
         }
     }
 
@@ -104,6 +118,10 @@ impl DiagCode {
             DiagCode::SandboxForbidden => "sandbox-forbidden",
             DiagCode::StaticEvalFailed => "static-eval-failed",
             DiagCode::BuiltinRejected => "builtin-rejected",
+            DiagCode::MorphContact => "morph-contact",
+            DiagCode::AudioBeatUncertain => "audio-beat-uncertain",
+            DiagCode::ParameterRange => "parameter-range",
+            DiagCode::InstanceFallback => "instance-fallback",
             DiagCode::UnsupportedSyntax => "unsupported-syntax",
             DiagCode::MotionGlassNotAdmitted => "motion-glass-not-admitted",
         }
@@ -184,6 +202,8 @@ mod tests {
         ] {
             assert_eq!(c.class(), DiagClass::Unsupported, "{}", c.as_str());
         }
+        assert_eq!(DiagCode::MorphContact.class(), DiagClass::Warning);
+        assert_eq!(DiagCode::InstanceFallback.class(), DiagClass::Warning);
     }
 
     #[test]

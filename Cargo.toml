@@ -82,6 +82,7 @@ windows-sys = { version = "0.61.2", features = ["Win32_Storage_FileSystem"] }
 libm = "=0.2.16"
 # Use the pure Rust geometry core without triangulation or multithreading.
 geo = { version = "=0.33.1", default-features = false }
+i_overlay = { version = "=4.5.2", default-features = false }
 valle-timeline = { path = "crates/valle-timeline" }
 valle-draw = { path = "crates/valle-draw" }
 valle-motion = { path = "crates/valle-motion" }

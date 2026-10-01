@@ -33,7 +33,7 @@ const OUTPUT_TRANSFORM: &str =
 
 #[derive(Debug, Clone)]
 pub(crate) struct EffectRuntime {
-    transitions: BTreeMap<PreparedTransitionKernel, Arc<RuntimeEffect>>,
+    transitions: BTreeMap<valle_draw::transition::TransitionKind, Arc<RuntimeEffect>>,
     color_grade: Option<Arc<RuntimeEffect>>,
     mosaic: Option<Arc<RuntimeEffect>>,
     directional_blur: Option<Arc<RuntimeEffect>>,
@@ -98,12 +98,12 @@ impl EffectRuntime {
                 ExecutionPassKind::DispatchKernel {
                     invocation: KernelInvocation::Transition { kernel, .. },
                 } => {
-                    if self.transitions.contains_key(kernel) {
+                    if self.transitions.contains_key(&kernel.builtin()) {
                         self.counters.hits = self.counters.hits.saturating_add(1);
                     } else {
                         self.counters.misses = self.counters.misses.saturating_add(1);
                         self.transitions.insert(
-                            *kernel,
+                            kernel.builtin(),
                             Arc::new(compile(transition_source(*kernel)?, "transition")?),
                         );
                     }
@@ -241,7 +241,7 @@ impl EffectRuntime {
         };
         let effect = self
             .transitions
-            .get(&kernel)
+            .get(&kernel.builtin())
             .ok_or_else(|| DrawError::Unsupported(format!("transition {kernel:?}")))?;
         let local = {
             let surface = surfaces.surface_mut(2)?;
@@ -249,7 +249,9 @@ impl EffectRuntime {
                 surface,
                 effect,
                 &[&from, &to],
-                &[info.width() as f32, info.height() as f32, progress],
+                &kernel
+                    .params()
+                    .uniforms(info.width() as f32, info.height() as f32, progress),
             )?;
             surface.image_snapshot()
         };
@@ -619,50 +621,7 @@ fn compile(source: &str, name: &str) -> Result<RuntimeEffect, DrawError> {
 }
 
 fn transition_source(kernel: PreparedTransitionKernel) -> Result<&'static str, DrawError> {
-    Ok(match kernel {
-        PreparedTransitionKernel::Fade => {
-            include_str!("../../../../valle-draw/assets/shaders/fade.sksl")
-        }
-        PreparedTransitionKernel::WipeLeft => {
-            include_str!("../../../../valle-draw/assets/shaders/wipeleft.sksl")
-        }
-        PreparedTransitionKernel::WipeRight => {
-            include_str!("../../../../valle-draw/assets/shaders/wiperight.sksl")
-        }
-        PreparedTransitionKernel::CircleOpen => {
-            include_str!("../../../../valle-draw/assets/shaders/circleopen.sksl")
-        }
-        PreparedTransitionKernel::SimpleZoom => {
-            include_str!("../../../../valle-draw/assets/shaders/simplezoom.sksl")
-        }
-        PreparedTransitionKernel::CrossWarp => {
-            include_str!("../../../../valle-draw/assets/shaders/crosswarp.sksl")
-        }
-        PreparedTransitionKernel::LinearBlur => {
-            include_str!("../../../../valle-draw/assets/shaders/linearblur.sksl")
-        }
-        PreparedTransitionKernel::DirectionalWarp => {
-            include_str!("../../../../valle-draw/assets/shaders/directionalwarp.sksl")
-        }
-        PreparedTransitionKernel::DreamyZoom => {
-            include_str!("../../../../valle-draw/assets/shaders/dreamyzoom.sksl")
-        }
-        PreparedTransitionKernel::Ripple => {
-            include_str!("../../../../valle-draw/assets/shaders/ripple.sksl")
-        }
-        PreparedTransitionKernel::FlyEye => {
-            include_str!("../../../../valle-draw/assets/shaders/flyeye.sksl")
-        }
-        PreparedTransitionKernel::MultiplyBlend => {
-            include_str!("../../../../valle-draw/assets/shaders/multiplyblend.sksl")
-        }
-        PreparedTransitionKernel::Perlin => {
-            include_str!("../../../../valle-draw/assets/shaders/perlin.sksl")
-        }
-        PreparedTransitionKernel::ExtensionCrossFade { .. } => {
-            include_str!("../../../../valle-draw/assets/shaders/fade.sksl")
-        }
-    })
+    Ok(kernel.builtin().source())
 }
 
 pub(crate) fn render_runtime_into(
@@ -937,7 +896,14 @@ pub(super) fn draw_filters(
         && filters.iter().all(|filter| match filter {
             Filter::Blur { .. } | Filter::DropShadow { .. } => super::blur::supports(filter),
             Filter::ColorMatrix { matrix } => matrix[19] == 0.0,
-            Filter::NoiseDisplacement { .. } | Filter::VelocityBlur { .. } => false,
+            Filter::NoiseDisplacement { .. }
+            | Filter::VelocityBlur { .. }
+            | Filter::Glow { .. }
+            | Filter::Bloom { .. }
+            | Filter::RadialBlur { .. }
+            | Filter::FilmGrain { .. }
+            | Filter::LensDistortion { .. }
+            | Filter::ChromaticAberration { .. } => false,
             _ => true,
         });
     if fast_chain {
@@ -1060,6 +1026,70 @@ pub(crate) fn image_filter(filter: &Filter) -> Result<Option<ImageFilter>, DrawE
             None,
             None,
         ),
+        Filter::Glow { .. } => {
+            return Err(DrawError::Unsupported(
+                "glow requires a scheduled F16 pass".into(),
+            ));
+        }
+        Filter::Bloom { .. } => {
+            return Err(DrawError::Unsupported(
+                "bloom requires a scheduled F16 pass".into(),
+            ));
+        }
+        Filter::RadialBlur { .. } => {
+            return Err(DrawError::Unsupported(
+                "radial blur requires a scheduled F16 pass".into(),
+            ));
+        }
+        Filter::FilmGrain { .. } => {
+            return Err(DrawError::Unsupported(
+                "film grain requires a scheduled F16 pass".into(),
+            ));
+        }
+        Filter::LensDistortion { .. } => {
+            return Err(DrawError::Unsupported(
+                "lens distortion requires a scheduled F16 pass".into(),
+            ));
+        }
+        Filter::ChromaticAberration { offset } => {
+            thread_local! {
+                static CHROMATIC: std::cell::RefCell<Option<RuntimeEffect>> = const { std::cell::RefCell::new(None) };
+            }
+            CHROMATIC.with(|cell| -> Result<_, DrawError> {
+                let mut effect = cell.borrow_mut();
+                if effect.is_none() {
+                    *effect = Some(
+                        RuntimeEffect::make_for_shader(
+                            include_str!(
+                                "../../../../valle-draw/assets/shaders/chromaticaberration.sksl"
+                            ),
+                            None,
+                        )
+                        .map_err(|message| DrawError::ShaderCompile {
+                            uri: "builtin://chromatic-aberration".into(),
+                            message,
+                        })?,
+                    );
+                }
+                let mut builder = skia_safe::runtime_effect::RuntimeShaderBuilder::new(
+                    effect.as_ref().unwrap().clone(),
+                );
+                builder
+                    .set_uniform_float("offset", offset)
+                    .map_err(|error| {
+                        DrawError::Unsupported(format!("chromatic aberration uniform: {error:?}"))
+                    })?;
+                image_filters::runtime_shader_with_options(
+                    &builder,
+                    offset[0].abs().max(offset[1].abs()) * 0.5,
+                    "image",
+                    None,
+                    false,
+                )
+                .ok_or_else(|| DrawError::Unsupported("chromatic aberration shader filter".into()))
+                .map(Some)
+            })?
+        }
         Filter::NoiseDisplacement {
             frequency,
             octaves,
@@ -1097,28 +1127,41 @@ pub(crate) fn image_filter(filter: &Filter) -> Result<Option<ImageFilter>, DrawE
             velocity,
             shutter_angle_degrees,
         } => {
-            let span = valle_draw::math::sqrt(f64::from(
-                velocity[0] * velocity[0] + velocity[1] * velocity[1],
-            )) as f32
-                * (*shutter_angle_degrees / 360.0).clamp(0.0, 1.0);
-            if span <= 1.0e-6 {
+            let shutter = (*shutter_angle_degrees / 360.0).clamp(0.0, 1.0);
+            if velocity[0].abs().max(velocity[1].abs()) * shutter <= 1.0e-6 {
                 return Ok(None);
             }
-            let angle = valle_draw::math::atan2(f64::from(velocity[1]), f64::from(velocity[0]))
-                .to_degrees() as f32;
-            let rotated = image_filters::matrix_transform(
-                &Matrix::rotate_deg(-angle),
-                SamplingOptions::default(),
+            // Nine uniformly weighted shutter positions use the same public Skia primitives on
+            // native and CanvasKit. Their Gaussian blur kernels differ at the tails across Skia
+            // builds, while translated samples have stable coverage on both backends.
+            const SAMPLES: usize = 9;
+            let weight = 1.0 / SAMPLES as f32;
+            let alpha = color_filters::matrix_row_major(
+                &[
+                    1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0,
+                    0.0, 0.0, weight, 0.0,
+                ],
                 None,
-            )
-            .ok_or_else(|| DrawError::Unsupported("velocity blur input rotation".into()))?;
-            let blurred = image_filters::blur((span / 3.0, 0.0), TileMode::Decal, rotated, None)
-                .ok_or_else(|| DrawError::Unsupported("velocity blur".into()))?;
-            image_filters::matrix_transform(
-                &Matrix::rotate_deg(angle),
-                SamplingOptions::default(),
-                blurred,
-            )
+            );
+            let mut sum = None;
+            for index in 0..SAMPLES {
+                let phase = index as f32 / (SAMPLES - 1) as f32 - 0.5;
+                let offset = (velocity[0] * shutter * phase, velocity[1] * shutter * phase);
+                let shifted = image_filters::matrix_transform(
+                    &Matrix::translate(offset),
+                    SamplingOptions::default(),
+                    None,
+                )
+                .ok_or_else(|| DrawError::Unsupported("velocity blur sample".into()))?;
+                let tap = image_filters::color_filter(alpha.clone(), shifted, None)
+                    .ok_or_else(|| DrawError::Unsupported("velocity blur weight".into()))?;
+                sum = Some(match sum {
+                    Some(previous) => image_filters::blend(BlendMode::Plus, previous, tap, None)
+                        .ok_or_else(|| DrawError::Unsupported("velocity blur sum".into()))?,
+                    None => tap,
+                });
+            }
+            sum
         }
     };
     result
@@ -1502,7 +1545,10 @@ mod tests {
         };
         assert_eq!(
             transition_source(kernel).unwrap(),
-            transition_source(PreparedTransitionKernel::Fade).unwrap()
+            transition_source(PreparedTransitionKernel::default_builtin(
+                valle_draw::transition::TransitionKind::Fade
+            ))
+            .unwrap()
         );
         let effect = compile(transition_source(kernel).unwrap(), "extensionCrossFade").unwrap();
         let from_pixel = [0.4, 0.2, 0.1, 0.5];
@@ -1516,7 +1562,13 @@ mod tests {
             Some(working_color_space().unwrap()),
         );
         let mut target = surfaces::raster(&info, None, None).unwrap();
-        render_runtime_into(&mut target, &effect, &[&from, &to], &[1.0, 1.0, 0.25]).unwrap();
+        render_runtime_into(
+            &mut target,
+            &effect,
+            &[&from, &to],
+            &kernel.params().uniforms(1.0, 1.0, 0.25),
+        )
+        .unwrap();
         assert_pixel_close(
             read_premul_pixel(&mut target),
             [0.325, 0.225, 0.125, 0.5625],

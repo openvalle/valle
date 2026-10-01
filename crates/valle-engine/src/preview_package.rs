@@ -163,7 +163,8 @@ pub fn prepare_preview_package(input: PreviewPackageInput) -> Result<PreparedPre
     .map_err(|error| error.to_string())?;
     let locators = document["resources"]
         .as_object()
-        .ok_or("Timeline resources are missing")?;
+        .cloned()
+        .unwrap_or_default();
     let mut instances = BTreeMap::<String, PreviewMotionInstance>::new();
     for instance in input.motion_instances {
         if instances
@@ -472,6 +473,41 @@ mod tests {
         assert_eq!(opened.compiled().canvas().width(), 64);
         assert_eq!(opened.compiled().canvas().height(), 64);
         assert!(package.external_resources.is_empty());
+    }
+
+    #[test]
+    fn admits_solid_transitions_without_an_author_resources_object() {
+        let input = PreviewPackageInput {
+            author_timeline: json!({
+                "canvas":{"width":64,"height":64,"fps":30},
+                "tracks":{"visual":[{
+                    "clips":[
+                        {"kind":"solid","color":"#2140ff","start":0,"duration":2.5},
+                        {"kind":"solid","color":"#ff4a24","start":1.5,"duration":2.5}
+                    ],
+                    "transitions":[{"from":0,"to":1,"kind":"circleOpen"}]
+                }]}
+            }),
+            motion_instances: Vec::new(),
+            resource_inputs: Vec::new(),
+        };
+        let package = prepare_preview_package(input).unwrap();
+        let files = fixed_package_files(
+            &package.timeline_json,
+            &package.resource_manifest_json,
+            &package.verified_binding_bundle_json,
+            &package.execution_profile_json,
+        );
+        let opened =
+            open_verified_fixed_package(&package.fixed_package_manifest_json, &files).unwrap();
+        let frame = opened
+            .compiled()
+            .evaluate(valle_timeline::internal::FrameKey::new(60))
+            .unwrap();
+        assert!(matches!(
+            &frame.visual()[0],
+            crate::render::EvaluatedVisualOperation::Transition(_)
+        ));
     }
 
     #[test]

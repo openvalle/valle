@@ -19,19 +19,20 @@ oxc = { workspace = true, features = [
 rquickjs = { workspace = true, optional = true }
 kurbo.workspace = true
 libm.workspace = true
+rustfft.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 valle-timeline.workspace = true
 valle-motion = { workspace = true, optional = true }
+valle-media = { workspace = true, optional = true, features = ["beat"] }
 valle-draw = { workspace = true, optional = true }
 
 [features]
 default = []
 jsx = ["dep:oxc", "dep:rquickjs"]
-motion = ["jsx", "dep:valle-motion", "dep:valle-draw"]
+motion = ["jsx", "dep:valle-motion", "dep:valle-draw", "dep:valle-media"]
 
 [dev-dependencies]
 valle-motion.workspace = true
 tempfile.workspace = true
-

@@ -667,6 +667,10 @@ impl PlanProgram {
         &self.content_hash
     }
 
+    pub const fn frame_hash(&self) -> &ContentDigest {
+        &self.frame_hash
+    }
+
     pub fn packed(&self) -> &[u8] {
         self.packed
             .get()
@@ -968,8 +972,8 @@ impl From<&PreparedDestinationUse> for DestinationStructure {
             valle_draw::requirements::DestinationOperation::Backdrop { sampling, .. } => {
                 DestinationOperationStructure::Backdrop { sampling }
             }
-            valle_draw::requirements::DestinationOperation::Blend { mode } => {
-                DestinationOperationStructure::Blend { mode }
+            valle_draw::requirements::DestinationOperation::Blend { mode, space } => {
+                DestinationOperationStructure::Blend { mode, space }
             }
         };
         Self {
@@ -989,6 +993,7 @@ enum DestinationOperationStructure {
     },
     Blend {
         mode: BlendMode,
+        space: valle_draw::program::BlendSpace,
     },
 }
 
@@ -1072,6 +1077,13 @@ enum ProgramPassStructure {
         node: u32,
         input: u32,
         output: u32,
+    },
+    ApplyTransition {
+        node: u32,
+        from: u32,
+        to: u32,
+        output: u32,
+        effect: valle_draw::transition::TransitionKind,
     },
     ApplyShader {
         node: u32,
@@ -1204,6 +1216,19 @@ impl From<&super::ProgramPass> for ProgramPassStructure {
                 node: node.raw(),
                 input: input.get(),
                 output: output.get(),
+            },
+            Kind::ApplyTransition {
+                node,
+                from,
+                to,
+                output,
+                transition,
+            } => Self::ApplyTransition {
+                node: node.raw(),
+                from: from.get(),
+                to: to.get(),
+                output: output.get(),
+                effect: transition.kind,
             },
             Kind::ApplyShader {
                 node,

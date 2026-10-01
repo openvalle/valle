@@ -11,15 +11,22 @@ use super::{
     MaterialImage, MaterialKind, MaterialSpec, ModelMaterial, ModelVertex, Scene3DSpec,
     TextureRole, Transform3D, Vec3,
 };
+mod dof;
 mod lighting;
 mod pbr;
+mod shadow;
 
-pub const BACKGROUND_OBJECT_ID: u16 = 0;
-pub const BACKGROUND_NODE_ID: u16 = u16::MAX;
-pub const CLEAR_DEPTH: u16 = u16::MAX;
+pub const BACKGROUND_OBJECT_ID: u32 = 0;
+pub const BACKGROUND_NODE_ID: u32 = u32::MAX;
+pub const CLEAR_DEPTH: f32 = f32::MAX;
 const SUBPIXEL_BITS: i32 = 8;
 const SUBPIXEL_SCALE: f32 = (1 << SUBPIXEL_BITS) as f32;
 const SUBPIXEL_STEP: i64 = 1 << SUBPIXEL_BITS;
+const TILE_ROWS: u32 = 32;
+const TILE_COLUMNS: u32 = 256;
+const MAX_RASTER_WORKERS: usize = 8;
+const MAX_TILE_REFERENCES: u64 = 8_000_000;
+const OIT_FIXED_SCALE: f64 = 1_000_000_000.0;
 
 /// Worker-local identity for an admitted Scene3D prepare result.
 ///
@@ -37,7 +44,7 @@ pub struct SceneResources {
 
 #[derive(Clone, Debug)]
 struct PreparedMesh {
-    object_id: u16,
+    object_id: u32,
     model: Arc<AdmittedModel>,
     images: Vec<MaterialImage>,
     /// Original material indices followed by the implicit glTF default material.
@@ -48,6 +55,135 @@ struct PreparedMesh {
 struct PreparedMaterial {
     kind: MaterialKind,
     values: ModelMaterial,
+}
+
+struct FrameMesh<'a> {
+    mesh: &'a PreparedMesh,
+    materials: Vec<PreparedMaterial>,
+}
+
+#[derive(Clone, Copy)]
+struct RasterCommand {
+    world: [WorldVertex; 3],
+    screen: [ScreenVertex; 3],
+    mesh_index: usize,
+    material_index: usize,
+    node_id: u32,
+    min_x: u32,
+    max_x: u32,
+    min_y: u32,
+    max_y: u32,
+}
+
+/// Each tile borrows disjoint row segments from all four output planes.
+struct RasterTile<'a> {
+    width: u32,
+    height: u32,
+    start_x: u32,
+    end_x: u32,
+    start_y: u32,
+    end_y: u32,
+    color: Vec<&'a mut [u16]>,
+    depth: Vec<&'a mut [f32]>,
+    object_ids: Vec<&'a mut [u32]>,
+    node_ids: Vec<&'a mut [u32]>,
+}
+
+struct TileJob<'a> {
+    tile: RasterTile<'a>,
+    commands: Vec<usize>,
+}
+
+/// Fixed-point sums make each pixel independent of transparent primitive submission order.
+#[derive(Clone, Copy)]
+struct OitPixel {
+    color_sum: [i64; 3],
+    weight_sum: i64,
+    optical_depth: i64,
+    full_coverage: bool,
+    nearest_depth: f32,
+    nearest_object: u32,
+    nearest_node: u32,
+}
+
+impl OitPixel {
+    fn empty() -> Self {
+        Self {
+            color_sum: [0; 3],
+            weight_sum: 0,
+            optical_depth: 0,
+            full_coverage: false,
+            nearest_depth: CLEAR_DEPTH,
+            nearest_object: BACKGROUND_OBJECT_ID,
+            nearest_node: BACKGROUND_NODE_ID,
+        }
+    }
+
+    fn add(&mut self, color: [f32; 3], alpha: f32, depth: f32, object: u32, node: u32) {
+        if alpha <= 0.0 {
+            return;
+        }
+        let extinction = (alpha < 1.0)
+            .then(|| libm::round(-libm::log1p(-(alpha as f64)) * OIT_FIXED_SCALE) as i64);
+        if extinction == Some(0) {
+            return;
+        }
+        let distance_weight =
+            (1.0 / ((1.0 + depth as f64) * (1.0 + depth as f64))).clamp(0.01, 8.0);
+        let contribution = alpha as f64 * distance_weight * OIT_FIXED_SCALE;
+        self.weight_sum = self
+            .weight_sum
+            .saturating_add(libm::round(contribution).max(1.0) as i64);
+        for (sum, channel) in self.color_sum.iter_mut().zip(color) {
+            *sum = sum
+                .saturating_add(libm::round(contribution * channel.clamp(0.0, 1.0) as f64) as i64);
+        }
+        if let Some(extinction) = extinction {
+            self.optical_depth = self.optical_depth.saturating_add(extinction);
+        } else {
+            self.full_coverage = true;
+        }
+        if depth < self.nearest_depth
+            || (depth == self.nearest_depth
+                && (object, node) < (self.nearest_object, self.nearest_node))
+        {
+            self.nearest_depth = depth;
+            self.nearest_object = object;
+            self.nearest_node = node;
+        }
+    }
+
+    fn resolve(self, background: [u16; 4]) -> [u16; 4] {
+        if self.weight_sum == 0 {
+            return background;
+        }
+        let reveal = if self.full_coverage {
+            0.0
+        } else {
+            libm::exp(-(self.optical_depth as f64 / OIT_FIXED_SCALE)) as f32
+        };
+        let coverage = 1.0 - reveal;
+        let background_alpha = f16_bits_to_f32(background[3]);
+        let output_alpha = coverage + reveal * background_alpha;
+        let rgb: [u16; 3] = std::array::from_fn(|axis| {
+            let background_encoded = f16_bits_to_f32(background[axis]);
+            let background_linear = if background_alpha > 0.0 {
+                super::asset::srgb_to_linear(background_encoded / background_alpha)
+                    * background_alpha
+            } else {
+                0.0
+            };
+            let transparent = self.color_sum[axis] as f64 / self.weight_sum as f64;
+            let linear_premul = transparent as f32 * coverage + background_linear * reveal;
+            let straight = if output_alpha > 0.0 {
+                linear_premul / output_alpha
+            } else {
+                0.0
+            };
+            f32_to_f16_bits(super::asset::linear_to_srgb(straight.clamp(0.0, 1.0)) * output_alpha)
+        });
+        [rgb[0], rgb[1], rgb[2], f32_to_f16_bits(output_alpha)]
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -77,9 +213,9 @@ impl PreparedScene {
 #[derive(Clone, Debug, PartialEq)]
 pub struct AnchorProjection {
     pub key: String,
-    pub object_id: u16,
+    pub object_id: u32,
     pub screen: [f32; 2],
-    pub depth: u16,
+    pub depth: f32,
     pub in_front: bool,
 }
 
@@ -87,16 +223,18 @@ pub struct AnchorProjection {
 pub struct RasterFrame {
     pub width: u32,
     pub height: u32,
-    pub premul_rgba8: Vec<u8>,
-    pub depth: Vec<u16>,
-    pub object_ids: Vec<u16>,
+    /// Premultiplied sRGB RGBA, four IEEE binary16 values per pixel.
+    pub premul_rgba16f: Vec<u16>,
+    /// Positive camera-space distance. Background is [`CLEAR_DEPTH`].
+    pub depth: Vec<f32>,
+    pub object_ids: Vec<u32>,
     /// Original glTF node index within the pixel's model. Background has no node.
-    pub node_ids: Vec<u16>,
+    pub node_ids: Vec<u32>,
     pub anchors: Vec<AnchorProjection>,
 }
 
 /// Small, JSON-safe description of the exact color/depth/id frame returned by the raster core.
-/// The large depth and object-id planes stay in explicit u16-LE byte exports; this record freezes
+/// The large depth and id planes stay in explicit 32-bit LE byte exports; this record freezes
 /// only their dimensions, sentinels and stable semantic-address lookup table.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -104,9 +242,9 @@ pub struct Scene3DFrameMetadata {
     pub scene_key: String,
     pub width: u32,
     pub height: u32,
-    pub background_object_id: u16,
-    pub background_node_id: u16,
-    pub clear_depth: u16,
+    pub background_object_id: u32,
+    pub background_node_id: u32,
+    pub clear_depth: f32,
     pub objects: Vec<Scene3DObjectMetadata>,
     pub anchors: Vec<Scene3DAnchorMetadata>,
 }
@@ -114,7 +252,7 @@ pub struct Scene3DFrameMetadata {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Scene3DObjectMetadata {
-    pub object_id: u16,
+    pub object_id: u32,
     pub object_key: String,
     pub semantic_address: String,
 }
@@ -123,25 +261,25 @@ pub struct Scene3DObjectMetadata {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Scene3DAnchorMetadata {
     pub anchor_key: String,
-    pub object_id: u16,
+    pub object_id: u32,
     pub object_key: String,
     pub semantic_address: String,
     pub screen: [f32; 2],
-    pub depth: u16,
+    pub depth: f32,
     pub in_front: bool,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Scene3DPick {
     pub scene_key: String,
-    pub object_id: u16,
+    pub object_id: u32,
     pub object_key: String,
     pub node_id: u32,
     pub semantic_address: String,
     pub pixel_x: u32,
     pub pixel_y: u32,
-    pub depth: u16,
+    pub depth: f32,
 }
 
 impl RasterFrame {
@@ -156,10 +294,10 @@ impl RasterFrame {
         scene.validate()?;
         let expected_pixels = u64::from(self.width) * u64::from(self.height);
         let mut errors = ContractErrors::default();
-        if self.premul_rgba8.len() as u64 != expected_pixels.saturating_mul(4) {
+        if self.premul_rgba16f.len() as u64 != expected_pixels.saturating_mul(4) {
             errors.push(
-                "/frame/premulRgba8",
-                "color plane length must equal width * height * 4",
+                "/frame/premulRgba16f",
+                "half-float color plane length must equal width * height * 4",
             );
         }
         if self.depth.len() as u64 != expected_pixels {
@@ -194,7 +332,7 @@ impl RasterFrame {
             .enumerate()
             .map(|(index, mesh)| {
                 Ok(Scene3DObjectMetadata {
-                    object_id: (index + 1) as u16,
+                    object_id: (index + 1) as u32,
                     object_key: mesh.key.clone(),
                     semantic_address: Scene3DSpec::semantic_address(scene_key, &mesh.key)?,
                 })
@@ -209,7 +347,7 @@ impl RasterFrame {
                     .meshes
                     .iter()
                     .position(|mesh| mesh.key == spec.parent)
-                    .map(|index| (index + 1) as u16)
+                    .map(|index| (index + 1) as u32)
                     .expect("Scene3D validation proved anchor parent");
                 let mut errors = ContractErrors::default();
                 if projection.key != spec.key {
@@ -248,16 +386,20 @@ impl RasterFrame {
         })
     }
 
-    pub fn depth_u16_le_bytes(&self) -> Vec<u8> {
-        u16_le_bytes(&self.depth)
+    pub fn premul_rgba16f_le_bytes(&self) -> Vec<u8> {
+        u16_le_bytes(&self.premul_rgba16f)
     }
 
-    pub fn object_ids_u16_le_bytes(&self) -> Vec<u8> {
-        u16_le_bytes(&self.object_ids)
+    pub fn depth_f32_le_bytes(&self) -> Vec<u8> {
+        f32_le_bytes(&self.depth)
     }
 
-    pub fn node_ids_u16_le_bytes(&self) -> Vec<u8> {
-        u16_le_bytes(&self.node_ids)
+    pub fn object_ids_u32_le_bytes(&self) -> Vec<u8> {
+        u32_le_bytes(&self.object_ids)
+    }
+
+    pub fn node_ids_u32_le_bytes(&self) -> Vec<u8> {
+        u32_le_bytes(&self.node_ids)
     }
 
     /// Resolve one raster-local pixel through the frozen metadata table. Background and out-of-
@@ -287,14 +429,14 @@ impl RasterFrame {
             .iter()
             .find(|object| object.object_id == object_id)?;
         let node_id = *self.node_ids.get(offset)?;
-        if usize::from(node_id) >= super::MAX_MODEL_NODES {
+        if node_id as usize >= super::MAX_MODEL_NODES {
             return None;
         }
         Some(Scene3DPick {
             scene_key: metadata.scene_key.clone(),
             object_id,
             object_key: object.object_key.clone(),
-            node_id: u32::from(node_id),
+            node_id,
             semantic_address: object.semantic_address.clone(),
             pixel_x,
             pixel_y,
@@ -305,6 +447,22 @@ impl RasterFrame {
 
 fn u16_le_bytes(values: &[u16]) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(values.len().saturating_mul(2));
+    for value in values {
+        bytes.extend_from_slice(&value.to_le_bytes());
+    }
+    bytes
+}
+
+fn u32_le_bytes(values: &[u32]) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(values.len().saturating_mul(4));
+    for value in values {
+        bytes.extend_from_slice(&value.to_le_bytes());
+    }
+    bytes
+}
+
+fn f32_le_bytes(values: &[f32]) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(values.len().saturating_mul(4));
     for value in values {
         bytes.extend_from_slice(&value.to_le_bytes());
     }
@@ -382,16 +540,18 @@ pub fn prepare_cache_key(
         hasher.update(environment.content_digest().as_bytes());
     }
     for spec in &scene.meshes {
-        let Some(model) = resources.models.get(&spec.model_control) else {
-            errors.push(
-                format!("/resources/models/{}", spec.model_control),
-                "missing admitted model3d control binding",
-            );
-            continue;
-        };
-        hasher.update(b"model\0");
-        hash_string(&mut hasher, &spec.model_control);
-        hasher.update(model.content_digest.as_bytes());
+        if let Some(control) = &spec.model_control {
+            let Some(model) = resources.models.get(control) else {
+                errors.push(
+                    format!("/resources/models/{control}"),
+                    "missing admitted model3d control binding",
+                );
+                continue;
+            };
+            hasher.update(b"model\0");
+            hash_string(&mut hasher, control);
+            hasher.update(model.content_digest.as_bytes());
+        }
         for (control, role) in spec.texture_controls() {
             let Some(texture) = resources
                 .textures
@@ -438,12 +598,22 @@ pub fn prepare_scene(
     let mut stored_images = BTreeSet::new();
     let mut material_count = 0u32;
     for (index, spec) in scene.meshes.iter().enumerate() {
-        let Some(model) = resources.models.get(&spec.model_control) else {
-            errors.push(
-                format!("/resources/models/{}", spec.model_control),
-                "missing admitted model3d control binding",
-            );
-            continue;
+        let model = if let Some(control) = &spec.model_control {
+            let Some(model) = resources.models.get(control) else {
+                errors.push(
+                    format!("/resources/models/{control}"),
+                    "missing admitted model3d control binding",
+                );
+                continue;
+            };
+            Arc::clone(model)
+        } else {
+            Arc::new(
+                spec.geometry
+                    .as_ref()
+                    .expect("validated geometry source")
+                    .admit_model()?,
+            )
         };
         for id in &spec.node_ids {
             if model.nodes.get(*id as usize).is_none_or(|n| !n.active) {
@@ -452,6 +622,15 @@ pub fn prepare_scene(
                     "node binding must reference an active node in the selected model scene",
                 );
             }
+        }
+        if spec
+            .animation_clip
+            .is_some_and(|clip| clip as usize >= model.animations.len())
+        {
+            errors.push(
+                format!("/meshes/{index}/animationClip"),
+                "selected animation clip is missing from the model",
+            );
         }
         if model_contents.insert(model.content_digest) {
             model_bytes = model_bytes.saturating_add(model.source_bytes);
@@ -484,9 +663,11 @@ pub fn prepare_scene(
                     material.kind = kind;
                 }
                 if let Some(mode) = spec.alpha_mode {
+                    material.values.alpha_mode = mode;
                     material.values.alpha_cutoff = match mode {
                         AlphaMode::Opaque => None,
                         AlphaMode::Mask => Some(material.values.alpha_cutoff.unwrap_or(0.5)),
+                        AlphaMode::Blend => None,
                     };
                 }
                 if let Some(value) = spec.double_sided {
@@ -558,8 +739,8 @@ pub fn prepare_scene(
         }
         material_count = material_count.saturating_add(used.len() as u32);
         meshes.push(PreparedMesh {
-            object_id: (index + 1) as u16,
-            model: Arc::clone(model),
+            object_id: (index + 1) as u32,
+            model,
             images,
             materials,
         });
@@ -629,7 +810,17 @@ pub fn render_scene(
     prepared: &PreparedScene,
     frame: &Frame3DState,
 ) -> Result<RasterFrame, ContractErrors> {
-    render_scene_reusing(prepared, frame, None)
+    render_scene_reusing_with_workers(prepared, frame, None, default_raster_workers())
+}
+
+/// Render with an explicit worker count for deterministic comparison and host scheduling.
+/// Counts above eight are capped; Wasm always uses the one-worker path.
+pub fn render_scene_with_workers(
+    prepared: &PreparedScene,
+    frame: &Frame3DState,
+    workers: usize,
+) -> Result<RasterFrame, ContractErrors> {
+    render_scene_reusing_with_workers(prepared, frame, None, workers)
 }
 
 /// Render into a previous frame allocation when its dimensions still match. All planes are fully
@@ -640,6 +831,15 @@ pub fn render_scene_reusing(
     frame: &Frame3DState,
     reusable: Option<RasterFrame>,
 ) -> Result<RasterFrame, ContractErrors> {
+    render_scene_reusing_with_workers(prepared, frame, reusable, default_raster_workers())
+}
+
+pub fn render_scene_reusing_with_workers(
+    prepared: &PreparedScene,
+    frame: &Frame3DState,
+    reusable: Option<RasterFrame>,
+    workers: usize,
+) -> Result<RasterFrame, ContractErrors> {
     prepared.scene.validate()?;
     frame.validate_for(&prepared.scene)?;
     prepared.budget.validate()?;
@@ -649,22 +849,18 @@ pub fn render_scene_reusing(
         Some(mut output)
             if output.width == prepared.width
                 && output.height == prepared.height
-                && output.premul_rgba8.len() == pixel_count * 4
+                && output.premul_rgba16f.len() == pixel_count * 4
                 && output.depth.len() == pixel_count
                 && output.object_ids.len() == pixel_count
                 && output.node_ids.len() == pixel_count =>
         {
-            output.premul_rgba8.fill(0);
-            output.depth.fill(CLEAR_DEPTH);
-            output.object_ids.fill(BACKGROUND_OBJECT_ID);
-            output.node_ids.fill(BACKGROUND_NODE_ID);
             output.anchors.clear();
             output
         }
         _ => RasterFrame {
             width: prepared.width,
             height: prepared.height,
-            premul_rgba8: vec![0; pixel_count * 4],
+            premul_rgba16f: vec![0; pixel_count * 4],
             depth: vec![CLEAR_DEPTH; pixel_count],
             object_ids: vec![BACKGROUND_OBJECT_ID; pixel_count],
             node_ids: vec![BACKGROUND_NODE_ID; pixel_count],
@@ -672,45 +868,43 @@ pub fn render_scene_reusing(
         },
     };
     let camera = Camera::new(frame, prepared.width, prepared.height)?;
-    let lights = Lights::new(&prepared.scene, frame, prepared.environment.clone());
-    if prepared
+    let mut lights = Lights::new(&prepared.scene, frame, prepared.environment.clone());
+    let environment_background = prepared
         .scene
         .pbr
         .environment
         .as_ref()
-        .is_some_and(|e| e.background)
-    {
-        let environment = prepared
-            .environment
-            .as_ref()
-            .expect("environment admission precedes rendering");
-        for y in 0..prepared.height {
-            for x in 0..prepared.width {
-                let horizontal = ((x as f32 + 0.5) / prepared.width as f32 * 2.0 - 1.0)
-                    * camera.aspect
-                    / camera.focal;
-                let vertical =
-                    (1.0 - (y as f32 + 0.5) / prepared.height as f32 * 2.0) / camera.focal;
-                let ray = (camera.forward + camera.right * horizontal + camera.up * vertical)
-                    .normalized();
-                let rgb = environment
-                    .specular(lights.environment_direction(ray), 0.0)
-                    .map(|v| v * lights.environment_intensity);
-                let pixel = output_color(rgb, 1.0, lights.pbr.tone_mapping, lights.exposure);
-                let offset = (y as usize * prepared.width as usize + x as usize) * 4;
-                output.premul_rgba8[offset..offset + 4].copy_from_slice(&pixel);
-            }
-        }
-    }
+        .is_some_and(|e| e.background);
     let mut transforms = Vec::with_capacity(prepared.meshes.len());
-    for (mesh, state) in prepared.meshes.iter().zip(&frame.meshes) {
+    let mut frame_meshes = Vec::with_capacity(prepared.meshes.len());
+    let mut commands = Vec::new();
+    let mut shadow_triangles = Vec::new();
+    for (mesh_index, (mesh, state)) in prepared.meshes.iter().zip(&frame.meshes).enumerate() {
         let transform = MeshTransform::new(state.transform);
         transforms.push(transform);
         let current_instances;
-        let instances = if state.nodes.is_empty() {
+        let clip = prepared.scene.meshes[mesh_index].animation_clip;
+        let instances = if state.nodes.is_empty()
+            && clip.is_none()
+            && mesh
+                .model
+                .instances
+                .iter()
+                .all(|instance| instance.skin.is_none())
+        {
             &mesh.model.instances
         } else {
-            current_instances = mesh.model.frame_instances(&state.nodes)?;
+            current_instances = mesh.model.frame_instances(
+                &state.nodes,
+                clip.map(|clip| {
+                    (
+                        clip,
+                        state
+                            .animation_time
+                            .expect("frame validation requires clip time"),
+                    )
+                }),
+            )?;
             &current_instances
         };
         let mut materials = mesh.materials.clone();
@@ -722,43 +916,384 @@ pub fn render_scene_reusing(
                 .values
                 .apply_values(&override_.material);
         }
+        frame_meshes.push(FrameMesh { mesh, materials });
         for instance in instances {
             let source = mesh.model.meshes[instance.mesh as usize];
-            for primitive in &mesh.model.primitives[source.first_primitive as usize
+            for (primitive_offset, primitive) in mesh.model.primitives[source.first_primitive
+                as usize
                 ..(source.first_primitive + source.primitive_count) as usize]
+                .iter()
+                .enumerate()
             {
-                let material = &materials[primitive
+                let primitive_index = source.first_primitive as usize + primitive_offset;
+                let material_index = primitive
                     .material_index
-                    .map_or(mesh.model.materials.len(), |i| i as usize)];
+                    .map_or(mesh.model.materials.len(), |i| i as usize);
                 let start = primitive.first_index as usize;
                 for triangle in mesh.model.indices[start..start + primitive.index_count as usize]
                     .chunks_exact(3)
                 {
-                    let mut vertices = [
-                        transformed_vertex(&mesh.model, triangle[0], instance.transform, transform),
-                        transformed_vertex(&mesh.model, triangle[1], instance.transform, transform),
-                        transformed_vertex(&mesh.model, triangle[2], instance.transform, transform),
-                    ];
-                    if instance.transform.mirrored != transform.mirrored() {
+                    let mut local = std::array::from_fn(|corner| {
+                        morphed_vertex(
+                            &mesh.model,
+                            primitive_index,
+                            triangle[corner],
+                            &instance.weights,
+                        )
+                    });
+                    if instance.skin.is_some() {
+                        let attributes = mesh.model.skin_vertices[primitive_index]
+                            .as_ref()
+                            .expect("admission requires skin attributes");
+                        for (corner, &index) in triangle.iter().enumerate() {
+                            local[corner] = skinned_vertex(
+                                local[corner],
+                                attributes[(index - primitive.first_vertex) as usize],
+                                &instance.joint_palette,
+                            );
+                        }
+                    }
+                    if !primitive.has_normal
+                        && (!instance.weights.is_empty() || instance.skin.is_some())
+                    {
+                        let p = local.map(|vertex| {
+                            V3::new(vertex.position[0], vertex.position[1], vertex.position[2])
+                        });
+                        let normal = (p[1] - p[0]).cross(p[2] - p[0]).normalized();
+                        for vertex in &mut local {
+                            vertex.normal = [normal.x, normal.y, normal.z];
+                        }
+                    }
+                    let node_transform = if instance.skin.is_some() {
+                        super::asset::Affine::identity()
+                    } else {
+                        instance.transform
+                    };
+                    if local.iter().any(|vertex| {
+                        node_transform.point(vertex.position).iter().any(|value| {
+                            !value.is_finite() || value.abs() > super::MAX_ABS_POSITION
+                        })
+                    }) {
+                        let mut errors = ContractErrors::default();
+                        errors.push("/frame/deformation", "deformed positions must remain finite and bounded after node transforms");
+                        return Err(errors);
+                    }
+                    let mut vertices =
+                        local.map(|vertex| transformed_vertex(vertex, node_transform, transform));
+                    if (instance.skin.is_none() && instance.transform.mirrored)
+                        != transform.mirrored()
+                    {
                         vertices.swap(1, 2);
                     }
-                    raster_world_triangle(
-                        vertices,
-                        mesh,
-                        material,
-                        instance.node as u16,
-                        &camera,
-                        &lights,
-                        prepared.width,
-                        prepared.height,
-                        &mut output,
-                    );
+                    if prepared.scene.pbr.shadows {
+                        shadow_triangles.push(shadow::ShadowTriangle {
+                            vertices,
+                            mesh_index,
+                            material_index,
+                        });
+                    }
+                    project_world_triangle(vertices, &camera, |screen| {
+                        let min_x = screen
+                            .iter()
+                            .map(|vertex| vertex.x)
+                            .fold(f32::INFINITY, f32::min)
+                            .floor()
+                            .max(0.0) as u32;
+                        let max_x = screen
+                            .iter()
+                            .map(|vertex| vertex.x)
+                            .fold(f32::NEG_INFINITY, f32::max)
+                            .ceil()
+                            .min(prepared.width as f32 - 1.0)
+                            as u32;
+                        let min_y = screen
+                            .iter()
+                            .map(|vertex| vertex.y)
+                            .fold(f32::INFINITY, f32::min)
+                            .floor()
+                            .max(0.0) as u32;
+                        let max_y = screen
+                            .iter()
+                            .map(|vertex| vertex.y)
+                            .fold(f32::NEG_INFINITY, f32::max)
+                            .ceil()
+                            .min(prepared.height as f32 - 1.0)
+                            as u32;
+                        if min_x <= max_x && min_y <= max_y {
+                            commands.push(RasterCommand {
+                                world: vertices,
+                                screen,
+                                mesh_index,
+                                material_index,
+                                node_id: instance.node,
+                                min_x,
+                                max_x,
+                                min_y,
+                                max_y,
+                            });
+                        }
+                    });
                 }
             }
         }
     }
+    if prepared.scene.pbr.shadows {
+        lights.shadow_maps = lights
+            .directional
+            .iter()
+            .map(|(direction, _)| {
+                shadow::ShadowMap::render(*direction, &shadow_triangles, &frame_meshes)
+            })
+            .collect();
+    }
+    let column_count = prepared.width.div_ceil(TILE_COLUMNS) as usize;
+    let row_count = prepared.height.div_ceil(TILE_ROWS) as usize;
+    let mut bins = vec![Vec::new(); row_count * column_count];
+    let mut tile_references = 0u64;
+    for (index, command) in commands.iter().enumerate() {
+        let first_row = command.min_y / TILE_ROWS;
+        let last_row = command.max_y / TILE_ROWS;
+        let first_column = command.min_x / TILE_COLUMNS;
+        let last_column = command.max_x / TILE_COLUMNS;
+        tile_references = tile_references.saturating_add(
+            u64::from(last_row - first_row + 1) * u64::from(last_column - first_column + 1),
+        );
+        if tile_references > MAX_TILE_REFERENCES {
+            let mut errors = ContractErrors::default();
+            errors.push(
+                "/budget/tileReferences",
+                "projected triangle coverage exceeds the tile work budget",
+            );
+            return Err(errors);
+        }
+        for row in first_row..=last_row {
+            for column in first_column..=last_column {
+                bins[row as usize * column_count + column as usize].push(index);
+            }
+        }
+    }
+    let tiles = raster_tiles(&mut output);
+    let worker_count = if cfg!(target_arch = "wasm32") {
+        1
+    } else {
+        workers.max(1).min(MAX_RASTER_WORKERS)
+    }
+    .min(tiles.len());
+    let mut worker_jobs = (0..worker_count).map(|_| Vec::new()).collect::<Vec<_>>();
+    for (index, (tile, command_indices)) in tiles.into_iter().zip(bins).enumerate() {
+        worker_jobs[index % worker_count].push(TileJob {
+            tile,
+            commands: command_indices,
+        });
+    }
+    if worker_count == 1 {
+        for job in worker_jobs.pop().expect("validated layer has one tile") {
+            render_tile(
+                job,
+                &commands,
+                &frame_meshes,
+                &camera,
+                &lights,
+                environment_background,
+            );
+        }
+    } else {
+        std::thread::scope(|scope| {
+            for jobs in worker_jobs {
+                let commands = &commands;
+                let frame_meshes = &frame_meshes;
+                let camera = &camera;
+                let lights = &lights;
+                scope.spawn(move || {
+                    for job in jobs {
+                        render_tile(
+                            job,
+                            commands,
+                            frame_meshes,
+                            camera,
+                            lights,
+                            environment_background,
+                        );
+                    }
+                });
+            }
+        });
+    }
+    dof::apply(&mut output, &frame.camera);
     output.anchors = anchor_projections(&prepared.scene, &camera, &transforms);
     Ok(output)
+}
+
+fn default_raster_workers() -> usize {
+    if cfg!(target_arch = "wasm32") {
+        1
+    } else {
+        std::thread::available_parallelism()
+            .map_or(1, |count| count.get())
+            .min(MAX_RASTER_WORKERS)
+    }
+}
+
+fn raster_tiles(output: &mut RasterFrame) -> Vec<RasterTile<'_>> {
+    let width = output.width;
+    let height = output.height;
+    let column_count = width.div_ceil(TILE_COLUMNS) as usize;
+    let row_count = height.div_ceil(TILE_ROWS) as usize;
+    let mut color_rows = output.premul_rgba16f.chunks_exact_mut(width as usize * 4);
+    let mut depth_rows = output.depth.chunks_exact_mut(width as usize);
+    let mut object_rows = output.object_ids.chunks_exact_mut(width as usize);
+    let mut node_rows = output.node_ids.chunks_exact_mut(width as usize);
+    let mut tiles = Vec::with_capacity(row_count * column_count);
+    for start_y in (0..height).step_by(TILE_ROWS as usize) {
+        let end_y = (start_y + TILE_ROWS).min(height);
+        let rows = (end_y - start_y) as usize;
+        let mut row_tiles = (0..width)
+            .step_by(TILE_COLUMNS as usize)
+            .map(|start_x| RasterTile {
+                width,
+                height,
+                start_x,
+                end_x: (start_x + TILE_COLUMNS).min(width),
+                start_y,
+                end_y,
+                color: Vec::with_capacity(rows),
+                depth: Vec::with_capacity(rows),
+                object_ids: Vec::with_capacity(rows),
+                node_ids: Vec::with_capacity(rows),
+            })
+            .collect::<Vec<_>>();
+        for _ in start_y..end_y {
+            let mut color_row = color_rows.next().expect("frame color rows are complete");
+            let mut depth_row = depth_rows.next().expect("frame depth rows are complete");
+            let mut object_row = object_rows.next().expect("frame object rows are complete");
+            let mut node_row = node_rows.next().expect("frame node rows are complete");
+            for tile in &mut row_tiles {
+                let columns = (tile.end_x - tile.start_x) as usize;
+                let (segment, rest) = color_row.split_at_mut(columns * 4);
+                tile.color.push(segment);
+                color_row = rest;
+                let (segment, rest) = depth_row.split_at_mut(columns);
+                tile.depth.push(segment);
+                depth_row = rest;
+                let (segment, rest) = object_row.split_at_mut(columns);
+                tile.object_ids.push(segment);
+                object_row = rest;
+                let (segment, rest) = node_row.split_at_mut(columns);
+                tile.node_ids.push(segment);
+                node_row = rest;
+            }
+        }
+        tiles.extend(row_tiles);
+    }
+    tiles
+}
+
+fn render_tile(
+    job: TileJob<'_>,
+    commands: &[RasterCommand],
+    frame_meshes: &[FrameMesh<'_>],
+    camera: &Camera,
+    lights: &Lights,
+    environment_background: bool,
+) {
+    let mut tile = job.tile;
+    for row in &mut tile.color {
+        row.fill(0);
+    }
+    for row in &mut tile.depth {
+        row.fill(CLEAR_DEPTH);
+    }
+    for row in &mut tile.object_ids {
+        row.fill(BACKGROUND_OBJECT_ID);
+    }
+    for row in &mut tile.node_ids {
+        row.fill(BACKGROUND_NODE_ID);
+    }
+    if environment_background {
+        let environment = lights
+            .environment
+            .as_ref()
+            .expect("environment admission precedes rendering");
+        for y in tile.start_y..tile.end_y {
+            let color_row = &mut tile.color[(y - tile.start_y) as usize];
+            for x in tile.start_x..tile.end_x {
+                let horizontal = ((x as f32 + 0.5) / tile.width as f32 * 2.0 - 1.0) * camera.aspect
+                    / camera.focal;
+                let vertical = (1.0 - (y as f32 + 0.5) / tile.height as f32 * 2.0) / camera.focal;
+                let ray = (camera.forward + camera.right * horizontal + camera.up * vertical)
+                    .normalized();
+                let rgb = environment
+                    .specular(lights.environment_direction(ray), 0.0)
+                    .map(|v| v * lights.environment_intensity);
+                let pixel = output_color(rgb, 1.0, lights.pbr.tone_mapping, lights.exposure);
+                let offset = (x - tile.start_x) as usize * 4;
+                color_row[offset..offset + 4].copy_from_slice(&pixel);
+            }
+        }
+    }
+    for &index in &job.commands {
+        let command = &commands[index];
+        let frame_mesh = &frame_meshes[command.mesh_index];
+        let material = &frame_mesh.materials[command.material_index];
+        if material.values.alpha_mode == AlphaMode::Blend {
+            continue;
+        }
+        let shading = pbr::Triangle::new(material.kind, &material.values, command.world);
+        raster_projected_triangle(
+            command.screen,
+            frame_mesh.mesh,
+            &shading,
+            command.node_id,
+            camera,
+            lights,
+            &mut tile,
+            None,
+        );
+    }
+    if job.commands.iter().any(|&index| {
+        let command = &commands[index];
+        frame_meshes[command.mesh_index].materials[command.material_index]
+            .values
+            .alpha_mode
+            == AlphaMode::Blend
+    }) {
+        let columns = (tile.end_x - tile.start_x) as usize;
+        let rows = (tile.end_y - tile.start_y) as usize;
+        let mut oit = vec![OitPixel::empty(); columns * rows];
+        for &index in &job.commands {
+            let command = &commands[index];
+            let frame_mesh = &frame_meshes[command.mesh_index];
+            let material = &frame_mesh.materials[command.material_index];
+            if material.values.alpha_mode != AlphaMode::Blend {
+                continue;
+            }
+            let shading = pbr::Triangle::new(material.kind, &material.values, command.world);
+            raster_projected_triangle(
+                command.screen,
+                frame_mesh.mesh,
+                &shading,
+                command.node_id,
+                camera,
+                lights,
+                &mut tile,
+                Some(&mut oit),
+            );
+        }
+        for row in 0..rows {
+            for column in 0..columns {
+                let sample = oit[row * columns + column];
+                if sample.weight_sum == 0 {
+                    continue;
+                }
+                let offset = column * 4;
+                let background = tile.color[row][offset..offset + 4].try_into().unwrap();
+                tile.color[row][offset..offset + 4].copy_from_slice(&sample.resolve(background));
+                tile.depth[row][column] = sample.nearest_depth;
+                tile.object_ids[row][column] = sample.nearest_object;
+                tile.node_ids[row][column] = sample.nearest_node;
+            }
+        }
+    }
 }
 
 fn anchor_projections(
@@ -778,16 +1313,16 @@ fn anchor_projections(
         output.push(match projected {
             Some(projected) => AnchorProjection {
                 key: anchor.key.clone(),
-                object_id: (mesh_index + 1) as u16,
+                object_id: (mesh_index + 1) as u32,
                 screen: [projected.x, projected.y],
-                depth: quantize_depth(projected.view_z, camera.near, camera.far),
+                depth: projected.view_z,
                 // Off-canvas anchors still have a valid projection and may drive an entering
                 // callout. `false` is reserved for behind-near/beyond-far, where no point exists.
                 in_front: true,
             },
             None => AnchorProjection {
                 key: anchor.key.clone(),
-                object_id: (mesh_index + 1) as u16,
+                object_id: (mesh_index + 1) as u32,
                 screen: [-1.0, -1.0],
                 depth: CLEAR_DEPTH,
                 in_front: false,
@@ -1110,9 +1645,66 @@ impl super::asset::Affine {
     }
 }
 
-fn transformed_vertex(
+fn morphed_vertex(
     model: &AdmittedModel,
+    primitive_index: usize,
     index: u32,
+    weights: &[f32],
+) -> ModelVertex {
+    let mut vertex = model.vertices[index as usize];
+    if weights.is_empty() {
+        return vertex;
+    }
+    let offset = (index - model.primitives[primitive_index].first_vertex) as usize;
+    for (target, &weight) in model.morph_targets[primitive_index].iter().zip(weights) {
+        if weight == 0.0 {
+            continue;
+        }
+        if let Some(positions) = &target.positions {
+            for axis in 0..3 {
+                vertex.position[axis] += positions[offset][axis] * weight;
+            }
+        }
+        if let Some(normals) = &target.normals {
+            for axis in 0..3 {
+                vertex.normal[axis] += normals[offset][axis] * weight;
+            }
+        }
+    }
+    if model.primitives[primitive_index].has_normal {
+        let normal = V3::new(vertex.normal[0], vertex.normal[1], vertex.normal[2]).normalized();
+        vertex.normal = [normal.x, normal.y, normal.z];
+    }
+    vertex
+}
+
+fn skinned_vertex(
+    mut vertex: ModelVertex,
+    attributes: super::asset::SkinVertex,
+    palette: &[super::asset::Affine],
+) -> ModelVertex {
+    let mut position = [0.0; 3];
+    let mut normal = [0.0; 3];
+    for (&joint, &weight) in attributes.joints.iter().zip(&attributes.weights) {
+        if weight == 0.0 {
+            continue;
+        }
+        let transform = palette[joint as usize];
+        let point = transform.point(vertex.position);
+        let transformed_normal = transform.normal_raw(vertex.normal);
+        for axis in 0..3 {
+            position[axis] += point[axis] * weight;
+            normal[axis] += transformed_normal[axis] * weight;
+        }
+    }
+    vertex.position = position;
+    let normal = V3::new(normal[0], normal[1], normal[2]).normalized();
+    vertex.normal = [normal.x, normal.y, normal.z];
+    vertex
+}
+
+fn transformed_vertex(
+    vertex: ModelVertex,
     node: super::asset::Affine,
     transform: MeshTransform,
 ) -> WorldVertex {
@@ -1120,7 +1712,7 @@ fn transformed_vertex(
         position,
         normal,
         uv,
-    } = model.vertices[index as usize];
+    } = vertex;
     let position = node.point(position);
     let normal = node.normal(normal);
     WorldVertex {
@@ -1133,6 +1725,7 @@ fn transformed_vertex(
 struct Lights {
     ambient: [f32; 3],
     directional: Vec<(V3, [f32; 3])>,
+    shadow_maps: Vec<Option<shadow::ShadowMap>>,
     hemisphere: Vec<(V3, [f32; 3], [f32; 3])>,
     environment: Option<Arc<super::EnvironmentAsset>>,
     pbr: super::PbrOptions,
@@ -1184,6 +1777,7 @@ impl Lights {
         Self {
             ambient,
             directional,
+            shadow_maps: Vec::new(),
             hemisphere,
             environment,
             pbr: scene.pbr.clone(),
@@ -1205,10 +1799,18 @@ impl Lights {
         ]
     }
 
-    fn factor(&self, normal: V3, occlusion: f32) -> [f32; 3] {
+    fn shadow_visibility(&self, index: usize, position: V3, normal: V3) -> f32 {
+        self.shadow_maps
+            .get(index)
+            .and_then(Option::as_ref)
+            .map_or(1.0, |map| map.visibility(position, normal))
+    }
+
+    fn factor(&self, normal: V3, occlusion: f32, position: V3) -> [f32; 3] {
         let mut factor = self.ambient.map(|v| v * occlusion);
-        for (direction, color) in &self.directional {
-            let cosine = normal.dot(*direction).max(0.0);
+        for (index, (direction, color)) in self.directional.iter().enumerate() {
+            let cosine =
+                normal.dot(*direction).max(0.0) * self.shadow_visibility(index, position, normal);
             for i in 0..3 {
                 factor[i] += color[i] * cosine;
             }
@@ -1229,18 +1831,11 @@ impl Lights {
     }
 }
 
-fn raster_world_triangle(
+fn project_world_triangle(
     vertices: [WorldVertex; 3],
-    mesh: &PreparedMesh,
-    material: &PreparedMaterial,
-    node_id: u16,
     camera: &Camera,
-    lights: &Lights,
-    width: u32,
-    height: u32,
-    output: &mut RasterFrame,
+    mut emit: impl FnMut([ScreenVertex; 3]),
 ) {
-    let shading = pbr::Triangle::new(material.kind, &material.values, vertices);
     let view = [
         camera.view(vertices[0]),
         camera.view(vertices[1]),
@@ -1256,17 +1851,7 @@ fn raster_world_triangle(
             && vertex.position.y + vertex.position.z * vertical >= 0.0
             && vertex.position.z * vertical - vertex.position.y >= 0.0
     }) {
-        raster_projected_triangle(
-            view.map(|vertex| camera.project(vertex)),
-            mesh,
-            &shading,
-            node_id,
-            camera,
-            lights,
-            width,
-            height,
-            output,
-        );
+        emit(view.map(|vertex| camera.project(vertex)));
         return;
     }
     // Clip all six view-frustum planes before fixed-point setup. Besides correct near-edge
@@ -1295,9 +1880,7 @@ fn raster_world_triangle(
             camera.project(clipped[index]),
             camera.project(clipped[index + 1]),
         ];
-        raster_projected_triangle(
-            screen, mesh, &shading, node_id, camera, lights, width, height, output,
-        );
+        emit(screen);
     }
 }
 
@@ -1344,13 +1927,16 @@ fn raster_projected_triangle(
     mut vertices: [ScreenVertex; 3],
     mesh: &PreparedMesh,
     shading: &pbr::Triangle<'_>,
-    node_id: u16,
+    node_id: u32,
     camera: &Camera,
     lights: &Lights,
-    width: u32,
-    height: u32,
-    output: &mut RasterFrame,
+    output: &mut RasterTile<'_>,
+    mut oit: Option<&mut [OitPixel]>,
 ) {
+    let width = output.width;
+    let height = output.height;
+    let tile_columns = (output.end_x - output.start_x) as usize;
+    let transparent = oit.is_some();
     let signed_area = orient_f32(vertices[0], vertices[1], vertices[2]);
     // glTF front faces are CCW in +Y-up NDC, therefore negative after mapping to screen +Y down.
     if signed_area.abs() <= 1.0e-8 {
@@ -1380,25 +1966,25 @@ fn raster_projected_triangle(
         .map(|vertex| vertex.x)
         .fold(f32::INFINITY, f32::min)
         .floor()
-        .max(0.0) as u32;
+        .max(output.start_x as f32) as u32;
     let max_x = vertices
         .iter()
         .map(|vertex| vertex.x)
         .fold(f32::NEG_INFINITY, f32::max)
         .ceil()
-        .min(width as f32 - 1.0) as u32;
+        .min(output.end_x as f32 - 1.0) as u32;
     let min_y = vertices
         .iter()
         .map(|vertex| vertex.y)
         .fold(f32::INFINITY, f32::min)
         .floor()
-        .max(0.0) as u32;
+        .max(output.start_y as f32) as u32;
     let max_y = vertices
         .iter()
         .map(|vertex| vertex.y)
         .fold(f32::NEG_INFINITY, f32::max)
         .ceil()
-        .min(height as f32 - 1.0) as u32;
+        .min(output.end_y as f32 - 1.0) as u32;
     if min_x > max_x || min_y > max_y {
         return;
     }
@@ -1429,7 +2015,8 @@ fn raster_projected_triangle(
     ];
     for y in min_y..=max_y {
         let mut edge = row_edge;
-        let mut offset = y as usize * width as usize + min_x as usize;
+        let row = (y - output.start_y) as usize;
+        let mut offset = (min_x - output.start_x) as usize;
         for x in min_x..=max_x {
             let current_edge = edge;
             edge[0] += edge_step_x[0];
@@ -1456,47 +2043,67 @@ fn raster_projected_triangle(
                 continue;
             }
             let view_z = 1.0 / perspective_sum;
-            let depth = quantize_depth(view_z, camera.near, camera.far);
-            let previous = output.depth[offset];
-            if depth > previous
-                || (depth == previous
-                    && output.object_ids[offset] != 0
-                    && mesh.object_id >= output.object_ids[offset])
+            let depth = view_z;
+            let previous = output.depth[row][offset];
+            if (transparent && depth >= previous)
+                || (!transparent
+                    && (depth > previous
+                        || (depth == previous
+                            && output.object_ids[row][offset] != 0
+                            && mesh.object_id >= output.object_ids[row][offset])))
             {
                 offset += 1;
                 continue;
             }
-            let pixel = &mut output.premul_rgba8[offset * 4..offset * 4 + 4];
             let corrected = perspective_weights(bary, vertices, perspective_sum);
             let uv = interpolated_uv(vertices, corrected);
             let normal = (vertices[0].normal * corrected[0]
                 + vertices[1].normal * corrected[1]
                 + vertices[2].normal * corrected[2])
                 .normalized();
-            let view = (camera.forward * -1.0
+            let ray = camera.forward
                 + camera.right
-                    * (-(2.0 * (x as f32 + 0.5) / width as f32 - 1.0) * camera.aspect
+                    * ((2.0 * (x as f32 + 0.5) / width as f32 - 1.0) * camera.aspect
                         / camera.focal)
-                + camera.up * (-(1.0 - 2.0 * (y as f32 + 0.5) / height as f32) / camera.focal))
-                .normalized();
-            let Some(color) = pbr::shade(
+                + camera.up * ((1.0 - 2.0 * (y as f32 + 0.5) / height as f32) / camera.focal);
+            let view = (ray * -1.0).normalized();
+            let position = camera.eye + ray * view_z;
+            let Some((radiance, alpha)) = pbr::shade(
                 mesh,
                 shading,
                 normal,
                 view,
                 uv,
                 gradients.at(uv, perspective_sum),
+                position,
                 lights,
             ) else {
                 offset += 1;
                 continue;
             };
-            pixel.copy_from_slice(&color);
-            // Masked fragments never write any visibility plane, so objects behind holes can
-            // still draw and be picked regardless of submission order.
-            output.depth[offset] = depth;
-            output.object_ids[offset] = mesh.object_id;
-            output.node_ids[offset] = node_id;
+            if let Some(accumulation) = oit.as_deref_mut() {
+                let display = display_linear(radiance, lights.pbr.tone_mapping, lights.exposure);
+                accumulation[row * tile_columns + offset].add(
+                    display,
+                    alpha,
+                    depth,
+                    mesh.object_id,
+                    node_id,
+                );
+            } else {
+                let pixel = &mut output.color[row][offset * 4..offset * 4 + 4];
+                pixel.copy_from_slice(&output_color(
+                    radiance,
+                    1.0,
+                    lights.pbr.tone_mapping,
+                    lights.exposure,
+                ));
+                // Masked fragments never write any visibility plane, so objects behind holes can
+                // still draw and be picked regardless of submission order.
+                output.depth[row][offset] = depth;
+                output.object_ids[row][offset] = mesh.object_id;
+                output.node_ids[row][offset] = node_id;
+            }
             offset += 1;
         }
         row_edge[0] += edge_step_y[0];
@@ -1533,22 +2140,56 @@ fn output_color(
     alpha: f32,
     tone: super::ToneMapping,
     exposure: f32,
-) -> [u8; 4] {
+) -> [u16; 4] {
+    let color = display_linear(radiance, tone, exposure);
+    let rgb =
+        color.map(|v| f32_to_f16_bits(super::asset::linear_to_srgb(v).clamp(0.0, 1.0) * alpha));
+    [rgb[0], rgb[1], rgb[2], f32_to_f16_bits(alpha)]
+}
+
+fn display_linear(radiance: [f32; 3], tone: super::ToneMapping, exposure: f32) -> [f32; 3] {
     let color = match tone {
         super::ToneMapping::Aces => lighting::aces(radiance, exposure),
         super::ToneMapping::None => radiance.map(|v| v * exposure),
     };
-    let rgb = color.map(|v| quantize_unit(super::asset::linear_to_srgb(v).clamp(0.0, 1.0) * alpha));
-    [rgb[0], rgb[1], rgb[2], quantize_unit(alpha)]
+    color.map(|value| value.clamp(0.0, 1.0))
 }
 
-fn quantize_unit(value: f32) -> u8 {
-    libm::roundf(value.clamp(0.0, 1.0) * 255.0) as u8
+fn f16_bits_to_f32(bits: u16) -> f32 {
+    let exponent = u32::from((bits >> 10) & 0x1f);
+    let mantissa = u32::from(bits & 0x03ff);
+    if exponent == 0 {
+        mantissa as f32 / 16_777_216.0
+    } else {
+        f32::from_bits(((exponent + 112) << 23) | (mantissa << 13))
+    }
 }
 
-fn quantize_depth(view_z: f32, near: f32, far: f32) -> u16 {
-    let normalized = ((view_z - near) / (far - near)).clamp(0.0, 1.0);
-    libm::roundf(normalized * (u16::MAX - 1) as f32) as u16
+/// IEEE-754 round-to-nearest-even binary32 to binary16. Input colors are finite in [0, 1].
+fn f32_to_f16_bits(value: f32) -> u16 {
+    let bits = value.to_bits();
+    let exponent = ((bits >> 23) & 0xff) as i32;
+    let mantissa = bits & 0x7f_ff_ff;
+    let half_exponent = exponent - 127 + 15;
+    if half_exponent <= 0 {
+        if half_exponent < -10 {
+            return 0;
+        }
+        let shifted = mantissa | 0x80_00_00;
+        return round_shift_even(shifted, (14 - half_exponent) as u32) as u16;
+    }
+    let rounded = round_shift_even(mantissa, 13);
+    if rounded == 0x400 {
+        return ((half_exponent + 1) as u16) << 10;
+    }
+    ((half_exponent as u16) << 10) | rounded as u16
+}
+
+fn round_shift_even(value: u32, shift: u32) -> u32 {
+    let truncated = value >> shift;
+    let remainder = value & ((1u32 << shift) - 1);
+    let halfway = 1u32 << (shift - 1);
+    truncated + u32::from(remainder > halfway || (remainder == halfway && truncated & 1 == 1))
 }
 
 #[derive(Clone, Copy)]
@@ -1601,4 +2242,27 @@ fn rotate_z(value: V3, sin: f32, cos: f32) -> V3 {
 
 fn rotate_axis(value: V3, axis: V3, sin: f32, cos: f32) -> V3 {
     value * cos + axis.cross(value) * sin + axis * (axis.dot(value) * (1.0 - cos))
+}
+
+#[cfg(test)]
+mod precision_tests {
+    use std::collections::BTreeSet;
+
+    use super::{f32_to_f16_bits, output_color};
+    use crate::scene3d::ToneMapping;
+
+    #[test]
+    fn half_float_color_preserves_more_lighting_levels_than_rgba8() {
+        assert_eq!(f32_to_f16_bits(0.0), 0x0000);
+        assert_eq!(f32_to_f16_bits(1.0), 0x3c00);
+        assert_eq!(f32_to_f16_bits(0.5), 0x3800);
+        let levels = (0..1024)
+            .map(|step| output_color([step as f32 / 1023.0; 3], 1.0, ToneMapping::None, 1.0)[0])
+            .collect::<BTreeSet<_>>();
+        assert!(
+            levels.len() > 900,
+            "{} distinct half-float levels",
+            levels.len()
+        );
+    }
 }

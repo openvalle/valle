@@ -133,10 +133,6 @@ fn every_rejection_names_a_documented_replacement() {
             "a border, a background gradient, or an explicit `<Image>`",
         ),
         (
-            r##"<Text split="word" perUnit={{ opacity: 1 }}>one <Span style={{ color: "#fff" }}>two</Span></Text>"##,
-            "keep the split text in its own single-run Text, or drop split/perUnit",
-        ),
-        (
             r##"<Text path={path("M0 0L100 0")}>one <Span style={{ color: "#fff" }}>two</Span></Text>"##,
             "keep the path text in its own single-run Text, or drop the path",
         ),

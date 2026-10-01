@@ -1,0 +1,74 @@
+uniform shader source;
+uniform shader original;
+uniform float2 originalSize;
+uniform float2 originalOffset;
+uniform float finalPass;
+uniform float2 sourceSize;
+uniform float2 inputOffset;
+uniform float2 outputOrigin;
+uniform float2 center;
+uniform float amount;
+uniform float fraction;
+
+float4 at(int2 pixel) {
+    if (pixel.x < 0 || pixel.y < 0 || float(pixel.x) >= sourceSize.x || float(pixel.y) >= sourceSize.y) {
+        return float4(0.0);
+    }
+    return float4(source.eval(float2(pixel) + 0.5));
+}
+
+float4 bilinearDecal(float2 pixel) {
+    float2 base = floor(pixel);
+    float2 fraction = pixel - base;
+    int2 origin = int2(base);
+    float4 sum = at(origin) * ((1.0 - fraction.x) * (1.0 - fraction.y));
+    sum += at(origin + int2(1, 0)) * (fraction.x * (1.0 - fraction.y));
+    sum += at(origin + int2(0, 1)) * ((1.0 - fraction.x) * fraction.y);
+    sum += at(origin + int2(1, 1)) * (fraction.x * fraction.y);
+    return sum;
+}
+
+float4 originalAt(int2 pixel) {
+    if (pixel.x < 0 || pixel.y < 0 || float(pixel.x) >= originalSize.x || float(pixel.y) >= originalSize.y) {
+        return float4(0.0);
+    }
+    return float4(original.eval(float2(pixel) + 0.5));
+}
+
+float4 originalBilinear(float2 pixel) {
+    float2 base = floor(pixel);
+    float2 fraction = pixel - base;
+    int2 origin = int2(base);
+    float4 sum = originalAt(origin) * ((1.0 - fraction.x) * (1.0 - fraction.y));
+    sum += originalAt(origin + int2(1, 0)) * (fraction.x * (1.0 - fraction.y));
+    sum += originalAt(origin + int2(0, 1)) * ((1.0 - fraction.x) * fraction.y);
+    sum += originalAt(origin + int2(1, 1)) * (fraction.x * fraction.y);
+    return sum;
+}
+
+half4 main(float2 xy) {
+    float2 pixel = floor(xy);
+    float2 sourcePixel = pixel - inputOffset;
+    float2 delta = outputOrigin + pixel + 0.5 - center;
+    float distance = length(delta);
+    if (finalPass > 0.5 && min(amount, distance * 0.5) <= 8.0) {
+        float2 point = pixel - originalOffset;
+        if (amount == 0.0 || distance < 1.0e-12) return half4(originalAt(int2(point)));
+        float reach = min(amount, distance * 0.5);
+        float steps = max(1.0, ceil(reach));
+        float4 sum = float4(0.0);
+        for (int i = -8; i <= 8; ++i) {
+            float tap = float(i);
+            if (abs(tap) <= steps) {
+                float weight = steps + 1.0 - abs(tap);
+                sum += originalBilinear(point + delta / distance * tap * reach / steps) * weight;
+            }
+        }
+        return half4(sum / ((steps + 1.0) * (steps + 1.0)));
+    }
+    float4 base = at(int2(sourcePixel));
+    if (amount == 0.0 || distance < 1.0e-12) return half4(base);
+    float reach = fraction * min(amount, distance * 0.5);
+    float2 travel = delta / distance * reach;
+    return half4(base * 0.5 + (bilinearDecal(sourcePixel - travel) + bilinearDecal(sourcePixel + travel)) * 0.25);
+}

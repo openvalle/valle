@@ -23,7 +23,7 @@ export default function VectorTurbulenceProxy(ctx) {
       ))}
 
       {riders.map((rider) => (
-        <View key={rider.key} className="absolute" style={{ width: 7.5 + (1 - rider.progress) * 12, height: 7.5 + (1 - rider.progress) * 12, borderRadius: 12, backgroundColor: rider.index % 2 === 0 ? "#111827" : "#ef4444", opacity: 0.22 + (1 - rider.progress) * 0.72, filter: "drop-shadow(0px 0px 9px #ffffff)", motionPath: follow(flow, trail(t * 1.35, rider.index, { gap: 0.035, mode: "wrap" }), { rotate: "auto" }) }} />
+        <View key={rider.key} className="absolute" style={{ width: 7.5 + (1 - rider.progress) * 12, height: 7.5 + (1 - rider.progress) * 12, borderRadius: 12, backgroundColor: rider.index % 2 === 0 ? "#111827" : "#ef4444", opacity: 0.22 + (1 - rider.progress) * 0.72, filter: "drop-shadow(0px 0px 9px #ffffff)", motionPath: follow(flow, trail(t * 1.35, rider.index, { gap: -0.035, mode: "wrap" }), { rotate: "auto" }) }} />
       ))}
 
       <View key="legend" className="absolute flex items-center" style={{ borderStyle: "solid", left: 87, top: 939, width: 1746, height: 81, borderTopWidth: 1.5, borderColor: "#a8a29e" }}>

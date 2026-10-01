@@ -883,6 +883,25 @@
           ],
           "type": "string"
         },
+        "BuiltinTransitionKernelWire": {
+          "additionalProperties": false,
+          "properties": {
+            "params": {
+              "additionalProperties": {
+                "format": "double",
+                "type": "number"
+              },
+              "type": "object"
+            },
+            "type": {
+              "$ref": "#/$defs/TransitionKind"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
         "CameraTrackWire": {
           "additionalProperties": false,
           "properties": {
@@ -1250,24 +1269,6 @@
             "srgb"
           ],
           "type": "string"
-        },
-        "CrossFadeTransitionKernelTag": {
-          "enum": [
-            "cross-fade"
-          ],
-          "type": "string"
-        },
-        "CrossFadeTransitionKernelWire": {
-          "additionalProperties": false,
-          "properties": {
-            "type": {
-              "$ref": "#/$defs/CrossFadeTransitionKernelTag"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "type": "object"
         },
         "CubicBezierEasingWire": {
           "additionalProperties": false,
@@ -2055,12 +2056,30 @@
         "TransitionKernelWire": {
           "anyOf": [
             {
-              "$ref": "#/$defs/CrossFadeTransitionKernelWire"
+              "$ref": "#/$defs/BuiltinTransitionKernelWire"
             },
             {
               "$ref": "#/$defs/TransitionKernelExtensionWire"
             }
           ]
+        },
+        "TransitionKind": {
+          "enum": [
+            "fade",
+            "wipeLeft",
+            "wipeRight",
+            "circleOpen",
+            "simpleZoom",
+            "crossWarp",
+            "linearBlur",
+            "directionalWarp",
+            "dreamyZoom",
+            "ripple",
+            "flyEye",
+            "multiplyBlend",
+            "perlin"
+          ],
+          "type": "string"
         },
         "VisualCompositionWire": {
           "additionalProperties": false,

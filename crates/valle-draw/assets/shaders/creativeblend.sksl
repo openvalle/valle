@@ -3,6 +3,7 @@ uniform shader destination;
 uniform float mode;
 uniform float opacity;
 uniform float compositeResult;
+uniform float linearSpace;
 
 float srgbEncodeChannel(float value) {
     float magnitude = abs(value);
@@ -20,12 +21,13 @@ float srgbDecodeChannel(float value) {
     return sign(value) * decoded;
 }
 
-float3 workingToSrgb(float3 value) {
+float3 workingToBlend(float3 value) {
     float3 linear = float3(
         1.6604910021084354 * value.r - 0.5876411387885495 * value.g - 0.07284986331988474 * value.b,
        -0.12455047452159074 * value.r + 1.1328998971259594 * value.g - 0.008349422604369515 * value.b,
        -0.01815076335490526 * value.r - 0.10057889800800739 * value.g + 1.118729661362913 * value.b
     );
+    if (linearSpace > 0.5) return linear;
     return float3(
         srgbEncodeChannel(linear.r),
         srgbEncodeChannel(linear.g),
@@ -33,8 +35,8 @@ float3 workingToSrgb(float3 value) {
     );
 }
 
-float3 srgbToWorking(float3 value) {
-    float3 linear = float3(
+float3 blendToWorking(float3 value) {
+    float3 linear = linearSpace > 0.5 ? value : float3(
         srgbDecodeChannel(value.r),
         srgbDecodeChannel(value.g),
         srgbDecodeChannel(value.b)
@@ -150,13 +152,20 @@ half4 main(float2 xy) {
             ? half4(src + backdrop * (1.0 - src.a))
             : half4(src);
     }
-    float3 srcSrgb = workingToSrgb(src.rgb / src.a);
-    float3 backdropSrgb = backdrop.a > 0.0
-        ? workingToSrgb(backdrop.rgb / backdrop.a)
+    if (mode > 16.5) {
+        float alpha = backdrop.a == 1.0 ? src.a : min(src.a / (1.0 - backdrop.a), 1.0);
+        float3 sum = clamp(src.rgb + backdrop.rgb, 0.0, 1.0);
+        return compositeResult > 0.5
+            ? half4(sum, min(src.a + backdrop.a, 1.0))
+            : half4(sum - backdrop.rgb * (1.0 - alpha), alpha);
+    }
+    float3 srcBlend = workingToBlend(src.rgb / src.a);
+    float3 backdropBlend = backdrop.a > 0.0
+        ? workingToBlend(backdrop.rgb / backdrop.a)
         : float3(0.0);
-    float3 blended = blendRgb(backdropSrgb, srcSrgb, mode);
-    float3 effectiveSrgb = (1.0 - backdrop.a) * srcSrgb + backdrop.a * blended;
-    float4 effective = float4(srgbToWorking(effectiveSrgb) * src.a, src.a);
+    float3 blended = blendRgb(backdropBlend, srcBlend, mode);
+    float3 effectiveBlend = (1.0 - backdrop.a) * srcBlend + backdrop.a * blended;
+    float4 effective = float4(blendToWorking(effectiveBlend) * src.a, src.a);
     return compositeResult > 0.5
         ? half4(effective + backdrop * (1.0 - effective.a))
         : half4(effective);

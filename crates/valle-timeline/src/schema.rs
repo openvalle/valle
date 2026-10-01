@@ -109,6 +109,21 @@ pub fn generated_artifacts() -> BTreeMap<&'static str, String> {
     BTreeMap::from([
         (SCHEMA_BUNDLE_FILE, schema_bundle_pretty()),
         (TYPESCRIPT_FILE, generated_typescript()),
+        (
+            "transition-parameters.generated.json",
+            // Serialize f32 directly, keeping author-facing decimals such as 0.01 concise.
+            // Passing through Value would widen them to f64 first.
+            format!(
+                "{}\n",
+                serde_json::to_string_pretty(
+                    &valle_draw::transition::TransitionKind::ALL
+                        .into_iter()
+                        .map(|kind| (kind, kind.parameter_specs()))
+                        .collect::<BTreeMap<_, _>>()
+                )
+                .expect("parameter metadata serializes")
+            ),
+        ),
     ])
 }
 

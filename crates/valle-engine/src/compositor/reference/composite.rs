@@ -306,7 +306,14 @@ fn blend_images(
             .pixels()
             .iter()
             .zip(destination.pixels())
-            .map(|(source, destination)| blend_over(*source, *destination, mode))
+            .map(|(source, destination)| {
+                blend_over(
+                    *source,
+                    *destination,
+                    mode,
+                    valle_draw::program::BlendSpace::Srgb,
+                )
+            })
             .collect::<Result<_, _>>()?,
     )
     .map_err(Into::into)
@@ -473,7 +480,12 @@ impl ReferenceLayer {
                     .iter()
                     .zip(current.image.pixels())
                     .map(|(source, destination)| {
-                        effective_blend_source(*source, *destination, blend)
+                        effective_blend_source(
+                            *source,
+                            *destination,
+                            blend,
+                            valle_draw::program::BlendSpace::Srgb,
+                        )
                     })
                     .collect::<Result<_, _>>()?,
             )?

@@ -1,5 +1,15 @@
 use std::path::{Path, PathBuf};
 
+#[test]
+fn numerical_corpus_matches_the_golden() {
+    use sha2::{Digest, Sha256};
+    let bytes = serde_json::to_vec(&valle_draw::math::determinism_corpus()).unwrap();
+    assert_eq!(
+        hex::encode(Sha256::digest(bytes)),
+        include_str!("golden/deterministic-math-v1.sha256").trim()
+    );
+}
+
 const FORBIDDEN: &[&str] = &[
     ".sin(",
     ".cos(",

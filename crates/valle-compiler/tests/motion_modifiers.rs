@@ -163,6 +163,12 @@ export default function P(ctx) {
             .unwrap()
             .contains("trail")
     );
+    let negative = CLAMPED.replace("gap: 0.2", "gap: -0.2");
+    let negative_wrap = WRAPPED.replace("gap: 0.2", "gap: -0.2");
+    let fps = FrameRate::new(30, 1).unwrap();
+    assert!((style_number(CLAMPED, "opacity", 300, fps) - 0.9).abs() < 1e-12);
+    assert!((style_number(&negative, "opacity", 300, fps) - 0.1).abs() < 1e-12);
+    assert!((style_number(&negative_wrap, "opacity", 0, fps) - 0.6).abs() < 1e-12);
 }
 
 #[test]
@@ -210,7 +216,7 @@ fn modifier_options_and_budgets_fail_closed() {
             "seed",
         ),
         (
-            r#"export default function P(ctx){return <View style={{opacity:trail(ctx.progress,1,{gap:-.1})}}/>;}"#,
+            r#"export default function P(ctx){return <View style={{opacity:trail(ctx.progress,1,{gap:'bad'})}}/>;}"#,
             "gap",
         ),
         (
@@ -307,7 +313,7 @@ export default function P(ctx) {
 }
 
 #[test]
-fn static_map_and_named_repeater_share_one_fixed_topology_lowering() {
+fn static_map_expands_while_named_repeater_uses_layout_instances() {
     let compiled = compile_motion(
         r##"
 const ITEMS = [0, 1, 2, 3];
@@ -329,5 +335,11 @@ export default function P(ctx) {
         r#"const I=defineRepeater({count:4}); export default function P(){return <View>{I.map((x)=><View key={x.key}/>)}</View>;}"#,
     )
     .expect("named repeater compiles");
-    assert_eq!(repeated.artifact.nodes.len(), compiled.artifact.nodes.len());
+    assert_eq!(repeated.artifact.instance_groups.len(), 1);
+    assert_eq!(repeated.artifact.instance_groups[0].rows(), 4);
+    assert_eq!(
+        repeated.artifact.instance_groups[0].template_node_count(),
+        1
+    );
+    assert!(repeated.artifact.nodes.len() < compiled.artifact.nodes.len());
 }

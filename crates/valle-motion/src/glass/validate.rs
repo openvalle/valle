@@ -422,6 +422,7 @@ fn subtree_has_unknown_foreground(artifact: &SceneArtifact, glass_at: usize) -> 
             node.kind,
             NodeKind::Image { .. }
                 | NodeKind::Video { .. }
+                | NodeKind::Transition { .. }
                 | NodeKind::ShaderLayer { .. }
                 | NodeKind::Scene3D { .. }
         ) {
@@ -849,6 +850,7 @@ mod tests {
             controls: controls(),
             resource_refs: vec![],
             exprs: vec![],
+            instance_groups: vec![],
             nodes: vec![
                 SceneNode {
                     key: "root".into(),
@@ -938,7 +940,9 @@ mod tests {
             vec![StyleBinding {
                 property: "background".into(),
                 value: StyleValue::Static {
-                    value: MotionValue::Color(valle_draw::Rgba::new(255, 0, 0, 255)),
+                    value: MotionValue::Color(valle_draw::program::AuthorColor::from_srgb8(
+                        valle_draw::Rgba::new(255, 0, 0, 255),
+                    )),
                 },
             }],
             vec![],

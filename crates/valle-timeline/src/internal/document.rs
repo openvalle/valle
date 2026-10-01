@@ -269,7 +269,10 @@ pub struct VisualTransition {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum TransitionKernel {
-    CrossFade,
+    Builtin {
+        kind: valle_draw::transition::TransitionKind,
+        params: valle_draw::transition::TransitionValues,
+    },
     Extension(TransitionKernelExtension),
 }
 
@@ -635,7 +638,7 @@ pub struct CameraTrack {
     pub rotation: Param<f64>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub(crate) enum DocumentConversionError {
     #[error("invalid frame rate in validated document")]
     FrameRate,
@@ -647,6 +650,8 @@ pub(crate) enum DocumentConversionError {
     NormalizedRect,
     #[error("invalid namespaced kernel type in validated document")]
     KernelType,
+    #[error(transparent)]
+    TransitionParams(valle_draw::transition::TransitionParamError),
 }
 
 pub(crate) fn from_wire(
@@ -969,7 +974,13 @@ fn transition_kernel_from_wire(
     kernel: wire::TransitionKernelWire,
 ) -> Result<TransitionKernel, DocumentConversionError> {
     match kernel {
-        wire::TransitionKernelWire::CrossFade(_) => Ok(TransitionKernel::CrossFade),
+        wire::TransitionKernelWire::Builtin(kernel) => Ok(TransitionKernel::Builtin {
+            kind: kernel.kind,
+            params: kernel
+                .kind
+                .resolve_params(&kernel.params)
+                .map_err(DocumentConversionError::TransitionParams)?,
+        }),
         wire::TransitionKernelWire::Extension(extension) => {
             Ok(TransitionKernel::Extension(TransitionKernelExtension {
                 kind: kernel_type_from_wire(extension.kind)?,
@@ -981,9 +992,10 @@ fn transition_kernel_from_wire(
 
 fn transition_kernel_into_wire(kernel: TransitionKernel) -> wire::TransitionKernelWire {
     match kernel {
-        TransitionKernel::CrossFade => {
-            wire::TransitionKernelWire::CrossFade(wire::CrossFadeTransitionKernelWire {
-                kind: wire::CrossFadeTransitionKernelTag::CrossFade,
+        TransitionKernel::Builtin { kind, params } => {
+            wire::TransitionKernelWire::Builtin(wire::BuiltinTransitionKernelWire {
+                kind,
+                params: kind.named_params(params),
             })
         }
         TransitionKernel::Extension(extension) => {

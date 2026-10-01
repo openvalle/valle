@@ -1,6 +1,7 @@
 //! File and project Timeline delivery through the fixed-package admission path.
+use super::render_delivery::{DeliveryObservation, DeliveryPlan};
 use crate::{
-    TimelineAction,
+    RenderOutputArgs, TimelineAction,
     preview_store::{FrozenMediaCache, PreviewFile},
 };
 use anyhow::{Context, Result, anyhow, bail};
@@ -28,25 +29,19 @@ pub fn run(action: TimelineAction) -> Result<std::process::ExitCode> {
             render_document_impl(
                 timeline,
                 input.parent().unwrap_or(Path::new(".")),
-                &temp.path().join("check.png"),
-                Some(0),
+                RenderOutputArgs {
+                    output: Some(temp.path().join("check.png")),
+                    frame: Some(0),
+                    ..Default::default()
+                },
                 true,
             )?;
             crate::output::emit(serde_json::json!({"status":"ok", "input":input}));
             Ok(std::process::ExitCode::SUCCESS)
         }
-        TimelineAction::Render {
-            input,
-            output,
-            frame,
-        } => {
+        TimelineAction::Render { input, delivery } => {
             let timeline = decode_timeline(&super::read(&input)?)?;
-            render_document(
-                timeline,
-                input.parent().unwrap_or(Path::new(".")),
-                &output,
-                frame,
-            )
+            render_document(timeline, input.parent().unwrap_or(Path::new(".")), delivery)
         }
     }
 }
@@ -54,27 +49,19 @@ pub fn run(action: TimelineAction) -> Result<std::process::ExitCode> {
 pub(super) fn render_document(
     timeline: Timeline,
     base: &Path,
-    output: &Path,
-    frame: Option<i64>,
+    delivery: RenderOutputArgs,
 ) -> Result<std::process::ExitCode> {
-    render_document_impl(timeline, base, output, frame, false)
+    render_document_impl(timeline, base, delivery, false)
 }
 
 fn render_document_impl(
     timeline: Timeline,
     base: &Path,
-    output: &Path,
-    frame: Option<i64>,
+    delivery: RenderOutputArgs,
     checking: bool,
 ) -> Result<std::process::ExitCode> {
-    super::fixed_render::require_new_output(output)?;
-    let extension = if frame.is_some() { "png" } else { "mp4" };
-    if !output
-        .extension()
-        .is_some_and(|e| e.eq_ignore_ascii_case(extension))
-    {
-        bail!("output must have an .{extension} extension");
-    }
+    let plan = DeliveryPlan::new(delivery)?;
+    let observation = DeliveryObservation::new();
     let prepared = prepare_timeline_package(timeline, base)?;
     // Package preparation already admitted and opened the closed package; reuse it.
     let opened = prepared.opened;
@@ -95,17 +82,7 @@ fn render_document_impl(
     if checking {
         return Ok(std::process::ExitCode::SUCCESS);
     }
-    let summary = match frame {
-        Some(f) => renderer.preview_frame_key(valle_engine::render::FrameKey::new(f), output)?,
-        None => renderer.export_mp4(output)?,
-    };
-    super::fixed_render::print_delivery_report(
-        &opened,
-        if frame.is_some() { "preview" } else { "export" },
-        output,
-        &summary,
-        None,
-    )?;
+    plan.deliver_and_report(&renderer, &opened, &observation, None)?;
     Ok(std::process::ExitCode::SUCCESS)
 }
 
@@ -157,9 +134,9 @@ pub(crate) fn prepare_timeline_media_facts(
     let mut motion_assets = BTreeSet::new();
     for track in doc["tracks"]["visual"].as_array_mut().into_iter().flatten() {
         if let Some(clips) = track["clips"].as_array_mut() {
-            clips.retain(|clip| {
+            for clip in clips {
                 if clip["kind"] != "motion" {
-                    return true;
+                    continue;
                 }
                 if let Some(bindings) = clip["resources"].as_object() {
                     motion_assets.extend(
@@ -168,8 +145,12 @@ pub(crate) fn prepare_timeline_media_facts(
                             .filter_map(|value| value.as_str().map(str::to_owned)),
                     );
                 }
-                false
-            });
+                // Preserve endpoint indices and overlap clocks while only collecting media.
+                *clip = serde_json::json!({
+                    "kind": "solid", "color": "#00000000",
+                    "start": clip["start"], "duration": clip["duration"],
+                });
+            }
         }
     }
     let mut used_by_media = BTreeSet::new();
@@ -1122,7 +1103,7 @@ mod preview_tests {
     use super::*;
 
     #[test]
-    fn media_facts_for_motion_asset_do_not_compile_the_component() {
+    fn media_facts_preserve_transition_indices_without_compiling_motion() {
         let dir = tempfile::tempdir().unwrap();
         let image =
             include_bytes!("../../../valle-compiler/tests/fixtures/motion/modules/assets/dot.png");
@@ -1134,7 +1115,9 @@ mod preview_tests {
             "tracks": {"visual": [{"clips": [{
                 "kind": "motion", "component": "component", "start": 0, "duration": 1,
                 "resources": {"image": "poster"}
-            }]}]}
+            }, {
+                "kind": "image", "src": "poster", "start": 0.5, "duration": 1
+            }], "transitions": [{"from":0,"to":1,"kind":"circleOpen"}]}]}
         });
         let mut cache = FrozenMediaCache::default();
         let (facts, blobs, input_dependencies) = prepare_timeline_media_facts(

@@ -118,6 +118,7 @@ impl<'s> Compiler<'s> {
                 "font-family",
                 "font-size",
                 "font-weight",
+                "font-variation-settings",
                 "font-style",
                 "letter-spacing",
                 "opacity",
@@ -128,7 +129,7 @@ impl<'s> Compiler<'s> {
                 if !name.starts_with("--") && !ALLOWED.contains(&camel_to_kebab(name).as_str()) {
                     self.unsupported(
                         entry.property.span(),
-                        format!("Span style `{name}` is not admitted; allowed: color, fontFamily, fontSize, fontWeight, fontStyle, letterSpacing, opacity and static custom properties"),
+                        format!("Span style `{name}` is not admitted; allowed: color, fontFamily, fontSize, fontWeight, fontVariationSettings, fontStyle, letterSpacing, opacity and static custom properties"),
                     );
                 }
             }

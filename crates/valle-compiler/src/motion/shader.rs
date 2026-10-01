@@ -427,7 +427,12 @@ impl<'s> Compiler<'s> {
                 let channel = |value: f32| (value.clamp(0.0, 1.0) * 255.0).round() as u8;
                 ShaderUniformValue::Color {
                     value: ColorValue::Static {
-                        value: Rgba::new(channel(*r), channel(*g), channel(*b), channel(*a)),
+                        value: valle_draw::program::AuthorColor::from_srgb8(Rgba::new(
+                            channel(*r),
+                            channel(*g),
+                            channel(*b),
+                            channel(*a),
+                        )),
                     },
                 }
             }

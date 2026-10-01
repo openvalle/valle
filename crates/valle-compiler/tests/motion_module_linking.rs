@@ -257,8 +257,16 @@ export const brandTheme = {
             _ => None,
         })
         .collect::<Vec<_>>();
-    assert!(colors.contains(&valle_draw::Rgba::rgb(15, 23, 42)));
-    assert!(colors.contains(&valle_draw::Rgba::rgb(248, 250, 252)));
+    assert!(
+        colors.contains(&valle_draw::program::AuthorColor::from_srgb8(
+            valle_draw::Rgba::rgb(15, 23, 42)
+        ))
+    );
+    assert!(
+        colors.contains(&valle_draw::program::AuthorColor::from_srgb8(
+            valle_draw::Rgba::rgb(248, 250, 252)
+        ))
+    );
     let panel = compiled
         .source_map
         .nodes

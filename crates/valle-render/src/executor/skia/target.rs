@@ -303,12 +303,11 @@ impl SkiaExternalObject {
         })
     }
 
-    /// Normalize the deterministic software Scene3D raster. The Scene3D v1 raster contract emits
-    /// premultiplied sRGB RGBA8; all later drawing sees only Linear Rec.2020 premultiplied pixels.
-    pub fn scene3d_rgba8(
+    /// Normalize premultiplied sRGB half-float Scene3D pixels into the working color space.
+    pub fn scene3d_rgba16f(
         key: ResourceKey,
         extent: Extent2d,
-        premul_rgba: &[u8],
+        premul_rgba: &[u16],
     ) -> Result<Self, SkiaObjectError> {
         if !matches!(key.interpretation, ResourceInterpretation::Scene3d { .. }) {
             return Err(SkiaObjectError::WrongInterpretation {
@@ -318,10 +317,11 @@ impl SkiaExternalObject {
         let width = usize::try_from(extent.width()).map_err(|_| SkiaObjectError::InvalidExtent)?;
         let height =
             usize::try_from(extent.height()).map_err(|_| SkiaObjectError::InvalidExtent)?;
-        let row_bytes = width.checked_mul(4).ok_or(SkiaObjectError::InvalidExtent)?;
+        let row_bytes = width.checked_mul(8).ok_or(SkiaObjectError::InvalidExtent)?;
         if premul_rgba.len()
-            != row_bytes
+            != width
                 .checked_mul(height)
+                .and_then(|pixels| pixels.checked_mul(4))
                 .ok_or(SkiaObjectError::InvalidExtent)?
         {
             return Err(SkiaObjectError::InvalidPixelPayload);
@@ -331,14 +331,18 @@ impl SkiaExternalObject {
                 i32::try_from(extent.width()).map_err(|_| SkiaObjectError::InvalidExtent)?,
                 i32::try_from(extent.height()).map_err(|_| SkiaObjectError::InvalidExtent)?,
             ),
-            ColorType::RGBA8888,
+            ColorType::RGBAF16,
             AlphaType::Premul,
             Some(
                 input_color_space(valle_engine::resource::ColorDescription::SRGB)
                     .map_err(|_| SkiaObjectError::InvalidInputColorSpace)?,
             ),
         );
-        let input = images::raster_from_data(&input_info, Data::new_copy(premul_rgba), row_bytes)
+        let bytes = premul_rgba
+            .iter()
+            .flat_map(|value| value.to_le_bytes())
+            .collect::<Vec<_>>();
+        let input = images::raster_from_data(&input_info, Data::new_copy(&bytes), row_bytes)
             .ok_or(SkiaObjectError::InvalidPixelPayload)?;
         let working_info =
             working_info(extent).map_err(|_| SkiaObjectError::InvalidWorkingPayload)?;

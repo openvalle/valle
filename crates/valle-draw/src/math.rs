@@ -11,6 +11,21 @@ pub fn sqrt(value: f64) -> f64 {
 }
 
 #[inline]
+pub fn cbrt(value: f64) -> f64 {
+    libm::cbrt(value)
+}
+
+#[inline]
+pub fn hypot(x: f64, y: f64) -> f64 {
+    libm::hypot(x, y)
+}
+
+#[inline]
+pub fn hypot_f32(x: f32, y: f32) -> f32 {
+    libm::hypotf(x, y)
+}
+
+#[inline]
 pub fn sin(value: f64) -> f64 {
     libm::sin(value)
 }
@@ -26,8 +41,21 @@ pub fn sin_cos(value: f64) -> (f64, f64) {
 }
 
 #[inline]
+pub fn sin_cos_f32(value: f32) -> (f32, f32) {
+    // Evaluate the f32 input with the pinned f64 routine and round once on output.
+    let (sin, cos) = libm::sincos(f64::from(value));
+    (sin as f32, cos as f32)
+}
+
+#[inline]
 pub fn tan(value: f64) -> f64 {
     libm::tan(value)
+}
+
+#[inline]
+pub fn tan_f32(value: f32) -> f32 {
+    // Match sin_cos_f32's single, deterministic f32 rounding step.
+    libm::tan(f64::from(value)) as f32
 }
 
 #[inline]
@@ -114,6 +142,24 @@ pub fn determinism_corpus() -> DeterminismCorpus {
 
     let mut samples = Vec::new();
     unary(
+        "cbrt",
+        &[-1.0, -0.1, -0.0, 0.0, 0.1, 1.0, 1e-300, 1e300],
+        cbrt,
+        &mut samples,
+    );
+    binary(
+        "hypot",
+        &[
+            (0.0, 0.0),
+            (3.0, 4.0),
+            (0.1, -0.3),
+            (1e-300, 1e-300),
+            (1e300, 1e300),
+        ],
+        hypot,
+        &mut samples,
+    );
+    unary(
         "sqrt",
         &[0.0, -0.0, 0.5, 2.0, 1e-300, 1e300],
         sqrt,
@@ -162,6 +208,9 @@ pub fn determinism_corpus() -> DeterminismCorpus {
 
     DeterminismCorpus {
         engine: ENGINE_ID,
-        samples,
+        samples: {
+            samples.extend(crate::program::gradient_determinism_samples());
+            samples
+        },
     }
 }

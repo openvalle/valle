@@ -135,7 +135,7 @@ fn typed_gradient_paints_are_shared_with_hosts() {
     assert!(point.contains("expr: ExprId"), "{point}");
 
     let color = decl::<ColorValue>();
-    assert!(color.contains("value: string"), "{color}");
+    assert!(color.contains("value: AuthorColor"), "{color}");
     assert!(color.contains("expr: ExprId"), "{color}");
 
     let stop = decl::<GradientStopValue>();

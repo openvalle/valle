@@ -15,9 +15,9 @@ use crate::requirements::{
 use crate::{Rect, program::recording};
 
 use super::{
-    Affine2d, BackdropRead, BackdropScope, BatchGeometry, BatchInstance, BlendMode, Clip,
-    DrawProgram, DrawProgramBuilder, DrawProgramError, FillRule, Filter, GeometryBatchNode, Glyph,
-    GlyphRun, Group, ImageNode, LinearColor, Mask, MaskMode, Node, NodeId, Paint, PaintId,
+    Affine2d, BackdropRead, BackdropScope, BlendMode, Clip, DrawProgram, DrawProgramBuilder,
+    DrawProgramError, FillRule, Filter, Glyph, GlyphRun, Group, ImageNode, InstanceBatchNode,
+    InstanceColumns, InstanceShape, LinearColor, Mask, MaskMode, Node, NodeId, Paint, PaintId,
     PathData, PathId, PathNode, PathStroke, RoundRect, Scene3dNode, ShaderLayer,
     ShaderTextureBinding, ShaderUniformBinding, ShaderUniformValue, ShadowNode, SpreadMode,
     StrokeCap, StrokeJoin, Transform2d,
@@ -54,6 +54,124 @@ pub fn compile_recording(
         .validate()
         .map_err(|error| ProgramRecordingError::InvalidRecording(format!("{error:?}")))?;
     RecordingCompiler::new(viewport, recording, None).compile()
+}
+
+pub(super) fn instance_transform(
+    geometry: recording::BatchGeometry,
+    instance: &recording::BatchInstance,
+) -> Affine2d {
+    let x = instance.position.x as f32;
+    let y = instance.position.y as f32;
+    let width = instance.size.x as f32;
+    let height = instance.size.y as f32;
+    if instance.skew_x != 0.0 {
+        if geometry == recording::BatchGeometry::Path {
+            // CSS independent transforms compose as rotate × scale × transform. Keep each
+            // multiplication in f32 so the shared path matches an expanded CSS Path exactly.
+            let rotation = instance.rotation.rem_euclid(360.0);
+            let (sin, cos) = crate::math::sin_cos_f32(rotation.to_radians());
+            let skew = crate::math::tan_f32(instance.skew_x.rem_euclid(360.0).to_radians());
+            let (a, b, c, d) = (cos * width, sin * width, -sin * height, cos * height);
+            return Affine2d([
+                f64::from(a),
+                f64::from(b),
+                f64::from(a * skew + c),
+                f64::from(b * skew + d),
+                f64::from(x),
+                f64::from(y),
+            ]);
+        }
+        let angle = f64::from((instance.rotation % 360.0) as f32).to_radians();
+        let (sin, cos) = crate::math::sin_cos(angle);
+        let (skew_sin, skew_cos) = crate::math::sin_cos(f64::from(instance.skew_x).to_radians());
+        let (sin, cos, skew) = (sin as f32, cos as f32, (skew_sin / skew_cos) as f32);
+        let (sx, sy) = if geometry == recording::BatchGeometry::Circle {
+            let radius = width.min(height) * 0.5;
+            (radius, radius)
+        } else {
+            (width, height)
+        };
+        // R(rotation) × K(skewX) × S(size). Rects keep the authored box center fixed.
+        let (a, b, c, d) = (
+            cos * sx,
+            sin * sx,
+            (cos * skew - sin) * sy,
+            (sin * skew + cos) * sy,
+        );
+        let (tx, ty) = if matches!(
+            geometry,
+            recording::BatchGeometry::Rect | recording::BatchGeometry::Image
+        ) {
+            (
+                x + width * 0.5 - (a + c) * 0.5,
+                y + height * 0.5 - (b + d) * 0.5,
+            )
+        } else {
+            (x, y)
+        };
+        return Affine2d([a as f64, b as f64, c as f64, d as f64, tx as f64, ty as f64]);
+    }
+    if geometry == recording::BatchGeometry::Circle {
+        let radius = width.min(height) * 0.5;
+        return Affine2d([
+            f64::from(radius),
+            0.0,
+            0.0,
+            f64::from(radius),
+            f64::from(x),
+            f64::from(y),
+        ]);
+    }
+    let rotation = if geometry == recording::BatchGeometry::Path {
+        // CSS Path nodes resolve their Angle and affine composition in f32. Match that route
+        // before composing the per-row scale, including its positive modulo for negative angles.
+        instance.rotation.rem_euclid(360.0)
+    } else {
+        instance.rotation % 360.0
+    };
+    if rotation == 0.0 {
+        return Affine2d([
+            f64::from(width),
+            0.0,
+            0.0,
+            f64::from(height),
+            f64::from(x),
+            f64::from(y),
+        ]);
+    }
+    let (sin, cos) = if geometry == recording::BatchGeometry::Path {
+        crate::math::sin_cos_f32(rotation.to_radians())
+    } else {
+        let (sin, cos) = crate::math::sin_cos(f64::from(rotation).to_radians());
+        (sin as f32, cos as f32)
+    };
+    if matches!(
+        geometry,
+        recording::BatchGeometry::Rect | recording::BatchGeometry::Image
+    ) {
+        // Match the CSS box's f32 center rotation before scaling its unit-square basis.
+        let half_width = width * 0.5;
+        let half_height = height * 0.5;
+        let tx = (cos * -half_width + -sin * -half_height + half_width) + x;
+        let ty = (sin * -half_width + cos * -half_height + half_height) + y;
+        Affine2d([
+            f64::from(cos * width),
+            f64::from(sin * width),
+            f64::from(-sin * height),
+            f64::from(cos * height),
+            f64::from(tx),
+            f64::from(ty),
+        ])
+    } else {
+        Affine2d([
+            f64::from(cos * width),
+            f64::from(sin * width),
+            f64::from(-sin * height),
+            f64::from(cos * height),
+            f64::from(x),
+            f64::from(y),
+        ])
+    }
 }
 
 /// Interpreted display-content dimensions used to resolve CSS object-fit before DrawProgram is
@@ -138,6 +256,8 @@ fn merge_recording_groups(outer: &Group, inner: &Group) -> Option<Group> {
 struct RecordingFrame {
     group: Group,
     alpha_mask: bool,
+    subtree_mask: Option<(MaskMode, Rect)>,
+    mask_source: bool,
 }
 
 struct RecordingCompiler<'a> {
@@ -192,9 +312,29 @@ impl<'a> RecordingCompiler<'a> {
         use recording::RecordCmd;
         match command {
             RecordCmd::BeginGroup => self.begin(Group::plain(Vec::new())),
+            RecordCmd::BeginTransition {
+                kind,
+                params,
+                progress,
+                bounds,
+            } => {
+                let mut group = Group::plain(Vec::new());
+                group.isolated = true;
+                group.transition = Some(super::TransitionLayer {
+                    kind: *kind,
+                    params: *params,
+                    progress: *progress,
+                    bounds: *bounds,
+                });
+                self.begin(group);
+            }
             RecordCmd::BeginAlphaMask => {
                 self.begin(Group::plain(Vec::new()));
                 self.stack.last_mut().unwrap().alpha_mask = true;
+            }
+            RecordCmd::BeginMaskSource => {
+                self.begin(Group::plain(Vec::new()));
+                self.stack.last_mut().unwrap().mask_source = true;
             }
             RecordCmd::BeginTransform { transform } => {
                 let mut group = Group::plain(Vec::new());
@@ -237,21 +377,27 @@ impl<'a> RecordingCompiler<'a> {
                 group.isolated = true;
                 self.begin(group);
             }
-            RecordCmd::BeginBlend { mode } => {
+            RecordCmd::BeginBlend { mode, space } => {
                 let mut group = Group::plain(Vec::new());
-                group.internal_blend = blend_mode(*mode)?;
+                group.internal_blend = blend_mode(*mode);
+                group.blend_space = *space;
                 self.begin(group);
             }
             RecordCmd::BeginMask { source, mode, rect } => {
+                let mode = match mode {
+                    recording::MaskMode::Alpha => MaskMode::Alpha,
+                    recording::MaskMode::Luminance => MaskMode::Luminance,
+                    recording::MaskMode::AlphaInverted => MaskMode::AlphaInverted,
+                    recording::MaskMode::LuminanceInverted => MaskMode::LuminanceInverted,
+                };
+                if matches!(source, recording::MaskSource::Subtree) {
+                    self.begin(Group::plain(Vec::new()));
+                    self.stack.last_mut().unwrap().subtree_mask = Some((mode, *rect));
+                    return Ok(());
+                }
                 let source = self.mask_source(command_index, source, *rect)?;
                 let mut group = Group::plain(Vec::new());
-                group.mask = Some(Mask {
-                    source,
-                    mode: match mode {
-                        recording::MaskMode::Alpha => MaskMode::Alpha,
-                        recording::MaskMode::Luminance => MaskMode::Luminance,
-                    },
-                });
+                group.mask = Some(Mask { source, mode });
                 self.begin(group);
             }
             RecordCmd::BeginFilter { filters, bounds } => {
@@ -380,32 +526,83 @@ impl<'a> RecordingCompiler<'a> {
             }
             RecordCmd::GeometryBatch {
                 geometry,
+                path,
+                atlas,
                 instances,
+                stroke_colors,
+                dash_offsets,
+                path_style,
             } => {
-                let instances = self
-                    .source
-                    .batch_instances
-                    .get(instances.range())
-                    .ok_or(ProgramRecordingError::InvalidReference {
+                let source_instances = self.source.batch_instances.get(instances.range()).ok_or(
+                    ProgramRecordingError::InvalidReference {
                         command: command_index,
                         table: "batchInstances",
                         index: instances.start,
-                    })?
-                    .iter()
-                    .map(|instance| BatchInstance {
-                        position: [instance.position.x, instance.position.y],
-                        size: [instance.size.x, instance.size.y],
-                        color: LinearColor::from_srgb8(instance.color),
-                    })
-                    .collect();
+                    },
+                )?;
+                let path = path
+                    .map(|path| self.path(command_index, path))
+                    .transpose()?;
+                let shape = match geometry {
+                    recording::BatchGeometry::Circle => InstanceShape::Circle,
+                    recording::BatchGeometry::Rect => InstanceShape::Rect,
+                    recording::BatchGeometry::Path => InstanceShape::Path(path.ok_or(
+                        ProgramRecordingError::InvalidReference {
+                            command: command_index,
+                            table: "paths",
+                            index: 0,
+                        },
+                    )?),
+                    recording::BatchGeometry::Image => {
+                        let atlas = atlas.ok_or(ProgramRecordingError::InvalidReference {
+                            command: command_index,
+                            table: "images",
+                            index: 0,
+                        })?;
+                        InstanceShape::Image(super::AtlasRegion {
+                            texture: self.image_texture(command_index, atlas.image)?,
+                            src: atlas.src,
+                            sampling: SamplingMode::LinearClamp,
+                        })
+                    }
+                };
+                let mut columns = InstanceColumns::with_capacity(source_instances.len());
+                if let Some(colors) = stroke_colors {
+                    columns.stroke_colors.extend_from_slice(
+                        self.source.batch_stroke_colors.get(colors.range()).ok_or(
+                            ProgramRecordingError::InvalidReference {
+                                command: command_index,
+                                table: "batchStrokeColors",
+                                index: colors.start,
+                            },
+                        )?,
+                    );
+                }
+                if let Some(offsets) = dash_offsets {
+                    columns.dash_offsets.extend_from_slice(
+                        self.source.batch_dash_offsets.get(offsets.range()).ok_or(
+                            ProgramRecordingError::InvalidReference {
+                                command: command_index,
+                                table: "batchDashOffsets",
+                                index: offsets.start,
+                            },
+                        )?,
+                    );
+                }
+                for instance in source_instances {
+                    columns
+                        .transforms
+                        .push(instance_transform(*geometry, instance));
+                    columns.colors.push(instance.color);
+                    columns.opacities.push(instance.opacity);
+                    columns.stroke_widths.push(instance.stroke_width);
+                }
                 let node = self
                     .builder
-                    .push_node(Node::GeometryBatch(GeometryBatchNode {
-                        geometry: match geometry {
-                            recording::BatchGeometry::Circle => BatchGeometry::Circle,
-                            recording::BatchGeometry::Rect => BatchGeometry::Rect,
-                        },
-                        instances,
+                    .push_node(Node::InstanceBatch(InstanceBatchNode {
+                        shape,
+                        instances: columns,
+                        path_style: path_style.clone(),
                     }));
                 self.push_node(node);
             }
@@ -610,6 +807,8 @@ impl<'a> RecordingCompiler<'a> {
         self.stack.push(RecordingFrame {
             group,
             alpha_mask: false,
+            subtree_mask: None,
+            mask_source: false,
         });
     }
 
@@ -629,6 +828,37 @@ impl<'a> RecordingCompiler<'a> {
                 source,
                 mode: MaskMode::Alpha,
             });
+        }
+        if let Some((mode, _)) = frame.subtree_mask
+            && frame.group.mask.is_none()
+        {
+            // A source removed by display:none is transparent, never an unmasked passthrough.
+            let source = self
+                .builder
+                .push_node(Node::Group(Group::plain(Vec::new())));
+            frame.group.mask = Some(Mask { source, mode });
+        }
+        if frame.mask_source {
+            let owner = self
+                .stack
+                .iter_mut()
+                .rev()
+                .find(|frame| frame.subtree_mask.is_some())
+                .ok_or_else(|| {
+                    ProgramRecordingError::InvalidRecording(
+                        "mask source has no enclosing subtree mask".into(),
+                    )
+                })?;
+            if owner.group.mask.is_some() {
+                return Err(ProgramRecordingError::InvalidRecording(
+                    "subtree mask has more than one source".into(),
+                ));
+            }
+            let (mode, rect) = owner.subtree_mask.unwrap();
+            frame.group.clip = Some(Clip::Rect(rect));
+            let source = self.builder.push_node(Node::Group(frame.group));
+            owner.group.mask = Some(Mask { source, mode });
+            return Ok(());
         }
         // Fold construction wrappers only when the child is the sole, last-owned node.
         // Destination-reading subtrees retain every scope boundary.
@@ -785,6 +1015,9 @@ impl<'a> RecordingCompiler<'a> {
         rect: Rect,
     ) -> Result<NodeId, ProgramRecordingError> {
         match source {
+            recording::MaskSource::Subtree => Err(ProgramRecordingError::InvalidRecording(
+                "subtree mask requires a structured source group".into(),
+            )),
             recording::MaskSource::Image { image } => {
                 let node = self.builder.push_node(Node::Image(ImageNode {
                     texture: self.image_texture(command, *image)?,
@@ -839,8 +1072,8 @@ fn round_rect(value: recording::RoundRect) -> RoundRect {
     }
 }
 
-fn blend_mode(value: recording::BlendMode) -> Result<BlendMode, ProgramRecordingError> {
-    Ok(match value {
+fn blend_mode(value: recording::BlendMode) -> BlendMode {
+    match value {
         recording::BlendMode::Normal => BlendMode::Normal,
         recording::BlendMode::Multiply => BlendMode::Multiply,
         recording::BlendMode::Screen => BlendMode::Screen,
@@ -857,12 +1090,8 @@ fn blend_mode(value: recording::BlendMode) -> Result<BlendMode, ProgramRecording
         recording::BlendMode::Saturation => BlendMode::Saturation,
         recording::BlendMode::Color => BlendMode::Color,
         recording::BlendMode::Luminosity => BlendMode::Luminosity,
-        recording::BlendMode::DestinationIn => {
-            return Err(ProgramRecordingError::InvalidRecording(
-                "destination-in is only legal inside a structured mask".into(),
-            ));
-        }
-    })
+        recording::BlendMode::Plus => BlendMode::Plus,
+    }
 }
 
 fn filter_of(value: recording::FilterOp) -> Filter {
@@ -906,6 +1135,48 @@ fn filter_of(value: recording::FilterOp) -> Filter {
             sigma_y: sigma as f32,
             color: LinearColor::from_srgb8(color),
         },
+        recording::FilterOp::Glow {
+            color,
+            radius,
+            intensity,
+        } => Filter::Glow {
+            color,
+            radius: radius as f32,
+            intensity: intensity as f32,
+        },
+        recording::FilterOp::Bloom {
+            threshold,
+            knee,
+            intensity,
+            radius,
+        } => Filter::Bloom {
+            threshold: threshold as f32,
+            knee: knee as f32,
+            intensity: intensity as f32,
+            radius: radius as f32,
+        },
+        recording::FilterOp::RadialBlur {
+            center_x,
+            center_y,
+            amount,
+        } => Filter::RadialBlur {
+            center: [center_x as f32, center_y as f32],
+            amount: amount as f32,
+        },
+        recording::FilterOp::FilmGrain { seed, amount, size } => Filter::FilmGrain {
+            seed,
+            amount: amount as f32,
+            size: size as f32,
+        },
+        recording::FilterOp::LensDistortion { k1, k2 } => Filter::LensDistortion {
+            k1: k1 as f32,
+            k2: k2 as f32,
+        },
+        recording::FilterOp::ChromaticAberration { offset_x, offset_y } => {
+            Filter::ChromaticAberration {
+                offset: [offset_x as f32, offset_y as f32],
+            }
+        }
         recording::FilterOp::NoiseDisplacement {
             frequency_x,
             frequency_y,
@@ -950,13 +1221,24 @@ fn recording_filter_footprint(filter: &Filter) -> Insets {
             (3.0 * *sigma_x + offset[0]).max(0.0),
             (3.0 * *sigma_y + offset[1]).max(0.0),
         ),
+        Filter::Glow { radius, .. } => Insets::uniform(5.0 * *radius + 1.0),
+        Filter::Bloom { radius, .. } => Insets::uniform(4.0 * *radius + 1.0),
+        Filter::RadialBlur { amount, .. } => Insets::uniform(*amount + 1.0),
+        Filter::FilmGrain { .. } => Insets::default(),
+        Filter::LensDistortion { .. } => Insets::default(),
         Filter::NoiseDisplacement { scale, .. } => Insets::uniform(*scale),
+        Filter::ChromaticAberration { offset } => Insets::new(
+            offset[0].abs() * 0.5 + 1.0,
+            offset[1].abs() * 0.5 + 1.0,
+            offset[0].abs() * 0.5 + 1.0,
+            offset[1].abs() * 0.5 + 1.0,
+        ),
         Filter::VelocityBlur {
             velocity,
             shutter_angle_degrees,
         } => {
             let scale = *shutter_angle_degrees / 360.0;
-            // Executors use a centered directional Gaussian, so support grows on both sides.
+            // Executors sample shutter positions around the center, so support grows on both sides.
             let dx = velocity[0].abs() * scale;
             let dy = velocity[1].abs() * scale;
             Insets::new(dx, dy, dx, dy)
@@ -970,7 +1252,7 @@ fn paint_of(
     command: usize,
     paint: &recording::Paint,
 ) -> Result<Paint, ProgramRecordingError> {
-    let stops = |span: crate::Span, opacity: f32| {
+    let stops = |span: crate::Span, opacity: f32, interpolation| {
         source
             .gradient_stops
             .get(span.range())
@@ -979,28 +1261,32 @@ fn paint_of(
                 table: "gradientStops",
                 index: span.start,
             })
-            .map(|stops| {
-                stops
-                    .iter()
-                    .map(|stop| super::GradientStop {
-                        offset: stop.offset as f32,
-                        color: LinearColor::from_srgb8(stop.color).scale_opacity(opacity),
-                    })
-                    .collect::<Vec<_>>()
+            .and_then(|stops| {
+                super::interpolation::lower_stops(stops, interpolation, opacity)
+                    .map_err(|reason| ProgramRecordingError::InvalidRecording(reason.into()))
             })
     };
     Ok(match paint {
         recording::Paint::Solid(color) => Paint::Solid(LinearColor::from_srgb8(*color)),
+        recording::Paint::FloatSolid(color) => Paint::Solid(*color),
         recording::Paint::Linear(gradient) => Paint::LinearGradient {
             start: [gradient.start.x, gradient.start.y],
             end: [gradient.end.x, gradient.end.y],
-            stops: stops(gradient.stops, gradient.alpha as f32)?,
+            stops: stops(
+                gradient.stops,
+                gradient.alpha as f32,
+                gradient.interpolation,
+            )?,
             spread: spread_mode(gradient.spread),
         },
         recording::Paint::Radial(gradient) => Paint::RadialGradient {
             center: [gradient.center.x, gradient.center.y],
             radii: [gradient.radii.x, gradient.radii.y],
-            stops: stops(gradient.stops, gradient.alpha as f32)?,
+            stops: stops(
+                gradient.stops,
+                gradient.alpha as f32,
+                gradient.interpolation,
+            )?,
             spread: spread_mode(gradient.spread),
         },
         recording::Paint::TwoCircle(g) => Paint::TwoCircleGradient {
@@ -1008,14 +1294,18 @@ fn paint_of(
             start_radius: g.start_radius,
             end: [g.end.x, g.end.y],
             end_radius: g.end_radius,
-            stops: stops(g.stops, g.alpha as f32)?,
+            stops: stops(g.stops, g.alpha as f32, g.interpolation)?,
             spread: spread_mode(g.spread),
         },
         recording::Paint::Conic(gradient) => Paint::ConicGradient {
             center: [gradient.center.x, gradient.center.y],
             start_angle_degrees: gradient.start_angle,
             sweep_angle_degrees: gradient.sweep_angle,
-            stops: stops(gradient.stops, gradient.alpha as f32)?,
+            stops: stops(
+                gradient.stops,
+                gradient.alpha as f32,
+                gradient.interpolation,
+            )?,
             spread: spread_mode(gradient.spread),
         },
     })
@@ -1138,6 +1428,41 @@ fn rect_path(rect: Rect) -> PathData {
 mod tests {
     use super::{ProgramRecordingError, font_key};
     use crate::program::recording::FontFace;
+
+    #[test]
+    fn subtree_mask_sources_reject_orphans_and_duplicates() {
+        use crate::program::{
+            compile_recording,
+            recording::{MaskMode, MaskSource, ProgramRecording, RecordCmd},
+        };
+        let bounds = crate::Rect::new(0.0, 0.0, 64.0, 64.0);
+        let mut orphan = ProgramRecording::new();
+        orphan.push(RecordCmd::BeginMaskSource);
+        orphan.push(RecordCmd::End);
+        assert!(
+            compile_recording(bounds, &orphan)
+                .unwrap_err()
+                .to_string()
+                .contains("no enclosing")
+        );
+        let mut duplicate = ProgramRecording::new();
+        duplicate.push(RecordCmd::BeginMask {
+            source: MaskSource::Subtree,
+            mode: MaskMode::Alpha,
+            rect: bounds,
+        });
+        for _ in 0..2 {
+            duplicate.push(RecordCmd::BeginMaskSource);
+            duplicate.push(RecordCmd::End);
+        }
+        duplicate.push(RecordCmd::End);
+        assert!(
+            compile_recording(bounds, &duplicate)
+                .unwrap_err()
+                .to_string()
+                .contains("more than one source")
+        );
+    }
 
     #[test]
     fn nested_transform_opacity_clip_wrappers_use_one_group_per_author_layer() {

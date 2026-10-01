@@ -9,7 +9,11 @@ use std::{
 
 use anyhow::{Context, Result, anyhow};
 use valle_engine::render::{CompiledAudioItem, CompiledRender, FrameKey};
-use valle_media::{SharedVideoFrame, SharedVideoFramePool, codec::Muxer, frame::RgbaFrame};
+use valle_media::{
+    SharedVideoFrame, SharedVideoFramePool,
+    codec::{Muxer, TransparentVideoMuxer},
+    frame::RgbaFrame,
+};
 
 use super::{CompiledAudioMixer, FrameEvidence, NativeResourceCatalog};
 
@@ -79,6 +83,7 @@ pub struct StoryboardSink {
     columns: u32,
     cell_width: u32,
     cell_height: u32,
+    cells: usize,
     canvas: RgbaFrame,
 }
 
@@ -90,38 +95,105 @@ impl StoryboardSink {
         cell_width: u32,
         cell_height: u32,
     ) -> Result<Self> {
-        let columns = columns.max(1);
-        let cells = u32::try_from(cells).map_err(|_| anyhow!("too many storyboard cells"))?;
-        let rows = cells.div_ceil(columns).max(1);
+        if columns == 0 || cells == 0 || cell_width == 0 || cell_height == 0 {
+            return Err(anyhow!(
+                "storyboard needs non-empty cells and positive columns"
+            ));
+        }
+        let rows = u32::try_from(cells)
+            .map_err(|_| anyhow!("too many storyboard cells"))?
+            .div_ceil(columns);
         let width = cell_width
             .checked_mul(columns)
             .ok_or_else(|| anyhow!("storyboard width overflow"))?;
         let height = cell_height
             .checked_mul(rows)
             .ok_or_else(|| anyhow!("storyboard height overflow"))?;
+        // A contact sheet is assembled in memory. Bound the allocation and all u32 row indices;
+        // authors can reduce cell size with --output-size or select fewer frames.
+        let bytes = u64::from(width)
+            .checked_mul(u64::from(height))
+            .and_then(|pixels| pixels.checked_mul(4));
+        if bytes.is_none_or(|bytes| bytes > 512 * 1024 * 1024) {
+            return Err(anyhow!(
+                "storyboard exceeds 512 MiB; select fewer frames or reduce --output-size"
+            ));
+        }
         Ok(Self {
             path: path.into(),
             columns,
             cell_width,
             cell_height,
-            canvas: RgbaFrame::opaque_black(width, height),
+            cells,
+            canvas: RgbaFrame::new(width, height),
         })
     }
 }
 
 impl FrameSink for StoryboardSink {
     fn push(&mut self, frame: DeliveredFrame<'_>) -> Result<()> {
+        if frame.sequence >= self.cells {
+            return Err(anyhow!("storyboard frame exceeds its cell count"));
+        }
         let fitted = contain_rgba(frame.pixels, self.cell_width, self.cell_height)?;
         let sequence = u32::try_from(frame.sequence)
             .map_err(|_| anyhow!("storyboard sequence does not fit u32"))?;
         let x = (sequence % self.columns) * self.cell_width;
         let y = (sequence / self.columns) * self.cell_height;
-        source_over(&mut self.canvas, &fitted, x, y);
+        // Cells do not overlap. Copy straight RGBA verbatim so a sheet cell is exactly the
+        // corresponding standalone PNG, including transparent and partially covered pixels.
+        for row in 0..fitted.height {
+            let source = (row * fitted.width * 4) as usize;
+            let destination = (((y + row) * self.canvas.width + x) * 4) as usize;
+            let length = (fitted.width * 4) as usize;
+            self.canvas.data[destination..destination + length]
+                .copy_from_slice(&fitted.data[source..source + length]);
+        }
         Ok(())
     }
 
     fn finish(&mut self) -> Result<()> {
         write_png(&self.path, &self.canvas)
+    }
+}
+
+/// Save each frame immediately and optionally copy the same pixels to a contact sheet.
+pub(super) struct PngFramesSink {
+    pub paths: Vec<PathBuf>,
+    pub storyboard: Option<StoryboardSink>,
+}
+
+impl FrameSink for PngFramesSink {
+    fn push(&mut self, frame: DeliveredFrame<'_>) -> Result<()> {
+        if !self.paths.is_empty() {
+            let path = self
+                .paths
+                .get(frame.sequence)
+                .context("PNG frame has no output path")?;
+            write_png(path, frame.pixels)?;
+        }
+        if let Some(storyboard) = &mut self.storyboard {
+            storyboard.push(frame)?;
+        }
+        Ok(())
+    }
+
+    fn finish(&mut self) -> Result<()> {
+        if let Some(storyboard) = &mut self.storyboard {
+            storyboard.finish()?;
+        }
+        Ok(())
+    }
+}
+
+pub(super) struct TransparentVideoSink(pub TransparentVideoMuxer);
+
+impl FrameSink for TransparentVideoSink {
+    fn push(&mut self, frame: DeliveredFrame<'_>) -> Result<()> {
+        self.0.encode_video(frame.pixels)
+    }
+    fn finish(&mut self) -> Result<()> {
+        self.0.finish()
     }
 }
 
@@ -269,32 +341,4 @@ fn contain_rgba(source: &RgbaFrame, width: u32, height: u32) -> Result<RgbaFrame
         }
     }
     Ok(output)
-}
-
-fn source_over(destination: &mut RgbaFrame, source: &RgbaFrame, x: u32, y: u32) {
-    for source_y in 0..source.height {
-        let destination_y = y + source_y;
-        if destination_y >= destination.height {
-            break;
-        }
-        for source_x in 0..source.width {
-            let destination_x = x + source_x;
-            if destination_x >= destination.width {
-                break;
-            }
-            let source_index = ((source_y * source.width + source_x) * 4) as usize;
-            let destination_index =
-                ((destination_y * destination.width + destination_x) * 4) as usize;
-            let alpha = u32::from(source.data[source_index + 3]);
-            let inverse = 255 - alpha;
-            for channel in 0..3 {
-                destination.data[destination_index + channel] =
-                    ((u32::from(source.data[source_index + channel]) * alpha
-                        + u32::from(destination.data[destination_index + channel]) * inverse
-                        + 127)
-                        / 255) as u8;
-            }
-            destination.data[destination_index + 3] = 255;
-        }
-    }
 }

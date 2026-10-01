@@ -68,6 +68,11 @@ fn snapshots(source: &str, frames: &[u32]) -> Vec<(BTreeMap<String, [f32; 4]>, V
 #[test]
 fn arbitrary_properties_share_css_geometry_paint_and_transform_semantics() {
     for (class, property, value) in [
+        (
+            "[background-image:linear-gradient(in_oklab,red,blue)]",
+            "backgroundImage",
+            "linear-gradient(in oklab,red,blue)",
+        ),
         ("[width:123px]", "width", "123px"),
         ("[width:calc(100%-20px)]", "width", "calc(100% - 20px)"),
         ("[padding:3px_7px]", "padding", "3px 7px"),
@@ -213,7 +218,7 @@ fn arbitrary_values_cannot_bypass_shared_admission_in_unselected_branches_or_art
         "[font-family:'broken]",
         "[grid-template-columns:1fr_nonsense]",
         "[background-image:url(https://example.com/a_b.png)]",
-        "[background-image:linear-gradient(in_oklab,red,blue)]",
+        "[background-image:linear-gradient(in_lab,red,blue)]",
         "[background-image:linear-gradient(red,blue),url(a.png)]",
         "[filter:blur(-2px)]",
         "[motion-transform-3d-scale-x:2]",

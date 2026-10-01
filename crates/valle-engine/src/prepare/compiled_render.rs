@@ -8,7 +8,8 @@ use std::f64::consts::PI;
 use valle_draw::{
     Rect, Rgba,
     program::{
-        BatchGeometry, BatchInstance, DrawProgramBuilder, GeometryBatchNode, LinearColor, Node,
+        Affine2d, DrawProgramBuilder, InstanceBatchNode, InstanceColumns, InstanceShape,
+        LinearColor, Node,
     },
 };
 
@@ -204,7 +205,10 @@ fn prepare_transition(
     state: &mut PrepareState<'_>,
 ) -> Result<PreparedTransition, PrepareError> {
     let kernel = match transition.kernel() {
-        CompiledTransitionKernel::CrossFade => PreparedTransitionKernel::Fade,
+        CompiledTransitionKernel::Builtin { kind, params } => PreparedTransitionKernel::Builtin {
+            kind: *kind,
+            params: *params,
+        },
         CompiledTransitionKernel::Extension { call } => {
             let descriptor = render.admitted_kernel(call.kernel_index()).ok_or_else(|| {
                 PrepareError::at(format!("{path}.kernel"), "missing admitted kernel")
@@ -297,13 +301,22 @@ fn prepare_endpoint(
                 f64::from(viewport.width()),
                 f64::from(viewport.height()),
             ));
-            let root = builder.push_node(Node::GeometryBatch(GeometryBatchNode {
-                geometry: BatchGeometry::Rect,
-                instances: vec![BatchInstance {
-                    position: [0.0, 0.0],
-                    size: [f64::from(viewport.width()), f64::from(viewport.height())],
-                    color: LinearColor::from_srgb8(Rgba::new(rgba[0], rgba[1], rgba[2], rgba[3])),
-                }],
+            let root = builder.push_node(Node::InstanceBatch(InstanceBatchNode {
+                shape: InstanceShape::Rect,
+                instances: InstanceColumns {
+                    transforms: vec![Affine2d::scale(
+                        f64::from(viewport.width()),
+                        f64::from(viewport.height()),
+                    )],
+                    colors: vec![LinearColor::from_srgb8(Rgba::new(
+                        rgba[0], rgba[1], rgba[2], rgba[3],
+                    ))],
+                    stroke_colors: Vec::new(),
+                    dash_offsets: Vec::new(),
+                    opacities: vec![1.0],
+                    stroke_widths: vec![0.0],
+                },
+                path_style: None,
             }));
             builder.add_root(root);
             let fixture = motion::FixtureProgram::new(
@@ -422,7 +435,7 @@ fn prepare_endpoint(
                         .rsplit('/')
                         .next()
                         .is_some_and(|role| role.starts_with("font:"));
-                    (*resource.digest(), bytes.as_ref(), generic)
+                    (*resource.digest(), bytes.clone(), generic)
                 })
                 .collect();
             let fonts = state
@@ -455,6 +468,42 @@ fn prepare_endpoint(
                     model_resources: &model_resources,
                 })
                 .map_err(|error| PrepareError::at(format!("{path}.motion"), error))?;
+            let used: std::collections::BTreeSet<_> = built
+                .scene3d_frames
+                .iter()
+                .flat_map(|frame| frame.resource_bindings.values().copied())
+                .collect();
+            for resource in source
+                .motion_resources()
+                .values()
+                .chain(source.motion_artifact_dependencies().iter())
+            {
+                if !used.contains(resource.digest()) {
+                    continue;
+                }
+                let bytes = match resource.facts() {
+                    VerifiedResourceFacts::Model3d { descriptor, .. } => {
+                        u64::from(descriptor.byte_length)
+                            + u64::from(descriptor.vertex_count)
+                                * std::mem::size_of::<valle_motion::scene3d::ModelVertex>() as u64
+                            + u64::from(descriptor.triangle_count) * 12
+                    }
+                    VerifiedResourceFacts::Environment { descriptor, .. } => {
+                        u64::from(descriptor.byte_length)
+                    }
+                    VerifiedResourceFacts::Image { descriptor, .. } => {
+                        // A full mip chain needs less than twice the base-level float RGBA bytes.
+                        u64::from(descriptor.width)
+                            .saturating_mul(u64::from(descriptor.height))
+                            .saturating_mul(32)
+                    }
+                    _ => 0,
+                };
+                state
+                    .requests
+                    .scene3d_asset(*resource.digest(), bytes, path)
+                    .map_err(|error| PrepareError::at(format!("{path}.motion.scene3d"), error))?;
+            }
             let mut fixture = motion::FixtureProgram::new(built.program);
             for frame in built.scene3d_frames {
                 fixture = fixture

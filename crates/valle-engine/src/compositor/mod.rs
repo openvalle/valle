@@ -12,7 +12,11 @@ pub use bind::{
     ExternalObjectTable, bind_external_objects,
 };
 
+pub mod bloom;
+pub mod film;
 pub mod glass;
 pub mod graph;
+pub mod lens;
 pub mod lower;
+pub mod radial;
 pub mod reference;

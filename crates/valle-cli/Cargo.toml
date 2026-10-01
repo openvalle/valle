@@ -33,6 +33,7 @@ valle-render = { workspace = true, features = ["native", "lottie"] }
 valle-project = { workspace = true, features = ["native"] }
 ttf-parser.workspace = true
 png.workspace = true
+image.workspace = true
 clap = { workspace = true, features = ["derive"] }
 ctrlc.workspace = true
 serde.workspace = true

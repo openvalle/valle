@@ -264,7 +264,7 @@ fn transition_filter_and_motion_footprints_form_one_serial_dependency_range() {
 
     assert_eq!(
         (transition.window().start(), transition.window().end()),
-        (3, 6)
+        (1, 4)
     );
     assert!(matches!(
         transition.kernel(),
@@ -275,7 +275,7 @@ fn transition_filter_and_motion_footprints_form_one_serial_dependency_range() {
 
     let expected_dependency_range = json!({
         "unit": "frames",
-        "range": {"start": -7, "end": 17}
+        "range": {"start": -9, "end": 15}
     });
     for source_index in [left.source_index(), right.source_index()] {
         let source = render.sources().source(source_index).unwrap();

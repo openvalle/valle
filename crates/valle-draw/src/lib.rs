@@ -16,6 +16,7 @@ pub mod program;
 pub mod requirements;
 pub mod space;
 pub mod text;
+pub mod transition;
 
 pub use anim::{ArcLength, flatten_curve};
 pub use camera::Camera;

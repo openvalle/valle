@@ -101,6 +101,8 @@ fn frame_for(cmd: &RecordCmd, list: &ProgramRecording) -> Option<Frame> {
             ..Frame::root()
         },
         RecordCmd::BeginGroup
+        | RecordCmd::BeginAlphaMask
+        | RecordCmd::BeginMaskSource
         | RecordCmd::BeginOpacity { .. }
         | RecordCmd::BeginClipRect { .. }
         | RecordCmd::BeginClipRoundRect { .. }
@@ -115,7 +117,8 @@ fn frame_for(cmd: &RecordCmd, list: &ProgramRecording) -> Option<Frame> {
 }
 
 /// Conservative filter-chain outset. Blur and shadows expand bounds; color-only filters do not. Add
-/// sequential filter outsets using a three-sigma Gaussian extent.
+/// sequential filter outsets using a three-sigma Gaussian extent and wider
+/// conservative support for the multilevel light pyramids.
 fn filter_growth(ops: &[FilterOp]) -> f64 {
     ops.iter()
         .map(|op| match op {
@@ -123,7 +126,15 @@ fn filter_growth(ops: &[FilterOp]) -> f64 {
             FilterOp::DropShadow { dx, dy, sigma, .. } => {
                 sigma.abs() * 3.0 + dx.abs().max(dy.abs())
             }
+            FilterOp::Glow { radius, .. } => radius * 5.0,
+            FilterOp::Bloom { radius, .. } => radius * 4.0,
+            FilterOp::RadialBlur { amount, .. } => *amount,
+            FilterOp::FilmGrain { .. } => 0.0,
+            FilterOp::LensDistortion { .. } => 0.0,
             FilterOp::NoiseDisplacement { scale, .. } => scale.abs(),
+            FilterOp::ChromaticAberration { offset_x, offset_y } => {
+                offset_x.abs().max(offset_y.abs()) * 0.5
+            }
             FilterOp::VelocityBlur {
                 velocity_x,
                 velocity_y,
@@ -188,25 +199,64 @@ fn leaf_bounds(cmd: &RecordCmd, list: &ProgramRecording) -> Option<Rect> {
         }
         RecordCmd::GeometryBatch {
             geometry,
+            path,
             instances,
-        } => list
-            .batch_instances
-            .get(instances.range())?
-            .iter()
-            .fold(None, |bbox, item| {
-                let rect = match geometry {
-                    crate::program::recording::BatchGeometry::Circle => Rect::new(
-                        item.position.x - item.size.x * 0.5,
-                        item.position.y - item.size.y * 0.5,
-                        item.size.x,
-                        item.size.y,
-                    ),
-                    crate::program::recording::BatchGeometry::Rect => {
-                        Rect::new(item.position.x, item.position.y, item.size.x, item.size.y)
-                    }
-                };
-                Some(bbox.map_or(rect, |current| union(current, rect)))
-            }),
+            path_style,
+            ..
+        } => {
+            let path_hull = path.and_then(|path| path_bounds(list, path));
+            list.batch_instances
+                .get(instances.range())?
+                .iter()
+                .fold(None, |bbox, item| {
+                    let rect = match geometry {
+                        crate::program::recording::BatchGeometry::Circle => Rect::new(
+                            item.position.x - item.size.x * 0.5,
+                            item.position.y - item.size.y * 0.5,
+                            item.size.x,
+                            item.size.y,
+                        ),
+                        crate::program::recording::BatchGeometry::Rect
+                        | crate::program::recording::BatchGeometry::Image => {
+                            let center_x = item.position.x + item.size.x * 0.5;
+                            let center_y = item.position.y + item.size.y * 0.5;
+                            let (sin, cos) =
+                                crate::math::sin_cos(f64::from(item.rotation % 360.0).to_radians());
+                            let width = cos.abs() * item.size.x + sin.abs() * item.size.y;
+                            let height = sin.abs() * item.size.x + cos.abs() * item.size.y;
+                            Rect::new(
+                                center_x - width * 0.5,
+                                center_y - height * 0.5,
+                                width,
+                                height,
+                            )
+                        }
+                        crate::program::recording::BatchGeometry::Path => {
+                            let hull = path_hull?;
+                            let join_scale =
+                                path_style.as_ref().map_or(4.0, |style| match style.join {
+                                    crate::program::StrokeJoin::Miter => style.miter_limit,
+                                    crate::program::StrokeJoin::Round
+                                    | crate::program::StrokeJoin::Bevel => 1.0,
+                                });
+                            let outset = f64::from(item.stroke_width * join_scale * 0.5);
+                            let expanded = Rect::new(
+                                hull.x - outset,
+                                hull.y - outset,
+                                hull.width + outset * 2.0,
+                                hull.height + outset * 2.0,
+                            );
+                            batch_path_bounds(
+                                expanded,
+                                item.position,
+                                item.size,
+                                f64::from(item.rotation),
+                            )
+                        }
+                    };
+                    Some(bbox.map_or(rect, |current| union(current, rect)))
+                })
+        }
         RecordCmd::Image { dst, .. } | RecordCmd::Texture { dst, .. } => Some(*dst),
         RecordCmd::Shadow {
             rrect,
@@ -248,6 +298,30 @@ fn path_bounds(list: &ProgramRecording, path: PathRef) -> Option<Rect> {
         return None;
     }
     Some(Rect::new(x0, y0, x1 - x0, y1 - y0))
+}
+
+fn batch_path_bounds(hull: Rect, position: Point, size: Point, rotation: f64) -> Rect {
+    let (sin, cos) = crate::math::sin_cos((rotation % 360.0).to_radians());
+    let mut left = f64::INFINITY;
+    let mut top = f64::INFINITY;
+    let mut right = f64::NEG_INFINITY;
+    let mut bottom = f64::NEG_INFINITY;
+    for (x, y) in [
+        (hull.x, hull.y),
+        (hull.x + hull.width, hull.y),
+        (hull.x, hull.y + hull.height),
+        (hull.x + hull.width, hull.y + hull.height),
+    ] {
+        let x = x * size.x;
+        let y = y * size.y;
+        let mapped_x = position.x + cos * x - sin * y;
+        let mapped_y = position.y + sin * x + cos * y;
+        left = left.min(mapped_x);
+        top = top.min(mapped_y);
+        right = right.max(mapped_x);
+        bottom = bottom.max(mapped_y);
+    }
+    Rect::new(left, top, right - left, bottom - top)
 }
 
 fn union(a: Rect, b: Rect) -> Rect {

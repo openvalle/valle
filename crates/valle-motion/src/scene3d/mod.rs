@@ -6,18 +6,21 @@ mod asset;
 mod environment;
 mod material;
 pub use material::*;
+mod procedural;
 mod raster;
 
 pub use asset::{
-    AdmittedModel, MaterialImage, ModelInstance, ModelMaterial, ModelMesh, ModelNode, ModelVertex,
-    PrimitiveRange, admit_glb,
+    AdmittedModel, MaterialImage, ModelAnimation, ModelInstance, ModelMaterial, ModelMesh,
+    ModelNode, ModelVertex, PrimitiveRange, admit_glb,
 };
 pub use environment::{EnvironmentAsset, EnvironmentSettings};
+pub use procedural::ProceduralGeometry;
 pub use raster::{
     AnchorProjection, BACKGROUND_NODE_ID, BACKGROUND_OBJECT_ID, CLEAR_DEPTH, PreparedScene,
     RasterFrame, Scene3DAnchorMetadata, Scene3DFrameMetadata, Scene3DObjectMetadata, Scene3DPick,
     ScenePrepareCacheKey, SceneResources, prepare_cache_key, prepare_scene, project_anchors,
-    render_scene, render_scene_reusing,
+    render_scene, render_scene_reusing, render_scene_reusing_with_workers,
+    render_scene_with_workers,
 };
 
 use std::collections::BTreeSet;
@@ -25,15 +28,26 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-pub const MAX_LAYER_EDGE: u32 = 2_048;
-pub const MAX_LAYER_PIXELS: u64 = 2_000_000;
-pub const MAX_FRAME_BUFFER_BYTES: u64 = MAX_LAYER_PIXELS * 10; // RGBA8 + u16 depth/object/node
-pub const MAX_MODEL_BYTES: u64 = 16 * 1024 * 1024;
-pub const MAX_VERTICES: u32 = 65_535;
-pub const MAX_TRIANGLES: u32 = 20_000;
+pub const MAX_LAYER_EDGE: u32 = 4_096;
+pub const MAX_LAYER_PIXELS: u64 = 8_388_608; // admits a 3840 x 2160 layer
+pub const MAX_FRAME_BUFFER_BYTES: u64 = MAX_LAYER_PIXELS * 20; // RGBA16F + f32 depth + u32 object/node
+/// Shared by all distinct Scene3D rasters in a prepared output frame, including shutter samples.
+pub const MAX_TOTAL_FRAME_PIXELS: u64 = 16_777_216;
+/// Frozen models plus mesh buffers, environments and decoded external texture mip storage.
+pub const MAX_TOTAL_FRAME_ASSET_BYTES: u64 = 256 * 1024 * 1024;
+pub const MAX_MODEL_BYTES: u64 = 64 * 1024 * 1024;
+pub const MAX_VERTICES: u32 = 262_144;
+pub const MAX_TRIANGLES: u32 = 131_072;
 pub const MAX_MESHES: usize = 8;
 pub const MAX_MODEL_NODES: usize = 256;
 pub const MAX_NODE_DEPTH: usize = 32;
+pub const MAX_ANIMATIONS: usize = 32;
+pub const MAX_ANIMATION_CHANNELS: usize = 1_024;
+pub const MAX_ANIMATION_KEYS: usize = 131_072;
+pub const MAX_MORPH_TARGETS: usize = 8;
+pub const MAX_MORPH_STORAGE_BYTES: usize = 64 * 1024 * 1024;
+pub const MAX_SKIN_JOINTS: usize = 128;
+pub const MAX_SKIN_STORAGE_BYTES: usize = 16 * 1024 * 1024;
 pub const MAX_MATERIALS: usize = MAX_MESHES;
 // Texture count, pixel count and decoded mip/environment storage are bounded independently.
 pub const MAX_TEXTURES: u32 = 8;
@@ -41,8 +55,8 @@ pub const MAX_TEXTURE_PIXELS: u64 = 24 * 1024 * 1024;
 pub const MAX_TEXTURE_STORAGE_BYTES: u64 = 128 * 1024 * 1024;
 pub const MAX_ANCHORS: usize = 32;
 pub const MAX_DIRECTIONAL_LIGHTS: usize = 2;
-pub const MAX_FRAME_SCALARS: usize = 12
-    + MAX_MESHES * ((1 + MAX_MODEL_NODES) * 9 + (1 + MAX_MATERIALS) * MATERIAL_FRAME_SCALARS)
+pub const MAX_FRAME_SCALARS: usize = 14
+    + MAX_MESHES * ((1 + MAX_MODEL_NODES) * 9 + (1 + MAX_MATERIALS) * MATERIAL_FRAME_SCALARS + 1)
     + 5
     + 12
     + MAX_DIRECTIONAL_LIGHTS * 8;
@@ -74,12 +88,14 @@ pub struct Scene3DSpec {
 pub struct PbrOptions {
     pub environment: Option<EnvironmentSpec>,
     pub tone_mapping: ToneMapping,
+    pub shadows: bool,
 }
 impl Default for PbrOptions {
     fn default() -> Self {
         Self {
             environment: None,
             tone_mapping: ToneMapping::None,
+            shadows: false,
         }
     }
 }
@@ -109,10 +125,17 @@ pub enum ToneMapping {
 pub struct MeshSpec {
     pub key: String,
     /// Logical project control name, resolved to admitted content before rasterization.
-    pub model_control: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_control: Option<String>,
+    /// Static procedural geometry prepared by the shared Rust kernel.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub geometry: Option<ProceduralGeometry>,
     pub material: MaterialSpec,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub material_overrides: Vec<MaterialOverrideSpec>,
+    /// Static index of a glTF animation clip sampled from this model on each frame.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub animation_clip: Option<u32>,
     /// Original GLB node indices whose complete local transforms are supplied per frame.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub node_ids: Vec<u32>,
@@ -312,6 +335,16 @@ pub struct CameraFrameState {
     pub fov_y_degrees: f32,
     pub near: f32,
     pub far: f32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub depth_of_field: Option<DepthOfFieldState>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DepthOfFieldState {
+    pub focus_distance: f32,
+    pub max_blur_radius: f32,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -322,6 +355,9 @@ pub struct MeshFrameState {
     pub material: MaterialFrameState,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub material_overrides: Vec<MaterialOverrideState>,
+    /// Explicit seconds within the selected clip; no renderer clock or previous frame is read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub animation_time: Option<f32>,
     pub transform: Transform3D,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub nodes: Vec<NodeFrameState>,
@@ -361,7 +397,7 @@ impl BudgetUsage {
     }
 
     pub fn frame_buffer_bytes(self) -> Option<u64> {
-        self.layer_pixels()?.checked_mul(10)
+        self.layer_pixels()?.checked_mul(20)
     }
 
     pub fn validate(self) -> Result<(), ContractErrors> {
@@ -482,11 +518,22 @@ impl Scene3DSpec {
             if !mesh_keys.insert(mesh.key.as_str()) {
                 errors.push(format!("{path}/key"), "mesh keys must be unique");
             }
-            validate_control(
-                &mesh.model_control,
-                &format!("{path}/modelControl"),
-                &mut errors,
-            );
+            match (&mesh.model_control, &mesh.geometry) {
+                (Some(control), None) => {
+                    validate_control(control, &format!("{path}/modelControl"), &mut errors)
+                }
+                (None, Some(geometry)) => {
+                    if let Err(error) = geometry.validate() {
+                        for issue in error.0 {
+                            errors.push(format!("{path}{}", issue.path), issue.message);
+                        }
+                    }
+                }
+                _ => errors.push(
+                    format!("{path}/geometry"),
+                    "Mesh requires exactly one of modelControl or geometry",
+                ),
+            }
             if mesh.node_ids.len() > MAX_MODEL_NODES
                 || mesh
                     .node_ids
@@ -498,6 +545,15 @@ impl Scene3DSpec {
                 errors.push(
                     format!("{path}/nodeIds"),
                     "node IDs must be distinct and within the node budget",
+                );
+            }
+            if mesh
+                .animation_clip
+                .is_some_and(|clip| clip as usize >= MAX_ANIMATIONS)
+            {
+                errors.push(
+                    format!("{path}/animationClip"),
+                    "clip index exceeds the animation budget",
                 );
             }
             mesh.material
@@ -571,12 +627,13 @@ impl Scene3DSpec {
     }
 
     pub fn frame_scalar_count(&self) -> usize {
-        12 + self
+        14 + self
             .meshes
             .iter()
             .map(|m| {
                 (1 + m.node_ids.len()) * 9
                     + (1 + m.material_overrides.len()) * MATERIAL_FRAME_SCALARS
+                    + usize::from(m.animation_clip.is_some())
             })
             .sum::<usize>()
             + self
@@ -630,6 +687,19 @@ impl Frame3DState {
         for (index, mesh) in self.meshes.iter().enumerate() {
             let path = format!("/meshes/{index}");
             validate_transform(mesh.transform, &format!("{path}/transform"), &mut errors);
+            if scene
+                .meshes
+                .get(index)
+                .is_some_and(|spec| spec.animation_clip.is_some() != mesh.animation_time.is_some())
+                || mesh
+                    .animation_time
+                    .is_some_and(|time| !time.is_finite() || !(0.0..=1.0e9).contains(&time))
+            {
+                errors.push(
+                    format!("{path}/animationTime"),
+                    "animation time must be present exactly for a selected clip and finite in 0..=1e9",
+                );
+            }
             if scene.meshes.get(index).is_some_and(|spec| {
                 spec.node_ids != mesh.nodes.iter().map(|n| n.id).collect::<Vec<_>>()
             }) {
@@ -787,6 +857,21 @@ fn validate_camera(camera: &CameraFrameState, errors: &mut ContractErrors) {
             "/camera/nearFar",
             format!("camera requires finite 0 < near < far <= {MAX_CAMERA_FAR}"),
         );
+    }
+    if let Some(dof) = camera.depth_of_field {
+        if !dof.focus_distance.is_finite() || !(0.01..=MAX_CAMERA_FAR).contains(&dof.focus_distance)
+        {
+            errors.push(
+                "/camera/depthOfField/focusDistance",
+                "focus distance must be finite in 0.01..=100000",
+            );
+        }
+        if !dof.max_blur_radius.is_finite() || !(0.0..=16.0).contains(&dof.max_blur_radius) {
+            errors.push(
+                "/camera/depthOfField/maxBlurRadius",
+                "maximum blur radius must be finite in 0..=16 pixels",
+            );
+        }
     }
 }
 

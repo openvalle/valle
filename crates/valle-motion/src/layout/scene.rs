@@ -4,6 +4,14 @@
 //! [`SceneArtifact`]. The backend-neutral [`crate::emit`] then shapes text and emits the same [`valle_draw::program::recording::ProgramRecording`]
 //! consumed by Native and CanvasKit executors.
 
+use crate::batch::{
+    BakedParticleTrajectories, bake_particle_trajectories, resolve_geometry_batch_with_identity,
+};
+use crate::eval::{
+    EvalPlan, InstanceEvalPlan, SampleValueCache, eval_all_planned_cached,
+    eval_layout_bounds_planned, eval_post_layout_planned, eval_roots_planned_dense_cached,
+    eval_units_planned,
+};
 use crate::style::gradient_background_source;
 use std::collections::{BTreeMap, HashMap};
 use std::rc::Rc;
@@ -17,15 +25,18 @@ use valle_motion::MotionValue;
 use valle_motion::value::{Length, LengthUnit};
 use valle_motion::{
     BatchPositions, BoolValue, ColorValue, CoordinateSpace, EvalError, EvalInputs, Expr, ExprId,
-    GeometryBatchGeometry, GradientStopValue, MaskValue, NodeId, NodeKind, NumberValue, PaintValue,
-    PathData, PathValue, PointValue, RectValue, ResolvedProps, SceneArtifact, ShaderUniformValue,
-    StyleValue, TextSplit, TextValue, ValidationError, css_token, eval_all,
+    GeometryBatchGeometry, GradientStopValue, InstanceColumnValues, InstanceGroup,
+    InstanceTemplateNode, MaskValue, NodeId, NodeKind, NumberValue, PaintValue, PathData,
+    PathValue, PointValue, RectValue, ResolvedProps, SceneArtifact, ShaderUniformValue, StyleValue,
+    TextSplit, TextValue, ValidationError, css_token,
 };
 
+use super::activation::{ActivationPlan, InstanceRangeGate, InstanceRowSelection};
+use super::dependencies::{SceneDependencies, TemporalSampling};
 use crate::layout::bridge::{
-    GlassLayoutEnvironment, GlassLayoutField, GlassLayoutForeground, GlassLayoutFrame,
+    EchoSample, GlassLayoutEnvironment, GlassLayoutField, GlassLayoutForeground, GlassLayoutFrame,
     GlassLayoutMaterial, GlassLayoutMotion, GlassLayoutSurface, LayoutOptions, LayoutTree,
-    ResolvedUnit, parse_style,
+    ResolvedUnit, TemporalSample, parse_style,
 };
 
 /// Fail-closed failures from Scene Artifact evaluation or layout construction.
@@ -33,6 +44,11 @@ use crate::layout::bridge::{
 pub enum LayoutError {
     InvalidArtifact(Vec<ValidationError>),
     Eval(EvalError),
+    Instance {
+        group: u32,
+        node: String,
+        reason: Box<LayoutError>,
+    },
     BadNode {
         at: usize,
     },
@@ -51,6 +67,22 @@ pub enum LayoutError {
         reason: String,
     },
     BadMask {
+        node: String,
+        reason: String,
+    },
+    BadTransition {
+        node: String,
+        reason: String,
+    },
+    BadShutter {
+        node: String,
+        reason: String,
+    },
+    BadEcho {
+        node: String,
+        reason: String,
+    },
+    BadTimeScope {
         node: String,
         reason: String,
     },
@@ -95,21 +127,25 @@ impl core::fmt::Display for LayoutError {
                 "node `{node}` requires `{capability}`, which this ProgramRecording producer does not execute"
             ),
             LayoutError::Eval(error) => write!(f, "eval: {error}"),
+            LayoutError::Instance { group, node, reason } => write!(f, "node `{node}`: instance group {group}: {reason}"),
             LayoutError::BadNode { at } => write!(f, "node {at}: out of range"),
             LayoutError::BadViewport => f.write_str(
                 "viewport dimensions must be non-zero and DPR finite and positive; a scene that reads ctx.viewport also requires both dimensions and a finite positive initial font size",
             ),
             LayoutError::BadStyle {
                 node,
-                declarations,
-                reason,
-            } => write!(f, "node `{node}`: bad CSS {declarations:?} ({reason})"),
+                reason, ..
+            } => write!(f, "node `{node}`: {reason}"),
             LayoutError::BadPaint { node, reason } => {
                 write!(f, "node `{node}`: bad paint ({reason})")
             }
             LayoutError::BadMask { node, reason } => {
                 write!(f, "node `{node}`: bad mask ({reason})")
             }
+            LayoutError::BadTransition { node, reason } => write!(f, "Transition '{node}': {reason}"),
+            LayoutError::BadShutter { node, reason } => write!(f, "Shutter '{node}': {reason}"),
+            LayoutError::BadEcho { node, reason } => write!(f, "Echo '{node}': {reason}"),
+            LayoutError::BadTimeScope { node, reason } => write!(f, "TimeScope '{node}': {reason}"),
             LayoutError::BadShader { node, reason } => {
                 write!(f, "node `{node}`: bad Shader parameter ({reason})")
             }
@@ -154,11 +190,73 @@ impl From<EvalError> for LayoutError {
 #[derive(Debug, Clone)]
 pub struct PreparedScene {
     artifact: Arc<SceneArtifact>,
+    /// Expand compact numeric formulas once at load time, keeping frame lookup in dense arrays.
+    materialized_instance_groups: Arc<Vec<Option<InstanceGroup>>>,
+    instance_eval_plans: Arc<Vec<InstanceEvalPlan>>,
+    /// Force trajectories are baked once at scene preparation, never integrated during a frame.
+    particle_trajectories: Arc<Vec<Option<BakedParticleTrajectories>>>,
+    instance_activation: Arc<Vec<Option<InstanceRangeGate>>>,
+    eval_plan: EvalPlan,
+    dependencies: Arc<SceneDependencies>,
+    activation: ActivationPlan,
     layout_reusable: bool,
+    /// Output-seconds derivatives of inline translations, when the entire scene has static
+    /// geometry and no other time-varying transforms. `None` selects the sampled layout path.
+    auto_blur_translations: Option<HashMap<String, valle_draw::Point>>,
     stylesheet: Arc<takumi_core::style::StyleSheet>,
+    sample_scene: Option<Arc<PreparedScene>>,
+    sample_roots: Option<Vec<ExprId>>,
     requires_explicit_viewport: bool,
     layout_classes: Vec<Vec<String>>,
     layout_probes: Vec<(crate::ExprId, MotionValue)>,
+}
+
+struct LayoutInstanceRow {
+    key: String,
+    class_name: String,
+    declarations: String,
+    background_color: Option<valle_draw::program::AuthorColor>,
+    text_color: Option<valle_draw::program::AuthorColor>,
+    text: Option<String>,
+    children: Vec<LayoutInstanceRow>,
+}
+
+type LayoutInstanceRows = HashMap<u32, Vec<LayoutInstanceRow>>;
+
+fn visit_layout_instance_node(row: &LayoutInstanceRow, visit: &mut impl FnMut(&LayoutInstanceRow)) {
+    visit(row);
+    for child in &row.children {
+        visit_layout_instance_node(child, visit);
+    }
+}
+
+/// Values shared by one render request while its main frame and temporal samples are built.
+pub(super) struct RequestValueCache {
+    scene: SampleValueCache,
+    instances: Vec<SampleValueCache>,
+}
+
+impl RequestValueCache {
+    pub(super) fn counts(&self) -> (usize, usize) {
+        let (computed, reused) = self.instance_counts();
+        let (scene_computed, scene_reused) = self.scene.counts();
+        (scene_computed + computed, scene_reused + reused)
+    }
+
+    pub(super) fn instance_counts(&self) -> (usize, usize) {
+        self.instances.iter().fold((0, 0), |total, cache| {
+            let (computed, reused) = cache.counts();
+            (total.0 + computed, total.1 + reused)
+        })
+    }
+}
+
+/// Work selected for one source sample before layout and rendering.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FrameEvaluationStats {
+    pub evaluated_expressions: usize,
+    pub active_nodes: usize,
+    pub layout_nodes: usize,
 }
 
 impl PreparedScene {
@@ -171,6 +269,84 @@ impl PreparedScene {
 
     pub fn artifact(&self) -> &SceneArtifact {
         &self.artifact
+    }
+
+    pub(super) fn sample_value_cache(&self) -> Option<RequestValueCache> {
+        (self.dependencies.temporal_sample_count() > 0
+            || !self.dependencies.auto_blur_nodes().is_empty())
+        .then(|| RequestValueCache {
+            scene: SampleValueCache::new(&self.eval_plan),
+            instances: self
+                .instance_eval_plans
+                .iter()
+                .map(|plan| SampleValueCache::for_len(plan.len()))
+                .collect(),
+        })
+    }
+
+    pub fn dependencies(&self) -> &SceneDependencies {
+        &self.dependencies
+    }
+
+    /// Report the same pre-layout activation schedule used by `build_tree` for this sample.
+    /// The count includes visibility gate work and the selected base expression plan.
+    pub fn frame_evaluation_stats(
+        &self,
+        ctx: &valle_motion::MotionContext,
+    ) -> FrameEvaluationStats {
+        let (base_expressions, active_nodes) =
+            self.activation.stats(&self.artifact, &self.eval_plan, ctx);
+        let layout_rows = self
+            .artifact
+            .nodes
+            .iter()
+            .filter_map(|node| match node.kind {
+                NodeKind::InstanceLayout { group } => self
+                    .artifact
+                    .instance_groups
+                    .get(group as usize)
+                    .map(|group| group.rows() * group.template_node_count()),
+                _ => None,
+            })
+            .sum::<usize>();
+        FrameEvaluationStats {
+            evaluated_expressions: base_expressions + self.instance_expression_evaluations(ctx),
+            active_nodes,
+            layout_nodes: active_nodes + layout_rows,
+        }
+    }
+
+    fn instance_expression_evaluations(&self, ctx: &valle_motion::MotionContext) -> usize {
+        let layout_groups = self
+            .artifact
+            .nodes
+            .iter()
+            .filter_map(|node| match node.kind {
+                NodeKind::InstanceLayout { group } => Some(group as usize),
+                _ => None,
+            })
+            .collect::<std::collections::BTreeSet<_>>();
+        self.artifact
+            .instance_groups
+            .iter()
+            .enumerate()
+            .map(|(at, group)| {
+                let plan = &self.instance_eval_plans[at];
+                if layout_groups.contains(&at) {
+                    return plan.work_for_rows(group.rows());
+                }
+                self.instance_activation
+                    .get(at)
+                    .and_then(|gate| gate.as_ref())
+                    .and_then(|gate| gate.select(ctx, group.rows()))
+                    .map_or_else(
+                        || plan.work_for_rows(group.rows()),
+                        |selection| {
+                            plan.work_for_rows(selection.rows.len()) + selection.gate_evaluations
+                        },
+                    )
+            })
+            .sum()
     }
 
     fn validate_viewport(
@@ -200,7 +376,17 @@ impl PreparedScene {
         viewport: takumi_core::viewport::Viewport,
     ) -> Result<(Node, Arc<takumi_core::style::StyleSheet>), LayoutError> {
         self.validate_viewport(viewport)?;
-        let node = node_of(self, at.0 as usize, &[], None, None, &HashMap::new(), None)?;
+        let node = node_of(
+            self,
+            at.0 as usize,
+            &[],
+            None,
+            None,
+            &HashMap::new(),
+            None,
+            &[],
+            &HashMap::new(),
+        )?;
         Ok((node, self.stylesheet.clone()))
     }
 }
@@ -215,12 +401,73 @@ pub fn prepare(artifact: &SceneArtifact) -> Result<PreparedScene, LayoutError> {
 pub fn prepare_owned(artifact: SceneArtifact) -> Result<PreparedScene, LayoutError> {
     artifact.validate().map_err(LayoutError::InvalidArtifact)?;
     admit_supported_surface(&artifact)?;
-    let (stylesheet, layout_classes) =
-        crate::tailwind::prepare_stylesheet(&artifact).map_err(|reason| LayoutError::BadStyle {
+    prepare_admitted(artifact, false)
+}
+
+fn prepare_admitted(
+    artifact: SceneArtifact,
+    is_sample: bool,
+) -> Result<PreparedScene, LayoutError> {
+    let instance_activation = artifact
+        .instance_groups
+        .iter()
+        .map(InstanceRangeGate::of)
+        .collect();
+    let instance_eval_plans = artifact
+        .instance_groups
+        .iter()
+        .map(InstanceEvalPlan::for_render)
+        .collect();
+    let materialized_instance_groups = artifact
+        .instance_groups
+        .iter()
+        .map(|group| {
+            if !group
+                .columns
+                .iter()
+                .any(|column| matches!(column.values, InstanceColumnValues::Formula { .. }))
+            {
+                return None;
+            }
+            let mut materialized = group.clone();
+            for column in &mut materialized.columns {
+                if let InstanceColumnValues::Formula { rows, expression } = &column.values {
+                    column.values = InstanceColumnValues::Numbers(
+                        (0..*rows as usize)
+                            .map(|index| expression.evaluate(index))
+                            .collect(),
+                    );
+                }
+            }
+            Some(materialized)
+        })
+        .collect();
+    let particle_trajectories = artifact
+        .nodes
+        .iter()
+        .map(|node| match &node.kind {
+            NodeKind::GeometryBatch { batch } => match &batch.positions {
+                BatchPositions::Particles { spec, .. } => {
+                    bake_particle_trajectories(spec).map_err(|reason| LayoutError::BadStyle {
+                        node: node.key.clone(),
+                        declarations: "particles forces".into(),
+                        reason: reason.into(),
+                    })
+                }
+                BatchPositions::Static { .. } => Ok(None),
+            },
+            _ => Ok(None),
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let eval_plan = EvalPlan::new(&artifact.exprs);
+    let (stylesheet, layout_classes, class_facts) = crate::tailwind::prepare_stylesheet(&artifact)
+        .map_err(|reason| LayoutError::BadStyle {
             node: artifact.nodes[artifact.root.0 as usize].key.clone(),
             declarations: "className utilities".into(),
             reason,
         })?;
+    let dependencies = Arc::new(SceneDependencies::new(&artifact, &eval_plan, &class_facts));
+    let activation = ActivationPlan::new(&artifact, &eval_plan, &dependencies);
     let post_layout = crate::post_layout_dependent(&artifact.exprs);
     let types =
         crate::expr::validate_exprs(&artifact.exprs, &artifact.controls, &mut Vec::new()).types;
@@ -243,7 +490,56 @@ pub fn prepare_owned(artifact: SceneArtifact) -> Result<PreparedScene, LayoutErr
             )
         })
         .collect();
+    let layout_reusable = super::reuse::eligible(&artifact, &types);
+    let auto_blur_translations =
+        analytic_auto_blur_translations(&artifact, &dependencies, layout_reusable);
+    let sample_scene = if is_sample {
+        None
+    } else {
+        super::temporal::sample_artifact(&artifact, &dependencies)
+            .map(|subset| prepare_admitted(subset, true).map(Arc::new))
+            .transpose()?
+    };
+    let sample_roots = is_sample.then(|| {
+        let mut roots: Vec<_> = artifact
+            .nodes
+            .iter()
+            .flat_map(|node| {
+                node.expr_refs_outside_per_unit()
+                    .into_iter()
+                    .chain(node.per_unit_expr_refs())
+                    .map(|(_, id)| id)
+            })
+            .collect();
+        // Later passes evaluate their full plan. Preserve the inputs of unused post-layout/unit
+        // expressions too, until those passes support their own sparse schedules.
+        roots.extend(
+            (0..artifact.exprs.len())
+                .map(|at| ExprId(at as u32))
+                .filter(|id| eval_plan.post_layout_dependent(*id) || eval_plan.unit_dependent(*id)),
+        );
+        if let Some(camera) = &artifact.camera {
+            if let PointValue::Expr { expr } = camera.center {
+                roots.push(expr);
+            }
+            for value in [&camera.zoom, &camera.rotation] {
+                if let NumberValue::Expr { expr } = value {
+                    roots.push(*expr);
+                }
+            }
+        }
+        eval_plan.schedule(roots)
+    });
     Ok(PreparedScene {
+        sample_scene,
+        sample_roots,
+        eval_plan,
+        dependencies,
+        activation,
+        materialized_instance_groups: Arc::new(materialized_instance_groups),
+        instance_eval_plans: Arc::new(instance_eval_plans),
+        particle_trajectories: Arc::new(particle_trajectories),
+        instance_activation: Arc::new(instance_activation),
         layout_classes,
         // Only expressions that read `ctx.viewport` still need both dimensions; the canvas itself
         // comes from the artifact's delivery contract.
@@ -252,7 +548,8 @@ pub fn prepare_owned(artifact: SceneArtifact) -> Result<PreparedScene, LayoutErr
             .names
             .iter()
             .any(|name| name == crate::artifact::VIEWPORT_CAPABILITY),
-        layout_reusable: super::reuse::eligible(&artifact),
+        layout_reusable,
+        auto_blur_translations,
         artifact: Arc::new(artifact),
         stylesheet,
         layout_probes,
@@ -269,13 +566,37 @@ pub fn build_tree(
     props: &ResolvedProps,
     opts: &LayoutOptions<'_>,
 ) -> Result<LayoutTree, LayoutError> {
-    build_tree_inner(prepared, ctx, props, opts, None, None)
+    let mut shared = prepared.sample_value_cache();
+    build_tree_inner(
+        prepared,
+        ctx,
+        props,
+        opts,
+        None,
+        None,
+        shared.as_mut(),
+        true,
+        true,
+    )
 }
 
 /// Native diagnostics only. These timings never enter an Artifact or DrawProgram.
 #[derive(Debug, Default, serde::Serialize)]
 pub struct LayoutTimings {
     pub layout_reused: bool,
+    /// Additional layout attempts made to estimate automatic motion blur velocity.
+    pub auto_blur_neighbor_layouts: u8,
+    /// Authored nodes retained in each temporal layout, before instance row projection.
+    pub temporal_layout_nodes: usize,
+    pub evaluated_expressions: usize,
+    /// Static expressions computed once and reused across this request's temporal samples.
+    pub sample_static_computed: usize,
+    pub sample_static_reused: usize,
+    /// The instance-template subset of the sample-static counts above.
+    pub instance_static_computed: usize,
+    pub instance_static_reused: usize,
+    pub active_nodes: usize,
+    pub layout_nodes: usize,
     pub eval_ms: f64,
     pub tree_ms: f64,
     pub layout_ms: f64,
@@ -290,7 +611,36 @@ pub fn build_tree_profiled(
     opts: &LayoutOptions<'_>,
 ) -> Result<(LayoutTree, LayoutTimings), LayoutError> {
     let mut timings = LayoutTimings::default();
-    let tree = build_tree_inner(prepared, ctx, props, opts, Some(&mut timings), None)?;
+    let mut shared = prepared.sample_value_cache();
+    let tree = build_tree_inner(
+        prepared,
+        ctx,
+        props,
+        opts,
+        Some(&mut timings),
+        None,
+        shared.as_mut(),
+        true,
+        true,
+    )?;
+    if prepared.dependencies.temporal_sample_count() > 0
+        || !prepared.dependencies.auto_blur_nodes().is_empty()
+    {
+        timings.temporal_layout_nodes = prepared
+            .sample_scene
+            .as_deref()
+            .unwrap_or(prepared)
+            .artifact
+            .nodes
+            .len();
+    }
+    if let Some(shared) = shared {
+        (timings.sample_static_computed, timings.sample_static_reused) = shared.counts();
+        (
+            timings.instance_static_computed,
+            timings.instance_static_reused,
+        ) = shared.instance_counts();
+    }
     Ok((tree, timings))
 }
 
@@ -301,6 +651,9 @@ pub(super) fn build_tree_inner(
     opts: &LayoutOptions<'_>,
     mut timings: Option<&mut LayoutTimings>,
     geometry_cache: Option<&std::cell::RefCell<Option<super::reuse::GeometrySnapshot>>>,
+    mut shared: Option<&mut RequestValueCache>,
+    auto_blur: bool,
+    temporal_samples: bool,
 ) -> Result<LayoutTree, LayoutError> {
     let mut started = timings.as_ref().map(|_| std::time::Instant::now());
     fn elapsed(started: &mut Option<std::time::Instant>) -> f64 {
@@ -321,20 +674,76 @@ pub(super) fn build_tree_inner(
     let opts = &opts;
     prepared.validate_viewport(opts.viewport)?;
 
-    let mut values = eval_all(
-        artifact,
-        EvalInputs {
+    let viewport = eval_viewport(opts);
+    let (mut values, evaluated_expressions, active_nodes, inactive_nodes) =
+        if let Some(roots) = &prepared.sample_roots {
+            let values = eval_roots_planned_dense_cached(
+                artifact,
+                &prepared.eval_plan,
+                EvalInputs {
+                    ctx,
+                    props,
+                    unit: None,
+                    viewport,
+                },
+                roots,
+                shared.as_deref_mut().map(|cache| &mut cache.scene),
+            )?;
+            (values, roots.len(), artifact.nodes.len(), Vec::new())
+        } else if let Some(base) = prepared.activation.evaluate(
+            artifact,
+            &prepared.eval_plan,
             ctx,
             props,
-            // The base pass has no unit context; unit expressions use a separate evaluation pass.
-            unit: None,
-            viewport: eval_viewport(opts),
-        },
-    )?;
+            viewport,
+            shared.as_deref_mut().map(|cache| &mut cache.scene),
+        )? {
+            (
+                base.values,
+                base.evaluated_expressions,
+                base.active_nodes,
+                base.inactive_nodes,
+            )
+        } else {
+            (
+                eval_all_planned_cached(
+                    artifact,
+                    &prepared.eval_plan,
+                    EvalInputs {
+                        ctx,
+                        props,
+                        unit: None,
+                        viewport,
+                    },
+                    shared.as_deref_mut().map(|cache| &mut cache.scene),
+                )?,
+                prepared.eval_plan.base_eval_count(),
+                artifact.nodes.len(),
+                Vec::new(),
+            )
+        };
     for (expr, probe) in &prepared.layout_probes {
         values[expr.0 as usize] = probe.clone();
     }
+    let layout_instances = eval_layout_instances(
+        prepared,
+        ctx,
+        props,
+        viewport,
+        &inactive_nodes,
+        shared.as_deref_mut(),
+    )?;
     if let Some(timings) = timings.as_deref_mut() {
+        timings.evaluated_expressions =
+            evaluated_expressions + prepared.instance_expression_evaluations(ctx);
+        timings.active_nodes = active_nodes;
+        let mut projected_nodes = 0;
+        for rows in layout_instances.values() {
+            for row in rows {
+                visit_layout_instance_node(row, &mut |_| projected_nodes += 1);
+            }
+        }
+        timings.layout_nodes = active_nodes + projected_nodes;
         timings.eval_ms = elapsed(&mut started);
     }
     let formulas = prepare_formula_fragments(artifact, &values, opts)?;
@@ -349,7 +758,7 @@ pub(super) fn build_tree_inner(
     // World content.
     //
     // Only bounds-dependent cameras require an extra layout pass.
-    let camera = if camera_depends_on_bounds(artifact) {
+    let camera = if camera_depends_on_bounds(artifact, &prepared.eval_plan) {
         let probe = identity_camera_wrappers(opts)?;
         let probe_node = node_of(
             prepared,
@@ -359,10 +768,13 @@ pub(super) fn build_tree_inner(
             Some(&probe),
             &formulas,
             None,
+            &inactive_nodes,
+            &layout_instances,
         )?;
         let probe_boxes = layout_and_collect_boxes(prepared, probe_node, opts)?;
-        let probe_values = valle_motion::eval_layout_bounds(
+        let probe_values = eval_layout_bounds_planned(
             artifact,
+            &prepared.eval_plan,
             &values,
             EvalInputs {
                 ctx,
@@ -413,6 +825,8 @@ pub(super) fn build_tree_inner(
             camera.as_ref(),
             &formulas,
             None,
+            &inactive_nodes,
+            &layout_instances,
         )?;
         let mut layout_root = RenderNode::from_node(&render_context, node);
         super::transform::preserve_identity(&mut layout_root);
@@ -430,12 +844,16 @@ pub(super) fn build_tree_inner(
         // Collect Scene keys and layout boxes during the same traversal for post-layout evaluation.
         let mut boxes = BTreeMap::new();
         let mut scene3d_content_boxes = BTreeMap::new();
-        walk_pairs(artifact, &layout_root, &layout, &mut |at, id, origin| {
-            if let Some(node) = artifact.nodes.get(at) {
-                keys.insert(u64::from(id), node.key.clone());
+        walk_pairs(
+            artifact,
+            &layout_root,
+            &layout,
+            &inactive_nodes,
+            &mut |at, key, id, origin| {
+                keys.insert(u64::from(id), key.to_owned());
                 if let Ok(computed) = layout.layout(id) {
                     boxes.insert(
-                        node.key.clone(),
+                        key.to_owned(),
                         valle_draw::Rect::new(
                             f64::from(origin.0),
                             f64::from(origin.1),
@@ -443,9 +861,12 @@ pub(super) fn build_tree_inner(
                             f64::from(computed.size.height),
                         ),
                     );
-                    if matches!(node.kind, NodeKind::Scene3D { .. }) {
+                    if at
+                        .and_then(|at| artifact.nodes.get(at))
+                        .is_some_and(|node| matches!(node.kind, NodeKind::Scene3D { .. }))
+                    {
                         scene3d_content_boxes.insert(
-                            node.key.clone(),
+                            key.to_owned(),
                             valle_draw::Rect::new(
                                 f64::from(origin.0 + computed.border.left + computed.padding.left),
                                 f64::from(origin.1 + computed.border.top + computed.padding.top),
@@ -455,15 +876,15 @@ pub(super) fn build_tree_inner(
                         );
                     }
                 }
-            }
-        })?;
+            },
+        )?;
 
         if artifact
             .exprs
             .iter()
             .any(|expr| matches!(expr, crate::Expr::NodeBounds { .. }))
         {
-            inline_boxes(artifact, &layout_root, &layout, &mut boxes)?;
+            inline_boxes(artifact, &layout_root, &layout, &inactive_nodes, &mut boxes)?;
         }
         let keys = Arc::new(keys);
         let boxes = Arc::new(boxes);
@@ -484,8 +905,9 @@ pub(super) fn build_tree_inner(
     // other expressions unchanged.
     //
     // Evaluate bounds after layout and before resolving paths, clips, masks, and text paths.
-    let bounds_values = valle_motion::eval_layout_bounds(
+    let bounds_values = eval_layout_bounds_planned(
         artifact,
+        &prepared.eval_plan,
         &values,
         EvalInputs {
             ctx,
@@ -497,8 +919,9 @@ pub(super) fn build_tree_inner(
     )?;
     let scene3d = resolve_scene3d_requests(artifact, &bounds_values)?;
     let projected = project_scene3d_anchors(artifact, &scene3d, &scene3d_content_boxes)?;
-    let values = valle_motion::eval_post_layout(
+    let values = eval_post_layout_planned(
         artifact,
+        &prepared.eval_plan,
         &bounds_values,
         EvalInputs {
             ctx,
@@ -533,9 +956,11 @@ pub(super) fn build_tree_inner(
             camera.as_ref(),
             &formulas,
             None,
+            &inactive_nodes,
+            &layout_instances,
         )?;
         let author_root = RenderNode::from_node(&render_context, author_node);
-        css_3d_author_styles(artifact, &author_root, &boxes)?
+        css_3d_author_styles(artifact, &author_root, &boxes, &inactive_nodes)?
     } else {
         HashMap::new()
     };
@@ -552,10 +977,12 @@ pub(super) fn build_tree_inner(
         camera.as_ref(),
         &formulas,
         Some(&css_3d_planes),
+        &inactive_nodes,
+        &layout_instances,
     )?;
     let mut root = RenderNode::from_node(&render_context, final_node);
     super::transform::preserve_identity(&mut root);
-    apply_css_3d_depth(artifact, &mut root, &css_3d_planes);
+    apply_css_3d_depth(artifact, &mut root, &css_3d_planes, &inactive_nodes);
 
     // Map render paths to Scene keys and retain original text to recover node-local offsets from
     // concatenated inline text. Layout keys cannot identify inline nodes that have no box.
@@ -566,9 +993,30 @@ pub(super) fn build_tree_inner(
         &root,
         &mut Vec::new(),
         &mut render_keys,
+        &inactive_nodes,
     );
+    let auto_velocities = if auto_blur {
+        let (velocities, neighbor_layouts) = auto_blur_velocities(
+            prepared,
+            ctx,
+            props,
+            opts,
+            &root,
+            &layout,
+            &keys,
+            &css_3d_planes,
+            shared.as_deref_mut(),
+        );
+        if let Some(timings) = timings.as_deref_mut() {
+            timings.auto_blur_neighbor_layouts = neighbor_layouts;
+        }
+        velocities
+    } else {
+        HashMap::new()
+    };
     let units = resolve_units(
         artifact,
+        &prepared.eval_plan,
         &values,
         ctx,
         props,
@@ -576,7 +1024,7 @@ pub(super) fn build_tree_inner(
         &projected,
         eval_viewport(opts),
     )?;
-    let node_texts = artifact
+    let mut node_texts = artifact
         .nodes
         .iter()
         .enumerate()
@@ -586,8 +1034,37 @@ pub(super) fn build_tree_inner(
             }
             _ => None,
         })
-        .collect();
+        .collect::<HashMap<_, _>>();
 
+    // Resolve advanced CSS filters only after normal/important class and inline cascade.
+    let mut css_filters = HashMap::new();
+    let mut pending = vec![(&root, takumi_core::geometry::NodeId::ROOT)];
+    while let Some((render_node, id)) = pending.pop() {
+        if let Some(key) = keys.get(&u64::from(id)) {
+            let properties = &render_node.context.style.custom_properties;
+            if let Some(text) = properties
+                .get(crate::style::advanced_filter::IMPORTANT_SLOT)
+                .or_else(|| properties.get(crate::style::advanced_filter::SLOT))
+                && let Some(filter) =
+                    crate::style::advanced_filter::parse(text).map_err(|reason| {
+                        LayoutError::BadStyle {
+                            node: key.clone(),
+                            declarations: text.clone(),
+                            reason,
+                        }
+                    })?
+            {
+                css_filters.insert(key.clone(), filter);
+            }
+        }
+        if let (Some(children), Ok(boxes)) = (&render_node.children, layout.box_children(id)) {
+            for child in boxes {
+                if let Some(node) = children.get(child.render_index) {
+                    pending.push((node, child.node_id));
+                }
+            }
+        }
+    }
     let mut paths = HashMap::new();
     let mut batches = HashMap::new();
     let mut text_paths = HashMap::new();
@@ -596,11 +1073,47 @@ pub(super) fn build_tree_inner(
     let mut videos = HashMap::new();
     let mut advanced_filters = HashMap::new();
     let mut backdrop_advanced_filters = HashMap::new();
+    let mut transitions = HashMap::new();
     let mut shaders = HashMap::new();
     let mut layer_fx = HashMap::new();
+    let mut blend_spaces = HashMap::new();
     let scene3d = scene3d;
+    let scoped_seconds = prepared
+        .dependencies
+        .mapped_seconds(ctx.sample.composition().as_f64())
+        .map_err(|id| LayoutError::BadTimeScope {
+            node: artifact.nodes[id.0 as usize].key.clone(),
+            reason: "mapped time must remain finite".into(),
+        })?;
     for (at, node) in artifact.nodes.iter().enumerate() {
-        let filters = resolve_advanced_filters(node, &values, at)?;
+        for style in &node.styles {
+            if style.property == "mix-blend-space" {
+                let resolved = match &style.value {
+                    StyleValue::Static { value } => value,
+                    StyleValue::Expr { expr } => value(&values, *expr, at)?,
+                };
+                let space = crate::style::blend::space(&css_token(resolved)).map_err(|reason| {
+                    LayoutError::BadStyle {
+                        node: node.key.clone(),
+                        declarations: "mixBlendSpace".into(),
+                        reason,
+                    }
+                })?;
+                blend_spaces.insert(node.key.clone(), space);
+            }
+        }
+        let mut filters =
+            resolve_advanced_filters(node, &values, at, auto_velocities.get(&node.key).copied())?;
+        if let Some(mut filter) = css_filters.remove(&node.key) {
+            if let valle_draw::program::recording::FilterOp::FilmGrain { seed, .. } = &mut filter {
+                let frame = match resolved_style(node, &values, at, "motion-filter-frame")? {
+                    Some(MotionValue::Number(frame)) => *frame as i64 as u32,
+                    _ => ctx.local_frame,
+                };
+                *seed = seed.wrapping_add(frame.wrapping_mul(0x9e37_79b9));
+            }
+            filters.push(filter);
+        }
         if !filters.is_empty() {
             advanced_filters.insert(node.key.clone(), filters);
         }
@@ -618,6 +1131,55 @@ pub(super) fn build_tree_inner(
             text_paths.insert(node.key.clone(), path_value(path, &values, at)?.clone());
         }
         match &node.kind {
+            NodeKind::Transition {
+                effect,
+                progress,
+                params,
+            } => {
+                let bindings = params;
+                let params = params
+                    .iter()
+                    .map(|(name, value)| {
+                        Ok((
+                            name.clone(),
+                            number_value(value, &values, at, "transition parameter")?,
+                        ))
+                    })
+                    .collect::<Result<std::collections::BTreeMap<_, _>, LayoutError>>()?;
+                let params =
+                    effect
+                        .resolve_params(&params)
+                        .map_err(|error| LayoutError::BadTransition {
+                            node: node.key.clone(),
+                            reason: match bindings.get(&error.parameter) {
+                                Some(NumberValue::Expr { expr }) => {
+                                    format!("expression {}: {error}", expr.0)
+                                }
+                                _ => error.to_string(),
+                            },
+                        })?;
+                let progress = number_value(progress, &values, at, "transition progress")?;
+                if !(0.0..=1.0).contains(&progress) {
+                    return Err(LayoutError::BadTransition {
+                        node: node.key.clone(),
+                        reason: format!("progress = {progress} must be finite and in [0, 1]"),
+                    });
+                }
+                let children = &artifact.node_children
+                    [node.children.start as usize..node.children.end as usize];
+                transitions.insert(
+                    node.key.clone(),
+                    crate::layout::bridge::ResolvedTransition {
+                        kind: *effect,
+                        params,
+                        progress: progress as f32,
+                        children: [
+                            artifact.nodes[children[0].0 as usize].key.clone(),
+                            artifact.nodes[children[1].0 as usize].key.clone(),
+                        ],
+                    },
+                );
+            }
             NodeKind::Scene3D { .. } => {}
             NodeKind::ShaderLayer {
                 program,
@@ -697,12 +1259,7 @@ pub(super) fn build_tree_inner(
                             ShaderUniformValue::Color { value } => {
                                 let value = color_value(value, &values, at)?;
                                 valle_draw::program::recording::ShaderUniformValue::Color {
-                                    value: [
-                                        f32::from(value.r) / 255.0,
-                                        f32::from(value.g) / 255.0,
-                                        f32::from(value.b) / 255.0,
-                                        f32::from(value.a) / 255.0,
-                                    ],
+                                    value: value.to_srgb_straight(),
                                 }
                             }
                             ShaderUniformValue::Bool { value } => {
@@ -801,29 +1358,127 @@ pub(super) fn build_tree_inner(
                     batch.opacity_field.as_ref().map(|field| field.progress),
                     "GeometryBatch opacity field progress",
                 )?;
+                let rotation_progress = field_progress(
+                    batch.rotation_field.as_ref().map(|field| field.progress),
+                    "GeometryBatch rotation field progress",
+                )?;
+                let skew_x_progress = field_progress(
+                    batch.skew_x_field.as_ref().map(|field| field.progress),
+                    "GeometryBatch skewX field progress",
+                )?;
+                let stroke_width_progress = field_progress(
+                    batch
+                        .stroke_width_field
+                        .as_ref()
+                        .map(|field| field.progress),
+                    "GeometryBatch strokeWidth field progress",
+                )?;
+                let mut row_identity = Vec::new();
+                let instances = resolve_geometry_batch_with_identity(
+                    batch,
+                    prepared
+                        .particle_trajectories
+                        .get(at)
+                        .and_then(Option::as_ref),
+                    frame,
+                    crate::frame_rate_as_f64(ctx.fps),
+                    valle_motion::BatchFieldProgress {
+                        position: position_progress,
+                        size: size_progress,
+                        fill: fill_progress,
+                        opacity: opacity_progress,
+                        rotation: rotation_progress,
+                        skew_x: skew_x_progress,
+                        stroke_width: stroke_width_progress,
+                    },
+                    &mut row_identity,
+                );
                 batches.insert(
                     node.key.clone(),
                     crate::layout::bridge::BatchContent {
-                        geometry: match batch.geometry {
+                        semantic_keys: row_identity
+                            .iter()
+                            .map(|identity| {
+                                batch
+                                    .semantic_keys
+                                    .get(identity.index)
+                                    .cloned()
+                                    .unwrap_or_else(|| format!("{}/{}", node.key, identity.index))
+                            })
+                            .collect(),
+                        row_identity,
+                        geometry: match &batch.geometry {
                             GeometryBatchGeometry::Circle => {
                                 valle_draw::program::recording::BatchGeometry::Circle
                             }
                             GeometryBatchGeometry::Rect => {
                                 valle_draw::program::recording::BatchGeometry::Rect
                             }
+                            GeometryBatchGeometry::Path { .. } => {
+                                valle_draw::program::recording::BatchGeometry::Path
+                            }
+                            GeometryBatchGeometry::Image { .. } => {
+                                valle_draw::program::recording::BatchGeometry::Image
+                            }
                         },
-                        instances: valle_motion::resolve_geometry_batch(
-                            batch,
-                            frame,
-                            crate::frame_rate_as_f64(ctx.fps),
-                            valle_motion::BatchFieldProgress {
-                                position: position_progress,
-                                size: size_progress,
-                                fill: fill_progress,
-                                opacity: opacity_progress,
-                            },
-                        ),
+                        path: match &batch.geometry {
+                            GeometryBatchGeometry::Path { path } => Some(path.clone()),
+                            _ => None,
+                        },
+                        atlas: match &batch.geometry {
+                            GeometryBatchGeometry::Image { source, src } => {
+                                Some((source.clone(), *src))
+                            }
+                            _ => None,
+                        },
+                        instances,
+                        stroke_colors: Vec::new(),
+                        dash_offsets: Vec::new(),
+                        path_style: None,
+                        exact_circle_paths: false,
                     },
+                );
+            }
+            NodeKind::InstanceBatch { group } => {
+                let group_index = *group as usize;
+                let activation = prepared
+                    .instance_activation
+                    .get(group_index)
+                    .and_then(Option::as_ref)
+                    .and_then(|gate| {
+                        artifact
+                            .instance_groups
+                            .get(group_index)
+                            .and_then(|group| gate.select(ctx, group.rows()))
+                    });
+                let group = prepared
+                    .materialized_instance_groups
+                    .get(group_index)
+                    .and_then(Option::as_ref)
+                    .or_else(|| artifact.instance_groups.get(group_index))
+                    .ok_or(LayoutError::BadNode { at })?;
+                let plan = prepared
+                    .instance_eval_plans
+                    .get(group_index)
+                    .ok_or(LayoutError::BadNode { at })?;
+                batches.insert(
+                    node.key.clone(),
+                    resolve_instance_batch(
+                        group,
+                        plan,
+                        activation.as_ref(),
+                        ctx,
+                        props,
+                        viewport,
+                        shared
+                            .as_deref_mut()
+                            .and_then(|cache| cache.instances.get_mut(group_index)),
+                    )
+                    .map_err(|reason| LayoutError::Instance {
+                        group: group_index as u32,
+                        node: node.key.clone(),
+                        reason: Box::new(reason),
+                    })?,
                 );
             }
             NodeKind::Path {
@@ -906,9 +1561,9 @@ pub(super) fn build_tree_inner(
                 source_start,
                 speed,
             } => {
-                // Motion video source time is a render-domain projection after the exact local
-                // sample has been chosen. It does not call the removed Timeline 1.x f64 helper.
-                let local_seconds = f64::from(ctx.local_frame) / crate::frame_rate_as_f64(ctx.fps);
+                // Temporal effects must sample video at the same exact subframe chosen for the
+                // rest of the subtree, not at its quantized localFrame address.
+                let local_seconds = scoped_seconds[at];
                 videos.insert(
                     node.key.clone(),
                     crate::layout::bridge::VideoContent {
@@ -966,16 +1621,61 @@ pub(super) fn build_tree_inner(
         &keys,
         &boxes,
         &css_3d_planes,
+        &layout_instances,
     )?;
 
-    if let Some(timings) = timings {
+    if let Some(timings) = timings.as_deref_mut() {
         timings.finish_ms = elapsed(&mut started);
     }
+    let (shutters, echoes) = if temporal_samples {
+        let mut at_time = HashMap::new();
+        let shutters = resolve_shutter_samples(
+            prepared,
+            ctx,
+            props,
+            opts,
+            &mut at_time,
+            shared.as_deref_mut(),
+        )?;
+        let echoes = resolve_echo_samples(
+            prepared,
+            ctx,
+            props,
+            opts,
+            &mut at_time,
+            shared.as_deref_mut(),
+        )?;
+        (shutters, echoes)
+    } else {
+        (HashMap::new(), HashMap::new())
+    };
+    let mut background_colors = authored_style_colors(artifact, &values, "background-color");
+    let mut text_colors = authored_style_colors(artifact, &values, "color");
+    for rows in layout_instances.values() {
+        for row in rows {
+            visit_layout_instance_node(row, &mut |node| {
+                if let Some(color) = node.background_color {
+                    background_colors.insert(node.key.clone(), color);
+                }
+                if let Some(color) = node.text_color {
+                    text_colors.insert(node.key.clone(), color);
+                }
+                if let Some(text) = &node.text {
+                    node_texts.insert(node.key.clone(), text.clone());
+                }
+            });
+        }
+    }
+    let text_stroke_colors = authored_style_colors(artifact, &values, "-webkit-text-stroke-color");
     Ok(LayoutTree {
         root,
+        inactive_nodes: Rc::new(inactive_nodes),
         viewport: opts.viewport,
         layout,
         values,
+        background_colors: Rc::new(background_colors),
+        text_colors: Rc::new(text_colors),
+        text_stroke_colors: Rc::new(text_stroke_colors),
         keys,
         units: Rc::new(units),
         render_keys: Rc::new(render_keys),
@@ -988,9 +1688,13 @@ pub(super) fn build_tree_inner(
         videos: Rc::new(videos),
         advanced_filters: Rc::new(advanced_filters),
         backdrop_advanced_filters: Rc::new(backdrop_advanced_filters),
+        transitions: Rc::new(transitions),
+        shutters: Rc::new(shutters),
+        echoes: Rc::new(echoes),
         shaders: Rc::new(shaders),
         scene3d: Rc::new(scene3d),
         layer_fx: Rc::new(layer_fx),
+        blend_spaces: Rc::new(blend_spaces),
         css_3d_planes: Rc::new(css_3d_planes),
         formulas: Rc::new(formulas),
         glass,
@@ -1005,6 +1709,7 @@ fn resolve_glass_layout(
     keys: &HashMap<u64, String>,
     boxes: &BTreeMap<String, valle_draw::Rect>,
     css_3d_planes: &HashMap<String, crate::layout::bridge::Css3dPlane>,
+    layout_instances: &LayoutInstanceRows,
 ) -> Result<GlassLayoutFrame, LayoutError> {
     if !artifact
         .nodes
@@ -1060,6 +1765,15 @@ fn resolve_glass_layout(
             frame
                 .node_fields
                 .insert(artifact.nodes[index].key.clone(), field.as_str().to_owned());
+            if let NodeKind::InstanceLayout { group } = artifact.nodes[index].kind
+                && let Some(group) = artifact.instance_groups.get(group as usize)
+            {
+                for row in 0..group.rows() {
+                    if let Some(key) = group.keys.key_at(row) {
+                        frame.node_fields.insert(key, field.as_str().to_owned());
+                    }
+                }
+            }
         }
     }
 
@@ -1309,7 +2023,7 @@ fn resolve_glass_layout(
             && foreground_bounds.is_some()
         {
             Some(
-                foreground_auto_luma(artifact, at, values, boxes)?.ok_or_else(|| {
+                foreground_auto_luma(artifact, at, values, boxes, layout_instances)?.ok_or_else(|| {
                     LayoutError::BadPaint {
                         node: node.key.clone(),
                         reason: "auto Glass foreground has pixels without a resolvable color descriptor; use tone light, dark, or none".into(),
@@ -1438,10 +2152,31 @@ fn foreground_protection_bounds(
     let mut bounds: Option<valle_draw::Rect> = None;
     while let Some(at) = stack.pop() {
         let node = artifact.nodes.get(at)?;
-        if foreground_node_paints(node)
-            && let Some(layout) = boxes.get(&node.key)
-        {
-            let viewport_points = if let Some(transform) = transforms.get(&node.key) {
+        let paint_keys = if let NodeKind::InstanceLayout { group } = node.kind {
+            let group = artifact.instance_groups.get(group as usize)?;
+            let mut templates = vec![&group.template];
+            let mut children = group.template_children.iter().collect::<Vec<_>>();
+            while let Some(child) = children.pop() {
+                templates.push(&child.node);
+                children.extend(&child.children);
+            }
+            templates
+                .into_iter()
+                .filter(|template| foreground_node_paints(template))
+                .flat_map(|template| {
+                    (0..group.rows()).filter_map(move |row| group.key_for_node(row, &template.key))
+                })
+                .collect()
+        } else if foreground_node_paints(node) {
+            vec![node.key.clone()]
+        } else {
+            Vec::new()
+        };
+        for key in paint_keys {
+            let Some(layout) = boxes.get(&key) else {
+                continue;
+            };
+            let viewport_points = if let Some(transform) = transforms.get(&key) {
                 let matrix = affine_matrix(*transform);
                 [
                     project_matrix3(matrix, [0.0, 0.0])?,
@@ -1515,7 +2250,9 @@ fn foreground_node_paints(node: &crate::SceneNode) -> bool {
             NodeKind::Text { .. }
                 | NodeKind::Path { .. }
                 | NodeKind::GeometryBatch { .. }
+                | NodeKind::InstanceBatch { .. }
                 | NodeKind::Image { .. }
+                | NodeKind::Transition { .. }
                 | NodeKind::ShaderLayer { .. }
                 | NodeKind::Scene3D { .. }
                 | NodeKind::Video { .. }
@@ -1529,6 +2266,7 @@ fn foreground_auto_luma(
     glass_at: usize,
     values: &[MotionValue],
     boxes: &BTreeMap<String, valle_draw::Rect>,
+    layout_instances: &LayoutInstanceRows,
 ) -> Result<Option<f32>, LayoutError> {
     let children = artifact.nodes[glass_at].children;
     let mut stack = artifact.node_children[children.start as usize..children.end as usize]
@@ -1539,6 +2277,26 @@ fn foreground_auto_luma(
     let mut total_weight = 0.0_f64;
     while let Some(at) = stack.pop() {
         let node = artifact.nodes.get(at).ok_or(LayoutError::BadNode { at })?;
+        if let NodeKind::InstanceLayout { group } = node.kind
+            && let Some(rows) = layout_instances.get(&group)
+        {
+            for row in rows {
+                visit_layout_instance_node(row, &mut |node| {
+                    for color in [node.background_color, node.text_color]
+                        .into_iter()
+                        .flatten()
+                    {
+                        let color = color.to_srgb8();
+                        let area = boxes
+                            .get(&node.key)
+                            .map_or(1.0, |bounds| (bounds.width * bounds.height).max(1.0));
+                        let weight = area * f64::from(color.a) / 255.0;
+                        weighted_luma += weight * color.relative_luminance();
+                        total_weight += weight;
+                    }
+                });
+            }
+        }
         let colors = foreground_node_colors(node, values, at)?;
         if !colors.is_empty() {
             let area = boxes
@@ -1584,7 +2342,7 @@ fn foreground_node_colors(
             StyleValue::Expr { expr } => value(values, *expr, at)?,
         };
         if let MotionValue::Color(color) = resolved {
-            colors.push(*color);
+            colors.push(color.to_srgb8());
         }
     }
     match &node.kind {
@@ -1605,9 +2363,9 @@ fn foreground_node_colors(
             }
         }
         NodeKind::GeometryBatch { batch } => {
-            colors.extend(batch.fills.iter().copied());
+            colors.extend(batch.fills.iter().map(|color| color.to_srgb8()));
             if let Some(field) = &batch.fill_field {
-                colors.extend(field.to.iter().copied());
+                colors.extend(field.to.iter().map(|color| color.to_srgb8()));
             }
         }
         _ => {}
@@ -1623,12 +2381,13 @@ fn foreground_paint_colors(
 ) -> Result<Vec<valle_draw::Rgba>, LayoutError> {
     let paint = paint_value(paint, values, at, node)?;
     Ok(match paint {
-        crate::layout::bridge::ResolvedPaint::Solid(color) => vec![color],
+        crate::layout::bridge::ResolvedPaint::Solid(color) => vec![color.to_srgb8()],
         crate::layout::bridge::ResolvedPaint::Linear { stops, .. }
         | crate::layout::bridge::ResolvedPaint::Radial { stops, .. }
-        | crate::layout::bridge::ResolvedPaint::Conic { stops, .. } => {
-            stops.into_iter().map(|(_, color)| color).collect()
-        }
+        | crate::layout::bridge::ResolvedPaint::Conic { stops, .. } => stops
+            .into_iter()
+            .map(|(_, color)| color.to_srgb8())
+            .collect(),
     })
 }
 
@@ -1688,9 +2447,7 @@ fn resolve_scene3d_requests(
         };
         let color = |v: &ColorValue| -> Result<valle_motion::scene3d::Color4, LayoutError> {
             let c = color_value(v, values, at)?;
-            Ok(valle_motion::scene3d::Color4(
-                [c.r, c.g, c.b, c.a].map(|v| f32::from(v) / 255.0),
-            ))
+            Ok(valle_motion::scene3d::Color4(c.to_srgb_straight()))
         };
         let camera = valle_motion::scene3d::CameraFrameState {
             position: vector(&frame.camera.position)?,
@@ -1698,6 +2455,23 @@ fn resolve_scene3d_requests(
             near: scalar(&frame.camera.near, "scene3d camera near")?,
             far: scalar(&frame.camera.far, "scene3d camera far")?,
             fov_y_degrees: scalar(&frame.camera.fov_y_degrees, "scene3d camera fov")?,
+            depth_of_field: frame
+                .camera
+                .depth_of_field
+                .as_ref()
+                .map(|dof| {
+                    Ok::<_, LayoutError>(valle_motion::scene3d::DepthOfFieldState {
+                        focus_distance: scalar(
+                            &dof.focus_distance,
+                            "scene3d camera focus distance",
+                        )?,
+                        max_blur_radius: scalar(
+                            &dof.max_blur_radius,
+                            "scene3d camera maximum blur radius",
+                        )?,
+                    })
+                })
+                .transpose()?,
         }
         .with_orbit(
             scalar(&frame.camera.orbit_yaw_degrees, "scene3d camera yaw")?,
@@ -1753,6 +2527,11 @@ fn resolve_scene3d_requests(
                                 })
                             })
                             .collect::<Result<Vec<_>, LayoutError>>()?,
+                        animation_time: mesh
+                            .animation_time
+                            .as_ref()
+                            .map(|time| scalar(time, "scene3d animation time"))
+                            .transpose()?,
                         transform: valle_motion::scene3d::Transform3D {
                             translation: vector(&mesh.transform.translation)?,
                             rotation_degrees: vector(&mesh.transform.rotation_degrees)?,
@@ -1915,6 +2694,496 @@ fn resolved_style<'a>(
         StyleValue::Static { value } => value,
         StyleValue::Expr { expr } => value(values, *expr, at)?,
     }))
+}
+
+/// Resolve each flow instance's shared expression program once, then let Takumi lay out every
+/// resulting sibling. Invisible rows retain their boxes so later siblings do not shift.
+fn eval_layout_instances(
+    prepared: &PreparedScene,
+    ctx: &valle_motion::MotionContext,
+    props: &ResolvedProps,
+    viewport: Option<(f64, f64)>,
+    inactive_nodes: &[bool],
+    mut shared: Option<&mut RequestValueCache>,
+) -> Result<LayoutInstanceRows, LayoutError> {
+    let artifact = prepared.artifact();
+    let mut result = HashMap::new();
+    for (node_at, node) in artifact.nodes.iter().enumerate() {
+        if inactive_nodes.get(node_at).copied().unwrap_or(false) {
+            continue;
+        }
+        let NodeKind::InstanceLayout { group: index } = node.kind else {
+            continue;
+        };
+        let group_at = index as usize;
+        let group = prepared
+            .materialized_instance_groups
+            .get(group_at)
+            .and_then(Option::as_ref)
+            .or_else(|| artifact.instance_groups.get(group_at))
+            .ok_or(LayoutError::BadNode { at: node_at })?;
+        let plan = prepared
+            .instance_eval_plans
+            .get(group_at)
+            .ok_or(LayoutError::BadNode { at: node_at })?;
+        let mut rows = Vec::with_capacity(group.rows());
+        crate::eval::try_for_each_instance_rows_planned(
+            group,
+            plan,
+            EvalInputs {
+                ctx,
+                props,
+                unit: None,
+                viewport,
+            },
+            0..group.rows(),
+            shared
+                .as_deref_mut()
+                .and_then(|cache| cache.instances.get_mut(group_at)),
+            |at, values| {
+                rows.push(resolve_layout_instance_node(
+                    group,
+                    &group.template,
+                    &group.template_children,
+                    at,
+                    values,
+                )?);
+                Ok::<(), LayoutError>(())
+            },
+        )
+        .map_err(|reason| LayoutError::Instance {
+            group: index,
+            node: node.key.clone(),
+            reason: Box::new(reason),
+        })?;
+        result.insert(index, rows);
+    }
+    Ok(result)
+}
+
+fn resolve_layout_instance_node(
+    group: &InstanceGroup,
+    template: &valle_motion::SceneNode,
+    children: &[InstanceTemplateNode],
+    row: usize,
+    values: &[MotionValue],
+) -> Result<LayoutInstanceRow, LayoutError> {
+    let visible = match template.visibility {
+        Some(expr) => match value(values, expr, row)? {
+            MotionValue::Bool(value) => *value,
+            _ => {
+                return Err(LayoutError::Eval(EvalError::TypeMismatch {
+                    at: row,
+                    op: "instance visibility",
+                }));
+            }
+        },
+        None => true,
+    };
+    let color = |property| -> Result<_, LayoutError> {
+        Ok(match resolved_style(template, values, row, property)? {
+            Some(MotionValue::Color(color)) => Some(*color),
+            _ => None,
+        })
+    };
+    let text = match &template.kind {
+        NodeKind::Text { text, .. } => Some(text_value(text, values, row)?),
+        _ => None,
+    };
+    let mut active_classes = Vec::with_capacity(template.class_names.len());
+    for class in &template.class_names {
+        let active = match template.class_conditions.get(class) {
+            Some(expr) => match value(values, *expr, row)? {
+                MotionValue::Bool(active) => *active,
+                _ => {
+                    return Err(LayoutError::Eval(EvalError::TypeMismatch {
+                        at: row,
+                        op: "instance className condition",
+                    }));
+                }
+            },
+            None => true,
+        };
+        if active {
+            active_classes.push(class.as_str());
+        }
+    }
+    Ok(LayoutInstanceRow {
+        key: group
+            .key_for_node(row, &template.key)
+            .ok_or(LayoutError::BadNode { at: row })?,
+        class_name: active_classes.join(" "),
+        declarations: declarations(template, values, visible, row)?,
+        background_color: color("background-color")?,
+        text_color: color("color")?,
+        text,
+        children: children
+            .iter()
+            .map(|child| {
+                resolve_layout_instance_node(group, &child.node, &child.children, row, values)
+            })
+            .collect::<Result<_, _>>()?,
+    })
+}
+
+fn resolve_instance_batch(
+    group: &valle_motion::InstanceGroup,
+    plan: &InstanceEvalPlan,
+    activation: Option<&InstanceRowSelection>,
+    ctx: &valle_motion::MotionContext,
+    props: &ResolvedProps,
+    viewport: Option<(f64, f64)>,
+    shared: Option<&mut SampleValueCache>,
+) -> Result<crate::layout::bridge::BatchContent, LayoutError> {
+    use valle_draw::program::recording::BatchGeometry;
+    use valle_draw::program::{InstancePathStyle, StrokeCap, StrokeJoin};
+
+    let circle = group.circle_template_parameters();
+    let static_path = group.static_path_template();
+    let (geometry, path) = if circle.is_some() {
+        (BatchGeometry::Path, None)
+    } else if let Some(path) = static_path {
+        (BatchGeometry::Path, Some(path.clone()))
+    } else if matches!(group.template.kind, NodeKind::Box) {
+        (BatchGeometry::Rect, None)
+    } else {
+        return Err(LayoutError::BadStyle {
+            node: group.template.key.clone(),
+            declarations: "instance template".into(),
+            reason: "expected a Box, full solid Circle, or translated solid static Path".into(),
+        });
+    };
+    let rows = activation.map_or(0..group.rows(), |selection| selection.rows.clone());
+    let mut semantic_keys = Vec::new();
+    let mut instances = Vec::with_capacity(rows.len());
+    let distinct_stroke = matches!(
+        &group.template.kind,
+        NodeKind::Path {
+            fill: Some(fill),
+            stroke: Some(stroke),
+            ..
+        } if &stroke.paint != fill
+    );
+    let mut stroke_colors = if distinct_stroke {
+        Vec::with_capacity(rows.len())
+    } else {
+        Vec::new()
+    };
+    let dynamic_dash_offset = matches!(
+        &group.template.kind,
+        NodeKind::Path {
+            stroke: Some(stroke),
+            ..
+        } if matches!(stroke.dash_offset, NumberValue::Expr { .. })
+    );
+    let mut dash_offsets = if dynamic_dash_offset {
+        Vec::with_capacity(rows.len())
+    } else {
+        Vec::new()
+    };
+    let path_style = if static_path.is_some() {
+        let NodeKind::Path { fill, stroke, .. } = &group.template.kind else {
+            unreachable!("static path template is a Path");
+        };
+        let mut style = InstancePathStyle {
+            fill: fill.is_some(),
+            ..Default::default()
+        };
+        if let Some(stroke) = stroke {
+            style.cap = match stroke.cap {
+                valle_draw::Cap::Butt => StrokeCap::Butt,
+                valle_draw::Cap::Round => StrokeCap::Round,
+                valle_draw::Cap::Square => StrokeCap::Square,
+            };
+            style.join = match stroke.join {
+                valle_draw::Join::Miter => StrokeJoin::Miter,
+                valle_draw::Join::Round => StrokeJoin::Round,
+                valle_draw::Join::Bevel => StrokeJoin::Bevel,
+            };
+            style.miter_limit = stroke.miter_limit as f32;
+            style.dash = stroke.dash.as_ref().map_or_else(Vec::new, |dash| {
+                dash.iter().map(|value| *value as f32).collect()
+            });
+            if let NumberValue::Static { value } = &stroke.dash_offset {
+                style.dash_offset = *value as f32;
+            }
+        }
+        (style != InstancePathStyle::default() || dynamic_dash_offset).then_some(style)
+    } else {
+        None
+    };
+    if rows.is_empty() {
+        return Ok(crate::layout::bridge::BatchContent {
+            row_identity: Vec::new(),
+            semantic_keys,
+            geometry,
+            path,
+            atlas: None,
+            instances,
+            stroke_colors,
+            dash_offsets,
+            path_style,
+            exact_circle_paths: circle.is_some(),
+        });
+    }
+    crate::eval::try_for_each_instance_rows_planned(
+        group,
+        plan,
+        EvalInputs {
+            ctx,
+            props,
+            unit: None,
+            viewport,
+        },
+        rows,
+        shared,
+        |at, values| {
+            let invalid = |property: &str| LayoutError::BadStyle {
+                node: group.keys.key_at(at).unwrap_or_default(),
+                declarations: property.into(),
+                reason: "instance template needs a finite supported value".into(),
+            };
+            if let Some(visibility) = group.template.visibility {
+                match values.get(visibility.0 as usize) {
+                    Some(MotionValue::Bool(true)) => {}
+                    Some(MotionValue::Bool(false)) => return Ok(()),
+                    _ => return Err(invalid("visible")),
+                }
+            }
+            let opacity = match resolved_style(&group.template, values, at, "opacity")? {
+                Some(MotionValue::Number(value)) if (0.0..=1.0).contains(value) => *value,
+                None => 1.0,
+                _ => return Err(invalid("opacity")),
+            };
+            if let Some((center_expr, radius_expr)) = circle {
+                let center = match values.get(center_expr.0 as usize) {
+                    Some(MotionValue::Point(value))
+                        if value.x.is_finite() && value.y.is_finite() =>
+                    {
+                        *value
+                    }
+                    _ => return Err(invalid("cx/cy")),
+                };
+                let radius = match values.get(radius_expr.0 as usize) {
+                    Some(MotionValue::Number(value)) if value.is_finite() && *value > 0.0 => *value,
+                    _ => return Err(invalid("r")),
+                };
+                let NodeKind::Path {
+                    fill: Some(PaintValue::Solid { color }),
+                    ..
+                } = &group.template.kind
+                else {
+                    return Err(invalid("fill"));
+                };
+                let fill = color_value(color, values, at)?;
+                semantic_keys.push(
+                    group
+                        .key_for_node(at, &group.template.key)
+                        .unwrap_or_default(),
+                );
+                instances.push(valle_draw::program::recording::BatchInstance {
+                    position: center,
+                    size: valle_draw::Point::new(radius, radius),
+                    color: fill.to_working(),
+                    rotation: 0.0,
+                    skew_x: 0.0,
+                    stroke_width: 0.0,
+                    opacity: opacity as f32,
+                });
+                return Ok(());
+            }
+            if static_path.is_some() {
+                let position = match resolved_style(&group.template, values, at, "translate")? {
+                    Some(MotionValue::Point(point)) => *point,
+                    Some(MotionValue::Vec2(vector)) => valle_draw::Point::new(vector.x, vector.y),
+                    Some(MotionValue::Length2(lengths))
+                        if lengths.x.unit == valle_motion::value::LengthUnit::Px
+                            && lengths.y.unit == valle_motion::value::LengthUnit::Px =>
+                    {
+                        valle_draw::Point::new(lengths.x.value, lengths.y.value)
+                    }
+                    _ => return Err(invalid("translate")),
+                };
+                if !position.x.is_finite() || !position.y.is_finite() {
+                    return Err(invalid("translate"));
+                }
+                let NodeKind::Path { fill, stroke, .. } = &group.template.kind else {
+                    return Err(invalid("Path"));
+                };
+                let fill_color = match fill {
+                    Some(PaintValue::Solid { color }) => {
+                        Some(color_value(color, values, at)?.to_working())
+                    }
+                    None => None,
+                    _ => return Err(invalid("fill")),
+                };
+                let stroke_color = if distinct_stroke || fill_color.is_none() {
+                    let Some(PaintValue::Solid { color }) =
+                        stroke.as_ref().map(|stroke| &stroke.paint)
+                    else {
+                        return Err(invalid("stroke"));
+                    };
+                    Some(color_value(color, values, at)?.to_working())
+                } else {
+                    None
+                };
+                let base_color = fill_color
+                    .or(stroke_color)
+                    .ok_or_else(|| invalid("fill/stroke"))?;
+                let stroke_width = match stroke {
+                    Some(stroke) => {
+                        let width = number_value(&stroke.width, values, at, "strokeWidth")?;
+                        if width <= 0.0 || !(width as f32).is_finite() || (width as f32) == 0.0 {
+                            return Err(invalid("strokeWidth"));
+                        }
+                        width as f32
+                    }
+                    None => 0.0,
+                };
+                let dash_offset = if dynamic_dash_offset {
+                    let Some(stroke) = stroke else {
+                        return Err(invalid("strokeDashoffset"));
+                    };
+                    let value =
+                        number_value(&stroke.dash_offset, values, at, "strokeDashoffset")? as f32;
+                    if !value.is_finite() {
+                        return Err(invalid("strokeDashoffset"));
+                    }
+                    Some(value)
+                } else {
+                    None
+                };
+                let rotation = match resolved_style(&group.template, values, at, "rotate")? {
+                    Some(MotionValue::Angle(angle)) => angle.as_degrees(),
+                    Some(MotionValue::Str(value)) => valle_motion::value::Angle::parse(value)
+                        .map(valle_motion::value::Angle::as_degrees)
+                        .ok_or_else(|| invalid("rotate"))?,
+                    None => 0.0,
+                    _ => return Err(invalid("rotate")),
+                };
+                if !rotation.is_finite() || !(rotation as f32).is_finite() {
+                    return Err(invalid("rotate"));
+                }
+                let scale = match resolved_style(&group.template, values, at, "scale")? {
+                    Some(MotionValue::Number(value)) => valle_draw::Point::new(*value, *value),
+                    Some(MotionValue::Point(point)) => *point,
+                    None => valle_draw::Point::new(1.0, 1.0),
+                    _ => return Err(invalid("scale")),
+                };
+                if !(scale.x as f32).is_finite() || !(scale.y as f32).is_finite() {
+                    return Err(invalid("scale"));
+                }
+                let skew_x = match resolved_style(&group.template, values, at, "transform")? {
+                    Some(MotionValue::Str(value)) => {
+                        valle_motion::artifact::path_instance_skew_x(value)
+                            .ok_or_else(|| invalid("transform"))?
+                    }
+                    None => 0.0,
+                    _ => return Err(invalid("transform")),
+                };
+                // CSS treats a singular scale as invisible. It can arise at an intermediate
+                // frame even when the authored end points are nonzero.
+                if (scale.x as f32) == 0.0 || (scale.y as f32) == 0.0 {
+                    return Ok(());
+                }
+                semantic_keys.push(
+                    group
+                        .key_for_node(at, &group.template.key)
+                        .unwrap_or_default(),
+                );
+                instances.push(valle_draw::program::recording::BatchInstance {
+                    position,
+                    size: scale,
+                    color: base_color,
+                    rotation: rotation as f32,
+                    skew_x,
+                    stroke_width,
+                    opacity: opacity as f32,
+                });
+                if distinct_stroke && let Some(color) = stroke_color {
+                    stroke_colors.push(color);
+                }
+                if let Some(offset) = dash_offset {
+                    dash_offsets.push(offset);
+                }
+                return Ok(());
+            }
+            let number = |property: &str| -> Result<f64, LayoutError> {
+                match resolved_style(&group.template, values, at, property)? {
+                    Some(MotionValue::Number(value)) if value.is_finite() => Ok(*value),
+                    Some(MotionValue::Length(value))
+                        if value.unit == valle_motion::value::LengthUnit::Px
+                            && value.value.is_finite() =>
+                    {
+                        Ok(value.value)
+                    }
+                    _ => Err(invalid(property)),
+                }
+            };
+            let left = number("left")?;
+            let top = number("top")?;
+            let width = number("width")?;
+            let height = number("height")?;
+            if width < 0.0 || height < 0.0 {
+                return Err(invalid("width/height"));
+            }
+            let fill = match resolved_style(&group.template, values, at, "background-color")? {
+                Some(MotionValue::Color(color)) => *color,
+                Some(MotionValue::Str(color)) => valle_draw::program::AuthorColor::from_srgb8(
+                    valle_draw::Rgba::parse(color).ok_or_else(|| invalid("background-color"))?,
+                ),
+                _ => return Err(invalid("background-color")),
+            };
+            let rotation = match resolved_style(&group.template, values, at, "transform")? {
+                Some(MotionValue::Str(value)) => value
+                    .trim()
+                    .strip_prefix("rotate(")
+                    .and_then(|value| value.strip_suffix("deg)"))
+                    .and_then(|value| value.trim().parse::<f64>().ok())
+                    .filter(|value| value.is_finite())
+                    .ok_or_else(|| invalid("transform"))?,
+                None => 0.0,
+                _ => return Err(invalid("transform")),
+            };
+            // Takumi snaps both absolute box edges in f32 layout coordinates. Snapping only the
+            // origin would keep B01's 4px cells correct but drift for fractional instance sizes.
+            let (raw_x, raw_y) = (left as f32, top as f32);
+            let x = raw_x.round();
+            let y = raw_y.round();
+            let snapped_width = (raw_x + width as f32).round() - x;
+            let snapped_height = (raw_y + height as f32).round() - y;
+            if snapped_width <= 0.0 || snapped_height <= 0.0 {
+                return Ok(());
+            }
+            semantic_keys.push(
+                group
+                    .key_for_node(at, &group.template.key)
+                    .unwrap_or_default(),
+            );
+            instances.push(valle_draw::program::recording::BatchInstance {
+                position: valle_draw::Point::new(f64::from(x), f64::from(y)),
+                size: valle_draw::Point::new(f64::from(snapped_width), f64::from(snapped_height)),
+                color: fill.to_working(),
+                rotation: rotation as f32,
+                skew_x: 0.0,
+                stroke_width: 0.0,
+                opacity: opacity as f32,
+            });
+            Ok(())
+        },
+    )?;
+    Ok(crate::layout::bridge::BatchContent {
+        row_identity: Vec::new(),
+        semantic_keys,
+        geometry,
+        path,
+        atlas: None,
+        instances,
+        stroke_colors,
+        dash_offsets,
+        path_style,
+        exact_circle_paths: circle.is_some(),
+    })
 }
 
 fn bad_advanced_filter(node: &valle_motion::SceneNode, reason: impl Into<String>) -> LayoutError {
@@ -2386,9 +3655,17 @@ fn css_3d_author_styles(
     artifact: &SceneArtifact,
     root: &RenderNode,
     boxes: &BTreeMap<String, valle_draw::Rect>,
+    inactive_nodes: &[bool],
 ) -> Result<HashMap<String, Css3dAuthorStyle>, LayoutError> {
     let mut keys = HashMap::new();
-    walk_render_keys(artifact, artifact.root, root, &mut Vec::new(), &mut keys);
+    walk_render_keys(
+        artifact,
+        artifact.root,
+        root,
+        &mut Vec::new(),
+        &mut keys,
+        inactive_nodes,
+    );
     let mut out = HashMap::new();
     for (path, key) in keys {
         let Some(node) = root
@@ -2432,9 +3709,17 @@ fn apply_css_3d_depth(
     artifact: &SceneArtifact,
     root: &mut RenderNode,
     planes: &HashMap<String, crate::layout::bridge::Css3dPlane>,
+    inactive_nodes: &[bool],
 ) {
     let mut keys = HashMap::new();
-    walk_render_keys(artifact, artifact.root, root, &mut Vec::new(), &mut keys);
+    walk_render_keys(
+        artifact,
+        artifact.root,
+        root,
+        &mut Vec::new(),
+        &mut keys,
+        inactive_nodes,
+    );
     for (path, key) in keys {
         let Some(plane) = planes.get(&key) else {
             continue;
@@ -2662,14 +3947,989 @@ fn resolve_css_3d_node(
     Ok(())
 }
 
+/// Evaluate each exposure at an exact output-time offset. A distinct evaluation round and layout
+/// belong to every sample; repeated times across Shutter nodes share one immutable result.
+fn resolve_shutter_samples(
+    prepared: &PreparedScene,
+    ctx: &valle_motion::MotionContext,
+    props: &ResolvedProps,
+    opts: &LayoutOptions<'_>,
+    at_time: &mut HashMap<valle_timeline::internal::SampleTime, Rc<LayoutTree>>,
+    mut shared: Option<&mut RequestValueCache>,
+) -> Result<HashMap<String, Vec<TemporalSample>>, LayoutError> {
+    use valle_timeline::{RationalTime, internal::SampleTime};
+
+    let artifact = prepared.artifact();
+    let shutters = prepared
+        .dependencies
+        .temporal_nodes()
+        .iter()
+        .filter_map(|temporal| match temporal.sampling {
+            TemporalSampling::Shutter { .. } => Some((
+                artifact.nodes[temporal.node.0 as usize].key.as_str(),
+                temporal.offsets.as_slice(),
+            )),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    if shutters.is_empty() {
+        return Ok(HashMap::new());
+    }
+    if prepared.dependencies.temporal_sample_count() > 128 {
+        return Err(LayoutError::BadShutter {
+            node: shutters[0].0.to_owned(),
+            reason: "one frame may request at most 128 temporal samples".into(),
+        });
+    }
+    let last =
+        crate::motion_context_at_frame(ctx.duration_frames - 1, ctx.duration_frames, ctx.fps)
+            .ok_or_else(|| LayoutError::BadShutter {
+                node: shutters[0].0.to_owned(),
+                reason: "last output frame has no exact sample time".into(),
+            })?;
+    let mut out = HashMap::new();
+    for (key, phases) in shutters {
+        let bad_time = |reason: &str| LayoutError::BadShutter {
+            node: key.to_owned(),
+            reason: reason.into(),
+        };
+        let frame_duration = RationalTime::new(
+            i64::from(ctx.fps.denominator()),
+            u32::try_from(ctx.fps.numerator())
+                .map_err(|_| bad_time("output frame rate cannot form exact shutter offsets"))?,
+        )
+        .map_err(|_| bad_time("output frame rate cannot form exact shutter offsets"))?;
+        let mut exposure = Vec::with_capacity(phases.len());
+        for &phase in phases {
+            let offset = frame_duration
+                .checked_mul(phase)
+                .map_err(|_| bad_time("shutter offset overflows exact time"))?;
+            let requested = ctx
+                .sample
+                .checked_offset(offset)
+                .map_err(|_| bad_time("shutter sample overflows exact time"))?;
+            let sample = crate::motion_context_at_sample(requested, ctx.duration_frames, ctx.fps)
+                .unwrap_or_else(|| {
+                    if requested < SampleTime::ZERO {
+                        crate::motion_context_at_frame(0, ctx.duration_frames, ctx.fps)
+                            .expect("validated nonempty composition")
+                    } else {
+                        last
+                    }
+                });
+            let tree = if let Some(tree) = at_time.get(&sample.sample) {
+                Rc::clone(tree)
+            } else {
+                let tree = Rc::new(build_tree_inner(
+                    prepared.sample_scene.as_deref().unwrap_or(prepared),
+                    &sample,
+                    props,
+                    opts,
+                    None,
+                    None,
+                    shared.as_deref_mut(),
+                    true,
+                    false,
+                )?);
+                at_time.insert(sample.sample, Rc::clone(&tree));
+                tree
+            };
+            exposure.push(TemporalSample {
+                time: sample.sample,
+                tree,
+            });
+        }
+        out.insert(key.to_owned(), exposure);
+    }
+    Ok(out)
+}
+
+/// Evaluate prior output frames, oldest first. The current subtree is painted separately above
+/// these samples, so a stationary subject naturally covers all of its converged echoes.
+fn resolve_echo_samples(
+    prepared: &PreparedScene,
+    ctx: &valle_motion::MotionContext,
+    props: &ResolvedProps,
+    opts: &LayoutOptions<'_>,
+    at_time: &mut HashMap<valle_timeline::internal::SampleTime, Rc<LayoutTree>>,
+    mut shared: Option<&mut RequestValueCache>,
+) -> Result<HashMap<String, Vec<EchoSample>>, LayoutError> {
+    use valle_timeline::{RationalTime, internal::SampleTime};
+
+    let artifact = prepared.artifact();
+    let echoes = prepared
+        .dependencies
+        .temporal_nodes()
+        .iter()
+        .filter_map(|temporal| match temporal.sampling {
+            TemporalSampling::Echo { count, decay, .. } => Some((
+                artifact.nodes[temporal.node.0 as usize].key.as_str(),
+                count,
+                decay,
+                temporal.offsets.as_slice(),
+            )),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    if echoes.is_empty() {
+        return Ok(HashMap::new());
+    }
+    if prepared.dependencies.temporal_sample_count() > 128 {
+        return Err(LayoutError::BadEcho {
+            node: echoes[0].0.to_owned(),
+            reason: "one frame may request at most 128 temporal samples".into(),
+        });
+    }
+    let mut out = HashMap::new();
+    for (key, count, decay, offsets) in echoes {
+        let bad_time = |reason: &str| LayoutError::BadEcho {
+            node: key.to_owned(),
+            reason: reason.into(),
+        };
+        let frame_duration = RationalTime::new(
+            i64::from(ctx.fps.denominator()),
+            u32::try_from(ctx.fps.numerator())
+                .map_err(|_| bad_time("output frame rate cannot form exact echo offsets"))?,
+        )
+        .map_err(|_| bad_time("output frame rate cannot form exact echo offsets"))?;
+        let mut trail = Vec::with_capacity(offsets.len());
+        for (index, &offset_frames) in offsets.iter().enumerate() {
+            let lag = count - index as u8;
+            let offset = frame_duration
+                .checked_mul(offset_frames)
+                .map_err(|_| bad_time("echo offset overflows exact time"))?;
+            let requested = ctx
+                .sample
+                .checked_offset(offset)
+                .map_err(|_| bad_time("echo sample overflows exact time"))?;
+            let sample = if requested < SampleTime::ZERO {
+                crate::motion_context_at_frame(0, ctx.duration_frames, ctx.fps)
+                    .ok_or_else(|| bad_time("first output frame has no exact sample time"))?
+            } else {
+                crate::motion_context_at_sample(requested, ctx.duration_frames, ctx.fps)
+                    .ok_or_else(|| bad_time("echo sample lies outside the composition"))?
+            };
+            let tree = if let Some(tree) = at_time.get(&sample.sample) {
+                Rc::clone(tree)
+            } else {
+                let tree = Rc::new(build_tree_inner(
+                    prepared.sample_scene.as_deref().unwrap_or(prepared),
+                    &sample,
+                    props,
+                    opts,
+                    None,
+                    None,
+                    shared.as_deref_mut(),
+                    true,
+                    false,
+                )?);
+                at_time.insert(sample.sample, Rc::clone(&tree));
+                tree
+            };
+            trail.push(EchoSample {
+                sample: TemporalSample {
+                    time: sample.sample,
+                    tree,
+                },
+                opacity: valle_draw::math::pow(decay, f64::from(lag)) as f32,
+            });
+        }
+        out.insert(key.to_owned(), trail);
+    }
+    Ok(out)
+}
+
+/// Only a scene with stable layout and affine, inline pixel translations can use the chain-rule
+/// path. Reject any other dynamic transform for the whole scene: it may move an ancestor or alter
+/// the coordinate basis of a target. Analysis runs once at preparation, not on every frame.
+fn analytic_auto_blur_translations(
+    artifact: &SceneArtifact,
+    dependencies: &SceneDependencies,
+    layout_reusable: bool,
+) -> Option<HashMap<String, valle_draw::Point>> {
+    if !layout_reusable
+        || dependencies.auto_blur_nodes().is_empty()
+        || artifact
+            .nodes
+            .iter()
+            .any(|node| matches!(node.kind, NodeKind::TimeScope { .. }))
+    {
+        return None;
+    }
+    let mut translations = HashMap::new();
+    for node in &artifact.nodes {
+        if node.styles.iter().any(|style| {
+            style.property.starts_with("motion-")
+                && !style.property.starts_with("motion-velocity-blur-")
+        }) {
+            return None;
+        }
+        for style in &node.styles {
+            let StyleValue::Expr { expr } = style.value else {
+                continue;
+            };
+            if style.property == "translate" {
+                // An important utility can override the inline declaration after evaluation.
+                if node
+                    .class_names
+                    .iter()
+                    .chain(node.class_conditions.keys())
+                    .any(|class| crate::tailwind::explicit_property(class) == Some("translate"))
+                {
+                    return None;
+                }
+                let velocity = analytic_translate_derivative(&artifact.exprs, expr)?;
+                if translations.insert(node.key.clone(), velocity).is_some() {
+                    return None;
+                }
+            } else if crate::style::property_spec(&style.property)
+                .impact
+                .containing_block
+            {
+                return None;
+            }
+        }
+    }
+    Some(translations)
+}
+
+fn analytic_translate_derivative(exprs: &[Expr], id: ExprId) -> Option<valle_draw::Point> {
+    let (x, y) = match exprs.get(id.0 as usize)? {
+        Expr::MakePoint { x, y } => (*x, *y),
+        Expr::ToLength2 { input } => match exprs.get(input.0 as usize)? {
+            Expr::MakePoint { x, y } => (*x, *y),
+            _ => return None,
+        },
+        _ => return None,
+    };
+    let derivative = |id: ExprId| match exprs.get(id.0 as usize)? {
+        Expr::Const {
+            value: MotionValue::Number(_),
+        } => Some(0.0),
+        _ => {
+            let function = crate::time_function::TimeFunction::compile(exprs, id)?;
+            (function.input() == valle_motion::ContextInput::CompositionSeconds)
+                .then_some(function.derivative())
+        }
+    };
+    let velocity = valle_draw::Point::new(derivative(x)?, derivative(y)?);
+    (velocity.x.is_finite() && velocity.y.is_finite()).then_some(velocity)
+}
+
+/// Apply the derivative of each CSS `translate` before its fixed local rotation/scale. The parent
+/// matrix's linear part carries the local velocity into screen space; the accumulated parent
+/// velocity then carries ancestor translations to every descendant. Geometry is already laid out.
+fn analytic_auto_blur_velocities(
+    root: &RenderNode,
+    layout: &LayoutResults,
+    keys: &HashMap<u64, String>,
+    translations: &HashMap<String, valle_draw::Point>,
+    targets: &[&str],
+    fps: f64,
+) -> HashMap<String, valle_draw::Point> {
+    let target_keys: std::collections::HashSet<_> = targets.iter().copied().collect();
+    let mut velocities = HashMap::new();
+    let mut pending = vec![(
+        root,
+        takumi_core::geometry::NodeId::ROOT,
+        TAffine::IDENTITY,
+        valle_draw::Point::new(0.0, 0.0),
+    )];
+    while let Some((node, id, parent, inherited)) = pending.pop() {
+        let Ok(box_layout) = layout.layout(id) else {
+            continue;
+        };
+        let local = node.context.style.local_transform(
+            box_layout.size.width,
+            box_layout.size.height,
+            &node.context.sizing,
+        );
+        let matrix =
+            parent * TAffine::translation(box_layout.location.x, box_layout.location.y) * local;
+        let mut screen = inherited;
+        if let Some(key) = keys.get(&u64::from(id)) {
+            if let Some(velocity) = translations.get(key) {
+                screen.x += f64::from(parent.a) * velocity.x + f64::from(parent.c) * velocity.y;
+                screen.y += f64::from(parent.b) * velocity.x + f64::from(parent.d) * velocity.y;
+            }
+            let velocity = valle_draw::Point::new(screen.x / fps, screen.y / fps);
+            if target_keys.contains(key.as_str())
+                && velocity.x.is_finite()
+                && velocity.y.is_finite()
+                && velocity.x.abs() <= 2048.0
+                && velocity.y.abs() <= 2048.0
+            {
+                velocities.insert(key.clone(), velocity);
+            }
+        }
+        if let (Some(children), Ok(boxes)) = (&node.children, layout.box_children(id)) {
+            for child in boxes {
+                if let Some(node) = children.get(child.render_index) {
+                    pending.push((node, child.node_id, matrix, screen));
+                }
+            }
+        }
+    }
+    velocities
+}
+
+/// Sample final screen positions in output time. The regular layout path is reused for the two
+/// neighbors, so flow layout, ancestor transforms, and camera movement contribute to velocity.
+/// Failed or discontinuous neighbors suppress blur without changing the requested main frame.
+fn auto_blur_velocities(
+    prepared: &PreparedScene,
+    ctx: &valle_motion::MotionContext,
+    props: &ResolvedProps,
+    opts: &LayoutOptions<'_>,
+    root: &RenderNode,
+    layout: &Arc<LayoutResults>,
+    keys: &Arc<HashMap<u64, String>>,
+    css_3d_planes: &HashMap<String, crate::layout::bridge::Css3dPlane>,
+    mut shared: Option<&mut RequestValueCache>,
+) -> (HashMap<String, valle_draw::Point>, u8) {
+    let targets = prepared
+        .dependencies
+        .auto_blur_nodes()
+        .iter()
+        .map(|id| prepared.artifact.nodes[id.0 as usize].key.as_str())
+        .collect::<Vec<_>>();
+    if targets.is_empty() {
+        return (HashMap::new(), 0);
+    }
+    if let Some(translations) = prepared.auto_blur_translations.as_ref()
+        && css_3d_planes.is_empty()
+    {
+        return (
+            analytic_auto_blur_velocities(
+                root,
+                layout,
+                keys,
+                translations,
+                &targets,
+                crate::frame_rate_as_f64(ctx.fps),
+            ),
+            0,
+        );
+    }
+    let Some(offset) = prepared.dependencies.auto_blur_offset(ctx.fps) else {
+        return (HashMap::new(), 0);
+    };
+    let previous_context = offset
+        .checked_neg()
+        .ok()
+        .and_then(|negative| ctx.sample.checked_offset(negative).ok())
+        .and_then(|sample| crate::motion_context_at_sample(sample, ctx.duration_frames, ctx.fps));
+    let next_context =
+        ctx.sample.checked_offset(offset).ok().and_then(|sample| {
+            crate::motion_context_at_sample(sample, ctx.duration_frames, ctx.fps)
+        });
+    let mut sample_anchors = |sample: Option<valle_motion::MotionContext>| {
+        sample.map(|sample| {
+            build_tree_inner(
+                prepared.sample_scene.as_deref().unwrap_or(prepared),
+                &sample,
+                props,
+                opts,
+                None,
+                None,
+                shared.as_deref_mut(),
+                false,
+                false,
+            )
+            .ok()
+            .map(|tree| screen_anchors(&tree.root, &tree.layout, &tree.keys, &tree.css_3d_planes))
+            .map(|anchors| (sample.sample.composition().as_f64(), anchors))
+        })
+    };
+    let previous = sample_anchors(previous_context).flatten();
+    let next = sample_anchors(next_context).flatten();
+    let center = screen_anchors(root, layout, keys, css_3d_planes);
+    let center_time = ctx.sample.composition().as_f64();
+    let fps = crate::frame_rate_as_f64(ctx.fps);
+    let mut velocities = HashMap::new();
+    for key in targets {
+        let Some(current) = center.get(key) else {
+            continue;
+        };
+        let before = previous.as_ref().and_then(|(_, anchors)| anchors.get(key));
+        let after = next.as_ref().and_then(|(_, anchors)| anchors.get(key));
+        // A missing node or a failed layout at a valid neighbor is a temporal cut.
+        if previous_context.is_some() && before.is_none()
+            || next_context.is_some() && after.is_none()
+        {
+            continue;
+        }
+        let derivative = |from: &valle_draw::Point, to: &valle_draw::Point, seconds: f64| {
+            valle_draw::Point::new(
+                (to.x - from.x) / seconds / fps,
+                (to.y - from.y) / seconds / fps,
+            )
+        };
+        let velocity = match (before, after) {
+            (Some(before), Some(after)) => {
+                let before_time = previous.as_ref().unwrap().0;
+                let after_time = next.as_ref().unwrap().0;
+                let left = derivative(before, current, center_time - before_time);
+                let right = derivative(current, after, after_time - center_time);
+                let jump = valle_draw::math::hypot(left.x - right.x, left.y - right.y);
+                let speed = valle_draw::math::hypot(left.x, left.y)
+                    .max(valle_draw::math::hypot(right.x, right.y));
+                if jump > 2.0_f64.max(speed * 0.2) {
+                    continue;
+                }
+                derivative(before, after, after_time - before_time)
+            }
+            (Some(before), None) => {
+                derivative(before, current, center_time - previous.as_ref().unwrap().0)
+            }
+            (None, Some(after)) => {
+                derivative(current, after, next.as_ref().unwrap().0 - center_time)
+            }
+            (None, None) => continue,
+        };
+        if velocity.x.is_finite()
+            && velocity.y.is_finite()
+            && velocity.x.abs() <= 2048.0
+            && velocity.y.abs() <= 2048.0
+        {
+            velocities.insert(key.to_owned(), velocity);
+        }
+    }
+    (
+        velocities,
+        u8::from(previous_context.is_some()) + u8::from(next_context.is_some()),
+    )
+}
+
+fn screen_anchors(
+    root: &RenderNode,
+    layout: &LayoutResults,
+    keys: &HashMap<u64, String>,
+    css_3d_planes: &HashMap<String, crate::layout::bridge::Css3dPlane>,
+) -> HashMap<String, valle_draw::Point> {
+    let mut anchors = HashMap::new();
+    let mut pending = vec![(root, takumi_core::geometry::NodeId::ROOT, TAffine::IDENTITY)];
+    while let Some((node, id, parent)) = pending.pop() {
+        let Ok(box_layout) = layout.layout(id) else {
+            continue;
+        };
+        let local = node.context.style.local_transform(
+            box_layout.size.width,
+            box_layout.size.height,
+            &node.context.sizing,
+        );
+        let matrix =
+            parent * TAffine::translation(box_layout.location.x, box_layout.location.y) * local;
+        if let Some(key) = keys.get(&u64::from(id)) {
+            let center_x = box_layout.size.width * 0.5;
+            let center_y = box_layout.size.height * 0.5;
+            let point = if let Some(plane) = css_3d_planes.get(key) {
+                valle_draw::Point::new(
+                    plane.quad.iter().map(|point| point.x).sum::<f64>() / 4.0,
+                    plane.quad.iter().map(|point| point.y).sum::<f64>() / 4.0,
+                )
+            } else {
+                valle_draw::Point::new(
+                    f64::from(matrix.a * center_x + matrix.c * center_y + matrix.x),
+                    f64::from(matrix.b * center_x + matrix.d * center_y + matrix.y),
+                )
+            };
+            if point.x.is_finite() && point.y.is_finite() {
+                anchors.insert(key.clone(), point);
+            }
+        }
+        if let (Some(children), Ok(boxes)) = (&node.children, layout.box_children(id)) {
+            for child in boxes {
+                if let Some(node) = children.get(child.render_index) {
+                    pending.push((node, child.node_id, matrix));
+                }
+            }
+        }
+    }
+    anchors
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct ReviewNodeSample {
+    pub opacity: f64,
+    pub cycle: i64,
+    pub group: Option<String>,
+    pub painted: bool,
+    pub position: valle_draw::Point,
+    /// Axis-aligned screen bounds after the final 2D or projected 3D transform.
+    pub bounds: [f64; 4],
+    pub visible: bool,
+    pub on_screen: bool,
+    pub motion_blurred: bool,
+}
+
+impl LayoutTree {
+    /// Inspect the same post-layout screen anchors and resolved blur filters used by rendering.
+    /// A CSS `visibility: visible` child may override a hidden parent, while opacity multiplies
+    /// through the ancestor chain.
+    pub(super) fn review_node_samples(&self) -> HashMap<String, ReviewNodeSample> {
+        use takumi_core::style::Visibility;
+        use valle_draw::program::recording::FilterOp;
+
+        let mut samples = HashMap::new();
+        let mut pending = vec![(
+            &self.root,
+            takumi_core::geometry::NodeId::ROOT,
+            TAffine::IDENTITY,
+            1.0_f32,
+            false,
+        )];
+        while let Some((node, id, parent, parent_opacity, parent_blurred)) = pending.pop() {
+            let Ok(box_layout) = self.layout.layout(id) else {
+                continue;
+            };
+            let local = node.context.style.local_transform(
+                box_layout.size.width,
+                box_layout.size.height,
+                &node.context.sizing,
+            );
+            let matrix =
+                parent * TAffine::translation(box_layout.location.x, box_layout.location.y) * local;
+            let opacity = parent_opacity * node.context.style.opacity.0;
+            let key = self.keys.get(&u64::from(id));
+            let blurred = parent_blurred
+                || key.is_some_and(|key| {
+                    self.advanced_filters.get(key).is_some_and(|filters| {
+                        filters
+                            .iter()
+                            .any(|filter| matches!(filter, FilterOp::VelocityBlur { .. }))
+                    })
+                });
+            if let Some(key) = key {
+                let width = box_layout.size.width;
+                let height = box_layout.size.height;
+                let plane = self.css_3d_planes.get(key);
+                let corners = plane.map_or_else(
+                    || {
+                        let point = |x: f32, y: f32| {
+                            valle_draw::Point::new(
+                                f64::from(matrix.a * x + matrix.c * y + matrix.x),
+                                f64::from(matrix.b * x + matrix.d * y + matrix.y),
+                            )
+                        };
+                        [
+                            point(0.0, 0.0),
+                            point(width, 0.0),
+                            point(width, height),
+                            point(0.0, height),
+                        ]
+                    },
+                    |plane| plane.quad,
+                );
+                let position = if plane.is_some() {
+                    valle_draw::Point::new(
+                        corners.iter().map(|point| point.x).sum::<f64>() / 4.0,
+                        corners.iter().map(|point| point.y).sum::<f64>() / 4.0,
+                    )
+                } else {
+                    valle_draw::Point::new(
+                        f64::from(matrix.a * width * 0.5 + matrix.c * height * 0.5 + matrix.x),
+                        f64::from(matrix.b * width * 0.5 + matrix.d * height * 0.5 + matrix.y),
+                    )
+                };
+                let left = corners
+                    .iter()
+                    .map(|point| point.x)
+                    .fold(f64::INFINITY, f64::min);
+                let right = corners
+                    .iter()
+                    .map(|point| point.x)
+                    .fold(f64::NEG_INFINITY, f64::max);
+                let top = corners
+                    .iter()
+                    .map(|point| point.y)
+                    .fold(f64::INFINITY, f64::min);
+                let bottom = corners
+                    .iter()
+                    .map(|point| point.y)
+                    .fold(f64::NEG_INFINITY, f64::max);
+                let on_screen = self
+                    .viewport
+                    .size
+                    .width
+                    .zip(self.viewport.size.height)
+                    .map_or(true, |(viewport_width, viewport_height)| {
+                        right > 0.0
+                            && bottom > 0.0
+                            && left < f64::from(viewport_width)
+                            && top < f64::from(viewport_height)
+                    });
+                if position.x.is_finite()
+                    && position.y.is_finite()
+                    && [left, top, right, bottom]
+                        .iter()
+                        .all(|value| value.is_finite())
+                {
+                    samples.insert(
+                        key.clone(),
+                        ReviewNodeSample {
+                            opacity: f64::from(opacity),
+                            cycle: 0,
+                            group: None,
+                            painted: node
+                                .context
+                                .style
+                                .background_color
+                                .resolve(node.context.current_color)
+                                .0[3]
+                                != 0
+                                || node
+                                    .context
+                                    .style
+                                    .background_image
+                                    .as_ref()
+                                    .is_some_and(|images| !images.is_empty())
+                                || [
+                                    (box_layout.border.top, node.context.style.border_top_color),
+                                    (
+                                        box_layout.border.right,
+                                        node.context.style.border_right_color,
+                                    ),
+                                    (
+                                        box_layout.border.bottom,
+                                        node.context.style.border_bottom_color,
+                                    ),
+                                    (box_layout.border.left, node.context.style.border_left_color),
+                                ]
+                                .iter()
+                                .any(|(width, color)| {
+                                    *width > 0.0
+                                        && color.resolve(node.context.current_color).0[3] != 0
+                                }),
+                            position,
+                            bounds: [left, top, right, bottom],
+                            visible: node.context.style.visibility == Visibility::Visible
+                                && opacity > 0.0
+                                && !plane.is_some_and(|plane| plane.hidden),
+                            on_screen,
+                            motion_blurred: blurred,
+                        },
+                    );
+                }
+            }
+            if let Some(key) = key
+                && let Some(batch) = self.batches.get(key)
+            {
+                use valle_draw::program::{Affine2d, recording::BatchGeometry};
+                let parent = Affine2d([
+                    f64::from(matrix.a),
+                    f64::from(matrix.b),
+                    f64::from(matrix.c),
+                    f64::from(matrix.d),
+                    f64::from(matrix.x),
+                    f64::from(matrix.y),
+                ]);
+                for (row, instance) in batch.instances.iter().enumerate() {
+                    let hull = if let Some(path) = &batch.path {
+                        path.points.iter().fold(
+                            [
+                                f64::INFINITY,
+                                f64::INFINITY,
+                                f64::NEG_INFINITY,
+                                f64::NEG_INFINITY,
+                            ],
+                            |b, p| [b[0].min(p.x), b[1].min(p.y), b[2].max(p.x), b[3].max(p.y)],
+                        )
+                    } else if batch.exact_circle_paths || batch.geometry == BatchGeometry::Circle {
+                        [-1.0, -1.0, 1.0, 1.0]
+                    } else {
+                        [0.0, 0.0, 1.0, 1.0]
+                    };
+                    let transform = instance.transform(batch.geometry).then(parent).0;
+                    let [a, b, c, d, e, f] = transform;
+                    let pad = f64::from(instance.stroke_width) * 0.5;
+                    let [x0, y0, x1, y1] =
+                        [hull[0] - pad, hull[1] - pad, hull[2] + pad, hull[3] + pad];
+                    let points = [[x0, y0], [x1, y0], [x1, y1], [x0, y1]]
+                        .map(|[x, y]| [a * x + c * y + e, b * x + d * y + f]);
+                    let bounds = points.iter().fold(
+                        [
+                            f64::INFINITY,
+                            f64::INFINITY,
+                            f64::NEG_INFINITY,
+                            f64::NEG_INFINITY,
+                        ],
+                        |r, p| {
+                            [
+                                r[0].min(p[0]),
+                                r[1].min(p[1]),
+                                r[2].max(p[0]),
+                                r[3].max(p[1]),
+                            ]
+                        },
+                    );
+                    let on_screen = self
+                        .viewport
+                        .size
+                        .width
+                        .zip(self.viewport.size.height)
+                        .is_none_or(|(w, h)| {
+                            bounds[2] > 0.0
+                                && bounds[3] > 0.0
+                                && bounds[0] < f64::from(w)
+                                && bounds[1] < f64::from(h)
+                        });
+                    let row_key = batch
+                        .semantic_keys
+                        .get(row)
+                        .cloned()
+                        .unwrap_or_else(|| format!("{key}/{row}"));
+                    samples.insert(
+                        row_key,
+                        ReviewNodeSample {
+                            opacity: f64::from(opacity * instance.opacity * instance.color.alpha),
+                            cycle: batch.row_identity.get(row).map_or(0, |row| row.cycle),
+                            group: Some(key.clone()),
+                            painted: true,
+                            position: valle_draw::Point::new(
+                                (bounds[0] + bounds[2]) * 0.5,
+                                (bounds[1] + bounds[3]) * 0.5,
+                            ),
+                            bounds,
+                            on_screen,
+                            motion_blurred: blurred,
+                            visible: node.context.style.visibility == Visibility::Visible
+                                && opacity * instance.opacity * instance.color.alpha > 0.0,
+                        },
+                    );
+                }
+            }
+            if let (Some(children), Ok(boxes)) = (&node.children, self.layout.box_children(id)) {
+                for child in boxes {
+                    if let Some(node) = children.get(child.render_index) {
+                        pending.push((node, child.node_id, matrix, opacity, blurred));
+                    }
+                }
+            }
+        }
+        samples
+    }
+}
+
 fn resolve_advanced_filters(
     node: &valle_motion::SceneNode,
     values: &[MotionValue],
     at: usize,
+    auto_velocity: Option<valle_draw::Point>,
 ) -> Result<Vec<valle_draw::program::recording::FilterOp>, LayoutError> {
     use valle_draw::program::recording::FilterOp;
 
     let mut filters = Vec::new();
+    if node
+        .styles
+        .iter()
+        .any(|style| style.property.starts_with("motion-bloom-"))
+    {
+        let mut params = [0.0; 4];
+        for (index, (property, max)) in [
+            ("motion-bloom-threshold", 1.0),
+            ("motion-bloom-knee", 1.0),
+            ("motion-bloom-intensity", 4.0),
+            ("motion-bloom-radius", 128.0),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let Some(MotionValue::Number(value)) = resolved_style(node, values, at, property)?
+            else {
+                return Err(bad_advanced_filter(
+                    node,
+                    "bloom parameter is missing or invalid",
+                ));
+            };
+            if !value.is_finite() || !(0.0..=max).contains(value) {
+                return Err(bad_advanced_filter(
+                    node,
+                    "bloom parameter is out of bounds",
+                ));
+            }
+            params[index] = *value;
+        }
+        filters.push(FilterOp::Bloom {
+            threshold: params[0],
+            knee: params[1],
+            intensity: params[2],
+            radius: params[3],
+        });
+    }
+    if node
+        .styles
+        .iter()
+        .any(|style| style.property.starts_with("motion-radial-blur-"))
+    {
+        let mut params = [0.0; 3];
+        for (index, (property, max, signed)) in [
+            ("motion-radial-blur-center-x", 10_000_000.0, true),
+            ("motion-radial-blur-center-y", 10_000_000.0, true),
+            ("motion-radial-blur-amount", 128.0, false),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let Some(MotionValue::Number(value)) = resolved_style(node, values, at, property)?
+            else {
+                return Err(bad_advanced_filter(
+                    node,
+                    "radial blur parameter is missing or invalid",
+                ));
+            };
+            if !value.is_finite()
+                || (signed && value.abs() > max)
+                || (!signed && !(0.0..=max).contains(value))
+            {
+                return Err(bad_advanced_filter(
+                    node,
+                    "radial blur parameter is out of bounds",
+                ));
+            }
+            params[index] = *value;
+        }
+        filters.push(FilterOp::RadialBlur {
+            center_x: params[0],
+            center_y: params[1],
+            amount: params[2],
+        });
+    }
+    if node
+        .styles
+        .iter()
+        .any(|style| style.property.starts_with("motion-film-grain-"))
+    {
+        let mut params = [0.0; 3];
+        for (index, property) in [
+            "motion-film-grain-seed",
+            "motion-film-grain-amount",
+            "motion-film-grain-size",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let Some(MotionValue::Number(value)) = resolved_style(node, values, at, property)?
+            else {
+                return Err(bad_advanced_filter(
+                    node,
+                    "film grain parameter is missing or invalid",
+                ));
+            };
+            params[index] = *value;
+        }
+        if !params[0].is_finite()
+            || params[0].fract() != 0.0
+            || !(0.0..=u32::MAX as f64).contains(&params[0])
+            || !params[1].is_finite()
+            || !(0.0..=1.0).contains(&params[1])
+            || !params[2].is_finite()
+            || !(1.0..=64.0).contains(&params[2])
+        {
+            return Err(bad_advanced_filter(
+                node,
+                "film grain parameter is out of bounds",
+            ));
+        }
+        filters.push(FilterOp::FilmGrain {
+            seed: params[0] as u32,
+            amount: params[1],
+            size: params[2],
+        });
+    }
+    if node
+        .styles
+        .iter()
+        .any(|style| style.property.starts_with("motion-lens-distortion-"))
+    {
+        let mut params = [0.0; 2];
+        for (index, property) in ["motion-lens-distortion-k1", "motion-lens-distortion-k2"]
+            .into_iter()
+            .enumerate()
+        {
+            let Some(MotionValue::Number(value)) = resolved_style(node, values, at, property)?
+            else {
+                return Err(bad_advanced_filter(
+                    node,
+                    "lens distortion parameter is missing or invalid",
+                ));
+            };
+            if !value.is_finite() || value.abs() > 0.5 {
+                return Err(bad_advanced_filter(
+                    node,
+                    "lens distortion parameter is out of bounds",
+                ));
+            }
+            params[index] = *value;
+        }
+        filters.push(FilterOp::LensDistortion {
+            k1: params[0],
+            k2: params[1],
+        });
+    }
+    if node
+        .styles
+        .iter()
+        .any(|style| style.property.starts_with("motion-glow-"))
+    {
+        let Some(MotionValue::Number(radius)) =
+            resolved_style(node, values, at, "motion-glow-radius")?
+        else {
+            return Err(bad_advanced_filter(
+                node,
+                "glow radius is missing or invalid",
+            ));
+        };
+        let Some(MotionValue::Number(intensity)) =
+            resolved_style(node, values, at, "motion-glow-intensity")?
+        else {
+            return Err(bad_advanced_filter(
+                node,
+                "glow intensity is missing or invalid",
+            ));
+        };
+        let Some(MotionValue::Color(color)) =
+            resolved_style(node, values, at, "motion-glow-color")?
+        else {
+            return Err(bad_advanced_filter(
+                node,
+                "glow color is missing or invalid",
+            ));
+        };
+        if !radius.is_finite()
+            || !(0.0..=128.0).contains(radius)
+            || !intensity.is_finite()
+            || !(0.0..=4.0).contains(intensity)
+        {
+            return Err(bad_advanced_filter(
+                node,
+                "glow radius or intensity is out of bounds",
+            ));
+        }
+        filters.push(FilterOp::Glow {
+            color: *color,
+            radius: *radius,
+            intensity: *intensity,
+        });
+    }
+    if let Some(value) = resolved_style(node, values, at, "motion-chromatic-aberration-offset")? {
+        let MotionValue::Number(offset) = value else {
+            return Err(bad_advanced_filter(
+                node,
+                "chromatic aberration offset must be a number",
+            ));
+        };
+        if !offset.is_finite() || offset.abs() > 256.0 {
+            return Err(bad_advanced_filter(
+                node,
+                "chromatic aberration offset must be within ±256px",
+            ));
+        }
+        filters.push(FilterOp::ChromaticAberration {
+            offset_x: *offset,
+            offset_y: 0.0,
+        });
+    }
     let has_displacement = node
         .styles
         .iter()
@@ -2751,14 +5011,10 @@ fn resolve_advanced_filters(
         .iter()
         .any(|style| style.property.starts_with("motion-velocity-blur-"));
     if has_velocity_blur {
-        let Some(MotionValue::Point(velocity)) =
-            resolved_style(node, values, at, "motion-velocity-blur-velocity")?
-        else {
-            return Err(bad_advanced_filter(
-                node,
-                "motion blur velocity is missing or is not point(x, y)",
-            ));
-        };
+        let is_auto = node
+            .styles
+            .iter()
+            .any(|style| style.property == "motion-velocity-blur-auto");
         let Some(MotionValue::Number(shutter_angle)) =
             resolved_style(node, values, at, "motion-velocity-blur-shutter")?
         else {
@@ -2766,6 +5022,22 @@ fn resolve_advanced_filters(
                 node,
                 "motion blur shutter angle must be a number",
             ));
+        };
+        let velocity = if is_auto {
+            let Some(velocity) = auto_velocity else {
+                return Ok(filters);
+            };
+            velocity
+        } else {
+            let Some(MotionValue::Point(velocity)) =
+                resolved_style(node, values, at, "motion-velocity-blur-velocity")?
+            else {
+                return Err(bad_advanced_filter(
+                    node,
+                    "motion blur velocity is missing or is not point(x, y)",
+                ));
+            };
+            *velocity
         };
         if !velocity.x.is_finite()
             || !velocity.y.is_finite()
@@ -2778,6 +5050,9 @@ fn resolve_advanced_filters(
                 node,
                 "motion blur requires velocity components within ±2048 px/frame and shutterAngle 0..=360",
             ));
+        }
+        if is_auto && velocity.x.abs() < 0.001 && velocity.y.abs() < 0.001 {
+            return Ok(filters);
         }
         filters.push(FilterOp::VelocityBlur {
             velocity_x: velocity.x,
@@ -2891,7 +5166,7 @@ fn color_value(
     binding: &ColorValue,
     values: &[MotionValue],
     at: usize,
-) -> Result<valle_draw::Rgba, LayoutError> {
+) -> Result<valle_draw::program::AuthorColor, LayoutError> {
     match binding {
         ColorValue::Static { value } => Ok(*value),
         ColorValue::Expr { expr } => match value(values, *expr, at)? {
@@ -2904,12 +5179,41 @@ fn color_value(
     }
 }
 
+fn authored_style_colors(
+    artifact: &SceneArtifact,
+    values: &[MotionValue],
+    property: &str,
+) -> HashMap<String, valle_draw::program::AuthorColor> {
+    artifact
+        .nodes
+        .iter()
+        .filter_map(|node| {
+            let binding = node
+                .styles
+                .iter()
+                .rev()
+                .find(|style| style.property == property)?;
+            let color = match &binding.value {
+                StyleValue::Static {
+                    value: MotionValue::Color(color),
+                } => *color,
+                StyleValue::Expr { expr } => match values.get(expr.0 as usize)? {
+                    MotionValue::Color(color) => *color,
+                    _ => return None,
+                },
+                _ => return None,
+            };
+            Some((node.key.clone(), color))
+        })
+        .collect()
+}
+
 fn gradient_stops(
     bindings: &[GradientStopValue],
     values: &[MotionValue],
     at: usize,
     node: &str,
-) -> Result<Vec<(f64, valle_draw::Rgba)>, LayoutError> {
+) -> Result<Vec<(f64, valle_draw::program::AuthorColor)>, LayoutError> {
     let mut stops = Vec::with_capacity(bindings.len());
     let mut previous = 0.0;
     for (index, stop) in bindings.iter().enumerate() {
@@ -3107,7 +5411,7 @@ fn formula_style_from_node(
                     value: MotionValue::Color(c),
                 } = &binding.value
                 {
-                    style.color = *c;
+                    style.color = c.to_srgb8();
                 }
             }
             _ => {}
@@ -3124,6 +5428,8 @@ fn node_of(
     camera: Option<&CameraWrappers>,
     formulas: &HashMap<String, crate::math_formula::FormulaFragment>,
     css_3d_planes: Option<&HashMap<String, crate::layout::bridge::Css3dPlane>>,
+    inactive_nodes: &[bool],
+    layout_instances: &LayoutInstanceRows,
 ) -> Result<Node, LayoutError> {
     let mut projected = projected_nodes_of(
         prepared,
@@ -3133,12 +5439,53 @@ fn node_of(
         camera,
         formulas,
         css_3d_planes,
-        &[],
+        inactive_nodes,
+        layout_instances,
     )?;
     if projected.len() != 1 {
         return Err(LayoutError::BadNode { at });
     }
     Ok(projected.remove(0))
+}
+
+fn projected_instance_node(
+    row: &LayoutInstanceRow,
+    cache: Option<&crate::StyleCache>,
+) -> Result<Node, LayoutError> {
+    let children = row
+        .children
+        .iter()
+        .map(|child| projected_instance_node(child, cache))
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut node = if let Some(text) = &row.text {
+        Node::text(text.clone())
+    } else {
+        Node::container(children)
+    };
+    let preset = if row.text.is_some() {
+        "box-sizing: border-box; margin: 0; padding: 0; border-width: 0; border-style: solid;"
+    } else {
+        "box-sizing: border-box; margin: 0; padding: 0; border-width: 0; border-style: solid; display: block;"
+    };
+    node =
+        node.with_preset(
+            parse_style(cache, preset).map_err(|reason| LayoutError::BadStyle {
+                node: row.key.clone(),
+                declarations: preset.into(),
+                reason,
+            })?,
+        );
+    node = node.with_class_name(row.class_name.clone());
+    if !row.declarations.is_empty() {
+        node = node.with_style(parse_style(cache, &row.declarations).map_err(|reason| {
+            LayoutError::BadStyle {
+                node: row.key.clone(),
+                declarations: row.declarations.clone(),
+                reason,
+            }
+        })?);
+    }
+    Ok(node)
 }
 
 /// Project one Artifact node into zero or one Takumi boxes. GlassField is a semantic material
@@ -3151,10 +5498,23 @@ fn projected_nodes_of(
     camera: Option<&CameraWrappers>,
     formulas: &HashMap<String, crate::math_formula::FormulaFragment>,
     css_3d_planes: Option<&HashMap<String, crate::layout::bridge::Css3dPlane>>,
-    css_active: &[bool],
+    inactive_nodes: &[bool],
+    layout_instances: &LayoutInstanceRows,
 ) -> Result<Vec<Node>, LayoutError> {
+    if inactive_nodes.get(at).copied().unwrap_or(false) {
+        return Ok(Vec::new());
+    }
     let artifact = prepared.artifact();
     let template = artifact.nodes.get(at).ok_or(LayoutError::BadNode { at })?;
+    if let NodeKind::InstanceLayout { group } = template.kind {
+        let rows = layout_instances
+            .get(&group)
+            .ok_or(LayoutError::BadNode { at })?;
+        return rows
+            .iter()
+            .map(|row| projected_instance_node(row, cache))
+            .collect();
+    }
     let child_range = template.children.start as usize..template.children.end as usize;
     let child_ids = artifact
         .node_children
@@ -3171,7 +5531,8 @@ fn projected_nodes_of(
                 camera,
                 formulas,
                 css_3d_planes,
-                css_active,
+                inactive_nodes,
+                layout_instances,
             )
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -3201,20 +5562,32 @@ fn projected_nodes_of(
         _ => child_groups.into_iter().flatten().collect(),
     };
 
-    if matches!(template.kind, NodeKind::GlassField(_)) {
+    if matches!(
+        template.kind,
+        NodeKind::GlassField(_) | NodeKind::TimeScope { .. }
+    ) {
         return Ok(children);
     }
 
     let mut node = match &template.kind {
         NodeKind::Group
         | NodeKind::Box
+        | NodeKind::Shutter { .. }
+        | NodeKind::Echo { .. }
         | NodeKind::Clip { .. }
+        | NodeKind::Transition { .. }
         | NodeKind::Mask { .. }
         | NodeKind::ShaderLayer { .. } => Node::container(children),
         NodeKind::Glass(_) => Node::container(children),
         NodeKind::GlassField(_) => unreachable!("GlassField is projected without a layout box"),
+        NodeKind::TimeScope { .. } => unreachable!("TimeScope is transparent to layout"),
+        NodeKind::InstanceLayout { .. } => {
+            unreachable!("InstanceLayout expands before node construction")
+        }
         NodeKind::Text { text, .. } => Node::text(text_value(text, values, at)?),
-        NodeKind::Path { .. } | NodeKind::GeometryBatch { .. } => Node::container([]),
+        NodeKind::Path { .. } | NodeKind::GeometryBatch { .. } | NodeKind::InstanceBatch { .. } => {
+            Node::container([])
+        }
         NodeKind::Image { source } => Node::image(source.clone()),
         // Scene3D is a replaced element just like image/video. The opaque generated URL is
         // resolved by the 3D host bridge; layout only owns its destination rectangle.
@@ -3244,10 +5617,15 @@ fn projected_nodes_of(
         template.kind,
         NodeKind::Group
             | NodeKind::Box
+            | NodeKind::Shutter { .. }
+            | NodeKind::Echo { .. }
             | NodeKind::Clip { .. }
+            | NodeKind::Transition { .. }
             | NodeKind::Mask { .. }
             | NodeKind::Path { .. }
             | NodeKind::GeometryBatch { .. }
+            | NodeKind::InstanceBatch { .. }
+            | NodeKind::InstanceLayout { .. }
             | NodeKind::ShaderLayer { .. }
             | NodeKind::Glass(_)
             | NodeKind::Scene3D { .. }
@@ -3281,13 +5659,42 @@ fn projected_nodes_of(
     let is_mask_source = artifact.nodes.iter().any(|node| {
         matches!(&node.kind, NodeKind::Mask { source: MaskValue::Subtree { source }, .. } if source == &template.key)
     });
+    let is_transition_child = artifact.nodes.iter().any(|node| {
+        matches!(node.kind, NodeKind::Transition { .. })
+            && artifact.node_children[node.children.start as usize..node.children.end as usize]
+                .iter()
+                .any(|child| child.0 as usize == at)
+    });
+    if matches!(
+        template.kind,
+        NodeKind::Mask { .. }
+            | NodeKind::Transition { .. }
+            | NodeKind::Shutter { .. }
+            | NodeKind::Echo { .. }
+    ) {
+        preset.push_str("position: relative;");
+    }
+    if matches!(
+        template.kind,
+        NodeKind::Shutter { .. } | NodeKind::Echo { .. }
+    ) {
+        preset.push_str("width: 100%; height: 100%;");
+    }
+    if is_mask_source || is_transition_child {
+        // Source placement is in the mask's coordinate system and never consumes content flow.
+        preset.push_str("position: absolute; left: 0; top: 0; width: 100%; height: 100%;");
+    }
     if matches!(
         template.kind,
         NodeKind::Clip { .. }
+            | NodeKind::Transition { .. }
+            | NodeKind::Shutter { .. }
+            | NodeKind::Echo { .. }
             | NodeKind::Mask { .. }
             | NodeKind::ShaderLayer { .. }
             | NodeKind::Glass(_)
     ) || is_mask_source
+        || is_transition_child
     {
         preset.push_str("isolation: isolate;");
     }
@@ -3295,6 +5702,12 @@ fn projected_nodes_of(
     if template.styles.iter().any(|style| {
         style.property.starts_with("motion-displacement-")
             || style.property.starts_with("motion-velocity-blur-")
+            || style.property == "motion-chromatic-aberration-offset"
+            || style.property.starts_with("motion-glow-")
+            || style.property.starts_with("motion-bloom-")
+            || style.property.starts_with("motion-radial-blur-")
+            || style.property.starts_with("motion-film-grain-")
+            || style.property.starts_with("motion-lens-distortion-")
             || style.property.starts_with("motion-transform-3d-")
             || matches!(
                 style.property.as_str(),
@@ -3309,11 +5722,8 @@ fn projected_nodes_of(
     }) {
         preset.push_str("isolation: isolate;");
     }
-    // Text along a path defaults to one line. Wrapping would restart glyph positions at the path
-    // origin and overlap earlier glyphs.
-    //
-    // Use a preset so explicit author styles still win; emission reports unsupported multiline
-    // text.
+    // Text along a path defaults to no automatic wrapping. An explicit author white-space style
+    // can preserve newlines or allow wrapping; emission gives each shaped line its own offset path.
     if let NodeKind::MathFormula { .. } = &template.kind {
         let fragment = formulas
             .get(&template.key)
@@ -3381,6 +5791,10 @@ fn projected_nodes_of(
         None => true,
     };
     let mut declarations = declarations(template, values, visible, at)?;
+    if is_transition_child || matches!(template.kind, NodeKind::Transition { .. }) {
+        // These are semantic subtree boundaries even when the author requests isolation:auto.
+        declarations.push_str("; isolation: isolate !important");
+    }
     if let Some(plane) = css_3d_planes.and_then(|planes| planes.get(&template.key)) {
         if plane.hidden {
             if !declarations.is_empty() {
@@ -3473,8 +5887,15 @@ fn declarations(
     for style in &node.styles {
         // Author `--*` is rejected at admission; skip it here so it never enters the cascade.
         if style.property.starts_with("--")
+            || style.property == "motion-filter-frame"
             || style.property.starts_with("motion-displacement-")
             || style.property.starts_with("motion-velocity-blur-")
+            || style.property == "motion-chromatic-aberration-offset"
+            || style.property.starts_with("motion-glow-")
+            || style.property.starts_with("motion-bloom-")
+            || style.property.starts_with("motion-radial-blur-")
+            || style.property.starts_with("motion-film-grain-")
+            || style.property.starts_with("motion-lens-distortion-")
             || style.property.starts_with("motion-transform-3d-")
             || style.property.starts_with("motion-perspective-origin-")
         {
@@ -3483,6 +5904,7 @@ fn declarations(
         if matches!(
             style.property.as_str(),
             "motion-path-anchor"
+                | "mix-blend-space"
                 | "motion-inline-image"
                 | "motion-path-angle-offset"
                 | "rotate-x"
@@ -3499,6 +5921,21 @@ fn declarations(
             StyleValue::Static { value } => value,
             StyleValue::Expr { expr } => value(values, *expr, at)?,
         };
+        if style.property == "filter" {
+            // Preserve the numeric parameter diagnostic before the generic CSS
+            // parser wraps the entire declaration block into one error.
+            if let Err(reason) = crate::style::advanced_filter::parse(&css_token(value)) {
+                let reason = match style.value {
+                    StyleValue::Expr { expr } => format!("expression {}: {reason}", expr.0),
+                    _ => reason,
+                };
+                return Err(LayoutError::BadStyle {
+                    node: node.key.clone(),
+                    declarations: String::new(),
+                    reason,
+                });
+            }
+        }
         if matches!(style.value, StyleValue::Expr { .. })
             && matches!(style.property.as_str(), "background" | "background-image")
             && !gradient_background_source(&style.property, &css_token(value))
@@ -3535,7 +5972,7 @@ fn declarations(
             // Atomic inline layout honors the authored media box without a pixel decoder.
             declarations.push_str("inline-block");
         } else {
-            declarations.push_str(&css_token(value));
+            declarations.push_str(&crate::style::value_token(&style.property, value));
         }
     }
     if !visible {
@@ -3612,6 +6049,7 @@ fn eval_viewport(opts: &LayoutOptions<'_>) -> Option<(f64, f64)> {
 
 fn resolve_units(
     artifact: &SceneArtifact,
+    eval_plan: &EvalPlan,
     values: &[MotionValue],
     ctx: &valle_motion::MotionContext,
     props: &ResolvedProps,
@@ -3619,6 +6057,58 @@ fn resolve_units(
     projected: &BTreeMap<(String, String), valle_draw::Point>,
     viewport: Option<(f64, f64)>,
 ) -> Result<HashMap<String, Vec<ResolvedUnit>>, LayoutError> {
+    struct RichUnitGroup {
+        boundaries: Vec<(u32, u32)>,
+        run_ranges: HashMap<usize, (u32, u32)>,
+    }
+
+    // A rich Text is an inline Group of styled Text runs. Join their authored source in child
+    // order before splitting, so ctx.unit.index/count/start/end address the whole Text and a
+    // word or line crossing a Span boundary remains one animation unit.
+    let mut rich_groups = HashMap::<String, RichUnitGroup>::new();
+    for group in &artifact.nodes {
+        if !matches!(&group.kind, NodeKind::Group) {
+            continue;
+        }
+        let children =
+            &artifact.node_children[group.children.start as usize..group.children.end as usize];
+        let split = children.iter().find_map(|child| {
+            let NodeKind::Text {
+                per_unit: Some(binding),
+                ..
+            } = &artifact.nodes[child.0 as usize].kind
+            else {
+                return None;
+            };
+            (binding.group_key.as_deref() == Some(group.key.as_str())).then_some(binding.split)
+        });
+        let Some(split) = split else {
+            continue;
+        };
+        let mut source = String::new();
+        let mut run_ranges = HashMap::new();
+        for child in children {
+            let at = child.0 as usize;
+            match &artifact.nodes[at].kind {
+                NodeKind::Text { text, .. } => {
+                    let start = source.len() as u32;
+                    source.push_str(&text_value(text, values, at)?);
+                    run_ranges.insert(at, (start, source.len() as u32));
+                }
+                // An inline image separates words, but has no text character or layout line.
+                NodeKind::Image { .. } if split == TextSplit::Word => source.push(' '),
+                _ => {}
+            }
+        }
+        rich_groups.insert(
+            group.key.clone(),
+            RichUnitGroup {
+                boundaries: unit_boundaries(&source, split),
+                run_ranges,
+            },
+        );
+    }
+
     let mut out = HashMap::new();
     for (at, node) in artifact.nodes.iter().enumerate() {
         let NodeKind::Text {
@@ -3629,20 +6119,62 @@ fn resolve_units(
         else {
             continue;
         };
-        let source = text_value(text, values, at)?;
-        let boundaries = unit_boundaries(&source, per_unit.split);
-        let count = boundaries.len() as u32;
+        let mut boundaries = Vec::new();
+        if let Some(group_key) = &per_unit.group_key {
+            let group = rich_groups
+                .get(group_key)
+                .ok_or(LayoutError::BadNode { at })?;
+            let (run_start, run_end) = group
+                .run_ranges
+                .get(&at)
+                .copied()
+                .ok_or(LayoutError::BadNode { at })?;
+            let count = group.boundaries.len() as u32;
+            let first = group
+                .boundaries
+                .partition_point(|&(_, end)| end <= run_start);
+            for (index, &(start, end)) in group.boundaries.iter().enumerate().skip(first) {
+                if start >= run_end {
+                    break;
+                }
+                let local_start = start.max(run_start);
+                let local_end = end.min(run_end);
+                if local_start < local_end {
+                    boundaries.push((
+                        local_start - run_start,
+                        local_end - run_start,
+                        valle_motion::UnitContext {
+                            index: index as u32,
+                            count,
+                            start,
+                            end,
+                        },
+                    ));
+                }
+            }
+        } else {
+            let source = text_value(text, values, at)?;
+            let units = unit_boundaries(&source, per_unit.split);
+            let count = units.len() as u32;
+            boundaries.extend(units.into_iter().enumerate().map(|(index, (start, end))| {
+                (
+                    start,
+                    end,
+                    valle_motion::UnitContext {
+                        index: index as u32,
+                        count,
+                        start,
+                        end,
+                    },
+                )
+            }));
+        }
         let style = &per_unit.style;
         let mut resolved = Vec::with_capacity(boundaries.len());
-        for (index, (start, end)) in boundaries.into_iter().enumerate() {
-            let unit = valle_motion::UnitContext {
-                index: index as u32,
-                count,
-                start,
-                end,
-            };
-            let values = valle_motion::eval_units(
+        for (start, end, unit) in boundaries {
+            let values = eval_units_planned(
                 artifact,
+                eval_plan,
                 values,
                 EvalInputs {
                     ctx,
@@ -3654,6 +6186,18 @@ fn resolve_units(
                 boxes,
                 projected,
             )?;
+            let blur = style
+                .blur
+                .as_ref()
+                .map(|binding| number_value(binding, &values, at, "unit blur"))
+                .transpose()?;
+            if blur.is_some_and(|value| !(0.0..=128.0).contains(&value)) {
+                return Err(LayoutError::BadStyle {
+                    node: node.key.clone(),
+                    declarations: "perUnit.blur".into(),
+                    reason: "perUnit blur sigma must be within 0..=128 CSS pixels".into(),
+                });
+            }
             resolved.push(ResolvedUnit {
                 start,
                 end,
@@ -3682,6 +6226,7 @@ fn resolve_units(
                     .as_ref()
                     .map(|binding| color_value(binding, &values, at))
                     .transpose()?,
+                blur,
             });
         }
         out.insert(node.key.clone(), resolved);
@@ -3698,6 +6243,7 @@ fn walk_render_keys(
     node: &RenderNode,
     path: &mut Vec<usize>,
     out: &mut HashMap<Vec<usize>, String>,
+    inactive_nodes: &[bool],
 ) {
     let at = node_id.0 as usize;
     let Some(scene) = artifact.nodes.get(at) else {
@@ -3707,7 +6253,7 @@ fn walk_render_keys(
     let Some(children) = node.children.as_deref() else {
         return;
     };
-    let Some(child_ids) = projected_child_ids(artifact, node_id) else {
+    let Some(child_ids) = projected_child_ids(artifact, node_id, inactive_nodes) else {
         return;
     };
 
@@ -3718,15 +6264,16 @@ fn walk_render_keys(
     if at == artifact.root.0 as usize && artifact.camera.is_some() {
         let mut world_ids = Vec::new();
         let mut screen_ids = Vec::new();
-        for id in &child_ids {
+        for projected in &child_ids {
+            let id = projected.id;
             let is_screen = artifact
                 .nodes
                 .get(id.0 as usize)
                 .is_some_and(|node| node.space == Some(CoordinateSpace::Screen));
             if is_screen {
-                screen_ids.push(*id);
+                screen_ids.push(projected.clone());
             } else {
-                world_ids.push(*id);
+                world_ids.push(projected.clone());
             }
         }
         // The first child is the outer wrapper, containing the inner wrapper and World content.
@@ -3747,6 +6294,7 @@ fn walk_render_keys(
                         &scene.key,
                         path,
                         out,
+                        inactive_nodes,
                     );
                 }
                 path.pop();
@@ -3755,11 +6303,25 @@ fn walk_render_keys(
         }
         // Screen children follow the camera wrapper, starting at render index 1.
         for (index, child) in children.iter().enumerate().skip(1) {
-            let Some(id) = screen_ids.get(index - 1).copied() else {
+            let Some(projected) = screen_ids.get(index - 1) else {
                 break;
             };
             path.push(index);
-            walk_render_keys(artifact, id, child, path, out);
+            if let Some(row) = projected.row {
+                if let Some(group) = artifact.instance_groups.get(projected.group as usize) {
+                    walk_instance_render_keys(
+                        group,
+                        row,
+                        &group.template,
+                        &group.template_children,
+                        child,
+                        path,
+                        out,
+                    );
+                }
+            } else {
+                walk_render_keys(artifact, projected.id, child, path, out, inactive_nodes);
+            }
             path.pop();
         }
         return;
@@ -3774,21 +6336,55 @@ fn walk_render_keys(
         &scene.key,
         path,
         out,
+        inactive_nodes,
     );
 }
 
-/// Artifact children that actually own Takumi boxes. GlassField scopes are flattened exactly as
-/// [`projected_nodes_of`] does; every other node remains one-to-one.
-fn projected_child_ids(artifact: &SceneArtifact, owner: NodeId) -> Option<Vec<NodeId>> {
-    fn append(artifact: &SceneArtifact, id: NodeId, out: &mut Vec<NodeId>) -> Option<()> {
+/// Artifact children that actually own Takumi boxes. Transparent scopes are flattened exactly
+/// as [`projected_nodes_of`] does.
+#[derive(Clone)]
+struct ProjectedChild {
+    id: NodeId,
+    group: u32,
+    row: Option<usize>,
+}
+
+fn projected_child_ids(
+    artifact: &SceneArtifact,
+    owner: NodeId,
+    inactive_nodes: &[bool],
+) -> Option<Vec<ProjectedChild>> {
+    fn append(
+        artifact: &SceneArtifact,
+        id: NodeId,
+        inactive_nodes: &[bool],
+        out: &mut Vec<ProjectedChild>,
+    ) -> Option<()> {
+        if inactive_nodes.get(id.0 as usize).copied().unwrap_or(false) {
+            return Some(());
+        }
         let node = artifact.nodes.get(id.0 as usize)?;
-        if matches!(node.kind, NodeKind::GlassField(_)) {
+        if matches!(
+            node.kind,
+            NodeKind::GlassField(_) | NodeKind::TimeScope { .. }
+        ) {
             let range = node.children.start as usize..node.children.end as usize;
             for child in artifact.node_children.get(range)? {
-                append(artifact, *child, out)?;
+                append(artifact, *child, inactive_nodes, out)?;
             }
+        } else if let NodeKind::InstanceLayout { group } = node.kind {
+            let rows = artifact.instance_groups.get(group as usize)?.rows();
+            out.extend((0..rows).map(|row| ProjectedChild {
+                id,
+                group,
+                row: Some(row),
+            }));
         } else {
-            out.push(id);
+            out.push(ProjectedChild {
+                id,
+                group: 0,
+                row: None,
+            });
         }
         Some(())
     }
@@ -3797,7 +6393,7 @@ fn projected_child_ids(artifact: &SceneArtifact, owner: NodeId) -> Option<Vec<No
     let range = node.children.start as usize..node.children.end as usize;
     let mut out = Vec::new();
     for child in artifact.node_children.get(range)? {
-        append(artifact, *child, &mut out)?;
+        append(artifact, *child, inactive_nodes, &mut out)?;
     }
     Some(out)
 }
@@ -3806,7 +6402,89 @@ fn projected_child_ids(artifact: &SceneArtifact, owner: NodeId) -> Option<Vec<No
 fn match_render_children(
     artifact: &SceneArtifact,
     children: &[RenderNode],
-    child_ids: &[NodeId],
+    child_ids: &[ProjectedChild],
+    cursor: &mut usize,
+    owner: &str,
+    path: &mut Vec<usize>,
+    out: &mut HashMap<Vec<usize>, String>,
+    inactive_nodes: &[bool],
+) {
+    for (at, child) in children.iter().enumerate() {
+        path.push(at);
+        if child.anonymous_text_content.is_some() {
+            walk_owned_subtree_keys(child, path, owner, out);
+        } else if child.node.is_none() {
+            if let Some(grandchildren) = child.children.as_deref() {
+                match_render_children(
+                    artifact,
+                    grandchildren,
+                    child_ids,
+                    cursor,
+                    owner,
+                    path,
+                    out,
+                    inactive_nodes,
+                );
+            }
+        } else if let Some(projected) = child_ids.get(*cursor) {
+            if let Some(row) = projected.row {
+                if let Some(group) = artifact.instance_groups.get(projected.group as usize) {
+                    walk_instance_render_keys(
+                        group,
+                        row,
+                        &group.template,
+                        &group.template_children,
+                        child,
+                        path,
+                        out,
+                    );
+                }
+            } else {
+                walk_render_keys(artifact, projected.id, child, path, out, inactive_nodes);
+            }
+            *cursor += 1;
+        } else {
+            path.pop();
+            return;
+        }
+        path.pop();
+    }
+}
+
+fn walk_instance_render_keys(
+    group: &InstanceGroup,
+    row: usize,
+    template: &valle_motion::SceneNode,
+    template_children: &[InstanceTemplateNode],
+    render: &RenderNode,
+    path: &mut Vec<usize>,
+    out: &mut HashMap<Vec<usize>, String>,
+) {
+    let Some(key) = group.key_for_node(row, &template.key) else {
+        return;
+    };
+    out.insert(path.clone(), key.clone());
+    let Some(children) = render.children.as_deref() else {
+        return;
+    };
+    let mut cursor = 0;
+    match_instance_render_children(
+        group,
+        row,
+        children,
+        template_children,
+        &mut cursor,
+        &key,
+        path,
+        out,
+    );
+}
+
+fn match_instance_render_children(
+    group: &InstanceGroup,
+    row: usize,
+    children: &[RenderNode],
+    templates: &[InstanceTemplateNode],
     cursor: &mut usize,
     owner: &str,
     path: &mut Vec<usize>,
@@ -3818,10 +6496,27 @@ fn match_render_children(
             walk_owned_subtree_keys(child, path, owner, out);
         } else if child.node.is_none() {
             if let Some(grandchildren) = child.children.as_deref() {
-                match_render_children(artifact, grandchildren, child_ids, cursor, owner, path, out);
+                match_instance_render_children(
+                    group,
+                    row,
+                    grandchildren,
+                    templates,
+                    cursor,
+                    owner,
+                    path,
+                    out,
+                );
             }
-        } else if let Some(id) = child_ids.get(*cursor) {
-            walk_render_keys(artifact, *id, child, path, out);
+        } else if let Some(template) = templates.get(*cursor) {
+            walk_instance_render_keys(
+                group,
+                row,
+                &template.node,
+                &template.children,
+                child,
+                path,
+                out,
+            );
             *cursor += 1;
         } else {
             path.pop();
@@ -3856,7 +6551,8 @@ fn walk_pairs(
     artifact: &SceneArtifact,
     root: &RenderNode,
     layout: &LayoutResults,
-    callback: &mut dyn FnMut(usize, takumi_core::geometry::NodeId, (f32, f32)),
+    inactive_nodes: &[bool],
+    callback: &mut dyn FnMut(Option<usize>, &str, takumi_core::geometry::NodeId, (f32, f32)),
 ) -> Result<(), LayoutError> {
     let mut render_keys = HashMap::new();
     walk_render_keys(
@@ -3865,6 +6561,7 @@ fn walk_pairs(
         root,
         &mut Vec::new(),
         &mut render_keys,
+        inactive_nodes,
     );
     let indices: HashMap<_, _> = artifact
         .nodes
@@ -3884,9 +6581,8 @@ fn walk_pairs(
         if node.source_order().is_some()
             && let Some(key) = render_keys.get(&path)
             && (path.is_empty() || key != root_key)
-            && let Some(&at) = indices.get(key.as_str())
         {
-            callback(at, id, here);
+            callback(indices.get(key.as_str()).copied(), key, id, here);
         }
         if let (Some(children), Ok(layout_children)) = (&node.children, layout.box_children(id)) {
             for item in layout_children.iter().rev() {
@@ -3921,6 +6617,7 @@ fn inline_boxes(
     artifact: &SceneArtifact,
     root: &RenderNode,
     layout: &LayoutResults,
+    inactive_nodes: &[bool],
     boxes: &mut BTreeMap<String, valle_draw::Rect>,
 ) -> Result<(), LayoutError> {
     use takumi_core::layout::inline::{
@@ -3934,6 +6631,7 @@ fn inline_boxes(
         root,
         &mut Vec::new(),
         &mut render_keys,
+        inactive_nodes,
     );
     let mut source_keys = HashMap::new();
     for (path, key) in render_keys {
@@ -4089,13 +6787,11 @@ impl CameraWrappers {
 }
 
 /// Whether a camera binding depends on bounds and therefore requires a probe layout pass.
-fn camera_depends_on_bounds(artifact: &SceneArtifact) -> bool {
+fn camera_depends_on_bounds(artifact: &SceneArtifact, plan: &EvalPlan) -> bool {
     let Some(camera) = &artifact.camera else {
         return false;
     };
-    let dependent = valle_motion::bounds_dependent(&artifact.exprs);
-    let is_dependent =
-        |expr: valle_motion::ExprId| dependent.get(expr.0 as usize).copied().unwrap_or_default();
+    let is_dependent = |expr: valle_motion::ExprId| plan.bounds_dependent(expr);
     let point_dependent = match &camera.center {
         PointValue::Static { .. } => false,
         PointValue::Expr { expr } => is_dependent(*expr),
@@ -4148,10 +6844,10 @@ fn layout_and_collect_boxes(
     tree.compute_layout(render_context.sizing.viewport.into());
     let layout = tree.into_results();
     let mut boxes = BTreeMap::new();
-    walk_pairs(artifact, &root, &layout, &mut |at, id, origin| {
-        if let (Some(node), Ok(computed)) = (artifact.nodes.get(at), layout.layout(id)) {
+    walk_pairs(artifact, &root, &layout, &[], &mut |_, key, id, origin| {
+        if let Ok(computed) = layout.layout(id) {
             boxes.insert(
-                node.key.clone(),
+                key.to_owned(),
                 valle_draw::Rect::new(
                     f64::from(origin.0),
                     f64::from(origin.1),
@@ -4161,7 +6857,7 @@ fn layout_and_collect_boxes(
             );
         }
     })?;
-    inline_boxes(artifact, &root, &layout, &mut boxes)?;
+    inline_boxes(artifact, &root, &layout, &[], &mut boxes)?;
     Ok(boxes)
 }
 
@@ -4264,16 +6960,28 @@ pub fn layout_boxes(
     tree: &LayoutTree,
 ) -> Result<BTreeMap<String, [f32; 4]>, LayoutError> {
     let mut boxes = BTreeMap::new();
-    walk_pairs(artifact, &tree.root, &tree.layout, &mut |at, id, origin| {
-        if let (Some(node), Ok(layout)) = (artifact.nodes.get(at), tree.layout.layout(id)) {
-            boxes.insert(
-                node.key.clone(),
-                [origin.0, origin.1, layout.size.width, layout.size.height],
-            );
-        }
-    })?;
+    walk_pairs(
+        artifact,
+        &tree.root,
+        &tree.layout,
+        &tree.inactive_nodes,
+        &mut |_, key, id, origin| {
+            if let Ok(layout) = tree.layout.layout(id) {
+                boxes.insert(
+                    key.to_owned(),
+                    [origin.0, origin.1, layout.size.width, layout.size.height],
+                );
+            }
+        },
+    )?;
     let mut inlines = BTreeMap::new();
-    inline_boxes(artifact, &tree.root, &tree.layout, &mut inlines)?;
+    inline_boxes(
+        artifact,
+        &tree.root,
+        &tree.layout,
+        &tree.inactive_nodes,
+        &mut inlines,
+    )?;
     boxes.extend(inlines.into_iter().map(|(key, rect)| {
         (
             key,

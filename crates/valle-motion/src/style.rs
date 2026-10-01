@@ -13,8 +13,10 @@ use takumi_core::style::{
     Angle, Filter, FromCssStr, Length, Style, StyleDeclaration, ToCss, Transform, Transforms,
 };
 
-mod background;
+pub mod advanced_filter;
+pub(crate) mod background;
 pub(crate) use background::gradient_background_source;
+pub mod blend;
 mod diagnostic;
 pub use diagnostic::{StyleIssue, StyleIssueKind};
 mod property;
@@ -42,6 +44,23 @@ pub fn supports_property(name: &str) -> bool {
     spec.lowering == PropertyLowering::Css && spec.admit().is_ok()
 }
 
+/// Point/vector styles acquire units at their consumer. The same expression may also
+/// feed a unitless scale, so converting the shared expression itself would be incorrect.
+pub(crate) fn value_token(name: &str, value: &crate::MotionValue) -> String {
+    use crate::{MotionValue, value::Length2};
+    if matches!(name, "translate" | "transform-origin") {
+        let point = match value {
+            MotionValue::Point(point) => Some((point.x, point.y)),
+            MotionValue::Vec2(vector) => Some((vector.x, vector.y)),
+            _ => None,
+        };
+        if let Some((x, y)) = point {
+            return crate::css_token(&MotionValue::Length2(Length2::px(x, y)));
+        }
+    }
+    crate::css_token(value)
+}
+
 /// Parse exactly one property value, preventing declaration injection through a string value.
 pub fn parse_property(name: &str, value: &str) -> Result<Style, StyleIssue> {
     if name.starts_with("--") {
@@ -60,8 +79,13 @@ pub fn parse_property(name: &str, value: &str) -> Result<Style, StyleIssue> {
     }
     spec.check_value(value)?;
     let source = format!("{name}: {value}");
-    let (style, count) = parse_block(&source)
-        .map_err(|reason| StyleIssue::new(StyleIssueKind::InvalidValue, name, value, reason))?;
+    let (style, count) = parse_block(&source).map_err(|reason| {
+        let issue = StyleIssue::new(StyleIssueKind::InvalidValue, name, value, reason);
+        match spec.dynamic_example() {
+            Some(example) => issue.with_suggestion(example),
+            None => issue,
+        }
+    })?;
     if count != 1 {
         return Err(StyleIssue::new(
             StyleIssueKind::InvalidValue,
@@ -184,7 +208,14 @@ impl<'i> DeclarationParser<'i> for StrictDeclarations {
         } else {
             &value
         };
-        let mut style = if name == "transform" && keyword.is_none() {
+        let advanced = if name == "filter" {
+            advanced_filter::parse(&value).map_err(|reason| input.new_custom_error(reason))?
+        } else {
+            None
+        };
+        let mut style = if advanced.is_some() {
+            Style::from_str("filter: opacity(1)").expect("identity filter")
+        } else if name == "transform" && keyword.is_none() {
             transform_style(&value).map_err(|reason| input.new_custom_error(reason))?
         } else {
             Style::from_str(&format!("{name}: {backend_value}"))
@@ -192,6 +223,17 @@ impl<'i> DeclarationParser<'i> for StrictDeclarations {
         };
         if style.declarations.is_empty() {
             return Err(input.new_custom_error(format!("unsupported `{name}: {value}`")));
+        }
+        for declaration in style.declarations.iter() {
+            if let StyleDeclaration::BackgroundImage(images) = declaration {
+                for image in images.iter().flat_map(|images| images.iter()) {
+                    background::validate_image(image)
+                        .map_err(|reason| input.new_custom_error(reason))?;
+                }
+            }
+            if let StyleDeclaration::MixBlendMode(mode) = declaration {
+                blend::lower(*mode).map_err(|reason| input.new_custom_error(reason))?;
+            }
         }
         if name == "translate" {
             let mut translated = Style::default();
@@ -221,6 +263,24 @@ impl<'i> DeclarationParser<'i> for StrictDeclarations {
                 )));
             }
             validate_filter_values(&style).map_err(|reason| input.new_custom_error(reason))?;
+        }
+        if name == "filter" {
+            style.push(
+                StyleDeclaration::CustomProperty(
+                    if important {
+                        advanced_filter::IMPORTANT_SLOT
+                    } else {
+                        advanced_filter::SLOT
+                    }
+                    .into(),
+                    if advanced.is_some() {
+                        value.clone()
+                    } else {
+                        "none".into()
+                    },
+                ),
+                important,
+            );
         }
         if let Some((marker, state)) = transform_state {
             let marker = if important {
@@ -355,6 +415,7 @@ fn css_keyword(value: &str) -> Option<String> {
     input
         .try_parse(|input| {
             let keyword = input.expect_ident_cloned()?;
+            let _ = input.try_parse(parse_important);
             input.expect_exhausted()?;
             Ok::<_, cssparser::BasicParseError<'_>>(keyword.to_ascii_lowercase())
         })

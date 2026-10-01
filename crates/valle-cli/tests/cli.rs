@@ -948,7 +948,7 @@ fn motion_surface_exposes_direct_export() {
         .expect("run valle motion --help");
     assert!(output.status.success());
     let help = String::from_utf8(output.stdout).expect("UTF-8 help");
-    for command in ["check", "render", "studio"] {
+    for command in ["check", "review", "render", "studio"] {
         assert!(help.contains(command), "missing `{command}` in:\n{help}");
     }
     let commands: Vec<_> = help
@@ -979,6 +979,7 @@ export default function Demo(ctx) {
     <View style={{ width: 20, height: 20, backgroundColor: "#ff5500", opacity: ctx.progress }} />
   </Scene>;
 }
+
 "##,
     )
     .unwrap();
@@ -1049,6 +1050,34 @@ export default function Demo(ctx) {
     assert_eq!(raster_report["delivery"]["height"], 180);
     assert!(stderr.contains("threads=2 "), "{stderr}");
     assert_eq!(raster_report["renderId"], report["renderId"]);
+}
+
+#[test]
+fn motion_oklch_interpolation_matches_native_pixel() {
+    let dir = tempfile::tempdir().unwrap();
+    for fixture in ["oklch-color-interpolation", "float-color-gradient"] {
+        let source = Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
+            "../valle-compiler/tests/fixtures/motion/composition/{fixture}.motion.tsx"
+        ));
+        let output = dir.path().join(format!("{fixture}.png"));
+        let result = valle()
+            .args(["motion", "render"])
+            .arg(&source)
+            .args(["--backend", "raster", "--frame", "30", "-o"])
+            .arg(&output)
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{fixture}: {}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        let pixels = valle_media::codec::read_rgba_png(&output).unwrap();
+        let center = &pixels.data[(180 * 640 + 320) * 4..(180 * 640 + 320) * 4 + 4];
+        for (actual, expected) in center.iter().zip([0_u8, 196, 159, 255]) {
+            assert!(actual.abs_diff(expected) <= 6, "{fixture} pixel {center:?}");
+        }
+    }
 }
 
 #[test]
@@ -1358,11 +1387,23 @@ fn motion_compile_errors_include_source_diagnostics_in_machine_output() {
                 "{}",
                 String::from_utf8_lossy(&out.stderr)
             );
-            let value: Value = serde_json::from_slice(&out.stdout).unwrap();
-            let report = if mode == "--events" {
-                &value["data"]
+            let report: Value = if mode == "--events" {
+                let events = String::from_utf8(out.stdout)
+                    .unwrap()
+                    .lines()
+                    .map(|line| serde_json::from_str::<Value>(line).unwrap())
+                    .collect::<Vec<_>>();
+                assert_eq!(
+                    events
+                        .iter()
+                        .filter(|event| event["type"] == "motion.compilation")
+                        .count(),
+                    1
+                );
+                assert_eq!(events.last().unwrap()["type"], "report");
+                events.last().unwrap()["data"].clone()
             } else {
-                &value
+                serde_json::from_slice(&out.stdout).unwrap()
             };
             assert_eq!(report["error"]["code"], "motion_compile_failed", "{report}");
             let diagnostic = &report["error"]["diagnostics"][0];

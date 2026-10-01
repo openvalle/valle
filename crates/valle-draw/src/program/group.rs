@@ -5,16 +5,19 @@ use crate::{
     requirements::{Insets, RuntimeShaderKey, SamplingMode},
 };
 
-use super::{LinearColor, NodeId, PathId, Transform2d};
+use super::{AuthorColor, LinearColor, NodeId, PathId, Transform2d};
 
 /// Truncated support used by the canonical DrawProgram Gaussian filter contract.
 pub const FILTER_GAUSSIAN_SUPPORT_SIGMAS: f32 = 3.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 pub enum BlendMode {
     #[default]
     Normal,
+    /// Premultiplied addition in the linear working space, with clamped coverage.
+    Plus,
     Multiply,
     Screen,
     Overlay,
@@ -31,6 +34,17 @@ pub enum BlendMode {
     Saturation,
     Color,
     Luminosity,
+}
+
+/// RGB domain for creative blend functions. Both choices use sRGB primaries;
+/// `Linear` omits the transfer curve. Normal and Plus always use working-linear math.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(rename_all = "camelCase")]
+pub enum BlendSpace {
+    #[default]
+    Srgb,
+    Linear,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -124,6 +138,34 @@ pub enum Filter {
         sigma_y: f32,
         color: LinearColor,
     },
+    Glow {
+        color: AuthorColor,
+        radius: f32,
+        intensity: f32,
+    },
+    Bloom {
+        threshold: f32,
+        knee: f32,
+        intensity: f32,
+        radius: f32,
+    },
+    RadialBlur {
+        center: [f32; 2],
+        amount: f32,
+    },
+    FilmGrain {
+        seed: u32,
+        amount: f32,
+        size: f32,
+    },
+    LensDistortion {
+        k1: f32,
+        k2: f32,
+    },
+    ChromaticAberration {
+        /// Red and blue are displaced by half this vector in opposite directions.
+        offset: [f32; 2],
+    },
     NoiseDisplacement {
         frequency: [f32; 2],
         octaves: u8,
@@ -142,6 +184,27 @@ pub enum Filter {
 pub enum MaskMode {
     Alpha,
     Luminance,
+    AlphaInverted,
+    LuminanceInverted,
+}
+
+impl MaskMode {
+    pub fn is_inverted(self) -> bool {
+        matches!(self, Self::AlphaInverted | Self::LuminanceInverted)
+    }
+
+    pub fn is_luminance(self) -> bool {
+        matches!(self, Self::Luminance | Self::LuminanceInverted)
+    }
+
+    pub fn inverted(self) -> Self {
+        match self {
+            Self::Alpha => Self::AlphaInverted,
+            Self::Luminance => Self::LuminanceInverted,
+            Self::AlphaInverted => Self::Alpha,
+            Self::LuminanceInverted => Self::Luminance,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -242,6 +305,16 @@ impl ShaderLayer {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TransitionLayer {
+    pub kind: crate::transition::TransitionKind,
+    pub params: crate::transition::TransitionValues,
+    pub progress: f32,
+    /// Origin-anchored local canvas shared by both independent child subtrees.
+    pub bounds: Rect,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Group {
     pub children: Vec<NodeId>,
     /// Motion Glass material painted from the Current destination before ordered foreground
@@ -257,9 +330,11 @@ pub struct Group {
     pub mask: Option<Mask>,
     pub opacity: f32,
     pub internal_blend: BlendMode,
+    pub blend_space: BlendSpace,
     pub isolated: bool,
     pub backdrop: Option<BackdropRead>,
     pub shader: Option<ShaderLayer>,
+    pub transition: Option<TransitionLayer>,
     /// Explicit author layer bounds. This is validation/cost metadata, never executor policy.
     pub layer_bounds: Option<Rect>,
 }
@@ -276,9 +351,11 @@ impl Group {
             mask: None,
             opacity: 1.0,
             internal_blend: BlendMode::Normal,
+            blend_space: BlendSpace::Srgb,
             isolated: false,
             backdrop: None,
             shader: None,
+            transition: None,
             layer_bounds: None,
         }
     }
@@ -306,6 +383,7 @@ impl Group {
             && self.internal_blend == BlendMode::Normal
             && self.backdrop.is_none()
             && self.shader.is_none()
+            && self.transition.is_none()
     }
 
     /// Returns true only when replacing this group with its ordered children is pixel-equivalent.

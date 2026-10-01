@@ -15,13 +15,13 @@ use valle_engine::{
     prepare::{
         DeviceRect, DeviceTransform, DynamicBindingId, DynamicBindingKind, DynamicValue, ProgramId,
     },
-    resource::Extent2d,
+    resource::{ContentDigest, Extent2d},
 };
 
 use super::{
     SkiaExternalObject, SkiaObjectTable, SkiaTarget,
     blend::BlendRuntime,
-    cache::{BackendCacheCounters, BackendCaches},
+    cache::{BackendCacheCounters, BackendCaches, RasterLayerCache, RasterLayerKey},
     draw::{DrawError, ProgramRuntime, ProgramTerminal},
     effect::{EffectCacheCounters, EffectRuntime, apply_prepared_mask, set_working_color},
     import::render_import,
@@ -39,6 +39,7 @@ pub struct SkiaExecutor {
     capabilities: BackendCapabilities,
     effects: EffectRuntime,
     caches: BackendCaches,
+    raster_layers: RasterLayerCache,
     surfaces: SurfaceArena,
 }
 
@@ -51,6 +52,7 @@ impl SkiaExecutor {
             capabilities,
             effects: EffectRuntime::new(),
             caches: BackendCaches::new(),
+            raster_layers: RasterLayerCache::new(),
             surfaces: SurfaceArena::new(),
         })
     }
@@ -62,6 +64,7 @@ impl SkiaExecutor {
             capabilities,
             effects: EffectRuntime::new(),
             caches: BackendCaches::new(),
+            raster_layers: RasterLayerCache::new(),
             surfaces: SurfaceArena::metal()?,
         })
     }
@@ -81,6 +84,7 @@ impl SkiaExecutor {
     /// Drops every reusable backend surface. CPU hosts call this for an explicit device/context
     /// loss; extent or output-contract changes invalidate the generation automatically.
     pub fn invalidate_surface_generation(&mut self) {
+        self.raster_layers.clear();
         self.surfaces.invalidate();
     }
 
@@ -113,7 +117,7 @@ impl SkiaExecutor {
         target: &mut SkiaTarget<'_>,
     ) -> Result<SkiaExecutionReport, SkiaExecuteError> {
         let admitted = self.admit(template, bindings, objects, target)?;
-        admitted.execute_with_arena(target, &mut self.surfaces)
+        admitted.execute_with_arena(target, &mut self.surfaces, &mut self.raster_layers)
     }
 
     #[cfg(all(target_os = "macos", feature = "native"))]
@@ -260,6 +264,11 @@ pub struct SkiaExecutionReport {
     /// Current retained-program gauges for this executor, not frame deltas or process RSS.
     pub program_cache_entries: usize,
     pub program_cache_cost_bytes: usize,
+    pub raster_layer_cache_hits: u64,
+    pub raster_layer_cache_misses: u64,
+    pub raster_layer_cache_entries: usize,
+    /// Retained ROI pixels × 8 bytes; an estimate, not actual Skia allocation size.
+    pub raster_layer_cache_bytes: usize,
     pub font_cache_hits: u64,
     pub font_cache_misses: u64,
     pub shader_cache_hits: u64,
@@ -336,13 +345,15 @@ impl AdmittedSkiaFrame<'_> {
         target: &mut SkiaTarget<'_>,
     ) -> Result<SkiaExecutionReport, SkiaExecuteError> {
         let mut arena = SurfaceArena::new();
-        self.execute_with_arena(target, &mut arena)
+        let mut raster_layers = RasterLayerCache::new();
+        self.execute_with_arena(target, &mut arena, &mut raster_layers)
     }
 
     fn execute_with_arena(
         self,
         target: &mut SkiaTarget<'_>,
         arena: &mut SurfaceArena,
+        raster_layers: &mut RasterLayerCache,
     ) -> Result<SkiaExecutionReport, SkiaExecuteError> {
         preflight_target(self.template, target)?;
         let extent = render_extent(self.template)?;
@@ -356,6 +367,7 @@ impl AdmittedSkiaFrame<'_> {
             self.max_surface_bytes,
             self.max_frame_bytes,
         )?;
+        let (layer_hits_before, layer_misses_before, _, _) = raster_layers.counters();
         let external_images = materialize_external_visuals(&self.bound, &mut surface_frame)?;
 
         // Deep per-pass tracing is intentionally separate from the stable aggregate VALLE_PERF
@@ -363,9 +375,15 @@ impl AdmittedSkiaFrame<'_> {
         let trace_passes = std::env::var_os("VALLE_COMPOSITOR_TRACE_PASSES").is_some();
         for pass in self.template.passes() {
             let pass_started = trace_passes.then(std::time::Instant::now);
-            let output = pass.kind.output();
-            let output_roi = bound_resource_roi(&self.schedules, output)?;
-            let output_slot = plan_surface_slot(self.template, output)?;
+            let bound_pass = self
+                .schedules
+                .passes()
+                .get(pass.id.get() as usize - 1)
+                .expect("frame admission binds every canonical execution pass");
+            debug_assert_eq!(bound_pass.pass(), pass.id);
+            let output = bound_pass.output();
+            let output_roi = bound_pass.device_roi();
+            let output_slot = bound_pass.surface_slot();
             let (image, already_materialized) = match &pass.kind {
                 ExecutionPassKind::ClearRegion {
                     working_linear_rec2020_premul,
@@ -426,49 +444,77 @@ impl AdmittedSkiaFrame<'_> {
                 }
                 ExecutionPassKind::RasterProgram {
                     program,
+                    external_inputs,
                     destination_inputs,
                     transform,
                     ..
                 } => {
                     let output_slot = required_output_slot(output, output_slot)?;
                     let schedule = program_schedule(&self.schedules, *program, pass.id)?;
-                    let mut local_extents = schedule
-                        .surface_slots()
-                        .iter()
-                        .filter_map(|slot| slot.extent())
-                        .collect::<Vec<_>>();
-                    let helper_index =
-                        program_helper_extent(plan_program(self.bindings, *program)?, schedule)?
-                            .map(|helper| {
-                                let index = local_extents.len();
-                                local_extents.push(helper);
-                                index
-                            });
-                    let image = {
-                        let roi_copies =
-                            program_uses_roi_copies(plan_program(self.bindings, *program)?);
-                        let mut scratch = if roi_copies {
-                            surface_frame.scratch_program(&local_extents)?
-                        } else {
-                            surface_frame.scratch(&local_extents)?
-                        };
-                        self.program(*program)?.execute(
+                    let plan = plan_program(self.bindings, *program)?;
+                    let transform = dynamic_transform(self.bindings, *transform)?;
+                    let cache_key = (external_inputs.is_empty()
+                        && destination_inputs.is_empty()
+                        && plan.resources.textures.is_empty()
+                        && plan.resources.fonts.is_empty()
+                        && plan.resources.runtime_shaders.is_empty()
+                        && plan.resources.scenes.is_empty()
+                        && plan.destination_uses.is_empty()
+                        && plan.local_plan().passes().iter().all(|pass| {
+                            !matches!(
+                                &pass.kind,
+                                ProgramPassKind::ReadDestination { .. }
+                                    | ProgramPassKind::Backdrop { .. }
+                            )
+                        })
+                        && !output_roi.is_empty())
+                    .then(|| raster_layer_key(plan, transform, output_roi, self.template));
+                    if let Some(image) = cache_key.as_ref().and_then(|key| raster_layers.get(key)) {
+                        (image, false)
+                    } else {
+                        let mut local_extents = schedule
+                            .surface_slots()
+                            .iter()
+                            .filter_map(|slot| slot.extent())
+                            .collect::<Vec<_>>();
+                        let helper_index = program_helper_extent(
                             plan_program(self.bindings, *program)?,
                             schedule,
-                            dynamic_transform(self.bindings, *transform)?,
-                            destination_inputs,
-                            &surfaces,
-                            extent,
-                            &info,
-                            &mut scratch,
-                            ProgramTerminal::Plan {
-                                slot: output_slot,
-                                roi: output_roi,
-                            },
-                            helper_index,
                         )?
-                    };
-                    (image, true)
+                        .map(|helper| {
+                            let index = local_extents.len();
+                            local_extents.push(helper);
+                            index
+                        });
+                        let image = {
+                            let roi_copies =
+                                program_uses_roi_copies(plan_program(self.bindings, *program)?);
+                            let mut scratch = if roi_copies {
+                                surface_frame.scratch_program(&local_extents)?
+                            } else {
+                                surface_frame.scratch(&local_extents)?
+                            };
+                            self.program(*program)?.execute(
+                                plan,
+                                schedule,
+                                transform,
+                                destination_inputs,
+                                &surfaces,
+                                extent,
+                                &info,
+                                &mut scratch,
+                                ProgramTerminal::Plan {
+                                    slot: output_slot,
+                                    roi: output_roi,
+                                },
+                                helper_index,
+                            )?
+                        };
+                        if let Some(key) = cache_key {
+                            raster_layers.insert(key, image.clone());
+                        }
+                        (image, true)
+                    }
                 }
                 ExecutionPassKind::RasterCaption {
                     program,
@@ -726,6 +772,7 @@ impl AdmittedSkiaFrame<'_> {
                                             &source,
                                             &destination,
                                             *mode,
+                                            valle_draw::program::BlendSpace::Srgb,
                                             opacity,
                                         )?;
                                         Ok(())
@@ -773,17 +820,8 @@ impl AdmittedSkiaFrame<'_> {
             // The plan's inclusive liveness intervals are executable ownership, not inspector
             // decoration. Retire dead logical images immediately so Skia can release their pixel
             // storage (or make the physical slot reusable) before the next pass.
-            for resource in self
-                .template
-                .surface_slots()
-                .iter()
-                .flat_map(|slot| &slot.allocations)
-                .filter(|allocation| allocation.interval.last == pass.id)
-                .map(|allocation| allocation.resource)
-            {
-                if resource != self.template.output() {
-                    surfaces.remove(&resource);
-                }
+            for resource in bound_pass.retire_after() {
+                surfaces.remove(resource);
             }
             if let Some(started) = pass_started {
                 eprintln!(
@@ -820,6 +858,7 @@ impl AdmittedSkiaFrame<'_> {
             .total_surface_allocations
             .checked_sub(pooled_allocations)
             .ok_or(SkiaExecuteError::SurfaceAllocationAccounting)?;
+        let (layer_hits, layer_misses, layer_entries, layer_bytes) = raster_layers.counters();
         Ok(SkiaExecutionReport {
             passes: self.template.passes().len(),
             programs: self.programs.len(),
@@ -827,6 +866,10 @@ impl AdmittedSkiaFrame<'_> {
             program_cache_misses: self.cache_counters.program_misses,
             program_cache_entries: self.cache_counters.program_entries,
             program_cache_cost_bytes: self.cache_counters.program_cost_bytes,
+            raster_layer_cache_hits: layer_hits.saturating_sub(layer_hits_before),
+            raster_layer_cache_misses: layer_misses.saturating_sub(layer_misses_before),
+            raster_layer_cache_entries: layer_entries,
+            raster_layer_cache_bytes: layer_bytes,
             font_cache_hits: self.cache_counters.font_hits,
             font_cache_misses: self.cache_counters.font_misses,
             shader_cache_hits: self.cache_counters.shader_hits,
@@ -872,26 +915,6 @@ fn materialize_plan_surface(
     }
 }
 
-fn plan_surface_slot(
-    template: &RenderPlanTemplate,
-    resource: PlanResourceId,
-) -> Result<Option<SurfaceSlotId>, SkiaExecuteError> {
-    let plan = template
-        .resources()
-        .get(resource.get() as usize - 1)
-        .filter(|candidate| candidate.id == resource)
-        .ok_or(SkiaExecuteError::InvalidPassOutput {
-            resource: resource.get(),
-        })?;
-    match plan.kind {
-        PlanResourceKind::Surface { slot } => Ok(Some(slot)),
-        PlanResourceKind::Alias { .. } | PlanResourceKind::OutputTarget {} => Ok(None),
-        PlanResourceKind::External { .. } => Err(SkiaExecuteError::InvalidPassOutput {
-            resource: resource.get(),
-        }),
-    }
-}
-
 fn required_output_slot(
     resource: PlanResourceId,
     slot: Option<SurfaceSlotId>,
@@ -913,6 +936,25 @@ fn render_plan_surface(
     let surface = frame.surface_mut(slot)?;
     draw(surface)?;
     Ok(frame.snapshot(slot, roi)?)
+}
+
+fn raster_layer_key(
+    program: &PlanProgram,
+    transform: DeviceTransform,
+    roi: DeviceRect,
+    template: &RenderPlanTemplate,
+) -> RasterLayerKey {
+    // The frame hash covers the admitted local pass graph and schedule as well as viewport;
+    // the content hash covers evaluated geometry, paints and shader uniforms.
+    let render_spec =
+        serde_json::to_vec(&template.render_spec()).expect("validated render spec is serializable");
+    RasterLayerKey {
+        program: *program.content_hash(),
+        frame: *program.frame_hash(),
+        render_spec: ContentDigest::of_bytes(&render_spec),
+        transform: transform.matrix().map(f64::to_bits),
+        roi: (roi.x, roi.y, roi.width, roi.height),
+    }
 }
 
 fn materialize_root_image(
@@ -1081,20 +1123,6 @@ fn program_schedule(
         .ok_or(SkiaExecuteError::InvalidProgramSchedule {
             program: id.get(),
             pass: pass.get(),
-        })
-}
-
-fn bound_resource_roi(
-    schedules: &BoundProgramSchedules,
-    resource: PlanResourceId,
-) -> Result<DeviceRect, SkiaExecuteError> {
-    schedules
-        .resources()
-        .get(resource.get() as usize - 1)
-        .filter(|candidate| candidate.resource() == resource)
-        .map(|resource| resource.device_roi())
-        .ok_or(SkiaExecuteError::InvalidPassOutput {
-            resource: resource.get(),
         })
 }
 

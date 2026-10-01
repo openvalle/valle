@@ -142,13 +142,113 @@ impl PreviewFiles {
 #[derive(Default)]
 pub(crate) struct PreviewStore {
     pub files: RwLock<PreviewFiles>,
+    audio: Mutex<BTreeMap<String, Arc<[u8]>>>,
     // A reload/edit must not prepare several multi-gigabyte packages simultaneously.
     pub prepare: Mutex<FrozenMediaCache>,
+}
+
+impl PreviewStore {
+    /// Canonical analysis input: the same FFmpeg 48 kHz mono decode used by CLI.
+    /// Only already-frozen preview resources can be decoded through this route.
+    pub fn audio_pcm(&self, digest: &str) -> Result<Option<Arc<[u8]>>> {
+        let file = self
+            .files
+            .read()
+            .map_err(|_| anyhow::anyhow!("preview files poisoned"))?
+            .get(digest)
+            .cloned();
+        let Some(file) = file else {
+            return Ok(None);
+        };
+        let mut cache = self
+            .audio
+            .lock()
+            .map_err(|_| anyhow::anyhow!("audio cache poisoned"))?;
+        if let Some(bytes) = cache.get(digest) {
+            return Ok(Some(Arc::clone(bytes)));
+        }
+        let mut temporary = None;
+        let path = match &file {
+            PreviewFile::File { path, .. } => path.clone(),
+            PreviewFile::Bytes(bytes) => {
+                let temp = tempfile::NamedTempFile::new()?;
+                std::fs::write(temp.path(), bytes)?;
+                let path = temp.path().to_owned();
+                temporary = Some(temp);
+                path
+            }
+        };
+        let samples = valle_media::codec::decode_audio_mono_f32(&path, 48_000)?;
+        drop(temporary);
+        let bytes: Arc<[u8]> = samples
+            .iter()
+            .flat_map(|sample| sample.to_le_bytes())
+            .collect::<Vec<_>>()
+            .into();
+        const MAX_CACHED_BYTES: usize = 128 * 1024 * 1024;
+        while !cache.is_empty()
+            && cache.values().map(|v| v.len()).sum::<usize>() + bytes.len() > MAX_CACHED_BYTES
+        {
+            cache.pop_first();
+        }
+        if bytes.len() <= MAX_CACHED_BYTES {
+            cache.insert(digest.to_owned(), Arc::clone(&bytes));
+        }
+        Ok(Some(bytes))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn analysis_pcm_uses_cli_decoder_and_reuses_frozen_bytes() {
+        let rate = 48_000_u32;
+        let samples: Vec<i16> = (0..4800).map(|i| ((i % 31) as i16 - 15) * 1000).collect();
+        let payload: Vec<u8> = samples
+            .iter()
+            .flat_map(|sample| sample.to_le_bytes())
+            .collect();
+        let mut wav = Vec::new();
+        wav.extend(b"RIFF");
+        wav.extend((36 + payload.len() as u32).to_le_bytes());
+        wav.extend(b"WAVEfmt ");
+        wav.extend(16_u32.to_le_bytes());
+        wav.extend(1_u16.to_le_bytes());
+        wav.extend(1_u16.to_le_bytes());
+        wav.extend(rate.to_le_bytes());
+        wav.extend((rate * 2).to_le_bytes());
+        wav.extend(2_u16.to_le_bytes());
+        wav.extend(16_u16.to_le_bytes());
+        wav.extend(b"data");
+        wav.extend((payload.len() as u32).to_le_bytes());
+        wav.extend(payload);
+        let source = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(source.path(), &wav).unwrap();
+        let expected = valle_media::codec::decode_audio_mono_f32(source.path(), rate).unwrap();
+        let digest = ContentDigest::of_bytes(&wav).to_wire();
+        let store = PreviewStore::default();
+        store.files.write().unwrap().replace(BTreeMap::from([(
+            digest.clone(),
+            PreviewFile::Bytes(wav.into()),
+        )]));
+        let first = store.audio_pcm(&digest).unwrap().unwrap();
+        let second = store.audio_pcm(&digest).unwrap().unwrap();
+        assert!(Arc::ptr_eq(&first, &second));
+        assert_eq!(
+            &*first,
+            expected
+                .iter()
+                .flat_map(|sample| sample.to_le_bytes())
+                .collect::<Vec<_>>()
+        );
+        assert!(store.audio_pcm("unknown").unwrap().is_none());
+        // Eviction from the frozen resource closure also revokes cached PCM access.
+        store.files.write().unwrap().replace(BTreeMap::new());
+        store.files.write().unwrap().replace(BTreeMap::new());
+        assert!(store.audio_pcm(&digest).unwrap().is_none());
+    }
 
     #[test]
     fn unchanged_media_reuses_snapshot_and_edits_preserve_old_generation() {

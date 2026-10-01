@@ -646,3 +646,24 @@ mod tests {
         assert!(errors.iter().any(|error| error.path.ends_with("/maxItems")));
     }
 }
+
+/// Normalize an external scalar binding exactly as render admission does. Length controls
+/// accept pixels; angle controls normalize CSS units to degrees.
+pub fn scalar_binding(value: &Value, control: &ControlType) -> Option<f64> {
+    value
+        .as_f64()
+        .filter(|value| value.is_finite())
+        .or_else(|| {
+            let source = value.as_str()?;
+            match control {
+                ControlType::Length => crate::value::Length::parse(source)
+                    .filter(|length| length.unit == crate::value::LengthUnit::Px)
+                    .map(|length| length.value),
+                ControlType::Angle => {
+                    crate::value::Angle::parse(source).map(|angle| angle.as_degrees())
+                }
+                _ => None,
+            }
+        })
+        .filter(|value| value.is_finite())
+}

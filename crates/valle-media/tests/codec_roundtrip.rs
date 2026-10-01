@@ -40,6 +40,66 @@ fn transparent_mov_roundtrips_rgb_and_alpha_losslessly() {
 }
 
 #[test]
+fn prores_4444_mov_keeps_straight_alpha_across_frames() {
+    use valle_media::codec::{TransparentVideoCodec, TransparentVideoMuxer, probe_av};
+
+    let temp = tempfile::tempdir().unwrap();
+    let out = temp.path().join("prores4444.mov");
+    let (width, height) = (64, 32);
+    let mut source = RgbaFrame::new(width, height);
+    for (index, pixel) in source.data.chunks_exact_mut(4).enumerate() {
+        let x = index % width as usize;
+        pixel.copy_from_slice(if x < 16 {
+            &[0, 0, 0, 0]
+        } else if x < 32 {
+            &[255, 64, 16, 64]
+        } else if x < 48 {
+            &[32, 180, 240, 128]
+        } else {
+            &[240, 240, 240, 255]
+        });
+    }
+    let mut mux = TransparentVideoMuxer::open_with_codec(
+        &out,
+        width,
+        height,
+        30000,
+        1001,
+        TransparentVideoCodec::ProRes4444,
+    )
+    .expect("open ProRes 4444 muxer");
+    mux.encode_video(&source).expect("encode first frame");
+    mux.encode_video(&source).expect("encode second frame");
+    mux.finish().expect("finish ProRes 4444 MOV");
+    drop(mux);
+
+    let probe = probe_av(&out).expect("probe ProRes MOV");
+    assert_eq!(probe.video.unwrap().0, width);
+    assert!(probe.audio.is_none());
+    let decoded = decode_rgba_frames(&out, None).expect("decode ProRes MOV");
+    assert_eq!(decoded.len(), 2);
+    for frame in decoded {
+        for (actual, expected) in frame.data.chunks_exact(4).zip(source.data.chunks_exact(4)) {
+            assert!(
+                actual[3].abs_diff(expected[3]) <= 2,
+                "alpha {actual:?} != {expected:?}"
+            );
+        }
+        for x in [24, 40, 56] {
+            let offset = (16 * width + x) as usize * 4;
+            for channel in 0..3 {
+                assert!(
+                    frame.data[offset + channel].abs_diff(source.data[offset + channel]) <= 20,
+                    "RGB at x={x}, channel={channel}: {} != {}",
+                    frame.data[offset + channel],
+                    source.data[offset + channel]
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn encode_then_decode_roundtrip() {
     let temp = tempfile::tempdir().expect("temp dir");
     let out = temp.path().join("roundtrip.mp4");

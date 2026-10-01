@@ -111,6 +111,35 @@ fn native_renderer_rejects_a_frame_outside_the_pinned_canvas() {
 }
 
 #[test]
+fn cancelled_multi_frame_delivery_discards_sequence_and_storyboard() {
+    let dir = tempfile::tempdir().unwrap();
+    let control = valle_render::host::RenderControl::default();
+    let cancel = control.clone();
+    let renderer = NativeRenderer::new(
+        project(),
+        NativeRenderOptions {
+            control,
+            raster_workers: Some(1),
+            progress: Some(Arc::new(move |completed, _| {
+                if completed == 1 {
+                    cancel.cancel();
+                }
+            })),
+            ..Default::default()
+        },
+    );
+    let outputs = [dir.path().join("0.png"), dir.path().join("1.png")];
+    let sheet = dir.path().join("sheet.png");
+    let result = renderer.render_png_frames(
+        &[FrameKey::new(0), FrameKey::new(1)],
+        &outputs,
+        Some((&sheet, 2)),
+    );
+    assert!(result.unwrap_err().to_string().contains("cancel"));
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+}
+
+#[test]
 fn motion_seek_pixels_survive_warm_caches_eviction_and_surface_reset() {
     use serde_json::json;
     use valle_compiler::timeline_contract::{
@@ -123,10 +152,11 @@ fn motion_seek_pixels_survive_warm_caches_eviction_and_surface_reset() {
     };
     let artifact = Arc::new(valle_compiler::motion::compile_motion(r##"
 export const composition = { width: 48, height: 48, duration: 12 };
+export const controls = { props: { still: number({ default: 0, min: 0, max: 1 }) } };
 const UPPER = curve([point(3,35),point(16,28),point(30,33),point(45,27)]);
 const LOWER = curve([point(3,44),point(16,40),point(30,44),point(45,39)]);
-export default function Demo(ctx) {
-  const f = ctx.localFrame;
+export default function Demo(ctx, props) {
+  const f = props.still > 0 ? 0 : ctx.localFrame;
   return <Scene style={{width:48,height:48,backgroundColor:'#14213d'}}>
     <View style={{position:'absolute',left:3,top:4,width:35,height:36,overflow:'hidden',borderRadius:7.3,opacity:0.63 + f / 3600}}>
       <View style={{position:'absolute',left:f / 60,top:0,width:32,height:30,backgroundColor:'#fca311'}} />
@@ -171,11 +201,18 @@ export default function Demo(ctx) {
     let constant = |value| json!({"type":"constant","value":value});
     let document = decode_canonical(&json!({"document":{
       "canvas":{"width":48,"height":48,"fps":"30/1","sampleRate":48000,"channelLayout":"stereo","colorSpace":"srgb","duration":"12/1"},
-      "background":{"color":"#000000ff"},"visual":{"tracks":[{"id":"track:seek","items":[{
-        "type":"clip","id":"clip:seek","duration":"12/1",
-        "layer":{"transform":{"position":constant(json!([0.5,0.5])),"scale":constant(json!([1,1])),"rotation":constant(json!(0)),"anchor":[0.5,0.5]},"opacity":constant(json!(1)),"mask":null,"filters":[],"blend":"normal"},
-        "source":{"type":"motion","component":"component:seek","sourceStart":"0/1","sourceDuration":"12/1","rate":"1/1","endBehavior":"hold","fit":"contain","props":{},"resources":{}}
-      }]}]},"audio":{"tracks":[]},"adjustments":[],"captions":{"tracks":[]},"camera":null,"metadata":{}
+      "background":{"color":"#000000ff"},"visual":{"tracks":[
+        {"id":"track:seek","items":[{
+          "type":"clip","id":"clip:seek","duration":"12/1",
+          "layer":{"transform":{"position":constant(json!([0.5,0.5])),"scale":constant(json!([1,1])),"rotation":constant(json!(0)),"anchor":[0.5,0.5]},"opacity":constant(json!(1)),"mask":null,"filters":[],"blend":"normal"},
+          "source":{"type":"motion","component":"component:seek","sourceStart":"0/1","sourceDuration":"12/1","rate":"1/1","endBehavior":"hold","fit":"contain","props":{},"resources":{}}
+        }]},
+        {"id":"track:still","items":[{
+          "type":"clip","id":"clip:still","duration":"12/1",
+          "layer":{"transform":{"position":constant(json!([0.5,0.5])),"scale":constant(json!([1,1])),"rotation":constant(json!(0)),"anchor":[0.5,0.5]},"opacity":constant(json!(0.25)),"mask":null,"filters":[],"blend":"normal"},
+          "source":{"type":"motion","component":"component:seek","sourceStart":"0/1","sourceDuration":"12/1","rate":"1/1","endBehavior":"hold","fit":"contain","props":{"still":constant(json!(1))},"resources":{}}
+        }]}
+      ]},"audio":{"tracks":[]},"adjustments":[],"captions":{"tracks":[]},"camera":null,"metadata":{}
     }}).to_string()).unwrap();
     let timeline = String::from_utf8(canonical_bytes(&document).unwrap()).unwrap();
     let manifest = std::str::from_utf8(manifest.canonical_bytes()).unwrap();
@@ -221,31 +258,78 @@ export default function Demo(ctx) {
         "fixture must change its pixels"
     );
     let key = FrameKey::new(0);
-    runner.render_rgba8(key, spec).unwrap();
-    let (_, warm) = runner.render_rgba8(key, spec).unwrap();
+    let (_, first) = runner.render_rgba8(key, spec).unwrap();
+    let (warm_pixels, warm) = runner.render_rgba8(key, spec).unwrap();
+    assert_eq!(warm_pixels.data, baseline[&0]);
     assert!(warm.execution.program_cache_hits > 0);
     assert!(warm.execution.program_cache_entries > 0);
     assert!(warm.execution.program_cache_cost_bytes > 0);
+    assert!(first.execution.raster_layer_cache_misses > 0);
+    assert!(
+        warm.execution.raster_layer_cache_hits > first.execution.raster_layer_cache_hits,
+        "first={first:?}, warm={warm:?}"
+    );
+    assert!(warm.execution.raster_layer_cache_entries > 0);
+    assert!(warm.execution.raster_layer_cache_bytes <= 64 * 1024 * 1024);
+    let (next_pixels, next) = runner.render_rgba8(FrameKey::new(1), spec).unwrap();
+    let (cold_next, cold_next_evidence) = project
+        .frame_runner(backend)
+        .unwrap()
+        .render_rgba8(FrameKey::new(1), spec)
+        .unwrap();
+    assert_eq!(next_pixels.data, cold_next.data);
+    assert!(
+        next.execution.raster_layer_cache_hits
+            > cold_next_evidence.execution.raster_layer_cache_hits,
+        "static overlay should reuse pixels while its sibling changes: warm={next:?}, cold={cold_next_evidence:?}"
+    );
+    let alternate_spec = RenderSpec::new(
+        48,
+        48,
+        RenderQuality::Preview,
+        OutputSpec::srgb_preview(OutputBackground::opaque_srgb([7, 11, 19])).unwrap(),
+    )
+    .unwrap();
+    let (alternate_pixels, alternate) = runner.render_rgba8(key, alternate_spec).unwrap();
+    let (cold_alternate, _) = project
+        .frame_runner(backend)
+        .unwrap()
+        .render_rgba8(key, alternate_spec)
+        .unwrap();
+    assert_eq!(alternate_pixels.data, cold_alternate.data);
+    assert!(alternate.execution.raster_layer_cache_misses > 0);
     for frame in 1..360 {
         let (_, evidence) = runner.render_rgba8(FrameKey::new(frame), spec).unwrap();
         assert!(evidence.execution.program_cache_entries <= 256);
         assert!(evidence.execution.program_cache_cost_bytes <= 32 * 1024 * 1024);
     }
-    let (_, evicted) = runner.render_rgba8(key, spec).unwrap();
+    let (_, evicted) = runner.render_rgba8(FrameKey::new(1), spec).unwrap();
     assert!(
         evicted.execution.program_cache_misses > 0,
-        "360 unique programs must evict frame zero"
+        "360 unique programs must evict the changing frame-one program"
+    );
+    assert!(
+        evicted.execution.raster_layer_cache_misses > 0,
+        "bounded pixel cache must evict the changing frame-one layer"
     );
     for reset in [false, true] {
         if reset {
             runner.invalidate_surface_generation().unwrap();
         }
-        for frame in [359, 45, 0, 120, 45, 359, 0] {
-            let (pixels, _) = runner.render_rgba8(FrameKey::new(frame), spec).unwrap();
+        let frames = if reset {
+            [0, 359, 45, 120, 45, 359, 0]
+        } else {
+            [359, 45, 0, 120, 45, 359, 0]
+        };
+        for (index, frame) in frames.into_iter().enumerate() {
+            let (pixels, evidence) = runner.render_rgba8(FrameKey::new(frame), spec).unwrap();
             assert_eq!(
                 pixels.data, baseline[&frame],
                 "frame {frame}, reset={reset}"
             );
+            if reset && index == 0 {
+                assert!(evidence.execution.raster_layer_cache_misses > 0);
+            }
         }
     }
 }

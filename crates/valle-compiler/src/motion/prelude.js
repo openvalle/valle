@@ -34,7 +34,21 @@ const point = (x = {}, y) => y === undefined && typeof x === "object"
 const rect = (x = {}, y, width, height) => y === undefined && typeof x === "object"
   ? __control("rect", x)
   : __typed({ __valleType: "rect", x, y, width, height });
+const atlasRegion = (source, src = rect(0, 0, 1, 1)) => __typed({
+  __valleType: "atlasRegion", source, src,
+});
+const curlNoise = (options = {}) => __typed({ ...options, __valleType: "particleCurlNoise" });
+const drag = (coefficient) => __typed({ __valleType: "particleDrag", coefficient });
 const path = (value) => __typed({ __valleType: "pathData", d: value });
+const extrude = (input, options = {}) => __typed({
+  __valleType: "scene3dExtrude", path: input, options,
+});
+const lathe = (input, options = {}) => __typed({
+  __valleType: "scene3dLathe", path: input, options,
+});
+const tube = (input, options = {}) => __typed({
+  __valleType: "scene3dTube", path: input, options,
+});
 const line = (points) => __typed({ __valleType: "pathLine", points });
 const cubic = (from, control1, control2, to) => __typed({
   __valleType: "pathCubic", from, control1, control2, to,
@@ -54,6 +68,15 @@ const sector = (options = {}) => __typed({
 });
 const areaBand = (upper, lower) => __typed({ __valleType: "pathAreaBand", upper, lower });
 const offsetPath = (input, distance) => __typed({ __valleType: "pathOffset", input, distance });
+const resamplePath = (input, count) => __typed({ __valleType: "pathResample", input, count });
+const reversePath = (input) => __typed({ __valleType: "pathReverse", input });
+const roundCorners = (input, radius) => __typed({ __valleType: "pathRoundCorners", input, radius });
+const zigzag = (input, options) => __typed({ __valleType: "pathZigzag", input, options });
+const noiseDisplace = (input, options) => __typed({ __valleType: "pathNoiseDisplace", input, options });
+const puckerBloat = (input, amount) => __typed({ __valleType: "pathPuckerBloat", input, amount });
+const twist = (input, angle) => __typed({ __valleType: "pathTwist", input, angle });
+const simplify = (input, tolerance) => __typed({ __valleType: "pathSimplify", input, tolerance });
+const strokeToPath = (input, width) => __typed({ __valleType: "pathStrokeToPath", input, width });
 const displacement = (seed, frequency, scale, options = {}) => __typed({
   __valleType: "nodeDisplacement", seed, frequency, scale, options,
 });
@@ -226,6 +249,94 @@ const defineRepeater = (options = {}) => {
   }
   return out;
 };
+// Rebuild a content-addressed prepare table without calling the authored init/step functions.
+// The compiler injects this only for a syntactically proven pure module-level simulation.
+const __valleHydrateSimulation = ({ dt, duration, fields }) => {
+  const names = Object.keys(fields).sort();
+  const steps = fields[names[0]].length - 1;
+  for (const key of names) Object.freeze(fields[key]);
+  Object.freeze(fields);
+  return Object.freeze(__typed({
+    __valleType: "simulation", dt, duration, fields,
+    at(t) {
+      if (!Number.isFinite(t)) throw new Error("valle:compute:simulate.at(t) needs a finite time");
+      const position = Math.min(Math.max(t, 0), duration) / dt;
+      const index = Math.min(Math.floor(position), steps - 1);
+      const fraction = position - index;
+      const sample = Object.create(null);
+      for (const key of names) {
+        const values = fields[key];
+        sample[key] = values[index] + (values[index + 1] - values[index]) * fraction;
+      }
+      return sample;
+    },
+  }));
+};
+// Integrate a finite numeric state at prepare time. The artifact stores only columns read by
+// frame expressions; no authored callback executes while rendering or seeking.
+const simulate = (options) => {
+  if (options === null || typeof options !== "object" || Array.isArray(options)) {
+    throw new Error("valle:compute:simulate expects { dt, duration, init, step }");
+  }
+  const allowed = new Set(["dt", "duration", "init", "step"]);
+  for (const key of Object.keys(options)) {
+    if (!allowed.has(key)) throw new Error("valle:compute:simulate has unknown option `" + key + "`");
+  }
+  const { dt, duration, init, step } = options;
+  if (!Number.isFinite(dt) || dt <= 0 || !Number.isFinite(duration) || duration <= 0) {
+    throw new Error("valle:compute:simulate needs finite positive dt and duration");
+  }
+  if (typeof init !== "function" || typeof step !== "function") {
+    throw new Error("valle:compute:simulate needs init and step functions");
+  }
+  const steps = Math.ceil(duration / dt);
+  if (!Number.isSafeInteger(steps) || steps < 1 || steps > 16384) {
+    throw new Error("valle:compute:simulate exceeds the 16384-step budget");
+  }
+  const readState = (value, names) => {
+    if (value === null || typeof value !== "object" || Array.isArray(value) ||
+        (Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null)) {
+      throw new Error("valle:compute:simulate state must be a plain object of finite numbers");
+    }
+    const keys = Object.keys(value).sort();
+    if (Reflect.ownKeys(value).length !== keys.length) {
+      throw new Error("valle:compute:simulate state fields must be enumerable string keys");
+    }
+    if (keys.length < 1 || keys.length > 16 || keys.some(key => !/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(key))) {
+      throw new Error("valle:compute:simulate state needs 1..=16 identifier-named fields");
+    }
+    if (names !== null && (keys.length !== names.length || keys.some((key, i) => key !== names[i]))) {
+      throw new Error("valle:compute:simulate step must preserve the state field set");
+    }
+    const descriptors = Object.getOwnPropertyDescriptors(value);
+    const copy = Object.create(null);
+    for (const key of keys) {
+      const descriptor = descriptors[key];
+      if (!descriptor || !Object.hasOwn(descriptor, "value") || !Number.isFinite(descriptor.value)) {
+        throw new Error("valle:compute:simulate state field `" + key + "` must be a finite number");
+      }
+      copy[key] = descriptor.value;
+    }
+    return [keys, Object.freeze(copy)];
+  };
+  let [names, state] = readState(init(), null);
+  if ((steps + 1) * names.length > 131072) {
+    throw new Error("valle:compute:simulate exceeds the 131072-value table budget");
+  }
+  const fields = Object.create(null);
+  for (const key of names) fields[key] = [state[key]];
+  for (let i = 0; i < steps; i += 1) {
+    [, state] = readState(step(state, i * dt, dt), names);
+    for (const key of names) {
+      const values = fields[key];
+      if (!Number.isFinite(state[key] - values[values.length - 1])) {
+        throw new Error("valle:compute:simulate state field `" + key + "` overflows interpolation");
+      }
+      values.push(state[key]);
+    }
+  }
+  return __valleHydrateSimulation({ dt, duration, fields });
+};
 const defineLayoutStates = (input) => {
   if (input === null || typeof input !== "object" || Array.isArray(input)) {
     throw new Error("valle:compute:defineLayoutStates expects an object of named states");
@@ -262,3 +373,6 @@ const defineLayoutStates = (input) => {
   return { __valleType: "layoutStates", states: input, ids };
 };
 const asset = (options = {}) => ({ kind: "asset", assetKind: options.kind, required: options.required ?? false });
+const audioAnalysis = (source, options = {}) => __typed({
+  __valleType: "audioAnalysis", source, bands: options.bands, fps: options.fps,
+});

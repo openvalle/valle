@@ -168,6 +168,7 @@ fn fixture(reverse_arena_insertion: bool) -> DrawProgram {
         }),
         opacity: 0.75,
         internal_blend: BlendMode::Screen,
+        blend_space: valle_draw::program::BlendSpace::Srgb,
         isolated: true,
         backdrop: Some(BackdropRead {
             scope: BackdropScope::ScopeEntry("glass-card".into()),
@@ -177,6 +178,7 @@ fn fixture(reverse_arena_insertion: bool) -> DrawProgram {
             filters: Vec::new(),
         }),
         shader: None,
+        transition: None,
         layer_bounds: None,
     }));
     builder.add_root(root);
@@ -229,6 +231,7 @@ fn structured_program_round_trips_and_derives_complete_requirements() {
         requirements.destination_uses[1].operation,
         DestinationOperation::Blend {
             mode: BlendMode::Screen,
+            space: valle_draw::program::BlendSpace::Srgb,
         }
     ));
     assert_eq!(
@@ -895,6 +898,260 @@ fn nested_filter_footprints_accumulate_conservatively() {
 }
 
 #[test]
+fn chromatic_aberration_expands_bounds_and_declares_its_capability() {
+    let mut b = builder();
+    let path = b.push_path(PathData {
+        verbs: vec![
+            PathVerb::MoveTo,
+            PathVerb::LineTo,
+            PathVerb::LineTo,
+            PathVerb::Close,
+        ],
+        points: vec![[10.0, 10.0], [30.0, 10.0], [30.0, 30.0]],
+    });
+    let paint = b.push_paint(Paint::Solid(LinearColor::new(1.0, 1.0, 1.0, 1.0)));
+    let leaf = b.push_node(Node::Path(PathNode {
+        path,
+        fill_rule: Default::default(),
+        fill: Some(paint),
+        stroke: None,
+    }));
+    let mut group = Group::plain(vec![leaf]);
+    group
+        .filters
+        .push(Filter::ChromaticAberration { offset: [6.0, 0.0] });
+    let root = b.push_node(Node::Group(group));
+    b.add_root(root);
+    let program = b.finish().unwrap();
+    assert_eq!(
+        program.requirements().filter_footprint,
+        Insets::new(4.0, 1.0, 4.0, 1.0)
+    );
+    assert_eq!(
+        program.requirements().output_bounds.rect(),
+        Some(Rect::new(6.0, 9.0, 28.0, 22.0))
+    );
+    assert!(
+        program
+            .requirements()
+            .capabilities
+            .contains(&valle_draw::requirements::DrawCapability::FilterChromaticAberration)
+    );
+}
+
+#[test]
+fn lens_distortion_preserves_frame_bounds_and_declares_capability() {
+    let mut b = builder();
+    let path = b.push_path(PathData {
+        verbs: vec![
+            PathVerb::MoveTo,
+            PathVerb::LineTo,
+            PathVerb::LineTo,
+            PathVerb::Close,
+        ],
+        points: vec![[10.0, 10.0], [30.0, 10.0], [30.0, 30.0]],
+    });
+    let paint = b.push_paint(Paint::Solid(LinearColor::new(1.0, 1.0, 1.0, 1.0)));
+    let leaf = b.push_node(Node::Path(PathNode {
+        path,
+        fill_rule: Default::default(),
+        fill: Some(paint),
+        stroke: None,
+    }));
+    let mut group = Group::plain(vec![leaf]);
+    group
+        .filters
+        .push(Filter::LensDistortion { k1: -0.3, k2: 0.2 });
+    let root = b.push_node(Node::Group(group));
+    b.add_root(root);
+    let program = b.finish().unwrap();
+    assert_eq!(program.requirements().filter_footprint, Insets::default());
+    assert_eq!(
+        program.requirements().output_bounds.rect(),
+        Some(Rect::new(10.0, 10.0, 20.0, 20.0))
+    );
+    assert!(
+        program
+            .requirements()
+            .capabilities
+            .contains(&valle_draw::requirements::DrawCapability::FilterLensDistortion)
+    );
+}
+
+#[test]
+fn film_grain_preserves_bounds_and_declares_capability() {
+    let mut b = builder();
+    let path = b.push_path(PathData {
+        verbs: vec![
+            PathVerb::MoveTo,
+            PathVerb::LineTo,
+            PathVerb::LineTo,
+            PathVerb::Close,
+        ],
+        points: vec![[10.0, 10.0], [30.0, 10.0], [30.0, 30.0]],
+    });
+    let paint = b.push_paint(Paint::Solid(LinearColor::new(0.25, 0.25, 0.25, 1.0)));
+    let leaf = b.push_node(Node::Path(PathNode {
+        path,
+        fill_rule: Default::default(),
+        fill: Some(paint),
+        stroke: None,
+    }));
+    let mut group = Group::plain(vec![leaf]);
+    group.filters.push(Filter::FilmGrain {
+        seed: 7,
+        amount: 0.12,
+        size: 2.0,
+    });
+    let root = b.push_node(Node::Group(group));
+    b.add_root(root);
+    let program = b.finish().unwrap();
+    assert_eq!(program.requirements().filter_footprint, Insets::default());
+    assert_eq!(
+        program.requirements().output_bounds.rect(),
+        Some(Rect::new(10.0, 10.0, 20.0, 20.0))
+    );
+    assert!(
+        program
+            .requirements()
+            .capabilities
+            .contains(&valle_draw::requirements::DrawCapability::FilterFilmGrain)
+    );
+}
+
+#[test]
+fn radial_blur_reserves_its_ray_extent_and_declares_its_capability() {
+    let mut b = builder();
+    let path = b.push_path(PathData {
+        verbs: vec![
+            PathVerb::MoveTo,
+            PathVerb::LineTo,
+            PathVerb::LineTo,
+            PathVerb::Close,
+        ],
+        points: vec![[10.0, 10.0], [30.0, 10.0], [30.0, 30.0]],
+    });
+    let paint = b.push_paint(Paint::Solid(LinearColor::new(1.0, 1.0, 1.0, 1.0)));
+    let leaf = b.push_node(Node::Path(PathNode {
+        path,
+        fill_rule: Default::default(),
+        fill: Some(paint),
+        stroke: None,
+    }));
+    let mut group = Group::plain(vec![leaf]);
+    group.filters.push(Filter::RadialBlur {
+        center: [20.0, 20.0],
+        amount: 4.0,
+    });
+    let root = b.push_node(Node::Group(group));
+    b.add_root(root);
+    let program = b.finish().unwrap();
+    assert_eq!(
+        program.requirements().filter_footprint,
+        Insets::uniform(5.0)
+    );
+    assert_eq!(
+        program.requirements().output_bounds.rect(),
+        Some(Rect::new(5.0, 5.0, 30.0, 30.0))
+    );
+    assert!(
+        program
+            .requirements()
+            .capabilities
+            .contains(&valle_draw::requirements::DrawCapability::FilterRadialBlur)
+    );
+}
+
+#[test]
+fn glow_reserves_its_blurred_halo_and_declares_its_capability() {
+    let mut b = builder();
+    let path = b.push_path(PathData {
+        verbs: vec![
+            PathVerb::MoveTo,
+            PathVerb::LineTo,
+            PathVerb::LineTo,
+            PathVerb::Close,
+        ],
+        points: vec![[10.0, 10.0], [30.0, 10.0], [30.0, 30.0]],
+    });
+    let paint = b.push_paint(Paint::Solid(LinearColor::new(1.0, 1.0, 1.0, 1.0)));
+    let leaf = b.push_node(Node::Path(PathNode {
+        path,
+        fill_rule: Default::default(),
+        fill: Some(paint),
+        stroke: None,
+    }));
+    let mut group = Group::plain(vec![leaf]);
+    group.filters.push(Filter::Glow {
+        color: valle_draw::program::AuthorColor::from_srgb8(valle_draw::Rgba::rgb(0, 204, 230)),
+        radius: 4.0,
+        intensity: 1.5,
+    });
+    let root = b.push_node(Node::Group(group));
+    b.add_root(root);
+    let program = b.finish().unwrap();
+    assert_eq!(
+        program.requirements().filter_footprint,
+        Insets::uniform(21.0)
+    );
+    assert_eq!(
+        program.requirements().output_bounds.rect(),
+        Some(Rect::new(-11.0, -11.0, 62.0, 62.0))
+    );
+    assert!(
+        program
+            .requirements()
+            .capabilities
+            .contains(&valle_draw::requirements::DrawCapability::FilterGlow)
+    );
+}
+
+#[test]
+fn bloom_reserves_multilevel_halo_and_declares_its_capability() {
+    let mut b = builder();
+    let path = b.push_path(PathData {
+        verbs: vec![
+            PathVerb::MoveTo,
+            PathVerb::LineTo,
+            PathVerb::LineTo,
+            PathVerb::Close,
+        ],
+        points: vec![[10.0, 10.0], [30.0, 10.0], [30.0, 30.0]],
+    });
+    let paint = b.push_paint(Paint::Solid(LinearColor::new(1.0, 1.0, 1.0, 1.0)));
+    let leaf = b.push_node(Node::Path(PathNode {
+        path,
+        fill_rule: Default::default(),
+        fill: Some(paint),
+        stroke: None,
+    }));
+    let mut group = Group::plain(vec![leaf]);
+    group.filters.push(Filter::Bloom {
+        threshold: 0.8,
+        knee: 0.1,
+        intensity: 1.2,
+        radius: 4.0,
+    });
+    let root = b.push_node(Node::Group(group));
+    b.add_root(root);
+    let program = b.finish().unwrap();
+    assert_eq!(
+        program.requirements().filter_footprint,
+        Insets::uniform(17.0)
+    );
+    assert_eq!(
+        program.requirements().output_bounds.rect(),
+        Some(Rect::new(-7.0, -7.0, 54.0, 54.0))
+    );
+    assert!(
+        program
+            .requirements()
+            .capabilities
+            .contains(&valle_draw::requirements::DrawCapability::FilterBloom,)
+    );
+}
+
+#[test]
 fn path_grammar_is_closed_instead_of_backend_defined() {
     let mut builder = builder();
     let path = builder.push_path(PathData {
@@ -976,5 +1233,55 @@ fn directional_gaussian_bounds_include_both_sides_for_either_velocity_sign() {
             program.requirements().output_bounds.rect(),
             Some(Rect::new(0.0, 5.0, 40.0, 30.0))
         );
+    }
+}
+
+#[test]
+fn transition_contract_requires_two_inputs_finite_progress_and_a_canvas() {
+    for params in [
+        valle_draw::transition::TransitionValues([2.0, 0.5, 0.5, 0.0]),
+        valle_draw::transition::TransitionValues([0.5, f32::NAN, 0.5, 0.0]),
+        valle_draw::transition::TransitionValues([0.5, 0.5, 0.5, 1.0]),
+    ] {
+        let mut builder = builder();
+        let from = builder.push_node(Node::Group(Group::plain(vec![])));
+        let to = builder.push_node(Node::Group(Group::plain(vec![])));
+        let mut group = Group::plain(vec![from, to]);
+        group.isolated = true;
+        group.transition = Some(valle_draw::program::TransitionLayer {
+            kind: valle_draw::transition::TransitionKind::CircleOpen,
+            params,
+            progress: 0.5,
+            bounds: Rect::new(0.0, 0.0, 64.0, 48.0),
+        });
+        let root = builder.push_node(Node::Group(group));
+        builder.add_root(root);
+        assert!(builder.finish().is_err());
+    }
+    for (children, progress, width, isolated, accepted) in [
+        (2, 0.5, 64.0, true, true),
+        (1, 0.5, 64.0, true, false),
+        (3, 0.5, 64.0, true, false),
+        (2, -0.1, 64.0, true, false),
+        (2, 1.1, 64.0, true, false),
+        (2, f32::NAN, 64.0, true, false),
+        (2, 0.5, 0.0, true, false),
+        (2, 0.5, 64.0, false, false),
+    ] {
+        let mut builder = builder();
+        let children = (0..children)
+            .map(|_| builder.push_node(Node::Group(Group::plain(vec![]))))
+            .collect();
+        let mut group = Group::plain(children);
+        group.isolated = isolated;
+        group.transition = Some(valle_draw::program::TransitionLayer {
+            kind: valle_draw::transition::TransitionKind::Fade,
+            params: valle_draw::transition::TransitionKind::Fade.default_values(),
+            progress,
+            bounds: Rect::new(0.0, 0.0, width, 48.0),
+        });
+        let root = builder.push_node(Node::Group(group));
+        builder.add_root(root);
+        assert_eq!(builder.finish().is_ok(), accepted);
     }
 }

@@ -5,20 +5,45 @@ use crate::codec::backend::{self, Inner, Version, backend_type};
 use crate::frame::RgbaFrame;
 use anyhow::Result;
 use std::path::Path;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransparentVideoCodec {
+    Qtrle,
+    ProRes4444,
+}
+
 backend_type!(TransparentVideoMuxer, alpha);
 impl TransparentVideoMuxer {
     pub fn open(path: &Path, width: u32, height: u32, fps_num: u32, fps_den: u32) -> Result<Self> {
+        Self::open_with_codec(
+            path,
+            width,
+            height,
+            fps_num,
+            fps_den,
+            TransparentVideoCodec::Qtrle,
+        )
+    }
+
+    pub fn open_with_codec(
+        path: &Path,
+        width: u32,
+        height: u32,
+        fps_num: u32,
+        fps_den: u32,
+        codec: TransparentVideoCodec,
+    ) -> Result<Self> {
         match backend::version()? {
-            Version::V7 => backend::v7::alpha::TransparentVideoMuxer::open(
-                path, width, height, fps_num, fps_den,
+            Version::V7 => backend::v7::alpha::TransparentVideoMuxer::open_with_codec(
+                path, width, height, fps_num, fps_den, codec,
             )
             .map(Into::into),
-            Version::V8 => backend::v8::alpha::TransparentVideoMuxer::open(
-                path, width, height, fps_num, fps_den,
+            Version::V8 => backend::v8::alpha::TransparentVideoMuxer::open_with_codec(
+                path, width, height, fps_num, fps_den, codec,
             )
             .map(Into::into),
-            Version::V9 => backend::v9::alpha::TransparentVideoMuxer::open(
-                path, width, height, fps_num, fps_den,
+            Version::V9 => backend::v9::alpha::TransparentVideoMuxer::open_with_codec(
+                path, width, height, fps_num, fps_den, codec,
             )
             .map(Into::into),
         }

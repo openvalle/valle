@@ -160,8 +160,7 @@ pub(crate) fn primaries_to_working(
     if primaries == ColorPrimaries::Rec2020 {
         return validate_rgb(rgb);
     }
-    let xyz = multiply_matrix(primaries_to_xyz(primaries), rgb)?;
-    multiply_matrix(XYZ_TO_REC2020, xyz)
+    multiply_matrix_pair(XYZ_TO_REC2020, primaries_to_xyz(primaries), rgb)
 }
 
 pub(crate) fn working_to_primaries(
@@ -171,8 +170,7 @@ pub(crate) fn working_to_primaries(
     if primaries == ColorPrimaries::Rec2020 {
         return validate_rgb(rgb);
     }
-    let xyz = multiply_matrix(REC2020_TO_XYZ, rgb)?;
-    multiply_matrix(xyz_to_primaries(primaries), xyz)
+    multiply_matrix_pair(xyz_to_primaries(primaries), REC2020_TO_XYZ, rgb)
 }
 
 pub(crate) fn decode_transfer(value: f32, transfer: TransferFunction) -> f32 {
@@ -483,6 +481,20 @@ fn xyz_to_primaries(primaries: ColorPrimaries) -> [[f64; 3]; 3] {
     }
 }
 
+// Compose in f64 before applying to f32 RGB. Rounding an intermediate XYZ value
+// introduces chroma into neutral gray; non-separable blends can amplify that tiny
+// error into a visible hue because saturation divides by the channel spread.
+fn multiply_matrix_pair(
+    left: [[f64; 3]; 3],
+    right: [[f64; 3]; 3],
+    value: [f32; 3],
+) -> Result<[f32; 3], ColorMathError> {
+    let matrix = std::array::from_fn(|row| {
+        std::array::from_fn(|column| (0..3).map(|i| left[row][i] * right[i][column]).sum())
+    });
+    multiply_matrix(matrix, value)
+}
+
 fn multiply_matrix(matrix: [[f64; 3]; 3], value: [f32; 3]) -> Result<[f32; 3], ColorMathError> {
     let value = value.map(f64::from);
     let result = matrix.map(|row| row[0] * value[0] + row[1] * value[1] + row[2] * value[2]);
@@ -629,6 +641,26 @@ mod tests {
             SignalLuminance::SDR_100,
             alpha,
         )
+    }
+
+    #[test]
+    fn primaries_conversion_keeps_quantized_grays_neutral() {
+        for gray in [0.0009765625, 0.049987793, 0.69970703, 0.94970703, 1.2998047] {
+            for primaries in [
+                ColorPrimaries::Rec709,
+                ColorPrimaries::DisplayP3,
+                ColorPrimaries::Rec2020,
+            ] {
+                assert_eq!(
+                    working_to_primaries([gray; 3], primaries).unwrap(),
+                    [gray; 3]
+                );
+                assert_eq!(
+                    primaries_to_working([gray; 3], primaries).unwrap(),
+                    [gray; 3]
+                );
+            }
+        }
     }
 
     #[test]

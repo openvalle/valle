@@ -391,7 +391,14 @@ where
     let mut projected = Vec::new();
     for (item_index, item_id, timeline_path, duration, advances_cursor, source_clock) in items {
         let duration = RationalTime::from_exact(duration);
-        let start = cursor;
+        let overlaps = band == "visual" && !advances_cursor;
+        let start = if overlaps {
+            cursor
+                .checked_sub(duration)
+                .map_err(|error| timeline_error("timeline_document_view", error))?
+        } else {
+            cursor
+        };
         let end = if advances_cursor {
             cursor
                 .checked_add(duration)
@@ -408,8 +415,15 @@ where
             end_seconds: end.as_f64(),
             start_frame: quantize_frame_boundary(start, frame_rate)
                 .map_err(|error| timeline_error("timeline_document_view", error))?,
-            duration_frames: quantize_frame_boundary(duration, frame_rate)
-                .map_err(|error| timeline_error("timeline_document_view", error))?,
+            duration_frames: if overlaps || advances_cursor {
+                quantize_frame_boundary(end, frame_rate)
+                    .map_err(|error| timeline_error("timeline_document_view", error))?
+                    - quantize_frame_boundary(start, frame_rate)
+                        .map_err(|error| timeline_error("timeline_document_view", error))?
+            } else {
+                quantize_frame_boundary(duration, frame_rate)
+                    .map_err(|error| timeline_error("timeline_document_view", error))?
+            },
             end_frame: quantize_frame_boundary(end, frame_rate)
                 .map_err(|error| timeline_error("timeline_document_view", error))?,
             advances_cursor,
@@ -425,7 +439,7 @@ where
                 .map_err(|error| timeline_error("timeline_document_view", error))?,
             source_rate: source_clock.map(|value| value.1.as_f64()),
         });
-        cursor = end;
+        cursor = if overlaps { start } else { end };
     }
     Ok(TimelineSequenceView {
         band,

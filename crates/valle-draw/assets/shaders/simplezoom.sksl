@@ -1,17 +1,21 @@
-// Zoom the destination into its final scale from the center. Adapted from GL Transitions
-// simplezoom.
+// Zoom the outgoing image, then fade into the unscaled destination.
+// Adapted from SimpleZoom by 0gust1 (MIT), gl-transitions/gl-transitions.
 uniform shader from_tex;
 uniform shader to_tex;
 uniform float2 resolution;
 uniform float progress;
+// Resolved slots: zoom completion, center X, center Y.
+uniform float4 params;
 
 half4 main(float2 xy) {
+    if (progress <= 0.0) return from_tex.eval(xy);
+    if (progress >= 1.0) return to_tex.eval(xy);
     float p = clamp(progress, 0.0, 1.0);
     float2 uv = xy / resolution;
-    float scale = max(1.0 - p, 0.001);
-    float2 to_uv = (uv - 0.5) * scale + 0.5;
-    half4 a = from_tex.eval(xy);
-    half4 b = to_tex.eval(clamp(to_uv, 0.0, 1.0) * resolution);
-    float t = smoothstep(0.0, 0.8, p);
+    float amount = smoothstep(0.0, params.x, p);
+    float2 from_uv = params.yz + (uv - params.yz) * (1.0 - amount);
+    half4 a = from_tex.eval(clamp(from_uv, 0.0, 1.0) * resolution);
+    half4 b = to_tex.eval(xy);
+    float t = smoothstep(params.x - 0.2, 1.0, p);
     return mix(a, b, half(t));
 }

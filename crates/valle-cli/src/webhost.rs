@@ -637,6 +637,34 @@ fn handle_connection(stream: TcpStream, state: &Arc<StudioHost>) -> Result<()> {
     }
 
     if let Some(digest) = path.strip_prefix("/preview-assets/") {
+        if let Some(digest) = digest.strip_suffix("/analysis-pcm") {
+            return match state.preview_files.audio_pcm(digest) {
+                Ok(Some(bytes)) => write_simple(
+                    &mut out,
+                    200,
+                    "OK",
+                    &[
+                        ("Content-Type", "application/octet-stream"),
+                        ("X-Valle-Audio-Source", digest),
+                        (
+                            "X-Valle-Pcm-Digest",
+                            &valle_motion::ContentDigest::of_bytes(&bytes).to_wire(),
+                        ),
+                        ("X-Valle-Sample-Rate", "48000"),
+                        ("Cache-Control", "private, max-age=31536000, immutable"),
+                    ],
+                    &bytes,
+                ),
+                Ok(None) => write_simple(&mut out, 404, "Not Found", &[], b""),
+                Err(error) => write_simple(
+                    &mut out,
+                    422,
+                    "Unprocessable Content",
+                    &[("Content-Type", "text/plain")],
+                    format!("Audio analysis decode failed: {error:#}").as_bytes(),
+                ),
+            };
+        }
         let file = state
             .preview_files
             .files

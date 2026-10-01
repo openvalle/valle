@@ -1,0 +1,83 @@
+uniform shader source;
+uniform shader lattice;
+uniform float2 sourceSize;
+uniform float2 inputOffset;
+uniform float2 outputOrigin;
+uniform float2 latticeOrigin;
+uniform float amount;
+uniform float size;
+
+float latticeValue(int2 point) {
+    float4 encodedBytes = float4(lattice.eval(float2(point) - latticeOrigin + 0.5));
+    float encoded = dot(encodedBytes.rgb, float3(1.0, 256.0, 65536.0)) * (255.0 / 16777215.0);
+    return encoded * 2.0 - 1.0;
+}
+
+float latticeNoise(int2 devicePixel) {
+    float2 position = float2(devicePixel) / size;
+    int2 origin = int2(floor(position));
+    float2 fraction = position - float2(origin);
+    float a = latticeValue(origin);
+    float b = latticeValue(origin + int2(1, 0));
+    float c = latticeValue(origin + int2(0, 1));
+    float d = latticeValue(origin + int2(1, 1));
+    return (a * (1.0 - fraction.x) + b * fraction.x) * (1.0 - fraction.y)
+        + (c * (1.0 - fraction.x) + d * fraction.x) * fraction.y;
+}
+
+float srgbEncodeChannel(float value) {
+    float magnitude = abs(value);
+    float encoded = magnitude <= 0.0031308
+        ? magnitude * 12.92
+        : 1.055 * pow(magnitude, 1.0 / 2.4) - 0.055;
+    return sign(value) * encoded;
+}
+
+float srgbDecodeChannel(float value) {
+    float magnitude = abs(value);
+    float decoded = magnitude <= 0.04045
+        ? magnitude / 12.92
+        : pow((magnitude + 0.055) / 1.055, 2.4);
+    return sign(value) * decoded;
+}
+
+float3 workingToDisplay(float3 value) {
+    float3 linear = float3(
+        1.6604910021084354 * value.r - 0.5876411387885495 * value.g - 0.07284986331988474 * value.b,
+       -0.12455047452159074 * value.r + 1.1328998971259594 * value.g - 0.008349422604369515 * value.b,
+       -0.01815076335490526 * value.r - 0.10057889800800739 * value.g + 1.118729661362913 * value.b
+    );
+    return float3(
+        srgbEncodeChannel(linear.r),
+        srgbEncodeChannel(linear.g),
+        srgbEncodeChannel(linear.b)
+    );
+}
+
+float3 displayToWorking(float3 value) {
+    float3 linear = float3(
+        srgbDecodeChannel(value.r),
+        srgbDecodeChannel(value.g),
+        srgbDecodeChannel(value.b)
+    );
+    return float3(
+        0.627403895934699 * linear.r + 0.3292830383778836 * linear.g + 0.04331306568741723 * linear.b,
+        0.06909728935823205 * linear.r + 0.9195403950754589 * linear.g + 0.011362315566309159 * linear.b,
+        0.01639143887515025 * linear.r + 0.08801330787722578 * linear.g + 0.8955952532476238 * linear.b
+    );
+}
+
+half4 main(float2 xy) {
+    int2 pixel = int2(floor(xy));
+    int2 sourcePixel = pixel - int2(inputOffset);
+    float4 base = float4(0.0);
+    if (sourcePixel.x >= 0 && sourcePixel.y >= 0 &&
+        float(sourcePixel.x) < sourceSize.x && float(sourcePixel.y) < sourceSize.y) {
+        base = float4(source.eval(float2(sourcePixel) + 0.5));
+    }
+    if (amount == 0.0 || base.a == 0.0) return half4(base);
+    float3 encoded = workingToDisplay(base.rgb / base.a);
+    float3 margin = max(min(encoded, 1.0 - encoded), 0.0);
+    encoded += latticeNoise(int2(outputOrigin) + pixel) * amount * margin;
+    return half4(displayToWorking(encoded) * base.a, base.a);
+}

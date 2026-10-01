@@ -122,7 +122,10 @@ fn continuity_of(expr: &Expr, prior: &[TemporalContinuity]) -> TemporalContinuit
         | Expr::Noise1D { .. }
         | Expr::Noise2D { .. }
         | Expr::FormatNumber { .. }
-        | Expr::PathTrajectory { .. } => TemporalContinuity::Discrete,
+        | Expr::PathTrajectory { .. }
+        | Expr::RangeSelector { .. }
+        | Expr::SimulationSample { .. }
+        | Expr::AudioSample { .. } => TemporalContinuity::Discrete,
         Expr::NodeBounds { .. } | Expr::Project3D { .. } => TemporalContinuity::C1,
         other => fold(other.children()),
     }
@@ -161,6 +164,10 @@ fn interpolate_continuity(
                 | MotionEasing::EaseIn
                 | MotionEasing::EaseOut
                 | MotionEasing::EaseInOut
+                | MotionEasing::EaseInBack
+                | MotionEasing::EaseOutBack
+                | MotionEasing::EaseInOutBack
+                | MotionEasing::Bounce
                 | MotionEasing::CubicBezier { .. }
         )
     });
@@ -189,6 +196,41 @@ mod tests {
     use super::*;
     use crate::expr::{Expr, ExprId};
     use crate::value::MotionValue;
+
+    #[test]
+    fn step_easing_is_discrete_and_back_and_bounce_are_piecewise() {
+        let continuity = |easing| {
+            interpolate_continuity(
+                TemporalContinuity::C2,
+                Extrapolation::Clamp,
+                Extrapolation::Clamp,
+                &[easing],
+            )
+        };
+        assert_eq!(
+            continuity(MotionEasing::Steps {
+                count: 4,
+                position: crate::StepPosition::Start
+            }),
+            TemporalContinuity::Discrete
+        );
+        // Elastic has an explicit endpoint snap; do not claim continuity through it.
+        assert_eq!(
+            continuity(MotionEasing::Elastic),
+            TemporalContinuity::Discrete
+        );
+        for easing in [
+            MotionEasing::EaseInBack,
+            MotionEasing::EaseOutBack,
+            MotionEasing::EaseInOutBack,
+            MotionEasing::Bounce,
+        ] {
+            assert!(matches!(
+                continuity(easing),
+                TemporalContinuity::Piecewise { .. }
+            ));
+        }
+    }
 
     #[test]
     fn constants_and_progress_are_c2_local_frame_is_discrete() {

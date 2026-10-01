@@ -10,6 +10,7 @@ impl<'s> Compiler<'s> {
         measure: Option<&MeasureEnv>,
         shader_registry: Option<&ShaderRegistryEnv>,
         prepare_data: Option<&PrepareDataBinding>,
+        audio: Option<&AudioAnalysisEnv>,
         require_composition: bool,
     ) -> Result<Self, Vec<CompilerDiagnostic>> {
         if let Some(span) = module_reserved_theme_binding(program) {
@@ -49,8 +50,8 @@ impl<'s> Compiler<'s> {
                 MotionDiagnostic::new(
                     DiagCode::StaticEvalFailed,
                     "module",
-                    "this source measures text at compile time, which requires a font bundle; \
-                     pass `--font <path>` so measurement uses the same fonts as rendering",
+                    "this source measures or outlines text at compile time, which requires a \
+                     font bundle; pass `--font <path>` so preparation uses the same fonts as rendering",
                 ),
                 Span::new(0, source.len() as u32),
             )]);
@@ -58,6 +59,7 @@ impl<'s> Compiler<'s> {
 
         let mut prelude = String::from(STATIC_HELPERS);
         let mut module_const_inits = BTreeMap::new();
+        let mut cache_candidates = Vec::new();
         for statement in &program.body {
             record_module_const_inits(statement, &mut module_const_inits);
             let is_prepare_declaration = match statement {
@@ -73,6 +75,17 @@ impl<'s> Compiler<'s> {
                 _ => false,
             };
             if is_prepare_declaration {
+                let prelude_start = prelude.len();
+                if let Statement::VariableDeclaration(declaration) = statement
+                    && prelude_peeled_const_text(source, declaration).is_none()
+                    && let Some(span) = simulation::simulation_cache_candidate(declaration)
+                {
+                    let statement_start = statement.span().start as usize;
+                    cache_candidates.push((
+                        prelude_start + span.start as usize - statement_start,
+                        prelude_start + span.end as usize - statement_start,
+                    ));
+                }
                 // Strip TypeScript-only wrappers before evaluating module constants in QuickJS.
                 if let Statement::VariableDeclaration(declaration) = statement
                     && let Some(text) = prelude_peeled_const_text(source, declaration)
@@ -85,6 +98,20 @@ impl<'s> Compiler<'s> {
                     &source[statement.span().start as usize..statement.span().end as usize],
                 );
                 prelude.push('\n');
+            }
+        }
+        for (start, end) in cache_candidates.into_iter().rev() {
+            let initializer = prelude[start..end].to_owned();
+            let digest = simulation::simulation_cache_key(&initializer);
+            if let Some(table_json) = simulation::cached_simulation(&digest)
+                .or_else(|| simulation::prepare_and_cache_simulation(&initializer, &digest))
+            {
+                let encoded = serde_json::to_string(&table_json)
+                    .expect("a JSON string is always serializable");
+                prelude.replace_range(
+                    start..end,
+                    &format!("__valleHydrateSimulation(JSON.parse({encoded}))"),
+                );
             }
         }
         let sandbox = Sandbox::new(&prelude, measure).map_err(|diagnostic| {
@@ -130,15 +157,22 @@ impl<'s> Compiler<'s> {
             controls: default_controls(),
             controls_span: None,
             prepare_data: prepare_data.cloned(),
+            audio: audio.cloned(),
+            audio_tables: BTreeMap::new(),
+            simulation_tables: BTreeMap::new(),
             default_function: None,
             functions,
             expr_arena: ExprArena::default(),
+            instance_groups: Vec::new(),
+            instance_scope: None,
+            geometry_references: geometry_references(program),
             source_ledger: SourceLedger::default(),
             resource_refs: resources.to_vec(),
             used_font_controls: BTreeSet::new(),
             bindings: Bindings::default(),
             module_const_inits,
             current_theme: None,
+            time_scopes: Vec::new(),
             key_prefix: String::new(),
             component_stack: Vec::new(),
             helper_stack: Vec::new(),
@@ -148,6 +182,7 @@ impl<'s> Compiler<'s> {
             keys: BTreeSet::new(),
             layout_ids: BTreeSet::new(),
             diagnostics: Vec::new(),
+            warnings: Vec::new(),
         })
     }
 
@@ -313,6 +348,7 @@ impl<'s> Compiler<'s> {
             controls: self.controls.clone(),
             resource_refs,
             exprs: std::mem::take(&mut self.expr_arena.values),
+            instance_groups: std::mem::take(&mut self.instance_groups),
             nodes,
             node_children,
             root,
@@ -976,6 +1012,7 @@ impl<'s> Compiler<'s> {
     pub(super) fn fold_to_value(&mut self, expression: &Expression<'_>) -> Option<MotionValue> {
         let mark = self.expr_arena.values.len();
         let diagnostics = self.diagnostics.len();
+        let warnings = self.warnings.len();
         let lowered = self.lower_expr_raw(expression);
         let folded = lowered.and_then(|id| {
             // Skip folding subtrees known to read runtime inputs.
@@ -993,10 +1030,7 @@ impl<'s> Compiler<'s> {
                 .cloned()
                 .flatten()
         });
-        self.expr_arena.values.truncate(mark);
-        self.expr_arena.spans.truncate(mark);
-        self.expr_arena.expansion_stacks.truncate(mark);
-        self.expr_arena.reads_runtime.truncate(mark);
+        self.expr_arena.truncate(mark);
         // Discard speculative diagnostics; the caller supplies context-specific errors.
         //
         // Preserve explicit builtin rejections so invalid arguments retain their actionable
@@ -1007,6 +1041,9 @@ impl<'s> Compiler<'s> {
             .cloned()
             .collect();
         self.diagnostics.truncate(diagnostics);
+        if folded.is_none() {
+            self.warnings.truncate(warnings);
+        }
         for diagnostic in rescued {
             self.push_diagnostic(diagnostic);
         }
@@ -1022,6 +1059,14 @@ impl<'s> Compiler<'s> {
 
     pub(super) fn push(&mut self, expression: Expr, span: Span) -> ExprId {
         let id = ExprId(self.expr_arena.values.len() as u32);
+        let ty = valle_motion::expr::validate_next_expr(
+            &expression,
+            &self.expr_arena.values,
+            &self.expr_arena.types,
+            &self.controls,
+            &mut Vec::new(),
+        );
+        self.expr_arena.types.push(ty);
         // Children precede parents in the arena; treat invalid indices as runtime-dependent.
         let flag = valle_motion::expr_reads_runtime_inputs(&expression)
             || expression.children().iter().any(|child| {
@@ -1067,5 +1112,18 @@ impl<'s> Compiler<'s> {
             span,
             message,
         ));
+    }
+
+    pub(super) fn warn(&mut self, code: DiagCode, span: Span, message: impl Into<String>) {
+        debug_assert_eq!(code.class(), DiagClass::Warning);
+        let diagnostic = diagnostic_at(self.source, code, span, message);
+        if !self.warnings.iter().any(|existing| {
+            existing.code == diagnostic.code
+                && existing.span.line == diagnostic.span.line
+                && existing.span.column == diagnostic.span.column
+                && existing.message == diagnostic.message
+        }) {
+            self.warnings.push(diagnostic);
+        }
     }
 }

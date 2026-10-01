@@ -1071,11 +1071,13 @@ impl SnapshotBuilder {
             let Some(payload) = font_payloads.get(&(font.digest.clone(), font.face_index)) else {
                 continue;
             };
-            let mut resource = valle_motion::FontResource::new(payload.bytes().to_vec())
-                .override_info(valle_motion::FontOverride {
-                    family_name: Some(Arc::<str>::from(font.family.as_str())),
-                    ..Default::default()
-                });
+            let mut resource = valle_motion::FontResource::new(
+                valle_motion::FontSource::from_shared(payload.shared_bytes()),
+            )
+            .override_info(valle_motion::FontOverride {
+                family_name: Some(Arc::<str>::from(font.family.as_str())),
+                ..Default::default()
+            });
             if font.family == DEFAULT_FONT_FAMILY {
                 resource = resource.generic_family(valle_motion::GenericFamily::SANS_SERIF);
             }

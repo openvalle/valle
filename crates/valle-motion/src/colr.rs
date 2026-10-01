@@ -144,6 +144,7 @@ impl<'a> colr::Painter<'a> for Painter<'a, '_> {
                 }
                 let stops = self.stops(g.stops(0, self.face.variation_coordinates()));
                 Paint::Linear(LinearGradient {
+                    interpolation: valle_draw::program::GradientInterpolation::LinearSrgb,
                     start: Point::new(g.x0.into(), g.y0.into()),
                     end: Point::new(f64::from(g.x0) + ex, f64::from(g.y0) + ey),
                     stops,
@@ -154,6 +155,7 @@ impl<'a> colr::Painter<'a> for Painter<'a, '_> {
             colr::Paint::RadialGradient(g) => {
                 let stops = self.stops(g.stops(0, self.face.variation_coordinates()));
                 Paint::TwoCircle(TwoCircleGradient {
+                    interpolation: valle_draw::program::GradientInterpolation::LinearSrgb,
                     start: Point::new(g.x0.into(), g.y0.into()),
                     start_radius: g.r0.into(),
                     end: Point::new(g.x1.into(), g.y1.into()),
@@ -246,6 +248,7 @@ impl<'a> colr::Painter<'a> for Painter<'a, '_> {
             }),
             colr::CompositeMode::SoftLight => self.commands.push(RecordCmd::BeginBlend {
                 mode: BlendMode::SoftLight,
+                space: valle_draw::program::BlendSpace::Srgb,
             }),
             colr::CompositeMode::SourceIn => {
                 // ttf-parser emits an outer SourceOver group, its backdrop, then SourceIn.

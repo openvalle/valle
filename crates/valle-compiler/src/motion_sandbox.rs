@@ -105,6 +105,8 @@ const FORBIDDEN_NAMES: &[&str] = &[
     "localeCompare",
     "WeakRef",
     "FinalizationRegistry",
+    // Compiler-owned cache hydration must never be an authored primitive.
+    "__valleHydrateSimulation",
 ];
 
 /// Reject host-dependent Math implementations without a deterministic Rust bridge. Bridged
@@ -320,6 +322,23 @@ impl MeasureEnv {
         aliases: &[(String, Vec<u8>)],
         viewport: (u32, u32),
     ) -> Result<Self, MotionDiagnostic> {
+        let blobs = font_blobs
+            .iter()
+            .map(|blob| std::sync::Arc::<[u8]>::from(blob.as_slice()))
+            .collect::<Vec<_>>();
+        let aliases = aliases
+            .iter()
+            .map(|(name, blob)| (name.clone(), std::sync::Arc::<[u8]>::from(blob.as_slice())))
+            .collect::<Vec<_>>();
+        Self::new_shared_with_aliases(&blobs, &aliases, viewport)
+    }
+
+    /// Retain immutable host buffers for measurement and alias registration without copying them.
+    pub fn new_shared_with_aliases(
+        font_blobs: &[std::sync::Arc<[u8]>],
+        aliases: &[(String, std::sync::Arc<[u8]>)],
+        viewport: (u32, u32),
+    ) -> Result<Self, MotionDiagnostic> {
         let mut fonts = valle_motion::Fonts::default();
         if font_blobs.is_empty() {
             #[cfg(target_arch = "wasm32")]
@@ -341,7 +360,9 @@ impl MeasureEnv {
         } else {
             for blob in font_blobs {
                 fonts
-                    .register(valle_motion::motion_font_resource(blob.clone()))
+                    .register(valle_motion::motion_font_resource(
+                        valle_motion::FontSource::from_shared(std::sync::Arc::new(blob.clone())),
+                    ))
                     .map_err(|error| {
                         MotionDiagnostic::new(
                             DiagCode::StaticEvalFailed,
@@ -353,12 +374,15 @@ impl MeasureEnv {
         }
         for (alias, blob) in aliases {
             fonts
-                .register(valle_motion::FontResource::new(blob.clone()).override_info(
-                    valle_motion::FontOverride {
+                .register(
+                    valle_motion::FontResource::new(valle_motion::FontSource::from_shared(
+                        std::sync::Arc::new(blob.clone()),
+                    ))
+                    .override_info(valle_motion::FontOverride {
                         family_name: Some(std::sync::Arc::<str>::from(alias.as_str())),
                         ..Default::default()
-                    },
-                ))
+                    }),
+                )
                 .map_err(|error| {
                     MotionDiagnostic::new(
                         DiagCode::StaticEvalFailed,
@@ -385,6 +409,15 @@ impl MeasureEnv {
     ) -> Result<Self, MotionDiagnostic> {
         // Reuse the bound constructor for font registration, then drop the placeholder canvas.
         let mut env = Self::new_with_aliases(font_blobs, aliases, (1, 1))?;
+        env.viewport = None;
+        Ok(env)
+    }
+
+    pub fn new_unbound_shared_with_aliases(
+        font_blobs: &[std::sync::Arc<[u8]>],
+        aliases: &[(String, std::sync::Arc<[u8]>)],
+    ) -> Result<Self, MotionDiagnostic> {
+        let mut env = Self::new_shared_with_aliases(font_blobs, aliases, (1, 1))?;
         env.viewport = None;
         Ok(env)
     }
@@ -427,6 +460,7 @@ impl Sandbox {
             run(&ctx, HARDEN_JS.as_bytes()).map(|_: Option<String>| ())?;
             // Install host functions before evaluating module-level constants that may call them.
             if let Some((fonts, viewport)) = measure {
+                let outline_fonts = fonts.clone();
                 let host = rquickjs::Function::new(ctx.clone(), move |request: String| -> String {
                     match viewport {
                         Some(viewport) => measure_text_json(&request, &fonts, viewport),
@@ -442,6 +476,22 @@ impl Sandbox {
                     .set("__valle_measure_text", host)
                     .map_err(|e| format!("cannot bind measureText: {e}"))?;
                 run(&ctx, MEASURE_JS.as_bytes()).map(|_: Option<String>| ())?;
+                let outline_host =
+                    rquickjs::Function::new(ctx.clone(), move |request: String| -> String {
+                        match viewport {
+                            Some(viewport) => text_outline_json(&request, &outline_fonts, viewport),
+                            None => serde_json::json!({
+                                "error": "textOutline needs the entry file's `composition` to bind \
+                                          the logical canvas before module constants run"
+                            })
+                            .to_string(),
+                        }
+                    })
+                    .map_err(|e| format!("cannot install textOutline: {e}"))?;
+                ctx.globals()
+                    .set("__valle_text_outline", outline_host)
+                    .map_err(|e| format!("cannot bind textOutline: {e}"))?;
+                run(&ctx, TEXT_OUTLINE_JS.as_bytes()).map(|_: Option<String>| ())?;
             }
             // Pure computation builtins require no external inputs and are always available.
             let compute = rquickjs::Function::new(ctx.clone(), |request: String| -> String {
@@ -586,7 +636,7 @@ fn run<'js, T: rquickjs::FromJs<'js>>(ctx: &rquickjs::Ctx<'js>, src: &[u8]) -> R
 /// authored `style` object accepts.
 const MEASURE_JS: &str = r#"
 (() => {
-const OPTIONS = ["fontSize", "fontFamily", "fontWeight", "letterSpacing", "lineHeight", "maxWidth"];
+const OPTIONS = ["fontSize", "fontFamily", "fontWeight", "fontVariationSettings", "letterSpacing", "lineHeight", "maxWidth"];
 const REMOVED = ["className", "style"];
 const fail = (message) => { throw new Error("valle:measure:" + message); };
 const show = (value) => (typeof value === "number" && !Number.isFinite(value) ? String(value) : JSON.stringify(value));
@@ -619,6 +669,10 @@ globalThis.measureText = (text, options = {}) => {
   if (options.fontWeight !== undefined && options.fontWeight !== null) {
     finite("fontWeight", options.fontWeight, true);
   }
+  if (options.fontVariationSettings !== undefined && options.fontVariationSettings !== null
+      && typeof options.fontVariationSettings !== "string") {
+    fail("fontVariationSettings must be a string");
+  }
   if (options.letterSpacing !== undefined && options.letterSpacing !== null) {
     finite("letterSpacing", options.letterSpacing, false);
   }
@@ -634,6 +688,7 @@ globalThis.measureText = (text, options = {}) => {
     fontSize: options.fontSize,
     fontFamily: options.fontFamily ?? null,
     fontWeight: options.fontWeight ?? null,
+    fontVariationSettings: options.fontVariationSettings ?? null,
     letterSpacing: options.letterSpacing ?? null,
     lineHeight: options.lineHeight ?? null,
     maxWidth,
@@ -641,6 +696,71 @@ globalThis.measureText = (text, options = {}) => {
   const result = JSON.parse(raw);
   if (result.error) { throw new Error("valle:measure:" + result.error); }
   return result;
+};
+})();
+"#;
+
+/// Preparation-only glyph outlining. The host returns SVG path strings, which become the same
+/// typed PathData values that authored `path(svgD)` uses after static folding.
+const TEXT_OUTLINE_JS: &str = r#"
+(() => {
+const OPTIONS = ["fontSize", "fontFamily", "fontWeight", "fontVariationSettings", "letterSpacing", "lineHeight", "maxWidth", "origin", "align"];
+const fail = (message) => { throw new Error("valle:measure:" + message); };
+const finite = (name, value, positive) => {
+  if (typeof value !== "number" || !Number.isFinite(value) || (positive && value <= 0)) {
+    fail(name + " must be a finite" + (positive ? " positive" : "") + " number");
+  }
+};
+globalThis.textOutline = (text, options = {}) => {
+  if (typeof text !== "string") fail("textOutline(text, typography) needs a string");
+  if (options === null || typeof options !== "object" || Array.isArray(options)) {
+    fail("textOutline typography must be an object");
+  }
+  for (const key of Object.keys(options)) {
+    if (!OPTIONS.includes(key)) fail("unknown textOutline option `" + key + "`; accepts " + OPTIONS.join(", "));
+  }
+  finite("fontSize", options.fontSize, true);
+  for (const name of ["fontWeight", "letterSpacing", "lineHeight", "maxWidth"]) {
+    if (options[name] !== undefined && options[name] !== null) {
+      finite(name, options[name], name === "fontWeight" || name === "maxWidth");
+    }
+  }
+  for (const name of ["fontFamily", "fontVariationSettings"]) {
+    if (options[name] !== undefined && options[name] !== null && typeof options[name] !== "string") {
+      fail(name + " must be a string");
+    }
+  }
+  const origin = options.origin ?? { x: 0, y: 0 };
+  if (origin === null || typeof origin !== "object" || Array.isArray(origin) ||
+      (origin.__valleType !== undefined && origin.__valleType !== "point")) {
+    fail("origin must be point(x, y)");
+  }
+  finite("origin.x", origin.x, false);
+  finite("origin.y", origin.y, false);
+  const align = options.align ?? "left";
+  if (!["left", "center", "right"].includes(align)) {
+    fail("align must be left, center, or right");
+  }
+  const raw = __valle_text_outline(JSON.stringify({
+    text,
+    fontSize: options.fontSize,
+    fontFamily: options.fontFamily ?? null,
+    fontWeight: options.fontWeight ?? null,
+    fontVariationSettings: options.fontVariationSettings ?? null,
+    letterSpacing: options.letterSpacing ?? null,
+    lineHeight: options.lineHeight ?? null,
+    maxWidth: options.maxWidth ?? null,
+    origin: { x: origin.x, y: origin.y },
+    align,
+  }));
+  const result = JSON.parse(raw);
+  if (result.error) fail(result.error);
+  const typedPath = (d) => __typed({ __valleType: "pathData", d });
+  return {
+    path: typedPath(result.path),
+    glyphs: result.glyphs.map((glyph) => ({ ...glyph, path: typedPath(glyph.path) })),
+    bounds: result.bounds,
+  };
 };
 })();
 "#;
@@ -834,7 +954,7 @@ globalThis.padNumber = (value, options = {}) => call("format", {
 
 /// Detect measureText before creating the sandbox to report missing fonts directly.
 pub fn mentions_measure(src: &str) -> bool {
-    contains_identifier(src, "measureText")
+    contains_identifier(src, "measureText") || contains_identifier(src, "textOutline")
 }
 
 #[derive(serde::Deserialize)]
@@ -844,6 +964,7 @@ struct MeasureRequestJson {
     font_size: f64,
     font_family: Option<String>,
     font_weight: Option<f64>,
+    font_variation_settings: Option<String>,
     letter_spacing: Option<f64>,
     line_height: Option<f64>,
     max_width: Option<f64>,
@@ -871,6 +992,7 @@ fn measure_text_json(
             font_size: request.font_size,
             font_family: request.font_family.as_deref(),
             font_weight: request.font_weight,
+            font_variation_settings: request.font_variation_settings.as_deref(),
             letter_spacing: request.letter_spacing,
             line_height: request.line_height,
             max_width: request.max_width,
@@ -884,6 +1006,65 @@ fn measure_text_json(
         })
         .to_string(),
         Err(error) => fail(error.to_string()),
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct OutlineRequestJson {
+    text: String,
+    font_size: f64,
+    font_family: Option<String>,
+    font_weight: Option<f64>,
+    font_variation_settings: Option<String>,
+    letter_spacing: Option<f64>,
+    line_height: Option<f64>,
+    max_width: Option<f64>,
+    origin: OutlineOriginJson,
+    align: String,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OutlineOriginJson {
+    x: f64,
+    y: f64,
+}
+
+fn text_outline_json(
+    request: &str,
+    fonts: &valle_motion::Fonts,
+    viewport: valle_motion::Viewport,
+) -> String {
+    let fail = |message: String| serde_json::json!({ "error": message }).to_string();
+    let request: OutlineRequestJson = match serde_json::from_str(request) {
+        Ok(request) => request,
+        Err(error) => return fail(format!("bad textOutline options: {error}")),
+    };
+    let align = match request.align.as_str() {
+        "left" => valle_motion::TextOutlineAlign::Left,
+        "center" => valle_motion::TextOutlineAlign::Center,
+        "right" => valle_motion::TextOutlineAlign::Right,
+        _ => return fail("align must be left, center, or right".into()),
+    };
+    match valle_motion::text_outline(
+        &valle_motion::TextMeasure {
+            text: &request.text,
+            font_size: request.font_size,
+            font_family: request.font_family.as_deref(),
+            font_weight: request.font_weight,
+            font_variation_settings: request.font_variation_settings.as_deref(),
+            letter_spacing: request.letter_spacing,
+            line_height: request.line_height,
+            max_width: request.max_width,
+        },
+        fonts,
+        viewport,
+        valle_draw::Point::new(request.origin.x, request.origin.y),
+        align,
+    ) {
+        Ok(outlined) => serde_json::to_string(&outlined).expect("finite outline JSON"),
+        Err(error) => fail(error),
     }
 }
 

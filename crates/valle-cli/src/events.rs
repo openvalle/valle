@@ -83,6 +83,13 @@ pub(crate) enum EventKind {
     ModelsProgress { message: String },
     #[serde(rename = "render.progress")]
     RenderProgress { completed: usize, total: usize },
+    /// Emitted by the actual Motion compiler invocation, including failed compilations.
+    #[serde(rename = "motion.compilation")]
+    MotionCompilation {
+        entry: String,
+        #[serde(rename = "elapsedMs")]
+        elapsed_ms: f64,
+    },
 }
 
 impl EventKind {

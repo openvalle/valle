@@ -3,7 +3,7 @@ use std::{collections::BTreeMap, sync::Arc};
 use thiserror::Error;
 use ttf_parser::{Face, GlyphId, OutlineBuilder};
 use valle_draw::{
-    math::{exp, sqrt},
+    math::{exp, hypot, sqrt},
     program::{
         Clip, DrawProgram, FILTER_GAUSSIAN_SUPPORT_SIGMAS, Filter, GlyphRun, MaskMode, Node,
         NodeId, Paint, PathData, PathVerb, Transform2d,
@@ -879,11 +879,61 @@ fn preflight_program(
                             &mut budget.kernel_samples,
                         )?;
                     }
+                    Filter::Glow { .. } | Filter::Bloom { .. } => {
+                        let output_roi =
+                            bound_program_resource_roi(schedule, prepared.id, pass, *output)?;
+                        reserve_kernel_samples(
+                            pass,
+                            output_roi.pixels(),
+                            32,
+                            &mut budget.kernel_samples,
+                        )?;
+                    }
+                    Filter::RadialBlur { .. } => {
+                        let output_roi =
+                            bound_program_resource_roi(schedule, prepared.id, pass, *output)?;
+                        reserve_kernel_samples(
+                            pass,
+                            output_roi.pixels(),
+                            9,
+                            &mut budget.kernel_samples,
+                        )?;
+                    }
+                    Filter::FilmGrain { .. } => {
+                        let output_roi =
+                            bound_program_resource_roi(schedule, prepared.id, pass, *output)?;
+                        reserve_kernel_samples(
+                            pass,
+                            output_roi.pixels(),
+                            4,
+                            &mut budget.kernel_samples,
+                        )?;
+                    }
+                    Filter::LensDistortion { .. } => {
+                        let output_roi =
+                            bound_program_resource_roi(schedule, prepared.id, pass, *output)?;
+                        reserve_kernel_samples(
+                            pass,
+                            output_roi.pixels(),
+                            4,
+                            &mut budget.kernel_samples,
+                        )?;
+                    }
                     Filter::ColorMatrix { .. } => {}
+                    Filter::ChromaticAberration { .. } => {
+                        let output_roi =
+                            bound_program_resource_roi(schedule, prepared.id, pass, *output)?;
+                        reserve_kernel_samples(
+                            pass,
+                            output_roi.pixels(),
+                            3,
+                            &mut budget.kernel_samples,
+                        )?;
+                    }
                     _ => return Err(ReferenceExecuteError::UnsupportedPass { pass }),
                 }
             }
-            ProgramPassKind::ApplyShader { .. } => {
+            ProgramPassKind::ApplyShader { .. } | ProgramPassKind::ApplyTransition { .. } => {
                 return Err(ReferenceExecuteError::UnsupportedPass { pass });
             }
             _ => {}
@@ -1313,6 +1363,7 @@ fn prepare_reference_program(
             | ProgramPassKind::Backdrop { .. }
             | ProgramPassKind::SourceOver { .. }
             | ProgramPassKind::ApplyOpacity { .. }
+            | ProgramPassKind::ApplyTransition { .. }
             | ProgramPassKind::ApplyShader { .. }
             | ProgramPassKind::ApplyTransform { .. }
             | ProgramPassKind::Blend { .. } => {}
@@ -2391,6 +2442,189 @@ impl<'plan, 'surface> ReferenceProgramExecution<'plan, 'surface> {
 }
 
 #[allow(clippy::too_many_arguments)]
+fn execute_shared_f16_filter(
+    execution: &mut ReferenceProgramExecution<'_, '_>,
+    prepared: &PlanProgram,
+    viewport: valle_draw::Rect,
+    normalized_program_to_device: [f64; 9],
+    input: ProgramResourceId,
+    output: ProgramResourceId,
+    filter: &Filter,
+    pass: ExecutionPassId,
+) -> Result<(), ReferenceExecuteError> {
+    let roi = execution.resource_roi(output)?;
+    if roi.is_empty() {
+        return Ok(());
+    }
+    let input_roi = execution.resource_roi(input)?;
+    if input_roi.is_empty() {
+        execution.write_resource(output, |_, _, _| Ok(PremulRgba32::TRANSPARENT))?;
+        return Ok(());
+    }
+    let input_offset = [
+        input_roi
+            .x
+            .checked_sub(roi.x)
+            .ok_or_else(|| execution.invalid_schedule())?,
+        input_roi
+            .y
+            .checked_sub(roi.y)
+            .ok_or_else(|| execution.invalid_schedule())?,
+    ];
+    let local_to_device =
+        program_resource_to_device(prepared, output, viewport, normalized_program_to_device)?;
+    let [a, b, c, d, e, f, g, h, i] = local_to_device;
+    let x_scale = hypot(a, d);
+    let y_scale = hypot(b, e);
+    let scale = x_scale.max(y_scale).max(1.0);
+    if g.abs() > 1.0e-12
+        || h.abs() > 1.0e-12
+        || (i - 1.0).abs() > 1.0e-12
+        || (x_scale - y_scale).abs() > scale * 1.0e-9
+        || (a * b + d * e).abs() > scale * scale * 1.0e-9
+    {
+        return Err(ReferenceExecuteError::UnsupportedPass { pass });
+    }
+    let input_start_x = u32::try_from(input_roi.x).map_err(|_| execution.invalid_schedule())?;
+    let input_start_y = u32::try_from(input_roi.y).map_err(|_| execution.invalid_schedule())?;
+    let input_end_x = input_start_x
+        .checked_add(input_roi.width)
+        .ok_or_else(|| execution.invalid_schedule())?;
+    let input_end_y = input_start_y
+        .checked_add(input_roi.height)
+        .ok_or_else(|| execution.invalid_schedule())?;
+    let mut bytes = Vec::with_capacity(input_roi.pixels() as usize * 8);
+    for y in input_start_y..input_end_y {
+        for x in input_start_x..input_end_x {
+            let pixel = execution.read_pixel(input, x, y)?;
+            for channel in pixel.channels() {
+                bytes.extend_from_slice(
+                    &crate::compositor::bloom::f32_to_half(channel).to_le_bytes(),
+                );
+            }
+        }
+    }
+    let radius_scale = ((x_scale + y_scale) * 0.5) as f32;
+    let output_bytes = match filter {
+        Filter::Bloom {
+            threshold,
+            knee,
+            intensity,
+            radius,
+        } => crate::compositor::bloom::apply_bloom_f16(
+            &bytes,
+            input_roi.width,
+            input_roi.height,
+            roi.width,
+            roi.height,
+            input_offset,
+            crate::compositor::bloom::BloomParams {
+                threshold: *threshold,
+                knee: *knee,
+                intensity: *intensity,
+                radius: *radius * radius_scale,
+            },
+        ),
+        Filter::Glow {
+            color,
+            intensity,
+            radius,
+        } => {
+            let color = color.to_working();
+            crate::compositor::bloom::apply_glow_f16(
+                &bytes,
+                input_roi.width,
+                input_roi.height,
+                roi.width,
+                roi.height,
+                input_offset,
+                crate::compositor::bloom::GlowParams {
+                    color: [color.red, color.green, color.blue, color.alpha],
+                    intensity: *intensity,
+                    radius: *radius * radius_scale,
+                },
+            )
+        }
+        Filter::RadialBlur { center, amount } => crate::compositor::radial::apply_radial_blur_f16(
+            &bytes,
+            input_roi.width,
+            input_roi.height,
+            roi.width,
+            roi.height,
+            input_offset,
+            [roi.x, roi.y],
+            crate::compositor::radial::RadialBlurParams {
+                center: [
+                    (a * f64::from(center[0]) + b * f64::from(center[1]) + c) as f32,
+                    (d * f64::from(center[0]) + e * f64::from(center[1]) + f) as f32,
+                ],
+                amount: *amount * radius_scale,
+            },
+        ),
+        Filter::FilmGrain { seed, amount, size } => crate::compositor::film::apply_film_grain_f16(
+            &bytes,
+            input_roi.width,
+            input_roi.height,
+            roi.width,
+            roi.height,
+            input_offset,
+            [roi.x, roi.y],
+            crate::compositor::film::FilmGrainParams {
+                seed: *seed,
+                amount: *amount,
+                size: (*size * radius_scale).max(1.0),
+            },
+        ),
+        Filter::LensDistortion { k1, k2 } => {
+            let frame = prepared
+                .local_plan()
+                .resources()
+                .get(input.index())
+                .filter(|resource| resource.id == input)
+                .and_then(|resource| resource.bounds.rect())
+                .and_then(|rect| valle_draw::program::Transform2d(local_to_device).map_bounds(rect))
+                .ok_or(ReferenceExecuteError::UnsupportedPass { pass })?;
+            crate::compositor::lens::apply_lens_distortion_f16(
+                &bytes,
+                input_roi.width,
+                input_roi.height,
+                roi.width,
+                roi.height,
+                input_offset,
+                [roi.x, roi.y],
+                crate::compositor::lens::LensDistortionParams {
+                    k1: *k1,
+                    k2: *k2,
+                    frame: [
+                        frame.x as f32,
+                        frame.y as f32,
+                        frame.width as f32,
+                        frame.height as f32,
+                    ],
+                },
+            )
+        }
+        _ => unreachable!("only shared F16 filters reach this pass"),
+    }
+    .map_err(|_| ReferenceExecuteError::UnsupportedPass { pass })?;
+    let start_x = u32::try_from(roi.x).map_err(|_| execution.invalid_schedule())?;
+    let start_y = u32::try_from(roi.y).map_err(|_| execution.invalid_schedule())?;
+    execution.write_resource(output, |_, x, y| {
+        let index = ((y - start_y) as usize * roi.width as usize + (x - start_x) as usize) * 8;
+        let mut channels = [0.0; 4];
+        for (channel, pair) in channels
+            .iter_mut()
+            .zip(output_bytes[index..index + 8].chunks_exact(2))
+        {
+            *channel =
+                crate::compositor::bloom::half_to_f32(u16::from_le_bytes([pair[0], pair[1]]));
+        }
+        PremulRgba32::from_premultiplied(channels).map_err(Into::into)
+    })?;
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
 fn raster_program<'program, 'object>(
     program: &'program ReferenceProgramRuntime,
     prepared: &PlanProgram,
@@ -2685,6 +2919,26 @@ fn raster_program<'program, 'object>(
                             .map_err(Into::into)
                     })?;
                 }
+                Filter::ChromaticAberration { offset } => {
+                    let (local_to_device, inverse) = program_resource_normalized_matrices(
+                        prepared,
+                        *output,
+                        program.viewport,
+                        transform.matrix(),
+                    )?;
+                    execution.write_resource(*output, |execution, x, y| {
+                        program_chromatic_aberration_pixel(
+                            execution,
+                            *input,
+                            program.viewport,
+                            local_to_device,
+                            inverse,
+                            x,
+                            y,
+                            *offset,
+                        )
+                    })?;
+                }
                 Filter::Blur { sigma_x, sigma_y } => {
                     let (local_to_device, inverse) = program_resource_normalized_matrices(
                         prepared,
@@ -2754,6 +3008,22 @@ fn raster_program<'program, 'object>(
                             .map_err(Into::into)
                     })?;
                 }
+                shared_f16 @ (Filter::Glow { .. }
+                | Filter::Bloom { .. }
+                | Filter::RadialBlur { .. }
+                | Filter::FilmGrain { .. }
+                | Filter::LensDistortion { .. }) => {
+                    execute_shared_f16_filter(
+                        &mut execution,
+                        prepared,
+                        program.viewport,
+                        transform.matrix(),
+                        *input,
+                        *output,
+                        shared_f16,
+                        pass,
+                    )?;
+                }
                 _ => return Err(ReferenceExecuteError::UnsupportedPass { pass }),
             },
             ProgramPassKind::ApplyMask {
@@ -2763,12 +3033,19 @@ fn raster_program<'program, 'object>(
                 output,
                 ..
             } => {
-                let mode = match program.mask_mode(*node)? {
-                    MaskMode::Alpha => ReferenceMaskMode::Alpha,
-                    MaskMode::Luminance => ReferenceMaskMode::Luminance,
+                let mask_mode = program.mask_mode(*node)?;
+                let mode = if mask_mode.is_luminance() {
+                    ReferenceMaskMode::Luminance
+                } else {
+                    ReferenceMaskMode::Alpha
                 };
                 execution.write_resource(*output, |execution, x, y| {
                     let coverage = mask_coverage_pixel(execution.read_pixel(*mask, x, y)?, mode);
+                    let coverage = if mask_mode.is_inverted() {
+                        1.0 - coverage
+                    } else {
+                        coverage
+                    };
                     Ok(execution
                         .read_pixel(*input, x, y)?
                         .scale_coverage(coverage)?)
@@ -2797,7 +3074,7 @@ fn raster_program<'program, 'object>(
                 .write_resource(*output, |execution, x, y| {
                     execution.read_pixel(*input, x, y)
                 })?,
-            ProgramPassKind::ApplyShader { .. } => {
+            ProgramPassKind::ApplyShader { .. } | ProgramPassKind::ApplyTransition { .. } => {
                 return Err(ReferenceExecuteError::UnsupportedPass { pass });
             }
             ProgramPassKind::Blend {
@@ -2805,12 +3082,14 @@ fn raster_program<'program, 'object>(
                 destination,
                 output,
                 mode,
+                space,
                 ..
             } => execution.write_resource(*output, |execution, x, y| {
                 effective_blend_source(
                     execution.read_pixel(*source, x, y)?,
                     execution.read_pixel(*destination, x, y)?,
                     (*mode).into(),
+                    *space,
                 )
                 .map_err(Into::into)
             })?,
@@ -3118,6 +3397,47 @@ fn program_gaussian_blur_pixel(
         }
     }
     premul_from_accumulated_channels(channels)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn program_chromatic_aberration_pixel(
+    execution: &ReferenceProgramExecution<'_, '_>,
+    input: ProgramResourceId,
+    viewport: valle_draw::Rect,
+    transform: [f64; 9],
+    inverse: [f64; 9],
+    x: u32,
+    y: u32,
+    offset: [f32; 2],
+) -> Result<PremulRgba32, ReferenceExecuteError> {
+    if offset == [0.0, 0.0] {
+        return execution.read_pixel(input, x, y);
+    }
+    let normalized = project_homography(inverse, [f64::from(x) + 0.5, f64::from(y) + 0.5])
+        .ok_or(ReferenceExecuteError::InvalidSampleCoordinate)?;
+    let local = [
+        viewport.x + normalized[0] * viewport.width,
+        viewport.y + normalized[1] * viewport.height,
+    ];
+    let mut samples = [PremulRgba32::TRANSPARENT; 3];
+    for (index, phase) in [-0.5, 0.0, 0.5].into_iter().enumerate() {
+        let sample_local = [
+            local[0] + f64::from(offset[0]) * phase,
+            local[1] + f64::from(offset[1]) * phase,
+        ];
+        let sample_normalized = [
+            (sample_local[0] - viewport.x) / viewport.width,
+            (sample_local[1] - viewport.y) / viewport.height,
+        ];
+        let device = project_homography(transform, sample_normalized)
+            .ok_or(ReferenceExecuteError::InvalidSampleCoordinate)?;
+        samples[index] = execution.sample_bilinear(input, device)?;
+    }
+    let red = samples[0].channels();
+    let green = samples[1].channels();
+    let blue = samples[2].channels();
+    PremulRgba32::from_premultiplied([red[0], green[1], blue[2], red[3].max(green[3]).max(blue[3])])
+        .map_err(Into::into)
 }
 
 fn nonzero_fill_contains(fill: &ReferenceFill, point: [f64; 2]) -> bool {

@@ -163,6 +163,7 @@ impl TimelineValidator {
                 let path = format!("{track_path}/clips/{clip_index}");
                 self.visual_clip(clip, &path, &valid_resources);
             }
+            self.visual_transitions(track, &track_path);
         }
 
         for (track_index, track) in timeline.tracks.audio.iter_mut().enumerate() {
@@ -229,6 +230,70 @@ impl TimelineValidator {
             for (clip_index, clip) in track.clips.iter_mut().enumerate() {
                 self.caption_clip(clip, &format!("{track_path}/clips/{clip_index}"));
             }
+        }
+    }
+
+    fn visual_transitions(
+        &mut self,
+        track: &crate::wire::timeline::TimelineVisualTrackWire,
+        track_path: &str,
+    ) {
+        let mut pairs = BTreeSet::new();
+        let mut windows = Vec::new();
+        for (index, transition) in track.transitions.iter().enumerate() {
+            let path = format!("{track_path}/transitions/{index}");
+            if let Err(error) = transition.kind.resolve_params(&transition.params) {
+                self.error(
+                    "invalid_transition_params",
+                    &format!("{path}/params/{}", error.parameter),
+                    json!({"reason":error.reason}),
+                );
+            }
+            let from = transition.from;
+            let to = transition.to;
+            if from.checked_add(1) != Some(to) || to >= track.clips.len() {
+                self.error(
+                    "transition_adjacency",
+                    &path,
+                    json!({ "from": from, "to": to }),
+                );
+                continue;
+            }
+            if !pairs.insert((from, to)) {
+                self.error(
+                    "duplicate_transition",
+                    &path,
+                    json!({ "from": from, "to": to }),
+                );
+                continue;
+            }
+            let a = &track.clips[from];
+            let b = &track.clips[to];
+            let a_start = a.start.to_exact();
+            let b_start = b.start.to_exact();
+            let (Ok(a_end), Ok(b_end)) = (
+                a_start.checked_add(a.duration.to_exact()),
+                b_start.checked_add(b.duration.to_exact()),
+            ) else {
+                self.error("time_overflow", &path, json!({}));
+                continue;
+            };
+            // Each endpoint has its own full local clock; only their intersection mixes.
+            if !(a_start < b_start && b_start < a_end && a_end < b_end) {
+                self.error(
+                    "invalid_transition_overlap",
+                    &path,
+                    json!({ "from": from, "to": to }),
+                );
+                continue;
+            }
+            if windows
+                .iter()
+                .any(|&(start, end)| b_start < end && start < a_end)
+            {
+                self.error("overlapping_transitions", &path, json!({}));
+            }
+            windows.push((b_start, a_end));
         }
     }
 

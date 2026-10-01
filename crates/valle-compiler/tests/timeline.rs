@@ -344,3 +344,155 @@ fn visual_video_volume_and_pixel_size_survive_lowering_and_angles_are_degrees() 
         assert!(compile_timeline(decode(source)).is_err());
     }
 }
+
+fn transition_author(kind: &str) -> serde_json::Value {
+    json!({
+        "canvas": { "width": 640, "height": 360, "fps": 30 },
+        "tracks": { "visual": [{
+            "clips": [
+                {"kind":"solid", "color":"#2140ff", "start":0, "duration":2.5},
+                {"kind":"solid", "color":"#ff4a24", "start":1.5, "duration":2.5}
+            ],
+            "transitions": [{"from":0, "to":1, "kind":kind}]
+        }] }
+    })
+}
+
+#[test]
+fn all_builtin_transitions_keep_endpoint_durations_and_overlap() {
+    for kind in valle_timeline::wire::timeline::TransitionKind::ALL {
+        let name = serde_json::to_value(kind).unwrap();
+        let author = transition_author(name.as_str().unwrap());
+        let compiled = compile_timeline(decode(author)).unwrap().to_wire();
+        assert_eq!(compiled.document.canvas.duration.to_string(), "4/1");
+        let items = &compiled.document.visual.tracks[0].items;
+        assert_eq!(items.len(), 3);
+        let document::VisualItemWire::Clip(from) = &items[0] else {
+            panic!()
+        };
+        let document::VisualItemWire::Transition(transition) = &items[1] else {
+            panic!()
+        };
+        let document::VisualItemWire::Clip(to) = &items[2] else {
+            panic!()
+        };
+        assert_eq!(from.duration.to_string(), "5/2");
+        assert_eq!(to.duration.to_string(), "5/2");
+        assert_eq!(transition.duration.to_string(), "1/1");
+        assert_eq!(
+            serde_json::to_value(&transition.kernel).unwrap(),
+            json!({"type": name})
+        );
+    }
+}
+
+#[test]
+fn transitions_reject_invalid_pairs_and_non_intersecting_or_contained_clips() {
+    for (pair, code) in [
+        (
+            json!({"from":0,"to":0,"kind":"fade"}),
+            "transition_adjacency",
+        ),
+        (
+            json!({"from":0,"to":2,"kind":"fade"}),
+            "transition_adjacency",
+        ),
+        (
+            json!({"from":1,"to":0,"kind":"fade"}),
+            "transition_adjacency",
+        ),
+    ] {
+        let mut author = transition_author("fade");
+        author["tracks"]["visual"][0]["transitions"][0] = pair;
+        assert!(validation_codes(author).iter().any(|actual| actual == code));
+    }
+    for start in [0.0, 2.5, 3.0] {
+        let mut author = transition_author("fade");
+        author["tracks"]["visual"][0]["clips"][1]["start"] = json!(start);
+        assert!(validation_codes(author).contains(&"invalid_transition_overlap".to_owned()));
+    }
+    let mut author = transition_author("fade");
+    author["tracks"]["visual"][0]["clips"][1]["duration"] = json!(0.5);
+    assert!(validation_codes(author).contains(&"invalid_transition_overlap".to_owned()));
+    let mut author = transition_author("fade");
+    author["tracks"]["visual"][0]["transitions"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"from":0,"to":1,"kind":"circleOpen"}));
+    assert!(validation_codes(author).contains(&"duplicate_transition".to_owned()));
+    assert!(decode_timeline(&transition_author("unknown").to_string()).is_err());
+    let mut params = transition_author("fade");
+    params["tracks"]["visual"][0]["transitions"][0]["params"] = json!({"ignored":1});
+    assert!(
+        validation_codes(params).contains(&"invalid_transition_params".to_owned()),
+        "unimplemented parameters must not be silently ignored"
+    );
+}
+
+#[test]
+fn consecutive_transitions_allow_touching_but_reject_overlapping_windows() {
+    let mut author = transition_author("fade");
+    author["tracks"]["visual"][0]["clips"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "kind":"solid", "color":"#ffffff", "start":2.5, "duration":3
+        }));
+    author["tracks"]["visual"][0]["transitions"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"from":1,"to":2,"kind":"wipeLeft"}));
+    compile_timeline(decode(author.clone())).unwrap();
+    author["tracks"]["visual"][0]["clips"][2]["start"] = json!(2.25);
+    assert!(validation_codes(author).contains(&"overlapping_transitions".to_owned()));
+}
+
+#[test]
+fn transition_parameters_survive_compilation_and_defaults_canonicalize() {
+    for kind in valle_timeline::wire::timeline::TransitionKind::ALL {
+        let name = serde_json::to_value(kind).unwrap();
+        for spec in kind.parameter_specs() {
+            let mut author = transition_author(name.as_str().unwrap());
+            let params =
+                std::collections::BTreeMap::from([(spec.name.to_string(), f64::from(spec.max))]);
+            author["tracks"]["visual"][0]["transitions"][0]["params"] =
+                serde_json::to_value(&params).unwrap();
+            let compiled = compile_timeline(decode(author)).unwrap().to_wire();
+            let document::VisualItemWire::Transition(transition) =
+                &compiled.document.visual.tracks[0].items[1]
+            else {
+                panic!()
+            };
+            let document::TransitionKernelWire::Builtin(kernel) = &transition.kernel else {
+                panic!()
+            };
+            assert_eq!(kernel.kind, kind);
+            assert_eq!(
+                kernel.kind.resolve_params(&kernel.params).unwrap(),
+                kind.resolve_params(&params).unwrap()
+            );
+        }
+        let mut explicit = transition_author(name.as_str().unwrap());
+        explicit["tracks"]["visual"][0]["transitions"][0]["params"] = serde_json::to_value(
+            kind.parameter_specs()
+                .iter()
+                .map(|s| (s.name, s.default))
+                .collect::<std::collections::BTreeMap<_, _>>(),
+        )
+        .unwrap();
+        let plain = compile_timeline(decode(transition_author(name.as_str().unwrap())))
+            .unwrap()
+            .to_wire();
+        assert_eq!(compile_timeline(decode(explicit)).unwrap().to_wire(), plain);
+    }
+    for (kind, params) in [
+        ("ripple", json!({"frequency":-1})),
+        ("fade", json!({"size":1})),
+        ("directionalWarp", json!({"directionX":0,"directionY":0})),
+        ("circleOpen", json!({"centerY":1.1})),
+    ] {
+        let mut author = transition_author(kind);
+        author["tracks"]["visual"][0]["transitions"][0]["params"] = params;
+        assert!(validation_codes(author).contains(&"invalid_transition_params".to_owned()));
+    }
+}

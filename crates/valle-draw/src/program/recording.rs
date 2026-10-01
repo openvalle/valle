@@ -6,12 +6,15 @@
 
 use serde::{Deserialize, Serialize};
 
+use super::AuthorColor;
 use crate::color::Rgba;
-use crate::draw::{Cap, GradientStop, Join, PathBuilder, PathRef, PathSink, PathVerb, Span};
+use crate::draw::{
+    Cap, GradientStop as LeafGradientStop, Join, PathBuilder, PathRef, PathSink, PathVerb, Span,
+};
 use crate::geom::{Point, Rect};
 use crate::requirements::DigestBytes;
 
-/// Aggregate instance side-table budget for one emitted frame, across every GeometryBatch node.
+/// Aggregate instance side-table budget for one emitted frame, across every GeometryBatch record.
 pub const MAX_BATCH_INSTANCES_PER_RECORDING: usize = 100_000;
 
 // Core types.
@@ -375,7 +378,7 @@ impl RoundRect {
     }
 }
 
-/// CSS blend modes plus DestinationIn for internal mask sources.
+/// CSS blend modes supported by the compositor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
@@ -397,7 +400,7 @@ pub enum BlendMode {
     Saturation,
     Color,
     Luminosity,
-    DestinationIn,
+    Plus,
 }
 
 /// Mask channel selection matching CSS mask-mode.
@@ -408,9 +411,30 @@ pub enum MaskMode {
     #[default]
     Alpha,
     Luminance,
+    AlphaInverted,
+    LuminanceInverted,
 }
 
-/// Image or gradient mask source, represented as a value rather than a subtree.
+impl MaskMode {
+    pub fn is_inverted(self) -> bool {
+        matches!(self, Self::AlphaInverted | Self::LuminanceInverted)
+    }
+
+    pub fn is_luminance(self) -> bool {
+        matches!(self, Self::Luminance | Self::LuminanceInverted)
+    }
+
+    pub fn inverted(self) -> Self {
+        match self {
+            Self::Alpha => Self::AlphaInverted,
+            Self::Luminance => Self::LuminanceInverted,
+            Self::AlphaInverted => Self::Alpha,
+            Self::LuminanceInverted => Self::Luminance,
+        }
+    }
+}
+
+/// A mask value, or a separately recorded source subtree.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(
@@ -420,8 +444,14 @@ pub enum MaskMode {
     deny_unknown_fields
 )]
 pub enum MaskSource {
-    Image { image: ImageId },
-    Paint { paint: Paint },
+    Image {
+        image: ImageId,
+    },
+    Paint {
+        paint: Paint,
+    },
+    /// Filled by a nested BeginMaskSource group, independently of content painter order.
+    Subtree,
 }
 
 /// One operation in an ordered CSS filter chain. Brightness, contrast, and saturation are neutral
@@ -470,6 +500,35 @@ pub enum FilterOp {
         sigma: f64,
         color: Rgba,
     },
+    Glow {
+        color: AuthorColor,
+        radius: f64,
+        intensity: f64,
+    },
+    Bloom {
+        threshold: f64,
+        knee: f64,
+        intensity: f64,
+        radius: f64,
+    },
+    RadialBlur {
+        center_x: f64,
+        center_y: f64,
+        amount: f64,
+    },
+    FilmGrain {
+        seed: u32,
+        amount: f64,
+        size: f64,
+    },
+    LensDistortion {
+        k1: f64,
+        k2: f64,
+    },
+    ChromaticAberration {
+        offset_x: f64,
+        offset_y: f64,
+    },
     /// Node-local displacement driven by deterministic Perlin noise.
     NoiseDisplacement {
         frequency_x: f64,
@@ -489,6 +548,52 @@ pub enum FilterOp {
 
 // Paint types.
 
+/// One stop in the recording side table. CSS/leaf colors retain their parsed byte value, while
+/// Motion author colors keep their straight linear-sRGB precision through program compilation.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GradientStop {
+    pub offset: f64,
+    pub color: GradientStopColor,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(
+    tag = "kind",
+    content = "value",
+    rename_all = "camelCase",
+    deny_unknown_fields
+)]
+pub enum GradientStopColor {
+    Byte(Rgba),
+    Author(super::AuthorColor),
+}
+
+impl GradientStopColor {
+    pub fn is_finite(self) -> bool {
+        match self {
+            Self::Byte(_) => true,
+            Self::Author(color) => color.is_finite(),
+        }
+    }
+
+    pub fn to_author(self) -> super::AuthorColor {
+        match self {
+            Self::Byte(color) => super::AuthorColor::from_srgb8(color),
+            Self::Author(color) => color,
+        }
+    }
+
+    pub fn to_working(self) -> super::LinearColor {
+        match self {
+            Self::Byte(color) => super::LinearColor::from_srgb8(color),
+            Self::Author(color) => color.to_working(),
+        }
+    }
+}
+
 /// Gradient repetition and behavior outside the stop range.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
@@ -505,6 +610,7 @@ pub enum SpreadMode {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct LinearGradient {
+    pub interpolation: super::GradientInterpolation,
     pub start: Point,
     pub end: Point,
     pub stops: Span,
@@ -518,6 +624,7 @@ pub struct LinearGradient {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RadialGradient {
+    pub interpolation: super::GradientInterpolation,
     pub center: Point,
     pub radii: Point,
     pub stops: Span,
@@ -530,6 +637,7 @@ pub struct RadialGradient {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TwoCircleGradient {
+    pub interpolation: super::GradientInterpolation,
     pub start: Point,
     pub start_radius: f64,
     pub end: Point,
@@ -545,6 +653,7 @@ pub struct TwoCircleGradient {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ConicGradient {
+    pub interpolation: super::GradientInterpolation,
     pub center: Point,
     pub start_angle: f64,
     /// Angular extent of one gradient tile in degrees. Repeating CSS conics use a value below 360.
@@ -566,6 +675,8 @@ pub struct ConicGradient {
 )]
 pub enum Paint {
     Solid(Rgba),
+    /// Already decoded, premultiplied working-space author color.
+    FloatSolid(super::LinearColor),
     Linear(LinearGradient),
     Radial(RadialGradient),
     TwoCircle(TwoCircleGradient),
@@ -582,6 +693,7 @@ impl Paint {
         match p {
             crate::draw::Paint::Solid(c) => Paint::Solid(c),
             crate::draw::Paint::Linear(g) => Paint::Linear(LinearGradient {
+                interpolation: crate::program::GradientInterpolation::LinearSrgb,
                 start: g.start,
                 end: g.end,
                 stops: Span {
@@ -597,7 +709,7 @@ impl Paint {
     /// Gradient stop span for validation; solid paints return None.
     pub fn stops(&self) -> Option<Span> {
         match self {
-            Paint::Solid(_) => None,
+            Paint::Solid(_) | Paint::FloatSolid(_) => None,
             Paint::Linear(g) => Some(g.stops),
             Paint::Radial(g) => Some(g.stops),
             Paint::TwoCircle(g) => Some(g.stops),
@@ -877,6 +989,17 @@ pub struct GlyphSource {
 pub enum BatchGeometry {
     Circle,
     Rect,
+    Path,
+    Image,
+}
+
+/// Source tile shared by an image batch; coordinates are normalized display-content units.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AtlasSource {
+    pub image: ImageId,
+    pub src: Rect,
 }
 
 /// One instance in [`RecordCmd::GeometryBatch`]. Positions are local to the owning Scene node.
@@ -886,7 +1009,22 @@ pub enum BatchGeometry {
 pub struct BatchInstance {
     pub position: Point,
     pub size: Point,
-    pub color: Rgba,
+    /// Premultiplied floating-point working color, converted once at recording emission.
+    pub color: super::LinearColor,
+    pub rotation: f32,
+    /// Horizontal shear angle in degrees, applied before rotation.
+    pub skew_x: f32,
+    /// Stroke width in the instance shape's local coordinate system. Zero disables stroke.
+    pub stroke_width: f32,
+    /// CSS-style group opacity, applied after painting this instance.
+    pub opacity: f32,
+}
+
+impl BatchInstance {
+    /// The exact local transform used when compiling an instance to a DrawProgram.
+    pub fn transform(&self, geometry: BatchGeometry) -> super::Affine2d {
+        super::compile::instance_transform(geometry, self)
+    }
 }
 
 // Recording commands.
@@ -906,6 +1044,15 @@ pub enum RecordCmd {
     BeginGroup,
     /// Exactly two child groups: alpha mask first, then content. Lowers to an ordinary Group mask.
     BeginAlphaMask,
+    /// Exactly two independent child groups, from then to, sampled on this local canvas.
+    BeginTransition {
+        kind: crate::transition::TransitionKind,
+        params: crate::transition::TransitionValues,
+        progress: f32,
+        bounds: Rect,
+    },
+    /// Capture this complete group as the enclosing subtree mask's source, not foreground.
+    BeginMaskSource,
     BeginTransform {
         transform: Affine,
     },
@@ -937,6 +1084,7 @@ pub enum RecordCmd {
     /// Blend this layer with its backdrop using the selected CSS blend mode.
     BeginBlend {
         mode: BlendMode,
+        space: super::BlendSpace,
     },
     /// Mask this layer, placing the mask source in its resolved destination rectangle.
     BeginMask {
@@ -993,7 +1141,18 @@ pub enum RecordCmd {
     /// topology constant while particle/data instances change from frame to frame.
     GeometryBatch {
         geometry: BatchGeometry,
+        path: Option<PathRef>,
+        atlas: Option<AtlasSource>,
         instances: Span,
+        /// Optional independent stroke colors, parallel to the instance span.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        stroke_colors: Option<Span>,
+        /// Optional per-row dash phase, parallel to the instance span.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        dash_offsets: Option<Span>,
+        /// Shared Path fill and stroke geometry.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        path_style: Option<super::InstancePathStyle>,
     },
     /// A run of positioned glyphs.
     GlyphRun {
@@ -1051,7 +1210,9 @@ impl RecordCmd {
     pub fn depth_delta(&self) -> i32 {
         match self {
             RecordCmd::BeginGroup
+            | RecordCmd::BeginTransition { .. }
             | RecordCmd::BeginAlphaMask
+            | RecordCmd::BeginMaskSource
             | RecordCmd::BeginTransform { .. }
             | RecordCmd::BeginPerspective { .. }
             | RecordCmd::BeginOpacity { .. }
@@ -1087,6 +1248,10 @@ pub struct ProgramRecording {
     pub glyphs: Vec<Glyph>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub batch_instances: Vec<BatchInstance>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub batch_stroke_colors: Vec<super::LinearColor>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub batch_dash_offsets: Vec<f32>,
     /// Per-glyph byte ranges grouped by GlyphSource::ranges.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub glyph_source_ranges: Vec<Span>,
@@ -1115,6 +1280,8 @@ impl Default for ProgramRecording {
             filters: Vec::new(),
             glyphs: Vec::new(),
             batch_instances: Vec::new(),
+            batch_stroke_colors: Vec::new(),
+            batch_dash_offsets: Vec::new(),
             glyph_source_ranges: Vec::new(),
             text_sources: Vec::new(),
             fonts: Vec::new(),
@@ -1182,6 +1349,9 @@ pub enum RecordingError {
         found: usize,
         max: usize,
     },
+    InvalidBatchGeometry {
+        at: usize,
+    },
     InvalidShaderLayer {
         at: usize,
         reason: &'static str,
@@ -1234,6 +1404,9 @@ impl core::fmt::Display for RecordingError {
             }
             RecordingError::TooManyBatchInstances { found, max } => {
                 write!(f, "batchInstances has {found} entries (max {max})")
+            }
+            RecordingError::InvalidBatchGeometry { at } => {
+                write!(f, "cmd {at}: batch path must match path geometry")
             }
             RecordingError::InvalidShaderLayer { at, reason } => {
                 write!(f, "cmd {at}: invalid ShaderLayer: {reason}")
@@ -1295,6 +1468,13 @@ mod finite {
     pub fn paint(p: &Paint) -> bool {
         match p {
             Paint::Solid(_) => true,
+            Paint::FloatSolid(color) => {
+                color.red.is_finite()
+                    && color.green.is_finite()
+                    && color.blue.is_finite()
+                    && color.alpha.is_finite()
+                    && (0.0..=1.0).contains(&color.alpha)
+            }
             Paint::Linear(g) => point(&g.start) && point(&g.end) && g.alpha.is_finite(),
             Paint::Radial(g) => {
                 point(&g.center)
@@ -1347,6 +1527,59 @@ mod finite {
             FilterOp::DropShadow { dx, dy, sigma, .. } => {
                 dx.is_finite() && dy.is_finite() && sigma.is_finite()
             }
+            FilterOp::Glow {
+                color,
+                radius,
+                intensity,
+            } => {
+                color.is_finite()
+                    && radius.is_finite()
+                    && (0.0..=128.0).contains(radius)
+                    && intensity.is_finite()
+                    && (0.0..=4.0).contains(intensity)
+            }
+            FilterOp::Bloom {
+                threshold,
+                knee,
+                intensity,
+                radius,
+            } => {
+                threshold.is_finite()
+                    && (0.0..=1.0).contains(threshold)
+                    && knee.is_finite()
+                    && (0.0..=1.0).contains(knee)
+                    && intensity.is_finite()
+                    && (0.0..=4.0).contains(intensity)
+                    && radius.is_finite()
+                    && (0.0..=128.0).contains(radius)
+            }
+            FilterOp::RadialBlur {
+                center_x,
+                center_y,
+                amount,
+            } => {
+                center_x.is_finite()
+                    && center_x.abs() <= 10_000_000.0
+                    && center_y.is_finite()
+                    && center_y.abs() <= 10_000_000.0
+                    && amount.is_finite()
+                    && (0.0..=128.0).contains(amount)
+            }
+            FilterOp::FilmGrain { amount, size, .. } => {
+                amount.is_finite()
+                    && (0.0..=1.0).contains(amount)
+                    && size.is_finite()
+                    && (1.0..=64.0).contains(size)
+            }
+            FilterOp::LensDistortion { k1, k2 } => {
+                k1.is_finite() && k1.abs() <= 0.5 && k2.is_finite() && k2.abs() <= 0.5
+            }
+            FilterOp::ChromaticAberration { offset_x, offset_y } => {
+                offset_x.is_finite()
+                    && offset_y.is_finite()
+                    && offset_x.abs() <= 256.0
+                    && offset_y.abs() <= 256.0
+            }
             FilterOp::NoiseDisplacement {
                 frequency_x,
                 frequency_y,
@@ -1394,10 +1627,26 @@ mod finite {
                     && match source {
                         MaskSource::Image { .. } => true,
                         MaskSource::Paint { paint: p } => paint(p),
+                        MaskSource::Subtree => true,
                     }
             }
             RecordCmd::BeginBackdropFilter { bounds, .. } => bounds.as_ref().is_none_or(rect),
             RecordCmd::BeginShaderLayer { bounds, .. } => rect(bounds),
+            RecordCmd::BeginTransition {
+                kind,
+                params,
+                progress,
+                bounds,
+            } => {
+                kind.validate_values(*params).is_ok()
+                    && progress.is_finite()
+                    && (0.0..=1.0).contains(progress)
+                    && rect(bounds)
+                    && bounds.x == 0.0
+                    && bounds.y == 0.0
+                    && bounds.width > 0.0
+                    && bounds.height > 0.0
+            }
             RecordCmd::BeginMotionGlass { .. } | RecordCmd::BeginMotionGlassForeground { .. } => {
                 true
             }
@@ -1431,6 +1680,7 @@ mod finite {
             }
             RecordCmd::BeginGroup
             | RecordCmd::BeginAlphaMask
+            | RecordCmd::BeginMaskSource
             | RecordCmd::BeginClipPath { .. }
             | RecordCmd::BeginBlend { .. }
             | RecordCmd::BeginFilter { .. }
@@ -1453,6 +1703,8 @@ impl ProgramRecording {
         self.filters.clear();
         self.glyphs.clear();
         self.batch_instances.clear();
+        self.batch_stroke_colors.clear();
+        self.batch_dash_offsets.clear();
         self.glyph_source_ranges.clear();
         self.text_sources.clear();
         self.fonts.clear();
@@ -1483,11 +1735,25 @@ impl ProgramRecording {
     /// Store gradient stops in the shared side table and return their span.
     pub fn intern_stops(&mut self, stops: &[(f64, Rgba)]) -> Span {
         let start = self.gradient_stops.len() as u32;
-        self.gradient_stops.extend(
-            stops
-                .iter()
-                .map(|&(offset, color)| GradientStop { offset, color }),
-        );
+        self.gradient_stops
+            .extend(stops.iter().map(|&(offset, color)| GradientStop {
+                offset,
+                color: GradientStopColor::Byte(color),
+            }));
+        Span {
+            start,
+            end: self.gradient_stops.len() as u32,
+        }
+    }
+
+    /// Preserve evaluated Motion author stops without a frame-time byte conversion.
+    pub fn intern_author_stops(&mut self, stops: &[(f64, super::AuthorColor)]) -> Span {
+        let start = self.gradient_stops.len() as u32;
+        self.gradient_stops
+            .extend(stops.iter().map(|&(offset, color)| GradientStop {
+                offset,
+                color: GradientStopColor::Author(color),
+            }));
         Span {
             start,
             end: self.gradient_stops.len() as u32,
@@ -1663,10 +1929,32 @@ impl ProgramRecording {
         }
     }
 
+    pub fn intern_batch_stroke_colors(&mut self, colors: &[super::LinearColor]) -> Span {
+        let start = self.batch_stroke_colors.len() as u32;
+        self.batch_stroke_colors.extend_from_slice(colors);
+        Span {
+            start,
+            end: self.batch_stroke_colors.len() as u32,
+        }
+    }
+
+    pub fn intern_batch_dash_offsets(&mut self, offsets: &[f32]) -> Span {
+        let start = self.batch_dash_offsets.len() as u32;
+        self.batch_dash_offsets.extend_from_slice(offsets);
+        Span {
+            start,
+            end: self.batch_dash_offsets.len() as u32,
+        }
+    }
+
     /// Append leaf gradient stops and return their offset for paint conversion.
-    pub fn push_draw_gradients(&mut self, stops: &[GradientStop]) -> u32 {
+    pub fn push_draw_gradients(&mut self, stops: &[LeafGradientStop]) -> u32 {
         let offset = self.gradient_stops.len() as u32;
-        self.gradient_stops.extend_from_slice(stops);
+        self.gradient_stops
+            .extend(stops.iter().map(|stop| GradientStop {
+                offset: stop.offset,
+                color: GradientStopColor::Byte(stop.color),
+            }));
         offset
     }
 
@@ -1704,6 +1992,18 @@ impl ProgramRecording {
                 max: MAX_BATCH_INSTANCES_PER_RECORDING,
             });
         }
+        if self.batch_stroke_colors.len() > MAX_BATCH_INSTANCES_PER_RECORDING {
+            return Err(RecordingError::TooManyBatchInstances {
+                found: self.batch_stroke_colors.len(),
+                max: MAX_BATCH_INSTANCES_PER_RECORDING,
+            });
+        }
+        if self.batch_dash_offsets.len() > MAX_BATCH_INSTANCES_PER_RECORDING {
+            return Err(RecordingError::TooManyBatchInstances {
+                found: self.batch_dash_offsets.len(),
+                max: MAX_BATCH_INSTANCES_PER_RECORDING,
+            });
+        }
         let bad = |at: usize, table: &'static str| RecordingError::NonFinite { at, table };
         if let Some(at) = self.points.iter().position(|p| !finite::point(p)) {
             return Err(bad(at, "points"));
@@ -1711,7 +2011,7 @@ impl ProgramRecording {
         if let Some(at) = self
             .gradient_stops
             .iter()
-            .position(|s| !s.offset.is_finite())
+            .position(|s| !s.offset.is_finite() || !s.color.is_finite())
         {
             return Err(bad(at, "gradientStops"));
         }
@@ -1728,10 +2028,39 @@ impl ProgramRecording {
         if let Some(at) = self.batch_instances.iter().position(|instance| {
             !finite::point(&instance.position)
                 || !finite::point(&instance.size)
-                || instance.size.x <= 0.0
-                || instance.size.y <= 0.0
+                || !instance.color.red.is_finite()
+                || !instance.color.green.is_finite()
+                || !instance.color.blue.is_finite()
+                || !instance.color.alpha.is_finite()
+                || !(0.0..=1.0).contains(&instance.color.alpha)
+                || !instance.rotation.is_finite()
+                || !instance.skew_x.is_finite()
+                || !instance.stroke_width.is_finite()
+                || instance.stroke_width < 0.0
+                || !instance.opacity.is_finite()
+                || !(0.0..=1.0).contains(&instance.opacity)
+                || instance.size.x == 0.0
+                || instance.size.y == 0.0
         }) {
             return Err(bad(at, "batchInstances"));
+        }
+        if let Some(at) = self.batch_stroke_colors.iter().position(|color| {
+            !color.red.is_finite()
+                || !color.green.is_finite()
+                || !color.blue.is_finite()
+                || !color.alpha.is_finite()
+                || !(0.0..=1.0).contains(&color.alpha)
+                || color.alpha == 0.0
+                    && (color.red != 0.0 || color.green != 0.0 || color.blue != 0.0)
+        }) {
+            return Err(bad(at, "batchStrokeColors"));
+        }
+        if let Some(at) = self
+            .batch_dash_offsets
+            .iter()
+            .position(|value| !value.is_finite())
+        {
+            return Err(bad(at, "batchDashOffsets"));
         }
         if let Some(at) = self.fonts.iter().position(|f| !f.size.is_finite()) {
             return Err(bad(at, "fonts"));
@@ -1839,6 +2168,7 @@ impl ProgramRecording {
                     self.check_id(at, "images", image.0, self.images.len())
                 }
                 MaskSource::Paint { paint: p } => paint(p, self),
+                MaskSource::Subtree => Ok(()),
             },
             RecordCmd::Path {
                 path, fill, stroke, ..
@@ -1852,8 +2182,90 @@ impl ProgramRecording {
                 }
                 Ok(())
             }
-            RecordCmd::GeometryBatch { instances, .. } => {
-                span("batchInstances", *instances, self.batch_instances.len())
+            RecordCmd::GeometryBatch {
+                geometry,
+                path,
+                atlas,
+                instances,
+                stroke_colors,
+                dash_offsets,
+                path_style,
+            } => {
+                if matches!(geometry, BatchGeometry::Path) != path.is_some() {
+                    return Err(RecordingError::InvalidBatchGeometry { at });
+                }
+                if matches!(geometry, BatchGeometry::Image) != atlas.is_some() {
+                    return Err(RecordingError::InvalidBatchGeometry { at });
+                }
+                if let Some(path) = path {
+                    self.check_path(at, *path)?;
+                }
+                if let Some(atlas) = atlas {
+                    self.check_id(at, "images", atlas.image.0, self.images.len())?;
+                    let src = atlas.src;
+                    if !src.x.is_finite()
+                        || !src.y.is_finite()
+                        || !src.width.is_finite()
+                        || !src.height.is_finite()
+                        || src.x < 0.0
+                        || src.y < 0.0
+                        || src.width <= 0.0
+                        || src.height <= 0.0
+                        || src.x + src.width > 1.0
+                        || src.y + src.height > 1.0
+                        || self.images[atlas.image.index()].source_time_s.is_some()
+                    {
+                        return Err(RecordingError::InvalidBatchGeometry { at });
+                    }
+                }
+                span("batchInstances", *instances, self.batch_instances.len())?;
+                if let Some(colors) = stroke_colors {
+                    span("batchStrokeColors", *colors, self.batch_stroke_colors.len())?;
+                    if colors.end - colors.start != instances.end - instances.start
+                        || *geometry != BatchGeometry::Path
+                    {
+                        return Err(RecordingError::InvalidBatchGeometry { at });
+                    }
+                }
+                if let Some(offsets) = dash_offsets {
+                    span("batchDashOffsets", *offsets, self.batch_dash_offsets.len())?;
+                    if offsets.end - offsets.start != instances.end - instances.start
+                        || *geometry != BatchGeometry::Path
+                    {
+                        return Err(RecordingError::InvalidBatchGeometry { at });
+                    }
+                }
+                if let Some(style) = path_style {
+                    let dash_total: f32 = style.dash.iter().sum();
+                    if *geometry != BatchGeometry::Path
+                        || !style.dash_offset.is_finite()
+                        || !style.miter_limit.is_finite()
+                        || style.miter_limit < 1.0
+                        || style.dash.len() % 2 != 0
+                        || style
+                            .dash
+                            .iter()
+                            .any(|value| !value.is_finite() || *value < 0.0)
+                        || !style.dash.is_empty() && (!dash_total.is_finite() || dash_total <= 0.0)
+                    {
+                        return Err(RecordingError::InvalidBatchGeometry { at });
+                    }
+                } else if dash_offsets.is_some() {
+                    return Err(RecordingError::InvalidBatchGeometry { at });
+                }
+                if *geometry != BatchGeometry::Path
+                    && self.batch_instances[instances.range()]
+                        .iter()
+                        .any(|instance| {
+                            instance.size.x <= 0.0
+                                || instance.size.y <= 0.0
+                                || instance.skew_x.abs() >= 89.0
+                                || *geometry == BatchGeometry::Image && instance.stroke_width != 0.0
+                        })
+                {
+                    return Err(RecordingError::InvalidBatchGeometry { at });
+                }
+                Ok(())
             }
             RecordCmd::GlyphRun {
                 font,
@@ -2028,6 +2440,7 @@ mod tests {
             path,
             fill_rule: FillRule::NonZero,
             fill: Some(Paint::Radial(RadialGradient {
+                interpolation: crate::program::GradientInterpolation::LinearSrgb,
                 center: Point::new(5.0, 5.0),
                 radii: Point::new(5.0, 5.0),
                 stops,
@@ -2043,6 +2456,73 @@ mod tests {
     #[test]
     fn validate_accepts_a_balanced_list() {
         assert_eq!(sample().validate(), Ok(()));
+    }
+
+    #[test]
+    fn path_batch_accepts_reflection_and_css_skew_but_rect_batch_keeps_bounds() {
+        let mut recording = ProgramRecording::new();
+        let path = recording
+            .begin_path()
+            .rect(Rect::new(0.0, 0.0, 1.0, 1.0))
+            .finish();
+        let rows = recording.intern_batch_instances(&[BatchInstance {
+            position: Point::new(8.0, 8.0),
+            size: Point::new(-2.0, 3.0),
+            color: crate::program::LinearColor::from_srgb8(Rgba::rgb(255, 0, 0)),
+            rotation: 0.0,
+            skew_x: 0.0,
+            stroke_width: 0.0,
+            opacity: 1.0,
+        }]);
+        recording.push(RecordCmd::GeometryBatch {
+            geometry: BatchGeometry::Path,
+            path: Some(path),
+            atlas: None,
+            instances: rows,
+            stroke_colors: None,
+            dash_offsets: None,
+            path_style: None,
+        });
+        assert_eq!(recording.validate(), Ok(()));
+        recording.batch_instances[0].skew_x = 95.0;
+        assert_eq!(recording.validate(), Ok(()));
+        recording.cmds.pop();
+        recording.push(RecordCmd::GeometryBatch {
+            geometry: BatchGeometry::Rect,
+            path: None,
+            atlas: None,
+            instances: rows,
+            stroke_colors: None,
+            dash_offsets: None,
+            path_style: None,
+        });
+        assert!(matches!(
+            recording.validate(),
+            Err(RecordingError::InvalidBatchGeometry { .. })
+        ));
+        recording.batch_instances[0].size.x = 2.0;
+        assert!(matches!(
+            recording.validate(),
+            Err(RecordingError::InvalidBatchGeometry { .. })
+        ));
+        recording.cmds.pop();
+        recording.batch_instances[0].size.x = 0.0;
+        recording.push(RecordCmd::GeometryBatch {
+            geometry: BatchGeometry::Path,
+            path: Some(path),
+            atlas: None,
+            instances: rows,
+            stroke_colors: None,
+            dash_offsets: None,
+            path_style: None,
+        });
+        assert!(matches!(
+            recording.validate(),
+            Err(RecordingError::NonFinite {
+                table: "batchInstances",
+                ..
+            })
+        ));
     }
 
     #[test]
@@ -2440,7 +2920,7 @@ mod tests {
         assert_eq!(lifted.stops, Span { start: 1, end: 3 });
         assert_eq!(
             d.gradient_stops_of(lifted.stops)[0].color,
-            Rgba::rgb(1, 1, 1)
+            GradientStopColor::Byte(Rgba::rgb(1, 1, 1))
         );
     }
 }

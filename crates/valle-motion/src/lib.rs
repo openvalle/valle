@@ -37,27 +37,31 @@ pub mod style;
 pub mod tailwind;
 pub mod text;
 pub mod time;
+pub mod time_function;
 pub mod value;
 
 pub use artifact::{
     ARTIFACT_FORMAT_VERSION, ArrowKind, ArrowSpec, BACKDROP_DISPLACEMENT_CAPABILITY,
     BASE_CAPABILITIES, BatchColorField, BatchNumberField, BatchPointField, BatchPositions,
-    BoolValue, CAMERA_CAPABILITY, CSS_3D_PERSPECTIVE_ORIGIN_CAPABILITY,
+    BatchStagger, BoolValue, CAMERA_CAPABILITY, CSS_3D_PERSPECTIVE_ORIGIN_CAPABILITY,
     CSS_3D_TRANSFORM_CAPABILITY, CSS_TRANSFORM_PERCENT_CAPABILITY, CameraBinding, CapabilitySet,
-    ChildRange, ColorValue, CoordinateSpace, DISPLACEMENT_SEED_EXPR_CAPABILITY, FLIP_CAPABILITY,
-    FONT_ASSET_CAPABILITY, GEOMETRY_BATCH_CAPABILITY, GEOMETRY_BATCH_FIELD_CAPABILITY,
-    GeometryBatchGeometry, GeometryBatchSpec, GradientStopValue, MATH_FORMULA_CAPABILITY,
-    MAX_GEOMETRY_BATCH_INSTANCES_PER_NODE, MOTION_MATH_CAPABILITY, MaskValue,
-    NODE_ADVANCED_FILTER_CAPABILITY, NUMBER_FORMAT_CAPABILITY, NodeId, NodeKind, NumberValue,
-    OPTIONAL_CAPABILITIES, PARTICLE_FIELD_CAPABILITY, PaintValue, ParticleSpec, PathStroke,
-    PathValue, PerUnit, PointValue, RICH_TEXT_CAPABILITY, RICH_TEXT_INLINE_IMAGE_CAPABILITY,
-    RectValue, ResourceRef, SCENE3D_LAYER_CAPABILITY, SHADER_LAYER_CAPABILITY,
-    Scene3DCameraBinding, Scene3DFrameBinding, Scene3DLightBinding, Scene3DMaterialBinding,
+    ChildRange, ColorValue, CoordinateSpace, DISPLACEMENT_SEED_EXPR_CAPABILITY, ECHO_CAPABILITY,
+    FLIP_CAPABILITY, FONT_ASSET_CAPABILITY, GEOMETRY_BATCH_CAPABILITY,
+    GEOMETRY_BATCH_FIELD_CAPABILITY, GeometryBatchGeometry, GeometryBatchSpec, GradientStopValue,
+    IndexFormula, InstanceColumn, InstanceColumnValues, InstanceGroup, InstanceKeys,
+    InstanceTemplateNode, MATH_FORMULA_CAPABILITY, MAX_GEOMETRY_BATCH_INSTANCES_PER_NODE,
+    MOTION_MATH_CAPABILITY, MaskValue, NODE_ADVANCED_FILTER_CAPABILITY, NUMBER_FORMAT_CAPABILITY,
+    NodeId, NodeKind, NumberValue, OPTIONAL_CAPABILITIES, PARTICLE_FIELD_CAPABILITY, PaintValue,
+    ParticleForce, ParticleSpec, PathStroke, PathValue, PerUnit, PointValue, RICH_TEXT_CAPABILITY,
+    RICH_TEXT_INLINE_IMAGE_CAPABILITY, RectValue, ResourceRef, SCENE3D_LAYER_CAPABILITY,
+    SHADER_LAYER_CAPABILITY, SHUTTER_CAPABILITY, Scene3DCameraBinding, Scene3DDepthOfFieldBinding,
+    Scene3DFrameBinding, Scene3DLightBinding, Scene3DMaterialBinding,
     Scene3DMaterialOverrideBinding, Scene3DMeshBinding, Scene3DNodeBinding,
     Scene3DTransformBinding, SceneArtifact, SceneNode, SemanticMeta, ShaderProgramRef,
     ShaderTextureInput, ShaderUniformBinding, ShaderUniformValue, StyleBinding, StyleValue,
-    TRANSFORM_SCALE2D_CAPABILITY, TextSplit, TextValue, UnitStyle, VIDEO_CAPABILITY,
-    VIEWPORT_CAPABILITY, ValidationError, font_family_alias,
+    TIME_SCOPE_CAPABILITY, TRANSFORM_SCALE2D_CAPABILITY, TRANSITION_CAPABILITY, TextSplit,
+    TextValue, UnitStyle, VIDEO_CAPABILITY, VIEWPORT_CAPABILITY, ValidationError,
+    font_family_alias,
 };
 pub use batch::{BatchFieldProgress, resolve_geometry_batch};
 pub use canonical::{CanonicalError, canonical_bytes};
@@ -79,6 +83,7 @@ pub use emit::{
     EmitError, EmitReport, FaceCache, default_font_naming, emit, emit_program_with_faces,
     emit_with_faces,
 };
+pub use eval::eval_instances;
 pub use eval::{
     EvalError, EvalInputs, ResolvedProps, UnitContext, css_token, eval_all, eval_layout_bounds,
     eval_post_layout, eval_units, expr_reads_runtime_inputs, fold_constants, resolve_props,
@@ -87,7 +92,7 @@ pub use eval::{
 pub use expr::{
     CompareOp, ContextInput, Expr, ExprId, ExprType, Extrapolation, GeometryField, InterpolateStop,
     MAX_TEMPLATE_OUTPUT_BYTES, MAX_TEMPLATE_PARTS, MAX_TEMPLATE_STATIC_BYTES, MathBinaryOp,
-    MathUnaryOp, NumberFormat, TemplatePart, bounds_dependent, geometry_eval_policy,
+    MathUnaryOp, NumberFormat, RangeShape, TemplatePart, bounds_dependent, geometry_eval_policy,
     post_layout_dependent, projection_dependent,
 };
 pub use geometry::{
@@ -100,10 +105,12 @@ pub use glass::{
     TemporalContinuity, sample_tracks, validate_glass_schema,
 };
 pub use layout::{
-    GlassLayoutEnvironment, GlassLayoutField, GlassLayoutForeground, GlassLayoutFrame,
-    GlassLayoutMaterial, GlassLayoutMotion, GlassLayoutSurface, LAYOUT_ENGINE_ID, LayoutError,
-    LayoutOptions, LayoutTree, PreparedScene, Scene3DFrameRequest, Scene3DRequest, StyleCache,
-    Viewport, build_tree, layout_boxes, prepare_owned_scene, prepare_scene,
+    FrameEvaluationStats, GlassLayoutEnvironment, GlassLayoutField, GlassLayoutForeground,
+    GlassLayoutFrame, GlassLayoutMaterial, GlassLayoutMotion, GlassLayoutSurface, LAYOUT_ENGINE_ID,
+    LayoutError, LayoutOptions, LayoutTree, MotionReview, MotionReviewIssue, MotionTrajectory,
+    MotionTrajectoryPoint, PreparedScene, Scene3DFrameRequest, Scene3DRequest, StyleCache,
+    Viewport, build_tree, layout_box_at_point, layout_boxes, prepare_owned_scene, prepare_scene,
+    review_motion,
 };
 pub use lock::{
     ArtifactEnvelope, BuildFingerprint, BundledAsset, BundledFont, BundledSource, EnvelopeDigest,
@@ -113,15 +120,16 @@ pub use spring::{SpringOutput, SpringParams, SpringSample, spring_at, spring_sam
 pub use tailwind::{TAILWIND_CATALOG, TailwindClassError, validate_tailwind_class};
 pub use text::{
     DEFAULT_MOTION_FONT_FILES, FontOverride, FontResource, Fonts, GenericFamily, MeasureError,
-    MeasuredBox, TextMeasure, measure_text,
+    MeasuredBox, OutlineBounds, OutlinedGlyph, OutlinedText, TextMeasure, TextOutlineAlign,
+    measure_text, text_outline,
 };
 pub use time::{frame_at_sample_floor, frame_rate_as_f64, sample_time_at_frame};
-pub use value::{MotionEasing, MotionValue};
+pub use value::{MotionEasing, MotionValue, StepPosition};
 
 pub const MOTION_MATH_ENGINE_ID: &str = valle_draw::math::ENGINE_ID;
 
-pub use text::motion_font_resource;
 #[cfg(not(target_arch = "wasm32"))]
 pub use text::{DEFAULT_MOTION_FONT, DEFAULT_MOTION_FONT_WEIGHTS};
+pub use text::{FontSource, motion_font_resource};
 #[cfg(not(target_arch = "wasm32"))]
 pub use text::{default_motion_fonts, register_default_motion_fonts};

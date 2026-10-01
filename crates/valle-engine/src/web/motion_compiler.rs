@@ -1,12 +1,13 @@
 //! Motion authoring in the same Web Engine module used for playback.
 
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, sync::Arc};
 
-use js_sys::{Array, Reflect, Uint8Array};
+use js_sys::{Array, Float32Array, Reflect, Uint8Array};
 use serde::Deserialize;
 use valle_compiler::motion::{
-    CompiledMotion, CompilerDiagnostic, MeasureEnv, MotionModuleGraph, PrepareDataBinding,
-    compile_motion_modules_with_full_env_and_data, compile_motion_with_full_env_and_data,
+    AudioAnalysisEnv, AudioPcm, CompiledMotion, CompilerDiagnostic, MeasureEnv, MotionModuleGraph,
+    PrepareDataBinding, compile_motion_modules_with_full_env_and_data_and_audio,
+    compile_motion_with_full_env_and_data_and_audio,
 };
 use valle_motion::shader::{ShaderPackage, ShaderRegistry};
 use valle_motion::{ContentDigest, ResourceRef};
@@ -26,6 +27,78 @@ struct CompileOptions {
     #[serde(default)]
     resources: Vec<ResourceRef>,
     data: Option<PrepareDataBinding>,
+    #[serde(default)]
+    audio_sources: Vec<AudioSourceInput>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AudioSourceInput {
+    control: String,
+    content_hash: ContentDigest,
+    sample_rate: u32,
+}
+
+thread_local! {
+    // The Worker owns frozen typed arrays across source edits. Keep their Rust
+    // allocation too, so a recompilation neither copies PCM nor repeats the FFT.
+    static AUDIO_PCM: std::cell::RefCell<Vec<(Float32Array, Arc<AudioPcm>)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+fn cached_audio(source: &AudioSourceInput, pcm: Float32Array) -> Arc<AudioPcm> {
+    AUDIO_PCM.with_borrow_mut(|cache| {
+        if let Some((_, cached)) = cache.iter().find(|(array, cached)| {
+            cached.content_hash == source.content_hash
+                && cached.sample_rate == source.sample_rate
+                && cached.samples.len() == pcm.length() as usize
+                && js_sys::Object::is(array.as_ref(), pcm.as_ref())
+        }) {
+            return Arc::clone(cached);
+        }
+        let value = Arc::new(AudioPcm {
+            content_hash: source.content_hash,
+            sample_rate: source.sample_rate,
+            samples: pcm.to_vec(),
+        });
+        const MAX_SAMPLES: usize = 128 * 1024 * 1024 / 4;
+        while !cache.is_empty()
+            && (cache.len() >= 16
+                || cache.iter().map(|(_, p)| p.samples.len()).sum::<usize>() + value.samples.len()
+                    > MAX_SAMPLES)
+        {
+            cache.remove(0);
+        }
+        if value.samples.len() <= MAX_SAMPLES {
+            cache.push((pcm, Arc::clone(&value)));
+        }
+        value
+    })
+}
+
+fn audio_env(sources: Vec<AudioSourceInput>, samples: &Array) -> Result<AudioAnalysisEnv, JsError> {
+    if sources.len() != samples.length() as usize {
+        return Err(JsError::new(
+            "audio source metadata and PCM buffers must have equal length",
+        ));
+    }
+    let mut env = AudioAnalysisEnv::default();
+    for (index, source) in sources.into_iter().enumerate() {
+        let pcm = samples
+            .get(index as u32)
+            .dyn_into::<Float32Array>()
+            .map_err(|_| JsError::new("audio PCM must be a Float32Array"))?;
+        if env
+            .sources
+            .insert(source.control.clone(), cached_audio(&source, pcm))
+            .is_some()
+        {
+            return Err(JsError::new(&format!(
+                "duplicate audio source `{}`",
+                source.control
+            )));
+        }
+    }
+    Ok(env)
 }
 
 /// Compile a standalone Motion JSX source with explicit host resources.
@@ -36,16 +109,19 @@ pub fn compile_motion_jsx(
     fonts: &Array,
     font_aliases: &Array,
     shaders: &Array,
+    audio_samples: &Array,
 ) -> Result<String, JsError> {
     let options = parse_options(options_json)?;
+    let audio = audio_env(options.audio_sources, audio_samples)?;
     let measure = measure_env(fonts, font_aliases)?;
     let shaders = shader_registry(shaders)?;
-    encode_result(compile_motion_with_full_env_and_data(
+    encode_result(compile_motion_with_full_env_and_data_and_audio(
         source,
         &options.resources,
         measure.as_ref(),
         Some(&shaders),
         options.data.as_ref(),
+        Some(&audio),
     ))
 }
 
@@ -58,8 +134,10 @@ pub fn compile_motion_modules(
     fonts: &Array,
     font_aliases: &Array,
     shaders: &Array,
+    audio_samples: &Array,
 ) -> Result<String, JsError> {
     let options = parse_options(options_json)?;
+    let audio = audio_env(options.audio_sources, audio_samples)?;
     let modules: BTreeMap<String, String> =
         serde_json::from_str(modules_json).map_err(|error| JsError::new(&error.to_string()))?;
     let graph = match MotionModuleGraph::new(entry, modules) {
@@ -68,12 +146,13 @@ pub fn compile_motion_modules(
     };
     let measure = measure_env(fonts, font_aliases)?;
     let shaders = shader_registry(shaders)?;
-    encode_result(compile_motion_modules_with_full_env_and_data(
+    encode_result(compile_motion_modules_with_full_env_and_data_and_audio(
         &graph,
         &options.resources,
         measure.as_ref(),
         Some(&shaders),
         options.data.as_ref(),
+        Some(&audio),
     ))
 }
 
@@ -156,6 +235,7 @@ fn encode_result(
                 "status": "ok",
                 "artifact": compiled.artifact,
                 "artifactDigest": artifact_digest,
+                "warnings": compiled.warnings,
                 "sourceMap": compiled.source_map,
                 "normalizedSource": compiled.normalized_source,
                 "normalizedAstDigest": compiled.normalized_ast_digest,

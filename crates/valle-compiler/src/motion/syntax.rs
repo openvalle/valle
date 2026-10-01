@@ -49,7 +49,11 @@ pub(super) fn motion_value_from_string(value: &str) -> MotionValue {
         .map(MotionValue::Length2)
         .or_else(|| Length::parse(value).map(MotionValue::Length))
         .or_else(|| Angle::parse(value).map(MotionValue::Angle))
-        .or_else(|| Rgba::parse(value).map(MotionValue::Color))
+        .or_else(|| {
+            Rgba::parse(value)
+                .map(valle_draw::program::AuthorColor::from_srgb8)
+                .map(MotionValue::Color)
+        })
         .unwrap_or_else(|| MotionValue::Str(value.to_string()))
 }
 
@@ -143,6 +147,28 @@ pub(super) fn parse_easing(name: &str) -> Option<MotionEasing> {
         "easeOut" => Some(MotionEasing::EaseOut),
         "easeInOut" => Some(MotionEasing::EaseInOut),
         "exp" => Some(MotionEasing::Exp),
+        "easeInBack" => Some(MotionEasing::EaseInBack),
+        "easeOutBack" => Some(MotionEasing::EaseOutBack),
+        "easeInOutBack" => Some(MotionEasing::EaseInOutBack),
+        "elastic" => Some(MotionEasing::Elastic),
+        "bounce" => Some(MotionEasing::Bounce),
+        other if other.starts_with("steps(") => {
+            let args = other.strip_prefix("steps(")?.strip_suffix(')')?;
+            let mut args = args.split(',').map(str::trim);
+            let count = args.next()?;
+            if count.is_empty() || !count.bytes().all(|byte| byte.is_ascii_digit()) {
+                return None;
+            }
+            let count = count.parse::<u32>().ok().filter(|count| *count > 0)?;
+            let position = match args.next() {
+                None | Some("end") => valle_motion::StepPosition::End,
+                Some("start") => valle_motion::StepPosition::Start,
+                _ => return None,
+            };
+            args.next()
+                .is_none()
+                .then_some(MotionEasing::Steps { count, position })
+        }
         other => {
             let args = other.strip_prefix("cubic-bezier(")?.strip_suffix(')')?;
             let mut p = [0.0_f64; 4];

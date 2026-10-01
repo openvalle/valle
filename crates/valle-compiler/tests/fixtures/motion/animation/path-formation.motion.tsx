@@ -21,7 +21,7 @@ export default function PathFormation(ctx) {
           backgroundColor: agent.index % 3 === 0 ? "#f8fafc" : agent.index % 3 === 1 ? "#67e8f9" : "#a7f3d0",
           opacity: 0.18 + (1 - agent.progress) * 0.82,
           filter: "drop-shadow(0px 0px 12px #67e8f9)",
-          motionPath: follow(ROUTE, trail(t, agent.index, { gap: 0.031, mode: "wrap" }), { rotate: "auto" }),
+          motionPath: follow(ROUTE, trail(t, agent.index, { gap: -0.031, mode: "wrap" }), { rotate: "auto" }),
         }} />
       ))}
       <View key="legend" className="absolute flex items-center" style={{ left: 108, top: 948, width: 750, height: 63, opacity: labels }}>

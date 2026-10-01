@@ -1,0 +1,17 @@
+// CanvasKit's CPU F16 store truncates; native ARM/x86 stores round to nearest even.
+// Quantize shader results explicitly before that store so both retain the same normal values.
+uniform shader content;
+float nearestHalf(float value) {
+    float magnitude = abs(value);
+    if (magnitude == 0.0) return value;
+    float stepSize = exp2(max(-24.0, floor(log2(magnitude)) - 10.0));
+    float scaled = magnitude / stepSize;
+    float base = floor(scaled);
+    float part = scaled - base;
+    float increment = part > 0.5 || (part == 0.5 && mod(base, 2.0) == 1.0) ? 1.0 : 0.0;
+    return sign(value) * (base + increment) * stepSize;
+}
+half4 main(float2 xy) {
+    float4 value = content.eval(xy);
+    return half4(nearestHalf(value.r), nearestHalf(value.g), nearestHalf(value.b), nearestHalf(value.a));
+}

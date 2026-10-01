@@ -44,7 +44,7 @@ pub use crate::transport::{
     VideoFrameTransport,
 };
 #[cfg(feature = "libav")]
-pub use alpha::TransparentVideoMuxer;
+pub use alpha::{TransparentVideoCodec, TransparentVideoMuxer};
 #[cfg(feature = "libav")]
 pub use audio::{LibavAudioSource, LibavAudioStream, decode_audio_mono_f32};
 #[cfg(feature = "libav")]

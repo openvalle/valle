@@ -1139,6 +1139,38 @@
           },
           "type": "object"
         },
+        "TimelineTransitionWire": {
+          "additionalProperties": false,
+          "description": "A transition occupies the intersection of two adjacent visual clips.",
+          "properties": {
+            "from": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "kind": {
+              "$ref": "#/$defs/TransitionKind"
+            },
+            "params": {
+              "additionalProperties": {
+                "format": "double",
+                "type": "number"
+              },
+              "type": "object"
+            },
+            "to": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "from",
+            "to",
+            "kind"
+          ],
+          "type": "object"
+        },
         "TimelineVisualClipWire": {
           "oneOf": [
             {
@@ -1475,6 +1507,12 @@
                 "$ref": "#/$defs/TimelineVisualClipWire"
               },
               "type": "array"
+            },
+            "transitions": {
+              "items": {
+                "$ref": "#/$defs/TimelineTransitionWire"
+              },
+              "type": "array"
             }
           },
           "required": [
@@ -1504,6 +1542,24 @@
             "tracks"
           ],
           "type": "object"
+        },
+        "TransitionKind": {
+          "enum": [
+            "fade",
+            "wipeLeft",
+            "wipeRight",
+            "circleOpen",
+            "simpleZoom",
+            "crossWarp",
+            "linearBlur",
+            "directionalWarp",
+            "dreamyZoom",
+            "ripple",
+            "flyEye",
+            "multiplyBlend",
+            "perlin"
+          ],
+          "type": "string"
         }
       },
       "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -2781,6 +2837,38 @@
           },
           "type": "object"
         },
+        "TimelineTransitionWire": {
+          "additionalProperties": false,
+          "description": "A transition occupies the intersection of two adjacent visual clips.",
+          "properties": {
+            "from": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "kind": {
+              "$ref": "#/$defs/TransitionKind"
+            },
+            "params": {
+              "additionalProperties": {
+                "format": "double",
+                "type": "number"
+              },
+              "type": "object"
+            },
+            "to": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "from",
+            "to",
+            "kind"
+          ],
+          "type": "object"
+        },
         "TimelineVisualClipWire": {
           "oneOf": [
             {
@@ -3117,12 +3205,36 @@
                 "$ref": "#/$defs/TimelineVisualClipWire"
               },
               "type": "array"
+            },
+            "transitions": {
+              "items": {
+                "$ref": "#/$defs/TimelineTransitionWire"
+              },
+              "type": "array"
             }
           },
           "required": [
             "clips"
           ],
           "type": "object"
+        },
+        "TransitionKind": {
+          "enum": [
+            "fade",
+            "wipeLeft",
+            "wipeRight",
+            "circleOpen",
+            "simpleZoom",
+            "crossWarp",
+            "linearBlur",
+            "directionalWarp",
+            "dreamyZoom",
+            "ripple",
+            "flyEye",
+            "multiplyBlend",
+            "perlin"
+          ],
+          "type": "string"
         }
       },
       "$schema": "https://json-schema.org/draft/2020-12/schema",

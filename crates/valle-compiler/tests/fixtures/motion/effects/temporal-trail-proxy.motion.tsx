@@ -21,7 +21,7 @@ export default function TemporalTrailProxy(ctx) {
       <Path key="route-fine" d={ROUTE} fill="none" stroke="#334155e6" strokeWidth="3" strokeDasharray="8 14" />
 
       {samples.map((sample) => (
-        <View key={sample.key} className="absolute" style={{ width: 51 - sample.progress * 28.5, height: 21 - sample.progress * 10.5, borderRadius: 27, backgroundColor: sample.index % 3 === 0 ? "#f8fafc" : sample.index % 3 === 1 ? "#67e8f9" : "#f472b6", opacity: (1 - sample.progress) * 0.48, filter: `blur(${0.4 + sample.progress * 5.2}px) drop-shadow(0px 0px 13.5px #67e8f9)`, motionPath: follow(ROUTE, trail(head, sample.index, { gap: 0.012, mode: "wrap" }), { rotate: "auto" }) }} />
+        <View key={sample.key} className="absolute" style={{ width: 51 - sample.progress * 28.5, height: 21 - sample.progress * 10.5, borderRadius: 27, backgroundColor: sample.index % 3 === 0 ? "#f8fafc" : sample.index % 3 === 1 ? "#67e8f9" : "#f472b6", opacity: (1 - sample.progress) * 0.48, filter: `blur(${0.4 + sample.progress * 5.2}px) drop-shadow(0px 0px 13.5px #67e8f9)`, motionPath: follow(ROUTE, trail(head, sample.index, { gap: -0.012, mode: "wrap" }), { rotate: "auto" }) }} />
       ))}
 
       <View key="head" className="absolute flex items-center justify-center" style={{ borderStyle: "solid", width: 114, height: 51, borderRadius: 27, backgroundColor: "#f8fafc", borderWidth: 3, borderColor: "#67e8f9", filter: "drop-shadow(0px 0px 27px #22d3ee)", motionPath: follow(ROUTE, head, { rotate: "auto" }) }}>

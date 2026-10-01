@@ -18,7 +18,7 @@ impl<'s> Compiler<'s> {
             self.illegal(
                 DiagCode::GrammarForbidden,
                 element.opening_element.span(),
-                "Scene3D requires camera={{ position, target, orbitYaw?, orbitPitch?, distance?, fov?, near?, far? }}",
+                "Scene3D requires camera={{ position, target, orbitYaw?, orbitPitch?, distance?, fov?, near?, far?, depthOfField? }}",
             );
             None
         })?;
@@ -34,6 +34,7 @@ impl<'s> Compiler<'s> {
                 "fov",
                 "near",
                 "far",
+                "depthOfField",
             ],
         )?;
         let position = self.scene3d_frame_vec3(
@@ -61,6 +62,51 @@ impl<'s> Compiler<'s> {
             Some(value) => Some(self.number_binding(value, "camera distance", |v| v > 0.0)?),
             None => None,
         };
+        let depth_of_field = if let Some(expression) = camera_values.get("depthOfField") {
+            let Expression::ObjectExpression(object) = expression.without_parentheses() else {
+                self.illegal(
+                    DiagCode::GrammarForbidden,
+                    expression.span(),
+                    "camera depthOfField must be { focusDistance, maxBlurRadius }",
+                );
+                return None;
+            };
+            let values = self.scene3d_object_values(
+                object,
+                "Scene3D camera.depthOfField",
+                &["focusDistance", "maxBlurRadius"],
+            )?;
+            let Some(focus_distance) = values.get("focusDistance") else {
+                self.illegal(
+                    DiagCode::GrammarForbidden,
+                    expression.span(),
+                    "camera depthOfField requires focusDistance",
+                );
+                return None;
+            };
+            let Some(max_blur_radius) = values.get("maxBlurRadius") else {
+                self.illegal(
+                    DiagCode::GrammarForbidden,
+                    expression.span(),
+                    "camera depthOfField requires maxBlurRadius",
+                );
+                return None;
+            };
+            Some(Scene3DDepthOfFieldBinding {
+                focus_distance: self.number_binding(
+                    focus_distance,
+                    "camera focusDistance",
+                    |v| (0.01..=f64::from(valle_motion::scene3d::MAX_CAMERA_FAR)).contains(&v),
+                )?,
+                max_blur_radius: self.number_binding(
+                    max_blur_radius,
+                    "camera maxBlurRadius",
+                    |v| (0.0..=16.0).contains(&v),
+                )?,
+            })
+        } else {
+            None
+        };
         let camera_binding = Scene3DCameraBinding {
             position,
             target,
@@ -73,7 +119,8 @@ impl<'s> Compiler<'s> {
                 "camera fov",
             )?,
             near: self.scene3d_number(camera_values.get("near").copied(), 0.1, "camera near")?,
-            far: self.scene3d_number(camera_values.get("far").copied(), 100.0, "camera far")?,
+            far: self.scene3d_number(camera_values.get("far").copied(), 1_000.0, "camera far")?,
+            depth_of_field,
         };
         if let Some(Err(error)) = camera_binding.constant() {
             self.illegal(
@@ -97,7 +144,7 @@ impl<'s> Compiler<'s> {
             let values = self.scene3d_object_values(
                 object,
                 "Scene3D pbr",
-                &["environment", "toneMapping", "exposure"],
+                &["environment", "toneMapping", "exposure", "shadows"],
             )?;
 
             if let Some(expression) = values.get("environment") {
@@ -176,6 +223,17 @@ impl<'s> Compiler<'s> {
                     ),
                 }
             }
+            if let Some(expression) = values.get("shadows") {
+                let Some(enabled) = self.eval_static(expression).and_then(|v| v.as_bool()) else {
+                    self.illegal(
+                        DiagCode::GrammarForbidden,
+                        expression.span(),
+                        "Scene3D pbr.shadows must be a static boolean",
+                    );
+                    return None;
+                };
+                pbr.shadows = enabled;
+            }
             exposure =
                 self.scene3d_number(values.get("exposure").copied(), 1.0, "Scene3D exposure")?;
         }
@@ -223,9 +281,11 @@ impl<'s> Compiler<'s> {
                         &[
                             "key",
                             "src",
+                            "geometry",
                             "material",
                             "materials",
                             "nodes",
+                            "animation",
                             "position",
                             "rotation",
                             "scale",
@@ -241,38 +301,82 @@ impl<'s> Compiler<'s> {
                         ],
                     )?;
                     let mesh_key = self.scene3d_required_attr_string(&attrs, "key", "Mesh")?;
-                    let source = self.scene3d_required_attr_string(&attrs, "src", "Mesh")?;
-                    let Some(model_control) = source.strip_prefix("asset://").map(str::to_owned)
-                    else {
+                    if attrs.contains_key("src") == attrs.contains_key("geometry") {
                         self.illegal(
                             DiagCode::GrammarForbidden,
                             child.span(),
-                            "Mesh src must be asset://<model3d-control>",
-                        );
-                        continue;
-                    };
-                    if !self
-                        .controls
-                        .assets
-                        .get(&model_control)
-                        .is_some_and(|asset| asset.kind == AssetKind::Model3d)
-                    {
-                        self.illegal(
-                            DiagCode::GrammarForbidden,
-                            child.span(),
-                            format!("Mesh model control `{model_control}` must have kind model3d"),
+                            "Mesh requires exactly one of src or geometry",
                         );
                         continue;
                     }
+                    let model_control = if attrs.contains_key("src") {
+                        let source = self.scene3d_required_attr_string(&attrs, "src", "Mesh")?;
+                        let Some(control) = source.strip_prefix("asset://").map(str::to_owned) else {
+                            self.illegal(
+                                DiagCode::GrammarForbidden,
+                                child.span(),
+                                "Mesh src must be asset://<model3d-control>",
+                            );
+                            continue;
+                        };
+                        if !self.controls.assets.get(&control).is_some_and(|asset| asset.kind == AssetKind::Model3d) {
+                            self.illegal(
+                                DiagCode::GrammarForbidden,
+                                child.span(),
+                                format!("Mesh model control `{control}` must have kind model3d"),
+                            );
+                            continue;
+                        }
+                        Some(control)
+                    } else {
+                        None
+                    };
+                    let geometry = if let Some((value, span)) = attrs.get("geometry") {
+                        Some(self.scene3d_procedural_geometry(value, *span)?)
+                    } else {
+                        None
+                    };
                     let (material, material_frame) = self.scene3d_material(&attrs, child.span())?;
                     let (material_overrides, material_frames) = self.scene3d_material_overrides(&attrs)?;
                     let transform = self.scene3d_mesh_transform(&attrs, child.span())?;
                     let node_frames = self.scene3d_nodes(&attrs)?;
                     let node_ids = node_frames.iter().map(|n| n.id).collect();
+                    let (animation_clip, animation_time) = if let Some((value, span)) = attrs.get("animation") {
+                        let object = self.attr_object_literal(value, *span, "Mesh animation")?;
+                        let values = self.scene3d_object_values(object, "Mesh animation", &["clip", "time"])?;
+                        let Some(clip) = values
+                            .get("clip")
+                            .and_then(|value| self.eval_static(value))
+                            .and_then(|value| value.as_u64())
+                            .filter(|clip| *clip < valle_motion::scene3d::MAX_ANIMATIONS as u64)
+                        else {
+                            self.illegal(
+                                DiagCode::GrammarForbidden,
+                                *span,
+                                "Mesh animation.clip must be a static glTF clip index within the clip budget",
+                            );
+                            continue;
+                        };
+                        let Some(time) = values.get("time") else {
+                            self.illegal(
+                                DiagCode::GrammarForbidden,
+                                *span,
+                                "Mesh animation requires a time in seconds",
+                            );
+                            continue;
+                        };
+                        let time = self.number_binding(time, "Mesh animation time", |value| {
+                            (0.0..=1.0e9).contains(&value)
+                        })?;
+                        (Some(clip as u32), Some(time))
+                    } else {
+                        (None, None)
+                    };
                     mesh_frames.push(Scene3DMeshBinding {
                         key: mesh_key.clone(),
                         material: material_frame,
                         material_overrides: material_frames,
+                        animation_time,
                         transform,
                         nodes: node_frames,
                     });
@@ -286,8 +390,10 @@ impl<'s> Compiler<'s> {
                     meshes.push(valle_motion::scene3d::MeshSpec {
                         key: mesh_key,
                         model_control,
+                        geometry,
                         material,
                         material_overrides,
+                        animation_clip,
                         node_ids,
                     });
                 }
@@ -504,6 +610,185 @@ impl<'s> Compiler<'s> {
             return None;
         };
         self.attr_static_string(value, *span, &format!("{label} {name}"))
+    }
+
+    fn scene3d_procedural_geometry(
+        &mut self,
+        value: &'s Option<JSXAttributeValue<'s>>,
+        span: Span,
+    ) -> Option<valle_motion::scene3d::ProceduralGeometry> {
+        let Some(JSXAttributeValue::ExpressionContainer(container)) = value else {
+            self.illegal(
+                DiagCode::GrammarForbidden,
+                span,
+                "Mesh geometry must be a prepare-time extrude, lathe, or tube value",
+            );
+            return None;
+        };
+        let Some(expression) = container.expression.as_expression() else {
+            self.illegal(
+                DiagCode::GrammarForbidden,
+                span,
+                "Mesh geometry must not be empty",
+            );
+            return None;
+        };
+        let Some(serde_json::Value::Object(mut geometry)) = self.eval_static(expression) else {
+            self.illegal(
+                DiagCode::GrammarForbidden,
+                span,
+                "Mesh geometry must be statically known at preparation time",
+            );
+            return None;
+        };
+        let kind = geometry
+            .remove("__valleType")
+            .and_then(|value| value.as_str().map(str::to_owned));
+        if !matches!(
+            kind.as_deref(),
+            Some("scene3dExtrude" | "scene3dLathe" | "scene3dTube")
+        ) || geometry.keys().any(|key| key != "path" && key != "options")
+        {
+            self.illegal(
+                DiagCode::GrammarForbidden,
+                span,
+                "Mesh geometry requires extrude(path), lathe(path), or tube(path)",
+            );
+            return None;
+        }
+        let label = match kind.as_deref().unwrap() {
+            "scene3dExtrude" => "extrude",
+            "scene3dLathe" => "lathe",
+            _ => "tube",
+        };
+        let Some(path_value) = geometry.remove("path") else {
+            self.illegal(
+                DiagCode::GrammarForbidden,
+                span,
+                format!("{label} requires a prepared PathData"),
+            );
+            return None;
+        };
+        let path = match motion_value_from_json(&path_value) {
+            Some(MotionValue::PathData(path)) => Some(path),
+            _ => path_value.as_str().and_then(parse_path_data),
+        };
+        let Some(path) = path else {
+            self.illegal(
+                DiagCode::GrammarForbidden,
+                span,
+                format!("{label} path must be prepared PathData"),
+            );
+            return None;
+        };
+        let Some(serde_json::Value::Object(options)) = geometry.remove("options") else {
+            self.illegal(
+                DiagCode::GrammarForbidden,
+                span,
+                format!("{label} options must be a static object"),
+            );
+            return None;
+        };
+        let allowed = match label {
+            "extrude" => &["depth", "bevel"][..],
+            "lathe" => &["segments"][..],
+            _ => &["radius", "sides"][..],
+        };
+        if options.keys().any(|key| !allowed.contains(&key.as_str())) {
+            self.illegal(
+                DiagCode::GrammarForbidden,
+                span,
+                format!("{label} options accept only {}", allowed.join(" and ")),
+            );
+            return None;
+        }
+        let geometry = match label {
+            "extrude" => {
+                let Some(depth) = options.get("depth").and_then(serde_json::Value::as_f64) else {
+                    self.illegal(
+                        DiagCode::GrammarForbidden,
+                        span,
+                        "extrude depth must be a static finite number",
+                    );
+                    return None;
+                };
+                let bevel = if let Some(value) = options.get("bevel") {
+                    let Some(bevel) = value.as_f64() else {
+                        self.illegal(
+                            DiagCode::GrammarForbidden,
+                            span,
+                            "extrude bevel must be a static finite number",
+                        );
+                        return None;
+                    };
+                    bevel
+                } else {
+                    0.0
+                };
+                valle_motion::scene3d::ProceduralGeometry::Extrude {
+                    path,
+                    depth: depth as f32,
+                    bevel: bevel as f32,
+                }
+            }
+            "lathe" => {
+                let segments = if let Some(value) = options.get("segments") {
+                    let Some(segments) = value.as_u64().and_then(|value| u32::try_from(value).ok())
+                    else {
+                        self.illegal(
+                            DiagCode::GrammarForbidden,
+                            span,
+                            "lathe segments must be a static integer",
+                        );
+                        return None;
+                    };
+                    segments
+                } else {
+                    64
+                };
+                valle_motion::scene3d::ProceduralGeometry::Lathe { path, segments }
+            }
+            _ => {
+                let Some(radius) = options.get("radius").and_then(serde_json::Value::as_f64) else {
+                    self.illegal(
+                        DiagCode::GrammarForbidden,
+                        span,
+                        "tube radius must be a static finite number",
+                    );
+                    return None;
+                };
+                let sides = if let Some(value) = options.get("sides") {
+                    let Some(sides) = value.as_u64().and_then(|value| u32::try_from(value).ok())
+                    else {
+                        self.illegal(
+                            DiagCode::GrammarForbidden,
+                            span,
+                            "tube sides must be a static integer",
+                        );
+                        return None;
+                    };
+                    sides
+                } else {
+                    16
+                };
+                valle_motion::scene3d::ProceduralGeometry::Tube {
+                    path,
+                    radius: radius as f32,
+                    sides,
+                }
+            }
+        };
+        if let Err(errors) = geometry.admit_model() {
+            for error in errors.0 {
+                self.illegal(
+                    DiagCode::GrammarForbidden,
+                    span,
+                    format!("Mesh{}: {}", error.path, error.message),
+                );
+            }
+            return None;
+        }
+        Some(geometry)
     }
 
     pub(super) fn scene3d_attr_number(
@@ -797,18 +1082,21 @@ impl<'s> Compiler<'s> {
         default: Option<&str>,
     ) -> Option<ColorValue> {
         let color = match attrs.get(name) {
-            Some((Some(JSXAttributeValue::StringLiteral(value)), _)) => {
-                Rgba::parse(&value.value).map(|value| ColorValue::Static { value })
-            }
+            Some((Some(JSXAttributeValue::StringLiteral(value)), _)) => Rgba::parse(&value.value)
+                .map(|value| ColorValue::Static {
+                    value: valle_draw::program::AuthorColor::from_srgb8(value),
+                }),
             Some((Some(JSXAttributeValue::ExpressionContainer(container)), _)) => {
                 self.color_binding(container.expression.as_expression()?, name)
             }
             None => default
                 .and_then(Rgba::parse)
-                .map(|value| ColorValue::Static { value }),
+                .map(|value| ColorValue::Static {
+                    value: valle_draw::program::AuthorColor::from_srgb8(value),
+                }),
             _ => None,
         };
-        if color.is_none() || matches!(color,Some(ColorValue::Static {value}) if value.a!=255) {
+        if color.is_none() || matches!(color,Some(ColorValue::Static {value}) if value.alpha!=1.0) {
             self.illegal(
                 DiagCode::GrammarForbidden,
                 attrs.get(name).map_or(Span::default(), |(_, s)| *s),
@@ -1019,11 +1307,12 @@ impl<'s> Compiler<'s> {
                 {
                     Some("opaque") => AlphaMode::Opaque,
                     Some("mask") => AlphaMode::Mask,
+                    Some("blend") => AlphaMode::Blend,
                     _ => {
                         self.illegal(
                             DiagCode::GrammarForbidden,
                             value.span(),
-                            "material alphaMode must be opaque or mask",
+                            "material alphaMode must be opaque, mask or blend",
                         );
                         return None;
                     }

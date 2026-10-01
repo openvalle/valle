@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Deserializer, Serialize, de};
 use thiserror::Error;
@@ -244,6 +244,10 @@ impl ResourceManifest {
 pub(crate) struct RequestAllocator {
     by_identity: BTreeMap<Vec<u8>, usize>,
     resources: Vec<PreparedResource>,
+    scene3d_frames: BTreeSet<ContentDigest>,
+    scene3d_assets: BTreeSet<ContentDigest>,
+    scene3d_pixels: u64,
+    scene3d_asset_bytes: u64,
 }
 
 impl RequestAllocator {
@@ -341,6 +345,24 @@ impl RequestAllocator {
         canonical_request: Vec<u8>,
         path: &str,
     ) -> Result<ExternalHandleId, RequestError> {
+        if !self.scene3d_frames.contains(&content) {
+            let frame: valle_motion::Scene3DFrameRequest =
+                serde_json::from_slice(&canonical_request)
+                    .map_err(|_| RequestError::CanonicalIdentity)?;
+            let pixels = self
+                .scene3d_pixels
+                .saturating_add(u64::from(frame.width) * u64::from(frame.height));
+            if pixels > valle_motion::scene3d::MAX_TOTAL_FRAME_PIXELS {
+                return Err(RequestError::Scene3dBudget {
+                    path: path.into(),
+                    resource: "frame pixels (20 bytes per pixel)",
+                    actual: pixels,
+                    limit: valle_motion::scene3d::MAX_TOTAL_FRAME_PIXELS,
+                });
+            }
+            self.scene3d_pixels = pixels;
+            self.scene3d_frames.insert(content);
+        }
         self.allocate_with_payload(
             ResourceKey::new(content, ResourceInterpretation::Scene3d { topology_digest }),
             ResourceSample::Static,
@@ -348,6 +370,29 @@ impl RequestAllocator {
             Some(ResourcePayload::Scene3dFrame { canonical_request }),
             path,
         )
+    }
+
+    pub(crate) fn scene3d_asset(
+        &mut self,
+        digest: ContentDigest,
+        bytes: u64,
+        path: &str,
+    ) -> Result<(), RequestError> {
+        if self.scene3d_assets.contains(&digest) {
+            return Ok(());
+        }
+        let total = self.scene3d_asset_bytes.saturating_add(bytes);
+        if total > valle_motion::scene3d::MAX_TOTAL_FRAME_ASSET_BYTES {
+            return Err(RequestError::Scene3dBudget {
+                path: path.into(),
+                resource: "asset bytes",
+                actual: total,
+                limit: valle_motion::scene3d::MAX_TOTAL_FRAME_ASSET_BYTES,
+            });
+        }
+        self.scene3d_asset_bytes = total;
+        self.scene3d_assets.insert(digest);
+        Ok(())
     }
 
     fn allocate(
@@ -415,6 +460,13 @@ impl RequestAllocator {
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum RequestError {
+    #[error("{path}: Scene3D total {resource} {actual} exceeds per-frame budget {limit}")]
+    Scene3dBudget {
+        path: String,
+        resource: &'static str,
+        actual: u64,
+        limit: u64,
+    },
     #[error("dynamic binding id budget exceeded")]
     BindingBudgetExceeded,
     #[error("execution resource handle budget exceeded")]
@@ -438,6 +490,76 @@ mod tests {
 
     fn digest(byte: char) -> ContentDigest {
         ContentDigest::from_hex(&byte.to_string().repeat(64)).unwrap()
+    }
+
+    #[test]
+    fn scene3d_frame_budgets_accumulate_distinct_requests_and_deduplicate_assets() {
+        use valle_motion::scene3d::*;
+        let frame = |provider: &str| valle_motion::Scene3DFrameRequest {
+            provider_key: provider.into(),
+            width: 3840,
+            height: 2160,
+            resource_bindings: Default::default(),
+            scene: Scene3DSpec {
+                meshes: vec![],
+                lights: vec![],
+                anchors: vec![],
+                pbr: Default::default(),
+            },
+            frame: Frame3DState {
+                exposure: 1.0,
+                environment_intensity: 1.0,
+                environment_rotation_degrees: 0.0,
+                camera: CameraFrameState {
+                    position: Vec3([0.0, 0.0, 5.0]),
+                    target: Vec3([0.0, 0.0, 0.0]),
+                    fov_y_degrees: 45.0,
+                    near: 0.1,
+                    far: 100.0,
+                    depth_of_field: None,
+                },
+                meshes: vec![],
+                lights: vec![],
+            },
+        };
+        let mut allocator = RequestAllocator::default();
+        for key in ["a", "a", "b"] {
+            let frame = frame(key);
+            allocator
+                .scene3d(
+                    frame.content_digest().unwrap(),
+                    frame.topology_digest().unwrap(),
+                    frame.canonical_bytes().unwrap(),
+                    key,
+                )
+                .unwrap();
+        }
+        let frame = frame("c");
+        assert!(matches!(
+            allocator.scene3d(
+                frame.content_digest().unwrap(),
+                frame.topology_digest().unwrap(),
+                frame.canonical_bytes().unwrap(),
+                "c"
+            ),
+            Err(RequestError::Scene3dBudget {
+                resource: "frame pixels (20 bytes per pixel)",
+                ..
+            })
+        ));
+        allocator
+            .scene3d_asset(digest('a'), MAX_TOTAL_FRAME_ASSET_BYTES, "a")
+            .unwrap();
+        allocator
+            .scene3d_asset(digest('a'), MAX_TOTAL_FRAME_ASSET_BYTES, "a reused")
+            .unwrap();
+        assert!(matches!(
+            allocator.scene3d_asset(digest('b'), 1, "b"),
+            Err(RequestError::Scene3dBudget {
+                resource: "asset bytes",
+                ..
+            })
+        ));
     }
 
     #[test]

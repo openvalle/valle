@@ -353,6 +353,10 @@ impl Admission<'_> {
         path: &str,
     ) -> Result<(), PreparedFrameValidationError> {
         expect_path(&transition.semantic_path, path)?;
+        transition
+            .kernel
+            .validate_wire()
+            .map_err(|error| invalid(path, error))?;
         self.dynamic(transition.progress, &format!("{path}.progress"))?;
         self.layer(&transition.from, &format!("{path}.from"))?;
         self.layer(&transition.to, &format!("{path}.to"))

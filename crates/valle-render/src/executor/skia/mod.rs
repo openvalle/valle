@@ -5,14 +5,18 @@
 //! artifacts and host scheduling never enter this module.
 
 mod blend;
+mod bloom_gpu;
 mod blur;
 mod cache;
 mod draw;
 mod effect;
+mod film_gpu;
 mod glass;
 mod import;
+mod lens_gpu;
 mod output;
 mod pass;
+mod radial_gpu;
 mod surface;
 mod target;
 

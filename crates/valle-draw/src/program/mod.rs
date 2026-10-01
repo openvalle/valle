@@ -8,6 +8,8 @@ mod arena;
 mod compile;
 pub mod glass;
 mod group;
+mod interpolation;
+pub(crate) use interpolation::determinism_samples as gradient_determinism_samples;
 mod node;
 mod packed;
 mod paint;
@@ -29,16 +31,18 @@ pub use glass::{
     PackedGlassLight, PackedGlassShapeKind, schema_digest,
 };
 pub use group::{
-    BackdropRead, BackdropScope, BlendMode, Clip, FILTER_GAUSSIAN_SUPPORT_SIGMAS, FillRule, Filter,
-    Group, MAX_SHADER_LAYER_PIXELS, Mask, MaskMode, RoundRect, ShaderLayer, ShaderTextureBinding,
-    ShaderUniformBinding, ShaderUniformValue,
+    BackdropRead, BackdropScope, BlendMode, BlendSpace, Clip, FILTER_GAUSSIAN_SUPPORT_SIGMAS,
+    FillRule, Filter, Group, MAX_SHADER_LAYER_PIXELS, Mask, MaskMode, RoundRect, ShaderLayer,
+    ShaderTextureBinding, ShaderUniformBinding, ShaderUniformValue, TransitionLayer,
 };
+pub use interpolation::{GradientInterpolation, HueDirection, interpolate_author_colors};
 pub use node::{
-    BatchGeometry, BatchInstance, GeometryBatchNode, Glyph, GlyphRun, ImageNode, Node, PathNode,
-    PathStroke, RuntimeShaderNode, Scene3dNode, ShadowNode, StrokeCap, StrokeJoin,
+    AtlasRegion, Glyph, GlyphRun, ImageNode, InstanceBatchNode, InstanceColumns, InstancePathStyle,
+    InstanceShape, Node, PathNode, PathStroke, RuntimeShaderNode, Scene3dNode, ShadowNode,
+    StrokeCap, StrokeJoin,
 };
 pub use packed::{DRAW_PROGRAM_FORMAT_VERSION, PackedDrawError};
-pub use paint::{GradientStop, LinearColor, Paint, SpreadMode};
+pub use paint::{AuthorColor, GradientStop, LinearColor, Paint, SpreadMode};
 pub use path::{PathData, PathVerb};
 pub use transform::{Affine2d, Transform2d};
 pub use validate::{

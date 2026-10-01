@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 use valle_compiler::motion::compile_motion;
 use valle_motion::{
-    Expr, ExprId, Fonts, LayoutOptions, MotionValue, StyleCache, Viewport, build_tree,
+    Expr, ExprId, Fonts, LayoutOptions, MotionValue, NodeId, StyleCache, Viewport, build_tree,
     default_font_naming, emit, motion_context_at_frame, prepare_scene, resolve_props,
 };
 use valle_timeline::FrameRate;
@@ -148,6 +148,42 @@ fn independent_class_conditions_do_not_expand_complete_style_combinations() {
     );
     let artifact = compile_motion(&shared).unwrap().artifact;
     assert_eq!(artifact.nodes[0].class_names.len(), 2);
+}
+
+#[test]
+fn conditional_composition_utilities_enter_the_scene_dependency_graph() {
+    let authored = r#"export default function Demo(ctx) {
+        return <Scene style={{width:320,height:180}}>
+            <Group key="conditional"
+                className={ctx.localFrame > 0 ? 'backdrop-blur-sm [mix-blend-mode:screen]' : ''}
+                style={{width:20,height:20}}><View style={{width:20,height:20}}/></Group>
+            <Group key="isolated" className="isolate opacity-50"
+                style={{width:20,height:20}}><View style={{width:20,height:20}}/></Group>
+            <Group key="repeated" className="opacity-50"
+                style={{width:20,height:20}}><View style={{width:20,height:20}}/></Group>
+            <Group key="plain" className="relative"
+                style={{width:20,height:20}}><View style={{width:20,height:20}}/></Group>
+        </Scene>;
+    }"#;
+    let artifact = compile_motion(authored).unwrap().artifact;
+    let prepared = prepare_scene(&artifact).unwrap();
+    let facts = |key: &str| {
+        let id = artifact
+            .nodes
+            .iter()
+            .position(|node| node.key == key)
+            .unwrap();
+        prepared.dependencies().node(NodeId(id as u32)).unwrap()
+    };
+    assert!(facts("conditional").composition_boundary);
+    assert!(facts("conditional").reads_backdrop);
+    assert!(facts("conditional").sample_dependent);
+    for key in ["isolated", "repeated"] {
+        assert!(facts(key).composition_boundary, "{key}");
+        assert!(!facts(key).reads_backdrop, "{key}");
+    }
+    assert!(!facts("plain").composition_boundary);
+    assert!(!facts("plain").reads_backdrop);
 }
 
 #[test]

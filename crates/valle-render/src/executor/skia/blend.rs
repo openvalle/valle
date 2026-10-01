@@ -1,7 +1,7 @@
 use skia_safe::{
     AlphaType, ColorType, Image, ImageInfo, RuntimeEffect, Surface, image::CachingHint,
 };
-use valle_draw::program::BlendMode as DrawBlend;
+use valle_draw::program::{BlendMode as DrawBlend, BlendSpace};
 use valle_engine::compositor::reference::{ReferenceBlendMode, blend_rgb};
 
 use super::{draw::DrawError, effect::render_runtime_into, surface::working_color_space};
@@ -30,15 +30,16 @@ impl BlendRuntime {
         source: &Image,
         destination: &Image,
         mode: DrawBlend,
+        space: BlendSpace,
     ) -> Result<(), DrawError> {
-        if raster_blend_into(output, source, destination, mode, 1.0, false)? {
+        if raster_blend_into(output, source, destination, mode, space, 1.0, false)? {
             return Ok(());
         }
         render_runtime_into(
             output,
             &self.effect,
             &[source, destination],
-            &[draw_code(mode), 1.0, 0.0],
+            &[draw_code(mode), 1.0, 0.0, space_code(space)],
         )
     }
 
@@ -48,16 +49,17 @@ impl BlendRuntime {
         source: &Image,
         destination: &Image,
         mode: DrawBlend,
+        space: BlendSpace,
         opacity: f32,
     ) -> Result<(), DrawError> {
-        if raster_blend_into(output, source, destination, mode, opacity, true)? {
+        if raster_blend_into(output, source, destination, mode, space, opacity, true)? {
             return Ok(());
         }
         render_runtime_into(
             output,
             &self.effect,
             &[source, destination],
-            &[draw_code(mode), opacity, 1.0],
+            &[draw_code(mode), opacity, 1.0, space_code(space)],
         )
     }
 }
@@ -73,6 +75,7 @@ fn raster_blend_into(
     source: &Image,
     destination: &Image,
     mode: DrawBlend,
+    space: BlendSpace,
     opacity: f32,
     composite: bool,
 ) -> Result<bool, DrawError> {
@@ -128,22 +131,40 @@ fn raster_blend_into(
             let source_alpha = source[3];
             let result = if source_alpha == 0.0 {
                 if composite { backdrop } else { source }
+            } else if mode == DrawBlend::Plus {
+                let alpha = if backdrop[3] == 1.0 {
+                    source_alpha
+                } else {
+                    (source_alpha / (1.0 - backdrop[3])).min(1.0)
+                };
+                let keep = if composite { 0.0 } else { 1.0 - alpha };
+                [
+                    (source[0] + backdrop[0]).clamp(0.0, 1.0) - backdrop[0] * keep,
+                    (source[1] + backdrop[1]).clamp(0.0, 1.0) - backdrop[1] * keep,
+                    (source[2] + backdrop[2]).clamp(0.0, 1.0) - backdrop[2] * keep,
+                    if composite {
+                        (source_alpha + backdrop[3]).min(1.0)
+                    } else {
+                        alpha
+                    },
+                ]
             } else {
                 let backdrop_alpha = backdrop[3];
-                let source_srgb = source_memo.to_srgb(tables, source);
-                let backdrop_srgb = if backdrop_alpha > 0.0 {
-                    backdrop_memo.to_srgb(tables, backdrop)
+                let source_rgb = source_memo.to_blend(tables, source, space);
+                let backdrop_rgb = if backdrop_alpha > 0.0 {
+                    backdrop_memo.to_blend(tables, backdrop, space)
                 } else {
                     [0.0; 3]
                 };
-                let blended = blend_rgb(backdrop_srgb, source_srgb, reference_mode)
+                let blended = blend_rgb(backdrop_rgb, source_rgb, reference_mode)
                     .map_err(|error| internal(&format!("creative blend: {error}")))?;
-                let working = srgb_to_working(
+                let working = blend_to_working(
                     tables,
+                    space,
                     [
-                        (1.0 - backdrop_alpha) * source_srgb[0] + backdrop_alpha * blended[0],
-                        (1.0 - backdrop_alpha) * source_srgb[1] + backdrop_alpha * blended[1],
-                        (1.0 - backdrop_alpha) * source_srgb[2] + backdrop_alpha * blended[2],
+                        (1.0 - backdrop_alpha) * source_rgb[0] + backdrop_alpha * blended[0],
+                        (1.0 - backdrop_alpha) * source_rgb[1] + backdrop_alpha * blended[1],
+                        (1.0 - backdrop_alpha) * source_rgb[2] + backdrop_alpha * blended[2],
                     ],
                 );
                 let keep = if composite { 1.0 - source_alpha } else { 0.0 };
@@ -173,7 +194,7 @@ thread_local! {
         const { std::cell::RefCell::new((Vec::new(), Vec::new())) };
 }
 
-/// The last premultiplied pixel converted to straight extended sRGB, keyed by exact bits.
+/// One pass has a fixed space; remember its last straight RGB conversion by exact bits.
 #[derive(Default)]
 struct ConversionMemo {
     key: Option<[u32; 4]>,
@@ -182,7 +203,12 @@ struct ConversionMemo {
 
 impl ConversionMemo {
     #[inline(always)]
-    fn to_srgb(&mut self, tables: &TransferTables, pixel: [f32; 4]) -> [f32; 3] {
+    fn to_blend(
+        &mut self,
+        tables: &TransferTables,
+        pixel: [f32; 4],
+        space: BlendSpace,
+    ) -> [f32; 3] {
         let key = [
             pixel[0].to_bits(),
             pixel[1].to_bits(),
@@ -195,11 +221,15 @@ impl ConversionMemo {
                 &WORKING_TO_LINEAR_SRGB,
                 [pixel[0] / alpha, pixel[1] / alpha, pixel[2] / alpha],
             );
-            self.value = [
-                encode_with(tables, linear[0]),
-                encode_with(tables, linear[1]),
-                encode_with(tables, linear[2]),
-            ];
+            self.value = if space == BlendSpace::Linear {
+                linear
+            } else {
+                [
+                    encode_with(tables, linear[0]),
+                    encode_with(tables, linear[1]),
+                    encode_with(tables, linear[2]),
+                ]
+            };
             self.key = Some(key);
         }
         self.value
@@ -265,14 +295,18 @@ fn multiply(matrix: &[[f64; 3]; 3], rgb: [f32; 3]) -> [f32; 3] {
 }
 
 #[inline(always)]
-fn srgb_to_working(tables: &TransferTables, rgb: [f32; 3]) -> [f32; 3] {
+fn blend_to_working(tables: &TransferTables, space: BlendSpace, rgb: [f32; 3]) -> [f32; 3] {
     multiply(
         &LINEAR_SRGB_TO_WORKING,
-        [
-            decode_with(tables, rgb[0]),
-            decode_with(tables, rgb[1]),
-            decode_with(tables, rgb[2]),
-        ],
+        if space == BlendSpace::Linear {
+            rgb
+        } else {
+            [
+                decode_with(tables, rgb[0]),
+                decode_with(tables, rgb[1]),
+                decode_with(tables, rgb[2]),
+            ]
+        },
     )
 }
 
@@ -368,9 +402,17 @@ fn internal(message: &str) -> DrawError {
     DrawError::Internal(message.to_owned())
 }
 
+const fn space_code(space: BlendSpace) -> f32 {
+    match space {
+        BlendSpace::Linear => 1.0,
+        BlendSpace::Srgb => 0.0,
+    }
+}
+
 const fn draw_code(mode: DrawBlend) -> f32 {
     match mode {
         DrawBlend::Normal => 0.0,
+        DrawBlend::Plus => 17.0,
         DrawBlend::Multiply => 1.0,
         DrawBlend::Screen => 2.0,
         DrawBlend::Overlay => 3.0,
@@ -420,6 +462,7 @@ mod tests {
                 &source,
                 &destination,
                 DrawBlend::LinearBurn,
+                BlendSpace::Srgb,
                 opacity,
             )
             .unwrap();
@@ -428,6 +471,7 @@ mod tests {
             source_value.scale_coverage(opacity).unwrap(),
             destination_value,
             ReferenceBlendMode::LinearBurn,
+            BlendSpace::Srgb,
         )
         .unwrap();
         let actual = read(&actual);
@@ -438,8 +482,30 @@ mod tests {
     }
 
     #[test]
+    fn f16_storage_error_is_bounded_separately_from_blending() {
+        let info = working_info(Extent2d::new(1, 1).unwrap()).unwrap();
+        for channels in [
+            [0.9, 0.4, 0.1, 1.0],
+            [0.05, 0.6, 0.95, 1.0],
+            [0.35, 0.12, 0.08, 0.7],
+            [1.3, 0.2, 0.05, 1.0],
+        ] {
+            let intended = PremulRgba32::from_premultiplied(channels).unwrap();
+            let stored = read(&solid(intended, &info));
+            for (before, after) in channels.into_iter().zip(stored.channels()) {
+                // One F16 ULP, including the premultiply/unpremultiply paint round trip.
+                assert!(
+                    (before - after).abs() <= 0.001 * before.abs().max(1.0),
+                    "intended={intended:?}, stored={stored:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn raster_path_matches_kernel_and_reference_for_every_mode() {
         let modes = [
+            DrawBlend::Plus,
             DrawBlend::Multiply,
             DrawBlend::Screen,
             DrawBlend::Overlay,
@@ -470,7 +536,10 @@ mod tests {
         let extent = Extent2d::new(1, 1).unwrap();
         let info = working_info(extent).unwrap();
         let runtime = BlendRuntime::admit().unwrap();
-        for mode in modes {
+        for (mode, space) in modes
+            .into_iter()
+            .flat_map(|mode| [BlendSpace::Srgb, BlendSpace::Linear].map(|space| (mode, space)))
+        {
             for (source_value, destination_value) in pairs {
                 for (opacity, composite) in [(1.0, true), (0.65, true), (1.0, false)] {
                     let source_value = PremulRgba32::from_premultiplied(source_value).unwrap();
@@ -485,6 +554,7 @@ mod tests {
                             &source,
                             &destination,
                             mode,
+                            space,
                             opacity,
                             composite,
                         )
@@ -495,24 +565,35 @@ mod tests {
                         &mut kernel,
                         &runtime.effect,
                         &[&source, &destination],
-                        &[draw_code(mode), opacity, if composite { 1.0 } else { 0.0 }],
+                        &[
+                            draw_code(mode),
+                            opacity,
+                            if composite { 1.0 } else { 0.0 },
+                            space_code(space),
+                        ],
                     )
                     .unwrap();
                     let native = read(&native.image_snapshot());
                     let kernel = read(&kernel.image_snapshot());
+                    // Compare the blend algorithm using the actual F16 inputs. ColorBurn
+                    // amplifies input rounding near its kink; pre-storage values are not
+                    // the operands seen by either the raster or shader implementation.
+                    let source_value = read(&source);
+                    let destination_value = read(&destination);
                     let scaled = source_value.scale_coverage(opacity).unwrap();
                     let expected = if composite {
-                        blend_over(scaled, destination_value, mode.into()).unwrap()
+                        blend_over(scaled, destination_value, mode.into(), space).unwrap()
                     } else {
                         valle_engine::compositor::reference::effective_blend_source(
                             scaled,
                             destination_value,
                             mode.into(),
+                            space,
                         )
                         .unwrap()
                     };
                     let context = format!(
-                        "{mode:?} opacity={opacity} composite={composite} \
+                        "{mode:?}/{space:?} opacity={opacity} composite={composite} \
                          native={native:?} kernel={kernel:?} reference={expected:?}"
                     );
                     // F16 storage quantizes extended (>1) values more coarsely, so scale the
@@ -566,8 +647,16 @@ mod tests {
             let mut output =
                 raster_surface(&working_info(Extent2d::new(8, 1).unwrap()).unwrap()).unwrap();
             assert!(
-                raster_blend_into(&mut output, &source_image, &backdrop_image, mode, 0.9, true)
-                    .unwrap()
+                raster_blend_into(
+                    &mut output,
+                    &source_image,
+                    &backdrop_image,
+                    mode,
+                    BlendSpace::Srgb,
+                    0.9,
+                    true
+                )
+                .unwrap()
             );
             let info = ImageInfo::new(
                 (8, 1),
@@ -591,6 +680,7 @@ mod tests {
                         .unwrap(),
                     PremulRgba32::from_premultiplied(*backdrop).unwrap(),
                     mode.into(),
+                    BlendSpace::Srgb,
                 )
                 .unwrap();
                 let actual = PremulRgba32::from_premultiplied(

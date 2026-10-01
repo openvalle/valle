@@ -163,7 +163,7 @@ export default function P(ctx, props) { return <Scene>
     );
     assert!(matches!(
         style_value(&artifact, &values, "wiggle", "translate"),
-        MotionValue::Length2(_)
+        MotionValue::Point(_)
     ));
     assert!(matches!(
         artifact

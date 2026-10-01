@@ -48,6 +48,20 @@ fn non_media_commands_and_png_work_without_ffmpeg() {
             "-o",
             "frame.png",
         ],
+        vec![
+            "--json",
+            "motion",
+            "render",
+            "scene.motion.tsx",
+            "--backend",
+            "raster",
+            "--frames",
+            "0,3,5",
+            "-o",
+            "frames/%05d.png",
+            "--storyboard",
+            "sheet.png",
+        ],
     ] {
         success(&run(dir, &missing, &args));
     }
@@ -63,6 +77,8 @@ fn non_media_commands_and_png_work_without_ffmpeg() {
             .contains("Apache License")
     );
     assert!(std::fs::metadata(dir.join("frame.png")).unwrap().len() > 100);
+    assert!(std::fs::metadata(dir.join("sheet.png")).unwrap().len() > 100);
+    assert_eq!(std::fs::read_dir(dir.join("frames")).unwrap().count(), 3);
     std::fs::write(dir.join("image.motion.tsx"), r#"export const composition = { width: 160, height: 90, fps: 30, duration: 0.2 };
 export const controls = ({assets:{poster:asset({kind:"image"})}});
 export default function Test(){return <Scene style={{width:160,height:90,backgroundColor:"rgb(18,52,86)"}}><Image src="asset://poster" style={{position:"absolute",left:0,top:0,width:160,height:90}} /></Scene>;}"#).unwrap();
@@ -147,6 +163,16 @@ fn missing_libraries_fail_only_at_media_use_with_json_diagnostic() {
             "-o",
             "video.mp4",
         ],
+        vec![
+            "--json",
+            "motion",
+            "render",
+            "scene.motion.tsx",
+            "--backend",
+            "raster",
+            "-o",
+            "video.mov",
+        ],
     ] {
         let out = run(dir, &dir.join("not-installed"), &args);
         assert!(!out.status.success());
@@ -158,6 +184,14 @@ fn missing_libraries_fail_only_at_media_use_with_json_diagnostic() {
             "{out:?}"
         );
     }
+    assert!(!dir.join("video.mov").exists());
+    assert!(!std::fs::read_dir(dir).unwrap().any(|entry| {
+        entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with(".valle-part-")
+    }));
 }
 #[test]
 fn cli_directory_overrides_environment_without_eager_loading() {

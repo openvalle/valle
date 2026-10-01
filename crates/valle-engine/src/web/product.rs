@@ -222,6 +222,203 @@ impl ProductEngine {
             .map_err(|error| js_error("srgb_preview_output", error))
     }
 
+    /// Apply the same working-linear F16 bloom pyramid used by the Native executor.
+    pub fn apply_bloom_f16(
+        &self,
+        input: &[u8],
+        input_width: u32,
+        input_height: u32,
+        output_width: u32,
+        output_height: u32,
+        offset_x: i32,
+        offset_y: i32,
+        threshold: f32,
+        knee: f32,
+        intensity: f32,
+        radius: f32,
+    ) -> Result<Vec<u8>, JsError> {
+        crate::compositor::bloom::apply_bloom_f16(
+            input,
+            input_width,
+            input_height,
+            output_width,
+            output_height,
+            [offset_x, offset_y],
+            crate::compositor::bloom::BloomParams {
+                threshold,
+                knee,
+                intensity,
+                radius,
+            },
+        )
+        .map_err(|error| js_error("bloom", error))
+    }
+
+    /// Render node-local colored glow using the shared F16 pyramid.
+    pub fn apply_glow_f16(
+        &self,
+        input: &[u8],
+        input_width: u32,
+        input_height: u32,
+        output_width: u32,
+        output_height: u32,
+        offset_x: i32,
+        offset_y: i32,
+        color_json: &str,
+        intensity: f32,
+        radius: f32,
+    ) -> Result<Vec<u8>, JsError> {
+        let color: valle_draw::program::AuthorColor = parse_json(color_json, "Glow color")?;
+        let color = color.to_working();
+        crate::compositor::bloom::apply_glow_f16(
+            input,
+            input_width,
+            input_height,
+            output_width,
+            output_height,
+            [offset_x, offset_y],
+            crate::compositor::bloom::GlowParams {
+                color: [color.red, color.green, color.blue, color.alpha],
+                intensity,
+                radius,
+            },
+        )
+        .map_err(|error| js_error("glow", error))
+    }
+
+    /// Shared ROI support and geometric pass spacings for Native and CanvasKit.
+    /// This sends a few numbers per pass; rendered pixels remain GPU-resident.
+    pub fn plan_radial_blur(
+        &self,
+        amount: f32,
+        input_x: i32,
+        input_y: i32,
+        input_width: u32,
+        input_height: u32,
+        output_x: i32,
+        output_y: i32,
+        output_width: u32,
+        output_height: u32,
+    ) -> Result<Vec<f64>, JsError> {
+        let plan = crate::compositor::radial::radial_blur_plan(
+            amount,
+            [input_x, input_y],
+            [input_width, input_height],
+            [output_x, output_y],
+            [output_width, output_height],
+        )
+        .map_err(|error| js_error("radial_blur_plan", error))?;
+        Ok(plan
+            .iter()
+            .flat_map(|p| {
+                [
+                    f64::from(p.origin[0]),
+                    f64::from(p.origin[1]),
+                    f64::from(p.size[0]),
+                    f64::from(p.size[1]),
+                    f64::from(p.fraction),
+                ]
+            })
+            .collect())
+    }
+
+    /// Blur along rays from a local-center filter mapped into device space.
+    pub fn apply_radial_blur_f16(
+        &self,
+        input: &[u8],
+        input_width: u32,
+        input_height: u32,
+        output_width: u32,
+        output_height: u32,
+        offset_x: i32,
+        offset_y: i32,
+        origin_x: i32,
+        origin_y: i32,
+        center_x: f32,
+        center_y: f32,
+        amount: f32,
+    ) -> Result<Vec<u8>, JsError> {
+        crate::compositor::radial::apply_radial_blur_f16(
+            input,
+            input_width,
+            input_height,
+            output_width,
+            output_height,
+            [offset_x, offset_y],
+            [origin_x, origin_y],
+            crate::compositor::radial::RadialBlurParams {
+                center: [center_x, center_y],
+                amount,
+            },
+        )
+        .map_err(|error| js_error("radial_blur", error))
+    }
+
+    /// Stable film grain over a working-linear F16 image ROI.
+    pub fn apply_film_grain_f16(
+        &self,
+        input: &[u8],
+        input_width: u32,
+        input_height: u32,
+        output_width: u32,
+        output_height: u32,
+        offset_x: i32,
+        offset_y: i32,
+        origin_x: i32,
+        origin_y: i32,
+        seed: u32,
+        amount: f32,
+        size: f32,
+    ) -> Result<Vec<u8>, JsError> {
+        crate::compositor::film::apply_film_grain_f16(
+            input,
+            input_width,
+            input_height,
+            output_width,
+            output_height,
+            [offset_x, offset_y],
+            [origin_x, origin_y],
+            crate::compositor::film::FilmGrainParams { seed, amount, size },
+        )
+        .map_err(|error| js_error("film_grain", error))
+    }
+
+    /// Distort a fixed device-space source frame without changing its output bounds.
+    pub fn apply_lens_distortion_f16(
+        &self,
+        input: &[u8],
+        input_width: u32,
+        input_height: u32,
+        output_width: u32,
+        output_height: u32,
+        offset_x: i32,
+        offset_y: i32,
+        origin_x: i32,
+        origin_y: i32,
+        k1: f32,
+        k2: f32,
+        frame_x: f32,
+        frame_y: f32,
+        frame_width: f32,
+        frame_height: f32,
+    ) -> Result<Vec<u8>, JsError> {
+        crate::compositor::lens::apply_lens_distortion_f16(
+            input,
+            input_width,
+            input_height,
+            output_width,
+            output_height,
+            [offset_x, offset_y],
+            [origin_x, origin_y],
+            crate::compositor::lens::LensDistortionParams {
+                k1,
+                k2,
+                frame: [frame_x, frame_y, frame_width, frame_height],
+            },
+        )
+        .map_err(|error| js_error("lens_distortion", error))
+    }
+
     /// Pack the canonical production SkSL uniform ABI. CanvasKit binds these floats and the
     /// working-linear backdrop mechanically; no material formulas or pixels cross into JS/Wasm.
     pub fn pack_motion_glass_uniforms(
@@ -437,9 +634,11 @@ impl ProductEngine {
         let mut textures =
             BTreeMap::<(ContentDigest, valle_motion::scene3d::TextureRole), ()>::new();
         for mesh in &frame.scene.meshes {
-            let model = scene3d_binding_digest(&frame, &mesh.model_control)?;
-            if !self.scene3d_models.contains_key(&model) {
-                models.insert(model, ());
+            if let Some(control) = &mesh.model_control {
+                let model = scene3d_binding_digest(&frame, control)?;
+                if !self.scene3d_models.contains_key(&model) {
+                    models.insert(model, ());
+                }
             }
             for (control, role) in mesh.texture_controls() {
                 let texture = scene3d_binding_digest(&frame, control)?;
@@ -519,7 +718,7 @@ impl ProductEngine {
     }
 
     /// Fulfill one complete random-access Scene3D request. The returned plane is premultiplied
-    /// RGBA8 for an opaque CanvasKit object; depth/object metadata stays in Rust for picking.
+    /// RGBA16F in little-endian bytes for CanvasKit; depth/object metadata stays in Rust for picking.
     pub fn render_scene3d_request(
         &mut self,
         content_digest: &str,
@@ -562,16 +761,16 @@ impl ProductEngine {
         }
 
         for mesh in &frame.scene.meshes {
-            let model_digest = scene3d_binding_digest(&frame, &mesh.model_control)?;
-            let model = self.scene3d_models.get(&model_digest).ok_or_else(|| {
-                JsError::new(&format!(
-                    "[scene3d_resource] model {} has not been fulfilled",
-                    model_digest
-                ))
-            })?;
-            resources
-                .models
-                .insert(mesh.model_control.clone(), Arc::clone(model));
+            if let Some(control) = &mesh.model_control {
+                let model_digest = scene3d_binding_digest(&frame, control)?;
+                let model = self.scene3d_models.get(&model_digest).ok_or_else(|| {
+                    JsError::new(&format!(
+                        "[scene3d_resource] model {} has not been fulfilled",
+                        model_digest
+                    ))
+                })?;
+                resources.models.insert(control.clone(), Arc::clone(model));
+            }
             for (control, role) in mesh.texture_controls() {
                 let texture_digest = scene3d_binding_digest(&frame, control)?;
                 let texture = self
@@ -624,7 +823,7 @@ impl ProductEngine {
         let metadata = raster
             .metadata(scene_key, &frame.scene)
             .map_err(|error| js_error("scene3d_metadata", error))?;
-        let rgba = raster.premul_rgba8.clone();
+        let rgba = raster.premul_rgba16f_le_bytes();
         if self.scene3d_frames.len() >= MAX_SCENE3D_FRAME_CACHE
             && !self.scene3d_frames.contains_key(&content_digest)
         {

@@ -226,3 +226,86 @@ fn value_limits_parse_tokens_and_apply_to_concrete_frame_declarations() {
         );
     }
 }
+
+#[test]
+fn transform_type_diagnostics_have_stable_source_spans_and_replacements() {
+    for (property, expression, start, end, column, expected) in [
+        (
+            "rotate",
+            "ctx.seconds",
+            84,
+            95,
+            35,
+            "`rotate: <expression>`: expected Angle or a finite CSS string; received Number; use rotate: `${ctx.seconds * 90}deg`",
+        ),
+        (
+            "translate",
+            "ctx.seconds",
+            87,
+            98,
+            38,
+            "`translate: <expression>`: expected Length2, Length, Point, Vec2 or a finite CSS string; received Number; use translate: point(ctx.seconds * 100, 0) or translate: `${ctx.seconds * 100}px 0px`",
+        ),
+        (
+            "scale",
+            "ctx.seconds > 0",
+            83,
+            98,
+            34,
+            "`scale: <expression>`: expected Number, Point, Length, Length2 or a finite CSS string; received Bool; use scale: 1 + ctx.seconds or scale: `${1 + ctx.seconds} 1`",
+        ),
+    ] {
+        let authored = source(&format!("style={{{{{property}: {expression}}}}}"));
+        let diagnostics = compile_motion(&authored).unwrap_err();
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        let diagnostic = &diagnostics[0];
+        assert_eq!(diagnostic.code, DiagCode::StyleInvalidValue);
+        assert_eq!(diagnostic.class, DiagClass::Illegal);
+        assert_eq!(diagnostic.message, expected);
+        assert_eq!(
+            (
+                diagnostic.span.start,
+                diagnostic.span.end,
+                diagnostic.span.line,
+                diagnostic.span.column
+            ),
+            (start, end, 2, column)
+        );
+        assert_eq!(&authored[start as usize..end as usize], expression);
+        assert!(diagnostic.node_path.is_some());
+        assert_eq!(diagnostic.style.as_ref().unwrap().property, property);
+    }
+}
+
+#[test]
+fn transform_structure_diagnostic_rejects_text_injection_at_the_template() {
+    let expression = "`${ctx.localFrame < 30 ? '0' : '45'}deg`";
+    let authored = source(&format!("style={{{{rotate: {expression}}}}}"));
+    let diagnostics = compile_motion(&authored).unwrap_err();
+    let diagnostic = diagnostics.iter().find(|d| d.style.is_some()).unwrap();
+    assert_eq!(diagnostic.code, DiagCode::StyleInvalidValue);
+    assert_eq!(
+        diagnostic.message,
+        "`rotate: <expression>`: dynamic CSS must use literal strings, typed templates, or finite conditional branches; template holes must be numbers, lengths, angles, or colors; use rotate: `${ctx.seconds * 90}deg`"
+    );
+    assert_eq!(
+        (
+            diagnostic.span.start,
+            diagnostic.span.end,
+            diagnostic.span.line,
+            diagnostic.span.column
+        ),
+        (84, 84 + expression.len() as u32, 2, 35)
+    );
+    assert_eq!(
+        &authored[diagnostic.span.start as usize..diagnostic.span.end as usize],
+        expression
+    );
+    // Branch on complete CSS values, or keep the choice numeric inside the hole.
+    for replacement in [
+        "ctx.localFrame < 30 ? '0deg' : '45deg'",
+        "`${ctx.localFrame < 30 ? 0 : 45}deg`",
+    ] {
+        assert!(compile_motion(&source(&format!("style={{{{rotate: {replacement}}}}}"))).is_ok());
+    }
+}

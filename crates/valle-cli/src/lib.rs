@@ -548,6 +548,33 @@ pub struct InterpolateArgs {
     pub json: bool,
 }
 
+/// Output selection shared by Motion, Timeline and Project delivery.
+#[derive(clap::Args, Debug, Clone, Default)]
+pub struct RenderOutputArgs {
+    /// Destination .mp4, lossless RGBA .mov, single .png, or PNG pattern (frames/%05d.png).
+    #[arg(short, long, required_unless_present = "storyboard")]
+    pub output: Option<PathBuf>,
+    /// One exact zero-based frame to PNG.
+    #[arg(long, conflicts_with_all = ["frames", "storyboard", "codec"])]
+    pub frame: Option<i64>,
+    /// Exact zero-based frame keys in delivery order, e.g. 0,30,59. Requires a PNG pattern or sheet.
+    #[arg(long, value_delimiter = ',', num_args = 1, conflicts_with = "codec")]
+    pub frames: Vec<i64>,
+    /// Contact sheet PNG. Without --frames, select up to 12 evenly spaced frames.
+    #[arg(long, value_name = "PATH", conflicts_with = "codec")]
+    pub storyboard: Option<PathBuf>,
+    /// Video codec: h264 for .mp4; qtrle (default) or prores4444 for .mov.
+    #[arg(long, value_enum)]
+    pub codec: Option<RenderVideoCodec>,
+}
+
+#[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RenderVideoCodec {
+    H264,
+    Qtrle,
+    Prores4444,
+}
+
 /// Delivery controls independent of the logical Motion authoring canvas.
 #[derive(clap::Args, Debug, Clone, Default)]
 pub struct MotionRenderTuningArgs {
@@ -558,13 +585,13 @@ pub struct MotionRenderTuningArgs {
     #[arg(long, value_parser = clap::value_parser!(u8).range(1..=8))]
     pub workers: Option<u8>,
     /// Require hardware H.264 encoding. Fails if unavailable; no software fallback.
-    #[arg(long, conflicts_with = "frame")]
+    #[arg(long, conflicts_with_all = ["frame", "frames", "storyboard"])]
     pub hardware_encode: bool,
     /// Hardware encoder target bitrate in bits/second. Defaults to a resolution-based estimate.
-    #[arg(long, requires = "hardware_encode", conflicts_with = "frame", value_parser = clap::value_parser!(u32).range(1..))]
+    #[arg(long, requires = "hardware_encode", conflicts_with_all = ["frame", "frames", "storyboard"], value_parser = clap::value_parser!(u32).range(1..))]
     pub bitrate: Option<u32>,
     /// Software H.264 encoder threads. Defaults to automatic selection.
-    #[arg(long, conflicts_with_all = ["hardware_encode", "frame"], value_parser = clap::value_parser!(u16).range(1..))]
+    #[arg(long, conflicts_with_all = ["hardware_encode", "frame", "frames", "storyboard"], value_parser = clap::value_parser!(u16).range(1..))]
     pub encode_threads: Option<u16>,
     /// Delivery dimensions; scales the composition canvas proportionally without changing layout.
     #[arg(long, value_parser = parse_canvas_size)]
@@ -596,16 +623,40 @@ pub enum MotionAction {
         #[arg(long)]
         fps: Option<String>,
     },
-    /// Compile Motion JSX and render an MP4 or one PNG frame.
+    /// Inspect every output frame for motion quality problems such as visible strobing.
+    Review {
+        /// Motion JSX source file.
+        input: PathBuf,
+        /// Bind an asset control as name=path; may be repeated.
+        #[arg(long = "asset", value_name = "NAME=PATH")]
+        assets: Vec<String>,
+        #[command(flatten)]
+        bindings: MotionBindingArgs,
+        /// JSON object bound to `controls.data` during prepare.
+        #[arg(long, value_name = "PATH")]
+        data: Option<PathBuf>,
+        /// Fonts used by layout; may be repeated.
+        #[arg(long)]
+        font: Vec<PathBuf>,
+        /// Output frame rate when the composition has no default.
+        #[arg(long)]
+        fps: Option<String>,
+        /// Optional frame budget; by default inspect the full composition without skipping frames.
+        #[arg(long)]
+        max_frames: Option<u32>,
+        /// Include visible screen-space positions, bounds, velocity, and acceleration in JSON.
+        #[arg(long)]
+        trajectories: bool,
+        /// Write a PNG contact sheet with screen-space trajectories and frame markers.
+        #[arg(long, value_name = "PATH")]
+        trajectory_sheet: Option<PathBuf>,
+    },
+    /// Compile Motion once and render video, PNG frames, or a contact sheet.
     Render {
         /// Motion JSX source file.
         input: PathBuf,
-        /// Render one exact zero-based frame to PNG instead of MP4.
-        #[arg(long)]
-        frame: Option<i64>,
-        /// Destination file. Existing files are never overwritten.
-        #[arg(short, long)]
-        output: PathBuf,
+        #[command(flatten)]
+        delivery: RenderOutputArgs,
         /// Compositor backend. Auto uses an available Metal device on macOS, otherwise CPU Raster.
         #[arg(long, value_enum, default_value = "auto")]
         backend: MotionRenderBackend,
@@ -953,10 +1004,8 @@ pub enum ProjectAction {
         project_id: String,
         #[arg(long, value_parser = parse_project_revision)]
         revision: Option<u64>,
-        #[arg(short, long)]
-        output: PathBuf,
-        #[arg(long)]
-        frame: Option<i64>,
+        #[command(flatten)]
+        delivery: RenderOutputArgs,
     },
 }
 
@@ -1048,13 +1097,11 @@ pub enum TimelineAction {
         #[arg(long, default_value_t = 9527)]
         port: u16,
     },
-    /// Prepare resources and render a timeline to MP4 or one frame to PNG.
+    /// Prepare resources once and render video, PNG frames, or a contact sheet.
     Render {
         input: PathBuf,
-        #[arg(short, long)]
-        output: PathBuf,
-        #[arg(long)]
-        frame: Option<i64>,
+        #[command(flatten)]
+        delivery: RenderOutputArgs,
     },
 }
 

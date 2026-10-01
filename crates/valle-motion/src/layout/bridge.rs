@@ -12,7 +12,7 @@ use valle_motion::{MotionContext, MotionValue};
 pub struct GlassLayoutMaterial {
     pub clarity: f64,
     pub depth: f64,
-    pub tint: valle_draw::Rgba,
+    pub tint: valle_draw::program::AuthorColor,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -92,23 +92,23 @@ pub struct GlassLayoutFrame {
 
 #[derive(Debug, Clone)]
 pub(crate) enum ResolvedPaint {
-    Solid(valle_draw::Rgba),
+    Solid(valle_draw::program::AuthorColor),
     Linear {
         start: valle_draw::Point,
         end: valle_draw::Point,
-        stops: Vec<(f64, valle_draw::Rgba)>,
+        stops: Vec<(f64, valle_draw::program::AuthorColor)>,
         spread: valle_draw::program::recording::SpreadMode,
     },
     Radial {
         center: valle_draw::Point,
         radius: f64,
-        stops: Vec<(f64, valle_draw::Rgba)>,
+        stops: Vec<(f64, valle_draw::program::AuthorColor)>,
         spread: valle_draw::program::recording::SpreadMode,
     },
     Conic {
         center: valle_draw::Point,
         start_angle: f64,
-        stops: Vec<(f64, valle_draw::Rgba)>,
+        stops: Vec<(f64, valle_draw::program::AuthorColor)>,
         spread: valle_draw::program::recording::SpreadMode,
     },
 }
@@ -157,8 +157,20 @@ pub struct PathContent {
 
 #[derive(Debug, Clone)]
 pub(crate) struct BatchContent {
+    pub(crate) row_identity: Vec<crate::batch::BatchRowIdentity>,
+    pub(crate) semantic_keys: Vec<String>,
     pub(crate) geometry: valle_draw::program::recording::BatchGeometry,
+    pub(crate) path: Option<valle_motion::PathData>,
+    pub(crate) atlas: Option<(String, valle_draw::Rect)>,
     pub(crate) instances: Vec<valle_draw::program::recording::BatchInstance>,
+    /// Empty inherits each instance's fill color; otherwise one stroke color per emitted row.
+    pub(crate) stroke_colors: Vec<valle_draw::program::LinearColor>,
+    /// Empty uses the shared Path style phase; otherwise one phase per emitted row.
+    pub(crate) dash_offsets: Vec<f32>,
+    pub(crate) path_style: Option<valle_draw::program::InstancePathStyle>,
+    /// Preserve the authored arc's f64 geometry for each Circle row. Scaling a shared unit arc
+    /// through the f32 instance transform shifts a few antialiased edge pixels.
+    pub(crate) exact_circle_paths: bool,
 }
 
 /// Inputs shared by expression evaluation and Takumi layout for one frame.
@@ -239,14 +251,47 @@ pub struct ResolvedUnit {
     pub translate: Option<valle_draw::Point>,
     pub scale: Option<valle_draw::Point>,
     pub rotate: Option<f64>,
-    pub color: Option<valle_draw::Rgba>,
+    pub color: Option<valle_draw::program::AuthorColor>,
+    pub blur: Option<f64>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct ResolvedTransition {
+    pub kind: valle_draw::transition::TransitionKind,
+    pub params: valle_draw::transition::TransitionValues,
+    pub progress: f32,
+    pub children: [String; 2],
+}
+
+/// One exact output-time exposure sample. Its layout and expressions are independent of the
+/// requested frame and of the other shutter samples.
+#[derive(Clone)]
+pub(crate) struct TemporalSample {
+    pub time: valle_timeline::internal::SampleTime,
+    pub tree: Rc<LayoutTree>,
+}
+
+#[derive(Clone)]
+pub(crate) struct EchoSample {
+    pub sample: TemporalSample,
+    pub opacity: f32,
 }
 
 pub struct LayoutTree {
     pub root: RenderNode,
+    /// Nodes proven to have no paint, flow-layout, or external geometry dependency at this sample.
+    pub(crate) inactive_nodes: Rc<Vec<bool>>,
     pub viewport: Viewport,
     pub layout: std::sync::Arc<LayoutResults>,
     pub values: Vec<MotionValue>,
+    /// Evaluated typed CSS background colors before Takumi's 8-bit color parser.
+    pub(crate) background_colors:
+        Rc<std::collections::HashMap<String, valle_draw::program::AuthorColor>>,
+    /// Evaluated typed text colors before Takumi's 8-bit shaping brush.
+    pub(crate) text_colors: Rc<std::collections::HashMap<String, valle_draw::program::AuthorColor>>,
+    /// Evaluated typed glyph-outline colors before Takumi's 8-bit shaping brush.
+    pub(crate) text_stroke_colors:
+        Rc<std::collections::HashMap<String, valle_draw::program::AuthorColor>>,
     pub keys: std::sync::Arc<std::collections::HashMap<u64, String>>,
     /// Scene key to evaluated unit parameters; emission reads these without reevaluation.
     pub units: Rc<std::collections::HashMap<String, Vec<ResolvedUnit>>>,
@@ -271,14 +316,21 @@ pub struct LayoutTree {
     /// Scene key → advanced filters applied only to the pixels behind the node.
     pub(crate) backdrop_advanced_filters:
         Rc<std::collections::HashMap<String, Vec<valle_draw::program::recording::FilterOp>>>,
+    /// Evaluated transition progress and semantic from/to child identities.
+    pub(crate) transitions: Rc<std::collections::HashMap<String, ResolvedTransition>>,
+    /// Scene key → independently evaluated output-time subframe scenes for one Shutter group.
+    pub(crate) shutters: Rc<std::collections::HashMap<String, Vec<TemporalSample>>>,
+    /// Scene key → past output-time scenes in oldest-to-newest painter order.
+    pub(crate) echoes: Rc<std::collections::HashMap<String, Vec<EchoSample>>>,
     /// Scene key → frame-evaluated ShaderLayer payload. Package bytes remain host-owned; this
-    /// bridge carries only the locked program pin and typed values into ProgramRecording v10.
+    /// bridge carries only the locked program pin and typed values into ProgramRecording.
     pub(crate) shaders: Rc<std::collections::HashMap<String, ResolvedShaderLayer>>,
     /// Scene key → one fully evaluated 3D request. Domain data stays in this Rust sidecar; the
     /// ProgramRecording receives only `provider_key` and target dimensions.
     pub(crate) scene3d: Rc<std::collections::HashMap<String, Scene3DRequest>>,
     /// Scene key → 2.5D layer extras that Takumi CSS cannot express.
     pub(crate) layer_fx: Rc<std::collections::HashMap<String, LayerFx>>,
+    pub(crate) blend_spaces: Rc<std::collections::HashMap<String, valle_draw::program::BlendSpace>>,
     /// Scene key → one flattened CSS 3D plane in absolute viewport coordinates.
     /// Ordered parent/child 4x4 transforms are resolved before paint; emit lowers
     /// the final quad to the existing homography command.
@@ -286,6 +338,33 @@ pub struct LayoutTree {
     pub(crate) formulas:
         Rc<std::collections::HashMap<String, crate::math_formula::FormulaFragment>>,
     pub glass: GlassLayoutFrame,
+}
+
+impl LayoutTree {
+    /// Exact output times used for a Shutter scope in this requested frame.
+    pub fn shutter_sample_times(
+        &self,
+        key: &str,
+    ) -> Option<Vec<valle_timeline::internal::SampleTime>> {
+        self.shutters
+            .get(key)
+            .map(|samples| samples.iter().map(|sample| sample.time).collect())
+    }
+
+    /// Exact output times used for an Echo scope, oldest first.
+    pub fn echo_sample_times(
+        &self,
+        key: &str,
+    ) -> Option<Vec<valle_timeline::internal::SampleTime>> {
+        self.echoes
+            .get(key)
+            .map(|samples| samples.iter().map(|sample| sample.sample.time).collect())
+    }
+
+    /// Source seconds selected for a Video node after its enclosing time scopes are applied.
+    pub fn video_source_time_seconds(&self, key: &str) -> Option<f64> {
+        self.videos.get(key).map(|video| video.source_time_s)
+    }
 }
 
 /// Per-node paint extras: perspective card, desk contact shadow, paper grain.

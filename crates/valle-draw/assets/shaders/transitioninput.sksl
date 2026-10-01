@@ -1,0 +1,8 @@
+// Sample a local subtree on a fixed canvas. Blank areas stay transparent; samples beyond
+// the transition canvas clamp to its edge pixels, just like Timeline transition textures.
+uniform shader content;
+uniform float2 resolution;
+half4 main(float2 xy) {
+    float2 inset = min(float2(0.5), resolution * 0.5);
+    return content.eval(clamp(xy, inset, resolution - inset));
+}

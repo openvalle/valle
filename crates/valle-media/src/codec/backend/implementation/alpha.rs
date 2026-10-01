@@ -1,20 +1,22 @@
-//! Lossless transparent video encoding from straight-alpha RGBA8 to qtrle MOV. The native decoder
-//! preserves RGB and alpha exactly. Hosts must choose a separate web-compatible delivery format
-//! rather than discarding alpha here.
+//! Transparent MOV encoding from straight-alpha RGBA8. qtrle preserves every channel exactly;
+//! ProRes 4444 retains alpha while applying its normal lossy RGB compression.
 
 use std::path::Path;
 
 use super::ff;
 use anyhow::{Context, Result, anyhow, bail};
-use ff::{Packet, Rational, codec, encoder, format, frame};
+use ff::{Dictionary, Packet, Rational, codec, encoder, format, frame, software};
 
-use super::ffi::{ffmpeg_init, fill_plane0, write_mp4_header};
+use super::ffi::{
+    YuvMatrix, ffmpeg_init, fill_plane0, set_sws_colorspace, tag_bt709_limited, write_mp4_header,
+};
+use crate::codec::alpha::TransparentVideoCodec;
 use crate::frame::RgbaFrame;
 
 const QTRLE_ENCODER: &str = "qtrle";
+const PRORES_ENCODER: &str = "prores_ks";
 
-/// MOV muxer with one lossless qtrle video stream. Preserve straight RGBA at the API boundary and
-/// never infer an opaque codec from the output extension.
+/// MOV muxer with one transparent video stream. Preserve straight RGBA at the API boundary.
 pub struct TransparentVideoMuxer {
     octx: format::context::Output,
     venc: encoder::Video,
@@ -23,6 +25,7 @@ pub struct TransparentVideoMuxer {
     ost_tb: Rational,
     width: u32,
     height: u32,
+    sws: Option<software::scaling::Context>,
     next_cfr_pts: i64,
     last_pts: Option<i64>,
     pending_packet: Option<Packet>,
@@ -32,8 +35,26 @@ pub struct TransparentVideoMuxer {
 }
 
 impl TransparentVideoMuxer {
-    /// Create a lossless RGBA MOV with an exact rational constant frame rate.
+    /// Create a lossless qtrle MOV with an exact rational constant frame rate.
     pub fn open(path: &Path, width: u32, height: u32, fps_num: u32, fps_den: u32) -> Result<Self> {
+        Self::open_with_codec(
+            path,
+            width,
+            height,
+            fps_num,
+            fps_den,
+            TransparentVideoCodec::Qtrle,
+        )
+    }
+
+    pub fn open_with_codec(
+        path: &Path,
+        width: u32,
+        height: u32,
+        fps_num: u32,
+        fps_den: u32,
+        codec: TransparentVideoCodec,
+    ) -> Result<Self> {
         if fps_num == 0 || fps_den == 0 || fps_num > i32::MAX as u32 || fps_den > i32::MAX as u32 {
             return Err(anyhow!(
                 "transparent video fps must be a positive i32 rational (got {fps_num}/{fps_den})"
@@ -46,6 +67,7 @@ impl TransparentVideoMuxer {
             Rational(fps_den as i32, fps_num as i32),
             Some(Rational(fps_num as i32, fps_den as i32)),
             false,
+            codec,
         )
     }
 
@@ -61,7 +83,15 @@ impl TransparentVideoMuxer {
         time_base: Rational,
         nominal_frame_rate: Option<Rational>,
     ) -> Result<Self> {
-        Self::open_with_clock(path, width, height, time_base, nominal_frame_rate, true)
+        Self::open_with_clock(
+            path,
+            width,
+            height,
+            time_base,
+            nominal_frame_rate,
+            true,
+            TransparentVideoCodec::Qtrle,
+        )
     }
 
     fn open_with_clock(
@@ -71,6 +101,7 @@ impl TransparentVideoMuxer {
         enc_tb: Rational,
         nominal_frame_rate: Option<Rational>,
         preserve_start_timestamp: bool,
+        codec_kind: TransparentVideoCodec,
     ) -> Result<Self> {
         ffmpeg_init()?;
         if width == 0 || height == 0 {
@@ -90,8 +121,12 @@ impl TransparentVideoMuxer {
         let mut octx = format::output_as(path, "mov")
             .with_context(|| format!("open transparent MOV {}", path.display()))?;
         let global_header = octx.format().flags().contains(format::Flags::GLOBAL_HEADER);
-        let codec = encoder::find_by_name(QTRLE_ENCODER)
-            .ok_or_else(|| anyhow!("the installed FFmpeg has no transparent encoder '{QTRLE_ENCODER}'; inspect it with `valle media capabilities`"))?;
+        let encoder_name = match codec_kind {
+            TransparentVideoCodec::Qtrle => QTRLE_ENCODER,
+            TransparentVideoCodec::ProRes4444 => PRORES_ENCODER,
+        };
+        let codec = encoder::find_by_name(encoder_name)
+            .ok_or_else(|| anyhow!("the installed FFmpeg has no transparent encoder '{encoder_name}'; inspect it with `valle media capabilities`"))?;
         let nominal_frame_ticks = nominal_frame_rate
             .map(|rate| frame_ticks(enc_tb, rate))
             .transpose()?;
@@ -100,15 +135,43 @@ impl TransparentVideoMuxer {
             .video()?;
         video.set_width(width);
         video.set_height(height);
-        // qtrle uses packed ARGB; encoding reorders channels without loss.
-        video.set_format(format::Pixel::ARGB);
+        video.set_format(match codec_kind {
+            TransparentVideoCodec::Qtrle => format::Pixel::ARGB,
+            TransparentVideoCodec::ProRes4444 => format::Pixel::YUVA444P10LE,
+        });
         video.set_time_base(enc_tb);
         video.set_frame_rate(nominal_frame_rate);
         video.set_aspect_ratio(Rational(1, 1));
+        if codec_kind == TransparentVideoCodec::ProRes4444 {
+            tag_bt709_limited(&mut video);
+        }
         if global_header {
             video.set_flags(codec::Flags::GLOBAL_HEADER);
         }
-        let venc = video.open_as(codec)?;
+        let venc = if codec_kind == TransparentVideoCodec::ProRes4444 {
+            let mut options = Dictionary::new();
+            options.set("profile", "4444");
+            options.set("alpha_bits", "16");
+            video.open_with(options)?
+        } else {
+            video.open_as(codec)?
+        };
+
+        let sws = if codec_kind == TransparentVideoCodec::ProRes4444 {
+            let mut sws = software::scaling::Context::get(
+                format::Pixel::RGBA,
+                width,
+                height,
+                format::Pixel::YUVA444P10LE,
+                width,
+                height,
+                software::scaling::Flags::BILINEAR,
+            )?;
+            set_sws_colorspace(&mut sws, YuvMatrix::Bt709, false, false);
+            Some(sws)
+        } else {
+            None
+        };
 
         let stream_idx = {
             let mut stream = octx.add_stream(codec)?;
@@ -137,6 +200,7 @@ impl TransparentVideoMuxer {
             ost_tb,
             width,
             height,
+            sws,
             next_cfr_pts: 0,
             last_pts: None,
             pending_packet: None,
@@ -146,7 +210,7 @@ impl TransparentVideoMuxer {
         })
     }
 
-    /// Encode one straight-alpha RGBA8 frame without RGB or alpha loss.
+    /// Encode one straight-alpha RGBA8 frame.
     pub fn encode_video(&mut self, rgba: &RgbaFrame) -> Result<()> {
         let pts = self.next_cfr_pts;
         self.encode_video_at(rgba, pts)?;
@@ -184,15 +248,30 @@ impl TransparentVideoMuxer {
             ));
         }
 
-        let mut argb = vec![0u8; expected];
-        for (src, dst) in rgba.data.chunks_exact(4).zip(argb.chunks_exact_mut(4)) {
-            dst[0] = src[3];
-            dst[1] = src[0];
-            dst[2] = src[1];
-            dst[3] = src[2];
-        }
-        let mut encoded = frame::Video::new(format::Pixel::ARGB, self.width, self.height);
-        fill_plane0(&mut encoded, &argb, self.width as usize * 4, self.height);
+        let mut encoded = if let Some(sws) = &mut self.sws {
+            let mut source = frame::Video::new(format::Pixel::RGBA, self.width, self.height);
+            fill_plane0(
+                &mut source,
+                &rgba.data,
+                self.width as usize * 4,
+                self.height,
+            );
+            let mut converted =
+                frame::Video::new(format::Pixel::YUVA444P10LE, self.width, self.height);
+            sws.run(&source, &mut converted)?;
+            converted
+        } else {
+            let mut argb = vec![0u8; expected];
+            for (src, dst) in rgba.data.chunks_exact(4).zip(argb.chunks_exact_mut(4)) {
+                dst[0] = src[3];
+                dst[1] = src[0];
+                dst[2] = src[1];
+                dst[3] = src[2];
+            }
+            let mut packed = frame::Video::new(format::Pixel::ARGB, self.width, self.height);
+            fill_plane0(&mut packed, &argb, self.width as usize * 4, self.height);
+            packed
+        };
         encoded.set_pts(Some(pts));
         self.venc.send_frame(&encoded)?;
         self.collect_packets()?;
@@ -238,12 +317,14 @@ impl TransparentVideoMuxer {
 
     fn queue_packet(&mut self, packet: Packet) -> Result<()> {
         if let Some(mut previous) = self.pending_packet.take() {
-            let previous_pts = previous.pts().context("qtrle packet has no PTS")?;
-            let next_pts = packet.pts().context("qtrle packet has no PTS")?;
+            let previous_pts = previous
+                .pts()
+                .context("transparent MOV packet has no PTS")?;
+            let next_pts = packet.pts().context("transparent MOV packet has no PTS")?;
             let duration = next_pts
                 .checked_sub(previous_pts)
                 .filter(|duration| *duration > 0)
-                .context("qtrle packet PTS is not strictly increasing")?;
+                .context("transparent MOV packet PTS is not strictly increasing")?;
             previous.set_duration(duration);
             self.write_packet(previous)?;
             self.last_packet_duration = Some(duration);

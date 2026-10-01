@@ -827,19 +827,13 @@ fn write_mask(writer: &mut StructureHash, mask: PreparedMask) {
 
 fn write_transition(writer: &mut StructureHash, kernel: PreparedTransitionKernel) {
     match kernel {
-        PreparedTransitionKernel::Fade => writer.tag(0),
-        PreparedTransitionKernel::WipeLeft => writer.tag(1),
-        PreparedTransitionKernel::WipeRight => writer.tag(2),
-        PreparedTransitionKernel::CircleOpen => writer.tag(3),
-        PreparedTransitionKernel::SimpleZoom => writer.tag(4),
-        PreparedTransitionKernel::CrossWarp => writer.tag(5),
-        PreparedTransitionKernel::LinearBlur => writer.tag(6),
-        PreparedTransitionKernel::DirectionalWarp => writer.tag(7),
-        PreparedTransitionKernel::DreamyZoom => writer.tag(8),
-        PreparedTransitionKernel::Ripple => writer.tag(9),
-        PreparedTransitionKernel::FlyEye => writer.tag(10),
-        PreparedTransitionKernel::MultiplyBlend => writer.tag(11),
-        PreparedTransitionKernel::Perlin => writer.tag(12),
+        PreparedTransitionKernel::Builtin { kind, params } => {
+            writer.tag(0);
+            writer.u32(kind as u32);
+            for value in params.0 {
+                writer.f64(f64::from(value));
+            }
+        }
         PreparedTransitionKernel::ExtensionCrossFade {
             implementation_sha256,
             past_frames,
@@ -886,6 +880,7 @@ fn write_blend_mode(writer: &mut StructureHash, mode: BlendMode) {
         BlendMode::Saturation => 14,
         BlendMode::Color => 15,
         BlendMode::Luminosity => 16,
+        BlendMode::Plus => 17,
     });
 }
 

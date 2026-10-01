@@ -525,6 +525,16 @@ impl<'a> Validator<'a> {
                         cursor = self.advance(cursor, gap.duration, &path, Some(&gap.id));
                     }
                     VisualItemWire::Transition(transition) => {
+                        if let TransitionKernelWire::Builtin(kernel) = &transition.kernel {
+                            if let Err(error) = kernel.kind.resolve_params(&kernel.params) {
+                                self.error(
+                                    "invalid_transition_params",
+                                    format!("{path}/kernel/params/{}", error.parameter),
+                                    Some(&transition.id),
+                                    details([("reason", json!(error.reason))]),
+                                );
+                            }
+                        }
                         self.register_id(
                             &transition.id,
                             "visual-transition",
@@ -550,6 +560,52 @@ impl<'a> Validator<'a> {
                                 Some(&transition.id),
                                 JsonObject::new(),
                             );
+                        } else {
+                            let VisualItemWire::Clip(from) = &track.items[item_index - 1] else {
+                                unreachable!()
+                            };
+                            let VisualItemWire::Clip(to) = &track.items[item_index + 1] else {
+                                unreachable!()
+                            };
+                            if transition.duration >= from.duration
+                                || transition.duration >= to.duration
+                            {
+                                self.error(
+                                    "invalid_transition_overlap",
+                                    &path,
+                                    Some(&transition.id),
+                                    JsonObject::new(),
+                                );
+                            }
+                            if let Some(VisualItemWire::Transition(previous)) = item_index
+                                .checked_sub(2)
+                                .and_then(|index| track.items.get(index))
+                            {
+                                match previous.duration.checked_add(transition.duration) {
+                                    Ok(total) if total > from.duration => self.error(
+                                        "overlapping_transitions",
+                                        &path,
+                                        Some(&transition.id),
+                                        JsonObject::new(),
+                                    ),
+                                    Err(_) => self.error(
+                                        "time_overflow",
+                                        &path,
+                                        Some(&transition.id),
+                                        JsonObject::new(),
+                                    ),
+                                    _ => {}
+                                }
+                            }
+                        }
+                        match cursor.checked_sub(transition.duration) {
+                            Ok(next) if next >= ExactRational::ZERO => cursor = next,
+                            _ => self.error(
+                                "invalid_transition_overlap",
+                                &path,
+                                Some(&transition.id),
+                                JsonObject::new(),
+                            ),
                         }
                     }
                 }

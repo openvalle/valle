@@ -19,7 +19,7 @@ pub type Rect = [f64; 4];
 
 /// A render-semantic kind owned by an extension namespace.
 ///
-/// Built-ins such as `cross-fade` and `color-grade` are intentionally not
+/// Built-ins such as `fade` and `color-grade` are intentionally not
 /// accepted here. They have dedicated closed DTOs. Extension kinds use
 /// `<namespace>/<name>` (for example `example.visual/glow@1`) and are retained
 /// by wire decode for the later capability-admission step.
@@ -294,23 +294,18 @@ pub struct VisualTransitionWire {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum TransitionKernelWire {
-    CrossFade(CrossFadeTransitionKernelWire),
+    Builtin(BuiltinTransitionKernelWire),
     Extension(TransitionKernelExtensionWire),
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct CrossFadeTransitionKernelWire {
+pub struct BuiltinTransitionKernelWire {
     #[serde(rename = "type")]
-    pub kind: CrossFadeTransitionKernelTag,
-}
-
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum CrossFadeTransitionKernelTag {
-    CrossFade,
+    pub kind: valle_draw::transition::TransitionKind,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub params: valle_draw::transition::TransitionParams,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]

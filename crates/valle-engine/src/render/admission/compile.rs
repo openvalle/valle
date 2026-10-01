@@ -245,15 +245,14 @@ pub(super) fn compile_admitted_timeline(
             AdmittedVisualItem::Transition { transition } => CompiledVisualItem::Transition {
                 transition: CompiledVisualTransition {
                     window: transition.window,
-                    cut_frame: transition.cut_frame,
-                    left_frames: transition.left_frames,
-                    right_frames: transition.right_frames,
                     from_item: transition.from_item,
                     to_item: transition.to_item,
                     from_source: transition.from_source,
                     to_source: transition.to_source,
                     kernel: match transition.kernel {
-                        AdmittedTransitionKernel::CrossFade => CompiledTransitionKernel::CrossFade,
+                        AdmittedTransitionKernel::Builtin { kind, params } => {
+                            CompiledTransitionKernel::Builtin { kind, params }
+                        }
                         AdmittedTransitionKernel::Extension { call } => {
                             CompiledTransitionKernel::Extension {
                                 call: compile_kernel_call(call),

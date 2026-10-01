@@ -9,7 +9,7 @@ use std::{
 };
 use takumi_core::{layout::tree::LayoutResults, resources::font::Fonts, viewport::Viewport};
 
-pub(super) fn eligible(artifact: &SceneArtifact) -> bool {
+pub(super) fn eligible(artifact: &SceneArtifact, types: &[Option<crate::expr::ExprType>]) -> bool {
     if artifact.camera.is_some()
         || crate::post_layout_dependent(&artifact.exprs)
             .into_iter()
@@ -60,7 +60,15 @@ pub(super) fn eligible(artifact: &SceneArtifact) -> bool {
                     StyleValue::Static { .. } => true,
                     StyleValue::Expr { expr } => stable[expr.0 as usize],
                 };
-                crate::style::property_spec(&s.property).can_reuse_geometry(frame_stable)
+                let spec = crate::style::property_spec(&s.property);
+                spec.can_reuse_geometry(frame_stable)
+                    && (frame_stable
+                        || match s.value {
+                            StyleValue::Expr { expr } => spec
+                                .validate_post_layout(expr, &artifact.exprs, types)
+                                .is_ok(),
+                            StyleValue::Static { .. } => true,
+                        })
             })
     })
 }
@@ -150,7 +158,7 @@ impl LayoutCache {
         props: &ResolvedProps,
         viewport: Viewport,
         styles: Option<&StyleCache>,
-        timings: Option<&mut LayoutTimings>,
+        mut timings: Option<&mut LayoutTimings>,
     ) -> Result<LayoutTree, LayoutError> {
         let opts = LayoutOptions {
             viewport,
@@ -159,13 +167,25 @@ impl LayoutCache {
             #[cfg(target_arch = "wasm32")]
             formula_fonts: &self.formula_fonts,
         };
-        build_tree_inner(
+        let mut shared = self.prepared.sample_value_cache();
+        let tree = build_tree_inner(
             &self.prepared,
             ctx,
             props,
             &opts,
-            timings,
+            timings.as_deref_mut(),
             Some(&self.geometry),
-        )
+            shared.as_mut(),
+            true,
+            true,
+        )?;
+        if let (Some(timings), Some(shared)) = (timings, shared) {
+            (timings.sample_static_computed, timings.sample_static_reused) = shared.counts();
+            (
+                timings.instance_static_computed,
+                timings.instance_static_reused,
+            ) = shared.instance_counts();
+        }
+        Ok(tree)
     }
 }

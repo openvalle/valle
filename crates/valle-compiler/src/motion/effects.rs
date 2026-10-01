@@ -7,28 +7,142 @@ impl<'s> Compiler<'s> {
         &mut self,
         expression: &'s Expression<'s>,
         property: &str,
-    ) -> Option<StyleValue> {
-        if let Some(text) = string_literal(expression).or_else(|| {
-            self.fold_to_value(expression)
-                .and_then(|value| match value {
-                    MotionValue::Str(text) => Some(text),
-                    _ => None,
-                })
-        }) {
-            return match valle_motion::style::parse_property(property, &text) {
-                // Keep `none` and identity filters until after cascade. They still override
-                // utilities, and a non-none identity filter establishes a containing block.
-                Ok(_) => Some(StyleValue::Static {
-                    value: MotionValue::Str(text),
-                }),
-                Err(reason) => {
-                    self.style_diagnostic(expression.span(), None, reason);
+    ) -> Option<Vec<StyleBinding>> {
+        let text = string_literal(expression).or_else(|| {
+            self.fold_to_value(expression).and_then(|v| {
+                if let MotionValue::Str(text) = v {
+                    Some(text)
+                } else {
                     None
                 }
-            };
+            })
+        });
+        let mut frame_dependent = text.is_none();
+        let value = if let Some(text) = text {
+            if let Err(reason) = valle_motion::style::parse_property(property, &text) {
+                self.style_diagnostic(expression.span(), None, reason);
+                return None;
+            }
+            if property == "filter"
+                && valle_motion::style::advanced_filter::parse(&text)
+                    .ok()
+                    .flatten()
+                    .is_some()
+            {
+                self.extra_capabilities
+                    .insert(valle_motion::NODE_ADVANCED_FILTER_CAPABILITY.to_owned());
+                frame_dependent = text.trim().starts_with("film-grain(");
+            }
+            StyleValue::Static {
+                value: MotionValue::Str(text),
+            }
+        } else {
+            if property == "filter" {
+                self.extra_capabilities
+                    .insert(valle_motion::NODE_ADVANCED_FILTER_CAPABILITY.to_owned());
+            }
+            let expr = self.lower_css_value_expression(expression)?;
+            if property == "filter" {
+                self.diagnose_filter_ranges(expr);
+            }
+            StyleValue::Expr { expr }
+        };
+        let mut styles = vec![StyleBinding {
+            property: property.into(),
+            value,
+        }];
+        if property == "filter" && frame_dependent {
+            // Grain changes once per local frame, including random seeks and TimeScope.
+            let frame = self.scoped_context_expr(ContextInput::LocalFrame, expression.span());
+            styles.push(StyleBinding {
+                property: "motion-filter-frame".into(),
+                value: StyleValue::Expr { expr: frame },
+            });
         }
-        let expr = self.lower_css_value_expression(expression)?;
-        Some(StyleValue::Expr { expr })
+        Some(styles)
+    }
+
+    fn diagnose_filter_ranges(&mut self, expr: ExprId) {
+        use valle_motion::expr::TemplatePart;
+        let Some(Expr::Template { parts }) = self.expr_arena.values.get(expr.0 as usize) else {
+            return;
+        };
+        let mut template = String::new();
+        for part in parts {
+            match part {
+                TemplatePart::Text { value } => template.push_str(value),
+                TemplatePart::Expr { expr } => {
+                    if let Some(Expr::Const { value }) = self.expr_arena.values.get(expr.0 as usize)
+                    {
+                        template.push_str(&valle_motion::css_token(value));
+                    } else {
+                        template.push_str(&format!("@{}@", expr.0));
+                    }
+                }
+            }
+        }
+        let Some((name, body)) = template.trim().split_once('(') else {
+            return;
+        };
+        let Some(body) = body.strip_suffix(')') else {
+            return;
+        };
+        for (raw, parameter) in body
+            .split_whitespace()
+            .zip(valle_motion::style::advanced_filter::parameters(name))
+        {
+            let raw = raw.strip_suffix(parameter.unit).unwrap_or(raw);
+            let Some(id) = raw
+                .strip_prefix('@')
+                .and_then(|s| s.strip_suffix('@'))
+                .and_then(|s| s.parse::<u32>().ok())
+            else {
+                continue;
+            };
+            self.diagnose_parameter_range(
+                ExprId(id),
+                &format!("{name} {}", parameter.name),
+                parameter.unit,
+                parameter.min,
+                parameter.max,
+            );
+        }
+    }
+
+    pub(super) fn diagnose_parameter_range(
+        &mut self,
+        expr: ExprId,
+        label: &str,
+        unit: &str,
+        min: f64,
+        max: f64,
+    ) {
+        use valle_motion::time_function::{ValueRange, numeric_range};
+        let range = numeric_range(&self.expr_arena.values, expr, &|input| match input {
+            ContextInput::LocalProgress => ValueRange::new(0.0, 1.0),
+            ContextInput::CompositionSeconds => {
+                ValueRange::new(0.0, self.composition.as_ref()?.duration().ok()?.as_f64())
+            }
+            // FPS is a host input, so frame-count-based expressions cannot use
+            // the optional author default as a universal proof.
+            _ => None,
+        });
+        let Some(range) = range else {
+            return;
+        };
+        let span = self.expr_arena.spans[expr.0 as usize];
+        if range.lower > max || range.upper < min {
+            self.illegal(
+                DiagCode::StyleInvalidValue,
+                span,
+                format!(
+                    "{label} range {:.6e}..={:.6e}{} is outside {min}..={max}{unit}",
+                    range.lower, range.upper, unit
+                ),
+            );
+        } else if range.lower < min - 1e-9 || range.upper > max + 1e-9 {
+            self.warn(DiagCode::ParameterRange,span,format!("{label} may leave {min}..={max}{unit}; conservative range {:.6e}..={:.6e}{}. Use clamp() explicitly if intended; runtime values remain strict.",range.lower,range.upper,unit));
+        }
     }
 
     /// CSS keywords such as `none` are strings here, not general Motion enum values.
@@ -37,7 +151,11 @@ impl<'s> Compiler<'s> {
         expression: &Expression<'_>,
     ) -> Option<ExprId> {
         let expression = strip_parens(expression);
-        if let Some(text) = string_literal(expression) {
+        if let Some(text) = string_literal(expression).or_else(|| {
+            (!matches!(expression, Expression::TemplateLiteral(template) if !template.expressions.is_empty()))
+                .then(|| self.eval_static(expression)).flatten()
+                .and_then(|value| value.as_str().map(str::to_owned))
+        }) {
             return Some(self.push(
                 Expr::Const {
                     value: MotionValue::Str(text),
@@ -57,8 +175,14 @@ impl<'s> Compiler<'s> {
             self.expr_arena.depth += 1;
             let result = (|| {
                 let condition = self.lower_expr(&branch.test)?;
-                let when_true = self.lower_css_value_expression(&branch.consequent)?;
-                let when_false = self.lower_css_value_expression(&branch.alternate)?;
+                let mut when_true = self.lower_css_value_expression(&branch.consequent)?;
+                let mut when_false = self.lower_css_value_expression(&branch.alternate)?;
+                if self.expr_arena.types[when_true.0 as usize]
+                    != self.expr_arena.types[when_false.0 as usize]
+                {
+                    when_true = self.css_scalar_string(when_true, branch.consequent.span());
+                    when_false = self.css_scalar_string(when_false, branch.alternate.span());
+                }
                 Some(self.push(
                     Expr::Select {
                         condition,
@@ -72,6 +196,25 @@ impl<'s> Compiler<'s> {
             return result;
         }
         self.lower_expr(expression)
+    }
+
+    /// CSS scalar branches can mix literal strings with typed angles/lengths/numbers.
+    /// Keep ordinary typed conditionals strict; coerce only at the CSS consumer.
+    fn css_scalar_string(&mut self, expr: ExprId, span: Span) -> ExprId {
+        use valle_motion::expr::ExprType;
+        if matches!(
+            self.expr_arena.types[expr.0 as usize],
+            Some(ExprType::Number | ExprType::Length | ExprType::Angle | ExprType::Color)
+        ) {
+            self.push(
+                Expr::Template {
+                    parts: vec![valle_motion::expr::TemplatePart::Expr { expr }],
+                },
+                span,
+            )
+        } else {
+            expr
+        }
     }
 
     pub(super) fn diagnose_path_paint(
@@ -258,17 +401,36 @@ impl<'s> Compiler<'s> {
         ])
     }
 
-    /// Velocity is explicit and frame-pure (px/frame); shutter controls exposure length. This is
-    /// a spatial shutter approximation, not hidden previous-frame state or temporal replay.
+    /// Auto blur derives screen-space velocity from nearby output-time layouts. Explicit velocity
+    /// remains a frame-pure spatial shutter approximation in pixels per frame.
     pub(super) fn lower_node_motion_blur_style(
         &mut self,
         expression: &'s Expression<'s>,
     ) -> Option<Vec<StyleBinding>> {
+        if matches!(strip_parens(expression), Expression::StringLiteral(value) if value.value == "auto")
+        {
+            self.extra_capabilities
+                .insert(valle_motion::NODE_ADVANCED_FILTER_CAPABILITY.to_owned());
+            return Some(vec![
+                StyleBinding {
+                    property: "motion-velocity-blur-auto".into(),
+                    value: StyleValue::Static {
+                        value: MotionValue::Bool(true),
+                    },
+                },
+                StyleBinding {
+                    property: "motion-velocity-blur-shutter".into(),
+                    value: StyleValue::Static {
+                        value: MotionValue::Number(180.0),
+                    },
+                },
+            ]);
+        }
         let Expression::CallExpression(call) = strip_parens(expression) else {
             self.illegal(
                 DiagCode::GrammarForbidden,
                 expression.span(),
-                "style.motionBlur must call motionBlur(velocityPoint, shutterAngle?)",
+                "style.motionBlur must be \"auto\" or motionBlur(velocityPoint, shutterAngle?)",
             );
             return None;
         };
@@ -451,6 +613,7 @@ impl<'s> Compiler<'s> {
                         },
                     ],
                     easings: Vec::new(),
+                    color_space: valle_draw::program::GradientInterpolation::Srgb,
                     extrapolate_left: Extrapolation::Extend,
                     extrapolate_right: Extrapolation::Extend,
                 },

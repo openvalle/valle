@@ -309,16 +309,37 @@ impl PropertySpec<'_> {
         exprs: &[Expr],
         types: &[Option<ExprType>],
     ) -> Result<(), &'static str> {
-        if !self.closed_css || !self.impact.containing_block {
+        if !self.requires_css_structure(types.get(expr.0 as usize).copied().flatten())
+            || !self.impact.containing_block
+        {
             return Ok(());
         }
         let variants = crate::artifact::css_expression_variants(expr, exprs, types)
             .ok_or("post-layout CSS requires a finite property structure")?;
         let mut presence = None;
+        let mut importance = None;
         for source in variants {
             let style = super::parse_property(self.name, &source)
                 .map_err(|_| "post-layout CSS has an invalid branch")?;
+            let important = !style.declarations.importance.is_empty();
+            if importance.is_some_and(|previous| previous != important) {
+                return Err(
+                    "post-layout transforms/filters cannot switch !important: that can change positioned descendants' containing block",
+                );
+            }
+            importance = Some(important);
             let current = match style.declarations.iter().next() {
+                _ if matches!(self.name, "translate" | "rotate" | "scale") => {
+                    match super::css_keyword(&source).as_deref() {
+                        Some("none" | "initial" | "unset") => false,
+                        Some("inherit" | "revert" | "revert-layer") => {
+                            return Err(
+                                "post-layout transforms/filters cannot resolve inherited presence; use an explicit list or none",
+                            );
+                        }
+                        _ => true,
+                    }
+                }
                 Some(StyleDeclaration::Transform(value)) => {
                     value.as_ref().is_some_and(|v| !v.is_empty())
                 }
@@ -361,6 +382,7 @@ impl PropertySpec<'_> {
             ValueSyntax::Css => true,
             ValueSyntax::Typed { types, static_css } => {
                 actual.is_some_and(|actual| types.contains(&actual))
+                    || self.closed_css && matches!(actual, Some(ExprType::String | ExprType::Enum))
                     || static_css
                         && matches!(
                             value,
@@ -369,6 +391,85 @@ impl PropertySpec<'_> {
                             }
                         )
             }
+        }
+    }
+
+    /// Shared source/artifact type check, before any sampled frame or CSS cascade.
+    pub fn check_type(
+        &self,
+        value: &StyleValue,
+        expr_types: &[Option<ExprType>],
+    ) -> Result<(), super::StyleIssue> {
+        let actual = match value {
+            StyleValue::Static { value } => Some(ExprType::of_value(value)),
+            StyleValue::Expr { expr } => expr_types.get(expr.0 as usize).copied().flatten(),
+        };
+        if self.accepts_typed_value(actual, value) {
+            Ok(())
+        } else {
+            Err(self.typed_value_issue(actual))
+        }
+    }
+
+    pub(crate) fn requires_css_structure(&self, actual: Option<ExprType>) -> bool {
+        self.closed_css
+            && (matches!(self.syntax, ValueSyntax::Css)
+                || matches!(actual, Some(ExprType::String | ExprType::Enum)))
+    }
+
+    pub(crate) fn typed_value_issue(&self, actual: Option<ExprType>) -> super::StyleIssue {
+        let expected = match self.syntax {
+            ValueSyntax::Typed { types, .. } => types
+                .iter()
+                .map(|ty| format!("{ty:?}"))
+                .collect::<Vec<_>>()
+                .join(", "),
+            ValueSyntax::Css => "CSS".into(),
+        };
+        let mut issue = super::StyleIssue::new(
+            super::StyleIssueKind::InvalidValue,
+            self.name,
+            "<expression>",
+            format!(
+                "expected {expected}{}; received {}",
+                if self.closed_css {
+                    " or a finite CSS string"
+                } else {
+                    ""
+                },
+                actual.map_or_else(|| "an invalid expression".into(), |ty| format!("{ty:?}")),
+            ),
+        );
+        if let Some(suggestion) = self.dynamic_example() {
+            issue = issue.with_suggestion(suggestion);
+        }
+        issue
+    }
+
+    pub(crate) fn css_structure_issue(&self) -> super::StyleIssue {
+        let mut issue = super::StyleIssue::new(
+            super::StyleIssueKind::InvalidValue,
+            self.name,
+            "<expression>",
+            "dynamic CSS must use literal strings, typed templates, or finite conditional branches; template holes must be numbers, lengths, angles, or colors",
+        );
+        if let Some(suggestion) = self.dynamic_example() {
+            issue = issue.with_suggestion(suggestion);
+        }
+        issue
+    }
+
+    pub(crate) fn dynamic_example(&self) -> Option<&'static str> {
+        match self.name {
+            "translate" => Some(
+                "translate: point(ctx.seconds * 100, 0) or translate: `${ctx.seconds * 100}px 0px`",
+            ),
+            "rotate" => Some("rotate: `${ctx.seconds * 90}deg`"),
+            "scale" => Some("scale: 1 + ctx.seconds or scale: `${1 + ctx.seconds} 1`"),
+            "transform" => Some(
+                "transform: `translateX(${ctx.seconds * 100}px) rotate(${ctx.seconds * 90}deg) skew(${ctx.seconds * 10}deg)`",
+            ),
+            _ => None,
         }
     }
 
@@ -499,6 +600,11 @@ pub fn property_spec(name: &str) -> PropertySpec<'_> {
         }
     }
     match name {
+        "motion-filter-frame" => {
+            spec.lowering = Lowering::Motion;
+            spec.geometry_reuse = Reuse::Rebuild;
+            spec.typed(&[T::Number], false)
+        }
         "motion-inline-image" => {
             spec.lowering = Lowering::Motion;
             spec.geometry_reuse = Reuse::Rebuild;
@@ -507,11 +613,13 @@ pub fn property_spec(name: &str) -> PropertySpec<'_> {
         "translate" | "rotate" | "scale" => {
             spec.impact = Impact::TRANSFORM;
             spec.geometry_reuse = Reuse::AcrossFrames;
-            // Typed inputs have fixed presence; CSS strings are static at admission.
+            // Typed inputs have fixed presence. CSS branches must expose their structure;
+            // cache/post-layout admission additionally checks containing-block presence.
+            spec.closed_css = true;
             spec.post_layout = true;
             spec.typed(
                 match name {
-                    "translate" => &[T::Length2, T::Length],
+                    "translate" => &[T::Length2, T::Length, T::Point, T::Vec2],
                     "rotate" => &[T::Angle],
                     _ => &[T::Number, T::Point, T::Length, T::Length2],
                 },
@@ -547,14 +655,52 @@ pub fn property_spec(name: &str) -> PropertySpec<'_> {
                 false,
             )
         }
-        "motion-path-anchor"
-        | "motion-path-angle-offset"
-        | "motion-velocity-blur-velocity"
-        | "motion-velocity-blur-shutter" => {
+        "motion-path-anchor" | "motion-path-angle-offset" => {
             spec.lowering = Lowering::Motion;
             spec.impact = Impact::COMPOSITE;
             spec.geometry_reuse = Reuse::Rebuild;
             spec
+        }
+        "motion-velocity-blur-auto"
+        | "motion-velocity-blur-velocity"
+        | "motion-velocity-blur-shutter" => {
+            spec.lowering = Lowering::Motion;
+            spec.impact = Impact::COMPOSITE;
+            spec.geometry_reuse = Reuse::AcrossFrames;
+            spec
+        }
+        "motion-chromatic-aberration-offset"
+        | "motion-glow-radius"
+        | "motion-glow-intensity"
+        | "motion-bloom-threshold"
+        | "motion-bloom-knee"
+        | "motion-bloom-intensity"
+        | "motion-bloom-radius"
+        | "motion-radial-blur-center-x"
+        | "motion-radial-blur-center-y"
+        | "motion-radial-blur-amount"
+        | "motion-film-grain-seed"
+        | "motion-film-grain-amount"
+        | "motion-film-grain-size"
+        | "motion-lens-distortion-k1"
+        | "motion-lens-distortion-k2" => {
+            spec.lowering = Lowering::Motion;
+            spec.impact = Impact::COMPOSITE;
+            spec.geometry_reuse = Reuse::AcrossFrames;
+            spec.typed(&[T::Number], false)
+        }
+        "motion-glow-color" => {
+            spec.lowering = Lowering::Motion;
+            spec.impact = Impact::COMPOSITE;
+            spec.geometry_reuse = Reuse::AcrossFrames;
+            spec.typed(&[T::Color], false)
+        }
+        "mix-blend-space" => {
+            spec.lowering = Lowering::Motion;
+            spec.impact = Impact::COMPOSITE;
+            spec.geometry_reuse = Reuse::AcrossFrames;
+            spec.post_layout = true;
+            spec.typed(&[T::String, T::Enum], false)
         }
         "paper-grain" | "contact-shadow" => {
             spec.lowering = Lowering::Motion;
@@ -628,7 +774,9 @@ pub(crate) fn layout_probe_value(
         return MotionValue::Str(source);
     }
     match types.get(expr.0 as usize).copied().flatten() {
-        Some(ExprType::Color) => MotionValue::Color(valle_draw::Rgba::new(0, 0, 0, 0)),
+        Some(ExprType::Color) => MotionValue::Color(valle_draw::program::AuthorColor::from_srgb8(
+            valle_draw::Rgba::new(0, 0, 0, 0),
+        )),
         Some(ExprType::String | ExprType::Enum) => MotionValue::Str("initial".into()),
         _ => MotionValue::Number(0.0),
     }

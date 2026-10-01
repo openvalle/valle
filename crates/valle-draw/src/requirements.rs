@@ -277,7 +277,10 @@ pub enum DestinationOperation {
         sampling: SamplingMode,
     },
     /// The effective source color is computed against the visible destination.
-    Blend { mode: BlendMode },
+    Blend {
+        mode: BlendMode,
+        space: crate::program::BlendSpace,
+    },
 }
 
 impl DestinationOperation {
@@ -318,6 +321,12 @@ pub enum DrawCapability {
     FilterBlur,
     FilterColorMatrix,
     FilterDropShadow,
+    FilterGlow,
+    FilterBloom,
+    FilterRadialBlur,
+    FilterFilmGrain,
+    FilterLensDistortion,
+    FilterChromaticAberration,
     FilterNoiseDisplacement,
     FilterVelocityBlur,
     MaskAlpha,
@@ -326,9 +335,10 @@ pub enum DrawCapability {
     GradientConic,
     GradientSpread,
     StrokeDash,
-    GeometryBatch,
+    InstanceBatch,
     BoxShadow,
     GroupShader,
+    Transition,
     MotionGlass,
 }
 

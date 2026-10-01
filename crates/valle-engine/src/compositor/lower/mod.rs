@@ -47,9 +47,10 @@ pub use program::{
     ProgramResource,
 };
 pub use program_frame::{
-    BOUND_PROGRAM_SCHEDULES_FORMAT_VERSION, BoundPlanResource, BoundProgramResource,
-    BoundProgramSchedule, BoundProgramSchedules, BoundProgramSurfaceAllocation,
-    BoundProgramSurfaceSlot, BoundSurfaceAllocation, BoundSurfaceSlot, ProgramBindingError,
+    BOUND_PROGRAM_SCHEDULES_FORMAT_VERSION, BoundExecutionPass, BoundPlanResource,
+    BoundProgramExecutionPass, BoundProgramResource, BoundProgramSchedule, BoundProgramSchedules,
+    BoundProgramSurfaceAllocation, BoundProgramSurfaceSlot, BoundSurfaceAllocation,
+    BoundSurfaceSlot, ProgramBindingError,
 };
 pub use schedule::{
     ProgramAllocationReason, ProgramPassInterval, ProgramResourceStorage, ProgramSchedule,

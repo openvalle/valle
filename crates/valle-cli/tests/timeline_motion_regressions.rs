@@ -304,7 +304,7 @@ fn model3d_assets_render_from_motion_and_timeline() {
         ("corrupt.glb", vec![0; 32], "magic"),
         (
             "oversize.glb",
-            vec![0; 16 * 1024 * 1024 + 1],
+            vec![0; valle_motion::scene3d::MAX_MODEL_BYTES as usize + 1],
             "GLB bytes must be <=",
         ),
     ] {

@@ -4,12 +4,78 @@ use std::sync::OnceLock;
 static SRGB8_LINEAR_LUT: OnceLock<[f64; 256]> = OnceLock::new();
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(deny_unknown_fields)]
 pub struct LinearColor {
     pub red: f32,
     pub green: f32,
     pub blue: f32,
     pub alpha: f32,
+}
+
+/// Author color in straight-alpha linear sRGB. Keeping the unassociated channels preserves the
+/// hue of a fully transparent endpoint until interpolation applies alpha weighting. DrawProgram
+/// paints convert this to premultiplied linear Rec.2020 only at the paint boundary.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(deny_unknown_fields)]
+pub struct AuthorColor {
+    pub red: f64,
+    pub green: f64,
+    pub blue: f64,
+    pub alpha: f64,
+}
+
+impl AuthorColor {
+    pub fn from_srgb8(color: crate::Rgba) -> Self {
+        Self {
+            red: decode_srgb_channel(f64::from(color.r) / 255.0),
+            green: decode_srgb_channel(f64::from(color.g) / 255.0),
+            blue: decode_srgb_channel(f64::from(color.b) / 255.0),
+            alpha: f64::from(color.a) / 255.0,
+        }
+    }
+
+    pub fn is_finite(self) -> bool {
+        self.red.is_finite()
+            && self.green.is_finite()
+            && self.blue.is_finite()
+            && self.alpha.is_finite()
+            && (0.0..=1.0).contains(&self.alpha)
+    }
+
+    pub fn to_working(self) -> LinearColor {
+        from_linear_srgb([self.red, self.green, self.blue], self.alpha as f32)
+    }
+
+    pub fn with_opacity(self, opacity: f64) -> Self {
+        Self {
+            alpha: self.alpha * opacity.clamp(0.0, 1.0),
+            ..self
+        }
+    }
+
+    pub fn to_srgb_straight(self) -> [f32; 4] {
+        [
+            encode_srgb_channel(self.red) as f32,
+            encode_srgb_channel(self.green) as f32,
+            encode_srgb_channel(self.blue) as f32,
+            self.alpha as f32,
+        ]
+    }
+
+    /// Only for CSS/layout and existing 8-bit leaf interfaces. Motion paint uses `to_working`.
+    pub fn to_srgb8(self) -> crate::Rgba {
+        let byte = |linear: f64| {
+            (encode_srgb_channel(linear).clamp(0.0, 1.0) * 255.0 + 1e-12).round() as u8
+        };
+        crate::Rgba::new(
+            byte(self.red),
+            byte(self.green),
+            byte(self.blue),
+            (self.alpha.clamp(0.0, 1.0) * 255.0 + 1e-12).round() as u8,
+        )
+    }
 }
 
 impl LinearColor {
@@ -70,7 +136,7 @@ pub fn decode_srgb_straight(color: [f32; 4]) -> [f32; 4] {
     ]
 }
 
-fn decode_srgb_channel(encoded: f64) -> f64 {
+pub(super) fn decode_srgb_channel(encoded: f64) -> f64 {
     if encoded.abs() <= 0.04045 {
         encoded / 12.92
     } else {
@@ -78,7 +144,15 @@ fn decode_srgb_channel(encoded: f64) -> f64 {
     }
 }
 
-fn from_linear_srgb(srgb: [f64; 3], alpha: f32) -> LinearColor {
+pub(super) fn encode_srgb_channel(linear: f64) -> f64 {
+    if linear.abs() <= 0.0031308 {
+        linear * 12.92
+    } else {
+        linear.signum() * (1.055 * crate::math::pow(linear.abs(), 1.0 / 2.4) - 0.055)
+    }
+}
+
+pub(super) fn from_linear_srgb(srgb: [f64; 3], alpha: f32) -> LinearColor {
     // Rec.709/sRGB D65 linear primaries -> Rec.2020 D65 linear primaries.
     let rec2020 = [
         0.627_403_895_934_699 * srgb[0]

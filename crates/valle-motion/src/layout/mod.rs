@@ -2,20 +2,32 @@
 //! caches. This module produces no pixels. Dynamic values come from [`crate::MotionContext`]; the
 //! CSS animation clock stays at zero.
 
+mod activation;
 pub(crate) mod bridge;
+mod dependencies;
+mod hit;
 mod reuse;
+mod review;
 mod scene;
+mod temporal;
 mod transform;
+pub use dependencies::{
+    NodeDependencies, SceneDependencies, SceneReference, SceneReferenceKind, TemporalWindow,
+};
+pub use hit::layout_box_at_point;
 pub use reuse::LayoutCache;
+pub use review::{
+    MotionReview, MotionReviewIssue, MotionTrajectory, MotionTrajectoryPoint, review_motion,
+};
 
 pub use bridge::{
     GlassLayoutEnvironment, GlassLayoutField, GlassLayoutForeground, GlassLayoutFrame,
     GlassLayoutMaterial, GlassLayoutMotion, GlassLayoutSurface, LayoutOptions, LayoutTree,
-    Scene3DFrameRequest, Scene3DRequest, StyleCache,
+    ResolvedUnit, Scene3DFrameRequest, Scene3DRequest, StyleCache,
 };
 pub use scene::{
-    LayoutError, PreparedScene, build_tree, layout_boxes, prepare as prepare_scene,
-    prepare_owned as prepare_owned_scene,
+    FrameEvaluationStats, LayoutError, PreparedScene, build_tree, layout_boxes,
+    prepare as prepare_scene, prepare_owned as prepare_owned_scene,
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub use scene::{LayoutTimings, build_tree_profiled};

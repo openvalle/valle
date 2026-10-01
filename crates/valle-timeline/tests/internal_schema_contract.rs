@@ -277,7 +277,11 @@ fn checked_schema_artifacts_are_current() {
             .keys()
             .copied()
             .collect::<BTreeSet<_>>(),
-        BTreeSet::from(["timeline.schema-bundle.json", "timeline.generated.ts"])
+        BTreeSet::from([
+            "timeline.schema-bundle.json",
+            "timeline.generated.ts",
+            "transition-parameters.generated.json"
+        ])
     );
     assert_eq!(
         generated_internal_artifacts()

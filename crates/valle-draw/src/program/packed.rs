@@ -2,9 +2,9 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use super::{
-    BatchGeometry, BatchInstance, DrawProgram, DrawProgramError, GeometryBatchNode, GlyphRun,
-    Group, ImageNode, Node, NodeId, Paint, PathData, PathNode, RuntimeShaderNode, Scene3dNode,
-    ShadowNode,
+    Affine2d, DrawProgram, DrawProgramError, GlyphRun, Group, ImageNode, InstanceBatchNode,
+    InstanceColumns, InstanceShape, Node, NodeId, Paint, PathData, PathNode, RuntimeShaderNode,
+    Scene3dNode, ShadowNode,
     validate::{
         MAX_BATCH_INSTANCES, MAX_NODES, MAX_PACKED_BYTES, MAX_PAINTS, MAX_PATHS, MAX_ROOTS,
     },
@@ -17,9 +17,11 @@ const MAGIC: &[u8; 8] = b"VLDRAW\0\0";
 const ENDIAN_MARKER: u32 = 0x0102_0304;
 const HEADER_LEN: usize = 28;
 const ENTRY_LEN: usize = 24;
-const SECTION_COUNT: usize = 7;
+const SECTION_COUNT: usize = 9;
 const TABLE_END: usize = HEADER_LEN + ENTRY_LEN * SECTION_COUNT;
-const BATCH_INSTANCE_BYTES: usize = 48;
+const BATCH_INSTANCE_BYTES: usize = 72;
+const STROKE_COLOR_BYTES: usize = 16;
+const DASH_OFFSET_BYTES: usize = 4;
 
 const ROOTS: u16 = 1;
 const NODES: u16 = 2;
@@ -28,10 +30,14 @@ const PAINTS: u16 = 4;
 const VIEWPORT: u16 = 5;
 const REQUIREMENTS: u16 = 6;
 const BATCH_INSTANCES: u16 = 7;
+const STROKE_COLORS: u16 = 8;
+const DASH_OFFSETS: u16 = 9;
 const SECTION_KINDS: [u16; SECTION_COUNT] = [
     ROOTS,
     NODES,
     BATCH_INSTANCES,
+    STROKE_COLORS,
+    DASH_OFFSETS,
     PATHS,
     PAINTS,
     VIEWPORT,
@@ -47,9 +53,12 @@ struct PackedBatchRange {
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct PackedGeometryBatchNode {
-    geometry: BatchGeometry,
+struct PackedInstanceBatchNode {
+    shape: InstanceShape,
     instances: PackedBatchRange,
+    stroke_colors: Option<PackedBatchRange>,
+    dash_offsets: Option<PackedBatchRange>,
+    path_style: Option<super::InstancePathStyle>,
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -62,7 +71,7 @@ struct PackedGeometryBatchNode {
 enum PackedNode {
     Group(Group),
     Path(PathNode),
-    GeometryBatch(PackedGeometryBatchNode),
+    InstanceBatch(PackedInstanceBatchNode),
     Image(ImageNode),
     GlyphRun(GlyphRun),
     Shadow(ShadowNode),
@@ -132,13 +141,15 @@ pub(crate) fn encode(program: &DrawProgram) -> Result<Vec<u8>, PackedDrawError> 
     // DrawProgram is an immutable admitted arena: its fields are crate-private, and both builder
     // finish and packed decode derive/validate the complete geometry and requirements tables.
     // Encoding therefore preserves an established type invariant instead of re-walking every
-    // node (notably large GeometryBatch tables) on every frame.
-    let (nodes, batch_instances) = encode_nodes(&program.nodes)?;
+    // node (notably large InstanceBatch tables) on every frame.
+    let (nodes, batch_instances, stroke_colors, dash_offsets) = encode_nodes(&program.nodes)?;
 
     let sections = [
         encode_section(ROOTS, program.roots.len(), &program.roots)?,
         encode_section(NODES, nodes.len(), &nodes)?,
         encode_batch_instances(&batch_instances)?,
+        encode_stroke_colors(&stroke_colors)?,
+        encode_dash_offsets(&dash_offsets)?,
         encode_section(PATHS, program.paths.len(), &program.paths)?,
         encode_section(PAINTS, program.paints.len(), &program.paints)?,
         encode_section(VIEWPORT, 1, &program.viewport)?,
@@ -281,7 +292,7 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<DrawProgram, PackedDrawError> {
         ));
     }
 
-    for entry_index in [0usize, 1, 3, 4] {
+    for entry_index in [0usize, 1, 5, 6] {
         let entry = entries[entry_index];
         let actual = count_top_level_array(section_bytes(bytes, entry)).map_err(|reason| {
             PackedDrawError::InvalidSectionTable(format!("section {}: {reason}", entry.kind))
@@ -293,12 +304,12 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<DrawProgram, PackedDrawError> {
             )));
         }
     }
-    if entries[5].count != 1 {
+    if entries[7].count != 1 {
         return Err(PackedDrawError::InvalidSectionTable(
             "viewport section must contain exactly one object".into(),
         ));
     }
-    if entries[6].count != 1 {
+    if entries[8].count != 1 {
         return Err(PackedDrawError::InvalidSectionTable(
             "requirements section must contain exactly one object".into(),
         ));
@@ -307,15 +318,17 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<DrawProgram, PackedDrawError> {
     let roots: Vec<NodeId> = decode_section(bytes, entries[0])?;
     let packed_nodes: Vec<PackedNode> = decode_section(bytes, entries[1])?;
     let batch_instances = decode_batch_instances(bytes, entries[2])?;
-    let nodes = decode_nodes(packed_nodes, batch_instances)?;
-    let paths: Vec<PathData> = decode_section(bytes, entries[3])?;
-    let paints: Vec<Paint> = decode_section(bytes, entries[4])?;
-    let viewport: crate::Rect = decode_section(bytes, entries[5])?;
-    let requirements: DrawRequirements = decode_section(bytes, entries[6])?;
+    let stroke_colors = decode_stroke_colors(bytes, entries[3])?;
+    let dash_offsets = decode_dash_offsets(bytes, entries[4])?;
+    let nodes = decode_nodes(packed_nodes, batch_instances, stroke_colors, dash_offsets)?;
+    let paths: Vec<PathData> = decode_section(bytes, entries[5])?;
+    let paints: Vec<Paint> = decode_section(bytes, entries[6])?;
+    let viewport: crate::Rect = decode_section(bytes, entries[7])?;
+    let requirements: DrawRequirements = decode_section(bytes, entries[8])?;
     if roots.len() != entries[0].count
         || nodes.len() != entries[1].count
-        || paths.len() != entries[3].count
-        || paints.len() != entries[4].count
+        || paths.len() != entries[5].count
+        || paints.len() != entries[6].count
     {
         return Err(PackedDrawError::InvalidSectionTable(
             "decoded section count changed during deserialization".into(),
@@ -355,14 +368,26 @@ pub(crate) fn content_hash(program: &DrawProgram) -> Result<[u8; 32], PackedDraw
     Ok(Sha256::digest(bytes).into())
 }
 
-fn encode_nodes(nodes: &[Node]) -> Result<(Vec<PackedNode>, Vec<BatchInstance>), PackedDrawError> {
+fn encode_nodes(
+    nodes: &[Node],
+) -> Result<
+    (
+        Vec<PackedNode>,
+        InstanceColumns,
+        Vec<super::LinearColor>,
+        Vec<f32>,
+    ),
+    PackedDrawError,
+> {
     let mut packed = Vec::with_capacity(nodes.len());
-    let mut instances = Vec::new();
+    let mut instances = InstanceColumns::with_capacity(0);
+    let mut stroke_colors = Vec::new();
+    let mut dash_offsets = Vec::new();
     for node in nodes {
         packed.push(match node {
             Node::Group(value) => PackedNode::Group(value.clone()),
             Node::Path(value) => PackedNode::Path(value.clone()),
-            Node::GeometryBatch(value) => {
+            Node::InstanceBatch(value) => {
                 let start = u32::try_from(instances.len()).map_err(|_| {
                     PackedDrawError::SectionCountBudget {
                         kind: BATCH_INSTANCES,
@@ -377,10 +402,48 @@ fn encode_nodes(nodes: &[Node]) -> Result<(Vec<PackedNode>, Vec<BatchInstance>),
                         limit: MAX_BATCH_INSTANCES,
                     }
                 })?;
-                instances.extend_from_slice(&value.instances);
-                PackedNode::GeometryBatch(PackedGeometryBatchNode {
-                    geometry: value.geometry,
+                instances
+                    .transforms
+                    .extend_from_slice(&value.instances.transforms);
+                instances.colors.extend_from_slice(&value.instances.colors);
+                instances
+                    .opacities
+                    .extend_from_slice(&value.instances.opacities);
+                instances
+                    .stroke_widths
+                    .extend_from_slice(&value.instances.stroke_widths);
+                let color_range = if value.instances.stroke_colors.is_empty() {
+                    None
+                } else {
+                    let start = u32::try_from(stroke_colors.len()).map_err(|_| {
+                        PackedDrawError::SectionCountBudget {
+                            kind: STROKE_COLORS,
+                            actual: stroke_colors.len(),
+                            limit: MAX_BATCH_INSTANCES,
+                        }
+                    })?;
+                    stroke_colors.extend_from_slice(&value.instances.stroke_colors);
+                    Some(PackedBatchRange { start, count })
+                };
+                let dash_range = if value.instances.dash_offsets.is_empty() {
+                    None
+                } else {
+                    let start = u32::try_from(dash_offsets.len()).map_err(|_| {
+                        PackedDrawError::SectionCountBudget {
+                            kind: DASH_OFFSETS,
+                            actual: dash_offsets.len(),
+                            limit: MAX_BATCH_INSTANCES,
+                        }
+                    })?;
+                    dash_offsets.extend_from_slice(&value.instances.dash_offsets);
+                    Some(PackedBatchRange { start, count })
+                };
+                PackedNode::InstanceBatch(PackedInstanceBatchNode {
+                    shape: value.shape.clone(),
                     instances: PackedBatchRange { start, count },
+                    stroke_colors: color_range,
+                    dash_offsets: dash_range,
+                    path_style: value.path_style.clone(),
                 })
             }
             Node::Image(value) => PackedNode::Image(value.clone()),
@@ -397,40 +460,75 @@ fn encode_nodes(nodes: &[Node]) -> Result<(Vec<PackedNode>, Vec<BatchInstance>),
             limit: MAX_BATCH_INSTANCES,
         });
     }
-    Ok((packed, instances))
+    Ok((packed, instances, stroke_colors, dash_offsets))
 }
 
 fn decode_nodes(
     nodes: Vec<PackedNode>,
-    batch_instances: Vec<BatchInstance>,
+    batch_instances: InstanceColumns,
+    stroke_colors: Vec<super::LinearColor>,
+    dash_offsets: Vec<f32>,
 ) -> Result<Vec<Node>, PackedDrawError> {
     let total_instances = batch_instances.len();
-    let mut instances = batch_instances.into_iter();
     let mut consumed = 0usize;
+    let mut colors_consumed = 0usize;
+    let mut offsets_consumed = 0usize;
     let mut decoded = Vec::with_capacity(nodes.len());
     for node in nodes {
         decoded.push(match node {
             PackedNode::Group(value) => Node::Group(value),
             PackedNode::Path(value) => Node::Path(value),
-            PackedNode::GeometryBatch(value) => {
+            PackedNode::InstanceBatch(value) => {
                 let start = value.instances.start as usize;
                 let count = value.instances.count as usize;
                 if start != consumed || count > total_instances.saturating_sub(consumed) {
                     return Err(PackedDrawError::InvalidSectionTable(
-                        "GeometryBatch ranges do not canonically partition the instance table"
+                        "InstanceBatch ranges do not canonically partition the instance table"
                             .into(),
                     ));
                 }
-                let values: Vec<_> = instances.by_ref().take(count).collect();
-                if values.len() != count {
-                    return Err(PackedDrawError::InvalidSectionTable(
-                        "GeometryBatch range exceeds the instance table".into(),
-                    ));
-                }
                 consumed += count;
-                Node::GeometryBatch(GeometryBatchNode {
-                    geometry: value.geometry,
-                    instances: values,
+                let row_stroke_colors = if let Some(range) = value.stroke_colors {
+                    let color_start = range.start as usize;
+                    if color_start != colors_consumed
+                        || range.count as usize != count
+                        || count > stroke_colors.len().saturating_sub(colors_consumed)
+                    {
+                        return Err(PackedDrawError::InvalidSectionTable(
+                            "InstanceBatch stroke color ranges do not canonically partition the color table".into(),
+                        ));
+                    }
+                    colors_consumed += count;
+                    stroke_colors[color_start..colors_consumed].to_vec()
+                } else {
+                    Vec::new()
+                };
+                let row_dash_offsets = if let Some(range) = value.dash_offsets {
+                    let offset_start = range.start as usize;
+                    if offset_start != offsets_consumed
+                        || range.count as usize != count
+                        || count > dash_offsets.len().saturating_sub(offsets_consumed)
+                    {
+                        return Err(PackedDrawError::InvalidSectionTable(
+                            "InstanceBatch dash ranges do not canonically partition the offset table".into(),
+                        ));
+                    }
+                    offsets_consumed += count;
+                    dash_offsets[offset_start..offsets_consumed].to_vec()
+                } else {
+                    Vec::new()
+                };
+                Node::InstanceBatch(InstanceBatchNode {
+                    shape: value.shape,
+                    path_style: value.path_style,
+                    instances: InstanceColumns {
+                        transforms: batch_instances.transforms[start..consumed].to_vec(),
+                        colors: batch_instances.colors[start..consumed].to_vec(),
+                        stroke_colors: row_stroke_colors,
+                        dash_offsets: row_dash_offsets,
+                        opacities: batch_instances.opacities[start..consumed].to_vec(),
+                        stroke_widths: batch_instances.stroke_widths[start..consumed].to_vec(),
+                    },
                 })
             }
             PackedNode::Image(value) => Node::Image(value),
@@ -440,15 +538,18 @@ fn decode_nodes(
             PackedNode::Scene3d(value) => Node::Scene3d(value),
         });
     }
-    if consumed != total_instances || instances.next().is_some() {
+    if consumed != total_instances
+        || colors_consumed != stroke_colors.len()
+        || offsets_consumed != dash_offsets.len()
+    {
         return Err(PackedDrawError::InvalidSectionTable(
-            "unreferenced GeometryBatch instances remain".into(),
+            "unreferenced InstanceBatch instances remain".into(),
         ));
     }
     Ok(decoded)
 }
 
-fn encode_batch_instances(instances: &[BatchInstance]) -> Result<EncodedSection, PackedDrawError> {
+fn encode_batch_instances(instances: &InstanceColumns) -> Result<EncodedSection, PackedDrawError> {
     let byte_len =
         instances
             .len()
@@ -459,18 +560,21 @@ fn encode_batch_instances(instances: &[BatchInstance]) -> Result<EncodedSection,
             })?;
     check_section_budget(BATCH_INSTANCES, instances.len(), byte_len)?;
     let mut bytes = Vec::with_capacity(byte_len);
-    for instance in instances {
-        for value in instance.position.into_iter().chain(instance.size) {
+    for transform in &instances.transforms {
+        for value in transform.0 {
             bytes.extend_from_slice(&value.to_bits().to_le_bytes());
         }
-        for value in [
-            instance.color.red,
-            instance.color.green,
-            instance.color.blue,
-            instance.color.alpha,
-        ] {
+    }
+    for color in &instances.colors {
+        for value in [color.red, color.green, color.blue, color.alpha] {
             bytes.extend_from_slice(&value.to_bits().to_le_bytes());
         }
+    }
+    for opacity in &instances.opacities {
+        bytes.extend_from_slice(&opacity.to_bits().to_le_bytes());
+    }
+    for width in &instances.stroke_widths {
+        bytes.extend_from_slice(&width.to_bits().to_le_bytes());
     }
     debug_assert_eq!(bytes.len(), byte_len);
     Ok(EncodedSection {
@@ -480,50 +584,144 @@ fn encode_batch_instances(instances: &[BatchInstance]) -> Result<EncodedSection,
     })
 }
 
+fn encode_stroke_colors(colors: &[super::LinearColor]) -> Result<EncodedSection, PackedDrawError> {
+    let byte_len =
+        colors
+            .len()
+            .checked_mul(STROKE_COLOR_BYTES)
+            .ok_or(PackedDrawError::TooLarge {
+                actual: usize::MAX,
+                limit: MAX_PACKED_BYTES,
+            })?;
+    check_section_budget(STROKE_COLORS, colors.len(), byte_len)?;
+    let mut bytes = Vec::with_capacity(byte_len);
+    for color in colors {
+        for value in [color.red, color.green, color.blue, color.alpha] {
+            bytes.extend_from_slice(&value.to_bits().to_le_bytes());
+        }
+    }
+    Ok(EncodedSection {
+        kind: STROKE_COLORS,
+        count: colors.len(),
+        bytes,
+    })
+}
+
+fn encode_dash_offsets(offsets: &[f32]) -> Result<EncodedSection, PackedDrawError> {
+    let byte_len =
+        offsets
+            .len()
+            .checked_mul(DASH_OFFSET_BYTES)
+            .ok_or(PackedDrawError::TooLarge {
+                actual: usize::MAX,
+                limit: MAX_PACKED_BYTES,
+            })?;
+    check_section_budget(DASH_OFFSETS, offsets.len(), byte_len)?;
+    let mut bytes = Vec::with_capacity(byte_len);
+    for offset in offsets {
+        bytes.extend_from_slice(&offset.to_bits().to_le_bytes());
+    }
+    Ok(EncodedSection {
+        kind: DASH_OFFSETS,
+        count: offsets.len(),
+        bytes,
+    })
+}
+
+fn decode_dash_offsets(bytes: &[u8], entry: SectionEntry) -> Result<Vec<f32>, PackedDrawError> {
+    if entry.length != entry.count * DASH_OFFSET_BYTES {
+        return Err(PackedDrawError::InvalidSectionTable(
+            "InstanceBatch dash offset section length does not match its count".into(),
+        ));
+    }
+    Ok(section_bytes(bytes, entry)
+        .chunks_exact(DASH_OFFSET_BYTES)
+        .map(|row| {
+            f32::from_bits(u32::from_le_bytes(
+                row.try_into().expect("fixed dash offset"),
+            ))
+        })
+        .collect())
+}
+
+fn decode_stroke_colors(
+    bytes: &[u8],
+    entry: SectionEntry,
+) -> Result<Vec<super::LinearColor>, PackedDrawError> {
+    if entry.length != entry.count * STROKE_COLOR_BYTES {
+        return Err(PackedDrawError::InvalidSectionTable(
+            "InstanceBatch stroke color section length does not match its count".into(),
+        ));
+    }
+    let section = section_bytes(bytes, entry);
+    let mut colors = Vec::with_capacity(entry.count);
+    for row in section.chunks_exact(STROKE_COLOR_BYTES) {
+        let channel = |offset: usize| {
+            f32::from_bits(u32::from_le_bytes(
+                row[offset..offset + 4]
+                    .try_into()
+                    .expect("fixed stroke color channel"),
+            ))
+        };
+        colors.push(super::LinearColor {
+            red: channel(0),
+            green: channel(4),
+            blue: channel(8),
+            alpha: channel(12),
+        });
+    }
+    Ok(colors)
+}
+
 fn decode_batch_instances(
     bytes: &[u8],
     entry: SectionEntry,
-) -> Result<Vec<BatchInstance>, PackedDrawError> {
+) -> Result<InstanceColumns, PackedDrawError> {
     let expected = entry
         .count
         .checked_mul(BATCH_INSTANCE_BYTES)
         .ok_or_else(|| {
             PackedDrawError::InvalidSectionTable(
-                "GeometryBatch instance byte length overflows".into(),
+                "InstanceBatch instance byte length overflows".into(),
             )
         })?;
     if entry.length != expected {
         return Err(PackedDrawError::InvalidSectionTable(format!(
-            "GeometryBatch section has {} bytes for {} instances; expected {expected}",
+            "InstanceBatch section has {} bytes for {} instances; expected {expected}",
             entry.length, entry.count
         )));
     }
-    let mut result = Vec::with_capacity(entry.count);
-    for chunk in section_bytes(bytes, entry).chunks_exact(BATCH_INSTANCE_BYTES) {
+    let section = section_bytes(bytes, entry);
+    let mut result = InstanceColumns::with_capacity(entry.count);
+    let color_base = entry.count * 48;
+    let opacity_base = entry.count * 64;
+    let stroke_base = entry.count * 68;
+    for index in 0..entry.count {
         let f64_at = |offset: usize| {
             f64::from_bits(u64::from_le_bytes(
-                chunk[offset..offset + 8]
+                section[offset..offset + 8]
                     .try_into()
-                    .expect("fixed GeometryBatch f64 range"),
+                    .expect("fixed InstanceBatch f64 range"),
             ))
         };
         let f32_at = |offset: usize| {
             f32::from_bits(u32::from_le_bytes(
-                chunk[offset..offset + 4]
+                section[offset..offset + 4]
                     .try_into()
-                    .expect("fixed GeometryBatch f32 range"),
+                    .expect("fixed InstanceBatch f32 range"),
             ))
         };
-        result.push(BatchInstance {
-            position: [f64_at(0), f64_at(8)],
-            size: [f64_at(16), f64_at(24)],
-            color: super::LinearColor {
-                red: f32_at(32),
-                green: f32_at(36),
-                blue: f32_at(40),
-                alpha: f32_at(44),
-            },
+        result.transforms.push(Affine2d(std::array::from_fn(|slot| {
+            f64_at(index * 48 + slot * 8)
+        })));
+        result.colors.push(super::LinearColor {
+            red: f32_at(color_base + index * 16),
+            green: f32_at(color_base + index * 16 + 4),
+            blue: f32_at(color_base + index * 16 + 8),
+            alpha: f32_at(color_base + index * 16 + 12),
         });
+        result.opacities.push(f32_at(opacity_base + index * 4));
+        result.stroke_widths.push(f32_at(stroke_base + index * 4));
     }
     Ok(result)
 }
@@ -573,6 +771,11 @@ fn check_section_budget(kind: u16, count: usize, bytes: usize) -> Result<(), Pac
             MAX_BATCH_INSTANCES,
             MAX_BATCH_INSTANCES * BATCH_INSTANCE_BYTES,
         ),
+        STROKE_COLORS => (
+            MAX_BATCH_INSTANCES,
+            MAX_BATCH_INSTANCES * STROKE_COLOR_BYTES,
+        ),
+        DASH_OFFSETS => (MAX_BATCH_INSTANCES, MAX_BATCH_INSTANCES * DASH_OFFSET_BYTES),
         PATHS => (MAX_PATHS, 48 * 1024 * 1024),
         PAINTS => (MAX_PAINTS, 16 * 1024 * 1024),
         VIEWPORT => (1, 1024),
@@ -725,16 +928,29 @@ mod tests {
 
     fn batch_fixture(count: usize) -> DrawProgram {
         let mut builder = DrawProgramBuilder::new(Rect::new(0.0, 0.0, 2048.0, 2048.0));
-        let instances = (0..count)
-            .map(|index| BatchInstance {
-                position: [(index % 100) as f64 * 10.0, (index / 100) as f64 * 10.0],
-                size: [2.0, 2.0],
-                color: super::super::LinearColor::new(0.25, 0.5, 0.75, 1.0),
-            })
-            .collect();
-        let root = builder.push_node(Node::GeometryBatch(GeometryBatchNode {
-            geometry: BatchGeometry::Circle,
+        let instances = InstanceColumns {
+            transforms: (0..count)
+                .map(|index| {
+                    Affine2d([
+                        2.0,
+                        0.0,
+                        0.0,
+                        2.0,
+                        (index % 100) as f64 * 10.0,
+                        (index / 100) as f64 * 10.0,
+                    ])
+                })
+                .collect(),
+            colors: vec![super::super::LinearColor::new(0.25, 0.5, 0.75, 1.0); count],
+            stroke_colors: Vec::new(),
+            dash_offsets: Vec::new(),
+            opacities: vec![1.0; count],
+            stroke_widths: vec![0.0; count],
+        };
+        let root = builder.push_node(Node::InstanceBatch(InstanceBatchNode {
+            shape: InstanceShape::Circle,
             instances,
+            path_style: None,
         }));
         builder.add_root(root);
         builder.finish().unwrap()
@@ -774,20 +990,113 @@ mod tests {
     }
 
     #[test]
-    fn geometry_batches_roundtrip_through_the_fixed_width_side_table() {
+    fn instance_batches_roundtrip_through_columnar_side_table() {
         let program = batch_fixture(10_000);
         let bytes = encode(&program).unwrap();
         let batch_entry = HEADER_LEN + ENTRY_LEN * 2;
         assert_eq!(u16_at(&bytes, batch_entry), BATCH_INSTANCES);
         assert_eq!(u32_at(&bytes, batch_entry + 4), 10_000);
-        assert_eq!(u64_at(&bytes, batch_entry + 16), 480_000);
+        assert_eq!(u64_at(&bytes, batch_entry + 16), 720_000);
         assert_eq!(decode(&bytes).unwrap(), program);
-        // The payload stays near the 48-byte physical instance layout instead of expanding each
-        // instance into a generic JSON object with repeated field names.
+        // Matrices, colors, opacities, and stroke widths occupy contiguous columns rather than
+        // repeating JSON field names for every instance.
         assert!(
-            bytes.len() < 500_000,
+            bytes.len() < 800_000,
             "packed batch is {} bytes",
             bytes.len()
         );
+    }
+
+    #[test]
+    fn affine_round_rect_and_stroke_columns_roundtrip_and_fail_closed() {
+        let build = |batch: InstanceBatchNode| {
+            let mut builder = DrawProgramBuilder::new(Rect::new(0.0, 0.0, 64.0, 64.0));
+            let root = builder.push_node(Node::InstanceBatch(batch));
+            builder.add_root(root);
+            builder.finish()
+        };
+        let batch = InstanceBatchNode {
+            shape: InstanceShape::RoundRect(super::super::RoundRect::circular(
+                Rect::new(0.0, 0.0, 1.0, 1.0),
+                [0.2; 4],
+            )),
+            instances: InstanceColumns {
+                transforms: vec![Affine2d([12.0, 3.0, 2.0, 10.0, 4.0, 5.0])],
+                colors: vec![super::super::LinearColor::new(0.25, 0.5, 0.75, 1.0)],
+                stroke_colors: Vec::new(),
+                dash_offsets: Vec::new(),
+                opacities: vec![0.5],
+                stroke_widths: vec![0.1],
+            },
+            path_style: None,
+        };
+        let program = build(batch.clone()).unwrap();
+        assert_eq!(decode(&encode(&program).unwrap()).unwrap(), program);
+
+        let mut distinct = batch.clone();
+        distinct.instances.stroke_colors = vec![super::super::LinearColor::new(0.9, 0.1, 0.0, 1.0)];
+        let program = build(distinct.clone()).unwrap();
+        let bytes = encode(&program).unwrap();
+        let color_entry = HEADER_LEN + ENTRY_LEN * 3;
+        assert_eq!(u16_at(&bytes, color_entry), STROKE_COLORS);
+        assert_eq!(u32_at(&bytes, color_entry + 4), 1);
+        assert_eq!(u64_at(&bytes, color_entry + 16), STROKE_COLOR_BYTES as u64);
+        assert_eq!(decode(&bytes).unwrap(), program);
+        distinct
+            .instances
+            .stroke_colors
+            .push(super::super::LinearColor::new(0.1, 0.9, 0.0, 1.0));
+        assert!(build(distinct).is_err());
+
+        let mut mismatched = batch.clone();
+        mismatched.instances.stroke_widths.clear();
+        assert!(build(mismatched).is_err());
+        let mut singular = batch;
+        singular.instances.transforms[0] = Affine2d([0.0, 0.0, 0.0, 10.0, 4.0, 5.0]);
+        assert!(build(singular).is_err());
+    }
+
+    #[test]
+    fn path_style_and_dash_phase_use_only_an_optional_side_table() {
+        let build = |dash: Vec<f32>, offsets: Vec<f32>| {
+            let mut builder = DrawProgramBuilder::new(Rect::new(0.0, 0.0, 64.0, 64.0));
+            let path = builder.push_path(PathData {
+                verbs: vec![
+                    super::super::PathVerb::MoveTo,
+                    super::super::PathVerb::LineTo,
+                ],
+                points: vec![[0.0, 0.0], [10.0, 0.0]],
+            });
+            let root = builder.push_node(Node::InstanceBatch(InstanceBatchNode {
+                shape: InstanceShape::Path(path),
+                instances: InstanceColumns {
+                    transforms: vec![Affine2d([1.0, 0.0, 0.0, 1.0, 5.0, 5.0])],
+                    colors: vec![super::super::LinearColor::new(1.0, 0.0, 0.0, 1.0)],
+                    stroke_colors: Vec::new(),
+                    dash_offsets: offsets,
+                    opacities: vec![1.0],
+                    stroke_widths: vec![1.5],
+                },
+                path_style: Some(super::super::InstancePathStyle {
+                    fill: false,
+                    dash,
+                    dash_offset: 0.0,
+                    cap: super::super::StrokeCap::Round,
+                    join: super::super::StrokeJoin::Bevel,
+                    miter_limit: 6.0,
+                }),
+            }));
+            builder.add_root(root);
+            builder.finish()
+        };
+        let program = build(vec![3.0, 2.0], vec![1.25]).unwrap();
+        let bytes = encode(&program).unwrap();
+        let entry = HEADER_LEN + ENTRY_LEN * 4;
+        assert_eq!(u16_at(&bytes, entry), DASH_OFFSETS);
+        assert_eq!(u32_at(&bytes, entry + 4), 1);
+        assert_eq!(u64_at(&bytes, entry + 16), DASH_OFFSET_BYTES as u64);
+        assert_eq!(decode(&bytes).unwrap(), program);
+        assert!(build(vec![0.0, 0.0], vec![1.25]).is_err());
+        assert!(build(vec![3.0, 2.0], vec![1.25, 2.0]).is_err());
     }
 }

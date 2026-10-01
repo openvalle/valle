@@ -62,6 +62,77 @@ fn pbr_configuration_is_frozen_and_hemisphere_intensity_uses_frame_binding() {
 }
 
 #[test]
+fn directional_shadow_setting_is_static_and_frozen_in_scene() {
+    let source = SOURCE
+        .replace("toneMapping:\"aces\"", "toneMapping:\"aces\",shadows:true")
+        .replace(
+            "</Scene3D>",
+            "<DirectionalLight direction={[1,0,1]} intensity={1}/></Scene3D>",
+        );
+    let artifact = compile_motion(&source).unwrap().artifact;
+    artifact.validate().unwrap();
+    let scene = artifact
+        .nodes
+        .iter()
+        .find_map(|node| match &node.kind {
+            NodeKind::Scene3D { scene, .. } => Some(scene),
+            _ => None,
+        })
+        .unwrap();
+    assert!(scene.pbr.shadows);
+    assert_eq!(scene.lights.last(), Some(&LightKind::Directional));
+    for bad in ["shadows:1", "shadows:ctx.seconds>0", "shadows:\"true\""] {
+        assert!(
+            compile_motion(&source.replace("shadows:true", bad)).is_err(),
+            "{bad}"
+        );
+    }
+}
+
+#[test]
+fn depth_of_field_focus_and_radius_are_frame_bindings() {
+    let source = SOURCE.replace(
+        "target:[0,0,0]",
+        "target:[0,0,0],depthOfField:{focusDistance:3+ctx.seconds,maxBlurRadius:8}",
+    );
+    let artifact = compile_motion(&source).unwrap().artifact;
+    artifact.validate().unwrap();
+    let camera = artifact
+        .nodes
+        .iter()
+        .find_map(|node| match &node.kind {
+            NodeKind::Scene3D { frame, .. } => Some(&frame.camera),
+            _ => None,
+        })
+        .unwrap();
+    let dof = camera.depth_of_field.as_ref().unwrap();
+    assert!(matches!(
+        dof.focus_distance,
+        valle_motion::NumberValue::Expr { .. }
+    ));
+    assert_eq!(
+        dof.max_blur_radius,
+        valle_motion::NumberValue::Static { value: 8.0 }
+    );
+    for bad in [
+        "depthOfField:{focusDistance:0,maxBlurRadius:8}",
+        "depthOfField:{focusDistance:3,maxBlurRadius:17}",
+        "depthOfField:{focusDistance:3}",
+        "depthOfField:{maxBlurRadius:8}",
+        "depthOfField:{focusDistance:3,maxBlurRadius:8,unknown:1}",
+    ] {
+        assert!(
+            compile_motion(&source.replace(
+                "depthOfField:{focusDistance:3+ctx.seconds,maxBlurRadius:8}",
+                bad
+            ))
+            .is_err(),
+            "{bad}"
+        );
+    }
+}
+
+#[test]
 fn pbr_unknown_options_dynamic_configuration_and_transparency_fail_closed() {
     for (from, to) in [
         ("src:\"asset://sky\"", "src:\"asset://missing\""),
@@ -120,7 +191,7 @@ fn camera_vectors_light_colors_and_exposure_use_frame_expressions() {
         scene.lights,
         [LightKind::Hemisphere, LightKind::Directional]
     );
-    assert_eq!(scene.frame_scalar_count(), 55);
+    assert_eq!(scene.frame_scalar_count(), 57);
     assert!(serde_json::to_value(scene).unwrap().get("camera").is_none());
 }
 
@@ -162,6 +233,42 @@ fn mesh_vectors_and_model_node_replacements_are_typed_complete_transforms() {
         "nodes={[{id:0,position:[true,0,0]}]}",
         "nodes={[{id:0,unknown:1}]}",
         "scale={[1001,1,1]}",
+    ] {
+        assert!(
+            compile_motion(&SOURCE.replace("rotateY={ctx.seconds*60}", bad)).is_err(),
+            "must reject {bad}"
+        );
+    }
+}
+
+#[test]
+fn mesh_animation_freezes_clip_and_binds_explicit_frame_time() {
+    let source = SOURCE.replace(
+        "src=\"asset://model\"",
+        r#"src="asset://model" animation={{clip:0,time:ctx.seconds}}"#,
+    );
+    let artifact = compile_motion(&source).unwrap().artifact;
+    artifact.validate().unwrap();
+    let (scene, frame) = artifact
+        .nodes
+        .iter()
+        .find_map(|node| match &node.kind {
+            NodeKind::Scene3D { scene, frame } => Some((scene, frame)),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(scene.meshes[0].animation_clip, Some(0));
+    assert!(matches!(
+        frame.meshes[0].animation_time,
+        Some(valle_motion::NumberValue::Expr { .. })
+    ));
+    assert_eq!(scene.frame_scalar_count(), 50);
+    for bad in [
+        r#"animation={{clip:ctx.seconds,time:0}}"#,
+        r#"animation={{clip:32,time:0}}"#,
+        r#"animation={{clip:0}}"#,
+        r#"animation={{clip:0,time:-1}}"#,
+        r#"animation={{clip:0,time:0,unknown:1}}"#,
     ] {
         assert!(
             compile_motion(&SOURCE.replace("rotateY={ctx.seconds*60}", bad)).is_err(),
@@ -221,7 +328,6 @@ fn material_values_and_texture_roles_lower_through_global_and_indexed_overrides(
         (r#"wrapU:"mirror""#, r#"wrapU:"bad""#),
         ("normal:null", "unknown:null"),
         ("id:0", "id:ctx.seconds"),
-        (r#"alphaMode:"mask""#, r#"alphaMode:"blend""#),
         (r##"emissive:"#ff0000""##, r##"emissive:"#ff000080""##),
         ("asset://map", "asset://missing"),
     ] {
@@ -230,4 +336,21 @@ fn material_values_and_texture_roles_lower_through_global_and_indexed_overrides(
             "must reject {to}"
         );
     }
+    let blended = compile(&source.replace(r#"alphaMode:"mask""#, r#"alphaMode:"blend""#))
+        .unwrap()
+        .artifact;
+    let blended_scene = blended
+        .nodes
+        .iter()
+        .find_map(|node| match &node.kind {
+            NodeKind::Scene3D { scene, .. } => Some(scene),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(
+        blended_scene.meshes[0].material_overrides[0]
+            .material
+            .alpha_mode,
+        Some(valle_motion::scene3d::AlphaMode::Blend)
+    );
 }

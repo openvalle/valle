@@ -80,30 +80,14 @@ pub(crate) static NOTO_NOTO_COLRV1_TTF: [u8; include_bytes!(
     "../../../assets/fonts/noto/Noto-COLRv1.ttf"
 )
 .len()] = *include_bytes!("../../../assets/fonts/noto/Noto-COLRv1.ttf");
-pub(crate) static NOTO_NOTOSANS_BOLD_TTF: [u8; include_bytes!(
-    "../../../assets/fonts/noto/NotoSans-Bold.ttf"
+pub(crate) static NOTO_NOTOSANS_VARIABLE_TTF: [u8; include_bytes!(
+    "../../../assets/fonts/noto/NotoSans-Variable.ttf"
 )
-.len()] = *include_bytes!("../../../assets/fonts/noto/NotoSans-Bold.ttf");
-pub(crate) static NOTO_NOTOSANS_EXTRABOLD_TTF: [u8; include_bytes!(
-    "../../../assets/fonts/noto/NotoSans-ExtraBold.ttf"
+.len()] = *include_bytes!("../../../assets/fonts/noto/NotoSans-Variable.ttf");
+pub(crate) static NOTO_NOTOSANSCJKSC_VARIABLE_OTF: [u8; include_bytes!(
+    "../../../assets/fonts/noto/NotoSansCJKsc-Variable.otf"
 )
-.len()] = *include_bytes!("../../../assets/fonts/noto/NotoSans-ExtraBold.ttf");
-pub(crate) static NOTO_NOTOSANS_MEDIUM_TTF: [u8; include_bytes!(
-    "../../../assets/fonts/noto/NotoSans-Medium.ttf"
-)
-.len()] = *include_bytes!("../../../assets/fonts/noto/NotoSans-Medium.ttf");
-pub(crate) static NOTO_NOTOSANS_REGULAR_TTF: [u8; include_bytes!(
-    "../../../assets/fonts/noto/NotoSans-Regular.ttf"
-)
-.len()] = *include_bytes!("../../../assets/fonts/noto/NotoSans-Regular.ttf");
-pub(crate) static NOTO_NOTOSANS_SEMIBOLD_TTF: [u8; include_bytes!(
-    "../../../assets/fonts/noto/NotoSans-SemiBold.ttf"
-)
-.len()] = *include_bytes!("../../../assets/fonts/noto/NotoSans-SemiBold.ttf");
-pub(crate) static NOTO_NOTOSANSCJKSC_REGULAR_OTF: [u8; include_bytes!(
-    "../../../assets/fonts/noto/NotoSansCJKsc-Regular.otf"
-)
-.len()] = *include_bytes!("../../../assets/fonts/noto/NotoSansCJKsc-Regular.otf");
+.len()] = *include_bytes!("../../../assets/fonts/noto/NotoSansCJKsc-Variable.otf");
 pub(crate) static NOTO_NOTOSANSMATH_REGULAR_TTF: [u8; include_bytes!(
     "../../../assets/fonts/noto/NotoSansMath-Regular.ttf"
 )

@@ -3,6 +3,148 @@
 use super::*;
 
 impl<'s> Compiler<'s> {
+    pub(super) fn scoped_context_expr(&mut self, input: ContextInput, span: Span) -> ExprId {
+        if self.time_scopes.is_empty()
+            || !matches!(
+                input,
+                ContextInput::CompositionSeconds
+                    | ContextInput::LocalFrame
+                    | ContextInput::LocalProgress
+            )
+        {
+            return self.push(Expr::Context { input }, span);
+        }
+        let mut seconds = self.push(
+            Expr::Context {
+                input: ContextInput::CompositionSeconds,
+            },
+            span,
+        );
+        for transform in self.time_scopes.clone() {
+            let offset = self.push(
+                Expr::Const {
+                    value: MotionValue::Number(transform.offset_seconds),
+                },
+                span,
+            );
+            seconds = self.push(
+                Expr::Sub {
+                    lhs: seconds,
+                    rhs: offset,
+                },
+                span,
+            );
+            let speed = self.push(
+                Expr::Const {
+                    value: MotionValue::Number(transform.speed),
+                },
+                span,
+            );
+            seconds = self.push(
+                Expr::Mul {
+                    lhs: seconds,
+                    rhs: speed,
+                },
+                span,
+            );
+        }
+        if input == ContextInput::CompositionSeconds {
+            return seconds;
+        }
+        let numerator = self.push(
+            Expr::Context {
+                input: ContextInput::FpsNum,
+            },
+            span,
+        );
+        let denominator = self.push(
+            Expr::Context {
+                input: ContextInput::FpsDen,
+            },
+            span,
+        );
+        let fps = self.push(
+            Expr::Div {
+                lhs: numerator,
+                rhs: denominator,
+            },
+            span,
+        );
+        let frames = self.push(
+            Expr::Mul {
+                lhs: seconds,
+                rhs: fps,
+            },
+            span,
+        );
+        if input == ContextInput::LocalFrame {
+            return self.push(
+                Expr::MathUnary {
+                    op: MathUnaryOp::FrameFloor,
+                    input: frames,
+                },
+                span,
+            );
+        }
+        let duration = self.push(
+            Expr::Context {
+                input: ContextInput::DurationFrames,
+            },
+            span,
+        );
+        let progress = self.push(
+            Expr::Div {
+                lhs: frames,
+                rhs: duration,
+            },
+            span,
+        );
+        let zero = self.push(
+            Expr::Const {
+                value: MotionValue::Number(0.0),
+            },
+            span,
+        );
+        let one = self.push(
+            Expr::Const {
+                value: MotionValue::Number(1.0),
+            },
+            span,
+        );
+        let before = self.push(
+            Expr::Compare {
+                op: CompareOp::Lt,
+                lhs: progress,
+                rhs: zero,
+            },
+            span,
+        );
+        let at_least_zero = self.push(
+            Expr::Select {
+                condition: before,
+                when_true: zero,
+                when_false: progress,
+            },
+            span,
+        );
+        let after = self.push(
+            Expr::Compare {
+                op: CompareOp::Gt,
+                lhs: at_least_zero,
+                rhs: one,
+            },
+            span,
+        );
+        self.push(
+            Expr::Select {
+                condition: after,
+                when_true: one,
+                when_false: at_least_zero,
+            },
+            span,
+        )
+    }
+
     /// Lower an expression and fold static subtrees using the runtime evaluator. Truncate newly
     /// added arena nodes after successful folding so a folded expression has the same artifact
     /// representation as its literal value.
@@ -37,6 +179,7 @@ impl<'s> Compiler<'s> {
         // Only truncate nodes added by this lowering operation.
         if id.0 as usize >= mark {
             self.expr_arena.values.truncate(mark);
+            self.expr_arena.types.truncate(mark);
             self.expr_arena.spans.truncate(mark);
             self.expr_arena.expansion_stacks.truncate(mark);
             self.expr_arena.reads_runtime.truncate(mark);
@@ -110,6 +253,16 @@ impl<'s> Compiler<'s> {
             Expression::Identifier(identifier) => {
                 if let Some(expr) = self.bindings.scalars.get(identifier.name.as_str()) {
                     return Some(*expr);
+                } else if self.bindings.paints.contains_key(identifier.name.as_str()) {
+                    self.illegal(
+                        DiagCode::GrammarForbidden,
+                        expression.span(),
+                        format!(
+                            "`{}` is a paint value; use it as Path fill/stroke or Mask paint",
+                            identifier.name
+                        ),
+                    );
+                    return None;
                 } else if self.bindings.tuples.contains_key(identifier.name.as_str()) {
                     self.illegal(
                         DiagCode::GrammarForbidden,
@@ -202,6 +355,24 @@ impl<'s> Compiler<'s> {
                 let condition = self.lower_expr(&conditional.test)?;
                 let when_true = self.lower_expr(&conditional.consequent)?;
                 let when_false = self.lower_expr(&conditional.alternate)?;
+                // A template and an authored string literal form a string choice, including
+                // aliases/helpers. Generic inference otherwise turns `none` into a Color and
+                // `15deg` into an Angle before a CSS consumer can see the original string.
+                use valle_motion::expr::ExprType;
+                let true_type = self.expr_arena.types[when_true.0 as usize];
+                let false_type = self.expr_arena.types[when_false.0 as usize];
+                if true_type != false_type
+                    && (true_type == Some(ExprType::String)
+                        && self
+                            .eval_static(&conditional.alternate)
+                            .is_some_and(|v| v.is_string())
+                        || false_type == Some(ExprType::String)
+                            && self
+                                .eval_static(&conditional.consequent)
+                                .is_some_and(|v| v.is_string()))
+                {
+                    return self.lower_css_value_expression(expression);
+                }
                 Expr::Select {
                     condition,
                     when_true,
@@ -280,6 +451,12 @@ impl<'s> Compiler<'s> {
                 Expr::Template { parts }
             }
             Expression::CallExpression(call) => {
+                if let Expression::StaticMemberExpression(member) = &call.callee
+                    && let Some(result) =
+                        self.lower_audio_analysis_call(member, &call.arguments, call.span())
+                {
+                    return result;
+                }
                 let Expression::Identifier(callee) = &call.callee else {
                     // Precisely specified Math operations may fold with static inputs; report
                     // runtime-dependent calls explicitly.
@@ -337,6 +514,9 @@ impl<'s> Compiler<'s> {
                         return None;
                     }
                     "interpolate" => return self.lower_interpolate(&call.arguments, call.span()),
+                    "rangeSelector" => {
+                        return self.lower_range_selector(&call.arguments, call.span());
+                    }
                     "spring" | "springVelocity" => {
                         return self.lower_spring(
                             &call.arguments,
@@ -469,6 +649,26 @@ impl<'s> Compiler<'s> {
                     "offsetPath" => {
                         return self.lower_offset_path(&call.arguments, call.span());
                     }
+                    "resamplePath" => {
+                        return self.lower_resample_path(&call.arguments, call.span());
+                    }
+                    "reversePath" => {
+                        return self.lower_reverse_path(&call.arguments, call.span());
+                    }
+                    "roundCorners" => {
+                        return self.lower_round_corners(&call.arguments, call.span());
+                    }
+                    "zigzag" => return self.lower_zigzag(&call.arguments, call.span()),
+                    "noiseDisplace" => {
+                        return self.lower_noise_displace(&call.arguments, call.span());
+                    }
+                    "puckerBloat" | "twist" | "simplify" | "strokeToPath" => {
+                        return self.lower_numeric_path_modifier(
+                            &call.arguments,
+                            call.span(),
+                            callee.name.as_str(),
+                        );
+                    }
                     "boolean" => {
                         self.illegal(
                             DiagCode::GrammarForbidden,
@@ -486,6 +686,10 @@ impl<'s> Compiler<'s> {
                         return None;
                     }
                     "morphPath" => return self.lower_morph_path(&call.arguments, call.span()),
+                    "morph" => return self.lower_morph(&call.arguments, call.span()),
+                    "morphSequence" => {
+                        return self.lower_morph_sequence(&call.arguments, call.span());
+                    }
                     "bounds" => return self.lower_bounds(&call.arguments, call.span()),
                     "project3d" => return self.lower_project3d(&call.arguments, call.span()),
                     "anchor" => return self.lower_anchor(&call.arguments, call.span()),
@@ -510,17 +714,23 @@ impl<'s> Compiler<'s> {
                     }
                     // Distinguish missing measurement fonts from frame-dependent measurement
                     // inputs.
-                    "measureText" => {
+                    "measureText" | "textOutline" => {
+                        let outline = callee.name == "textOutline";
                         self.illegal(
                             DiagCode::GrammarForbidden,
                             call.span(),
                             if self.has_measure {
-                                "measureText is a prepare-time capability: its arguments must be \
-                                 statically known. Frame-varying text/size cannot be measured at \
-                                 compile time — measure the static extremes instead"
+                                if outline {
+                                    "textOutline is a prepare-time capability: text and typography \
+                                     must be statically known"
+                                } else {
+                                    "measureText is a prepare-time capability: its arguments must be \
+                                     statically known. Frame-varying text/size cannot be measured at \
+                                     compile time — measure the static extremes instead"
+                                }
                             } else {
-                                "measureText needs a font bundle at compile time; pass \
-                                 `--font <path>` so measurement uses the same fonts as rendering"
+                                "text outlining and measurement need a font bundle at compile time; \
+                                 pass `--font <path>` so preparation uses the same fonts as rendering"
                             },
                         );
                         return None;
@@ -742,6 +952,18 @@ impl<'s> Compiler<'s> {
     }
 
     pub(super) fn lower_member(&mut self, expression: &Expression<'_>) -> Option<ExprId> {
+        if let Expression::StaticMemberExpression(field_member) = expression
+            && let Expression::CallExpression(call) = strip_parens(&field_member.object)
+            && let Expression::StaticMemberExpression(at_member) = strip_parens(&call.callee)
+            && at_member.property.name == "at"
+        {
+            return self.lower_simulation_field(
+                call,
+                &at_member.object,
+                field_member.property.name.as_str(),
+                expression.span(),
+            );
+        }
         if let Expression::StaticMemberExpression(member) = expression
             && !matches!(
                 strip_parens(&member.object),
@@ -778,6 +1000,108 @@ impl<'s> Compiler<'s> {
             }
         }
         segments.reverse();
+        if self.instance_scope.is_some() {
+            match segments.as_slice() {
+                [root, scope, field]
+                    if root == "ctx" && scope == "instance" && field == "index" =>
+                {
+                    return Some(self.push(Expr::InstanceIndex, expression.span()));
+                }
+                [root, scope, field]
+                    if root == "ctx" && scope == "instance" && field == "count" =>
+                {
+                    return Some(self.push(Expr::InstanceCount, expression.span()));
+                }
+                _ => {}
+            }
+        }
+        if let [local, field] = segments.as_slice()
+            && let Some(scope) = &self.instance_scope
+            && local == &scope.parameter
+        {
+            let Some((column, value_type)) = scope.fields.get(field).copied() else {
+                self.illegal(
+                    DiagCode::UnknownIdentifier,
+                    expression.span(),
+                    format!("unknown instance field `{field}`"),
+                );
+                return None;
+            };
+            return Some(self.push(
+                Expr::InstanceField { column, value_type },
+                expression.span(),
+            ));
+        }
+        let instance_object = match segments.as_slice() {
+            [local, field] | [local, field, _]
+                if self.bindings.instance_objects.contains_key(local) =>
+            {
+                self.bindings
+                    .instance_objects
+                    .get(local)
+                    .cloned()
+                    .map(|fields| (fields, field.as_str(), segments.get(2).map(String::as_str)))
+            }
+            [root, name, field] | [root, name, field, _] if root == "props" => self
+                .bindings
+                .component_props
+                .as_ref()
+                .and_then(|props| props.get(name))
+                .and_then(|value| match value {
+                    AuthorValue::InstanceObject(fields) => Some((
+                        fields.clone(),
+                        field.as_str(),
+                        segments.get(3).map(String::as_str),
+                    )),
+                    _ => None,
+                }),
+            _ => None,
+        };
+        if let Some((fields, field, part)) = instance_object {
+            let Some((column, value_type)) = fields.get(field).copied() else {
+                self.illegal(
+                    DiagCode::UnknownIdentifier,
+                    expression.span(),
+                    format!("unknown instance field `{field}`"),
+                );
+                return None;
+            };
+            let input = self.push(
+                Expr::InstanceField { column, value_type },
+                expression.span(),
+            );
+            return match part {
+                Some(part) => self.lower_geometry_field(input, part, expression.span()),
+                None => Some(input),
+            };
+        }
+        if let [root, name, field] | [root, name, field, _] = segments.as_slice()
+            && root == "props"
+            && let Some(AuthorValue::Static(object)) = self
+                .bindings
+                .component_props
+                .as_ref()
+                .and_then(|props| props.get(name))
+            && motion_value_from_json(object).is_none()
+        {
+            let Some(value) = object
+                .as_object()
+                .and_then(|object| object.get(field))
+                .and_then(motion_value_from_json)
+            else {
+                self.illegal(
+                    DiagCode::UnknownProp,
+                    expression.span(),
+                    format!("component prop `{name}` has no scalar field `{field}`"),
+                );
+                return None;
+            };
+            let input = self.push(Expr::Const { value }, expression.span());
+            return match segments.get(3) {
+                Some(part) => self.lower_geometry_field(input, part, expression.span()),
+                None => Some(input),
+            };
+        }
         match segments.as_slice() {
             [local, field] if self.bindings.scalars.contains_key(local) => {
                 let input = self.bindings.scalars[local];
@@ -793,6 +1117,16 @@ impl<'s> Compiler<'s> {
                                 expression.span(),
                                 format!(
                                     "component prop {name} is a dynamic tuple; read it with a compile-time-known index"
+                                ),
+                            );
+                            return None;
+                        }
+                        Some(AuthorValue::InstanceObject(_)) => {
+                            self.illegal(
+                                DiagCode::GrammarForbidden,
+                                expression.span(),
+                                format!(
+                                    "component prop {name} is an instance object; read one field"
                                 ),
                             );
                             return None;
@@ -842,6 +1176,22 @@ impl<'s> Compiler<'s> {
                                 format!(
                                     "component prop `{name}` is a dynamic tuple and cannot be used as a scalar expression"
                                 ),
+                            );
+                            None
+                        }
+                        Some(AuthorValue::InstanceObject(_)) => {
+                            self.illegal(
+                                DiagCode::GrammarForbidden,
+                                expression.span(),
+                                format!("component prop `{name}` is an instance object; read one field"),
+                            );
+                            None
+                        }
+                        Some(AuthorValue::Paint(_)) => {
+                            self.illegal(
+                                DiagCode::GrammarForbidden,
+                                expression.span(),
+                                format!("component prop `{name}` is a paint value; use it as Path fill/stroke or Mask paint"),
                             );
                             None
                         }
@@ -901,7 +1251,7 @@ impl<'s> Compiler<'s> {
                     self.extra_capabilities
                         .insert(VIEWPORT_CAPABILITY.to_owned());
                 }
-                Some(self.push(Expr::Context { input }, expression.span()))
+                Some(self.scoped_context_expr(input, expression.span()))
             }
             _ => {
                 self.illegal(

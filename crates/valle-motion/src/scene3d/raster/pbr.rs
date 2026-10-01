@@ -1,6 +1,6 @@
-//! Opaque and alpha-mask glTF shading. Inputs belong to this frame or admitted resources.
+//! glTF shading for opaque, mask and blended surfaces. Inputs belong to this frame or admitted resources.
 use super::{Lights, PreparedMesh, ScreenVertex, V2, V3, WorldVertex};
-use crate::scene3d::{MaterialKind, ModelMaterial, asset::ModelTextureBinding};
+use crate::scene3d::{AlphaMode, MaterialKind, ModelMaterial, asset::ModelTextureBinding};
 
 pub(super) struct Triangle<'a> {
     pub kind: MaterialKind,
@@ -137,14 +137,14 @@ pub(super) fn shade(
     v: V3,
     uv: V2,
     derivatives: [f32; 4],
+    position: V3,
     lights: &Lights,
-) -> Option<[u8; 4]> {
+) -> Option<([f32; 3], f32)> {
     let m = triangle.material;
     let tex = |binding| sample(mesh, binding, uv, derivatives);
     let base_tex = m.base_color_texture.map(tex).unwrap_or([1.0; 4]);
-    if m.alpha_cutoff
-        .is_some_and(|cutoff| m.base_color[3] * base_tex[3] < cutoff)
-    {
+    let coverage = m.base_color[3] * base_tex[3];
+    if m.alpha_cutoff.is_some_and(|cutoff| coverage < cutoff) {
         return None;
     }
     let base = std::array::from_fn::<_, 3, _>(|i| m.base_color[i] * base_tex[i]);
@@ -162,7 +162,7 @@ pub(super) fn shade(
     let mut radiance = match triangle.kind {
         MaterialKind::Pbr => indirect(base, metallic, roughness, n, v, ao, lights),
         MaterialKind::Lambert => {
-            let factor = lights.factor(n, ao);
+            let factor = lights.factor(n, ao, position);
             std::array::from_fn(|i| base[i] * factor[i])
         }
         MaterialKind::Unlit => base,
@@ -171,18 +171,21 @@ pub(super) fn shade(
         radiance[i] += m.emissive[i] * m.emissive_intensity * emission[i];
     }
     if triangle.kind == MaterialKind::Pbr {
-        for &(direction, intensity) in &lights.directional {
+        for (index, &(direction, intensity)) in lights.directional.iter().enumerate() {
             let reflected = direct(base, metallic, roughness, n, v, direction);
+            let visibility = lights.shadow_visibility(index, position, n);
             for i in 0..3 {
-                radiance[i] += reflected[i] * intensity[i];
+                radiance[i] += reflected[i] * intensity[i] * visibility;
             }
         }
     }
-    Some(super::output_color(
+    Some((
         radiance,
-        1.0,
-        lights.pbr.tone_mapping,
-        lights.exposure,
+        if m.alpha_mode == AlphaMode::Blend {
+            coverage
+        } else {
+            1.0
+        },
     ))
 }
 

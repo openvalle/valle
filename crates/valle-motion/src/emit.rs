@@ -20,9 +20,11 @@ use takumi_core::style::{
     Affine as TAffine, Color, ComputedStyle, TextTransform, ToCss, WhiteSpaceCollapse,
 };
 use valle_draw::draw::Span;
+use valle_draw::program::LinearColor;
 use valle_draw::program::recording::{
-    Affine, BatchGeometry, BatchInstance, FillRule, FontFace, Glyph, GlyphSource, Homography,
-    MaskSource, Paint, ProgramRecording, RecordCmd, RoundRect, ShaderTextureInput, Stroke,
+    Affine, AtlasSource, BatchGeometry, BatchInstance, FillRule, FontFace, Glyph, GlyphSource,
+    Homography, MaskSource, Paint, ProgramRecording, RecordCmd, RoundRect, ShaderTextureInput,
+    Stroke,
 };
 use valle_draw::{Cap, Join, Point, Rect, Rgba};
 
@@ -41,6 +43,7 @@ pub struct EmitReport {
 }
 
 struct EmissionState {
+    review_ink: bool,
     recording: ProgramRecording,
     scene3d_frames: Vec<crate::Scene3DFrameRequest>,
     unsupported: Vec<(String, &'static str)>,
@@ -161,13 +164,106 @@ pub fn emit(tree: &LayoutTree, naming: FontNaming<'_>) -> Result<EmitReport, Emi
     emit_with_faces(tree, naming, None)
 }
 
+#[derive(Default)]
+pub(crate) struct ReviewTextInk {
+    pub lines: Vec<Rect>,
+    pub opacity: f32,
+    pub motion_blurred: bool,
+}
+
+/// Review the shaper's ink through the same line, unit, text-path and CSS transforms
+/// as drawing. Force outlines for static fonts too; layout boxes and font-size
+/// approximations are not text ink. Shadows do not extend the reading area.
+pub(crate) fn review_text_ink(
+    tree: &LayoutTree,
+    faces: &FaceCache,
+) -> Result<std::collections::HashMap<String, ReviewTextInk>, EmitError> {
+    use valle_draw::program::{Node, Paint as ProgramPaint, Transform2d};
+    let program =
+        emit_with_faces_and_catalog(tree, &default_font_naming, Some(faces), None, None, true)?
+            .program;
+    let mut ink = std::collections::HashMap::<String, ReviewTextInk>::new();
+    let mut pending = program
+        .roots()
+        .iter()
+        .map(|id| (*id, Transform2d::IDENTITY, 1.0_f32, false))
+        .collect::<Vec<_>>();
+    while let Some((id, parent, opacity, blurred)) = pending.pop() {
+        match &program.nodes()[id.raw() as usize] {
+            Node::Group(group) => {
+                let transform = group.transform.then(parent);
+                let blurred = blurred
+                    || group
+                        .filters
+                        .iter()
+                        .any(|f| matches!(f, valle_draw::program::Filter::VelocityBlur { .. }));
+                pending.extend(
+                    group
+                        .children
+                        .iter()
+                        .map(|id| (*id, transform, opacity * group.opacity, blurred)),
+                );
+            }
+            Node::GlyphRun(run) if opacity > 0.0 => {
+                let Some(key) = &run.source_node else {
+                    continue;
+                };
+                let painted =
+                    |id: valle_draw::program::PaintId| match &program.paints()[id.raw() as usize] {
+                        ProgramPaint::Solid(color) => color.alpha > 0.0,
+                        _ => true,
+                    };
+                if !painted(run.paint)
+                    && !run
+                        .stroke
+                        .as_ref()
+                        .is_some_and(|stroke| painted(stroke.paint))
+                {
+                    continue;
+                }
+                let pad = run
+                    .stroke
+                    .as_ref()
+                    .map_or(0.0, |stroke| f64::from(stroke.width) * 0.5);
+                let bounds = Rect::from_edges(
+                    run.bounds.left() - pad,
+                    run.bounds.top() - pad,
+                    run.bounds.right() + pad,
+                    run.bounds.bottom() + pad,
+                );
+                if !bounds.is_empty()
+                    && let Some(bounds) = parent.map_bounds(bounds)
+                {
+                    let entry = ink.entry(key.clone()).or_default();
+                    entry.lines.push(bounds);
+                    let paint_alpha = |paint: valle_draw::program::PaintId| match &program.paints()
+                        [paint.raw() as usize]
+                    {
+                        ProgramPaint::Solid(color) => color.alpha,
+                        _ => 1.0,
+                    };
+                    let alpha = paint_alpha(run.paint).max(
+                        run.stroke
+                            .as_ref()
+                            .map_or(0.0, |stroke| paint_alpha(stroke.paint)),
+                    );
+                    entry.opacity = entry.opacity.max(opacity * alpha);
+                    entry.motion_blurred |= blurred;
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(ink)
+}
+
 /// Emit with optional cross-frame font-name caching; cache hits preserve identical output.
 pub fn emit_with_faces(
     tree: &LayoutTree,
     naming: FontNaming<'_>,
     faces: Option<&FaceCache>,
 ) -> Result<EmitReport, EmitError> {
-    emit_with_faces_and_catalog(tree, naming, faces, None, None)
+    emit_with_faces_and_catalog(tree, naming, faces, None, None, false)
 }
 
 /// Product emission with immutable interpreted-content descriptors. This is required for
@@ -179,7 +275,7 @@ pub fn emit_program_with_faces(
     faces: Option<&FaceCache>,
     catalog: &dyn valle_draw::program::ProgramResourceCatalog,
 ) -> Result<EmitReport, EmitError> {
-    emit_with_faces_and_catalog(tree, naming, faces, Some(catalog), None)
+    emit_with_faces_and_catalog(tree, naming, faces, Some(catalog), None, false)
 }
 
 /// Emit a Motion program with a source-space clip, used by Timeline `fit: cover`.
@@ -190,7 +286,7 @@ pub fn emit_program_with_faces_clipped(
     catalog: &dyn valle_draw::program::ProgramResourceCatalog,
     clip: Rect,
 ) -> Result<EmitReport, EmitError> {
-    emit_with_faces_and_catalog(tree, naming, faces, Some(catalog), Some(clip))
+    emit_with_faces_and_catalog(tree, naming, faces, Some(catalog), Some(clip), false)
 }
 
 fn emit_with_faces_and_catalog(
@@ -199,12 +295,14 @@ fn emit_with_faces_and_catalog(
     faces: Option<&FaceCache>,
     catalog: Option<&dyn valle_draw::program::ProgramResourceCatalog>,
     source_clip: Option<Rect>,
+    review_ink: bool,
 ) -> Result<EmitReport, EmitError> {
     let root_layout = tree
         .layout
         .layout(NodeId::ROOT)
         .map_err(|e| EmitError::RootLayout(e.to_string()))?;
     let mut out = EmissionState {
+        review_ink,
         recording: ProgramRecording::new(),
         scene3d_frames: Vec::new(),
         unsupported: Vec::new(),
@@ -222,6 +320,20 @@ fn emit_with_faces_and_catalog(
         .batches
         .values()
         .map(|batch| batch.instances.len())
+        .chain(
+            tree.shutters
+                .values()
+                .flat_map(|samples| samples.iter())
+                .flat_map(|sample| sample.tree.batches.values())
+                .map(|batch| batch.instances.len())
+                .chain(
+                    tree.echoes
+                        .values()
+                        .flat_map(|samples| samples.iter())
+                        .flat_map(|sample| sample.sample.tree.batches.values())
+                        .map(|batch| batch.instances.len()),
+                ),
+        )
         .fold(0usize, usize::saturating_add);
     let mut e = Emitter {
         tree,
@@ -403,6 +515,14 @@ impl Emitter<'_> {
         let Some(cx) = self.contexts.get(index) else {
             return Ok(());
         };
+        let mask_source = cx.root().and_then(|root| self.node_key(root)).is_some_and(|key| {
+            self.tree.masks.values().any(|mask| {
+                matches!(&mask.source, crate::layout::bridge::ResolvedMaskSource::Subtree(source) if source == key)
+            })
+        });
+        if mask_source {
+            self.push(RecordCmd::BeginMaskSource);
+        }
         let open = if let Some(root) = cx.root() {
             self.begin_node(root)?
         } else {
@@ -410,11 +530,96 @@ impl Emitter<'_> {
         };
         if open.hidden {
             self.end(open);
+            if mask_source {
+                self.push(RecordCmd::End);
+            }
             return Ok(());
         }
         if let Some(root) = cx.root() {
             self.node_content(root);
         }
+        if let Some(root) = cx.root()
+            && let Some(transition) = self
+                .node_key(root)
+                .and_then(|key| self.tree.transitions.get(key))
+                .cloned()
+        {
+            let layout = self
+                .tree
+                .layout
+                .layout(root.node_id)
+                .map_err(|error| EmitError::Program(error.to_string()))?;
+            let bounds = Rect::new(
+                0.0,
+                0.0,
+                layout.size.width as f64,
+                layout.size.height as f64,
+            );
+            if !bounds.is_empty() {
+                self.push(RecordCmd::BeginTransition {
+                    kind: transition.kind,
+                    params: transition.params,
+                    progress: transition.progress,
+                    bounds,
+                });
+                for key in &transition.children {
+                    self.push(RecordCmd::BeginSaveLayer {
+                        bounds: Some(bounds),
+                        alpha: 1.0,
+                    });
+                    let endpoint = self.contexts.iter().position(|context| {
+                        context.root().and_then(|root| self.node_key(root)) == Some(key)
+                    });
+                    if let Some(endpoint) = endpoint {
+                        self.context(endpoint)?;
+                    }
+                    self.push(RecordCmd::End);
+                }
+                self.push(RecordCmd::End);
+            }
+            self.end(open);
+            if mask_source {
+                self.push(RecordCmd::End);
+            }
+            return Ok(());
+        }
+        if let Some(root) = cx.root()
+            && let Some(key) = self.node_key(root).map(str::to_owned)
+            && let Some(samples) = self.tree.shutters.get(&key).cloned()
+        {
+            self.paint_shutter_samples(root, &key, &samples)?;
+            self.end(open);
+            if mask_source {
+                self.push(RecordCmd::End);
+            }
+            return Ok(());
+        }
+        if let Some(root) = cx.root()
+            && let Some(key) = self.node_key(root).map(str::to_owned)
+            && let Some(samples) = self.tree.echoes.get(&key).cloned()
+        {
+            self.paint_echo_samples(root, &key, &samples)?;
+            self.paint_context_items(index)?;
+            self.end(open);
+            if mask_source {
+                self.push(RecordCmd::End);
+            }
+            return Ok(());
+        }
+        self.paint_context_items(index)?;
+        self.end(open);
+        if mask_source {
+            self.push(RecordCmd::End);
+        }
+        Ok(())
+    }
+
+    /// Paint the ordered children of a context without reopening its root. Shutter exposure
+    /// samples use the evaluated child's absolute paint transforms beneath the current wrapper.
+    fn paint_context_items(&mut self, index: usize) -> Result<(), EmitError> {
+        let Some(cx) = self.contexts.get(index) else {
+            return Ok(());
+        };
         let inherited_material = self.material_stack.last().cloned();
         let mut field_open: Option<(String, Open)> = None;
         let mut closed_fields = HashSet::<String>::new();
@@ -446,7 +651,142 @@ impl Emitter<'_> {
         if let Some((_field, open)) = field_open {
             self.end(open);
         }
-        self.end(open);
+        Ok(())
+    }
+
+    fn paint_shutter_samples(
+        &mut self,
+        root: &NodePaint,
+        key: &str,
+        samples: &[crate::layout::bridge::TemporalSample],
+    ) -> Result<(), EmitError> {
+        if samples.is_empty() || samples.windows(2).any(|pair| pair[0].time > pair[1].time) {
+            return Err(EmitError::Program(format!(
+                "Shutter '{key}' has no ordered exposure samples"
+            )));
+        }
+        let layout = self
+            .tree
+            .layout
+            .layout(root.node_id)
+            .map_err(|error| EmitError::Program(error.to_string()))?;
+        let bounds = Rect::new(
+            0.0,
+            0.0,
+            f64::from(layout.size.width),
+            f64::from(layout.size.height),
+        );
+        if bounds.is_empty() {
+            return Ok(());
+        }
+        self.push(RecordCmd::BeginSaveLayer {
+            bounds: Some(bounds),
+            alpha: 1.0,
+        });
+        for sample in samples {
+            self.push(RecordCmd::BeginBlend {
+                mode: valle_draw::program::recording::BlendMode::Plus,
+                space: valle_draw::program::BlendSpace::Linear,
+            });
+            self.push(RecordCmd::BeginSaveLayer {
+                bounds: Some(bounds),
+                alpha: 1.0 / samples.len() as f64,
+            });
+            self.paint_temporal_sample(key, sample)?;
+            self.push(RecordCmd::End);
+            self.push(RecordCmd::End);
+        }
+        self.push(RecordCmd::End);
+        Ok(())
+    }
+
+    fn paint_echo_samples(
+        &mut self,
+        root: &NodePaint,
+        key: &str,
+        samples: &[crate::layout::bridge::EchoSample],
+    ) -> Result<(), EmitError> {
+        let layout = self
+            .tree
+            .layout
+            .layout(root.node_id)
+            .map_err(|error| EmitError::Program(error.to_string()))?;
+        let bounds = Rect::new(
+            0.0,
+            0.0,
+            f64::from(layout.size.width),
+            f64::from(layout.size.height),
+        );
+        if bounds.is_empty() {
+            return Ok(());
+        }
+        for sample in samples {
+            if sample.opacity <= 0.0 {
+                continue;
+            }
+            self.push(RecordCmd::BeginSaveLayer {
+                bounds: Some(bounds),
+                alpha: f64::from(sample.opacity),
+            });
+            self.paint_temporal_sample(key, &sample.sample)?;
+            self.push(RecordCmd::End);
+        }
+        Ok(())
+    }
+
+    fn paint_temporal_sample(
+        &mut self,
+        key: &str,
+        sample: &crate::layout::bridge::TemporalSample,
+    ) -> Result<(), EmitError> {
+        let sample_root = sample
+            .tree
+            .layout
+            .layout(NodeId::ROOT)
+            .map_err(|error| EmitError::Program(error.to_string()))?;
+        let contexts = build_stacking_contexts(
+            &sample.tree.root,
+            &sample.tree.layout,
+            NodeId::ROOT,
+            TAffine::IDENTITY,
+            (Some(sample_root.size.width), Some(sample_root.size.height)),
+        )
+        .map_err(|error| EmitError::Scene(error.to_string()))?;
+        let endpoint = contexts.iter().position(|context| {
+            context
+                .root()
+                .and_then(|root| {
+                    sample
+                        .tree
+                        .keys
+                        .get(&u64::from(root.node_id))
+                        .or_else(|| sample.tree.render_keys.get(&root.path))
+                })
+                .is_some_and(|name| name == key)
+        });
+        if let Some(endpoint) = endpoint {
+            let fonts = std::mem::take(&mut self.fonts);
+            let painted_formulas = std::mem::take(&mut self.painted_formulas);
+            let mut emitter = Emitter {
+                tree: &sample.tree,
+                contexts: &contexts,
+                naming: self.naming,
+                faces: self.faces,
+                out: self.out,
+                fonts,
+                cur: self.cur,
+                reserved_batch_instances: self.reserved_batch_instances,
+                grain_instances: self.grain_instances,
+                painted_formulas,
+                resources: self.resources,
+                material_stack: self.material_stack.clone(),
+            };
+            let result = emitter.paint_context_items(endpoint);
+            self.fonts = std::mem::take(&mut emitter.fonts);
+            self.painted_formulas = std::mem::take(&mut emitter.painted_formulas);
+            self.grain_instances = emitter.grain_instances;
+            result?;
+        }
         Ok(())
     }
 
@@ -711,12 +1051,7 @@ impl Emitter<'_> {
                         })
                     }
                     crate::layout::bridge::ResolvedMaskSource::Subtree(_) => {
-                        self.push(RecordCmd::BeginSaveLayer {
-                            bounds: Some(mask.rect),
-                            alpha: 1.0,
-                        });
-                        depth += 1;
-                        None
+                        Some(MaskSource::Subtree)
                     }
                 };
                 if let Some(source) = source {
@@ -727,14 +1062,6 @@ impl Emitter<'_> {
                     });
                     depth += 1;
                 }
-            }
-            if self.tree.masks.values().any(|mask| {
-                matches!(&mask.source, crate::layout::bridge::ResolvedMaskSource::Subtree(source) if source == key)
-            }) {
-                self.push(RecordCmd::BeginBlend {
-                    mode: valle_draw::program::recording::BlendMode::DestinationIn,
-                });
-                depth += 1;
             }
         }
 
@@ -767,7 +1094,21 @@ impl Emitter<'_> {
 
         // Apply opacity and blending to the composited group rather than each leaf.
         let alpha = f64::from(style.opacity.0);
-        let blend = blend_of(style);
+        let blend = blend_of(style).map_err(|reason| EmitError::BadStyle {
+            node: self.node_key(np).unwrap_or_default().to_owned(),
+            reason,
+        })?;
+        // Blend must see the parent's backdrop after this layer's opacity is applied.
+        // An opacity layer outside the blend would isolate its destination to transparent.
+        if let Some(mode) = blend {
+            let space = self
+                .node_key(np)
+                .and_then(|key| self.tree.blend_spaces.get(key))
+                .copied()
+                .unwrap_or_default();
+            self.push(RecordCmd::BeginBlend { mode, space });
+            depth += 1;
+        }
         if alpha < 1.0 {
             self.push(RecordCmd::BeginSaveLayer {
                 bounds: None,
@@ -775,13 +1116,49 @@ impl Emitter<'_> {
             });
             depth += 1;
         }
-        if let Some(mode) = blend {
-            self.push(RecordCmd::BeginBlend { mode });
-            depth += 1;
-        }
 
         // Apply standard CSS filters, then displacement, then velocity blur in a fixed semantic
         // order.
+        let advanced_css = style
+            .custom_properties
+            .get(crate::style::advanced_filter::IMPORTANT_SLOT)
+            .or_else(|| {
+                style
+                    .custom_properties
+                    .get(crate::style::advanced_filter::SLOT)
+            })
+            .is_some_and(|value| {
+                crate::style::advanced_filter::parse(value)
+                    .ok()
+                    .flatten()
+                    .is_some()
+            });
+        if !advanced_css
+            && !style.filter.is_empty()
+            && self
+                .node_key(np)
+                .and_then(|key| self.tree.advanced_filters.get(key))
+                .is_some_and(|filters| {
+                    filters.iter().any(|filter| {
+                        matches!(
+                            filter,
+                            valle_draw::program::recording::FilterOp::ChromaticAberration { .. }
+                                | valle_draw::program::recording::FilterOp::Glow { .. }
+                                | valle_draw::program::recording::FilterOp::Bloom { .. }
+                                | valle_draw::program::recording::FilterOp::RadialBlur { .. }
+                                | valle_draw::program::recording::FilterOp::FilmGrain { .. }
+                                | valle_draw::program::recording::FilterOp::LensDistortion { .. }
+                        )
+                    })
+                })
+        {
+            return Err(EmitError::BadStyle {
+                node: self.node_key(np).unwrap_or_default().to_owned(),
+                reason:
+                    "bloom, glow(), radial-blur(), film-grain(), lens-distortion() and chromatic-aberration() cannot be combined with another CSS filter"
+                        .into(),
+            });
+        }
         if let Some(key) = self.tree.keys.get(&u64::from(np.node_id))
             && let Some(filters) = self.tree.advanced_filters.get(key)
             && !filters.is_empty()
@@ -795,7 +1172,7 @@ impl Emitter<'_> {
         }
 
         // Keep CSS filters inside the opacity/blend group.
-        if !style.filter.is_empty() {
+        if !advanced_css && !style.filter.is_empty() {
             let filters = self.filters(np, &style.filter, &node.context)?;
             self.push(RecordCmd::BeginFilter {
                 filters,
@@ -981,10 +1358,68 @@ impl Emitter<'_> {
             if batch.instances.is_empty() {
                 return;
             }
+            if batch.exact_circle_paths {
+                for instance in &batch.instances {
+                    let Ok(circle) = valle_motion::PathData::arc(
+                        instance.position,
+                        instance.size.x,
+                        0.0,
+                        core::f64::consts::TAU,
+                    ) else {
+                        self.unsupported(np, "instance Circle arc is invalid");
+                        return;
+                    };
+                    let Some(path) = self.path_ref(&circle) else {
+                        self.unsupported(np, "instance Circle path exceeds recording budget");
+                        return;
+                    };
+                    let alpha = f64::from(instance.opacity);
+                    if alpha < 1.0 {
+                        self.push(RecordCmd::BeginOpacity { alpha });
+                    }
+                    self.push(RecordCmd::Path {
+                        path,
+                        fill_rule: FillRule::NonZero,
+                        fill: Some(Paint::FloatSolid(instance.color)),
+                        stroke: None,
+                    });
+                    if alpha < 1.0 {
+                        self.push(RecordCmd::End);
+                    }
+                }
+                return;
+            }
+            let path = batch.path.as_ref().and_then(|path| self.path_ref(path));
+            let atlas = batch.atlas.as_ref().map(|(source, src)| AtlasSource {
+                image: self.out.recording.intern_image(
+                    valle_draw::program::recording::ImageSource {
+                        asset: source.clone(),
+                        width: 1,
+                        height: 1,
+                        source_time_s: None,
+                    },
+                ),
+                src: *src,
+            });
             let instances = self.out.recording.intern_batch_instances(&batch.instances);
+            let stroke_colors = (!batch.stroke_colors.is_empty()).then(|| {
+                self.out
+                    .recording
+                    .intern_batch_stroke_colors(&batch.stroke_colors)
+            });
+            let dash_offsets = (!batch.dash_offsets.is_empty()).then(|| {
+                self.out
+                    .recording
+                    .intern_batch_dash_offsets(&batch.dash_offsets)
+            });
             self.push(RecordCmd::GeometryBatch {
                 geometry: batch.geometry,
+                path,
+                atlas,
                 instances,
+                stroke_colors,
+                dash_offsets,
+                path_style: batch.path_style,
             });
             return;
         }
@@ -1111,7 +1546,9 @@ impl Emitter<'_> {
                         .meshes
                         .iter()
                         .flat_map(|mesh| {
-                            core::iter::once(mesh.model_control.as_str())
+                            mesh.model_control
+                                .as_deref()
+                                .into_iter()
                                 .chain(mesh.texture_controls().map(|(control, _)| control))
                         })
                         .chain(
@@ -1199,15 +1636,16 @@ impl Emitter<'_> {
 
     fn resolved_paint(&mut self, paint: &ResolvedPaint) -> Paint {
         match paint {
-            ResolvedPaint::Solid(color) => Paint::Solid(*color),
+            ResolvedPaint::Solid(color) => Paint::FloatSolid(color.to_working()),
             ResolvedPaint::Linear {
                 start,
                 end,
                 stops,
                 spread,
             } => {
-                let stops = self.out.recording.intern_stops(stops);
+                let stops = self.out.recording.intern_author_stops(stops);
                 Paint::Linear(valle_draw::program::recording::LinearGradient {
+                    interpolation: valle_draw::program::GradientInterpolation::LinearSrgb,
                     start: *start,
                     end: *end,
                     stops,
@@ -1221,8 +1659,9 @@ impl Emitter<'_> {
                 stops,
                 spread,
             } => {
-                let stops = self.out.recording.intern_stops(stops);
+                let stops = self.out.recording.intern_author_stops(stops);
                 Paint::Radial(valle_draw::program::recording::RadialGradient {
+                    interpolation: valle_draw::program::GradientInterpolation::LinearSrgb,
                     center: *center,
                     radii: Point::new(*radius, *radius),
                     stops,
@@ -1236,8 +1675,9 @@ impl Emitter<'_> {
                 stops,
                 spread,
             } => {
-                let stops = self.out.recording.intern_stops(stops);
+                let stops = self.out.recording.intern_author_stops(stops);
                 Paint::Conic(valle_draw::program::recording::ConicGradient {
+                    interpolation: valle_draw::program::GradientInterpolation::LinearSrgb,
                     center: *center,
                     start_angle: *start_angle,
                     sweep_angle: 360.0,
@@ -1418,72 +1858,77 @@ impl Emitter<'_> {
                     .cloned()
             })
             .collect();
-        // Cache each node's arc length and initial advance so its text starts at its own path
-        // origin.
-        let mut plans: std::collections::HashMap<String, (TextPathPlan, f64)> =
-            std::collections::HashMap::new();
-        let mut degenerate = false;
+        // Each shaped line gets an offset copy of the path. Its own arc length preserves glyph
+        // advances as the inner/outer curves change length; the first glyph of every line starts
+        // at that line's path origin. Font fallback runs on one line share the same plan.
+        let mut first_baselines = std::collections::HashMap::<String, f64>::new();
+        let mut line_origins = std::collections::HashMap::<(String, u32), f64>::new();
         for (run, key) in resolved.runs.iter().zip(&run_keys) {
             let Some(key) = key else { continue };
-            let Some(path) = self.tree.text_paths.get(key).cloned() else {
+            if !self.tree.text_paths.contains_key(key) {
                 continue;
-            };
+            }
+            // Takumi keeps the shaped baseline in Parley's coordinates and applies its
+            // resolved line-height adjustment separately when painting the glyphs.
+            let baseline = run.glyph_run.baseline + run.baseline_shift;
             let first_x = run
                 .glyph_run
                 .glyphs
                 .first()
                 .map_or(0.0, |glyph| f64::from(glyph.x));
-            match plans.get_mut(key) {
-                Some((_, origin)) => *origin = origin.min(first_x),
-                None => match path.path_length() {
-                    Ok(length) if length > 0.0 => {
-                        plans.insert(key.clone(), (TextPathPlan { path, length }, first_x));
-                    }
-                    _ => degenerate = true,
-                },
+            first_baselines
+                .entry(key.clone())
+                .and_modify(|first| *first = first.min(f64::from(baseline)))
+                .or_insert(f64::from(baseline));
+            line_origins
+                .entry((key.clone(), baseline.to_bits()))
+                .and_modify(|origin| *origin = origin.min(first_x))
+                .or_insert(first_x);
+        }
+        let mut plans = std::collections::HashMap::<(String, u32), (TextPathPlan, f64)>::new();
+        let mut degenerate = false;
+        for ((key, baseline_bits), origin) in line_origins {
+            let Some(path) = self.tree.text_paths.get(&key) else {
+                continue;
+            };
+            let line_offset = f64::from(f32::from_bits(baseline_bits)) - first_baselines[&key];
+            match path.offset_path(line_offset).and_then(|path| {
+                let length = path.path_length()?;
+                Ok((path, length))
+            }) {
+                Ok((path, length)) if length > 0.0 => {
+                    plans.insert(
+                        (key, baseline_bits),
+                        (TextPathPlan { path, length }, origin),
+                    );
+                }
+                _ => degenerate = true,
             }
         }
         if degenerate {
-            self.unsupported(np, "text path has zero length or cannot be flattened");
+            self.unsupported(np, "text path line has zero length or cannot be offset");
         }
         let placements: Vec<Option<Vec<Option<Affine>>>> = resolved
             .runs
             .iter()
             .zip(&run_keys)
             .map(|(run, key)| {
-                let (plan, origin) = plans.get(key.as_ref()?)?;
+                let key = key.as_ref()?;
+                let baseline = run.glyph_run.baseline + run.baseline_shift;
+                let (plan, origin) = plans.get(&(key.clone(), baseline.to_bits()))?;
                 path_placements(plan, *origin, run, layout)
             })
             .collect();
         if !plans.is_empty() {
-            // Reject wrapped text on a single path; later lines would otherwise overlap at the path
-            // origin.
-            let mut baselines: Vec<u32> = resolved
-                .runs
-                .iter()
-                .map(|run| run.glyph_run.baseline.to_bits())
-                .collect();
-            baselines.sort_unstable();
-            baselines.dedup();
-            if baselines.len() > 1 {
-                self.unsupported(np, "text path requires one line, but the text wrapped");
-            }
-            if resolved.runs.iter().any(|run| run.baseline_shift != 0.0) {
-                self.unsupported(
-                    np,
-                    "text path does not preserve superscript or subscript baseline offsets",
-                );
-            }
             // Report missing placements only for runs that actually requested a path.
-            if resolved
-                .runs
-                .iter()
-                .zip(&run_keys)
-                .zip(&placements)
-                .any(|((_, key), placement)| {
-                    key.as_ref().is_some_and(|key| plans.contains_key(key)) && placement.is_none()
-                })
-            {
+            if resolved.runs.iter().zip(&run_keys).zip(&placements).any(
+                |((run, key), placement)| {
+                    key.as_ref().is_some_and(|key| {
+                        let baseline = run.glyph_run.baseline + run.baseline_shift;
+                        plans.contains_key(&(key.clone(), baseline.to_bits()))
+                    }) && placement.is_none()
+                },
+            ) {
                 self.unsupported(np, "text path sampling failed");
             }
             if placements.iter().flatten().flatten().any(Option::is_none) {
@@ -1887,13 +2332,18 @@ impl Emitter<'_> {
         source_ranges: Option<GlyphSource>,
         placements: Option<&[Option<Affine>]>,
     ) {
-        match crate::colr::emit_run(&mut self.out.recording, run, layout, shadow, placements) {
-            Ok(true) => return,
-            Err(error) => {
-                self.unsupported(np, error);
-                return;
+        if self.out.review_ink && shadow.is_some() {
+            return;
+        }
+        if !self.out.review_ink {
+            match crate::colr::emit_run(&mut self.out.recording, run, layout, shadow, placements) {
+                Ok(true) => return,
+                Err(error) => {
+                    self.unsupported(np, error);
+                    return;
+                }
+                Ok(false) => {}
             }
-            Ok(false) => {}
         }
         let shaped = &run.glyph_run;
         let size = shaped.font_size;
@@ -1932,7 +2382,7 @@ impl Emitter<'_> {
         if glyphs.is_empty() {
             return;
         }
-        if self.color_outline_run_at(run, layout, shadow, placements) {
+        if !self.out.review_ink && self.color_outline_run_at(run, layout, shadow, placements) {
             return;
         }
         // Embedded bitmap glyphs still need an image side-table contract. COLR outline glyphs use
@@ -1956,12 +2406,44 @@ impl Emitter<'_> {
                 rgba_of(shaped.brush.stroke_color),
             )
         });
+        let source_key = source_ranges.as_ref().and_then(|source| {
+            self.out
+                .recording
+                .text_sources
+                .get(source.node.index())
+                .map(String::as_str)
+        });
+        let authored_fill = source_key
+            .and_then(|key| self.tree.text_colors.get(key))
+            .or_else(|| {
+                self.node_key(np)
+                    .and_then(|key| self.tree.text_colors.get(key))
+            })
+            .copied()
+            .filter(|color| color.to_srgb8() == rgba_of(shaped.brush.color));
+        let authored_stroke = source_key
+            .and_then(|key| self.tree.text_stroke_colors.get(key))
+            .or_else(|| {
+                self.node_key(np)
+                    .and_then(|key| self.tree.text_stroke_colors.get(key))
+            })
+            .copied()
+            .filter(|color| color.to_srgb8() == rgba_of(shaped.brush.stroke_color));
         // Shadow the combined fill and stroke shape, preserving each component's alpha. Transparent
         // fills therefore produce outline-shaped shadows.
         let (paint, stroke) = match shadow {
             None => (
-                Paint::Solid(rgba_of(shaped.brush.color)),
-                declared_stroke.map(|(w, c)| valle_draw::program::recording::Stroke::solid(c, w)),
+                authored_fill.map_or_else(
+                    || Paint::Solid(rgba_of(shaped.brush.color)),
+                    |color| Paint::FloatSolid(color.to_working()),
+                ),
+                declared_stroke.map(|(w, c)| {
+                    let mut stroke = Stroke::solid(c, w);
+                    if let Some(color) = authored_stroke {
+                        stroke.paint = Paint::FloatSolid(color.to_working());
+                    }
+                    stroke
+                }),
             ),
             Some((_, _, sc)) => {
                 let tint = |a: u8| {
@@ -2013,7 +2495,8 @@ impl Emitter<'_> {
             &paint,
             &stroke,
             placements,
-            (!shaped.variations.is_empty()
+            (self.out.review_ink
+                || !shaped.variations.is_empty()
                 || ttf_parser::Face::parse(shaped.font_data(), shaped.font_index)
                     .is_ok_and(|face| face.is_variable()))
             .then_some(run),
@@ -2079,7 +2562,7 @@ impl Emitter<'_> {
                 .copied();
             let color = unit
                 .and_then(|unit| unit.color)
-                .map_or(*paint, Paint::Solid);
+                .map_or(*paint, |color| Paint::FloatSolid(color.to_working()));
             let unit_affine = unit.and_then(|unit| unit_transform(unit, &glyphs[at..end]));
             // Apply the same unit decoration inside any path transform.
             let decorate = |emitter: &mut Self| -> usize {
@@ -2092,6 +2575,16 @@ impl Emitter<'_> {
                 }
                 if let Some(transform) = unit_affine {
                     emitter.push(RecordCmd::BeginTransform { transform });
+                    depth += 1;
+                }
+                if let Some(sigma) = unit.and_then(|unit| unit.blur).filter(|sigma| *sigma > 0.0) {
+                    let filters = emitter.out.recording.intern_filters(&[
+                        valle_draw::program::recording::FilterOp::Blur { sigma },
+                    ]);
+                    emitter.push(RecordCmd::BeginFilter {
+                        filters,
+                        bounds: None,
+                    });
                     depth += 1;
                 }
                 depth
@@ -2152,9 +2645,22 @@ impl Emitter<'_> {
         use takumi_core::geometry::PathCommand as C;
         let mut path = self.out.recording.begin_path();
         for glyph in glyphs {
-            let Some(ResolvedGlyph::Outline(outline)) =
-                run.resolved_glyphs.get(&glyph.id).map(|g| g.as_ref())
-            else {
+            let resolved = run.resolved_glyphs.get(&glyph.id).map(|g| g.as_ref());
+            if self.out.review_ink
+                && let Some(ResolvedGlyph::Bitmap(bitmap)) = resolved
+            {
+                let p = bitmap.placement;
+                let x = glyph.x + f64::from(p.left);
+                let y = glyph.y + f64::from(p.top);
+                path = path
+                    .move_to(Point::new(x, y))
+                    .line_to(Point::new(x + f64::from(p.width), y))
+                    .line_to(Point::new(x + f64::from(p.width), y + f64::from(p.height)))
+                    .line_to(Point::new(x, y + f64::from(p.height)))
+                    .close();
+                continue;
+            }
+            let Some(ResolvedGlyph::Outline(outline)) = resolved else {
                 continue;
             };
             let pt = |q: &takumi_core::geometry::Point<f32>| {
@@ -2185,7 +2691,15 @@ impl Emitter<'_> {
         // Paint the background color beneath background images.
         let color = style.background_color.resolve(node.context.current_color);
         if color.0[3] != 0 {
-            self.fill_box(border_box, radii, rgba_of(color));
+            let authored = self
+                .node_key(np)
+                .and_then(|key| self.tree.background_colors.get(key))
+                .filter(|authored| authored.to_srgb8() == rgba_of(color));
+            if let Some(authored) = authored {
+                self.fill_box_with(border_box, radii, Paint::FloatSolid(authored.to_working()));
+            } else {
+                self.fill_box(border_box, radii, rgba_of(color));
+            }
         }
         // Use upstream gradient tiling, sizing, and positioning geometry.
         // Tiles already arrive in CSS paint order, bottom first.
@@ -2321,6 +2835,9 @@ impl Emitter<'_> {
                 let span = self.out.recording.intern_stops(&stops);
                 Some(Paint::Linear(
                     valle_draw::program::recording::LinearGradient {
+                        interpolation: crate::style::background::gradient_interpolation(
+                            g.interpolation,
+                        )?,
                         start: point_at(t0),
                         end: point_at(t0 + extent),
                         stops: span,
@@ -2365,6 +2882,9 @@ impl Emitter<'_> {
                 let tile_scale = f64::from(extent) / full_radius;
                 Some(Paint::Radial(
                     valle_draw::program::recording::RadialGradient {
+                        interpolation: crate::style::background::gradient_interpolation(
+                            g.interpolation,
+                        )?,
                         center: Point::new(
                             border_box.x + f64::from(tile.cx),
                             border_box.y + f64::from(tile.cy),
@@ -2413,6 +2933,9 @@ impl Emitter<'_> {
                 let span = self.out.recording.intern_stops(&stops);
                 Some(Paint::Conic(
                     valle_draw::program::recording::ConicGradient {
+                        interpolation: crate::style::background::gradient_interpolation(
+                            g.interpolation,
+                        )?,
                         center: Point::new(
                             border_box.x + f64::from(tile.cx),
                             border_box.y + f64::from(tile.cy),
@@ -2807,17 +3330,26 @@ impl Emitter<'_> {
                     position: Point::new(x, y),
                     size: Point::new(size, size),
                     color: if dark {
-                        Rgba::new(96, 82, 64, alpha as u8)
+                        LinearColor::from_srgb8(Rgba::new(96, 82, 64, alpha as u8))
                     } else {
-                        Rgba::new(255, 252, 246, alpha as u8)
+                        LinearColor::from_srgb8(Rgba::new(255, 252, 246, alpha as u8))
                     },
+                    rotation: 0.0,
+                    skew_x: 0.0,
+                    stroke_width: 0.0,
+                    opacity: 1.0,
                 });
             }
             let instances = self.out.recording.intern_batch_instances(&instances);
             self.grain_instances += specks;
             self.push(RecordCmd::GeometryBatch {
                 geometry: BatchGeometry::Circle,
+                path: None,
+                atlas: None,
                 instances,
+                stroke_colors: None,
+                dash_offsets: None,
+                path_style: None,
             });
         }
         if fibers > 0 {
@@ -2831,14 +3363,23 @@ impl Emitter<'_> {
                 instances.push(BatchInstance {
                     position: Point::new(x, y),
                     size: Point::new(w, h),
-                    color: Rgba::new(120, 104, 84, alpha as u8),
+                    color: LinearColor::from_srgb8(Rgba::new(120, 104, 84, alpha as u8)),
+                    rotation: 0.0,
+                    skew_x: 0.0,
+                    stroke_width: 0.0,
+                    opacity: 1.0,
                 });
             }
             let instances = self.out.recording.intern_batch_instances(&instances);
             self.grain_instances += fibers;
             self.push(RecordCmd::GeometryBatch {
                 geometry: BatchGeometry::Rect,
+                path: None,
+                atlas: None,
                 instances,
+                stroke_colors: None,
+                dash_offsets: None,
+                path_style: None,
             });
         }
     }
@@ -3392,29 +3933,10 @@ fn radius_is_visible(radius: &Point) -> bool {
 }
 
 /// Map CSS blending to recording modes; Normal requires no blend group.
-fn blend_of(style: &ComputedStyle) -> Option<valle_draw::program::recording::BlendMode> {
-    use takumi_core::style::BlendMode as T;
-    use valle_draw::program::recording::BlendMode as D;
-    Some(match style.mix_blend_mode {
-        T::Normal => return None,
-        T::Multiply => D::Multiply,
-        T::Screen => D::Screen,
-        T::Overlay => D::Overlay,
-        T::Darken => D::Darken,
-        T::Lighten => D::Lighten,
-        T::ColorDodge => D::ColorDodge,
-        T::ColorBurn => D::ColorBurn,
-        T::HardLight => D::HardLight,
-        T::SoftLight => D::SoftLight,
-        T::Difference => D::Difference,
-        T::Exclusion => D::Exclusion,
-        T::Hue => D::Hue,
-        T::Saturation => D::Saturation,
-        T::Color => D::Color,
-        T::Luminosity => D::Luminosity,
-        // Unknown upstream blend variants fall back to Normal.
-        _ => return None,
-    })
+fn blend_of(
+    style: &ComputedStyle,
+) -> Result<Option<valle_draw::program::recording::BlendMode>, String> {
+    crate::style::blend::lower(style.mix_blend_mode)
 }
 
 /// Text path with arc length cached per node for all runs and shadows.

@@ -1,8 +1,55 @@
 //! Fixed collections, compile-time map expansion, interpolate, spring, and easing.
 
 use super::*;
+use valle_motion::expr::ExprType;
 
 impl<'s> Compiler<'s> {
+    /// A shared dynamic shift of every input stop is exactly equivalent to shifting the input.
+    /// This admits per-unit staggered ranges without making InterpolateStop frame-dependent.
+    fn shifted_interpolate_inputs<'a>(
+        &mut self,
+        expression: &'a Expression<'a>,
+    ) -> Option<(Vec<f64>, &'a Expression<'a>)> {
+        let items = array_items(expression)?;
+        let mut inputs = Vec::with_capacity(items.len());
+        let mut shift = None;
+        let mut shift_source = None::<String>;
+        for item in items {
+            if self.fold_to_number(item).is_some() {
+                return None;
+            }
+            let (base, candidate) = match peel_expr(item) {
+                Expression::BinaryExpression(binary)
+                    if binary.operator == BinaryOperator::Addition =>
+                {
+                    if let Some(base) = self.fold_to_number(&binary.left) {
+                        (base, &binary.right)
+                    } else if let Some(base) = self.fold_to_number(&binary.right) {
+                        (base, &binary.left)
+                    } else {
+                        (0.0, item)
+                    }
+                }
+                _ => (0.0, item),
+            };
+            let candidate = peel_expr(candidate);
+            let spelling = self.src(candidate).trim();
+            if !base.is_finite() || spelling.is_empty() {
+                return None;
+            }
+            if let Some(expected) = &shift_source {
+                if spelling != expected {
+                    return None;
+                }
+            } else {
+                shift_source = Some(spelling.to_owned());
+                shift = Some(candidate);
+            }
+            inputs.push(base);
+        }
+        Some((inputs, shift?))
+    }
+
     pub(super) fn collect_interpolate_inputs(
         &mut self,
         expression: &Expression<'_>,
@@ -20,9 +67,9 @@ impl<'s> Compiler<'s> {
                             self.illegal(
                                 DiagCode::GrammarForbidden,
                                 item.span(),
-                                "interpolate input stops must be finite numbers known at compile time \
-                                 (literals, or arithmetic over module constants — anything depending on \
-                                 ctx/props cannot be a stop)",
+                                "interpolate input stops must be finite numbers known at compile time; \
+                                 for per-unit stagger use a shared shift on every stop, such as \
+                                 [ctx.unit.index * 0.1, 1 + ctx.unit.index * 0.1]",
                             );
                             None
                         })
@@ -468,7 +515,31 @@ impl<'s> Compiler<'s> {
             return None;
         }
         let input = self.lower_expr(arguments[0].as_expression()?)?;
-        let inputs = self.collect_interpolate_inputs(arguments[1].as_expression()?)?;
+        let range = arguments[1].as_expression()?;
+        let (input, inputs) = if let Some((inputs, shift)) = self.shifted_interpolate_inputs(range)
+        {
+            let offset = self.lower_expr(shift)?;
+            if self.expr_arena.types.get(offset.0 as usize) != Some(&Some(ExprType::Number)) {
+                self.illegal(
+                    DiagCode::GrammarForbidden,
+                    shift.span(),
+                    "interpolate shared input-stop shift must be numeric",
+                );
+                return None;
+            }
+            (
+                self.push(
+                    Expr::Sub {
+                        lhs: input,
+                        rhs: offset,
+                    },
+                    span,
+                ),
+                inputs,
+            )
+        } else {
+            (input, self.collect_interpolate_inputs(range)?)
+        };
         let outputs = self.collect_interpolate_outputs(arguments[2].as_expression()?)?;
         if inputs.len() < 2 || inputs.len() != outputs.len() {
             self.illegal(
@@ -483,15 +554,29 @@ impl<'s> Compiler<'s> {
             stops.push(InterpolateStop { input, output });
         }
         let easing_count = stops.len() - 1;
-        let easings = match arguments.get(3) {
-            None => vec![MotionEasing::Linear; easing_count],
+        let (easings, color_space) = match arguments.get(3) {
+            None => (
+                vec![MotionEasing::Linear; easing_count],
+                valle_draw::program::GradientInterpolation::Srgb,
+            ),
             Some(options) => self.lower_interpolate_options(options, easing_count)?,
         };
+        if color_space != valle_draw::program::GradientInterpolation::Srgb
+            && !matches!(stops[0].output, MotionValue::Color(_))
+        {
+            self.illegal(
+                DiagCode::GrammarForbidden,
+                span,
+                "interpolate colorSpace requires color outputs",
+            );
+            return None;
+        }
         Some(self.push(
             Expr::Interpolate {
                 input,
                 stops,
                 easings,
+                color_space,
                 extrapolate_left: Extrapolation::Clamp,
                 extrapolate_right: Extrapolation::Clamp,
             },
@@ -725,7 +810,10 @@ impl<'s> Compiler<'s> {
         &mut self,
         options: &Argument<'_>,
         easing_count: usize,
-    ) -> Option<Vec<MotionEasing>> {
+    ) -> Option<(
+        Vec<MotionEasing>,
+        valle_draw::program::GradientInterpolation,
+    )> {
         let expression = options.as_expression()?;
         let Expression::ObjectExpression(object) = strip_parens(expression) else {
             self.illegal(
@@ -736,6 +824,8 @@ impl<'s> Compiler<'s> {
             return None;
         };
         let mut easings = None;
+        let mut color_space = None;
+        let mut hue = None;
         for property in &object.properties {
             let ObjectPropertyKind::ObjectProperty(property) = property else {
                 self.illegal(
@@ -757,17 +847,85 @@ impl<'s> Compiler<'s> {
                     continue;
                 }
             };
-            if name != "easing" {
+            match name.as_str() {
+                "easing" => easings = self.lower_easing(&property.value, easing_count),
+                "colorSpace" => {
+                    let Expression::StringLiteral(value) = strip_parens(&property.value) else {
+                        self.illegal(
+                            DiagCode::GrammarForbidden,
+                            property.value.span(),
+                            "interpolate colorSpace must be a literal string",
+                        );
+                        return None;
+                    };
+                    color_space = Some(match value.value.as_str() {
+                        "srgb" => valle_draw::program::GradientInterpolation::Srgb,
+                        "linear" => valle_draw::program::GradientInterpolation::LinearSrgb,
+                        "oklab" => valle_draw::program::GradientInterpolation::Oklab,
+                        "oklch" => valle_draw::program::GradientInterpolation::Oklch {
+                            hue: valle_draw::program::HueDirection::Shorter,
+                        },
+                        _ => {
+                            self.illegal(
+                                DiagCode::GrammarForbidden,
+                                property.value.span(),
+                                "interpolate colorSpace must be srgb, linear, oklab, or oklch",
+                            );
+                            return None;
+                        }
+                    });
+                }
+                "hue" => {
+                    let Expression::StringLiteral(value) = strip_parens(&property.value) else {
+                        self.illegal(
+                            DiagCode::GrammarForbidden,
+                            property.value.span(),
+                            "interpolate hue must be a literal string",
+                        );
+                        return None;
+                    };
+                    hue = Some(match value.value.as_str() {
+                        "shorter" => valle_draw::program::HueDirection::Shorter,
+                        "longer" => valle_draw::program::HueDirection::Longer,
+                        "increasing" => valle_draw::program::HueDirection::Increasing,
+                        "decreasing" => valle_draw::program::HueDirection::Decreasing,
+                        _ => {
+                            self.illegal(DiagCode::GrammarForbidden, property.value.span(),
+                                "interpolate hue must be shorter, longer, increasing, or decreasing");
+                            return None;
+                        }
+                    });
+                }
+                _ => {
+                    self.illegal(
+                        DiagCode::GrammarForbidden,
+                        property.key.span(),
+                        format!("unknown interpolate option `{name}`"),
+                    );
+                    return None;
+                }
+            }
+        }
+        let color_space = match (color_space, hue) {
+            (Some(valle_draw::program::GradientInterpolation::Oklch { .. }), hue) => {
+                valle_draw::program::GradientInterpolation::Oklch {
+                    hue: hue.unwrap_or(valle_draw::program::HueDirection::Shorter),
+                }
+            }
+            (_, Some(_)) => {
                 self.illegal(
                     DiagCode::GrammarForbidden,
-                    property.key.span(),
-                    format!("unknown interpolate option `{name}`; only `easing` is admitted"),
+                    expression.span(),
+                    "interpolate hue requires colorSpace: \"oklch\"",
                 );
-                continue;
+                return None;
             }
-            easings = self.lower_easing(&property.value, easing_count);
-        }
-        easings.or_else(|| Some(vec![MotionEasing::Linear; easing_count]))
+            (space, None) => space.unwrap_or(valle_draw::program::GradientInterpolation::Srgb),
+        };
+        Some((
+            easings.unwrap_or_else(|| vec![MotionEasing::Linear; easing_count]),
+            color_space,
+        ))
     }
 
     /// Accept one easing for all intervals or one per interval, with exactly one fewer entries than
@@ -854,7 +1012,7 @@ impl<'s> Compiler<'s> {
                 DiagCode::GrammarForbidden,
                 span,
                 format!(
-                    "unknown easing `{name}`; use linear/ease/easeIn/easeOut/easeInOut/exp or cubic-bezier(x1,y1,x2,y2)"
+                    "invalid easing `{name}`; use linear/ease/easeIn/easeOut/easeInOut/exp, easeInBack/easeOutBack/easeInOutBack, elastic, bounce, steps(n, start|end) with a positive integer n, or cubic-bezier(x1,y1,x2,y2) with finite values and x in [0,1]"
                 ),
             );
             None

@@ -2,9 +2,9 @@
 use crate::{
     ContentDigest,
     scene3d::{
-        ContractErrors, MAX_MATERIALS, MAX_TEXTURE_PIXELS, MAX_TEXTURE_STORAGE_BYTES, MAX_TEXTURES,
-        MaterialFrameState, MaterialTexture, MaterialTextureSlot, MipmapFilter, TextureFilter,
-        TextureRole, TextureWrap,
+        AlphaMode, ContractErrors, MAX_MATERIALS, MAX_TEXTURE_PIXELS, MAX_TEXTURE_STORAGE_BYTES,
+        MAX_TEXTURES, MaterialFrameState, MaterialTexture, MaterialTextureSlot, MipmapFilter,
+        TextureFilter, TextureRole, TextureWrap,
     },
 };
 use serde::Deserialize;
@@ -20,7 +20,8 @@ pub struct ModelMaterial {
     pub normal_scale: f32,
     pub occlusion_strength: f32,
     pub double_sided: bool,
-    /// None is opaque; Some is alpha mask with this cutoff. Blending is not admitted.
+    pub alpha_mode: AlphaMode,
+    /// Present only for alpha mask materials.
     pub alpha_cutoff: Option<f32>,
     pub(crate) base_color_texture: Option<ModelTextureBinding>,
     pub(crate) metallic_roughness_texture: Option<ModelTextureBinding>,
@@ -39,6 +40,7 @@ impl Default for ModelMaterial {
             normal_scale: 1.0,
             occlusion_strength: 1.0,
             double_sided: false,
+            alpha_mode: AlphaMode::Opaque,
             alpha_cutoff: None,
             base_color_texture: None,
             metallic_roughness_texture: None,
@@ -379,7 +381,7 @@ pub(super) fn admit_materials(
     for (i, m) in root.materials.iter().enumerate() {
         let p = &m.pbr_metallic_roughness;
         let unit = |v: f32| v.is_finite() && (0.0..=1.0).contains(&v);
-        if !matches!(m.alpha_mode.as_str(), "OPAQUE" | "MASK")
+        if !matches!(m.alpha_mode.as_str(), "OPAQUE" | "MASK" | "BLEND")
             || !m.alpha_cutoff.is_finite()
             || m.alpha_cutoff < 0.0
             || !p.base_color_factor.into_iter().all(unit)
@@ -395,7 +397,7 @@ pub(super) fn admit_materials(
         {
             return Err(failure(
                 format!("/glb/materials/{i}"),
-                "PBR factors must be finite and bounded; only OPAQUE and MASK alpha modes are admitted",
+                "PBR factors must be finite and bounded; alpha mode must be OPAQUE, MASK or BLEND",
             ));
         }
         let material = ModelMaterial {
@@ -407,6 +409,11 @@ pub(super) fn admit_materials(
             normal_scale: m.normal_texture.as_ref().map_or(1.0, |t| t.scale),
             occlusion_strength: m.occlusion_texture.as_ref().map_or(1.0, |t| t.strength),
             double_sided: m.double_sided,
+            alpha_mode: match m.alpha_mode.as_str() {
+                "MASK" => AlphaMode::Mask,
+                "BLEND" => AlphaMode::Blend,
+                _ => AlphaMode::Opaque,
+            },
             alpha_cutoff: (m.alpha_mode == "MASK").then_some(m.alpha_cutoff),
             base_color_texture: p
                 .base_color_texture

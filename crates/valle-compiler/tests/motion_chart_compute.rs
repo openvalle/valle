@@ -148,7 +148,7 @@ fn static_color(artifact: &valle_motion::SceneArtifact, key: &str, property: &st
     match &binding.value {
         StyleValue::Static {
             value: MotionValue::Color(value),
-        } => *value,
+        } => value.to_srgb8(),
         other => panic!("{key}.{property} should be a prepared color, got {other:?}"),
     }
 }

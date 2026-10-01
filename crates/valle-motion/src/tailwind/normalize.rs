@@ -18,6 +18,21 @@ pub(crate) struct Utility {
     inline_display: Option<bool>,
 }
 
+/// Composition facts collected from every admitted class, including conditional classes.
+/// The graph keeps a conservative union because class conditions can vary per sample.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct CompositionClassFacts {
+    pub composition_boundary: bool,
+    pub reads_backdrop: bool,
+}
+
+impl CompositionClassFacts {
+    fn include(&mut self, other: Self) {
+        self.composition_boundary |= other.composition_boundary;
+        self.reads_backdrop |= other.reads_backdrop;
+    }
+}
+
 /// Property/value pairs a lowering produces before CSS serialization.
 type Css = Vec<(String, String)>;
 
@@ -148,6 +163,28 @@ fn declaration_properties(css: &str) -> Vec<String> {
     properties
 }
 
+fn composition_facts(candidate: &str, utility: &Utility) -> CompositionClassFacts {
+    let properties = declaration_properties(&utility.declarations);
+    // These catalog entries lower through @apply, so their declarations are expanded by
+    // StyleSheet::parse after this scanner. All other relevant utilities emit CSS directly.
+    let catalog_class = candidate.strip_suffix('!').unwrap_or(candidate);
+    let composition_boundary = matches!(catalog_class, "isolate" | "isolation-auto")
+        || catalog_class.starts_with("opacity-")
+        || properties.iter().any(|property| {
+            matches!(
+                property.as_str(),
+                "opacity" | "filter" | "backdrop-filter" | "mix-blend-mode" | "isolation"
+            )
+        });
+    let reads_backdrop = properties
+        .iter()
+        .any(|property| matches!(property.as_str(), "backdrop-filter" | "mix-blend-mode"));
+    CompositionClassFacts {
+        composition_boundary,
+        reads_backdrop,
+    }
+}
+
 /// The authored CSS property for arbitrary declarations and visual composition utilities.
 /// Existing layout utilities retain their conservative static-layout cache policy.
 pub(crate) fn explicit_property(candidate: &str) -> Option<&str> {
@@ -166,6 +203,17 @@ fn arbitrary_property_parts(candidate: &str) -> Option<(&str, &str)> {
         return None;
     }
     Some((property, value))
+}
+
+pub(super) fn advanced_filter(candidate: &str) -> Option<valle_draw::program::recording::FilterOp> {
+    let candidate = candidate.strip_suffix('!').unwrap_or(candidate);
+    let (property, value) = arbitrary_property_parts(candidate)?;
+    if property != "filter" {
+        return None;
+    }
+    crate::style::advanced_filter::parse(&decode_arbitrary(value).ok()?)
+        .ok()
+        .flatten()
 }
 
 pub(super) fn default_theme(name: &str) -> Option<&'static str> {
@@ -189,37 +237,84 @@ pub(crate) fn layout_class<'a>(kind: &crate::NodeKind, class: &'a str) -> Cow<'a
 
 /// Compile each unique candidate once. All nodes and finite choices share the same
 /// ordered rules; full layout, bounds probes and cache reuse use this stylesheet.
+fn add_node_candidates(
+    node: &crate::SceneNode,
+    candidates: &mut BTreeMap<String, (Utility, CompositionClassFacts)>,
+) -> Result<(Vec<String>, CompositionClassFacts), String> {
+    let mut names = Vec::with_capacity(node.class_names.len());
+    let mut facts = CompositionClassFacts::default();
+    for class in &node.class_names {
+        let selector = layout_class(&node.kind, class).into_owned();
+        if let Some((_, class_facts)) = candidates.get(&selector) {
+            facts.include(*class_facts);
+            names.push(selector);
+            continue;
+        }
+        let mut utility = utility(class).map_err(|error| error.message(class))?;
+        if matches!(
+            node.kind,
+            crate::NodeKind::Image { .. } | crate::NodeKind::Video { .. }
+        ) && let Some(important) = utility.inline_display
+        {
+            utility.declarations =
+                css_declarations(&[("display".into(), "inline-block".into())], important)
+                    .expect("atomic inline display");
+        }
+        // Composed filter utilities use private CSS slots rather than parse_property.
+        // Mirror their priority so an important class can override an inline advanced filter.
+        if explicit_property(class) == Some("filter")
+            && !utility.declarations.contains("motion-filter:")
+        {
+            let important = class.ends_with('!');
+            let slot = if important {
+                crate::style::advanced_filter::IMPORTANT_SLOT
+            } else {
+                crate::style::advanced_filter::SLOT
+            };
+            utility.declarations.push_str(&format!(
+                ";{slot}:none{};",
+                if important { " !important" } else { "" }
+            ));
+        }
+        let class_facts = composition_facts(class, &utility);
+        facts.include(class_facts);
+        names.push(selector.clone());
+        candidates.insert(selector, (utility, class_facts));
+    }
+    Ok((names, facts))
+}
+
 pub(crate) fn prepare_stylesheet(
     artifact: &crate::SceneArtifact,
-) -> Result<(Arc<StyleSheet>, Vec<Vec<String>>), String> {
+) -> Result<
+    (
+        Arc<StyleSheet>,
+        Vec<Vec<String>>,
+        Vec<CompositionClassFacts>,
+    ),
+    String,
+> {
     let mut candidates = BTreeMap::new();
     let mut classes = Vec::with_capacity(artifact.nodes.len());
-    for node in artifact.nodes.iter() {
-        let mut names = Vec::with_capacity(node.class_names.len());
-        for class in node.class_names.iter() {
-            let selector = layout_class(&node.kind, class).into_owned();
-            if candidates.contains_key(&selector) {
-                names.push(selector);
-                continue;
+    let mut composition = Vec::with_capacity(artifact.nodes.len());
+    for node in &artifact.nodes {
+        let (names, mut facts) = add_node_candidates(node, &mut candidates)?;
+        if let crate::NodeKind::InstanceLayout { group } = node.kind
+            && let Some(group) = artifact.instance_groups.get(group as usize)
+        {
+            facts.include(add_node_candidates(&group.template, &mut candidates)?.1);
+            let mut stack = group.template_children.iter().collect::<Vec<_>>();
+            while let Some(child) = stack.pop() {
+                facts.include(add_node_candidates(&child.node, &mut candidates)?.1);
+                stack.extend(&child.children);
             }
-            let mut utility = utility(class).map_err(|error| error.message(class))?;
-            if matches!(
-                node.kind,
-                crate::NodeKind::Image { .. } | crate::NodeKind::Video { .. }
-            ) && let Some(important) = utility.inline_display
-            {
-                utility.declarations =
-                    css_declarations(&[("display".into(), "inline-block".into())], important)
-                        .expect("atomic inline display");
-            }
-            names.push(selector.clone());
-            candidates.entry(selector).or_insert(utility);
         }
         classes.push(names);
+        composition.push(facts);
     }
     let mut utilities: Vec<_> = candidates
         .into_iter()
-        .map(|(selector, utility)| (utility, selector))
+        .map(|(selector, (utility, _))| (utility, selector))
         .collect();
     utilities.sort_by(|a, b| compare_utilities(&a.0, &b.0));
     let mut source = String::new();
@@ -231,7 +326,7 @@ pub(crate) fn prepare_stylesheet(
         source.push_str("}\n");
     }
     StyleSheet::parse(&source)
-        .map(|sheet| (Arc::new(sheet), classes))
+        .map(|sheet| (Arc::new(sheet), classes, composition))
         .map_err(|error| error.to_string())
 }
 
@@ -1136,7 +1231,7 @@ pub(crate) fn css_declarations(
                 crate::style::StyleIssueKind::UnsupportedValue,
                 property,
                 value,
-                "background requires a supported color or sRGB gradient; URL images and other interpolation spaces have no paint lowering",
+                "background requires a supported color or gradient in srgb, srgb-linear, oklab, or oklch; use an <Image> node for URL images",
             )));
         }
         let authored_important = !parsed.declarations.importance.is_empty();
@@ -1414,6 +1509,22 @@ fn natural_compare(a: &str, b: &str) -> Ordering {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn composition_facts_follow_admitted_utility_declarations() {
+        for (class, boundary, backdrop) in [
+            ("opacity-50", true, false),
+            ("isolate", true, false),
+            ("blur-sm", true, false),
+            ("[mix-blend-mode:screen]", true, true),
+            ("backdrop-blur-sm", true, true),
+            ("[background-color:#f00]", false, false),
+        ] {
+            let facts = composition_facts(class, &utility(class).unwrap());
+            assert_eq!(facts.composition_boundary, boundary, "{class}");
+            assert_eq!(facts.reads_backdrop, backdrop, "{class}");
+        }
+    }
 
     #[test]
     fn catalog_order_is_stable_under_class_reversal() {

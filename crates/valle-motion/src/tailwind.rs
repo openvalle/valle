@@ -9,11 +9,17 @@ mod arbitrary;
 mod normalize;
 mod order_table;
 mod visual;
+pub(crate) use normalize::CompositionClassFacts;
 pub(crate) use normalize::explicit_property;
 pub(crate) use normalize::prepare_stylesheet;
 
 /// Exact catalog identity. It is also part of the artifact capability set.
 pub const TAILWIND_CATALOG: &str = "tailwind";
+
+/// Advanced node filter carried by a literal arbitrary property utility.
+pub fn advanced_filter(class: &str) -> Option<valle_draw::program::recording::FilterOp> {
+    normalize::advanced_filter(class)
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TailwindClassError {

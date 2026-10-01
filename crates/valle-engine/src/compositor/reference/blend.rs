@@ -1,15 +1,21 @@
 use crate::frame::CompositeBlendMode as TimelineBlend;
+use crate::resource::ColorPrimaries;
 use thiserror::Error;
-use valle_draw::{math, program::BlendMode as DrawBlendMode};
+use valle_draw::{
+    math,
+    program::{BlendMode as DrawBlendMode, BlendSpace},
+};
 
 use super::{
-    ColorMathError, PixelError, PremulRgba32, extended_srgb_to_working, working_to_extended_srgb,
+    ColorMathError, PixelError, PremulRgba32, extended_srgb_to_working, primaries_to_working,
+    working_to_extended_srgb, working_to_primaries,
 };
 
 /// The complete creative blend set shared by Timeline clips and Motion DrawPrograms.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ReferenceBlendMode {
     Normal,
+    Plus,
     Multiply,
     Screen,
     Overlay,
@@ -26,21 +32,6 @@ pub enum ReferenceBlendMode {
     Saturation,
     Color,
     Luminosity,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BlendDomain {
-    WorkingLinear,
-    PerceptualSrgbExtended,
-}
-
-impl ReferenceBlendMode {
-    pub const fn domain(self) -> BlendDomain {
-        match self {
-            Self::Normal => BlendDomain::WorkingLinear,
-            _ => BlendDomain::PerceptualSrgbExtended,
-        }
-    }
 }
 
 impl From<TimelineBlend> for ReferenceBlendMode {
@@ -71,6 +62,7 @@ impl From<DrawBlendMode> for ReferenceBlendMode {
     fn from(value: DrawBlendMode) -> Self {
         match value {
             DrawBlendMode::Normal => Self::Normal,
+            DrawBlendMode::Plus => Self::Plus,
             DrawBlendMode::Multiply => Self::Multiply,
             DrawBlendMode::Screen => Self::Screen,
             DrawBlendMode::Overlay => Self::Overlay,
@@ -98,18 +90,44 @@ pub fn effective_blend_source(
     source: PremulRgba32,
     destination: PremulRgba32,
     mode: ReferenceBlendMode,
+    space: BlendSpace,
 ) -> Result<PremulRgba32, BlendError> {
     if mode == ReferenceBlendMode::Normal || source.alpha() == 0.0 {
         return Ok(source);
     }
-    let source_rgb = working_to_extended_srgb(source.straight_rgb()?)?;
-    let destination_rgb = working_to_extended_srgb(destination.straight_rgb()?)?;
+    if mode == ReferenceBlendMode::Plus {
+        let source = source.channels();
+        let backdrop = destination.channels();
+        // The plan composites this contribution with source-over later. Solve for a
+        // contribution whose result is Plus, including saturated alpha on transparent layers.
+        let alpha = if backdrop[3] == 1.0 {
+            source[3]
+        } else {
+            (source[3] / (1.0 - backdrop[3])).min(1.0)
+        };
+        return PremulRgba32::from_premultiplied([
+            (source[0] + backdrop[0]).clamp(0.0, 1.0) - backdrop[0] * (1.0 - alpha),
+            (source[1] + backdrop[1]).clamp(0.0, 1.0) - backdrop[1] * (1.0 - alpha),
+            (source[2] + backdrop[2]).clamp(0.0, 1.0) - backdrop[2] * (1.0 - alpha),
+            alpha,
+        ])
+        .map_err(Into::into);
+    }
+    let to_blend = |rgb| match space {
+        BlendSpace::Srgb => working_to_extended_srgb(rgb),
+        BlendSpace::Linear => working_to_primaries(rgb, ColorPrimaries::Rec709),
+    };
+    let source_rgb = to_blend(source.straight_rgb()?)?;
+    let destination_rgb = to_blend(destination.straight_rgb()?)?;
     let blended = blend_rgb(destination_rgb, source_rgb, mode)?;
     let destination_alpha = destination.alpha();
     let effective = [0, 1, 2].map(|channel| {
         (1.0 - destination_alpha) * source_rgb[channel] + destination_alpha * blended[channel]
     });
-    let working = extended_srgb_to_working(effective)?;
+    let working = match space {
+        BlendSpace::Srgb => extended_srgb_to_working(effective),
+        BlendSpace::Linear => primaries_to_working(effective, ColorPrimaries::Rec709),
+    }?;
     PremulRgba32::from_straight(working, source.alpha()).map_err(Into::into)
 }
 
@@ -117,13 +135,14 @@ pub fn blend_over(
     source: PremulRgba32,
     destination: PremulRgba32,
     mode: ReferenceBlendMode,
+    space: BlendSpace,
 ) -> Result<PremulRgba32, BlendError> {
-    effective_blend_source(source, destination, mode)?
+    effective_blend_source(source, destination, mode, space)?
         .source_over(destination)
         .map_err(Into::into)
 }
 
-/// Straight RGB blend function in the mode's fixed perceptual extended-sRGB domain.
+/// Straight RGB blend function in the caller's selected domain.
 pub fn blend_rgb(
     backdrop: [f32; 3],
     source: [f32; 3],
@@ -138,6 +157,7 @@ pub fn blend_rgb(
     }
     let result = match mode {
         ReferenceBlendMode::Normal => source,
+        ReferenceBlendMode::Plus => zip(backdrop, source, |b, s| (b + s).clamp(0.0, 1.0)),
         ReferenceBlendMode::Multiply => zip(backdrop, source, |b, s| b * s),
         ReferenceBlendMode::Screen => zip(backdrop, source, |b, s| b + s - b * s),
         ReferenceBlendMode::Overlay => zip(backdrop, source, overlay),
@@ -286,6 +306,101 @@ mod tests {
     use super::*;
 
     #[test]
+    fn screen_uses_selected_transfer_without_changing_coverage() {
+        let encoded = 128.0 / 255.0;
+        let linear =
+            super::super::decode_transfer(encoded, crate::resource::TransferFunction::Srgb);
+        let working = extended_srgb_to_working([encoded, 0.0, 0.0]).unwrap();
+        for space in [BlendSpace::Srgb, BlendSpace::Linear] {
+            for source_alpha in [0.0, 0.25, 0.5, 1.0] {
+                for backdrop_alpha in [0.0, 0.25, 0.5, 1.0] {
+                    let source = PremulRgba32::from_straight(working, source_alpha).unwrap();
+                    let backdrop = PremulRgba32::from_straight(working, backdrop_alpha).unwrap();
+                    let result =
+                        blend_over(source, backdrop, ReferenceBlendMode::Screen, space).unwrap();
+                    let x = if space == BlendSpace::Srgb {
+                        encoded
+                    } else {
+                        linear
+                    };
+                    let effective = (1.0 - backdrop_alpha) * x + backdrop_alpha * (2.0 * x - x * x);
+                    let effective_linear = if space == BlendSpace::Srgb {
+                        super::super::decode_transfer(
+                            effective,
+                            crate::resource::TransferFunction::Srgb,
+                        )
+                    } else {
+                        effective
+                    };
+                    let red = effective_linear * source_alpha
+                        + linear * backdrop_alpha * (1.0 - source_alpha);
+                    let rgb = working_to_primaries(
+                        result.channels()[..3].try_into().unwrap(),
+                        ColorPrimaries::Rec709,
+                    )
+                    .unwrap();
+                    assert_rgb_close(rgb, [red, 0.0, 0.0]);
+                    assert!(
+                        (result.alpha() - (source_alpha + backdrop_alpha * (1.0 - source_alpha)))
+                            .abs()
+                            < 1e-6
+                    );
+                    if source_alpha == 1.0 && backdrop_alpha == 1.0 {
+                        let output =
+                            working_to_extended_srgb(result.straight_rgb().unwrap()).unwrap();
+                        let expected = if space == BlendSpace::Linear {
+                            167.0
+                        } else {
+                            192.0
+                        };
+                        assert!((output[0] * 255.0 - expected).abs() < 1.0);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn plus_adds_premultiplied_linear_channels_and_saturates_alpha() {
+        for source_alpha in [0.0, 0.2, 0.5, 0.8, 1.0] {
+            for destination_alpha in [0.0, 0.2, 0.5, 0.8, 1.0] {
+                let source = PremulRgba32::from_straight([0.4, 0.8, 0.2], source_alpha).unwrap();
+                let destination =
+                    PremulRgba32::from_straight([0.8, 0.2, 0.6], destination_alpha).unwrap();
+                let actual = blend_over(
+                    source,
+                    destination,
+                    ReferenceBlendMode::Plus,
+                    BlendSpace::Srgb,
+                )
+                .unwrap();
+                assert_eq!(
+                    actual,
+                    blend_over(
+                        source,
+                        destination,
+                        ReferenceBlendMode::Plus,
+                        BlendSpace::Linear
+                    )
+                    .unwrap()
+                );
+                let a = source.channels();
+                let b = destination.channels();
+                for (actual, expected) in actual
+                    .channels()
+                    .into_iter()
+                    .zip([0, 1, 2, 3].map(|i| (a[i] + b[i]).min(1.0)))
+                {
+                    assert!(
+                        (actual - expected).abs() < 1e-6,
+                        "{source_alpha}/{destination_alpha}: {actual} != {expected}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn separable_formulas_match_hand_values() {
         let backdrop = [0.25, 0.5, 0.75];
         let source = [0.8, 0.4, 0.2];
@@ -306,9 +421,12 @@ mod tests {
     #[test]
     fn transparent_destination_never_changes_effective_source() {
         let source = PremulRgba32::from_straight([0.2, 0.7, 1.5], 0.4).unwrap();
-        for mode in all_modes() {
+        for (mode, space) in all_modes()
+            .into_iter()
+            .flat_map(|mode| [BlendSpace::Srgb, BlendSpace::Linear].map(|space| (mode, space)))
+        {
             let effective =
-                effective_blend_source(source, PremulRgba32::TRANSPARENT, mode).unwrap();
+                effective_blend_source(source, PremulRgba32::TRANSPARENT, mode, space).unwrap();
             assert!(effective.approx_eq(source, 2e-6), "{mode:?}: {effective:?}");
         }
     }
@@ -317,8 +435,11 @@ mod tests {
     fn blend_alpha_always_uses_porter_duff_source_over() {
         let source = PremulRgba32::from_straight([0.8, 0.2, 0.1], 0.25).unwrap();
         let destination = PremulRgba32::from_straight([0.1, 0.3, 0.7], 0.5).unwrap();
-        for mode in all_modes() {
-            let output = blend_over(source, destination, mode).unwrap();
+        for (mode, space) in all_modes()
+            .into_iter()
+            .flat_map(|mode| [BlendSpace::Srgb, BlendSpace::Linear].map(|space| (mode, space)))
+        {
+            let output = blend_over(source, destination, mode, space).unwrap();
             assert!((output.alpha() - 0.625).abs() < 1e-7, "{mode:?}");
         }
     }

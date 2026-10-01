@@ -236,6 +236,190 @@ fn translate_single_value_defaults_y_to_zero() {
 }
 
 #[test]
+fn dynamic_transform_values_match_literal_css_and_preserve_geometry_reuse() {
+    let requested = [60, 0, 30, 60, 15, 0];
+    for (dynamic, reference) in [
+        (
+            "translate:`${ctx.localFrame}px 10%`",
+            "translate:'FRAMEpx 10%'",
+        ),
+        ("translate:`${ctx.localFrame}px`", "translate:'FRAMEpx'"),
+        (
+            "translate:point(ctx.localFrame,5)",
+            "translate:'FRAMEpx 5px'",
+        ),
+        ("rotate:`${ctx.localFrame}deg`", "rotate:'FRAMEdeg'"),
+        ("scale:`${1+ctx.localFrame/90} 1`", "scale:'SCALE 1'"),
+        ("scale:`${100+ctx.localFrame}%`", "scale:'PERCENT%'"),
+        (
+            "transformOrigin:`${ctx.localFrame}% 20%`,rotate:'20deg'",
+            "transformOrigin:'FRAME% 20%',rotate:'20deg'",
+        ),
+    ] {
+        let authored = scene("", dynamic, "fixed");
+        let artifact = compile_motion(&authored).unwrap().artifact;
+        if !dynamic.starts_with("transformOrigin") {
+            assert!(
+                prepare_scene(&artifact).unwrap().can_reuse_layout(),
+                "{dynamic}"
+            );
+        }
+        let actual = frames(&authored, &requested);
+        for (index, frame) in requested.into_iter().enumerate() {
+            let literal = reference
+                .replace("FRAME", &frame.to_string())
+                .replace("SCALE", &(1.0 + frame as f64 / 90.0).to_string())
+                .replace("PERCENT", &(100 + frame).to_string());
+            assert_eq!(
+                actual[index],
+                frames(&scene("", &literal, "fixed"), &[0])[0],
+                "{dynamic}, frame {frame}"
+            );
+        }
+    }
+}
+
+#[test]
+fn dynamic_transform_presence_switches_rebuild_positioned_descendants() {
+    let requested = [60, 0, 29, 30, 60, 0];
+    for (property, identity) in [
+        ("translate", "0px 0px"),
+        ("rotate", "0deg"),
+        ("scale", "1 1"),
+    ] {
+        for position in ["absolute", "fixed"] {
+            let dynamic = format!("{property}:ctx.localFrame<30?'none':'{identity}'");
+            let authored = scene("", &dynamic, position);
+            let artifact = compile_motion(&authored).unwrap().artifact;
+            assert!(!prepare_scene(&artifact).unwrap().can_reuse_layout());
+            let actual = frames(&authored, &requested);
+            assert_ne!(actual[0], actual[1]);
+            for (index, frame) in requested.into_iter().enumerate() {
+                let value = if frame < 30 { "none" } else { identity };
+                assert_eq!(
+                    actual[index],
+                    frames(&scene("", &format!("{property}:'{value}'"), position), &[0])[0]
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn transform_templates_can_be_reused_through_constants_helpers_and_components() {
+    let source = r#"function angle(t) { return `${t}deg`; }
+    function Item(ctx, props) { return <View key='parent' style={{width:80,height:60,backgroundColor:'red',
+        translate:props.move,rotate:props.turn,scale:props.zoom,transform:props.skew}}/>; }
+    export default function Demo(ctx) {
+        const move = `${ctx.localFrame}px 5px`;
+        const turn = angle(ctx.localFrame);
+        const zoom = `${1+ctx.localFrame/90} 1`;
+        const skew = ctx.localFrame<30 ? `skew(${ctx.localFrame}deg)` : `skew(10deg,${ctx.localFrame}deg)`;
+        return <Scene style={{width:320,height:180}}><Item move={move} turn={turn} zoom={zoom} skew={skew}/></Scene>;
+    }"#;
+    let actual = frames(source, &[60, 0, 15, 60, 0]);
+    assert_ne!(actual[0], actual[1]);
+    assert_ne!(actual[1], actual[2]);
+    assert_eq!(actual[0], actual[3]);
+    assert_eq!(actual[1], actual[4]);
+}
+
+#[test]
+fn css_template_choices_keep_literal_keywords_through_local_bindings() {
+    for (property, value) in [
+        ("translate", "${ctx.localFrame}px"),
+        ("rotate", "${ctx.localFrame}deg"),
+        ("scale", "${1+ctx.localFrame/90}"),
+    ] {
+        let dynamic = scene("", &format!("{property}:chosen"), "fixed")
+            .replace("{ return <Scene", &format!("{{ const reset = 'none'; const chosen = ctx.localFrame<30 ? reset : `{value}`; return <Scene"));
+        let inline = scene(
+            "",
+            &format!("{property}:ctx.localFrame<30?'none':`{value}`"),
+            "fixed",
+        );
+        assert_eq!(
+            frames(&dynamic, &[60, 0, 15, 30, 60, 0]),
+            frames(&inline, &[60, 0, 15, 30, 60, 0]),
+            "{property}"
+        );
+    }
+}
+
+#[test]
+fn css_choices_can_mix_typed_scalars_and_literal_strings() {
+    let dynamic = scene(
+        "",
+        "rotate:ctx.localFrame<30?'15deg':interpolate(ctx.localFrame,[0,90],['0deg','90deg'])",
+        "fixed",
+    );
+    let inline = scene(
+        "",
+        "rotate:ctx.localFrame<30?'15deg':`${ctx.localFrame}deg`",
+        "fixed",
+    );
+    assert_eq!(
+        frames(&dynamic, &[60, 0, 15, 30, 60, 0]),
+        frames(&inline, &[60, 0, 15, 30, 60, 0])
+    );
+    let scale = scene(
+        "",
+        "scale:ctx.localFrame<30?'none':1+ctx.localFrame/90",
+        "fixed",
+    );
+    let inline = scene(
+        "",
+        "scale:ctx.localFrame<30?'none':`${1+ctx.localFrame/90}`",
+        "fixed",
+    );
+    assert_eq!(
+        frames(&scale, &[60, 0, 15, 30, 60, 0]),
+        frames(&inline, &[60, 0, 15, 30, 60, 0])
+    );
+}
+
+#[test]
+fn dynamic_priority_must_not_reuse_a_different_containing_block() {
+    for (property, identity, class) in [
+        ("translate", "0px", "[translate:none]!"),
+        ("rotate", "0deg", "[rotate:none]!"),
+        ("scale", "1", "scale-none!"),
+    ] {
+        let class = format!("className='{class}'");
+        let dynamic = scene(
+            &class,
+            &format!("{property}:ctx.localFrame<30?'{identity}':'{identity} !important'"),
+            "fixed",
+        );
+        let artifact = compile_motion(&dynamic).unwrap().artifact;
+        assert!(
+            !prepare_scene(&artifact).unwrap().can_reuse_layout(),
+            "{property}"
+        );
+        let actual = frames(&dynamic, &[60, 0, 60, 0]);
+        assert_ne!(actual[0], actual[1], "{property}");
+        assert_eq!(
+            actual[0],
+            frames(
+                &scene(
+                    &class,
+                    &format!("{property}:'{identity} !important'"),
+                    "fixed"
+                ),
+                &[0]
+            )[0]
+        );
+        assert_eq!(
+            actual[1],
+            frames(
+                &scene(&class, &format!("{property}:'{identity}'"), "fixed"),
+                &[0]
+            )[0]
+        );
+    }
+}
+
+#[test]
 fn animated_scale_keeps_geometry_at_identity_and_seeks_without_history() {
     let source = scene("", "scale:1+ctx.localFrame/90", "fixed");
     let requested = [0, 60, 0, 30, 89, 60, 0];

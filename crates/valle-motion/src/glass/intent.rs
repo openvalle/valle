@@ -120,7 +120,7 @@ impl GlassMaterialBinding {
                 value: DEFAULT_DEPTH,
             },
             tint: ColorValue::Static {
-                value: valle_draw::Rgba::TRANSPARENT,
+                value: valle_draw::program::AuthorColor::from_srgb8(valle_draw::Rgba::TRANSPARENT),
             },
         }
     }

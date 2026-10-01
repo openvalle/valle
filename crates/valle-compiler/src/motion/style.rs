@@ -41,11 +41,16 @@ impl<'s> Compiler<'s> {
                     style.rotate = self.number_binding(value, "perUnit rotate", f64::is_finite)
                 }
                 "color" => style.color = self.color_binding(value, "perUnit color"),
+                "blur" => {
+                    style.blur = self.number_binding(value, "perUnit blur", |value| {
+                        (0.0..=128.0).contains(&value)
+                    })
+                }
                 _ => self.illegal(
                     DiagCode::GrammarForbidden,
                     property.key.span(),
                     format!(
-                        "unknown perUnit property `{name}`; allowed: opacity, translate, scale, rotate, color"
+                        "unknown perUnit property `{name}`; allowed: opacity, translate, scale, rotate, color, blur"
                     ),
                 ),
             }
@@ -61,14 +66,16 @@ impl<'s> Compiler<'s> {
         style: Option<UnitStyle>,
     ) -> Option<Box<PerUnit>> {
         match (split, style) {
-            (Some(split), Some(style)) if !style.is_empty() => {
-                Some(Box::new(PerUnit { split, style }))
-            }
+            (Some(split), Some(style)) if !style.is_empty() => Some(Box::new(PerUnit {
+                split,
+                style,
+                group_key: None,
+            })),
             (Some(_), Some(_)) => {
                 self.illegal(
                     DiagCode::GrammarForbidden,
                     span,
-                    "perUnit must bind at least one of opacity/translate/scale/rotate/color",
+                    "perUnit must bind at least one of opacity/translate/scale/rotate/color/blur",
                 );
                 None
             }
@@ -315,11 +322,10 @@ impl<'s> Compiler<'s> {
                 continue;
             }
             if matches!(property_name.as_str(), "filter" | "backdrop-filter") {
-                if let Some(value) = self.lower_css_filter_style(&property.value, &property_name) {
-                    styles.push(StyleBinding {
-                        property: property_name,
-                        value,
-                    });
+                if let Some(mut bindings) =
+                    self.lower_css_filter_style(&property.value, &property_name)
+                {
+                    styles.append(&mut bindings);
                 }
                 continue;
             }
@@ -475,8 +481,15 @@ impl<'s> Compiler<'s> {
                 None => match self.fold_to_value(&property.value) {
                     Some(value) => StyleValue::Static { value },
                     None => {
-                        match if matches!(property_name.as_str(), "background" | "background-image")
-                        {
+                        match if matches!(
+                            property_name.as_str(),
+                            "background"
+                                | "background-image"
+                                | "translate"
+                                | "rotate"
+                                | "scale"
+                                | "transform-origin"
+                        ) {
                             self.lower_css_value_expression(&property.value)
                         } else {
                             self.lower_expr(&property.value)
@@ -563,14 +576,15 @@ impl<'s> Compiler<'s> {
                     } => StyleValue::Static {
                         value: MotionValue::Length2(Length2::px(vector.x, vector.y)),
                     },
-                    StyleValue::Expr { expr } => StyleValue::Expr {
-                        expr: self.push(Expr::ToLength2 { input: expr }, property.span()),
-                    },
                     value => value,
                 };
             }
             if property_name == "scale" {
                 self.note_scale_binding(&value);
+            }
+            if let Err(issue) = spec.check_type(&value, &self.expr_arena.types) {
+                self.style_diagnostic(property.value.span(), Some(path), issue);
+                continue;
             }
             if property_name == "perspective" {
                 self.extra_capabilities
@@ -675,8 +689,8 @@ impl<'s> Compiler<'s> {
                 value: MotionValue::Point(_),
             } => true,
             StyleValue::Expr { expr } => matches!(
-                self.expr_arena.values.get(expr.0 as usize),
-                Some(Expr::MakePoint { .. })
+                self.expr_arena.types.get(expr.0 as usize),
+                Some(Some(valle_motion::expr::ExprType::Point))
             ),
             _ => false,
         };

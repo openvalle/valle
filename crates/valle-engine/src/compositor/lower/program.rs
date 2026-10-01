@@ -283,6 +283,13 @@ pub enum ProgramPassKind {
         output: ProgramResourceId,
         opacity: f32,
     },
+    ApplyTransition {
+        node: NodeId,
+        from: ProgramResourceId,
+        to: ProgramResourceId,
+        output: ProgramResourceId,
+        transition: valle_draw::program::TransitionLayer,
+    },
     ApplyShader {
         node: NodeId,
         input: ProgramResourceId,
@@ -301,6 +308,7 @@ pub enum ProgramPassKind {
         destination: ProgramResourceId,
         output: ProgramResourceId,
         mode: BlendMode,
+        space: valle_draw::program::BlendSpace,
     },
 }
 
@@ -328,6 +336,7 @@ impl ProgramPassKind {
                 ..
             } => vec![*source, *destination],
             Self::ApplyMask { input, mask, .. } => vec![*input, *mask],
+            Self::ApplyTransition { from, to, .. } => vec![*from, *to],
         }
     }
 
@@ -345,6 +354,7 @@ impl ProgramPassKind {
             | Self::ApplyFilter { output, .. }
             | Self::ApplyMask { output, .. }
             | Self::ApplyOpacity { output, .. }
+            | Self::ApplyTransition { output, .. }
             | Self::ApplyShader { output, .. }
             | Self::ApplyTransform { output, .. }
             | Self::Blend { output, .. } => *output,
@@ -587,8 +597,14 @@ impl<'a> Compiler<'a> {
                 footprint,
                 sampling: SamplingMode::LinearClamp,
             };
-            let mut local_inputs = base_prefix.clone();
-            local_inputs.extend(self.nonempty_prefix(&[output]));
+            let (external, local_inputs) = match glass.backdrop.scope {
+                BackdropScope::Current => {
+                    let mut inputs = base_prefix.clone();
+                    inputs.extend(self.nonempty_prefix(&[output]));
+                    (entry_is_external, inputs)
+                }
+                BackdropScope::LayerEntry(_) | BackdropScope::ScopeEntry(_) => (true, Vec::new()),
+            };
             let destination = self.read_destination(
                 id,
                 ProgramDestinationKind::Backdrop,
@@ -597,7 +613,7 @@ impl<'a> Compiler<'a> {
                 glass.backdrop.output_bounds,
                 LocalBounds::from_rect(glass.backdrop.sample_bounds),
                 local_to_program,
-                entry_is_external,
+                external,
                 local_inputs,
                 format!("{node_path}.glass.destination"),
             )?;
@@ -667,15 +683,49 @@ impl<'a> Compiler<'a> {
             output = self.source_over(source, output, format!("{node_path}.backdrop.composite"))?;
         }
 
-        output = self.compose_nodes(
-            &group.children,
-            output,
-            &base_prefix,
-            child_entry_is_external,
-            local_to_program,
-            child_glass_owner_to_program,
-            &format!("{node_path}.children"),
-        )?;
+        if let Some(transition) = &group.transition {
+            let from = self.node(
+                group.children[0],
+                &[],
+                false,
+                local_to_program,
+                child_glass_owner_to_program,
+            )?;
+            let to = self.node(
+                group.children[1],
+                &[],
+                false,
+                local_to_program,
+                child_glass_owner_to_program,
+            )?;
+            let transitioned =
+                self.resource(LocalBounds::from_rect(transition.bounds), local_to_program)?;
+            self.pass(
+                format!("{node_path}.transition"),
+                ProgramPassKind::ApplyTransition {
+                    node: id,
+                    from,
+                    to,
+                    output: transitioned,
+                    transition: transition.clone(),
+                },
+            )?;
+            output = self.source_over(
+                transitioned,
+                output,
+                format!("{node_path}.transition.composite"),
+            )?;
+        } else {
+            output = self.compose_nodes(
+                &group.children,
+                output,
+                &base_prefix,
+                child_entry_is_external,
+                local_to_program,
+                child_glass_owner_to_program,
+                &format!("{node_path}.children"),
+            )?;
+        }
 
         if let Some(foreground) = group.glass_foreground.as_deref() {
             let owner_to_program =
@@ -761,7 +811,11 @@ impl<'a> Compiler<'a> {
                 child_glass_owner_to_program,
             )?;
             let masked = self.resource(
-                intersect(self.bounds(output), self.bounds(mask_source)),
+                if mask.mode.is_inverted() {
+                    self.bounds(output)
+                } else {
+                    intersect(self.bounds(output), self.bounds(mask_source))
+                },
                 local_to_program,
             )?;
             self.pass(
@@ -836,6 +890,7 @@ impl<'a> Compiler<'a> {
                 BackdropScope::Current,
                 DestinationOperation::Blend {
                     mode: group.internal_blend,
+                    space: group.blend_space,
                 },
                 rect,
                 bounds,
@@ -853,6 +908,7 @@ impl<'a> Compiler<'a> {
                     destination,
                     output: blended,
                     mode: group.internal_blend,
+                    space: group.blend_space,
                 },
             )?;
             output = blended;
@@ -996,6 +1052,7 @@ impl<'a> Compiler<'a> {
         let id = ProgramPassId::from_index(self.passes.len())?;
         let shader_work_per_pixel = match &kind {
             ProgramPassKind::ApplyShader { shader, .. } => shader.shader.work_per_pixel,
+            ProgramPassKind::ApplyTransition { transition, .. } => transition.kind.work_per_pixel(),
             ProgramPassKind::RasterNode { node, .. } => {
                 match &self.program.nodes()[node.raw() as usize] {
                     Node::RuntimeShader(shader) => shader.shader.work_per_pixel,
@@ -1150,9 +1207,27 @@ fn program_filter_bounds(bounds: LocalBounds, filter: &Filter) -> LocalBounds {
             );
             union(LocalBounds::from_rect(rect), LocalBounds::from_rect(shadow))
         }
+        Filter::Glow { radius, .. } => {
+            LocalBounds::from_rect(outset(rect, Insets::uniform(5.0 * *radius + 1.0)))
+        }
+        Filter::Bloom { radius, .. } => {
+            LocalBounds::from_rect(outset(rect, Insets::uniform(4.0 * *radius + 1.0)))
+        }
+        Filter::RadialBlur { amount, .. } => {
+            LocalBounds::from_rect(outset(rect, Insets::uniform(*amount + 1.0)))
+        }
         Filter::NoiseDisplacement { scale, .. } => {
             LocalBounds::from_rect(outset(rect, Insets::uniform(*scale)))
         }
+        Filter::ChromaticAberration { offset } => LocalBounds::from_rect(outset(
+            rect,
+            Insets::new(
+                offset[0].abs() * 0.5 + 1.0,
+                offset[1].abs() * 0.5 + 1.0,
+                offset[0].abs() * 0.5 + 1.0,
+                offset[1].abs() * 0.5 + 1.0,
+            ),
+        )),
         Filter::VelocityBlur {
             velocity,
             shutter_angle_degrees,
@@ -1167,7 +1242,9 @@ fn program_filter_bounds(bounds: LocalBounds, filter: &Filter) -> LocalBounds {
                 rect.bottom() + f64::from(dy),
             ))
         }
-        Filter::ColorMatrix { .. }
+        Filter::FilmGrain { .. }
+        | Filter::LensDistortion { .. }
+        | Filter::ColorMatrix { .. }
         | Filter::Brightness { .. }
         | Filter::Contrast { .. }
         | Filter::Grayscale { .. }
@@ -1225,6 +1302,60 @@ mod tests {
         }))
     }
 
+    #[test]
+    fn transition_inputs_have_independent_destinations_and_reachable_schedules() {
+        let mut builder = DrawProgramBuilder::new(Rect::new(0.0, 0.0, 64.0, 48.0));
+        let from = rect_path(
+            &mut builder,
+            Rect::new(0.0, 0.0, 64.0, 48.0),
+            LinearColor::new(1.0, 0.0, 0.0, 1.0),
+        );
+        let mut to = Group::plain(vec![]);
+        to.backdrop = Some(BackdropRead {
+            scope: BackdropScope::Current,
+            bounds: Rect::new(0.0, 0.0, 64.0, 48.0),
+            footprint: Default::default(),
+            sampling: SamplingMode::LinearClamp,
+            filters: vec![],
+        });
+        let to = builder.push_node(Node::Group(to));
+        let mut group = Group::plain(vec![from, to]);
+        group.isolated = true;
+        group.transition = Some(valle_draw::program::TransitionLayer {
+            kind: valle_draw::transition::TransitionKind::LinearBlur,
+            params: valle_draw::transition::TransitionKind::LinearBlur.default_values(),
+            progress: 0.5,
+            bounds: Rect::new(0.0, 0.0, 64.0, 48.0),
+        });
+        let root = builder.push_node(Node::Group(group));
+        builder.add_root(root);
+        let program = builder.finish().unwrap();
+        assert!(program.requirements().destination_uses.is_empty());
+        let plan = ProgramPlan::derive(&program).unwrap();
+        let mut transitions = 0;
+        let mut reads = 0;
+        for pass in plan.passes() {
+            match &pass.kind {
+                ProgramPassKind::ReadDestination {
+                    external,
+                    local_inputs,
+                    ..
+                } => {
+                    assert!(external.is_none());
+                    assert!(local_inputs.is_empty(), "to must not read from");
+                    reads += 1;
+                }
+                ProgramPassKind::ApplyTransition { from, to, .. } => {
+                    assert_ne!(from, to);
+                    assert_eq!(pass.shader_work_per_pixel.samples, 72);
+                    transitions += 1;
+                }
+                _ => {}
+            }
+        }
+        assert_eq!((transitions, reads), (1, 1));
+    }
+
     fn field_owner_program() -> MotionGlassProgram {
         MotionGlassProgram {
             owner_kind: GlassOwnerKind::Field,
@@ -1277,6 +1408,12 @@ mod tests {
         let owner = field_owner_program();
         let foreground = MotionGlassForegroundProgram::from_owner(&owner, "member").unwrap();
         let mut builder = DrawProgramBuilder::new(Rect::new(0.0, 0.0, 128.0, 72.0));
+        let before = rect_path(
+            &mut builder,
+            Rect::new(1.0, 1.0, 8.0, 8.0),
+            LinearColor::new(0.2, 0.4, 0.6, 1.0),
+        );
+        builder.add_root(before);
         let child = rect_path(
             &mut builder,
             Rect::new(0.0, 0.0, 30.0, 20.0),
@@ -1315,6 +1452,22 @@ mod tests {
         );
 
         let plan = ProgramPlan::derive(&program).unwrap();
+        let glass_owner = program
+            .nodes()
+            .iter()
+            .position(|node| matches!(node, Node::Group(group) if group.glass.is_some()))
+            .map(|index| NodeId::from_raw(u32::try_from(index).unwrap()))
+            .expect("canonical Glass field owner");
+        assert!(plan.passes().iter().any(|pass| matches!(
+            &pass.kind,
+            ProgramPassKind::ReadDestination {
+                node,
+                scope: BackdropScope::ScopeEntry(field),
+                external: Some(_),
+                local_inputs,
+                ..
+            } if *node == glass_owner && field == "pair" && local_inputs.is_empty()
+        )));
         let (output, admitted_owner) = plan
             .passes()
             .iter()
@@ -1338,6 +1491,47 @@ mod tests {
             member_to_owner.then(owner_to_program),
             "the foreground image remains in member-local coordinates even though its kernel uses the Field owner",
         );
+    }
+
+    #[test]
+    fn glass_scope_entry_remains_external_inside_isolation() {
+        let owner = field_owner_program();
+        let foreground = MotionGlassForegroundProgram::from_owner(&owner, "member").unwrap();
+        let mut builder = DrawProgramBuilder::new(Rect::new(0.0, 0.0, 128.0, 72.0));
+        let child = rect_path(
+            &mut builder,
+            Rect::new(0.0, 0.0, 30.0, 20.0),
+            LinearColor::new(0.9, 0.8, 0.7, 1.0),
+        );
+        let mut foreground_group = Group::plain(vec![child]);
+        foreground_group.glass_foreground = Some(Box::new(foreground));
+        let foreground = builder.push_node(Node::Group(foreground_group));
+        let mut owner_group = Group::plain(vec![foreground]);
+        owner_group.glass = Some(Box::new(owner));
+        let owner = builder.push_node(Node::Group(owner_group));
+        let mut isolation = Group::plain(vec![owner]);
+        isolation.isolated = true;
+        let isolation = builder.push_node(Node::Group(isolation));
+        builder.add_root(isolation);
+
+        let program = builder.finish().unwrap();
+        assert!(
+            program
+                .requirements()
+                .destination_uses
+                .iter()
+                .any(|read| { read.scope == BackdropScope::ScopeEntry("pair".into()) })
+        );
+        let plan = ProgramPlan::derive(&program).unwrap();
+        assert!(plan.passes().iter().any(|pass| matches!(
+            &pass.kind,
+            ProgramPassKind::ReadDestination {
+                scope: BackdropScope::ScopeEntry(field),
+                external: Some(_),
+                local_inputs,
+                ..
+            } if field == "pair" && local_inputs.is_empty()
+        )));
     }
 
     #[test]
@@ -1582,6 +1776,131 @@ mod tests {
                 .count(),
             2
         );
+    }
+
+    #[test]
+    fn motion_backdrop_read_uses_frame_bounds_and_only_the_painted_prefix() {
+        use valle_compiler::motion::compile_motion;
+        use valle_motion::{
+            Fonts, LayoutOptions, Viewport, build_tree, default_font_naming, emit,
+            motion_context_at_frame, prepare_scene, resolve_props,
+        };
+        use valle_timeline::FrameRate;
+
+        let source = r##"
+export default function Scene(ctx) {
+  return <Scene className="relative" style={{width:100,height:40}}>
+    <View key="before" className="absolute" style={{left:0,top:0,width:10,height:10,backgroundColor:"#ff0000"}} />
+    <View key="reader" className="absolute" style={{left:20,top:0,width:20+ctx.localFrame*5,height:10,backdropFilter:"blur(2px)",backgroundColor:"#ffffff80"}} />
+    <View key="after" className="absolute" style={{left:80,top:0,width:10,height:10,backgroundColor:"#0000ff"}} />
+  </Scene>;
+}
+"##;
+        let artifact = compile_motion(source).unwrap().artifact;
+        let prepared = prepare_scene(&artifact).unwrap();
+        let reader = artifact
+            .nodes
+            .iter()
+            .position(|node| node.key == "reader")
+            .unwrap();
+        assert!(
+            prepared
+                .dependencies()
+                .node(valle_motion::NodeId(reader as u32))
+                .unwrap()
+                .reads_backdrop
+        );
+        let props = resolve_props(&artifact.controls, &Default::default()).unwrap();
+        let fonts = Fonts::default();
+        for (frame, width) in [(0, 20.0), (1, 25.0)] {
+            let context =
+                motion_context_at_frame(frame, 30, FrameRate::new(30, 1).unwrap()).unwrap();
+            let tree = build_tree(
+                &prepared,
+                &context,
+                &props,
+                &LayoutOptions {
+                    viewport: Viewport::new((100, 40)),
+                    fonts: &fonts,
+                    styles: None,
+                },
+            )
+            .unwrap();
+            let program = emit(&tree, &default_font_naming).unwrap().program;
+            let (at, backdrop) = program
+                .nodes()
+                .iter()
+                .enumerate()
+                .find_map(|(at, node)| match node {
+                    Node::Group(group) => group.backdrop.as_ref().map(|read| (at, read)),
+                    _ => None,
+                })
+                .expect("Motion backdrop filter emits a read");
+            assert_eq!(backdrop.scope, BackdropScope::Current);
+            assert_eq!(backdrop.bounds.width, width);
+            assert_eq!(backdrop.bounds.height, 10.0);
+            assert!(backdrop.footprint.left > 0.0);
+
+            let plan = ProgramPlan::derive(&program).unwrap();
+            let reads = plan
+                .passes()
+                .iter()
+                .filter_map(|pass| match &pass.kind {
+                    ProgramPassKind::ReadDestination {
+                        node,
+                        scope,
+                        local_inputs,
+                        ..
+                    } if *node == NodeId::from_raw(at as u32) => Some((scope, local_inputs)),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(reads.len(), 1);
+            assert_eq!(*reads[0].0, BackdropScope::Current);
+            assert_eq!(reads[0].1.len(), 1);
+            let prefix_bounds = plan.resources()[reads[0].1[0].index()]
+                .bounds
+                .rect()
+                .unwrap();
+            assert!(prefix_bounds.right() <= 10.0, "{prefix_bounds:?}");
+        }
+    }
+
+    #[test]
+    fn blend_space_changes_program_identity_and_destination_semantics() {
+        use valle_draw::program::BlendSpace;
+        let build = |space| {
+            let mut builder = DrawProgramBuilder::new(Rect::new(0.0, 0.0, 16.0, 9.0));
+            let child = rect_path(
+                &mut builder,
+                Rect::new(2.0, 2.0, 8.0, 4.0),
+                LinearColor::new(0.5, 0.25, 0.1, 1.0),
+            );
+            let mut group = Group::plain(vec![child]);
+            group.internal_blend = BlendMode::Screen;
+            group.blend_space = space;
+            let root = builder.push_node(Node::Group(group));
+            builder.add_root(root);
+            builder.finish().unwrap()
+        };
+        let srgb = build(BlendSpace::Srgb);
+        let linear = build(BlendSpace::Linear);
+        assert_ne!(srgb.content_hash().unwrap(), linear.content_hash().unwrap());
+        assert_eq!(srgb.geometries(), linear.geometries());
+        for (program, space) in [(srgb, BlendSpace::Srgb), (linear, BlendSpace::Linear)] {
+            assert_eq!(
+                program.requirements().destination_uses[0].operation,
+                DestinationOperation::Blend {
+                    mode: BlendMode::Screen,
+                    space
+                }
+            );
+            let decoded = DrawProgram::from_packed(&program.packed_bytes().unwrap()).unwrap();
+            let plan = ProgramPlan::derive(&decoded).unwrap();
+            plan.validate_shape(1).unwrap();
+            assert!(plan.passes().iter().any(|pass| matches!(pass.kind,
+                ProgramPassKind::Blend { mode: BlendMode::Screen, space: actual, .. } if actual == space)));
+        }
     }
 
     #[test]

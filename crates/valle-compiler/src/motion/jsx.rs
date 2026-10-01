@@ -75,6 +75,10 @@ impl<'s> Compiler<'s> {
             "Circle" | "circle" | "Ellipse" | "ellipse" | "Rect" | "rect" | "Line" | "line"
             | "Polyline" | "polyline" | "Polygon" | "polygon" => ("path", None),
             "GeometryBatch" => ("geometry-batch", None),
+            "Transition" => ("transition", None),
+            "Shutter" => ("shutter", None),
+            "Echo" => ("echo", None),
+            "TimeScope" => ("time-scope", None),
             "ShaderLayer" => ("shader-layer", None),
             "Scene3D" => ("scene3d", None),
             "Image" | "img" => ("image", None),
@@ -107,7 +111,7 @@ impl<'s> Compiler<'s> {
         let mut shape_points = None;
         let mut path_fill = Some(PaintValue::Solid {
             color: ColorValue::Static {
-                value: Rgba::rgb(0, 0, 0),
+                value: valle_draw::program::AuthorColor::from_srgb8(Rgba::rgb(0, 0, 0)),
             },
         });
         let mut saw_explicit_fill = false;
@@ -139,6 +143,7 @@ impl<'s> Compiler<'s> {
         let mut mask_paint = None;
         let mut mask_image = None;
         let mut mask_mode = MaskMode::Alpha;
+        let mut mask_invert = false;
         let mut mask_rect = None;
         let mut batch_geometry = None;
         let mut batch_positions = None;
@@ -149,12 +154,30 @@ impl<'s> Compiler<'s> {
         let mut batch_fill_field = None;
         let mut batch_opacities = None;
         let mut batch_opacity_field = None;
+        let mut batch_rotations = None;
+        let mut batch_rotation_field = None;
+        let mut batch_skew_xs = None;
+        let mut batch_skew_x_field = None;
+        let mut batch_stroke_widths = None;
+        let mut batch_stroke_width_field = None;
         let mut batch_semantic_keys = None;
+        let mut transition_kind: Option<valle_draw::transition::TransitionKind> = None;
+        let mut transition_progress = None;
+        let mut transition_params = BTreeMap::new();
+        let mut shutter_samples = None;
+        let mut shutter_angle = None;
+        let mut echo_count = None;
+        let mut echo_interval = None;
+        let mut echo_decay = None;
+        let mut time_offset = None;
+        let mut time_speed = None;
         let mut shader_source = None;
         let mut shader_inputs: Option<&'s ObjectExpression<'s>> = None;
         let mut shader_uniforms: Option<&'s ObjectExpression<'s>> = None;
         let mut scene3d_camera: Option<&'s ObjectExpression<'s>> = None;
         let mut scene3d_pbr: Option<&'s ObjectExpression<'s>> = None;
+        let mut scene_bloom = None;
+        let mut saw_scene_bloom = false;
         for attribute in &element.opening_element.attributes {
             let JSXAttributeItem::Attribute(attribute) = attribute else {
                 self.illegal(DiagCode::GrammarForbidden, attribute.span(), "JSX spread attributes are illegal because property order and provenance must stay explicit");
@@ -169,10 +192,67 @@ impl<'s> Compiler<'s> {
                 continue;
             };
             match name.name.as_str() {
-                "key" => key = self.attr_static_string(&attribute.value, attribute.span(), "key"),
+                "key" => {
+                    key = if self.instance_scope.as_ref().is_some_and(|scope| {
+                        matches!(&attribute.value,
+                            Some(JSXAttributeValue::ExpressionContainer(container))
+                            if matches!(container.expression.as_expression().map(peel_expr),
+                                Some(Expression::StaticMemberExpression(member))
+                                if matches!(&member.object, Expression::Identifier(id) if id.name.as_str() == scope.parameter)
+                                    && member.property.name.as_str() == scope.key_field))
+                    }) {
+                        self.instance_scope.as_ref().map(|scope| scope.template_key.clone())
+                    } else {
+                        self.attr_static_string(&attribute.value, attribute.span(), "key")
+                    };
+                }
                 // Allow the scene camera only on Scene, the final composition boundary.
                 "camera" if kind_tag == "group" => {
                     self.lower_camera(&attribute.value, attribute.span());
+                }
+                "bloom" if tag == "Scene" => {
+                    if saw_scene_bloom {
+                        self.illegal(DiagCode::GrammarForbidden, attribute.span(),
+                            "Scene bloom may only be declared once");
+                        continue;
+                    }
+                    saw_scene_bloom = true;
+                    let Some(object) = self.attr_object_literal(&attribute.value, attribute.span(), "Scene bloom") else {
+                        continue;
+                    };
+                    let Some(fields) = self.scene3d_object_values(
+                        object,
+                        "Scene bloom",
+                        &["threshold", "knee", "intensity", "radius"],
+                    ) else {
+                        continue;
+                    };
+                    let mut numbers = [None; 4];
+                    for (index, (name, max)) in [
+                        ("threshold", 1.0),
+                        ("knee", 1.0),
+                        ("intensity", 4.0),
+                        ("radius", 128.0),
+                    ]
+                    .into_iter()
+                    .enumerate()
+                    {
+                        let Some(expression) = fields.get(name) else { continue };
+                        numbers[index] = self.eval_static(expression).and_then(|value| value.as_f64())
+                            .filter(|value| value.is_finite() && (0.0..=max).contains(value));
+                        if numbers[index].is_none() {
+                            self.illegal(DiagCode::GrammarForbidden, expression.span(),
+                                format!("Scene bloom {name} must be a static number in 0..={max}"));
+                        }
+                    }
+                    if let (Some(threshold), Some(intensity), Some(radius)) =
+                        (numbers[0], numbers[2], numbers[3])
+                    {
+                        scene_bloom = Some([threshold, numbers[1].unwrap_or(0.1), intensity, radius]);
+                    } else {
+                        self.illegal(DiagCode::GrammarForbidden, object.span(),
+                            "Scene bloom requires threshold, intensity, and radius");
+                    }
                 }
                 "camera" if kind_tag == "scene3d" => {
                     scene3d_camera = self.attr_object_literal(
@@ -275,18 +355,7 @@ impl<'s> Compiler<'s> {
                     shape_points = self.attr_shape_points(&attribute.value, attribute.span());
                 }
                 "geometry" if kind_tag == "geometry-batch" => {
-                    batch_geometry = match self
-                        .attr_static_string(&attribute.value, attribute.span(), "geometry")
-                        .as_deref()
-                    {
-                        Some("circle") => Some(GeometryBatchGeometry::Circle),
-                        Some("rect") => Some(GeometryBatchGeometry::Rect),
-                        Some(_) => {
-                            self.illegal(DiagCode::GrammarForbidden, attribute.span(), "GeometryBatch geometry must be circle or rect");
-                            None
-                        }
-                        None => None,
-                    };
+                    batch_geometry = self.attr_batch_geometry(&attribute.value, attribute.span());
                 }
                 "positions" if kind_tag == "geometry-batch" => {
                     if let Some((positions, field)) =
@@ -320,8 +389,124 @@ impl<'s> Compiler<'s> {
                         batch_opacity_field = field;
                     }
                 }
+                "rotations" if kind_tag == "geometry-batch" => {
+                    if let Some((rotations, field)) =
+                        self.attr_batch_rotations(&attribute.value, attribute.span())
+                    {
+                        batch_rotations = Some(rotations);
+                        batch_rotation_field = field;
+                    }
+                }
+                "skewXs" if kind_tag == "geometry-batch" => {
+                    if let Some((values, field)) =
+                        self.attr_batch_skew_xs(&attribute.value, attribute.span())
+                    {
+                        batch_skew_xs = Some(values);
+                        batch_skew_x_field = field;
+                    }
+                }
+                "strokeWidths" if kind_tag == "geometry-batch" => {
+                    if let Some((values, field)) =
+                        self.attr_batch_stroke_widths(&attribute.value, attribute.span())
+                    {
+                        batch_stroke_widths = Some(values);
+                        batch_stroke_width_field = field;
+                    }
+                }
                 "semanticKeys" if kind_tag == "geometry-batch" => {
                     batch_semantic_keys = self.attr_static_strings(&attribute.value, attribute.span(), "semanticKeys");
+                }
+                "kind" if kind_tag == "transition" => {
+                    if let Some(name) = self.attr_static_string(&attribute.value, attribute.span(), "kind") {
+                        match serde_json::from_value(serde_json::Value::String(name.clone())) {
+                            Ok(kind) => transition_kind = Some(kind),
+                            Err(_) => self.illegal(DiagCode::GrammarForbidden, attribute.span(), format!("unknown Transition kind `{name}`")),
+                        }
+                    }
+                }
+                "progress" if kind_tag == "transition" => {
+                    transition_progress = self.attr_number_value(&attribute.value, attribute.span(), "progress");
+                }
+                "samples" if kind_tag == "shutter" => {
+                    if let Some(value) = self.attr_static_number(&attribute.value, attribute.span(), "Shutter samples") {
+                        if value.fract() == 0.0 && (1.0..=32.0).contains(&value) {
+                            shutter_samples = Some(value as u8);
+                        } else {
+                            self.illegal(DiagCode::GrammarForbidden, attribute.span(), "Shutter samples must be an integer in 1..=32");
+                        }
+                    }
+                }
+                "angle" if kind_tag == "shutter" => {
+                    if let Some(value) = self.attr_static_number(&attribute.value, attribute.span(), "Shutter angle") {
+                        if value.fract() == 0.0 && (0.0..=360.0).contains(&value) {
+                            shutter_angle = Some(value as u16);
+                        } else {
+                            self.illegal(DiagCode::GrammarForbidden, attribute.span(), "Shutter angle must be an integer in 0..=360 degrees");
+                        }
+                    }
+                }
+                "count" if kind_tag == "echo" => {
+                    if let Some(value) = self.attr_static_number(&attribute.value, attribute.span(), "Echo count") {
+                        if value.fract() == 0.0 && (1.0..=32.0).contains(&value) {
+                            echo_count = Some(value as u8);
+                        } else {
+                            self.illegal(DiagCode::GrammarForbidden, attribute.span(), "Echo count must be an integer in 1..=32");
+                        }
+                    }
+                }
+                "interval" if kind_tag == "echo" => {
+                    if let Some(value) = self.attr_static_number(&attribute.value, attribute.span(), "Echo interval") {
+                        if value.fract() == 0.0 && (1.0..=u32::MAX as f64).contains(&value) {
+                            echo_interval = Some(value as u32);
+                        } else {
+                            self.illegal(DiagCode::GrammarForbidden, attribute.span(), "Echo interval must be a positive integer frame count");
+                        }
+                    }
+                }
+                "decay" if kind_tag == "echo" => {
+                    if let Some(value) = self.attr_static_number(&attribute.value, attribute.span(), "Echo decay") {
+                        if value.is_finite() && (0.0..=1.0).contains(&value) {
+                            echo_decay = Some(value);
+                        } else {
+                            self.illegal(DiagCode::GrammarForbidden, attribute.span(), "Echo decay must be a finite number in [0,1]");
+                        }
+                    }
+                }
+                "offset" if kind_tag == "time-scope" => {
+                    if let Some(value) = self.attr_static_number(&attribute.value, attribute.span(), "TimeScope offset") {
+                        if value.is_finite() {
+                            time_offset = Some(value);
+                        } else {
+                            self.illegal(DiagCode::GrammarForbidden, attribute.span(), "TimeScope offset must be finite seconds");
+                        }
+                    }
+                }
+                "speed" if kind_tag == "time-scope" => {
+                    if let Some(value) = self.attr_static_number(&attribute.value, attribute.span(), "TimeScope speed") {
+                        if value.is_finite() {
+                            time_speed = Some(value);
+                        } else {
+                            self.illegal(DiagCode::GrammarForbidden, attribute.span(), "TimeScope speed must be finite");
+                        }
+                    }
+                }
+                "params" if kind_tag == "transition" => {
+                    let Some(object) = self.attr_object_literal(&attribute.value, attribute.span(), "Transition params") else { continue; };
+                    for entry in &object.properties {
+                        let ObjectPropertyKind::ObjectProperty(property) = entry else {
+                            self.illegal(DiagCode::GrammarForbidden, entry.span(), "Transition params spread is not admitted");
+                            continue;
+                        };
+                        let Some(name) = static_property_name(&property.key) else {
+                            self.illegal(DiagCode::GrammarForbidden, property.span(), "Transition parameter names must be static");
+                            continue;
+                        };
+                        if let Some(value) = self.expr_number_value(&property.value) {
+                            if transition_params.insert(name.clone(), value).is_some() {
+                                self.illegal(DiagCode::GrammarForbidden, property.span(), format!("duplicate Transition parameter `{name}`"));
+                            }
+                        }
+                    }
                 }
                 "source" if kind_tag == "shader-layer" => {
                     let value = self.attr_static_string(
@@ -633,6 +818,24 @@ impl<'s> Compiler<'s> {
                         "src",
                     );
                 }
+                "invert" if kind_tag == "mask" => {
+                    mask_invert = match &attribute.value {
+                        None => true,
+                        Some(JSXAttributeValue::ExpressionContainer(container)) => {
+                            match container.expression.as_expression() {
+                                Some(Expression::BooleanLiteral(value)) => value.value,
+                                _ => {
+                                    self.illegal(DiagCode::GrammarForbidden, attribute.span(), "Mask invert must be a static boolean");
+                                    false
+                                }
+                            }
+                        }
+                        _ => {
+                            self.illegal(DiagCode::GrammarForbidden, attribute.span(), "Mask invert must be a static boolean");
+                            false
+                        }
+                    };
+                }
                 "mode" if kind_tag == "mask" => {
                     mask_mode = match self
                         .attr_static_string(&attribute.value, attribute.span(), "mode")
@@ -685,6 +888,40 @@ impl<'s> Compiler<'s> {
         }
         if let Some(object) = style_object {
             styles.extend(self.lower_style(&object, path, layout_id.as_deref()));
+        }
+        if class_names
+            .iter()
+            .any(|class| valle_motion::tailwind::advanced_filter(class).is_some())
+        {
+            self.extra_capabilities
+                .insert(valle_motion::NODE_ADVANCED_FILTER_CAPABILITY.to_owned());
+            if !styles
+                .iter()
+                .any(|style| style.property == "motion-filter-frame")
+            {
+                let expr = self.scoped_context_expr(ContextInput::LocalFrame, element.span());
+                styles.push(StyleBinding {
+                    property: "motion-filter-frame".into(),
+                    value: StyleValue::Expr { expr },
+                });
+            }
+        }
+        if let Some([threshold, knee, intensity, radius]) = scene_bloom {
+            self.extra_capabilities
+                .insert(valle_motion::NODE_ADVANCED_FILTER_CAPABILITY.to_owned());
+            for (property, value) in [
+                ("motion-bloom-threshold", threshold),
+                ("motion-bloom-knee", knee),
+                ("motion-bloom-intensity", intensity),
+                ("motion-bloom-radius", radius),
+            ] {
+                styles.push(StyleBinding {
+                    property: property.into(),
+                    value: StyleValue::Static {
+                        value: MotionValue::Number(value),
+                    },
+                });
+            }
         }
         if let Some(shape) = svg_shape {
             if path_d.is_some() {
@@ -819,12 +1056,6 @@ impl<'s> Compiler<'s> {
 
             let rich = saw_span || saw_inline_image || items.len() > 1;
             let per_unit = self.close_per_unit(element.span(), text_split, text_per_unit);
-            if rich && per_unit.is_some() {
-                self.unsupported(
-                    element.span(),
-                    "split/perUnit needs one run per unit, and a multi-run Text spans several runs; keep the split text in its own single-run Text, or drop split/perUnit",
-                );
-            }
             if rich && text_path.is_some() {
                 self.unsupported(
                     element.span(),
@@ -886,7 +1117,11 @@ impl<'s> Compiler<'s> {
                             key: run_key,
                             kind: NodeKind::Text {
                                 text,
-                                per_unit: None,
+                                per_unit: per_unit.as_ref().map(|binding| {
+                                    let mut binding = (**binding).clone();
+                                    binding.group_key = Some(key.clone());
+                                    Box::new(binding)
+                                }),
                                 path: None,
                             },
                             class_names: Vec::new(),
@@ -1001,7 +1236,10 @@ impl<'s> Compiler<'s> {
             let has_frame_fields = batch_position_field.is_some()
                 || batch_size_field.is_some()
                 || batch_fill_field.is_some()
-                || batch_opacity_field.is_some();
+                || batch_opacity_field.is_some()
+                || batch_rotation_field.is_some()
+                || batch_skew_x_field.is_some()
+                || batch_stroke_width_field.is_some();
             if matches!(positions, BatchPositions::Particles { .. }) {
                 if has_frame_fields {
                     self.illegal(
@@ -1030,11 +1268,17 @@ impl<'s> Compiler<'s> {
                         sizes,
                         fills,
                         opacities: batch_opacities.unwrap_or_default(),
+                        rotations: batch_rotations.unwrap_or_default(),
+                        skew_xs: batch_skew_xs.unwrap_or_default(),
+                        stroke_widths: batch_stroke_widths.unwrap_or_default(),
                         semantic_keys: batch_semantic_keys.unwrap_or_default(),
                         position_field: batch_position_field,
                         size_field: batch_size_field,
                         fill_field: batch_fill_field,
                         opacity_field: batch_opacity_field,
+                        rotation_field: batch_rotation_field,
+                        skew_x_field: batch_skew_x_field,
+                        stroke_width_field: batch_stroke_width_field,
                     },
                 },
                 class_names,
@@ -1199,6 +1443,19 @@ impl<'s> Compiler<'s> {
             return None;
         }
 
+        let scoped_time = if kind_tag == "time-scope" {
+            time_offset
+                .zip(time_speed)
+                .map(|(offset_seconds, speed)| TimeTransform {
+                    offset_seconds,
+                    speed,
+                })
+        } else {
+            None
+        };
+        if let Some(transform) = scoped_time {
+            self.time_scopes.push(transform);
+        }
         let mut children = Vec::new();
         for (index, child) in element.children.iter().enumerate() {
             match child {
@@ -1220,6 +1477,96 @@ impl<'s> Compiler<'s> {
                 }
                 _ => self.unsupported(child.span(), "container child is not valid Motion JSX"),
             }
+        }
+        if scoped_time.is_some() {
+            self.time_scopes.pop();
+        }
+        if kind_tag == "transition" {
+            if transition_kind.is_none()
+                || transition_progress.is_none()
+                || children.len() != 2
+                || children
+                    .iter()
+                    .any(|child| matches!(child.kind, NodeKind::GlassField(_)))
+            {
+                self.illegal(DiagCode::GrammarForbidden, element.span(),
+                    "Transition requires a static kind, numeric progress, and exactly two child subtrees with layout boxes");
+                return None;
+            }
+            if let Some(NumberValue::Expr { expr }) = transition_progress.as_ref() {
+                self.diagnose_parameter_range(*expr, "Transition progress", "", 0.0, 1.0);
+            }
+            for spec in transition_kind.unwrap().parameter_specs() {
+                if let Some(NumberValue::Expr { expr }) = transition_params.get(spec.name) {
+                    self.diagnose_parameter_range(
+                        *expr,
+                        &format!("Transition {}", spec.name),
+                        "",
+                        f64::from(spec.min),
+                        f64::from(spec.max),
+                    );
+                }
+            }
+            self.extra_capabilities
+                .insert(valle_motion::TRANSITION_CAPABILITY.into());
+        }
+        if kind_tag == "shutter" {
+            if shutter_samples.is_none()
+                || shutter_angle.is_none()
+                || children.is_empty()
+                || children
+                    .iter()
+                    .any(|child| matches!(child.kind, NodeKind::GlassField(_)))
+                || !styles.is_empty()
+                || !class_names.is_empty()
+                || !class_conditions.is_empty()
+                || visibility.is_some()
+            {
+                self.illegal(DiagCode::GrammarForbidden, element.span(),
+                    "Shutter requires static samples and angle plus child layout boxes; put styles and visibility on a surrounding View");
+                return None;
+            }
+            self.extra_capabilities
+                .insert(valle_motion::SHUTTER_CAPABILITY.into());
+        }
+        if kind_tag == "echo" {
+            if echo_count.is_none()
+                || echo_interval.is_none()
+                || echo_decay.is_none()
+                || children.is_empty()
+                || children
+                    .iter()
+                    .any(|child| matches!(child.kind, NodeKind::GlassField(_)))
+                || !styles.is_empty()
+                || !class_names.is_empty()
+                || !class_conditions.is_empty()
+                || visibility.is_some()
+            {
+                self.illegal(DiagCode::GrammarForbidden, element.span(),
+                    "Echo requires static count, interval and decay plus child layout boxes; put styles and visibility on a surrounding View");
+                return None;
+            }
+            self.extra_capabilities
+                .insert(valle_motion::ECHO_CAPABILITY.into());
+        }
+        if kind_tag == "time-scope" {
+            if time_offset.is_none()
+                || time_speed.is_none()
+                || children.is_empty()
+                || children
+                    .iter()
+                    .any(|child| matches!(child.kind, NodeKind::GlassField(_)))
+                || !styles.is_empty()
+                || !class_names.is_empty()
+                || !class_conditions.is_empty()
+                || visibility.is_some()
+            {
+                self.illegal(DiagCode::GrammarForbidden, element.span(),
+                    "TimeScope requires static offset and speed plus child layout boxes; put styles and visibility on a surrounding View");
+                return None;
+            }
+            self.extra_capabilities
+                .insert(valle_motion::TIME_SCOPE_CAPABILITY.into());
         }
         if kind_tag != "mask" && children.iter().any(|child| child.is_mask_source) {
             self.illegal(
@@ -1253,23 +1600,7 @@ impl<'s> Compiler<'s> {
                 );
                 return None;
             }
-            if let Some((index, source)) = source_children.first() {
-                if mask_mode != MaskMode::Alpha {
-                    self.illegal(
-                        DiagCode::GrammarForbidden,
-                        element.span(),
-                        "subtree MaskSource currently requires mode=\"alpha\"",
-                    );
-                    return None;
-                }
-                if *index + 1 != children.len() {
-                    self.illegal(
-                        DiagCode::GrammarForbidden,
-                        element.span(),
-                        "MaskSource must be the final direct child so it composites over preceding mask content",
-                    );
-                    return None;
-                }
+            if let Some((_, source)) = source_children.first() {
                 Some(source.key.clone())
             } else {
                 None
@@ -1300,8 +1631,30 @@ impl<'s> Compiler<'s> {
                         (None, None, Some(source)) => MaskValue::Subtree { source },
                         _ => unreachable!("checked above"),
                     },
-                    mode: mask_mode,
+                    mode: if mask_invert {
+                        mask_mode.inverted()
+                    } else {
+                        mask_mode
+                    },
                     rect: mask_rect.expect("checked above"),
+                },
+                "transition" => NodeKind::Transition {
+                    effect: transition_kind.expect("checked above"),
+                    progress: transition_progress.expect("checked above"),
+                    params: transition_params,
+                },
+                "shutter" => NodeKind::Shutter {
+                    samples: shutter_samples.expect("checked above"),
+                    angle_degrees: shutter_angle.expect("checked above"),
+                },
+                "echo" => NodeKind::Echo {
+                    count: echo_count.expect("checked above"),
+                    interval_frames: echo_interval.expect("checked above"),
+                    decay: echo_decay.expect("checked above"),
+                },
+                "time-scope" => NodeKind::TimeScope {
+                    offset_seconds: time_offset.expect("checked above"),
+                    speed: time_speed.expect("checked above"),
                 },
                 "shader-layer" => shader_kind.expect("lowered above"),
                 "glass" | "glass-field" => {

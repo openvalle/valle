@@ -544,8 +544,11 @@ impl NativeResourceProvider {
         })?;
         add_elapsed(&mut self.frame_scene3d.raster_us, raster_started.elapsed())?;
         let upload_started = Instant::now();
-        let object =
-            SkiaExternalObject::scene3d_rgba8(request.key().clone(), extent, &raster.premul_rgba8)?;
+        let object = SkiaExternalObject::scene3d_rgba16f(
+            request.key().clone(),
+            extent,
+            &raster.premul_rgba16f,
+        )?;
         add_elapsed(&mut self.frame_scene3d.upload_us, upload_started.elapsed())?;
         Ok(object)
     }
@@ -556,9 +559,11 @@ impl NativeResourceProvider {
     ) -> Result<SceneResources, NativeResourceError> {
         let mut resources = SceneResources::default();
         for mesh in &frame.scene.meshes {
-            let model_digest = binding_digest(frame, &mesh.model_control)?;
-            let model = self.model(&model_digest)?;
-            resources.models.insert(mesh.model_control.clone(), model);
+            if let Some(control) = &mesh.model_control {
+                let model_digest = binding_digest(frame, control)?;
+                let model = self.model(&model_digest)?;
+                resources.models.insert(control.clone(), model);
+            }
             for (control, role) in mesh.texture_controls() {
                 let texture_digest = binding_digest(frame, control)?;
                 let texture = self.texture(&texture_digest, role)?;

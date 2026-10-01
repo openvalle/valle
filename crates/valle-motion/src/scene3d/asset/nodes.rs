@@ -1,8 +1,10 @@
 //! Source-index identities and immutable affine transforms for a closed static glTF forest.
 use super::{
-    ContractErrors, ModelMesh, ModelVertex, Node, PrimitiveRange, Root,
-    geometry::{cross, normalize},
+    ContractErrors, ModelMesh, ModelVertex, Node, PrimitiveRange, Root, SkinVertex,
+    animation::ModelTrs,
+    geometry::{cross, normalize, valid_weight},
     one_error,
+    skin::ModelSkin,
 };
 use crate::scene3d::{MAX_ABS_POSITION, MAX_NODE_DEPTH, MAX_SCALE, MAX_TRIANGLES, MAX_VERTICES};
 
@@ -22,11 +24,17 @@ pub struct ModelNode {
 pub struct ModelInstance {
     pub node: u32,
     pub mesh: u32,
+    pub skin: Option<u32>,
     pub(crate) transform: Affine,
+    pub(crate) weights: Vec<f32>,
+    pub(crate) joint_palette: Vec<Affine>,
 }
 impl ModelInstance {
     pub fn world_transform(&self) -> &[f32; 16] {
         &self.transform.matrix
+    }
+    pub fn morph_weights(&self) -> &[f32] {
+        &self.weights
     }
 }
 
@@ -37,6 +45,15 @@ pub(crate) struct Affine {
     pub mirrored: bool,
 }
 impl Affine {
+    pub(crate) fn identity() -> Self {
+        Self {
+            matrix: [
+                1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+            ],
+            normal: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+            mirrored: false,
+        }
+    }
     pub(crate) fn new(matrix: [f32; 16]) -> Result<Self, ContractErrors> {
         if matrix.iter().any(|v| !v.is_finite() || v.abs() > 1.0e12)
             || [matrix[3], matrix[7], matrix[11], matrix[15]] != [0.0, 0.0, 0.0, 1.0]
@@ -81,7 +98,7 @@ impl Affine {
             mirrored: determinant < 0.0,
         })
     }
-    fn compose(self, local: Self) -> Result<Self, ContractErrors> {
+    pub(crate) fn compose(self, local: Self) -> Result<Self, ContractErrors> {
         Self::new(std::array::from_fn(|i| {
             let row = i % 4;
             let column = i / 4;
@@ -99,9 +116,30 @@ impl Affine {
         })
     }
     pub fn normal(self, n: [f32; 3]) -> [f32; 3] {
-        normalize(std::array::from_fn(|r| {
+        normalize(self.normal_raw(n))
+    }
+    pub(crate) fn normal_raw(self, n: [f32; 3]) -> [f32; 3] {
+        std::array::from_fn(|r| {
             self.normal[0][r] * n[0] + self.normal[1][r] * n[1] + self.normal[2][r] * n[2]
-        }))
+        })
+    }
+
+    pub(crate) fn from_model_trs(trs: ModelTrs, index: usize) -> Result<Self, ContractErrors> {
+        local_transform(
+            &Node {
+                mesh: None,
+                skin: None,
+                weights: None,
+                name: None,
+                children: Vec::new(),
+                matrix: None,
+                rotation: Some(trs.rotation),
+                translation: Some(trs.translation),
+                scale: Some(trs.scale),
+                _extras: None,
+            },
+            index,
+        )
     }
 }
 
@@ -219,9 +257,12 @@ fn resolve(
 pub(super) fn admit_nodes(
     root: &Root,
     meshes: &[ModelMesh],
+    mesh_weights: &[Vec<f32>],
     primitives: &[PrimitiveRange],
     indices: &[u32],
     vertices: &[ModelVertex],
+    skin_vertices: &[Option<Vec<SkinVertex>>],
+    skins: &[ModelSkin],
 ) -> Result<(Vec<ModelNode>, Vec<ModelInstance>), ContractErrors> {
     let mut parents = vec![None; root.nodes.len()];
     let mut locals = Vec::with_capacity(root.nodes.len());
@@ -231,6 +272,25 @@ pub(super) fn admit_nodes(
                 format!("/glb/nodes/{index}/mesh"),
                 "mesh index is out of range",
             ));
+        }
+        if node.skin.is_some_and(|s| s >= skins.len()) || node.skin.is_some() && node.mesh.is_none()
+        {
+            return Err(one_error(
+                format!("/glb/nodes/{index}/skin"),
+                "skin must reference an admitted skin and a mesh",
+            ));
+        }
+        if let Some(weights) = &node.weights {
+            if node
+                .mesh
+                .is_none_or(|m| meshes[m].morph_target_count as usize != weights.len())
+                || weights.iter().any(|w| !valid_weight(*w))
+            {
+                return Err(one_error(
+                    format!("/glb/nodes/{index}/weights"),
+                    "node weights require a morph mesh and matching finite bounded values",
+                ));
+            }
         }
         for &child in &node.children {
             let Some(parent) = parents.get_mut(child) else {
@@ -290,6 +350,64 @@ pub(super) fn admit_nodes(
             continue;
         };
         let mesh = meshes[mesh_index];
+        if let Some(skin_index) = node.skin {
+            let skin = &skins[skin_index];
+            if skin.joints.iter().any(|&joint| !active[joint])
+                || skin.skeleton.is_some_and(|skeleton| !active[skeleton])
+            {
+                return Err(one_error(
+                    format!("/glb/nodes/{index}/skin"),
+                    "skin joints and skeleton must belong to the selected scene",
+                ));
+            }
+            let common = skin.skeleton.map_or_else(
+                || {
+                    let mut candidate = Some(skin.joints[0]);
+                    while let Some(ancestor) = candidate {
+                        if skin
+                            .joints
+                            .iter()
+                            .all(|&joint| is_ancestor(ancestor, joint, &parents))
+                        {
+                            return Some(ancestor);
+                        }
+                        candidate = parents[ancestor];
+                    }
+                    None
+                },
+                Some,
+            );
+            if common.is_none_or(|ancestor| {
+                skin.joints
+                    .iter()
+                    .any(|&joint| !is_ancestor(ancestor, joint, &parents))
+            }) {
+                return Err(one_error(
+                    format!("/glb/nodes/{index}/skin"),
+                    "skin joints must share the declared or inferred skeleton root",
+                ));
+            }
+            for primitive_index in mesh.first_primitive as usize
+                ..(mesh.first_primitive + mesh.primitive_count) as usize
+            {
+                let Some(attributes) = &skin_vertices[primitive_index] else {
+                    return Err(one_error(
+                        format!("/glb/nodes/{index}/skin"),
+                        "skinned mesh primitives require JOINTS_0 and WEIGHTS_0",
+                    ));
+                };
+                if attributes
+                    .iter()
+                    .flat_map(|vertex| vertex.joints)
+                    .any(|joint| joint as usize >= skin.joints.len())
+                {
+                    return Err(one_error(
+                        format!("/glb/nodes/{index}/skin"),
+                        "JOINTS_0 values must index this skin's joint list",
+                    ));
+                }
+            }
+        }
         rendered_vertices = rendered_vertices.saturating_add(mesh.vertex_count);
         rendered_triangles = rendered_triangles.saturating_add(mesh.triangle_count);
         if rendered_vertices > MAX_VERTICES || rendered_triangles > MAX_TRIANGLES {
@@ -302,6 +420,9 @@ pub(super) fn admit_nodes(
         for primitive in &primitives
             [mesh.first_primitive as usize..(mesh.first_primitive + mesh.primitive_count) as usize]
         {
+            if node.skin.is_some() {
+                continue;
+            }
             for &vertex in &indices[primitive.first_index as usize
                 ..(primitive.first_index + primitive.index_count) as usize]
             {
@@ -320,7 +441,13 @@ pub(super) fn admit_nodes(
         instances.push(ModelInstance {
             node: index as u32,
             mesh: mesh_index as u32,
+            skin: node.skin.map(|i| i as u32),
             transform,
+            weights: node
+                .weights
+                .clone()
+                .unwrap_or_else(|| mesh_weights[mesh_index].clone()),
+            joint_palette: Vec::new(),
         });
     }
     if instances.is_empty() {
@@ -332,18 +459,52 @@ pub(super) fn admit_nodes(
     Ok((nodes, instances))
 }
 
+fn is_ancestor(ancestor: usize, mut node: usize, parents: &[Option<usize>]) -> bool {
+    loop {
+        if node == ancestor {
+            return true;
+        }
+        let Some(parent) = parents[node] else {
+            return false;
+        };
+        node = parent;
+    }
+}
+
 impl super::AdmittedModel {
     /// Resolve only from immutable bind transforms plus this frame's explicit replacements.
     /// Parent indices may follow children; the admitted forest resolver handles either order.
     pub(crate) fn frame_instances(
         &self,
         states: &[crate::scene3d::NodeFrameState],
+        animation: Option<(u32, f32)>,
     ) -> Result<Vec<ModelInstance>, ContractErrors> {
         let mut locals = self
             .nodes
             .iter()
             .map(|n| Affine::new(n.transform))
             .collect::<Result<Vec<_>, _>>()?;
+        if let Some((clip, time)) = animation {
+            let Some(animation) = self.animations.get(clip as usize) else {
+                return Err(one_error(
+                    "/frame/animation/clip",
+                    "animation clip is out of range",
+                ));
+            };
+            let mut trs = self.source_trs.clone();
+            animation.apply(time, &mut trs)?;
+            let mut touched = vec![false; self.nodes.len()];
+            for channel in &animation.channels {
+                if channel.is_trs() {
+                    touched[channel.node as usize] = true;
+                }
+            }
+            for (index, touched) in touched.into_iter().enumerate() {
+                if touched {
+                    locals[index] = Affine::from_model_trs(trs[index].unwrap(), index)?;
+                }
+            }
+        }
         for state in states {
             let Some(node) = self.nodes.get(state.id as usize).filter(|n| n.active) else {
                 return Err(one_error(
@@ -361,6 +522,11 @@ impl super::AdmittedModel {
         let mut world = vec![None; locals.len()];
         let mut visiting = vec![false; locals.len()];
         let mut instances = Vec::with_capacity(self.instances.len());
+        let weight_overrides = animation
+            .map(|(clip, time)| {
+                self.animations[clip as usize].sample_weights(time, self.nodes.len())
+            })
+            .transpose()?;
         for source in &self.instances {
             let transform = resolve(
                 source.node as usize,
@@ -375,6 +541,9 @@ impl super::AdmittedModel {
             for primitive in &self.primitives[mesh.first_primitive as usize
                 ..(mesh.first_primitive + mesh.primitive_count) as usize]
             {
+                if source.skin.is_some() {
+                    continue;
+                }
                 for &index in &self.indices[primitive.first_index as usize
                     ..(primitive.first_index + primitive.index_count) as usize]
                 {
@@ -390,10 +559,30 @@ impl super::AdmittedModel {
                     }
                 }
             }
+            let joint_palette = if let Some(skin_index) = source.skin {
+                let skin = &self.skins[skin_index as usize];
+                skin.joints
+                    .iter()
+                    .zip(&skin.inverse_bind)
+                    .map(|(&joint, &inverse)| {
+                        let world_transform =
+                            resolve(joint, &parents, &locals, &mut world, &mut visiting, 0)?.0;
+                        world_transform.compose(inverse)
+                    })
+                    .collect::<Result<Vec<_>, _>>()?
+            } else {
+                Vec::new()
+            };
             instances.push(ModelInstance {
                 node: source.node,
                 mesh: source.mesh,
+                skin: source.skin,
                 transform,
+                weights: weight_overrides
+                    .as_ref()
+                    .and_then(|overrides| overrides[source.node as usize].clone())
+                    .unwrap_or_else(|| source.weights.clone()),
+                joint_palette,
             });
         }
         Ok(instances)

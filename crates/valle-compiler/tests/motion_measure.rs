@@ -237,6 +237,26 @@ fn assert_measured_box_matches_text(
 }
 
 #[test]
+fn variable_axis_measurement_matches_the_rendered_layout_box() {
+    let source = r#"
+const label='WEIGHT';
+const type={fontSize:80,fontVariationSettings:'"wght" 650.25, "wdth" 75'};
+const M=measureText(label,type);
+export default function Card(ctx){return <Scene style={{width:640,height:360}}>
+  <View key='measured' style={{position:'absolute',width:M.width,height:M.height,opacity:ctx.localFrame/100}}/>
+  <Text key='actual' style={{...type,position:'absolute',top:100}}>{label}</Text>
+</Scene>}
+"#;
+    let compiled = compile_motion_with_env(
+        source,
+        &[],
+        Some(&MeasureEnv::new(&[], (640, 360)).unwrap()),
+    )
+    .unwrap();
+    assert_measured_box_matches_text(&compiled.artifact, (640, 360), &[]);
+}
+
+#[test]
 fn constrained_measurement_matches_wrapped_rendered_text() {
     use valle_compiler::motion::compile_motion_modules_with_full_env;
     // Measure and render receive the same numbers, so the measured box must equal the laid-out

@@ -109,6 +109,18 @@ fn post_layout_css_uses_valid_probes_and_matches_direct_frame_expressions() {
     let requested = [60, 0, 29, 30, 89, 60, 0];
     for (bound, direct) in [
         (
+            "translate:`${bounds('target').width/2}px 10%`",
+            "translate:`${(80+ctx.localFrame)/2}px 10%`",
+        ),
+        (
+            "rotate:`${bounds('target').width}deg`",
+            "rotate:`${80+ctx.localFrame}deg`",
+        ),
+        (
+            "scale:`${bounds('target').width/100} 1`",
+            "scale:`${(80+ctx.localFrame)/100} 1`",
+        ),
+        (
             "transform:`translateX(${bounds('target').width/2}px)`",
             "transform:`translateX(${(80+ctx.localFrame)/2}px)`",
         ),
@@ -143,18 +155,25 @@ fn post_layout_css_uses_valid_probes_and_matches_direct_frame_expressions() {
 
 #[test]
 fn post_layout_branches_must_preserve_containing_block_presence() {
-    for property in ["transform", "filter", "backdropFilter"] {
-        let list = if property == "transform" {
-            "translateX(10px)"
-        } else {
-            "blur(1px)"
-        };
-        let other = if property == "transform" {
-            "scale(1.2) translateX(4px)"
-        } else {
-            "brightness(0.8) blur(2px)"
-        };
-        for reset in ["none", "inherit", "initial"] {
+    for (property, list, other) in [
+        (
+            "transform",
+            "translateX(10px)",
+            "scale(1.2) translateX(4px)",
+        ),
+        ("filter", "blur(1px)", "brightness(0.8) blur(2px)"),
+        ("backdropFilter", "blur(1px)", "brightness(0.8) blur(2px)"),
+        ("translate", "0px", "10% 5px"),
+        ("rotate", "0deg", "45deg"),
+        ("scale", "1", "120% 80%"),
+    ] {
+        for reset in [
+            "none",
+            "inherit",
+            "initial",
+            "none !important",
+            "inherit !important",
+        ] {
             let diagnostics = compile_motion(&source(&format!(
                 "{property}:bounds('target').width>100?'{reset}':'{list}'"
             )))
@@ -166,6 +185,14 @@ fn post_layout_branches_must_preserve_containing_block_presence() {
                 "{diagnostics:?}"
             );
         }
+        assert!(
+            compile_motion(&source(&format!(
+                "{property}:bounds('target').width>100?'{list}':'{list} !important'"
+            )))
+            .unwrap_err()
+            .iter()
+            .any(|d| d.message.contains("cannot switch !important"))
+        );
         let bound = format!("{property}:bounds('target').width>100?'{list}':'{other}'");
         let direct = format!("{property}:80+ctx.localFrame>100?'{list}':'{other}'");
         assert_eq!(

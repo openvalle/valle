@@ -1,0 +1,235 @@
+{
+  "fade": [],
+  "wipeLeft": [
+    {
+      "name": "softness",
+      "label": "Edge softness",
+      "default": 0.0,
+      "min": 0.0,
+      "max": 1.0,
+      "step": 0.01
+    }
+  ],
+  "wipeRight": [
+    {
+      "name": "softness",
+      "label": "Edge softness",
+      "default": 0.0,
+      "min": 0.0,
+      "max": 1.0,
+      "step": 0.01
+    }
+  ],
+  "circleOpen": [
+    {
+      "name": "centerX",
+      "label": "Center X",
+      "default": 0.5,
+      "min": 0.0,
+      "max": 1.0,
+      "step": 0.01
+    },
+    {
+      "name": "centerY",
+      "label": "Center Y",
+      "default": 0.5,
+      "min": 0.0,
+      "max": 1.0,
+      "step": 0.01
+    },
+    {
+      "name": "softness",
+      "label": "Edge softness (px)",
+      "default": 0.5,
+      "min": 0.0,
+      "max": 100.0,
+      "step": 0.5
+    }
+  ],
+  "simpleZoom": [
+    {
+      "name": "quickness",
+      "label": "Zoom completion",
+      "default": 0.8,
+      "min": 0.2,
+      "max": 1.0,
+      "step": 0.01
+    },
+    {
+      "name": "centerX",
+      "label": "Center X",
+      "default": 0.5,
+      "min": 0.0,
+      "max": 1.0,
+      "step": 0.01
+    },
+    {
+      "name": "centerY",
+      "label": "Center Y",
+      "default": 0.5,
+      "min": 0.0,
+      "max": 1.0,
+      "step": 0.01
+    }
+  ],
+  "crossWarp": [
+    {
+      "name": "centerX",
+      "label": "Center X",
+      "default": 0.5,
+      "min": 0.0,
+      "max": 1.0,
+      "step": 0.01
+    },
+    {
+      "name": "centerY",
+      "label": "Center Y",
+      "default": 0.5,
+      "min": 0.0,
+      "max": 1.0,
+      "step": 0.01
+    }
+  ],
+  "linearBlur": [
+    {
+      "name": "intensity",
+      "label": "Blur intensity",
+      "default": 0.1,
+      "min": 0.0,
+      "max": 2.0,
+      "step": 0.01
+    }
+  ],
+  "directionalWarp": [
+    {
+      "name": "directionX",
+      "label": "Direction X",
+      "default": -1.0,
+      "min": -1.0,
+      "max": 1.0,
+      "step": 0.1
+    },
+    {
+      "name": "directionY",
+      "label": "Direction Y",
+      "default": 1.0,
+      "min": -1.0,
+      "max": 1.0,
+      "step": 0.1
+    },
+    {
+      "name": "softness",
+      "label": "Edge softness",
+      "default": 0.5,
+      "min": 0.001,
+      "max": 1.0,
+      "step": 0.01
+    }
+  ],
+  "dreamyZoom": [
+    {
+      "name": "strength",
+      "label": "Zoom strength",
+      "default": 0.5,
+      "min": 0.0,
+      "max": 4.0,
+      "step": 0.05
+    },
+    {
+      "name": "centerX",
+      "label": "Center X",
+      "default": 0.5,
+      "min": 0.0,
+      "max": 1.0,
+      "step": 0.01
+    },
+    {
+      "name": "centerY",
+      "label": "Center Y",
+      "default": 0.5,
+      "min": 0.0,
+      "max": 1.0,
+      "step": 0.01
+    }
+  ],
+  "ripple": [
+    {
+      "name": "frequency",
+      "label": "Wave frequency",
+      "default": 100.0,
+      "min": 0.0,
+      "max": 256.0,
+      "step": 1.0
+    },
+    {
+      "name": "speed",
+      "label": "Wave speed",
+      "default": 50.0,
+      "min": 0.0,
+      "max": 256.0,
+      "step": 1.0
+    },
+    {
+      "name": "amplitude",
+      "label": "Displacement",
+      "default": 0.033333335,
+      "min": 0.0,
+      "max": 1.0,
+      "step": 0.01
+    }
+  ],
+  "flyEye": [
+    {
+      "name": "size",
+      "label": "Displacement",
+      "default": 0.04,
+      "min": 0.0,
+      "max": 1.0,
+      "step": 0.01
+    },
+    {
+      "name": "frequency",
+      "label": "Grid frequency",
+      "default": 50.0,
+      "min": 0.0,
+      "max": 256.0,
+      "step": 1.0
+    },
+    {
+      "name": "colorSeparation",
+      "label": "Color separation",
+      "default": 0.3,
+      "min": 0.0,
+      "max": 1.0,
+      "step": 0.01
+    }
+  ],
+  "multiplyBlend": [
+    {
+      "name": "midpoint",
+      "label": "Multiply midpoint",
+      "default": 0.5,
+      "min": 0.001,
+      "max": 0.999,
+      "step": 0.01
+    }
+  ],
+  "perlin": [
+    {
+      "name": "scale",
+      "label": "Noise scale",
+      "default": 5.0,
+      "min": 0.001,
+      "max": 128.0,
+      "step": 0.5
+    },
+    {
+      "name": "smoothness",
+      "label": "Reveal softness",
+      "default": 0.1,
+      "min": 0.001,
+      "max": 1.0,
+      "step": 0.01
+    }
+  ]
+}

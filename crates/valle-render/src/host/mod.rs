@@ -6,6 +6,8 @@
 
 #[cfg(feature = "native")]
 mod audio;
+#[cfg(feature = "native")]
+mod delivery;
 mod frame;
 #[cfg(feature = "lottie")]
 mod lottie;

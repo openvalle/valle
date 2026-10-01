@@ -3,11 +3,20 @@ uniform shader from_tex;
 uniform shader to_tex;
 uniform float2 resolution;
 uniform float progress;
+// Resolved slots are defined by TransitionKind::parameter_specs in Rust.
+uniform float4 params;
+
+float lattice_mod(float n) {
+    return n - floor(n * (1.0 / 1024.0)) * 1024.0;
+}
 
 float hash21(float2 p) {
-    p = fract(p * float2(123.34, 456.21));
-    p += dot(p, p + 45.32);
-    return fract(p.x * p.y);
+    // Exact integer arithmetic expressed with ES2-compatible floats. Every product is
+    // below 2^24 and power-of-two reduction avoids platform-sensitive fract(x*y).
+    float h = lattice_mod(p.x * 157.0 + p.y * 113.0);
+    h = lattice_mod(h * (h + 31.0));
+    h = lattice_mod(h * (h + 71.0));
+    return h * (1.0 / 1024.0);
 }
 
 float value_noise(float2 p) {
@@ -22,11 +31,14 @@ float value_noise(float2 p) {
 }
 
 half4 main(float2 xy) {
+    if (progress <= 0.0) return from_tex.eval(xy);
+    if (progress >= 1.0) return to_tex.eval(xy);
     float2 uv = xy / resolution;
     // Noise frequency controls patch size.
-    float n = value_noise(uv * 5.0);
+    float n = value_noise(uv * params.x);
     // Soften the reveal boundary around the current progress.
-    float t = smoothstep(n - 0.1, n + 0.1, progress);
+    float front = -params.y + progress * (1.0 + 2.0 * params.y);
+    float t = smoothstep(n - params.y, n + params.y, front);
     half4 a = from_tex.eval(xy);
     half4 b = to_tex.eval(xy);
     return mix(a, b, half(t));

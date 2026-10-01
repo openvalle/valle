@@ -2,7 +2,69 @@
 
 use super::*;
 
+struct InstanceAttemptState {
+    keys: BTreeSet<String>,
+    layout_ids: BTreeSet<String>,
+    capabilities: BTreeSet<String>,
+    used_font_controls: BTreeSet<String>,
+    camera: Option<CameraBinding>,
+    source_node_spans_len: usize,
+    source_node_stacks_len: usize,
+    source_object_spans_len: usize,
+    resource_refs_len: usize,
+    instance_groups_len: usize,
+    diagnostics_len: usize,
+    warnings_len: usize,
+    expanded_helper_calls: usize,
+    expanded_list_items: usize,
+}
+
 impl<'s> Compiler<'s> {
+    fn snapshot_instance_attempt(&self) -> InstanceAttemptState {
+        InstanceAttemptState {
+            keys: self.keys.clone(),
+            layout_ids: self.layout_ids.clone(),
+            capabilities: self.extra_capabilities.clone(),
+            used_font_controls: self.used_font_controls.clone(),
+            camera: self.camera.clone(),
+            source_node_spans_len: self.source_ledger.node_spans.len(),
+            source_node_stacks_len: self.source_ledger.node_expansion_stacks.len(),
+            source_object_spans_len: self.source_ledger.object_spans.len(),
+            resource_refs_len: self.resource_refs.len(),
+            instance_groups_len: self.instance_groups.len(),
+            diagnostics_len: self.diagnostics.len(),
+            warnings_len: self.warnings.len(),
+            expanded_helper_calls: self.expanded_helper_calls,
+            expanded_list_items: self.expanded_list_items,
+        }
+    }
+
+    fn restore_instance_attempt(&mut self, state: InstanceAttemptState) {
+        self.keys = state.keys;
+        self.layout_ids = state.layout_ids;
+        self.extra_capabilities = state.capabilities;
+        self.used_font_controls = state.used_font_controls;
+        self.camera = state.camera;
+        self.source_ledger
+            .node_spans
+            .truncate(state.source_node_spans_len);
+        self.source_ledger
+            .node_expansion_stacks
+            .truncate(state.source_node_stacks_len);
+        self.source_ledger
+            .object_spans
+            .truncate(state.source_object_spans_len);
+        self.resource_refs.truncate(state.resource_refs_len);
+        self.instance_groups.truncate(state.instance_groups_len);
+        self.source_ledger
+            .instance_exprs
+            .truncate(state.instance_groups_len);
+        self.diagnostics.truncate(state.diagnostics_len);
+        self.warnings.truncate(state.warnings_len);
+        self.expanded_helper_calls = state.expanded_helper_calls;
+        self.expanded_list_items = state.expanded_list_items;
+    }
+
     pub(super) fn static_bindings(&self) -> Vec<(String, serde_json::Value)> {
         let mut bindings = self
             .bindings
@@ -19,7 +81,9 @@ impl<'s> Compiler<'s> {
     /// Bind a prepare-time constant and invalidate any dynamic binding with the same name.
     pub(super) fn bind_static(&mut self, name: String, value: serde_json::Value) {
         self.bindings.objects.remove(&name);
+        self.bindings.instance_objects.remove(&name);
         self.bindings.scalars.remove(&name);
+        self.bindings.paints.remove(&name);
         self.bindings.tuples.remove(&name);
         self.bindings.children.remove(&name);
         self.bindings.statics.insert(name, value);
@@ -29,6 +93,8 @@ impl<'s> Compiler<'s> {
     /// Otherwise the sandbox could fold a shadowed outer value into a constant.
     pub(super) fn bind_dynamic(&mut self, name: String, expr: ExprId) {
         self.bindings.objects.remove(&name);
+        self.bindings.instance_objects.remove(&name);
+        self.bindings.paints.remove(&name);
         self.bindings.statics.remove(&name);
         self.bindings.tuples.remove(&name);
         self.bindings.children.remove(&name);
@@ -40,10 +106,66 @@ impl<'s> Compiler<'s> {
     /// one scalar ExprId before the SceneArtifact is emitted.
     pub(super) fn bind_dynamic_tuple(&mut self, name: String, values: Vec<ExprId>) {
         self.bindings.objects.remove(&name);
+        self.bindings.instance_objects.remove(&name);
         self.bindings.scalars.remove(&name);
+        self.bindings.paints.remove(&name);
         self.bindings.statics.remove(&name);
         self.bindings.children.remove(&name);
         self.bindings.tuples.insert(name, values);
+    }
+
+    pub(super) fn bind_paint(&mut self, name: String, paint: PaintValue) {
+        self.bindings.objects.remove(&name);
+        self.bindings.instance_objects.remove(&name);
+        self.bindings.scalars.remove(&name);
+        self.bindings.tuples.remove(&name);
+        self.bindings.statics.remove(&name);
+        self.bindings.children.remove(&name);
+        self.bindings.paints.insert(name, paint);
+    }
+
+    pub(super) fn bind_instance_object(
+        &mut self,
+        name: String,
+        fields: BTreeMap<String, (u32, valle_motion::expr::ExprType)>,
+    ) {
+        self.bindings.objects.remove(&name);
+        self.bindings.scalars.remove(&name);
+        self.bindings.paints.remove(&name);
+        self.bindings.tuples.remove(&name);
+        self.bindings.statics.remove(&name);
+        self.bindings.children.remove(&name);
+        self.bindings.instance_objects.insert(name, fields);
+    }
+
+    pub(super) fn instance_object_fields(
+        &self,
+        expression: &Expression<'_>,
+    ) -> Option<BTreeMap<String, (u32, valle_motion::expr::ExprType)>> {
+        match peel_expr(expression) {
+            Expression::Identifier(id) => self
+                .instance_scope
+                .as_ref()
+                .filter(|scope| scope.parameter == id.name.as_str())
+                .map(|scope| scope.fields.clone())
+                .or_else(|| {
+                    self.bindings
+                        .instance_objects
+                        .get(id.name.as_str())
+                        .cloned()
+                }),
+            Expression::StaticMemberExpression(member) if matches!(&member.object, Expression::Identifier(id) if id.name == "props") => {
+                self.bindings
+                    .component_props
+                    .as_ref()
+                    .and_then(|props| props.get(member.property.name.as_str()))
+                    .and_then(|value| match value {
+                        AuthorValue::InstanceObject(fields) => Some(fields.clone()),
+                        _ => None,
+                    })
+            }
+            _ => None,
+        }
     }
 
     pub(super) fn dynamic_tuple_value(&self, expression: &Expression<'_>) -> Option<Vec<ExprId>> {
@@ -283,8 +405,25 @@ impl<'s> Compiler<'s> {
         &mut self,
         expression: &Expression<'_>,
     ) -> Option<AuthorValue> {
+        if let Some(paint) = self.bound_paint(expression) {
+            return Some(AuthorValue::Paint(paint));
+        }
+        if let Some(fields) = self.instance_object_fields(expression) {
+            return Some(AuthorValue::InstanceObject(fields));
+        }
         if let Some(value) = self.eval_static(expression) {
             return Some(AuthorValue::Static(value));
+        }
+        if let Expression::CallExpression(call) = peel_expr(expression)
+            && let Expression::Identifier(callee) = &call.callee
+            && matches!(
+                callee.name.as_str(),
+                "linearGradient" | "radialGradient" | "conicGradient"
+            )
+        {
+            return self
+                .lower_gradient_call(call, expression.span())
+                .map(AuthorValue::Paint);
         }
         if self.is_dynamic_tuple_expression(expression) {
             return self
@@ -297,7 +436,9 @@ impl<'s> Compiler<'s> {
     /// Bind JSX children in the same namespace as scalar and tuple values.
     pub(super) fn bind_children(&mut self, name: String, children: Vec<PendingNode>) {
         self.bindings.objects.remove(&name);
+        self.bindings.instance_objects.remove(&name);
         self.bindings.scalars.remove(&name);
+        self.bindings.paints.remove(&name);
         self.bindings.tuples.remove(&name);
         self.bindings.statics.remove(&name);
         self.bindings.children.insert(name, children);
@@ -306,8 +447,17 @@ impl<'s> Compiler<'s> {
     /// Detect names currently bound to runtime expressions; the sandbox cannot safely evaluate them
     /// using older static bindings.
     pub(super) fn shadowed_by_dynamic(&self, expression: &Expression<'_>) -> bool {
+        if self
+            .instance_scope
+            .as_ref()
+            .is_some_and(|scope| referenced_identifiers(expression).contains(&scope.parameter))
+        {
+            return true;
+        }
         if self.bindings.scalars.is_empty()
+            && self.bindings.paints.is_empty()
             && self.bindings.tuples.is_empty()
+            && self.bindings.instance_objects.is_empty()
             && self.bindings.children.is_empty()
             && self.bindings.objects.is_empty()
         {
@@ -315,7 +465,9 @@ impl<'s> Compiler<'s> {
         }
         referenced_identifiers(expression).iter().any(|name| {
             self.bindings.scalars.contains_key(name)
+                || self.bindings.paints.contains_key(name)
                 || self.bindings.tuples.contains_key(name)
+                || self.bindings.instance_objects.contains_key(name)
                 || self.bindings.children.contains_key(name)
                 || (self.bindings.objects.contains_key(name)
                     && !self.bindings.statics.contains_key(name))
@@ -381,7 +533,12 @@ impl<'s> Compiler<'s> {
                 // values.
                 if let Some(authored) = authored_fn_of(initializer) {
                     self.bindings.objects.remove(&name);
+                    self.bindings.paints.remove(&name);
                     self.bindings.local_functions.insert(name, authored);
+                    return;
+                }
+                if let Some(fields) = self.instance_object_fields(initializer) {
+                    self.bind_instance_object(name, fields);
                     return;
                 }
                 let object = self.capture_authored_object(initializer);
@@ -390,8 +547,21 @@ impl<'s> Compiler<'s> {
                     if let Some(object) = object {
                         self.bindings.objects.insert(name, object);
                     }
+                } else if let Some(paint) = self.bound_paint(initializer) {
+                    self.bind_paint(name, paint);
+                } else if let Expression::CallExpression(call) = peel_expr(initializer)
+                    && let Expression::Identifier(callee) = &call.callee
+                    && matches!(
+                        callee.name.as_str(),
+                        "linearGradient" | "radialGradient" | "conicGradient"
+                    )
+                {
+                    if let Some(paint) = self.lower_gradient_call(call, initializer.span()) {
+                        self.bind_paint(name, paint);
+                    }
                 } else if let Some(object) = object {
                     self.bindings.scalars.remove(&name);
+                    self.bindings.paints.remove(&name);
                     self.bindings.tuples.remove(&name);
                     self.bindings.statics.remove(&name);
                     self.bindings.children.remove(&name);
@@ -417,6 +587,10 @@ impl<'s> Compiler<'s> {
                 if matches!(strip_parens(initializer), Expression::Identifier(id) if id.name == "props")
                 {
                     self.bind_props_pattern(pattern);
+                    return;
+                }
+                if let Some(fields) = self.instance_object_fields(initializer) {
+                    self.bind_instance_object_pattern(pattern, &fields);
                     return;
                 }
                 let Some(value) = self.eval_static(initializer) else {
@@ -484,8 +658,14 @@ impl<'s> Compiler<'s> {
                 Some(AuthorValue::Dynamic(expr)) => {
                     self.bind_dynamic(local_name, expr);
                 }
+                Some(AuthorValue::Paint(paint)) => {
+                    self.bind_paint(local_name, paint);
+                }
                 Some(AuthorValue::DynamicTuple(values)) => {
                     self.bind_dynamic_tuple(local_name, values);
+                }
+                Some(AuthorValue::InstanceObject(fields)) => {
+                    self.bind_instance_object(local_name, fields);
                 }
                 Some(AuthorValue::Static(value)) => {
                     self.bind_static(local_name, value);
@@ -519,6 +699,40 @@ impl<'s> Compiler<'s> {
                     }
                 }
             }
+        }
+    }
+
+    fn bind_instance_object_pattern(
+        &mut self,
+        pattern: &oxc::ast::ast::ObjectPattern<'_>,
+        fields: &BTreeMap<String, (u32, valle_motion::expr::ExprType)>,
+    ) {
+        for property in &pattern.properties {
+            let Some(field) = static_property_name(&property.key) else {
+                self.illegal(
+                    DiagCode::GrammarForbidden,
+                    property.span(),
+                    "computed instance fields are illegal",
+                );
+                continue;
+            };
+            let Some(name) = binding_local_name(&property.value) else {
+                self.unsupported(
+                    property.span(),
+                    "nested instance field destructuring is unsupported",
+                );
+                continue;
+            };
+            let Some((column, value_type)) = fields.get(&field).copied() else {
+                self.illegal(
+                    DiagCode::UnknownIdentifier,
+                    property.span(),
+                    format!("unknown instance field `{field}`"),
+                );
+                continue;
+            };
+            let expr = self.push(Expr::InstanceField { column, value_type }, property.span());
+            self.bind_dynamic(name, expr);
         }
     }
 
@@ -815,8 +1029,14 @@ impl<'s> Compiler<'s> {
                 Some(AuthorValue::Dynamic(expr)) => {
                     self.bind_dynamic(local_name, expr);
                 }
+                Some(AuthorValue::Paint(paint)) => {
+                    self.bind_paint(local_name, paint);
+                }
                 Some(AuthorValue::DynamicTuple(values)) => {
                     self.bind_dynamic_tuple(local_name, values);
+                }
+                Some(AuthorValue::InstanceObject(fields)) => {
+                    self.bind_instance_object(local_name, fields);
                 }
                 Some(AuthorValue::Children(_)) => unreachable!("helper arguments are values"),
                 None => self.illegal(
@@ -897,20 +1117,6 @@ impl<'s> Compiler<'s> {
             );
             return None;
         };
-        if items.len() > MAX_STATIC_MAP_ITEMS
-            || self.expanded_list_items.saturating_add(items.len()) > MAX_TOTAL_EXPANDED_LIST_ITEMS
-        {
-            self.illegal(
-                DiagCode::GrammarForbidden,
-                member.object.span(),
-                format!(
-                    "prepare-time map expands {} items; the per-map limit is {MAX_STATIC_MAP_ITEMS} and the module budget is {MAX_TOTAL_EXPANDED_LIST_ITEMS}",
-                    items.len()
-                ),
-            );
-            return None;
-        }
-        self.expanded_list_items += items.len();
         if call.arguments.len() != 1 {
             self.illegal(
                 DiagCode::GrammarForbidden,
@@ -936,6 +1142,44 @@ impl<'s> Compiler<'s> {
             );
             return None;
         }
+        let mut fallback_reason = None;
+        if items.len() <= valle_motion::MAX_GEOMETRY_BATCH_INSTANCES_PER_NODE
+            && let Some(nodes) = self.try_lower_instance_map(
+                &items,
+                &member.object,
+                arrow,
+                path,
+                &mut fallback_reason,
+            )
+        {
+            return Some(nodes);
+        }
+        if items.len() > MAX_STATIC_MAP_ITEMS
+            || self.expanded_list_items.saturating_add(items.len()) > MAX_TOTAL_EXPANDED_LIST_ITEMS
+        {
+            self.illegal(
+                DiagCode::GrammarForbidden,
+                member.object.span(),
+                format!(
+                    "prepare-time map expands {} items; the per-map limit is {MAX_STATIC_MAP_ITEMS} and the module budget is {MAX_TOTAL_EXPANDED_LIST_ITEMS}; homogeneous absolute View or translated solid Path instance groups can use up to {} rows",
+                    items.len(), valle_motion::MAX_GEOMETRY_BATCH_INSTANCES_PER_NODE,
+                ),
+            );
+            return None;
+        }
+        // Small authored lists are ordinary composition, not a performance problem.
+        if items.len() >= 64 {
+            self.warn(
+                DiagCode::InstanceFallback,
+                call.span(),
+                format!(
+                    "static JSX map expands {} rows: {}",
+                    items.len(),
+                    fallback_reason.unwrap_or_else(|| self.instance_map_fallback_reason(arrow)),
+                ),
+            );
+        }
+        self.expanded_list_items += items.len();
         // Restore the complete lexical binding frame between map iterations and after the map.
         let saved_frame = self.bindings.snapshot_frame();
         let mut nodes = Vec::new();
@@ -957,6 +1201,958 @@ impl<'s> Compiler<'s> {
         self.list_depth -= 1;
         self.bindings.restore_frame(saved_frame);
         Some(nodes)
+    }
+
+    fn instance_map_fallback_reason(
+        &self,
+        arrow: &oxc::ast::ast::ArrowFunctionExpression<'s>,
+    ) -> String {
+        let Some(Expression::JSXElement(element)) = arrow.get_expression().map(peel_expr) else {
+            return "callback does not return one JSX element".into();
+        };
+        let tag = match &element.opening_element.name {
+            JSXElementName::Identifier(id) => id.name.as_str(),
+            JSXElementName::IdentifierReference(id) => id.name.as_str(),
+            _ => return "template component name is dynamic".into(),
+        };
+        if self.authored_fn(tag).is_some() {
+            return "component instance needs a direct item key, supported row fields, and a fixed in-flow View/Group/Text tree".into();
+        }
+        if !matches!(tag, "View" | "Group" | "Text" | "Circle" | "Path") {
+            return format!("{tag} has no instance template renderer");
+        }
+        if !element.children.is_empty() && tag != "Text" {
+            return "template has children and needs per-instance layout".into();
+        }
+        let mut class_name = None;
+        let mut style_properties = BTreeSet::new();
+        let mut attributes = BTreeSet::new();
+        for attribute in &element.opening_element.attributes {
+            let JSXAttributeItem::Attribute(attribute) = attribute else {
+                return "spread attributes prevent a fixed template".into();
+            };
+            let JSXAttributeName::Identifier(name) = &attribute.name else {
+                return "namespaced attributes prevent a fixed template".into();
+            };
+            let name = name.name.as_str();
+            attributes.insert(name);
+            if name == "className" {
+                class_name = match &attribute.value {
+                    Some(JSXAttributeValue::StringLiteral(value)) => Some(value.value.as_str()),
+                    _ => None,
+                };
+            }
+            if name == "style" {
+                let Some(JSXAttributeValue::ExpressionContainer(container)) = &attribute.value
+                else {
+                    return "style must be a fixed object literal".into();
+                };
+                let Some(Expression::ObjectExpression(object)) =
+                    container.expression.as_expression().map(peel_expr)
+                else {
+                    return "style must be a fixed object literal".into();
+                };
+                for property in &object.properties {
+                    let ObjectPropertyKind::ObjectProperty(property) = property else {
+                        return "style spread prevents a fixed template".into();
+                    };
+                    let name = match &property.key {
+                        PropertyKey::StaticIdentifier(id) => id.name.as_str(),
+                        PropertyKey::StringLiteral(id) => id.value.as_str(),
+                        _ => return "computed style keys prevent a fixed template".into(),
+                    };
+                    style_properties.insert(name);
+                }
+            }
+        }
+        if tag == "View"
+            && class_name.is_some_and(|name| {
+                name != "absolute" && name.split_whitespace().any(|class| class == "absolute")
+            })
+        {
+            return "View needs exact className=\"absolute\" for absolute batching".into();
+        }
+        if !attributes.contains("key") {
+            return "template leaf needs a key from the array item to preserve row identity".into();
+        }
+        let supported_style = |name: &str| match tag {
+            "View" | "Group" => matches!(
+                name,
+                "left"
+                    | "top"
+                    | "width"
+                    | "height"
+                    | "backgroundColor"
+                    | "opacity"
+                    | "transform"
+                    | "minWidth"
+                    | "minHeight"
+                    | "maxWidth"
+                    | "maxHeight"
+                    | "marginTop"
+                    | "marginRight"
+                    | "marginBottom"
+                    | "marginLeft"
+                    | "paddingTop"
+                    | "paddingRight"
+                    | "paddingBottom"
+                    | "paddingLeft"
+                    | "borderRadius"
+            ),
+            "Text" => matches!(
+                name,
+                "width"
+                    | "height"
+                    | "fontSize"
+                    | "fontWeight"
+                    | "letterSpacing"
+                    | "lineHeight"
+                    | "color"
+                    | "opacity"
+                    | "textAlign"
+                    | "whiteSpace"
+            ),
+            "Circle" => name == "opacity",
+            "Path" => matches!(
+                name,
+                "translate" | "opacity" | "rotate" | "scale" | "transform" | "transformOrigin"
+            ),
+            _ => false,
+        };
+        if let Some(name) = style_properties.iter().find(|name| !supported_style(name)) {
+            return format!("{tag} style.{name} has no pixel-equivalent instance lowering");
+        }
+        if tag == "View" && class_name == Some("absolute") {
+            if let Some(name) = style_properties.iter().find(|name| {
+                matches!(
+                    **name,
+                    "minWidth"
+                        | "minHeight"
+                        | "maxWidth"
+                        | "maxHeight"
+                        | "marginTop"
+                        | "marginRight"
+                        | "marginBottom"
+                        | "marginLeft"
+                        | "paddingTop"
+                        | "paddingRight"
+                        | "paddingBottom"
+                        | "paddingLeft"
+                        | "borderRadius"
+                )
+            }) {
+                return format!(
+                    "View style.{name} needs the per-row layout template instead of the absolute batch template"
+                );
+            }
+        }
+        if tag == "View" && class_name != Some("absolute") {
+            if let Some(name) = style_properties
+                .iter()
+                .find(|name| matches!(**name, "left" | "top" | "transform"))
+            {
+                return format!("View style.{name} needs the exact absolute batch template");
+            }
+        }
+        if tag == "View"
+            && class_name == Some("absolute")
+            && let Some(name) = ["left", "top", "width", "height", "backgroundColor"]
+                .into_iter()
+                .find(|name| !style_properties.contains(name))
+        {
+            return format!("View style.{name} is required by the absolute box template");
+        }
+        if tag == "Path" {
+            if let Some(name) = attributes.iter().find(|name| {
+                !matches!(
+                    **name,
+                    "key" | "d" | "fill" | "stroke" | "strokeWidth" | "style" | "visible"
+                )
+            }) {
+                return format!("Path {name} has no shared-geometry instance lowering");
+            }
+            if !attributes.contains("d") || !attributes.contains("fill") {
+                return "Path needs a shared static d and solid fill".into();
+            }
+            if !style_properties.contains("translate") {
+                return "Path needs a pixel translate style".into();
+            }
+            if (style_properties.contains("rotate")
+                || style_properties.contains("scale")
+                || style_properties.contains("transform"))
+                && !style_properties.contains("transformOrigin")
+            {
+                return "Path rotation/scale/skew needs transformOrigin: point(0, 0)".into();
+            }
+        }
+        if tag == "Circle" {
+            if let Some(name) = attributes.iter().find(|name| {
+                !matches!(
+                    **name,
+                    "key" | "cx" | "cy" | "r" | "fill" | "style" | "visible"
+                )
+            }) {
+                return format!("Circle {name} has no full-arc instance lowering");
+            }
+        }
+        if self.geometry_references.unknown_key {
+            return "dynamic bounds()/anchor() references need per-row layout".into();
+        }
+        "row fields, value types, or geometry references do not meet the instance template contract"
+            .into()
+    }
+
+    /// Compile a homogeneous template once, keeping row values in columns. Flow roots may
+    /// be View, Group, or plain Text; each row still receives its own layout.
+    fn try_lower_instance_map(
+        &mut self,
+        items: &[serde_json::Value],
+        source: &'s Expression<'s>,
+        arrow: &'s oxc::ast::ast::ArrowFunctionExpression<'s>,
+        path: &str,
+        fallback_reason: &mut Option<String>,
+    ) -> Option<Vec<PendingNode>> {
+        let index_formulas = self.prepared_index_formulas(source, items.len());
+        let parameter = arrow
+            .params
+            .items
+            .first()?
+            .pattern
+            .get_identifier_name()?
+            .to_string();
+        let element = match arrow.get_expression().map(peel_expr)? {
+            Expression::JSXElement(element) => element,
+            _ => return None,
+        };
+        let tag = match &element.opening_element.name {
+            JSXElementName::Identifier(id) => id.name.as_str(),
+            JSXElementName::IdentifierReference(id) => id.name.as_str(),
+            _ => return None,
+        };
+        let is_component = self.authored_fn(tag).is_some();
+        let is_view = tag == "View" && !is_component;
+        let is_group = tag == "Group" && !is_component;
+        let is_text = tag == "Text" && !is_component;
+        let is_circle = tag == "Circle" && !is_component;
+        let is_path = tag == "Path" && !is_component;
+        if !(is_view || is_group || is_text || is_circle || is_path || is_component)
+            || !element.children.is_empty() && !(is_view || is_group || is_text || is_component)
+        {
+            return None;
+        }
+        // Exact Circle arcs currently emit one path per row, bounded by the ordinary map budget.
+        if is_circle && items.len() > MAX_STATIC_MAP_ITEMS {
+            return None;
+        }
+        let mut key_field = None;
+        let mut has_absolute_class = false;
+        let mut has_style = false;
+        let mut has_circle_radius = false;
+        let mut has_circle_fill = false;
+        let mut has_path_data = false;
+        let mut has_path_fill = false;
+        let mut has_path_stroke = false;
+        let mut has_path_stroke_width = false;
+        let mut path_fill_source = None;
+        let mut path_stroke_source = None;
+        let mut style_names = BTreeSet::new();
+        for attribute in &element.opening_element.attributes {
+            let JSXAttributeItem::Attribute(attribute) = attribute else {
+                return None;
+            };
+            let JSXAttributeName::Identifier(name) = &attribute.name else {
+                return None;
+            };
+            if is_component && name.name != "key" {
+                continue;
+            }
+            match name.name.as_str() {
+                "key" => {
+                    let Some(JSXAttributeValue::ExpressionContainer(container)) = &attribute.value
+                    else {
+                        return None;
+                    };
+                    let Some(Expression::StaticMemberExpression(member)) =
+                        container.expression.as_expression().map(peel_expr)
+                    else {
+                        return None;
+                    };
+                    if !matches!(&member.object, Expression::Identifier(id) if id.name.as_str() == parameter)
+                    {
+                        return None;
+                    }
+                    key_field = Some(member.property.name.to_string());
+                }
+                "className" => {
+                    if !(is_view || is_group || is_text) {
+                        return None;
+                    }
+                    match &attribute.value {
+                        Some(JSXAttributeValue::StringLiteral(value)) => {
+                            has_absolute_class = value.value == "absolute";
+                            if !has_absolute_class
+                                && value
+                                    .value
+                                    .split_whitespace()
+                                    .any(|class| class == "absolute")
+                            {
+                                return None;
+                            }
+                        }
+                        Some(JSXAttributeValue::ExpressionContainer(_)) => {}
+                        _ => return None,
+                    }
+                }
+                "style" => {
+                    let Some(JSXAttributeValue::ExpressionContainer(container)) = &attribute.value
+                    else {
+                        return None;
+                    };
+                    let Some(Expression::ObjectExpression(object)) =
+                        container.expression.as_expression().map(peel_expr)
+                    else {
+                        return None;
+                    };
+                    has_style = true;
+                    for property in &object.properties {
+                        let ObjectPropertyKind::ObjectProperty(property) = property else {
+                            return None;
+                        };
+                        let name = match &property.key {
+                            PropertyKey::StaticIdentifier(id) => id.name.as_str(),
+                            PropertyKey::StringLiteral(id) => id.value.as_str(),
+                            _ => return None,
+                        };
+                        if !(if is_circle {
+                            name == "opacity"
+                        } else if is_path {
+                            matches!(
+                                name,
+                                "translate"
+                                    | "opacity"
+                                    | "rotate"
+                                    | "scale"
+                                    | "transform"
+                                    | "transformOrigin"
+                            )
+                        } else if is_text {
+                            matches!(
+                                name,
+                                "width"
+                                    | "height"
+                                    | "fontSize"
+                                    | "fontWeight"
+                                    | "letterSpacing"
+                                    | "lineHeight"
+                                    | "color"
+                                    | "opacity"
+                                    | "textAlign"
+                                    | "whiteSpace"
+                            )
+                        } else {
+                            matches!(
+                                name,
+                                "left"
+                                    | "top"
+                                    | "width"
+                                    | "height"
+                                    | "backgroundColor"
+                                    | "opacity"
+                                    | "transform"
+                                    | "minWidth"
+                                    | "minHeight"
+                                    | "maxWidth"
+                                    | "maxHeight"
+                                    | "marginTop"
+                                    | "marginRight"
+                                    | "marginBottom"
+                                    | "marginLeft"
+                                    | "paddingTop"
+                                    | "paddingRight"
+                                    | "paddingBottom"
+                                    | "paddingLeft"
+                                    | "borderRadius"
+                            )
+                        }) {
+                            return None;
+                        }
+                        style_names.insert(name.to_owned());
+                        if name == "transform"
+                            && !matches!(peel_expr(&property.value), Expression::TemplateLiteral(template)
+                                if template.quasis.len() == 2
+                                    && template.expressions.len() == 1
+                                    && template.quasis[0].value.raw == (if is_path { "skewX(" } else { "rotate(" })
+                                    && template.quasis[1].value.raw == "deg)")
+                            && !(is_path
+                                && matches!(
+                                    peel_expr(&property.value),
+                                    Expression::StringLiteral(_)
+                                ))
+                        {
+                            return None;
+                        }
+                    }
+                }
+                "visible" => {
+                    if !matches!(
+                        &attribute.value,
+                        Some(JSXAttributeValue::ExpressionContainer(_))
+                    ) {
+                        return None;
+                    }
+                }
+                "cx" | "cy" | "r" | "fill" if is_circle => {
+                    if attribute.value.is_none() {
+                        return None;
+                    }
+                    has_circle_radius |= name.name == "r";
+                    has_circle_fill |= name.name == "fill";
+                }
+                "d" | "fill" | "stroke" | "strokeWidth" | "strokeLinecap" | "strokeLineCap"
+                | "strokeCap" | "strokeLinejoin" | "strokeLineJoin" | "strokeJoin"
+                | "strokeDasharray" | "strokeDash" | "strokeDashoffset" | "strokeDashOffset"
+                | "strokeMiterlimit" | "strokeMiterLimit"
+                    if is_path =>
+                {
+                    let value = attribute.value.as_ref()?;
+                    has_path_data |= name.name == "d";
+                    has_path_fill |= name.name == "fill";
+                    has_path_stroke |= name.name == "stroke";
+                    has_path_stroke_width |= name.name == "strokeWidth";
+                    if matches!(name.name.as_str(), "fill" | "stroke") {
+                        let span = value.span();
+                        let authored = self.source.get(span.start as usize..span.end as usize)?;
+                        if name.name == "fill" {
+                            path_fill_source = Some(authored);
+                        } else {
+                            path_stroke_source = Some(authored);
+                        }
+                    }
+                }
+                _ => return None,
+            }
+        }
+        let key_field = key_field?;
+        let layout_view = is_component || is_group || is_text || is_view && !has_absolute_class;
+        if !element.children.is_empty() && !layout_view {
+            return None;
+        }
+        if layout_view
+            && style_names
+                .iter()
+                .any(|name| matches!(name.as_str(), "left" | "top" | "transform"))
+        {
+            return None;
+        }
+        if is_view
+            && !layout_view
+            && style_names.iter().any(|name| {
+                !matches!(
+                    name.as_str(),
+                    "left"
+                        | "top"
+                        | "width"
+                        | "height"
+                        | "backgroundColor"
+                        | "opacity"
+                        | "transform"
+                )
+            })
+        {
+            return None;
+        }
+        if is_path && has_path_stroke_width && !has_path_stroke {
+            *fallback_reason = Some("Path strokeWidth needs a stroke".into());
+            return None;
+        }
+        if items.is_empty()
+            || is_view
+                && (!layout_view && (!has_style || !has_absolute_class)
+                    || !["left", "top", "width", "height", "backgroundColor"]
+                        .iter()
+                        .all(|name| style_names.contains(*name))
+                        && !layout_view)
+            || is_circle && (!has_circle_radius || !has_circle_fill)
+            || is_path
+                && (!has_path_data
+                    || !has_path_fill
+                    || !has_style
+                    || !style_names.contains("translate"))
+        {
+            return None;
+        }
+        if self.geometry_references.unknown_key
+            || items.iter().any(|item| {
+                item.as_object()
+                    .and_then(|object| object.get(&key_field))
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|key| {
+                        self.geometry_references.keys.contains(key)
+                            || self
+                                .geometry_references
+                                .keys
+                                .contains(&self.scoped_key(key))
+                    })
+            })
+        {
+            if !layout_view {
+                *fallback_reason =
+                    Some("bounds()/anchor() reads an instance row's layout box".into());
+                return None;
+            }
+        }
+        let first = items.first()?.as_object()?;
+        #[cfg(not(target_family = "wasm"))]
+        let instance_data_started = std::time::Instant::now();
+        // Only scalar or typed geometry fields can become instance columns. Prepare-time
+        // objects may carry metadata that the template never reads; those fields must not
+        // force an otherwise homogeneous component back to per-row expansion.
+        let mut columns = first
+            .iter()
+            .filter_map(|(name, value)| {
+                motion_value_from_json(value)
+                    .filter(MotionValue::is_finite)
+                    .map(|value| (name.clone(), vec![value]))
+            })
+            .collect::<Vec<_>>();
+        columns.sort_by(|left, right| left.0.cmp(&right.0));
+        let mut keys = Vec::with_capacity(items.len());
+        let mut seen_keys = BTreeSet::new();
+        for (index, item) in items.iter().enumerate() {
+            let object = item.as_object()?;
+            let key = object.get(&key_field)?.as_str()?;
+            let scoped_key = self.scoped_key(key);
+            if !seen_keys.insert(scoped_key.clone()) {
+                *fallback_reason = Some("duplicate instance row key".into());
+                return None;
+            }
+            keys.push(scoped_key);
+            if index > 0 {
+                for (name, values) in &mut columns {
+                    if values.len() != index {
+                        continue;
+                    }
+                    let value = object
+                        .get(name)
+                        .and_then(motion_value_from_json)
+                        .filter(MotionValue::is_finite)
+                        .filter(|value| {
+                            valle_motion::expr::ExprType::of_value(&values[0])
+                                == valle_motion::expr::ExprType::of_value(value)
+                        });
+                    if let Some(value) = value {
+                        values.push(value);
+                    }
+                }
+            }
+        }
+        columns.retain(|(_, values)| values.len() == items.len());
+        let fields = columns
+            .iter()
+            .enumerate()
+            .map(|(index, (name, values))| {
+                (
+                    name.clone(),
+                    (
+                        index as u32,
+                        valle_motion::expr::ExprType::of_value(&values[0]),
+                    ),
+                )
+            })
+            .collect();
+        #[cfg(not(target_family = "wasm"))]
+        let instance_data_elapsed = instance_data_started.elapsed();
+        let template_key = self.scoped_key(&format!("{path}.__template__"));
+        let saved = self.snapshot_instance_attempt();
+        // Lower in the outer arena so captured values retain their identity, then extract
+        // only the template's reachable closure before rolling back temporary expressions.
+        let prefix_len = self.expr_arena.values.len();
+        let saved_bindings = self.bindings.clone();
+        let saved_scope = self.instance_scope.replace(InstanceCompileScope {
+            parameter,
+            key_field,
+            template_key: template_key.clone(),
+            fields,
+        });
+        let index_binding = arrow
+            .params
+            .items
+            .get(1)
+            .and_then(|parameter| parameter.pattern.get_identifier_name())
+            .map(|name| name.to_string());
+        if let Some(name) = index_binding {
+            let id = self.push(Expr::InstanceIndex, arrow.span());
+            self.bindings.scalars.insert(name, id);
+        }
+        self.list_depth += 1;
+        #[cfg(not(target_family = "wasm"))]
+        let template_started = std::time::Instant::now();
+        let template = self.lower_jsx(element, path);
+        #[cfg(not(target_family = "wasm"))]
+        let template_elapsed = template_started.elapsed();
+        self.list_depth -= 1;
+        let mut template = template;
+        let group_arena = template
+            .as_mut()
+            .and_then(|template| instance_capture::extract(&self.expr_arena, template));
+        self.expr_arena.truncate(prefix_len);
+        self.instance_scope = saved_scope;
+        self.bindings = saved_bindings;
+        let Some(mut template) = template else {
+            self.restore_instance_attempt(saved);
+            *fallback_reason =
+                Some("template could not be lowered with instance row values".into());
+            return None;
+        };
+        if self.diagnostics.len() > saved.diagnostics_len {
+            self.restore_instance_attempt(saved);
+            *fallback_reason =
+                Some("template needs per-row lowering for its expressions or topology".into());
+            return None;
+        }
+        let Some(group_arena) = group_arena else {
+            self.restore_instance_attempt(saved);
+            *fallback_reason = Some("template contains unsupported node fields".into());
+            return None;
+        };
+        if is_path
+            && has_path_stroke
+            && path_fill_source == path_stroke_source
+            && let NodeKind::Path {
+                fill: Some(fill),
+                stroke: Some(stroke),
+                ..
+            } = &mut template.kind
+        {
+            // The author wrote the same pure paint expression twice. Reuse the fill binding
+            // so the artifact itself proves the batch's single color paints both passes.
+            stroke.paint = fill.clone();
+        }
+        let Some(root_key_suffix) = template.key.strip_prefix(&template_key) else {
+            self.restore_instance_attempt(saved);
+            *fallback_reason = Some("component root key is outside the instance key scope".into());
+            return None;
+        };
+        if !root_key_suffix.is_empty()
+            && !root_key_suffix.starts_with('/')
+            && !root_key_suffix.starts_with('.')
+        {
+            self.restore_instance_attempt(saved);
+            *fallback_reason = Some("component root key is outside the instance key scope".into());
+            return None;
+        }
+        for key in &mut keys {
+            key.push_str(root_key_suffix);
+        }
+        let text_root_supported = match &template.kind {
+            NodeKind::Text {
+                text,
+                per_unit: None,
+                path: None,
+            } if template.children.is_empty() => match text {
+                TextValue::Static { .. } => true,
+                TextValue::Expr { expr } => {
+                    group_arena.types.get(expr.0 as usize).copied().flatten()
+                        == Some(valle_motion::expr::ExprType::String)
+                }
+            },
+            _ => false,
+        };
+        let layout_root_supported = !layout_view
+            || (matches!(template.kind, NodeKind::Box | NodeKind::Group) || text_root_supported)
+                && template.space.is_none()
+                && template.semantic.is_none()
+                && !template.is_mask_source
+                && (text_root_supported
+                    || template.styles.iter().all(|style| {
+                        matches!(
+                            style.property.as_str(),
+                            "width"
+                                | "height"
+                                | "min-width"
+                                | "min-height"
+                                | "max-width"
+                                | "max-height"
+                                | "margin-top"
+                                | "margin-right"
+                                | "margin-bottom"
+                                | "margin-left"
+                                | "padding-top"
+                                | "padding-right"
+                                | "padding-bottom"
+                                | "padding-left"
+                                | "border-radius"
+                                | "background-color"
+                                | "opacity"
+                        )
+                    }));
+        let template_types_supported = template.styles.iter().all(|style| {
+            if text_root_supported {
+                return pending_instance_style_supported(style, &group_arena.types, true);
+            }
+            use valle_motion::expr::ExprType;
+            match &style.value {
+                StyleValue::Static { value } => match style.property.as_str() {
+                    "left" | "top" | "width" | "height" | "min-width" | "min-height"
+                    | "max-width" | "max-height" | "margin-top" | "margin-right"
+                    | "margin-bottom" | "margin-left" | "padding-top" | "padding-right"
+                    | "padding-bottom" | "padding-left" | "border-radius" => {
+                        matches!(value,
+                        MotionValue::Number(number) if number.is_finite())
+                            || matches!(value, MotionValue::Length(length)
+                            if length.unit == valle_motion::value::LengthUnit::Px
+                                && length.value.is_finite())
+                    }
+                    "opacity" => matches!(value, MotionValue::Number(number)
+                        if number.is_finite() && (0.0..=1.0).contains(number)),
+                    "background-color" => {
+                        matches!(value, MotionValue::Color(_) | MotionValue::Str(_))
+                    }
+                    "transform" if is_path => matches!(value, MotionValue::Str(value)
+                        if valle_motion::artifact::path_instance_skew_x(value).is_some()),
+                    "transform" => matches!(value, MotionValue::Str(_)),
+                    "rotate" => match value {
+                        MotionValue::Angle(angle) => (angle.as_degrees() as f32).is_finite(),
+                        MotionValue::Str(value) => valle_motion::value::Angle::parse(value)
+                            .is_some_and(|angle| (angle.as_degrees() as f32).is_finite()),
+                        _ => false,
+                    },
+                    "scale" => match value {
+                        MotionValue::Number(value) => *value != 0.0 && (*value as f32).is_finite(),
+                        MotionValue::Point(point) => {
+                            point.x != 0.0
+                                && point.y != 0.0
+                                && (point.x as f32).is_finite()
+                                && (point.y as f32).is_finite()
+                        }
+                        _ => false,
+                    },
+                    "transform-origin" => {
+                        matches!(value,
+                        MotionValue::Point(point) if point.x == 0.0 && point.y == 0.0)
+                            || matches!(value, MotionValue::Length2(lengths)
+                            if lengths.x.unit == valle_motion::value::LengthUnit::Px
+                                && lengths.y.unit == valle_motion::value::LengthUnit::Px
+                                && lengths.x.value == 0.0 && lengths.y.value == 0.0)
+                    }
+                    "translate" => match value {
+                        MotionValue::Point(point) => point.x.is_finite() && point.y.is_finite(),
+                        MotionValue::Vec2(vector) => vector.x.is_finite() && vector.y.is_finite(),
+                        MotionValue::Length2(lengths) => {
+                            lengths.x.unit == valle_motion::value::LengthUnit::Px
+                                && lengths.y.unit == valle_motion::value::LengthUnit::Px
+                                && lengths.x.value.is_finite()
+                                && lengths.y.value.is_finite()
+                        }
+                        _ => false,
+                    },
+                    _ => false,
+                },
+                StyleValue::Expr { expr } => match (
+                    style.property.as_str(),
+                    group_arena.types.get(expr.0 as usize).copied().flatten(),
+                ) {
+                    (
+                        "left" | "top" | "width" | "height" | "opacity" | "min-width"
+                        | "min-height" | "max-width" | "max-height" | "margin-top" | "margin-right"
+                        | "margin-bottom" | "margin-left" | "padding-top" | "padding-right"
+                        | "padding-bottom" | "padding-left" | "border-radius",
+                        Some(ExprType::Number),
+                    )
+                    | ("background-color", Some(ExprType::Color | ExprType::String))
+                    | ("transform", Some(ExprType::String))
+                    | ("rotate", Some(ExprType::Angle | ExprType::String))
+                    | ("scale", Some(ExprType::Number | ExprType::Point))
+                    | ("translate", Some(ExprType::Point | ExprType::Vec2)) => true,
+                    _ => false,
+                },
+            }
+        });
+        let template_inputs_supported = group_arena.values.iter().all(|expr| {
+            !matches!(expr, Expr::NodeBounds { .. } | Expr::Project3D { .. })
+                && !matches!(expr, Expr::Context { input } if input.is_unit())
+        });
+        let template_visibility_supported = template.visibility.is_none_or(|id| {
+            group_arena.types.get(id.0 as usize).copied().flatten()
+                == Some(valle_motion::expr::ExprType::Bool)
+        });
+        let template_children_supported = if layout_view {
+            pending_instance_children_supported(
+                &template_key,
+                &template.children,
+                &group_arena.types,
+            )
+        } else {
+            template.children.is_empty()
+        };
+        if !layout_root_supported
+            || !template_types_supported
+            || !template_inputs_supported
+            || !template_visibility_supported
+            || !template_children_supported
+        {
+            self.restore_instance_attempt(saved);
+            *fallback_reason = Some(if !layout_root_supported {
+                "layout instance root must be a fixed View/Group or plain Text with supported styles"
+                    .into()
+            } else if !template_types_supported {
+                format!("{tag} has a style value type unsupported by its instance renderer")
+            } else if !template_inputs_supported {
+                "template reads per-node layout, 3D, or text-unit context".into()
+            } else if !template_children_supported {
+                "template children need a fixed Box/Text tree with supported inline styles and row-scoped keys".into()
+            } else {
+                "visible must produce a boolean for every row".into()
+            });
+            return None;
+        }
+        // The key already has its own column. Keep only item fields read by the compiled
+        // template, and rewrite their compact column ids after expression lowering.
+        let mut exprs = group_arena.values;
+        let used_columns = exprs
+            .iter()
+            .filter_map(|expr| match expr {
+                Expr::InstanceField { column, .. } => Some(*column),
+                _ => None,
+            })
+            .collect::<BTreeSet<_>>();
+        let remap = used_columns
+            .iter()
+            .enumerate()
+            .map(|(new, old)| (*old, new as u32))
+            .collect::<BTreeMap<_, _>>();
+        #[cfg(not(target_family = "wasm"))]
+        let column_pack_started = std::time::Instant::now();
+        let columns = columns
+            .into_iter()
+            .enumerate()
+            .filter_map(|(old, (name, values))| {
+                if !used_columns.contains(&(old as u32)) {
+                    return None;
+                }
+                let mut values =
+                    InstanceColumnValues::from_values(values).expect("validated instance column");
+                if let (InstanceColumnValues::Numbers(numbers), Some(expression)) =
+                    (&values, index_formulas.get(&name))
+                    && numbers.iter().enumerate().all(|(index, value)| {
+                        expression.evaluate(index).to_bits() == value.to_bits()
+                    })
+                {
+                    values = InstanceColumnValues::Formula {
+                        rows: numbers.len() as u32,
+                        expression: expression.clone(),
+                    };
+                }
+                Some(InstanceColumn { name, values })
+            })
+            .collect();
+        #[cfg(not(target_family = "wasm"))]
+        metrics::record_instance_data(column_pack_started.elapsed());
+        for expr in &mut exprs {
+            if let Expr::InstanceField { column, .. } = expr {
+                *column = remap[column];
+            }
+        }
+        let template_children = template
+            .children
+            .into_iter()
+            .map(pending_instance_template_node)
+            .collect();
+        let instance_group = InstanceGroup {
+            template: SceneNode {
+                key: template.key,
+                kind: template.kind,
+                space: template.space,
+                class_names: template.class_names,
+                class_conditions: template.class_conditions,
+                styles: template.styles,
+                visibility: template.visibility,
+                children: ChildRange::EMPTY,
+                semantic: template.semantic,
+            },
+            template_key_prefix: template_key,
+            template_children,
+            keys: InstanceKeys::from_values(keys),
+            columns,
+            exprs,
+        };
+        if is_circle && instance_group.circle_template_parameters().is_none() {
+            self.restore_instance_attempt(saved);
+            *fallback_reason =
+                Some("Circle needs a full solid arc without stroke or trimming".into());
+            return None;
+        }
+        if is_path && instance_group.static_path_template().is_none() {
+            self.restore_instance_attempt(saved);
+            *fallback_reason = Some(if has_path_stroke {
+                "Path needs static geometry, pixel translate, and same-color non-negative stroke with default cap/join".into()
+            } else {
+                "Path needs one nonempty static geometry, solid fill, and pixel translate".into()
+            });
+            return None;
+        }
+        #[cfg(not(target_family = "wasm"))]
+        {
+            metrics::record_instance_data(instance_data_elapsed);
+            metrics::record_template_compile(template_elapsed);
+        }
+        let group = self.instance_groups.len() as u32;
+        self.source_ledger
+            .instance_exprs
+            .push((group_arena.spans, group_arena.expansion_stacks));
+        self.instance_groups.push(instance_group);
+        self.extra_capabilities
+            .insert(GEOMETRY_BATCH_CAPABILITY.to_owned());
+        let zero = || StyleValue::Static {
+            value: MotionValue::Number(0.0),
+        };
+        let full = || StyleValue::Static {
+            value: MotionValue::Length(valle_motion::value::Length::parse("100%").unwrap()),
+        };
+        Some(vec![PendingNode {
+            span: element.span(),
+            expansion_stack: self.component_stack.clone(),
+            key: self.scoped_key(&format!("{path}.__instances__")),
+            kind: if layout_view {
+                NodeKind::InstanceLayout { group }
+            } else {
+                NodeKind::InstanceBatch { group }
+            },
+            space: None,
+            class_names: if layout_view {
+                Vec::new()
+            } else {
+                vec!["absolute".into()]
+            },
+            class_conditions: BTreeMap::new(),
+            styles: if layout_view {
+                Vec::new()
+            } else {
+                [
+                    StyleBinding {
+                        property: "left".into(),
+                        value: zero(),
+                    },
+                    StyleBinding {
+                        property: "top".into(),
+                        value: zero(),
+                    },
+                    StyleBinding {
+                        property: "width".into(),
+                        value: full(),
+                    },
+                    StyleBinding {
+                        property: "height".into(),
+                        value: full(),
+                    },
+                ]
+                .into()
+            },
+            visibility: None,
+            semantic: None,
+            children: Vec::new(),
+            is_mask_source: false,
+        }])
     }
 
     pub(super) fn lower_static_map_callback(
@@ -1101,6 +2297,7 @@ impl<'s> Compiler<'s> {
 
         let mut props = BTreeMap::new();
         let mut instance_key = None;
+        let mut scoped_instance_key = None;
         for attribute in &element.opening_element.attributes {
             let JSXAttributeItem::Attribute(attribute) = attribute else {
                 self.illegal(
@@ -1120,7 +2317,20 @@ impl<'s> Compiler<'s> {
             };
             let prop_name = prop_name.name.to_string();
             if prop_name == "key" {
-                instance_key = self.attr_static_string(&attribute.value, attribute.span(), "key");
+                if let Some(scope) = self.instance_scope.as_ref()
+                    && matches!(&attribute.value,
+                        Some(JSXAttributeValue::ExpressionContainer(container))
+                        if matches!(container.expression.as_expression().map(peel_expr),
+                            Some(Expression::StaticMemberExpression(member))
+                            if matches!(&member.object, Expression::Identifier(id)
+                                if id.name.as_str() == scope.parameter)
+                                && member.property.name.as_str() == scope.key_field))
+                {
+                    scoped_instance_key = Some(scope.template_key.clone());
+                } else {
+                    instance_key =
+                        self.attr_static_string(&attribute.value, attribute.span(), "key");
+                }
                 continue;
             }
             let value = match &attribute.value {
@@ -1159,7 +2369,8 @@ impl<'s> Compiler<'s> {
         }
         let instance_key = instance_key.unwrap_or_else(|| path.to_string());
         let caller_prefix = self.key_prefix.clone();
-        let component_prefix = self.scoped_key(&instance_key);
+        let component_prefix =
+            scoped_instance_key.unwrap_or_else(|| self.scoped_key(&instance_key));
         self.key_prefix = component_prefix.clone();
 
         let mut children = Vec::new();
@@ -1343,8 +2554,14 @@ impl<'s> Compiler<'s> {
                 Some(AuthorValue::Dynamic(expr)) => {
                     self.bind_dynamic(local_name, expr);
                 }
+                Some(AuthorValue::Paint(paint)) => {
+                    self.bind_paint(local_name, paint);
+                }
                 Some(AuthorValue::DynamicTuple(values)) => {
                     self.bind_dynamic_tuple(local_name, values);
+                }
+                Some(AuthorValue::InstanceObject(fields)) => {
+                    self.bind_instance_object(local_name, fields);
                 }
                 Some(AuthorValue::Children(_)) => unreachable!("helper arguments are values"),
                 None => self.illegal(
@@ -1401,5 +2618,131 @@ impl<'s> Compiler<'s> {
             );
         }
         result
+    }
+}
+
+fn pending_instance_children_supported(
+    scope_key: &str,
+    children: &[PendingNode],
+    types: &[Option<valle_motion::expr::ExprType>],
+) -> bool {
+    fn check(
+        scope_key: &str,
+        node: &PendingNode,
+        types: &[Option<valle_motion::expr::ExprType>],
+        depth: usize,
+        count: &mut usize,
+    ) -> bool {
+        *count += 1;
+        if depth > 32
+            || *count > 1024
+            || !node
+                .key
+                .strip_prefix(scope_key)
+                .is_some_and(|suffix| suffix.starts_with('.') || suffix.starts_with('/'))
+            || node.space.is_some()
+            || node.class_conditions.iter().any(|(class, id)| {
+                !node.class_names.contains(class)
+                    || types.get(id.0 as usize).copied().flatten()
+                        != Some(valle_motion::expr::ExprType::Bool)
+            })
+            || node.semantic.is_some()
+            || node.is_mask_source
+            || node.visibility.is_some_and(|id| {
+                types.get(id.0 as usize).copied().flatten()
+                    != Some(valle_motion::expr::ExprType::Bool)
+            })
+        {
+            return false;
+        }
+        let is_text = match &node.kind {
+            NodeKind::Box | NodeKind::Group => false,
+            NodeKind::Text {
+                text,
+                per_unit: None,
+                path: None,
+            } if node.children.is_empty() => {
+                if let TextValue::Expr { expr } = text
+                    && types.get(expr.0 as usize).copied().flatten()
+                        != Some(valle_motion::expr::ExprType::String)
+                {
+                    return false;
+                }
+                true
+            }
+            _ => return false,
+        };
+        node.styles
+            .iter()
+            .all(|style| pending_instance_style_supported(style, types, is_text))
+            && node
+                .children
+                .iter()
+                .all(|child| check(scope_key, child, types, depth + 1, count))
+    }
+    let mut count = 0;
+    children
+        .iter()
+        .all(|child| check(scope_key, child, types, 1, &mut count))
+}
+
+fn pending_instance_style_supported(
+    style: &StyleBinding,
+    types: &[Option<valle_motion::expr::ExprType>],
+    is_text: bool,
+) -> bool {
+    use valle_motion::expr::ExprType;
+    let property = style.property.as_str();
+    let value_type = match &style.value {
+        StyleValue::Static { value } if value.is_finite() => ExprType::of_value(value),
+        StyleValue::Static { .. } => return false,
+        StyleValue::Expr { expr } => match types.get(expr.0 as usize).copied().flatten() {
+            Some(value_type) => value_type,
+            None => return false,
+        },
+    };
+    let pixel_length = value_type == ExprType::Number
+        || matches!(&style.value,
+        StyleValue::Static { value: MotionValue::Length(length) }
+            if length.unit == valle_motion::value::LengthUnit::Px && length.value.is_finite());
+    match property {
+        "width" | "height" | "min-width" | "min-height" | "max-width" | "max-height"
+        | "margin-top" | "margin-right" | "margin-bottom" | "margin-left" | "padding-top"
+        | "padding-right" | "padding-bottom" | "padding-left" | "border-radius" | "gap"
+        | "left" | "top" | "right" | "bottom" => pixel_length,
+        "font-size" | "letter-spacing" | "line-height" if is_text => pixel_length,
+        "background-color" if !is_text => matches!(value_type, ExprType::Color | ExprType::String),
+        "color" if is_text => matches!(value_type, ExprType::Color | ExprType::String),
+        "opacity" => value_type == ExprType::Number,
+        "font-weight" if is_text => matches!(value_type, ExprType::Number | ExprType::String),
+        "text-align" | "white-space" if is_text => value_type == ExprType::String,
+        "display" | "position" | "flex-direction" | "justify-content" | "align-items"
+        | "flex-wrap"
+            if !is_text =>
+        {
+            value_type == ExprType::String
+        }
+        _ => false,
+    }
+}
+
+fn pending_instance_template_node(node: PendingNode) -> InstanceTemplateNode {
+    InstanceTemplateNode {
+        node: SceneNode {
+            key: node.key,
+            kind: node.kind,
+            space: node.space,
+            class_names: node.class_names,
+            class_conditions: node.class_conditions,
+            styles: node.styles,
+            visibility: node.visibility,
+            children: ChildRange::EMPTY,
+            semantic: node.semantic,
+        },
+        children: node
+            .children
+            .into_iter()
+            .map(pending_instance_template_node)
+            .collect(),
     }
 }

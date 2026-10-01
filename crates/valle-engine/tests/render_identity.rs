@@ -399,7 +399,7 @@ fn transition_document(transition_duration: &str) -> Value {
             "type": "transition",
             "id": "transition:cut",
             "duration": transition_duration,
-            "kernel": {"type": "cross-fade"}
+            "kernel": {"type": "fade"}
         },
         solid_clip("clip:right", "1/1", "#0000ffff")
     ]);
@@ -2064,15 +2064,14 @@ fn transition_windows_freeze_endpoint_progress_for_n1_and_n_greater_than_one() {
     let CompiledVisualItem::Transition { transition } = &n3.visual().tracks()[0].items()[1] else {
         panic!("middle item must be a transition")
     };
-    assert_eq!(transition.cut_frame(), 4);
     assert_eq!(
         (transition.window().start(), transition.window().end()),
-        (3, 6)
+        (1, 4)
     );
-    assert_eq!(transition.progress_at(3).unwrap().as_f64(), 0.0);
-    assert_eq!(transition.progress_at(4).unwrap().as_f64(), 0.5);
-    assert_eq!(transition.progress_at(5).unwrap().as_f64(), 1.0);
-    for (frame, expected) in [(3, 0.0), (4, 0.5), (5, 1.0)] {
+    assert_eq!(transition.progress_at(1).unwrap().as_f64(), 0.0);
+    assert_eq!(transition.progress_at(2).unwrap().as_f64(), 0.5);
+    assert_eq!(transition.progress_at(3).unwrap().as_f64(), 1.0);
+    for (frame, expected) in [(1, 0.0), (2, 0.5), (3, 1.0)] {
         let evaluated = n3.evaluate(FrameKey::new(frame)).unwrap();
         let EvaluatedVisualOperation::Transition(active) = &evaluated.visual()[0] else {
             panic!("transition must replace endpoint clips inside its window")
@@ -2098,9 +2097,9 @@ fn transition_windows_freeze_endpoint_progress_for_n1_and_n_greater_than_one() {
     };
     assert_eq!(
         (transition.window().start(), transition.window().end()),
-        (4, 5)
+        (3, 4)
     );
-    assert_eq!(transition.progress_at(4).unwrap().as_f64(), 0.5);
+    assert_eq!(transition.progress_at(3).unwrap().as_f64(), 0.5);
 }
 
 #[test]
@@ -2939,4 +2938,199 @@ export default function Demo(ctx) {
                 .unwrap_or_else(|error| panic!("frame {frame}, scale {scale}: {error}"));
         }
     }
+}
+
+#[test]
+fn author_transition_preserves_video_source_and_layer_clocks_in_the_overlap() {
+    let author = valle_timeline::decode_timeline(&json!({
+        "canvas": {"width":640,"height":360,"fps":30},
+        "resources": {"video":"https://example.test/video.mp4"},
+        "tracks": {"visual":[{
+            "clips":[
+                {"kind":"video","src":"video","start":0,"duration":2.5,"trimStart":1,"rate":2,
+                 "opacity":{"keyframes":[[0,0],[2.5,1]]}},
+                {"kind":"video","src":"video","start":1.5,"duration":2.5,"trimStart":0.25,"rate":0.5,
+                 "opacity":{"keyframes":[[0,0],[2.5,1]]}}
+            ], "transitions":[{"from":0,"to":1,"kind":"circleOpen"}]
+        }]}
+    }).to_string()).unwrap();
+    let canonical = valle_compiler::compile_timeline(author).unwrap();
+    let mut video = video_entry("10/1");
+    video["descriptor"]["audioStream"] = json!(0);
+    let manifest =
+        manifest(json!({"resource:video":video,"video:audio":audio_entry_at(48000,"10/1")}));
+    let bindings = ResourceBindings::new()
+        .with_binding(
+            "resource:video",
+            binding(&manifest, "resource:video", None, 1)
+                .with_dependency(ResourceDependency::new("audio", "video:audio").unwrap()),
+        )
+        .unwrap()
+        .with_binding("video:audio", binding(&manifest, "video:audio", None, 2))
+        .unwrap();
+    let render = open(
+        &canonical,
+        &manifest,
+        &bindings,
+        &Capabilities::new(),
+        &baseline_profile(),
+    )
+    .unwrap();
+    assert_eq!(render.canvas().frame_count(), 120);
+    let audio = render.audio().evaluate_sample(96000).unwrap();
+    assert_eq!(audio.tracks().len(), 2);
+    assert_eq!(
+        audio.tracks()[0].endpoints()[0].source().sample_time(),
+        valle_timeline::RationalTime::new(5, 1).unwrap()
+    );
+    assert_eq!(
+        audio.tracks()[1].endpoints()[0].source().sample_time(),
+        valle_timeline::RationalTime::new(1, 2).unwrap()
+    );
+    for frame in [60, 45, 74, 60] {
+        let evaluated = render.evaluate(FrameKey::new(frame)).unwrap();
+        let EvaluatedVisualOperation::Transition(t) = &evaluated.visual()[0] else {
+            panic!()
+        };
+        assert_eq!((t.window().start(), t.window().end()), (45, 75));
+        assert_eq!(t.progress().as_f64(), (frame - 45) as f64 / 29.0);
+        assert_eq!(
+            t.from().sample_time(),
+            valle_timeline::RationalTime::new(frame + 15, 15).unwrap()
+        );
+        assert_eq!(
+            t.to().sample_time(),
+            valle_timeline::RationalTime::new(frame - 30, 60).unwrap()
+        );
+        assert!((t.from_layer().opacity() - frame as f64 / 75.0).abs() < 1e-9);
+        assert!((t.to_layer().opacity() - (frame - 45) as f64 / 75.0).abs() < 1e-9);
+    }
+    for (frame, id) in [
+        (44, "timeline:visual-track:0:clip:0"),
+        (75, "timeline:visual-track:0:clip:1"),
+    ] {
+        let evaluated = render.evaluate(FrameKey::new(frame)).unwrap();
+        let EvaluatedVisualOperation::Clip(clip) = &evaluated.visual()[0] else {
+            panic!()
+        };
+        assert_eq!(clip.clip_id(), id);
+    }
+}
+
+#[test]
+fn transition_quantizes_global_overlap_boundaries_instead_of_rounded_duration() {
+    let author = valle_timeline::decode_timeline(
+        &json!({
+            "canvas":{"width":64,"height":64,"fps":1},
+            "tracks":{"visual":[{
+                "clips":[{"kind":"solid","color":"#000000","start":0,"duration":0.51},
+                         {"kind":"solid","color":"#ffffff","start":0.49,"duration":1.51}],
+                "transitions":[{"from":0,"to":1,"kind":"fade"}]
+            }]}
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let canonical = valle_compiler::compile_timeline(author).unwrap();
+    let render = open(
+        &canonical,
+        &manifest(json!({})),
+        &ResourceBindings::new(),
+        &Capabilities::new(),
+        &baseline_profile(),
+    )
+    .unwrap();
+    let CompiledVisualItem::Transition { transition } = &render.visual().tracks()[0].items()[1]
+    else {
+        panic!()
+    };
+    assert_eq!(
+        (transition.window().start(), transition.window().end()),
+        (0, 1)
+    );
+    assert_eq!(transition.progress_at(0).unwrap().as_f64(), 0.5);
+}
+
+#[test]
+fn transition_parameters_participate_in_identity_and_survive_prepare() {
+    use valle_draw::transition::TransitionKind;
+    use valle_engine::prepare::{PreparedTransitionKernel, PreparedVisualItem};
+    let manifest = manifest(json!({}));
+    let bindings = ResourceBindings::new();
+    let capabilities = Capabilities::new();
+    let profile = baseline_profile();
+    let spec = valle_engine::frame::RenderSpec::new(
+        64,
+        32,
+        valle_engine::frame::RenderQuality::Preview,
+        valle_engine::resource::OutputSpec::srgb_preview(
+            valle_engine::resource::OutputBackground::opaque_srgb([0, 0, 0]),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let make = |params: Value| {
+        let mut document = transition_document("3/4");
+        document["document"]["visual"]["tracks"][0]["items"][1]["kernel"] =
+            json!({"type":"circleOpen","params":params});
+        open(
+            &timeline(&document),
+            &manifest,
+            &bindings,
+            &capabilities,
+            &profile,
+        )
+        .unwrap()
+    };
+    let default = make(json!({}));
+    let explicit = make(json!({"centerX":0.5,"centerY":0.5,"softness":0.5}));
+    let changed = make(json!({"centerX":0.2,"softness":4}));
+    assert_eq!(default.render_id(), explicit.render_id());
+    assert_ne!(default.render_id(), changed.render_id());
+    let prepare = |render: &EngineRender| {
+        valle_engine::prepare::prepare_compiled_render_frame_cached(
+            render,
+            &render.evaluate(FrameKey::new(2)).unwrap(),
+            &spec,
+            &mut valle_engine::prepare::ProductPrepareCaches::new(),
+        )
+        .unwrap()
+    };
+    let output = prepare(&changed);
+    let transition = output
+        .frame
+        .visual
+        .iter()
+        .find_map(|item| match item {
+            PreparedVisualItem::Transition(t) => Some(t),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(
+        transition.kernel,
+        PreparedTransitionKernel::Builtin {
+            kind: TransitionKind::CircleOpen,
+            params: valle_draw::transition::TransitionValues([0.2, 0.5, 4.0, 0.0])
+        }
+    );
+    let baseline = prepare(&default);
+    assert_ne!(
+        valle_engine::compositor::graph::build_render_graph(&baseline.frame)
+            .unwrap()
+            .semantic_hash()
+            .unwrap(),
+        valle_engine::compositor::graph::build_render_graph(&output.frame)
+            .unwrap()
+            .semantic_hash()
+            .unwrap()
+    );
+    let mut invalid = serde_json::to_value(output).unwrap();
+    // Prepared payload validation cannot trust even a correctly typed parameter array.
+    let visual = invalid["frame"]["visual"].as_array_mut().unwrap();
+    let item = visual
+        .iter_mut()
+        .find(|item| item["kind"] == "transition")
+        .unwrap();
+    item["kernel"]["params"][0] = json!(2.0);
+    assert!(serde_json::from_value::<valle_engine::prepare::PrepareOutput>(invalid).is_err());
 }

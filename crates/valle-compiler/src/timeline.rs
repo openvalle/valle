@@ -184,7 +184,7 @@ impl TimelineNormalizer {
         let mut captions = Vec::new();
 
         for (track_index, track) in timeline.tracks.visual.into_iter().enumerate() {
-            visual.push(self.visual_track(track_index, track.clips)?);
+            visual.push(self.visual_track(track_index, track.clips, track.transitions)?);
         }
         for (track_index, track) in timeline.tracks.audio.into_iter().enumerate() {
             audio.push(self.audio_track(track_index, track.clips)?);
@@ -233,22 +233,46 @@ impl TimelineNormalizer {
         &self,
         track_index: usize,
         clips: Vec<timeline::TimelineVisualClipWire>,
+        transitions: Vec<timeline::TimelineTransitionWire>,
     ) -> Result<document::VisualTrackWire, CompileTimelineError> {
         let track_id = track_id("visual", track_index);
+        let transitions: BTreeMap<_, _> = transitions
+            .into_iter()
+            .map(|value| (value.to, value))
+            .collect();
         let mut cursor = ExactRational::ZERO;
         let mut items = Vec::new();
         for (clip_index, clip) in clips.into_iter().enumerate() {
             let clip_path = format!("/tracks/visual/{track_index}/clips/{clip_index}");
             let clip_id = clip_id("visual", track_index, clip_index);
             let start = exact_time(&clip.start);
-            push_visual_gap(
-                &mut items,
-                track_index,
-                clip_index,
-                cursor,
-                start,
-                &clip_path,
-            )?;
+            if let Some(transition) = transitions.get(&clip_index) {
+                items.push(document::VisualItemWire::Transition(
+                    document::VisualTransitionWire {
+                        id: format!("{track_id}:transition:{}", transition.from),
+                        duration: cursor.checked_sub(start).map_err(|_| {
+                            CompileTimelineError::TimeOverflow {
+                                path: clip_path.clone(),
+                            }
+                        })?,
+                        kernel: document::TransitionKernelWire::Builtin(
+                            document::BuiltinTransitionKernelWire {
+                                kind: transition.kind,
+                                params: transition.params.clone(),
+                            },
+                        ),
+                    },
+                ));
+            } else {
+                push_visual_gap(
+                    &mut items,
+                    track_index,
+                    clip_index,
+                    cursor,
+                    start,
+                    &clip_path,
+                )?;
+            }
             let duration = exact_time(&clip.duration);
             cursor = checked_end(start, duration, &clip_path)?;
 

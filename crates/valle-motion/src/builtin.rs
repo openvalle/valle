@@ -18,6 +18,7 @@ pub fn math_unary(op: MathUnaryOp, value: f64) -> Result<f64, &'static str> {
         MathUnaryOp::Cos => valle_draw::math::cos(value),
         MathUnaryOp::Tan => valle_draw::math::tan(value),
         MathUnaryOp::Floor => value.floor(),
+        MathUnaryOp::FrameFloor => crate::time::frame_index_floor(value),
         MathUnaryOp::Ceil => value.ceil(),
         MathUnaryOp::Round => ecma_round(value),
         MathUnaryOp::Trunc => value.trunc(),

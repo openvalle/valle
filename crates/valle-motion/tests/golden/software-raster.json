@@ -1,9 +1,9 @@
 {
   "width": 320,
   "height": 240,
-  "premulRgba8Sha256": "f3dde426939de8bd09fa181e8d7b70e4eba46a1d870bc1cd26b3a2ae38a8310b",
-  "depthU16LeSha256": "64c7133a90a5fe07880ebfef640def7933b092ba9359074738652cb4b43d478c",
-  "objectIdU16LeSha256": "57425b2f869199a7bf47ae1f617e15732bfcb3a6b8f009fff0b436115b895528",
+  "premulRgba16fLeSha256": "878ffedd62a329b915f312c54777aa08adaffb551c427e1e9c18e8d08eb6c2a5",
+  "depthF32LeSha256": "825a6d22e08ba49eaf6617783035039121f89de39ce0921a3cd199831cff968f",
+  "objectIdU32LeSha256": "47539a8812b14a2b0ead850552aa58fda7a564ad2375a749d199768df725c8fe",
   "visiblePixels": 11208,
   "translucentPixels": 0,
   "anchorBits": [1129731812, 1118296699]

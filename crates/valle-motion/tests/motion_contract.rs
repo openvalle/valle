@@ -9,7 +9,7 @@ use valle_motion::{
     SceneNode, SemanticMeta, StyleBinding, StyleValue, TemplatePart, TextValue, canonical_bytes,
 };
 
-const ENVELOPE_SHA256: &str = "c1e229ec578446035b736b23452df42658e7f0f8955e5aa07fdeecf0e49a1074";
+const ENVELOPE_SHA256: &str = "5e62918f650fad8903edc7bcbc68a211c6b0c25d7265611896eeb74068468c0f";
 
 fn prop(control: ControlType, default: MotionValue) -> PropControl {
     PropControl {
@@ -106,6 +106,7 @@ fn envelope() -> ArtifactEnvelope {
                 },
             ],
             easings: vec![MotionEasing::EaseOut],
+            color_space: valle_draw::program::GradientInterpolation::Srgb,
             extrapolate_left: Extrapolation::Clamp,
             extrapolate_right: Extrapolation::Clamp,
         },
@@ -123,6 +124,7 @@ fn envelope() -> ArtifactEnvelope {
             content_hash: ContentDigest::of_bytes(b"hero.png"),
         }],
         exprs,
+        instance_groups: vec![],
         nodes: vec![
             SceneNode {
                 key: "root".into(),

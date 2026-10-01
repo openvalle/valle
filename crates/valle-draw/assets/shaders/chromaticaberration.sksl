@@ -1,0 +1,11 @@
+uniform shader image;
+uniform float2 offset;
+
+half4 main(float2 p) {
+    half4 red = image.eval(p - offset * 0.5);
+    half4 green = image.eval(p);
+    half4 blue = image.eval(p + offset * 0.5);
+    // Channels already carry premultiplied coverage. Reusing a channel must not
+    // add the same coverage three times in a uniform translucent region.
+    return half4(red.r, green.g, blue.b, max(red.a, max(green.a, blue.a)));
+}
