@@ -353,7 +353,7 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
         compiled = compileTimeline(normalized);
       } catch (error) {
         if (!options.preparePreview || !(error instanceof Error)
-          || !error.message.includes("needs its composition duration resolved")) throw error;
+          || !error.message.includes("needs its composition duration and role resolved")) throw error;
       }
       workingCopy = structuredClone(normalized);
       sourceEditor?.restore(next.sources);
@@ -1220,9 +1220,9 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
       compiled = compileTimeline(normalized);
     } catch (error) {
       if (!options.preparePreview || !(error instanceof Error)
-        || !error.message.includes("needs its composition duration resolved")) throw error;
+        || !error.message.includes("needs its composition duration and role resolved")) throw error;
       // Data and resource bindings change the Motion instance key. The Worker will
-      // provide its new composition duration before this UI projection can compile.
+      // provide its new composition duration and role before this UI projection can compile.
     }
     beginHistory();
     editError = null;

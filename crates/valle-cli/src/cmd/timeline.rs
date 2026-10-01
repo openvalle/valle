@@ -168,6 +168,11 @@ pub(crate) fn prepare_timeline_media_facts(
             .as_object_mut()
             .and_then(|track| track.remove("presenter"))
         {
+            // The presenter binds this font implicitly, so Studio must confirm its
+            // digest just like an explicitly bound Motion asset before saving.
+            if let Some(font) = track["style"]["font"].as_str() {
+                motion_assets.insert(font.to_owned());
+            }
             motion_assets.extend(
                 presenter["resources"]
                     .as_object()
@@ -1137,11 +1142,15 @@ export default function Caption(ctx,props,data){return <Scene><Text style={{font
         let author = serde_json::json!({"canvas":{"width":160,"height":48,"fps":4},"resources":{"words":"missing.motion.tsx","font":font},"tracks":{"caption":[{"presenter":{"component":"words"},"style":{"font":"font","fontSize":20},"clips":[{"start":0,"duration":2,"runs":[{"text":"Words","start":0,"end":1.75}]}]}]}});
         let timeline = decode_timeline(&author.to_string()).unwrap();
         let mut media = FrozenMediaCache::default();
-        let (facts, _, _) =
+        let (facts, _, dependencies) =
             prepare_timeline_media_facts(timeline.clone(), dir.path(), &mut media).unwrap();
         assert_eq!(facts.len(), 1);
         assert_eq!(facts[0]["id"], "resource:font");
         assert_eq!(facts[0]["entry"]["kind"], "font");
+        assert_eq!(
+            dependencies[&font.to_string_lossy().to_string()],
+            ContentDigest::of_bytes(&std::fs::read(&font).unwrap())
+        );
         let unchanged: serde_json::Value =
             serde_json::from_slice(&timeline_bytes(&timeline).unwrap()).unwrap();
         assert_eq!(

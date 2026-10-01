@@ -566,7 +566,12 @@ mod tests {
         let file = TimelineFile::open(&path).unwrap();
         let snapshot = file.snapshot().unwrap();
         assert_eq!(snapshot["inputDependencies"].as_object().unwrap().len(), 1);
-        assert_eq!(snapshot["motionSourceMetadata"]["card"], 3.0);
+        assert_eq!(
+            snapshot["motionSourceMetadata"]["card"],
+            json!({
+                "duration":"3/1", "role":{"type":"clip"}
+            })
+        );
         assert!(
             snapshot["timeline"]["tracks"]["visual"][0]["clips"][0]
                 .get("sourceDuration")
@@ -617,6 +622,60 @@ mod tests {
         assert_eq!(
             serde_json::from_slice::<Value>(&std::fs::read(&path).unwrap()).unwrap(),
             authored
+        );
+    }
+
+    #[test]
+    fn caption_edits_save_and_reopen_with_browser_confirmed_font_dependencies() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("words.motion.tsx");
+        std::fs::write(&source, "export const composition={width:160,height:48,duration:1}; export const role=captionPresenter({intro:seconds(0),outro:seconds(0)}); export default function Words(ctx,props,data){return <Scene><Text style={{fontFamily:data.style.font,fontSize:data.style.fontSize}}>{data.text}</Text></Scene>;}").unwrap();
+        let font = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../assets/fonts/noto/NotoSans-Regular.ttf")
+            .canonicalize()
+            .unwrap();
+        let path = dir.path().join("captions.timeline.json");
+        let mut authored = json!({"canvas":{"width":160,"height":48,"fps":4},
+            "resources":{"words":"words.motion.tsx","font":font},
+            "tracks":{"caption":[{"presenter":{"component":"words"},
+                "style":{"font":"font","fontSize":20},"clips":[{"start":0.125,"duration":2,
+                    "runs":[{"text":"Build","start":0,"end":1.75}]}]}]}});
+        std::fs::write(&path, authored.to_string()).unwrap();
+        let file = TimelineFile::open(&path).unwrap();
+        let loaded = file.snapshot().unwrap();
+        assert!(loaded["inputDependencyError"].is_null(), "{loaded}");
+        authored["tracks"]["caption"][0]["clips"][0]["runs"][0] =
+            json!({"text":"Create","start":0,"end":1.5});
+        let mut cache = crate::preview_store::FrozenMediaCache::default();
+        let (_, _, mut expected) = crate::cmd::timeline::prepare_timeline_media_facts(
+            decode_timeline(&authored.to_string()).unwrap(),
+            dir.path(),
+            &mut cache,
+        )
+        .unwrap();
+        // A successful browser preview replaces the loaded dependency set with
+        // current media facts plus confirmed source files.
+        let source_path = source.canonicalize().unwrap().to_string_lossy().to_string();
+        let source_digest =
+            serde_json::from_value(loaded["inputDependencies"][&source_path].clone()).unwrap();
+        expected.insert(source_path, source_digest);
+        let save = file
+            .save(
+                &json!({"baseRevision":1,"timeline":authored,
+            "expectedDependencies":expected})
+                .to_string(),
+            )
+            .unwrap();
+        assert_eq!(save["outcome"], "committed", "{save}");
+        let reopened = TimelineFile::open(&path).unwrap().snapshot().unwrap();
+        assert!(reopened["inputDependencyError"].is_null(), "{reopened}");
+        assert_eq!(reopened["timeline"], authored);
+        let items = reopened["render"]["timeline"]["document"]["captions"]["tracks"][0]["items"]
+            .as_array()
+            .unwrap();
+        assert_eq!(
+            items.iter().filter(|item| item["type"] == "motion").count(),
+            1
         );
     }
 
