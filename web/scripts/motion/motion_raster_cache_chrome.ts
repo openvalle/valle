@@ -2,7 +2,7 @@
  * Run after `bun run build:runtime` from `web`:
  *   bun web/scripts/motion/motion_raster_cache_chrome.ts
  */
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
 
@@ -11,22 +11,25 @@ const dist = join(root, "web/dist");
 const temporary = await mkdtemp(join(tmpdir(), "valle-cache-chrome-"));
 const resultPath = join(temporary, "result.json");
 const isOverlay = process.env.VALLE_TEST_MOTION_ROLE === "overlay";
+const isCaption = process.env.VALLE_TEST_MOTION_ROLE === "captionPresenter";
 const source = join(temporary, "scene.motion.tsx");
 const timeline = join(temporary, "timeline.json");
 await writeFile(source, `
   export const composition = { width: 48, height: 48, fps: 30, duration: 1 };
+  ${isCaption ? `export const role=captionPresenter({intro:seconds(0.2),outro:seconds(0.2)});` : ""}
   ${isOverlay ? `export const role=overlay({intro:seconds(0.2),outro:seconds(0.2),hold:"once"});` : ""}
-  export default function CacheScene(ctx) {
+  export default function CacheScene(ctx,props,data) {
     return <Scene style={{ width: ctx.viewport.width, height: ctx.viewport.height, backgroundColor: "#000" }}>
       <View style={{ position: "absolute", left: ctx.host.progress * 24,
         top: ctx.seconds * 8, width: 16, height: 16, backgroundColor: "#0f0" }} />
+      ${isCaption ? `<Text style={{position:"absolute",top:24,fontFamily:data.style.font,fontSize:14,color:ctx.host.seconds<1.2?"#facc15":"white"}}>{data.text}</Text>` : ""}
     </Scene>;
   }
 `);
 await writeFile(timeline, JSON.stringify({
   canvas: { width: 48, height: 48, fps: 30 },
-  resources: { scene: "scene.motion.tsx" },
-  tracks: { visual: [{ clips: [{ kind: "motion", component: "scene", start: 0, duration: 2, ...(isOverlay ? {size:[32,48]} : {end:"hold"}) }] }] },
+  resources: { scene: "scene.motion.tsx", ...(isCaption ? { font: join(root, "assets/fonts/noto/NotoSans-Regular.ttf") } : {}) },
+  tracks: isCaption ? { caption: [{ presenter: {component:"scene"},style:{font:"font",fontSize:14},layout:{region:[0,0,1,1]},clips:[{start:0,duration:2,runs:[{text:"Host",start:0,end:1.9}]}] }] } : { visual: [{ clips: [{ kind: "motion", component: "scene", start: 0, duration: 2, ...(isOverlay ? {size:[32,48]} : {end:"hold"}) }] }] },
 }));
 const studio = Bun.spawn([
   process.env.VALLE_TEST_CLI ?? join(root, "target/debug/valle"), "--json", "timeline", "studio",
@@ -45,12 +48,31 @@ try {
     }
   } finally { reader.releaseLock(); }
   const upstream = new URL(JSON.parse(line.split("\n")[0]!).url).origin;
+  const sourceText = await readFile(source, "utf8");
+  const authorTimeline = JSON.parse(await readFile(timeline, "utf8"));
   const client = `
     const canvas = document.querySelector("canvas");
     try {
-      const { createBrowserValleWebPlayer } = await import("/packages/engine/index.mjs");
+      const { createBrowserValleWebPlayer, createTimelineCompilerRuntime } = await import("/packages/engine/index.mjs");
       const config = await (await fetch("/config.json")).json();
       if (!config.fixedPackageManifestJson) throw new Error(JSON.stringify(config.diagnostics ?? config));
+      let browserCompiled = false;
+      if (${isCaption}) {
+        const compiler = await createTimelineCompilerRuntime({ runtimeAssets: config.runtimeAssets, runtimeBaseUrl: location.href });
+        const author = ${JSON.stringify(authorTimeline)};
+        const inputs = compiler.motionPreparationInputs(author);
+        const bindings = JSON.parse(config.verifiedBindingBundleJson).bindings;
+        const entries = JSON.parse(config.resourceManifestJson).entries;
+        const font = bindings["resource:font"].facts;
+        const fontBytes = Uint8Array.from(atob(font.bytesBase64), char => char.charCodeAt(0));
+        const compiled = compiler.compileMotionJsx(${JSON.stringify(sourceText)}, { data: {source:"timeline",value:inputs[0].data}, fontAliases: {"asset://caption":fontBytes}, resources: [{control:"caption",contentHash:entries["resource:font"].digest}] });
+        const preview = compiler.preparePreviewPackage({ authorTimeline: author, motionInstances: [{clipPath:inputs[0].clipPath,artifact:compiled.artifact,artifactDigest:compiled.artifactDigest,fonts:[]}], resourceInputs:[{id:"resource:font",entry:entries["resource:font"],facts:font}] });
+        const nativeKey = config.motion?.structures?.[0]?.clipId;
+        if (!nativeKey && !config.timelineJson) throw new Error("Native caption package is missing");
+        if (preview.timelineJson !== config.timelineJson) throw new Error("Native and browser caption Timeline identities differ");
+        Object.assign(config, preview);
+        browserCompiled = true;
+      }
       const player = await createBrowserValleWebPlayer({
         fixedPackageManifestJson: config.fixedPackageManifestJson,
         timelineJson: config.timelineJson,
@@ -77,7 +99,7 @@ try {
         const ext = gl.getExtension("WEBGL_debug_renderer_info");
         const renderer = ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER);
         const result = {
-          renderer, runtimeFlavor: revisit.runtimeFlavor,
+          renderer, browserCompiled, runtimeFlavor: revisit.runtimeFlavor,
           backend: revisit.executionProfile.surfaceBackend,
           first: first.stats, repeat: repeat.stats, moved: moved.stats,
           revisit: revisit.stats,
@@ -130,8 +152,9 @@ try {
   if (!result) throw new Error("Chrome did not report within 45 seconds");
   if (result.error) throw new Error(result.error);
   const summary = {
-    role: isOverlay ? "overlay" : "clip",
+    role: isCaption ? "captionPresenter" : isOverlay ? "overlay" : "clip",
     renderer: result.renderer,
+    browserCompiled: result.browserCompiled,
     runtimeFlavor: result.runtimeFlavor,
     backend: result.backend,
     first: { hits: result.first.rasterLayerCacheHits, misses: result.first.rasterLayerCacheMisses },
@@ -146,8 +169,9 @@ try {
   };
   if (!summary.renderer.includes("Apple") || !summary.renderer.includes("Metal")
     || summary.runtimeFlavor !== "product-gpu" || summary.backend !== "canvaskit-gpu"
-    || !(summary.first.misses >= 1) || !(summary.repeat.hits >= 1)
-    || !(summary.revisit.hits >= 1)
+    // Font-bound programs retain the existing policy of bypassing the raster pixel cache.
+    || (!isCaption && (!(summary.first.misses >= 1) || !(summary.repeat.hits >= 1) || !(summary.revisit.hits >= 1)))
+    || (isCaption && !summary.browserCompiled)
     || !summary.sameRepeat || !summary.changedFrame || !summary.sameRevisit || !summary.hostContinuesAfterHold) {
     throw new Error(`GPU raster cache smoke failed: ${JSON.stringify(summary)}`);
   }

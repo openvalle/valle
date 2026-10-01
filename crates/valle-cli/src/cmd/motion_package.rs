@@ -168,7 +168,7 @@ fn build_timeline(
     artifact_digest: &ContentDigest,
 ) -> Result<CanonicalTimeline> {
     let props = authored_default_props(input.artifact, input.prop_bindings)?;
-    let document = json!({
+    let mut document = json!({
         "document": {
             "canvas": {
                 "width": input.canvas.0,
@@ -211,6 +211,18 @@ fn build_timeline(
             "metadata": {"standaloneMotionArtifactDigest": artifact_digest},
         },
     });
+    if matches!(
+        input.artifact.role,
+        valle_timeline::MotionRole::CaptionPresenter { .. }
+    ) {
+        let mut source = document["document"]["visual"]["tracks"][0]["items"][0]["source"].clone();
+        source
+            .as_object_mut()
+            .expect("source object")
+            .remove("type");
+        document["document"]["visual"]["tracks"] = json!([]);
+        document["document"]["captions"]["tracks"] = json!([{ "id": "caption:motion", "items": [{ "type": "motion", "id": "clip:motion", "duration": input.duration, "source": source }] }]);
+    }
     decode_canonical(&serde_json::to_string(&document)?).map_err(Into::into)
 }
 

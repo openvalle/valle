@@ -11,6 +11,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use valle_motion::{NodeKind, SceneArtifact};
+use valle_timeline::decode_timeline;
 use valle_timeline::internal::{
     ContentDigest, ResourceManifest, encode_canonical,
     wire::resource::{
@@ -19,7 +20,6 @@ use valle_timeline::internal::{
         ResourceManifestEnvelopeWire,
     },
 };
-use valle_timeline::{decode_timeline, timeline_bytes};
 
 use crate::{
     fixed_package::{
@@ -157,14 +157,6 @@ impl PackageResources {
 pub fn prepare_preview_package(input: PreviewPackageInput) -> Result<PreparedPreview, String> {
     let author_timeline =
         decode_timeline(&input.author_timeline.to_string()).map_err(|error| error.to_string())?;
-    let document: Value = serde_json::from_slice(
-        &timeline_bytes(&author_timeline).map_err(|error| error.to_string())?,
-    )
-    .map_err(|error| error.to_string())?;
-    let locators = document["resources"]
-        .as_object()
-        .cloned()
-        .unwrap_or_default();
     let mut instances = BTreeMap::<String, PreviewMotionInstance>::new();
     for instance in input.motion_instances {
         if instances
@@ -177,101 +169,61 @@ pub fn prepare_preview_package(input: PreviewPackageInput) -> Result<PreparedPre
     let mut prepared = BTreeMap::<String, (PreviewMotionInstance, BTreeMap<String, String>)>::new();
     let mut durations = BTreeMap::new();
     let mut motion_source_metadata = BTreeMap::new();
-    for (track_index, track) in document["tracks"]["visual"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .enumerate()
+    for prepared_input in valle_compiler::motion_preparation_inputs(&author_timeline)
+        .map_err(|error| error.to_string())?
     {
-        for (clip_index, clip) in track["clips"].as_array().into_iter().flatten().enumerate() {
-            if clip["kind"] != "motion" {
-                continue;
-            }
-            let path = format!("/tracks/visual/{track_index}/clips/{clip_index}");
-            let instance = instances
-                .remove(&path)
-                .ok_or_else(|| format!("Motion preview instance is missing for {path}"))?;
-            let component = clip["component"]
-                .as_str()
-                .ok_or_else(|| format!("Motion component is missing at {path}"))?;
-            let locator = locators
-                .get(component)
-                .and_then(Value::as_str)
-                .ok_or_else(|| format!("Motion resource {component} is missing at {path}"))?;
-            let resources = clip
-                .get("resources")
-                .filter(|value| value.as_object().is_some_and(|map| !map.is_empty()))
-                .unwrap_or(&Value::Null);
-            let data = clip
-                .get("data")
-                .filter(|value| value.as_object().is_some_and(|map| !map.is_empty()))
-                .unwrap_or(&Value::Null);
-            let key = valle_compiler::motion_instance_key(locator, resources, data);
-            let composition = instance
-                .artifact
-                .composition
-                .as_ref()
-                .ok_or_else(|| format!("Motion {path} has no composition"))?;
-            let duration = composition.duration().map_err(|error| error.to_string())?;
-            let metadata = valle_timeline::MotionSourceMetadata {
+        let path = &prepared_input.clip_path;
+        let instance = instances
+            .remove(path)
+            .ok_or_else(|| format!("Motion preview instance is missing for {path}"))?;
+        let component = &prepared_input.component;
+        let key = prepared_input.key();
+        let composition = instance
+            .artifact
+            .composition
+            .as_ref()
+            .ok_or_else(|| format!("Motion {path} has no composition"))?;
+        let duration = composition.duration().map_err(|error| error.to_string())?;
+        let metadata = valle_timeline::MotionSourceMetadata {
+            duration,
+            role: instance.artifact.role,
+        };
+        motion_source_metadata.insert(component.to_owned(), metadata);
+        if let Some(old) = durations.insert(
+            key.clone(),
+            valle_timeline::MotionSourceMetadata {
                 duration,
                 role: instance.artifact.role,
-            };
-            motion_source_metadata.insert(component.to_owned(), metadata);
-            if let Some(old) = durations.insert(
-                key.clone(),
-                valle_timeline::MotionSourceMetadata {
+            },
+        ) {
+            if old
+                != (valle_timeline::MotionSourceMetadata {
                     duration,
                     role: instance.artifact.role,
-                },
-            ) {
-                if old
-                    != (valle_timeline::MotionSourceMetadata {
-                        duration,
-                        role: instance.artifact.role,
-                    })
-                {
-                    return Err(format!("Motion instance {key} has conflicting durations"));
-                }
-            }
-            let bindings = resources
-                .as_object()
-                .map(|map| {
-                    map.iter()
-                        .map(|(role, alias)| {
-                            Ok((
-                                role.clone(),
-                                alias
-                                    .as_str()
-                                    .ok_or_else(|| {
-                                        format!("Motion asset {role} is not a resource alias")
-                                    })?
-                                    .to_owned(),
-                            ))
-                        })
-                        .collect::<Result<BTreeMap<_, _>, String>>()
                 })
-                .transpose()?
-                .unwrap_or_default();
-            if let Some((existing, old_bindings)) = prepared.get(&key) {
-                if existing.artifact_digest != instance.artifact_digest
-                    || old_bindings != &bindings
-                    || existing.fonts.len() != instance.fonts.len()
-                    || existing
-                        .fonts
-                        .iter()
-                        .zip(&instance.fonts)
-                        .any(|(left, right)| {
-                            left.role != right.role || left.bytes_base64 != right.bytes_base64
-                        })
-                {
-                    return Err(format!(
-                        "Motion instance {key} has inconsistent preparation inputs"
-                    ));
-                }
-            } else {
-                prepared.insert(key, (instance, bindings));
+            {
+                return Err(format!("Motion instance {key} has conflicting durations"));
             }
+        }
+        let bindings = prepared_input.resources;
+        if let Some((existing, old_bindings)) = prepared.get(&key) {
+            if existing.artifact_digest != instance.artifact_digest
+                || old_bindings != &bindings
+                || existing.fonts.len() != instance.fonts.len()
+                || existing
+                    .fonts
+                    .iter()
+                    .zip(&instance.fonts)
+                    .any(|(left, right)| {
+                        left.role != right.role || left.bytes_base64 != right.bytes_base64
+                    })
+            {
+                return Err(format!(
+                    "Motion instance {key} has inconsistent preparation inputs"
+                ));
+            }
+        } else {
+            prepared.insert(key, (instance, bindings));
         }
     }
     if let Some(path) = instances.keys().next() {

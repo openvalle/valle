@@ -202,6 +202,34 @@ impl TimelineValidator {
 
         for (track_index, track) in timeline.tracks.caption.iter_mut().enumerate() {
             let track_path = format!("/tracks/caption/{track_index}");
+            if let Some(presenter) = &mut track.presenter {
+                self.resource_ref(
+                    &presenter.component,
+                    &format!("{track_path}/presenter/component"),
+                    &valid_resources,
+                );
+                for (name, param) in &mut presenter.props {
+                    normalize_open_param_easing(
+                        param,
+                        &format!("{track_path}/presenter/props/{}", pointer_escape(name)),
+                        self,
+                    );
+                }
+                for (name, alias) in &presenter.resources {
+                    if name == crate::motion::CAPTION_FONT_CONTROL {
+                        self.error(
+                            "caption_font_reserved",
+                            &format!("{track_path}/presenter/resources/caption"),
+                            json!({}),
+                        );
+                    }
+                    self.resource_ref(
+                        alias,
+                        &format!("{track_path}/presenter/resources/{}", pointer_escape(name)),
+                        &valid_resources,
+                    );
+                }
+            }
             self.resource_ref(
                 &track.style.font,
                 &format!("{track_path}/style/font"),
@@ -228,7 +256,11 @@ impl TimelineValidator {
                 normalize_layout(layout, &format!("{track_path}/layout"), self);
             }
             for (clip_index, clip) in track.clips.iter_mut().enumerate() {
-                self.caption_clip(clip, &format!("{track_path}/clips/{clip_index}"));
+                self.caption_clip(
+                    clip,
+                    track.presenter.is_some(),
+                    &format!("{track_path}/clips/{clip_index}"),
+                );
             }
         }
     }
@@ -356,7 +388,7 @@ impl TimelineValidator {
         normalize_param(&mut clip.opacity, &format!("{path}/opacity"), self);
     }
 
-    fn caption_clip(&mut self, clip: &mut TimelineCaptionClipWire, path: &str) {
+    fn caption_clip(&mut self, clip: &mut TimelineCaptionClipWire, presenter: bool, path: &str) {
         self.positive_time(&clip.duration, &format!("{path}/duration"));
         match (&clip.text, &clip.runs) {
             (Some(_), None) => {}
@@ -376,7 +408,7 @@ impl TimelineValidator {
             clip.behavior.as_ref(),
             Some(TimelineCaptionBehaviorWire::Karaoke { .. })
         );
-        if !karaoke {
+        if !karaoke && !presenter {
             if let Some(runs) = &clip.runs {
                 for (index, run) in runs.iter().enumerate() {
                     if run.start.is_some() || run.end.is_some() {

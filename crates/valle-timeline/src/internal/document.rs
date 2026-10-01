@@ -513,7 +513,15 @@ pub struct CaptionTrack {
 #[derive(Debug, Clone, PartialEq)]
 pub enum CaptionItem {
     Clip(Caption),
+    Motion(CaptionMotion),
     Gap(Gap),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CaptionMotion {
+    pub id: EntityId,
+    pub duration: RationalTime,
+    pub source: MotionInstance,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1195,23 +1203,9 @@ fn visual_source_from_wire(
                 fit: raster_fit_from_wire(source.sampling.fit),
             },
         })),
-        wire::VisualSourceWire::Motion(source) => Ok(VisualSource::Motion(MotionInstance {
-            role: source.role,
-            component: source.component,
-            fit: raster_fit_from_wire(source.fit),
-            source_start: RationalTime::from_exact(source.source_start),
-            source_duration: RationalTime::from_exact(source.source_duration),
-            rate: RationalRate::from_exact(source.rate)
-                .map_err(|_| DocumentConversionError::RationalRate)?,
-            end_behavior: media_end_behavior_from_wire(source.end_behavior),
-            props: source
-                .props
-                .into_iter()
-                .map(|(name, param)| Ok((name, param_from_wire(param, identity)?)))
-                .collect::<Result<_, DocumentConversionError>>()?,
-            data: source.data,
-            resources: source.resources,
-        })),
+        wire::VisualSourceWire::Motion(source) => {
+            Ok(VisualSource::Motion(motion_instance_from_wire(source)?))
+        }
         wire::VisualSourceWire::Solid(source) => Ok(VisualSource::Solid(SolidSource {
             color: source.color,
         })),
@@ -1247,22 +1241,9 @@ fn visual_source_into_wire(source: VisualSource) -> wire::VisualSourceWire {
                 fit: raster_fit_into_wire(source.sampling.fit),
             },
         }),
-        VisualSource::Motion(source) => wire::VisualSourceWire::Motion(wire::MotionInstanceWire {
-            role: source.role,
-            component: source.component,
-            fit: raster_fit_into_wire(source.fit),
-            source_start: source.source_start.into_exact(),
-            source_duration: source.source_duration.into_exact(),
-            rate: source.rate.into_exact(),
-            end_behavior: media_end_behavior_into_wire(source.end_behavior),
-            props: source
-                .props
-                .into_iter()
-                .map(|(name, param)| (name, param_into_wire(param, std::convert::identity)))
-                .collect(),
-            data: source.data,
-            resources: source.resources,
-        }),
+        VisualSource::Motion(source) => {
+            wire::VisualSourceWire::Motion(motion_instance_into_wire(source))
+        }
         VisualSource::Solid(source) => wire::VisualSourceWire::Solid(wire::SolidSourceWire {
             color: source.color,
         }),
@@ -1549,6 +1530,11 @@ fn caption_item_from_wire(
             },
             behavior: caption.behavior.map(caption_behavior_from_wire),
         })),
+        wire::CaptionItemWire::Motion(caption) => Ok(CaptionItem::Motion(CaptionMotion {
+            id: caption.id,
+            duration: RationalTime::from_exact(caption.duration),
+            source: motion_instance_from_wire(caption.source)?,
+        })),
         wire::CaptionItemWire::Gap(gap) => Ok(CaptionItem::Gap(gap_from_wire(gap))),
     }
 }
@@ -1597,6 +1583,11 @@ fn caption_item_into_wire(item: CaptionItem) -> wire::CaptionItemWire {
                 blur_sigma: param_into_wire(caption.presentation.blur_sigma, identity_into),
             },
             behavior: caption.behavior.map(caption_behavior_into_wire),
+        }),
+        CaptionItem::Motion(caption) => wire::CaptionItemWire::Motion(wire::CaptionMotionWire {
+            id: caption.id,
+            duration: caption.duration.into_exact(),
+            source: motion_instance_into_wire(caption.source),
         }),
         CaptionItem::Gap(gap) => wire::CaptionItemWire::Gap(gap_into_wire(gap)),
     }
@@ -1697,5 +1688,46 @@ fn camera_into_wire(camera: CameraTrack) -> wire::CameraTrackWire {
         center_y: param_into_wire(camera.center_y, std::convert::identity),
         zoom: param_into_wire(camera.zoom, std::convert::identity),
         rotation: param_into_wire(camera.rotation, std::convert::identity),
+    }
+}
+
+fn motion_instance_from_wire(
+    source: wire::MotionInstanceWire,
+) -> Result<MotionInstance, DocumentConversionError> {
+    Ok(MotionInstance {
+        role: source.role,
+        component: source.component,
+        fit: raster_fit_from_wire(source.fit),
+        source_start: RationalTime::from_exact(source.source_start),
+        source_duration: RationalTime::from_exact(source.source_duration),
+        rate: RationalRate::from_exact(source.rate)
+            .map_err(|_| DocumentConversionError::RationalRate)?,
+        end_behavior: media_end_behavior_from_wire(source.end_behavior),
+        props: source
+            .props
+            .into_iter()
+            .map(|(name, param)| Ok((name, param_from_wire(param, identity)?)))
+            .collect::<Result<_, DocumentConversionError>>()?,
+        data: source.data,
+        resources: source.resources,
+    })
+}
+
+fn motion_instance_into_wire(source: MotionInstance) -> wire::MotionInstanceWire {
+    wire::MotionInstanceWire {
+        role: source.role,
+        component: source.component,
+        fit: raster_fit_into_wire(source.fit),
+        source_start: source.source_start.into_exact(),
+        source_duration: source.source_duration.into_exact(),
+        rate: source.rate.into_exact(),
+        end_behavior: media_end_behavior_into_wire(source.end_behavior),
+        props: source
+            .props
+            .into_iter()
+            .map(|(name, param)| (name, param_into_wire(param, std::convert::identity)))
+            .collect(),
+        data: source.data,
+        resources: source.resources,
     }
 }

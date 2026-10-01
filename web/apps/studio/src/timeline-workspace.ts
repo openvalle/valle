@@ -58,7 +58,6 @@ import {
   projectTimelineSequences,
   type ProjectedSequenceItem,
   type AudioItem,
-  type CaptionItem,
   type TimelineSequenceItem,
   type VisualItem,
 } from "./timeline-sequence.ts";
@@ -69,7 +68,6 @@ type PlayerHitRect = Player["hitRects"][number];
 type MotionProjection = Record<string, unknown> & { structures: unknown[] };
 type VisualClip = Extract<VisualItem, { type: "clip" }>;
 type AudioClip = Extract<AudioItem, { type: "clip" }>;
-type Caption = Extract<CaptionItem, { type: "clip" }>;
 
 type StudioConfig = Omit<
   Partial<PlayerOptions>,
@@ -199,6 +197,7 @@ function bytesToBase64(bytes: Uint8Array): string {
 }
 
 function sourceKind(item: TimelineSequenceItem): string {
+  if ("type" in item && item.type === "motion") return "caption";
   if ("type" in item && item.type === "clip" && "layer" in item) return item.source.type;
   if ("type" in item && item.type === "clip" && "source" in item) return "audio";
   if ("type" in item && item.type === "clip" && "runs" in item) return "caption";
@@ -207,6 +206,7 @@ function sourceKind(item: TimelineSequenceItem): string {
 }
 
 function itemLabel(item: TimelineSequenceItem): string {
+  if ("type" in item && item.type === "motion") return "Caption";
   if ("type" in item && item.type === "clip" && "layer" in item) {
     if (item.source.type === "motion") return (item.source.component.split(/[\\/]/).pop() ?? item.source.component).replace(/^resource:/, "");
     if (item.source.type === "solid") return item.source.color;
@@ -230,10 +230,6 @@ function audioClip(item: TimelineSequenceItem): AudioClip | null {
   return "type" in item && item.type === "clip" && "source" in item && !("layer" in item)
     ? item
     : null;
-}
-
-function captionItem(item: TimelineSequenceItem): Caption | null {
-  return "type" in item && item.type === "clip" && "runs" in item ? item : null;
 }
 
 function constantVec2(
@@ -860,6 +856,11 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
   }
 
   function projectedLabel(projected: ProjectedSequenceItem): string {
+    const address = projected.timelinePath ? timelineClipAddress(projected.timelinePath) : null;
+    if (address?.band === "caption") {
+      const clip = workingCopy.tracks.caption?.[address.trackIndex]?.clips[address.clipIndex];
+      if (clip) return clip.text ?? clip.runs?.map(run => run.text).join("") ?? "Caption";
+    }
     if (sourceKind(projected.item) === "motion" && projected.timelinePath) {
       const address = timelineClipAddress(projected.timelinePath);
       const clip = address?.band === "visual"
@@ -876,7 +877,7 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
     artifact: Record<string, unknown>;
     sourceMap: Record<string, unknown>;
   } | null {
-    if (!projected.timelinePath || sourceKind(projected.item) !== "motion") return null;
+    if (!projected.timelinePath || (sourceKind(projected.item) !== "motion" && !("type" in projected.item && projected.item.type === "motion"))) return null;
     const fromBrowser = options.motionInstance?.(projected.timelinePath);
     const prepared = motionInstances.get(projected.timelinePath) ?? fromBrowser;
     if (prepared) return prepared;
@@ -889,6 +890,13 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
   }
 
   function motionSourcePath(projected: ProjectedSequenceItem, composition = false): string | null {
+    const address = projected.timelinePath ? timelineClipAddress(projected.timelinePath) : null;
+    const presenter = address?.band === "caption" ? workingCopy.tracks.caption?.[address.trackIndex]?.presenter : undefined;
+    if (presenter && sourceEditor) {
+      const locator = workingCopy.resources?.[presenter.component];
+      if (!locator) return null;
+      try { return sourceEditor.resolvePath(locator); } catch { return null; }
+    }
     const info = selectedMotionAuthoring(projected);
     if (!info || !sourceEditor) return null;
     const sourceMap = info.sourceMap;
@@ -1149,22 +1157,25 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
       }
       sections.push({ title: "Sound", rows });
     }
-    const caption = captionItem(item);
-    if (caption) {
-      sections.push({
-        title: "Content",
-        rows: [
-          ...caption.runs.map((run: { id: string; text: string }, runIndex: number) => ({
-            kind: "textarea" as const,
-            key: `caption:run:${runIndex}`,
-            label: run.id,
-            value: run.text,
-            primaryText: true,
-          })),
-          { kind: "color", key: "caption:color", label: "Color", value: caption.style.color },
-          { kind: "number", key: "caption:font-size", label: "Font size", value: caption.style.fontSize, min: 1, step: 1, unit: "px" },
-        ],
-      });
+    const captionAddress = projected.timelinePath ? timelineClipAddress(projected.timelinePath) : null;
+    const captionTrack = captionAddress?.band === "caption" ? workingCopy.tracks.caption?.[captionAddress.trackIndex] : undefined;
+    const captionClip = captionAddress && captionTrack?.clips[captionAddress.clipIndex];
+    if (captionClip && captionTrack) {
+      const runs = captionClip.runs ?? [{ text: captionClip.text ?? "" }];
+      const templateAliases = Object.entries(workingCopy.resources ?? {}).filter(([, locator]) => /\.(?:tsx|jsx)$/i.test(locator)).map(([alias]) => alias);
+      sections.push({ title: "Caption template", rows: [{ kind: "select", key: "caption:presenter", label: "Presenter", value: captionTrack.presenter?.component ?? "builtin", values: ["builtin", ...templateAliases], valueLabels: { builtin: "Built-in text" } }] });
+      if (captionTrack.presenter) motionSource = workingCopy.resources?.[captionTrack.presenter.component] ?? captionTrack.presenter.component;
+      sections.push({ title: "Content", rows: [
+        ...runs.flatMap((run, runIndex): InspectorSectionView["rows"] => [
+          { kind: "textarea", key: `caption:run:${runIndex}`, label: `Word ${runIndex + 1}`, value: run.text, primaryText: true },
+          ...("start" in run && typeof run.start === "number" && typeof run.end === "number" ? [
+            { kind: "number" as const, key: `caption:start:${runIndex}`, label: "Word start", value: run.start, min: 0, step: 0.01, unit: "s" },
+            { kind: "number" as const, key: `caption:end:${runIndex}`, label: "Word end", value: run.end, min: 0, step: 0.01, unit: "s" },
+          ] : []),
+        ]),
+        { kind: "color", key: "caption:color", label: "Color", value: captionTrack.style.color ?? "#ffffffff" },
+        { kind: "number", key: "caption:font-size", label: "Font size", value: captionTrack.style.fontSize ?? 64, min: 1, step: 1, unit: "px" },
+      ] });
     }
     inspector.renderInspector({
       errorMessage: editError,
@@ -1346,7 +1357,6 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
       const item = projected.item;
       const visual = visualClip(item);
       const audio = audioClip(item);
-      const caption = captionItem(item);
       return editTimelineClip(workingCopy, projected.timelinePath, (target) => {
         if (key === "source:color" && visual?.source.type === "solid") {
           if (target.band !== "visual" || target.clip.kind !== "solid") {
@@ -1395,7 +1405,21 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
           else target.clip.pan = Number(value);
           return;
         }
-        if (caption && key.startsWith("caption:run:")) {
+        if (key === "caption:presenter") {
+          if (target.band !== "caption") throw new Error("selected item is not a caption clip");
+          if (value === "builtin") delete target.track.presenter;
+          else target.track.presenter = { component: String(value) };
+          return;
+        }
+        if (key.startsWith("caption:start:") || key.startsWith("caption:end:")) {
+          if (target.band !== "caption") throw new Error("selected item is not a caption clip");
+          const [, field, token] = key.split(":");
+          const run = target.clip.runs?.[Number(token)];
+          if (!run || (field !== "start" && field !== "end")) throw new Error("caption word is missing");
+          run[field] = Number(value);
+          return;
+        }
+        if (key.startsWith("caption:run:")) {
           if (target.band !== "caption") throw new Error("selected item is not a caption clip");
           const runToken = key.slice("caption:run:".length);
           if (!/^(0|[1-9]\d*)$/.test(runToken)) {
@@ -1412,7 +1436,7 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
           runs[runIndex]!.text = String(value);
           return;
         }
-        if (caption && (key === "caption:color" || key === "caption:font-size")) {
+        if (key === "caption:color" || key === "caption:font-size") {
           if (target.band !== "caption") throw new Error("selected item is not a caption clip");
           const style = target.track.style;
           if (key === "caption:color") {
@@ -1942,8 +1966,8 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
   async function openMotionClip(clipId: string): Promise<void> {
     if (!sourceEditor) throw new Error("Motion source editor is unavailable");
     const projected = findProjectedItem(compiledCopy.timeline, documentView, clipId);
-    if (!projected || sourceKind(projected.item) !== "motion") {
-      throw new Error(`'${clipId}' is not a Motion visual clip`);
+    if (!projected || (sourceKind(projected.item) !== "motion" && !("type" in projected.item && projected.item.type === "motion"))) {
+      throw new Error(`'${clipId}' has no Motion template`);
     }
     const path = motionSourcePath(projected);
     if (!path) throw new Error("Motion component source is not loaded");

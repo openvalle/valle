@@ -9,10 +9,10 @@ use crate::value::MotionValue;
 use super::artifact::ValidationError;
 
 /// Hard budgets for data that is frozen and expanded during Motion prepare.
-pub const MAX_PREPARE_DATA_DEPTH: usize = 16;
-pub const MAX_PREPARE_DATA_ARRAY_ITEMS: usize = 10_000;
-pub const MAX_PREPARE_DATA_TOTAL_ITEMS: usize = 50_000;
-pub const MAX_PREPARE_DATA_BYTES: usize = 1024 * 1024;
+pub use valle_timeline::motion::{
+    MAX_PREPARE_DATA_ARRAY_ITEMS, MAX_PREPARE_DATA_BYTES, MAX_PREPARE_DATA_DEPTH,
+    MAX_PREPARE_DATA_TOTAL_ITEMS,
+};
 
 /// Schema for JSON values admitted through `controls.data`.
 ///

@@ -58,14 +58,20 @@ export function timelineCompilePayload(
 ): CompilePayload {
   const resources = new Map(resourceInputs.map((resource) => [resource.id, resource]));
   const instances: CompilePayload["instances"] = [];
-  for (const [trackIndex, track] of (timeline.tracks.visual ?? []).entries()) {
-    for (const [clipIndex, clip] of track.clips.entries()) {
-      if (clip.kind !== "motion") continue;
+  const frozenFonts = new Map<string, Uint8Array>();
+  const clips = (timeline.tracks.visual ?? []).flatMap((track, ti) => track.clips.flatMap((clip, ci) => clip.kind === "motion" ? [{ ...clip, clipPath: `/tracks/visual/${ti}/clips/${ci}` }] : []));
+  for (const [ti, track] of (timeline.tracks.caption ?? []).entries()) {
+    if (!track.presenter) continue;
+    for (const [ci] of track.clips.entries()) {
+      clips.push({ kind: "motion", component: track.presenter.component, resources: { ...track.presenter.resources, caption: track.style.font }, start: 0, duration: 1, clipPath: `/tracks/caption/${ti}/clips/${ci}` });
+    }
+  }
+  for (const clip of clips) {
       const locator = timeline.resources?.[clip.component];
       if (typeof locator !== "string") throw new Error(`Motion resource ${clip.component} is missing`);
       const { entry, modules } = moduleClosure(locator, sources);
       const options: MotionCompileOptions = {};
-      if (clip.data) options.data = { source: `timeline:${trackIndex}:${clipIndex}`, value: clip.data };
+      if (clip.data) options.data = { source: `timeline:${clip.clipPath}`, value: clip.data };
       const refs = Object.entries(clip.resources ?? {}).map(([control, alias]) => {
         const resource = resources.get(`resource:${alias}`);
         if (!resource || typeof resource.entry.digest !== "string") {
@@ -80,7 +86,9 @@ export function timelineCompilePayload(
         if (resource?.entry.kind === "font") {
           const bytes = resource.facts.bytesBase64;
           if (typeof bytes !== "string") throw new Error(`Motion font asset ${control} has no frozen bytes`);
-          aliases[`asset://${control}`] = decodeBase64(bytes);
+          let font = frozenFonts.get(alias);
+          if (!font) { font = decodeBase64(bytes); frozenFonts.set(alias, font); }
+          aliases[`asset://${control}`] = font;
         }
       }
       if (Object.keys(aliases).length) options.fontAliases = aliases;
@@ -105,10 +113,9 @@ export function timelineCompilePayload(
         if (!url) throw new Error(`Motion audio asset ${control} has no frozen locator`);
         audioUrls.push({ control, contentHash: String(resource.entry.digest), url });
       }
-      instances.push({ clipPath: `/tracks/visual/${trackIndex}/clips/${clipIndex}`,
+      instances.push({ clipPath: clip.clipPath,
         entry, modules, options, audioUrls,
         fontUrls: boot.runtime.fontUrls.map(({ url, role }) => ({ url, role: role as "font" | "formula-font" })) });
-    }
   }
   return { runtimeAssets: playerRuntimeAssetsFromStudioBoot(boot), runtimeBaseUrl: location.href,
     authorTimeline: timeline, instances, resourceInputs: [...resourceInputs] };

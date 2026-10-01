@@ -121,7 +121,9 @@ impl<'a> Builder<'a> {
 
         for item in &self.frame.visual {
             current = match item {
-                PreparedVisualItem::Layer(layer) => self.composite_layer(layer, current)?,
+                PreparedVisualItem::Layer(layer) => {
+                    self.composite_layer(layer, current, PassStage::Visual)?
+                }
                 PreparedVisualItem::Transition(transition) => {
                     self.transition(transition, current)?
                 }
@@ -131,7 +133,12 @@ impl<'a> Builder<'a> {
             current = self.adjustment_effect(effect, current)?;
         }
         for caption in &self.frame.captions {
-            current = self.caption(caption, current)?;
+            current = match caption {
+                crate::prepare::PreparedCaption::Text(caption) => self.caption(caption, current)?,
+                crate::prepare::PreparedCaption::Motion(layer) => {
+                    self.composite_layer(layer, current, PassStage::Caption)?
+                }
+            };
         }
 
         let output = self.push_resource(
@@ -175,8 +182,9 @@ impl<'a> Builder<'a> {
         &mut self,
         layer: &PreparedLayer,
         backdrop: ResourceId,
+        stage: PassStage,
     ) -> Result<ResourceId, GraphBuildError> {
-        let source = self.layer_source(layer, backdrop)?;
+        let source = self.layer_source(layer, backdrop, stage)?;
         let output = self.composite_resource(format!("{}.composite", layer.semantic_path))?;
         let kind = if layer.blend.is_normal() {
             LogicalPassKind::CompositeLayer {
@@ -194,12 +202,15 @@ impl<'a> Builder<'a> {
                 opacity: layer.dynamic.opacity,
             }
         };
-        let pass = self.add_pass(
-            format!("{}.composite", layer.semantic_path),
-            PassStage::Visual,
-            kind,
-        )?;
-        self.link_spine(pass, OrderReason::VisualSpine);
+        let pass = self.add_pass(format!("{}.composite", layer.semantic_path), stage, kind)?;
+        self.link_spine(
+            pass,
+            if stage == PassStage::Caption {
+                OrderReason::CaptionTerminal
+            } else {
+                OrderReason::VisualSpine
+            },
+        );
         Ok(output)
     }
 
@@ -207,6 +218,7 @@ impl<'a> Builder<'a> {
         &mut self,
         layer: &PreparedLayer,
         entry_composite: ResourceId,
+        stage: PassStage,
     ) -> Result<ResourceId, GraphBuildError> {
         let mut current = match &layer.source {
             PreparedSource::External {
@@ -226,7 +238,7 @@ impl<'a> Builder<'a> {
                 )?;
                 self.add_pass(
                     format!("{}.import", layer.semantic_path),
-                    PassStage::Visual,
+                    stage,
                     LogicalPassKind::Import {
                         external,
                         source_pipeline: GraphSourcePipeline { chroma_key },
@@ -238,7 +250,7 @@ impl<'a> Builder<'a> {
                 output
             }
             PreparedSource::Program { program, .. } => {
-                self.program_layer(layer, *program, entry_composite)?
+                self.program_layer(layer, *program, entry_composite, stage)?
             }
         };
 
@@ -253,7 +265,7 @@ impl<'a> Builder<'a> {
             )?;
             self.add_pass(
                 format!("{}.effects[{index}]", layer.semantic_path),
-                PassStage::Visual,
+                stage,
                 LogicalPassKind::Filter {
                     input: current,
                     output,
@@ -270,7 +282,7 @@ impl<'a> Builder<'a> {
             )?;
             self.add_pass(
                 format!("{}.mask", layer.semantic_path),
-                PassStage::Visual,
+                stage,
                 LogicalPassKind::Mask {
                     input: current,
                     output,
@@ -287,6 +299,7 @@ impl<'a> Builder<'a> {
         layer: &PreparedLayer,
         program_id: ProgramId,
         entry_composite: ResourceId,
+        stage: PassStage,
     ) -> Result<ResourceId, GraphBuildError> {
         let program = self.program(program_id, &layer.semantic_path)?.clone();
         if program.destination_uses.len() != program.requirements.destination_uses.len() {
@@ -311,7 +324,7 @@ impl<'a> Builder<'a> {
             )?;
             self.add_pass(
                 format!("{}.destination[{index}]", layer.semantic_path),
-                PassStage::Visual,
+                stage,
                 LogicalPassKind::BackdropRead {
                     token: BackdropToken {
                         scope: destination.scope.clone(),
@@ -333,7 +346,7 @@ impl<'a> Builder<'a> {
         )?;
         self.add_pass(
             format!("{}.draw", layer.semantic_path),
-            PassStage::Visual,
+            stage,
             LogicalPassKind::Draw {
                 program: program_id,
                 external_inputs,
@@ -351,8 +364,8 @@ impl<'a> Builder<'a> {
         transition: &PreparedTransition,
         backdrop: ResourceId,
     ) -> Result<ResourceId, GraphBuildError> {
-        let from = self.layer_source(&transition.from, backdrop)?;
-        let to = self.layer_source(&transition.to, backdrop)?;
+        let from = self.layer_source(&transition.from, backdrop, PassStage::Visual)?;
+        let to = self.layer_source(&transition.to, backdrop, PassStage::Visual)?;
         let output = self.composite_resource(format!("{}.composite", transition.semantic_path))?;
         let pass = self.add_pass(
             format!("{}.transition", transition.semantic_path),
@@ -393,7 +406,7 @@ impl<'a> Builder<'a> {
 
     fn caption(
         &mut self,
-        caption: &crate::prepare::PreparedCaption,
+        caption: &crate::prepare::PreparedTextCaption,
         backdrop: ResourceId,
     ) -> Result<ResourceId, GraphBuildError> {
         let program = self

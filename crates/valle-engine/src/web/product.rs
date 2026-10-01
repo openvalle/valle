@@ -968,9 +968,9 @@ impl ProductEngine {
         }
         for caption in &frame.captions {
             hits.push(ProductHitRect {
-                clip_id: &caption.clip_id,
+                clip_id: caption.clip_id(),
                 kind: "caption",
-                rect: caption.bounds.output.into(),
+                rect: caption.bounds().output.into(),
             });
         }
         serde_json::to_string(&serde_json::json!({

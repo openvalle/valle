@@ -203,7 +203,7 @@ fn first_caption_mut(
         .flat_map(|track| &mut track.items)
         .find_map(|item| match item {
             CaptionItemWire::Clip(caption) => Some(caption),
-            CaptionItemWire::Gap(_) => None,
+            CaptionItemWire::Gap(_) | CaptionItemWire::Motion(_) => None,
         })
         .expect("synthetic timeline contains one caption")
 }

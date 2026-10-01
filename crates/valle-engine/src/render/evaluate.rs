@@ -362,6 +362,7 @@ fn evaluate_resource_ref(
 
 pub(super) fn evaluate_caption_program(
     program: &CompiledCaptionProgram,
+    sources: &CompiledSourceCatalog,
     snapshot: &ResolvedResourceSnapshot,
     frame: i64,
     composition_time: RationalTime,
@@ -371,6 +372,35 @@ pub(super) fn evaluate_caption_program(
     let mut evaluated = Vec::new();
     for track in &program.tracks {
         for item in &track.items {
+            if let CompiledCaptionItem::Motion { clip } = item {
+                if clip.range.contains(frame) {
+                    evaluated.push(EvaluatedCaption::Motion(super::EvaluatedVisualClip {
+                        clip_id: clip.id.clone(),
+                        track_id: format!("compiled-caption-track/{}", track.order),
+                        track_order: track.order,
+                        source: evaluate_source_ref(
+                            sources,
+                            snapshot,
+                            clip.source,
+                            composition_time,
+                            &format!("caption/{}/clip", track.order),
+                            resources,
+                        )?,
+                        layer: super::EvaluatedVisualLayer {
+                            size: None,
+                            position: [0.5, 0.5],
+                            scale: [1.0, 1.0],
+                            rotation: 0.0,
+                            anchor: [0.5, 0.5],
+                            opacity: 1.0,
+                            blend: super::CompiledBlendMode::Normal,
+                            mask: None,
+                            filters: Vec::new(),
+                        },
+                    }));
+                }
+                continue;
+            }
             let CompiledCaptionItem::Clip { clip: caption } = item else {
                 continue;
             };
@@ -387,7 +417,7 @@ pub(super) fn evaluate_caption_program(
                 composition: composition_time,
                 clip: local_time,
             };
-            evaluated.push(EvaluatedCaption {
+            evaluated.push(EvaluatedCaption::Text(super::EvaluatedTextCaption {
                 track_order: track.order,
                 range: caption.range,
                 local_time,
@@ -407,7 +437,7 @@ pub(super) fn evaluate_caption_program(
                     blur_sigma: caption.presentation.blur_sigma.evaluate(clocks),
                 },
                 behavior: caption.behavior.clone(),
-            });
+            }));
         }
     }
     Ok(evaluated)

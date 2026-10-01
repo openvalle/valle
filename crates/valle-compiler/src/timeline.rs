@@ -109,47 +109,30 @@ fn bind_motion_instances(
     timeline: &mut timeline::TimelineWire,
     motion_sources: &mut BTreeMap<String, valle_timeline::MotionSourceMetadata>,
 ) -> Result<(), CompileTimelineError> {
+    let inputs = crate::motion_inputs::motion_preparation_inputs_wire(timeline)?;
     let original = timeline.resources.clone();
-    for track in &mut timeline.tracks.visual {
-        for clip in &mut track.clips {
-            let timeline::TimelineVisualSourceWire::Motion {
-                component,
-                resources,
-                data,
-                ..
-            } = &mut clip.source
-            else {
-                continue;
-            };
-            let Some(locator) = original.get(component) else {
-                continue;
-            };
-            let key = motion_instance_key(
-                locator,
-                &if resources.is_empty() {
-                    serde_json::Value::Null
-                } else {
-                    serde_json::to_value(resources).expect("resource aliases serialize")
-                },
-                &if data.is_empty() {
-                    serde_json::Value::Null
-                } else {
-                    serde_json::to_value(data).expect("JSON data serializes")
-                },
-            );
-            if original.contains_key(&key) {
-                return Err(CompileTimelineError::InvalidResourceAlias {
-                    alias: key,
-                    path: "/resources".into(),
-                });
+    let mut by_path = BTreeMap::new();
+    for input in inputs {
+        let key = input.key();
+        if original.contains_key(&key) {
+            return Err(CompileTimelineError::InvalidResourceAlias {
+                alias: key,
+                path: "/resources".into(),
+            });
+        }
+        if !motion_sources.contains_key(&key) {
+            if let Some(metadata) = motion_sources.get(&input.component).copied() {
+                motion_sources.insert(key.clone(), metadata);
             }
-            if !motion_sources.contains_key(&key) {
-                if let Some(duration) = motion_sources.get(component).copied() {
-                    motion_sources.insert(key.clone(), duration);
-                }
+        }
+        timeline.resources.insert(key.clone(), input.locator);
+        by_path.insert(input.clip_path, key);
+    }
+    for (ti, track) in timeline.tracks.visual.iter_mut().enumerate() {
+        for (ci, clip) in track.clips.iter_mut().enumerate() {
+            if let timeline::TimelineVisualSourceWire::Motion { component, .. } = &mut clip.source {
+                *component = by_path[&format!("/tracks/visual/{ti}/clips/{ci}")].clone();
             }
-            timeline.resources.insert(key.clone(), locator.clone());
-            *component = key;
         }
     }
     Ok(())
@@ -162,6 +145,7 @@ struct NormalizationInput {
 
 struct TimelineNormalizer {
     resources: BTreeSet<String>,
+    resource_locators: BTreeMap<String, String>,
     motion_sources: BTreeMap<String, valle_timeline::MotionSourceMetadata>,
     frame_rate: FrameRate,
     canvas_size: [u32; 2],
@@ -176,6 +160,7 @@ impl TimelineNormalizer {
         let frame_rate = frame_rate(&timeline.canvas.fps)?;
         Ok(Self {
             resources: timeline.resources.keys().cloned().collect(),
+            resource_locators: timeline.resources.clone(),
             motion_sources: motion_sources.clone(),
             frame_rate,
             canvas_size: [timeline.canvas.width, timeline.canvas.height],
@@ -204,6 +189,7 @@ impl TimelineNormalizer {
                 track_index,
                 track.style,
                 track.layout,
+                track.presenter,
                 track.clips,
             )?);
         }
@@ -566,21 +552,28 @@ impl TimelineNormalizer {
         track_index: usize,
         style: timeline::TimelineCaptionStyleWire,
         track_layout: Option<timeline::TimelineCaptionLayoutWire>,
+        presenter: Option<timeline::TimelineCaptionPresenterWire>,
         clips: Vec<timeline::TimelineCaptionClipWire>,
     ) -> Result<document::CaptionTrackWire, CompileTimelineError> {
         let font = self.resolve(
             &style.font,
             &format!("/tracks/caption/{track_index}/style/font"),
         )?;
-        let style = document::CaptionStyleWire {
+        let canonical_style = document::CaptionStyleWire {
             font,
             font_size: style.font_size.unwrap_or(64.0),
-            color: style.color.unwrap_or_else(|| "#ffffffff".to_owned()),
-            shadow: style.shadow.map(|shadow| document::CaptionShadowWire {
-                color: shadow.color,
-                offset: shadow.offset,
-                blur_sigma: shadow.blur.unwrap_or(0.0),
-            }),
+            color: style
+                .color
+                .clone()
+                .unwrap_or_else(|| "#ffffffff".to_owned()),
+            shadow: style
+                .shadow
+                .clone()
+                .map(|shadow| document::CaptionShadowWire {
+                    color: shadow.color,
+                    offset: shadow.offset,
+                    blur_sigma: shadow.blur.unwrap_or(0.0),
+                }),
         };
         let mut cursor = ExactRational::ZERO;
         let mut items = Vec::new();
@@ -599,6 +592,86 @@ impl TimelineNormalizer {
             let duration = exact_time(&clip.duration);
             cursor = checked_end(start, duration, &clip_path)?;
 
+            if let Some(presenter) = &presenter {
+                let input = crate::motion_inputs::caption_motion_input(
+                    &self.resource_locators,
+                    presenter,
+                    &style,
+                    track_layout.as_ref(),
+                    &clip,
+                    self.canvas_size,
+                    &clip_path,
+                )?;
+                let key = input.key();
+                let metadata = self.motion_sources.get(&key).ok_or_else(|| {
+                    CompileTimelineError::MissingMotionMetadata {
+                        path: clip_path.clone(),
+                    }
+                })?;
+                let role_error = |reason: &str| CompileTimelineError::MotionRole {
+                    component: presenter.component.clone(),
+                    role: metadata.role.name().into(),
+                    path: clip_path.clone(),
+                    reason: reason.into(),
+                };
+                if !matches!(
+                    metadata.role,
+                    valle_timeline::MotionRole::CaptionPresenter { .. }
+                ) {
+                    return Err(role_error(
+                        "a caption track presenter must declare captionPresenter",
+                    ));
+                }
+                metadata
+                    .role
+                    .validate(metadata.duration, Some(RationalTime::from_exact(duration)))
+                    .map_err(role_error)?;
+                items.push(document::CaptionItemWire::Motion(
+                    document::CaptionMotionWire {
+                        id: id.clone(),
+                        duration,
+                        source: document::MotionInstanceWire {
+                            component: self.resolve(&key, &clip_path)?,
+                            role: metadata.role,
+                            fit: document::RasterFitWire::Contain,
+                            source_start: ExactRational::ZERO,
+                            source_duration: metadata.duration.into_exact(),
+                            rate: ExactRational::ONE,
+                            end_behavior: document::MediaEndBehaviorWire::Hold,
+                            props: presenter
+                                .props
+                                .clone()
+                                .into_iter()
+                                .map(|(name, value)| {
+                                    (
+                                        name.clone(),
+                                        timeline_param_to_canonical(
+                                            value,
+                                            &id,
+                                            &format!("motionProp:{name}"),
+                                        ),
+                                    )
+                                })
+                                .collect(),
+                            data: input
+                                .data
+                                .as_object()
+                                .expect("caption data object")
+                                .iter()
+                                .map(|(k, v)| (k.clone(), v.clone()))
+                                .collect(),
+                            resources: input
+                                .resources
+                                .into_iter()
+                                .map(|(slot, alias)| {
+                                    self.resolve(&alias, &clip_path).map(|id| (slot, id))
+                                })
+                                .collect::<Result<_, _>>()?,
+                        },
+                    },
+                ));
+                continue;
+            }
             let runs = caption_runs(clip.text, clip.runs, &id, &clip_path)?;
             let layout = merge_layout(track_layout.as_ref(), clip.layout.as_ref());
             let uses_preset = clip.enter.is_some() || clip.display.is_some() || clip.exit.is_some();
@@ -626,7 +699,7 @@ impl TimelineNormalizer {
                 id,
                 duration,
                 runs,
-                style: style.clone(),
+                style: canonical_style.clone(),
                 layout,
                 presentation,
                 behavior,
@@ -1060,15 +1133,14 @@ fn caption_runs(
 
 /// Freeze one caption's text, timed runs and inherited style/layout for Motion preparation.
 /// Placement start is deliberately absent; duration only validates timed input.
-#[cfg(feature = "motion")]
 pub fn prepare_caption_presenter_data(
     style: &timeline::TimelineCaptionStyleWire,
     track_layout: Option<&timeline::TimelineCaptionLayoutWire>,
     clip: &timeline::TimelineCaptionClipWire,
     canvas: [u32; 2],
     path: &str,
-) -> Result<valle_motion::caption::CaptionPresenterData, CompileTimelineError> {
-    use valle_motion::caption::*;
+) -> Result<valle_timeline::motion::CaptionPresenterData, CompileTimelineError> {
+    use valle_timeline::motion::*;
     let error = |reason: String| CompileTimelineError::MotionPreparation {
         reason: format!("{path}: {reason}"),
     };

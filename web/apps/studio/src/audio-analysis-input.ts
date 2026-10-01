@@ -57,15 +57,25 @@ export async function prepareAudioAnalysisInputs(
   );
 }
 
-/** The digest identifies PCM; never stringify millions of samples for cache keys. */
-export function motionCompileOptionIdentity(
+/** Cache immutable binary inputs by content rather than expanding their bytes into JSON. */
+export async function motionCompileOptionIdentity(
   options?: MotionCompileOptions,
-): unknown {
+  digest: (bytes: Uint8Array) => Promise<string> = digestBytes,
+): Promise<unknown> {
   if (!options) return options;
   return {
     ...options,
-    audioSources: options.audioSources?.map(
-      ({ samples: _samples, ...metadata }) => metadata,
-    ),
+    data: options.data ? { value: options.data.value } : undefined,
+    fonts: options.fonts ? await Promise.all(options.fonts.map(digest)) : undefined,
+    fontAliases: options.fontAliases ? Object.fromEntries(await Promise.all(Object.entries(options.fontAliases).map(async ([uri, bytes]) => [uri, await digest(bytes)]))) : undefined,
+    shaders: options.shaders ? await Promise.all(options.shaders.map(async ({ frozenBytes, ...metadata }) => ({ ...metadata, contentHash: await digest(frozenBytes) }))) : undefined,
+    audioSources: options.audioSources?.map(({ samples: _samples, ...metadata }) => metadata),
   };
+}
+
+export async function digestBytes(bytes: Uint8Array): Promise<string> {
+  const copy = new Uint8Array(bytes.byteLength);
+  copy.set(bytes);
+  return [...new Uint8Array(await crypto.subtle.digest("SHA-256", copy.buffer))]
+    .map(byte => byte.toString(16).padStart(2, "0")).join("");
 }

@@ -201,6 +201,10 @@ impl BindingAdmission<'_> {
     }
 
     fn caption(&mut self, caption: &PreparedCaption) -> Result<(), PreparedFrameValidationError> {
+        let caption = match caption {
+            PreparedCaption::Motion(layer) => return self.layer(layer),
+            PreparedCaption::Text(caption) => caption,
+        };
         let path = &caption.semantic_path;
         self.binding(
             caption.dynamic.transform,
@@ -489,6 +493,23 @@ impl Admission<'_> {
         caption: &PreparedCaption,
         path: &str,
     ) -> Result<(), PreparedFrameValidationError> {
+        let caption = match caption {
+            PreparedCaption::Motion(layer) => {
+                let super::PreparedSource::Program { program, .. } = &layer.source else {
+                    return Err(invalid(path, "caption Motion must use a Motion program"));
+                };
+                if !self
+                    .frame
+                    .programs
+                    .iter()
+                    .any(|p| p.id == *program && p.kind == super::PreparedProgramKind::Motion)
+                {
+                    return Err(invalid(path, "caption Motion must use a Motion program"));
+                }
+                return self.layer(layer, path);
+            }
+            PreparedCaption::Text(caption) => caption,
+        };
         expect_path(&caption.semantic_path, path)?;
         if caption.clip_id.is_empty() || caption.track_id.is_empty() {
             return Err(invalid(path, "clip and track ids must not be empty"));

@@ -148,6 +148,24 @@ impl TimelineFile {
                             }
                         }
                     }
+                    for track in document["tracks"]["caption"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                    {
+                        if let Some(component) = track["presenter"]["component"].as_str() {
+                            durations.insert(
+                                component.to_owned(),
+                                valle_timeline::MotionSourceMetadata {
+                                    duration: valle_timeline::RationalTime::new(86_400, 1)?,
+                                    role: valle_timeline::MotionRole::CaptionPresenter {
+                                        intro: valle_timeline::RationalTime::ZERO,
+                                        outro: valle_timeline::RationalTime::ZERO,
+                                    },
+                                },
+                            );
+                        }
+                    }
                     let projection = valle_compiler::compile_timeline_with_motion_sources(
                         timeline.clone(),
                         &durations,

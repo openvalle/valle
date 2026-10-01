@@ -211,6 +211,11 @@ fn quantize_document_scalars(document: &mut TimelineDocumentWire) {
 
     for track in &mut document.captions.tracks {
         for item in &mut track.items {
+            if let CaptionItemWire::Motion(caption) = item {
+                for param in caption.source.props.values_mut() {
+                    quantize_param(param, quantize_json_numbers);
+                }
+            }
             let CaptionItemWire::Clip(caption) = item else {
                 continue;
             };
@@ -658,82 +663,18 @@ impl<'a> Validator<'a> {
                 );
             }
             VisualSourceWire::Motion(source) => {
-                if !matches!(source.role, crate::MotionRole::Clip) {
-                    for (field, valid) in [
-                        ("fit", matches!(source.fit, RasterFitWire::Contain)),
-                        ("sourceStart", source.source_start == ExactRational::ZERO),
-                        ("rate", source.rate == ExactRational::ONE),
-                        (
-                            "endBehavior",
-                            matches!(source.end_behavior, MediaEndBehaviorWire::Hold),
-                        ),
-                    ] {
-                        if !valid {
-                            self.error(
-                                "motion_role_invalid",
-                                &format!("{path}/source/{field}"),
-                                Some(&clip.id),
-                                details([(
-                                    "reason",
-                                    json!("overlay source must use neutral media timing and fit"),
-                                )]),
-                            );
-                        }
-                    }
-                }
-                if let Err(reason) = source.role.validate(
-                    crate::RationalTime::from_exact(source.source_duration),
-                    Some(crate::RationalTime::from_exact(clip.duration)),
-                ) {
+                if matches!(source.role, crate::MotionRole::CaptionPresenter { .. }) {
                     self.error(
                         "motion_role_invalid",
                         &format!("{path}/source/role"),
                         Some(&clip.id),
-                        details([("reason", json!(reason))]),
+                        details([(
+                            "reason",
+                            json!("captionPresenter belongs to a caption track"),
+                        )]),
                     );
                 }
-                if source.props.len() > MAX_MOTION_PROPS {
-                    self.error(
-                        "motion_prop_budget_exceeded",
-                        &format!("{path}/source/props"),
-                        Some(&clip.id),
-                        details([
-                            ("limit", json!(MAX_MOTION_PROPS)),
-                            ("actual", json!(source.props.len())),
-                        ]),
-                    );
-                }
-                self.validate_resource_id(&source.component, &format!("{path}/source/component"));
-                self.require_non_negative(
-                    source.source_start,
-                    &format!("{path}/source/sourceStart"),
-                    Some(&clip.id),
-                );
-                self.require_positive(
-                    source.source_duration,
-                    &format!("{path}/source/sourceDuration"),
-                    Some(&clip.id),
-                    "duration_non_positive",
-                );
-                self.require_positive(
-                    source.rate,
-                    &format!("{path}/source/rate"),
-                    Some(&clip.id),
-                    "rate_non_positive",
-                );
-                for (name, param) in &source.props {
-                    self.validate_json_param(
-                        param,
-                        clip.duration,
-                        &format!("{path}/source/props/{}", pointer_token(name)),
-                    );
-                }
-                for (name, resource) in &source.resources {
-                    self.validate_resource_id(
-                        resource,
-                        &format!("{path}/source/resources/{}", pointer_token(name)),
-                    );
-                }
+                self.validate_motion_source(source, clip.duration, &clip.id, path);
             }
             VisualSourceWire::Solid(source) => {
                 if !crate::internal::Color(source.color.clone()).is_valid() {
@@ -745,6 +686,91 @@ impl<'a> Validator<'a> {
                     );
                 }
             }
+        }
+    }
+
+    fn validate_motion_source(
+        &mut self,
+        source: &MotionInstanceWire,
+        duration: ExactRational,
+        id: &str,
+        path: &str,
+    ) {
+        if !matches!(source.role, crate::MotionRole::Clip) {
+            for (field, valid) in [
+                ("fit", matches!(source.fit, RasterFitWire::Contain)),
+                ("sourceStart", source.source_start == ExactRational::ZERO),
+                ("rate", source.rate == ExactRational::ONE),
+                (
+                    "endBehavior",
+                    matches!(source.end_behavior, MediaEndBehaviorWire::Hold),
+                ),
+            ] {
+                if !valid {
+                    self.error(
+                        "motion_role_invalid",
+                        &format!("{path}/source/{field}"),
+                        Some(id),
+                        details([(
+                            "reason",
+                            json!("template source must use neutral media timing and fit"),
+                        )]),
+                    );
+                }
+            }
+        }
+        if let Err(reason) = source.role.validate(
+            crate::RationalTime::from_exact(source.source_duration),
+            Some(crate::RationalTime::from_exact(duration)),
+        ) {
+            self.error(
+                "motion_role_invalid",
+                &format!("{path}/source/role"),
+                Some(id),
+                details([("reason", json!(reason))]),
+            );
+        }
+        if source.props.len() > MAX_MOTION_PROPS {
+            self.error(
+                "motion_prop_budget_exceeded",
+                &format!("{path}/source/props"),
+                Some(id),
+                details([
+                    ("limit", json!(MAX_MOTION_PROPS)),
+                    ("actual", json!(source.props.len())),
+                ]),
+            );
+        }
+        self.validate_resource_id(&source.component, &format!("{path}/source/component"));
+        self.require_non_negative(
+            source.source_start,
+            &format!("{path}/source/sourceStart"),
+            Some(id),
+        );
+        self.require_positive(
+            source.source_duration,
+            &format!("{path}/source/sourceDuration"),
+            Some(id),
+            "duration_non_positive",
+        );
+        self.require_positive(
+            source.rate,
+            &format!("{path}/source/rate"),
+            Some(id),
+            "rate_non_positive",
+        );
+        for (name, param) in &source.props {
+            self.validate_json_param(
+                param,
+                duration,
+                &format!("{path}/source/props/{}", pointer_token(name)),
+            );
+        }
+        for (name, resource) in &source.resources {
+            self.validate_resource_id(
+                resource,
+                &format!("{path}/source/resources/{}", pointer_token(name)),
+            );
         }
     }
 
@@ -1200,6 +1226,36 @@ impl<'a> Validator<'a> {
                                 );
                             }
                         }
+                        cursor = self.advance(cursor, caption.duration, &path, Some(&caption.id));
+                    }
+                    CaptionItemWire::Motion(caption) => {
+                        self.register_id(&caption.id, "caption-motion", &format!("{path}/id"));
+                        self.require_positive(
+                            caption.duration,
+                            &format!("{path}/duration"),
+                            Some(&caption.id),
+                            "duration_non_positive",
+                        );
+                        if !matches!(
+                            caption.source.role,
+                            crate::MotionRole::CaptionPresenter { .. }
+                        ) {
+                            self.error(
+                                "motion_role_invalid",
+                                &format!("{path}/source/role"),
+                                Some(&caption.id),
+                                details([(
+                                    "reason",
+                                    json!("caption Motion must declare captionPresenter"),
+                                )]),
+                            );
+                        }
+                        self.validate_motion_source(
+                            &caption.source,
+                            caption.duration,
+                            &caption.id,
+                            &path,
+                        );
                         cursor = self.advance(cursor, caption.duration, &path, Some(&caption.id));
                     }
                     CaptionItemWire::Gap(gap) => {

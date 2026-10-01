@@ -49,7 +49,7 @@ use super::{
 };
 
 #[cfg(feature = "text")]
-use super::PreparedCaption;
+use super::{PreparedCaption, PreparedTextCaption};
 
 /// Prepares one frame from the exact immutable render that produced `evaluated`.
 pub fn prepare_compiled_render_frame_cached(
@@ -139,14 +139,27 @@ pub fn prepare_compiled_render_frame_cached(
 
     #[cfg(feature = "text")]
     let captions = {
+        state.frame.camera = None;
         let mut prepared = Vec::with_capacity(evaluated.captions().len());
         for (index, caption) in evaluated.captions().iter().enumerate() {
-            prepared.push(prepare_compiled_caption(
-                render,
-                caption,
-                &format!("captions[{index}]"),
-                &mut state,
-            )?);
+            let path = format!("captions[{index}]");
+            prepared.push(match caption {
+                crate::render::EvaluatedCaption::Text(caption) => PreparedCaption::Text(Box::new(
+                    prepare_compiled_caption(render, caption, &path, &mut state)?,
+                )),
+                crate::render::EvaluatedCaption::Motion(clip) => {
+                    PreparedCaption::Motion(Box::new(prepare_endpoint(
+                        render,
+                        evaluated,
+                        clip.clip_id(),
+                        clip.track_id(),
+                        clip.source(),
+                        clip.layer(),
+                        &path,
+                        &mut state,
+                    )?))
+                }
+            });
         }
         prepared
     };
@@ -721,10 +734,10 @@ fn render_seed(render: &CompiledRender) -> u32 {
 #[cfg(feature = "text")]
 fn prepare_compiled_caption(
     render: &CompiledRender,
-    caption: &crate::render::EvaluatedCaption,
+    caption: &crate::render::EvaluatedTextCaption,
     path: &str,
     state: &mut PrepareState<'_>,
-) -> Result<PreparedCaption, PrepareError> {
+) -> Result<PreparedTextCaption, PrepareError> {
     let VerifiedResourceFacts::Font { descriptor, bytes } = caption.font().facts() else {
         return Err(PrepareError::at(
             format!("{path}.font"),

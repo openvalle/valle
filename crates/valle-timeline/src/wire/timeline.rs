@@ -294,10 +294,23 @@ pub struct TimelineAdjustmentTrackWire {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TimelineCaptionTrackWire {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub presenter: Option<TimelineCaptionPresenterWire>,
     pub style: TimelineCaptionStyleWire,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub layout: Option<TimelineCaptionLayoutWire>,
     pub clips: Vec<TimelineCaptionClipWire>,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TimelineCaptionPresenterWire {
+    pub component: String,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub props: BTreeMap<String, TimelineParamWire<JsonValue>>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub resources: BTreeMap<String, String>,
 }
 
 /// A non-negative decimal second value normalized to at most six fractional
@@ -894,10 +907,10 @@ pub struct TimelineCaptionClipWire {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TimelineTextRunWire {
     pub text: String,
-    /// Clip-local start of this run's karaoke reveal window.
+    /// Clip-local start of this word's reveal/highlight window.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub start: Option<TimelineTimeWire>,
-    /// Clip-local end of this run's karaoke reveal window.
+    /// Clip-local end of this word's reveal/highlight window.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub end: Option<TimelineTimeWire>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

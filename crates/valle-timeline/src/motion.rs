@@ -1,6 +1,13 @@
 //! Closed Motion roles and exact template timing shared by every host.
 use crate::{RationalTime, TimeError};
 use serde::{Deserialize, Serialize};
+mod caption;
+pub use caption::*;
+
+pub const MAX_PREPARE_DATA_DEPTH: usize = 16;
+pub const MAX_PREPARE_DATA_ARRAY_ITEMS: usize = 10_000;
+pub const MAX_PREPARE_DATA_TOTAL_ITEMS: usize = 50_000;
+pub const MAX_PREPARE_DATA_BYTES: usize = 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]

@@ -132,7 +132,12 @@ pub(crate) fn prepare_timeline_media_facts(
     let original_doc: serde_json::Value = serde_json::from_slice(&timeline_bytes(&timeline)?)?;
     let mut doc = original_doc.clone();
     let mut motion_assets = BTreeSet::new();
-    for track in doc["tracks"]["visual"].as_array_mut().into_iter().flatten() {
+    for track in doc
+        .pointer_mut("/tracks/visual")
+        .and_then(serde_json::Value::as_array_mut)
+        .into_iter()
+        .flatten()
+    {
         if let Some(clips) = track["clips"].as_array_mut() {
             for clip in clips {
                 if clip["kind"] != "motion" {
@@ -150,6 +155,35 @@ pub(crate) fn prepare_timeline_media_facts(
                     "kind": "solid", "color": "#00000000",
                     "start": clip["start"], "duration": clip["duration"],
                 });
+            }
+        }
+    }
+    for track in doc
+        .pointer_mut("/tracks/caption")
+        .and_then(serde_json::Value::as_array_mut)
+        .into_iter()
+        .flatten()
+    {
+        if let Some(presenter) = track
+            .as_object_mut()
+            .and_then(|track| track.remove("presenter"))
+        {
+            motion_assets.extend(
+                presenter["resources"]
+                    .as_object()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|(_, v)| v.as_str().map(str::to_owned)),
+            );
+            // This copy collects media facts through the built-in text path. Word timing
+            // belongs to the original presenter input and does not affect font facts.
+            for clip in track["clips"].as_array_mut().into_iter().flatten() {
+                for run in clip["runs"].as_array_mut().into_iter().flatten() {
+                    if let Some(run) = run.as_object_mut() {
+                        run.remove("start");
+                        run.remove("end");
+                    }
+                }
             }
         }
     }
@@ -390,6 +424,11 @@ fn prepare_timeline_package_impl(
     let media = media.unwrap_or(&mut fresh_media);
     let timeline_json = String::from_utf8(timeline_bytes(&timeline)?)?;
     let mut doc: serde_json::Value = serde_json::from_slice(&timeline_bytes(&timeline)?)?;
+    let motion_inputs: std::collections::BTreeMap<_, _> =
+        valle_compiler::motion_preparation_inputs(&timeline)?
+            .into_iter()
+            .map(|input| (input.key(), input))
+            .collect();
     prepare_motion_instances(&mut doc)?;
     let captured_motions = capture_motion_sources(&doc, base)?;
     let input_dependencies = captured_motions.dependency_digests()?;
@@ -404,11 +443,18 @@ fn prepare_timeline_package_impl(
     if let Some(locators) = doc["resources"].as_object() {
         let mut used = std::collections::BTreeSet::new();
         collect_used_resources(&doc["tracks"], &mut used);
+        for input in motion_inputs.values() {
+            used.remove(&input.component);
+        }
+        for (key, input) in &motion_inputs {
+            used.insert(key.clone());
+            used.extend(input.resources.values().cloned());
+        }
         let mut ordered: Vec<_> = locators
             .iter()
             .filter(|(name, _)| used.contains(name.as_str()))
             .collect();
-        ordered.sort_by_key(|(name, _)| motion_component(&doc, name).is_none());
+        ordered.sort_by_key(|(name, _)| !motion_inputs.contains_key(name.as_str()));
         let mut motion_asset_kinds = std::collections::BTreeMap::new();
         let mut motion_environments = std::collections::BTreeMap::new();
         for (name, locator) in ordered {
@@ -422,14 +468,11 @@ fn prepare_timeline_package_impl(
                 base.join(locator)
             };
             let id = format!("resource:{name}");
-            if motion_component(&doc, name).is_some() {
-                let clip = motion_component(&doc, name).unwrap();
+            if let Some(input) = motion_inputs.get(name) {
                 let mut deps = Vec::new();
-                if let Some(bindings) = clip["resources"].as_object() {
-                    for (control, resource) in bindings {
-                        let key = resource
-                            .as_str()
-                            .ok_or_else(|| anyhow!("invalid Motion resource binding"))?;
+                {
+                    for (control, key) in &input.resources {
+                        let key = key.as_str();
                         let locator = locators
                             .get(key)
                             .and_then(|v| v.as_str())
@@ -457,25 +500,25 @@ fn prepare_timeline_package_impl(
                     .as_ref()
                     .ok_or_else(|| anyhow!("Motion {name} needs composition.duration"))?
                     .duration_frames(frame_rate)?;
-                for track in compiled_json["document"]["visual"]["tracks"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                {
-                    for item in track["items"].as_array().into_iter().flatten() {
-                        if item["source"]["component"].as_str() == Some(&id) {
-                            structures.push(serde_json::json!({
+                for band in ["visual", "captions"] {
+                    for track in compiled_json["document"][band]["tracks"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                    {
+                        for item in track["items"].as_array().into_iter().flatten() {
+                            if item["source"]["component"].as_str() == Some(&id) {
+                                structures.push(serde_json::json!({
                                 "clipId": item["id"],
                                 "authoring": {"sourceMap": source_map, "totalFrames": total_frames}
                             }));
+                            }
                         }
                     }
                 }
-                if let Some(bindings) = clip["resources"].as_object() {
-                    for (control, resource) in bindings {
-                        let key = resource
-                            .as_str()
-                            .ok_or_else(|| anyhow!("invalid Motion resource binding"))?;
+                {
+                    for (control, key) in &input.resources {
+                        let key = key.as_str();
                         let kind = artifact
                             .controls
                             .assets
@@ -740,22 +783,6 @@ fn resource_kind(doc: &serde_json::Value, name: &str) -> Option<AssetKind> {
     scan(&doc["tracks"], name, false)
 }
 
-fn motion_component<'a>(doc: &'a serde_json::Value, name: &str) -> Option<&'a serde_json::Value> {
-    match doc {
-        serde_json::Value::Object(map) => {
-            if map.get("kind").and_then(|v| v.as_str()) == Some("motion")
-                && map.get("component").and_then(|v| v.as_str()) == Some(name)
-            {
-                Some(doc)
-            } else {
-                resource_fields(map).find_map(|(_, v)| motion_component(v, name))
-            }
-        }
-        serde_json::Value::Array(a) => a.iter().find_map(|v| motion_component(v, name)),
-        _ => None,
-    }
-}
-
 fn has_visual_source(value: &serde_json::Value, name: &str, kind: &str) -> bool {
     match value {
         serde_json::Value::Object(map) => {
@@ -770,46 +797,15 @@ fn has_visual_source(value: &serde_json::Value, name: &str, kind: &str) -> bool 
 
 /// Compilation captures bound resource facts; vary the artifact by its actual preparation inputs.
 pub(crate) fn prepare_motion_instances(doc: &mut serde_json::Value) -> Result<()> {
+    let inputs = valle_compiler::motion_preparation_inputs(&decode_timeline(&doc.to_string())?)?;
     let mut locators = doc["resources"].as_object().cloned().unwrap_or_default();
     let original = locators.clone();
-    if let Some(tracks) = doc["tracks"]["visual"].as_array_mut() {
-        for track in tracks {
-            if let Some(clips) = track["clips"].as_array_mut() {
-                for clip in clips {
-                    if clip["kind"] != "motion" {
-                        continue;
-                    }
-                    let name = clip["component"]
-                        .as_str()
-                        .ok_or_else(|| anyhow!("missing Motion component"))?;
-                    let locator = original
-                        .get(name)
-                        .ok_or_else(|| anyhow!("missing Motion component {name}"))?;
-                    let resources = clip
-                        .get("resources")
-                        .filter(|value| value.as_object().is_some_and(|map| !map.is_empty()))
-                        .unwrap_or(&serde_json::Value::Null)
-                        .clone();
-                    let data = clip
-                        .get("data")
-                        .filter(|value| value.as_object().is_some_and(|map| !map.is_empty()))
-                        .unwrap_or(&serde_json::Value::Null)
-                        .clone();
-                    let key = valle_compiler::motion_instance_key(
-                        locator
-                            .as_str()
-                            .ok_or_else(|| anyhow!("invalid Motion locator"))?,
-                        &resources,
-                        &data,
-                    );
-                    if original.contains_key(&key) {
-                        bail!("resource alias {key} collides with a prepared Motion instance");
-                    }
-                    locators.insert(key.clone(), locator.clone());
-                    clip["component"] = key.into();
-                }
-            }
+    for input in inputs {
+        let key = input.key();
+        if original.contains_key(&key) {
+            bail!("resource alias {key} collides with a prepared Motion instance");
         }
+        locators.insert(key, input.locator.into());
     }
     doc["resources"] = locators.into();
     Ok(())
@@ -902,41 +898,28 @@ pub(crate) fn capture_motion_sources(
     doc: &serde_json::Value,
     base: &Path,
 ) -> Result<CapturedMotionSources> {
-    let locators = doc["resources"].as_object().cloned().unwrap_or_default();
+    let timeline = decode_timeline(&doc.to_string())?;
+    let wire = timeline.clone().into_wire();
+    let locators = &wire.resources;
     let mut instances = std::collections::BTreeMap::new();
-    for track in doc["tracks"]["visual"].as_array().into_iter().flatten() {
-        for clip in track["clips"].as_array().into_iter().flatten() {
-            if clip["kind"] != "motion" {
-                continue;
-            }
-            let name = clip["component"]
-                .as_str()
-                .ok_or_else(|| anyhow!("missing Motion component"))?;
-            if instances.contains_key(name) {
-                continue;
-            }
-            let locator = locators
-                .get(name)
-                .and_then(|value| value.as_str())
-                .ok_or_else(|| anyhow!("missing Motion resource {name}"))?;
-            let mut assets = Vec::new();
-            for (control, alias) in clip["resources"].as_object().into_iter().flatten() {
-                let alias = alias
-                    .as_str()
-                    .ok_or_else(|| anyhow!("invalid Motion asset alias"))?;
-                let asset = locators
-                    .get(alias)
-                    .and_then(|value| value.as_str())
-                    .ok_or_else(|| anyhow!("missing Motion resource {alias}"))?;
-                assets.push(format!("{control}={}", base.join(asset).display()));
-            }
-            let input = super::motion::capture_timeline_component(
-                &base.join(locator),
-                &assets,
-                clip.get("data"),
-            )?;
-            instances.insert(name.to_owned(), input);
+    for input in valle_compiler::motion_preparation_inputs(&timeline)? {
+        let key = input.key();
+        if instances.contains_key(&key) {
+            continue;
         }
+        let mut assets = Vec::new();
+        for (control, alias) in &input.resources {
+            let asset = locators
+                .get(alias)
+                .ok_or_else(|| anyhow!("missing Motion resource {alias}"))?;
+            assets.push(format!("{control}={}", base.join(asset).display()));
+        }
+        let captured = super::motion::capture_timeline_component(
+            &base.join(&input.locator),
+            &assets,
+            (!input.data.is_null()).then_some(&input.data),
+        )?;
+        instances.insert(key, captured);
     }
     Ok(CapturedMotionSources { instances })
 }
@@ -950,29 +933,38 @@ pub(crate) fn motion_source_paths(
     let document: serde_json::Value = serde_json::from_slice(&timeline_bytes(timeline)?)?;
     let locators = document["resources"].as_object();
     let mut paths = std::collections::BTreeSet::new();
-    for track in document["tracks"]["visual"]
+    let visual = document["tracks"]["visual"]
         .as_array()
         .into_iter()
         .flatten()
-    {
-        for clip in track["clips"].as_array().into_iter().flatten() {
-            if clip["kind"] != "motion" {
-                continue;
-            }
-            let name = clip["component"]
-                .as_str()
-                .ok_or_else(|| anyhow!("missing Motion component"))?;
-            let locator = locators
-                .and_then(|locators| locators.get(name))
-                .and_then(serde_json::Value::as_str)
-                .ok_or_else(|| anyhow!("missing Motion resource {name}"))?;
-            if locator.contains("://") {
-                bail!("Motion source {name} must be a local file");
-            }
-            let entry = base.join(locator);
-            paths
-                .extend(super::motion::motion_module_paths(&entry).unwrap_or_else(|_| vec![entry]));
+        .flat_map(|track| track["clips"].as_array().into_iter().flatten())
+        .filter(|clip| clip["kind"] == "motion")
+        .filter_map(|clip| clip["component"].as_str());
+    let caption = document["tracks"]["caption"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|track| track["presenter"]["component"].as_str());
+    let declared = locators
+        .into_iter()
+        .flat_map(|resources| resources.iter())
+        .filter(|(_, locator)| {
+            locator.as_str().is_some_and(|locator| {
+                let extension = Path::new(locator).extension().and_then(|e| e.to_str());
+                matches!(extension, Some("tsx" | "jsx"))
+            })
+        })
+        .map(|(alias, _)| alias.as_str());
+    for name in visual.chain(caption).chain(declared) {
+        let locator = locators
+            .and_then(|l| l.get(name))
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| anyhow!("missing Motion resource {name}"))?;
+        if locator.contains("://") {
+            bail!("Motion source {name} must be a local file");
         }
+        let entry = base.join(locator);
+        paths.extend(super::motion::motion_module_paths(&entry).unwrap_or_else(|_| vec![entry]));
     }
     Ok(paths)
 }
@@ -982,60 +974,37 @@ pub(crate) fn motion_source_metadata(
     author: &serde_json::Value,
 ) -> Result<std::collections::BTreeMap<String, valle_timeline::MotionSourceMetadata>> {
     let mut durations = std::collections::BTreeMap::new();
-    for track in canonical["document"]["visual"]["tracks"]
-        .as_array()
-        .into_iter()
-        .flatten()
-    {
-        for item in track["items"].as_array().into_iter().flatten() {
-            let source = &item["source"];
-            if source["type"] != "motion" {
-                continue;
-            }
-            let alias = source["component"]
-                .as_str()
-                .and_then(|id| id.strip_prefix("resource:"))
-                .ok_or_else(|| anyhow!("invalid prepared Motion component"))?;
-            let duration: valle_timeline::RationalTime =
-                serde_json::from_value(source["sourceDuration"].clone())?;
-            durations.insert(
-                alias.to_owned(),
-                valle_timeline::MotionSourceMetadata {
-                    duration,
-                    role: serde_json::from_value(source["role"].clone())?,
-                },
-            );
-        }
-    }
-    for (track_index, track) in author["tracks"]["visual"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .enumerate()
-    {
-        for (clip_index, clip) in track["clips"].as_array().into_iter().flatten().enumerate() {
-            if clip["kind"] != "motion" {
-                continue;
-            }
-            let id = format!("timeline:visual-track:{track_index}:clip:{clip_index}");
-            let source = canonical["document"]["visual"]["tracks"][track_index]["items"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .find(|item| item["id"] == id)
-                .ok_or_else(|| anyhow!("prepared Motion clip {id} is missing"))?;
-            let duration: valle_timeline::RationalTime =
-                serde_json::from_value(source["source"]["sourceDuration"].clone())?;
-            if let Some(alias) = clip["component"].as_str() {
+    for band in ["visual", "captions"] {
+        for track in canonical["document"][band]["tracks"]
+            .as_array()
+            .into_iter()
+            .flatten()
+        {
+            for item in track["items"].as_array().into_iter().flatten() {
+                let source = &item["source"];
+                if source["type"] != "motion" && !(band == "captions" && item["type"] == "motion") {
+                    continue;
+                }
+                let alias = source["component"]
+                    .as_str()
+                    .and_then(|id| id.strip_prefix("resource:"))
+                    .ok_or_else(|| anyhow!("invalid prepared Motion component"))?;
                 durations.insert(
                     alias.to_owned(),
                     valle_timeline::MotionSourceMetadata {
-                        duration,
-                        role: serde_json::from_value(source["source"]["role"].clone())?,
+                        duration: serde_json::from_value(source["sourceDuration"].clone())?,
+                        role: serde_json::from_value(source["role"].clone())?,
                     },
                 );
             }
         }
+    }
+    for input in valle_compiler::motion_preparation_inputs(&decode_timeline(&author.to_string())?)?
+    {
+        let metadata = *durations
+            .get(&input.key())
+            .ok_or_else(|| anyhow!("prepared Motion clip {} is missing", input.clip_path))?;
+        durations.insert(input.component, metadata);
     }
     Ok(durations)
 }
@@ -1051,7 +1020,7 @@ fn collect_used_resources(
                     used.insert(name.to_owned());
                 }
             }
-            if map.get("kind").and_then(|v| v.as_str()) == Some("motion") {
+            if map.contains_key("component") {
                 if let Some(bindings) = map.get("resources").and_then(|v| v.as_object()) {
                     used.extend(
                         bindings
@@ -1119,6 +1088,67 @@ mod motion_source_metadata_tests {
 #[cfg(test)]
 mod preview_tests {
     use super::*;
+
+    #[test]
+    fn caption_baseline_prepares_three_hundred_clips_from_one_hundred_immutable_inputs() {
+        let dir = tempfile::tempdir().unwrap();
+        let font = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../assets/fonts/noto/NotoSans-Regular.ttf")
+            .canonicalize()
+            .unwrap();
+        std::fs::write(dir.path().join("caption.motion.tsx"), r##"export const composition={width:160,height:48,fps:4,duration:1};
+export const role=captionPresenter({intro:seconds(0.25),outro:seconds(0.25)});
+export default function Caption(ctx,props,data){return <Scene><Text style={{fontFamily:data.style.font,fontSize:data.style.fontSize,color:ctx.host.seconds<1?"#facc15":"white"}}>{data.text}</Text></Scene>; }"##).unwrap();
+        let clips: Vec<_> = (0..300).map(|i| serde_json::json!({"start":f64::from(i*2)+0.125,"duration":2,"runs":[{"text":format!("Word {}",i%100),"start":0,"end":1.75}]})).collect();
+        let author = serde_json::json!({"canvas":{"width":160,"height":48,"fps":4},"resources":{"caption":"caption.motion.tsx","font":font},"tracks":{"caption":[{"presenter":{"component":"caption"},"style":{"font":"font","fontSize":20},"clips":clips}]}});
+        let start = std::time::Instant::now();
+        let captured = capture_motion_sources(&author, dir.path()).unwrap();
+        assert_eq!(captured.instances.len(), 100);
+        let (prepared, metadata) = captured.prepare().unwrap();
+        assert_eq!(prepared.len(), 100);
+        assert_eq!(metadata.len(), 100);
+        let hashes: std::collections::BTreeSet<_> = prepared
+            .values()
+            .map(|input| {
+                ContentDigest::of_bytes(
+                    &valle_motion::canonical_bytes(&input.compiled.artifact).unwrap(),
+                )
+            })
+            .collect();
+        assert_eq!(hashes.len(), 100);
+        valle_compiler::compile_timeline_with_motion_sources(
+            decode_timeline(&author.to_string()).unwrap(),
+            &metadata,
+        )
+        .unwrap();
+        eprintln!(
+            "native-caption-baseline: clips=300 immutable-inputs=100 compilations=100 elapsed-ms={}",
+            start.elapsed().as_millis()
+        );
+    }
+
+    #[test]
+    fn presenter_media_facts_keep_word_timing_in_the_author_and_do_not_compile_a_template() {
+        let dir = tempfile::tempdir().unwrap();
+        let font = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../assets/fonts/noto/NotoSans-Regular.ttf")
+            .canonicalize()
+            .unwrap();
+        let author = serde_json::json!({"canvas":{"width":160,"height":48,"fps":4},"resources":{"words":"missing.motion.tsx","font":font},"tracks":{"caption":[{"presenter":{"component":"words"},"style":{"font":"font","fontSize":20},"clips":[{"start":0,"duration":2,"runs":[{"text":"Words","start":0,"end":1.75}]}]}]}});
+        let timeline = decode_timeline(&author.to_string()).unwrap();
+        let mut media = FrozenMediaCache::default();
+        let (facts, _, _) =
+            prepare_timeline_media_facts(timeline.clone(), dir.path(), &mut media).unwrap();
+        assert_eq!(facts.len(), 1);
+        assert_eq!(facts[0]["id"], "resource:font");
+        assert_eq!(facts[0]["entry"]["kind"], "font");
+        let unchanged: serde_json::Value =
+            serde_json::from_slice(&timeline_bytes(&timeline).unwrap()).unwrap();
+        assert_eq!(
+            unchanged["tracks"]["caption"][0]["clips"][0]["runs"][0]["end"],
+            1.75
+        );
+    }
 
     #[test]
     fn media_facts_preserve_transition_indices_without_compiling_motion() {

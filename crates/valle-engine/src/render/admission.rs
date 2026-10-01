@@ -1031,7 +1031,15 @@ struct AdmittedCaptionGap {
 }
 
 #[derive(Debug, Clone)]
+struct AdmittedCaptionMotion {
+    id: String,
+    range: FrameRange,
+    source: u32,
+}
+
+#[derive(Debug, Clone)]
 enum AdmittedCaptionItem {
+    Motion { clip: AdmittedCaptionMotion },
     Clip { clip: AdmittedCaptionClip },
     Gap { gap: AdmittedCaptionGap },
 }
@@ -1147,6 +1155,7 @@ fn admit_timeline_programs(
         canvas,
         resource_targets,
         resources,
+        &mut sources,
         diagnostics,
     )?;
     let audio_composition = with_video_audio(document, resource_targets, resources, diagnostics)?;
@@ -1765,6 +1774,16 @@ fn admit_visual_source(
             }
         }
         VisualSource::Motion(source) => {
+            // A template starts at local frame zero, exactly like its frozen host clock.
+            // Clip media retain the authored exact placement/source offset.
+            let placement_start = if matches!(source.role, valle_timeline::MotionRole::Clip) {
+                placement_start
+            } else {
+                frame_sample_time(range.start(), frame_rate).unwrap_or_else(|_| {
+                    diagnostics.push(admit_fault(path, "motion-template-start-frame"));
+                    placement_start
+                })
+            };
             let target =
                 required_resource_target(resource_targets, &source.component, path, diagnostics);
             let instance = admit_motion_instance(
@@ -2495,6 +2514,7 @@ fn admit_caption_program(
     canvas: CompiledCanvas,
     resource_targets: &BTreeMap<String, u32>,
     resources: &[ResolvedResource],
+    sources: &mut Vec<AdmittedSource>,
     diagnostics: &mut Vec<EngineOpenDiagnostic>,
 ) -> Option<AdmittedCaptionProgram> {
     let mut tracks = Vec::with_capacity(captions.tracks.len());
@@ -2610,6 +2630,32 @@ fn admit_caption_program(
                         },
                     });
                     cursor = cursor.checked_add(duration).ok()?;
+                }
+                CaptionItem::Motion(caption) => {
+                    let interval =
+                        quantize_frame_interval(cursor, caption.duration, canvas.frame_rate)
+                            .ok()?;
+                    let range = FrameRange::new(interval.start_frame, interval.end_frame);
+                    let source = admit_visual_source(
+                        &VisualSource::Motion(caption.source.clone()),
+                        cursor,
+                        caption.duration,
+                        range,
+                        canvas.frame_rate,
+                        resource_targets,
+                        resources,
+                        sources,
+                        &format!("{path}/source"),
+                        diagnostics,
+                    );
+                    items.push(AdmittedCaptionItem::Motion {
+                        clip: AdmittedCaptionMotion {
+                            id: caption.id.clone(),
+                            range,
+                            source,
+                        },
+                    });
+                    cursor = cursor.checked_add(caption.duration).ok()?;
                 }
                 CaptionItem::Gap(gap) => {
                     let duration = gap.duration;

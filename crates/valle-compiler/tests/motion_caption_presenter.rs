@@ -302,3 +302,52 @@ fn caption_input_obeys_existing_prepare_budgets_and_cannot_occupy_a_visual_track
         .to_string();
     assert!(error.contains("captionPresenter") && error.contains("/tracks/visual/0/clips/0"));
 }
+
+#[test]
+fn caption_track_presenter_has_a_closed_wire_shape_and_uses_caption_items() {
+    let author = json!({ "canvas": {"width":240,"height":80,"fps":30}, "resources":{"words":"words.motion.tsx","bodyFont":"body.ttf"},
+      "tracks":{"caption":[{"presenter":{"component":"words"},"style":{"font":"bodyFont","fontSize":24},"clips":[{"start":3.2,"duration":1.6,"runs":input()["runs"]}]}]} });
+    let decoded = valle_timeline::decode_timeline(&author.to_string()).unwrap();
+    let prepared = valle_compiler::motion_preparation_inputs(&decoded).unwrap();
+    assert_eq!(prepared.len(), 1);
+    assert_eq!(prepared[0].clip_path, "/tracks/caption/0/clips/0");
+    assert_eq!(prepared[0].resources["caption"], "bodyFont");
+    assert_eq!(prepared[0].data["text"], "Build your story");
+    let metadata = std::collections::BTreeMap::from([(
+        "words".into(),
+        valle_timeline::MotionSourceMetadata {
+            duration: RationalTime::ONE,
+            role: MotionRole::CaptionPresenter {
+                intro: RationalTime::new(3, 20).unwrap(),
+                outro: RationalTime::new(3, 20).unwrap(),
+            },
+        },
+    )]);
+    let canonical =
+        valle_compiler::compile_timeline_with_motion_sources(decoded.clone(), &metadata)
+            .unwrap()
+            .to_wire();
+    use valle_timeline::internal::wire::document::CaptionItemWire;
+    let CaptionItemWire::Motion(clip) = &canonical.document.captions.tracks[0].items[1] else {
+        panic!("presenter must belong to the caption band")
+    };
+    assert_eq!(clip.source.data["text"], "Build your story");
+    assert_eq!(clip.source.resources["caption"], "resource:bodyFont");
+    let wrong_role = std::collections::BTreeMap::from([(
+        "words".into(),
+        valle_timeline::MotionSourceMetadata {
+            duration: RationalTime::ONE,
+            role: MotionRole::Clip,
+        },
+    )]);
+    assert!(valle_compiler::compile_timeline_with_motion_sources(decoded, &wrong_role).is_err());
+    for invalid in [
+        json!({"component":"words","data":{}}),
+        json!({"component":"words","resources":{"caption":"bodyFont"}}),
+        json!({"component":"missing"}),
+    ] {
+        let mut author = author.clone();
+        author["tracks"]["caption"][0]["presenter"] = invalid;
+        assert!(valle_timeline::decode_timeline(&author.to_string()).is_err());
+    }
+}

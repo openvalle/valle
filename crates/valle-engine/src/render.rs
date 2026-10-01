@@ -2039,8 +2039,17 @@ impl CompiledCaptionGap {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CompiledCaptionMotion {
+    id: String,
+    range: FrameRange,
+    source: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum CompiledCaptionItem {
+    Motion { clip: CompiledCaptionMotion },
     Clip { clip: CompiledCaptionClip },
     Gap { gap: CompiledCaptionGap },
 }
@@ -2048,6 +2057,7 @@ pub enum CompiledCaptionItem {
 impl CompiledCaptionItem {
     pub const fn frame_range(&self) -> FrameRange {
         match self {
+            Self::Motion { clip } => clip.range,
             Self::Clip { clip } => clip.range,
             Self::Gap { gap } => gap.range,
         }
@@ -2552,6 +2562,7 @@ impl CompiledRender {
             .collect();
         let captions = evaluate_caption_program(
             &self.captions,
+            &self.sources,
             &self.resources,
             frame.index(),
             composition_time,
@@ -2902,7 +2913,7 @@ impl EvaluatedVisualOperation {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct EvaluatedCaption {
+pub struct EvaluatedTextCaption {
     track_order: u32,
     range: FrameRange,
     local_time: RationalTime,
@@ -2915,6 +2926,12 @@ pub struct EvaluatedCaption {
     align: CompiledCaptionAlign,
     presentation: EvaluatedCaptionPresentation,
     behavior: Option<CompiledCaptionBehavior>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum EvaluatedCaption {
+    Text(EvaluatedTextCaption),
+    Motion(EvaluatedVisualClip),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -2953,7 +2970,7 @@ impl EvaluatedCaptionPresentation {
     }
 }
 
-impl EvaluatedCaption {
+impl EvaluatedTextCaption {
     pub const fn track_order(&self) -> u32 {
         self.track_order
     }
@@ -3679,6 +3696,24 @@ fn collect_document_requirements(
 
     for (track_index, track) in document.captions.tracks.iter().enumerate() {
         for (item_index, item) in track.items.iter().enumerate() {
+            if let CaptionItem::Motion(caption) = item {
+                let path =
+                    format!("/document/captions/tracks/{track_index}/items/{item_index}/source");
+                resources.push(ResourceUse {
+                    role: format!("caption/{track_index}/{item_index}/motion-component"),
+                    path: format!("{path}/component"),
+                    resource_id: caption.source.component.clone(),
+                    expected_kind: Some(ResourceKind::MotionArtifact),
+                });
+                for (name, resource_id) in &caption.source.resources {
+                    resources.push(ResourceUse {
+                        role: format!("caption/{track_index}/{item_index}/motion-resource/{name}"),
+                        path: format!("{path}/resources/{name}"),
+                        resource_id: resource_id.clone(),
+                        expected_kind: None,
+                    });
+                }
+            }
             if let CaptionItem::Clip(caption) = item {
                 let item_path =
                     format!("/document/captions/tracks/{track_index}/items/{item_index}");
@@ -3848,6 +3883,16 @@ fn validate_quantized_intervals(
                 format!("/document/captions/tracks/{track_index}/items/{item_index}/duration");
             match item {
                 CaptionItem::Clip(caption) => {
+                    cursor = validate_frame_interval(
+                        cursor,
+                        caption.duration,
+                        canvas.frame_rate,
+                        &path,
+                        true,
+                        diagnostics,
+                    );
+                }
+                CaptionItem::Motion(caption) => {
                     cursor = validate_frame_interval(
                         cursor,
                         caption.duration,

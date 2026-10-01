@@ -8,6 +8,7 @@ interface TimelineCompilerWasmModule {
   default(wasmUrl: string): Promise<unknown>;
   canonicalize_timeline_document(timelineJson: string): string;
   compile_timeline(timelineJson: string, motionSourcesJson: string): string;
+  motion_preparation_inputs(timelineJson: string): string;
   normalize_timeline(timelineJson: string): string;
   timeline_source_time_delta_from_frames(
     frames: number,
@@ -161,6 +162,8 @@ export interface TimelineCompilerRuntime {
 }
 
 export interface WebCompilerRuntime extends TimelineCompilerRuntime {
+  /** Immutable Motion inputs, including captions prepared by the shared Rust compiler. */
+  motionPreparationInputs(timeline: Timeline): MotionPreparationInput[];
   /** Compile a standalone Motion TSX/JSX source to a Scene artifact. */
   compileMotionJsx(source: string, options?: MotionCompileOptions): CompiledMotion;
   /** Compile an explicit project-relative module closure to a Scene artifact. */
@@ -191,6 +194,7 @@ export async function createTimelineCompilerRuntime(
     timelineSourceTimeDeltaFromFrames: (frames, fps, rate) => (
       timelineSourceTimeDeltaFromFramesWithWasm(wasm, frames, fps, rate)
     ),
+    motionPreparationInputs: (timeline) => JSON.parse(wasm.motion_preparation_inputs(JSON.stringify(timeline))) as MotionPreparationInput[],
     compileTimeline: (timeline, motionSources) => compileTimelineWithWasm(wasm, timeline, motionSources),
     canonicalizeTimelineDocument: (timeline) => canonicalizeTimelineDocumentWithWasm(wasm, timeline),
     compileMotionJsx: (source, compileOptions) => compileMotionJsxWithWasm(wasm, source, compileOptions),
@@ -368,3 +372,5 @@ function loadTimelineCompilerWasm(
   void loading.catch(() => moduleLoads.delete(key));
   return loading;
 }
+
+export interface MotionPreparationInput { clipPath: string; component: string; locator: string; resources: Record<string, string>; data: unknown; }

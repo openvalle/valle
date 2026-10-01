@@ -1883,8 +1883,11 @@ fn visual_schedule_uses_cumulative_boundaries_and_preserves_band_order() {
         assert_eq!(bottom.track_id(), "track:bottom");
         assert_eq!(frame.adjustments().len(), 1);
         assert_eq!(frame.captions().len(), 1);
-        assert_eq!(frame.captions()[0].track_order(), 0);
-        assert_eq!(frame.captions()[0].runs(), &["hello".to_owned()]);
+        let valle_engine::render::EvaluatedCaption::Text(caption) = &frame.captions()[0] else {
+            panic!("expected text caption")
+        };
+        assert_eq!(caption.track_order(), 0);
+        assert_eq!(caption.runs(), &["hello".to_owned()]);
     }
 }
 
@@ -1965,7 +1968,9 @@ fn caption_rich_styles_and_presentation_use_caption_local_clock() {
     // 10fps. Admission assigns the caption to frame 1; its local clock must
     // still begin at exactly zero rather than composition 1/10 - exact 1/20.
     let at_start = render.evaluate(FrameKey::new(1)).unwrap();
-    let caption = &at_start.captions()[0];
+    let valle_engine::render::EvaluatedCaption::Text(caption) = &at_start.captions()[0] else {
+        panic!("expected text caption")
+    };
     let resolved_face_weight = ttf_parser::Face::parse(FONT_BYTES, 0)
         .unwrap()
         .weight()
@@ -1985,11 +1990,15 @@ fn caption_rich_styles_and_presentation_use_caption_local_clock() {
     assert_eq!(caption.presentation().blur_sigma(), 2.0);
 
     let next_frame = render.evaluate(FrameKey::new(2)).unwrap();
+    let valle_engine::render::EvaluatedCaption::Text(next_caption) = &next_frame.captions()[0]
+    else {
+        panic!("expected text caption")
+    };
     assert_eq!(
-        next_frame.captions()[0].local_time(),
+        next_caption.local_time(),
         valle_timeline::RationalTime::new(1, 10).unwrap()
     );
-    assert!((next_frame.captions()[0].presentation().opacity() - 1.0).abs() < 1e-12);
+    assert!((next_caption.presentation().opacity() - 1.0).abs() < 1e-12);
 
     // Preparing Scroll exercises the same EvaluatedCaption::local_time value;
     // Prepare must not reconstruct a second clock from the exact sequence start.
@@ -2041,8 +2050,16 @@ fn caption_rich_styles_and_presentation_use_caption_local_clock() {
         &mut valle_engine::prepare::ProductPrepareCaches::new(),
     )
     .unwrap();
-    let fractional_program = prepared.frame.captions[0].program.get() as usize;
-    let aligned_program = aligned_prepared.frame.captions[0].program.get() as usize;
+    let valle_engine::prepare::PreparedCaption::Text(fractional) = &prepared.frame.captions[0]
+    else {
+        panic!("expected text caption")
+    };
+    let valle_engine::prepare::PreparedCaption::Text(aligned) = &aligned_prepared.frame.captions[0]
+    else {
+        panic!("expected text caption")
+    };
+    let fractional_program = fractional.program.get() as usize;
+    let aligned_program = aligned.program.get() as usize;
     assert_eq!(
         prepared.frame.programs[fractional_program - 1].packed,
         aligned_prepared.frame.programs[aligned_program - 1].packed

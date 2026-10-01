@@ -576,6 +576,30 @@
           },
           "type": "object"
         },
+        "TimelineCaptionPresenterWire": {
+          "additionalProperties": false,
+          "properties": {
+            "component": {
+              "type": "string"
+            },
+            "props": {
+              "additionalProperties": {
+                "$ref": "#/$defs/TimelineParamWire2"
+              },
+              "type": "object"
+            },
+            "resources": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            }
+          },
+          "required": [
+            "component"
+          ],
+          "type": "object"
+        },
         "TimelineCaptionShadowWire": {
           "additionalProperties": false,
           "properties": {
@@ -653,6 +677,16 @@
               "anyOf": [
                 {
                   "$ref": "#/$defs/TimelineCaptionLayoutWire"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "presenter": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/TimelineCaptionPresenterWire"
                 },
                 {
                   "type": "null"
@@ -1075,7 +1109,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Clip-local end of this run's karaoke reveal window."
+              "description": "Clip-local end of this word's reveal/highlight window."
             },
             "fontSize": {
               "format": "double",
@@ -1093,7 +1127,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Clip-local start of this run's karaoke reveal window."
+              "description": "Clip-local start of this word's reveal/highlight window."
             },
             "text": {
               "type": "string"
@@ -2274,6 +2308,30 @@
           },
           "type": "object"
         },
+        "TimelineCaptionPresenterWire": {
+          "additionalProperties": false,
+          "properties": {
+            "component": {
+              "type": "string"
+            },
+            "props": {
+              "additionalProperties": {
+                "$ref": "#/$defs/TimelineParamWire2"
+              },
+              "type": "object"
+            },
+            "resources": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            }
+          },
+          "required": [
+            "component"
+          ],
+          "type": "object"
+        },
         "TimelineCaptionShadowWire": {
           "additionalProperties": false,
           "properties": {
@@ -2351,6 +2409,16 @@
               "anyOf": [
                 {
                   "$ref": "#/$defs/TimelineCaptionLayoutWire"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "presenter": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/TimelineCaptionPresenterWire"
                 },
                 {
                   "type": "null"
@@ -2773,7 +2841,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Clip-local end of this run's karaoke reveal window."
+              "description": "Clip-local end of this word's reveal/highlight window."
             },
             "fontSize": {
               "format": "double",
@@ -2791,7 +2859,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Clip-local start of this run's karaoke reveal window."
+              "description": "Clip-local start of this word's reveal/highlight window."
             },
             "text": {
               "type": "string"

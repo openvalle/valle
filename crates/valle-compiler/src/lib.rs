@@ -8,8 +8,10 @@ use serde::{Serialize, ser::SerializeStruct};
 use valle_timeline::decode_timeline;
 use valle_timeline::internal::CanonicalTimeline;
 
+mod motion_inputs;
 /// Sparse public Timeline → internal canonical normalization.
 pub mod timeline;
+pub use motion_inputs::{MotionPreparationInput, motion_preparation_inputs};
 pub use timeline::{
     CompileTimelineError, compile_timeline, compile_timeline_with_motion_sources,
     motion_instance_key,

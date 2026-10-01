@@ -400,12 +400,15 @@ fn validate_pass_contracts(graph: &RenderGraph) -> Result<(), GraphValidationErr
                 "pass semantic path must not be empty",
             ));
         }
-        let expected_stage = match pass.kind {
-            LogicalPassKind::Caption { .. } => PassStage::Caption,
-            LogicalPassKind::OutputTransform { .. } => PassStage::Output,
-            _ => PassStage::Visual,
+        let valid_stage = match pass.kind {
+            LogicalPassKind::Caption { .. } => pass.stage == PassStage::Caption,
+            LogicalPassKind::OutputTransform { .. } => pass.stage == PassStage::Output,
+            LogicalPassKind::ClearComposite { .. }
+            | LogicalPassKind::Transition { .. }
+            | LogicalPassKind::AdjustmentEffect { .. } => pass.stage == PassStage::Visual,
+            _ => matches!(pass.stage, PassStage::Visual | PassStage::Caption),
         };
-        if pass.stage != expected_stage {
+        if !valid_stage {
             return Err(GraphValidationError::InvalidPassStage { pass: pass.id });
         }
         let stage = match pass.stage {
@@ -1608,7 +1611,13 @@ fn validate_order_edges(graph: &RenderGraph) -> Result<(), GraphValidationError>
             LogicalPassKind::CompositeLayer { .. }
             | LogicalPassKind::Blend { .. }
             | LogicalPassKind::Transition { .. }
-            | LogicalPassKind::AdjustmentEffect { .. } => Some(OrderReason::VisualSpine),
+            | LogicalPassKind::AdjustmentEffect { .. } => {
+                Some(if pass.stage == PassStage::Caption {
+                    OrderReason::CaptionTerminal
+                } else {
+                    OrderReason::VisualSpine
+                })
+            }
             LogicalPassKind::Caption { .. } => Some(OrderReason::CaptionTerminal),
             LogicalPassKind::OutputTransform { .. } => Some(OrderReason::OutputTerminal),
             LogicalPassKind::Import { .. }

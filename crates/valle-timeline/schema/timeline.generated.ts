@@ -30,9 +30,10 @@ export namespace TimelineSchema {
   export type TimelineCaptionClipWire = { "behavior"?: (TimelineCaptionBehaviorWire | null); "display"?: (TimelineDisplayPresetWire | null); "duration": TimelineTimeWire; "enter"?: (TimelineEnterPresetWire | null); "exit"?: (TimelineExitPresetWire | null); "layout"?: (TimelineCaptionLayoutWire | null); "presentation"?: (TimelineCaptionPresentationWire | null); "runs"?: (Array<TimelineTextRunWire> | null); "start": TimelineTimeWire; "text"?: (string | null) };
   export type TimelineCaptionLayoutWire = { "align"?: (CaptionAlignWire | null); "region"?: ([number, number, number, number] | null) };
   export type TimelineCaptionPresentationWire = { "blur"?: (TimelineParamWire | null); "clipInset"?: (TimelineParamWire4 | null); "opacity"?: (TimelineParamWire | null); "rotation"?: (TimelineParamWire | null); "scale"?: (TimelineParamWire | null); "translation"?: (TimelineParamWire3 | null) };
+  export type TimelineCaptionPresenterWire = { "component": string; "props"?: Record<string, TimelineParamWire2>; "resources"?: Record<string, string> };
   export type TimelineCaptionShadowWire = { "blur"?: (number | null); "color": string; "offset": [number, number] };
   export type TimelineCaptionStyleWire = { "color"?: (string | null); "font": string; "fontSize"?: (number | null); "shadow"?: (TimelineCaptionShadowWire | null) };
-  export type TimelineCaptionTrackWire = { "clips": Array<TimelineCaptionClipWire>; "layout"?: (TimelineCaptionLayoutWire | null); "style": TimelineCaptionStyleWire };
+  export type TimelineCaptionTrackWire = { "clips": Array<TimelineCaptionClipWire>; "layout"?: (TimelineCaptionLayoutWire | null); "presenter"?: (TimelineCaptionPresenterWire | null); "style": TimelineCaptionStyleWire };
   export type TimelineCurveWire = { "interpolation"?: (InterpolationWire | null); "keyframes": Array<TimelineKeyframeWire> };
   export type TimelineCurveWire2 = { "interpolation"?: (InterpolationWire | null); "keyframes": Array<TimelineKeyframeWire2> };
   export type TimelineCurveWire3 = { "interpolation"?: (InterpolationWire | null); "keyframes": Array<TimelineKeyframeWire3> };
@@ -84,9 +85,10 @@ export namespace EditTimelineRequestSchema {
   export type TimelineCaptionClipWire = { "behavior"?: (TimelineCaptionBehaviorWire | null); "display"?: (TimelineDisplayPresetWire | null); "duration": TimelineTimeWire; "enter"?: (TimelineEnterPresetWire | null); "exit"?: (TimelineExitPresetWire | null); "layout"?: (TimelineCaptionLayoutWire | null); "presentation"?: (TimelineCaptionPresentationWire | null); "runs"?: (Array<TimelineTextRunWire> | null); "start": TimelineTimeWire; "text"?: (string | null) };
   export type TimelineCaptionLayoutWire = { "align"?: (CaptionAlignWire | null); "region"?: ([number, number, number, number] | null) };
   export type TimelineCaptionPresentationWire = { "blur"?: (TimelineParamWire | null); "clipInset"?: (TimelineParamWire4 | null); "opacity"?: (TimelineParamWire | null); "rotation"?: (TimelineParamWire | null); "scale"?: (TimelineParamWire | null); "translation"?: (TimelineParamWire3 | null) };
+  export type TimelineCaptionPresenterWire = { "component": string; "props"?: Record<string, TimelineParamWire2>; "resources"?: Record<string, string> };
   export type TimelineCaptionShadowWire = { "blur"?: (number | null); "color": string; "offset": [number, number] };
   export type TimelineCaptionStyleWire = { "color"?: (string | null); "font": string; "fontSize"?: (number | null); "shadow"?: (TimelineCaptionShadowWire | null) };
-  export type TimelineCaptionTrackWire = { "clips": Array<TimelineCaptionClipWire>; "layout"?: (TimelineCaptionLayoutWire | null); "style": TimelineCaptionStyleWire };
+  export type TimelineCaptionTrackWire = { "clips": Array<TimelineCaptionClipWire>; "layout"?: (TimelineCaptionLayoutWire | null); "presenter"?: (TimelineCaptionPresenterWire | null); "style": TimelineCaptionStyleWire };
   export type TimelineCurveWire = { "interpolation"?: (InterpolationWire | null); "keyframes": Array<TimelineKeyframeWire> };
   export type TimelineCurveWire2 = { "interpolation"?: (InterpolationWire | null); "keyframes": Array<TimelineKeyframeWire2> };
   export type TimelineCurveWire3 = { "interpolation"?: (InterpolationWire | null); "keyframes": Array<TimelineKeyframeWire3> };

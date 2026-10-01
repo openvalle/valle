@@ -1095,6 +1095,31 @@
                 "id": {
                   "type": "string"
                 },
+                "source": {
+                  "$ref": "#/$defs/MotionInstanceWire"
+                },
+                "type": {
+                  "const": "motion",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "id",
+                "duration",
+                "source"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "duration": {
+                  "$ref": "#/$defs/ExactRational"
+                },
+                "id": {
+                  "type": "string"
+                },
                 "type": {
                   "const": "gap",
                   "type": "string"
@@ -1562,6 +1587,60 @@
             "loop"
           ],
           "type": "string"
+        },
+        "MotionInstanceWire": {
+          "additionalProperties": false,
+          "properties": {
+            "component": {
+              "type": "string"
+            },
+            "data": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "endBehavior": {
+              "$ref": "#/$defs/MediaEndBehaviorWire"
+            },
+            "fit": {
+              "$ref": "#/$defs/RasterFitWire"
+            },
+            "props": {
+              "additionalProperties": {
+                "$ref": "#/$defs/ParamWire4"
+              },
+              "type": "object"
+            },
+            "rate": {
+              "$ref": "#/$defs/ExactRational"
+            },
+            "resources": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "role": {
+              "$ref": "#/$defs/MotionRole"
+            },
+            "sourceDuration": {
+              "$ref": "#/$defs/ExactRational"
+            },
+            "sourceStart": {
+              "$ref": "#/$defs/ExactRational"
+            }
+          },
+          "required": [
+            "role",
+            "component",
+            "fit",
+            "sourceStart",
+            "sourceDuration",
+            "rate",
+            "endBehavior",
+            "props",
+            "resources"
+          ],
+          "type": "object"
         },
         "MotionRole": {
           "oneOf": [

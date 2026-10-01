@@ -635,7 +635,17 @@ pub struct CaptionTrackWire {
 #[serde(tag = "type", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum CaptionItemWire {
     Clip(CaptionWire),
+    Motion(CaptionMotionWire),
     Gap(GapWire),
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CaptionMotionWire {
+    pub id: EntityId,
+    pub duration: ExactRational,
+    pub source: MotionInstanceWire,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]

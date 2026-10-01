@@ -129,7 +129,7 @@ pub enum PreparedVisualItem {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct PreparedCaption {
+pub struct PreparedTextCaption {
     pub semantic_path: String,
     pub clip_id: String,
     pub track_id: String,
@@ -137,6 +137,28 @@ pub struct PreparedCaption {
     pub device_transform: DeviceTransform,
     pub bounds: PreparedBounds,
     pub dynamic: LayerDynamicSlots,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
+pub enum PreparedCaption {
+    Text(Box<PreparedTextCaption>),
+    Motion(Box<PreparedLayer>),
+}
+
+impl PreparedCaption {
+    pub fn clip_id(&self) -> &str {
+        match self {
+            Self::Text(c) => &c.clip_id,
+            Self::Motion(c) => &c.clip_id,
+        }
+    }
+    pub fn bounds(&self) -> PreparedBounds {
+        match self {
+            Self::Text(c) => c.bounds,
+            Self::Motion(c) => c.bounds,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -630,7 +652,7 @@ impl<'a> PrepareState<'a> {
         clip_id: String,
         track_id: String,
         path: &str,
-    ) -> Result<PreparedCaption, PrepareError> {
+    ) -> Result<PreparedTextCaption, PrepareError> {
         let transform = crate::frame::ResolvedTransform {
             x: 0.5,
             y: 0.5,
@@ -673,7 +695,7 @@ impl<'a> PrepareState<'a> {
             transform: device_transform,
             bounds: prepared_bounds,
         });
-        Ok(PreparedCaption {
+        Ok(PreparedTextCaption {
             semantic_path: path.to_owned(),
             clip_id,
             track_id,

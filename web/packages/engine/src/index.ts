@@ -43,6 +43,7 @@ export {
   type PreviewResourceInput,
   type MotionRole,
   type MotionSourceMetadata,
+  type MotionPreparationInput,
   type PreviewPackageInput,
   type PreparedPreviewPackage,
   type MotionSourceEdit,

@@ -22,6 +22,9 @@ function mediaInputKey(timeline: Timeline): string | null {
       }
     }
   }
+  for (const track of timeline.tracks.caption ?? []) {
+    if (track.presenter) { motionComponents.add(track.presenter.component); bindings.push({ ...track.presenter.resources, caption: track.style.font }); }
+  }
   const external = Object.entries(timeline.resources ?? {})
     .filter(([alias]) => !motionComponents.has(alias));
   const otherTracks = { audio: timeline.tracks.audio, caption: timeline.tracks.caption,

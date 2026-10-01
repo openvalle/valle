@@ -44,8 +44,9 @@ pub fn sample_motion_properties(
     run().map_err(|e| wasm_bindgen::JsError::new(&e))
 }
 pub use timeline::{
-    canonicalize_timeline_document, compile_timeline, normalize_timeline, timeline_document_view,
-    timeline_source_time_delta_from_frames, timeline_time_from_frames,
+    canonicalize_timeline_document, compile_timeline, motion_preparation_inputs,
+    normalize_timeline, timeline_document_view, timeline_source_time_delta_from_frames,
+    timeline_time_from_frames,
 };
 
 /// Rebind ordinary Motion fonts supplied by the host before opening the player.

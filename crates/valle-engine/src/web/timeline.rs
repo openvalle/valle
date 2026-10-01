@@ -77,6 +77,16 @@ pub fn compile_timeline(json: &str, motion_sources_json: &str) -> Result<String,
         .map_err(|error| JsError::new(&error))
 }
 
+#[wasm_bindgen]
+pub fn motion_preparation_inputs(json: &str) -> Result<String, JsError> {
+    let timeline = valle_timeline::decode_timeline(json)
+        .map_err(|error| JsError::new(&timeline_error("motion_preparation_inputs", error)))?;
+    let inputs = valle_compiler::motion_preparation_inputs(&timeline)
+        .map_err(|error| JsError::new(&timeline_error("motion_preparation_inputs", error)))?;
+    serde_json::to_string(&inputs)
+        .map_err(|error| JsError::new(&timeline_error("motion_preparation_inputs", error)))
+}
+
 /// Normalize one sparse public Timeline with the exact same Rust admission
 /// path used by Project persistence, then return canonical valle-json bytes.
 #[wasm_bindgen]
@@ -336,6 +346,12 @@ fn timeline_document_view_native(json: &str) -> Result<String, String> {
             track.items.iter().enumerate().map(|(item_index, item)| {
                 let (id, duration, timeline_path) = match item {
                     CaptionItemWire::Clip(value) => {
+                        let timeline_path = (track.id == compiler_track)
+                            .then(|| compiler_timeline_path(&value.id, "caption", track_index))
+                            .flatten();
+                        (&value.id, value.duration, timeline_path)
+                    }
+                    CaptionItemWire::Motion(value) => {
                         let timeline_path = (track.id == compiler_track)
                             .then(|| compiler_timeline_path(&value.id, "caption", track_index))
                             .flatten();

@@ -392,6 +392,13 @@ pub(super) fn compile_admitted_timeline(
                                     },
                                 }
                             }
+                            AdmittedCaptionItem::Motion { clip } => CompiledCaptionItem::Motion {
+                                clip: CompiledCaptionMotion {
+                                    id: clip.id,
+                                    range: clip.range,
+                                    source: clip.source,
+                                },
+                            },
                             AdmittedCaptionItem::Gap { gap } => CompiledCaptionItem::Gap {
                                 gap: CompiledCaptionGap { range: gap.range },
                             },
