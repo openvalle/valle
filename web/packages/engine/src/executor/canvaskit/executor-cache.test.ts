@@ -56,6 +56,10 @@ describe("long-lived CanvasKit executor caches", () => {
         fontMisses: 1,
         shaderHits: 1,
         shaderMisses: 1,
+        rasterHits: 0,
+        rasterMisses: 0,
+        rasterEntries: 0,
+        rasterBytes: 0,
       });
     } finally {
       executor.dispose();
@@ -159,7 +163,7 @@ test("RasterTree preserves nested transforms, translucent order and pixel bounda
   const builtins = new CanvasKitBuiltinRuntime(ck);
   const identity = [1, 0, 0, 0, 1, 0, 0, 0, 1];
   const group = (children: number[], transform: number[]) => ({ kind: "group", value: {
-    children, transform, filters: [], opacity: 1, internalBlend: "normal", isolated: true,
+    children, transform, filters: [], opacity: 1, internalBlend: "normal", blendSpace: "srgb", isolated: true,
   }});
   const draw = {
     nodes: [
@@ -218,7 +222,7 @@ test("RasterTree clips overlapping children once after composition", async () =>
   const identity = [1, 0, 0, 0, 1, 0, 0, 0, 1];
   const draw = { nodes: [
     { kind: "group", value: { children: [1,2], transform: identity, filters: [], opacity: 1,
-      internalBlend: "normal", isolated: true,
+      internalBlend: "normal", blendSpace: "srgb", isolated: true,
       clip: { kind: "rect", value: { x: 7.3, y: 3.7, width: 17.2, height: 22.6 } } } },
     { kind: "path", value: { path: 0, fill: 0, fillRule: "nonZero" } },
     { kind: "path", value: { path: 0, fill: 1, fillRule: "nonZero" } },

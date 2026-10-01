@@ -11,7 +11,7 @@ const SECTION_COUNT = DRAW_PROGRAM_ABI.sectionCount;
 const TABLE_BYTES = HEADER_BYTES + SECTION_ENTRY_BYTES * SECTION_COUNT;
 export const BATCH_INSTANCE_BYTES = DRAW_PROGRAM_ABI.batchInstanceBytes;
 const DRAW_LITTLE_ENDIAN = DRAW_PROGRAM_ABI.endianness === "little";
-const EXPECTED_KINDS = [1, 2, 7, 3, 4, 5, 6] as const;
+const EXPECTED_KINDS = [1, 2, 7, 8, 9, 3, 4, 5, 6] as const;
 const PATCH_HEADER_BYTES = PROGRAM_PATCH_ABI.headerBytes;
 const PATCH_COPY = 0;
 const PATCH_INSERT = 1;
@@ -25,10 +25,22 @@ export interface BatchInstanceTableWire {
   readonly view: DataView;
   readonly count: number;
 }
+export interface StrokeColorTableWire {
+  readonly bytes: Uint8Array;
+  readonly view: DataView;
+  readonly count: number;
+}
+export interface DashOffsetTableWire {
+  readonly bytes: Uint8Array;
+  readonly view: DataView;
+  readonly count: number;
+}
 export interface DrawProgramWire {
   roots: number[];
   nodes: TaggedWire[];
   batchInstances: BatchInstanceTableWire;
+  strokeColors: StrokeColorTableWire;
+  dashOffsets: DashOffsetTableWire;
   paths: PathWire[];
   paints: TaggedWire[];
   viewport: RectWire;
@@ -164,9 +176,10 @@ export async function decodeDrawProgram(input: ArrayBuffer | ArrayBufferView): P
     const end = offset + length;
     if (!Number.isSafeInteger(end) || end > bytes.byteLength) fail(`section ${kind} is out of range`);
     let value: unknown;
-    if (kind === 7) {
-      if (length !== count * BATCH_INSTANCE_BYTES) {
-        fail(`GeometryBatch section has ${length} bytes for ${count} instances`);
+    if (kind === 7 || kind === 8 || kind === 9) {
+      const rowBytes = kind === 7 ? BATCH_INSTANCE_BYTES : kind === 8 ? 16 : 4;
+      if (length !== count * rowBytes) {
+        fail(`InstanceBatch section ${kind} has ${length} bytes for ${count} instances`);
       }
       const batchBytes = bytes.subarray(offset, end);
       value = { bytes: batchBytes, view: dataView(batchBytes), count } satisfies BatchInstanceTableWire;
@@ -186,12 +199,14 @@ export async function decodeDrawProgram(input: ArrayBuffer | ArrayBufferView): P
   }
   if (expectedOffset !== bytes.byteLength) fail("trailing bytes are not owned by a section");
 
-  const [roots, nodes, batchInstances, paths, paints, viewport, requirements] = sections;
+  const [roots, nodes, batchInstances, strokeColors, dashOffsets, paths, paints, viewport, requirements] = sections;
   if (!Array.isArray(roots) || !roots.every(positiveIntegerOrZero)) fail("roots are invalid");
   if (!Array.isArray(nodes) || !nodes.every(isRecord)) fail("nodes are invalid");
-  if (!isBatchInstanceTable(batchInstances)) fail("GeometryBatch instance table is invalid");
-  validateGeometryBatches(nodes as TaggedWire[], batchInstances);
+  if (!isBatchInstanceTable(batchInstances)) fail("InstanceBatch instance table is invalid");
+  if (!isStrokeColorTable(strokeColors)) fail("InstanceBatch stroke color table is invalid");
+  if (!isDashOffsetTable(dashOffsets)) fail("InstanceBatch dash offset table is invalid");
   if (!Array.isArray(paths) || !paths.every(isPath)) fail("paths are invalid");
+  validateInstanceBatches(nodes as TaggedWire[], batchInstances, strokeColors, dashOffsets, paths.length);
   if (!Array.isArray(paints) || !paints.every(isRecord)) fail("paints are invalid");
   if (!isRect(viewport) || viewport.width <= 0 || viewport.height <= 0) fail("viewport is invalid");
   if (!isRecord(requirements)) fail("requirements are invalid");
@@ -199,6 +214,8 @@ export async function decodeDrawProgram(input: ArrayBuffer | ArrayBufferView): P
     roots: roots as number[],
     nodes: nodes as TaggedWire[],
     batchInstances,
+    strokeColors,
+    dashOffsets,
     paths: paths as PathWire[],
     paints: paints as TaggedWire[],
     viewport,
@@ -214,13 +231,87 @@ function isBatchInstanceTable(value: unknown): value is BatchInstanceTableWire {
     && value.bytes.byteLength === value.count * BATCH_INSTANCE_BYTES;
 }
 
-function validateGeometryBatches(nodes: TaggedWire[], table: BatchInstanceTableWire): void {
+function isStrokeColorTable(value: unknown): value is StrokeColorTableWire {
+  return isRecord(value)
+    && value.bytes instanceof Uint8Array
+    && value.view instanceof DataView
+    && positiveIntegerOrZero(value.count)
+    && value.bytes.byteLength === value.count * 16;
+}
+
+function isDashOffsetTable(value: unknown): value is DashOffsetTableWire {
+  return isRecord(value)
+    && value.bytes instanceof Uint8Array
+    && value.view instanceof DataView
+    && positiveIntegerOrZero(value.count)
+    && value.bytes.byteLength === value.count * 4;
+}
+
+function validateInstanceBatches(nodes: TaggedWire[], table: BatchInstanceTableWire, strokeColors: StrokeColorTableWire, dashOffsets: DashOffsetTableWire, pathCount: number): void {
   let consumed = 0;
+  let colorsConsumed = 0;
+  let offsetsConsumed = 0;
   for (const [nodeIndex, node] of nodes.entries()) {
-    if (node.kind !== "geometryBatch") continue;
-    const value = exactRecord(node.value, ["geometry", "instances"], `nodes[${nodeIndex}].value`);
-    if (value.geometry !== "circle" && value.geometry !== "rect") {
-      fail(`nodes[${nodeIndex}].value.geometry is invalid`);
+    if (node.kind !== "instanceBatch") continue;
+    const value = exactRecord(node.value, ["shape", "instances", "strokeColors", "dashOffsets", "pathStyle"], `nodes[${nodeIndex}].value`);
+    const shape = value.shape;
+    if (!isRecord(shape)) fail(`nodes[${nodeIndex}].shape must be an object`);
+    if (shape.kind === "path") {
+      exactRecord(shape, ["kind", "value"], `nodes[${nodeIndex}].shape`);
+      const path = exactNonNegativeInteger(shape.value, `nodes[${nodeIndex}].shape.value`);
+      if (path >= pathCount) fail(`nodes[${nodeIndex}].shape.value is out of range`);
+    } else if (shape.kind === "image") {
+      exactRecord(shape, ["kind", "value"], `nodes[${nodeIndex}].shape`);
+      const region = exactRecord(shape.value, ["texture", "src", "sampling"], `nodes[${nodeIndex}].shape.value`);
+      const texture = exactRecord(region.texture, ["key", "kind", "colorDomain", "alpha", "sampleTimeMicros"], `nodes[${nodeIndex}].shape.value.texture`);
+      if (typeof texture.key !== "string" || texture.key.length === 0
+        || new TextEncoder().encode(texture.key).length > 4096
+        || !["image", "video", "generated"].includes(String(texture.kind))
+        || texture.colorDomain !== "linearRec2020"
+        || !["opaque", "straight", "premultiplied"].includes(String(texture.alpha))
+        || (texture.kind === "video"
+          ? !positiveIntegerOrZero(texture.sampleTimeMicros)
+          : texture.sampleTimeMicros !== null)
+        || !["nearestClamp", "linearClamp", "linearDecal", "cubicClamp"].includes(String(region.sampling))
+        || !isRect(region.src) || region.src.x < 0 || region.src.y < 0
+        || region.src.width <= 0 || region.src.height <= 0
+        || region.src.x + region.src.width > 1 || region.src.y + region.src.height > 1) {
+        fail(`nodes[${nodeIndex}].shape.value is invalid`);
+      }
+    } else if (shape.kind === "roundRect") {
+      exactRecord(shape, ["kind", "value"], `nodes[${nodeIndex}].shape`);
+      const roundRect = exactRecord(shape.value, ["rect", "radii"], `nodes[${nodeIndex}].shape.value`);
+      if (!isRect(roundRect.rect) || roundRect.rect.width < 0 || roundRect.rect.height < 0) {
+        fail(`nodes[${nodeIndex}].shape.value.rect is invalid`);
+      }
+      const bounds = roundRect.rect;
+      if ([bounds.x, bounds.y, bounds.width, bounds.height, bounds.x + bounds.width, bounds.y + bounds.height]
+        .some((coordinate) => Math.abs(coordinate) > 16_777_216)) {
+        fail(`nodes[${nodeIndex}].shape.value.rect exceeds the coordinate limit`);
+      }
+      if (!Array.isArray(roundRect.radii) || roundRect.radii.length !== 4
+        || !roundRect.radii.every((pair) => Array.isArray(pair) && pair.length === 2
+          && pair.every((radius) => typeof radius === "number" && Number.isFinite(radius)
+            && radius >= 0 && radius <= 16_777_216))) {
+        fail(`nodes[${nodeIndex}].shape.value.radii is invalid`);
+      }
+    } else if (shape.kind === "circle" || shape.kind === "rect") {
+      exactRecord(shape, ["kind"], `nodes[${nodeIndex}].shape`);
+    } else {
+      fail(`nodes[${nodeIndex}].shape.kind is invalid`);
+    }
+    if (value.pathStyle !== null) {
+      if (shape.kind !== "path") fail(`nodes[${nodeIndex}].pathStyle requires a Path shape`);
+      const style = exactRecord(value.pathStyle, ["fill", "dash", "dashOffset", "cap", "join", "miterLimit"], `nodes[${nodeIndex}].value.pathStyle`);
+      if (typeof style.fill !== "boolean" || !["butt", "round", "square"].includes(String(style.cap))
+        || !["miter", "round", "bevel"].includes(String(style.join))
+        || typeof style.miterLimit !== "number" || !Number.isFinite(style.miterLimit) || style.miterLimit < 1
+        || typeof style.dashOffset !== "number" || !Number.isFinite(style.dashOffset)
+        || !Array.isArray(style.dash) || style.dash.length % 2 !== 0
+        || !style.dash.every((part: unknown) => typeof part === "number" && Number.isFinite(part) && part >= 0)
+        || style.dash.length > 0 && style.dash.reduce((sum: number, part: number) => sum + part, 0) <= 0) {
+        fail(`nodes[${nodeIndex}].pathStyle is invalid`);
+      }
     }
     const range = exactRecord(
       value.instances,
@@ -230,29 +321,79 @@ function validateGeometryBatches(nodes: TaggedWire[], table: BatchInstanceTableW
     const start = exactNonNegativeInteger(range.start, `nodes[${nodeIndex}].instances.start`);
     const count = exactNonNegativeInteger(range.count, `nodes[${nodeIndex}].instances.count`);
     if (start !== consumed || count > table.count - consumed) {
-      fail("GeometryBatch ranges do not canonically partition the instance table");
+      fail("InstanceBatch ranges do not canonically partition the instance table");
+    }
+    if (shape.kind === "image") {
+      for (let row = start; row < start + count; row += 1) {
+        if (table.view.getFloat32(table.count * 68 + row * 4, DRAW_LITTLE_ENDIAN) !== 0) {
+          fail(`nodes[${nodeIndex}].image instance ${row} has a stroke`);
+        }
+      }
     }
     consumed += count;
+    if (value.strokeColors !== null) {
+      const colors = exactRecord(value.strokeColors, ["start", "count"], `nodes[${nodeIndex}].value.strokeColors`);
+      const colorStart = exactNonNegativeInteger(colors.start, `nodes[${nodeIndex}].strokeColors.start`);
+      const colorCount = exactNonNegativeInteger(colors.count, `nodes[${nodeIndex}].strokeColors.count`);
+      if (colorStart !== colorsConsumed || colorCount !== count || colorCount > strokeColors.count - colorsConsumed) {
+        fail("InstanceBatch stroke color ranges do not canonically partition the color table");
+      }
+      colorsConsumed += colorCount;
+    }
+    if (value.dashOffsets !== null) {
+      if (value.pathStyle === null) fail(`nodes[${nodeIndex}].dashOffsets requires a Path style`);
+      const offsets = exactRecord(value.dashOffsets, ["start", "count"], `nodes[${nodeIndex}].value.dashOffsets`);
+      const offsetStart = exactNonNegativeInteger(offsets.start, `nodes[${nodeIndex}].dashOffsets.start`);
+      const offsetCount = exactNonNegativeInteger(offsets.count, `nodes[${nodeIndex}].dashOffsets.count`);
+      if (offsetStart !== offsetsConsumed || offsetCount !== count || offsetCount > dashOffsets.count - offsetsConsumed) {
+        fail("InstanceBatch dash ranges do not canonically partition the offset table");
+      }
+      offsetsConsumed += offsetCount;
+    }
   }
-  if (consumed !== table.count) fail("GeometryBatch instance table has unreferenced values");
+  if (consumed !== table.count) fail("InstanceBatch instance table has unreferenced values");
+  if (colorsConsumed !== strokeColors.count) fail("InstanceBatch stroke color table has unreferenced values");
+  if (offsetsConsumed !== dashOffsets.count) fail("InstanceBatch dash offset table has unreferenced values");
 
   for (let index = 0; index < table.count; index += 1) {
-    const offset = index * BATCH_INSTANCE_BYTES;
-    const positionX = table.view.getFloat64(offset, DRAW_LITTLE_ENDIAN);
-    const positionY = table.view.getFloat64(offset + 8, DRAW_LITTLE_ENDIAN);
-    const sizeX = table.view.getFloat64(offset + 16, DRAW_LITTLE_ENDIAN);
-    const sizeY = table.view.getFloat64(offset + 24, DRAW_LITTLE_ENDIAN);
-    const red = table.view.getFloat32(offset + 32, DRAW_LITTLE_ENDIAN);
-    const green = table.view.getFloat32(offset + 36, DRAW_LITTLE_ENDIAN);
-    const blue = table.view.getFloat32(offset + 40, DRAW_LITTLE_ENDIAN);
-    const alpha = table.view.getFloat32(offset + 44, DRAW_LITTLE_ENDIAN);
-    if (![positionX, positionY, sizeX, sizeY, red, green, blue, alpha].every(Number.isFinite)) {
-      fail(`GeometryBatch instance ${index} contains a non-finite value`);
+    const transform = Array.from({ length: 6 }, (_, slot) => table.view.getFloat64(index * 48 + slot * 8, DRAW_LITTLE_ENDIAN));
+    const colorOffset = table.count * 48 + index * 16;
+    const red = table.view.getFloat32(colorOffset, DRAW_LITTLE_ENDIAN);
+    const green = table.view.getFloat32(colorOffset + 4, DRAW_LITTLE_ENDIAN);
+    const blue = table.view.getFloat32(colorOffset + 8, DRAW_LITTLE_ENDIAN);
+    const alpha = table.view.getFloat32(colorOffset + 12, DRAW_LITTLE_ENDIAN);
+    const opacity = table.view.getFloat32(table.count * 64 + index * 4, DRAW_LITTLE_ENDIAN);
+    const stroke = table.view.getFloat32(table.count * 68 + index * 4, DRAW_LITTLE_ENDIAN);
+    if (![...transform, red, green, blue, alpha, opacity, stroke].every(Number.isFinite)) {
+      fail(`InstanceBatch instance ${index} contains a non-finite value`);
     }
-    if (sizeX <= 0 || sizeY <= 0) fail(`GeometryBatch instance ${index} has a non-positive size`);
-    if (alpha < 0 || alpha > 1) fail(`GeometryBatch instance ${index} alpha is outside [0,1]`);
+    if (transform.some((value) => Math.abs(value) > 16_777_216)) {
+      fail(`InstanceBatch instance ${index} exceeds the coordinate limit`);
+    }
+    const determinant = transform[0]! * transform[3]! - transform[1]! * transform[2]!;
+    if (!Number.isFinite(determinant) || determinant === 0 || !Number.isFinite(1 / determinant)) {
+      fail(`InstanceBatch instance ${index} has a singular transform`);
+    }
+    if (alpha < 0 || alpha > 1) fail(`InstanceBatch instance ${index} alpha is outside [0,1]`);
+    if (opacity < 0 || opacity > 1) fail(`InstanceBatch instance ${index} opacity is outside [0,1]`);
+    if (stroke < 0) fail(`InstanceBatch instance ${index} stroke width is negative`);
     if (alpha === 0 && (red !== 0 || green !== 0 || blue !== 0)) {
-      fail(`GeometryBatch instance ${index} has RGB under transparent premultiplied alpha`);
+      fail(`InstanceBatch instance ${index} has RGB under transparent premultiplied alpha`);
+    }
+  }
+  for (let index = 0; index < strokeColors.count; index += 1) {
+    const offset = index * 16;
+    const channels = Array.from({ length: 4 }, (_, slot) => strokeColors.view.getFloat32(offset + slot * 4, DRAW_LITTLE_ENDIAN));
+    if (!channels.every(Number.isFinite) || channels[3]! < 0 || channels[3]! > 1) {
+      fail(`InstanceBatch stroke color ${index} is invalid`);
+    }
+    if (channels[3] === 0 && channels.slice(0, 3).some((value) => value !== 0)) {
+      fail(`InstanceBatch stroke color ${index} has RGB under transparent premultiplied alpha`);
+    }
+  }
+  for (let index = 0; index < dashOffsets.count; index += 1) {
+    if (!Number.isFinite(dashOffsets.view.getFloat32(index * 4, DRAW_LITTLE_ENDIAN))) {
+      fail(`InstanceBatch dash offset ${index} is non-finite`);
     }
   }
 }

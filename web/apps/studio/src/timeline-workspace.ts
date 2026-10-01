@@ -40,6 +40,11 @@ import {
   setTimelineSourceStartFrames,
   trimTimelineClipFrames,
   timelineClipAddress,
+  setTimelineTransition,
+  setTimelineTransitionParameter,
+  transitionParameterSpecs,
+  transitionLabels,
+  type TimelineTransitionKind,
 } from "./timeline-edit.ts";
 import { initializeTimelineWorkspaceRuntime } from "./timeline-workspace-runtime.ts";
 import {
@@ -211,6 +216,7 @@ function itemLabel(item: TimelineSequenceItem): string {
     return item.runs.map((run: { text: string }) => run.text).join("");
   }
   if ("effect" in item) return item.effect.type;
+  if ("type" in item && item.type === "transition") return item.kernel.type in transitionLabels ? transitionLabels[item.kernel.type as TimelineTransitionKind] : "Transition";
   if ("type" in item) return item.type === "gap" ? "Gap" : item.type === "crossfade" ? "Audio crossfade" : "Transition";
   return "Adjustment";
 }
@@ -267,8 +273,13 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
   timelinePane.hidden = false;
   shell.dispatchIntent({ type: "panel", inspectorVisible: true });
   shell.restorePanelPrefs();
+  const showWarnings = (warnings: TimelineContext["warnings"]) => {
+    shell.dispatchIntent({ type: "diagnostics", messages: (warnings ?? []).map((warning) =>
+      `${warning.sourcePath ?? "Motion"}:${warning.span.line}:${warning.span.column} ${warning.message}`) });
+  };
 
   let config = await loadTimeline() as StudioConfig;
+  showWarnings(config.warnings);
   let workingCopy: Timeline = structuredClone(config.timeline);
   let motionProjection: MotionProjection | null = isMotionProjection(config.motion)
     ? structuredClone(config.motion)
@@ -506,9 +517,11 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
       const nextAuthor = result.generatedWrapper ? result.timeline : draft;
       const next: StudioConfig = { ...config, timeline: nextAuthor, timelineJson: JSON.stringify(nextAuthor),
         render: result.render, assets: result.assets as StudioConfig["assets"], motion: result.motion,
-        motionSourceDurations: result.motionSourceDurations ?? config.motionSourceDurations };
+        motionSourceDurations: result.motionSourceDurations ?? config.motionSourceDurations,
+        warnings: result.warnings ?? [] };
       if (!await replacePreview(next, isCurrent) || !isCurrent()) return;
       config = next;
+      showWarnings(next.warnings);
       if (result.motionSourceDurations) workspaceRuntime.setMotionSourceDurations(result.motionSourceDurations);
       if (JSON.stringify(workingCopy) === JSON.stringify(draft)) {
         if (result.generatedWrapper) workingCopy = structuredClone(nextAuthor);
@@ -711,7 +724,7 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
       indexLabel: track.band.slice(0, 1).toUpperCase(),
       selected: Boolean(selectedItemId && track.items.some((entry) => entry.item.id === selectedItemId)),
       clips: track.items.filter((entry) => !("type" in entry.item && entry.item.type === "gap")).map((entry) => {
-        const durationBearing = entry.advancesCursor || entry.band === "adjustment";
+        const durationBearing = entry.advancesCursor || entry.band === "adjustment" || ("type" in entry.item && entry.item.type === "transition");
         const kind = sourceKind(entry.item);
         return {
           id: entry.item.id,
@@ -935,6 +948,22 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
     }];
     let motionSource: string | undefined;
     const visual = visualClip(item);
+    if (visual && projected.timelinePath) {
+      const address = timelineClipAddress(projected.timelinePath);
+      const track = address?.band === "visual" ? workingCopy.tracks.visual?.[address.trackIndex] : undefined;
+      if (address && track?.clips[address.clipIndex + 1]) {
+        const transition = track.transitions?.find(t => t.from === address.clipIndex);
+        const a = track.clips[address.clipIndex]!, b = track.clips[address.clipIndex + 1]!;
+        sections.push({ title: "Transition to next clip", rows: [
+          { kind: "select", key: "transition:kind", label: "Effect", value: transition?.kind ?? "none", values: ["none", ...Object.keys(transitionLabels)], valueLabels: { none: "None", ...transitionLabels } },
+          ...(transition ? [{ kind: "number" as const, key: "transition:duration", label: "Overlap", value: Math.round((a.start + a.duration - b.start) * fps), min: 1, step: 1, unit: "f" }] : []),
+          ...(transition ? transitionParameterSpecs[transition.kind].map(spec => ({
+            kind: "number" as const, key: `transition:param:${spec.name}`, label: spec.label,
+            value: transition.params?.[spec.name] ?? spec.default, min: spec.min, max: spec.max, step: spec.step,
+          })) : []),
+        ] });
+      }
+    }
     if (visual) {
       const rows: InspectorSectionView["rows"][number][] = [
         { kind: "value", label: "Source", value: visual.source.type },
@@ -1226,6 +1255,20 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
           throw new Error("Motion clip data must be a JSON object");
         }
         return setTimelineMotionData(workingCopy, projected.timelinePath, parsed as Record<string, never>);
+      });
+    }
+    if (key.startsWith("transition:")) {
+      return queueWorkingCopy(() => {
+        const projected = findProjectedItem(compiledCopy.timeline, documentView, itemId);
+        if (!projected?.timelinePath) throw new Error("Select a visual clip to edit its transition");
+        if (key === "transition:kind") return setTimelineTransition(workingCopy, projected.timelinePath, value === "none" ? null : String(value) as TimelineTransitionKind);
+        const address = timelineClipAddress(projected.timelinePath)!;
+        const transition = workingCopy.tracks.visual?.[address.trackIndex]?.transitions?.find(t => t.from === address.clipIndex);
+        if (!transition) throw new Error("Transition does not exist");
+        if (key.startsWith("transition:param:")) return setTimelineTransitionParameter(workingCopy, projected.timelinePath, key.slice("transition:param:".length), Number(value));
+        const frames = Number(value);
+        if (!Number.isSafeInteger(frames) || frames <= 0) throw new Error("Overlap must be a positive whole number of frames");
+        return setTimelineTransition(workingCopy, projected.timelinePath, transition.kind, timelineTimeFromFrames(frames, workingCopy.canvas.fps));
       });
     }
     if (key.startsWith("component:")) {
@@ -1786,6 +1829,7 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
       }
     }
     config = next;
+    showWarnings(next.warnings);
     markDirty();
     setConflict(null);
     renderWorkingCopy();
@@ -1821,6 +1865,7 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
     const next = await loadTimeline() as StudioConfig;
     draftPreview.invalidate();
     config = next;
+    showWarnings(next.warnings);
     confirmedDependencies = next.inputDependencies ? { ...next.inputDependencies } : null;
     workspaceRuntime.setMotionSourceDurations(next.motionSourceDurations ?? {});
     savedSnapshotJson = JSON.stringify(next.timeline);

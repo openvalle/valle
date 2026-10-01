@@ -19,14 +19,19 @@ test("Motion compiler forwards explicit bytes and preserves structured diagnosti
   const options = {
     resources: [{ control: "logo", contentHash: `sha256:${"a".repeat(64)}` }],
     data: { source: "fixture", value: { count: 2 } },
+    audioSources: [{ control: "beat", contentHash: `sha256:${"b".repeat(64)}`,
+      sampleRate: 48_000, samples: new Float32Array([0, 0.5]) }],
     fonts: [font],
     fontAliases: { "asset://brand": font },
     shaders: [shader],
   };
   const compiled = compileMotionJsxWithWasm({
-    compile_motion_jsx: (source, optionsJson, fonts, aliases, shaders) => {
+    compile_motion_jsx: (source, optionsJson, fonts, aliases, shaders, audioSamples) => {
       expect(source).toBe("source");
-      expect(JSON.parse(optionsJson)).toEqual({ resources: options.resources, data: options.data });
+      expect(JSON.parse(optionsJson)).toEqual({ resources: options.resources, data: options.data,
+        audioSources: [{ control: "beat", contentHash: options.audioSources[0]!.contentHash,
+          sampleRate: 48_000 }] });
+      expect(audioSamples[0]).toBe(options.audioSources[0]!.samples);
       expect(fonts).toEqual([font]);
       expect(aliases).toEqual([["asset://brand", font]]);
       expect(shaders).toEqual([shader]);
@@ -143,4 +148,14 @@ test("sparse normalization and frame conversion delegate to Rust/WASM", () => {
   expect(receivedFpsJson).toBe('"30000/1001"');
   expect(receivedRateJson).toBe("2");
   expect(sourceSeconds).toBe(0.066733);
+});
+
+test("long PCM reaches Wasm as a typed buffer without JSON conversion", () => {
+  const samples = new Float32Array(48_000 * 60 * 5);
+  Object.defineProperty(samples, "toJSON", { value() { throw new Error("PCM JSON conversion"); } });
+  compileMotionJsxWithWasm({ compile_motion_jsx: (_source,json,_fonts,_aliases,_shaders,pcm) => {
+    expect(pcm[0]).toBe(samples);
+    expect(json.length).toBeLessThan(250);
+    return JSON.stringify({status:"ok",artifact:{},warnings:[]});
+  } }, "source", {audioSources:[{control:"beat",contentHash:`sha256:${"a".repeat(64)}`,sampleRate:48000,samples}]});
 });

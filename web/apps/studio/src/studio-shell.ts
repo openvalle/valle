@@ -283,19 +283,24 @@ export class ValleStudioApp extends LitElement {
     const previewText = this.#req<HTMLElement>("previewStatusText");
     previewStatus.className = "preview-status";
     if (state.previewStatus === "error") previewStatus.classList.add("error");
-    else if (state.previewStatus === "updating" || state.previewStatus === "unavailable") {
+    else if (state.previewStatus === "updating" || state.previewStatus === "unavailable"
+      || (state.previewStatus === "ready" && state.diagnostics.length > 0)) {
       previewStatus.classList.add("warning");
     } else if (state.previewStatus === "loading" || state.previewStatus === "empty") {
       previewStatus.classList.add("info");
     }
-    previewText.textContent = PREVIEW_LABELS[state.previewStatus];
-    previewStatus.title = state.previewMessage ?? "";
+    previewText.textContent = state.previewStatus === "ready" && state.diagnostics.length > 0
+      ? `Preview up to date · ${state.diagnostics.length} warning${state.diagnostics.length === 1 ? "" : "s"}`
+      : PREVIEW_LABELS[state.previewStatus];
+    previewStatus.title = state.previewStatus === "ready" && state.diagnostics.length > 0
+      ? state.diagnostics.join("\n") : (state.previewMessage ?? "");
 
     const banner = this.#req<HTMLElement>("stageBanner");
     const showBanner = state.conflict
       || state.previewStatus === "error"
       || state.previewStatus === "updating"
-      || state.previewStatus === "unavailable";
+      || state.previewStatus === "unavailable"
+      || (state.previewStatus === "ready" && state.diagnostics.length > 0);
     banner.hidden = !showBanner;
     banner.classList.toggle("error", state.previewStatus === "error" || state.conflict);
     if (showBanner) {
@@ -305,11 +310,14 @@ export class ValleStudioApp extends LitElement {
           ? (state.previewMessage ?? "Preview failed. Showing the last successful result.")
           : state.previewStatus === "unavailable"
             ? (state.previewMessage ?? "Preview is unavailable for this session.")
+            : state.previewStatus === "ready" && state.diagnostics.length > 0
+              ? state.diagnostics[0]!
             : (state.previewMessage ?? "Updating preview… showing the last successful result.");
       banner.innerHTML = "";
       const span = document.createElement("span");
       span.textContent = state.previewStatus === "error" ? "Preview failed. Showing the last successful result." : message;
-      span.title = state.previewMessage ?? message;
+      span.title = state.previewStatus === "ready" && state.diagnostics.length > 0
+        ? state.diagnostics.join("\n") : (state.previewMessage ?? message);
       banner.append(span);
       if (state.conflict) {
         const keep = document.createElement("button");

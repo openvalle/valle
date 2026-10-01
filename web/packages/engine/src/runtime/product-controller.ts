@@ -312,6 +312,10 @@ export interface ProductRenderStats {
   fontCacheMisses: number;
   shaderCacheHits: number;
   shaderCacheMisses: number;
+  rasterLayerCacheHits: number;
+  rasterLayerCacheMisses: number;
+  rasterLayerCacheEntries: number;
+  rasterLayerCacheBytes: number;
   resourceCacheGeneration: number;
   resourceCacheGenerationInvalidations: number;
   resourceCacheHits: number;
@@ -452,6 +456,10 @@ export interface PlayerStats {
   fontCacheMisses: number;
   shaderCacheHits: number;
   shaderCacheMisses: number;
+  rasterLayerCacheHits: number;
+  rasterLayerCacheMisses: number;
+  maximumRasterLayerCacheEntries: number;
+  maximumRasterLayerCacheBytes: number;
   resourceCacheGenerationInvalidations: number;
   resourceCacheHits: number;
   resourceCacheMisses: number;
@@ -776,6 +784,10 @@ export class BrowserValleWebPlayer {
         fontCacheMisses: report.fontCacheMisses,
         shaderCacheHits: report.shaderCacheHits,
         shaderCacheMisses: report.shaderCacheMisses,
+        rasterLayerCacheHits: report.rasterLayerCacheHits,
+        rasterLayerCacheMisses: report.rasterLayerCacheMisses,
+        rasterLayerCacheEntries: report.rasterLayerCacheEntries,
+        rasterLayerCacheBytes: report.rasterLayerCacheBytes,
         resourceCacheGeneration: frameResources.resourceCache.generation,
         resourceCacheGenerationInvalidations: frameResources.resourceCache.generationInvalidations,
         resourceCacheHits: frameResources.resourceCache.hits,
@@ -842,6 +854,14 @@ export class BrowserValleWebPlayer {
       this.stats.fontCacheMisses += report.fontCacheMisses;
       this.stats.shaderCacheHits += report.shaderCacheHits;
       this.stats.shaderCacheMisses += report.shaderCacheMisses;
+      this.stats.rasterLayerCacheHits += report.rasterLayerCacheHits;
+      this.stats.rasterLayerCacheMisses += report.rasterLayerCacheMisses;
+      this.stats.maximumRasterLayerCacheEntries = Math.max(
+        this.stats.maximumRasterLayerCacheEntries, report.rasterLayerCacheEntries,
+      );
+      this.stats.maximumRasterLayerCacheBytes = Math.max(
+        this.stats.maximumRasterLayerCacheBytes, report.rasterLayerCacheBytes,
+      );
       this.stats.resourceCacheGenerationInvalidations +=
         frameResources.resourceCache.generationInvalidations;
       this.stats.resourceCacheHits += frameResources.resourceCache.hits;
@@ -1586,17 +1606,17 @@ export class BrowserValleWebPlayer {
       const rgba = this.engine.render_scene3d_request(contentWire, topology, canonicalRequest);
       const width = this.engine.scene3d_frame_width(contentWire);
       const height = this.engine.scene3d_frame_height(contentWire);
-      const bytes = pixelBytes(width, height, 4);
+      const bytes = pixelBytes(width, height, 8);
       if (rgba.byteLength !== bytes) {
-        throw new Error(`Scene3D ${content} returned an invalid RGBA plane`);
+        throw new Error(`Scene3D ${content} returned an invalid RGBA16F plane`);
       }
       const image = this.CanvasKit.MakeImage({
         width,
         height,
-        colorType: this.CanvasKit.ColorType.RGBA_8888,
+        colorType: this.CanvasKit.ColorType.RGBA_F16,
         alphaType: this.CanvasKit.AlphaType.Premul,
         colorSpace: this.CanvasKit.ColorSpace.SRGB,
-      }, rgba, width * 4);
+      }, rgba, width * 8);
       if (!image) throw new Error(`CanvasKit cannot wrap Scene3D frame ${content}`);
       return {
         object: { key, kind: "scene3d", image },
@@ -2397,6 +2417,8 @@ function emptyPlayerStats(): PlayerStats {
     programCacheHits: 0, programCacheMisses: 0,
     fontCacheHits: 0, fontCacheMisses: 0,
     shaderCacheHits: 0, shaderCacheMisses: 0,
+    rasterLayerCacheHits: 0, rasterLayerCacheMisses: 0,
+    maximumRasterLayerCacheEntries: 0, maximumRasterLayerCacheBytes: 0,
     resourceCacheGenerationInvalidations: 0,
     resourceCacheHits: 0, resourceCacheMisses: 0,
     resourceCacheInsertions: 0, resourceCacheEvictions: 0, resourceCacheBypasses: 0,

@@ -184,6 +184,7 @@ export class StandaloneTimelineSession {
       assetBaseUrl: "/preview-assets/",
       generation: ++this.#generation,
       motionInstances: result.instances,
+      warnings: result.warnings,
     };
   }
 
@@ -202,6 +203,7 @@ export class StandaloneTimelineSession {
           && JSON.stringify(timeline) !== JSON.stringify(result.authorTimeline),
         inputDependencies: this.#sources.confirmedDigests(),
         motionInstances: result.instances,
+        warnings: result.warnings,
       };
     } catch (error) {
       return { status: "error", diagnostics: [{ class: "compile", code: "studio-preview",

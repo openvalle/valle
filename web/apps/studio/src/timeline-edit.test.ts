@@ -190,3 +190,67 @@ test("delete and reorder operate on hard-typed arrays and preserve legal absolut
   const deleted = deleteTimelineClip(moved, "/tracks/visual/0/clips/1");
   expect(deleted.tracks.visual?.[0]?.clips).toHaveLength(2);
 });
+
+test("transition edits ripple following starts while preserving source clocks and durations", async () => {
+  const { setTimelineTransition, transitionLabels } = await import("./timeline-edit.ts");
+  const source = timeline();
+  for (const kind of Object.keys(transitionLabels) as Array<keyof typeof transitionLabels>) {
+    const next = setTimelineTransition(source, "/tracks/visual/0/clips/0", kind, 0.25);
+    const track = next.tracks.visual![0]!;
+    expect(track.transitions).toEqual([{ from: 0, to: 1, kind }]);
+    expect(track.clips.map(c => [c.start, c.duration])).toEqual([[0,1],[0.75,2],[3.25,1]]);
+    const removed = setTimelineTransition(next, "/tracks/visual/0/clips/0", null);
+    expect(removed.tracks.visual![0]!.clips.map(c => c.start)).toEqual([0,1,3.5]);
+    expect(removed.tracks.visual![0]!.transitions).toEqual([]);
+  }
+  expect(source.tracks.visual![0]!.clips[1]!.start).toBe(1.5);
+  for (const duration of [0,1,NaN,-1]) {
+    expect(() => setTimelineTransition(source, "/tracks/visual/0/clips/0", "fade", duration)).toThrow("duration");
+  }
+  expect(() => setTimelineTransition(source, "/tracks/visual/0/clips/2", "fade")).toThrow("following clip");
+});
+
+test("deleting and reordering visual clips keep only adjacent transition endpoints", async () => {
+  const { setTimelineTransition } = await import("./timeline-edit.ts");
+  const source = setTimelineTransition(timeline(), "/tracks/visual/0/clips/1", "circleOpen", 0.25);
+  const deletedHead = deleteTimelineClip(source, "/tracks/visual/0/clips/0");
+  expect(deletedHead.tracks.visual![0]!.transitions).toEqual([{from:0,to:1,kind:"circleOpen"}]);
+  const deletedEndpoint = deleteTimelineClip(source, "/tracks/visual/0/clips/1");
+  expect(deletedEndpoint.tracks.visual![0]!.transitions).toEqual([]);
+  const reordered = moveTimelineVisualClipBefore(source, "/tracks/visual/0/clips/2", "/tracks/visual/0/clips/1");
+  expect(reordered.tracks.visual![0]!.transitions).toEqual([]);
+  const preserved = moveTimelineVisualClipBefore(source, "/tracks/visual/0/clips/0", "/tracks/visual/0/clips/1");
+  expect(preserved.tracks.visual![0]!.transitions).toEqual([{from:1,to:2,kind:"circleOpen"}]);
+  const clips = preserved.tracks.visual![0]!.clips;
+  expect(clips[1]!.start+clips[1]!.duration-clips[2]!.start).toBe(0.25);
+});
+
+test("transition parameters survive duration changes, reorder and deletion; kind changes reset them", async () => {
+  const { setTimelineTransition, setTimelineTransitionParameter, transitionParameterSpecs } = await import("./timeline-edit.ts");
+  const four = timeline();
+  four.tracks.visual![0]!.clips.push({kind:"solid",color:"#444444",start:6,duration:1});
+  const source = setTimelineTransition(four, "/tracks/visual/0/clips/1", "circleOpen", 0.25);
+  const edited = setTimelineTransitionParameter(source, "/tracks/visual/0/clips/1", "centerX", 0.2);
+  expect(source.tracks.visual![0]!.transitions![0]!.params).toBeUndefined();
+  const resized = setTimelineTransition(edited, "/tracks/visual/0/clips/1", "circleOpen", 0.4);
+  expect(resized.tracks.visual![0]!.transitions![0]!.params).toEqual({centerX:0.2});
+  const deletedHead = deleteTimelineClip(resized, "/tracks/visual/0/clips/0");
+  expect(deletedHead.tracks.visual![0]!.transitions![0]).toEqual({from:0,to:1,kind:"circleOpen",params:{centerX:0.2}});
+  const preserved = moveTimelineVisualClipBefore(resized, "/tracks/visual/0/clips/3", "/tracks/visual/0/clips/0");
+  expect(preserved.tracks.visual![0]!.transitions![0]!.params).toEqual({centerX:0.2});
+  expect(setTimelineTransition(resized, "/tracks/visual/0/clips/1", "ripple").tracks.visual![0]!.transitions![0]!.params).toBeUndefined();
+  expect(() => setTimelineTransitionParameter(edited, "/tracks/visual/0/clips/1", "centerX", 2)).toThrow();
+  expect(() => setTimelineTransitionParameter(edited, "/tracks/visual/0/clips/1", "frequency", 4)).toThrow();
+  const zoom = setTimelineTransition(timeline(), "/tracks/visual/0/clips/0", "simpleZoom", 0.25);
+  expect(setTimelineTransitionParameter(zoom, "/tracks/visual/0/clips/0", "quickness", 0.2).tracks.visual![0]!.transitions![0]!.params).toEqual({quickness:0.2});
+  const ripple = setTimelineTransition(timeline(), "/tracks/visual/0/clips/0", "ripple", 0.25);
+  expect(setTimelineTransitionParameter(ripple, "/tracks/visual/0/clips/0", "amplitude", 1/30).tracks.visual![0]!.transitions![0]!.params).toEqual({});
+  for (const [kind, specs] of Object.entries(transitionParameterSpecs)) {
+    const base = setTimelineTransition(timeline(), "/tracks/visual/0/clips/0", kind as keyof typeof transitionParameterSpecs, 0.25);
+    for (const spec of specs) {
+      const changed = setTimelineTransitionParameter(base, "/tracks/visual/0/clips/0", spec.name, spec.max);
+      expect(changed.tracks.visual![0]!.transitions![0]!.params?.[spec.name] ?? spec.default).toBe(spec.max);
+      expect(() => setTimelineTransitionParameter(base, "/tracks/visual/0/clips/0", spec.name, NaN)).toThrow();
+    }
+  }
+});

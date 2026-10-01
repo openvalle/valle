@@ -376,7 +376,7 @@ test("Scene3D keeps canonical ContentDigest wires at every WASM boundary", async
     engine: {
       render_scene3d_request(content: string, topology: string) {
         calls.push([content, topology]);
-        return new Uint8Array(4);
+        return new Uint8Array(8);
       },
       scene3d_frame_width(content: string) {
         expect(content).toBe(SCENE_DIGEST);
@@ -388,10 +388,15 @@ test("Scene3D keeps canonical ContentDigest wires at every WASM boundary", async
       },
     },
     CanvasKit: {
-      ColorType: { RGBA_8888: 1 },
+      ColorType: { RGBA_F16: 1 },
       AlphaType: { Premul: 1 },
       ColorSpace: { SRGB: 1 },
-      MakeImage: () => image,
+      MakeImage: (info: {colorType:number}, pixels: Uint8Array, rowBytes: number) => {
+        expect(info.colorType).toBe(1);
+        expect(pixels.byteLength).toBe(8);
+        expect(rowBytes).toBe(8);
+        return image;
+      },
     },
     async ensureScene3dResources() {},
   });
@@ -407,6 +412,7 @@ test("Scene3D keeps canonical ContentDigest wires at every WASM boundary", async
 
   expect(calls).toEqual([[SCENE_DIGEST, TOPOLOGY_DIGEST]]);
   expect(produced.object.image).toBe(image);
+  expect(produced.bytes).toBe(8);
 });
 
 test("Scene3D model and environment admission use frozen bytes and deduplicate registration", async () => {

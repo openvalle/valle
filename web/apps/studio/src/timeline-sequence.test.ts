@@ -20,7 +20,7 @@ function fixture(): TimelineDocument {
       visual: {
         tracks: [{ id: "visual:main", items: [
           { type: "clip", id: "clip:a", duration: "3/2", source: { type: "solid", color: "#111111" }, layer: layer() },
-          { type: "transition", id: "transition:ab", duration: "1/2", kernel: { type: "cross-fade" } },
+          { type: "transition", id: "transition:ab", duration: "1/2", kernel: { type: "fade" } },
           { type: "clip", id: "clip:b", duration: "5/2", source: { type: "solid", color: "#222222" }, layer: layer() },
           { type: "gap", id: "gap:tail", duration: "1/1" },
         ] }],
@@ -106,12 +106,12 @@ function view(): TimelineDocumentView {
         band: "visual",
         trackId: "visual:main",
         trackIndex: 0,
-        durationSeconds: 5,
+        durationSeconds: 4.5,
         items: [
           item("clip:a", "/tracks/visual/0/clips/0", 0, 0, 1.5),
-          item("transition:ab", null, 1, 1.5, 0.5, false),
-          item("clip:b", "/tracks/visual/0/clips/1", 2, 1.5, 2.5),
-          item("gap:tail", null, 3, 4, 1),
+          { ...item("transition:ab", null, 1, 1, 0.5, false), endSeconds: 1.5, endFrame: 45 },
+          item("clip:b", "/tracks/visual/0/clips/1", 2, 1, 2.5),
+          item("gap:tail", null, 3, 3.5, 1),
         ],
       },
       {
@@ -168,17 +168,17 @@ function view(): TimelineDocumentView {
   };
 }
 
-test("Sequence projection derives starts and keeps transition/crossfade cursor-neutral", () => {
+test("Sequence projection shows visual overlap and preserves audio cut clocks", () => {
   const tracks = projectTimelineSequences(fixture(), view());
   const visual = tracks.find((track) => track.band === "visual")!;
   expect(visual.items.map((entry) => [entry.item.id, entry.startSeconds, entry.advancesCursor])).toEqual([
     ["clip:a", 0, true],
-    ["transition:ab", 1.5, false],
-    ["clip:b", 1.5, true],
-    ["gap:tail", 4, true],
+    ["transition:ab", 1, false],
+    ["clip:b", 1, true],
+    ["gap:tail", 3.5, true],
   ]);
   expect(visual.items[1]).toMatchObject({ endSeconds: 1.5, durationSeconds: 0.5 });
-  expect(visual.durationSeconds).toBe(5);
+  expect(visual.durationSeconds).toBe(4.5);
   const audio = tracks.find((track) => track.band === "audio")!;
   expect(audio.items[1]).toMatchObject({ startSeconds: 2, endSeconds: 2, advancesCursor: false });
   expect(audio.items[2]).toMatchObject({ startSeconds: 2, sourceStartSeconds: 0, sourceRate: 1 });

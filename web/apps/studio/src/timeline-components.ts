@@ -66,6 +66,7 @@ export interface InspectorFieldRow {
   unit?: string;
   prefix?: string;
   values?: ReadonlyArray<string>;
+  valueLabels?: Readonly<Record<string, string>>;
   primaryText?: boolean;
   readOnly?: boolean;
 }
@@ -188,6 +189,7 @@ export class StudioTimeline extends LitElement {
         class="clip ${kindClass} ${clip.selected ? "selected" : ""} ${clip.readOnly ? "readonly" : ""} ${clip.error ? "error" : ""} ${tiny ? "tiny" : narrow ? "narrow" : ""}"
         style="left:${clip.leftPx}px;width:${width}px"
         data-clip-id=${clip.id}
+        data-kind=${clip.kind}
         title=${clip.title}
         aria-label=${clip.label}
         aria-pressed=${clip.selected}
@@ -345,8 +347,8 @@ export class StudioInspector extends LitElement {
     if (field.kind === "select") {
       return html`
         <select data-edit-key=${field.key} data-clip-id=${clipId}
-          .value=${String(field.value)} @change=${this.#edit} @blur=${this.#edit}>
-          ${(field.values ?? []).map((value) => html`<option value=${value}>${value}</option>`)}
+          @change=${this.#edit} @blur=${this.#edit}>
+          ${(field.values ?? []).map((value) => html`<option value=${value} .selected=${value === String(field.value)}>${field.valueLabels?.[value] ?? value}</option>`)}
         </select>
       `;
     }

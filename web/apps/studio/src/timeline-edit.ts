@@ -1,4 +1,5 @@
 import type { JsonValue, Timeline, TimelineSchema } from "valle-engine";
+import transitionParameters from "../../../../crates/valle-timeline/schema/transition-parameters.generated.json";
 
 type TimelineVisualTrack = TimelineSchema.TimelineVisualTrackWire;
 type TimelineAudioTrack = TimelineSchema.TimelineAudioTrackWire;
@@ -152,7 +153,12 @@ export function deleteTimelineClip(timeline: Timeline, timelinePath: string): Ti
   const address = requireAddress(timelinePath);
   const target = requireClip(next, timelinePath);
   switch (target.band) {
-    case "visual": target.track.clips.splice(address.clipIndex, 1); break;
+    case "visual": {
+      target.track.clips.splice(address.clipIndex, 1);
+      target.track.transitions = target.track.transitions?.filter(t => t.from !== address.clipIndex && t.to !== address.clipIndex)
+        .map(t => ({ ...t, from: t.from > address.clipIndex ? t.from - 1 : t.from, to: t.to > address.clipIndex ? t.to - 1 : t.to }));
+      break;
+    }
     case "audio": target.track.clips.splice(address.clipIndex, 1); break;
     case "caption": target.track.clips.splice(address.clipIndex, 1); break;
     case "adjustment": target.track.clips.splice(address.clipIndex, 1); break;
@@ -176,6 +182,11 @@ export function moveTimelineVisualClipBefore(
   if (!track || !track.clips[target.clipIndex]) {
     throw new Error("Timeline visual reorder target does not exist");
   }
+  const originalClips = [...track.clips];
+  const transitions = (track.transitions ?? []).map(t => ({
+    ...t, fromClip: originalClips[t.from]!, toClip: originalClips[t.to]!,
+    duration: originalClips[t.from]!.start + originalClips[t.from]!.duration - originalClips[t.to]!.start,
+  }));
   const slots = track.clips.map((clip, index) => ({
     start: finiteNumber(clip.start, `clip ${index} start`),
     gapAfter: index + 1 < track.clips.length
@@ -189,11 +200,18 @@ export function moveTimelineVisualClipBefore(
   if (!clip) throw new Error(`Timeline clip '${timelinePath}' does not exist`);
   const insertion = source.clipIndex < target.clipIndex ? target.clipIndex - 1 : target.clipIndex;
   track.clips.splice(insertion, 0, clip);
+  const retained = transitions.flatMap(t => {
+    const from = track.clips.indexOf(t.fromClip), to = track.clips.indexOf(t.toClip);
+    return to === from + 1 ? [{ from, to, kind: t.kind, params: t.params, duration: t.duration }] : [];
+  });
+  track.transitions = retained.map(({ from, to, kind, params }) => ({ from, to, kind, ...(params ? { params } : {}) }));
   let cursor = slots[0]?.start ?? 0;
   for (let index = 0; index < track.clips.length; index += 1) {
     const current = track.clips[index]!;
     current.start = cursor;
-    cursor += finiteNumber(current.duration, `clip ${index} duration`) + (slots[index]?.gapAfter ?? 0);
+    const transition = retained.find(t => t.from === index);
+    cursor += finiteNumber(current.duration, `clip ${index} duration`)
+      + (transition ? -transition.duration : (slots[index]?.gapAfter ?? 0));
   }
   return next;
 }
@@ -308,4 +326,64 @@ function finiteNumber(value: unknown, label: string): number {
 
 function finiteOptionalNumber(value: unknown, fallback: number): number {
   return value === undefined ? fallback : finiteNumber(value, "Timeline number");
+}
+
+
+export type TimelineTransitionKind = TimelineSchema.TransitionKind;
+export const transitionParameterSpecs = transitionParameters;
+export const transitionLabels = {
+  fade: "Fade", wipeLeft: "Wipe left", wipeRight: "Wipe right", circleOpen: "Circle open",
+  simpleZoom: "Simple zoom", crossWarp: "Cross warp", linearBlur: "Linear blur",
+  directionalWarp: "Directional warp", dreamyZoom: "Dreamy zoom", ripple: "Ripple",
+  flyEye: "Fly eye", multiplyBlend: "Multiply blend", perlin: "Perlin noise",
+} satisfies Record<TimelineTransitionKind, string>;
+
+/** Ripple the following clips so overlap changes preserve all endpoint local clocks. */
+export function setTimelineTransition(
+  timeline: Timeline,
+  timelinePath: string,
+  kind: TimelineTransitionKind | null,
+  durationSeconds?: number,
+): Timeline {
+  const next = structuredClone(timeline);
+  const address = requireAddress(timelinePath);
+  const target = requireClip(next, timelinePath);
+  if (target.band !== "visual") throw new Error("Transitions require two visual clips");
+  const track = target.track;
+  const from = address.clipIndex, to = from + 1;
+  const a = track.clips[from]!, b = track.clips[to];
+  if (!b) throw new Error("Select a visual clip with a following clip");
+  if (kind !== null && !Object.hasOwn(transitionLabels, kind)) throw new Error("Unknown transition kind");
+  const existing = track.transitions?.find(t => t.from === from && t.to === to);
+  if (!kind && !existing) return next;
+  const overlap = existing ? a.start + a.duration - b.start : 0;
+  const duration = kind ? durationSeconds ?? (existing ? overlap : Math.min(0.5, a.duration / 2, b.duration / 2)) : 0;
+  if (!Number.isFinite(duration) || (kind && (duration <= 0 || duration >= a.duration || duration >= b.duration))) {
+    throw new Error("Transition duration must be positive and shorter than both clips");
+  }
+  const delta = a.start + a.duration - duration - b.start;
+  for (let index = to; index < track.clips.length; index++) track.clips[index]!.start += delta;
+  track.transitions = (track.transitions ?? []).filter(t => t.from !== from);
+  if (kind) track.transitions.push({ from, to, kind, ...(existing?.kind === kind && existing.params ? { params: existing.params } : {}) });
+  return next;
+}
+
+/** Parameters use generated Rust metadata; compilation remains the final semantic admission. */
+export function setTimelineTransitionParameter(timeline: Timeline, timelinePath: string, name: string, value: number): Timeline {
+  const next = structuredClone(timeline);
+  const address = requireAddress(timelinePath);
+  const target = requireClip(next, timelinePath);
+  if (target.band !== "visual") throw new Error("Transitions require visual clips");
+  const transition = target.track.transitions?.find(t => t.from === address.clipIndex);
+  if (!transition) throw new Error("Transition does not exist");
+  const spec = transitionParameterSpecs[transition.kind].find(spec => spec.name === name);
+  if (!spec) throw new Error(`Unknown transition parameter '${name}'`);
+  if (!Number.isFinite(value) || Math.fround(value) < Math.fround(spec.min) || Math.fround(value) > Math.fround(spec.max)) throw new Error(`${spec.label} must be in [${spec.min}, ${spec.max}]`);
+  const params = { ...transition.params, [name]: value };
+  if (transition.kind === "directionalWarp" && Math.abs(params.directionX ?? -1) + Math.abs(params.directionY ?? 1) < 0.000001) {
+    throw new Error("Transition direction must have nonzero length");
+  }
+  if (Math.fround(value) === Math.fround(spec.default)) delete params[name];
+  transition.params = params;
+  return next;
 }

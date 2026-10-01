@@ -19,11 +19,11 @@ interface TimelineCompilerWasmModule {
   sample_motion_properties(artifactJson: string, requestJson: string): string;
   compile_motion_jsx(
     source: string, optionsJson: string, fonts: Uint8Array[],
-    aliases: Array<[string, Uint8Array]>, shaders: MotionShaderPackage[],
+    aliases: Array<[string, Uint8Array]>, shaders: MotionShaderPackage[], audioSamples: Float32Array[],
   ): string;
   compile_motion_modules(
     entry: string, modulesJson: string, optionsJson: string, fonts: Uint8Array[],
-    aliases: Array<[string, Uint8Array]>, shaders: MotionShaderPackage[],
+    aliases: Array<[string, Uint8Array]>, shaders: MotionShaderPackage[], audioSamples: Float32Array[],
   ): string;
   prepare_preview_package(inputJson: string): string;
   rewrite_motion_source(inputJson: string): string;
@@ -59,6 +59,13 @@ export interface MotionShaderPackage {
 export interface MotionCompileOptions {
   resources?: readonly { control: string; contentHash: string }[];
   data?: { source: string; value: unknown };
+  /** Frozen decoded mono PCM matching a resource digest, resampled by the caller. */
+  audioSources?: readonly {
+    control: string;
+    contentHash: string;
+    sampleRate: number;
+    samples: Float32Array;
+  }[];
   /** TTF/OTF bytes in the same order used by the renderer. */
   fonts?: readonly Uint8Array[];
   /** Asset font family aliases such as `asset://brandFont`. */
@@ -69,6 +76,7 @@ export interface MotionCompileOptions {
 export interface CompiledMotion {
   artifact: Record<string, unknown>;
   artifactDigest: string;
+  warnings: MotionCompilerDiagnostic[];
   sourceMap: Record<string, unknown>;
   normalizedSource: string;
   normalizedAstDigest: string;
@@ -219,7 +227,7 @@ export function compileMotionJsxWithWasm(
 ): CompiledMotion {
   const inputs = motionCompileInputs(options);
   return readMotionCompileResult(wasm.compile_motion_jsx(
-    source, inputs.optionsJson, inputs.fonts, inputs.aliases, inputs.shaders,
+    source, inputs.optionsJson, inputs.fonts, inputs.aliases, inputs.shaders, inputs.audioSamples,
   ));
 }
 
@@ -231,7 +239,7 @@ export function compileMotionModulesWithWasm(
 ): CompiledMotion {
   const inputs = motionCompileInputs(options);
   return readMotionCompileResult(wasm.compile_motion_modules(
-    entry, JSON.stringify(modules), inputs.optionsJson, inputs.fonts, inputs.aliases, inputs.shaders,
+    entry, JSON.stringify(modules), inputs.optionsJson, inputs.fonts, inputs.aliases, inputs.shaders, inputs.audioSamples,
   ));
 }
 
@@ -240,12 +248,20 @@ function motionCompileInputs(options: MotionCompileOptions): {
   fonts: Uint8Array[];
   aliases: Array<[string, Uint8Array]>;
   shaders: MotionShaderPackage[];
+  audioSamples: Float32Array[];
 } {
   return {
-    optionsJson: JSON.stringify({ resources: options.resources ?? [], data: options.data ?? null }),
+    optionsJson: JSON.stringify({
+      resources: options.resources ?? [], data: options.data ?? null,
+      audioSources: (options.audioSources ?? []).map((source) => ({
+        control: source.control, contentHash: source.contentHash,
+        sampleRate: source.sampleRate,
+      })),
+    }),
     fonts: [...options.fonts ?? []],
     aliases: Object.entries(options.fontAliases ?? {}),
     shaders: [...options.shaders ?? []],
+    audioSamples: (options.audioSources ?? []).map((source) => source.samples),
   };
 }
 
@@ -258,6 +274,7 @@ function readMotionCompileResult(json: string): CompiledMotion {
   return {
     artifact: result.artifact,
     artifactDigest: result.artifactDigest,
+    warnings: result.warnings,
     sourceMap: result.sourceMap,
     normalizedSource: result.normalizedSource,
     normalizedAstDigest: result.normalizedAstDigest,

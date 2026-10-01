@@ -877,6 +877,15 @@ valle-studio-app {
     isolation: isolate;
   }
 
+  .clip[data-kind="transition"] {
+    top: auto;
+    height: 21px;
+    z-index: 4;
+    background: repeating-linear-gradient(135deg, #444d60, #444d60 5px, #354052 5px, #354052 10px);
+    border-color: #9cb2d5;
+    color: #edf3ff;
+  }
+
   .clip:hover:not(:disabled) {
     background: color-mix(in srgb, white 5%, var(--kind-bg));
     border-color: var(--kind-edge);

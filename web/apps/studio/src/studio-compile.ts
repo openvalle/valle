@@ -5,6 +5,7 @@ import type {
   StudioCompileResult,
 } from "./studio-compile-worker.ts";
 import type { StandaloneAssets } from "./standalone-assets.ts";
+import { type AudioAnalysisInput } from "./audio-analysis-input.ts";
 import { frozenShaderBytes } from "./shader-input.ts";
 
 export type CompilePayload = Omit<StudioCompileRequest, "id">;
@@ -53,6 +54,7 @@ export function timelineCompilePayload(
   timeline: Timeline,
   sources: Record<string, string>,
   resourceInputs: readonly PreviewResourceInput[],
+  locators: readonly { id: string; url: string }[] = [],
 ): CompilePayload {
   const resources = new Map(resourceInputs.map((resource) => [resource.id, resource]));
   const instances: CompilePayload["instances"] = [];
@@ -95,8 +97,16 @@ export function timelineCompilePayload(
           frozenBytes: frozenShaderBytes(decodeBase64(manifest), decodeBase64(source)) });
       }
       if (shaders.length) options.shaders = shaders;
+      const audioUrls: AudioAnalysisInput[] = [];
+      for (const [control, alias] of Object.entries(clip.resources ?? {})) {
+        const resource = resources.get(`resource:${alias}`);
+        if (resource?.entry.kind !== "audio") continue;
+        const url = locators.find(item => item.id === resource.id)?.url;
+        if (!url) throw new Error(`Motion audio asset ${control} has no frozen locator`);
+        audioUrls.push({ control, contentHash: String(resource.entry.digest), url });
+      }
       instances.push({ clipPath: `/tracks/visual/${trackIndex}/clips/${clipIndex}`,
-        entry, modules, options,
+        entry, modules, options, audioUrls,
         fontUrls: boot.runtime.fontUrls.map(({ url, role }) => ({ url, role: role as "font" | "formula-font" })) });
     }
   }
@@ -128,6 +138,13 @@ export function standaloneCompilePayload(
     resourceInputs: assets?.resourceInputs,
     instances: [{
       clipPath: "/tracks/visual/0/clips/0", entry, modules,
+      audioUrls: assets?.bindings.flatMap(asset => {
+        const resource = assets.resourceInputs.find(input => input.id === `resource:${asset.alias}`);
+        if (resource?.entry.kind !== "audio") return [];
+        const url = assets.locators.find(item => item.id === resource.id)?.url;
+        if (!url) throw new Error(`Motion audio asset ${asset.name} has no frozen locator`);
+        return [{ control: asset.name, contentHash: String(resource.entry.digest), url }];
+      }),
       options: { ...(data ? { data: { source: inputs.dataPath ?? "studio:inline", value: data } } : {}),
         ...assets?.options },
       fontUrls: inputs.fontUrls.map(({ url, role }) => ({ url, role: role as "font" | "formula-font" })),
@@ -141,6 +158,7 @@ export class StudioCompileClient {
   readonly #pending = new Map<number, { resolve: (value: StudioCompileResult) => void;
     reject: (error: Error) => void; started: number }>();
   #nextId = 1;
+  #closed = false;
 
   constructor(boot: StudioBoot) {
     const path = boot.runtime.assetUrls.studioCompileWorker;
@@ -163,7 +181,8 @@ export class StudioCompileClient {
     };
   }
 
-  compile(payload: CompilePayload): Promise<StudioCompileResult> {
+  async compile(payload: CompilePayload): Promise<StudioCompileResult> {
+    if (this.#closed) throw new Error("Studio compiler closed");
     const id = this.#nextId++;
     return new Promise((resolve, reject) => {
       this.#pending.set(id, { resolve, reject, started: performance.now() });
@@ -172,6 +191,7 @@ export class StudioCompileClient {
   }
 
   close(): void {
+    this.#closed = true;
     this.#worker.terminate();
     for (const pending of this.#pending.values()) pending.reject(new Error("Studio compiler closed"));
     this.#pending.clear();

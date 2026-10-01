@@ -1,18 +1,23 @@
+import { artifactFontUrls } from "./font-demand.ts";
 import {
   createTimelineCompilerRuntime,
   MotionCompileError,
   type MotionCompileOptions,
+  type MotionCompilerDiagnostic,
   type PreparedPreviewPackage,
   type PreviewResourceInput,
   type Timeline,
   type WebCompilerRuntime,
 } from "valle-engine";
 
+import { motionCompileOptionIdentity, prepareAudioAnalysisInputs, type AudioAnalysisInput } from "./audio-analysis-input.ts";
+
 export interface StudioCompileInstance {
   clipPath: string;
   entry: string;
   modules: Record<string, string>;
   options?: MotionCompileOptions;
+  audioUrls?: readonly AudioAnalysisInput[];
   fonts?: readonly { bytes: Uint8Array; role: "font" | "formula-font" }[];
   fontUrls?: readonly { url: string; role: "font" | "formula-font" }[];
 }
@@ -36,6 +41,7 @@ export interface StudioCompileRequest {
 export type StudioCompileResult =
   | { id: number; status: "ok"; authorTimeline: Timeline; package: PreparedPreviewPackage;
       timings: { runtimeMs: number; fontsMs: number; compileMs: number; prepareMs: number; cacheHit: boolean };
+      warnings: MotionCompilerDiagnostic[];
       instances: Array<{ clipPath: string; artifact: Record<string, unknown>; artifactDigest: string;
         sourceMap: Record<string, unknown> }> }
   | { id: number; status: "error"; message: string; diagnostics?: MotionCompileError["diagnostics"] };
@@ -151,12 +157,38 @@ export async function compileStudioPreview(request: StudioCompileRequest): Promi
       compiledInstances.clear();
     }
     const compiler = await runtime!;
+    // Fetch canonical PCM in this long-lived Worker. Source edits only send URLs
+    // and digests from the UI; they do not clone the song through postMessage.
+    request = { ...request, instances: await Promise.all(request.instances.map(async instance => {
+      if (!instance.audioUrls?.length || !Object.values(instance.modules).some(source => source.includes("audioAnalysis"))) return instance;
+      const audioSources = await prepareAudioAnalysisInputs(instance.audioUrls);
+      return { ...instance, options: { ...instance.options, audioSources } };
+    })) };
     const runtimeMs = performance.now() - started;
-    const hydrated = await Promise.all(request.instances.map(instanceFonts));
+    const preliminary = new Map<number, ReturnType<WebCompilerRuntime["compileMotionModules"]>>();
+    const hydrated = await Promise.all(request.instances.map(async (instance, index) => {
+      if (instance.fonts || !instance.fontUrls?.length) return instanceFonts(instance);
+      const key = JSON.stringify([instance.entry, instance.modules, motionCompileOptionIdentity(instance.options), "without-measurement-fonts"]);
+      let compiled = compiledInstances.get(key);
+      if (!compiled) {
+        try {
+          compiled = compiler.compileMotionModules(instance.entry, instance.modules, { ...instance.options, fonts: [] });
+          compiledInstances.set(key, compiled);
+          if (compiledInstances.size > 32) compiledInstances.delete(compiledInstances.keys().next().value!);
+        } catch (error) {
+          // The first compile has no measurement environment. Retry only when author code needs
+          // a measurement/outline helper; rendering-only text can select fonts from its artifact.
+          if (!/measureText|textOutline|measure font|font bytes/iu.test(String(error))) throw error;
+          return instanceFonts(instance);
+        }
+      }
+      preliminary.set(index, compiled);
+      return instanceFonts({ ...instance, fontUrls: artifactFontUrls(compiled.artifact, instance.fontUrls) });
+    }));
     const fontsMs = performance.now() - started - runtimeMs;
     const cacheKey = JSON.stringify([request.authorTimeline, request.standalone,
       request.instances.map((instance, index) => [instance.clipPath, instance.entry, instance.modules,
-        instance.options, hydrated[index]!.digests]), request.resourceInputs]);
+        motionCompileOptionIdentity(instance.options), hydrated[index]!.digests]), request.resourceInputs]);
     if (cachedInputs === cacheKey && cachedResult?.status === "ok") {
       return { ...cachedResult, id: request.id,
         timings: { runtimeMs, fontsMs, compileMs: 0, prepareMs: 0, cacheHit: true } };
@@ -164,9 +196,9 @@ export async function compileStudioPreview(request: StudioCompileRequest): Promi
     const compileStarted = performance.now();
     const instances = request.instances.map((instance, index) => {
       const fonts = hydrated[index]!.fonts;
-      const instanceKey = JSON.stringify([instance.entry, instance.modules, instance.options,
+      const instanceKey = JSON.stringify([instance.entry, instance.modules, motionCompileOptionIdentity(instance.options),
         hydrated[index]!.digests]);
-      let compiled = compiledInstances.get(instanceKey);
+      let compiled = preliminary.get(index) ?? compiledInstances.get(instanceKey);
       if (!compiled) {
         compiled = compiler.compileMotionModules(instance.entry, instance.modules, {
           ...instance.options,
@@ -175,11 +207,12 @@ export async function compileStudioPreview(request: StudioCompileRequest): Promi
         compiledInstances.set(instanceKey, compiled);
         if (compiledInstances.size > 32) compiledInstances.delete(compiledInstances.keys().next().value!);
       }
-      const kinds = new Set((compiled.artifact.nodes as Array<{ kind?: { kind?: string } }> | undefined)
-        ?.map((node) => node.kind?.kind));
+      const needed = artifactFontUrls(compiled.artifact, [
+        { url: "provided", role: "font" as const }, { url: "provided", role: "formula-font" as const },
+      ]);
+      const roles = new Set(needed.map(font => font.role));
       return { clipPath: instance.clipPath, ...compiled,
-        fonts: fonts.filter((font) => font.role === "formula-font"
-          ? kinds.has("mathFormula") : kinds.has("text"))
+        fonts: fonts.filter((font) => roles.has(font.role))
           .map((font) => ({ bytesBase64: base64(font.bytes), role: font.role })) };
     });
     const compileMs = performance.now() - compileStarted;
@@ -204,6 +237,8 @@ export async function compileStudioPreview(request: StudioCompileRequest): Promi
     const result: StudioCompileResult = {
       id: request.id, status: "ok", authorTimeline, package: prepared,
       timings: { runtimeMs, fontsMs, compileMs, prepareMs, cacheHit: false },
+      warnings: [...new Map(instances.flatMap((instance) => instance.warnings)
+        .map((warning) => [JSON.stringify([warning.sourcePath, warning.span, warning.code, warning.message]), warning])).values()],
       instances: instances.map((instance) => ({
         clipPath: instance.clipPath, artifact: instance.artifact,
         artifactDigest: instance.artifactDigest, sourceMap: instance.sourceMap,

@@ -35,8 +35,8 @@ export const DRAW_PROGRAM_ABI = Object.freeze({
   "endiannessMarker": 16909060,
   "maximumBytes": 67108864,
   "sectionEntryBytes": 24,
-  "sectionCount": 7,
-  "batchInstanceBytes": 48
+  "sectionCount": 9,
+  "batchInstanceBytes": 72
 });
 
 export const RENDER_PLAN_ABI = Object.freeze({

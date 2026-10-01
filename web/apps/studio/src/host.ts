@@ -1,6 +1,7 @@
 import type {
   EditTimelineRequest,
   EditTimelineResponse,
+  MotionCompilerDiagnostic,
   PreviewResourceInput,
   Timeline,
 } from "valle-engine";
@@ -43,6 +44,7 @@ export interface TimelineContext {
   proxyBase?: string | null;
   generation?: number;
   motionInstances?: Array<{ clipPath: string; artifact: Record<string, unknown>; sourceMap: Record<string, unknown> }>;
+  warnings?: ReadonlyArray<MotionCompilerDiagnostic>;
 }
 
 export interface StudioTimelineRevision {
@@ -135,6 +137,7 @@ export type TimelinePreviewResult =
     motionSourceDurations?: Record<string, number>;
     generatedWrapper?: boolean;
     motionInstances?: Array<{ clipPath: string; artifact: Record<string, unknown>; sourceMap: Record<string, unknown> }>;
+    warnings?: ReadonlyArray<MotionCompilerDiagnostic>;
   }
   | {
     status: "error";

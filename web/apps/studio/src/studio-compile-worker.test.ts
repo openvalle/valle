@@ -29,3 +29,28 @@ test("Studio Worker builds an exact one-clip Timeline without retaining unused f
   const manifest = JSON.parse(result.package.resourceManifestJson);
   expect(Object.keys(manifest.entries).every((id) => !id.startsWith("font:"))).toBe(true);
 });
+
+test("Studio Worker retains tangent contact warnings across cached previews", async () => {
+  const source = await readFile(new URL("../../../../crates/valle-compiler/tests/fixtures/motion/composition/contact-warning.motion.tsx", import.meta.url), "utf8");
+  const request = {
+    runtimeAssets, runtimeBaseUrl,
+    standalone: { input: "/project/contact-warning.motion.tsx" },
+    instances: [{
+      clipPath: "/tracks/visual/0/clips/0", entry: "contact-warning.motion.tsx",
+      modules: { "contact-warning.motion.tsx": source },
+    }],
+  };
+  const first = await compileStudioPreview({ id: 8, ...request });
+  expect(first.status).toBe("ok");
+  if (first.status !== "ok") return;
+  expect(first.warnings).toHaveLength(1);
+  expect(first.warnings[0]).toMatchObject({
+    class: "warning", code: "morph-contact", sourcePath: "contact-warning.motion.tsx",
+  });
+
+  const cached = await compileStudioPreview({ id: 9, ...request });
+  expect(cached.status).toBe("ok");
+  if (cached.status !== "ok") return;
+  expect(cached.timings.cacheHit).toBe(true);
+  expect(cached.warnings).toEqual(first.warnings);
+});

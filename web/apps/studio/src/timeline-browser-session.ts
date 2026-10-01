@@ -62,7 +62,7 @@ export class TimelineBrowserSession {
       const locators = this.#locators;
       const mediaDependencies = this.#mediaDependencies;
       const result = await this.#compiler.compile(timelineCompilePayload(
-        this.#host.boot, timeline, sources, resourceInputs,
+        this.#host.boot, timeline, sources, resourceInputs, locators,
       ));
       if (result.status === "error") throw new Error(result.message);
       const render = {
@@ -77,7 +77,7 @@ export class TimelineBrowserSession {
         assets: locators, motion: { structures: [] },
         motionSourceDurations: result.package.motionSourceDurations,
         inputDependencies: { ...mediaDependencies, ...sourceDependencies },
-        motionInstances: result.instances };
+        motionInstances: result.instances, warnings: result.warnings };
     } catch (error) {
       return { status: "error", diagnostics: [{ class: "compile", code: "studio-preview",
         message: error instanceof Error ? error.message : String(error) }] };

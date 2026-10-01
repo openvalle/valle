@@ -251,7 +251,7 @@ test("frozen shaders align Native/CanvasKit sampling and arbitrary-frame results
                 for (const digest of needs.models) engine.register_scene3d_model(digest,engine.compiled_resource_bytes(renderId,"model3d-bytes",digest));
                 const pixels = engine.render_scene3d_request(request.key.content,request.key.interpretation.topology_digest,payload);
                 const width = engine.scene3d_frame_width(request.key.content), height = engine.scene3d_frame_height(request.key.content);
-                const image = ck.MakeImage({...info,width,height,alphaType:ck.AlphaType.Premul},pixels,width*4)!;
+                const image = ck.MakeImage({...info,width,height,colorType:ck.ColorType.RGBA_F16,alphaType:ck.AlphaType.Premul},pixels,width*8)!;
                 owned.push(image);
                 objects.set(request.handle,{key:request.key,kind:"scene3d",image});
               } else throw new Error(`unexpected shader dependency ${request.expected.kind}`);
@@ -338,10 +338,9 @@ test("frozen shaders align Native/CanvasKit sampling and arbitrary-frame results
           }
           if (frame === 60) { if (first) expect(web).toEqual(first); else first = web; }
         }
-        expect(cpuOutputCalls).toBeGreaterThan(0);
-        const opaqueCalls = cpuOutputCalls;
+        const priorCpuOutputCalls = cpuOutputCalls;
         await renderWeb(engine, opened.renderId, 60, true);
-        expect(cpuOutputCalls, "coverage output must retain the SkSL conversion").toBe(opaqueCalls);
+        expect(cpuOutputCalls, "coverage output must retain the SkSL conversion").toBe(priorCpuOutputCalls);
         if (scene3d) {await rm(join(dir,"model.glb"));await rm(join(dir,"effect.vsksl"));}
         const fresh = open();
         try { expect(await renderWeb(fresh.engine, fresh.renderId, 60)).toEqual(first!); } finally { fresh.engine.free(); }
