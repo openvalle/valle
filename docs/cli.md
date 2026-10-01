@@ -64,6 +64,7 @@ animation helpers, assets and complete scene examples.
 
 ```sh
 valle motion check examples/hello.motion.tsx
+valle motion review examples/hello.motion.tsx --json
 valle motion render examples/hello.motion.tsx \
   --backend raster -o "$demo_dir/hello.mp4" --events
 valle motion render examples/hello.motion.tsx \
@@ -74,8 +75,63 @@ valle motion studio examples/hello.motion.tsx
 Studio prints a local URL and keeps running; stop it with Ctrl-C. `--port 0` asks
 the OS for a free port. Studio uses the Web resources embedded by `cargo xtask build`. `valle licenses` displays the embedded dependency notices and source links.
 
-`--frame` selects a zero-based frame and requires a `.png` output. Without it,
-render writes `.mp4`. The entry file declares its base canvas and duration in
+`motion review --json` checks every output frame using final screen positions after layout and
+transforms. A `strobe` warning names a visible painted node that moves over a quarter of its
+extent along the travel direction per frame for
+at least three consecutive frame intervals without an active motion blur filter. A single
+discontinuous jump is excluded from this sustained-motion rule. The report includes the frame
+range and peak displacement. Content whose square-root area times opacity is below 4 px is ignored.
+Batch strobe warnings are grouped, with `affectedRows` and up to three `exampleKeys`. A `text_readability` warning names a text node that stays visible
+for less than 0.3 seconds plus 0.3 seconds per word or 0.225 seconds per CJK character. It reports the visible frame range,
+duration, word count and recommended duration; hidden or fully offscreen text is excluded.
+`text_out_of_frame` reports visible text ink extending beyond the canvas, and `text_overlap`
+reports two visible text ink bounds intersecting by more than 1 px in both directions. Consecutive
+frames are combined into one issue. The informational `motion_while_reading` hint reports a
+prominent moving subject during readable text, and `simultaneous_main_actions` reports two
+separate prominent subjects moving together. These hints require at least three consecutive
+intervals; subjects below 1% of the canvas area or moving at most 4 px per frame are ignored.
+Area is measured inside the output frame, so a mostly offscreen shape is not counted as a main action.
+The informational `linear_motion` hint reports a visible, prominent subject traveling at nearly
+constant speed for at least eight frame intervals and at least 10% of the shorter canvas edge.
+Small motion, motion-blurred subjects, and motion with changing speed are excluded.
+`stagger_timing` is an informational hint for three to 64 consecutively numbered painted
+nodes sharing a key prefix. It compares their observed movement starts and reports gaps
+outside 30–100 ms; a simultaneous group, missing starts, or mixed start order is excluded.
+An empty `issues` array means none of these rules detected a problem.
+Pass `--trajectories` to include each visible painted node's per-frame screen anchor and
+bounds in JSON. Consecutive samples also include velocity in pixels per second and
+acceleration in pixels per second squared; both reset after a hidden or offscreen gap and at particle rebirth.
+Pass `--trajectory-sheet review.png` to render up to 12 sampled frames as a 320 px contact
+sheet with every visible node's screen path and a marker at each sampled frame. The JSON report
+includes frame keys and a node-to-color legend; the PNG is written only after rendering succeeds.
+By default the budget covers the complete composition. Pass `--max-frames N` to impose a limit; review fails
+when that explicit budget is too small instead of silently skipping frames. It accepts the same `--fps`,
+`--props`, `--data`, `--asset`, and `--font` inputs as other Motion authoring commands.
+
+For audio-driven Motion, declare an audio asset and bind it with `--asset beat=beat.wav`.
+`const BEAT = audioAnalysis("asset://beat", { bands: 8, fps: 30 })` prepares a frozen table;
+`BEAT.level(ctx.seconds)`, `BEAT.band(3, ctx.seconds)`, `BEAT.onset(ctx.seconds)`, and
+`BEAT.beatPhase(ctx.seconds)` read it at frame time. `fps` defaults to an integer
+`composition.fps` when omitted. Analysis uses frozen decoded 48 kHz mono PCM, accepts 1–32
+logarithmic bands and 1–120 analysis frames per second, and limits each table to 16,384 frames.
+
+`--frame` selects a zero-based frame and requires a `.png` output. Full exports
+accept H.264 `.mp4`, transparent qtrle or ProRes 4444 `.mov`, or a PNG filename pattern such as
+`-o 'frames/%05d.png'`. `.mov` defaults to lossless qtrle; use `--codec prores4444`
+for ProRes 4444. PNG and MOV retain alpha; Motion MP4 uses a black output background.
+Transparent MOV currently delivers video only; a Timeline with audio is rejected
+instead of silently dropping its audio.
+
+`--frames 0,30,59` selects exact frame keys for a PNG sequence or
+`--storyboard sheet.png`. A sheet needs no `-o`; providing a PNG pattern and sheet
+together saves both from one rendering pass. Without `--frames`, a sheet uses up
+to 12 evenly spaced keys including the first and last. Cells keep the delivery
+resolution in at most four columns and preserve transparency. Sequence filenames
+use original frame keys, not consecutive selection indices. Parent directories
+are created; existing outputs are never replaced. Compilation and preparation are
+shared across all selected frames. See [Motion delivery](motion.md) for limits.
+
+The entry file declares its base canvas and duration in
 seconds: `export const composition = { width, height, duration, fps? }`.
 `--fps` overrides the optional file FPS for this invocation. If both are absent,
 the command asks for an FPS. `--output-size` scales delivery dimensions without
@@ -87,8 +143,9 @@ declared asset controls with repeated `--asset name=path`, prepared data with
 Use `--props props.json` for constant prop values. `check` accepts the same bindings and fonts, and validates
 one Native Raster frame (`--frame 0` by default).
 
-For video delivery, `--workers 1..8`, `--encode-threads N`, or `--hardware-encode`
-control execution. `--bitrate` requires hardware encoding. `--backend auto`
+`--workers 1..8` controls frame concurrency for all Motion outputs. H.264 delivery
+also accepts `--encode-threads N` or `--hardware-encode`; `--bitrate` requires
+hardware encoding. These encoder controls are rejected for PNG and transparent MOV. `--backend auto`
 selects an available Metal device on macOS and otherwise Raster; `--backend raster`
 explicitly selects CPU composition. See `valle motion render --help` for constraints.
 
@@ -108,8 +165,9 @@ valle timeline render examples/timeline.json --frame 60 -o "$demo_dir/timeline.p
 ```
 
 Canvas size, frame rate, background and clip timing come from the document. PNG
-frames preserve transparency; MP4 delivery requires an opaque canvas background. Timeline and
-Project render currently expose `-o` and `--frame`; Motion's delivery tuning flags
+frames and transparent MOV preserve transparency; MP4 delivery requires an opaque canvas
+background. Timeline and Project render expose the same `-o`, `--frame`, `--frames`,
+`--storyboard` and `--codec` selection as Motion. Motion's delivery tuning flags
 are not exposed on those commands.
 
 For actual footage, declare named resources and refer to them from clips. Video
@@ -310,6 +368,11 @@ uncategorized command errors use `command_failed`. Motion compile failures use
 source spans and, where available, source paths. Media and Assets retain their
 typed error codes and optional hints.
 
+Render reports include the actual Motion compiler-entry count in `compilations`
+(zero for a Timeline without Motion), and separate `compileMs`, `prepareMs`, and
+`renderMs` in `delivery.timing`. Image deliveries include `delivery.frameKeys`,
+the sequence paths in `delivery.outputs`, and the optional `delivery.storyboard`.
+
 | Exit code | Meaning |
 | --- | --- |
 | 0 | Success |
@@ -323,6 +386,8 @@ An NDJSON line has `ts_ms` (UTC epoch milliseconds), increasing `seq`, `level`,
 `type`, and `data`. Event types are:
 
 - `render.progress`: `{ "completed": 10, "total": 90 }`.
+- `motion.compilation`: `{ "entry": "title.motion.tsx", "elapsedMs": 12.5 }`, emitted
+  for each actual Motion compiler invocation, including a failed invocation.
 - `media.progress`: `phase`, optional `completed`, `total`, and `message`.
 - `models.progress` and `analyze.progress`: a human-readable `message`.
 - `report`: the command's unchanged result payload in `data`.

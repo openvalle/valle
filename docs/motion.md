@@ -54,11 +54,53 @@ valle motion check title.motion.tsx --json
 valle motion render title.motion.tsx --frame 30 -o title.png --backend raster --json
 valle motion studio title.motion.tsx
 valle motion render title.motion.tsx -o title.mp4 --events
+valle motion render title.motion.tsx -o title.mov
+valle motion render title.motion.tsx -o title-prores.mov --codec prores4444
+valle motion render title.motion.tsx -o 'frames/%05d.png'
+valle motion render title.motion.tsx --frames 0,30,59 --storyboard sheet.png --json
 ```
 
-`--frame` is zero-based and selects PNG output; without it, render produces MP4.
-Destinations must be new files. Pure graphics PNG rendering needs no FFmpeg; MP4
-encoding and video decoding need compatible FFmpeg shared libraries. See
+`motion check --frame N --json` reports `expressions`, `fullEvaluationExpressions`,
+`evaluatedExpressions`, `activeNodes`, and `layoutNodes` for the checked source sample.
+`expressions` counts the compiled expression pool, including each instance template once;
+`fullEvaluationExpressions` counts the work if every instance row were evaluated.
+`evaluatedExpressions` counts the selected frame work, including visibility gates and
+pre-layout expressions. Post-layout and per-unit passes are outside this diagnostic.
+Independent hidden absolute leaves can be skipped; one instance batch counts as one
+scene node even when it contains many visible rows.
+The load-time scene dependency graph records geometry reads,
+mask paint sources, composition scopes, background reads, and sample dependence used by
+this decision. See [time functions and visibility evaluation](#time-functions-and-visibility-evaluation)
+for recognized time-dependent gates.
+
+`--frame` selects one zero-based frame as PNG. Full exports select the codec from
+the extension: `.mp4` uses H.264; `.mov` defaults to lossless qtrle with straight RGBA.
+Use `--codec prores4444` for a transparent ProRes 4444 `.mov`. PNG and MOV preserve the
+scene's alpha; MP4 composites the scene over black. Transparent MOV delivers video
+only; Timeline audio must be exported separately or delivered with MP4.
+
+A PNG pattern containing exactly one `%d` or `%0Nd` field in its filename writes
+all frames (`N` is 1–20). Numbering uses the original zero-based frame key, so
+`--frames 0,30,59 -o 'frames/%05d.png'` writes `00000.png`, `00030.png`, and
+`00059.png`. Parent directories are created automatically. `--frames` preserves
+the requested order; duplicate keys are allowed in a sheet but rejected for a
+sequence because they name the same output file.
+
+`--storyboard sheet.png` uses the requested frames, or up to 12 evenly spaced
+frames including the first and last when `--frames` is omitted. Cells use the
+full delivery dimensions (or `--output-size`), with up to four columns; unused
+cells are transparent. `-o` is optional for a sheet. Supplying both a PNG pattern
+and a sheet writes both from the same rendered pixels. A sheet is limited to
+512 MiB of RGBA pixels; reduce `--output-size` or select fewer frames if needed.
+
+The source is compiled once for the complete delivery. JSON reports expose the
+actual compiler-entry count as `compilations`, exact image `delivery.frameKeys`,
+`delivery.outputs`, and compile/prepare/render milliseconds under `delivery.timing`.
+`--events` emits one `motion.compilation` event per actual compile.
+
+Destinations must be new files. PNG sequences and sheets are staged before
+publication; a failed render leaves no completed outputs. Pure graphics PNG
+rendering needs no FFmpeg; video encoding and decoding need compatible FFmpeg shared libraries. See
 [runtime setup](cli.md#runtime-notes).
 
 Canvas and duration come from the file's `composition`; `fps` is optional there and
@@ -195,7 +237,7 @@ below. Unknown attributes and event handlers are rejected.
 
 | Primitive | Purpose and additional attributes |
 | --- | --- |
-| `Scene` | Composition root; optional 2D `camera` |
+| `Scene` | Composition root; optional 2D `camera` and static `bloom` |
 | `Group` | Group children; shares the layout model, does not imply absolute positioning |
 | `View` | General layout/paint box |
 | `Flex`, `Absolute` | Boxes with implied `flex` or `absolute` class |
@@ -206,11 +248,12 @@ below. Unknown attributes and event handlers are rejected.
 | `Video` | Static `src` referencing a video asset; `sourceStart`, `speed` |
 | `Path` | Typed `d`, fill/stroke and path reveal attributes |
 | `Circle`, `Ellipse`, `Rect`, `Line`, `Polyline`, `Polygon` | Shape coordinates plus Path paint attributes |
-| `GeometryBatch` | Repeated circles/rectangles; `geometry`, `positions`, `sizes`, `fills`, optional `opacities`, `semanticKeys` |
+| `GeometryBatch` | Repeated circles/rectangles/paths; `geometry`, `positions`, `sizes`, `fills`, optional `opacities`, `rotations`, `skewXs`, `strokeWidths`, `semanticKeys` |
 | `Clip` | Path-clipped children; `path` (or `d`), `fillRule` |
 | `Mask`, `MaskSource` | Alpha/luminance masking; see [masks](#clipping-masks-and-effects) |
 | `MathFormula` | Formula leaf; static `latex`, `displayMode`, `ariaLabel` |
 | `Glass`, `GlassField` | Optical material surfaces and shared material fields |
+| `Transition` | Two child subtrees, static `kind`, numeric `progress`, optional `params`; see [transitions](#subtree-transitions) |
 | `ShaderLayer` | Package-backed custom shader; `source`, `inputs`, `uniforms`, content children |
 | `Scene3D` | 3D scene leaf with its own camera and explicit 3D children |
 | `ThemeProvider` | Compile-time theme scope; `value` and one root child |
@@ -253,6 +296,32 @@ and Native Raster rendering path for one frame (default `--frame 0`); pass the s
 data, asset and font bindings as the intended render, and keep them consistent with the
 file's `composition`. It creates no persistent output and does not prove that every frame
 or encoder will succeed.
+
+`valle motion review scene.motion.tsx --json` checks the full output duration for
+screen-position strobing after layout and transforms. It reports a `strobe` issue when a
+visible painted node moves over a quarter of its extent along the travel direction per frame for at least three consecutive frame
+intervals without motion blur. It also reports `text_readability` when visible text is
+shown for less than 0.3 seconds plus 0.3 seconds per word or 0.225 seconds per CJK character, `text_out_of_frame` for text
+outside the canvas, and `text_overlap` for overlapping glyph ink bounds. Informational
+`motion_while_reading` and `simultaneous_main_actions` hints identify competing prominent
+motion over consecutive frames. `linear_motion` flags a prominent subject whose long move has
+nearly constant screen speed. `stagger_timing` compares observed starts in a consecutively
+numbered moving group against a 30–100 ms gap. The same bindings and FPS options apply. `--trajectories`
+adds screen positions, bounds, velocity and acceleration
+per visible frame to the JSON report. `--trajectory-sheet review.png` renders a contact sheet
+with the same trajectories and sampled frame markers; see the
+[CLI guide](cli.md#motion-jsx-to-video) for the frame budget and report details.
+
+Audio assets can drive Motion through `audioAnalysis("asset://beat", { bands: 8, fps: 30 })`.
+The prepared object provides `level(t)`, `band(index, t)`, `onset(t)`, `beatPhase(t)`, and `beatConfidence(t)`;
+its numeric tables are frozen into the compiled artifact and are read without decoding at
+frame time. Bind the declared audio control with `--asset beat=beat.wav`.
+`beatPhase` interpolates between tracked beat times, including fractional frame periods.
+When periodic support is below 0.35 or fewer than three beats are tracked, it returns zero
+and compilation emits an `audio-beat-uncertain` warning. `beatConfidence(t)` returns the
+whole-asset periodic support in 0–1; use `onset(t)` for irregular individual events.
+Studio downloads the same frozen FFmpeg 48 kHz mono PCM used by CLI. Its compiler Worker
+keeps decoded PCM and analysis tables across source edits; browser audio decoders are not used.
 
 ### Structured data example
 
@@ -382,21 +451,92 @@ Formula faces and explicit `asset://` font bindings remain resources of the work
 Define animation windows explicitly with `ctx.seconds`, sequences and expressions.
 The last displayed source frame precedes the quantized duration boundary.
 
+### Time functions and visibility evaluation
+
+Motion's time-function intermediate representation recognizes bounded numeric
+expressions that are affine in one time input: `ctx.seconds` or `ctx.localFrame`.
+It accepts finite constants, addition, subtraction, negation, multiplication by a
+time-independent expression, and division by a finite nonzero time-independent
+expression. Mixed time inputs, nonlinear terms, and unsupported operations stay
+on the ordinary expression evaluator.
+
+Each recognized function stores its mathematical slope and offset for analysis.
+Runtime evaluation keeps the original arithmetic tree and operation order, so
+floating-point rounding at a visibility threshold is unchanged. The derivative
+is with respect to the selected input; it is not yet a screen-space velocity or
+an automatic motion-blur parameter.
+
+The internal `range_on(start, end)` operation evaluates an inclusive numeric
+enclosure through that same tree. Every arithmetic bound rounds outward; overflow
+or a division whose enclosure crosses zero leaves the range unproven. A comparison
+is certified constant only when the entire enclosure lies on one side of its
+threshold. For authored compositions with a fixed default frame rate, leaf
+activation precomputes certificates over the full composition time domain. The
+certificate is used only when the requested sample, frame rate, and duration
+belong to that domain and the sample's projected seconds lie inside the proved
+numeric interval. Requests outside it evaluate the gate directly.
+
+If a comparison changes somewhere during the composition, activation inspects
+bounded binary subdivisions (at most eight splits along a branch and 31 visited
+intervals per leaf). It retains only proven intervals and merges adjacent intervals
+with the same result. Samples in unresolved gaps, including threshold crossings,
+evaluate the original gate. This works for both composition seconds and local
+frames without quantizing subframe requests. The selected expression roots then
+run against a dense arena-indexed value table.
+
+Absolute-leaf visibility gates and [instance-row range gates](#automatic-instances-for-prepared-maps)
+consume this representation. Comparisons work with the time expression on either
+side, and instance ranges use a binary search over row indices. Structurally
+identical leaf time functions share one result within a sample. Each Shutter or
+Echo sample gets a new result cache, including when it carries the same local
+frame number. Non-finite values or unrecognized expressions fall back to full
+evaluation.
+
+The compiler lowers [TimeScope](#time-scopes) time reads through the authored
+nested offset/speed chain. Because TimeScope adds no layout box, independent
+absolute leaves below it can use the same certified visibility gate; the
+unresolved threshold still evaluates the original expression at the exact sample.
+
+This representation does not yet provide general differentiation, time shifting,
+interval proofs for other node kinds, screen-space bounds, or SIMD evaluation.
+
 ### Interpolation and springs
 
-`interpolate(input, inputRange, outputRange, { easing }?)` clamps outside its
+`interpolate(input, inputRange, outputRange, { easing, colorSpace, hue }?)` clamps outside its
 input range. Ranges must have equal length ≥ 2, strictly increasing finite input
-stops, and compatible output types. Stops are known at compile time: literals or
-immutable constant arrays. No `ctx`, runtime props, spreads or holes in the stops.
+stops, and compatible output types. Stops are normally known at compile time: literals or
+immutable constant arrays. One exception is the same numeric shift added to every input stop,
+such as `interpolate(ctx.seconds, [ctx.unit.index * 0.1, 1 + ctx.unit.index * 0.1], [0, 1])`.
+The compiler subtracts that shift from the input. Different shifts, spreads and holes are
+rejected.
 
 Numbers, colors, lengths, angles and supported geometric values interpolate;
 boolean/string/enum values are discrete. Keep corresponding length/angle units
 compatible. For a destination depending on a prop or viewport, interpolate a
 normalized number and multiply afterward.
 
+Color interpolation uses `colorSpace: "srgb"` by default. Choose `"linear"`,
+`"oklab"`, or `"oklch"` for linear sRGB, OKLab, or OKLCH interpolation.
+For OKLCH, `hue` can be `"shorter"` (default), `"longer"`, `"increasing"`,
+or `"decreasing"`; it is invalid in other color spaces. Authored colors stay
+floating point through expression evaluation and DrawProgram emission for solid
+paints, Path gradient stops, Text fills, and `perUnit.color`. For example:
+
+```tsx
+backgroundColor: interpolate(ctx.progress, [0, 1], ["#2140ff", "#ffd000"],
+  { colorSpace: "oklch", hue: "shorter" })
+```
+
 Easing names: `linear` (default), `ease`, `easeIn`, `easeOut`, `easeInOut`, `exp`,
-and `cubic-bezier(x1,y1,x2,y2)` with x coordinates in `[0,1]`. `easing` can be one
-string or an array with one entry per segment. Other option names, including
+`easeInBack`, `easeOutBack`, `easeInOutBack`, `elastic`, `bounce`,
+`steps(n, start|end)`, and `cubic-bezier(x1,y1,x2,y2)` with finite coordinates and
+x coordinates in `[0,1]`. Back curves and the decaying elastic-out curve can
+overshoot; `bounce` uses a piecewise quadratic bounce-out curve. `steps(n)` defaults
+to `end`, with a positive integer step count. `start` jumps to the first step at
+the segment's first input, including the first frame; `end` jumps at each interval's
+end. Both finish at the destination. `easing` can be one string or an array with
+one entry per segment, including immutable constants. Custom function easings
+are not yet admitted. Other option names, including
 `extrapolateLeft`/`extrapolateRight`, are not author options in this CLI language.
 
 Save as `spring.motion.tsx`:
@@ -445,6 +585,31 @@ const v = springVelocity({ elapsedFrames: ctx.localFrame, fps: ctx.fps, preset: 
 // motionBlur: motionBlur(point(120 * v * ctx.fps.den / ctx.fps.num, 0), 180)
 ```
 
+For an authored state update rather than the analytic spring, bake it once at prepare time:
+
+```tsx
+const motion = simulate({
+  dt: 1 / 240, duration: 2,
+  init: () => ({ x: 100, velocity: 0 }),
+  step: (state, time, dt) => {
+    const velocity = state.velocity + ((300 - state.x) * 40 - state.velocity * 4) * dt;
+    return { x: state.x + velocity * dt, velocity };
+  },
+});
+// In the component: left: motion.at(ctx.seconds).x
+```
+
+`simulate({ dt, duration, init, step })` runs `step` at fixed `dt` increments in the
+prepare-time sandbox. The state has 1–16 named numeric fields; `step` must return the
+same fields with finite values. The table is limited to 16,384 steps and 131,072 values.
+At frame time, `.at(t).field` clamps `t` to `[0, duration]` and linearly interpolates
+the two neighboring samples, including at fractional times. Each lookup reads the
+baked table, so rendering frames out of order has the same result as sequential playback.
+Direct module-level simulations whose callbacks use only numeric literals, their
+parameters, local `const`s and state fields are cached by content hash while Studio
+recompiles. A callback that calls helpers, captures other values or writes external
+state still runs during each prepare pass.
+
 Compose separate curves for opacity, position, scale and path reveal. An easing
 per segment does not guarantee matching velocities across adjacent segments.
 
@@ -489,7 +654,7 @@ Sequence stages do not extend the render duration automatically.
 | `yoyoProgress(frame, ctx.fps, stage, count)` | Repeated forward/backward progress within the stage |
 | `freezeFrame(frame, { from, to })` | Hold at `from` during `[from,to)`, then subtract the frozen interval; static integers `0 ≤ from < to` |
 | `defineRepeater({ count, keyPrefix? })` | Prepared list of `{ index, count, progress, key }`; count 1–2048 |
-| `trail(progress, index, { gap, mode? })` | Offset normalized progress; mode `clamp` (default) or `wrap` |
+| `trail(progress, index, { gap, mode? })` | Sample `progress + index × gap`; negative gap places later indices behind the head. Mode `clamp` (default) or `wrap` |
 | `wiggle(frame, ctx.fps, { seed, frequency, amplitude, phase? })` | Seeded scalar displacement; frequency in seconds, non-negative amplitude |
 | `wiggle2D(frame, ctx.fps, { seed, frequency, amplitude: [x,y], phase? })` | Seeded point displacement; suitable for `style.translate` |
 
@@ -652,7 +817,8 @@ export default function Layout(ctx) {
 | `outline`, `outlineWidth`, `outlineStyle`, `outlineColor`, `outlineOffset` | `"2px solid #38bdf8"`, `4` | S/D; inline outline islands have restrictions |
 | `boxShadow` | `"0px 8px 20px #00000040"`; comma-separated shadows, optional `inset` | S/D valid CSS; can increase offscreen bounds |
 | `opacity` | Number 0–1 | S/D; applies to the composed subtree |
-| `mixBlendMode` | `normal`, `multiply`, `screen`, `overlay`, `darken`, `lighten`, `color-dodge`, `color-burn`, `hard-light`, `soft-light`, `difference`, `exclusion`, `hue`, `saturation`, `color`, `luminosity` | S; combines with the already-painted backdrop |
+| `mixBlendMode` | `normal`, `plus-lighter`, `multiply`, `screen`, `overlay`, `darken`, `lighten`, `color-dodge`, `color-burn`, `hard-light`, `soft-light`, `difference`, `exclusion`, `hue`, `saturation`, `color`, `luminosity` | S; combines with the already-painted backdrop |
+| `mixBlendSpace` | `"srgb"` (default), `"linear"` | S/D finite choices; selects encoded or linear sRGB for this node's creative blend; not inherited |
 | `isolation` | `auto`, `isolate` | S; establish a compositing boundary when needed |
 | `objectFit`, `objectPosition` | `contain`, `cover`, `fill`, `none`, `scale-down`; `"center"` | S for media placement |
 | `imageRendering` | `auto`, `pixelated` | S; choose sampling appropriate to the image |
@@ -663,9 +829,15 @@ without a non-empty border style is not a way to draw a border.
 Dashed/dotted/double borders currently require uniform widths/colors around the
 box; unequal per-edge paint supports solid/none/hidden styles.
 
-CSS gradients use sRGB interpolation. Omitting the interpolation space preserves
-the supported legacy behavior; explicit `in srgb` is accepted. `in oklab`,
-`in srgb-linear`, Display-P3 and relative-color gradient forms are not admitted.
+CSS gradients default to OKLab interpolation. Linear, radial, conic and repeating
+gradients accept `in oklab`, `in oklch`, `in srgb`, and `in srgb-linear`.
+OKLCH accepts `shorter hue` (default), `longer hue`, `increasing hue`, and
+`decreasing hue`, for example `linear-gradient(90deg in oklch longer hue, red, blue)`.
+Interpolation uses premultiplied alpha; polar hue itself is not premultiplied.
+Native and browser rendering share floating-point color-stop lowering. CSS stop
+colors still resolve through the parser's 8-bit sRGB representation; this does not
+provide a float/wide-gamut author color pipeline. Other interpolation spaces such
+as `in display-p3` and `in lab` produce explicit diagnostics.
 Multiple gradient layers use a comma-separated `backgroundImage` value.
 Gradient stops currently must resolve inside the emitted gradient's `[0, 1]`
 offset range. CSS stops outside that range can fail DrawProgram validation;
@@ -676,8 +848,8 @@ extending/remapping the gradient rather than clamping its stops remains unimplem
 
 | Property | Example / contract |
 | --- | --- |
-| `translate` | `point(x,y)`, `"12px 24px"`, `"-50% -50%"`; a single CSS length defaults Y to zero; dynamic typed pairs accepted |
-| `rotate` | `"15deg"` or angle-valued interpolation; numeric degrees via a transform template |
+| `translate` | `point(x,y)`, `"12px 24px"`, `"-50% -50%"`; a single CSS length defaults Y to zero; typed values and CSS templates can vary per frame |
+| `rotate` | `"15deg"`, angle-valued interpolation, or a CSS template with an explicit angle unit |
 | `rotateX`, `rotateY` | Numeric degrees or typed angles for a projected layer |
 | `scale` | `1.2`, `point(1.2,0.8)`, or CSS `"120% 80%"`; `"none"` resets the property |
 | `scaleX`, `scaleY` | One axis at a time; compiler lowers to a 2D scale binding |
@@ -690,6 +862,30 @@ For animated 2D translation, use `translate: point(x,y)` or the CSS list
 `` transform: `translate(${x}px, ${y}px)` ``. Transform functions use CSS comma
 separators; independent properties use spaces. Single-argument `translate(12px)`
 means `translate(12px, 0px)`. Percentage translations use the element's border box.
+
+Independent `translate`, `rotate`, and `scale` accept the same closed CSS templates
+and finite conditional branches as the ordered `transform` list. Templates can be
+stored in local constants, returned from helpers, and passed as component props:
+
+```tsx
+const move = `${ctx.seconds * 100}px 10%`;
+const turn = ctx.seconds < 1 ? "none" : `${ctx.seconds * 90}deg`;
+const zoom = `${1 + ctx.seconds * 0.1} 1`;
+return <View style={{ translate: move, rotate: turn, scale: zoom,
+  transform: `skew(${ctx.seconds * 10}deg, 0deg)` }} />;
+```
+
+Skew uses the ordered list's `skew`/`skewX`/`skewY` functions. Numeric template
+holes need the property's CSS units (`px`, `%`, `deg`, etc.); typed angles and
+lengths already carry units. Arbitrary string holes cannot inject CSS structure:
+write `` rotate: `${condition ? 0 : 45}deg` `` or branch between whole CSS values.
+Wrong value types report the authored expression and an accepted replacement.
+
+Dynamic independent transforms with fixed presence and priority retain geometry
+reuse. A time-dependent choice between `none` and a transform, inherited values,
+or a change of `!important` rebuilds layout so positioned descendants use the
+correct containing block. Point values acquire pixel units when used by
+`translate`/`transformOrigin`; the same point remains unitless when used by `scale`.
 
 Independent properties compose in the order **translate → rotate → scale →
 transform list**, around `transformOrigin`, regardless of style-object key order.
@@ -705,11 +901,12 @@ subtree, while its layout boxes remain available.
 retain their layout reference box. All branches of a conditional list are checked,
 and templates accept typed numeric/length/angle holes with valid CSS units. Every
 frame is evaluated directly; selecting a different list never starts a transition.
-Lists depending on `bounds`/`anchor`/`project3d` use syntax-valid probes prepared
+Independent transforms and lists depending on `bounds`/`anchor`/`project3d` use syntax-valid probes prepared
 before rendering. Every branch must preserve containing-block presence: different
 non-empty lists are allowed, as are branches that all reset to `none`/`initial`,
 but switching between a list and `none` is rejected. Inherited presence is not
-admitted in these post-layout expressions. The final values are evaluated from
+admitted in these post-layout expressions, and `!important` must stay the same
+across branches. The final values are evaluated from
 the requested frame's layout, without using previously rendered frames.
 
 The separate CSS 3D adapter supports ordered `translateZ`, `translate3d`,
@@ -731,6 +928,56 @@ Supported CSS filter functions are `blur`, `brightness`, `contrast`, `grayscale`
 They work in `filter` and `backdropFilter` through Motion's filter lowering.
 Filters compose in written order. `filter` affects the node and descendants;
 `backdropFilter` samples already-painted content behind the node.
+
+`filter: "chromatic-aberration(6px)"` is also available as a standalone
+node filter. It shifts red and blue by 3 px in opposite directions while green
+stays centered. The signed offset must be finite and within ±256 px. It is
+currently a standalone `filter` value; chaining it with other CSS filters and
+using it in `backdropFilter` are not admitted.
+
+`filter: "radial-blur(40px 20px 16px)"` blurs the node and its descendants along
+rays from a center at local `(40, 20)` px. The last length is the maximum sample
+displacement in either direction along each ray (0–128 px). It uses a shared working-linear RGBA16F approximation with geometrically increasing
+three-tap passes, so cost grows logarithmically with device radius. Near the center,
+a bounded exact kernel avoids rings and excess diffusion; samples never cross the
+center. Native and CanvasKit use the same shader, including at enlarged output sizes. The value is
+standalone; it cannot be chained with CSS filters or used in `backdropFilter`.
+
+`filter: "film-grain(7 0.12 2px)"` adds seeded monochrome grain in sRGB display encoding to the node and its descendants. The unsigned integer seed fixes the sequence;
+amount is in 0–1 and grain size in 1–64 local px. Noise changes once per local frame and stays deterministic across ROI crops and
+random frame seeks. Noise amplitude follows each channel's distance to black and white, preserving
+both endpoints without asymmetric clipping. Display-gray mean brightness remains
+stable at high amounts. The result returns to working-linear light, scales with
+source alpha, and does not alter alpha. This is a standalone `filter` value.
+
+These advanced filters use the same cascade as ordinary CSS filters, including
+important utilities. Template strings and conditional expressions can animate parameters,
+for example ``filter: `glow(${ctx.progress * 24}px 1 #22d3ee)` ``. Each frame must
+satisfy the parameter bounds below; effects cannot be combined in one filter list.
+The compiler checks numeric ranges it can establish for template parameters and
+transition bindings. A range wholly outside the domain is an error; a range that
+might leave it produces `parameter-range`. Unknown expressions remain runtime-checked.
+Runtime diagnostics identify the parameter, value and frame; CLI authoring errors
+also resolve the expression to its source location. Use `clamp()` explicitly when
+clipping an overshoot is intended; the renderer never silently clamps it.
+
+`filter: "lens-distortion(-0.3 0.2)"` resamples the node and its descendants around
+the center of their uncropped frame. The two unitless radial coefficients are each
+within ±0.5; negative values pull source samples toward the center, making content
+appear farther from it. Pixels outside the source are transparent, and the effect
+stays inside the original frame. The frame and coefficients remain stable across
+ROI crops. This standalone value requires a similarity device transform.
+
+`filter: "glow(24px 1.5 #22d3ee)"` adds a tinted halo behind the node and its
+descendants while retaining the source. It uses the same multilevel F16 pyramid
+as scene bloom, driven by the subtree alpha. The radius controls the halo extent
+in 0–128 px; intensity is in 0–4. This requires a standalone `filter` value and is not admitted in `backdropFilter`.
+
+`Scene bloom={{ threshold: 0.8, intensity: 1.2, radius: 48 }}` extracts bright
+pixels from the whole scene and adds a soft halo through a five-level F16
+downsample/upsample pyramid. `threshold` is in 0–1, `intensity` in 0–4, and
+`radius` in 0–128 px. The optional `knee` is in 0–1 and defaults to 0.1. These
+values must be static; the effect runs after the scene's children are composed.
 
 Use non-negative blur lengths, finite scalar/percentage factors and explicit
 angle units for hue rotation. `drop-shadow` uses offsets, optional blur and color;
@@ -928,7 +1175,7 @@ or artifact validation, rather than becoming empty or truncated track lists.
 | Properties | Values / behavior |
 | --- | --- |
 | `fontFamily` | Static family string or bound `asset://fontName`; cannot vary by frame |
-| `fontSize`, `fontWeight`, `fontStyle` | Size in pixels/lengths; weight such as 400/700; normal/italic/oblique as accepted by the font |
+| `fontSize`, `fontWeight`, `fontStyle` | Size in pixels/lengths; continuous numeric weight (including fractions); normal/italic/oblique as accepted by the font |
 | `lineHeight` | Number is a multiplier (`1.4`); length string is an explicit height (`"32px"`) |
 | `letterSpacing`, `wordSpacing` | Lengths; explicit numeric pixel values are useful for spacing |
 | `textAlign`, `direction` | left/right/center/justify/start/end; ltr/rtl |
@@ -938,7 +1185,9 @@ or artifact validation, rather than becoming empty or truncated track lists.
 | `textOverflow`, `lineClamp` | clip/ellipsis; positive line clamp, usually with a constrained width and overflow |
 | `textDecoration`, `textDecorationLine/Style/Color/Thickness` | underline/overline/line-through, color/width; decoration style currently supports only `solid` |
 | `textShadow` | CSS shadow list, for example `"0px 2px 8px #00000080"` |
-| `fontFeatureSettings`, `fontVariationSettings`, `fontKerning` | Font-dependent typography; use a font containing the requested features |
+| `WebkitTextStroke`, `WebkitTextStrokeWidth`, `WebkitTextStrokeColor` | Glyph-outline stroke: `"2px #ffffff"`, width in pixels/lengths, CSS color; width and color may animate |
+| `fontVariationSettings` | CSS axis string such as `'"wght" 650.25, "wdth" 75'`; may animate per frame on `Text` and `Span` |
+| `fontFeatureSettings`, `fontKerning` | Font-dependent typography; use a font containing the requested features |
 | `fontVariant`, `fontVariantLigatures/Numeric/EastAsian/Caps/Position` | Static font-feature selection, for example `fontVariantNumeric: "tabular-nums"` |
 | `fitText` | `fitText({ minFontSize, maxFontSize })`; see below |
 
@@ -947,12 +1196,28 @@ metrics and line breaks can then change each frame. For a reveal that preserves
 layout, animate opacity/translation instead of inserting/removing characters.
 JSX indentation is not a reliable way to author spaces between rich runs: use
 explicit `{" "}` or string expressions where spacing matters.
+For outlined text, use `color: "transparent"` with `WebkitTextStrokeColor: "#ffffff"`
+and `WebkitTextStrokeWidth: 1 + ctx.progress * 3`; the glyph outline stays attached
+to the shaped text. This is available on `Text`, outside `Span`'s restricted styles.
 For a padded caption/card, put padding on a containing `View` and use flex/grid
 alignment or explicit positioning. Text in an inline formatting context does not
 behave like a standalone block box with vertical margins.
 
-Native defaults include Noto text, symbols, CJK and vector color emoji fonts;
-formula faces are separate. See the [font inventory](../assets/fonts/README.md).
+The default sans face is variable Noto Sans: `fontWeight` maps directly to `wght`
+(100–900), including fractional weights. It also has a `wdth` axis (62.5–100,
+default 100). For example, `fontWeight: 100 + ctx.progress * 800` animates weight.
+To animate width, use:
+
+```tsx
+fontVariationSettings: `"wght" 500, "wdth" ${62.5 + ctx.progress * 37.5}`
+```
+
+Explicit `"wght"` in `fontVariationSettings` overrides `fontWeight`.
+The default CJK fallback is variable Noto Sans CJK SC, with its own `wght` axis
+(100–900), so Chinese also follows continuous `fontWeight` changes. Axis availability
+and ranges depend on the selected font; mono, symbol and emoji faces remain separate.
+Measurement and rendering share the default font pack. Formula faces are separate.
+See the [font inventory](../assets/fonts/README.md).
 Additional fonts must be available at measurement and rendering time. Web hosts
 consume the fonts in the supplied render package; do not assume an arbitrary
 operating-system font is present in every renderer.
@@ -960,9 +1225,11 @@ operating-system font is present in every renderer.
 ### Rich text and per-unit animation
 
 `Span` is a direct `Text` child. Its styles are exactly `color`, `fontFamily`,
-`fontSize`, `fontWeight`, `fontStyle`, `letterSpacing`, `opacity`; it does not accept
-general layout props or `className`. Multi-run text currently cannot combine with
-`split/perUnit` or text-on-path. Inline `Image` is supported within Text, but
+`fontSize`, `fontWeight`, `fontStyle`, `fontVariationSettings`, `letterSpacing`,
+`opacity`; it does not accept general layout props or `className`. Multi-run text supports
+`split/perUnit`, preserving each span’s style across animated units; see the
+[rich text units fixture](../crates/valle-compiler/tests/fixtures/motion/composition/rich-text-units.motion.tsx).
+Multi-run text-on-path remains unsupported. Inline `Image` is supported within Text, but
 arbitrary inline container trees and transformed inline images are not.
 
 Save as `text.motion.tsx`:
@@ -991,16 +1258,38 @@ export default function Typography(ctx) {
 `split` is `char`, `word` or `line`; `line` refers to source newlines, not wrapped
 layout lines. `split` and a non-empty `perUnit` must be supplied together.
 Per-unit properties are `opacity` (0–1), `translate` (point), `scale` (point),
-`rotate` (numeric angle), `color`. `ctx.unit.*` is unavailable in ordinary styles.
+`rotate` (numeric angle), `color`, and `blur` (Gaussian sigma in CSS pixels,
+0–128). `ctx.unit.*` is unavailable in ordinary styles.
+When one `Text` contains styled `Span` runs, its units span the full authored
+text: `ctx.unit.index`, `count`, `start`, and `end` do not restart at a `Span`.
+Each run keeps its color, weight, and shaping; the unit style is applied to its
+glyphs. Inline images are excluded from character counts and separate word units.
 
-`Text path={path(...)}` lays out a single text run along a path. Keep it to one
-line and make the path long enough; wrapped text or glyphs beyond the path are
-reported as unsupported. It does not expose individual formula/glyph fragments
+`rangeSelector({ start, end, offset?, softness?, shape? })` returns a 0–1 weight
+for the current text unit, so use it inside `perUnit`. `start` and `end` are
+normalized positions in 0–1; the selector samples each unit at `index / count`.
+`offset` shifts both ends, while `softness` (0–1) feathers the boundaries. `shape`
+is a static `"square"` (default), `"ramp"`, `"triangle"`, or `"smooth"`.
+Numeric options may depend on the frame. An empty or reversed range selects nothing.
+
+```tsx
+<Text split="char" perUnit={{
+  opacity: rangeSelector({ start: 0, end: ctx.progress, softness: 0.15, shape: "ramp" }),
+  blur: 8 * (1 - rangeSelector({ start: 0, end: ctx.progress, softness: 0.15, shape: "ramp" })),
+}}>SELECTOR</Text>
+```
+
+`Text path={path(...)}` lays out each shaped line along a parallel offset copy
+of the path. It does not wrap by default. Use `whiteSpace: "pre-line"` or
+`"pre-wrap"` for explicit newlines; `lineHeight` sets the distance between the
+line paths. Make the path long enough for every line: glyphs beyond a line's
+path are reported as unsupported. Styled `Span` children inside a path `Text`
+are not supported. Path text does not expose individual formula/glyph fragments
 as arbitrary selectable JSX nodes.
 
 ### Measuring and fitting
 
-`measureText(text, { fontSize, fontFamily?, fontWeight?, letterSpacing?,
+`measureText(text, { fontSize, fontFamily?, fontWeight?, fontVariationSettings?, letterSpacing?,
 lineHeight?, maxWidth? })` runs during preparation and returns measured metrics
 including `width` and `height`. `fontSize` is required; every option is the same
 value, with the same meaning, as the identically named property in a JSX `style`
@@ -1037,6 +1326,26 @@ Measurements become artifact constants. Do not pass frame-varying text or option
 do not use browser measurement APIs. Reprepare when fonts or the canvas change.
 Low-level Rust callers also supply viewport DPR; metrics remain CSS pixels, with
 device-pixel rounding determined by that fixed DPR.
+
+`textOutline(text, { fontSize, fontFamily?, fontWeight?, fontVariationSettings?,
+letterSpacing?, lineHeight?, maxWidth?, origin?, align? })` uses the same font stack and
+layout as `measureText`, then returns the resolved glyph curves as static `PathData`.
+`origin: point(x, y)` places the first line's baseline in scene coordinates; it defaults
+to `(0, 0)`. `align` is `"left"` (default), `"center"`, or `"right"` relative to the
+layout width. The result has `path`, `bounds`, and `glyphs`; each visible glyph has its
+own `path`, baseline `x`/`y`, `advance`, source UTF-8 `cluster` offset, and zero-based
+`word` and `line` indices. Whitespace without ink contributes to layout but has no
+outline entry. Text and typography must be known during preparation, and the host
+must supply the same font bytes used for rendering.
+
+```tsx
+const word = textOutline("VALLE", { fontSize: 150, fontWeight: 800, origin: point(60, 240) });
+export default function DrawOn(ctx) {
+  return <Scene style={{ width: 640, height: 360, backgroundColor: "#101010" }}>
+    <Path d={word.path} fill="none" stroke="#ffffff" strokeWidth={3} trimEnd={ctx.progress} />
+  </Scene>;
+}
+```
 
 `style.fitText: fitText({ minFontSize: 16, maxFontSize: 48 })` fits text to a fixed
 content box with bounded font sizes. Set explicit width/height. The options are
@@ -1093,8 +1402,19 @@ for accepted and rejected extensions.
 | `area(input,baseline)` | Close one open contour to a horizontal baseline, keeping Line/Quad/Cubic verbs |
 | `areaBand(upper,lower)` | Close two aligned open contours (matching segments, strictly increasing X) |
 | `offsetPath(input,distance)` | Geometric path offset |
+| `resamplePath(input,count)` | Uniform arc-length polyline samples per contour; `count` is a static integer (2–2048 in frame expressions) |
+| `reversePath(input)` | Reverse each contour's travel direction while preserving lines and Bézier geometry |
+| `roundCorners(input,radius)` | Round line-only vertices with cubic circular fillets; geometric radius is non-negative and may animate |
+| `zigzag(input,{size,ridges})` | Add alternating peaks to one open contour; size is non-negative and ridges is a static integer 1–1023 |
+| `noiseDisplace(input,{seed,amount,frequency,phase?})` | Resample each contour to 256 points and apply seeded radial 2D noise; phase may animate |
+| `puckerBloat(input,amount)` | Resample closed contours to 256 points; pull radial extrema toward their mean at negative amounts or amplify them at positive amounts; amount ∈ [−1,1] |
+| `twist(input,angle)` | Resample contours to 256 points and rotate each point about its contour center by a radius-weighted angle in radians |
+| `simplify(input,tolerance)` | Simplify contour shape by distance tolerance, then resample to 256 points so animated tolerance retains fixed topology |
+| `strokeToPath(input,width)` | Expand a path to a filled outline with exact polyline corners and bounded miter joins; non-negative width, butt caps on open paths, a union of the valid stroke region on closed paths |
 | `boolean(left,right,op)` | Path union/intersection/difference/xor; both inputs must satisfy geometry admission |
 | `morphPath(from,to,progress)` | Interpolate compatible path topology |
+| `morph(from,to,progress,options?)` | Prepare convex edge-direction, shared-kernel polar, checked arc-length, or fixed-boundary compatible-mesh correspondence. `options.method` may be `"auto"` (default), `"convex"`, `"polar"`, `"compatible"`, or `"arcLength"`; `anchors` fixes boundary points, `pairs` matches multiple contours, and `contactPolicy` is `"warn"` (default) or `"error"` |
+| `morphSequence(paths,stops,progress,options?)` | Prepare 2–16 closed paths with convex, polar, checked arc-length, or compatible-mesh correspondence across keys; stops must be finite and strictly increasing. Accepts the same `method`, `anchors`, `pairs`, and `contactPolicy` options |
 | `pointAt(path,progress)`, `tangentAt(path,progress)` | Sample path position/tangent |
 | `pathLength(path)` | Path length |
 | `pathTrajectory(paths,frame)` | Sample a prepared array of compatible path frames |
@@ -1103,6 +1423,90 @@ Use typed constructors where a Path/Point/Rect is required. Plain strings/object
 with similarly named fields are not automatically those types. For dynamic path
 coordinates, use `pathTemplate` or geometry constructors instead of injecting
 arbitrary commands into `d`. `deg(90)` gives a radian value for geometry APIs.
+
+`resamplePath` includes both endpoints of an open contour. A closed contour gets
+`count` distinct points and remains closed; a full-turn `arc` is treated as a
+closed contour. `morph` computes its correspondence once from prepare-time path
+inputs. Convex correspondence merges all edge directions and inserts zero-length
+edges where a shape lacks a direction. Every intermediate contour is a convex
+Minkowski combination, including when the endpoints have no shared kernel point.
+`morphSequence` uses one edge-direction grid for all convex key shapes. For
+non-convex star-shaped contours, the polar method uses one shared kernel point
+and angular grid; the grid includes the original polygon corners so they survive
+at the exact stop. For other single, simple, closed contours, `arcLength`
+resamples each shape to 256 points, aligns cyclic starting points, and rejects
+correspondences whose linear interpolation has a self-intersection, zero edge,
+overlapping adjacent edge, or area collapse anywhere in the time interval.
+The check converts the input floating-point coordinates to exact integer-grid
+polynomials before comparing event times; it does not rely on checking a few
+frames. `compatible` embeds each single simple closed polygon in a common
+fixed convex triangle, refines both endpoint triangulations to the same mesh,
+and interpolates positive barycentric neighbor weights. This keeps the
+intermediate mesh valid when the numerical solve succeeds. A contour with fewer
+flattened boundary vertices gains collinear points on its longest edges, so its
+authored boundary stays geometrically unchanged. The current implementation
+accepts at most 59 boundary vertices after this step and limits the solve to
+128 interior mesh vertices. A sequence uses the largest key-shape vertex count
+for every segment, so its output topology stays fixed across stops.
+It may reject poorly conditioned geometry. It does not yet accept `anchors` or
+`pairs`; those options remain available to the other methods. `auto` tries
+convex, then polar, then checked arc length, and tries the compatible mesh if
+the arc-length check fails and the inputs meet its limits. A failed explicit
+`arcLength` check reports an event time and the involved vertex and edge.
+`anchors` can fix boundary correspondence for `auto` or `arcLength`:
+`[[point(ax, ay), point(bx, by)], ...]` for a pair, or one point per key shape in
+each row for a sequence. Anchors must lie on their contours and keep the same
+cyclic order; up to 32 rows are accepted. The prepared paths include every
+anchor at the same vertex index across keys. `allowSelfIntersection: true`
+explicitly bypasses the continuous-time check for an arc-length morph while
+still requiring simple input contours. Crossings, folding spikes, zero edges,
+and area collapse are rejected. A zero-width tangent contact emits a compiler
+warning by default; set `contactPolicy: "error"` to reject it. Successful
+browser compiles return these warnings alongside the artifact, while the CLI
+prints them with source locations. For paths with multiple contours, `pairs`
+explicitly matches their
+zero-based contour indices: `[[0, 1], [1, 0]]` swaps two contours in a pair;
+each row of a sequence has one index per key shape. Use `null` for a contour
+absent at a key shape, for example `[[0, 0, 0], [null, 1, null]]` to open and
+close a hole. Every existing contour must appear exactly once, with at most
+eight rows. Missing contours become a point at that key shape. Outer contours
+and holes keep their nesting role, and hole winding is normalized opposite the
+outer contour. A missing hole starts inside its parent's filled region, away
+from existing sibling holes; when several high-clearance points are available,
+the point nearer the hole's visible key shape is preferred. By default,
+preparation also rejects collisions between
+different contours anywhere between stops. When `anchors` and `pairs` are both
+provided, each anchor row must lie on exactly one matched contour at every key
+shape; the row uses checked arc-length correspondence for that contour. A row
+with a `null` contour cannot receive anchors. Ambiguous or mismatched contour
+membership is rejected. Without `pairs`, multiple contours are matched within
+their nesting level by a deterministic minimum-cost comparison of their bounds;
+contours with no match use `null`. Anchors constrain this matching, including
+the containing contours of anchored holes. The same continuous-time checks
+apply to inferred pairs; if they reject a match, specify `pairs` to choose the
+correspondence.
+Unsupported correspondence options are rejected.
+`morphPath` still accepts authored compatible topology without this check.
+
+Compatible-mesh interpolation guarantees a simple boundary, not local rigidity.
+Intermediate outlines receive an orientation-preserving similarity correction: their
+centroid follows the authored endpoints, and their extent stays within the interpolated
+endpoint bounds. This prevents global drift and unwanted growth; local features may
+still deform. Authored endpoint geometry is unchanged.
+
+`roundCorners` retains a fixed Line/Cubic command pattern while its radius changes.
+Tangent distance is derived from the corner angle and radius; each adjacent edge
+limits that distance to half its length. Cubics approximate the circular arc.
+`zigzag` fixes its point count from `ridges`; `noiseDisplace` uses fixed resampling
+and recenters each contour after displacement. Their frame parameters change
+coordinates without changing command topology.
+`puckerBloat`, `twist`, and `simplify` also use fixed-size output
+contours. `strokeToPath` unions stroked segments, preserving straight-edge corners and
+surviving holes. Curved runs are simplified when needed to keep the output within the
+2,048-point frame budget; too many essential corners produce a budget error.
+Its contour topology can change as width closes a hole or joins overlapping regions;
+do not assume two such outputs have compatible topology for `morphPath`. `simplify` reduces visible corners but retains the output point count;
+it is a shape operation rather than a vertex-count optimization.
 
 ### Path and shape attributes
 
@@ -1138,6 +1542,8 @@ Gradient paint constructors:
 Use an ordered stop array with at least two stops. Spread is `pad` (default),
 `repeat` or `reflect`. These typed paints belong in Path fill/stroke or Mask paint;
 CSS `backgroundImage` uses CSS gradient strings.
+Frame-time gradient colors and geometry may be assigned to a local `const`, aliased, and
+passed to a component as a paint prop before use in `fill`, `stroke`, or `paint`.
 
 Save as `path.motion.tsx`:
 
@@ -1192,10 +1598,23 @@ one source:
 
 - `paint={colorOrGradient}`;
 - `src="asset://image"`;
-- one direct `MaskSource` child, placed last after the content to mask.
+- one direct `MaskSource` child, in any child position.
 
-`mode` is `alpha` (default) or `luminance`; a subtree `MaskSource` currently requires
-alpha mode. A MaskSource is not independently visible content.
+`mode` is `alpha` (default) or `luminance`, for all source types. Luminance is measured
+in linear Rec.2020 and includes the source's alpha. `invert={true}` reverses coverage.
+A `MaskSource` is rendered into its own subgraph, is not independently visible,
+and defaults to an absolute box filling the mask, so it does not displace content.
+
+`mixBlendMode: "plus-lighter"` adds premultiplied colors in linear light; two opaque
+`#800000` layers produce approximately `#af0000`. Other supported CSS blend modes
+use encoded sRGB by default. Set `mixBlendSpace: "linear"` to calculate them on
+linear sRGB channels: screening two opaque `#800000` layers produces about
+`#a70000`, compared with `#c00000` in the default space. The setting applies to
+the node's composed subtree, is not inherited, and can switch per frame using
+a finite choice such as `ctx.seconds < 1 ? "linear" : "srgb"`.
+`normal` and `plus-lighter` always use linear working-space compositing, regardless
+of this setting. Alpha coverage is unchanged. Unsupported operators such as
+`plus-darker` and unknown spaces are rejected during admission.
 
 Save as `mask.motion.tsx`:
 
@@ -1220,6 +1639,50 @@ export default function MaskedTitle(ctx) {
 }
 ```
 
+### Subtree transitions
+
+`<Transition kind="circleOpen" progress={p}>` requires exactly two direct child
+subtrees: outgoing first, incoming second. `kind` is static and supports the same
+13 kernels as Timeline: `fade`, `wipeLeft`, `wipeRight`, `circleOpen`, `simpleZoom`,
+`crossWarp`, `linearBlur`, `directionalWarp`, `dreamyZoom`, `ripple`, `flyEye`,
+`multiplyBlend`, and `perlin`. Unknown kinds and unsupported attributes are errors.
+
+Optional `params={{...}}` accepts the [same names, defaults and ranges as Timeline](timeline.md#transitions).
+The object keys must be static; each value may be a number or admitted numeric
+animation expression. For example, `params={{centerX:0.2+0.6*ctx.progress,softness:4}}`
+animates a circle reveal's center while holding its edge softness at four local
+pixels. Values are checked after evaluation on every frame. Unknown names,
+non-numeric or non-finite values, out-of-range results, and a zero direction for
+`directionalWarp` are errors. Missing fields use the kind's defaults.
+
+Both children render independently against transparency, in the Transition's local
+border box. By default each is absolutely positioned at `(0,0)` and fills that box;
+explicit child sizes and positions override these defaults. Give the Transition a
+positive size. Child `z-index` cannot reverse the two inputs. Empty or hidden inputs
+are transparent. A zero-size or hidden Transition paints nothing.
+
+`progress` must be a finite number in `[0,1]`. Endpoints 0 and 1 reproduce the
+corresponding subtree, clipped to the local canvas; 0.5 uses the kernel's midpoint.
+Masks, filters and nested transitions work inside either subtree. Owner styles
+such as opacity, clipping and filters apply to the combined result. Current-backdrop
+reads inside an input start with that input's own transparent canvas.
+
+```tsx
+export const composition = { width: 640, height: 360, fps: 30, duration: 2 };
+export default function Reveal(ctx) {
+  const p = clamp(ctx.seconds, 0, 1);
+  return <Transition kind="circleOpen" progress={p} style={{width:640,height:360}}>
+    <View style={{backgroundColor:"#2140ff"}} />
+    <View style={{backgroundColor:"#ff4a24"}} />
+  </Transition>;
+}
+```
+
+`ctx.progress` is `localFrame / durationFrames`: for a 60-frame composition, frame
+30 is exactly 0.5 and frame 59 is 59/60. Use an explicit time expression when the
+last rendered frame must reach 1. The [E06 fixture](../crates/valle-compiler/tests/fixtures/motion/composition/motion-transition.motion.tsx)
+uses `ctx.progress` as authored in the refactor acceptance scene.
+
 ### Displacement and motion blur
 
 `style.displacement: displacement(seed, frequencyPoint, scale, options?)` distorts
@@ -1228,24 +1691,83 @@ to distort the backdrop. Seed is a static integer in `[0, 2^32−1]`; options ar
 `octaves` (1–4) and `mode` (`fractal` or `turbulence`). Frequency is a point,
 scale a number; both may use admitted animation expressions.
 
-`style.motionBlur: motionBlur(velocityPoint, shutterAngle?)` applies directional
-blur using explicit velocity in pixels/frame. Shutter angle defaults to 180°.
-This is a spatial approximation; it does not sample multiple historical scenes
-or infer the velocity from a changing `left`/`rotate` property.
+`style.motionBlur: "auto"` derives directional blur from the element's final
+screen position. It samples the scene half a frame before and after the requested
+output time, so layout changes, ancestor transforms, and camera movement also
+contribute. The built-in shutter angle is 180°. At a temporal cut or when the
+element is stationary, no blur filter is emitted. The result is determined by
+the requested time, including for out-of-order frame requests.
+
+`style.motionBlur: motionBlur(velocityPoint, shutterAngle?)` supplies explicit
+velocity in pixels/frame. Its shutter angle defaults to 180°. Both forms use a
+spatial directional blur based on the element's anchor velocity. Rotation and
+scaling can give different velocities to different pixels, so they require
+shutter sampling for a faithful result.
 
 Use `springVelocity` for an exact spring derivative. For an arbitrary pure position
 helper `position(t)`, a centered one-frame displacement is
 `position(t + 0.5 / fps) - position(t - 0.5 / fps)`, already in px/frame. This is an
 approximation of instantaneous velocity and explicitly samples the same authored
 trajectory on both sides of the target time. It never reads the last displayed
-frame. A step cut still needs an authored blur decision; it is not a smooth path.
+frame. With explicit velocity, a step cut still needs an authored blur decision;
+`"auto"` suppresses blur when adjacent screen-space slopes disagree sharply.
 
 Effects on a group include its descendants. Keep the affected bounds small and
 inspect clipping near edges. See
 [advanced node effects](../crates/valle-compiler/tests/fixtures/motion/effects/advanced-node-effects.motion.tsx)
-for explicit velocity and displacement examples.
+for explicit velocity and displacement examples, and the
+[automatic motion blur scene](../crates/valle-compiler/tests/fixtures/motion/composition/auto-motion-blur.motion.tsx)
+for automatic blur.
 The additional layer styles `paperGrain` and `contactShadow` take finite numeric
 intensities clamped to 0–1. They are Motion layer effects, not browser CSS properties.
+
+### Shutter sampling
+
+`<Shutter samples={8} angle={180}>...</Shutter>` evaluates its children at eight
+output-time samples across a 180° exposure (half a frame) and averages their
+premultiplied pixels in linear light. This reproduces rotation and scaling blur
+that one anchor velocity cannot describe. Every requested frame computes its own
+subframes, so seeking and out-of-order rendering give the same result. Samples
+outside the composition hold its first or last frame.
+
+`samples` is a static integer from 1 to 32; `angle` is a static integer from 0°
+to 360°. A frame may request at most 128 samples across Shutter and Echo nodes. The
+Shutter wrapper fills its parent and takes no authored styles, classes, or
+visibility. Put those properties on a surrounding `View`. Nesting Shutter or
+Echo within either temporal sampling effect is currently rejected.
+
+### Echo trails
+
+`<Echo count={4} interval={3} decay={0.5}>...</Echo>` samples its children at
+3, 6, 9, and 12 output frames before the requested frame. It paints the oldest
+sample first with opacity `decay^4`, then successively newer samples with
+`decay^3` through `decay`, and finally paints the current children at full
+opacity. Each sample reevaluates Motion expressions, layout, and media time, so
+the trail follows the scene rather than a fixed spatial offset. Samples before
+the composition starts hold the first frame; seeking does not depend on earlier
+render requests.
+
+`count` is a static integer from 1 to 32, `interval` is a positive integer
+number of output frames, and `decay` is a finite static number from 0 to 1.
+Shutter and Echo together may request at most 128 temporal samples in one
+frame. The Echo wrapper fills its parent and takes no authored styles, classes,
+or visibility; use a surrounding `View` for those properties. Nesting Shutter
+or Echo within either temporal sampling effect is currently rejected.
+
+### Time scopes
+
+`<TimeScope offset={0.5} speed={2}>...</TimeScope>` maps the time seen by
+its descendants to `(parentSeconds - offset) * speed`. It applies to
+`ctx.seconds`, the derived `ctx.localFrame` and `ctx.progress`, and Video source
+time. Nested scopes compose from outside in; siblings outside the scope keep
+the parent clock. `ctx.fps` and `ctx.durationFrames` retain the composition
+contract. Speed zero freezes the subtree; a negative speed reverses its local
+clock. Expressions can see a local time outside the composition's output
+interval.
+
+`offset` and `speed` must be finite static numbers. TimeScope contributes no
+layout box or paint of its own and takes no authored styles, classes, or
+visibility; use a surrounding `View` for those properties.
 
 ### Layout transitions
 
@@ -1386,15 +1908,92 @@ and [data dashboard](../crates/valle-compiler/tests/fixtures/motion/modules/data
 Valle exposes these lower-level builders; it does not currently provide a general
 `Chart`, `FunctionPlot` or arbitrary HTML widget primitive.
 
+### Automatic instances for prepared maps
+
+Motion compiles a prepared array's `.map()` to one shared template and a columnar instance table
+when every item returns the same supported shape with a direct `key={item.id}` field.
+For a batch-drawn `View`, the leaf needs
+`className="absolute"`, and a literal style containing `left`, `top`, `width`, `height`, and
+`backgroundColor`. The optional `opacity` expression and `rotate(...deg)` transform may depend on
+time, item fields, the callback index, and `ctx.instance.index` / `ctx.instance.count`. These views
+draw as one rectangle batch. A full solid `Circle` with no stroke also shares one template;
+its center, radius, fill and optional opacity can vary by row. Each circle still draws its exact
+authored arc. A `Path` can share one static nonempty geometry and solid fill with pixel `translate`,
+optional numeric `opacity`, and optional `rotate` angle, numeric/point `scale`, or a single
+`skewX(...deg)` in `style.transform` when `transformOrigin: point(0, 0)` is explicit.
+Translation, fill, opacity, rotation, scale and horizontal skew can vary by row and frame;
+it draws as one path batch. The batch accepts fill-only, stroke-only, and separately colored
+solid fill/stroke. Positive `strokeWidth` and `strokeDashoffset` may vary by row and frame;
+cap, join, miter limit and dash pattern are shared template values. Omitting stroke width uses
+1; a stroked Path still requires a positive width. Other unsupported paints and transform
+lists use ordinary per-row paths. See the
+[instance grid](../crates/valle-compiler/tests/fixtures/motion/composition/grid-instances.motion.tsx),
+[Circle](../crates/valle-compiler/tests/fixtures/motion/composition/circle-instances.motion.tsx), and
+[Path](../crates/valle-compiler/tests/fixtures/motion/composition/path-instances.motion.tsx) fixtures.
+An in-flow `View` or `Group`, or a plain leaf `Text`, uses the layout instance path: one compiled
+expression tree, but separate layout boxes and paint for every row and descendant. A `View` or
+`Group` root may contain a fixed nested tree of `View`/`Group` nodes and plain leaf `Text` nodes.
+Supported inline layout, color and text styles may vary by row; `visible={...}` hides paint while
+preserving its layout box. A root or descendant can use a static or finite conditional `className`,
+including a class-only layout with no inline style. Row data may supply text content, class
+conditions and descendant styles. Descendant keys follow the row key and JSX child path.
+`bounds()` and `anchor()` can read row keys and descendant `View`/`Group` layout boxes.
+The map may also return the same authored component for every item, such as
+`items.map(item => <Card key={item.id} item={item} />)`, when it returns one of these fixed
+in-flow shapes. The component may read scalar or typed item fields through `item.field`,
+`props.item.field`, or local destructuring, and may forward the item to another fixed component.
+Only fields actually read by the template enter the instance table. Component and descendant
+keys retain the same paths they have when the map expands normally. Unread item metadata, including
+nested objects or fields whose value types vary between rows, does not prevent instancing.
+See the [flow list](../crates/valle-compiler/tests/fixtures/motion/composition/flow-instances.motion.tsx)
+and [card list](../crates/valle-compiler/tests/fixtures/motion/composition/repeated-cards.motion.tsx),
+including its [component form](../crates/valle-compiler/tests/fixtures/motion/composition/repeated-card-component.motion.tsx),
+and the [Text root list](../crates/valle-compiler/tests/fixtures/motion/composition/text-root-instances.motion.tsx).
+Other maps retain per-item JSX lowering. Maps with at least 64 items emit an
+`instance-fallback` warning with the source position and reason; smaller maps do not
+produce this optimization warning. Path trimming currently uses that path.
+The instance table stores numbers, points, colors, rectangles, booleans and strings in
+homogeneous columns; template expressions reconstruct only the values needed for each row.
+When an `Array.from` row field is a numeric function of its index using arithmetic,
+`Math.floor`, or `Math.sqrt`, the compiler may store the function instead of the numeric
+array. It checks the function against every prepared value first; fields that do not match
+remain ordinary columns. The source array is still evaluated during preparation.
+Keys of the form `prefix + rowIndex + suffix` are also checked against every authored key and
+stored as one indexed key rule; other keys remain explicit. Both forms resolve to the same
+per-row identity for diagnostics.
+
+`valle motion check --json` reports `templates`, `instanceRows`, the total template expression
+count, and `timings.templateCompile` / `timings.instanceData` in milliseconds. The timing fields
+measure template JSX lowering and instance-table construction separately.
+An instance template may use `visible`. Batch-drawn templates can select a visible prefix or
+suffix with a logarithmic search when visibility compares composition time or local frame against
+the instance row index. Other batch visibility expressions evaluate per row. Layout instances
+always retain each row's box, including hidden rows. A batch-drawn row whose geometry is read by
+`bounds()` or `anchor()` stays an ordinary scene node.
+
 ### GeometryBatch and particles
 
-Use `GeometryBatch` when many circles/rectangles share one coordinate space and
-do not need separate layout/children. Ordinary `.map()` nodes remain useful for
-individually styled cards, text and other content.
+Use `GeometryBatch` when many circles, rectangles, copies of one prepared path, or tiles from one image share one coordinate space and
+do not need separate layout/children. Flow cards with supported fixed `View`/`Group`/`Text`
+subtrees can use layout instances; maps with other content use ordinary `.map()` nodes.
 
-`geometry` is `circle` or `rect`. `positions` is a prepared point array or a
+`geometry` is `circle`, `rect`, a prepared `PathData` value such as `path("M...")`,
+or `atlasRegion("asset://sprites", rect(0, 0, 0.5, 1))`. The image source must be
+declared as an image asset control. The region is a positive normalized source rectangle
+inside the image; use source pixel boundaries for clean tile edges. Atlas rows use
+`positions` as their top-left corners and `sizes` as destination widths and heights;
+rotation is around each destination rectangle's center. `fills` tint each tile, and
+`opacities` apply per row. Image rows do not accept a stroke.
+See the [two-tile atlas example](../crates/valle-compiler/tests/fixtures/motion/composition/atlas-geometry-batch.motion.tsx).
+Path instances use their `positions` as the local path origin and their `sizes` as
+per-axis scale factors. Rotation is in degrees around that origin. `positions` is a prepared point array or a
 supported field. `sizes` and `fills` are required; scalar values broadcast across
-instances, while arrays follow the batch contract. `opacities` is optional;
+instances, while arrays follow the batch contract. `opacities` and `rotations`
+are optional; rectangle rotations are degrees around each rectangle's center.
+`skewXs` adds a horizontal shear in degrees before rotation (restricted to less than 89° in magnitude),
+also centered on each rectangle. `strokeWidths` adds a same-color stroke in local shape units:
+rectangles use a unit box, circles a unit radius, and paths their authored coordinates.
+Both values default to zero and can be a scalar or a per-instance array.
 `semanticKeys` provides static per-instance identities. Do not give it JSX children.
 
 Save as `particles.motion.tsx`:
@@ -1409,6 +2008,7 @@ export default function Particles(ctx) {
           birth: { interval: 0.01 }, lifetime: 2,
           velocity: { x: [-80,80], y: [-180,-80] },
           gravity: point(0,90), loop: true,
+          forces: [curlNoise({ seed: 3, scale: 0.012, strength: 220 }), drag(0.8)],
         })}
         sizes={[2,6]} fills={["#38bdf8","#a78bfa"]} opacities={[1,0]}
         style={{ position: "absolute", left: 0, top: 0, width: 640, height: 360 }} />
@@ -1420,16 +2020,26 @@ export default function Particles(ctx) {
 `particles(frame,ctx.fps,options)` is admitted as a batch position field. Options
 are prepare-time values: integer seed/count, typed emitter Rect, positive
 `birth.interval` and `lifetime` in seconds, velocity ranges in pixels/second,
-typed gravity and optional loop. With particle fields, two-element sizes, fills
-and opacities describe the start/end values over particle life. It is deterministic
+typed gravity and optional loop. With particle fields, two-element sizes, fills,
+opacities, rotations, skewXs and strokeWidths describe the start/end values over particle life. It is deterministic
 at an arbitrary frame; it does not require rendering every previous frame.
 For looping fields, `count × birth.interval` must be at least `lifetime`.
+Optional `forces` is a prepare-time array of up to eight `curlNoise({seed,scale,strength})`
+or `drag(coefficient)` values. Curl noise uses a positive spatial scale and a signed
+acceleration strength; drag uses a nonnegative coefficient per second. Force trajectories
+are baked at 120 samples per second when the scene is prepared, then interpolated for
+arbitrary frame seeks. The table is limited to four million particle samples per batch.
+Setting a force's strength or coefficient to zero has the same result as removing it.
 
 For fixed batches, `field({ from, to, progress, stagger? })` can bind positions,
-sizes, fills or opacities. From/to are static compatible arrays (or admitted
-broadcast values for side fields); progress is numeric and can animate. Stagger
-is a static non-negative delay, and the final instance's delay must remain below
-1. Keep array lengths and geometry types consistent. See
+sizes, fills, opacities, rotations, skewXs or strokeWidths. From/to are static compatible arrays (or admitted
+broadcast values for side fields); progress is numeric and can animate. `stagger`
+accepts either a prepare-time nonnegative step, giving instance `i` delay `i × step`,
+or a prepare-time array with one normalized delay in `[0,1)` per instance. The array
+can be non-monotonic, for example `[0.4,0.2,0,0.2,0.4]` starts an animation at the
+center and propagates outward. The remaining progress interval is remapped so every
+instance reaches `to` at progress 1. For a step, the final instance's delay must
+remain below 1. Keep array lengths and geometry types consistent. See
 [batch attribute lowering](../crates/valle-compiler/src/motion/attrs.rs) for type
 admission when constructing a new field.
 
@@ -1471,13 +2081,29 @@ width/height and `camera={{ position:[x,y,z], target:[x,y,z], ... }}`.
 Position/target components, `orbitYaw`, `orbitPitch`, `distance`, `fov`, `near`
 and `far` may use frame expressions. Motion resolves orbit controls into the final
 position before submitting the frame; the renderer receives one complete camera.
-FOV defaults to 38° and is restricted to 10–120°; near defaults to 0.1.
+FOV defaults to 38° and is restricted to 10–120°; near defaults to 0.1 and far to 1000.
+Optional `depthOfField: { focusDistance, maxBlurRadius }` accepts frame expressions
+for both values. `focusDistance` is the camera-space distance of the sharp plane
+(0.01–100000 world units), and `maxBlurRadius` caps the defocus circle at 0–16
+output pixels. Omission or a zero radius disables the effect. The depth-aware
+post-process softens geometry before and after the focus plane and spreads blurred
+foreground silhouettes over more distant pixels. It changes the Scene3D color
+plane; depth, anchors and picking retain the original geometric values.
+
+```tsx
+<Scene3D
+  camera={{ position: [0, 0, 3], target: [0, 0, 0],
+    depthOfField: { focusDistance: 3 + ctx.seconds * 0.5, maxBlurRadius: 12 } }}
+  style={{ width: 640, height: 360 }}>
+  <Mesh key="model" src="asset://model" />
+</Scene3D>
+```
 
 Its direct children are explicit leaves, not arbitrary React/Three.js content:
 
 | Child | Attributes |
 | --- | --- |
-| `Mesh` | Static `key`, `src="asset://model"`; `material` and indexed `materials` overrides; animated `position`, `rotation`, `scale` triples and `translateX/Y/Z`, `rotateX/Y/Z`, `scaleX/Y/Z`; model-node `nodes` bindings |
+| `Mesh` | Static `key`, exactly one of `src="asset://model"` or `geometry={extrude(...)}`, `geometry={lathe(...)}`, `geometry={tube(...)}`; `material` and indexed `materials` overrides; animated `position`, `rotation`, `scale` triples and `translateX/Y/Z`, `rotateX/Y/Z`, `scaleX/Y/Z`; model-node `nodes` bindings and imported GLB `animation` |
 | `Anchor3D` | Static `key`, parent mesh key and position triple |
 | `AmbientLight` | Optional key, opaque `color` (default white), `intensity`; color and intensity may animate |
 | `DirectionalLight` | Animated nonzero `direction` triple, optional key, color (default white), intensity |
@@ -1489,6 +2115,36 @@ an override for the whole Mesh; `materials={[{id: 0, ...}]}` supplies overrides 
 original GLB material indices. Merge order is source material, whole-Mesh override,
 then indexed override. Missing properties inherit; supplied values replace them.
 Primitives without a source material index receive the whole-Mesh override.
+
+Prepared paths can build meshes without a model asset:
+
+| Function | Prepared path and options |
+| --- | --- |
+| `extrude(path, { depth, bevel? })` | Closed, nonintersecting contours; nested contours form holes. `depth` is positive and `bevel` ranges from zero to half the depth. Front and back caps, walls, and bevel receive normals and UVs. |
+| `lathe(profile, { segments? })` | One simple open or closed profile. Profile X is the radius from the world Y axis. Open profiles may reach zero only at endpoints and, together with their axis caps, must bound a simple region with nonzero Y extent; returning lips are allowed. Closed profiles stay at positive radii and receive no caps (for example, a torus). `segments` defaults to 64 and ranges from 3 to 256. Nonzero radius endpoints receive disk caps. |
+| `tube(path, { radius, sides? })` | One planar centerline. `radius` is positive; `sides` defaults to 16 and ranges from 3 to 128. An open path receives end caps; a closed path joins its last ring to its first without caps. Zero-length edges and reversing corners are rejected. |
+
+Path Y uses the 2D screen-down convention and is flipped into the 3D world-up axis.
+The tube centerline lies in the world XY plane; its circular cross section extends
+through Z. All geometry is static; Mesh transforms and materials may animate.
+Generated vertices use indexed storage. Angle-weighted normals smooth adjacent
+faces within 60 degrees while retaining hard edges and UV seams.
+The generated model has one mesh node with ID 0 and participates in the same
+lighting, shadows, depth, picking and geometry budgets as a GLB model. It has no
+source material indices, so use the whole-Mesh `material` override.
+
+```tsx
+const glyph = textOutline("V", { fontSize: 220, fontWeight: 800, align: "center" });
+<Mesh key="letter" geometry={extrude(glyph.path, { depth: 60, bevel: 6 })}
+  material={{ type: "pbr", color: "#8b7bff", metallic: 0, roughness: 0.4 }}
+  position={[0, -80, 0]}
+  rotateY={ctx.seconds * 40} />
+
+<Mesh key="vase" geometry={lathe(path("M 0.4 1 L 0.7 0 L 0.3 -1"), { segments: 64 })}
+  material={{ type: "lambert", color: "#77bbee" }} />
+<Mesh key="rail" geometry={tube(path("M -1 0 L 0 0.4 L 1 0"), { radius: 0.12, sides: 16 })}
+  material={{ type: "lambert", color: "#ffbb66" }} />
+```
 
 ```tsx
 <Mesh key="model" src="asset://model"
@@ -1524,13 +2180,18 @@ Host image fulfillment verifies encoded content digests before registration. Por
 hosts must retain the referenced image bytes alongside the fixed semantic package.
 
 `alphaMode` and `doubleSided` are static material configuration. All material kinds
-support opaque and mask modes. Opaque ignores base alpha. Mask multiplies factor alpha
-by texture alpha, discards values below the cutoff (default 0.5), and writes no
+support `opaque`, `mask` and `blend`. Opaque ignores base alpha. Mask multiplies factor
+alpha by texture alpha, discards values below the cutoff (default 0.5), and writes no
 color/depth/picking data for discarded fragments. Retained fragments are opaque.
-Double-sided materials render both faces with reversed back-face normals. Use the
-Scene3D layer's 2D opacity for compositing transparency; sorted 3D blending is outside
-this profile. Normal and occlusion maps share the same semantics for lit materials;
-occlusion affects indirect illumination.
+Blend uses factor alpha times texture alpha for weighted blended order-independent
+transparency. Opaque and retained mask fragments establish depth first; transparent
+fragments behind them are discarded. Visible transparent fragments accumulate a
+depth-weighted color and revealage before compositing, so their submission order does
+not change the result. This is an approximation for overlapping transparent surfaces.
+Picking and the final depth plane use the nearest contributing transparent fragment.
+Double-sided materials render both faces with reversed back-face normals. Normal and
+occlusion maps share the same semantics for lit materials; occlusion affects indirect
+illumination.
 
 Mesh vector attributes may contain frame expressions. Axis translations and rotations
 add to the corresponding vector components; axis scales multiply them. The compiler
@@ -1552,7 +2213,35 @@ are zero and omitted scale is one. Unbound nodes retain their frozen source tran
 The hierarchy is recalculated from these inputs on every frame; parent transforms affect
 all descendants, while instances referencing the same mesh can move independently.
 IDs must be distinct and reference active nodes in the selected model scene. No external
-animation player or imported glTF animation track is involved.
+animation player is involved.
+
+An imported glTF node animation can be sampled at an explicit time in seconds:
+
+```tsx
+<Mesh key="model" src="asset://model"
+  animation={{ clip: 0, time: ctx.seconds }} />
+```
+
+`clip` is a static zero-based index in the GLB (at most 32 clips); `time` may be a
+frame expression from 0 to 1e9 seconds. Times before the first key or after the last
+key hold the nearest pose. The renderer never advances a clock. Translation, rotation,
+scale and morph weights support glTF `LINEAR`, `STEP` and `CUBICSPLINE` interpolation;
+linear rotation uses quaternion spherical interpolation. Channels use one shared
+time even when their key ranges differ. Each frame starts from the source node TRS,
+applies the clip, then applies explicit `nodes` replacements, so a replacement wins
+for its complete local transform. Morph weights on a node override `mesh.weights`;
+missing weights start at zero. A weight animation targets the instanced node, so
+another node using the same mesh keeps its own weights. Explicit `nodes` entries
+replace transforms only.
+
+Skinned GLBs use `JOINTS_0` and `WEIGHTS_0` with up to four influences per vertex.
+The importer reads the skin's joint list and optional inverse bind matrices (identity
+when absent). Each frame samples joint transforms from the same explicit clip time,
+applies morph targets before skinning, and blends joint transforms per vertex.
+As required by glTF, the transform on the node holding the skinned mesh is ignored;
+ancestor transforms on the joint hierarchy still apply. Explicit `nodes` replacements
+can pose joints without an imported animation. A skin admits up to 128 joints and
+16 MiB of decoded vertex influences.
 
 Static GLB scenes admit multiple roots, parent/child nodes and shared mesh instances.
 Node TRS and column-major affine matrices remain separate from source geometry;
@@ -1561,23 +2250,27 @@ inverse-transpose normals and mirrored winding. Node identifiers are their origi
 glTF indices, independent of display names and traversal order. The importer retains
 up to 256 nodes/meshes and a maximum hierarchy depth of 32. Picking returns the
 scene object's semantic address plus `nodeId`, the original glTF node index.
-The raster keeps separate object/node planes, with ten bytes per pixel for color,
-depth and both identifiers; buffer reuse resets every plane.
+The raster keeps separate object/node planes, with 20 bytes per pixel for half-float
+color, 32-bit depth and both 32-bit identifiers; buffer reuse resets every plane.
 
 Triangle primitives accept packed or interleaved FLOAT positions/normals, FLOAT or
 normalized U8/U16 UVs, U8/U16/U32 indices and non-indexed geometry. Missing normals
 produce flat face normals with split corners. UVs may be absent when no material
 texture needs them; binding a texture without UVs reports an error. Buffer-view targets
-are optional, and present targets must match their use. External URIs, sparse accessors,
-skins, morphs, extensions, imported animation and alpha-blended GLB materials remain
-outside the admitted profile.
+are optional, and present targets must match their use. Morph targets may displace
+positions and normals; absent target attributes leave the source value unchanged.
+The renderer recomputes flat normals after deformation when the source has no normals.
+Tangent accessors are validated but source and morphed tangents are not consumed by the
+current rasterizer. A mesh admits up to eight targets and 64 MiB of decoded morph data;
+weight magnitudes are limited to 16. External URIs, sparse accessors,
+additional joint/weight sets and extensions remain outside the admitted profile.
 
 Environment lighting uses an explicitly bound `asset({kind: "environment"})` resource:
 
 ```tsx
 <Scene3D pbr={{
   environment: { src: "asset://sky", intensity: 1, rotation: ctx.seconds * 30, background: false },
-  toneMapping: "aces", exposure: 1.1,
+  toneMapping: "aces", exposure: 1.1, shadows: true,
 }} /* camera and model children as above */ />
 ```
 
@@ -1593,12 +2286,27 @@ visibility is independent of illumination. Tone mapping (`none` or `aces`) and
 exposure (0–16, default 1) are applied once in linear light before scene output.
 Tone mapping is static; exposure may animate. Ambient, directional and hemisphere
 light colors are converted from sRGB to linear values for both Lambert and PBR.
+`shadows` is a static boolean, false by default. When enabled, each directional
+light gets a 1024×1024 orthographic depth map rebuilt from the complete current
+frame, including casters outside the camera view. Opaque and retained mask fragments
+cast shadows; blended fragments do not. A 3×3 percentage-closer filter attenuates
+the direct Lambert/PBR light term, leaving ambient, environment, emissive and Unlit
+color unchanged. This is a single map per light, so very large scenes can show
+limited shadow detail.
 
 
-The loader retains a 16 MiB GLB / 65,535 vertex / 20,000 triangle limit. A layer
+The loader admits a 64 MiB GLB, 262,144 vertices and 131,072 triangles. A Scene3D
+layer can be 3840×2160 within the 8,388,608-pixel budget. A layer
 admits at most 8 textures, 24 Mi pixels and 128 MiB decoded mip/environment storage.
 Geometry storage is shared between nodes, while vertex and triangle work is charged
-for every rendered instance. Over-budget inputs fail before drawing.
+for every rendered instance. A prepared output frame additionally allows at most
+16,777,216 pixels across distinct Scene3D raster requests (20 bytes per framebuffer
+pixel), including temporal samples. Frozen model bytes plus vertex/index buffers,
+frozen environments and external texture mip estimates share a 256 MiB frame
+asset budget; identical content is charged once. Embedded GLB texture, morph and
+skin storage still obey their per-layer admission limits. These limits apply per
+worker, so multiple Native workers multiply the working set. Over-budget inputs
+fail before drawing.
 
 `project3d("sceneKey","meshKey::anchorKey")` returns a post-layout 2D point for an
 overlay. The same paint-only dependency rules as `bounds` apply. See
@@ -1747,11 +2455,14 @@ An upstream CSS parser may recognize an otherwise unsupported declaration. Alway
 check the rendered frame and any prepare/render diagnostics; `motion check` cannot
 prove every future frame's numeric validity or every backend's visual behavior.
 
-Current compiler budgets include 10,000 items per static JSX map, 50,000 expanded
+Current compiler budgets include 10,000 items per expanded static JSX map, 50,000 expanded
 list items across compilation, 2,000 helper expansions, 4,096 items for expression
 map unrolling and expression nesting depth 256. Themes have bounded depth/size;
 sequences allow at most 256 stages. These are rejection ceilings, not performance
-targets. Prefer smaller layouts or explicit batches for large repeated geometry.
+targets. Supported `View` and `Path` instance templates can use up to 100,000 rows;
+flow subtrees have a 32-level, 1,024-node template limit and one million projected
+row nodes. Exact-arc `Circle` templates remain capped at 10,000. Prefer explicit batches for other
+large repeated geometry.
 
 For export controls, `--backend raster` selects CPU composition, `metal` requires
 Metal and `auto` chooses an available backend. `--workers` accepts 1–8; defaults

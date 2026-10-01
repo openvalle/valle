@@ -52,10 +52,17 @@ valle timeline render cuts.timeline.json -o cuts.mp4 --events
 
 Frame indices are zero-based. Frame 44 belongs to the blue clip; frame 45 belongs
 to the teal clip. The output has 90 video frames. Output paths must be new files.
-`--frame` requires PNG; without it, the command requires MP4.
+`--frame` requires PNG. Full exports accept H.264 `.mp4`, transparent qtrle or
+ProRes 4444 `.mov`, or a PNG sequence such as `-o 'frames/%05d.png'`. `.mov`
+defaults to lossless qtrle; use `--codec prores4444` for ProRes. `--frames 0,30,59`
+selects exact keys for a sequence or `--storyboard sheet.png`; a sheet does not
+require `-o`. All frames share preparation, and JSON reports include actual Motion
+`compilations`. See [CLI delivery](cli.md#motion-jsx-to-video) for selection,
+numbering, contact-sheet layout and encoder options. Transparent MOV exports video
+only and rejects Timelines with audio; use MP4 for a combined audio/video delivery.
 
 The document controls dimensions, FPS and duration. The Timeline CLI uses
-Native Raster composition. MP4 encoding and media decoding need compatible
+Native Raster composition. Video encoding and media decoding need compatible
 FFmpeg shared libraries; see [runtime setup](cli.md#runtime-notes).
 
 ## Document structure and resources
@@ -82,7 +89,7 @@ data. Motion `props` is a separately typed input surface, described below.
 | `fps` | Positive JSON number, or canonical rational string such as `"30000/1001"` |
 | `background` | Static color, default opaque black `"#000000ff"` |
 
-Use `"#00000000"` for a transparent PNG background. MP4 delivery requires an opaque
+Use `"#00000000"` for a transparent PNG or MOV background. MP4 delivery requires an opaque
 canvas background, even if an opaque visual clip happens to cover the canvas.
 Prefer even dimensions for ordinary H.264 delivery and verify the chosen encoder.
 The current normalized audio output is 48 kHz stereo; there are no public
@@ -187,19 +194,19 @@ time zero at its end. Prepare a trimmed asset first when only a subrange should 
 | `caption` | Text or rich runs, layout and animation; no `kind` field | Composited above the visual result; later caption tracks are above earlier ones |
 | `adjustment` | Currently `color-grade` | Applied to the visual result before captions |
 
-Within each track, list clips in chronological order with
-`next.start >= previous.start + previous.duration`. Overlaps and out-of-order
-clips are rejected. A gap is implicit; do not insert internal gap objects.
-For simultaneous clips, create separate tracks. These rules also apply to audio,
-caption and adjustment tracks.
+Within each track, list clips in chronological order. Normally,
+`next.start >= previous.start + previous.duration`; a visual track may instead
+connect two overlapping adjacent clips with an explicit `transitions` entry.
+A gap is implicit; do not insert internal gap objects. Other simultaneous clips
+belong on separate tracks. Audio, caption and adjustment tracks do not allow
+within-track overlaps.
 
 JSON object key order does not change the band order. A caption stays above the
 visual bands even if the `caption` key is written before `visual`. Use Motion text
 inside a visual clip when text needs to participate in a different visual stack.
 
-There is no public `transition` clip or transition object. A visual crossfade uses
-two tracks and an opacity curve; an audio crossfade uses two tracks and gain curves.
-The next section includes a complete visual example.
+Visual transitions are track entries referencing zero-based clip indices. Audio
+crossfades use separate tracks and complementary gain curves.
 
 ## Visual clips and transforms
 
@@ -301,27 +308,77 @@ These Timeline names differ from Motion's helper spelling. A custom easing is
 control points must be in 0–1. Easing is useful for linear segments; omit it for
 step interpolation.
 
-### Crossfade example
+### Transitions
 
-Save as `crossfade.timeline.json`. Blue stays opaque underneath while teal fades
-in on the upper track during output seconds 1–2. The upper clip's local time zero
-is output second 1.
+`transitions: [{ from, to, kind, params? }]` connects adjacent clips in the same visual
+track. The transition spans their intersection, from the incoming clip's `start`
+to the outgoing clip's end. Both clips retain their full duration, trim, rate,
+local keyframes and Motion source clock.
 
 ```json
 {
   "canvas": { "width": 640, "height": 360, "fps": 30 },
-  "tracks": { "visual": [
-    { "clips": [{ "kind": "solid", "color": "#2563eb", "start": 0, "duration": 2 }] },
-    { "clips": [{ "kind": "solid", "color": "#0d9488", "start": 1, "duration": 2,
-      "opacity": { "keyframes": [[0,0],[1,1]] } }] }
-  ] }
+  "tracks": { "visual": [{
+    "clips": [
+      { "kind": "solid", "color": "#2140ff", "start": 0, "duration": 2.5 },
+      { "kind": "solid", "color": "#ff4a24", "start": 1.5, "duration": 2.5 }
+    ],
+    "transitions": [{ "from": 0, "to": 1, "kind": "circleOpen",
+      "params": { "centerX": 0.3, "centerY": 0.5, "softness": 4 } }]
+  }] }
 }
 ```
 
-For two fully opaque sources, fading only the upper one preserves coverage during
-the overlap. Fading both visual clips out/in independently with ordinary
-source-over blending can expose the background and produce an unwanted dark dip.
-For audio, complementary gain ramps on the two tracks produce a linear crossfade.
+Available kinds: `fade`, `wipeLeft`, `wipeRight`, `circleOpen`, `simpleZoom`,
+`crossWarp`, `linearBlur`, `directionalWarp`, `dreamyZoom`, `ripple`, `flyEye`,
+`multiplyBlend`, `perlin`. These use the same parameter registry and built-in shaders
+as Motion. `params` is optional; omitted fields use the defaults below. Values must
+be finite numbers in the inclusive range. Unknown names and other value types are
+errors. Explicit defaults and omitted defaults have the same render identity.
+
+| Kind | Parameter: default [range] | Meaning |
+| --- | --- | --- |
+| `fade` | None | Linear crossfade |
+| `wipeLeft`, `wipeRight` | `softness`: 0 [0, 1] | Edge half-width as a fraction of canvas width |
+| `circleOpen` | `centerX`, `centerY`: 0.5 [0, 1]; `softness`: 0.5 [0, 100] | Normalized center and radial edge half-width in pixels; zero is a point-sampled hard edge |
+| `simpleZoom` | `quickness`: 0.8 [0.2, 1]; `centerX`, `centerY`: 0.5 [0, 1] | Progress at which outgoing zoom completes, and normalized zoom center; fading starts at quickness − 0.2 |
+| `crossWarp` | `centerX`, `centerY`: 0.5 [0, 1] | Normalized warp center |
+| `linearBlur` | `intensity`: 0.1 [0, 2] | Blur displacement relative to the canvas |
+| `directionalWarp` | `directionX`: -1 [-1, 1]; `directionY`: 1 [-1, 1]; `softness`: 0.5 [0.001, 1] | Direction normalized by its L1 length, and edge width; direction length must be at least 0.000001 |
+| `dreamyZoom` | `strength`: 0.5 [0, 4]; `centerX`, `centerY`: 0.5 [0, 1] | Zoom amount and normalized center |
+| `ripple` | `frequency`: 100 [0, 256]; `speed`: 50 [0, 256]; `amplitude`: 1/30 [0, 1] | Radial wave frequency, phase speed, and displacement |
+| `flyEye` | `size`: 0.04 [0, 1]; `frequency`: 50 [0, 256]; `colorSeparation`: 0.3 [0, 1] | Displacement, grid frequency, and RGB offset separation |
+| `multiplyBlend` | `midpoint`: 0.5 [0.001, 0.999] | Progress at which the multiplied image appears |
+| `perlin` | `scale`: 5 [0.001, 128]; `smoothness`: 0.1 [0.001, 1] | Noise scale and threshold smoothing |
+
+Soft edges sweep fully outside the canvas at both ends, so increasing softness does
+not introduce a jump when the overlap starts or ends. Ripple displacement ramps
+from zero, reaches its full amplitude at progress 0.5, and returns to zero.
+
+Parameter names and limits come from the [shared registry](../crates/valle-draw/src/transition.rs);
+Studio controls consume its [generated metadata](../crates/valle-timeline/schema/transition-parameters.generated.json).
+Timeline parameters are constant for the overlap. Motion can animate the same fields.
+
+The overlap must be positive and shorter than each endpoint. Duplicate pairs,
+non-adjacent indices, contained clips and overlapping transition windows are
+rejected. Unmarked within-track overlaps are also rejected. Endpoint layers must
+use the normal blend mode; their transform, opacity, mask and filters are applied
+before the transition. Clip audio follows the overlapping placement; use `gain`
+curves when an audio crossfade is wanted.
+
+Transition boundaries are quantized from their absolute timestamps. For an
+N-frame overlap, progress is `i / (N - 1)` with exact source/destination endpoints;
+a single-frame overlap samples progress 0.5. Empty quantized overlaps are rejected.
+The transition mixes its two premultiplied inputs, then composites once over the
+underlying tracks.
+
+In Studio, select the outgoing clip and edit **Transition to next clip**. Changing
+overlap duration moves the incoming clip and later clips together, preserving
+their source clocks and intervening gaps. Removing a transition restores a direct
+cut. The timeline displays the overlap as a striped band. Reordering preserves a
+transition only when its original endpoints remain adjacent in the same order.
+Parameter controls appear for the selected kind. Changing duration or moving a
+surviving transition preserves its parameters; changing kind resets them to defaults.
 
 ## Audio and video sound
 
@@ -703,9 +760,9 @@ and exit codes see the [CLI output contract](cli.md#output-contract-for-scripts-
 
 | Problem | What to inspect |
 | --- | --- |
-| Unknown field / invalid shape | Use the sparse public format; check spelling and avoid internal IDs, `version`, `transform` and `transition` objects |
+| Unknown field / invalid shape | Use the sparse public format; check spelling and avoid internal IDs, `version`, `transform` and internal clip objects |
 | Missing resource alias | Declare it in root `resources`; use the alias in `src`, `component` and `style.font` |
-| Track overlap | Sort clips and keep each track non-overlapping; split simultaneous clips across tracks |
+| Track overlap | Connect adjacent visual overlaps with `transitions`; otherwise use separate tracks |
 | Video has no sound | Check whether the source has audio and whether its video `gain` is zero |
 | Video/image does not fill canvas | Use `fit: "cover"`; check any explicit `size`, `scale` and `position` |
 | Motion source range failure | Check the component duration, `trimStart`, `rate`, output `duration` and `end` together |
@@ -715,7 +772,7 @@ and exit codes see the [CLI output contract](cli.md#output-contract-for-scripts-
 | Caption is rejected | Exactly one of `text`/non-empty `runs`; choose presets or custom `presentation` |
 | Karaoke timing error | Supply ordered clip-local run windows and `behavior.type: "karaoke"` |
 | Check passes but render fails | Inspect actual resources, media extent, Motion controls, font availability and backend admission |
-| MP4 rejects a transparent scene | Set an opaque `canvas.background` or use PNG when alpha is required |
+| MP4 rejects a transparent scene | Set an opaque `canvas.background` or use PNG/transparent MOV when alpha is required |
 | Export is longer than expected | Check the latest ending clip in every band, including audio and adjustments |
 
 Use `project create/show/apply/history/restore` when revisions are needed; those
