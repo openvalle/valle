@@ -179,7 +179,7 @@ pub(crate) fn build_compiled_motion_program(
             ),
         });
     }
-    let motion_context = valle_motion::motion_context_at_source(
+    let mut motion_context = valle_motion::motion_context_at_source(
         local_frame,
         valle_timeline::internal::SampleTime::new(context.source_time),
         total_frames,
@@ -188,6 +188,13 @@ pub(crate) fn build_compiled_motion_program(
     .ok_or_else(|| ProgramPrepareError::CompiledInvariant {
         reason: format!("local frame {local_frame} is outside Motion duration {total_frames}"),
     })?;
+    motion_context.host =
+        context
+            .evaluated
+            .motion_host()
+            .ok_or_else(|| ProgramPrepareError::CompiledInvariant {
+                reason: "compiled Motion host context is missing".into(),
+            })?;
     let options = valle_motion::LayoutOptions {
         viewport: valle_motion::Viewport::new((
             context.viewport.width(),

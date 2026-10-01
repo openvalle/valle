@@ -9,6 +9,20 @@ use valle_timeline::FrameRate;
 
 const TIME_SCOPE: &str = include_str!("fixtures/motion/composition/time-scope.motion.tsx");
 
+#[test]
+fn time_scope_preserves_host_inputs() {
+    for (expression, expected) in [
+        ("ctx.host.seconds * 100", 250.0),
+        ("ctx.host.duration * 100", 300.0),
+        ("ctx.host.progress * 59", 145.0),
+    ] {
+        let source = TIME_SCOPE.replace("ctx.seconds * 100", expression);
+        let artifact = compile_motion(&source).unwrap().artifact;
+        assert!((width(&artifact, "bar", 45) - expected).abs() < 1e-9);
+    }
+    assert!(compile_motion(&TIME_SCOPE.replace("ctx.seconds", "ctx.host.frame")).is_err());
+}
+
 fn width(artifact: &SceneArtifact, key: &str, frame: u32) -> f64 {
     let context = motion_context_at_frame(frame, 60, FrameRate::new(30, 1).unwrap()).unwrap();
     let props = resolve_props(&artifact.controls, &Default::default()).unwrap();

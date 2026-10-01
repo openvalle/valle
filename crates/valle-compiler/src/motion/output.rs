@@ -45,6 +45,12 @@ pub(super) fn context_input(segments: &[String]) -> Option<ContextInput> {
         [name] if name == "durationFrames" => Some(ContextInput::DurationFrames),
         [fps, name] if fps == "fps" && name == "num" => Some(ContextInput::FpsNum),
         [fps, name] if fps == "fps" && name == "den" => Some(ContextInput::FpsDen),
+        [host, field] if host == "host" => match field.as_str() {
+            "seconds" => Some(ContextInput::HostSeconds),
+            "duration" => Some(ContextInput::HostDuration),
+            "progress" => Some(ContextInput::HostProgress),
+            _ => None,
+        },
         // Recognize per-unit fields; artifact admission restricts their use to Text perUnit
         // expressions.
         [unit, field] if unit == "unit" => match field.as_str() {

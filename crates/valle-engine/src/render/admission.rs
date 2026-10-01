@@ -662,7 +662,6 @@ enum AdmittedOwnerClock {
     VisualClipLocal,
     AudioClipLocal,
     CaptionLocal,
-    MotionSource,
 }
 
 #[derive(Debug, Clone)]
@@ -743,6 +742,9 @@ struct AdmittedMotionArtifactDependency {
 struct AdmittedMotionInstance {
     component_target: u32,
     reads_destination: bool,
+    host_duration: RationalTime,
+    host_range: FrameRange,
+    host_fps: FrameRate,
     props: BTreeMap<String, AdmittedMotionParam>,
     resources: BTreeMap<String, u32>,
     artifact_dependencies: Vec<AdmittedMotionArtifactDependency>,
@@ -1369,6 +1371,7 @@ fn admit_visual_program(
                     let source = admit_visual_source(
                         &clip.source,
                         cursor,
+                        duration,
                         range,
                         canvas.frame_rate,
                         resource_targets,
@@ -1682,6 +1685,7 @@ fn admit_blend(blend: BlendMode) -> AdmittedBlendMode {
 fn admit_visual_source(
     source: &VisualSource,
     placement_start: RationalTime,
+    host_duration: RationalTime,
     range: FrameRange,
     frame_rate: FrameRate,
     resource_targets: &BTreeMap<String, u32>,
@@ -1765,6 +1769,8 @@ fn admit_visual_source(
             let instance = admit_motion_instance(
                 source,
                 target,
+                host_duration,
+                range,
                 frame_rate,
                 resource_targets,
                 resources,
@@ -1820,6 +1826,8 @@ fn admit_visual_source(
 fn admit_motion_instance(
     source: &MotionInstance,
     component_target: u32,
+    host_duration: RationalTime,
+    host_range: FrameRange,
     frame_rate: FrameRate,
     resource_targets: &BTreeMap<String, u32>,
     resources: &[ResolvedResource],
@@ -1964,6 +1972,9 @@ fn admit_motion_instance(
     AdmittedMotionInstance {
         component_target,
         reads_destination: descriptor.reads_destination,
+        host_duration,
+        host_range,
+        host_fps: frame_rate,
         props,
         resources: compiled_resources,
         artifact_dependencies,
@@ -2136,7 +2147,7 @@ fn admit_motion_typed_param<T: Clone>(
         },
     };
     Some(AdmittedParam {
-        owner_clock: AdmittedOwnerClock::MotionSource,
+        owner_clock: AdmittedOwnerClock::VisualClipLocal,
         value,
     })
 }

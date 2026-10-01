@@ -1376,13 +1376,13 @@ fn hold_end_preserves_the_sentinel_and_uses_each_producers_abi_boundary() {
     assert_eq!(motion_clip.source().sample_time(), motion_frame_boundary);
     assert_eq!(
         motion_clip.source().motion_props().unwrap()["opacity"],
-        valle_engine::render::EvaluatedMotionValue::Scalar(0.5),
-        "HoldEnd must read the final step strictly before D, not the canvas frame boundary or D"
+        valle_engine::render::EvaluatedMotionValue::Scalar(0.75),
+        "holding the source must not hold a host-local prop curve"
     );
     assert_eq!(
         motion_clip.source().motion_props().unwrap()["linear"],
         valle_engine::render::EvaluatedMotionValue::Scalar(1.0),
-        "a continuous curve's value at D is its mathematical left limit"
+        "the host-local curve clamps after its last keyframe"
     );
     assert_eq!(
         motion_render
@@ -3133,4 +3133,136 @@ fn transition_parameters_participate_in_identity_and_survive_prepare() {
         .unwrap();
     item["kernel"]["params"][0] = json!(2.0);
     assert!(serde_json::from_value::<valle_engine::prepare::PrepareOutput>(invalid).is_err());
+}
+
+#[test]
+fn motion_host_clock_and_props_ignore_source_retiming() {
+    let artifact = motion_artifact();
+    let resources =
+        manifest(json!({"component:title":motion_entry(&artifact),"asset:logo":image_entry()}));
+    let bindings = ResourceBindings::new()
+        .with_binding(
+            "component:title",
+            motion_binding(&resources, "component:title", Arc::clone(&artifact), 2),
+        )
+        .unwrap()
+        .with_binding("asset:logo", binding(&resources, "asset:logo", None, 3))
+        .unwrap();
+    for end in ["hold", "loop"] {
+        let mut value = motion_document("component:title");
+        value["document"]["canvas"]["fps"] = json!("30000/1001");
+        value["document"]["canvas"]["duration"] = json!("3/1");
+        let clip = &mut value["document"]["visual"]["tracks"][0]["items"][0];
+        clip["duration"] = json!("2/1");
+        clip["source"]["rate"] = json!("2/1");
+        clip["source"]["endBehavior"] = json!(end);
+        clip["source"]["props"]["opacity"] = json!({
+            "type":"curve", "id":"curve:host", "interpolation":"linear",
+            "keyframes":[
+                {"id":"key:start","time":"0/1","value":0.0,"outEasing":null},
+                {"id":"key:end","time":"2/1","value":1.0,"outEasing":null}
+            ],"extrapolation":"clamp"
+        });
+        let items = value["document"]["visual"]["tracks"][0]["items"]
+            .as_array_mut()
+            .unwrap();
+        items.insert(
+            0,
+            json!({"type":"gap","id":"gap:placement","duration":"1/1000"}),
+        );
+        let render = open(
+            &timeline(&value),
+            &resources,
+            &bindings,
+            &Capabilities::new().with_artifact_abi("valle.motion/artifact@1"),
+            &baseline_profile(),
+        )
+        .unwrap();
+        for frame in [59, 0, 30, 59, 1, 0] {
+            let evaluated = render.evaluate(FrameKey::new(frame)).unwrap();
+            let EvaluatedVisualOperation::Clip(clip) = &evaluated.visual()[0] else {
+                panic!("expected clip")
+            };
+            let host = clip.source().motion_host().unwrap();
+            let seconds = valle_timeline::RationalTime::new(frame * 1001 - 30, 30000).unwrap();
+            assert_eq!(host.sample.composition(), seconds);
+            assert_eq!(
+                host.duration,
+                valle_timeline::RationalTime::new(2, 1).unwrap()
+            );
+            assert_eq!(
+                host.progress,
+                valle_timeline::RationalTime::new(frame, 59).unwrap()
+            );
+            assert_eq!(
+                clip.source().motion_props().unwrap()["opacity"],
+                valle_engine::render::EvaluatedMotionValue::Scalar(
+                    (seconds.as_f64() / 2.0).max(0.0)
+                )
+            );
+        }
+    }
+}
+
+#[test]
+fn motion_host_progress_uses_both_absolute_quantized_boundaries() {
+    let artifact = motion_artifact();
+    let resources =
+        manifest(json!({"component:title":motion_entry(&artifact),"asset:logo":image_entry()}));
+    let bindings = ResourceBindings::new()
+        .with_binding(
+            "component:title",
+            motion_binding(&resources, "component:title", Arc::clone(&artifact), 2),
+        )
+        .unwrap()
+        .with_binding("asset:logo", binding(&resources, "asset:logo", None, 3))
+        .unwrap();
+    for (start, duration, expected_frames) in [
+        ("0/1", "1/5", 1),
+        ("0/1", "2/5", 1),
+        ("3/20", "2/5", 2),
+        ("1/5", "1/5", 0),
+    ] {
+        let mut value = motion_document("component:title");
+        value["document"]["canvas"]["fps"] = json!("3/1");
+        let clip = &mut value["document"]["visual"]["tracks"][0]["items"][0];
+        clip["duration"] = json!(duration);
+        if start != "0/1" {
+            value["document"]["visual"]["tracks"][0]["items"]
+                .as_array_mut()
+                .unwrap()
+                .insert(
+                    0,
+                    json!({"type":"gap","id":"gap:placement","duration":start}),
+                );
+        }
+        let result = open(
+            &timeline(&value),
+            &resources,
+            &bindings,
+            &Capabilities::new().with_artifact_abi("valle.motion/artifact@1"),
+            &baseline_profile(),
+        );
+        if expected_frames == 0 {
+            assert!(result.is_err());
+            continue;
+        }
+        let render = result.unwrap();
+        for frame in 0..expected_frames {
+            let evaluated = render.evaluate(FrameKey::new(frame)).unwrap();
+            let EvaluatedVisualOperation::Clip(clip) = &evaluated.visual()[0] else {
+                panic!("expected clip")
+            };
+            let host = clip.source().motion_host().unwrap();
+            assert_eq!(
+                host.progress,
+                if expected_frames == 1 {
+                    valle_timeline::RationalTime::new(1, 2).unwrap()
+                } else {
+                    valle_timeline::RationalTime::new(frame, expected_frames as u32 - 1).unwrap()
+                }
+            );
+            assert_eq!(host.duration.to_string(), duration);
+        }
+    }
 }

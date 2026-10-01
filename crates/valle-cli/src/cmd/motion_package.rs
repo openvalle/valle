@@ -193,7 +193,9 @@ fn build_timeline(
                             "component": COMPONENT_RESOURCE_ID,
                             "fit": "contain",
                             "sourceStart": "0/1",
-                            "sourceDuration": input.duration,
+                            "sourceDuration": input.artifact.composition.as_ref()
+                                .context("standalone Motion needs a composition")?.duration()
+                                .map_err(|error| anyhow!(error))?,
                             "rate": "1/1",
                             "endBehavior": "hold",
                             "props": props,

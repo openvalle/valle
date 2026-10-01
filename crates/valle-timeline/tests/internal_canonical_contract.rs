@@ -1078,3 +1078,20 @@ fn transitions_subtract_the_overlap_and_reject_containment_and_triple_overlap() 
             .any(|d| d.code == "overlapping_transitions")
     );
 }
+
+#[test]
+fn motion_prop_keyframes_are_bounded_by_host_duration() {
+    let mut value = empty_document();
+    let mut clip = solid_clip("clip:motion", "4/1");
+    clip["source"] = json!({
+        "type":"motion", "component":"component:card", "fit":"contain",
+        "sourceStart":"0/1", "sourceDuration":"1/1", "rate":"2/1", "endBehavior":"hold",
+        "props":{"opacity":{"type":"curve","id":"curve:host","interpolation":"linear",
+            "keyframes":[{"id":"key:host:end","time":"4/1","value":1,"outEasing":null}],
+            "extrapolation":"clamp"}}, "resources":{}
+    });
+    value["document"]["visual"]["tracks"] = json!([{"id":"visual:main","items":[clip]}]);
+    decode_value(&value).unwrap();
+    value["document"]["visual"]["tracks"][0]["items"][0]["duration"] = json!("1/2");
+    assert!(decode_value(&value).is_err());
+}

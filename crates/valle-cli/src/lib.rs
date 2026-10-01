@@ -605,6 +605,9 @@ pub enum MotionAction {
     Check {
         /// Motion JSX source file.
         input: PathBuf,
+        /// Host clip duration in decimal seconds; source timing remains composition-based.
+        #[arg(long, value_name = "SECONDS")]
+        host_duration: Option<String>,
         /// Bind an asset control as name=path; may be repeated.
         #[arg(long = "asset", value_name = "NAME=PATH")]
         assets: Vec<String>,
@@ -627,6 +630,9 @@ pub enum MotionAction {
     Review {
         /// Motion JSX source file.
         input: PathBuf,
+        /// Host clip duration in decimal seconds; source timing remains composition-based.
+        #[arg(long, value_name = "SECONDS")]
+        host_duration: Option<String>,
         /// Bind an asset control as name=path; may be repeated.
         #[arg(long = "asset", value_name = "NAME=PATH")]
         assets: Vec<String>,
@@ -655,6 +661,9 @@ pub enum MotionAction {
     Render {
         /// Motion JSX source file.
         input: PathBuf,
+        /// Host clip duration in decimal seconds; source timing remains composition-based.
+        #[arg(long, value_name = "SECONDS")]
+        host_duration: Option<String>,
         #[command(flatten)]
         delivery: RenderOutputArgs,
         /// Compositor backend. Auto uses an available Metal device on macOS, otherwise CPU Raster.

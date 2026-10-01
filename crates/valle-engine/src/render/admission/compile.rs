@@ -11,7 +11,6 @@ pub(super) fn compile_admitted_timeline(
             AdmittedOwnerClock::VisualClipLocal => CompiledOwnerClock::VisualClipLocal,
             AdmittedOwnerClock::AudioClipLocal => CompiledOwnerClock::AudioClipLocal,
             AdmittedOwnerClock::CaptionLocal => CompiledOwnerClock::CaptionLocal,
-            AdmittedOwnerClock::MotionSource => CompiledOwnerClock::MotionSource,
         }
     }
 
@@ -78,6 +77,9 @@ pub(super) fn compile_admitted_timeline(
         CompiledMotionInstance {
             component_target: instance.component_target,
             reads_destination: instance.reads_destination,
+            host_duration: instance.host_duration,
+            host_range: instance.host_range,
+            host_fps: instance.host_fps,
             props: instance
                 .props
                 .into_iter()

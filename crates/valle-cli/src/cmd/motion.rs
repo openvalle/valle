@@ -27,6 +27,7 @@ pub fn run(action: MotionAction) -> Result<std::process::ExitCode> {
     match action {
         MotionAction::Check {
             input,
+            host_duration,
             assets,
             bindings,
             data,
@@ -38,6 +39,7 @@ pub fn run(action: MotionAction) -> Result<std::process::ExitCode> {
             let temp = tempfile::tempdir()?;
             render(
                 &input,
+                host_duration.as_deref(),
                 RenderOutputArgs {
                     output: Some(temp.path().join("check.png")),
                     frame: Some(frame),
@@ -57,6 +59,7 @@ pub fn run(action: MotionAction) -> Result<std::process::ExitCode> {
         }
         MotionAction::Review {
             input,
+            host_duration,
             assets,
             bindings,
             data,
@@ -67,6 +70,7 @@ pub fn run(action: MotionAction) -> Result<std::process::ExitCode> {
             trajectory_sheet,
         } => review(
             &input,
+            host_duration.as_deref(),
             &assets,
             &font,
             data.as_deref(),
@@ -78,6 +82,7 @@ pub fn run(action: MotionAction) -> Result<std::process::ExitCode> {
         ),
         MotionAction::Render {
             input,
+            host_duration,
             delivery,
             backend,
             tuning,
@@ -88,6 +93,7 @@ pub fn run(action: MotionAction) -> Result<std::process::ExitCode> {
             ..
         } => render(
             &input,
+            host_duration.as_deref(),
             delivery,
             &assets,
             &font,
@@ -123,6 +129,7 @@ pub fn run(action: MotionAction) -> Result<std::process::ExitCode> {
 
 fn review(
     input: &Path,
+    host_duration: Option<&str>,
     asset_specs: &[String],
     font_paths: &[PathBuf],
     data: Option<&Path>,
@@ -139,7 +146,7 @@ fn review(
         Err(()) => return Ok(std::process::ExitCode::FAILURE),
     };
     let artifact = &prepared.compiled.artifact;
-    let delivery = Delivery::of(artifact, output_fps)?;
+    let delivery = Delivery::of(artifact, output_fps)?.with_host_duration(host_duration)?;
     let prop_bindings = read_prop_bindings(bindings.props.as_deref())?;
     let overrides = review_prop_overrides(artifact, &prop_bindings)?;
     let props = valle_motion::resolve_props(&artifact.controls, &overrides)?;
@@ -179,6 +186,7 @@ fn review(
         &opts,
         delivery.fps,
         delivery.duration_frames,
+        delivery.duration,
         max_frames.unwrap_or(delivery.duration_frames.max(2)),
         trajectories || trajectory_sheet.is_some(),
     )
@@ -215,6 +223,7 @@ mod trajectory_sheet;
 #[allow(clippy::too_many_arguments)]
 fn render(
     input: &Path,
+    host_duration: Option<&str>,
     output: RenderOutputArgs,
     asset_specs: &[String],
     font_paths: &[PathBuf],
@@ -246,7 +255,8 @@ fn render(
         Err(()) => return Ok(std::process::ExitCode::FAILURE),
     };
     let artifact = &prepared.compiled.artifact;
-    let delivery = Delivery::of(artifact, tuning.fps.as_deref())?;
+    let delivery =
+        Delivery::of(artifact, tuning.fps.as_deref())?.with_host_duration(host_duration)?;
     let (duration, fps, canvas) = (delivery.duration, delivery.fps, delivery.canvas);
     if let Some((width, height)) = tuning.output_size {
         // Delivery scaling must preserve the composition's aspect ratio: another shape is another
@@ -311,12 +321,28 @@ fn render(
             .execute(&renderer)
             .map_err(|error| source_error(error, &prepared.compiled))?;
         let checked_frame = frame.unwrap_or(0);
-        let motion_context = valle_motion::motion_context_at_frame(
-            u32::try_from(checked_frame).context("checked frame must be nonnegative")?,
-            delivery.duration_frames,
+        let host_frame =
+            u32::try_from(checked_frame).context("checked frame must be nonnegative")?;
+        let source_frames = artifact
+            .composition
+            .as_ref()
+            .expect("validated composition")
+            .duration_frames(fps)
+            .map_err(|error| anyhow!(error))?;
+        let mut motion_context = valle_motion::motion_context_at_frame(
+            host_frame.min(source_frames - 1),
+            source_frames,
             fps,
         )
         .context("checked frame is outside the Motion duration")?;
+        motion_context.host = valle_motion::MotionHostContext::new(
+            valle_motion::time::sample_time_at_frame(i64::from(host_frame), fps)
+                .map_err(|error| anyhow!(error))?,
+            duration,
+            host_frame,
+            delivery.duration_frames,
+        )
+        .context("checked frame is outside the host duration")?;
         let evaluation = prepared.scene.frame_evaluation_stats(&motion_context);
         let compilation = observation.trace.metrics();
         crate::output::emit(
@@ -1420,9 +1446,9 @@ fn validate_studio_request(_request: &StudioRequest) -> Result<()> {
 
 /// The delivery contract every rendering path reads back from the artifact.
 ///
-/// Preview, export, and Studio all take the canvas, frame rate, and duration from here, so a
-/// command line cannot disagree with the file. An artifact without a contract is an in-memory
-/// compile; rendering it would have to guess a canvas, which this project never does.
+/// The artifact defines the source canvas and duration. CLI output FPS and host duration
+/// can be overridden without changing that source contract. An artifact without a contract
+/// is an in-memory compile and cannot supply a delivery canvas.
 #[derive(Clone, Copy)]
 struct Delivery {
     duration: RationalTime,
@@ -1462,6 +1488,19 @@ impl Delivery {
             fps,
             canvas,
         })
+    }
+
+    fn with_host_duration(mut self, input: Option<&str>) -> Result<Self> {
+        if let Some(input) = input {
+            let duration = RationalTime::from_exact(TimelineTimeWire::new(input)?.to_exact());
+            if !duration.is_positive() {
+                bail!("--host-duration must be positive");
+            }
+            self.duration_frames = valle_motion::duration_frames(duration, self.fps)
+                .context("--host-duration must produce at least one output frame")?;
+            self.duration = duration;
+        }
+        Ok(self)
     }
 }
 

@@ -435,6 +435,8 @@ impl EvalPlan {
                     input: ContextInput::LocalFrame
                         | ContextInput::LocalProgress
                         | ContextInput::CompositionSeconds
+                        | ContextInput::HostSeconds
+                        | ContextInput::HostProgress
                         | ContextInput::UnitIndex
                         | ContextInput::UnitCount
                         | ContextInput::UnitStart
@@ -1051,6 +1053,11 @@ fn reads_runtime_inputs(expr: &Expr) -> bool {
 /// evaluated during folding.
 fn folding_context() -> MotionContext {
     MotionContext {
+        host: crate::MotionHostContext {
+            sample: valle_timeline::internal::SampleTime::ZERO,
+            duration: valle_timeline::RationalTime::ZERO,
+            progress: valle_timeline::RationalTime::ZERO,
+        },
         local_frame: 0,
         sample: valle_timeline::internal::SampleTime::ZERO,
         progress: 0.0,
@@ -1605,6 +1612,9 @@ fn context_value(
         ContextInput::LocalFrame => number(ctx.local_frame),
         ContextInput::LocalProgress => MotionValue::Number(ctx.progress),
         ContextInput::CompositionSeconds => MotionValue::Number(ctx.sample.composition().as_f64()),
+        ContextInput::HostSeconds => MotionValue::Number(ctx.host.sample.composition().as_f64()),
+        ContextInput::HostDuration => MotionValue::Number(ctx.host.duration.as_f64()),
+        ContextInput::HostProgress => MotionValue::Number(ctx.host.progress.as_f64()),
         ContextInput::DurationFrames => number(ctx.duration_frames),
         ContextInput::FpsNum => MotionValue::Number(ctx.fps.numerator() as f64),
         ContextInput::FpsDen => number(ctx.fps.denominator()),

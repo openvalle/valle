@@ -114,8 +114,12 @@ pub fn sample_properties(
             continue;
         }
         let at = |frame| -> Result<(Vec<f64>, Vec<MotionValue>), String> {
-            let ctx = crate::motion_context_at_frame(frame, request.duration_frames, request.fps)
-                .ok_or("frame outside scene")?;
+            let mut ctx =
+                crate::motion_context_at_frame(frame, request.duration_frames, request.fps)
+                    .ok_or("frame outside scene")?;
+            if let Some(composition) = &artifact.composition {
+                ctx.host.duration = composition.duration().map_err(|error| error.to_string())?;
+            }
             let values = eval_roots_planned(
                 artifact,
                 &plan,

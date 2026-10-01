@@ -1175,7 +1175,6 @@ enum CompiledOwnerClock {
     VisualClipLocal,
     AudioClipLocal,
     CaptionLocal,
-    MotionSource,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -1258,39 +1257,10 @@ impl<T: CompiledParamValueType> CompiledParam<T> {
             CompiledOwnerClock::VisualClipLocal
             | CompiledOwnerClock::AudioClipLocal
             | CompiledOwnerClock::CaptionLocal => clocks.clip,
-            CompiledOwnerClock::MotionSource => clocks.motion,
         };
         match &self.value {
             CompiledParamValue::Constant { value } => value.clone(),
             CompiledParamValue::Curve { curve } => curve.evaluate(time),
-        }
-    }
-
-    /// Evaluates a Motion-source-owned parameter without collapsing a held end into an arbitrary
-    /// exact timestamp. A continuous curve has its ordinary value at the boundary, while a step
-    /// curve excludes a keyframe exactly at that boundary.
-    fn evaluate_motion_source(
-        &self,
-        mapped_time: MappedSourceTime,
-        source_duration: RationalTime,
-    ) -> T {
-        assert_eq!(
-            self.owner_clock,
-            CompiledOwnerClock::MotionSource,
-            "Motion controls must be compiled onto the Motion source clock"
-        );
-        match (&self.value, mapped_time) {
-            (CompiledParamValue::Constant { value }, _) => value.clone(),
-            (CompiledParamValue::Curve { curve }, MappedSourceTime::HoldEnd) => {
-                curve.evaluate_left_limit(source_duration)
-            }
-            (CompiledParamValue::Curve { curve }, MappedSourceTime::Exact(time)) => {
-                curve.evaluate(time)
-            }
-            (
-                CompiledParamValue::Curve { curve },
-                MappedSourceTime::Static | MappedSourceTime::HoldStart,
-            ) => curve.evaluate(RationalTime::ZERO),
         }
     }
 }
@@ -1327,23 +1297,6 @@ impl<T: CompiledParamValueType> CompiledCurve<T> {
             .clamp(0.0, 1.0);
         from.value.interpolate(&to.value, from.easing.apply(raw))
     }
-
-    fn evaluate_left_limit(&self, boundary: RationalTime) -> T {
-        if self.interpolation != CompiledInterpolation::Step {
-            // Linear and cubic-eased segments are continuous at their endpoint. Their exact
-            // boundary value is therefore also the mathematical left limit.
-            return self.evaluate(boundary);
-        }
-        let first = &self.keyframes[0];
-        let upper = self
-            .keyframes
-            .partition_point(|keyframe| keyframe.time < boundary);
-        if upper == 0 {
-            first.value.clone()
-        } else {
-            self.keyframes[upper - 1].value.clone()
-        }
-    }
 }
 
 impl CompiledEasing {
@@ -1359,7 +1312,6 @@ impl CompiledEasing {
 struct EvaluationClocks {
     composition: RationalTime,
     clip: RationalTime,
-    motion: RationalTime,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -1430,6 +1382,9 @@ impl CompiledMotionArtifactDependency {
 pub struct CompiledMotionInstance {
     component_target: u32,
     reads_destination: bool,
+    host_duration: RationalTime,
+    host_range: FrameRange,
+    host_fps: FrameRate,
     props: BTreeMap<String, CompiledMotionParam>,
     resources: BTreeMap<String, u32>,
     artifact_dependencies: Vec<CompiledMotionArtifactDependency>,
@@ -1460,24 +1415,20 @@ impl CompiledMotionInstance {
         &self.artifact_dependencies
     }
 
-    fn evaluate_props(
-        &self,
-        mapped_time: MappedSourceTime,
-        source_duration: RationalTime,
-    ) -> BTreeMap<String, EvaluatedMotionValue> {
+    fn evaluate_props(&self, clocks: EvaluationClocks) -> BTreeMap<String, EvaluatedMotionValue> {
         self.props
             .iter()
             .map(|(name, param)| {
                 let value = match param {
-                    CompiledMotionParam::Scalar { param } => EvaluatedMotionValue::Scalar(
-                        param.evaluate_motion_source(mapped_time, source_duration),
-                    ),
-                    CompiledMotionParam::Vec2 { param } => EvaluatedMotionValue::Vec2(
-                        param.evaluate_motion_source(mapped_time, source_duration),
-                    ),
-                    CompiledMotionParam::Vec4 { param } => EvaluatedMotionValue::Vec4(
-                        param.evaluate_motion_source(mapped_time, source_duration),
-                    ),
+                    CompiledMotionParam::Scalar { param } => {
+                        EvaluatedMotionValue::Scalar(param.evaluate(clocks))
+                    }
+                    CompiledMotionParam::Vec2 { param } => {
+                        EvaluatedMotionValue::Vec2(param.evaluate(clocks))
+                    }
+                    CompiledMotionParam::Vec4 { param } => {
+                        EvaluatedMotionValue::Vec4(param.evaluate(clocks))
+                    }
                     CompiledMotionParam::Boolean { value } => EvaluatedMotionValue::Boolean(*value),
                     CompiledMotionParam::String { value } => {
                         EvaluatedMotionValue::String(value.clone())
@@ -2692,6 +2643,7 @@ pub struct EvaluatedSourceRef {
     sample_time: RationalTime,
     resource: Option<EvaluatedResourceRef>,
     motion_props: Option<BTreeMap<String, EvaluatedMotionValue>>,
+    motion_host: Option<valle_motion::MotionHostContext>,
     motion_resources: BTreeMap<String, EvaluatedResourceRef>,
     motion_artifact_dependencies: Vec<EvaluatedResourceRef>,
 }
@@ -2719,15 +2671,18 @@ impl EvaluatedSourceRef {
     }
 
     /// Exact discrete producer/request clock after applying the source boundary policy. The
-    /// original [`MappedSourceTime`] sentinel remains available separately: Motion continuous
-    /// props evaluate `HoldEnd` as a mathematical left limit, while this clock addresses the
-    /// final Motion ABI frame or Lottie descriptor tick.
+    /// original [`MappedSourceTime`] sentinel remains available separately. This clock addresses
+    /// the final Motion ABI frame or Lottie descriptor tick; props use the host-local clock.
     pub const fn sample_time(&self) -> RationalTime {
         self.sample_time
     }
 
     pub fn resource(&self) -> Option<&EvaluatedResourceRef> {
         self.resource.as_ref()
+    }
+
+    pub const fn motion_host(&self) -> Option<valle_motion::MotionHostContext> {
+        self.motion_host
     }
 
     pub fn motion_props(&self) -> Option<&BTreeMap<String, EvaluatedMotionValue>> {

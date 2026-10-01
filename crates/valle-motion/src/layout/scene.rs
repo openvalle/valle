@@ -4008,15 +4008,17 @@ fn resolve_shutter_samples(
                 .sample
                 .checked_offset(offset)
                 .map_err(|_| bad_time("shutter sample overflows exact time"))?;
-            let sample = crate::motion_context_at_sample(requested, ctx.duration_frames, ctx.fps)
-                .unwrap_or_else(|| {
-                    if requested < SampleTime::ZERO {
-                        crate::motion_context_at_frame(0, ctx.duration_frames, ctx.fps)
-                            .expect("validated nonempty composition")
-                    } else {
-                        last
-                    }
-                });
+            let mut sample =
+                crate::motion_context_at_sample(requested, ctx.duration_frames, ctx.fps)
+                    .unwrap_or_else(|| {
+                        if requested < SampleTime::ZERO {
+                            crate::motion_context_at_frame(0, ctx.duration_frames, ctx.fps)
+                                .expect("validated nonempty composition")
+                        } else {
+                            last
+                        }
+                    });
+            sample.host = ctx.host;
             let tree = if let Some(tree) = at_time.get(&sample.sample) {
                 Rc::clone(tree)
             } else {
@@ -4102,13 +4104,14 @@ fn resolve_echo_samples(
                 .sample
                 .checked_offset(offset)
                 .map_err(|_| bad_time("echo sample overflows exact time"))?;
-            let sample = if requested < SampleTime::ZERO {
+            let mut sample = if requested < SampleTime::ZERO {
                 crate::motion_context_at_frame(0, ctx.duration_frames, ctx.fps)
                     .ok_or_else(|| bad_time("first output frame has no exact sample time"))?
             } else {
                 crate::motion_context_at_sample(requested, ctx.duration_frames, ctx.fps)
                     .ok_or_else(|| bad_time("echo sample lies outside the composition"))?
             };
+            sample.host = ctx.host;
             let tree = if let Some(tree) = at_time.get(&sample.sample) {
                 Rc::clone(tree)
             } else {
@@ -4324,7 +4327,8 @@ fn auto_blur_velocities(
             crate::motion_context_at_sample(sample, ctx.duration_frames, ctx.fps)
         });
     let mut sample_anchors = |sample: Option<valle_motion::MotionContext>| {
-        sample.map(|sample| {
+        sample.map(|mut sample| {
+            sample.host = ctx.host;
             build_tree_inner(
                 prepared.sample_scene.as_deref().unwrap_or(prepared),
                 &sample,

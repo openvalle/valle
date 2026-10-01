@@ -549,6 +549,7 @@ pub fn review_motion(
     opts: &LayoutOptions<'_>,
     fps: FrameRate,
     duration_frames: u32,
+    host_duration: valle_timeline::RationalTime,
     max_frames: u32,
     include_trajectories: bool,
 ) -> Result<MotionReview, String> {
@@ -609,9 +610,25 @@ pub fn review_motion(
     let mut motion_onsets = HashMap::<String, u32>::new();
     let mut trajectories = BTreeMap::<String, Vec<MotionTrajectoryPoint>>::new();
     let mut issues = Vec::new();
+    let source_frames = prepared
+        .artifact()
+        .composition
+        .as_ref()
+        .map(|composition| composition.duration_frames(fps))
+        .transpose()
+        .map_err(|error| error.to_string())?
+        .unwrap_or(duration_frames);
     for frame in 0..duration_frames {
-        let ctx = motion_context_at_frame(frame, duration_frames, fps)
+        let mut ctx = motion_context_at_frame(frame.min(source_frames - 1), source_frames, fps)
             .ok_or_else(|| format!("review frame {frame} is outside the composition"))?;
+        ctx.host = crate::MotionHostContext::new(
+            crate::time::sample_time_at_frame(i64::from(frame), fps)
+                .map_err(|error| error.to_string())?,
+            host_duration,
+            frame,
+            duration_frames,
+        )
+        .ok_or_else(|| format!("review frame {frame} has an invalid host interval"))?;
         let tree = match &cache {
             Some(cache) => cache.build_tree(&ctx, props, opts.viewport, opts.styles),
             None => build_tree(prepared, &ctx, props, opts),

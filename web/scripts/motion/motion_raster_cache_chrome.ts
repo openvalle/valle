@@ -1,4 +1,4 @@
-/** Smoke-test the product player's RasterProgram cache on Chrome's CanvasKit GPU backend.
+/** Verify RasterProgram caching and host animation through a held source on Chrome’s CanvasKit GPU backend.
  * Run after `bun run build:runtime` from `web`:
  *   bun web/scripts/motion/motion_raster_cache_chrome.ts
  */
@@ -11,18 +11,24 @@ const dist = join(root, "web/dist");
 const temporary = await mkdtemp(join(tmpdir(), "valle-cache-chrome-"));
 const resultPath = join(temporary, "result.json");
 const source = join(temporary, "scene.motion.tsx");
+const timeline = join(temporary, "timeline.json");
 await writeFile(source, `
-  export const composition = { width: 48, height: 48, fps: 30, duration: 2 };
+  export const composition = { width: 48, height: 48, fps: 30, duration: 1 };
   export default function CacheScene(ctx) {
     return <Scene style={{ width: 48, height: 48, backgroundColor: "#000" }}>
-      <View style={{ position: "absolute", left: ctx.seconds < 1 ? 4 : 20,
-        top: 8, width: 16, height: 16, backgroundColor: "#0f0" }} />
+      <View style={{ position: "absolute", left: ctx.host.progress * 24,
+        top: ctx.seconds * 8, width: 16, height: 16, backgroundColor: "#0f0" }} />
     </Scene>;
   }
 `);
+await writeFile(timeline, JSON.stringify({
+  canvas: { width: 48, height: 48, fps: 30 },
+  resources: { scene: "scene.motion.tsx" },
+  tracks: { visual: [{ clips: [{ kind: "motion", component: "scene", start: 0, duration: 2, end: "hold" }] }] },
+}));
 const studio = Bun.spawn([
-  process.env.VALLE_TEST_CLI ?? join(root, "target/debug/valle"), "--json", "motion", "studio",
-  source, "--port", "0", "--web-assets-dir", dist,
+  process.env.VALLE_TEST_CLI ?? join(root, "target/debug/valle"), "--json", "timeline", "studio",
+  timeline, "--port", "0", "--web-assets-dir", dist,
 ], { cwd: temporary, stdout: "pipe", stderr: "pipe" });
 let chrome: ReturnType<typeof Bun.spawn> | null = null;
 let server: ReturnType<typeof Bun.serve> | null = null;
@@ -42,7 +48,7 @@ try {
     try {
       const { createBrowserValleWebPlayer } = await import("/packages/engine/index.mjs");
       const config = await (await fetch("/config.json")).json();
-      if (config.status !== "ok") throw new Error(JSON.stringify(config.diagnostics));
+      if (!config.fixedPackageManifestJson) throw new Error(JSON.stringify(config.diagnostics ?? config));
       const player = await createBrowserValleWebPlayer({
         fixedPackageManifestJson: config.fixedPackageManifestJson,
         timelineJson: config.timelineJson,
@@ -59,6 +65,8 @@ try {
         const repeatPixels = canvas.toDataURL();
         const moved = await player.renderFrame(30);
         const movedPixels = canvas.toDataURL();
+        await player.renderFrame(59);
+        const lastPixels = canvas.toDataURL();
         const revisit = await player.renderFrame(0);
         const revisitPixels = canvas.toDataURL();
         const gl = document.createElement("canvas").getContext("webgl2");
@@ -71,6 +79,7 @@ try {
           revisit: revisit.stats,
           sameRepeat: firstPixels === repeatPixels,
           changedFrame: firstPixels !== movedPixels,
+          hostContinuesAfterHold: movedPixels !== lastPixels,
           sameRevisit: firstPixels === revisitPixels,
         };
         await fetch("/result", { method: "POST", body: JSON.stringify(result) });
@@ -125,13 +134,14 @@ try {
     revisit: { hits: result.revisit.rasterLayerCacheHits, misses: result.revisit.rasterLayerCacheMisses },
     sameRepeat: result.sameRepeat,
     changedFrame: result.changedFrame,
+    hostContinuesAfterHold: result.hostContinuesAfterHold,
     sameRevisit: result.sameRevisit,
   };
   if (!summary.renderer.includes("Apple") || !summary.renderer.includes("Metal")
     || summary.runtimeFlavor !== "product-gpu" || summary.backend !== "canvaskit-gpu"
     || !(summary.first.misses >= 1) || !(summary.repeat.hits >= 1)
     || !(summary.revisit.hits >= 1)
-    || !summary.sameRepeat || !summary.changedFrame || !summary.sameRevisit) {
+    || !summary.sameRepeat || !summary.changedFrame || !summary.sameRevisit || !summary.hostContinuesAfterHold) {
     throw new Error(`GPU raster cache smoke failed: ${JSON.stringify(summary)}`);
   }
   console.log(JSON.stringify(summary));

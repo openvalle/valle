@@ -133,13 +133,17 @@ fn continuity_of(expr: &Expr, prior: &[TemporalContinuity]) -> TemporalContinuit
 
 fn context_continuity(input: ContextInput) -> TemporalContinuity {
     match input {
-        ContextInput::LocalProgress | ContextInput::CompositionSeconds => TemporalContinuity::C2,
+        ContextInput::LocalProgress
+        | ContextInput::CompositionSeconds
+        | ContextInput::HostSeconds
+        | ContextInput::HostDuration => TemporalContinuity::C2,
         ContextInput::DurationFrames
         | ContextInput::FpsNum
         | ContextInput::FpsDen
         | ContextInput::ViewportWidth
         | ContextInput::ViewportHeight => TemporalContinuity::C2,
         ContextInput::LocalFrame
+        | ContextInput::HostProgress
         | ContextInput::UnitIndex
         | ContextInput::UnitCount
         | ContextInput::UnitStart

@@ -69,8 +69,8 @@ pub use composition::{
     COMPOSITION_TEMPLATE, Composition, DEFAULT_DPR, MAX_DURATION_FRAMES, ROOT_FONT_SIZE,
 };
 pub use context::{
-    MotionContext, duration_frames, motion_context_at_frame, motion_context_at_sample,
-    motion_context_at_source,
+    MotionContext, MotionHostContext, duration_frames, motion_context_at_frame,
+    motion_context_at_sample, motion_context_at_source,
 };
 pub use controls::{
     AssetControl, AssetKind, ControlType, ControlsSchema, MAX_PREPARE_DATA_ARRAY_ITEMS,

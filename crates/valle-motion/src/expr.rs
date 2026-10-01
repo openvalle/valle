@@ -28,6 +28,9 @@ pub enum ContextInput {
     LocalProgress,
     /// Clip-local composition seconds as a finite f64 projection of the exact sample identity.
     CompositionSeconds,
+    HostSeconds,
+    HostDuration,
+    HostProgress,
     DurationFrames,
     FpsNum,
     FpsDen,

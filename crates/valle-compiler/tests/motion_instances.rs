@@ -420,6 +420,7 @@ fn direct_and_component_text_roots_share_layout_and_glyph_sources() {
             &opts,
             FrameRate::new(30, 1).unwrap(),
             4,
+            valle_timeline::RationalTime::new(2, 15).unwrap(),
             4,
             false,
         )

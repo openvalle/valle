@@ -33,6 +33,7 @@ fn report(source: &str) -> valle_motion::layout::MotionReview {
         },
         FrameRate::new(30, 1).unwrap(),
         60,
+        valle_timeline::RationalTime::new(2, 1).unwrap(),
         60,
         true,
     )

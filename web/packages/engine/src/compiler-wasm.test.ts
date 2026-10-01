@@ -8,6 +8,37 @@ import {
 
 initSync({ module: await readFile(new URL("../generated/web/valle_engine_bg.wasm", import.meta.url)) });
 
+test("Wasm keeps host endpoints and geometry moving while the source holds", () => {
+  const compiled = compileMotionJsxWithWasm({ compile_motion_jsx }, `
+    export const composition={width:64,height:32,fps:4,duration:1};
+    export default function Host(ctx) {return <Scene><View key="bar" className="absolute"
+      style={{left:ctx.host.progress*40,top:ctx.seconds*8,width:ctx.host.duration*6,
+      height:12,backgroundColor:"white"}}/></Scene>;}`);
+  const preview = preparePreviewPackageWithWasm({ prepare_preview_package }, {
+    authorTimeline: { canvas:{width:64,height:32,fps:4}, resources:{host:"host.motion.tsx"},
+      tracks:{visual:[{clips:[{kind:"motion",component:"host",start:0,duration:2,end:"hold"}]}]} },
+    motionInstances:[{clipPath:"/tracks/visual/0/clips/0",artifact:compiled.artifact,
+      artifactDigest:compiled.artifactDigest,fonts:[]}],
+  });
+  const engine = new ProductEngine();
+  try {
+    const receipt = JSON.parse(engine.open_fixed_package(preview.fixedPackageManifestJson,
+      preview.timelineJson,preview.resourceManifestJson,preview.verifiedBindingBundleJson));
+    const seen = new Map<number, string>();
+    for (const frame of [7,0,3,7,1,0]) {
+      const ticket = engine.evaluate_prepare_preview(receipt.renderId,BigInt(frame),64,32,false);
+      try {
+        const json = engine.frame_inspection_json(ticket);
+        const inspection = JSON.parse(json).motion[0];
+        expect(inspection.sourceFrame).toBe(Math.min(frame,3));
+        expect(inspection.boxes.bar).toEqual([Math.round(frame*40/7),Math.min(frame,3)*2,12,12]);
+        if (seen.has(frame)) expect(json).toBe(seen.get(frame)!);
+        seen.set(frame,json);
+      } finally { engine.release_ticket(ticket); }
+    }
+  } finally { engine.free(); }
+});
+
 test("merged Engine Wasm compiles standalone JSX and linked modules", () => {
   const source = `export const composition = { width: 320, height: 180, duration: 1 };
     export default function Card(ctx) { return <Scene><View style={{ opacity: ctx.progress }} /></Scene>; }`;

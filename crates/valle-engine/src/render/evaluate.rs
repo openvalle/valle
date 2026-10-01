@@ -109,7 +109,6 @@ pub(super) fn evaluate_camera(
     let clocks = EvaluationClocks {
         composition,
         clip: composition,
-        motion: composition,
     };
     EvaluatedCamera {
         center_x: camera.center_x.evaluate(clocks),
@@ -222,7 +221,6 @@ fn evaluate_visual_layer(
     let clocks = EvaluationClocks {
         composition: composition_time,
         clip: clip_time,
-        motion: clip_time,
     };
     let mask = clip.layer.mask.as_ref().map(|mask| match mask {
         CompiledMask::Rect {
@@ -276,14 +274,35 @@ fn evaluate_source_ref(
             .hold_end_time
             .ok_or(RuntimeFault::VisualSourceHoldEndMissing { source_index })?,
     };
-    let motion_props = source.motion().map(|motion| {
-        motion.evaluate_props(
-            mapped_time,
-            source
-                .source_duration
-                .expect("admitted Motion sources have a finite duration"),
-        )
-    });
+    let clip_time = composition_time
+        .checked_sub(source.placement_start)
+        .map_err(|_| RuntimeFault::ExactTimeOverflow)?;
+    let clocks = EvaluationClocks {
+        composition: composition_time,
+        clip: clip_time,
+    };
+    let motion_props = source.motion().map(|motion| motion.evaluate_props(clocks));
+    let motion_host = source
+        .motion()
+        .map(|motion| {
+            let frame = valle_timeline::internal::quantize::quantize_frame_boundary(
+                composition_time,
+                motion.host_fps,
+            )
+            .map_err(|_| RuntimeFault::ExactTimeOverflow)?;
+            let local_frame = u32::try_from(frame - motion.host_range.start())
+                .map_err(|_| RuntimeFault::ExactTimeOverflow)?;
+            let frames = u32::try_from(motion.host_range.end() - motion.host_range.start())
+                .map_err(|_| RuntimeFault::ExactTimeOverflow)?;
+            valle_motion::MotionHostContext::new(
+                valle_timeline::internal::SampleTime::new(clip_time),
+                motion.host_duration,
+                local_frame,
+                frames,
+            )
+            .ok_or(RuntimeFault::ExactTimeOverflow)
+        })
+        .transpose()?;
     let mut motion_resources = BTreeMap::new();
     let mut motion_artifact_dependencies = Vec::new();
     if let Some(motion) = source.motion() {
@@ -315,6 +334,7 @@ fn evaluate_source_ref(
         sample_time,
         resource,
         motion_props,
+        motion_host,
         motion_resources,
         motion_artifact_dependencies,
     })
@@ -366,7 +386,6 @@ pub(super) fn evaluate_caption_program(
             let clocks = EvaluationClocks {
                 composition: composition_time,
                 clip: local_time,
-                motion: local_time,
             };
             evaluated.push(EvaluatedCaption {
                 track_order: track.order,
@@ -470,7 +489,6 @@ fn evaluate_audio_endpoint(
     let clocks = EvaluationClocks {
         composition: composition_time,
         clip: clip_time,
-        motion: clip_time,
     };
     let gain = clip.gain.evaluate(clocks);
     let pan = clip.pan.evaluate(clocks);
@@ -501,6 +519,7 @@ fn evaluate_audio_endpoint(
             sample_time,
             resource,
             motion_props: None,
+            motion_host: None,
             motion_resources: BTreeMap::new(),
             motion_artifact_dependencies: Vec::new(),
         },

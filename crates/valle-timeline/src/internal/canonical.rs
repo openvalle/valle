@@ -690,7 +690,7 @@ impl<'a> Validator<'a> {
                 for (name, param) in &source.props {
                     self.validate_json_param(
                         param,
-                        source.source_duration,
+                        clip.duration,
                         &format!("{path}/source/props/{}", pointer_token(name)),
                     );
                 }

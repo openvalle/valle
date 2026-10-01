@@ -1,4 +1,4 @@
-//! The source clock used by every Motion evaluator. Values come from the requested sample.
+//! Exact source and host clocks used by every Motion evaluator.
 
 use serde::{Deserialize, Serialize};
 use valle_timeline::internal::SampleTime;
@@ -9,7 +9,44 @@ use crate::time::{frame_at_sample_floor, frame_rate_as_f64, sample_time_at_frame
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MotionHostContext {
+    #[cfg_attr(feature = "ts", ts(type = "{ composition: string }"))]
+    pub sample: SampleTime,
+    #[cfg_attr(feature = "ts", ts(type = "string"))]
+    pub duration: RationalTime,
+    #[cfg_attr(feature = "ts", ts(type = "string"))]
+    pub progress: RationalTime,
+}
+
+impl MotionHostContext {
+    /// The frame address comes from quantizing both absolute host boundaries.
+    pub fn new(
+        sample: SampleTime,
+        duration: RationalTime,
+        frame: u32,
+        frames: u32,
+    ) -> Option<Self> {
+        if !duration.is_positive() || frames == 0 || frame >= frames {
+            return None;
+        }
+        let progress = if frames == 1 {
+            RationalTime::new(1, 2).ok()?
+        } else {
+            RationalTime::new(i64::from(frame), frames - 1).ok()?
+        };
+        Some(Self {
+            sample,
+            duration,
+            progress,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct MotionContext {
+    pub host: MotionHostContext,
     pub local_frame: u32,
     #[cfg_attr(feature = "ts", ts(type = "{ composition: string }"))]
     pub sample: SampleTime,
@@ -41,7 +78,11 @@ pub fn motion_context_at_source(
     }
     let seconds = sample.composition().as_f64();
     let progress = (seconds * frame_rate_as_f64(fps) / f64::from(duration_frames)).clamp(0.0, 1.0);
+    let duration = sample_time_at_frame(i64::from(duration_frames), fps)
+        .ok()?
+        .composition();
     Some(MotionContext {
+        host: MotionHostContext::new(sample, duration, local_frame, duration_frames)?,
         local_frame,
         sample,
         progress,
@@ -90,5 +131,30 @@ mod tests {
         assert_eq!(ctx.sample, sample);
         assert!((ctx.progress - 0.5 / 110.0).abs() < 1e-12);
         assert!(motion_context_at_frame(frames, frames, fps).is_none());
+    }
+
+    #[test]
+    fn host_progress_has_exact_endpoints_and_preserves_authored_time() {
+        let duration = RationalTime::new(23, 5).unwrap();
+        let sample = SampleTime::new(RationalTime::new(-1, 1000).unwrap());
+        let first = MotionHostContext::new(sample, duration, 0, 110).unwrap();
+        assert_eq!(first.sample, sample);
+        assert_eq!(first.duration, duration);
+        assert_eq!(first.progress, RationalTime::ZERO);
+        assert_eq!(
+            MotionHostContext::new(sample, duration, 109, 110)
+                .unwrap()
+                .progress,
+            RationalTime::new(1, 1).unwrap()
+        );
+        assert_eq!(
+            MotionHostContext::new(sample, duration, 0, 1)
+                .unwrap()
+                .progress,
+            RationalTime::new(1, 2).unwrap()
+        );
+        assert!(MotionHostContext::new(sample, duration, 0, 0).is_none());
+        assert!(MotionHostContext::new(sample, duration, 110, 110).is_none());
+        assert!(MotionHostContext::new(sample, RationalTime::ZERO, 0, 1).is_none());
     }
 }
