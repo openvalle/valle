@@ -110,6 +110,35 @@ pub fn motion_context_at_sample(
     )
 }
 
+/// Standalone delivery and review use the same template map as an admitted Timeline instance.
+pub fn motion_context_at_host(
+    role: valle_timeline::MotionRole,
+    source_duration: RationalTime,
+    host: MotionHostContext,
+    fps: FrameRate,
+) -> Option<MotionContext> {
+    role.validate(source_duration, Some(host.duration)).ok()?;
+    let frames = duration_frames(source_duration, fps)?;
+    let mapped = role
+        .overlay_time(host.sample.composition(), host.duration, source_duration)
+        .ok()?;
+    let end = sample_time_at_frame(i64::from(frames), fps)
+        .ok()?
+        .composition();
+    let boundary = if matches!(role, valle_timeline::MotionRole::Overlay { .. }) {
+        end.min(source_duration)
+    } else {
+        end
+    };
+    let mut ctx = if mapped >= boundary {
+        motion_context_at_frame(frames - 1, frames, fps)?
+    } else {
+        motion_context_at_sample(SampleTime::new(mapped.max(RationalTime::ZERO)), frames, fps)?
+    };
+    ctx.host = host;
+    Some(ctx)
+}
+
 /// Quantize authored duration at the actual output rate. Zero-frame works are invalid.
 pub fn duration_frames(duration: RationalTime, fps: FrameRate) -> Option<u32> {
     let frames = valle_timeline::internal::quantize::quantize_frame_boundary(duration, fps).ok()?;

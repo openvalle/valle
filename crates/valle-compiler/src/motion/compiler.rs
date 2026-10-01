@@ -153,6 +153,7 @@ impl<'s> Compiler<'s> {
             shader_registry: shader_registry.cloned(),
             component: None,
             composition: None,
+            role: valle_timeline::MotionRole::Clip,
             require_composition,
             controls: default_controls(),
             controls_span: None,
@@ -206,11 +207,12 @@ impl<'s> Compiler<'s> {
                             match name.as_str() {
                                 "controls" => self.compile_controls(initializer),
                                 "composition" => self.compile_composition(initializer),
-                                other => self.unsupported(initializer.span(), format!("a Motion module exports its component by default and may declare `controls` and `composition`; `{other}` is not part of the module contract — keep helpers module-local")),
+                                "role" => self.compile_role(initializer),
+                                other => self.unsupported(initializer.span(), format!("a Motion module exports its component by default and may declare `controls`, `composition` and `role`; `{other}` is not part of the module contract — keep helpers module-local")),
                             }
                         }
                     }
-                    _ => self.illegal(DiagCode::ModuleShape, export.span(), "named exports must be `export const controls` or `export const composition`"),
+                    _ => self.illegal(DiagCode::ModuleShape, export.span(), "named exports must be `export const controls`, `export const composition` or `export const role`"),
                 },
                 Statement::ExportDefaultDeclaration(export) => match &export.declaration {
                     ExportDefaultDeclarationKind::FunctionDeclaration(function) => {
@@ -345,6 +347,7 @@ impl<'s> Compiler<'s> {
             ),
             component,
             composition: self.composition.clone(),
+            role: self.role,
             controls: self.controls.clone(),
             resource_refs,
             exprs: std::mem::take(&mut self.expr_arena.values),

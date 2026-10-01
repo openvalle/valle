@@ -27,12 +27,19 @@ const RESOURCE_ID_NAMESPACE: &str = "resource";
 /// retained verbatim through [`CompileTimelineError::InvalidCanonical`].
 #[derive(Debug, Error)]
 pub enum CompileTimelineError {
+    #[error("Motion component `{component}` declared role `{role}` at `{path}`: {reason}")]
+    MotionRole {
+        component: String,
+        role: String,
+        path: String,
+        reason: String,
+    },
     #[error("Motion preparation failed: {reason}")]
     MotionPreparation { reason: String },
     #[error(
-        "Motion at `{path}` needs its composition duration resolved before Timeline compilation"
+        "Motion at `{path}` needs its composition duration and role resolved before Timeline compilation"
     )]
-    MissingMotionDuration { path: String },
+    MissingMotionMetadata { path: String },
     #[error("resource alias `{alias}` at `{path}` must match [A-Za-z0-9._-]{{1,64}}")]
     InvalidResourceAlias { alias: String, path: String },
     #[error("resource `{alias}` has an empty locator")]
@@ -73,10 +80,10 @@ pub fn compile_timeline(timeline: Timeline) -> Result<CanonicalTimeline, Compile
     compile_timeline_with_motion_sources(timeline, &BTreeMap::new())
 }
 
-/// Compile a public Timeline with source durations obtained from its prepared Motion artifacts.
+/// Compile a public Timeline with duration and role metadata obtained from its prepared Motion artifacts.
 pub fn compile_timeline_with_motion_sources(
     timeline: Timeline,
-    motion_sources: &BTreeMap<String, RationalTime>,
+    motion_sources: &BTreeMap<String, valle_timeline::MotionSourceMetadata>,
 ) -> Result<CanonicalTimeline, CompileTimelineError> {
     let mut timeline = timeline.into_wire();
     let mut resolved_sources = motion_sources.clone();
@@ -100,7 +107,7 @@ pub fn motion_instance_key(
 
 fn bind_motion_instances(
     timeline: &mut timeline::TimelineWire,
-    motion_sources: &mut BTreeMap<String, RationalTime>,
+    motion_sources: &mut BTreeMap<String, valle_timeline::MotionSourceMetadata>,
 ) -> Result<(), CompileTimelineError> {
     let original = timeline.resources.clone();
     for track in &mut timeline.tracks.visual {
@@ -155,7 +162,7 @@ struct NormalizationInput {
 
 struct TimelineNormalizer {
     resources: BTreeSet<String>,
-    motion_sources: BTreeMap<String, RationalTime>,
+    motion_sources: BTreeMap<String, valle_timeline::MotionSourceMetadata>,
     frame_rate: FrameRate,
     canvas_size: [u32; 2],
 }
@@ -163,7 +170,7 @@ struct TimelineNormalizer {
 impl TimelineNormalizer {
     fn new(
         timeline: &timeline::TimelineWire,
-        motion_sources: &BTreeMap<String, RationalTime>,
+        motion_sources: &BTreeMap<String, valle_timeline::MotionSourceMetadata>,
     ) -> Result<Self, CompileTimelineError> {
         validate_resources(&timeline.resources)?;
         let frame_rate = frame_rate(&timeline.canvas.fps)?;
@@ -428,22 +435,64 @@ impl TimelineNormalizer {
                         self.resolve(&alias, &path).map(|resource| (slot, resource))
                     })
                     .collect::<Result<_, _>>()?;
-                let source_duration = self.motion_sources.get(&component).ok_or_else(|| {
-                    CompileTimelineError::MissingMotionDuration {
+                let metadata = self.motion_sources.get(&component).ok_or_else(|| {
+                    CompileTimelineError::MissingMotionMetadata {
                         path: clip_path.to_owned(),
                     }
                 })?;
+                let role_error = |reason: String| CompileTimelineError::MotionRole {
+                    component: component.clone(),
+                    role: match metadata.role {
+                        valle_timeline::MotionRole::Clip => "clip",
+                        _ => "overlay",
+                    }
+                    .into(),
+                    path: clip_path.to_owned(),
+                    reason,
+                };
+                metadata
+                    .role
+                    .validate(
+                        metadata.duration,
+                        Some(RationalTime::from_exact(exact_time(_clip_duration))),
+                    )
+                    .map_err(|reason| {
+                        role_error(format!(
+                            "{reason}; host duration {}, template duration {}",
+                            exact_time(_clip_duration),
+                            metadata.duration
+                        ))
+                    })?;
+                if matches!(metadata.role, valle_timeline::MotionRole::Overlay { .. }) {
+                    for (field, present) in [
+                        ("fit", fit.is_some()),
+                        ("trimStart", trim_start.is_some()),
+                        ("rate", rate.is_some()),
+                        ("end", end.is_some()),
+                    ] {
+                        if present {
+                            return Err(role_error(format!("overlay does not admit `{field}`")));
+                        }
+                    }
+                }
                 document::VisualSourceWire::Motion(document::MotionInstanceWire {
                     component: self.resolve(&component, &format!("{clip_path}/component"))?,
                     fit: fit
                         .map(lower_raster_fit)
                         .unwrap_or(document::RasterFitWire::Contain),
                     source_start: trim_start.as_ref().map_or(ExactRational::ZERO, exact_time),
-                    source_duration: source_duration.into_exact(),
+                    source_duration: metadata.duration.into_exact(),
+                    role: metadata.role,
                     rate: rate.as_ref().map_or(ExactRational::ONE, exact_time),
-                    end_behavior: end
-                        .map(lower_media_end)
-                        .unwrap_or(document::MediaEndBehaviorWire::Error),
+                    end_behavior: if matches!(
+                        metadata.role,
+                        valle_timeline::MotionRole::Overlay { .. }
+                    ) {
+                        document::MediaEndBehaviorWire::Hold
+                    } else {
+                        end.map(lower_media_end)
+                            .unwrap_or(document::MediaEndBehaviorWire::Error)
+                    },
                     props,
                     data,
                     resources,

@@ -59,7 +59,7 @@ fn motion_clip(id: &str, filter_id: &str) -> Value {
             "component": "component:glass",
             "fit": "contain",
             "sourceStart": "0/1",
-            "sourceDuration": "1/1",
+            "role": {"type":"clip"}, "sourceDuration": "1/1",
             "rate": "1/1",
             "endBehavior": "hold",
             "props": {},

@@ -1563,6 +1563,48 @@
           ],
           "type": "string"
         },
+        "MotionRole": {
+          "oneOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "type": {
+                  "const": "clip",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "hold": {
+                  "$ref": "#/$defs/OverlayHold"
+                },
+                "intro": {
+                  "$ref": "#/$defs/RationalTime"
+                },
+                "outro": {
+                  "$ref": "#/$defs/RationalTime"
+                },
+                "type": {
+                  "const": "overlay",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "intro",
+                "outro",
+                "hold"
+              ],
+              "type": "object"
+            }
+          ]
+        },
         "NamedEasingWire": {
           "enum": [
             "linear",
@@ -1575,6 +1617,14 @@
         },
         "NamespacedKernelTypeWire": {
           "pattern": "^[^/\\s]+/[^/\\s]+$",
+          "type": "string"
+        },
+        "OverlayHold": {
+          "enum": [
+            "once",
+            "loop",
+            "stretch"
+          ],
           "type": "string"
         },
         "ParamWire": {
@@ -1820,6 +1870,10 @@
             "fit"
           ],
           "type": "object"
+        },
+        "RationalTime": {
+          "pattern": "^(0|[1-9][0-9]*|-[1-9][0-9]*)/[1-9][0-9]*$",
+          "type": "string"
         },
         "RequiredNullable_for_CameraTrackWire": {
           "anyOf": [
@@ -2358,6 +2412,9 @@
                   },
                   "type": "object"
                 },
+                "role": {
+                  "$ref": "#/$defs/MotionRole"
+                },
                 "sourceDuration": {
                   "$ref": "#/$defs/ExactRational"
                 },
@@ -2371,6 +2428,7 @@
               },
               "required": [
                 "type",
+                "role",
                 "component",
                 "fit",
                 "sourceStart",

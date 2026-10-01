@@ -2,6 +2,7 @@ import type {
   EditTimelineRequest,
   EditTimelineResponse,
   MotionCompilerDiagnostic,
+  MotionSourceMetadata,
   PreviewResourceInput,
   Timeline,
 } from "valle-engine";
@@ -30,7 +31,7 @@ export interface TimelineContext {
   timelineRevision: StudioTimelineRevision;
   timelineJson: string;
   timeline: Timeline;
-  motionSourceDurations?: Record<string, number>;
+  motionSourceMetadata?: Record<string, MotionSourceMetadata>;
   /** Digests of Motion files confirmed for this loaded author input. */
   inputDependencies?: Record<string, string> | null;
   inputDependencyError?: string | null;
@@ -134,7 +135,7 @@ export type TimelinePreviewResult =
       verifiedBindingBundleJson: string;
     };
     inputDependencies?: Record<string, string>;
-    motionSourceDurations?: Record<string, number>;
+    motionSourceMetadata?: Record<string, MotionSourceMetadata>;
     generatedWrapper?: boolean;
     motionInstances?: Array<{ clipPath: string; artifact: Record<string, unknown>; sourceMap: Record<string, unknown> }>;
     warnings?: ReadonlyArray<MotionCompilerDiagnostic>;

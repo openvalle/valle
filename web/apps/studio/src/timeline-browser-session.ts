@@ -75,7 +75,7 @@ export class TimelineBrowserSession {
       };
       return { status: "ok", timeline, timelineJson: JSON.stringify(timeline), render,
         assets: locators, motion: { structures: [] },
-        motionSourceDurations: result.package.motionSourceDurations,
+        motionSourceMetadata: result.package.motionSourceMetadata,
         inputDependencies: { ...mediaDependencies, ...sourceDependencies },
         motionInstances: result.instances, warnings: result.warnings };
     } catch (error) {

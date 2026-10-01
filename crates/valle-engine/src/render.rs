@@ -1380,6 +1380,7 @@ impl CompiledMotionArtifactDependency {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CompiledMotionInstance {
+    role: valle_timeline::MotionRole,
     component_target: u32,
     reads_destination: bool,
     host_duration: RationalTime,
@@ -1393,6 +1394,10 @@ pub struct CompiledMotionInstance {
 }
 
 impl CompiledMotionInstance {
+    pub const fn role(&self) -> valle_timeline::MotionRole {
+        self.role
+    }
+
     pub const fn component_target(&self) -> u32 {
         self.component_target
     }
@@ -1571,6 +1576,23 @@ impl CompiledSource {
         let clip_local = composition_time
             .checked_sub(self.placement_start)
             .map_err(|_| RuntimeFault::ExactTimeOverflow)?;
+        if let Some(motion) = self.motion() {
+            if matches!(motion.role, valle_timeline::MotionRole::Overlay { .. }) {
+                let duration = self.source_duration.expect("admitted Motion duration");
+                let sample = motion
+                    .role
+                    .overlay_time(clip_local, motion.host_duration, duration)
+                    .map_err(|_| RuntimeFault::ExactTimeOverflow)?;
+                let frames = quantized_motion_source_frame_count(duration, motion.host_fps)
+                    .map_err(|_| RuntimeFault::ExactTimeOverflow)?;
+                let boundary = frame_sample_time(i64::from(frames), motion.host_fps)?.min(duration);
+                return Ok(if sample >= boundary {
+                    MappedSourceTime::HoldEnd
+                } else {
+                    MappedSourceTime::Exact(sample)
+                });
+            }
+        }
         let raw = self
             .source_start
             .checked_add(

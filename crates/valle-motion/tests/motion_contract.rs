@@ -9,7 +9,7 @@ use valle_motion::{
     SceneNode, SemanticMeta, StyleBinding, StyleValue, TemplatePart, TextValue, canonical_bytes,
 };
 
-const ENVELOPE_SHA256: &str = "5e62918f650fad8903edc7bcbc68a211c6b0c25d7265611896eeb74068468c0f";
+const ENVELOPE_SHA256: &str = "4ffaad7fe68b706bc25aefa4cc10d9a740f8296fc34286ee6e6977d211585541";
 
 fn prop(control: ControlType, default: MotionValue) -> PropControl {
     PropControl {
@@ -113,6 +113,7 @@ fn envelope() -> ArtifactEnvelope {
     ];
 
     let artifact = SceneArtifact {
+        role: valle_timeline::MotionRole::Clip,
         composition: None,
         camera: None,
         format_version: ARTIFACT_FORMAT_VERSION,

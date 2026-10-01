@@ -740,6 +740,7 @@ struct AdmittedMotionArtifactDependency {
 
 #[derive(Debug, Clone)]
 struct AdmittedMotionInstance {
+    role: valle_timeline::MotionRole,
     component_target: u32,
     reads_destination: bool,
     host_duration: RationalTime,
@@ -1846,6 +1847,13 @@ fn admit_motion_instance(
         _ => unreachable!("resolver admitted a Motion component without Motion facts"),
     };
 
+    if source.role != artifact.role {
+        diagnostics.push(motion_schema_diagnostic(
+            EngineOpenDiagnosticCode::MotionTimingMismatch,
+            &format!("{path}/role"),
+            "role-differs-from-artifact",
+        ));
+    }
     let authored_duration = artifact
         .composition
         .as_ref()
@@ -1970,6 +1978,7 @@ fn admit_motion_instance(
     );
 
     AdmittedMotionInstance {
+        role: source.role,
         component_target,
         reads_destination: descriptor.reads_destination,
         host_duration,

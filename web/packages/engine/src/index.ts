@@ -41,6 +41,8 @@ export {
   type MotionShaderPackage,
   type PreviewMotionInstance,
   type PreviewResourceInput,
+  type MotionRole,
+  type MotionSourceMetadata,
   type PreviewPackageInput,
   type PreparedPreviewPackage,
   type MotionSourceEdit,

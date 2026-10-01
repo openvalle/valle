@@ -3947,6 +3947,21 @@ fn resolve_css_3d_node(
     Ok(())
 }
 
+// Overlay templates keep their authored exclusive endpoint when duration quantization rounds up.
+fn temporal_context_at_sample(
+    prepared: &PreparedScene,
+    ctx: &valle_motion::MotionContext,
+    sample: valle_timeline::internal::SampleTime,
+) -> Option<valle_motion::MotionContext> {
+    let artifact = prepared.artifact();
+    if matches!(artifact.role, valle_timeline::MotionRole::Overlay { .. })
+        && sample.composition() >= artifact.composition.as_ref()?.duration().ok()?
+    {
+        return None;
+    }
+    crate::motion_context_at_sample(sample, ctx.duration_frames, ctx.fps)
+}
+
 /// Evaluate each exposure at an exact output-time offset. A distinct evaluation round and layout
 /// belong to every sample; repeated times across Shutter nodes share one immutable result.
 fn resolve_shutter_samples(
@@ -4009,15 +4024,14 @@ fn resolve_shutter_samples(
                 .checked_offset(offset)
                 .map_err(|_| bad_time("shutter sample overflows exact time"))?;
             let mut sample =
-                crate::motion_context_at_sample(requested, ctx.duration_frames, ctx.fps)
-                    .unwrap_or_else(|| {
-                        if requested < SampleTime::ZERO {
-                            crate::motion_context_at_frame(0, ctx.duration_frames, ctx.fps)
-                                .expect("validated nonempty composition")
-                        } else {
-                            last
-                        }
-                    });
+                temporal_context_at_sample(prepared, ctx, requested).unwrap_or_else(|| {
+                    if requested < SampleTime::ZERO {
+                        crate::motion_context_at_frame(0, ctx.duration_frames, ctx.fps)
+                            .expect("validated nonempty composition")
+                    } else {
+                        last
+                    }
+                });
             sample.host = ctx.host;
             let tree = if let Some(tree) = at_time.get(&sample.sample) {
                 Rc::clone(tree)
@@ -4108,7 +4122,7 @@ fn resolve_echo_samples(
                 crate::motion_context_at_frame(0, ctx.duration_frames, ctx.fps)
                     .ok_or_else(|| bad_time("first output frame has no exact sample time"))?
             } else {
-                crate::motion_context_at_sample(requested, ctx.duration_frames, ctx.fps)
+                temporal_context_at_sample(prepared, ctx, requested)
                     .ok_or_else(|| bad_time("echo sample lies outside the composition"))?
             };
             sample.host = ctx.host;
@@ -4321,11 +4335,12 @@ fn auto_blur_velocities(
         .checked_neg()
         .ok()
         .and_then(|negative| ctx.sample.checked_offset(negative).ok())
-        .and_then(|sample| crate::motion_context_at_sample(sample, ctx.duration_frames, ctx.fps));
-    let next_context =
-        ctx.sample.checked_offset(offset).ok().and_then(|sample| {
-            crate::motion_context_at_sample(sample, ctx.duration_frames, ctx.fps)
-        });
+        .and_then(|sample| temporal_context_at_sample(prepared, ctx, sample));
+    let next_context = ctx
+        .sample
+        .checked_offset(offset)
+        .ok()
+        .and_then(|sample| temporal_context_at_sample(prepared, ctx, sample));
     let mut sample_anchors = |sample: Option<valle_motion::MotionContext>| {
         sample.map(|mut sample| {
             sample.host = ctx.host;

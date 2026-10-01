@@ -547,6 +547,7 @@ fn word_index(text: &str, byte_offset: usize) -> usize {
 // exactly the same variable, utility and property admission as an authored Text node.
 fn text_artifact(request: &TextMeasure<'_>, styles: Vec<StyleBinding>) -> SceneArtifact {
     SceneArtifact {
+        role: valle_timeline::MotionRole::Clip,
         format_version: ARTIFACT_FORMAT_VERSION,
         capability_set: CapabilitySet::base(),
         component: "measureText".into(),

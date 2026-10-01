@@ -372,7 +372,21 @@ fn prepare_endpoint(
                         "Motion source has no base canvas",
                     )
                 })?;
-            let source_extent = (composition.width, composition.height);
+            let overlay = matches!(
+                prepared_scene.artifact().role,
+                valle_timeline::MotionRole::Overlay { .. }
+            );
+            let source_extent = if overlay {
+                let size = layer.size().unwrap_or([
+                    f64::from(render.canvas().width()),
+                    f64::from(render.canvas().height()),
+                ]);
+                let viewport =
+                    motion::host_viewport(size).map_err(|error| PrepareError::at(path, error))?;
+                (viewport.width(), viewport.height())
+            } else {
+                (composition.width, composition.height)
+            };
             let mut clip = adapt_program_clip(
                 render,
                 clip_id,
@@ -382,17 +396,21 @@ fn prepare_endpoint(
                 path,
                 Some(source_extent),
             )?;
-            let source_clip = fit_motion_program_clip(
-                &mut clip,
-                render
-                    .sources()
-                    .source(source.source_index())
-                    .and_then(|source| source.raster_fit())
-                    .ok_or_else(|| PrepareError::at(path, "Motion source has no fit"))?,
-                source_extent,
-                (render.canvas().width(), render.canvas().height()),
-                layer.scale(),
-            );
+            let source_clip = if overlay {
+                None
+            } else {
+                fit_motion_program_clip(
+                    &mut clip,
+                    render
+                        .sources()
+                        .source(source.source_index())
+                        .and_then(|source| source.raster_fit())
+                        .ok_or_else(|| PrepareError::at(path, "Motion source has no fit"))?,
+                    source_extent,
+                    (render.canvas().width(), render.canvas().height()),
+                    layer.scale(),
+                )
+            };
             let frame_address = render
                 .motion_frame_address(render.render_id(), evaluated.frame(), source.source_index())
                 .map_err(|error| PrepareError::at(format!("{path}.source.frame"), error))?;
@@ -1004,9 +1022,14 @@ fn adapt_program_clip(
     path: &str,
     source_extent: Option<(u32, u32)>,
 ) -> Result<EvaluatedVisualClip, PrepareError> {
+    let overlay = render
+        .sources()
+        .source(source.source_index())
+        .and_then(|s| s.motion())
+        .is_some_and(|m| matches!(m.role(), valle_timeline::MotionRole::Overlay { .. }));
     let canvas = render.canvas();
     let (source_width, source_height) = source_extent.unwrap_or((canvas.width(), canvas.height()));
-    let transform = if source_extent.is_some() {
+    let transform = if source_extent.is_some() && !overlay {
         adapt_transform(
             render,
             layer,

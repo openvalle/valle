@@ -205,12 +205,12 @@ export default function Demo(ctx, props) {
         {"id":"track:seek","items":[{
           "type":"clip","id":"clip:seek","duration":"12/1",
           "layer":{"transform":{"position":constant(json!([0.5,0.5])),"scale":constant(json!([1,1])),"rotation":constant(json!(0)),"anchor":[0.5,0.5]},"opacity":constant(json!(1)),"mask":null,"filters":[],"blend":"normal"},
-          "source":{"type":"motion","component":"component:seek","sourceStart":"0/1","sourceDuration":"12/1","rate":"1/1","endBehavior":"hold","fit":"contain","props":{},"resources":{}}
+          "source":{"type":"motion","component":"component:seek","sourceStart":"0/1","role": {"type":"clip"}, "sourceDuration":"12/1","rate":"1/1","endBehavior":"hold","fit":"contain","props":{},"resources":{}}
         }]},
         {"id":"track:still","items":[{
           "type":"clip","id":"clip:still","duration":"12/1",
           "layer":{"transform":{"position":constant(json!([0.5,0.5])),"scale":constant(json!([1,1])),"rotation":constant(json!(0)),"anchor":[0.5,0.5]},"opacity":constant(json!(0.25)),"mask":null,"filters":[],"blend":"normal"},
-          "source":{"type":"motion","component":"component:seek","sourceStart":"0/1","sourceDuration":"12/1","rate":"1/1","endBehavior":"hold","fit":"contain","props":{"still":constant(json!(1))},"resources":{}}
+          "source":{"type":"motion","component":"component:seek","sourceStart":"0/1","role": {"type":"clip"}, "sourceDuration":"12/1","rate":"1/1","endBehavior":"hold","fit":"contain","props":{"still":constant(json!(1))},"resources":{}}
         }]}
       ]},"audio":{"tracks":[]},"adjustments":[],"captions":{"tracks":[]},"camera":null,"metadata":{}
     }}).to_string()).unwrap();

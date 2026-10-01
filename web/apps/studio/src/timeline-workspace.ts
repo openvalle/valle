@@ -1,6 +1,6 @@
 import { DraftPreview } from "./draft-preview.ts";
 import type { StudioSourceEditor } from "./source-editor.ts";
-import type { Timeline } from "valle-engine";
+import type { Timeline, MotionRole } from "valle-engine";
 import { createTimelineCompilerRuntime } from "valle-engine";
 import type { TimelineDocumentView } from "valle-engine";
 import type { VallePlayerElement, VallePlayerElementOptions } from "valle-engine/element";
@@ -118,6 +118,7 @@ interface CanvasDragState {
 }
 
 interface TimelineTrimState {
+  motionRole?: MotionRole;
   timelinePath: string;
   edge: "start" | "end";
   pointerId: number;
@@ -517,12 +518,12 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
       const nextAuthor = result.generatedWrapper ? result.timeline : draft;
       const next: StudioConfig = { ...config, timeline: nextAuthor, timelineJson: JSON.stringify(nextAuthor),
         render: result.render, assets: result.assets as StudioConfig["assets"], motion: result.motion,
-        motionSourceDurations: result.motionSourceDurations ?? config.motionSourceDurations,
+        motionSourceMetadata: result.motionSourceMetadata ?? config.motionSourceMetadata,
         warnings: result.warnings ?? [] };
       if (!await replacePreview(next, isCurrent) || !isCurrent()) return;
       config = next;
       showWarnings(next.warnings);
-      if (result.motionSourceDurations) workspaceRuntime.setMotionSourceDurations(result.motionSourceDurations);
+      if (result.motionSourceMetadata) workspaceRuntime.setMotionSourceMetadata(result.motionSourceMetadata);
       if (JSON.stringify(workingCopy) === JSON.stringify(draft)) {
         if (result.generatedWrapper) workingCopy = structuredClone(nextAuthor);
         compiledCopy = compileTimeline(workingCopy);
@@ -971,7 +972,15 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
       if (visual.source.type === "solid") {
         rows.push({ kind: "color", key: "source:color", label: "Color", value: visual.source.color });
       }
-      if (visual.source.type === "video" || visual.source.type === "lottie" || visual.source.type === "motion") {
+      if (visual.source.type === "motion") {
+        rows.push({ kind: "value", label: "Role", value: visual.source.role.type });
+        if (visual.source.role.type === "overlay") {
+          rows.push({ kind: "value", label: "Intro / outro", value: `${visual.source.role.intro} s / ${visual.source.role.outro} s` });
+          rows.push({ kind: "value", label: "Hold", value: visual.source.role.hold });
+        }
+      }
+      if (visual.source.type === "video" || visual.source.type === "lottie"
+        || (visual.source.type === "motion" && visual.source.role.type === "clip")) {
         rows.push(
           { kind: "number", key: "timing:sourceStartFrames", label: "Source start", value: projected.sourceStartFrame ?? 0, min: 0, step: 1, unit: "f" },
           { kind: "value", label: "Source start (exact)", value: visual.source.sourceStart },
@@ -1507,7 +1516,9 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
       if (!itemId) return;
       const projected = findProjectedItem(compiledCopy.timeline, documentView, itemId);
       if (!projected?.timelinePath) return;
+      const visual = visualClip(projected.item);
       timelineTrim = {
+        motionRole: visual?.source.type === "motion" ? visual.source.role : undefined,
         timelinePath: projected.timelinePath,
         edge: handle.classList.contains("left") ? "start" : "end",
         pointerId: event.pointerId,
@@ -1573,6 +1584,7 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
           deltaFrames,
           timelineTimeFromFrames,
           timelineSourceTimeDeltaFromFrames,
+          trim.motionRole,
         ));
       }
       return;
@@ -1819,7 +1831,7 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
     const unchanged = JSON.stringify(workingCopy) === localSnapshotJson;
     if (unchanged) {
       workingCopy = structuredClone(committed);
-      workspaceRuntime.setMotionSourceDurations(next.motionSourceDurations ?? {});
+      workspaceRuntime.setMotionSourceMetadata(next.motionSourceMetadata ?? {});
       compiledCopy = compileTimeline(workingCopy);
       documentView = compiledCopy.view;
       if (storageKind === "motion" && selectedItemId
@@ -1867,7 +1879,7 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
     config = next;
     showWarnings(next.warnings);
     confirmedDependencies = next.inputDependencies ? { ...next.inputDependencies } : null;
-    workspaceRuntime.setMotionSourceDurations(next.motionSourceDurations ?? {});
+    workspaceRuntime.setMotionSourceMetadata(next.motionSourceMetadata ?? {});
     savedSnapshotJson = JSON.stringify(next.timeline);
     workingCopy = structuredClone(next.timeline);
     compiledCopy = compileTimeline(workingCopy);

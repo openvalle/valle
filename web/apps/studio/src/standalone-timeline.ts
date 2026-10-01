@@ -175,7 +175,7 @@ export class StandaloneTimelineSession {
       },
       timelineJson: JSON.stringify(result.authorTimeline),
       timeline: result.authorTimeline,
-      motionSourceDurations: result.package.motionSourceDurations,
+      motionSourceMetadata: result.package.motionSourceMetadata,
       inputDependencies: this.#sources.confirmedDigests(),
       render,
       motion: { structures: [] },
@@ -198,7 +198,7 @@ export class StandaloneTimelineSession {
         timeline: result.authorTimeline,
         assets: assets?.locators ?? [], motion: { structures: [] },
         render: compiledPackage(result),
-        motionSourceDurations: result.package.motionSourceDurations,
+        motionSourceMetadata: result.package.motionSourceMetadata,
         generatedWrapper: this.#ownedTimeline === null
           && JSON.stringify(timeline) !== JSON.stringify(result.authorTimeline),
         inputDependencies: this.#sources.confirmedDigests(),

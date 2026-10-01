@@ -10,12 +10,14 @@ const root = resolve(import.meta.dir, "../../..");
 const dist = join(root, "web/dist");
 const temporary = await mkdtemp(join(tmpdir(), "valle-cache-chrome-"));
 const resultPath = join(temporary, "result.json");
+const isOverlay = process.env.VALLE_TEST_MOTION_ROLE === "overlay";
 const source = join(temporary, "scene.motion.tsx");
 const timeline = join(temporary, "timeline.json");
 await writeFile(source, `
   export const composition = { width: 48, height: 48, fps: 30, duration: 1 };
+  ${isOverlay ? `export const role=overlay({intro:seconds(0.2),outro:seconds(0.2),hold:"once"});` : ""}
   export default function CacheScene(ctx) {
-    return <Scene style={{ width: 48, height: 48, backgroundColor: "#000" }}>
+    return <Scene style={{ width: ctx.viewport.width, height: ctx.viewport.height, backgroundColor: "#000" }}>
       <View style={{ position: "absolute", left: ctx.host.progress * 24,
         top: ctx.seconds * 8, width: 16, height: 16, backgroundColor: "#0f0" }} />
     </Scene>;
@@ -24,7 +26,7 @@ await writeFile(source, `
 await writeFile(timeline, JSON.stringify({
   canvas: { width: 48, height: 48, fps: 30 },
   resources: { scene: "scene.motion.tsx" },
-  tracks: { visual: [{ clips: [{ kind: "motion", component: "scene", start: 0, duration: 2, end: "hold" }] }] },
+  tracks: { visual: [{ clips: [{ kind: "motion", component: "scene", start: 0, duration: 2, ...(isOverlay ? {size:[32,48]} : {end:"hold"}) }] }] },
 }));
 const studio = Bun.spawn([
   process.env.VALLE_TEST_CLI ?? join(root, "target/debug/valle"), "--json", "timeline", "studio",
@@ -65,6 +67,8 @@ try {
         const repeatPixels = canvas.toDataURL();
         const moved = await player.renderFrame(30);
         const movedPixels = canvas.toDataURL();
+        await player.renderFrame(45);
+        const heldPixels = canvas.toDataURL();
         await player.renderFrame(59);
         const lastPixels = canvas.toDataURL();
         const revisit = await player.renderFrame(0);
@@ -79,7 +83,8 @@ try {
           revisit: revisit.stats,
           sameRepeat: firstPixels === repeatPixels,
           changedFrame: firstPixels !== movedPixels,
-          hostContinuesAfterHold: movedPixels !== lastPixels,
+          hostContinuesAfterHold: movedPixels !== heldPixels,
+          exitFrameChanges: heldPixels !== lastPixels,
           sameRevisit: firstPixels === revisitPixels,
         };
         await fetch("/result", { method: "POST", body: JSON.stringify(result) });
@@ -125,6 +130,7 @@ try {
   if (!result) throw new Error("Chrome did not report within 45 seconds");
   if (result.error) throw new Error(result.error);
   const summary = {
+    role: isOverlay ? "overlay" : "clip",
     renderer: result.renderer,
     runtimeFlavor: result.runtimeFlavor,
     backend: result.backend,
@@ -135,6 +141,7 @@ try {
     sameRepeat: result.sameRepeat,
     changedFrame: result.changedFrame,
     hostContinuesAfterHold: result.hostContinuesAfterHold,
+    exitFrameChanges: result.exitFrameChanges,
     sameRevisit: result.sameRevisit,
   };
   if (!summary.renderer.includes("Apple") || !summary.renderer.includes("Metal")

@@ -286,7 +286,13 @@ fn motion_resources_data_and_inline_karaoke_timings_lower_to_canonical_data() {
     }));
     let timeline = compile_timeline_with_motion_sources(
         author,
-        &BTreeMap::from([("component".to_owned(), RationalTime::new(3, 1).unwrap())]),
+        &BTreeMap::from([(
+            "component".to_owned(),
+            valle_timeline::MotionSourceMetadata {
+                duration: RationalTime::new(3, 1).unwrap(),
+                role: valle_timeline::MotionRole::Clip,
+            },
+        )]),
     )
     .expect("compile all resource-bearing fields");
     let wire = timeline.to_wire().document;

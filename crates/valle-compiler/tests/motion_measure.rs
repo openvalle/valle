@@ -344,6 +344,8 @@ fn invalid_measure_options_name_the_option_and_the_replacement() {
         ("{style:'font-size:24px'}", "style"),
         ("{size:12}", "size"),
         ("{fontSize:0}", "fontSize"),
+        ("{fontSize:'2vw'}", "fontSize"),
+        ("{fontSize:16,maxWidth:'50%'}", "maxWidth"),
         ("{fontSize:16,fontWeight:2000}", "fontWeight"),
         ("{fontSize:16,maxWidth:1e300}", "maxWidth"),
         ("{fontSize:16,maxWidth:Infinity}", "maxWidth"),

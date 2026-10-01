@@ -312,6 +312,7 @@ mod tests {
             }
         };
         SceneArtifact {
+            role: valle_timeline::MotionRole::Clip,
             camera: None,
             format_version: ARTIFACT_FORMAT_VERSION,
             capability_set: CapabilitySet::base(),

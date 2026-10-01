@@ -132,7 +132,7 @@ fn motion_document(component: &str) -> Value {
             "component": component,
             "fit": "contain",
             "sourceStart": "0/1",
-            "sourceDuration": "1/1",
+            "role": {"type":"clip"}, "sourceDuration": "1/1",
             "rate": "1/1",
             "endBehavior": "hold",
             "props": {"opacity": constant(json!(0.75))},
@@ -3263,6 +3263,109 @@ fn motion_host_progress_uses_both_absolute_quantized_boundaries() {
                 }
             );
             assert_eq!(host.duration.to_string(), duration);
+        }
+    }
+}
+
+#[test]
+fn overlay_host_time_and_viewport_are_exact_in_any_request_order() {
+    use valle_timeline::RationalTime;
+    for hold in ["once", "loop", "stretch"] {
+        let artifact = Arc::new(valle_compiler::motion::compile_motion(&format!(r#"
+export const composition={{width:64,height:32,fps:4,duration:2}};
+export const role=overlay({{intro:seconds(0.5),outro:seconds(0.5),hold:"{hold}"}});
+export default function Main(ctx) {{return <Scene><View key="bar" className="absolute"
+ style={{{{left:ctx.seconds*12,top:ctx.host.progress*20,width:ctx.viewport.width/2,height:ctx.viewport.height,backgroundColor:"white"}}}}/></Scene>;}}
+"#)).unwrap().artifact);
+        let resources = manifest(json!({"component:title":motion_entry(&artifact)}));
+        let bindings = ResourceBindings::new()
+            .with_binding(
+                "component:title",
+                custom_motion_binding(&resources, "component:title", Arc::clone(&artifact), &[], 2),
+            )
+            .unwrap();
+        for duration in ["1/1", "3/2", "4/1"] {
+            let host =
+                serde_json::from_value::<valle_timeline::internal::ExactRational>(json!(duration))
+                    .unwrap();
+            for size in [None, Some([31.5, 63.49])] {
+                let mut value = motion_document("component:title");
+                value["document"]["canvas"]["width"] = json!(64);
+                value["document"]["canvas"]["height"] = json!(32);
+                value["document"]["canvas"]["fps"] = json!("4/1");
+                value["document"]["canvas"]["duration"] = json!(duration);
+                let clip = &mut value["document"]["visual"]["tracks"][0]["items"][0];
+                clip["duration"] = json!(duration);
+                clip["source"]["sourceDuration"] = json!("2/1");
+                clip["source"]["role"] = serde_json::to_value(artifact.role).unwrap();
+                clip["source"]["resources"] = json!({});
+                clip["source"]["props"] = json!({});
+                if let Some(size) = size {
+                    clip["layer"]["transform"]["size"] = constant(json!(size));
+                }
+                let render = open(
+                    &timeline(&value),
+                    &resources,
+                    &bindings,
+                    &Capabilities::new().with_artifact_abi("valle.motion/artifact@1"),
+                    &baseline_profile(),
+                )
+                .unwrap();
+                let spec = valle_engine::frame::RenderSpec::new(
+                    64,
+                    32,
+                    valle_engine::frame::RenderQuality::Preview,
+                    valle_engine::resource::OutputSpec::srgb_preview(
+                        valle_engine::resource::OutputBackground::Transparent,
+                    )
+                    .unwrap(),
+                )
+                .unwrap();
+                let mut caches = valle_engine::prepare::ProductPrepareCaches::new();
+                let frames = (host.as_f64() * 4.0) as i64;
+                let mut seen = std::collections::BTreeMap::new();
+                for frame in [frames - 1, 0, frames / 2, frames - 1, 1, 0] {
+                    let evaluated = render.evaluate(FrameKey::new(frame)).unwrap();
+                    let EvaluatedVisualOperation::Clip(clip) = &evaluated.visual()[0] else {
+                        panic!("clip")
+                    };
+                    let source = artifact
+                        .role
+                        .overlay_time(
+                            RationalTime::new(frame, 4).unwrap(),
+                            RationalTime::from_exact(host),
+                            RationalTime::new(2, 1).unwrap(),
+                        )
+                        .unwrap();
+                    assert_eq!(clip.source().sample_time(), source);
+                    let output = valle_engine::prepare::prepare_compiled_render_frame_cached(
+                        &render,
+                        &evaluated,
+                        &spec,
+                        &mut caches,
+                    )
+                    .unwrap();
+                    let motion = &output.inspection.motion[0];
+                    let [w, h] = if size.is_some() {
+                        [32.0, 63.0]
+                    } else {
+                        [64.0, 32.0]
+                    };
+                    assert_eq!(
+                        motion.boxes["bar"],
+                        [
+                            ((source.as_f64() * 12.0).round()) as f32,
+                            ((frame as f64 / (frames - 1) as f64 * 20.0).round()) as f32,
+                            w / 2.0,
+                            h
+                        ]
+                    );
+                    let bytes = serde_json::to_vec(&output).unwrap();
+                    if let Some(old) = seen.insert(frame, bytes.clone()) {
+                        assert_eq!(old, bytes);
+                    }
+                }
+            }
         }
     }
 }

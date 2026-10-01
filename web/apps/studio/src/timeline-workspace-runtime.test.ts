@@ -96,9 +96,9 @@ test("file Studio passes resolved Motion metadata separately from author clips",
   const scene = { ...authored, tracks: { visual: [{ clips: [
     { kind: "motion", component: "card", start: 0, duration: 1 },
   ] }] } } as Timeline;
-  const compiledInputs: Array<{ timeline: Timeline; durations: Record<string, number> | undefined }> = [];
+  const compiledInputs: Array<{ timeline: Timeline; durations: Record<string, import("valle-engine").MotionSourceMetadata> | undefined }> = [];
   const runtime = await initializeTimelineWorkspaceRuntime(
-    { ...config, timeline: scene, motionSourceDurations: { card: 3 } },
+    { ...config, timeline: scene, motionSourceMetadata: { card: { duration: "3/1", role: { type: "clip" } } } },
     { load: async () => undefined },
     async () => ({
       normalizeTimeline: (value) => value,
@@ -109,13 +109,13 @@ test("file Studio passes resolved Motion metadata separately from author clips",
     }),
   );
   expect(compiledInputs[0]!.timeline).toEqual(scene);
-  expect(compiledInputs[0]!.durations).toEqual({ card: 3 });
-  runtime.setMotionSourceDurations({ otherData: 2 });
+  expect(compiledInputs[0]!.durations).toEqual({ card: { duration: "3/1", role: { type: "clip" } } });
+  runtime.setMotionSourceMetadata({ otherData: { duration: "2/1", role: { type: "clip" } } });
   runtime.compileTimeline(scene);
-  expect(compiledInputs[1]!.durations).toEqual({ card: 3, otherData: 2 });
-  runtime.setMotionSourceDurations({ card: 4 });
+  expect(compiledInputs[1]!.durations).toEqual({ card: { duration: "3/1", role: { type: "clip" } }, otherData: { duration: "2/1", role: { type: "clip" } } });
+  runtime.setMotionSourceMetadata({ card: { duration: "4/1", role: { type: "clip" } } });
   runtime.compileTimeline(scene);
-  expect(compiledInputs[2]!.durations).toEqual({ card: 4, otherData: 2 });
+  expect(compiledInputs[2]!.durations).toEqual({ card: { duration: "4/1", role: { type: "clip" } }, otherData: { duration: "2/1", role: { type: "clip" } } });
   expect(scene.tracks.visual![0]!.clips[0]).not.toHaveProperty("sourceDuration");
 });
 

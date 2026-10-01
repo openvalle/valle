@@ -6,7 +6,7 @@ use serde::Serialize;
 use valle_timeline::FrameRate;
 
 use super::{LayoutCache, LayoutOptions, PreparedScene, build_tree};
-use crate::{NodeKind, ResolvedProps, motion_context_at_frame};
+use crate::{NodeKind, ResolvedProps};
 
 const STROBE_EXTENT_FRACTION: f64 = 0.25;
 const MIN_FAST_INTERVALS: u32 = 3;
@@ -610,18 +610,16 @@ pub fn review_motion(
     let mut motion_onsets = HashMap::<String, u32>::new();
     let mut trajectories = BTreeMap::<String, Vec<MotionTrajectoryPoint>>::new();
     let mut issues = Vec::new();
-    let source_frames = prepared
-        .artifact()
+    let artifact = prepared.artifact();
+    let source_duration = artifact
         .composition
         .as_ref()
-        .map(|composition| composition.duration_frames(fps))
+        .map(|composition| composition.duration())
         .transpose()
         .map_err(|error| error.to_string())?
-        .unwrap_or(duration_frames);
+        .unwrap_or(host_duration);
     for frame in 0..duration_frames {
-        let mut ctx = motion_context_at_frame(frame.min(source_frames - 1), source_frames, fps)
-            .ok_or_else(|| format!("review frame {frame} is outside the composition"))?;
-        ctx.host = crate::MotionHostContext::new(
+        let host = crate::MotionHostContext::new(
             crate::time::sample_time_at_frame(i64::from(frame), fps)
                 .map_err(|error| error.to_string())?,
             host_duration,
@@ -629,6 +627,8 @@ pub fn review_motion(
             duration_frames,
         )
         .ok_or_else(|| format!("review frame {frame} has an invalid host interval"))?;
+        let ctx = crate::motion_context_at_host(artifact.role, source_duration, host, fps)
+            .ok_or_else(|| format!("review frame {frame} is outside the template"))?;
         let tree = match &cache {
             Some(cache) => cache.build_tree(&ctx, props, opts.viewport, opts.styles),
             None => build_tree(prepared, &ctx, props, opts),

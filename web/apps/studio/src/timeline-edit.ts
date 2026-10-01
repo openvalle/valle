@@ -1,4 +1,4 @@
-import type { JsonValue, Timeline, TimelineSchema } from "valle-engine";
+import type { JsonValue, MotionRole, Timeline, TimelineSchema } from "valle-engine";
 import transitionParameters from "../../../../crates/valle-timeline/schema/transition-parameters.generated.json";
 
 type TimelineVisualTrack = TimelineSchema.TimelineVisualTrackWire;
@@ -107,6 +107,7 @@ export function trimTimelineClipFrames(
   deltaFrames: number,
   timeFromFrames: TimelineTimeFromFrames,
   sourceTimeDeltaFromFrames: TimelineSourceTimeDeltaFromFrames,
+  motionRole?: MotionRole,
 ): Timeline {
   if (!Number.isSafeInteger(deltaFrames)) {
     throw new Error("Timeline trim delta must be a safe integer");
@@ -131,7 +132,8 @@ export function trimTimelineClipFrames(
         trimStart = target.clip.trimStart;
       } else if (target.band === "visual"
         && target.clip.kind !== "image"
-        && target.clip.kind !== "solid") {
+        && target.clip.kind !== "solid"
+        && !(target.clip.kind === "motion" && motionRole?.type === "overlay")) {
         const sourceDelta = finiteNumber(
           sourceTimeDeltaFromFrames(deltaFrames, timeline.canvas.fps, target.clip.rate),
           "source trim delta",

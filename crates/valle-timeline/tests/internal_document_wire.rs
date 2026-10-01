@@ -219,7 +219,7 @@ fn all_visual_source_variants_have_closed_shapes() {
         }),
         json!({
             "type": "motion", "component": "component:Title", "fit": "contain", "sourceStart": "0/1",
-            "sourceDuration": "4/1", "rate": "1/1", "endBehavior": "hold",
+            "role": {"type":"clip"}, "sourceDuration": "4/1", "rate": "1/1", "endBehavior": "hold",
             "props": { "title": { "type": "constant", "value": "VALLE" } },
             "resources": { "hero": "asset:i" }
         }),
@@ -233,7 +233,7 @@ fn all_visual_source_variants_have_closed_shapes() {
 
     let retired_runtime_data = json!({
         "type": "motion", "component": "component:Title", "fit": "contain", "sourceStart": "0/1",
-        "sourceDuration": "4/1", "rate": "1/1", "endBehavior": "hold",
+        "role": {"type":"clip"}, "sourceDuration": "4/1", "rate": "1/1", "endBehavior": "hold",
         "props": {}, "data": {}, "cues": {}, "resources": {},
         "phases": { "enterDuration": null, "exitDuration": null }
     });
@@ -400,7 +400,7 @@ fn canonical_nullable_and_default_fields_are_explicitly_required() {
 
     let motion = json!({
         "type": "motion", "component": "component:card", "fit": "contain", "sourceStart": "0/1",
-        "sourceDuration": "2/1", "rate": "1/1", "endBehavior": "hold",
+        "role": {"type":"clip"}, "sourceDuration": "2/1", "rate": "1/1", "endBehavior": "hold",
         "props": {}, "resources": {}
     });
     for retired in ["cues", "phases"] {

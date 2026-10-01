@@ -28,6 +28,7 @@ pub fn run(action: MotionAction) -> Result<std::process::ExitCode> {
         MotionAction::Check {
             input,
             host_duration,
+            host_size,
             assets,
             bindings,
             data,
@@ -40,6 +41,7 @@ pub fn run(action: MotionAction) -> Result<std::process::ExitCode> {
             render(
                 &input,
                 host_duration.as_deref(),
+                host_size,
                 RenderOutputArgs {
                     output: Some(temp.path().join("check.png")),
                     frame: Some(frame),
@@ -60,6 +62,7 @@ pub fn run(action: MotionAction) -> Result<std::process::ExitCode> {
         MotionAction::Review {
             input,
             host_duration,
+            host_size,
             assets,
             bindings,
             data,
@@ -71,6 +74,7 @@ pub fn run(action: MotionAction) -> Result<std::process::ExitCode> {
         } => review(
             &input,
             host_duration.as_deref(),
+            host_size,
             &assets,
             &font,
             data.as_deref(),
@@ -83,6 +87,7 @@ pub fn run(action: MotionAction) -> Result<std::process::ExitCode> {
         MotionAction::Render {
             input,
             host_duration,
+            host_size,
             delivery,
             backend,
             tuning,
@@ -94,6 +99,7 @@ pub fn run(action: MotionAction) -> Result<std::process::ExitCode> {
         } => render(
             &input,
             host_duration.as_deref(),
+            host_size,
             delivery,
             &assets,
             &font,
@@ -130,6 +136,7 @@ pub fn run(action: MotionAction) -> Result<std::process::ExitCode> {
 fn review(
     input: &Path,
     host_duration: Option<&str>,
+    host_size: Option<(u32, u32)>,
     asset_specs: &[String],
     font_paths: &[PathBuf],
     data: Option<&Path>,
@@ -146,7 +153,9 @@ fn review(
         Err(()) => return Ok(std::process::ExitCode::FAILURE),
     };
     let artifact = &prepared.compiled.artifact;
-    let delivery = Delivery::of(artifact, output_fps)?.with_host_duration(host_duration)?;
+    let delivery = Delivery::of(artifact, output_fps)?
+        .with_host_duration(host_duration)?
+        .with_host_size(host_size, artifact)?;
     let prop_bindings = read_prop_bindings(bindings.props.as_deref())?;
     let overrides = review_prop_overrides(artifact, &prop_bindings)?;
     let props = valle_motion::resolve_props(&artifact.controls, &overrides)?;
@@ -224,6 +233,7 @@ mod trajectory_sheet;
 fn render(
     input: &Path,
     host_duration: Option<&str>,
+    host_size: Option<(u32, u32)>,
     output: RenderOutputArgs,
     asset_specs: &[String],
     font_paths: &[PathBuf],
@@ -255,8 +265,9 @@ fn render(
         Err(()) => return Ok(std::process::ExitCode::FAILURE),
     };
     let artifact = &prepared.compiled.artifact;
-    let delivery =
-        Delivery::of(artifact, tuning.fps.as_deref())?.with_host_duration(host_duration)?;
+    let delivery = Delivery::of(artifact, tuning.fps.as_deref())?
+        .with_host_duration(host_duration)?
+        .with_host_size(host_size, artifact)?;
     let (duration, fps, canvas) = (delivery.duration, delivery.fps, delivery.canvas);
     if let Some((width, height)) = tuning.output_size {
         // Delivery scaling must preserve the composition's aspect ratio: another shape is another
@@ -323,19 +334,7 @@ fn render(
         let checked_frame = frame.unwrap_or(0);
         let host_frame =
             u32::try_from(checked_frame).context("checked frame must be nonnegative")?;
-        let source_frames = artifact
-            .composition
-            .as_ref()
-            .expect("validated composition")
-            .duration_frames(fps)
-            .map_err(|error| anyhow!(error))?;
-        let mut motion_context = valle_motion::motion_context_at_frame(
-            host_frame.min(source_frames - 1),
-            source_frames,
-            fps,
-        )
-        .context("checked frame is outside the Motion duration")?;
-        motion_context.host = valle_motion::MotionHostContext::new(
+        let host = valle_motion::MotionHostContext::new(
             valle_motion::time::sample_time_at_frame(i64::from(host_frame), fps)
                 .map_err(|error| anyhow!(error))?,
             duration,
@@ -343,6 +342,18 @@ fn render(
             delivery.duration_frames,
         )
         .context("checked frame is outside the host duration")?;
+        let motion_context = valle_motion::motion_context_at_host(
+            artifact.role,
+            artifact
+                .composition
+                .as_ref()
+                .expect("validated composition")
+                .duration()
+                .map_err(|error| anyhow!(error))?,
+            host,
+            fps,
+        )
+        .context("checked frame is outside the template")?;
         let evaluation = prepared.scene.frame_evaluation_stats(&motion_context);
         let compilation = observation.trace.metrics();
         crate::output::emit(
@@ -1488,6 +1499,33 @@ impl Delivery {
             fps,
             canvas,
         })
+    }
+
+    fn with_host_size(
+        mut self,
+        size: Option<(u32, u32)>,
+        artifact: &valle_motion::SceneArtifact,
+    ) -> Result<Self> {
+        artifact
+            .role
+            .validate(
+                artifact
+                    .composition
+                    .as_ref()
+                    .context("composition missing")?
+                    .duration()?,
+                Some(self.duration),
+            )
+            .map_err(|reason| anyhow!(reason))?;
+        if let Some((width, height)) = size {
+            if matches!(artifact.role, valle_timeline::MotionRole::Clip) {
+                bail!(
+                    "--host-size requires an overlay role; clip layout uses its composition canvas"
+                )
+            }
+            self.canvas = validate_pixel_size(MotionViewport { width, height }, "host viewport")?;
+        }
+        Ok(self)
     }
 
     fn with_host_duration(mut self, input: Option<&str>) -> Result<Self> {

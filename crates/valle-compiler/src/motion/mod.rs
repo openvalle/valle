@@ -73,6 +73,7 @@ mod glass;
 mod instance_capture;
 mod instance_formula;
 mod jsx;
+mod role;
 // Native delivery observations use the host clock. Browser compilation must not call the
 // unsupported std::time::Instant implementation on wasm32-unknown-unknown.
 #[cfg(not(target_family = "wasm"))]
@@ -849,6 +850,7 @@ struct Compiler<'s> {
     component: Option<String>,
     /// Fixed delivery contract from `export const composition`; absent for in-memory compiles.
     composition: Option<valle_motion::Composition>,
+    role: valle_timeline::MotionRole,
     /// Authored entry files must declare the delivery contract; in-memory compiles need not.
     require_composition: bool,
     controls: ControlsSchema,

@@ -442,6 +442,7 @@ pub struct LottieSourceWire {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct MotionInstanceWire {
+    pub role: crate::MotionRole,
     pub component: ResourceId,
     pub fit: RasterFitWire,
     pub source_start: ExactRational,

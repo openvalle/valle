@@ -159,7 +159,7 @@ fn closed_schema_scalars_quantize_before_validation_and_canonicalization() {
         "component": "motion:quantized",
         "fit": "contain",
         "sourceStart": "0/1",
-        "sourceDuration": "1/1",
+        "role": {"type":"clip"}, "sourceDuration": "1/1",
         "rate": "1/1",
         "endBehavior": "hold",
         "props": {
@@ -968,7 +968,7 @@ fn motion_source_duration_must_be_positive() {
     let mut clip = solid_clip("clip:motion", "4/1");
     clip["source"] = json!({
         "type": "motion", "component": "component:card", "fit": "contain",
-        "sourceStart": "0/1", "sourceDuration": "0/1", "rate": "1/1",
+        "sourceStart": "0/1", "role": {"type":"clip"}, "sourceDuration": "0/1", "rate": "1/1",
         "endBehavior": "hold", "props": {}, "resources": {}
     });
     value["document"]["visual"]["tracks"] = json!([{ "id": "visual:main", "items": [clip] }]);
@@ -1085,7 +1085,7 @@ fn motion_prop_keyframes_are_bounded_by_host_duration() {
     let mut clip = solid_clip("clip:motion", "4/1");
     clip["source"] = json!({
         "type":"motion", "component":"component:card", "fit":"contain",
-        "sourceStart":"0/1", "sourceDuration":"1/1", "rate":"2/1", "endBehavior":"hold",
+        "sourceStart":"0/1", "role": {"type":"clip"}, "sourceDuration":"1/1", "rate":"2/1", "endBehavior":"hold",
         "props":{"opacity":{"type":"curve","id":"curve:host","interpolation":"linear",
             "keyframes":[{"id":"key:host:end","time":"4/1","value":1,"outEasing":null}],
             "extrapolation":"clamp"}}, "resources":{}
@@ -1093,5 +1093,37 @@ fn motion_prop_keyframes_are_bounded_by_host_duration() {
     value["document"]["visual"]["tracks"] = json!([{"id":"visual:main","items":[clip]}]);
     decode_value(&value).unwrap();
     value["document"]["visual"]["tracks"][0]["items"][0]["duration"] = json!("1/2");
+    assert!(decode_value(&value).is_err());
+}
+
+#[test]
+fn overlay_canonical_timing_cannot_be_reinterpreted_as_media_timing() {
+    let mut value = empty_document();
+    let mut clip = solid_clip("clip:overlay", "2/1");
+    clip["source"] = json!({"type":"motion","component":"component:card","fit":"contain",
+        "role":{"type":"overlay","intro":"1/2","outro":"1/2","hold":"once"},
+        "sourceStart":"0/1","sourceDuration":"2/1","rate":"1/1","endBehavior":"hold","props":{},"resources":{}});
+    value["document"]["visual"]["tracks"] = json!([{"id":"visual:main","items":[clip]}]);
+    decode_value(&value).unwrap();
+    for (field, invalid) in [
+        ("fit", json!("cover")),
+        ("sourceStart", json!("1/1")),
+        ("rate", json!("2/1")),
+        ("endBehavior", json!("loop")),
+    ] {
+        let mut changed = value.clone();
+        changed["document"]["visual"]["tracks"][0]["items"][0]["source"][field] = invalid;
+        let CanonicalDecodeError::InvalidDocument(report) = decode_value(&changed).unwrap_err()
+        else {
+            panic!("invariant")
+        };
+        assert!(
+            report
+                .diagnostics
+                .iter()
+                .any(|error| error.code == "motion_role_invalid" && error.path.ends_with(field))
+        );
+    }
+    value["document"]["visual"]["tracks"][0]["items"][0]["duration"] = json!("999/1000");
     assert!(decode_value(&value).is_err());
 }

@@ -138,13 +138,9 @@ fn compile_timeline_with_sources_native(
 ) -> Result<String, String> {
     let timeline = valle_timeline::decode_timeline(json)
         .map_err(|error| timeline_error("timeline_decode", error))?;
-    let durations: BTreeMap<String, TimelineTimeWire> =
+    let durations: BTreeMap<String, valle_timeline::MotionSourceMetadata> =
         serde_json::from_str(motion_sources_json)
             .map_err(|error| timeline_error("motion_source_metadata", error))?;
-    let durations = durations
-        .into_iter()
-        .map(|(alias, time)| (alias, RationalTime::from_exact(time.to_exact())))
-        .collect();
     let timeline = valle_compiler::compile_timeline_with_motion_sources(timeline, &durations)
         .map_err(|error| timeline_error("timeline_compile", error))?;
     valle_timeline::internal::encode_canonical(&timeline)

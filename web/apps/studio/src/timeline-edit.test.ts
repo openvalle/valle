@@ -254,3 +254,14 @@ test("transition parameters survive duration changes, reorder and deletion; kind
     }
   }
 });
+
+test("overlay leading trim edits the host window without creating a source trim", () => {
+  const authored = { canvas: { width:64, height:32, fps:4 }, tracks:{visual:[{clips:[
+    {kind:"motion",component:"card",start:1,duration:3},
+  ]}]} } as Timeline;
+  const trimmed = trimTimelineClipFrames(authored,"/tracks/visual/0/clips/0","start",2,
+    (frames) => frames/4, () => {throw new Error("overlay has no media source delta");},
+    {type:"overlay",intro:"1/2",outro:"1/2",hold:"once"});
+  expect(trimmed.tracks.visual![0]!.clips[0]).toEqual({kind:"motion",component:"card",start:1.5,duration:2.5});
+  expect(authored.tracks.visual![0]!.clips[0]!.start).toBe(1);
+});

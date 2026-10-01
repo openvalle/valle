@@ -70,7 +70,7 @@ pub use composition::{
 };
 pub use context::{
     MotionContext, MotionHostContext, duration_frames, motion_context_at_frame,
-    motion_context_at_sample, motion_context_at_source,
+    motion_context_at_host, motion_context_at_sample, motion_context_at_source,
 };
 pub use controls::{
     AssetControl, AssetKind, ControlType, ControlsSchema, MAX_PREPARE_DATA_ARRAY_ITEMS,

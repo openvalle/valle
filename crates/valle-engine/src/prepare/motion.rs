@@ -103,6 +103,21 @@ impl MotionFontCache {
     }
 }
 
+/// Shared Native/Wasm host viewport rounding, before any allocation.
+pub(crate) fn host_viewport(size: [f64; 2]) -> Result<Extent2d, &'static str> {
+    let mut extent = [0; 2];
+    for (output, value) in extent.iter_mut().zip(size) {
+        let value = value.round();
+        if !value.is_finite() || value < 1.0 || value > f64::from(i32::MAX) {
+            return Err(
+                "Motion host dimensions must round to positive pixels within the supported extent",
+            );
+        }
+        *output = value as u32;
+    }
+    Extent2d::new(extent[0], extent[1]).map_err(|_| "invalid Motion host viewport")
+}
+
 pub(crate) struct CompiledMotionProgramContext<'a> {
     pub prepared: &'a valle_motion::PreparedScene,
     pub evaluated: &'a crate::render::EvaluatedSourceRef,
@@ -1612,5 +1627,26 @@ export default function Card() {{
         assert_eq!(internal_request, alias_request);
         assert_eq!(internal_request.face_hash.into_bytes(), *digest.as_bytes());
         assert_eq!(internal_request.face_index, 0);
+    }
+}
+
+#[cfg(test)]
+mod host_viewport_tests {
+    use super::host_viewport;
+    #[test]
+    fn dimensions_round_half_away_from_zero_and_reject_invalid_extents() {
+        assert_eq!(
+            host_viewport([31.5, 63.49]).unwrap(),
+            crate::resource::Extent2d::new(32, 63).unwrap()
+        );
+        for size in [
+            [0.49, 32.0],
+            [-0.5, 32.0],
+            [f64::NAN, 32.0],
+            [32.0, f64::INFINITY],
+            [f64::from(i32::MAX) + 0.5, 32.0],
+        ] {
+            assert!(host_viewport(size).is_err(), "{size:?}");
+        }
     }
 }

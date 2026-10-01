@@ -658,6 +658,40 @@ impl<'a> Validator<'a> {
                 );
             }
             VisualSourceWire::Motion(source) => {
+                if matches!(source.role, crate::MotionRole::Overlay { .. }) {
+                    for (field, valid) in [
+                        ("fit", matches!(source.fit, RasterFitWire::Contain)),
+                        ("sourceStart", source.source_start == ExactRational::ZERO),
+                        ("rate", source.rate == ExactRational::ONE),
+                        (
+                            "endBehavior",
+                            matches!(source.end_behavior, MediaEndBehaviorWire::Hold),
+                        ),
+                    ] {
+                        if !valid {
+                            self.error(
+                                "motion_role_invalid",
+                                &format!("{path}/source/{field}"),
+                                Some(&clip.id),
+                                details([(
+                                    "reason",
+                                    json!("overlay source must use neutral media timing and fit"),
+                                )]),
+                            );
+                        }
+                    }
+                }
+                if let Err(reason) = source.role.validate(
+                    crate::RationalTime::from_exact(source.source_duration),
+                    Some(crate::RationalTime::from_exact(clip.duration)),
+                ) {
+                    self.error(
+                        "motion_role_invalid",
+                        &format!("{path}/source/role"),
+                        Some(&clip.id),
+                        details([("reason", json!(reason))]),
+                    );
+                }
                 if source.props.len() > MAX_MOTION_PROPS {
                     self.error(
                         "motion_prop_budget_exceeded",

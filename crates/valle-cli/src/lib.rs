@@ -608,6 +608,9 @@ pub enum MotionAction {
         /// Host clip duration in decimal seconds; source timing remains composition-based.
         #[arg(long, value_name = "SECONDS")]
         host_duration: Option<String>,
+        /// Overlay layout viewport; defaults to the composition canvas.
+        #[arg(long, value_parser = parse_canvas_size)]
+        host_size: Option<(u32, u32)>,
         /// Bind an asset control as name=path; may be repeated.
         #[arg(long = "asset", value_name = "NAME=PATH")]
         assets: Vec<String>,
@@ -633,6 +636,9 @@ pub enum MotionAction {
         /// Host clip duration in decimal seconds; source timing remains composition-based.
         #[arg(long, value_name = "SECONDS")]
         host_duration: Option<String>,
+        /// Overlay layout viewport; defaults to the composition canvas.
+        #[arg(long, value_parser = parse_canvas_size)]
+        host_size: Option<(u32, u32)>,
         /// Bind an asset control as name=path; may be repeated.
         #[arg(long = "asset", value_name = "NAME=PATH")]
         assets: Vec<String>,
@@ -664,6 +670,9 @@ pub enum MotionAction {
         /// Host clip duration in decimal seconds; source timing remains composition-based.
         #[arg(long, value_name = "SECONDS")]
         host_duration: Option<String>,
+        /// Overlay layout viewport; defaults to the composition canvas.
+        #[arg(long, value_parser = parse_canvas_size)]
+        host_size: Option<(u32, u32)>,
         #[command(flatten)]
         delivery: RenderOutputArgs,
         /// Compositor backend. Auto uses an available Metal device on macOS, otherwise CPU Raster.

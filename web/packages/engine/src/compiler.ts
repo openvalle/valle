@@ -1,5 +1,5 @@
 import type { Timeline } from "./timeline.ts";
-import type { TimelineDocument } from "./internal-timeline.ts";
+import type { TimelineDocument, TimelineDocumentSchema } from "./internal-timeline.ts";
 
 import type { CanonicalTimelineDocument } from "./runtime/product-controller.ts";
 import { resolveEngineRuntimeAssets } from "./runtime-assets.ts";
@@ -103,6 +103,9 @@ export interface PreviewPackageInput {
   resourceInputs?: readonly PreviewResourceInput[];
 }
 
+export type MotionRole = TimelineDocumentSchema.MotionRole;
+export interface MotionSourceMetadata { duration: string; role: MotionRole }
+
 export interface PreparedPreviewPackage {
   fixedPackageManifestJson: string;
   timelineJson: string;
@@ -110,7 +113,7 @@ export interface PreparedPreviewPackage {
   verifiedBindingBundleJson: string;
   executionProfileJson: string;
   externalResources: readonly { id: string; digest: string }[];
-  motionSourceDurations: Record<string, number>;
+  motionSourceMetadata: Record<string, MotionSourceMetadata>;
 }
 
 export interface MotionSourceEdit {
@@ -153,7 +156,7 @@ export interface TimelineCompilerRuntime {
     rate?: number | null,
   ): number;
   /** Read-only projection used by Studio preview and inspection. */
-  compileTimeline(timeline: Timeline, motionSources?: Record<string, number>): CanonicalTimelineDocument;
+  compileTimeline(timeline: Timeline, motionSources?: Record<string, MotionSourceMetadata>): CanonicalTimelineDocument;
   canonicalizeTimelineDocument(timeline: TimelineDocument): CanonicalTimelineDocument;
 }
 
@@ -320,7 +323,7 @@ export function compileTimelineWithWasm(
     "compile_timeline" | "timeline_document_view"
   >,
   timeline: Timeline,
-  motionSources: Record<string, number> = {},
+  motionSources: Record<string, MotionSourceMetadata> = {},
 ): CanonicalTimelineDocument {
   const timelineJson = wasm.compile_timeline(JSON.stringify(timeline), JSON.stringify(motionSources));
   return canonicalTimelineDocumentFromJson(wasm, timelineJson);

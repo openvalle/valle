@@ -75,6 +75,7 @@ pub(super) fn compile_admitted_timeline(
 
     fn compile_motion_instance(instance: AdmittedMotionInstance) -> CompiledMotionInstance {
         CompiledMotionInstance {
+            role: instance.role,
             component_target: instance.component_target,
             reads_destination: instance.reads_destination,
             host_duration: instance.host_duration,

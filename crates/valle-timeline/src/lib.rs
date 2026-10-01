@@ -7,6 +7,8 @@
 // Internal helpers.
 mod canonical_json;
 
+pub mod motion;
+pub use motion::{MotionRole, MotionSourceMetadata, OverlayHold};
 pub mod caption_presets;
 pub mod color_value;
 pub mod edit;

@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { initSync, compile_motion_jsx, compile_motion_modules, prepare_preview_package, rewrite_motion_source, ProductEngine } from "../generated/web/valle_engine.js";
 import {
   compileMotionJsxWithWasm, compileMotionModulesWithWasm, preparePreviewPackageWithWasm,
-  rewriteMotionSourceWithWasm, MotionCompileError,
+  rewriteMotionSourceWithWasm, MotionCompileError, type MotionRole,
 } from "./compiler.ts";
 
 initSync({ module: await readFile(new URL("../generated/web/valle_engine_bg.wasm", import.meta.url)) });
@@ -37,6 +37,48 @@ test("Wasm keeps host endpoints and geometry moving while the source holds", () 
       } finally { engine.release_ticket(ticket); }
     }
   } finally { engine.free(); }
+});
+
+test("Wasm maps overlay timing and rounds the host viewport through the shared engine", () => {
+  for (const hold of ["once","loop","stretch"]) {
+    const compiled = compileMotionJsxWithWasm({ compile_motion_jsx }, `
+      export const composition={width:64,height:32,fps:4,duration:2};
+      export const role=overlay({intro:seconds(0.5),outro:seconds(0.5),hold:"${hold}"});
+      export default function Main(ctx){return <Scene><View key="bar" className="absolute"
+        style={{left:ctx.seconds*12,top:ctx.host.progress*20,width:ctx.viewport.width/2,
+        height:ctx.viewport.height,backgroundColor:"white"}}/></Scene>;}`);
+    expect(compiled.artifact.role).toEqual({type:"overlay",intro:"1/2",outro:"1/2",hold});
+    for (const duration of [1,1.5,4]) {
+      const author = {canvas:{width:64,height:32,fps:4},resources:{card:"card.motion.tsx"},
+        tracks:{visual:[{clips:[{kind:"motion" as const,component:"card",start:0,duration,size:[31.5,63.49] as [number,number]}]}]}};
+      const prepare = (timeline:typeof author) => preparePreviewPackageWithWasm({prepare_preview_package},{
+        authorTimeline:timeline,motionInstances:[{clipPath:"/tracks/visual/0/clips/0",
+          artifact:compiled.artifact,artifactDigest:compiled.artifactDigest,fonts:[]}],
+      });
+      const preview=prepare(author);
+      expect(preview.motionSourceMetadata.card).toEqual({duration:"2/1",role:compiled.artifact.role as MotionRole});
+      expect(()=>prepare({...author,tracks:{visual:[{clips:[{...author.tracks.visual[0]!.clips[0]!,fit:"contain"} as any]}]}})).toThrow("fit");
+      expect(()=>prepare({...author,tracks:{visual:[{clips:[{...author.tracks.visual[0]!.clips[0]!,duration:0.999}]}]}})).toThrow("shorter");
+      const engine=new ProductEngine();
+      try {
+        const receipt=JSON.parse(engine.open_fixed_package(preview.fixedPackageManifestJson,
+          preview.timelineJson,preview.resourceManifestJson,preview.verifiedBindingBundleJson));
+        const frames=duration*4,seen=new Map<number,string>();
+        for (const frame of [frames-1,0,frames/2,frames-1,1,0]) {
+          const ticket=engine.evaluate_prepare_preview(receipt.renderId,BigInt(frame),64,32,false);
+          try {
+            const json=engine.frame_inspection_json(ticket),inspection=JSON.parse(json).motion[0];
+            const t=frame/4,exit=duration-0.5;
+            const source=t<0.5?t:t>=exit?1.5+t-exit:0.5+(hold==="once"?Math.min(t-0.5,1):hold==="loop"?(t-0.5)%1:(t-0.5)/(duration-1));
+            expect(inspection.sourceFrame).toBe(Math.floor(source*4));
+            expect(inspection.boxes.bar).toEqual([Math.round(source*12),Math.round(frame/(frames-1)*20),16,63]);
+            if(seen.has(frame)) expect(json).toBe(seen.get(frame)!);
+            seen.set(frame,json);
+          } finally {engine.release_ticket(ticket);}
+        }
+      } finally {engine.free();}
+    }
+  }
 });
 
 test("merged Engine Wasm compiles standalone JSX and linked modules", () => {
@@ -90,7 +132,7 @@ test("pulse audio analysis produces the Native artifact digest in WASM", async (
     audioSources: [{ control: "beat", contentHash: hash, sampleRate: 8000, samples }],
   });
   expect(compiled.artifactDigest)
-    .toBe("sha256:c64ba4b51605ffb3ddf7303056cbc8dd6b7847e3229924469f112652d9850a09");
+    .toBe("sha256:ae43252a3fde55d8c7f9a540d55ac34483def1d6234635102bea454660883179");
 });
 
 test("WASM admits shared staggered stops and a local frame-time path paint", () => {

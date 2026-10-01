@@ -160,7 +160,7 @@ fn pulse_pcm_artifact_digest_is_shared_with_wasm() {
     let bytes = valle_motion::canonical_bytes(&compiled.artifact).unwrap();
     assert_eq!(
         ContentDigest::of_bytes(&bytes).to_wire(),
-        "sha256:c64ba4b51605ffb3ddf7303056cbc8dd6b7847e3229924469f112652d9850a09"
+        "sha256:ae43252a3fde55d8c7f9a540d55ac34483def1d6234635102bea454660883179"
     );
 }
 

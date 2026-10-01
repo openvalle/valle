@@ -1,4 +1,5 @@
 import type {
+  MotionSourceMetadata,
   CanonicalTimelineDocument,
   TimelineCompilerRuntime,
   TimelineCompilerRuntimeOptions,
@@ -21,7 +22,7 @@ export type TimelineWorkspaceRuntimeConfig = Omit<
 > & {
   timeline: Timeline;
   timelineJson: string;
-  motionSourceDurations?: Record<string, number>;
+  motionSourceMetadata?: Record<string, MotionSourceMetadata>;
   render: {
     timeline: CanonicalTimelineDocument["timeline"];
     timelineJson: string;
@@ -54,7 +55,7 @@ export interface TimelineWorkspaceRuntime {
     rate?: number | null,
   ): number;
   compileTimeline(timeline: Timeline): CanonicalTimelineDocument;
-  setMotionSourceDurations(durations: Record<string, number>): void;
+  setMotionSourceMetadata(durations: Record<string, MotionSourceMetadata>): void;
 }
 
 type CompilerRuntimeFactory = (
@@ -77,8 +78,8 @@ export async function initializeTimelineWorkspaceRuntime(
     runtimeAssets: config.runtimeAssets,
     runtimeBaseUrl: config.runtimeBaseUrl,
   });
-  let motionSourceDurations = config.motionSourceDurations ?? {};
-  const compileTimeline = (timeline: Timeline) => compiler.compileTimeline(timeline, motionSourceDurations);
+  let motionSourceMetadata = config.motionSourceMetadata ?? {};
+  const compileTimeline = (timeline: Timeline) => compiler.compileTimeline(timeline, motionSourceMetadata);
   const compiled = compileTimeline(config.timeline);
   const hostedRender = compiler.canonicalizeTimelineDocument(config.render.timeline);
   if (hostedRender.timelineJson !== compiled.timelineJson) {
@@ -138,7 +139,7 @@ export async function initializeTimelineWorkspaceRuntime(
         compiler.timelineSourceTimeDeltaFromFrames(frames, fps, rate)
       ),
       compileTimeline,
-      setMotionSourceDurations: (durations) => { motionSourceDurations = { ...motionSourceDurations, ...durations }; },
+      setMotionSourceMetadata: (durations) => { motionSourceMetadata = { ...motionSourceMetadata, ...durations }; },
     };
   }
   return {
@@ -151,7 +152,7 @@ export async function initializeTimelineWorkspaceRuntime(
       compiler.timelineSourceTimeDeltaFromFrames(frames, fps, rate)
     ),
     compileTimeline,
-    setMotionSourceDurations: (durations) => { motionSourceDurations = { ...motionSourceDurations, ...durations }; },
+    setMotionSourceMetadata: (durations) => { motionSourceMetadata = { ...motionSourceMetadata, ...durations }; },
   };
 }
 

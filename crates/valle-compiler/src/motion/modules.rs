@@ -855,13 +855,13 @@ fn analyze_module(
                     if !is_entry
                         && declaration_root_names(&export.declaration, scoping)
                             .iter()
-                            .any(|name| name == "composition")
+                            .any(|name| name == "composition" || name == "role")
                     {
                         return Err(vec![path_diagnostic(
                             path,
                             source,
                             export.declaration.span(),
-                            "`composition` belongs to the entry `.motion.tsx` only; a component module must not declare the delivery contract",
+                            "`composition` and `role` belong to the entry `.motion.tsx` only; a component module must not declare the delivery contract",
                         )]);
                     }
                     for name in declaration_root_names(&export.declaration, scoping) {

@@ -998,13 +998,27 @@ fn compile_timeline_errors(error: CompileTimelineError) -> Vec<EditErrorWire> {
         }]
     };
     match error {
+        CompileTimelineError::MotionRole {
+            component,
+            role,
+            path,
+            reason,
+        } => one(
+            "motion_role",
+            &path,
+            BTreeMap::from([
+                ("component".into(), json!(component)),
+                ("role".into(), json!(role)),
+                ("reason".into(), json!(reason)),
+            ]),
+        ),
         CompileTimelineError::MotionPreparation { reason } => one(
             "motion_preparation",
             "/tracks/visual",
             BTreeMap::from([("reason".to_owned(), json!(reason))]),
         ),
-        CompileTimelineError::MissingMotionDuration { path } => {
-            one("missing_motion_duration", &path, BTreeMap::new())
+        CompileTimelineError::MissingMotionMetadata { path } => {
+            one("missing_motion_metadata", &path, BTreeMap::new())
         }
         CompileTimelineError::InvalidResourceAlias { alias, path } => one(
             "invalid_resource_alias",

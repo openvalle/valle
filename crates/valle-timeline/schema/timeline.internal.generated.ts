@@ -47,14 +47,17 @@ export namespace TimelineDocumentSchema {
   export type LayerTransformWire = { "anchor": [number, number]; "position": ParamWire; "rotation": ParamWire2; "scale": ParamWire; "size"?: (ParamWire | null) };
   export type LottieSamplingWire = { "fit": RasterFitWire };
   export type MediaEndBehaviorWire = ("error" | "hold" | "loop");
+  export type MotionRole = ({ "type": "clip" } | { "hold": OverlayHold; "intro": RationalTime; "outro": RationalTime; "type": "overlay" });
   export type NamedEasingWire = ("linear" | "ease" | "ease-in" | "ease-out" | "ease-in-out");
   export type NamespacedKernelTypeWire = string;
+  export type OverlayHold = ("once" | "loop" | "stretch");
   export type ParamWire = ({ "type": "constant"; "value": [number, number] } | { "extrapolation": ExtrapolationWire; "id": string; "interpolation": InterpolationWire; "keyframes": Array<KeyframeWire>; "type": "curve" });
   export type ParamWire2 = ({ "type": "constant"; "value": number } | { "extrapolation": ExtrapolationWire; "id": string; "interpolation": InterpolationWire; "keyframes": Array<KeyframeWire2>; "type": "curve" });
   export type ParamWire3 = ({ "type": "constant"; "value": [number, number, number, number] } | { "extrapolation": ExtrapolationWire; "id": string; "interpolation": InterpolationWire; "keyframes": Array<KeyframeWire3>; "type": "curve" });
   export type ParamWire4 = ({ "type": "constant"; "value": JsonValue } | { "extrapolation": ExtrapolationWire; "id": string; "interpolation": InterpolationWire; "keyframes": Array<KeyframeWire4>; "type": "curve" });
   export type RasterFitWire = ("contain" | "cover" | "fill" | "none");
   export type RasterSamplingWire = { "fit": RasterFitWire };
+  export type RationalTime = string;
   export type RequiredNullable_for_CameraTrackWire = (CameraTrackWire | null);
   export type RequiredNullable_for_CaptionBehaviorWire = (CaptionBehaviorWire | null);
   export type RequiredNullable_for_CaptionShadowWire = (CaptionShadowWire | null);
@@ -77,7 +80,7 @@ export namespace TimelineDocumentSchema {
   export type VisualFilterWire = { "id": string; "parameters": Record<string, JsonValue>; "type": NamespacedKernelTypeWire };
   export type VisualItemWire = ({ "duration": ExactRational; "id": string; "layer": VisualLayerWire; "source": VisualSourceWire; "type": "clip" } | { "duration": ExactRational; "id": string; "type": "gap" } | { "duration": ExactRational; "id": string; "kernel": TransitionKernelWire; "type": "transition" });
   export type VisualLayerWire = { "blend": BlendModeWire; "filters": Array<VisualFilterWire>; "mask": RequiredNullable_for_LayerMaskWire; "opacity": ParamWire2; "transform": LayerTransformWire };
-  export type VisualSourceWire = ({ "endBehavior": MediaEndBehaviorWire; "gain"?: (ParamWire2 | null); "rate": ExactRational; "resource": string; "sampling": RasterSamplingWire; "sourceStart": ExactRational; "type": "video" } | { "resource": string; "sampling": RasterSamplingWire; "type": "image" } | { "endBehavior": MediaEndBehaviorWire; "rate": ExactRational; "resource": string; "sampling": LottieSamplingWire; "sourceStart": ExactRational; "type": "lottie" } | { "component": string; "data"?: Record<string, JsonValue>; "endBehavior": MediaEndBehaviorWire; "fit": RasterFitWire; "props": Record<string, ParamWire4>; "rate": ExactRational; "resources": Record<string, string>; "sourceDuration": ExactRational; "sourceStart": ExactRational; "type": "motion" } | { "color": string; "type": "solid" });
+  export type VisualSourceWire = ({ "endBehavior": MediaEndBehaviorWire; "gain"?: (ParamWire2 | null); "rate": ExactRational; "resource": string; "sampling": RasterSamplingWire; "sourceStart": ExactRational; "type": "video" } | { "resource": string; "sampling": RasterSamplingWire; "type": "image" } | { "endBehavior": MediaEndBehaviorWire; "rate": ExactRational; "resource": string; "sampling": LottieSamplingWire; "sourceStart": ExactRational; "type": "lottie" } | { "component": string; "data"?: Record<string, JsonValue>; "endBehavior": MediaEndBehaviorWire; "fit": RasterFitWire; "props": Record<string, ParamWire4>; "rate": ExactRational; "resources": Record<string, string>; "role": MotionRole; "sourceDuration": ExactRational; "sourceStart": ExactRational; "type": "motion" } | { "color": string; "type": "solid" });
   export type VisualTrackWire = { "id": string; "items": Array<VisualItemWire> };
 }
 export type TimelineDocument = TimelineDocumentSchema.Root;

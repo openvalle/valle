@@ -170,3 +170,107 @@ fn metal_host_clock_has_exact_endpoints_and_repeatable_output() {
         assert_eq!(images[0], images[1]);
     }
 }
+
+#[test]
+fn overlay_delivery_preserves_endpoints_and_uses_the_host_viewport() {
+    let backend = if std::env::var("VALLE_TEST_NATIVE_BACKEND").as_deref() == Ok("metal") {
+        "metal"
+    } else {
+        "raster"
+    };
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("overlay.motion.tsx"),r#"
+export const composition={width:64,height:32,fps:4,duration:2};
+export const role=overlay({intro:seconds(0.5),outro:seconds(0.5),hold:"once"});
+export default function Main(ctx) {return <Scene><View key="bar" className="absolute"
+ style={{left:ctx.seconds*8,width:ctx.viewport.width/4,height:ctx.viewport.height/2,backgroundColor:"white"}}/></Scene>;}
+"#).unwrap();
+    for size in ["64x32", "32x64"] {
+        let mut endpoints = Vec::new();
+        for (duration, last) in [("1.5", "5"), ("3", "11")] {
+            let review = report(run(
+                dir.path(),
+                &[
+                    "motion",
+                    "review",
+                    "overlay.motion.tsx",
+                    "--host-duration",
+                    duration,
+                    "--host-size",
+                    size,
+                    "--json",
+                ],
+            ));
+            assert_eq!(review["framesAnalyzed"], last.parse::<u32>().unwrap() + 1);
+            report(run(
+                dir.path(),
+                &[
+                    "motion",
+                    "check",
+                    "overlay.motion.tsx",
+                    "--host-duration",
+                    duration,
+                    "--host-size",
+                    size,
+                    "--frame",
+                    last,
+                    "--json",
+                ],
+            ));
+            let mut images = Vec::new();
+            for (pass, frame) in [last, "0", last].into_iter().enumerate() {
+                let name = format!("{size}-{duration}-{frame}-{pass}.png");
+                report(run(
+                    dir.path(),
+                    &[
+                        "motion",
+                        "render",
+                        "overlay.motion.tsx",
+                        "--host-duration",
+                        duration,
+                        "--host-size",
+                        size,
+                        "--backend",
+                        backend,
+                        "--frame",
+                        frame,
+                        "-o",
+                        &name,
+                        "--json",
+                    ],
+                ));
+                let bytes = std::fs::read(dir.path().join(name)).unwrap();
+                let mut reader = png::Decoder::new(std::io::Cursor::new(&bytes))
+                    .read_info()
+                    .unwrap();
+                let mut pixels = vec![0; reader.output_buffer_size().unwrap()];
+                let info = reader.next_frame(&mut pixels).unwrap();
+                let (width, height) = if size == "64x32" { (64, 32) } else { (32, 64) };
+                assert_eq!((info.width, info.height), (width, height));
+                let left = if frame == "0" { 0 } else { 14 };
+                assert_eq!(&pixels[left * 4..left * 4 + 4], &[255, 255, 255, 255]);
+                let outside = (height / 2 * width + left as u32) as usize * 4;
+                assert_eq!(&pixels[outside..outside + 4], &[0, 0, 0, 0]);
+                images.push(bytes);
+            }
+            assert_eq!(images[0], images[2]);
+            endpoints.push(images);
+        }
+        assert_eq!(endpoints[0], endpoints[1]);
+    }
+    assert!(
+        !run(
+            dir.path(),
+            &[
+                "motion",
+                "check",
+                "overlay.motion.tsx",
+                "--host-duration",
+                "0.99",
+                "--json"
+            ]
+        )
+        .status
+        .success()
+    );
+}

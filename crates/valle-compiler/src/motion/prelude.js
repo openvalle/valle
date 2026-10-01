@@ -376,3 +376,5 @@ const asset = (options = {}) => ({ kind: "asset", assetKind: options.kind, requi
 const audioAnalysis = (source, options = {}) => __typed({
   __valleType: "audioAnalysis", source, bands: options.bands, fps: options.fps,
 });
+
+const overlay = (options) => ({ __valleType: "overlay", ...options });

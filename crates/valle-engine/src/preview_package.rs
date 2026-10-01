@@ -88,7 +88,7 @@ pub struct PreparedPreview {
     pub verified_binding_bundle_json: String,
     pub execution_profile_json: String,
     pub external_resources: Vec<PreviewExternalResource>,
-    pub motion_source_durations: BTreeMap<String, f64>,
+    pub motion_source_metadata: BTreeMap<String, valle_timeline::MotionSourceMetadata>,
 }
 
 #[derive(Debug, Serialize)]
@@ -176,6 +176,7 @@ pub fn prepare_preview_package(input: PreviewPackageInput) -> Result<PreparedPre
     }
     let mut prepared = BTreeMap::<String, (PreviewMotionInstance, BTreeMap<String, String>)>::new();
     let mut durations = BTreeMap::new();
+    let mut motion_source_metadata = BTreeMap::new();
     for (track_index, track) in document["tracks"]["visual"]
         .as_array()
         .into_iter()
@@ -212,8 +213,24 @@ pub fn prepare_preview_package(input: PreviewPackageInput) -> Result<PreparedPre
                 .as_ref()
                 .ok_or_else(|| format!("Motion {path} has no composition"))?;
             let duration = composition.duration().map_err(|error| error.to_string())?;
-            if let Some(old) = durations.insert(key.clone(), duration) {
-                if old != duration {
+            let metadata = valle_timeline::MotionSourceMetadata {
+                duration,
+                role: instance.artifact.role,
+            };
+            motion_source_metadata.insert(component.to_owned(), metadata);
+            if let Some(old) = durations.insert(
+                key.clone(),
+                valle_timeline::MotionSourceMetadata {
+                    duration,
+                    role: instance.artifact.role,
+                },
+            ) {
+                if old
+                    != (valle_timeline::MotionSourceMetadata {
+                        duration,
+                        role: instance.artifact.role,
+                    })
+                {
                     return Err(format!("Motion instance {key} has conflicting durations"));
                 }
             }
@@ -262,10 +279,7 @@ pub fn prepare_preview_package(input: PreviewPackageInput) -> Result<PreparedPre
             "Motion preview instance does not match an author clip: {path}"
         ));
     }
-    let motion_source_durations = durations
-        .iter()
-        .map(|(key, duration)| (key.clone(), duration.as_f64()))
-        .collect();
+    motion_source_metadata.extend(durations.clone());
     let canonical =
         valle_compiler::compile_timeline_with_motion_sources(author_timeline, &durations)
             .map_err(|error| error.to_string())?;
@@ -401,7 +415,7 @@ pub fn prepare_preview_package(input: PreviewPackageInput) -> Result<PreparedPre
         verified_binding_bundle_json,
         execution_profile_json,
         external_resources,
-        motion_source_durations,
+        motion_source_metadata,
     })
 }
 

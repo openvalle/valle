@@ -871,7 +871,7 @@ impl CapturedMotionSources {
         &self,
     ) -> Result<(
         std::collections::BTreeMap<String, super::motion::PreparedInput>,
-        std::collections::BTreeMap<String, valle_timeline::RationalTime>,
+        std::collections::BTreeMap<String, valle_timeline::MotionSourceMetadata>,
     )> {
         self.verify_dependencies()?;
         let mut prepared = std::collections::BTreeMap::new();
@@ -884,7 +884,13 @@ impl CapturedMotionSources {
                 .composition
                 .as_ref()
                 .ok_or_else(|| anyhow!("Motion {name} needs composition.duration"))?;
-            durations.insert(name.clone(), composition.duration()?);
+            durations.insert(
+                name.clone(),
+                valle_timeline::MotionSourceMetadata {
+                    duration: composition.duration()?,
+                    role: input.compiled.artifact.role,
+                },
+            );
             prepared.insert(name.clone(), input);
         }
         self.verify_dependencies()?;
@@ -971,10 +977,10 @@ pub(crate) fn motion_source_paths(
     Ok(paths)
 }
 
-pub(crate) fn motion_source_durations(
+pub(crate) fn motion_source_metadata(
     canonical: &serde_json::Value,
     author: &serde_json::Value,
-) -> Result<std::collections::BTreeMap<String, f64>> {
+) -> Result<std::collections::BTreeMap<String, valle_timeline::MotionSourceMetadata>> {
     let mut durations = std::collections::BTreeMap::new();
     for track in canonical["document"]["visual"]["tracks"]
         .as_array()
@@ -992,7 +998,13 @@ pub(crate) fn motion_source_durations(
                 .ok_or_else(|| anyhow!("invalid prepared Motion component"))?;
             let duration: valle_timeline::RationalTime =
                 serde_json::from_value(source["sourceDuration"].clone())?;
-            durations.insert(alias.to_owned(), duration.as_f64());
+            durations.insert(
+                alias.to_owned(),
+                valle_timeline::MotionSourceMetadata {
+                    duration,
+                    role: serde_json::from_value(source["role"].clone())?,
+                },
+            );
         }
     }
     for (track_index, track) in author["tracks"]["visual"]
@@ -1015,7 +1027,13 @@ pub(crate) fn motion_source_durations(
             let duration: valle_timeline::RationalTime =
                 serde_json::from_value(source["source"]["sourceDuration"].clone())?;
             if let Some(alias) = clip["component"].as_str() {
-                durations.insert(alias.to_owned(), duration.as_f64());
+                durations.insert(
+                    alias.to_owned(),
+                    valle_timeline::MotionSourceMetadata {
+                        duration,
+                        role: serde_json::from_value(source["source"]["role"].clone())?,
+                    },
+                );
             }
         }
     }

@@ -29,7 +29,7 @@ fn bind_file_timeline_captured(
     captured: &super::cmd::timeline::CapturedMotionSources,
 ) -> Result<(
     valle_timeline::internal::CanonicalTimeline,
-    std::collections::BTreeMap<String, f64>,
+    std::collections::BTreeMap<String, valle_timeline::MotionSourceMetadata>,
 )> {
     let (_, durations) = captured.prepare()?;
     let canonical =
@@ -38,7 +38,7 @@ fn bind_file_timeline_captured(
         serde_json::from_slice(&valle_timeline::internal::canonical_bytes(&canonical)?)?;
     let author_value: Value = serde_json::from_slice(&timeline_bytes(timeline)?)?;
     let source_durations =
-        super::cmd::timeline::motion_source_durations(&canonical_value, &author_value)?;
+        super::cmd::timeline::motion_source_metadata(&canonical_value, &author_value)?;
     Ok((canonical, source_durations))
 }
 
@@ -119,7 +119,7 @@ impl TimelineFile {
             let (canonical, durations) = bind_file_timeline_captured(&timeline, &captured)?;
             Ok((canonical, durations, input_dependencies))
         })();
-        let (canonical, motion_source_durations, input_dependencies, input_dependency_error) =
+        let (canonical, motion_source_metadata, input_dependencies, input_dependency_error) =
             match prepared {
                 Ok((canonical, durations, dependencies)) => {
                     (canonical, durations, dependencies, None)
@@ -139,7 +139,10 @@ impl TimelineFile {
                                 if let Some(component) = clip["component"].as_str() {
                                     durations.insert(
                                         component.to_owned(),
-                                        valle_timeline::RationalTime::new(86_400, 1)?,
+                                        valle_timeline::MotionSourceMetadata {
+                                            duration: valle_timeline::RationalTime::new(86_400, 1)?,
+                                            role: valle_timeline::MotionRole::Clip,
+                                        },
                                     );
                                 }
                             }
@@ -149,13 +152,10 @@ impl TimelineFile {
                         timeline.clone(),
                         &durations,
                     )?;
-                    let duration_numbers = durations
-                        .into_iter()
-                        .map(|(key, duration)| (key, duration.as_f64()))
-                        .collect();
+                    let metadata = durations;
                     (
                         projection,
-                        duration_numbers,
+                        metadata,
                         BTreeMap::new(),
                         Some(format!("{error:#}")),
                     )
@@ -166,7 +166,7 @@ impl TimelineFile {
         Ok(json!({
             "timelineRevision": {"revision":revision,"parentRevision":null,"createdAt":"","actor":"file","cause":{"type":"genesis"},"intent":null},
             "timeline":serde_json::from_str::<Value>(&timeline_json)?, "timelineJson":timeline_json,
-            "motionSourceDurations":motion_source_durations,
+            "motionSourceMetadata":motion_source_metadata,
             "inputDependencies":input_dependencies,
             "inputDependencyError":input_dependency_error,
             "render":{"timeline":serde_json::from_str::<Value>(&render_json)?,"timelineJson":render_json},
@@ -548,7 +548,7 @@ mod tests {
         let file = TimelineFile::open(&path).unwrap();
         let snapshot = file.snapshot().unwrap();
         assert_eq!(snapshot["inputDependencies"].as_object().unwrap().len(), 1);
-        assert_eq!(snapshot["motionSourceDurations"]["card"], 3.0);
+        assert_eq!(snapshot["motionSourceMetadata"]["card"], 3.0);
         assert!(
             snapshot["timeline"]["tracks"]["visual"][0]["clips"][0]
                 .get("sourceDuration")

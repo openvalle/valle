@@ -187,13 +187,13 @@ fn build_timeline(
                         "type": "clip",
                         "id": "clip:motion",
                         "duration": input.duration,
-                        "layer": standalone_motion_layer(),
+                        "layer": standalone_motion_layer(input.canvas),
                         "source": {
                             "type": "motion",
                             "component": COMPONENT_RESOURCE_ID,
                             "fit": "contain",
                             "sourceStart": "0/1",
-                            "sourceDuration": input.artifact.composition.as_ref()
+                            "role": input.artifact.role, "sourceDuration": input.artifact.composition.as_ref()
                                 .context("standalone Motion needs a composition")?.duration()
                                 .map_err(|error| anyhow!(error))?,
                             "rate": "1/1",
@@ -214,9 +214,10 @@ fn build_timeline(
     decode_canonical(&serde_json::to_string(&document)?).map_err(Into::into)
 }
 
-fn standalone_motion_layer() -> Value {
+fn standalone_motion_layer(canvas: (u32, u32)) -> Value {
     json!({
         "transform": {
+            "size": {"type":"constant","value":[canvas.0,canvas.1]},
             "position": {"type": "constant", "value": [0.5, 0.5]},
             "scale": {"type": "constant", "value": [1.0, 1.0]},
             "rotation": {"type": "constant", "value": 0.0},
@@ -839,7 +840,7 @@ export default function T(){return <Scene><Text>Hello</Text><MathFormula latex="
 
     #[test]
     fn standalone_timeline_centers_the_full_canvas_motion_source() {
-        let layer = standalone_motion_layer();
+        let layer = standalone_motion_layer((64, 32));
 
         assert_eq!(
             layer["transform"]["position"],

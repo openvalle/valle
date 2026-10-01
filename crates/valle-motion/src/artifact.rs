@@ -1588,6 +1588,7 @@ pub struct ResourceRef {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SceneArtifact {
+    pub role: valle_timeline::MotionRole,
     pub format_version: u32,
     pub capability_set: CapabilitySet,
     pub component: String,
@@ -2302,6 +2303,19 @@ impl SceneArtifact {
 
     pub(crate) fn validate_impl(&self) -> Result<(), Vec<ValidationError>> {
         let mut errors = Vec::new();
+        if let Some(composition) = &self.composition {
+            if let Ok(duration) = composition.duration() {
+                if let Err(reason) = self.role.validate(duration, None) {
+                    errors.push(ValidationError::new("/role", reason));
+                }
+            }
+        } else if !matches!(self.role, valle_timeline::MotionRole::Clip) {
+            errors.push(ValidationError::new(
+                "/role",
+                "overlay needs composition.duration",
+            ));
+        }
+
         if self.format_version != ARTIFACT_FORMAT_VERSION {
             errors.push(ValidationError::new(
                 "/formatVersion",
