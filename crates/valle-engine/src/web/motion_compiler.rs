@@ -27,6 +27,7 @@ struct CompileOptions {
     #[serde(default)]
     resources: Vec<ResourceRef>,
     data: Option<PrepareDataBinding>,
+    placement: Option<valle_compiler::motion::MotionPlacement>,
     #[serde(default)]
     audio_sources: Vec<AudioSourceInput>,
 }
@@ -122,6 +123,7 @@ pub fn compile_motion_jsx(
         Some(&shaders),
         options.data.as_ref(),
         Some(&audio),
+        options.placement.as_ref(),
     ))
 }
 
@@ -153,6 +155,7 @@ pub fn compile_motion_modules(
         Some(&shaders),
         options.data.as_ref(),
         Some(&audio),
+        options.placement.as_ref(),
     ))
 }
 

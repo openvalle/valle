@@ -153,7 +153,9 @@ test("300 Timeline captions compile each immutable word input once and retain ex
         const json = engine.frame_inspection_json(ticket);
         if (seen.has(frame)) expect(json).toBe(seen.get(frame)!);
         seen.set(frame, json);
-        if (frame === 1) expect(JSON.parse(json).motion[0].sourceFrame).toBe(0);
+        // At 4 fps the first admitted sample is 0.25 s; authored start 0.125 s
+        // leaves source time 0.125 s, whose nearest source frame is 1.
+        if (frame === 1) expect(JSON.parse(json).motion[0].sourceFrame).toBe(1);
       } finally { engine.release_ticket(ticket); }
     }
   } finally { engine.free(); }
@@ -165,4 +167,29 @@ test("300 Timeline captions compile each immutable word input once and retain ex
   if (edited.status !== "ok") throw new Error(edited.message);
   expect(edited.instances[0]!.artifactDigest).not.toBe(result.instances[0]!.artifactDigest);
   expect(edited.instances[100]!.artifactDigest).toBe(result.instances[100]!.artifactDigest);
+});
+
+test("Studio diagnoses misplaced roles before compiling host data with author names", async () => {
+  for (const [component, track, declaration, expected] of [
+    ["words", "visual", "captionPresenter({intro:seconds(0),outro:seconds(0)})", "captionPresenter belongs on a caption track"],
+    ["title", "caption", "overlay({intro:seconds(0),outro:seconds(0),hold:'once'})", "a caption track presenter must declare captionPresenter"],
+  ] as const) {
+    const source = `export const composition={width:64,height:32,duration:1}; export const role=${declaration};
+      export default function Template(ctx,props,data){return <Scene/>;}`;
+    const clipPath = `/tracks/${track}/0/clips/0`;
+    const tracks = track === "visual"
+      ? { visual: [{ clips: [{ kind: "motion" as const, component, start: 0, duration: 1 }] }] }
+      : { caption: [{ presenter: { component }, style: { font: "font", fontSize: 20 },
+          clips: [{ start: 0, duration: 1, runs: [{ text: "word", start: 0, end: 1 }] }] }] };
+    const result = await compileStudioPreview({ id: 50, runtimeAssets, runtimeBaseUrl,
+      authorTimeline: { canvas: { width: 64, height: 32, fps: 4 }, resources: { [component]: "template.motion.tsx", font: "font.ttf" }, tracks },
+      instances: [{ clipPath, entry: "template.motion.tsx", modules: { "template.motion.tsx": source }, fonts: [] }] });
+    expect(result.status).toBe("error");
+    if (result.status !== "error") throw new Error("misplaced role accepted");
+    expect(result.message).toContain(`component \`${component}\``);
+    expect(result.message).toContain(clipPath);
+    expect(result.message).toContain(expected);
+    expect(result.message).not.toContain("needs frozen caption data");
+    expect(result.message).not.toContain("binding is not declared");
+  }
 });

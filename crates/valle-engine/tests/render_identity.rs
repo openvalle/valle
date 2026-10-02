@@ -3386,3 +3386,93 @@ export default function Main(ctx) {{return <Scene><View key="bar" className="abs
         }
     }
 }
+
+#[test]
+fn overlay_host_clock_props_and_outer_curves_share_the_authored_start() {
+    use valle_timeline::{MotionRole, OverlayHold, RationalTime};
+    let mut artifact = (*motion_artifact()).clone();
+    artifact.role = MotionRole::Overlay {
+        intro: RationalTime::new(1, 4).unwrap(),
+        outro: RationalTime::new(1, 4).unwrap(),
+        hold: OverlayHold::Once,
+    };
+    let artifact = Arc::new(artifact);
+    let resources =
+        manifest(json!({"component:title":motion_entry(&artifact),"asset:logo":image_entry()}));
+    let bindings = ResourceBindings::new()
+        .with_binding(
+            "component:title",
+            motion_binding(&resources, "component:title", Arc::clone(&artifact), 2),
+        )
+        .unwrap()
+        .with_binding("asset:logo", binding(&resources, "asset:logo", None, 3))
+        .unwrap();
+    for (fps, numerator, denominator) in [("4/1", 4, 1), ("30000/1001", 30000, 1001)] {
+        for start in [
+            RationalTime::new(1, 20).unwrap(),
+            RationalTime::new(1, 8).unwrap(),
+        ] {
+            let mut value = motion_document("component:title");
+            value["document"]["canvas"]["fps"] = json!(fps);
+            value["document"]["canvas"]["duration"] = json!("3/1");
+            let clip = &mut value["document"]["visual"]["tracks"][0]["items"][0];
+            clip["duration"] = json!("2/1");
+            clip["source"]["role"] = serde_json::to_value(artifact.role).unwrap();
+            for (field, prefix) in [("source", "props"), ("layer", "outer")] {
+                let curve = json!({"type":"curve","id":format!("curve:{prefix}"),"interpolation":"linear",
+                    "keyframes":[{"id":format!("key:{prefix}:start"),"time":"0/1","value":0.0,"outEasing":null},
+                        {"id":format!("key:{prefix}:end"),"time":"2/1","value":1.0,"outEasing":null}],"extrapolation":"clamp"});
+                if field == "source" {
+                    clip[field]["props"]["opacity"] = curve;
+                } else {
+                    clip[field]["opacity"] = curve;
+                }
+            }
+            value["document"]["visual"]["tracks"][0]["items"]
+                .as_array_mut()
+                .unwrap()
+                .insert(
+                    0,
+                    json!({"type":"gap","id":"gap:placement","duration":start.to_string()}),
+                );
+            let render = open(
+                &timeline(&value),
+                &resources,
+                &bindings,
+                &Capabilities::new().with_artifact_abi("valle.motion/artifact@1"),
+                &baseline_profile(),
+            )
+            .unwrap();
+            let first =
+                (start.as_f64() * f64::from(numerator) / f64::from(denominator)).round() as i64;
+            for frame in [first + 2, first, first + 1, first + 2, first] {
+                let evaluated = render.evaluate(FrameKey::new(frame)).unwrap();
+                let EvaluatedVisualOperation::Clip(clip) = &evaluated.visual()[0] else {
+                    panic!("clip")
+                };
+                let seconds = RationalTime::new(frame * i64::from(denominator), numerator)
+                    .unwrap()
+                    .checked_sub(start)
+                    .unwrap();
+                assert_eq!(
+                    clip.source().motion_host().unwrap().sample.composition(),
+                    seconds
+                );
+                let valle_engine::render::EvaluatedMotionValue::Scalar(prop) =
+                    clip.source().motion_props().unwrap()["opacity"]
+                else {
+                    panic!("scalar")
+                };
+                assert_eq!(prop, clip.layer().opacity());
+                assert_eq!(prop, (seconds.as_f64() / 2.0).max(0.0));
+                assert_eq!(
+                    clip.source().sample_time(),
+                    artifact
+                        .role
+                        .template_time(seconds, RationalTime::new(2, 1).unwrap(), RationalTime::ONE)
+                        .unwrap()
+                );
+            }
+        }
+    }
+}

@@ -78,12 +78,20 @@ fn timeline_admits_host_placement_and_rejects_media_fields_and_short_hosts() {
         );
     }
     let error = compile_timeline_with_motion_sources(
-        decode_timeline(&author(0.999).to_string()).unwrap(),
+        decode_timeline(&author(0.8).to_string()).unwrap(),
         &metadata,
     )
     .unwrap_err()
     .to_string();
     assert!(error.contains("overlay") && error.contains("/tracks/visual/0/clips/0"));
+    assert!(error.contains("component `card`"), "{error}");
+    assert!(error.contains("host duration 0.8 s"), "{error}");
+    assert!(error.contains("intro 0.5 s + outro 0.5 s = 1 s"), "{error}");
+    assert!(error.contains("template duration 2 s"), "{error}");
+    assert!(
+        !error.contains("motion-") && !error.contains("4/5"),
+        "{error}"
+    );
     for (field, value) in [
         ("fit", json!("contain")),
         ("trimStart", json!(0)),

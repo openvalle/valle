@@ -142,7 +142,7 @@ pub fn compile_motion_modules_with_full_env_and_data(
     data: Option<&PrepareDataBinding>,
 ) -> Result<CompiledMotion, Vec<CompilerDiagnostic>> {
     compile_motion_modules_with_full_env_and_data_and_audio(
-        graph, resources, measure, shaders, data, None,
+        graph, resources, measure, shaders, data, None, None,
     )
 }
 
@@ -153,6 +153,7 @@ pub fn compile_motion_modules_with_full_env_and_data_and_audio(
     shaders: Option<&ShaderRegistryEnv>,
     data: Option<&PrepareDataBinding>,
     audio: Option<&AudioAnalysisEnv>,
+    placement: Option<&super::MotionPlacement>,
 ) -> Result<CompiledMotion, Vec<CompilerDiagnostic>> {
     let linked = Linker::new(graph).link()?;
     let mut compiled = match compile_motion_impl(
@@ -163,6 +164,7 @@ pub fn compile_motion_modules_with_full_env_and_data_and_audio(
         data,
         audio,
         Some(&graph.entry),
+        placement,
     ) {
         Ok(compiled) => compiled,
         Err(mut diagnostics) => {

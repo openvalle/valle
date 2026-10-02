@@ -557,8 +557,11 @@ host boundaries are quantized at the actual output FPS; `N` is their difference 
 `i` is the requested output frame minus the first boundary. For `N > 1`, the first
 and last progress values are exactly 0 and 1. A start between frame boundaries can
 produce a slightly negative first `ctx.host.seconds`; the authored start is preserved.
+This applies to ordinary clips, overlays and caption presenters. Template time
+maps that same exact local time through its intro/hold/outro rule; it does not
+replace the authored start with the first admitted frame.
 Motion `props` curves also use host-local seconds and are validated against the
-clip duration.
+clip duration, using the same start as the clip's outer opacity and transform curves.
 
 `TimeScope` changes source time only. `Shutter`, `Echo` and automatic motion blur
 keep the request frame’s host inputs frozen while sampling source time. Motion

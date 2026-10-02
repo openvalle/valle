@@ -301,6 +301,10 @@ fn caption_input_obeys_existing_prepare_budgets_and_cannot_occupy_a_visual_track
         .unwrap_err()
         .to_string();
     assert!(error.contains("captionPresenter") && error.contains("/tracks/visual/0/clips/0"));
+    assert!(
+        error.contains("component `words`") && !error.contains("motion-"),
+        "{error}"
+    );
 }
 
 #[test]

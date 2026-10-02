@@ -560,6 +560,7 @@ pub(crate) struct PreparedInput {
 /// Source closure and asset bytes captured before a Timeline save starts compiling.
 /// Compilation may clone these values, but never reopens the author paths.
 pub(crate) struct CapturedTimelineComponent {
+    pub(crate) placement: Option<valle_compiler::motion::MotionPlacement>,
     graph: valle_compiler::motion::MotionModuleGraph,
     assets: BTreeMap<String, BoundAsset>,
     data_binding: Option<valle_compiler::motion::PrepareDataBinding>,
@@ -619,6 +620,7 @@ pub(crate) fn capture_timeline_component(
         assets.insert(name.to_owned(), asset);
     }
     let captured = CapturedTimelineComponent {
+        placement: None,
         graph,
         assets,
         data_binding: data.map(|value| valle_compiler::motion::PrepareDataBinding {
@@ -651,6 +653,7 @@ pub(crate) fn compile_captured_timeline_component(
         &fonts,
         &shaders,
         captured.data_binding.as_ref(),
+        captured.placement.as_ref(),
     )?
     .map_err(|diagnostics| {
         anyhow!(
@@ -713,6 +716,7 @@ fn compile_with_font_assets(
     font_blobs: &[Arc<[u8]>],
     shaders: &valle_motion::shader::ShaderRegistry,
     data: Option<&valle_compiler::motion::PrepareDataBinding>,
+    placement: Option<&valle_compiler::motion::MotionPlacement>,
 ) -> Result<
     Result<valle_compiler::motion::CompiledMotion, Vec<valle_compiler::motion::CompilerDiagnostic>>,
 > {
@@ -765,6 +769,7 @@ fn compile_with_font_assets(
             Some(shaders),
             data,
             audio.as_ref(),
+            placement,
         ) {
             Ok(compiled) => compiled,
             Err(diagnostics) => return Ok(Err(diagnostics)),
@@ -866,6 +871,7 @@ fn studio_native_state_json(request: &StudioRequest, generation: u64) -> Result<
         &font_blobs,
         &shaders,
         data_binding.as_ref(),
+        None,
     )? {
         Ok(compiled) => compiled,
         Err(diagnostics) => {
@@ -1211,6 +1217,7 @@ fn compile_and_prepare(
         font_blobs,
         &shaders,
         data_binding.as_ref(),
+        None,
     )? {
         Ok(compiled) => compiled,
         Err(diagnostics) => {

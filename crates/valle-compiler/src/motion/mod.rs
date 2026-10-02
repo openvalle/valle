@@ -315,6 +315,22 @@ pub struct PrepareDataBinding {
     pub value: serde_json::Value,
 }
 
+/// Author placement used only for early host-role validation and diagnostics.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MotionPlacement {
+    pub component: String,
+    pub path: String,
+    pub track: MotionTrack,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MotionTrack {
+    Visual,
+    Caption,
+}
+
 /// Compile one deterministic Motion TSX module directly into the Scene IR.
 pub fn compile_motion(source: &str) -> Result<CompiledMotion, Vec<CompilerDiagnostic>> {
     compile_motion_with_resources(source, &[])
@@ -360,7 +376,9 @@ pub fn compile_motion_with_full_env_and_data(
     shaders: Option<&ShaderRegistryEnv>,
     data: Option<&PrepareDataBinding>,
 ) -> Result<CompiledMotion, Vec<CompilerDiagnostic>> {
-    compile_motion_with_full_env_and_data_and_audio(source, resources, measure, shaders, data, None)
+    compile_motion_with_full_env_and_data_and_audio(
+        source, resources, measure, shaders, data, None, None,
+    )
 }
 
 pub fn compile_motion_with_full_env_and_data_and_audio(
@@ -370,10 +388,14 @@ pub fn compile_motion_with_full_env_and_data_and_audio(
     shaders: Option<&ShaderRegistryEnv>,
     data: Option<&PrepareDataBinding>,
     audio: Option<&AudioAnalysisEnv>,
+    placement: Option<&MotionPlacement>,
 ) -> Result<CompiledMotion, Vec<CompilerDiagnostic>> {
-    compile_motion_impl(source, resources, measure, shaders, data, audio, None)
+    compile_motion_impl(
+        source, resources, measure, shaders, data, audio, None, placement,
+    )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compile_motion_impl(
     source: &str,
     resources: &[ResourceRef],
@@ -382,6 +404,7 @@ fn compile_motion_impl(
     data: Option<&PrepareDataBinding>,
     audio: Option<&AudioAnalysisEnv>,
     _entry: Option<&str>,
+    placement: Option<&MotionPlacement>,
 ) -> Result<CompiledMotion, Vec<CompilerDiagnostic>> {
     #[cfg(not(target_family = "wasm"))]
     let _compilation = metrics::record_compilation(_entry.unwrap_or("<inline>"));
@@ -431,7 +454,7 @@ fn compile_motion_impl(
         audio,
         require_composition,
     )?;
-    let artifact = compiler.compile(&program)?;
+    let artifact = compiler.compile(&program, placement)?;
     let prepared_data_bytes =
         valle_motion::canonical_bytes(&data.as_ref().map(|binding| &binding.value))
             .expect("validated prepare data binding is canonical");

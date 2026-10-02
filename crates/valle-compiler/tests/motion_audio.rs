@@ -52,6 +52,7 @@ fn uncertain_beat_phase_has_a_source_warning_and_exposes_confidence() {
         None,
         None,
         Some(&audio),
+        None,
     )
     .unwrap();
     let warning = compiled
@@ -106,6 +107,7 @@ fn audio_analysis_freezes_level_band_and_onset_with_asset_digest() {
         None,
         None,
         Some(&audio),
+        None,
     )
     .unwrap_or_else(|diagnostics| panic!("{diagnostics:?}"));
     let tables = compiled
@@ -155,6 +157,7 @@ fn pulse_pcm_artifact_digest_is_shared_with_wasm() {
         None,
         None,
         Some(&audio),
+        None,
     )
     .unwrap_or_else(|diagnostics| panic!("{diagnostics:?}"));
     let bytes = valle_motion::canonical_bytes(&compiled.artifact).unwrap();
@@ -189,6 +192,7 @@ fn audio_frame_lookup_does_not_drop_single_frame_pulses() {
         None,
         None,
         Some(&audio),
+        None,
     )
     .unwrap()
     .artifact;

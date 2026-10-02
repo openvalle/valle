@@ -15,6 +15,19 @@ pub struct MotionPreparationInput {
     pub data: Value,
 }
 impl MotionPreparationInput {
+    #[cfg(feature = "motion")]
+    pub fn placement(&self) -> crate::motion::MotionPlacement {
+        crate::motion::MotionPlacement {
+            component: self.component.clone(),
+            path: self.clip_path.clone(),
+            // Paths are produced by the two closed track loops below.
+            track: if self.clip_path.starts_with("/tracks/caption/") {
+                crate::motion::MotionTrack::Caption
+            } else {
+                crate::motion::MotionTrack::Visual
+            },
+        }
+    }
     pub fn key(&self) -> String {
         motion_instance_key(
             &self.locator,

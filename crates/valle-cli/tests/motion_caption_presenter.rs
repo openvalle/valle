@@ -226,6 +226,32 @@ export default function Cover(ctx,props,data){return <Scene><View style={{width:
             .all(|p| p[..3] == [0x12, 0x34, 0x56]),
         "caption end is exclusive"
     );
+    // First admitted frame is 0.25 s, but the authored start is 0.125 s.
+    // A word ending at local 0.1 s has already ended; a frame-origin clock would highlight it.
+    timeline["tracks"]["caption"][0]["clips"][0]["runs"][0]["end"] = json!(0.1);
+    write(&timeline);
+    report(run(
+        dir.path(),
+        &[
+            "timeline",
+            "render",
+            "captions.timeline.json",
+            "--frame",
+            "1",
+            "-o",
+            "first-word.png",
+            "--json",
+        ],
+    ));
+    let pixels = valle_media::codec::read_rgba_png(&dir.path().join("first-word.png"))
+        .unwrap()
+        .data;
+    assert!(
+        !pixels
+            .chunks_exact(4)
+            .any(|p| p[0] > 200 && p[1] > 160 && p[2] < 80 && p[3] > 100),
+        "caption host clock must retain the authored start"
+    );
     timeline["tracks"]["caption"][0]["clips"][0]["enter"] =
         json!({"preset":"fade","duration":0.25});
     write(&timeline);
@@ -238,4 +264,65 @@ export default function Cover(ctx,props,data){return <Scene><View style={{width:
         .success(),
         "builtin effects cannot be mixed with a presenter"
     );
+}
+
+#[test]
+fn timeline_reports_author_alias_and_wrong_role_before_caption_input_errors() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("words.motion.tsx"), SOURCE).unwrap();
+    std::fs::write(dir.path().join("overlay.motion.tsx"), "export const composition={width:160,height:48,duration:2}; export const role=overlay({intro:seconds(0.6),outro:seconds(0.4),hold:'once'}); export default function Overlay(){return <Scene/>;}").unwrap();
+    let font = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../assets/fonts/noto/NotoSans-Regular.ttf")
+        .canonicalize()
+        .unwrap();
+    let visual = |component: &str, duration: f64| json!({"canvas":{"width":160,"height":48,"fps":4},"resources":{"words":"words.motion.tsx","title":"overlay.motion.tsx"},"tracks":{"visual":[{"clips":[{"kind":"motion","component":component,"start":0,"duration":duration}]}]}});
+    let caption = json!({"canvas":{"width":160,"height":48,"fps":4},"resources":{"title":"overlay.motion.tsx","font":font},"tracks":{"caption":[{"presenter":{"component":"title"},"style":{"font":"font","fontSize":20},"clips":[{"start":0,"duration":2,"runs":[{"text":"word","start":0,"end":1}]}]}]}});
+    for (document, alias, path, expected) in [
+        (
+            visual("words", 2.0),
+            "words",
+            "/tracks/visual/0/clips/0",
+            "captionPresenter belongs on a caption track",
+        ),
+        (
+            caption,
+            "title",
+            "/tracks/caption/0/clips/0",
+            "a caption track presenter must declare captionPresenter",
+        ),
+        (
+            visual("title", 0.8),
+            "title",
+            "/tracks/visual/0/clips/0",
+            "intro 0.6 s + outro 0.4 s = 1 s",
+        ),
+    ] {
+        std::fs::write(
+            dir.path().join("invalid.timeline.json"),
+            document.to_string(),
+        )
+        .unwrap();
+        let result = run(
+            dir.path(),
+            &["timeline", "check", "invalid.timeline.json", "--json"],
+        );
+        assert!(!result.status.success());
+        let message = format!(
+            "{}{}",
+            String::from_utf8_lossy(&result.stdout),
+            String::from_utf8_lossy(&result.stderr)
+        );
+        assert!(
+            message.contains(&format!("component `{alias}`"))
+                && message.contains(path)
+                && message.contains(expected),
+            "{message}"
+        );
+        assert!(
+            !message.contains("motion-")
+                && !message.contains("needs frozen caption data")
+                && !message.contains("binding is not declared"),
+            "{message}"
+        );
+    }
 }

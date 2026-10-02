@@ -1774,16 +1774,6 @@ fn admit_visual_source(
             }
         }
         VisualSource::Motion(source) => {
-            // A template starts at local frame zero, exactly like its frozen host clock.
-            // Clip media retain the authored exact placement/source offset.
-            let placement_start = if matches!(source.role, valle_timeline::MotionRole::Clip) {
-                placement_start
-            } else {
-                frame_sample_time(range.start(), frame_rate).unwrap_or_else(|_| {
-                    diagnostics.push(admit_fault(path, "motion-template-start-frame"));
-                    placement_start
-                })
-            };
             let target =
                 required_resource_target(resource_targets, &source.component, path, diagnostics);
             let instance = admit_motion_instance(

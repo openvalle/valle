@@ -87,8 +87,10 @@ pub fn compile_timeline_with_motion_sources(
 ) -> Result<CanonicalTimeline, CompileTimelineError> {
     let mut timeline = timeline.into_wire();
     let mut resolved_sources = motion_sources.clone();
-    bind_motion_instances(&mut timeline, &mut resolved_sources)?;
-    TimelineNormalizer::new(&timeline, &resolved_sources)?.compile(NormalizationInput { timeline })
+    let motion_components = bind_motion_instances(&mut timeline, &mut resolved_sources)?;
+    let mut normalizer = TimelineNormalizer::new(&timeline, &resolved_sources)?;
+    normalizer.motion_components = motion_components;
+    normalizer.compile(NormalizationInput { timeline })
 }
 
 /// Identity of one Motion instance's preparation inputs. Native and Web hosts use this
@@ -108,11 +110,13 @@ pub fn motion_instance_key(
 fn bind_motion_instances(
     timeline: &mut timeline::TimelineWire,
     motion_sources: &mut BTreeMap<String, valle_timeline::MotionSourceMetadata>,
-) -> Result<(), CompileTimelineError> {
+) -> Result<BTreeMap<String, String>, CompileTimelineError> {
     let inputs = crate::motion_inputs::motion_preparation_inputs_wire(timeline)?;
     let original = timeline.resources.clone();
     let mut by_path = BTreeMap::new();
+    let mut components = BTreeMap::new();
     for input in inputs {
+        components.insert(input.clip_path.clone(), input.component.clone());
         let key = input.key();
         if original.contains_key(&key) {
             return Err(CompileTimelineError::InvalidResourceAlias {
@@ -135,7 +139,7 @@ fn bind_motion_instances(
             }
         }
     }
-    Ok(())
+    Ok(components)
 }
 
 /// Private normalization carrier. It intentionally has no serde/schema surface.
@@ -147,6 +151,7 @@ struct TimelineNormalizer {
     resources: BTreeSet<String>,
     resource_locators: BTreeMap<String, String>,
     motion_sources: BTreeMap<String, valle_timeline::MotionSourceMetadata>,
+    motion_components: BTreeMap<String, String>,
     frame_rate: FrameRate,
     canvas_size: [u32; 2],
 }
@@ -162,6 +167,7 @@ impl TimelineNormalizer {
             resources: timeline.resources.keys().cloned().collect(),
             resource_locators: timeline.resources.clone(),
             motion_sources: motion_sources.clone(),
+            motion_components: BTreeMap::new(),
             frame_rate,
             canvas_size: [timeline.canvas.width, timeline.canvas.height],
         })
@@ -427,7 +433,11 @@ impl TimelineNormalizer {
                     }
                 })?;
                 let role_error = |reason: String| CompileTimelineError::MotionRole {
-                    component: component.clone(),
+                    component: self
+                        .motion_components
+                        .get(clip_path)
+                        .expect("author Motion component was captured before binding")
+                        .clone(),
                     role: metadata.role.name().into(),
                     path: clip_path.to_owned(),
                     reason,
@@ -446,13 +456,7 @@ impl TimelineNormalizer {
                         metadata.duration,
                         Some(RationalTime::from_exact(exact_time(_clip_duration))),
                     )
-                    .map_err(|reason| {
-                        role_error(format!(
-                            "{reason}; host duration {}, template duration {}",
-                            exact_time(_clip_duration),
-                            metadata.duration
-                        ))
-                    })?;
+                    .map_err(role_error)?;
                 if matches!(metadata.role, valle_timeline::MotionRole::Overlay { .. }) {
                     for (field, present) in [
                         ("fit", fit.is_some()),
@@ -608,7 +612,7 @@ impl TimelineNormalizer {
                         path: clip_path.clone(),
                     }
                 })?;
-                let role_error = |reason: &str| CompileTimelineError::MotionRole {
+                let role_error = |reason: String| CompileTimelineError::MotionRole {
                     component: presenter.component.clone(),
                     role: metadata.role.name().into(),
                     path: clip_path.clone(),
@@ -619,7 +623,7 @@ impl TimelineNormalizer {
                     valle_timeline::MotionRole::CaptionPresenter { .. }
                 ) {
                     return Err(role_error(
-                        "a caption track presenter must declare captionPresenter",
+                        "a caption track presenter must declare captionPresenter".into(),
                     ));
                 }
                 metadata

@@ -65,6 +65,8 @@ export async function motionCompileOptionIdentity(
   if (!options) return options;
   return {
     ...options,
+    // Placement only validates role and labels diagnostics; it cannot change an artifact.
+    placement: options.placement ? { track: options.placement.track } : undefined,
     data: options.data ? { value: options.data.value } : undefined,
     fonts: options.fonts ? await Promise.all(options.fonts.map(digest)) : undefined,
     fontAliases: options.fontAliases ? Object.fromEntries(await Promise.all(Object.entries(options.fontAliases).map(async ([uri, bytes]) => [uri, await digest(bytes)]))) : undefined,

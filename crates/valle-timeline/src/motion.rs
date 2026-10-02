@@ -43,26 +43,35 @@ pub struct MotionSourceMetadata {
 }
 
 impl MotionRole {
-    pub fn validate(
-        self,
-        source: RationalTime,
-        host: Option<RationalTime>,
-    ) -> Result<(), &'static str> {
+    pub fn validate(self, source: RationalTime, host: Option<RationalTime>) -> Result<(), String> {
         if !source.is_positive() {
-            return Err("template duration must be positive");
+            return Err("template duration must be positive".into());
         }
         if let Some((intro, outro, _)) = self.template_timing() {
             if intro.is_negative() || outro.is_negative() {
-                return Err("template intro and outro must be non-negative");
+                return Err("template intro and outro must be non-negative".into());
             }
             let minimum = intro
                 .checked_add(outro)
                 .map_err(|_| "template timing overflows")?;
             if minimum > source {
-                return Err("template intro + outro exceeds template duration");
+                return Err(format!(
+                    "template intro {} s + outro {} s = {} s exceeds template duration {} s",
+                    intro.as_f64(),
+                    outro.as_f64(),
+                    minimum.as_f64(),
+                    source.as_f64()
+                ));
             }
-            if host.is_some_and(|host| host < minimum) {
-                return Err("template host duration is shorter than intro + outro");
+            if let Some(host) = host.filter(|host| *host < minimum) {
+                return Err(format!(
+                    "template host duration {} s is shorter than intro {} s + outro {} s = {} s (template duration {} s)",
+                    host.as_f64(),
+                    intro.as_f64(),
+                    outro.as_f64(),
+                    minimum.as_f64(),
+                    source.as_f64()
+                ));
             }
         }
         Ok(())

@@ -17,6 +17,7 @@ test("Motion compiler forwards explicit bytes and preserves structured diagnosti
   const font = new Uint8Array([1, 2, 3]);
   const shader = { frozenBytes: new Uint8Array([4]) };
   const options = {
+    placement: { component: "card", path: "/tracks/visual/0/clips/0", track: "visual" as const },
     resources: [{ control: "logo", contentHash: `sha256:${"a".repeat(64)}` }],
     data: { source: "fixture", value: { count: 2 } },
     audioSources: [{ control: "beat", contentHash: `sha256:${"b".repeat(64)}`,
@@ -29,6 +30,7 @@ test("Motion compiler forwards explicit bytes and preserves structured diagnosti
     compile_motion_jsx: (source, optionsJson, fonts, aliases, shaders, audioSamples) => {
       expect(source).toBe("source");
       expect(JSON.parse(optionsJson)).toEqual({ resources: options.resources, data: options.data,
+        placement: options.placement,
         audioSources: [{ control: "beat", contentHash: options.audioSources[0]!.contentHash,
           sampleRate: 48_000 }] });
       expect(audioSamples[0]).toBe(options.audioSources[0]!.samples);

@@ -919,11 +919,12 @@ pub(crate) fn capture_motion_sources(
                 .ok_or_else(|| anyhow!("missing Motion resource {alias}"))?;
             assets.push(format!("{control}={}", base.join(asset).display()));
         }
-        let captured = super::motion::capture_timeline_component(
+        let mut captured = super::motion::capture_timeline_component(
             &base.join(&input.locator),
             &assets,
             (!input.data.is_null()).then_some(&input.data),
         )?;
+        captured.placement = Some(input.placement());
         instances.insert(key, captured);
     }
     Ok(CapturedMotionSources { instances })

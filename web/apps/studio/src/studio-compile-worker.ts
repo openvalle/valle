@@ -179,7 +179,10 @@ export async function compileStudioPreview(request: StudioCompileRequest): Promi
       request = { ...request, instances: request.instances.map(instance => {
         const input = prepared.get(instance.clipPath);
         if (!input) throw new Error(`Motion preparation input is missing for ${instance.clipPath}`);
-        return { ...instance, options: { ...instance.options, data: input.data === null ? undefined : { source: `timeline:${instance.clipPath}`, value: input.data } } };
+        return { ...instance, options: { ...instance.options,
+          placement: { component: input.component, path: input.clipPath,
+            track: input.clipPath.startsWith("/tracks/caption/") ? "caption" : "visual" },
+          data: input.data === null ? undefined : { source: `timeline:${instance.clipPath}`, value: input.data } } };
       }) };
     }
     // Fetch canonical PCM in this long-lived Worker. Source edits only send URLs

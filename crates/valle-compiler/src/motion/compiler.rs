@@ -191,6 +191,7 @@ impl<'s> Compiler<'s> {
     pub(super) fn compile(
         &mut self,
         program: &'s Program<'s>,
+        placement: Option<&MotionPlacement>,
     ) -> Result<SceneArtifact, Vec<CompilerDiagnostic>> {
         for statement in &program.body {
             match statement {
@@ -229,6 +230,30 @@ impl<'s> Compiler<'s> {
             }
         }
 
+        if let Some(placement) = placement {
+            let caption = matches!(
+                self.role,
+                valle_timeline::MotionRole::CaptionPresenter { .. }
+            );
+            if caption != matches!(placement.track, MotionTrack::Caption) {
+                self.illegal(
+                    DiagCode::ModuleShape,
+                    Span::new(0, 0),
+                    format!(
+                        "Motion component `{}` declared role `{}` at `{}`: {}",
+                        placement.component,
+                        self.role.name(),
+                        placement.path,
+                        if caption {
+                            "captionPresenter belongs on a caption track"
+                        } else {
+                            "a caption track presenter must declare captionPresenter"
+                        }
+                    ),
+                );
+                return Err(std::mem::take(&mut self.diagnostics));
+            }
+        }
         self.bind_caption_contract();
         self.validate_prepare_data();
         if !self.diagnostics.is_empty() {
