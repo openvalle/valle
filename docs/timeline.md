@@ -291,10 +291,11 @@ This is a parameter fragment. Each keyframe is `[time,value]` or
 the last keyframe must not include easing. Use arrays for vector values, for
 example `[0,[0.25,0.5]]`.
 
-Ordinary visual transforms, audio gain/pan and caption presentation curves use
-**clip-local seconds**, starting at zero regardless of the clip's `start`.
-Motion `props` curves use **Motion source seconds**, so trimming/rate/looping affect
-them. This distinction matters when retiming a Motion clip.
+Visual transforms, audio gain/pan, caption presentation and Motion `props` curves
+use **clip-local seconds**, regardless of the clip’s `start`. Source trimming,
+rate, looping and hold do not retime these curves. Motion exposes the same
+host-local clock through `ctx.host.seconds` and the authored clip length through
+`ctx.host.duration`.
 
 Keyframes must be non-empty, strictly increasing and lie in the owning duration
 (the last time may equal that duration). Values before the first and after the
@@ -463,7 +464,35 @@ Each caption clip requires `start`, `duration`, and exactly one of `text` or a
 non-empty `runs` array. A run has `text` plus optional `fontSize` and `color`.
 Spaces/newlines are literal content: include spaces at run boundaries and use
 `\n` for an explicit line break. There is no arbitrary per-run CSS or run font
-override. Timed run `start`/`end` fields are reserved for karaoke.
+override. Timed run `start`/`end` fields are supported by karaoke and Motion presenters.
+
+### Motion presenter
+
+A track can use `presenter: { component, props?, resources? }` to render its existing
+text/runs through a Motion template declaring `captionPresenter({ intro, outro })`.
+The compiler prepares `{ text, runs, style, region, align }` once per distinct input;
+`region` is in canvas pixels, and `style.font` is bound as `asset://caption` from
+the track's font resource. Do not bind a `caption` resource slot or supply a
+presenter `data` field. Word times are clip-local q6 seconds, ordered and contained
+within the caption duration. Compare them with `ctx.host.seconds` in the template.
+
+```json
+{
+  "presenter": { "component": "words" },
+  "style": { "font": "font", "fontSize": 36 },
+  "clips": [{ "start": 3, "duration": 2, "runs": [
+    { "text": "Build ", "start": 0, "end": 0.8 },
+    { "text": "your story", "start": 0.8, "end": 1.8 }
+  ] }]
+}
+```
+
+`words` and `font` must be declared in `resources`. Presenter captions reject
+`enter`, `display`, `exit`, `presentation` and `behavior`; their animation belongs
+to the template. They share the caption band and track order with built-in text.
+Different text or word times require different compiled inputs; playback only
+evaluates the prepared result. Studio can select declared templates and edit
+words/times through the existing Timeline working copy.
 
 ### Preset animation example
 
@@ -578,7 +607,7 @@ Timeline alias does not have to match that function's name.
 
 | Motion field | Meaning |
 | --- | --- |
-| `props` | Declared Motion prop name → constant or typed source-time curve |
+| `props` | Declared Motion prop name → constant or typed clip-local curve |
 | `resources` | Declared Motion asset slot → root resource alias |
 | `data` | Inline JSON object matching the component's prepared `controls.data` schema |
 
@@ -602,11 +631,20 @@ Timeline supplies Motion props using the same color and unit vocabulary as JSX:
 For example, use `"#38bdf8"` both in a JSX color default and in a Timeline color prop.
 Path geometry is authored with `path(svgD)` in the component.
 
-Timeline prepares Motion at its composition canvas size, then fits it to the clip
+Timeline prepares ordinary Motion clips at their composition canvas size, then fits them to the clip
 target rectangle (the Timeline canvas unless the clip sets `size`). The default
 `fit` is `contain`; `cover`, `fill` and `none` are also available. A clip's
 `data` is validated and bound before component preparation; clips with distinct
 data or resources produce distinct prepared instances.
+
+A Motion entry may instead declare `role = overlay({ intro: seconds(...),
+outro: seconds(...), hold: "once" | "loop" | "stretch" })`. Placement uses the same
+`kind: "motion"` clip. Its `duration` must be at least intro plus outro; explicitly
+supplied `fit`, `trimStart`, `rate` and `end` are rejected, including neutral values.
+Overlays lay out directly in `size` (rounded to positive pixels, halves away from
+zero), or the Timeline canvas. They preserve intro/outro and map only the middle
+segment to the host duration. Component duration and role travel together as exact
+prepared metadata; Timeline JSON does not repeat the declaration.
 
 In Studio, selecting a Motion clip shows its instance overrides alongside the
 component defaults. Changing an override edits only that clip's author `props`;
@@ -688,7 +726,8 @@ shows the canvas background.
 When retiming, the source duration remains the composition duration. For example,
 a three-second Motion source
 played at `rate: 2` needs an output `duration: 1.5` to play once. Outer clip opacity/position still use
-clip-local time; its Motion props and data expressions follow the source clock.
+clip-local time; Motion prop curves use host-local seconds, while expressions such
+as `ctx.seconds` follow the mapped source clock.
 
 Repeated clips can use the same component alias with different data or resource bindings.
 The CLI prepares each distinct binding set internally; no duplicate aliases are needed.
@@ -766,7 +805,7 @@ and exit codes see the [CLI output contract](cli.md#output-contract-for-scripts-
 | Video has no sound | Check whether the source has audio and whether its video `gain` is zero |
 | Video/image does not fill canvas | Use `fit: "cover"`; check any explicit `size`, `scale` and `position` |
 | Motion source range failure | Check the component duration, `trimStart`, `rate`, output `duration` and `end` together |
-| Animation starts at the wrong time | Distinguish output time, clip-local keyframes and Motion source-time props/data |
+| Animation starts at the wrong time | Check the clip start and distinguish Motion source time from host-local curves |
 | Rotation is unexpectedly large | Timeline rotation and numeric Motion angle props are degrees |
 | Invalid keyframe | Strictly increasing times within the owning duration; no easing on the last keyframe |
 | Caption is rejected | Exactly one of `text`/non-empty `runs`; choose presets or custom `presentation` |

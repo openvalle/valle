@@ -9,7 +9,7 @@ import {
   type TimelinePreviewResult,
 } from "./host.ts";
 import type { StudioSourceEditor } from "./source-editor.ts";
-import { StudioCompileClient, standaloneCompilePayload, type CompilePayload } from "./studio-compile.ts";
+import { StudioCompileClient, standaloneCompilePayload, timelineCompilePayload, type CompilePayload } from "./studio-compile.ts";
 import type { StudioCompileResult } from "./studio-compile-worker.ts";
 import { standaloneAssetsFromMotionContext, type StandaloneAssets } from "./standalone-assets.ts";
 
@@ -228,18 +228,11 @@ export class StandaloneTimelineSession {
       payload.authorTimeline = draft;
       delete payload.standalone;
       const original = payload.instances[0];
-      payload.instances = [];
       if (!original) throw new Error("Motion source closure is missing");
-      for (const [trackIndex, track] of (draft.tracks.visual ?? []).entries()) {
-        for (const [clipIndex, clip] of track.clips.entries()) {
-          if (clip.kind !== "motion") continue;
-          payload.instances.push({ ...original,
-            clipPath: `/tracks/visual/${trackIndex}/clips/${clipIndex}`,
-            options: clip.data ? { ...original.options, data: { source: `timeline:${trackIndex}:${clipIndex}`, value: clip.data } }
-              : original.options,
-          });
-        }
-      }
+      const assets = await this.assets();
+      const timelinePayload = timelineCompilePayload(this.#boot, draft, this.#sources.snapshot(),
+        assets?.resourceInputs ?? [], assets?.locators ?? []);
+      payload.instances = timelinePayload.instances.map(instance => ({ ...instance, fontUrls: original.fontUrls }));
     }
     const result = await this.#compiler.compile(payload);
     if (result.status === "error") throw new Error(result.message);

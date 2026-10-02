@@ -55,6 +55,64 @@ test("Studio Worker retains tangent contact warnings across cached previews", as
   expect(cached.warnings).toEqual(first.warnings);
 });
 
+test("standalone caption Studio uses a caption track and preserves the saved preparation input", async () => {
+  const font = new Uint8Array(await readFile(new URL("../../../../assets/fonts/noto/NotoSans-Regular.ttf", import.meta.url)));
+  const digest = `sha256:${new Bun.CryptoHasher("sha256").update(font).digest("hex")}`;
+  const descriptor = { faceIndex: 0, variationAxes: {} };
+  const source = `export const composition={width:320,height:180,fps:4,duration:1};
+    export const role=captionPresenter({intro:seconds(0.25),outro:seconds(0.25)});
+    export default function Caption(ctx,props,data){return <Scene>{data.runs.map((run,index)=><Text key={index} style={{fontFamily:data.style.font,fontSize:data.style.fontSize,color:ctx.host.seconds>=run.start&&ctx.host.seconds<run.end?"#facc15":"#ffffff"}}>{run.text}</Text>)}</Scene>;}`;
+  const data = { text: "Build story", runs: [{ text: "Build ", start: 0, end: 0.5 }, { text: "story", start: 0.5, end: 1 }],
+    style: { font: "asset://caption", fontSize: 28, color: "#ffffff" }, region: [32, 54, 256, 90], align: "bottom-center" };
+  const instance = { clipPath: "/tracks/visual/0/clips/0", entry: "caption.motion.tsx", modules: { "caption.motion.tsx": source },
+    options: { data: { source: "caption.json", value: data },
+      fontAliases: { "asset://caption": font }, resources: [{ control: "caption", contentHash: digest }] }, fonts: [] };
+  const resourceInputs = [{ id: "resource:asset_0", entry: { kind: "font", digest, descriptor },
+    facts: { kind: "font", descriptor, bytesBase64: Buffer.from(font).toString("base64") } }];
+  const request = { id: 15, runtimeAssets, runtimeBaseUrl,
+    standalone: { input: "/project/caption.motion.tsx", data,
+      assets: [{ name: "caption", alias: "asset_0", path: "/project/font.ttf" }] },
+    instances: [instance], resourceInputs };
+  const result = await compileStudioPreview(request);
+  if (result.status !== "ok") throw new Error(result.message);
+  expect(result.authorTimeline.tracks.visual).toBeUndefined();
+  expect(result.authorTimeline.tracks.caption?.[0]).toMatchObject({
+    presenter: { component: "motion" }, style: { font: "asset_0" },
+    layout: { region: [0.1, 0.3, 0.8, 0.5] }, clips: [{ runs: data.runs }],
+  });
+  expect(result.authorTimeline.tracks.caption![0]!.presenter).not.toHaveProperty("resources.caption");
+  expect(result.instances[0]!.clipPath).toBe("/tracks/caption/0/clips/0");
+  expect(result.timings.compilations).toBe(1);
+  expect(result.warnings).toEqual([]);
+  const reopened = await compileStudioPreview({ id: 16, runtimeAssets, runtimeBaseUrl, resourceInputs,
+    authorTimeline: JSON.parse(JSON.stringify(result.authorTimeline)),
+    instances: [{ ...instance, clipPath: result.instances[0]!.clipPath }] });
+  if (reopened.status !== "ok") throw new Error(reopened.message);
+  expect(reopened.instances[0]!.artifactDigest).toBe(result.instances[0]!.artifactDigest);
+  expect(reopened.package.timelineJson).toBe(result.package.timelineJson);
+
+  // Conversion uses Rust's q6 layout once. It never previews the old pixel input
+  // while saving a differently rounded Timeline input.
+  const fractional = { ...data, region: [13, 8, 256, 90] };
+  const normalized = await compileStudioPreview({ ...request, id: 17,
+    standalone: { ...request.standalone, data: fractional },
+    instances: [{ ...instance, options: { ...instance.options, data: { source: "caption.json", value: fractional } } }] });
+  if (normalized.status !== "ok") throw new Error(normalized.message);
+  expect(normalized.warnings).toContainEqual(expect.objectContaining({ code: "caption-input-normalized" }));
+  const normalizedReopen = await compileStudioPreview({ id: 18, runtimeAssets, runtimeBaseUrl, resourceInputs,
+    authorTimeline: normalized.authorTimeline, instances: [{ ...instance, clipPath: normalized.instances[0]!.clipPath }] });
+  if (normalizedReopen.status !== "ok") throw new Error(normalizedReopen.message);
+  expect(normalizedReopen.instances[0]!.artifactDigest).toBe(normalized.instances[0]!.artifactDigest);
+  expect(normalizedReopen.package.timelineJson).toBe(normalized.package.timelineJson);
+  const repeated = await compileStudioPreview({ ...request, id: 19,
+    standalone: { ...request.standalone, data: fractional, props: {} },
+    instances: [{ ...instance, options: { ...instance.options, data: { source: "caption.json", value: fractional } } }] });
+  if (repeated.status !== "ok") throw new Error(repeated.message);
+  expect(repeated.timings.compilations).toBe(0);
+  expect(repeated.instances[0]!.artifactDigest).toBe(normalized.instances[0]!.artifactDigest);
+  expect(repeated.warnings).toEqual(normalized.warnings);
+});
+
 test("300 Timeline captions compile each immutable word input once and retain exact frame identity", async () => {
   const font = new Uint8Array(await readFile(new URL("../../../../assets/fonts/noto/NotoSans-Regular.ttf", import.meta.url)));
   const digest = `sha256:${new Bun.CryptoHasher("sha256").update(font).digest("hex")}`;

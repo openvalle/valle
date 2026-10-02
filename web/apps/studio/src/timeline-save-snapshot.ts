@@ -76,7 +76,7 @@ function assertJsonSame(label: string, expected: unknown, actual: unknown): void
   if (!jsonEqual(expected, actual)) throw new Error(`saved snapshot ${label} drift`);
 }
 
-function jsonEqual(left: unknown, right: unknown): boolean {
+export function jsonEqual(left: unknown, right: unknown): boolean {
   if (Object.is(left, right)) return true;
   if (Array.isArray(left) || Array.isArray(right)) {
     return Array.isArray(left)

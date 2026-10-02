@@ -1,4 +1,5 @@
 import { artifactFontUrls } from "./font-demand.ts";
+import { jsonEqual } from "./timeline-save-snapshot.ts";
 import {
   createTimelineCompilerRuntime,
   MotionCompileError,
@@ -124,6 +125,29 @@ function standaloneTimeline(
     resources[alias] = asset.path;
     assetBindings[asset.name] = alias;
   }
+  if ((artifact.role as { type?: string } | undefined)?.type === "captionPresenter") {
+    type Track = NonNullable<Timeline["tracks"]["caption"]>[number];
+    type CaptionData = { runs: NonNullable<Track["clips"][number]["runs"]>;
+      style: Track["style"]; region: [number, number, number, number];
+      align: NonNullable<Track["layout"]>["align"] };
+    // Motion compilation has already validated the closed caption input shape.
+    const data = input.data as CaptionData | undefined;
+    const font = assetBindings.caption;
+    if (!data || !font) throw new Error("Caption Studio needs caption data and the reserved font binding");
+    delete assetBindings.caption;
+    const width = composition.width as number, height = composition.height as number;
+    return {
+      canvas: { width, height, fps }, resources,
+      tracks: { caption: [{
+        presenter: { component: "motion", ...(input.props ? { props: input.props as NonNullable<Track["presenter"]>["props"] } : {}),
+          ...(Object.keys(assetBindings).length ? { resources: assetBindings } : {}) },
+        style: { ...data.style, font },
+        layout: { region: [data.region[0] / width, data.region[1] / height,
+          data.region[2] / width, data.region[3] / height], align: data.align },
+        clips: [{ start: 0, duration, runs: data.runs }],
+      }] },
+    };
+  }
   return {
     canvas: { width: composition.width as number, height: composition.height as number, fps },
     resources,
@@ -206,7 +230,7 @@ export async function compileStudioPreview(request: StudioCompileRequest): Promi
         timings: { runtimeMs, fontsMs, compileMs: 0, prepareMs: 0, compilations, cacheHit: true } };
     }
     const compileStarted = performance.now();
-    const instances = request.instances.map((instance, index) => {
+    let instances = request.instances.map((instance, index) => {
       const fonts = hydrated[index]!.fonts;
       const instanceKey = JSON.stringify([instance.entry, instance.modules, optionIdentities[index],
         hydrated[index]!.digests]);
@@ -229,13 +253,43 @@ export async function compileStudioPreview(request: StudioCompileRequest): Promi
         fonts: fonts.filter((font) => roles.has(font.role))
           .map((font) => ({ bytesBase64: base64(font.bytes), role: font.role })) };
     });
-    const compileMs = performance.now() - compileStarted;
-    const authorTimeline = request.authorTimeline ?? (
+    let authorTimeline = request.authorTimeline ?? (
       request.standalone && instances.length === 1
         ? standaloneTimeline(request.standalone, instances[0]!.artifact)
         : null
     );
     if (!authorTimeline) throw new Error("Studio compile needs an author Timeline");
+    const conversionWarnings: MotionCompilerDiagnostic[] = [];
+    if (request.standalone && (instances[0]?.artifact.role as { type?: string } | undefined)?.type === "captionPresenter") {
+      // The editable wrapper uses Timeline's existing normalized layout and q6 rules.
+      // Freeze that exact Rust projection for both preview and the saved document.
+      authorTimeline = compiler.normalizeTimeline(authorTimeline);
+      const input = compiler.motionPreparationInputs(authorTimeline)[0];
+      if (!input) throw new Error("Caption Studio preparation input is missing");
+      instances[0]!.clipPath = input.clipPath;
+      if (!jsonEqual(input.data, request.standalone.data)) {
+        const original = request.instances[0]!;
+        const options: MotionCompileOptions = { ...original.options,
+          data: { source: "studio:caption", value: input.data },
+        };
+        const instanceKey = JSON.stringify([original.entry, original.modules,
+          await motionCompileOptionIdentity(options, digest), hydrated[0]!.digests]);
+        let compiled = compiledInstances.get(instanceKey);
+        if (!compiled) {
+          compiled = compiler.compileMotionModules(original.entry, original.modules, {
+            ...options, fonts: hydrated[0]!.fonts.map(font => font.bytes),
+          });
+          compilations++;
+          compiledInstances.set(instanceKey, compiled);
+          if (compiledInstances.size > 32) compiledInstances.delete(compiledInstances.keys().next().value!);
+        }
+        instances[0] = { ...instances[0]!, ...compiled };
+        conversionWarnings.push({ class: "warning", code: "caption-input-normalized",
+          span: { start: 0, end: 0, line: 1, column: 1 }, sourcePath: original.entry,
+          message: "Caption input was normalized to Timeline precision; preview and Save as Timeline use the normalized values." });
+      }
+    }
+    const compileMs = performance.now() - compileStarted;
     const prepareStarted = performance.now();
     const prepared = compiler.preparePreviewPackage({
       authorTimeline,
@@ -251,7 +305,7 @@ export async function compileStudioPreview(request: StudioCompileRequest): Promi
     const result: StudioCompileResult = {
       id: request.id, status: "ok", authorTimeline, package: prepared,
       timings: { runtimeMs, fontsMs, compileMs, prepareMs, compilations, cacheHit: false },
-      warnings: [...new Map(instances.flatMap((instance) => instance.warnings)
+      warnings: [...new Map([...instances.flatMap((instance) => instance.warnings), ...conversionWarnings]
         .map((warning) => [JSON.stringify([warning.sourcePath, warning.span, warning.code, warning.message]), warning])).values()],
       instances: instances.map((instance) => ({
         clipPath: instance.clipPath, artifact: instance.artifact,

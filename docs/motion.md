@@ -112,7 +112,8 @@ Keep data, assets and fonts consistent between previews and export; a rational
 `fps` such as `30000/1001` is accepted in `composition` and `--fps`.
 
 `motion studio` opens the same Timeline editor as `timeline studio` and
-`project studio`. A standalone file starts with one selected Motion visual clip.
+`project studio`. An ordinary standalone file starts with a Motion visual clip;
+a `captionPresenter` starts with a caption track whose words and times are editable.
 The component panel writes supported `composition` values and declared prop
 defaults back to JSX; the code pane edits the source directly. Preview compiles
 the current source in a browser Worker. The ordinary **Save** action writes source
@@ -216,6 +217,103 @@ requires explicit keys on list roots; static descendants derive stable paths
 from their keyed parent. Component expansion scopes
 descendant keys to the component instance, so a reusable component can use fixed
 internal keys such as `body` and `title`.
+
+### Overlay role
+
+Without a role declaration, a template is an ordinary source clip. An entry module
+can declare an overlay to preserve its intro and outro when the host duration changes:
+
+```tsx
+export const composition = { width: 640, height: 360, duration: 2, fps: 30 };
+export const role = overlay({ intro: seconds(0.6), outro: seconds(0.4), hold: "once" });
+
+export default function Banner(ctx) {
+  return <Scene><View style={{ width: ctx.viewport.width, height: ctx.viewport.height,
+    opacity: interpolate(ctx.seconds, [0, 0.6, 1.6, 2], [0, 1, 1, 0]) }} /></Scene>;
+}
+```
+
+`intro` and `outro` must use finite nonnegative `seconds(...)`. Their sum cannot
+exceed the composition duration or the host duration. All three fields are required.
+Helper modules cannot export a role. `hold` maps the middle segment:
+
+- `once`: play it once, then hold its end until the outro starts.
+- `loop`: repeat it using exact modulo time.
+- `stretch`: stretch or compress it to the host's middle segment.
+
+An empty template middle holds the intro endpoint; an empty host middle jumps
+directly to the outro. Mapping uses exact rational seconds. The source's right
+endpoint remains exclusive: mapped times at or beyond the earlier of the authored
+and quantized endpoint hold the last valid source frame.
+
+`ctx.seconds` follows this template map; `ctx.host` and prop curves follow the host
+window. Overlay layout uses the Timeline clip's `size`, or the Timeline canvas when
+size is absent. Fractional dimensions round to positive integer pixels, with halves
+away from zero, before layout. The composition canvas is its standalone default;
+overlays do not apply media fit. Compile-time text measurements still require fixed
+numeric typography and constraints; viewport-relative measurements are rejected.
+
+```sh
+valle motion check banner.motion.tsx --host-duration 4 --host-size 360x640 --json
+valle motion review banner.motion.tsx --host-duration 4 --host-size 360x640 --json
+valle motion render banner.motion.tsx --host-duration 4 --host-size 360x640 -o banner.mov
+```
+
+`--host-size` changes overlay layout and delivery; `--output-size` only scales the
+rendered delivery. Ordinary clip templates retain their composition layout and
+reject `--host-size`. Studio displays the role and hold mode, hides source trim for
+an overlay, and rejects a duration shorter than its intro plus outro. Leading trim
+changes the host window without adding `trimStart`.
+
+### Caption presenter role
+
+Declare `captionPresenter({ intro: seconds(...), outro: seconds(...) })` in the
+entry module to draw a Timeline caption through Motion. It uses the same exact
+intro/outro mapping as an overlay with `hold: "once"`. The third root argument is
+the frozen `{ text, runs, style, region, align }` input prepared for that caption.
+`region` uses canvas pixels. Timed runs use ordered, nonoverlapping clip-local q6
+seconds; compare them with `ctx.host.seconds` so word highlighting continues when
+the template's source clock holds.
+
+```tsx
+export const composition = { width: 640, height: 360, duration: 1, fps: 30 };
+export const role = captionPresenter({ intro: seconds(0.2), outro: seconds(0.2) });
+
+export default function Words(ctx, props, data) {
+  return <Scene>{data.runs.map((run, index) =>
+    <Text key={index} className="absolute" style={{
+      left: data.region[0] + index * 140, top: data.region[1],
+      fontFamily: data.style.font, fontSize: data.style.fontSize,
+      color: ctx.host.seconds >= run.start && ctx.host.seconds < run.end
+        ? "#facc15" : data.style.color,
+    }}>{run.text}</Text>
+  )}</Scene>;
+}
+```
+
+This example expects timed runs. The track's font is automatically bound to the
+required `asset://caption` slot. Do not declare that asset control, bind the
+reserved slot yourself, or declare `controls.data`. Use a track's `presenter`
+field to choose the component and optional props/resource bindings; see
+[Timeline caption tracks](timeline.md#captions). Output follows caption
+track order above the visual/adjustment bands. Built-in caption animation fields
+cannot be combined with a presenter.
+
+Each different static caption input compiles once during preparation. Frame
+rendering evaluates the prepared program. Equal inputs can reuse compilation;
+different text, word times, style, font bindings or viewport produce different
+inputs. The caption track does not compile into one artifact for all text.
+For standalone CLI check/review/render, supply this same typed object with
+`--data caption.json`, bind the font with `--asset caption=font.ttf`, and optionally
+set a different `--host-duration`.
+
+`motion studio` accepts those same data and font bindings. Its caption wrapper
+uses Timeline's existing q6 layout precision. When conversion changes the pixel
+region or style, Studio reports `caption-input-normalized` and prepares the
+normalized input for both preview and **Save as Timeline**. This conversion can
+compile the original and normalized inputs on first preparation; repeated inputs
+reuse the existing bounded cache. The saved track contains its timed runs, style,
+layout and presenter bindings, and reopens with the same prepared input.
 
 ### Local modules
 
@@ -440,6 +538,9 @@ Formula faces and explicit `asset://` font bindings remain resources of the work
 
 | Expression | Meaning |
 | --- | --- |
+| `ctx.host.seconds` | Exact output sample minus the clip’s authored start, projected to seconds |
+| `ctx.host.duration` | Exact authored clip duration, projected to seconds |
+| `ctx.host.progress` | Frame position in the admitted host interval: `i / (N - 1)`; `0.5` for one frame |
 | `ctx.localFrame` | Clamped zero-based source frame |
 | `ctx.seconds` | Exact mapped source sample time in seconds, including subframes |
 | `ctx.progress` | `clamp(sourceTime × actualFPS / durationFrames, 0, 1)` |
@@ -450,6 +551,25 @@ Formula faces and explicit `asset://` font bindings remain resources of the work
 
 Define animation windows explicitly with `ctx.seconds`, sequences and expressions.
 The last displayed source frame precedes the quantized duration boundary.
+
+Host time advances independently of source trim, rate, looping and hold. Both absolute
+host boundaries are quantized at the actual output FPS; `N` is their difference and
+`i` is the requested output frame minus the first boundary. For `N > 1`, the first
+and last progress values are exactly 0 and 1. A start between frame boundaries can
+produce a slightly negative first `ctx.host.seconds`; the authored start is preserved.
+Motion `props` curves also use host-local seconds and are validated against the
+clip duration.
+
+`TimeScope` changes source time only. `Shutter`, `Echo` and automatic motion blur
+keep the request frame’s host inputs frozen while sampling source time. Motion
+driven only by `ctx.host` therefore receives no temporal sampling blur.
+
+Standalone `motion check/render/review` use the composition as host by default.
+`--host-duration S` supplies a different positive host duration in decimal seconds.
+The output FPS determines its frame interval; a duration that produces no frames
+is rejected. A longer host holds the source on its last valid frame while host
+time continues; a shorter host ends delivery earlier. This does not change the
+composition canvas or its source duration.
 
 ### Time functions and visibility evaluation
 

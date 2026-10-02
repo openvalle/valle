@@ -133,6 +133,16 @@ shared across all selected frames. See [Motion delivery](motion.md) for limits.
 
 The entry file declares its base canvas and duration in
 seconds: `export const composition = { width, height, duration, fps? }`.
+`--host-duration S` overrides the host duration for `check`, `render` and `review`
+using positive decimal seconds. It changes output frame count and `ctx.host`,
+while preserving the source composition duration and canvas. For ordinary clips, a longer host holds
+the source on its last valid frame; a shorter host stops delivery earlier. Overlay
+templates preserve their declared intro and outro and map the middle with once,
+loop or stretch. `--host-size WxH` supplies the overlay layout viewport for check,
+review and render; it is rejected for ordinary clip templates.
+Caption presenter templates use the same intro/outro mapping with a held middle;
+standalone check/review/render require their typed caption input through `--data`
+and the reserved font binding through `--asset caption=font.ttf`.
 `--fps` overrides the optional file FPS for this invocation. If both are absent,
 the command asks for an FPS. `--output-size` scales delivery dimensions without
 changing source layout; its aspect ratio must match the composition. Motion in a
