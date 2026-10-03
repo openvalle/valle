@@ -21,6 +21,8 @@ export interface TimelineClipView {
   readOnly?: boolean;
   error?: boolean;
   media?: { kind: "video" | "audio"; assetId: string; sourceStartS: number; sourceDurationS: number };
+  /** Short secondary text shown at the right end of wide clips, e.g. the duration. */
+  meta?: string;
 }
 
 export interface TimelineTrackView {
@@ -47,6 +49,8 @@ export interface InspectorValueRow {
   kind: "value";
   label: string;
   value: string;
+  /** Internal identity or exact value, listed under Technical details instead of the section. */
+  technical?: boolean;
 }
 
 export interface InspectorActionRow {
@@ -56,7 +60,7 @@ export interface InspectorActionRow {
 }
 
 export interface InspectorFieldRow {
-  kind: "number" | "textarea" | "color" | "select" | "checkbox";
+  kind: "number" | "text" | "textarea" | "color" | "select" | "checkbox";
   key: string;
   label: string;
   value: string | number | boolean;
@@ -69,6 +73,8 @@ export interface InspectorFieldRow {
   valueLabels?: Readonly<Record<string, string>>;
   primaryText?: boolean;
   readOnly?: boolean;
+  /** Consecutive fields with the same pair label share one row, e.g. Position X and Y. */
+  pair?: string;
 }
 
 export type InspectorRow = InspectorValueRow | InspectorFieldRow | InspectorActionRow;
@@ -76,6 +82,8 @@ export type InspectorRow = InspectorValueRow | InspectorFieldRow | InspectorActi
 export interface InspectorSectionView {
   title?: string;
   rows: ReadonlyArray<InspectorRow>;
+  /** Start folded, e.g. an empty optional section. */
+  collapsed?: boolean;
 }
 
 export interface InspectorViewModel {
@@ -142,7 +150,7 @@ export class StudioTimeline extends LitElement {
     return html`
       <div class="timeline-content" style="width:${labelWidth + model.laneWidthPx}px">
         <div class="ruler">
-          <div class="ruler-label">Track <span id="rulerUnit">sec</span></div>
+          <div class="ruler-label"><span id="rulerUnit">sec</span></div>
           <div class="ruler-lane" id="rulerLane" style="width:${model.laneWidthPx}px"
             aria-label="Drag to seek">
             ${model.ticks.map((tick) => html`
@@ -197,6 +205,7 @@ export class StudioTimeline extends LitElement {
         <span class="clip-title">
           <span class="icon" data-icon=${kindIconOf(clip.kind)}></span>
           <span class="clip-text">${clip.label}</span>
+          ${clip.meta && width >= 120 ? html`<span class="clip-length">${clip.meta}</span>` : ""}
           ${clip.readOnly ? html`<span class="icon" data-icon="lock" aria-label="Read only"></span>` : ""}
         </span>
         <span class="clip-body">
@@ -275,12 +284,16 @@ export class StudioInspector extends LitElement {
             `)}
           </section>`
         : ""}
-      ${model.sections.map((section) => html`
-        <section class="ins-section">
-          ${section.title ? html`<h2 class="section-label">${section.title}</h2>` : ""}
-          ${section.rows.map((row) => this.#renderRow(row, model.clipId!))}
-        </section>
-      `)}
+      ${model.sections.map((section) => {
+        const rows = section.rows.filter((row) => !(row.kind === "value" && row.technical));
+        if (!rows.length) return "";
+        return section.title
+          ? html`<details class="ins-section" ?open=${!section.collapsed}>
+              <summary>${section.title}</summary>
+              ${this.#renderRows(rows, model.clipId!)}
+            </details>`
+          : html`<section class="ins-section">${this.#renderRows(rows, model.clipId!)}</section>`;
+      })}
       ${model.motionSource
         ? html`
             <button class="button full-width" type="button" id="insOpenMotion" @click=${this.#openMotion}>
@@ -292,10 +305,47 @@ export class StudioInspector extends LitElement {
       ${model.canDelete
         ? html`<button class="ins-del" type="button" @click=${this.#delete}>Delete clip</button>`
         : ""}
-      ${model.rawJson
-        ? html`<details class="details"><summary>Technical details</summary><code>${model.rawJson}</code></details>`
-        : ""}
+      ${this.#renderTechnical(model)}
     `;
+  }
+
+  #renderTechnical(model: InspectorViewModel): TemplateResult | string {
+    const rows = model.sections.flatMap((section) => section.rows)
+      .filter((row): row is InspectorValueRow => row.kind === "value" && row.technical === true);
+    if (!rows.length && !model.rawJson) return "";
+    return html`<details class="details">
+      <summary>Technical details</summary>
+      ${rows.map((row) => html`<div class="inspector-metric"><span>${row.label}</span><span>${row.value}</span></div>`)}
+      ${model.rawJson ? html`<code>${model.rawJson}</code>` : ""}
+    </details>`;
+  }
+
+  #renderRows(rows: ReadonlyArray<InspectorRow>, clipId: string): TemplateResult[] {
+    const rendered: TemplateResult[] = [];
+    for (let index = 0; index < rows.length; index += 1) {
+      const row = rows[index]!;
+      if (row.kind !== "value" && row.kind !== "action" && row.pair && !row.readOnly) {
+        const group: InspectorFieldRow[] = [row];
+        while (index + 1 < rows.length) {
+          const next = rows[index + 1]!;
+          if (next.kind === "value" || next.kind === "action" || next.pair !== row.pair || next.readOnly) break;
+          group.push(next);
+          index += 1;
+        }
+        if (group.length > 1) {
+          const text = group[0]!.kind === "text";
+          rendered.push(html`
+            <div class="field pair ${text ? "has-text" : ""}">
+              <span class="field-label" title=${group.map((field) => field.label).join(" · ")}>${row.pair}</span>
+              <div class="pair-inputs" style="--pair-count:${group.length}">${group.map((field) => this.#renderField(field, clipId))}</div>
+            </div>
+          `);
+          continue;
+        }
+      }
+      rendered.push(this.#renderRow(row, clipId));
+    }
+    return rendered;
   }
 
   #renderRow(row: InspectorRow, clipId: string): TemplateResult {
@@ -321,7 +371,8 @@ export class StudioInspector extends LitElement {
     }
     return html`
       <label class="field">
-        <span class="field-label">${row.label}</span>
+        <span class="field-label ${row.kind === "number" ? "scrub" : ""}"
+          @pointerdown=${row.kind === "number" ? (event: PointerEvent) => this.#scrub(event, row, clipId) : null}>${row.label}</span>
         ${this.#renderField(row, clipId)}
       </label>
     `;
@@ -333,6 +384,13 @@ export class StudioInspector extends LitElement {
         <textarea data-edit-key=${field.key} data-clip-id=${clipId}
           .value=${String(field.value)} @change=${this.#edit} @blur=${this.#edit}
           @keydown=${this.#fieldKeydown}></textarea>
+      `;
+    }
+    if (field.kind === "text") {
+      return html`
+        <input type="text" aria-label=${field.label} data-edit-key=${field.key} data-clip-id=${clipId}
+          .value=${String(field.value)} @change=${this.#edit} @blur=${this.#edit}
+          @keydown=${this.#fieldKeydown} />
       `;
     }
     if (field.kind === "color") {
@@ -360,7 +418,8 @@ export class StudioInspector extends LitElement {
     }
     return html`
       <span class="number-field">
-        ${field.prefix ? html`<span class="field-prefix">${field.prefix}</span>` : ""}
+        ${field.prefix ? html`<span class="field-prefix scrub" title="Drag to adjust ${field.label}"
+          @pointerdown=${(event: PointerEvent) => this.#scrub(event, field, clipId)}>${field.prefix}</span>` : ""}
         <input type="number" aria-label=${[field.label, field.unit].filter(Boolean).join(" ")} data-edit-key=${field.key} data-clip-id=${clipId}
           .value=${String(field.value)}
           min=${field.min ?? ""} max=${field.max ?? ""} step=${field.step ?? ""}
@@ -369,6 +428,40 @@ export class StudioInspector extends LitElement {
         ${field.unit ? html`<span class="field-unit">${field.unit}</span>` : ""}
       </span>
     `;
+  }
+
+  /** Drag a number's label or prefix horizontally to change it; Shift moves ten steps at a time.
+   * The field shows the value while dragging and the edit is committed once on release. */
+  #scrub(event: PointerEvent, field: InspectorFieldRow, clipId: string): void {
+    if (field.kind !== "number" || field.readOnly || event.button !== 0) return;
+    const handle = event.currentTarget as HTMLElement;
+    const input = handle.closest(".field")?.querySelector<HTMLInputElement>(`input[data-edit-key="${CSS.escape(field.key)}"]`);
+    if (!input) return;
+    event.preventDefault();
+    const startX = event.clientX;
+    const start = Number(input.value);
+    const step = field.step ?? 1;
+    let value = start;
+    handle.setPointerCapture(event.pointerId);
+    document.documentElement.classList.add("scrubbing");
+    const move = (moveEvent: PointerEvent) => {
+      const steps = Math.round((moveEvent.clientX - startX) / 3) * (moveEvent.shiftKey ? 10 : 1);
+      let next = start + steps * step;
+      if (field.min !== undefined) next = Math.max(field.min, next);
+      if (field.max !== undefined) next = Math.min(field.max, next);
+      value = Number(next.toFixed(6));
+      input.value = String(value);
+    };
+    const end = () => {
+      handle.removeEventListener("pointermove", move);
+      handle.removeEventListener("pointerup", end);
+      handle.removeEventListener("pointercancel", end);
+      document.documentElement.classList.remove("scrubbing");
+      if (value !== start) this.#emit({ type: "edit", clipId, key: field.key, value });
+    };
+    handle.addEventListener("pointermove", move);
+    handle.addEventListener("pointerup", end);
+    handle.addEventListener("pointercancel", end);
   }
 
   #emit(intent: StudioInspectorIntent): void {
@@ -468,7 +561,7 @@ export class StudioProjectControls extends LitElement {
     if (!state.visible) return html``;
     return html`
       ${state.conflictMessage ? html`<button class="button" type="button" @click=${() => this.#emit("reload")}>Discard draft and reload</button>` : ""}
-      <button class="button primary" id="saveBtn" type="button"
+      <button class="button primary ${state.saving ? "saving" : ""}" id="saveBtn" type="button"
         ?disabled=${!state.dirty || state.saving === true}
         @click=${() => this.#emit("save")}>
         ${state.saving ? "Saving…" : "Save"}

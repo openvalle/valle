@@ -222,6 +222,20 @@ function itemLabel(item: TimelineSequenceItem): string {
   return "Adjustment";
 }
 
+/** File name without directories or extension, e.g. `scenes/03-data.motion.tsx` → `03-data`. */
+function fileStem(locator: string): string {
+  const name = locator.split(/[\\/]/).pop() || locator;
+  return name.replace(/\.motion\.tsx?$/u, "").replace(/\.[^.]+$/u, "") || name;
+}
+
+function kindTitle(kind: string, visual: VisualClip | null): string {
+  const names: Record<string, string> = { motion: "Motion", video: "Video", image: "Image", lottie: "Lottie",
+    solid: "Solid", audio: "Audio", caption: "Caption", adjustment: "Adjustment", transition: "Transition" };
+  const name = names[kind] ?? `${kind.charAt(0).toUpperCase()}${kind.slice(1)}`;
+  const role = visual?.source.type === "motion" ? visual.source.role.type : "clip";
+  return role === "clip" ? name : `${name} · ${role.charAt(0).toUpperCase()}${role.slice(1)}`;
+}
+
 function visualClip(item: TimelineSequenceItem): VisualClip | null {
   return "type" in item && item.type === "clip" && "layer" in item ? item : null;
 }
@@ -646,7 +660,8 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
     shell.style.setProperty("--canvas-height", `${workingCopy.canvas.height}px`);
     shell.style.setProperty("--canvas-aspect", String(workingCopy.canvas.width / workingCopy.canvas.height));
     document.getElementById("stageMeta")!.textContent = stageMetaText();
-    document.getElementById("trackCount")!.textContent = `${countTracks()} tracks`;
+    const trackCount = countTracks();
+    document.getElementById("trackCount")!.textContent = `${trackCount} track${trackCount === 1 ? "" : "s"}`;
     document.getElementById("timelineSelection")!.textContent = selectedItemId
       ? `Selected · ${selectedItemId}`
       : "";
@@ -734,6 +749,8 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
             ? `${entry.item.id} · ${formatSeconds(entry.startSeconds)} · ${entry.item.duration}`
             : `${entry.item.id} · cut ${formatSeconds(entry.startSeconds)} · nominal ${entry.item.duration}`,
           label: projectedLabel(entry),
+          meta: durationBearing && !("type" in entry.item && entry.item.type === "transition")
+            ? `${Number(entry.durationSeconds.toFixed(2))}s` : undefined,
           selected: selectedItemId === entry.item.id,
           timingEditable: durationBearing && entry.timelinePath !== null,
           readOnly: entry.timelinePath === null,
@@ -861,14 +878,14 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
       const clip = workingCopy.tracks.caption?.[address.trackIndex]?.clips[address.clipIndex];
       if (clip) return clip.text ?? clip.runs?.map(run => run.text).join("") ?? "Caption";
     }
-    if (sourceKind(projected.item) === "motion" && projected.timelinePath) {
-      const address = timelineClipAddress(projected.timelinePath);
-      const clip = address?.band === "visual"
-        ? workingCopy.tracks.visual?.[address.trackIndex]?.clips[address.clipIndex] : null;
-      if (clip?.kind === "motion") {
-        const locator = workingCopy.resources?.[clip.component] ?? clip.component;
-        return locator.split(/[\\/]/).pop() || locator;
-      }
+    if (address?.band === "visual") {
+      const clip = workingCopy.tracks.visual?.[address.trackIndex]?.clips[address.clipIndex];
+      const alias = clip?.kind === "motion" ? clip.component : clip && "src" in clip ? clip.src : null;
+      if (alias) return fileStem(workingCopy.resources?.[alias] ?? alias);
+    }
+    if (address?.band === "audio") {
+      const clip = workingCopy.tracks.audio?.[address.trackIndex]?.clips[address.clipIndex];
+      if (clip) return fileStem(workingCopy.resources?.[clip.src] ?? clip.src);
     }
     return itemLabel(projected.item);
   }
@@ -910,11 +927,16 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
     const canvas = workingCopy.canvas;
     const duration = documentView.canvas.durationSeconds;
     const totalFrames = Math.round(duration * fps);
+    const bandCounts = (["visual", "caption", "audio", "adjustment"] as const)
+      .map((band) => [band, workingCopy.tracks[band]?.length ?? 0] as const)
+      .filter(([, count]) => count > 0)
+      .map(([band, count]) => `${count} ${band === "visual" ? "video" : band}`);
     const projectSummary = [
       { label: "Canvas", value: `${canvas.width} × ${canvas.height}` },
       { label: "Frame rate", value: `${fps} fps` },
       { label: "Duration", value: `${formatSeconds(duration)} · ${totalFrames} f` },
-      ...(storageKind === "file" ? [{ label: "Save", value: "Writes the opened JSON file" }] : [{ label: "Revision", value: String(baseRevision) }]),
+      { label: "Tracks", value: bandCounts.join(" · ") || "None" },
+      ...(storageKind === "file" ? [] : [{ label: "Revision", value: String(baseRevision) }]),
     ];
     const projected = selectedProjection();
     if (!projected) {
@@ -925,7 +947,7 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
         title: shell.shellState.projectName,
         summary: projectSummary,
         sections: [],
-        emptyHint: "Select a clip on the stage or timeline to inspect it.",
+        emptyHint: storageKind === "file" ? (shell.shellState.session?.kind === "motion-file" ? "Motion" : "Timeline") : "Project",
       });
       return;
     }
@@ -935,6 +957,7 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
     const sections: InspectorSectionView[] = [{
       title: "Timing",
       rows: [
+        { kind: "value", label: "ID", value: item.id, technical: true },
         { kind: "value", label: "Start", value: formatSeconds(projected.startSeconds) },
         ...(projected.timelinePath
           ? [{
@@ -947,7 +970,7 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
               unit: "f",
             }]
           : [{ kind: "value" as const, label: "Duration", value: `${projected.durationFrames} f` }]),
-        { kind: "value", label: "Exact duration", value: String(item.duration) },
+        { kind: "value", label: "Exact duration", value: String(item.duration), technical: true },
         ...(projected.timelinePath ? [] : [{
           kind: "value" as const,
           label: "Editability",
@@ -975,13 +998,13 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
     }
     if (visual) {
       const rows: InspectorSectionView["rows"][number][] = [
-        { kind: "value", label: "Source", value: visual.source.type },
+        { kind: "value", label: "Source", value: visual.source.type, technical: true },
       ];
       if (visual.source.type === "solid") {
         rows.push({ kind: "color", key: "source:color", label: "Color", value: visual.source.color });
       }
       if (visual.source.type === "motion") {
-        rows.push({ kind: "value", label: "Role", value: visual.source.role.type });
+        rows.push({ kind: "value", label: "Role", value: visual.source.role.type, technical: true });
         if (visual.source.role.type === "overlay") {
           rows.push({ kind: "value", label: "Intro / outro", value: `${visual.source.role.intro} s / ${visual.source.role.outro} s` });
           rows.push({ kind: "value", label: "Hold", value: visual.source.role.hold });
@@ -991,7 +1014,7 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
         || (visual.source.type === "motion" && visual.source.role.type === "clip")) {
         rows.push(
           { kind: "number", key: "timing:sourceStartFrames", label: "Source start", value: projected.sourceStartFrame ?? 0, min: 0, step: 1, unit: "f" },
-          { kind: "value", label: "Source start (exact)", value: visual.source.sourceStart },
+          { kind: "value", label: "Source start (exact)", value: visual.source.sourceStart, technical: true },
         );
       }
       if (visual.layer.opacity.type === "constant") {
@@ -1019,24 +1042,24 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
       const { position, scale, rotation, size } = visual.layer.transform;
       if (size?.type === "constant") {
         rows.push(
-          { kind: "number", key: "layer:size-x", label: "Width", value: size.value[0], min: 1, step: 1, unit: "px" },
-          { kind: "number", key: "layer:size-y", label: "Height", value: size.value[1], min: 1, step: 1, unit: "px" },
+          { kind: "number", key: "layer:size-x", label: "Width", value: size.value[0], min: 1, step: 1, prefix: "W", pair: "Size" },
+          { kind: "number", key: "layer:size-y", label: "Height", value: size.value[1], min: 1, step: 1, prefix: "H", pair: "Size" },
         );
       } else if (size) {
         rows.push({ kind: "value", label: "Size", value: "Curve-driven · read only" });
       }
       if (position.type === "constant") {
         rows.push(
-          { kind: "number", key: "layer:position-x", label: "Position X", value: position.value[0] * workingCopy.canvas.width, step: 1, unit: "px", prefix: "X" },
-          { kind: "number", key: "layer:position-y", label: "Position Y", value: position.value[1] * workingCopy.canvas.height, step: 1, unit: "px", prefix: "Y" },
+          { kind: "number", key: "layer:position-x", label: "Position X", value: position.value[0] * workingCopy.canvas.width, step: 1, prefix: "X", pair: "Position" },
+          { kind: "number", key: "layer:position-y", label: "Position Y", value: position.value[1] * workingCopy.canvas.height, step: 1, prefix: "Y", pair: "Position" },
         );
       } else {
         rows.push({ kind: "value", label: "Position", value: "Curve-driven · read only" });
       }
       if (scale.type === "constant") {
         rows.push(
-          { kind: "number", key: "layer:scale-x", label: "Scale X", value: scale.value[0], step: 0.01 },
-          { kind: "number", key: "layer:scale-y", label: "Scale Y", value: scale.value[1], step: 0.01 },
+          { kind: "number", key: "layer:scale-x", label: "Scale X", value: scale.value[0], step: 0.01, prefix: "X", pair: "Scale" },
+          { kind: "number", key: "layer:scale-y", label: "Scale Y", value: scale.value[1], step: 0.01, prefix: "Y", pair: "Scale" },
         );
       } else {
         rows.push({ kind: "value", label: "Scale", value: "Curve-driven · read only" });
@@ -1124,7 +1147,8 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
               { kind: "value", label: "Timeline conversion", value: "Current data is copied into the clip" },
             ]
           : [{ kind: "textarea", key: "data:inline", label: "Clip JSON",
-              value: JSON.stringify(authoredClip.data ?? {}, null, 2) }] });
+              value: JSON.stringify(authoredClip.data ?? {}, null, 2) }],
+          collapsed: !externalDataPath && Object.keys(authoredClip.data ?? {}).length === 0 });
         const componentAliases = new Set((workingCopy.tracks.visual ?? [])
           .flatMap((track) => track.clips)
           .filter((clip) => clip.kind === "motion")
@@ -1141,9 +1165,9 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
     const audio = audioClip(item);
     if (audio) {
       const rows: InspectorSectionView["rows"][number][] = [
-        { kind: "value", label: "Resource", value: audio.source.resource },
+        { kind: "value", label: "Resource", value: audio.source.resource, technical: true },
         { kind: "number", key: "timing:sourceStartFrames", label: "Source start", value: projected.sourceStartFrame ?? 0, min: 0, step: 1, unit: "f" },
-        { kind: "value", label: "Source start (exact)", value: audio.source.sourceStart },
+        { kind: "value", label: "Source start (exact)", value: audio.source.sourceStart, technical: true },
       ];
       if (audio.gain.type === "constant") {
         rows.push({ kind: "number", key: "audio:gain", label: "Gain", value: audio.gain.value, min: 0, step: 0.01 });
@@ -1166,13 +1190,19 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
       sections.push({ title: "Caption template", rows: [{ kind: "select", key: "caption:presenter", label: "Presenter", value: captionTrack.presenter?.component ?? "builtin", values: ["builtin", ...templateAliases], valueLabels: { builtin: "Built-in text" } }] });
       if (captionTrack.presenter) motionSource = workingCopy.resources?.[captionTrack.presenter.component] ?? captionTrack.presenter.component;
       sections.push({ title: "Content", rows: [
-        ...runs.flatMap((run, runIndex): InspectorSectionView["rows"] => [
-          { kind: "textarea", key: `caption:run:${runIndex}`, label: `Word ${runIndex + 1}`, value: run.text, primaryText: true },
-          ...("start" in run && typeof run.start === "number" && typeof run.end === "number" ? [
-            { kind: "number" as const, key: `caption:start:${runIndex}`, label: "Word start", value: run.start, min: 0, step: 0.01, unit: "s" },
-            { kind: "number" as const, key: `caption:end:${runIndex}`, label: "Word end", value: run.end, min: 0, step: 0.01, unit: "s" },
-          ] : []),
-        ]),
+        ...runs.flatMap((run, runIndex): InspectorSectionView["rows"] => {
+          // One row per word: text, start and end side by side. Multi-line runs keep a text area.
+          const timed = "start" in run && typeof run.start === "number" && typeof run.end === "number";
+          const multiline = run.text.includes("\n");
+          const pair = multiline ? undefined : String(runIndex + 1);
+          return [
+            { kind: multiline ? "textarea" : "text", key: `caption:run:${runIndex}`, label: `Word ${runIndex + 1}`, value: run.text, primaryText: true, pair },
+            ...(timed ? [
+              { kind: "number" as const, key: `caption:start:${runIndex}`, label: "Word start", value: run.start as number, min: 0, step: 0.01, unit: "s", pair },
+              { kind: "number" as const, key: `caption:end:${runIndex}`, label: "Word end", value: run.end as number, min: 0, step: 0.01, unit: "s", pair },
+            ] : []),
+          ];
+        }),
         { kind: "color", key: "caption:color", label: "Color", value: captionTrack.style.color ?? "#ffffffff" },
         { kind: "number", key: "caption:font-size", label: "Font size", value: captionTrack.style.fontSize ?? 64, min: 1, step: 1, unit: "px" },
       ] });
@@ -1183,7 +1213,7 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
       kindLabel: kind,
       kindClass,
       title: projectedLabel(projected),
-      subtitle: item.id,
+      subtitle: `${kindTitle(kind, visual)} · ${formatSeconds(projected.startSeconds)} – ${formatSeconds(projected.startSeconds + projected.durationSeconds)}`,
       sections,
       rawJson: JSON.stringify(item, null, 2),
       motionSource,
@@ -1214,7 +1244,8 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
     // The working copy is editing truth. Renderer supersede/failure is reported separately and
     // never rolls it back.
     const normalized = normalizeTimeline(next);
-    if (JSON.stringify(normalized) === JSON.stringify(workingCopy)) return;
+    // A generated Motion wrapper is not stored in normalized key order, so compare normalized forms.
+    if (JSON.stringify(normalized) === JSON.stringify(normalizeTimeline(workingCopy))) return;
     let compiled = compiledCopy;
     try {
       compiled = compileTimeline(normalized);
@@ -1618,11 +1649,13 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
     const target = event.target instanceof Element
       ? event.target.closest<HTMLElement>("[data-clip-id]")?.dataset.clipId
       : undefined;
-    if (!source || !target || source === target) return;
+    if (!source || !target) return;
     const targetProjection = findProjectedItem(compiledCopy.timeline, documentView, target);
     if (targetProjection?.band !== "visual" || !targetProjection.timelinePath
       || !visualClip(targetProjection.item)) return;
     const targetPath = targetProjection.timelinePath;
+    // `source` is a Timeline path and `target` a clip id; a click without a drag ends on its source.
+    if (targetPath === source) return;
     void queueWorkingCopy(() => moveTimelineVisualClipBefore(
       workingCopy,
       source,

@@ -229,7 +229,7 @@ async function run(
     await cdp("Page.navigate", { url: `http://127.0.0.1:${port}/studio` });
     const state = () =>
       evaluate(
-        `(()=>{const app=document.querySelector('valle-studio-app');return {state:app?.shellState,source:document.querySelector('#sourceText')?.value,status:document.querySelector('#sourceStatus')?.textContent,compiles:performance.getEntriesByName('valle-studio-compile').length,text:document.body.innerText};})()`,
+        `(()=>{const app=document.querySelector('valle-studio-app');return {state:app?.shellState,source:document.querySelector('#sourceText')?.value,status:document.querySelector('#sourceStatus')?.textContent,previewStatusClass:document.querySelector('#previewStatus')?.className,compiles:performance.getEntriesByName('valle-studio-compile').length,text:document.body.innerText};})()`,
       );
     await poll(
       state,
@@ -317,7 +317,9 @@ async function run(
       );
     }
     const final = await state();
-    assert(final.text.includes("Preview up to date"), "visible preview status");
+    // A settled preview hides its status pill; only updating or failed previews show one.
+    assert(final.state?.previewStatus === "ready" && /\bready\b/.test(String(final.previewStatusClass)),
+      "preview status settles and hides its pill");
     const report = {
       mode,
       input,

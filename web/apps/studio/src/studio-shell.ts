@@ -11,13 +11,25 @@ import {
 } from "./shell-state.ts";
 
 const PREVIEW_LABELS: Record<PreviewStatusKind, string> = {
-  loading: "Loading…",
+  loading: "Loading",
   ready: "Preview up to date",
-  updating: "Updating preview…",
-  error: "Preview failed",
+  updating: "Updating preview",
+  error: "Preview failed · Details",
   unavailable: "Preview unavailable",
   empty: "No preview",
 };
+
+interface StudioProblem {
+  severity: "warning" | "error";
+  message: string;
+  action?: "retry" | "conflict";
+}
+
+/** A compiler diagnostic usually starts with `file:line:column`; show that part separately. */
+function splitLocation(message: string): { location: string | null; text: string } {
+  const match = /^(\S+:\d+:\d+)\s+(.*)$/su.exec(message);
+  return match ? { location: match[1]!, text: match[2]! } : { location: null, text: message };
+}
 
 export class ValleStudioApp extends LitElement {
   static properties = {
@@ -37,6 +49,8 @@ export class ValleStudioApp extends LitElement {
   #host: StudioHost | null = null;
   #unsubscribe: (() => void) | null = null;
   #splitGesture: { axis: "x" | "y"; pointerId: number } | null = null;
+  #problemsOpen = false;
+  #conflictDismissed = false;
   #resizeObserver: ResizeObserver | null = null;
 
   constructor() {
@@ -156,6 +170,48 @@ export class ValleStudioApp extends LitElement {
     const splitV = this.#req<HTMLElement>("splitV");
     const splitH = this.#req<HTMLElement>("splitH");
 
+    const problemsButton = this.#req<HTMLButtonElement>("problemsButton");
+    problemsButton.addEventListener("click", (event) => {
+      event.stopPropagation();
+      this.#setProblemsOpen(!this.#problemsOpen);
+    });
+    this.#req<HTMLElement>("previewStatus").addEventListener("click", () => {
+      if (this.shellState.previewStatus === "error") this.#setProblemsOpen(true);
+    });
+    document.addEventListener("pointerdown", (event) => {
+      if (!this.#problemsOpen) return;
+      const target = event.target as Node | null;
+      if (target && (this.#req("problemsPanel").contains(target) || problemsButton.contains(target))) return;
+      this.#setProblemsOpen(false);
+    });
+    window.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && this.#problemsOpen) this.#setProblemsOpen(false);
+      // ⌥⌘I / ⌥⌘T (Alt+Ctrl elsewhere). Option changes `key` on macOS, so match the physical key.
+      if (!event.altKey || !(event.metaKey || event.ctrlKey) || event.repeat) return;
+      if (event.code === "KeyI") {
+        event.preventDefault();
+        inspectorToggle.click();
+      } else if (event.code === "KeyT") {
+        event.preventDefault();
+        collapseTimeline.click();
+      }
+    });
+
+    // Inspector tabs: Code is the source editor's own toggle; Properties closes it.
+    const inspectorPanel = this.#req<HTMLElement>("inspectorPanel");
+    const propertiesTab = this.#req<HTMLButtonElement>("propertiesTab");
+    const codeTab = this.#req<HTMLButtonElement>("sourceToggle");
+    propertiesTab.addEventListener("click", () => {
+      if (inspectorPanel.classList.contains("source-open")) codeTab.click();
+    });
+    const syncTabs = () => {
+      const code = inspectorPanel.classList.contains("source-open");
+      propertiesTab.setAttribute("aria-selected", String(!code));
+      codeTab.setAttribute("aria-selected", String(code));
+    };
+    new MutationObserver(syncTabs).observe(inspectorPanel, { attributes: true, attributeFilter: ["class"] });
+    syncTabs();
+
     undoBtn.addEventListener("click", () => {
       this.dispatchEvent(new CustomEvent("studio-history-intent", {
         detail: { type: "undo" },
@@ -180,6 +236,7 @@ export class ValleStudioApp extends LitElement {
       }
       this.dispatchIntent({ type: "panel", inspectorVisible: !this.shellState.inspectorVisible });
     });
+    window.addEventListener("resize", () => this.#syncInspectorToggle());
     window.addEventListener("keydown", (event) => {
       if (event.key === "Escape" && this.classList.contains("mobile-inspector")) {
         this.classList.remove("mobile-inspector");
@@ -257,9 +314,9 @@ export class ValleStudioApp extends LitElement {
     badge.textContent = state.session?.kind === "project"
       ? "Project"
       : state.session?.kind === "timeline-file"
-        ? "Timeline file"
+        ? "Timeline"
         : state.session?.kind === "motion-file"
-          ? "Motion file"
+          ? "Motion"
           : "";
     badge.hidden = !state.session;
 
@@ -281,71 +338,25 @@ export class ValleStudioApp extends LitElement {
 
     const previewStatus = this.#req<HTMLElement>("previewStatus");
     const previewText = this.#req<HTMLElement>("previewStatusText");
-    previewStatus.className = "preview-status";
-    if (state.previewStatus === "error") previewStatus.classList.add("error");
-    else if (state.previewStatus === "updating" || state.previewStatus === "unavailable"
-      || (state.previewStatus === "ready" && state.diagnostics.length > 0)) {
-      previewStatus.classList.add("warning");
-    } else if (state.previewStatus === "loading" || state.previewStatus === "empty") {
-      previewStatus.classList.add("info");
-    }
-    previewText.textContent = state.previewStatus === "ready" && state.diagnostics.length > 0
-      ? `Preview up to date · ${state.diagnostics.length} warning${state.diagnostics.length === 1 ? "" : "s"}`
-      : PREVIEW_LABELS[state.previewStatus];
-    previewStatus.title = state.previewStatus === "ready" && state.diagnostics.length > 0
-      ? state.diagnostics.join("\n") : (state.previewMessage ?? "");
+    previewStatus.className = `preview-status ${state.previewStatus === "error" ? "error"
+      : state.previewStatus === "ready" ? "ready"
+        : state.previewStatus === "updating" ? "warning" : "info"}`;
+    previewText.textContent = PREVIEW_LABELS[state.previewStatus];
+    previewStatus.title = state.previewMessage ?? "";
 
-    const banner = this.#req<HTMLElement>("stageBanner");
-    const showBanner = state.conflict
-      || state.previewStatus === "error"
-      || state.previewStatus === "updating"
-      || state.previewStatus === "unavailable"
-      || (state.previewStatus === "ready" && state.diagnostics.length > 0);
-    banner.hidden = !showBanner;
-    banner.classList.toggle("error", state.previewStatus === "error" || state.conflict);
-    if (showBanner) {
-      const message = state.conflict
-        ? (state.conflictMessage ?? "Source changed outside Studio. Draft is kept until you choose.")
-        : state.previewStatus === "error"
-          ? (state.previewMessage ?? "Preview failed. Showing the last successful result.")
-          : state.previewStatus === "unavailable"
-            ? (state.previewMessage ?? "Preview is unavailable for this session.")
-            : state.previewStatus === "ready" && state.diagnostics.length > 0
-              ? state.diagnostics[0]!
-            : (state.previewMessage ?? "Updating preview… showing the last successful result.");
-      banner.innerHTML = "";
-      const span = document.createElement("span");
-      span.textContent = state.previewStatus === "error" ? "Preview failed. Showing the last successful result." : message;
-      span.title = state.previewStatus === "ready" && state.diagnostics.length > 0
-        ? state.diagnostics.join("\n") : (state.previewMessage ?? message);
-      banner.append(span);
-      if (state.conflict) {
-        const keep = document.createElement("button");
-        keep.type = "button";
-        keep.textContent = "Keep draft";
-        keep.addEventListener("click", () => { banner.hidden = true; });
-        if (state.session?.kind === "motion-file") {
-          const discard = document.createElement("button"); discard.type = "button"; discard.textContent = "Discard and reload";
-          discard.addEventListener("click", () => this.dispatchEvent(new CustomEvent("studio-discard-draft")));
-          banner.append(discard);
-        }
-        banner.append(keep);
-      } else if (state.previewStatus === "error") {
-        const retry = document.createElement("button");
-        retry.type = "button";
-        retry.textContent = "Retry";
-        retry.addEventListener("click", () => {
-          this.dispatchEvent(new CustomEvent("studio-preview-retry", {
-            bubbles: true,
-            composed: true,
-          }));
-        });
-        banner.append(retry);
-      }
-    }
+    if (!state.conflict) this.#conflictDismissed = false;
+    const problems = this.#problems();
+    const problemsButton = this.#req<HTMLButtonElement>("problemsButton");
+    problemsButton.hidden = problems.length === 0;
+    problemsButton.classList.toggle("error", problems.some((problem) => problem.severity === "error"));
+    const problemsLabel = problems.length === 1 ? "1 problem" : `${problems.length} problems`;
+    problemsButton.title = problemsLabel;
+    problemsButton.setAttribute("aria-label", problemsLabel);
+    this.#text("problemsCount", String(problems.length));
+    if (problems.length === 0 && this.#problemsOpen) this.#problemsOpen = false;
+    this.#renderProblems(problems);
 
-    const inspectorToggle = this.#req<HTMLButtonElement>("inspectorToggle");
-    inspectorToggle.setAttribute("aria-pressed", String(innerWidth <= 780 ? this.classList.contains("mobile-inspector") : state.inspectorVisible));
+    this.#syncInspectorToggle();
     const focusPreview = this.#req<HTMLButtonElement>("focusPreview");
     focusPreview.setAttribute("aria-pressed", String(state.previewFocus));
     const collapseTimeline = this.#req<HTMLButtonElement>("collapseTimeline");
@@ -353,11 +364,104 @@ export class ValleStudioApp extends LitElement {
       "aria-label",
       state.timelineCollapsed ? "Expand timeline" : "Collapse timeline",
     );
+    collapseTimeline.title = `${state.timelineCollapsed ? "Expand" : "Collapse"} timeline (⌥⌘T)`;
 
     this.#text("timelineTitle", "Timeline");
     this.#text("timelineHint", "Drag the ruler to seek · Select a clip to edit");
 
     this.#persistPanelPrefs();
+  }
+
+  #syncInspectorToggle(): void {
+    this.#req<HTMLButtonElement>("inspectorToggle").setAttribute("aria-pressed", String(
+      innerWidth <= 780 ? this.classList.contains("mobile-inspector") : this.shellState.inspectorVisible,
+    ));
+  }
+
+  #problems(): StudioProblem[] {
+    const state = this.shellState;
+    const problems: StudioProblem[] = [];
+    if (state.conflict && !this.#conflictDismissed) {
+      problems.push({ severity: "error", action: "conflict",
+        message: state.conflictMessage ?? "Source changed outside Studio. Your draft is kept until you choose." });
+    }
+    if (state.previewStatus === "error") {
+      problems.push({ severity: "error", action: "retry",
+        message: state.previewMessage ?? "Preview failed. Showing the last successful result." });
+    } else if (state.previewStatus === "unavailable") {
+      problems.push({ severity: "warning", message: state.previewMessage ?? "Preview is unavailable for this session." });
+    }
+    for (const message of state.diagnostics) problems.push({ severity: "warning", message });
+    return problems;
+  }
+
+  #setProblemsOpen(open: boolean): void {
+    this.#problemsOpen = open && this.#problems().length > 0;
+    this.#renderProblems(this.#problems());
+  }
+
+  #renderProblems(problems: readonly StudioProblem[]): void {
+    const panel = this.#req<HTMLElement>("problemsPanel");
+    const button = this.#req<HTMLButtonElement>("problemsButton");
+    button.setAttribute("aria-expanded", String(this.#problemsOpen));
+    panel.hidden = !this.#problemsOpen;
+    if (!this.#problemsOpen) return;
+    panel.replaceChildren();
+    const heading = document.createElement("h2");
+    heading.textContent = problems.length === 1 ? "1 problem" : `${problems.length} problems`;
+    panel.append(heading);
+    for (const problem of problems) {
+      const item = document.createElement("div");
+      item.className = `problem-item ${problem.severity}`;
+      const icon = document.createElement("span");
+      icon.dataset.icon = "alert";
+      const { location, text } = splitLocation(problem.message);
+      const body = document.createElement("div");
+      if (location) {
+        const loc = document.createElement("div");
+        loc.className = "problem-loc";
+        loc.textContent = location;
+        body.append(loc);
+      }
+      const message = document.createElement("div");
+      message.className = "problem-msg";
+      message.textContent = text;
+      body.append(message);
+      item.append(icon, body);
+      if (problem.action) {
+        const actions = document.createElement("div");
+        actions.className = "problem-actions";
+        const button = (label: string, primary: boolean, onClick: () => void) => {
+          const element = document.createElement("button");
+          element.type = "button";
+          element.className = primary ? "button primary" : "button";
+          element.textContent = label;
+          element.addEventListener("click", onClick);
+          actions.append(element);
+        };
+        if (problem.action === "retry") {
+          button("Retry", true, () => {
+            this.#setProblemsOpen(false);
+            this.dispatchEvent(new CustomEvent("studio-preview-retry", { bubbles: true, composed: true }));
+          });
+        } else {
+          if (this.shellState.session?.kind === "motion-file") {
+            button("Discard and reload", false, () => {
+              this.#setProblemsOpen(false);
+              this.dispatchEvent(new CustomEvent("studio-discard-draft"));
+            });
+          }
+          button("Keep draft", true, () => {
+            this.#conflictDismissed = true;
+            this.#applyShellChrome();
+            this.#setProblemsOpen(false);
+          });
+        }
+        body.append(actions);
+      }
+      panel.append(item);
+    }
+    hydrateIcons(panel);
   }
 
   #persistPanelPrefs(): void {

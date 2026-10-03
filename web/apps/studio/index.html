@@ -9,43 +9,45 @@
 <valle-studio-app id="studioShell">
   <header class="topbar">
     <a class="brand" href="./" aria-label="Valle Studio">
-      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4 5 8 15L20 5M9 5l3 6 3-6"/></svg>
-      <b>valle</b>
+      <svg class="brand-mark" width="24" height="24" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" viewBox="32 32 136 136" fill="#ffffff">
+        <rect x="42" y="50" width="76" height="28" rx="14" />
+        <rect x="42" y="86" width="116" height="28" rx="14" />
+        <rect x="42" y="122" width="76" height="28" rx="14" />
+      </svg>
+      <span class="brand-name">valle</span>
     </a>
-    <span class="top-divider"></span>
-    <span class="project-name" id="projectName">Studio</span>
-    <span class="session-badge" id="sessionBadge"></span>
+    <div class="doc-title">
+      <span class="project-name" id="projectName">Studio</span>
+      <span class="session-badge" id="sessionBadge"></span>
+    </div>
     <div class="top-actions">
       <span id="saveStatus" class="save-status"></span>
-      <button class="button quiet" id="saveAsTimeline" type="button" hidden>Save as Timeline</button>
-      <studio-project-controls id="projectControls"></studio-project-controls>
+      <button class="problems-button" id="problemsButton" type="button" hidden
+        aria-haspopup="dialog" aria-expanded="false" aria-controls="problemsPanel">
+        <span data-icon="alert"></span><span id="problemsCount">0</span>
+      </button>
+      <span class="top-sep" aria-hidden="true"></span>
       <button class="icon-button" id="undoBtn" type="button" title="Undo (⌘Z)" aria-label="Undo" disabled data-icon="undo"></button>
       <button class="icon-button" id="redoBtn" type="button" title="Redo (⇧⌘Z)" aria-label="Redo" disabled data-icon="redo"></button>
-      <button class="icon-button" id="inspectorToggle" type="button" title="Show / hide inspector" aria-label="Show / hide inspector" aria-pressed="true" data-icon="panel"></button>
+      <button class="button quiet" id="saveAsTimeline" type="button" hidden>Save as Timeline</button>
+      <studio-project-controls id="projectControls"></studio-project-controls>
+      <button class="icon-button" id="inspectorToggle" type="button" title="Show / hide inspector (⌥⌘I)" aria-label="Show / hide inspector" aria-pressed="true" data-icon="panel"></button>
     </div>
   </header>
 
+  <section class="popover problems-panel" id="problemsPanel" role="dialog" aria-label="Problems" hidden></section>
+
   <section class="workspace">
-    <section class="preview-pane">
-      <div class="stage-toolbar">
-        <div class="workspace-tabs" aria-label="Workspace">
-          <span class="workspace-tab active">
-            <span data-icon="timeline"></span>Timeline
+    <section class="preview-pane island">
+      <div class="preview-header">
+        <div class="preview-heading"><span data-icon="film"></span><strong>Preview</strong></div>
+        <div class="viewer-info">
+          <span class="preview-status info" id="previewStatus" role="status">
+            <span class="status-dot"></span><span id="previewStatusText">Loading…</span>
           </span>
-        </div>
-        <span class="preview-status info" id="previewStatus" role="status">
-          <span class="status-dot"></span><span id="previewStatusText">Loading…</span>
-        </span>
-        <div class="stage-options">
           <span class="stage-meta" id="stageMeta"></span>
-          <button class="button quiet" id="sourceToggle" type="button" hidden>Code</button>
-          <button class="button quiet fit-control" id="stageFit" type="button" title="Fit canvas / actual size">
-            Fit
-          </button>
-          <button class="icon-button" id="focusPreview" type="button" title="Expand preview" aria-label="Expand preview" aria-pressed="false" data-icon="expand"></button>
         </div>
       </div>
-
       <div class="stage-area" id="stageArea">
         <div class="stage" id="stageWrap">
           <valle-player id="studioPlayer" loading-label="Booting render engine…">
@@ -67,23 +69,22 @@
         <div class="stage-banner" id="stageBanner" role="status" hidden></div>
       </div>
 
-      <section class="source-pane" id="sourcePane" aria-label="Motion source editor" hidden>
-        <div class="source-toolbar">
-          <label for="sourceFile">Source</label>
-          <select id="sourceFile" aria-label="Source file"></select>
-          <span id="sourceStatus" role="status"></span>
-          <button class="button quiet" id="sourceReload" type="button">Reload</button>
-          <button class="button" id="sourceSave" type="button">Save</button>
+      <div class="viewer-footer">
+        <studio-transport class="transport" id="studioTransport"></studio-transport>
+        <div class="stage-options">
+          <button class="button quiet fit-control" id="stageFit" type="button" title="Fit canvas / actual size">Fit</button>
+          <button class="icon-button" id="focusPreview" type="button" title="Expand preview" aria-label="Expand preview" aria-pressed="false" data-icon="expand"></button>
         </div>
-        <textarea id="sourceText" aria-label="Motion source code" spellcheck="false" autocapitalize="off" autocomplete="off" autocorrect="off"></textarea>
-      </section>
-
-      <studio-transport class="transport" id="studioTransport"></studio-transport>
+      </div>
     </section>
 
     <div class="vertical-split" id="splitV" title="Drag to resize inspector width, double-click to reset"></div>
 
-    <aside class="inspector" id="inspectorPanel" aria-label="Inspector">
+    <aside class="inspector island" id="inspectorPanel" aria-label="Inspector">
+      <div class="inspector-tabs" role="tablist" aria-label="Inspector view">
+        <button class="inspector-tab" id="propertiesTab" type="button" role="tab" aria-selected="true">Properties</button>
+        <button class="inspector-tab" id="sourceToggle" type="button" role="tab" aria-pressed="false" hidden>Code</button>
+      </div>
       <div class="inspector-heading">
         <h1 id="inspectorTitle">Inspector</h1>
         <span id="inspectorKind" class="type-tag">Project</span>
@@ -91,12 +92,21 @@
       <div class="inspector-scroll" id="inspectorScroll">
         <studio-inspector id="inspectorBody"></studio-inspector>
       </div>
+      <section class="source-pane" id="sourcePane" aria-label="Motion source editor" hidden>
+        <div class="source-toolbar">
+          <select id="sourceFile" aria-label="Source file"></select>
+          <span id="sourceStatus" role="status"></span>
+          <button class="button quiet" id="sourceReload" type="button">Reload</button>
+          <button class="button" id="sourceSave" type="button">Save</button>
+        </div>
+        <textarea id="sourceText" aria-label="Motion source code" spellcheck="false" autocapitalize="off" autocomplete="off" autocorrect="off"></textarea>
+      </section>
     </aside>
   </section>
 
   <div class="horizontal-split" id="splitH" title="Drag to resize timeline height, double-click to reset"></div>
 
-  <section class="timeline-pane" id="timelinePane" aria-label="Timeline">
+  <section class="timeline-pane island" id="timelinePane" aria-label="Timeline">
     <div class="timeline-toolbar">
       <div class="timeline-heading">
         <span data-icon="timeline"></span>
@@ -105,11 +115,11 @@
         <span class="timeline-selection" id="timelineSelection"></span>
       </div>
       <div class="timeline-actions">
-        <button class="button quiet" id="fitTimeline" type="button">Fit</button>
+        <button class="button quiet" id="fitTimeline" type="button" title="Fit the full timeline" aria-label="Fit timeline">Fit</button>
         <button class="icon-button" id="zoomOut" type="button" title="Zoom out" aria-label="Zoom out" data-icon="minus"></button>
         <input type="range" id="timelineZoom" min="0.25" max="8" step="0.25" value="1" aria-label="Timeline zoom" />
         <button class="icon-button" id="zoomIn" type="button" title="Zoom in" aria-label="Zoom in" data-icon="plus"></button>
-        <button class="icon-button" id="collapseTimeline" type="button" title="Collapse timeline" aria-label="Collapse timeline" data-icon="chevron-down"></button>
+        <button class="icon-button" id="collapseTimeline" type="button" title="Collapse timeline (⌥⌘T)" aria-label="Collapse timeline" data-icon="chevron-down"></button>
       </div>
     </div>
     <div class="timeline-scroll" id="timelineScroll">

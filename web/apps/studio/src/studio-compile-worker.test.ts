@@ -30,6 +30,22 @@ test("Studio Worker builds an exact one-clip Timeline without retaining unused f
   expect(Object.keys(manifest.entries).every((id) => !id.startsWith("font:"))).toBe(true);
 });
 
+test("Studio Worker loads font URLs before compiling compile-time text measurement", async () => {
+  const fontUrl = new URL("../../../../assets/fonts/noto/NotoSans-Variable.ttf", import.meta.url).href;
+  const result = await compileStudioPreview({
+    id: 8, runtimeAssets, runtimeBaseUrl,
+    standalone: { input: "/project/measured.motion.tsx" },
+    instances: [{
+      clipPath: "/tracks/visual/0/clips/0", entry: "measured.motion.tsx",
+      modules: { "measured.motion.tsx": `export const composition = { width: 64, height: 64, fps: 30, duration: 1 };
+        const WORD = measureText("Valle", { fontSize: 20 });
+        export default function Measured() { return <Scene><View style={{ width: WORD.width, height: 8 }} /></Scene>; }` },
+      fontUrls: [{ url: fontUrl, role: "font" }],
+    }],
+  });
+  expect(result.status === "ok" ? "ok" : JSON.stringify(result)).toBe("ok");
+});
+
 test("Studio Worker retains tangent contact warnings across cached previews", async () => {
   const source = await readFile(new URL("../../../../crates/valle-compiler/tests/fixtures/motion/composition/contact-warning.motion.tsx", import.meta.url), "utf8");
   const request = {

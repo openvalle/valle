@@ -205,21 +205,20 @@ export async function compileStudioPreview(request: StudioCompileRequest): Promi
     const preliminary = new Map<number, ReturnType<WebCompilerRuntime["compileMotionModules"]>>();
     const hydrated = await Promise.all(request.instances.map(async (instance, index) => {
       if (instance.fonts || !instance.fontUrls?.length) return instanceFonts(instance);
+      // Compile-time measurement needs the whole font pack before compiling. This is a superset of
+      // the compiler's `mentions_measure` identifier check, so no fontless compile can need fonts.
+      if (Object.values(instance.modules).some((source) => /measureText|textOutline/u.test(source))) {
+        return instanceFonts(instance);
+      }
+      // Rendering-only text compiles without fonts first, then loads just the faces its artifact uses.
       const key = JSON.stringify([instance.entry, instance.modules, optionIdentities[index], "without-measurement-fonts"]);
       let compiled = currentCompilations.get(key) ?? compiledInstances.get(key);
       if (!compiled) {
-        try {
-          compilations += 1;
-          compiled = compiler.compileMotionModules(instance.entry, instance.modules, { ...instance.options, fonts: [] });
-          currentCompilations.set(key, compiled);
-          compiledInstances.set(key, compiled);
-          if (compiledInstances.size > 32) compiledInstances.delete(compiledInstances.keys().next().value!);
-        } catch (error) {
-          // The first compile has no measurement environment. Retry only when author code needs
-          // a measurement/outline helper; rendering-only text can select fonts from its artifact.
-          if (!/measureText|textOutline|measure font|font bytes/iu.test(String(error))) throw error;
-          return instanceFonts(instance);
-        }
+        compilations += 1;
+        compiled = compiler.compileMotionModules(instance.entry, instance.modules, { ...instance.options, fonts: [] });
+        currentCompilations.set(key, compiled);
+        compiledInstances.set(key, compiled);
+        if (compiledInstances.size > 32) compiledInstances.delete(compiledInstances.keys().next().value!);
       }
       preliminary.set(index, compiled);
       return instanceFonts({ ...instance, fontUrls: artifactFontUrls(compiled.artifact, instance.fontUrls) });

@@ -88,28 +88,27 @@ export class StudioTransport extends LitElement {
     const timecodeWidth = formatTimecode(this.durationS).length;
     return html`
       <div class="transport-side">
-        <button class="icon-button" type="button" title="First frame (Home)" aria-label="First frame"
+        <button class="icon-button transport-boundary" type="button" title="First frame (Home)" aria-label="First frame"
           ?disabled=${this.disabled} @click=${this.#first} data-icon="skip-back"></button>
         <button class="icon-button" type="button" title="Previous frame (←)" aria-label="Previous frame"
           ?disabled=${this.disabled} @click=${this.#prev} data-icon="step-back"></button>
-      </div>
-      <div class="transport-middle" style=${`--transport-frame-digits: ${frameDigits}; --transport-time-width: ${timecodeWidth}ch`}>
         <button class="play-button" type="button" title="Play / pause (Space)" aria-label=${this.playing ? "Pause" : "Play"}
-          ?disabled=${this.disabled} @click=${this.#toggle} data-icon=${this.playing ? "pause" : "play"}></button>
+          aria-pressed=${this.playing} ?disabled=${this.disabled} @click=${this.#toggle} data-icon=${this.playing ? "pause" : "play"}></button>
         <button class="icon-button" type="button" title="Next frame (→)" aria-label="Next frame"
           ?disabled=${this.disabled} @click=${this.#next} data-icon="step-forward"></button>
-        <button class="icon-button" type="button" title="Last frame (End)" aria-label="Last frame"
+        <button class="icon-button transport-boundary" type="button" title="Last frame (End)" aria-label="Last frame"
           ?disabled=${this.disabled} @click=${() => this.#emit({ type: "last-frame" })} data-icon="skip-forward"></button>
         <button class="icon-button" type="button" title="Loop" aria-label="Loop" aria-pressed=${this.looping}
           ?disabled=${this.disabled} @click=${this.#loop} data-icon="repeat"></button>
-        <span class="transport-separator"></span>
-        <label class="time-input-wrap">
+      </div>
+      <div class="transport-middle" style=${`--transport-frame-digits: ${frameDigits}; --transport-time-width: ${timecodeWidth}ch`}>
+        <span class="time-code">${timecode}</span>
+        <span class="time-total">/ ${formatTimecode(this.durationS)}</span>
+        <label class="time-input-wrap" title="Current frame of ${this.totalFrames}">
           <input id="frameInput" type="number" min="0" max=${Math.max(0, this.totalFrames - 1)} .value=${String(this.frame)}
             aria-label="Current frame" ?disabled=${this.disabled} @change=${this.#onFrameInput} @blur=${this.#onFrameInput} @keydown=${this.#frameKeydown} />
           <span>f</span>
         </label>
-        <span class="time-total">/ ${this.totalFrames} f</span>
-        <span class="time-code">${timecode}</span>
       </div>
       <div class="transport-side end">
         <button class="icon-button" type="button" title=${this.muted ? "Unmute" : "Mute"} aria-label=${this.muted ? "Unmute" : "Mute"}
