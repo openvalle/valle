@@ -373,7 +373,9 @@ The transport is shared; result payloads retain domain-specific information:
 
 Always check the process exit code. A JSON object or the arrival of `report` alone
 does not mean success. Argument errors use `error.code: "invalid_arguments"`;
-uncategorized command errors use `command_failed`. Motion compile failures use
+uncategorized command errors use `command_failed`. A media operation without
+loadable FFmpeg libraries uses `ffmpeg_unavailable`; its message ends with a
+platform install hint (see [Runtime notes](#runtime-notes)). Motion compile failures use
 `motion_compile_failed` and include `error.diagnostics` with messages, codes,
 source spans and, where available, source paths. Media and Assets retain their
 typed error codes and optional hints.
@@ -417,18 +419,27 @@ Keep stdout and stderr separate when parsing events.
 
 FFmpeg 7.x, 8.x and 9.x shared libraries are loaded on the first media operation.
 Help, source checking, pure Motion PNG rendering and Studio startup work without
-FFmpeg. A standalone/static `ffmpeg` executable does not supply these libraries.
+FFmpeg. Checking, previewing or rendering a Timeline that contains audio or video
+needs it. A standalone/static `ffmpeg` executable does not supply these libraries.
 
-On macOS, install a shared-library build with Homebrew:
+| Platform | Install shared libraries |
+| --- | --- |
+| macOS | `brew install ffmpeg` |
+| Linux | `sudo apt install ffmpeg` where the distribution ships FFmpeg 7 or newer (for example Debian 13 or Ubuntu 26.04). Ubuntu 24.04 and Debian 12 ship FFmpeg 6.1 and 5.1, which are too old: extract a shared build such as BtbN's `linux64-gpl-shared` from <https://github.com/BtbN/FFmpeg-Builds/releases> and set `VALLE_FFMPEG_DIR` to its folder |
+| Windows | `winget install Gyan.FFmpeg.Shared` or BtbN's `win64-gpl-shared` build; make sure its `bin` folder is on `PATH`, or set `VALLE_FFMPEG_DIR` to the build's folder |
 
 ```sh
-brew install ffmpeg
 valle media capabilities
 
 # Select a custom installation (the CLI flag takes precedence over the environment):
-export VALLE_FFMPEG_DIR=/absolute/path/to/ffmpeg/lib
-valle --ffmpeg-dir /absolute/path/to/ffmpeg/lib media capabilities
+export VALLE_FFMPEG_DIR=/absolute/path/to/ffmpeg
+valle --ffmpeg-dir /absolute/path/to/ffmpeg media capabilities
 ```
+
+When no installation can be loaded, the command fails with
+`error.code: "ffmpeg_unavailable"`, and the message lists each attempted location
+followed by a `hint:` line for the current platform. Media tools keep their own
+error envelope; their message carries the same hint.
 
 A library directory or installation prefix is accepted. An explicit path is
 authoritative: an invalid installation returns an error without falling back to

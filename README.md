@@ -33,7 +33,15 @@ The first build needs network access and can take a while. Cargo builds Skia fro
 
 `cargo xtask build` produces **`dist/bin/valle`** (`dist/bin/valle.exe` on Windows), an executable with the Studio Web runtime, CanvasKit full, fonts and dependency notices embedded. Use `cargo xtask build --release` for an optimized build. For CLI-only development, `cargo build -p valle-cli` skips these embedded resources; pass `--web-assets-dir /absolute/path/to/web/dist` when starting Studio.
 
-FFmpeg is optional at runtime and is not bundled. Install FFmpeg 7.x, 8.x or 9.x **shared libraries** for media operations (`brew install ffmpeg` on macOS). Motion checks, pure Motion PNG rendering and Studio startup work without them. Run `./dist/bin/valle media capabilities` to inspect an installation; see [runtime setup](docs/cli.md#runtime-notes) for custom paths and compatibility rules.
+FFmpeg is optional at runtime and is not bundled. Media operations, including checking, previewing or rendering a Timeline that contains audio or video, need FFmpeg 7.x, 8.x or 9.x **shared libraries**. Motion checks, pure Motion PNG rendering and Studio startup work without them.
+
+| Platform | Install FFmpeg shared libraries |
+| --- | --- |
+| macOS | `brew install ffmpeg` |
+| Linux | `sudo apt install ffmpeg` where the distribution ships FFmpeg 7 or newer (for example Debian 13 or Ubuntu 26.04). Ubuntu 24.04 and Debian 12 ship FFmpeg 6.1 and 5.1, which are too old: extract a shared build such as [BtbN](https://github.com/BtbN/FFmpeg-Builds/releases)'s `linux64-gpl-shared` and set `VALLE_FFMPEG_DIR` to its folder |
+| Windows | `winget install Gyan.FFmpeg.Shared` or BtbN's `win64-gpl-shared` build; make sure its `bin` folder is on `PATH`, or set `VALLE_FFMPEG_DIR` to the build's folder |
+
+Run `./dist/bin/valle media capabilities` to inspect an installation. When none can be loaded, JSON errors use `error.code: "ffmpeg_unavailable"` and the message ends with a platform install hint. See [runtime setup](docs/cli.md#runtime-notes) for custom paths and compatibility rules.
 
 ## Package
 

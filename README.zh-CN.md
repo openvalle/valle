@@ -33,7 +33,15 @@ cargo xtask build
 
 `cargo xtask build` 生成可执行文件 **`dist/bin/valle`**（Windows 为 `dist/bin/valle.exe`），内嵌 Studio Web 资源、CanvasKit full、字体和依赖声明。使用 `cargo xtask build --release` 进行优化构建。仅开发 CLI 时，`cargo build -p valle-cli` 会跳过这些内嵌资源；启动 Studio 时需传入 `--web-assets-dir /absolute/path/to/web/dist`。
 
-FFmpeg 是可选的运行时依赖，不随 Valle 分发。媒体操作需要安装 FFmpeg 7.x、8.x 或 9.x **动态库**（macOS 可用 `brew install ffmpeg`）。Motion 检查、纯 Motion PNG 渲染及 Studio 启动无需 FFmpeg。运行 `./dist/bin/valle media capabilities` 检查安装情况；自定义路径和兼容规则见 [CLI 运行时说明](docs/cli.md#runtime-notes)。
+FFmpeg 是可选的运行时依赖，不随 Valle 分发。媒体操作需要安装 FFmpeg 7.x、8.x 或 9.x **动态库**；检查、预览或渲染包含音频或视频的 Timeline 也属于媒体操作。Motion 检查、纯 Motion PNG 渲染及 Studio 启动无需 FFmpeg。
+
+| 平台 | 安装 FFmpeg 动态库 |
+| --- | --- |
+| macOS | `brew install ffmpeg` |
+| Linux | 发行版自带 FFmpeg 7 或更新版本时（例如 Debian 13、Ubuntu 26.04）运行 `sudo apt install ffmpeg`。Ubuntu 24.04 和 Debian 12 自带的 FFmpeg 6.1 和 5.1 版本过旧，请解压 [BtbN](https://github.com/BtbN/FFmpeg-Builds/releases) 的 `linux64-gpl-shared` 构建，并将 `VALLE_FFMPEG_DIR` 设为解压目录 |
+| Windows | `winget install Gyan.FFmpeg.Shared` 或 BtbN 的 `win64-gpl-shared` 构建；确保其 `bin` 目录在 `PATH` 中，或将 `VALLE_FFMPEG_DIR` 设为构建目录 |
+
+运行 `./dist/bin/valle media capabilities` 检查安装情况。找不到可用的 FFmpeg 时，JSON 错误使用 `error.code: "ffmpeg_unavailable"`，消息末尾附带对应平台的安装提示。自定义路径和兼容规则见 [CLI 运行时说明](docs/cli.md#runtime-notes)。
 
 ## 打包
 
