@@ -27,6 +27,30 @@ pub fn set_ffmpeg_log_level(level: FfmpegLogLevel) {
 pub fn set_ffmpeg_directory(path: std::path::PathBuf) -> Result<()> {
     backend::set_directory(path)
 }
+
+/// No compatible FFmpeg installation could be loaded. Callers can find it in an error chain to
+/// report a dedicated code; its message ends with the platform install hint.
+#[derive(Debug)]
+pub struct FfmpegUnavailable(pub(crate) String);
+
+impl std::fmt::Display for FfmpegUnavailable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}\nhint: {}", self.0, ffmpeg_install_hint())
+    }
+}
+
+impl std::error::Error for FfmpegUnavailable {}
+
+/// One platform-specific way to install loadable FFmpeg shared libraries.
+fn ffmpeg_install_hint() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "install FFmpeg with `brew install ffmpeg`, or set VALLE_FFMPEG_DIR to another installation. Run `valle docs cli` for details."
+    } else if cfg!(target_os = "windows") {
+        "install a shared build (for example `winget install Gyan.FFmpeg.Shared`) and add its bin directory to PATH, or set VALLE_FFMPEG_DIR to the build's folder. Run `valle docs cli` for details."
+    } else {
+        "install FFmpeg 7 or newer from your distribution (for example `sudo apt install ffmpeg` on Debian 13 or Ubuntu 26.04), or extract a shared build and set VALLE_FFMPEG_DIR to its folder. Run `valle docs cli` for details."
+    }
+}
 pub fn ffmpeg_init() -> Result<()> {
     backend::version().map(|_| ())
 }

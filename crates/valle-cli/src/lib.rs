@@ -1367,10 +1367,28 @@ pub fn run() -> std::process::ExitCode {
     match dispatch(cli.cmd) {
         Ok(code) => code,
         Err(e) => {
-            output::error(&format!("{e:#}"));
+            let code = if ffmpeg_unavailable(&e) {
+                "ffmpeg_unavailable"
+            } else {
+                "command_failed"
+            };
+            output::error_with_code(code, &format!("{e:#}"));
             std::process::ExitCode::FAILURE
         }
     }
+}
+
+/// Whether a command failed because no compatible FFmpeg installation could be loaded.
+fn ffmpeg_unavailable(error: &anyhow::Error) -> bool {
+    use valle_render::host::NativeRenderError;
+    error.chain().any(|cause| {
+        cause.is::<valle_media::codec::ffi::FfmpegUnavailable>()
+            // A transparent render error forwards Display and source(), hiding its wrapped error.
+            || matches!(
+                cause.downcast_ref::<NativeRenderError>(),
+                Some(NativeRenderError::Media(inner)) if ffmpeg_unavailable(inner)
+            )
+    })
 }
 
 #[cfg(test)]

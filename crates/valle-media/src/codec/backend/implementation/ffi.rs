@@ -10,7 +10,8 @@ use ff::{Packet, Rational, color, encoder, format, frame, software};
 static FF_INIT: OnceLock<std::result::Result<(), String>> = OnceLock::new();
 
 pub fn ffmpeg_init() -> Result<()> {
-    ff::ffi::runtime::load()?;
+    ff::ffi::runtime::load()
+        .map_err(|error| crate::codec::ffi::FfmpegUnavailable(error.to_string()))?;
     FF_INIT
         .get_or_init(|| ff::init().map_err(|e| e.to_string()))
         .as_ref()

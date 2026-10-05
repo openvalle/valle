@@ -7,7 +7,9 @@ pub(crate) mod v8;
 pub(crate) mod v9;
 
 pub(crate) fn version() -> Result<Version> {
-    Ok(valle_ffmpeg::init()?.version)
+    valle_ffmpeg::init()
+        .map(|runtime| runtime.version)
+        .map_err(|error| crate::codec::ffi::FfmpegUnavailable(error.to_string()).into())
 }
 pub(crate) fn set_directory(path: std::path::PathBuf) -> Result<()> {
     Ok(valle_ffmpeg::set_directory(path)?)

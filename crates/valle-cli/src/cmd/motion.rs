@@ -5,7 +5,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
 use super::render_delivery::{DeliveryObservation, DeliveryPlan};
@@ -735,12 +735,16 @@ fn compile_with_font_assets(
         &measure_aliases,
     )
     .map_err(|diagnostic| anyhow!("{}", diagnostic.message))?;
+    // The compiler's resolver carries string diagnostics. Keep dependency failures typed so
+    // authoring commands can report a missing runtime instead of a source compilation failure.
+    let audio_runtime_error = Arc::new(Mutex::new(None));
     let audio = if graph
         .modules
         .values()
         .any(|source| source.contains("audioAnalysis"))
     {
         let captured = assets.clone();
+        let runtime_error = Arc::clone(&audio_runtime_error);
         Some(valle_compiler::motion::AudioAnalysisEnv::with_resolver(
             move |control| {
                 let asset = captured
@@ -749,8 +753,16 @@ fn compile_with_font_assets(
                 let frozen = tempfile::tempdir().map_err(|error| error.to_string())?;
                 let path = frozen.path().join(asset.hash.as_hex());
                 std::fs::write(&path, &asset.bytes).map_err(|error| error.to_string())?;
-                let samples = valle_media::codec::decode_audio_mono_f32(&path, 48_000)
-                    .map_err(|error| error.to_string())?;
+                let samples =
+                    valle_media::codec::decode_audio_mono_f32(&path, 48_000).map_err(|error| {
+                        let message = error.to_string();
+                        if crate::ffmpeg_unavailable(&error) {
+                            *runtime_error.lock().unwrap_or_else(|e| e.into_inner()) = Some(
+                                error.context(format!("loading audioAnalysis asset `{control}`")),
+                            );
+                        }
+                        message
+                    })?;
                 Ok(valle_compiler::motion::AudioPcm {
                     content_hash: asset.hash,
                     sample_rate: 48_000,
@@ -761,8 +773,8 @@ fn compile_with_font_assets(
     } else {
         None
     };
-    let mut compiled =
-        match valle_compiler::motion::compile_motion_modules_with_full_env_and_data_and_audio(
+    let compilation =
+        valle_compiler::motion::compile_motion_modules_with_full_env_and_data_and_audio(
             graph,
             resources,
             Some(&measure),
@@ -770,10 +782,18 @@ fn compile_with_font_assets(
             data,
             audio.as_ref(),
             placement,
-        ) {
-            Ok(compiled) => compiled,
-            Err(diagnostics) => return Ok(Err(diagnostics)),
-        };
+        );
+    if let Some(error) = audio_runtime_error
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .take()
+    {
+        return Err(error);
+    }
+    let mut compiled = match compilation {
+        Ok(compiled) => compiled,
+        Err(diagnostics) => return Ok(Err(diagnostics)),
+    };
     for (control, schema) in &compiled.artifact.controls.assets {
         if schema.kind == valle_motion::AssetKind::Environment {
             if let Some(asset) = assets.get_mut(control) {

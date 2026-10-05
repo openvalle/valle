@@ -177,8 +177,10 @@ fn missing_libraries_fail_only_at_media_use_with_json_diagnostic() {
         let out = run(dir, &dir.join("not-installed"), &args);
         assert!(!out.status.success());
         let value: Value = serde_json::from_slice(&out.stdout).unwrap();
+        assert_eq!(value["error"]["code"], "ffmpeg_unavailable", "{value}");
         let error = value["error"]["message"].as_str().unwrap();
         assert!(error.contains("VALLE_FFMPEG_DIR"), "{error}");
+        assert!(error.contains("\nhint: install"), "{error}");
         assert!(
             !String::from_utf8_lossy(&out.stderr).contains("panicked"),
             "{out:?}"
@@ -193,6 +195,107 @@ fn missing_libraries_fail_only_at_media_use_with_json_diagnostic() {
             .starts_with(".valle-part-")
     }));
 }
+
+#[test]
+fn audio_analysis_reports_missing_ffmpeg_before_compilation_diagnostics() {
+    let temp = tempfile::tempdir().unwrap();
+    let dir = temp.path();
+    std::fs::write(
+        dir.join("audio.motion.tsx"),
+        r#"export const composition = { width: 160, height: 90, fps: 30, duration: 0.2 };
+export const controls = { assets: { beat: asset({ kind: "audio", required: true }) } };
+const BEAT = audioAnalysis("asset://beat", { bands: 8, fps: 30 });
+export default function AudioBars(ctx) {
+    return <Scene><View style={{width:30,height:BEAT.level(ctx.seconds)*90}} /></Scene>;
+}"#,
+    )
+    .unwrap();
+    // A valid mono PCM WAV keeps the failure specific to the missing shared libraries.
+    let samples = 9_600_u32;
+    let mut wav = Vec::new();
+    wav.extend_from_slice(b"RIFF");
+    wav.extend_from_slice(&(36 + samples * 2).to_le_bytes());
+    wav.extend_from_slice(b"WAVEfmt ");
+    wav.extend_from_slice(&16_u32.to_le_bytes());
+    wav.extend_from_slice(&1_u16.to_le_bytes());
+    wav.extend_from_slice(&1_u16.to_le_bytes());
+    wav.extend_from_slice(&48_000_u32.to_le_bytes());
+    wav.extend_from_slice(&96_000_u32.to_le_bytes());
+    wav.extend_from_slice(&2_u16.to_le_bytes());
+    wav.extend_from_slice(&16_u16.to_le_bytes());
+    wav.extend_from_slice(b"data");
+    wav.extend_from_slice(&(samples * 2).to_le_bytes());
+    wav.resize(wav.len() + samples as usize * 2, 0);
+    std::fs::write(dir.join("beat.wav"), wav).unwrap();
+    std::fs::write(
+        dir.join("timeline.json"),
+        serde_json::json!({
+            "canvas": {"width":160,"height":90,"fps":30},
+            "resources": {"bars":"audio.motion.tsx","beat":"beat.wav"},
+            "tracks": {"visual":[{"clips":[{
+                "start":0,"duration":0.2,"kind":"motion","component":"bars",
+                "resources":{"beat":"beat"}
+            }]}]}
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    for domain in ["motion", "timeline"] {
+        for action in ["check", "render"] {
+            for mode in ["--json", "--events"] {
+                let mut args = vec![mode, domain, action];
+                if domain == "motion" {
+                    args.extend(["audio.motion.tsx", "--asset", "beat=beat.wav"]);
+                } else {
+                    args.push("timeline.json");
+                }
+                if action == "render" {
+                    args.extend(["--frame", "0", "-o", "audio.png"]);
+                }
+                let out = run(dir, &dir.join("not-installed"), &args);
+                assert!(!out.status.success(), "{args:?}: {out:?}");
+                let value: Value = if mode == "--events" {
+                    let events = String::from_utf8(out.stdout)
+                        .unwrap()
+                        .lines()
+                        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+                        .collect::<Vec<_>>();
+                    assert_eq!(events.last().unwrap()["type"], "report", "{events:?}");
+                    assert_eq!(events.last().unwrap()["level"], "error", "{events:?}");
+                    events.last().unwrap()["data"].clone()
+                } else {
+                    serde_json::from_slice(&out.stdout).unwrap()
+                };
+                assert_eq!(
+                    value["error"]["code"], "ffmpeg_unavailable",
+                    "{args:?}: {value}"
+                );
+                let message = value["error"]["message"].as_str().unwrap();
+                assert!(message.contains("audioAnalysis asset `beat`"), "{message}");
+                assert!(message.contains("VALLE_FFMPEG_DIR"), "{message}");
+                assert!(message.contains("\nhint: install"), "{message}");
+            }
+        }
+    }
+    assert!(!dir.join("audio.png").exists());
+}
+
+#[test]
+fn mentioning_audio_analysis_does_not_load_ffmpeg() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::write(
+        temp.path().join("comment.motion.tsx"),
+        "// audioAnalysis is optional.\nexport const composition = {width:160,height:90,fps:30,duration:0.2}; export default function Test(){return <Scene />;}",
+    )
+    .unwrap();
+    success(&run(
+        temp.path(),
+        &temp.path().join("not-installed"),
+        &["--json", "motion", "check", "comment.motion.tsx"],
+    ));
+}
+
 #[test]
 fn cli_directory_overrides_environment_without_eager_loading() {
     let temp = tempfile::tempdir().unwrap();
