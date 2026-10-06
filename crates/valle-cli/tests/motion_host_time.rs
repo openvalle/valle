@@ -1,3 +1,6 @@
+//! Run Metal acceptance outside the sandbox with
+//! `VALLE_TEST_NATIVE_BACKEND=metal cargo test -p valle-cli --test motion_host_time -- --include-ignored --test-threads=1`.
+
 use serde_json::Value;
 use std::{
     path::Path,
@@ -137,10 +140,9 @@ fn assert_host_endpoint(path: &Path, frame: u32) {
 }
 
 #[test]
+#[cfg(target_os = "macos")]
+#[ignore = "requires a real Metal device; run outside the sandbox with --include-ignored"]
 fn metal_host_clock_has_exact_endpoints_and_repeatable_output() {
-    if std::env::var("VALLE_TEST_NATIVE_BACKEND").as_deref() != Ok("metal") {
-        return;
-    }
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("host.motion.tsx"), SOURCE).unwrap();
     for frame in [0, 7] {

@@ -65,6 +65,7 @@ pub fn run(
     context
         .progress
         .event(ToolEvent::phase(ToolPhase::Resolving));
+    check_cancelled(context)?;
     let candidates = ModelSessionCandidates::resolve(context.models, request.model.clone())?;
     let transaction = FileOutputTransaction::new(&request.output, request.overwrite)?;
 

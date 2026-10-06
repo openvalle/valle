@@ -227,6 +227,6 @@ fn delivery_contract_is_required_by_rendering_not_compilation() {
         .map(|diagnostic| diagnostic.message.clone())
         .collect::<Vec<_>>()
         .join("\n");
-    let phrase = "belongs to the entry `.motion.tsx` only; a component module must not declare the delivery contract";
+    let phrase = "`composition` and `role` belong to the entry `.motion.tsx` only; a component module must not declare the delivery contract";
     assert!(text.contains(phrase), "got: {text}");
 }

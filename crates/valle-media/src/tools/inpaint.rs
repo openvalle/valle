@@ -141,6 +141,7 @@ fn run_png(
     let (output, load_seconds, inference_seconds, postprocess_seconds, tasks, scaled_tasks) =
         if let Some(bucket) = plan.bucket {
             context.progress.event(ToolEvent::phase(ToolPhase::Loading));
+            check_cancelled(context)?;
             let load_started = Instant::now();
             let opened = candidates.open("load LaMa", |model| {
                 InpaintModel::from_resolved(model, context.resources.cpu_threads)?
@@ -1098,6 +1099,10 @@ impl MatchedVideoFrame {
             / self.time_base.denominator() as f64
     }
 }
+
+#[cfg(test)]
+#[path = "inpaint_tests.rs"]
+mod flow_tests;
 
 #[cfg(test)]
 mod tests {

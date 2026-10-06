@@ -244,3 +244,7 @@ fn validate_prompt_protocol(path: &Path) -> Result<()> {
     );
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "contract_tests.rs"]
+mod tests;

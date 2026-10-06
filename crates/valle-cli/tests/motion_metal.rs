@@ -1,5 +1,5 @@
 //! Opt-in hardware acceptance. Run outside the sandbox with
-//! `VALLE_TEST_NATIVE_BACKEND=metal cargo test -p valle-cli --test motion_metal`.
+//! `cargo test -p valle-cli --test motion_metal -- --ignored --test-threads=1`.
 #![cfg(target_os = "macos")]
 
 use std::{io::BufReader, path::Path, process::Command};
@@ -9,6 +9,14 @@ fn render(dir: &Path, name: &str, source: &str, backend: &str) -> Vec<u8> {
 }
 
 fn render_size(dir: &Path, name: &str, source: &str, backend: &str, size: (u32, u32)) -> Vec<u8> {
+    let gpu_stage = match name {
+        name if name.contains("bloom") => Some("gpu-bloom"),
+        "node-glow" => Some("gpu-glow"),
+        name if name.starts_with("radial-") => Some("gpu-radial-blur"),
+        name if name.starts_with("film-") => Some("gpu-film-grain"),
+        name if name.starts_with("lens-") => Some("gpu-lens-distortion"),
+        _ => None,
+    };
     let input = dir.join(format!("{name}.motion.tsx"));
     std::fs::write(&input, source).unwrap();
     let output = dir.join(format!("{name}-{backend}.png"));
@@ -30,13 +38,7 @@ fn render_size(dir: &Path, name: &str, source: &str, backend: &str, size: (u32, 
     command.env_remove("VALLE_RADIAL_BLUR_CPU_REFERENCE");
     command.env_remove("VALLE_FILM_GRAIN_CPU_REFERENCE");
     command.env_remove("VALLE_LENS_DISTORTION_CPU_REFERENCE");
-    if (name.starts_with("bloom")
-        || name == "node-glow"
-        || name.starts_with("radial-filter")
-        || name.starts_with("film-filter")
-        || name.starts_with("lens-filter"))
-        && backend == "metal"
-    {
+    if gpu_stage.is_some() && backend == "metal" {
         command.env("VALLE_TRACE_F16_STAGES", "1");
     }
     let result = command.output().unwrap();
@@ -51,31 +53,13 @@ fn render_size(dir: &Path, name: &str, source: &str, backend: &str, size: (u32, 
     if backend == "metal" {
         let trace = String::from_utf8_lossy(&result.stderr);
         assert!(!trace.contains("Shader compilation error"), "{trace}");
-    }
-    if name.starts_with("bloom") && backend == "metal" {
-        let trace = String::from_utf8_lossy(&result.stderr);
-        assert!(trace.contains("[valle f16] gpu-bloom"), "{trace}");
-        assert!(!trace.contains("gpu-to-cpu"), "{trace}");
-    }
-    if name == "node-glow" && backend == "metal" {
-        let trace = String::from_utf8_lossy(&result.stderr);
-        assert!(trace.contains("[valle f16] gpu-glow"), "{trace}");
-        assert!(!trace.contains("gpu-to-cpu"), "{trace}");
-    }
-    if name.starts_with("radial-filter") && backend == "metal" {
-        let trace = String::from_utf8_lossy(&result.stderr);
-        assert!(trace.contains("[valle f16] gpu-radial-blur"), "{trace}");
-        assert!(!trace.contains("gpu-to-cpu"), "{trace}");
-    }
-    if name.starts_with("film-filter") && backend == "metal" {
-        let trace = String::from_utf8_lossy(&result.stderr);
-        assert!(trace.contains("[valle f16] gpu-film-grain"), "{trace}");
-        assert!(!trace.contains("gpu-to-cpu"), "{trace}");
-    }
-    if name.starts_with("lens-filter") && backend == "metal" {
-        let trace = String::from_utf8_lossy(&result.stderr);
-        assert!(trace.contains("[valle f16] gpu-lens-distortion"), "{trace}");
-        assert!(!trace.contains("gpu-to-cpu"), "{trace}");
+        if let Some(stage) = gpu_stage {
+            assert!(
+                trace.contains(&format!("[valle f16] {stage}")),
+                "{name}: {trace}"
+            );
+            assert!(!trace.contains("gpu-to-cpu"), "{name}: {trace}");
+        }
     }
     let mut reader = png::Decoder::new(BufReader::new(std::fs::File::open(output).unwrap()))
         .read_info()
@@ -89,10 +73,8 @@ fn render_size(dir: &Path, name: &str, source: &str, backend: &str, size: (u32, 
 }
 
 #[test]
+#[ignore = "requires a real Metal device; run outside the sandbox with --ignored"]
 fn fullhd_bloom_stays_on_metal_and_matches_raster() {
-    if std::env::var("VALLE_TEST_NATIVE_BACKEND").as_deref() != Ok("metal") {
-        return;
-    }
     let dir = tempfile::tempdir().unwrap();
     let source = include_str!(
         "../../valle-compiler/tests/fixtures/motion/composition/scene-bloom.motion.tsx"
@@ -113,10 +95,8 @@ fn fullhd_bloom_stays_on_metal_and_matches_raster() {
 }
 
 #[test]
+#[ignore = "requires a real Metal device; run outside the sandbox with --ignored"]
 fn shared_f16_filters_render_on_real_metal() {
-    if std::env::var("VALLE_TEST_NATIVE_BACKEND").as_deref() != Ok("metal") {
-        return;
-    }
     let dir = tempfile::tempdir().unwrap();
     let glow =
         include_str!("../../valle-compiler/tests/fixtures/motion/composition/node-glow.motion.tsx");
@@ -212,10 +192,8 @@ fn shared_f16_filters_render_on_real_metal() {
 }
 
 #[test]
+#[ignore = "requires a real Metal device; run outside the sandbox with --ignored"]
 fn fullhd_sphere_matches_raster_on_real_metal() {
-    if std::env::var("VALLE_TEST_NATIVE_BACKEND").as_deref() != Ok("metal") {
-        return;
-    }
     let dir = tempfile::tempdir().unwrap();
     let model = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../valle-motion/tests/fixtures/scene3d/sphere.glb");

@@ -84,7 +84,7 @@ test("standalone caption Studio uses a caption track and preserves the saved pre
     options: { data: { source: "caption.json", value: data },
       fontAliases: { "asset://caption": font }, resources: [{ control: "caption", contentHash: digest }] }, fonts: [] };
   const resourceInputs = [{ id: "resource:asset_0", entry: { kind: "font", digest, descriptor },
-    facts: { kind: "font", descriptor, bytesBase64: Buffer.from(font).toString("base64") } }];
+    facts: { kind: "font", descriptor, bytesBase64: font.toBase64() } }];
   const request = { id: 15, runtimeAssets, runtimeBaseUrl,
     standalone: { input: "/project/caption.motion.tsx", data,
       assets: [{ name: "caption", alias: "asset_0", path: "/project/font.ttf" }] },
@@ -144,7 +144,7 @@ test("300 Timeline captions compile each immutable word input once and retain ex
       tracks: { caption: [{ presenter: { component: "caption" }, style: { font: "font", fontSize: 20 }, clips }] } },
     instances: clips.map((_, i) => ({ clipPath: `/tracks/caption/0/clips/${i}`, entry: "caption.motion.tsx", modules: { "caption.motion.tsx": source },
       options: { fontAliases: { "asset://caption": font }, resources: [{ control: "caption", contentHash: digest }] }, fonts: [] })),
-    resourceInputs: [{ id: "resource:font", entry: { kind: "font", digest, descriptor }, facts: { kind: "font", descriptor, bytesBase64: Buffer.from(font).toString("base64") } }],
+    resourceInputs: [{ id: "resource:font", entry: { kind: "font", digest, descriptor }, facts: { kind: "font", descriptor, bytesBase64: font.toBase64() } }],
   };
   const before = process.memoryUsage().rss;
   const start = performance.now();

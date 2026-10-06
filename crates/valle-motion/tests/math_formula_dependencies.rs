@@ -36,8 +36,10 @@ fn product_crate_does_not_depend_on_ratex_renderer_or_embedded_fonts() {
 #[test]
 fn wasm32_unknown_unknown_builds_ratex_core_through_layout() {
     let manifest = repo_root().join("Cargo.toml");
+    // Keep nested Cargo checks on the parent test's Rust/LLVM toolchain.
+    let toolchain = std::env::var("RUSTUP_TOOLCHAIN").unwrap_or_else(|_| "stable".into());
     let status = Command::new("rustup")
-        .args(["run", "stable", "cargo", "check", "--manifest-path"])
+        .args(["run", &toolchain, "cargo", "check", "--manifest-path"])
         .arg(&manifest)
         .args([
             "-p",

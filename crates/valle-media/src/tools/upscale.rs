@@ -92,6 +92,7 @@ pub fn run(
     context
         .progress
         .event(ToolEvent::phase(ToolPhase::Resolving));
+    check_cancelled(context)?;
     let candidates = ModelSessionCandidates::resolve(context.models, request.model.clone())?;
     let transaction = FileOutputTransaction::new(&request.output, request.overwrite)?;
 
@@ -123,6 +124,7 @@ fn run_png(
     check_cancelled(context)?;
 
     context.progress.event(ToolEvent::phase(ToolPhase::Loading));
+    check_cancelled(context)?;
     let load_started = Instant::now();
     let opened = candidates.open("load Real-ESRGAN", |model| {
         UpscaleSession::open(model, context.resources.cpu_threads, TileConfig::default())
@@ -1027,6 +1029,10 @@ fn check_cancelled(context: &RunContext<'_>) -> Result<(), ToolError> {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "upscale_tests.rs"]
+mod flow_tests;
 
 #[cfg(test)]
 mod tests {
