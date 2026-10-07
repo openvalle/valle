@@ -941,3 +941,133 @@ fn write_f64_slice(writer: &mut StructureHash, values: &[f64]) {
         writer.f64(*value);
     }
 }
+
+#[cfg(test)]
+mod contract_tests {
+    use super::*;
+    use crate::prepare::{DeviceTransform, DynamicBindingId};
+
+    fn digest(write: impl FnOnce(&mut StructureHash)) -> crate::resource::ContentDigest {
+        let mut writer = StructureHash::new();
+        write(&mut writer);
+        writer.finish()
+    }
+
+    #[test]
+    fn every_blend_and_transition_kernel_has_a_distinct_cache_identity() {
+        let modes = [
+            BlendMode::Normal,
+            BlendMode::Plus,
+            BlendMode::Multiply,
+            BlendMode::Screen,
+            BlendMode::Overlay,
+            BlendMode::Darken,
+            BlendMode::Lighten,
+            BlendMode::ColorDodge,
+            BlendMode::ColorBurn,
+            BlendMode::LinearBurn,
+            BlendMode::HardLight,
+            BlendMode::SoftLight,
+            BlendMode::Difference,
+            BlendMode::Exclusion,
+            BlendMode::Hue,
+            BlendMode::Saturation,
+            BlendMode::Color,
+            BlendMode::Luminosity,
+        ];
+        let hashes = modes.map(|mode| digest(|writer| write_blend_mode(writer, mode)));
+        assert_eq!(
+            hashes
+                .into_iter()
+                .collect::<std::collections::BTreeSet<_>>()
+                .len(),
+            modes.len()
+        );
+        let fade = PreparedTransitionKernel::from(valle_draw::transition::TransitionKind::Fade);
+        let extension = PreparedTransitionKernel::ExtensionCrossFade {
+            implementation_sha256: [2; 32],
+            past_frames: 1,
+            future_frames: 2,
+        };
+        assert_ne!(
+            digest(|writer| write_transition(writer, fade)),
+            digest(|writer| write_transition(writer, extension))
+        );
+        for kernel in [
+            PreparedTransitionKernel::ExtensionCrossFade {
+                implementation_sha256: [3; 32],
+                past_frames: 1,
+                future_frames: 2,
+            },
+            PreparedTransitionKernel::ExtensionCrossFade {
+                implementation_sha256: [2; 32],
+                past_frames: 2,
+                future_frames: 2,
+            },
+            PreparedTransitionKernel::ExtensionCrossFade {
+                implementation_sha256: [2; 32],
+                past_frames: 1,
+                future_frames: 3,
+            },
+        ] {
+            assert_ne!(
+                digest(|writer| write_transition(writer, extension)),
+                digest(|writer| write_transition(writer, kernel))
+            );
+        }
+    }
+
+    #[test]
+    fn mask_and_external_backdrop_parameters_participate_in_cache_identity() {
+        let transform =
+            DeviceTransform::from_projective([16., 0., 8., 0., 16., 8., 0., 0., 1.]).unwrap();
+        let mask = PreparedMask::new(PreparedMaskShape::Rect, transform, 0., false).unwrap();
+        let original = digest(|writer| write_mask(writer, mask));
+        for changed in [
+            PreparedMask::new(PreparedMaskShape::Ellipse, transform, 0., false).unwrap(),
+            PreparedMask::new(PreparedMaskShape::Rect, transform, 1., false).unwrap(),
+            PreparedMask::new(PreparedMaskShape::Rect, transform, 0., true).unwrap(),
+        ] {
+            assert_ne!(original, digest(|writer| write_mask(writer, changed)));
+        }
+        let rect = PreparedUnitRect {
+            x: 0.1,
+            y: 0.2,
+            width: 0.3,
+            height: 0.4,
+        };
+        assert_ne!(
+            digest(|writer| write_unit_rect(writer, rect)),
+            digest(|writer| write_unit_rect(writer, PreparedUnitRect { x: 0.2, ..rect }))
+        );
+        let placement = ExternalPlacement {
+            fit: RasterFit::Contain,
+            content_rect: Rect::new(0., 0., 1., 1.),
+            clip_rect: Rect::new(0., 0., 1., 1.),
+            sample: ExternalSample::Empty,
+            backdrop: None,
+        };
+        let base = digest(|writer| write_external_placement(writer, placement));
+        for backdrop in [
+            PreparedExternalBackdrop::Color {
+                working_linear_rec2020_premul: [0.1, 0.2, 0.3, 1.],
+            },
+            PreparedExternalBackdrop::Blur {
+                sigma_device_px: serde_json::from_value::<DynamicBindingId>(serde_json::json!(1))
+                    .unwrap(),
+                sample: ExternalSample::Empty,
+            },
+        ] {
+            assert_ne!(
+                base,
+                digest(|writer| write_external_placement(
+                    writer,
+                    ExternalPlacement {
+                        backdrop: Some(backdrop),
+                        ..placement
+                    }
+                ))
+            );
+        }
+    }
+}

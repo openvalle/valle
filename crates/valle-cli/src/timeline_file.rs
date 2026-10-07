@@ -769,3 +769,93 @@ mod tests {
         assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
     }
 }
+
+#[cfg(test)]
+mod contract_tests {
+    use super::*;
+
+    fn host(input: PathBuf) -> crate::webhost::StudioHost {
+        crate::webhost::StudioHost {
+            runtime_files: Default::default(),
+            assets_dir: None,
+            preview_files: Arc::new(Default::default()),
+            motion_source: Some(crate::webhost::MotionSourceCtx {
+                token: "fixture".into(),
+                input,
+                data: None,
+            }),
+            config_json: Arc::new(RwLock::new(
+                json!({"authorInputs":{"extraFonts":[]}}).to_string(),
+            )),
+            sse: Default::default(),
+            capture_dir: None,
+            library: None,
+            project: None,
+            timeline_file: None,
+            source_paths: Mutex::new(Default::default()),
+            last_report: RwLock::new(None),
+        }
+    }
+
+    #[test]
+    fn motion_export_saves_relative_resources_then_reopens_and_checks_conflicts() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("card.motion.tsx");
+        std::fs::write(&source,"export const composition={width:32,height:32,fps:4,duration:1};export default function Card(){return <Scene/>;}").unwrap();
+        let state = host(source.clone());
+        let document = json!({"canvas":{"width":32,"height":32,"fps":4},"resources":{"card":source},"tracks":{"visual":[{"clips":[{"kind":"motion","component":"card","start":0,"duration":1}]}]}});
+        let dependencies = json!({source.canonicalize().unwrap().to_string_lossy().to_string():ContentDigest::of_bytes(&std::fs::read(&source).unwrap())});
+        let request = json!({"target":"cut.json","baseDigest":null,"timeline":document,"expectedDependencies":dependencies});
+        let saved = save_motion_timeline_as(&state, &request.to_string()).unwrap();
+        assert_eq!(saved["status"], "saved");
+        assert_eq!(saved["timeline"]["resources"]["card"], "card.motion.tsx");
+        let reopened = load_saved_motion_timeline(&state, "{\"target\":\"cut.json\"}").unwrap();
+        assert_eq!(saved["digest"], reopened["digest"]);
+        assert_eq!(saved["timeline"], reopened["timeline"]);
+        assert_eq!(
+            save_motion_timeline_as(&state, &request.to_string()).unwrap()["status"],
+            "conflict"
+        );
+        let mut update = request.clone();
+        update["baseDigest"] = saved["digest"].clone();
+        update["timeline"] = saved["timeline"].clone();
+        update["timeline"]["canvas"]["background"] = json!("#123456");
+        let updated = save_motion_timeline_as(&state, &update.to_string()).unwrap();
+        assert_eq!(updated["status"], "saved");
+        assert_ne!(updated["digest"], saved["digest"]);
+        assert_eq!(
+            save_motion_timeline_as(&state, &update.to_string()).unwrap()["status"],
+            "conflict"
+        );
+        let file = TimelineFile::open(&dir.path().join("cut.json")).unwrap();
+        assert!(
+            file.source_paths()
+                .unwrap()
+                .contains(&source.canonicalize().unwrap())
+        );
+        let mut invalid = request.clone();
+        invalid["target"] = json!("bad.txt");
+        assert!(
+            save_motion_timeline_as(&state, &invalid.to_string())
+                .unwrap_err()
+                .to_string()
+                .contains(".json")
+        );
+        *state.config_json.write().unwrap() =
+            json!({"authorInputs":{"extraFonts":["/font"]}}).to_string();
+        assert!(
+            save_motion_timeline_as(&state, &request.to_string())
+                .unwrap_err()
+                .to_string()
+                .contains("extra --font")
+        );
+        let oversized = dir.path().join("large.json");
+        std::fs::write(&oversized, vec![b' '; 4 * 1024 * 1024 + 1]).unwrap();
+        assert!(
+            load_saved_motion_timeline(&state, "{\"target\":\"large.json\"}")
+                .unwrap_err()
+                .to_string()
+                .contains("4 MiB")
+        );
+    }
+}

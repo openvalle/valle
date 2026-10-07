@@ -111,3 +111,45 @@ fn unpremultiply_rgba(bytes: &mut [u8]) {
         }
     }
 }
+
+#[cfg(test)]
+mod contract_tests {
+    use super::*;
+
+    #[test]
+    fn bundled_resources_allow_local_and_embedded_data_but_reject_external_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("image.bin"), b"fixture").unwrap();
+        let provider = BundleResourceProvider {
+            root: dir.path().to_owned(),
+            font_mgr: FontMgr::default(),
+        };
+        assert_eq!(
+            provider.load(".", "image.bin").unwrap().as_bytes(),
+            b"fixture"
+        );
+        assert_eq!(
+            provider
+                .load("", "data:application/octet-stream;base64,Zm94")
+                .unwrap()
+                .as_bytes(),
+            b"fox"
+        );
+        assert!(provider.load("https://example.com", "image.png").is_none());
+        assert!(provider.load(".", "../image.bin").is_none());
+        assert!(provider.load(".", "missing.bin").is_none());
+        assert_eq!(
+            safe_join(dir.path(), Path::new("./image.bin")).unwrap(),
+            dir.path().join("image.bin")
+        );
+        assert!(safe_join(dir.path(), Path::new("/absolute")).is_none());
+        let font = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../assets/fonts/noto/NotoSans-Regular.ttf");
+        std::fs::copy(font, dir.path().join("font.ttf")).unwrap();
+        assert!(provider.load_typeface("font.ttf", ".").is_some());
+        let _ = provider.font_mgr();
+        let mut pixels = [10, 20, 30, 0, 10, 20, 30, 255, 64, 32, 16, 128];
+        unpremultiply_rgba(&mut pixels);
+        assert_eq!(pixels, [10, 20, 30, 0, 10, 20, 30, 255, 128, 64, 32, 128]);
+    }
+}

@@ -667,3 +667,75 @@ pub fn scalar_binding(value: &Value, control: &ControlType) -> Option<f64> {
         })
         .filter(|value| value.is_finite())
 }
+
+#[cfg(test)]
+mod contract_tests {
+    use super::*;
+
+    #[test]
+    fn data_schemas_reject_contradictory_bounds_invalid_keys_and_empty_structures() {
+        let invalid = [
+            PrepareDataType::Number {
+                min: Some(f64::NAN),
+                max: Some(f64::INFINITY),
+            },
+            PrepareDataType::Number {
+                min: Some(2.0),
+                max: Some(1.0),
+            },
+            PrepareDataType::String {
+                min_bytes: Some(2),
+                max_bytes: Some(1),
+            },
+            PrepareDataType::String {
+                min_bytes: None,
+                max_bytes: Some(MAX_PREPARE_DATA_BYTES + 1),
+            },
+            PrepareDataType::Array {
+                items: Box::new(PrepareDataType::Bool),
+                min_items: 2,
+                max_items: 1,
+                key: None,
+            },
+            PrepareDataType::Array {
+                items: Box::new(PrepareDataType::Bool),
+                min_items: 0,
+                max_items: 2,
+                key: Some("id".into()),
+            },
+            PrepareDataType::Record {
+                fields: BTreeMap::new(),
+            },
+            PrepareDataType::Tuple { items: vec![] },
+        ];
+        for schema in invalid {
+            let mut errors = vec![];
+            schema.validate_schema("/schema", 1, &mut errors);
+            assert!(!errors.is_empty(), "{schema:?}");
+            assert!(errors.iter().all(|error| error.path.starts_with("/schema")));
+        }
+        let mut errors = vec![];
+        PrepareDataType::Bool.validate_schema("/deep", MAX_PREPARE_DATA_DEPTH + 1, &mut errors);
+        assert_eq!(errors.len(), 1);
+        for (schema, value) in [
+            (PrepareDataType::Bool, serde_json::json!(1)),
+            (
+                PrepareDataType::String {
+                    min_bytes: Some(2),
+                    max_bytes: Some(3),
+                },
+                serde_json::json!("x"),
+            ),
+            (
+                PrepareDataType::Tuple {
+                    items: vec![PrepareDataType::Bool],
+                },
+                serde_json::json!([true, false]),
+            ),
+        ] {
+            let mut errors = vec![];
+            schema.validate_value(&value, "/data", 1, &mut 0, &mut errors);
+            assert!(!errors.is_empty());
+        }
+    }
+}

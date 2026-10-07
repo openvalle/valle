@@ -90,3 +90,52 @@ impl Clone for SharedVideoFramePool {
         Self(self.0.clone())
     }
 }
+
+#[cfg(all(test, target_os = "macos"))]
+mod contract_tests {
+    use super::*;
+
+    #[link(name = "CoreVideo", kind = "framework")]
+    unsafe extern "C" {
+        fn CVPixelBufferGetWidth(buffer: *mut c_void) -> usize;
+        fn CVPixelBufferGetHeight(buffer: *mut c_void) -> usize;
+    }
+
+    #[test]
+    #[ignore = "requires a real VideoToolbox frame pool"]
+    fn native_frame_outlives_pool_and_encoder_and_keeps_its_geometry() {
+        let root = tempfile::tempdir().unwrap();
+        let muxer = crate::Muxer::open_ext_with_transport(
+            &root.path().join("shared.mp4"),
+            64,
+            48,
+            30,
+            None,
+            true,
+            None,
+            VideoFrameTransport::SharedGpu,
+        )
+        .unwrap();
+        let pool = muxer.shared_frame_pool().unwrap();
+        let frame = pool.acquire().unwrap();
+        drop(pool);
+        drop(muxer);
+        let backend = std::hint::black_box(
+            SharedVideoFrame::backend as fn(&SharedVideoFrame) -> SharedFrameBackend,
+        );
+        let dimensions = std::hint::black_box(
+            SharedVideoFrame::dimensions as fn(&SharedVideoFrame) -> (u32, u32),
+        );
+        assert_eq!(backend(&frame), SharedFrameBackend::VideoToolbox);
+        assert_eq!(dimensions(&frame), (64, 48));
+        let SharedVideoFrameHandle::VideoToolbox(buffer) = frame.handle() else {
+            panic!("expected a VideoToolbox frame")
+        };
+        assert!(!buffer.is_null());
+        // The frame owns this borrowed CVPixelBuffer after both producers have gone away.
+        unsafe {
+            assert_eq!(CVPixelBufferGetWidth(buffer), 64);
+            assert_eq!(CVPixelBufferGetHeight(buffer), 48);
+        }
+    }
+}

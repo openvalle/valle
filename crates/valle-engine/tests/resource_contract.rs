@@ -256,3 +256,40 @@ fn render_spec_carries_the_complete_output_contract() {
         [12, 34, 56, 128]
     );
 }
+
+#[test]
+fn semantic_snapshot_exposes_exact_font_payloads_and_audio_descriptors() {
+    let bytes = include_bytes!("../../../assets/fonts/noto/NotoSans-Regular.ttf");
+    let digest = ContentDigest::of_bytes(bytes);
+    let font = SemanticFont::new("Contract font", digest.clone(), 0);
+    let duration = RationalTime::new(3, 2).unwrap();
+    let descriptor = MediaDescriptor::audio(duration).unwrap();
+    assert_eq!(descriptor.duration(), Some(duration));
+    assert_eq!(descriptor.extent(), None);
+    assert_eq!(descriptor.visual_interpretation(), None);
+    assert!(MediaDescriptor::audio(RationalTime::new(-1, 1).unwrap()).is_err());
+    let snapshot = SnapshotBuilder::new()
+        .font_face(font, bytes.as_slice())
+        .asset(SemanticAsset::new(
+            "sound",
+            SemanticAssetKind::Audio,
+            ContentDigest::of_bytes(b"sound"),
+            descriptor,
+        ))
+        .finish()
+        .unwrap();
+    assert_eq!(snapshot.assets().len(), 1);
+    assert_eq!(
+        snapshot.asset("sound").unwrap().descriptor.duration(),
+        Some(duration)
+    );
+    assert!(snapshot.asset("missing").is_none());
+    assert_eq!(snapshot.font("Contract font").unwrap().face_index, 0);
+    assert_eq!(snapshot.font_faces("Contract font").unwrap().len(), 1);
+    let payload = snapshot.font_payload(&digest, 0).unwrap();
+    assert_eq!(payload.bytes(), bytes);
+    assert_eq!(payload.shared_bytes().as_slice(), bytes);
+    assert!(format!("{payload:?}").contains(&bytes.len().to_string()));
+    assert!(snapshot.font_payload(&digest, 1).is_none());
+    assert!(snapshot.font("missing").is_none());
+}

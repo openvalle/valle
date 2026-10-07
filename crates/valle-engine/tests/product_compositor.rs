@@ -325,3 +325,95 @@ fn product_frame_range_is_checked_by_the_pinned_compiled_render() {
         .unwrap_err();
     assert!(matches!(error, ProductEngineError::Evaluate(_)));
 }
+
+#[test]
+fn plan_and_frame_inspection_roundtrip_and_reject_cross_artifact_tampering() {
+    use valle_engine::compositor::inspect::{
+        FrameMetric, FramePerfInspection, FrameStageTimings, InspectionArtifactKind,
+        PlanInspection, render_graph_dot,
+    };
+    let render = compiled_render();
+    let mut compiler = render.frame_compiler();
+    let prepared = compiler
+        .evaluate_prepare(render.render_id(), FrameKey::new(0), render_spec(2))
+        .unwrap();
+    let frame = prepared.prepared().frame.clone();
+    let backend = capabilities();
+    let bound = prepared
+        .lower(&backend)
+        .unwrap()
+        .bind(ExternalGeneration::new(7).unwrap())
+        .unwrap();
+    let inspection =
+        PlanInspection::build(bound.graph(), bound.template(), bound.bindings(), &backend).unwrap();
+    inspection.validate().unwrap();
+    assert_eq!(
+        inspection.counts.logical_passes,
+        bound.graph().passes.len() as u64
+    );
+    assert_eq!(
+        inspection.counts.execution_passes,
+        bound.template().passes().len() as u64
+    );
+    assert!(inspection.counts.planned_roi_pixels > 0);
+    let restored: PlanInspection =
+        serde_json::from_slice(&serde_json::to_vec(&inspection).unwrap()).unwrap();
+    assert_eq!(restored, inspection);
+    restored.validate().unwrap();
+    let stages = FrameStageTimings {
+        render_open_us: 1,
+        semantic_preflight_us: 2,
+        evaluate_us: 3,
+        prepare_us: 4,
+        build_us: 5,
+        validate_us: 6,
+        lower_us: 7,
+        bind_us: 8,
+        execute_us: 9,
+    };
+    let perf = FramePerfInspection::build(&frame, bound.graph(), &inspection, stages).unwrap();
+    perf.validate().unwrap();
+    assert_eq!(perf.stages, stages);
+    assert_eq!(perf.metrics.peak_rss_bytes, FrameMetric::NotObservable {});
+    assert!(matches!(perf.metrics.physical_surfaces, FrameMetric::Planned { value } if value > 0));
+    assert_eq!(
+        serde_json::from_value::<FramePerfInspection>(serde_json::to_value(&perf).unwrap())
+            .unwrap(),
+        perf
+    );
+    let dot = render_graph_dot(bound.graph()).unwrap();
+    assert_eq!(render_graph_dot(bound.graph()).unwrap(), dot);
+    assert!(
+        dot.contains("external")
+            && dot.contains("import")
+            && dot.contains("output-transform")
+            && dot.contains("label=\"read\"")
+    );
+    for mutation in 0..5 {
+        let mut damaged = inspection.clone();
+        match mutation {
+            0 => damaged.schema_version += 1,
+            1 => damaged.kind = InspectionArtifactKind::CompositorFramePerf,
+            2 => damaged.template_hash = valle_engine::resource::ContentDigest::of_bytes(b"forged"),
+            3 => {
+                damaged.capability_fingerprint =
+                    valle_engine::resource::ContentDigest::of_bytes(b"forged")
+            }
+            _ => damaged.bound_program_schedules.estimated_peak_surface_bytes += 1,
+        }
+        assert!(damaged.validate().is_err());
+    }
+    let mut wrong_frame = frame.clone();
+    wrong_frame.render_id = RenderId::from_bytes([0x77; 32]);
+    assert!(FramePerfInspection::build(&wrong_frame, bound.graph(), &inspection, stages).is_err());
+    let mut wrong_perf = perf.clone();
+    wrong_perf.schema_version += 1;
+    assert!(wrong_perf.validate().is_err());
+    wrong_perf = perf;
+    wrong_perf.kind = InspectionArtifactKind::CompositorPlan;
+    assert!(wrong_perf.validate().is_err());
+    let mut graph = bound.graph().clone();
+    graph.resources[0].semantic_path = "root.\"clear\\line\n\t".into();
+    let escaped = render_graph_dot(&graph).unwrap();
+    assert!(escaped.contains("root.\\\"clear\\\\line\\n?"));
+}

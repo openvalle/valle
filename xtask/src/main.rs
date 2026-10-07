@@ -216,3 +216,62 @@ mod tests {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod contract_tests {
+    use super::*;
+
+    #[test]
+    fn commands_report_start_and_exit_failures() {
+        run(Command::new("/usr/bin/true").arg("unused")).unwrap();
+        assert!(run(Command::new("/usr/bin/false").arg("unused")).is_err());
+        assert!(run(&mut Command::new("/nonexistent/valle-test-command")).is_err());
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join("dist")).unwrap();
+        fs::write(dir.path().join("dist/user-file"), "keep").unwrap();
+        assert!(build_with_environment(dir.path(), false, &Default::default()).is_err());
+        assert_eq!(
+            fs::read_to_string(dir.path().join("dist/user-file")).unwrap(),
+            "keep"
+        );
+    }
+
+    #[test]
+    #[ignore = "runs the actual locked native CLI build with embedded runtime inputs"]
+    fn locked_cli_build_returns_the_cargo_reported_executable() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+        let target = std::env::var("CARGO_LLVM_COV_TARGET_DIR")
+            .unwrap_or_else(|_| root.join("target").display().to_string());
+        let environment =
+            std::collections::BTreeMap::from([("CARGO_TARGET_DIR".to_owned(), target.clone())]);
+        let binary = build_cli(root, false, &environment).unwrap();
+        assert!(binary.starts_with(&target));
+        assert!(binary.is_file());
+        assert_eq!(binary.file_name().unwrap(), "valle");
+        assert!(
+            package::capture(Command::new(binary).arg("--version"))
+                .unwrap()
+                .starts_with("valle ")
+        );
+    }
+
+    #[test]
+    fn actual_license_collection_includes_native_web_and_font_provenance() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let output = temp.path().join("notices.txt");
+        notices::generate(root, &output, false, &Default::default()).unwrap();
+        let text = fs::read_to_string(output).unwrap();
+        for required in [
+            "Valle base revision:",
+            "Apache License",
+            "cssparser",
+            "https://static.crates.io/",
+            "GL-Transitions-MIT.txt",
+            "OFL",
+            "CanvasKit",
+        ] {
+            assert!(text.contains(required), "{required}");
+        }
+    }
+}

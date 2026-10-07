@@ -41,6 +41,67 @@ fn project() -> NativeProject {
 }
 
 #[test]
+fn native_storyboard_and_sparse_schedule_use_the_admitted_clock() {
+    let project = project();
+    let canvas = project.compiled().canvas();
+    let frames = FrameSchedule::Sparse {
+        times_seconds: vec![0.5, 0.0, 0.5, 0.1],
+    }
+    .frames(canvas)
+    .unwrap();
+    assert_eq!(
+        frames.iter().map(|frame| frame.index()).collect::<Vec<_>>(),
+        [0, 3, 15]
+    );
+    for schedule in [
+        FrameSchedule::Range {
+            from_seconds: 0.5,
+            to_seconds: 0.4,
+        },
+        FrameSchedule::Range {
+            from_seconds: 0.,
+            to_seconds: 0.001,
+        },
+        FrameSchedule::Sparse {
+            times_seconds: vec![f64::NAN],
+        },
+        FrameSchedule::Single { at_seconds: 1. },
+    ] {
+        assert!(schedule.frames(canvas).is_err());
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let renderer = NativeRenderer::new(project, NativeRenderOptions::default());
+    let preview = renderer
+        .preview_frame(0.5, &dir.path().join("preview.png"))
+        .unwrap();
+    assert_eq!(preview.frames, 1);
+    let storyboard = renderer
+        .storyboard(&dir.path().join("sheet.png"), 2, 1)
+        .unwrap();
+    assert_eq!(storyboard.frames, 2);
+    assert!(
+        renderer
+            .storyboard(&dir.path().join("bad.png"), 0, 1)
+            .is_err()
+    );
+    let decoder = png::Decoder::new(Cursor::new(
+        std::fs::read(dir.path().join("sheet.png")).unwrap(),
+    ));
+    let reader = decoder.read_info().unwrap();
+    assert_eq!((reader.info().width, reader.info().height), (640, 320));
+    let summary = renderer
+        .preview_range(0.1, 0.3, &dir.path().join("range.mp4"), 8)
+        .unwrap();
+    assert_eq!(summary.frames, 6);
+    assert!(
+        std::fs::metadata(dir.path().join("range.mp4"))
+            .unwrap()
+            .len()
+            > 0
+    );
+}
+
+#[test]
 fn native_project_schedule_and_preview_keep_one_render_id() {
     let project = project();
     let render = project.render_id();

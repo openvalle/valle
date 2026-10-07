@@ -198,7 +198,14 @@ fn single_line_reason(error: &Error) -> String {
         .join(" ")
 }
 
-#[cfg(all(test, any(feature = "tool-inpaint", feature = "tool-upscale")))]
+#[cfg(all(
+    test,
+    any(
+        feature = "tool-inpaint",
+        feature = "tool-upscale",
+        feature = "tool-segment"
+    )
+))]
 #[path = "model_session_tests.rs"]
 pub(super) mod test_support;
 

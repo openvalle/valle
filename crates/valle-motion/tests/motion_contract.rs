@@ -607,3 +607,45 @@ fn shader_artifact_metadata_is_checked_against_its_admitted_dependency() {
             .any(|error| error.path.ends_with("/workPerPixel"))
     );
 }
+
+#[test]
+fn envelope_digest_display_matches_the_strict_wire_identity() {
+    let digest = envelope().envelope_digest().unwrap();
+    assert_eq!(digest.to_string(), digest.to_wire());
+    assert_eq!(digest.to_wire(), format!("sha256:{}", digest.as_hex()));
+}
+
+#[test]
+fn envelope_fingerprint_validation_rejects_empty_inputs_and_inconsistent_formula_metadata() {
+    let valid = envelope();
+    let mut wrong = valid.clone();
+    wrong.build_fingerprint.compiler_version.clear();
+    assert!(
+        wrong
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("compilerVersion")
+    );
+    let mut formula = valid.clone();
+    formula.build_fingerprint.formula_layout_engine = "unexpected".into();
+    assert!(
+        formula
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("formulaLayoutEngine")
+    );
+    let mut canvas = valid;
+    canvas.build_fingerprint.canvas_size = MotionViewport {
+        width: 0,
+        height: 1,
+    };
+    assert!(
+        canvas
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("canvasSize")
+    );
+}

@@ -636,7 +636,13 @@ impl AdmittedSkiaFrame<'_> {
                         let image = {
                             let mut scratch =
                                 surface_frame.scratch(&vec![extent; scratch_count])?;
-                            apply_prepared_mask(&mut scratch, output_slot, &input, *mask)?;
+                            apply_prepared_mask(
+                                &mut scratch,
+                                output_slot,
+                                &input,
+                                *mask,
+                                output_roi,
+                            )?;
                             scratch.snapshot_output(output_slot, output_roi)?
                         };
                         (image, true)

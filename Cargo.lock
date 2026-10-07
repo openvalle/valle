@@ -4294,6 +4294,7 @@ dependencies = [
  "toml",
  "ttf-parser",
  "valle-compiler",
+ "valle-draw",
  "valle-engine",
  "valle-media",
  "valle-motion",

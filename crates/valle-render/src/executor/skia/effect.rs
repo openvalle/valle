@@ -718,6 +718,7 @@ pub(crate) fn apply_prepared_mask(
     output_slot: SurfaceSlotId,
     input: &Image,
     mask: PreparedMask,
+    output_roi: DeviceRect,
 ) -> Result<(), DrawError> {
     let mask_surface = surfaces.surface_mut(0)?;
     let canvas = mask_surface.canvas();
@@ -763,6 +764,10 @@ pub(crate) fn apply_prepared_mask(
 
     let output = surfaces.output_mut(output_slot)?;
     output.canvas().clear(Color4f::new(0.0, 0.0, 0.0, 0.0));
+    output.canvas().save();
+    output
+        .canvas()
+        .translate((-output_roi.x as f32, -output_roi.y as f32));
     let mut source = Paint::default();
     source.set_blend_mode(BlendMode::Src);
     output.canvas().draw_image(input, (0.0, 0.0), Some(&source));
@@ -771,6 +776,7 @@ pub(crate) fn apply_prepared_mask(
     output
         .canvas()
         .draw_image(&mask_image, (0.0, 0.0), Some(&coverage));
+    output.canvas().restore();
     Ok(())
 }
 

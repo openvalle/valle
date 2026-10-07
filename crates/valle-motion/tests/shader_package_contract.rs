@@ -12,6 +12,7 @@ fn registry_is_exact_uri_and_content_addressed() {
     let first = package();
     let uri = first.uri();
     let mut registry = ShaderRegistry::new();
+    assert!(registry.is_empty());
     registry.register(first.clone()).unwrap();
     registry
         .register(first)
@@ -25,6 +26,12 @@ fn registry_is_exact_uri_and_content_addressed() {
     registry.register_asset("effect", changed.clone()).unwrap();
     registry.register_asset("duplicate", changed).unwrap();
     assert_eq!(registry.len(), 2);
+    assert!(!registry.is_empty());
+    assert_eq!(registry.packages().count(), 2);
+    assert_eq!(
+        registry.get(&changed_uri.to_string()).unwrap().uri(),
+        changed_uri
+    );
     assert_ne!(changed_uri, uri);
     assert_eq!(registry.asset("effect").unwrap().uri(), changed_uri);
     assert_eq!(registry.asset("duplicate").unwrap().uri(), changed_uri);

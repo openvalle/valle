@@ -157,3 +157,64 @@ pub(super) fn validation_span(
         Span::new(0, 0)
     }
 }
+
+#[cfg(test)]
+mod contract_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn nested_overrides_preserve_inferred_types_and_replace_arrays_atomically() {
+        let mut base = json!({"palette":{"accent":"red","width":3},"items":[1,2],"enabled":false,"point":{"__valleType":"point","x":1,"y":2}});
+        merge_theme(&mut base,json!({"palette":{"accent":"blue","height":4},"items":[5],"enabled":true,"point":{"__valleType":"point","x":5,"y":6}}),"theme").unwrap();
+        assert_eq!(
+            base,
+            json!({"palette":{"accent":"blue","width":3,"height":4},"items":[5],"enabled":true,"point":{"__valleType":"point","x":5,"y":6}})
+        );
+        validate_theme(&base).unwrap();
+        for (value, kind) in [
+            (json!(null), "null"),
+            (json!(true), "boolean"),
+            (json!(1), "number"),
+            (json!("s"), "string"),
+            (json!([]), "array"),
+            (json!({}), "object"),
+            (json!({"__valleType":"point"}), "typed point"),
+        ] {
+            assert_eq!(theme_kind(&value), kind);
+            let mut inherited = value.clone();
+            let replacement = if kind == "string" {
+                json!(2)
+            } else {
+                json!("changed")
+            };
+            let error = merge_theme(&mut inherited, replacement, "theme.color").unwrap_err();
+            assert!(error.contains("theme.color") && error.contains(kind));
+            assert_eq!(inherited, value);
+        }
+    }
+
+    #[test]
+    fn validation_diagnostics_select_the_original_expression_node_or_control_span() {
+        let expr = Span::new(5, 10);
+        let node = Span::new(15, 25);
+        let control = Span::new(30, 40);
+        assert_eq!(
+            validation_span("/exprs/0/value", &[expr], &[node], Some(control)),
+            expr
+        );
+        assert_eq!(
+            validation_span("/nodes/0/style", &[expr], &[node], Some(control)),
+            node
+        );
+        for path in ["/controls/props/a", "/resourceRefs/0"] {
+            assert_eq!(validation_span(path, &[], &[], Some(control)), control);
+        }
+        for path in ["/exprs/99", "/nodes/2", "/exprs/nope", "/else"] {
+            assert_eq!(
+                validation_span(path, &[expr], &[node], None),
+                Span::new(0, 0)
+            );
+        }
+    }
+}

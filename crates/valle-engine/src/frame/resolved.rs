@@ -212,3 +212,80 @@ pub struct ResolvedMask {
     pub rotation: f64,
     pub invert: bool,
 }
+
+#[cfg(test)]
+mod contract_tests {
+    use super::*;
+
+    #[test]
+    fn animation_identity_is_exact_and_every_component_affects_it() {
+        let constructor = std::hint::black_box(
+            ResolvedClipAnimation::identity
+                as fn(ClipAnimationApplication) -> ResolvedClipAnimation,
+        );
+        assert_eq!(
+            constructor(ClipAnimationApplication::Raster),
+            ResolvedClipAnimation::RASTER_IDENTITY
+        );
+        assert_eq!(
+            constructor(ClipAnimationApplication::Semantic),
+            ResolvedClipAnimation::SEMANTIC_IDENTITY
+        );
+        for base in [
+            ResolvedClipAnimation::RASTER_IDENTITY,
+            ResolvedClipAnimation::SEMANTIC_IDENTITY,
+        ] {
+            assert!(base.is_identity());
+            for component in 0..7 {
+                let mut value = base;
+                match component {
+                    0 => value.scale = 1.1,
+                    1 => value.opacity = 0.9,
+                    2 => value.rotation_deg = 1.0,
+                    3 => value.translate_x_px = 1.0,
+                    4 => value.translate_y_px = 1.0,
+                    5 => value.clip_inset = Some([0.0; 4]),
+                    _ => value.blur_sigma_px = 1.0,
+                }
+                assert!(!value.is_identity());
+                assert_eq!(
+                    serde_json::from_value::<ResolvedClipAnimation>(
+                        serde_json::to_value(value).unwrap()
+                    )
+                    .unwrap(),
+                    value
+                );
+            }
+        }
+        let expected = [
+            (0.5, 0.5),
+            (0.0, 0.0),
+            (0.5, 0.0),
+            (1.0, 0.0),
+            (0.0, 0.5),
+            (1.0, 0.5),
+            (0.0, 1.0),
+            (0.5, 1.0),
+            (1.0, 1.0),
+        ];
+        for (anchor, expected) in [
+            Anchor::Center,
+            Anchor::TopLeft,
+            Anchor::Top,
+            Anchor::TopRight,
+            Anchor::Left,
+            Anchor::Right,
+            Anchor::BottomLeft,
+            Anchor::Bottom,
+            Anchor::BottomRight,
+        ]
+        .into_iter()
+        .zip(expected)
+        {
+            assert_eq!(
+                std::hint::black_box(anchor_fraction as fn(Anchor) -> (f64, f64))(anchor),
+                expected
+            );
+        }
+    }
+}

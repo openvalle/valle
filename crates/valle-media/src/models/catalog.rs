@@ -600,3 +600,151 @@ mod tests {
         assert_eq!(std::fs::read(path).unwrap(), b"one");
     }
 }
+
+#[cfg(test)]
+mod contract_tests {
+    use super::*;
+    use std::{
+        io::{Read, Write},
+        net::TcpListener,
+        time::{Duration, Instant},
+    };
+
+    fn server(
+        responses: Vec<(&'static str, Vec<u8>)>,
+    ) -> (String, std::thread::JoinHandle<Vec<String>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let task = std::thread::spawn(move || {
+            let mut requests = vec![];
+            for (status, body) in responses {
+                let deadline = Instant::now() + Duration::from_secs(10);
+                let mut stream = loop {
+                    match listener.accept() {
+                        Ok((stream, _)) => break stream,
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            assert!(Instant::now() < deadline, "catalog request timeout");
+                            std::thread::sleep(Duration::from_millis(5));
+                        }
+                        Err(error) => panic!("{error}"),
+                    }
+                };
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let mut request = vec![];
+                let mut bytes = [0; 1024];
+                while !request.windows(4).any(|value| value == b"\r\n\r\n") {
+                    let count = stream.read(&mut bytes).unwrap();
+                    assert!(count > 0);
+                    request.extend_from_slice(&bytes[..count]);
+                }
+                requests.push(String::from_utf8(request).unwrap());
+                write!(
+                    stream,
+                    "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                )
+                .unwrap();
+                stream.write_all(&body).unwrap();
+            }
+            requests
+        });
+        (endpoint, task)
+    }
+
+    #[test]
+    fn explicit_refresh_pins_metadata_then_allows_exact_offline_resolution() {
+        let root = tempfile::tempdir().unwrap();
+        let mut catalog = embedded_catalog();
+        let model = catalog
+            .models
+            .iter_mut()
+            .find(|model| model.id == "birefnet")
+            .unwrap();
+        let mut release = model.releases[0].clone();
+        release.version = "1.0.1".into();
+        release.revision = "1111111111111111111111111111111111111111".into();
+        model.latest = release.version.clone();
+        model.releases.push(release.clone());
+        let mut manifest = embedded_release_manifest("birefnet", "1.0.0").unwrap();
+        manifest.model.version = release.version.clone();
+        let manifest_bytes = serde_json::to_vec(&manifest).unwrap();
+        let (endpoint, task) = server(vec![
+            ("200 OK", serde_json::to_vec(&catalog).unwrap()),
+            ("200 OK", manifest_bytes),
+        ]);
+        let repository = CatalogRepository::with_source(
+            root.path().to_owned(),
+            format!("{endpoint}/catalog.v1.json"),
+        );
+        let hub = HubClient::new(&endpoint, None).unwrap();
+        let fetched = repository
+            .install_release("birefnet", Some("latest"), true, &hub)
+            .unwrap();
+        assert_eq!(fetched.release.version, "1.0.1");
+        assert_eq!(fetched.release.revision, release.revision);
+        let requests = task.join().unwrap();
+        assert!(requests[0].starts_with("GET /catalog.v1.json "));
+        assert!(requests[1].contains(&release.revision));
+        assert!(requests[1].contains(&release.manifest_path));
+        let cached = repository
+            .offline_release("birefnet", Some("1.0.1"))
+            .unwrap();
+        assert_eq!(cached.manifest_bytes, fetched.manifest_bytes);
+        assert_eq!(cached.manifest.model.version, "1.0.1");
+        assert_eq!(
+            repository
+                .offline_release("birefnet", None)
+                .unwrap()
+                .manifest
+                .model
+                .version,
+            "1.0.0"
+        );
+        assert_eq!(
+            repository
+                .offline_release("unknown", None)
+                .unwrap_err()
+                .code,
+            ModelErrorCode::UnknownModel
+        );
+        assert_eq!(
+            repository
+                .install_release("birefnet", Some("latest"), false, &hub)
+                .unwrap_err()
+                .code,
+            ModelErrorCode::InvalidSelection
+        );
+    }
+
+    #[test]
+    fn refresh_auth_errors_remain_distinct_from_invalid_cached_metadata() {
+        let root = tempfile::tempdir().unwrap();
+        let (endpoint, task) = server(vec![("403 Forbidden", b"denied".to_vec())]);
+        let repository = CatalogRepository::with_source(
+            root.path().to_owned(),
+            format!("{endpoint}/catalog.v1.json"),
+        );
+        let error = repository
+            .install_release(
+                "birefnet",
+                Some("latest"),
+                true,
+                &HubClient::new(&endpoint, None).unwrap(),
+            )
+            .unwrap_err();
+        assert_eq!(error.code, ModelErrorCode::AuthRequired);
+        task.join().unwrap();
+        let parent = root.path().join("occupied");
+        std::fs::write(&parent, b"user file").unwrap();
+        assert_eq!(
+            write_immutable(&parent.join("release.json"), b"metadata")
+                .unwrap_err()
+                .code,
+            ModelErrorCode::Internal
+        );
+        assert_eq!(std::fs::read(parent).unwrap(), b"user file");
+    }
+}

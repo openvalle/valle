@@ -510,3 +510,29 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod contract_tests {
+    use super::*;
+
+    #[test]
+    fn preview_font_descriptors_capture_variation_ranges_and_reject_invalid_faces() {
+        let descriptor = font_descriptor(include_bytes!(
+            "../../../assets/fonts/noto/NotoSans-Variable.ttf"
+        ))
+        .unwrap();
+        assert_eq!(descriptor.face_index, 0);
+        let axis = descriptor.variation_axes.get("wght").unwrap();
+        assert!(axis.minimum < axis.default && axis.default < axis.maximum);
+        assert_eq!(axis.default, 400.0);
+        let fixed = font_descriptor(include_bytes!(
+            "../../../assets/fonts/noto/NotoSans-Regular.ttf"
+        ))
+        .unwrap();
+        assert!(fixed.variation_axes.is_empty());
+        assert_eq!(
+            font_descriptor(b"invalid").unwrap_err(),
+            "invalid preview font face"
+        );
+    }
+}

@@ -166,34 +166,37 @@ fn verify_runtime(
             );
         }
     }
-    // Motion serves the native font assets from memory. Derive expected bytes from
-    // the source assets instead of maintaining a second, fixed font/hash catalog.
+    // Studio advertises the font pack it embeds, including KaTeX faces served at the
+    // default-font route. Static test faces in assets/fonts are not distribution inputs.
+    let config_path = temp.path().join("studio-config.json");
+    fetch(&format!("{base}/config.json"), &config_path)?;
+    let config: Value = serde_json::from_slice(&fs::read(config_path)?)?;
+    let fonts = config["authorInputs"]["fontUrls"]
+        .as_array()
+        .context("Studio font list missing")?;
+    ensure!(!fonts.is_empty(), "Studio embedded font list is empty");
     let font_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../assets/fonts");
-    for (directory, route_prefix) in [("noto", "runtime/fonts"), ("katex", "runtime/fonts/katex")] {
-        let mut fonts = fs::read_dir(font_root.join(directory))?
-            .map(|entry| entry.map(|entry| entry.path()))
-            .collect::<std::io::Result<Vec<_>>>()?;
-        fonts.retain(|path| {
-            path.is_file()
-                && matches!(
-                    path.extension().and_then(|ext| ext.to_str()),
-                    Some("ttf" | "otf")
-                )
-        });
-        fonts.sort();
-        ensure!(!fonts.is_empty(), "no bundled fonts found in {directory}");
-        for font in fonts {
-            let name = font
-                .file_name()
-                .and_then(|name| name.to_str())
-                .context("invalid font filename")?;
-            let downloaded = temp.path().join("downloaded-font");
-            fetch(&format!("{base}/{route_prefix}/{name}"), &downloaded)?;
-            ensure!(
-                hash_file(&downloaded)? == hash_file(&font)?,
-                "served built-in font mismatch: {name}"
-            );
-        }
+    for font in fonts {
+        let route = font["url"].as_str().context("invalid font URL")?;
+        let name = route
+            .strip_prefix("/runtime/fonts/katex/")
+            .or_else(|| route.strip_prefix("/runtime/fonts/"))
+            .context("unexpected built-in font route")?;
+        ensure!(
+            Path::new(name).components().count() == 1 && name != "..",
+            "invalid built-in font filename"
+        );
+        let source = ["noto", "katex"]
+            .into_iter()
+            .map(|directory| font_root.join(directory).join(name))
+            .find(|path| path.is_file())
+            .context("built-in font source missing")?;
+        let downloaded = temp.path().join("downloaded-font");
+        fetch(&format!("{base}{route}"), &downloaded)?;
+        ensure!(
+            hash_file(&downloaded)? == hash_file(&source)?,
+            "served built-in font mismatch: {name}"
+        );
     }
     println!(
         "Verified {}: {platform}, single binary, embedded licenses/Web assets, no resource extraction, Motion/PNG/Studio without FFmpeg",

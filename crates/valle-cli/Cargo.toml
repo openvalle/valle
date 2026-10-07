@@ -25,6 +25,7 @@ hex.workspace = true
 [dependencies]
 tempfile.workspace = true
 valle-timeline.workspace = true
+valle-draw.workspace = true
 valle-motion.workspace = true
 valle-compiler = { workspace = true, features = ["motion"] }
 valle-engine.workspace = true

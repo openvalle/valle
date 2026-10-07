@@ -1622,3 +1622,212 @@ mod tests {
         .unwrap();
     }
 }
+
+#[cfg(test)]
+mod contract_tests {
+    use super::*;
+    use crate::{
+        codec::decode_rgba_frames,
+        models::{ModelManager, RunBackendPreference},
+        tools::{NoopProgress, model_session::test_support::candidates},
+    };
+    mod fixture {
+        //! Tiny five-graph pipeline with constant logits, plus generated zero-valued position tensors.
+        //! The low-level runtime tests inject this explicitly; published artifact hashes remain pinned.
+        use std::{fs, path::Path};
+
+        pub fn write(root: &Path) {
+            fs::create_dir_all(root).unwrap();
+            for (name, bytes) in [
+                (
+                    "image_encoder.onnx",
+                    &include_bytes!("../../tests/fixtures/models/edgetam_encoder.onnx")[..],
+                ),
+                (
+                    "memattn.onnx",
+                    &include_bytes!("../../tests/fixtures/models/edgetam_attention.onnx")[..],
+                ),
+                (
+                    "decoder_p3.onnx",
+                    &include_bytes!("../../tests/fixtures/models/edgetam_decoder_p3.onnx")[..],
+                ),
+                (
+                    "decoder_p1.onnx",
+                    &include_bytes!("../../tests/fixtures/models/edgetam_decoder_p1.onnx")[..],
+                ),
+                (
+                    "memencode.onnx",
+                    &include_bytes!("../../tests/fixtures/models/edgetam_memory.onnx")[..],
+                ),
+                (
+                    "prompt_protocol.v1.json",
+                    &include_bytes!("../../tests/fixtures/edgetam/prompt_protocol.v1.json")[..],
+                ),
+            ] {
+                fs::write(root.join(name), bytes).unwrap();
+            }
+            for (name, shape) in [
+                ("const_curr_pos.npy", &[1, 4096, 256][..]),
+                ("const_maskmem_pos.npy", &[1, 512, 64][..]),
+                ("const_maskmem_tpos.npy", &[7, 1, 1, 64][..]),
+                ("const_no_mem_embed.npy", &[1, 1, 256][..]),
+                ("const_no_obj_ptr.npy", &[1, 256][..]),
+            ] {
+                let dimensions = shape
+                    .iter()
+                    .map(usize::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let header = format!(
+                    "{{'descr': '<f4', 'fortran_order': False, 'shape': ({dimensions},), }}\n"
+                );
+                let mut bytes = b"\x93NUMPY\x01\x00".to_vec();
+                bytes.extend_from_slice(&(header.len() as u16).to_le_bytes());
+                bytes.extend_from_slice(header.as_bytes());
+                bytes.resize(bytes.len() + shape.iter().product::<usize>() * 4, 0);
+                fs::write(root.join(name), bytes).unwrap();
+            }
+        }
+    }
+
+    fn source() -> RgbaFrame {
+        let mut frame = RgbaFrame::new(64, 48);
+        frame.fill([80, 100, 120, 128]);
+        frame
+    }
+
+    fn request(root: &Path, video: bool, foreground: bool, range: bool) -> SegmentRequest {
+        let input = root.join(if video { "source.mov" } else { "source.png" });
+        if video {
+            let mut muxer = TransparentVideoMuxer::open(&input, 64, 48, 10, 1).unwrap();
+            for _ in 0..17 {
+                muxer.encode_video(&source()).unwrap();
+            }
+            muxer.finish().unwrap();
+        } else {
+            write_rgba_png(&input, &source()).unwrap();
+        }
+        let prompt = root.join("prompt.json");
+        std::fs::write(&prompt, br#"{"format":"valle.segment-prompt","formatVersion":1,"coordinateSpace":"source_pixels_xy","points":[{"x":20,"y":20,"label":"positive"},{"x":30,"y":20,"label":"positive"},{"x":0,"y":0,"label":"negative"}]}"#).unwrap();
+        SegmentRequest {
+            input,
+            output: root.join(if video { "mask.mkv" } else { "mask.png" }),
+            foreground_output: foreground.then(|| {
+                root.join(if video {
+                    "foreground.mov"
+                } else {
+                    "foreground.png"
+                })
+            }),
+            prompt,
+            model: ModelSelection {
+                id: "edgetam".into(),
+                version: Some("1.0.0".into()),
+                backend: RunBackendPreference::Onnx,
+            },
+            range: range.then(|| TimeRange::new(0.2, Some(0.5)).unwrap()),
+            threshold: Some(0.5),
+            overwrite: false,
+        }
+    }
+
+    #[test]
+    #[ignore = "requires the pinned ORT_DYLIB_PATH bundle"]
+    fn png_contract_pipeline_publishes_binary_mask_and_independent_soft_alpha() {
+        for foreground in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let artifact = root.path().join("graphs");
+            fixture::write(&artifact);
+            let request = request(root.path(), false, foreground, false);
+            let threshold = validate_request(&request).unwrap();
+            let document = read_prompt_document(&request.prompt).unwrap();
+            let prompt = prompt_from_document(&document).unwrap();
+            let mask = FileOutputTransaction::new(&request.output, false).unwrap();
+            let companion = request
+                .foreground_output
+                .as_deref()
+                .map(|path| FileOutputTransaction::new(path, false).unwrap());
+            let manager = ModelManager::from_models_root(root.path().join("empty-model-store"));
+            let mut progress = NoopProgress;
+            let mut context = RunContext::new(&manager, &mut progress);
+            context.resources.cpu_threads = 1;
+            let run = run_png(
+                request.clone(),
+                threshold,
+                document,
+                prompt,
+                mask,
+                companion,
+                candidates("edgetam", &artifact),
+                Instant::now(),
+                &mut context,
+            )
+            .unwrap();
+            assert_eq!(run.result.frames, 1);
+            assert_eq!(run.result.outputs.len(), if foreground { 2 } else { 1 });
+            assert!(
+                read_gray8_png(&request.output)
+                    .unwrap()
+                    .data
+                    .iter()
+                    .all(|byte| *byte == 255)
+            );
+            if let Some(path) = request.foreground_output {
+                assert_eq!(
+                    read_rgba_png(&path).unwrap().pixel(32, 24).unwrap(),
+                    [80, 100, 120, 113]
+                );
+            }
+            assert_eq!(run.report.models[0].id, "edgetam");
+        }
+    }
+
+    #[test]
+    #[ignore = "requires the pinned ORT_DYLIB_PATH bundle and FFmpeg"]
+    fn video_contract_pipeline_tracks_warm_and_hot_memory_and_preserves_range_clock() {
+        for (foreground, range) in [(true, false), (false, true)] {
+            let root = tempfile::tempdir().unwrap();
+            let artifact = root.path().join("graphs");
+            fixture::write(&artifact);
+            let request = request(root.path(), true, foreground, range);
+            let threshold = validate_request(&request).unwrap();
+            let document = read_prompt_document(&request.prompt).unwrap();
+            let prompt = prompt_from_document(&document).unwrap();
+            let mask = FileOutputTransaction::new(&request.output, false).unwrap();
+            let companion = request
+                .foreground_output
+                .as_deref()
+                .map(|path| FileOutputTransaction::new(path, false).unwrap());
+            let manager = ModelManager::from_models_root(root.path().join("empty-model-store"));
+            let mut progress = NoopProgress;
+            let mut context = RunContext::new(&manager, &mut progress);
+            context.resources.cpu_threads = 1;
+            let run = run_video(
+                request.clone(),
+                threshold,
+                document,
+                prompt,
+                mask,
+                companion,
+                candidates("edgetam", &artifact),
+                Instant::now(),
+                &mut context,
+            )
+            .unwrap();
+            assert_eq!(run.result.frames, if range { 3 } else { 17 });
+            let masks = decode_rgba_frames(&request.output, None).unwrap();
+            assert_eq!(masks.len() as u64, run.result.frames);
+            assert!(
+                masks
+                    .iter()
+                    .all(|frame| frame.pixel(32, 24).unwrap() == [255, 255, 255, 255])
+            );
+            if let Some(path) = request.foreground_output {
+                let frames = decode_rgba_frames(&path, None).unwrap();
+                assert_eq!(frames.len(), 17);
+                assert_eq!(frames[16].pixel(32, 24).unwrap(), [80, 100, 120, 113]);
+            }
+            assert!(run.result.source_time_base.is_some());
+        }
+    }
+}

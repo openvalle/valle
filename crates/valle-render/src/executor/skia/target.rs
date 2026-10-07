@@ -631,3 +631,57 @@ pub enum SkiaTargetError {
     #[error("Skia target must have a finite positive extent")]
     InvalidExtent,
 }
+
+#[cfg(all(test, feature = "native"))]
+mod contract_tests {
+    use super::*;
+    use valle_engine::resource::ContentDigest;
+
+    #[test]
+    fn resource_payload_accessors_and_resident_accounting_follow_the_admitted_kind() {
+        let bytes = include_bytes!("../../../../../assets/fonts/noto/NotoSans-Regular.ttf");
+        let key = ResourceKey::new(
+            ContentDigest::of_bytes(bytes),
+            ResourceInterpretation::FontFace { face_index: 0 },
+        );
+        let font = SkiaExternalObject::font_bytes(key.clone(), bytes.as_slice()).unwrap();
+        let diagnostic = format!("{font:?}");
+        assert!(diagnostic.contains("fontBytes"));
+        assert!(
+            diagnostic.len() < 512,
+            "diagnostics must not dump font bytes"
+        );
+        assert_eq!(font.font_data().unwrap(), bytes);
+        assert!(font.visual_image().is_none());
+        assert!(font.shader_data().is_none());
+        assert!(font.data_image().is_none());
+        assert_eq!(font.resident_bytes(), Some(bytes.len() as u64));
+        assert!(font.decoded_raster_image().is_err());
+        assert!(
+            SkiaExternalObject::visual_rgba8(key.clone(), Extent2d::new(1, 1).unwrap(), &[0; 4])
+                .is_err()
+        );
+        assert!(
+            SkiaExternalObject::visual_encoded(
+                key.clone(),
+                ExternalPixelLayout::Rgba8,
+                Extent2d::new(1, 1).unwrap(),
+                b"bad"
+            )
+            .is_err()
+        );
+        assert!(
+            SkiaExternalObject::data_texture_encoded(key, Extent2d::new(1, 1).unwrap(), b"bad")
+                .is_err()
+        );
+        let key = ResourceKey::new(
+            ContentDigest::of_bytes(b"data"),
+            ResourceInterpretation::DataTexture {},
+        );
+        assert!(SkiaExternalObject::font_bytes(key.clone(), bytes.as_slice()).is_err());
+        assert!(
+            SkiaExternalObject::data_texture_encoded(key, Extent2d::new(1, 1).unwrap(), b"bad")
+                .is_err()
+        );
+    }
+}

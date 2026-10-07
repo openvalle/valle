@@ -277,3 +277,50 @@ mod tests {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod contract_tests {
+    use super::*;
+
+    #[test]
+    fn package_refuses_unowned_output_before_running_a_build() {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir_all(root.path().join("dist")).unwrap();
+        fs::write(root.path().join("dist/user-file"), "keep").unwrap();
+        for args in [vec![], vec!["--min-macos".to_owned(), "14.2".to_owned()]] {
+            assert!(package(root.path(), &args).is_err());
+            assert_eq!(
+                fs::read_to_string(root.path().join("dist/user-file")).unwrap(),
+                "keep"
+            );
+        }
+        assert!(package(root.path(), &["--bad".to_owned()]).is_err());
+        assert!(package(root.path(), &["--min-macos".to_owned(), "bad".to_owned()]).is_err());
+        assert_eq!(display_version([14, 2, 0]), "14.2");
+        assert_eq!(display_version([14, 2, 1]), "14.2.1");
+        assert!(parse_loads("cmd LC_BUILD_VERSION\nminos invalid\n").is_err());
+        assert!(capture(&mut Command::new("/nonexistent/valle-test-command")).is_err());
+        assert!(capture(&mut Command::new("/usr/bin/false")).is_err());
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    #[ignore = "requires the built distribution and real macOS signing tools"]
+    fn copied_product_can_be_prepared_signed_and_inspected() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let binary = temp.path().join("Valle with spaces");
+        fs::copy(root.join("dist/bin/valle"), &binary).unwrap();
+        prepare_executable(&binary).unwrap();
+        let info = inspect(&binary).unwrap();
+        assert!(info.rpaths.is_empty());
+        assert!(info.dependencies.iter().all(|name| system_library(name)));
+        assert!(version(&info.minimum).unwrap() > [0, 0, 0]);
+        assert_eq!(hash_file(&binary).unwrap().len(), 64);
+        assert!(
+            capture(Command::new(binary).arg("--version"))
+                .unwrap()
+                .starts_with("valle ")
+        );
+    }
+}

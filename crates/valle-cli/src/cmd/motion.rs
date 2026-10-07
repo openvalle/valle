@@ -1836,7 +1836,12 @@ fn review_prop_overrides(
                         channels[0], channels[1], channels[2], channels[3]
                     )
                 };
-                ("color", serde_json::Value::String(color))
+                let color = valle_draw::Rgba::parse(&color)
+                    .ok_or_else(|| anyhow!("Motion prop `{name}` must be a valid CSS color"))?;
+                (
+                    "color",
+                    serde_json::to_value(valle_draw::program::AuthorColor::from_srgb8(color))?,
+                )
             }
             valle_motion::ControlType::Bool => ("bool", raw.clone()),
             valle_motion::ControlType::String => ("str", raw.clone()),
@@ -1888,5 +1893,134 @@ mod capture_tests {
                 .to_string()
                 .contains("logo.bin")
         );
+    }
+}
+
+#[cfg(test)]
+mod contract_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn request(input: PathBuf) -> StudioRequest {
+        StudioRequest {
+            input,
+            fps: None,
+            preview_files: Arc::new(Default::default()),
+            asset_specs: vec![],
+            bindings: Default::default(),
+            fonts: vec![],
+            data: None,
+            web_assets_dir: None,
+            port: 0,
+        }
+    }
+
+    #[test]
+    fn studio_freezes_authored_font_image_data_and_source_dependencies() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("card.motion.tsx");
+        std::fs::write(&input,"export const composition={width:32,height:32,fps:4,duration:1};export const controls={assets:{image:asset({kind:'image'}),font:asset({kind:'font'})},data:{label:string()}};export default function Card(ctx,props,data){return <Scene><Image src='asset://image' style={{width:32,height:32}}/><Text style={{fontFamily:'asset://font',fontSize:10}}>{data.label}</Text></Scene>;}").unwrap();
+        let image = dir.path().join("image.png");
+        std::fs::write(
+            &image,
+            include_bytes!("../../../valle-compiler/tests/fixtures/motion/modules/assets/dot.png"),
+        )
+        .unwrap();
+        let font = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../assets/fonts/noto/NotoSans-Regular.ttf")
+            .canonicalize()
+            .unwrap();
+        let data = dir.path().join("data.json");
+        std::fs::write(&data, "{\"label\":\"frozen\"}").unwrap();
+        let mut request = request(input.clone());
+        request.asset_specs = vec![
+            format!("image={}", image.display()),
+            format!("font={}", font.display()),
+        ];
+        request.fonts = vec![font];
+        request.data = Some(data);
+        let state: serde_json::Value =
+            serde_json::from_str(&studio_state_json(&request, 7).unwrap()).unwrap();
+        assert_eq!(state["status"], "ok");
+        assert_eq!(state["generation"], 7);
+        assert_eq!(state["durationFrames"], 4);
+        assert_eq!(state["preparedData"]["label"], "frozen");
+        assert_eq!(state["assets"][0]["kind"], "image");
+        assert_eq!(state["resourceLocators"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            state["authorInputs"]["extraFonts"],
+            json!(["/motion-fonts/0"])
+        );
+        assert!(state["authorInputs"]["fontUrls"].as_array().unwrap().len() > 2);
+        assert_eq!(
+            state["authorInputs"]["inputDigests"]
+                .as_object()
+                .unwrap()
+                .len(),
+            4
+        );
+        assert!(
+            state["fixedPackageManifestJson"]
+                .as_str()
+                .unwrap()
+                .contains("sha256")
+        );
+        let image_digest = state["assets"][0]["url"]
+            .as_str()
+            .unwrap()
+            .rsplit('/')
+            .next()
+            .unwrap();
+        assert!(
+            request
+                .preview_files
+                .files
+                .read()
+                .unwrap()
+                .get(image_digest)
+                .is_some()
+        );
+        std::fs::write(
+            &input,
+            "export default function Broken(){return <Scene><Unsupported/></Scene>;}",
+        )
+        .unwrap();
+        let error: serde_json::Value =
+            serde_json::from_str(&studio_native_state_json(&request, 8).unwrap()).unwrap();
+        assert_eq!(error["status"], "error");
+        assert!(!error["diagnostics"].as_array().unwrap().is_empty());
+        std::fs::write(&input, "export default function Broken(){return <Scene>").unwrap();
+        assert!(
+            studio_native_state_json(&request, 9)
+                .unwrap_err()
+                .to_string()
+                .contains("module graph")
+        );
+    }
+
+    #[test]
+    fn review_props_keep_typed_geometry_and_report_invalid_payloads() {
+        let compiled=valle_compiler::motion::compile_motion("export const controls={props:{n:{kind:'number',default:1},l:{kind:'length',default:'2px'},a:{kind:'angle',default:'20deg'},p:{kind:'point',default:point(1,2)},r:{kind:'rect',default:rect(0,0,2,3)},c:{kind:'color',default:'red'},b:{kind:'bool',default:true},s:{kind:'string',default:'s'},e:{kind:'select',default:'a',values:['a','b']}}};export default function Card(){return <Scene/>;}").unwrap_or_else(|d|panic!("{d:#?}"));
+        let bindings=serde_json::from_value(json!({"n":2,"l":"3px","a":"0.5turn","p":[3,4],"r":[1,2,3,4],"c":[255,0,128,64],"b":false,"s":"text","e":"b"})).unwrap();
+        let values = review_prop_overrides(&compiled.artifact, &bindings).unwrap();
+        assert_eq!(values.len(), 9);
+        assert!(matches!(values["p"], valle_motion::MotionValue::Point(_)));
+        for binding in [
+            json!({"unknown":1}),
+            json!({"l":"3%"}),
+            json!({"a":"3px"}),
+            json!({"p":[1]}),
+            json!({"r":[1,2,3,"bad"]}),
+            json!({"c":[255,0,0]}),
+            json!({"c":[256,0,0,255]}),
+        ] {
+            assert!(
+                review_prop_overrides(
+                    &compiled.artifact,
+                    &serde_json::from_value(binding).unwrap()
+                )
+                .is_err()
+            );
+        }
     }
 }

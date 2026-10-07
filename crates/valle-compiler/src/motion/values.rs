@@ -402,3 +402,65 @@ pub(super) fn expr_path_topology(expr: ExprId, exprs: &[Expr]) -> PathTopology {
         _ => PathTopology::Unknown,
     }
 }
+
+#[cfg(test)]
+mod contract_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn malformed_typed_geometry_and_paint_are_rejected_before_artifact_creation() {
+        for value in [
+            json!(null),
+            json!([]),
+            json!({"__valleType":"unknown"}),
+            json!({"__valleType":"pathLine","points":[true]}),
+            json!({"__valleType":"pathCubic","from":false}),
+            json!({"__valleType":"pathArc","center":1}),
+            json!({"__valleType":"pathArea","input":[false]}),
+            json!({"__valleType":"pathArea","input":true}),
+            json!({"__valleType":"pathSector","center":false}),
+            json!({"__valleType":"pathAreaBand","upper":true}),
+            json!({"__valleType":"pathOffset","input":true}),
+            json!({"__valleType":"pathResample","input":true}),
+            json!({"__valleType":"pathReverse","input":true}),
+            json!({"__valleType":"pathRoundCorners","input":true}),
+            json!({"__valleType":"pathZigzag","input":true}),
+            json!({"__valleType":"pathNoiseDisplace","input":true}),
+            json!({"__valleType":"pathTwist","input":true}),
+            json!({"__valleType":"pathBoolean","left":true}),
+        ] {
+            assert!(motion_value_from_json(&value).is_none(), "{value}");
+        }
+        for value in [
+            json!({"__valleType":"linearGradient","spread":"invalid"}),
+            json!({"__valleType":"radialGradient","spread":"repeat","center":true}),
+            json!({"__valleType":"conicGradient","spread":"reflect","center":{"__valleType":"point","x":1,"y":2},"startAngle":"bad"}),
+            json!({"__valleType":"other","spread":"pad"}),
+        ] {
+            assert!(static_paint_from_json(&value).is_none(), "{value}");
+        }
+        assert!(static_gradient_stops_from_json(&json!([])).is_none());
+        assert!(static_gradient_stop_from_json(&json!({"__valleType":"point"})).is_none());
+        for value in [
+            json!(true),
+            json!(1),
+            json!("literal"),
+            json!({"__valleType":"point","x":1,"y":2}),
+            json!({"__valleType":"rect","x":0,"y":0,"width":2,"height":3}),
+            json!({"__valleType":"pathData","d":"M0 0 L1 1"}),
+        ] {
+            assert!(!value_kind_name(&motion_value_from_json(&value).unwrap()).is_empty());
+        }
+        assert_eq!(expr_path_topology(ExprId(99), &[]), PathTopology::Unknown);
+        assert_eq!(
+            expr_path_topology(
+                ExprId(0),
+                &[Expr::Const {
+                    value: MotionValue::Number(1.0)
+                }]
+            ),
+            PathTopology::Unknown
+        );
+    }
+}

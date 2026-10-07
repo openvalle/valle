@@ -347,3 +347,49 @@ fn inverse3(value: [f64; 9]) -> Option<[f64; 9]> {
     }
     Some(cofactors.map(|value| value / determinant))
 }
+
+#[cfg(test)]
+mod contract_tests {
+    use super::super::surface::working_info;
+    use super::*;
+    use skia_safe::{AlphaType, ColorType, surfaces};
+    use valle_engine::resource::Extent2d;
+
+    fn pixels(surface: &mut Surface) -> Vec<u8> {
+        let info = ImageInfo::new((32, 32), ColorType::RGBA8888, AlphaType::Unpremul, None);
+        let mut bytes = vec![0; 32 * 32 * 4];
+        assert!(surface.read_pixels(&info, &mut bytes, 128, (0, 0)));
+        bytes
+    }
+
+    #[test]
+    fn color_backdrop_and_device_image_clipping_preserve_nonzero_origins() {
+        let info = working_info(Extent2d::new(32, 32).unwrap()).unwrap();
+        let mut source = surfaces::raster(&info, None, None).unwrap();
+        source.canvas().clear(Color4f::new(0., 0., 0., 0.));
+        let transform =
+            DeviceTransform::from_projective([16., 0., 8., 0., 16., 8., 0., 0., 1.]).unwrap();
+        let bounds = DeviceRect::new(8, 8, 16, 16);
+        draw_color_backdrop(&mut source, [0.2, 0.1, 0., 1.], transform, bounds).unwrap();
+        let data = pixels(&mut source);
+        assert_eq!(data[3], 0);
+        assert_eq!(data[(16 * 32 + 16) * 4 + 3], 255);
+        let image = source.image_snapshot();
+        let mut output = surfaces::raster(&info, None, None).unwrap();
+        clip_device_image_into(
+            &mut output,
+            &image,
+            transform,
+            Rect::new(0., 0., 0.5, 1.),
+            bounds,
+        )
+        .unwrap();
+        let clipped = pixels(&mut output);
+        assert_eq!(clipped[(12 * 32 + 12) * 4 + 3], 255);
+        assert_eq!(clipped[(12 * 32 + 20) * 4 + 3], 0);
+        draw_image(&mut output, &image, BlendMode::Src).unwrap();
+        assert_eq!(pixels(&mut output), data);
+        let shifted = translated_device_transform(transform, [8, 8]).unwrap();
+        assert_eq!(shifted.matrix(), [16., 0., 0., 0., 16., 0., 0., 0., 1.]);
+    }
+}

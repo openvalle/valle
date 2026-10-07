@@ -75,3 +75,44 @@ pub(crate) enum PreparedTransitionValidationError {
     #[error(transparent)]
     Params(valle_draw::transition::TransitionParamError),
 }
+
+#[cfg(test)]
+mod contract_tests {
+    use super::*;
+
+    #[test]
+    fn transition_wire_rejects_nonfinite_parameters_and_foreign_implementations() {
+        let builtin = PreparedTransitionKernel::from(TransitionKind::Fade);
+        builtin.validate_wire().unwrap();
+        assert_eq!(builtin.builtin(), TransitionKind::Fade);
+        assert_eq!(builtin.params(), TransitionKind::Fade.default_values());
+        assert!(matches!(
+            PreparedTransitionKernel::Builtin {
+                kind: TransitionKind::Fade,
+                params: TransitionValues([f32::NAN, 0.0, 0.0, 0.0])
+            }
+            .validate_wire(),
+            Err(PreparedTransitionValidationError::Params(_))
+        ));
+        let extension = PreparedTransitionKernel::ExtensionCrossFade {
+            implementation_sha256: engine_owned_kernel_implementation_sha256(
+                EXTENSION_CROSS_FADE_ABI,
+            )
+            .unwrap(),
+            past_frames: 1,
+            future_frames: 2,
+        };
+        extension.validate_wire().unwrap();
+        assert_eq!(extension.builtin(), TransitionKind::Fade);
+        assert_eq!(extension.params(), builtin.params());
+        assert_eq!(
+            PreparedTransitionKernel::ExtensionCrossFade {
+                implementation_sha256: [0; 32],
+                past_frames: 0,
+                future_frames: 0
+            }
+            .validate_wire(),
+            Err(PreparedTransitionValidationError::InvalidImplementation)
+        );
+    }
+}
