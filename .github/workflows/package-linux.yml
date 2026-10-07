@@ -21,7 +21,6 @@ jobs:
     env:
       CARGO_BUILD_JOBS: '2'
       CARGO_NET_RETRY: '3'
-      FORCE_SKIA_BUILD: '1'
       CC: clang-18
       CXX: clang++-18
     steps:

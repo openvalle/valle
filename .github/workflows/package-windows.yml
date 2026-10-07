@@ -21,7 +21,6 @@ jobs:
     env:
       CARGO_BUILD_JOBS: '2'
       CARGO_NET_RETRY: '3'
-      FORCE_SKIA_BUILD: '1'
     steps:
       - name: Set cache and log directories
         id: environment
