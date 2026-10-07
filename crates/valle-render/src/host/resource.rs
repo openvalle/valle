@@ -79,7 +79,7 @@ impl NativeResourceCatalog {
 
 const DEFAULT_RESOURCE_CACHE_ENTRIES: usize = 256;
 const DEFAULT_RESOURCE_CACHE_BYTES: u64 = 512 * 1024 * 1024;
-/// Time-varying objects (a video or Lottie frame at one source time, a Scene3D frame raster) are
+/// Time-varying objects (a video frame at one source time, a Scene3D frame raster) are
 /// seldom requested twice: parallel workers take interleaved frames, so reuse only happens when a
 /// held or slowed source repeats within one worker. Keeping only the most recent few stops them
 /// from filling the byte budget with full-frame working-space copies (~16.6 MB each at 1080p).
@@ -280,8 +280,6 @@ pub struct NativeResourceProvider {
     environments: BTreeMap<ContentDigest, Arc<valle_engine::motion::scene3d::EnvironmentAsset>>,
     textures: BTreeMap<(ContentDigest, TextureRole), Arc<MaterialImage>>,
     scenes: BTreeMap<ScenePrepareCacheKey, Arc<PreparedScene>>,
-    #[cfg(feature = "lottie")]
-    lottie: BTreeMap<ContentDigest, super::lottie::LottieDocument>,
 }
 
 impl NativeResourceProvider {
@@ -309,8 +307,6 @@ impl NativeResourceProvider {
             environments: BTreeMap::new(),
             textures: BTreeMap::new(),
             scenes: BTreeMap::new(),
-            #[cfg(feature = "lottie")]
-            lottie: BTreeMap::new(),
         }
     }
 
@@ -364,9 +360,6 @@ impl NativeResourceProvider {
                 )?;
                 Ok(object)
             }
-            ResourceSample::SourceTime(time) if layout == ExternalPixelLayout::Rgba8 => {
-                self.fulfill_lottie(request, extent, source, time.as_f64())
-            }
             ResourceSample::SourceTime(time) => {
                 let path = source_path(&source)?;
                 if !self.video.contains_key(&request.key().content) {
@@ -419,55 +412,6 @@ impl NativeResourceProvider {
                 )?)
             }
         }
-    }
-
-    #[cfg(feature = "lottie")]
-    fn fulfill_lottie(
-        &mut self,
-        request: &ResourceRequest,
-        extent: Extent2d,
-        source: NativeResourceSource,
-        time_s: f64,
-    ) -> Result<SkiaExternalObject, NativeResourceError> {
-        let path = source_path(&source)?;
-        if !self.lottie.contains_key(&request.key().content) {
-            let document = super::lottie::LottieDocument::load(&path).map_err(|error| {
-                NativeResourceError::Lottie {
-                    digest: request.key().content.to_string(),
-                    reason: error.to_string(),
-                }
-            })?;
-            self.lottie.insert(request.key().content.clone(), document);
-        }
-        let frame = self
-            .lottie
-            .get(&request.key().content)
-            .expect("Lottie document was inserted")
-            .render_at(time_s, extent.width(), extent.height())
-            .map_err(|error| NativeResourceError::Lottie {
-                digest: request.key().content.to_string(),
-                reason: error.to_string(),
-            })?;
-        Ok(SkiaExternalObject::visual_rgba8_as(
-            request.key().clone(),
-            ExternalPixelLayout::Rgba8,
-            extent,
-            &frame.data,
-        )?)
-    }
-
-    #[cfg(not(feature = "lottie"))]
-    fn fulfill_lottie(
-        &mut self,
-        request: &ResourceRequest,
-        _extent: Extent2d,
-        _source: NativeResourceSource,
-        _time_s: f64,
-    ) -> Result<SkiaExternalObject, NativeResourceError> {
-        Err(NativeResourceError::Lottie {
-            digest: request.key().content.to_string(),
-            reason: "this build has no Skottie executor capability".into(),
-        })
     }
 
     fn fulfill_scene3d(
@@ -904,8 +848,6 @@ pub enum NativeResourceError {
     },
     #[error("video resource {digest} failed: {reason}")]
     Video { digest: String, reason: String },
-    #[error("Lottie resource {digest} failed: {reason}")]
-    Lottie { digest: String, reason: String },
     #[error("font {digest}:{face_index} has no render-owned bytes")]
     MissingFont { digest: String, face_index: u32 },
     #[error("runtime shader content {content} / ABI {abi} is not in the admitted render")]

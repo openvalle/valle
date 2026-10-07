@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { STUDIO_HOST_PROTOCOL_VERSION } from "valle-engine/protocol";
 import type { Timeline } from "valle-engine";
 import type { TimelineDocument } from "valle-engine/internal";
 
@@ -23,8 +24,8 @@ const runtime = {
   assetUrls: {
     engineGlue: "/runtime/engine/valle_engine.js",
     engineWasm: "/runtime/engine/valle_engine_bg.wasm",
-    canvasKitFullGlue: "/runtime/canvaskit/canvaskit.js",
-    canvasKitFullWasm: "/runtime/canvaskit/canvaskit.wasm",
+    canvasKitGlue: "/runtime/canvaskit/canvaskit.js",
+    canvasKitWasm: "/runtime/canvaskit/canvaskit.wasm",
     productFrameWorker: "/runtime/workers/product-frame.js",
   },
 };
@@ -137,7 +138,7 @@ function fixedPackage() {
 describe("Studio host adapters", () => {
   test("source file reads and writes carry the bound Studio token", async () => {
     const boot = assertStudioBoot({
-      protocolVersion: 1,
+      protocolVersion: STUDIO_HOST_PROTOCOL_VERSION,
       session: { kind: "project", projectId: "p1", revision: 1, token: "secret" },
       capabilities, runtime,
     });
@@ -157,7 +158,7 @@ describe("Studio host adapters", () => {
 
   test("file sessions load their snapshot and authenticate media facts and explicit saves", async () => {
     const boot = assertStudioBoot({
-      protocolVersion: 1, session: { kind: "timeline-file", input: "/cuts/edit.json", token: "file-token" },
+      protocolVersion: STUDIO_HOST_PROTOCOL_VERSION, session: { kind: "timeline-file", input: "/cuts/edit.json", token: "file-token" },
       capabilities: { ...capabilities, saveTimeline: true }, runtime,
     });
     const calls: Array<{ url: string; init?: RequestInit }> = [];
@@ -185,7 +186,7 @@ describe("Studio host adapters", () => {
       [{ kind: "motion-file", input: "card.motion.tsx", generation: 2, token: "motion-token" }, MotionFileHost],
     ] as const;
     for (const [session, Host] of fixtures) {
-      const fetcher = async () => json({ protocolVersion: 1, session, capabilities, runtime });
+      const fetcher = async () => json({ protocolVersion: STUDIO_HOST_PROTOCOL_VERSION, session, capabilities, runtime });
       const host = await loadStudioHost("", fetcher);
       expect(host).toBeInstanceOf(Host);
       expect(host.boot.session.kind).toBe(session.kind);
@@ -194,7 +195,7 @@ describe("Studio host adapters", () => {
 
   test("rejects malformed Studio event JSON", () => {
     const boot = assertStudioBoot({
-      protocolVersion: 1,
+      protocolVersion: STUDIO_HOST_PROTOCOL_VERSION,
       session: { kind: "timeline-file", input: "cut.valle.json", token: "file-token" },
       capabilities,
       runtime,
@@ -227,7 +228,7 @@ describe("Studio host adapters", () => {
   test("project host submits the generated full-document edit contract", async () => {
     const calls: Array<{ url: string; init?: RequestInit }> = [];
     const boot = assertStudioBoot({
-      protocolVersion: 1,
+      protocolVersion: STUDIO_HOST_PROTOCOL_VERSION,
       session: { kind: "project", projectId: "p 1", revision: 7, token: "secret" },
       capabilities: { ...capabilities, saveTimeline: true, editProject: true },
       runtime,
@@ -265,7 +266,7 @@ describe("Studio host adapters", () => {
   test("project host requests frozen media facts without persisting", async () => {
     const calls: Array<{ url: string; init?: RequestInit }> = [];
     const boot = assertStudioBoot({
-      protocolVersion: 1,
+      protocolVersion: STUDIO_HOST_PROTOCOL_VERSION,
       session: { kind: "project", projectId: "p1", revision: 3, token: "secret" },
       capabilities: { ...capabilities, saveTimeline: true, editProject: true },
       runtime,
@@ -292,7 +293,7 @@ describe("Studio host adapters", () => {
 
   test("Timeline host fails closed on the unsupported versioned track-list shape", async () => {
     const boot = assertStudioBoot({
-      protocolVersion: 1,
+      protocolVersion: STUDIO_HOST_PROTOCOL_VERSION,
       session: { kind: "timeline-file", input: "timeline.json", token: "file-token" },
       capabilities,
       runtime,
@@ -316,7 +317,7 @@ describe("Studio host adapters", () => {
 
   test("Timeline host rejects partial fixed render packages", async () => {
     const boot = assertStudioBoot({
-      protocolVersion: 1,
+      protocolVersion: STUDIO_HOST_PROTOCOL_VERSION,
       session: { kind: "timeline-file", input: "timeline.json", token: "file-token" },
       capabilities,
       runtime,
@@ -358,7 +359,7 @@ describe("Studio host adapters", () => {
 
   test("project host loads and saves an authoritative snapshot with preview explicitly unavailable", async () => {
     const boot = assertStudioBoot({
-      protocolVersion: 1,
+      protocolVersion: STUDIO_HOST_PROTOCOL_VERSION,
       session: { kind: "project", projectId: "p1", revision: 7, token: "secret" },
       capabilities: { ...capabilities, saveTimeline: true, editProject: true },
       runtime,
@@ -412,10 +413,8 @@ describe("Studio host adapters", () => {
             wasm: runtime.assetUrls.engineWasm,
           },
           canvasKit: {
-            full: {
-              glue: runtime.assetUrls.canvasKitFullGlue,
-              wasm: runtime.assetUrls.canvasKitFullWasm,
-            },
+            glue: runtime.assetUrls.canvasKitGlue,
+            wasm: runtime.assetUrls.canvasKitWasm,
           },
           workers: { productFrame: runtime.assetUrls.productFrameWorker },
         });
@@ -460,7 +459,7 @@ describe("Studio host adapters", () => {
 
   test("project host derives a selected clip MotionContext from admitted structure and Timeline", async () => {
     const boot = assertStudioBoot({
-      protocolVersion: 1,
+      protocolVersion: STUDIO_HOST_PROTOCOL_VERSION,
       session: { kind: "project", projectId: "p1", revision: 7, token: "secret" },
       capabilities: { ...capabilities, editMotionProps: true },
       runtime: { ...runtime, assetBaseUrl: "/passets/p1/" },
@@ -612,7 +611,7 @@ describe("Studio host adapters", () => {
 
   test("project host fails closed when the selected clip lacks source-map format 1", async () => {
     const boot = assertStudioBoot({
-      protocolVersion: 1,
+      protocolVersion: STUDIO_HOST_PROTOCOL_VERSION,
       session: { kind: "project", projectId: "p1", revision: 7, token: "secret" },
       capabilities,
       runtime,
@@ -639,9 +638,9 @@ describe("Studio host adapters", () => {
   });
 
   test("fails closed on a missing or unknown session kind", () => {
-    expect(() => assertStudioBoot({ protocolVersion: 1 })).toThrow("contain session");
+    expect(() => assertStudioBoot({ protocolVersion: STUDIO_HOST_PROTOCOL_VERSION })).toThrow("contain session");
     expect(() => assertStudioBoot({
-      protocolVersion: 1,
+      protocolVersion: STUDIO_HOST_PROTOCOL_VERSION,
       session: { kind: "guessed-from-fields" },
       capabilities,
       runtime,
@@ -650,7 +649,7 @@ describe("Studio host adapters", () => {
 
   test("project boot accepts only positive JavaScript-safe numeric revisions", () => {
     const projectBoot = (revision: unknown) => ({
-      protocolVersion: 1,
+      protocolVersion: STUDIO_HOST_PROTOCOL_VERSION,
       session: { kind: "project", projectId: "p1", revision, token: "secret" },
       capabilities,
       runtime,
@@ -667,22 +666,22 @@ describe("Studio host adapters", () => {
   test("MotionContext accepts explicit success/error states and rejects implicit unsupported state", () => {
     expect(assertMotionContext({
       status: "error",
-      protocolVersion: 1,
+      protocolVersion: STUDIO_HOST_PROTOCOL_VERSION,
       generation: 3,
       input: "card.motion.tsx",
       diagnostics: [],
     }).status).toBe("error");
     expect(() => assertMotionContext({
       status: "error",
-      protocolVersion: 1,
+      protocolVersion: STUDIO_HOST_PROTOCOL_VERSION,
       generation: 3,
       input: "card.motion.tsx",
       diagnostics: [{ class: "resource", code: "failed", message: "failed", span: null }],
-    })).toThrow("protocolVersion 1");
+    })).toThrow("protocolVersion " + STUDIO_HOST_PROTOCOL_VERSION);
     const fixed = fixedPackage().render;
     const success = {
       status: "ok",
-      protocolVersion: 1,
+      protocolVersion: STUDIO_HOST_PROTOCOL_VERSION,
       generation: 3,
       input: "card.motion.tsx",
       artifactDigest: `sha256:${"a".repeat(64)}`,
@@ -766,6 +765,6 @@ describe("Studio host adapters", () => {
     malformedModuleDigest.sourceMap.modules[0].sourceDigest = "sha256:source";
     expect(() => assertMotionContext(malformedModuleDigest)).toThrow("successful MotionContext");
     expect(() => assertMotionContext({ ...success, timing: {} })).toThrow("successful MotionContext");
-    expect(() => assertMotionContext({ status: "ok", generation: 3 })).toThrow("protocolVersion 1");
+    expect(() => assertMotionContext({ status: "ok", generation: 3 })).toThrow("protocolVersion " + STUDIO_HOST_PROTOCOL_VERSION);
   });
 });

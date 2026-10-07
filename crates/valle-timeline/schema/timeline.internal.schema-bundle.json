@@ -212,45 +212,6 @@
           ],
           "type": "object"
         },
-        "LottieArtifactAbiWire": {
-          "enum": [
-            "valle.lottie/artifact@1"
-          ],
-          "type": "string"
-        },
-        "LottieResourceDescriptorWire": {
-          "additionalProperties": false,
-          "description": "Frozen Lottie source clock, extent, and boundary-sample semantics.",
-          "properties": {
-            "boundarySampling": {
-              "$ref": "#/$defs/ContinuousBoundarySamplingWire"
-            },
-            "duration": {
-              "$ref": "#/$defs/RationalTime"
-            },
-            "height": {
-              "format": "uint32",
-              "minimum": 0,
-              "type": "integer"
-            },
-            "timeBase": {
-              "$ref": "#/$defs/ExactRational"
-            },
-            "width": {
-              "format": "uint32",
-              "minimum": 0,
-              "type": "integer"
-            }
-          },
-          "required": [
-            "duration",
-            "timeBase",
-            "width",
-            "height",
-            "boundarySampling"
-          ],
-          "type": "object"
-        },
         "MediaColorDescriptorWire": {
           "additionalProperties": false,
           "properties": {
@@ -410,31 +371,6 @@
               "required": [
                 "kind",
                 "digest",
-                "descriptor"
-              ],
-              "type": "object"
-            },
-            {
-              "additionalProperties": false,
-              "properties": {
-                "abi": {
-                  "$ref": "#/$defs/LottieArtifactAbiWire"
-                },
-                "descriptor": {
-                  "$ref": "#/$defs/LottieResourceDescriptorWire"
-                },
-                "digest": {
-                  "$ref": "#/$defs/ContentDigest"
-                },
-                "kind": {
-                  "const": "lottie",
-                  "type": "string"
-                }
-              },
-              "required": [
-                "kind",
-                "digest",
-                "abi",
                 "descriptor"
               ],
               "type": "object"
@@ -1568,18 +1504,6 @@
           ],
           "type": "object"
         },
-        "LottieSamplingWire": {
-          "additionalProperties": false,
-          "properties": {
-            "fit": {
-              "$ref": "#/$defs/RasterFitWire"
-            }
-          },
-          "required": [
-            "fit"
-          ],
-          "type": "object"
-        },
         "MediaEndBehaviorWire": {
           "enum": [
             "error",
@@ -2444,39 +2368,6 @@
               "required": [
                 "type",
                 "resource",
-                "sampling"
-              ],
-              "type": "object"
-            },
-            {
-              "additionalProperties": false,
-              "properties": {
-                "endBehavior": {
-                  "$ref": "#/$defs/MediaEndBehaviorWire"
-                },
-                "rate": {
-                  "$ref": "#/$defs/ExactRational"
-                },
-                "resource": {
-                  "type": "string"
-                },
-                "sampling": {
-                  "$ref": "#/$defs/LottieSamplingWire"
-                },
-                "sourceStart": {
-                  "$ref": "#/$defs/ExactRational"
-                },
-                "type": {
-                  "const": "lottie",
-                  "type": "string"
-                }
-              },
-              "required": [
-                "type",
-                "resource",
-                "sourceStart",
-                "rate",
-                "endBehavior",
                 "sampling"
               ],
               "type": "object"

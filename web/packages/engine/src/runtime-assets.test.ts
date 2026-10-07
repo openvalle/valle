@@ -5,9 +5,7 @@ import { resolveEngineRuntimeAssets, resolvePlayerRuntimeAssets } from "valle-en
 
 const runtimeAssets = {
   engine: { glue: "engine/engine.js", wasm: "engine/engine.wasm" },
-  canvasKit: {
-    full: { glue: "canvaskit/full.js", wasm: "canvaskit/full.wasm" },
-  },
+  canvasKit: { glue: "canvaskit/canvaskit.js", wasm: "canvaskit/canvaskit.wasm" },
   workers: { productFrame: "workers/product-frame.js" },
 };
 
@@ -26,10 +24,8 @@ describe("player runtime asset map", () => {
         wasm: "https://example.test/runtime/engine/engine.wasm",
       },
       canvasKit: {
-        full: {
-          glue: "https://example.test/runtime/canvaskit/full.js",
-          wasm: "https://example.test/runtime/canvaskit/full.wasm",
-        },
+        glue: "https://example.test/runtime/canvaskit/canvaskit.js",
+        wasm: "https://example.test/runtime/canvaskit/canvaskit.wasm",
       },
 
       workers: {
@@ -42,7 +38,7 @@ describe("player runtime asset map", () => {
     const expectedBase = new URL("/runtime/", import.meta.url);
     const resolved = resolvePlayerRuntimeAssets(runtimeAssets, "/runtime/");
     expect(resolved.engine.glue).toBe(new URL("engine/engine.js", expectedBase).href);
-    expect(resolved.canvasKit.full.wasm).toBe(new URL("canvaskit/full.wasm", expectedBase).href);
+    expect(resolved.canvasKit.wasm).toBe(new URL("canvaskit/canvaskit.wasm", expectedBase).href);
     expect(resolved.workers.productFrame).toBe(new URL("workers/product-frame.js", expectedBase).href);
   });
 

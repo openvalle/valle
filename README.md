@@ -29,9 +29,9 @@ cd valle
 cargo xtask build
 ```
 
-The first build needs network access and can take a while. Cargo builds Skia from source for Skottie support. The published `valle-ffmpeg` and `valle-ffmpeg-sys` crates include pinned FFmpeg 7.0/8.0/9.0 public headers; building needs libclang, but no FFmpeg installation or extra repository checkout.
+The first build needs network access and can take a while. Cargo downloads matching prebuilt Skia binaries when available and otherwise builds Skia from source. The published `valle-ffmpeg` and `valle-ffmpeg-sys` crates include pinned FFmpeg 7.0/8.0/9.0 public headers; building needs libclang, but no FFmpeg installation or extra repository checkout.
 
-`cargo xtask build` produces **`dist/bin/valle`** (`dist/bin/valle.exe` on Windows), an executable with the Studio Web runtime, CanvasKit full, fonts and dependency notices embedded. Use `cargo xtask build --release` for an optimized build. For CLI-only development, `cargo build -p valle-cli` skips these embedded resources; pass `--web-assets-dir /absolute/path/to/web/dist` when starting Studio.
+`cargo xtask build` produces **`dist/bin/valle`** (`dist/bin/valle.exe` on Windows), an executable with the Studio Web runtime, CanvasKit, fonts and dependency notices embedded. Use `cargo xtask build --release` for an optimized build. For CLI-only development, `cargo build -p valle-cli` skips these embedded resources; pass `--web-assets-dir /absolute/path/to/web/dist` when starting Studio.
 
 FFmpeg is optional at runtime and is not bundled. Media operations, including checking, previewing or rendering a Timeline that contains audio or video, need FFmpeg 7.x, 8.x or 9.x **shared libraries**. Motion checks, pure Motion PNG rendering and Studio startup work without them.
 

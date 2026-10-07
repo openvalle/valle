@@ -209,7 +209,7 @@ fn assets_cli_exposes_read_write_analyze_and_maintenance_contracts() {
 }
 
 #[test]
-fn assets_native_probes_admit_fonts_lottie_and_scene3d_and_reject_corrupt_media() {
+fn assets_native_probes_admit_fonts_and_scene3d_and_reject_corrupt_media() {
     let root = tempfile::tempdir().unwrap();
     let home = root.path().join("home");
     let fixtures = [
@@ -222,11 +222,6 @@ fn assets_native_probes_admit_fonts_lottie_and_scene3d_and_reject_corrupt_media(
             "scene.glb",
             "model3d",
             &include_bytes!("../../valle-motion/tests/fixtures/scene3d/triangle.glb")[..],
-        ),
-        (
-            "animation.json",
-            "lottie",
-            &br#"{"fr":30,"ip":0,"op":60,"w":32,"h":32,"layers":[]}"#[..],
         ),
     ];
     for (name, kind, bytes) in fixtures {

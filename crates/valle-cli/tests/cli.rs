@@ -1240,61 +1240,6 @@ export default function Title(ctx) { return <Scene><Text style={{ fontSize: 24, 
 }
 
 #[test]
-fn timeline_renders_embedded_lottie_and_reports_frame_progress() {
-    let dir = tempfile::tempdir().unwrap();
-    std::fs::write(
-        dir.path().join("shape.json"),
-        serde_json::json!({
-            "v":"5.7.4", "fr":10,"ip":0,"op":10,"w":160,"h":90,"layers":[
-                {"ty":1,"ind":1,"ip":0,"op":10,"st":0,"sw":160,"sh":90,"sc":"#ff0000",
-                 "ks":{"o":{"a":0,"k":100},"r":{"a":0,"k":0},"p":{"a":0,"k":[0,0,0]},
-                       "a":{"a":0,"k":[0,0,0]},"s":{"a":0,"k":[100,100,100]}}}
-            ]
-        })
-        .to_string(),
-    )
-    .unwrap();
-    let input = dir.path().join("timeline.json");
-    std::fs::write(
-        &input,
-        serde_json::json!({
-            "canvas":{"width":160,"height":90,"fps":10},"resources":{"shape":"shape.json"},
-            "tracks":{"visual":[{"clips":[{"kind":"lottie","src":"shape","start":0,"duration":1}]}]}
-        })
-        .to_string(),
-    )
-    .unwrap();
-    let frame = dir.path().join("frame.png");
-    let out = valle()
-        .args(["--events", "timeline", "render"])
-        .arg(input)
-        .args(["--frame", "0", "-o"])
-        .arg(&frame)
-        .output()
-        .unwrap();
-    assert!(
-        out.status.success(),
-        "{} {}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr)
-    );
-    let events: Vec<Value> = String::from_utf8(out.stdout)
-        .unwrap()
-        .lines()
-        .map(|l| serde_json::from_str(l).unwrap())
-        .collect();
-    assert!(events.iter().any(|v| v["type"] == "render.progress"));
-    assert_eq!(events.last().unwrap()["type"], "report");
-    let pixels = valle_media::codec::read_rgba_png(&frame).unwrap();
-    assert!(
-        pixels
-            .data
-            .chunks_exact(4)
-            .any(|p| p[0] > 200 && p[1] < 30 && p[2] < 30)
-    );
-}
-
-#[test]
 fn motion_render_rejects_invalid_delivery_options() {
     for extra in [
         vec!["--workers", "0"],

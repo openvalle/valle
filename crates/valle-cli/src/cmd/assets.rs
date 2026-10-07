@@ -1,5 +1,5 @@
 //! CLI adapters for asset library commands. Parse arguments into `Verb`, execute the asset kernel,
-//! and render reports. Native media, font, and Lottie probes are assembled here.
+//! and render reports. Native media and font probes are assembled here.
 
 use std::path::Path;
 use std::process::ExitCode;
@@ -514,7 +514,6 @@ impl Prober for CliProber {
             AssetKind::Video | AssetKind::Audio | AssetKind::Image => probe_media(path, kind),
             AssetKind::Font => probe_font(path),
             AssetKind::Model3d => probe_model3d(path),
-            AssetKind::Lottie => Ok(probe_lottie(path)),
             AssetKind::Component | AssetKind::Other => Ok(ProbeOutcome::default()),
         }
     }
@@ -601,30 +600,4 @@ fn probe_font(path: &Path) -> valle_project::assets::Result<ProbeOutcome> {
         probe: Some(p),
         warnings: vec![],
     })
-}
-
-/// Read Lottie timing and dimensions from JSON on a best-effort basis.
-fn probe_lottie(path: &Path) -> ProbeOutcome {
-    let Ok(bytes) = std::fs::read(path) else {
-        return ProbeOutcome::default();
-    };
-    let Ok(v) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
-        return ProbeOutcome::default();
-    };
-    let mut p = Probe::default();
-    let fr = v.get("fr").and_then(|x| x.as_f64());
-    let ip = v.get("ip").and_then(|x| x.as_f64()).unwrap_or(0.0);
-    let op = v.get("op").and_then(|x| x.as_f64());
-    if let (Some(fr), Some(op)) = (fr, op) {
-        if fr > 0.0 {
-            p.fps = Some(fr);
-            p.duration_ms = Some(((op - ip) / fr * 1000.0) as i64);
-        }
-    }
-    p.width = v.get("w").and_then(|x| x.as_u64()).map(|x| x as u32);
-    p.height = v.get("h").and_then(|x| x.as_u64()).map(|x| x as u32);
-    ProbeOutcome {
-        probe: Some(p),
-        warnings: vec![],
-    }
 }

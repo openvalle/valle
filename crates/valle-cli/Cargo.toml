@@ -30,7 +30,7 @@ valle-motion.workspace = true
 valle-compiler = { workspace = true, features = ["motion"] }
 valle-engine.workspace = true
 valle-media = { workspace = true, features = ["media-tools", "beat"] }
-valle-render = { workspace = true, features = ["native", "lottie"] }
+valle-render = { workspace = true, features = ["native"] }
 valle-project = { workspace = true, features = ["native"] }
 ttf-parser.workspace = true
 png.workspace = true

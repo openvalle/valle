@@ -45,16 +45,28 @@ pub fn generate(
     let skia_dir = Path::new(skia["manifest_path"].as_str().unwrap())
         .parent()
         .unwrap();
-    if !skia_dir.join("skia/LICENSE").is_file() {
+    let mut skia_notice = skia_dir.join("skia/LICENSE");
+    if !skia_notice.is_file() {
         let mut command = Command::new("cargo");
         command
-            .args(["check", "--locked", "-p", "valle-cli"])
+            .args([
+                "check",
+                "--locked",
+                "-p",
+                "valle-cli",
+                "--message-format=json-render-diagnostics",
+            ])
             .envs(environment)
             .current_dir(root);
         if release {
             command.arg("--release");
         }
-        super::run(&mut command)?;
+        let messages = super::package::capture(&mut command)?;
+        skia_notice = skia_notice_from_build(
+            &messages,
+            skia["id"].as_str().context("Skia package ID missing")?,
+            skia_dir,
+        )?;
     }
     let cli = packages
         .iter()
@@ -148,12 +160,9 @@ pub fn generate(
             text.len() > before,
             "{name} {version} has no packaged license; record its upstream notice in xtask/license-supplements.json"
         );
-        // Skia is downloaded by skia-bindings after Cargo extraction, so it has separate sources.
+        // Prebuilt Skia supplies its notice beside the binaries without downloading the sources.
         if name == "skia-bindings" {
-            ensure!(
-                dir.join("skia/LICENSE").is_file(),
-                "Skia notices missing; build Skia first"
-            );
+            append(&mut text, "Skia/LICENSE", &skia_notice, &mut seen)?;
             let revision = p["metadata"]["skia"]
                 .as_str()
                 .context("Skia revision missing")?;
@@ -211,6 +220,27 @@ process.stdout.write(JSON.stringify(result.sort((a,b)=>(a.name+a.version).locale
         fs::write(output, text)?;
     }
     Ok(())
+}
+
+fn skia_notice_from_build(messages: &str, package_id: &str, source: &Path) -> Result<PathBuf> {
+    for line in messages.lines().filter(|line| !line.trim().is_empty()) {
+        let message: Value = serde_json::from_str(line).context("invalid Cargo build message")?;
+        if message["reason"] == "build-script-executed" && message["package_id"] == package_id {
+            let output = message["out_dir"]
+                .as_str()
+                .context("Skia build output directory missing")?;
+            let notice = Path::new(output).join("skia/LICENSE_SKIA");
+            if notice.is_file() {
+                return Ok(notice);
+            }
+        }
+    }
+    let notice = source.join("skia/LICENSE");
+    ensure!(
+        notice.is_file(),
+        "Skia notices missing from source and compiled binaries"
+    );
+    Ok(notice)
 }
 
 fn supplement(text: &mut String, entries: &[Value], name: &str, version: &str) -> Result<()> {
@@ -306,6 +336,42 @@ fn append(text: &mut String, label: &str, path: &Path, seen: &mut BTreeSet<PathB
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn skia_notices_follow_the_current_cargo_build_without_source_files() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("registry/skia-bindings");
+        let output = temp.path().join("build/skia-bindings/out");
+        fs::create_dir_all(output.join("skia")).unwrap();
+        let notice = output.join("skia/LICENSE_SKIA");
+        fs::write(&notice, "Skia license from the prebuilt archive").unwrap();
+        let message = serde_json::json!({
+            "reason": "build-script-executed",
+            "package_id": "skia-bindings@0.153.3",
+            "out_dir": output,
+        })
+        .to_string();
+        assert_eq!(
+            skia_notice_from_build(&message, "skia-bindings@0.153.3", &source).unwrap(),
+            notice
+        );
+        assert!(skia_notice_from_build(&message, "another-package", &source).is_err());
+        assert!(skia_notice_from_build("", "skia-bindings@0.153.3", &source).is_err());
+        assert!(!source.exists());
+    }
+
+    #[test]
+    fn skia_source_build_notices_are_used_without_an_archive_notice() {
+        let temp = tempfile::tempdir().unwrap();
+        let notice = temp.path().join("skia/LICENSE");
+        fs::create_dir_all(notice.parent().unwrap()).unwrap();
+        fs::write(&notice, "Skia source license").unwrap();
+        assert_eq!(
+            skia_notice_from_build("", "skia-bindings@0.153.3", temp.path()).unwrap(),
+            notice
+        );
+    }
+
     #[test]
     fn notice_detection_excludes_source_filenames() {
         for file in ["LICENSE", "LICENSE-MIT", "NOTICE.txt", "OFL-notosans.txt"] {

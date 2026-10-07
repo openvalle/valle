@@ -1302,62 +1302,6 @@
             },
             {
               "properties": {
-                "end": {
-                  "anyOf": [
-                    {
-                      "$ref": "#/$defs/MediaEndBehaviorWire"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "fit": {
-                  "anyOf": [
-                    {
-                      "$ref": "#/$defs/RasterFitWire"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "kind": {
-                  "const": "lottie",
-                  "type": "string"
-                },
-                "rate": {
-                  "anyOf": [
-                    {
-                      "$ref": "#/$defs/TimelineTimeWire"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "src": {
-                  "type": "string"
-                },
-                "trimStart": {
-                  "anyOf": [
-                    {
-                      "$ref": "#/$defs/TimelineTimeWire"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                }
-              },
-              "required": [
-                "kind",
-                "src"
-              ],
-              "type": "object"
-            },
-            {
-              "properties": {
                 "component": {
                   "type": "string"
                 },
@@ -3024,62 +2968,6 @@
                 },
                 "src": {
                   "type": "string"
-                }
-              },
-              "required": [
-                "kind",
-                "src"
-              ],
-              "type": "object"
-            },
-            {
-              "properties": {
-                "end": {
-                  "anyOf": [
-                    {
-                      "$ref": "#/$defs/MediaEndBehaviorWire"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "fit": {
-                  "anyOf": [
-                    {
-                      "$ref": "#/$defs/RasterFitWire"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "kind": {
-                  "const": "lottie",
-                  "type": "string"
-                },
-                "rate": {
-                  "anyOf": [
-                    {
-                      "$ref": "#/$defs/TimelineTimeWire"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "src": {
-                  "type": "string"
-                },
-                "trimStart": {
-                  "anyOf": [
-                    {
-                      "$ref": "#/$defs/TimelineTimeWire"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
                 }
               },
               "required": [

@@ -121,8 +121,8 @@ fn project_boot(project: &ProjectStudioCtx, config_json: &str) -> Result<String>
     for (name, pointer) in [
         ("engineGlue", "/engine/glue"),
         ("engineWasm", "/engine/wasm"),
-        ("canvasKitFullGlue", "/canvasKit/full/glue"),
-        ("canvasKitFullWasm", "/canvasKit/full/wasm"),
+        ("canvasKitGlue", "/canvasKit/glue"),
+        ("canvasKitWasm", "/canvasKit/wasm"),
         ("productFrameWorker", "/workers/productFrame"),
         ("studioCompileWorker", "/workers/studioCompile"),
     ] {
@@ -202,8 +202,8 @@ fn studio_boot_from_config(config_json: &str, motion_token: Option<&str>) -> Res
     for (name, pointer) in [
         ("engineGlue", "/engine/glue"),
         ("engineWasm", "/engine/wasm"),
-        ("canvasKitFullGlue", "/canvasKit/full/glue"),
-        ("canvasKitFullWasm", "/canvasKit/full/wasm"),
+        ("canvasKitGlue", "/canvasKit/glue"),
+        ("canvasKitWasm", "/canvasKit/wasm"),
         ("productFrameWorker", "/workers/productFrame"),
         ("studioCompileWorker", "/workers/studioCompile"),
     ] {

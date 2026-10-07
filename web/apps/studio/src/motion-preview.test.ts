@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { STUDIO_HOST_PROTOCOL_VERSION } from "valle-engine/protocol";
 
 import { buildMotionPreview, type GoodMotionContext } from "./motion-preview.ts";
 
@@ -8,7 +9,7 @@ const fixedTimeline = {
 
 const context = {
   status: "ok",
-  protocolVersion: 1,
+  protocolVersion: STUDIO_HOST_PROTOCOL_VERSION,
   generation: 2,
   input: "card.motion.tsx",
   artifactDigest: `sha256:${"a".repeat(64)}`,

@@ -580,7 +580,7 @@ export class StudioProjectControls extends LitElement {
 
 export function kindClassOf(kind: string): string {
   const value = kind.toLowerCase();
-  if (value.includes("motion") || value.includes("lottie")) return "kind-motion";
+  if (value.includes("motion")) return "kind-motion";
   if (value.includes("audio")) return "kind-audio";
   if (value.includes("caption") || value.includes("text")) return "kind-caption";
   if (value.includes("effect") || value.includes("adjustment")) return "kind-effect";
@@ -589,7 +589,7 @@ export function kindClassOf(kind: string): string {
 
 export function kindIconOf(kind: string): string {
   const value = kind.toLowerCase();
-  if (value.includes("motion") || value.includes("lottie")) return "motion";
+  if (value.includes("motion")) return "motion";
   if (value.includes("audio")) return "music";
   if (value.includes("caption") || value.includes("text")) return "text";
   if (value.includes("effect") || value.includes("adjustment")) return "effect";

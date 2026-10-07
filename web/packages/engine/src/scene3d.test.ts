@@ -41,10 +41,10 @@ function rgba16fToRgba8(bytes: Uint8Array): Uint8Array {
 }
 
 test("project environments and models survive frozen-package reopen and arbitrary frame access", async () => {
-  const { default: CanvasKitInit } = await import("canvaskit-wasm/full") as unknown as {
+  const { default: CanvasKitInit } = await import("canvaskit-wasm") as unknown as {
     default: (options: { locateFile(file: string): string }) => Promise<CanvasKit>;
   };
-  const ck = await CanvasKitInit({ locateFile: () => Bun.resolveSync("canvaskit-wasm/bin/full/canvaskit.wasm", import.meta.dir) });
+  const ck = await CanvasKitInit({ locateFile: () => Bun.resolveSync("canvaskit-wasm/bin/canvaskit.wasm", import.meta.dir) });
   initSync({ module: await readFile(new URL("../generated/web/valle_engine_bg.wasm", import.meta.url)) });
   const dir = await mkdtemp(join(tmpdir(), "valle-scene3d-parity-"));
   const info = { width:64,height:64,colorType:ck.ColorType.RGBA_8888,alphaType:ck.AlphaType.Unpremul,colorSpace:ck.ColorSpace.SRGB };

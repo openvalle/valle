@@ -33,9 +33,7 @@ export interface RootRuntimeManifest {
   routes: Record<string, string>;
   runtimeAssets: {
     engine: { glue: string; wasm: string };
-    canvasKit: {
-      full: { glue: string; wasm: string };
-    };
+    canvasKit: { glue: string; wasm: string };
     workers: { productFrame: string; studioCompile: string };
   };
 }
@@ -90,8 +88,8 @@ export async function emitRuntimeManifests(
     spec("product-frame-worker", "worker", "runtime/workers/product-frame.js", "Apache-2.0"),
     spec("motion-curves-worker", "worker", "runtime/workers/motion-curves.js", "Apache-2.0"),
     spec("studio-compile-worker", "worker", "runtime/workers/studio-compile.js", "Apache-2.0"),
-    spec("canvaskit-full-glue", "glue", "runtime/canvaskit/canvaskit.js", "BSD-3-Clause", "canvaskit-full", `npm:canvaskit-wasm@${dependencyVersions.canvasKit}`),
-    spec("canvaskit-full-wasm", "wasm", "runtime/canvaskit/canvaskit.wasm", "BSD-3-Clause", "canvaskit-full", `npm:canvaskit-wasm@${dependencyVersions.canvasKit}`),
+    spec("canvaskit-glue", "glue", "runtime/canvaskit/canvaskit.js", "BSD-3-Clause", "canvaskit", `npm:canvaskit-wasm@${dependencyVersions.canvasKit}`),
+    spec("canvaskit-wasm", "wasm", "runtime/canvaskit/canvaskit.wasm", "BSD-3-Clause", "canvaskit", `npm:canvaskit-wasm@${dependencyVersions.canvasKit}`),
     spec("canvaskit-license", "license", "runtime/licenses/canvaskit.txt", "BSD-3-Clause", undefined, `npm:canvaskit-wasm@${dependencyVersions.canvasKit}`),
     spec("mp4box-license", "license", "runtime/licenses/mp4box.txt", "BSD-3-Clause", undefined, `npm:mp4box@${dependencyVersions.mp4box}`),
     spec("valle-third-party-notices", "license", "runtime/licenses/valle-and-third-party.txt", "Apache-2.0 AND MIT AND ISC AND OFL-1.1 AND CC-BY-4.0"),
@@ -115,7 +113,7 @@ export async function emitRuntimeManifests(
     assets,
     assetGroups: [
       { id: "engine-core", glue: "runtime/engine/valle_engine.js", wasm: ["runtime/engine/valle_engine_bg.wasm"] },
-      { id: "canvaskit-full", glue: "runtime/canvaskit/canvaskit.js", wasm: ["runtime/canvaskit/canvaskit.wasm"] },
+      { id: "canvaskit", glue: "runtime/canvaskit/canvaskit.js", wasm: ["runtime/canvaskit/canvaskit.wasm"] },
     ],
     workers: [{ id: "product-frame", path: "runtime/workers/product-frame.js" }, { id: "motion-curves", path: "runtime/workers/motion-curves.js" }, { id: "studio-compile", path: "runtime/workers/studio-compile.js" }],
     apps: [
@@ -126,9 +124,7 @@ export async function emitRuntimeManifests(
     routes,
     runtimeAssets: {
       engine: { glue: "runtime/engine/valle_engine.js", wasm: "runtime/engine/valle_engine_bg.wasm" },
-      canvasKit: {
-        full: { glue: "runtime/canvaskit/canvaskit.js", wasm: "runtime/canvaskit/canvaskit.wasm" },
-      },
+      canvasKit: { glue: "runtime/canvaskit/canvaskit.js", wasm: "runtime/canvaskit/canvaskit.wasm" },
       workers: { productFrame: "runtime/workers/product-frame.js", studioCompile: "runtime/workers/studio-compile.js" },
     },
   };
@@ -229,8 +225,8 @@ function flattenRuntimeAssets(value: RootRuntimeManifest["runtimeAssets"]): stri
   return [
     value.engine.glue,
     value.engine.wasm,
-    value.canvasKit.full.glue,
-    value.canvasKit.full.wasm,
+    value.canvasKit.glue,
+    value.canvasKit.wasm,
     value.workers.productFrame,
     value.workers.studioCompile,
   ];

@@ -371,7 +371,6 @@ fn sample_corners(matrix: [f64; 9]) -> [[f64; 2]; 4] {
 fn default_fit(kind: SemanticAssetKind) -> Fit {
     match kind {
         SemanticAssetKind::Video | SemanticAssetKind::Image => Fit::Cover,
-        SemanticAssetKind::Lottie => Fit::Contain,
         SemanticAssetKind::Audio => Fit::Contain,
     }
 }

@@ -34,7 +34,6 @@ function renderResult(label: string): ValleRenderResult {
     stats: {
       videoFrames: 0,
       gpuVideoFrames: 0,
-      lottieFrames: 0,
       passes: 0,
       programs: 0,
       physicalSurfaces: 0,
@@ -91,9 +90,7 @@ const options = {
   runtimeAssets: {
     schemaVersion: 1,
     engine: { glue: "engine.js", wasm: "engine.wasm" },
-    canvasKit: {
-      full: { glue: "full.js", wasm: "full.wasm" },
-    },
+    canvasKit: { glue: "canvaskit.js", wasm: "canvaskit.wasm" },
   },
 } as VallePlayerOptions;
 

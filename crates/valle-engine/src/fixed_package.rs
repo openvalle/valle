@@ -28,9 +28,9 @@ use valle_timeline::internal::{
     ContentDigest, RenderId, ResourceManifest,
     wire::resource::{
         AudioResourceDescriptorWire, FontResourceDescriptorWire, ImageResourceDescriptorWire,
-        LottieArtifactAbiWire, LottieResourceDescriptorWire, Model3dResourceDescriptorWire,
-        MotionArtifactAbiWire, MotionArtifactDescriptorWire, ResourceEntryWire,
-        ShaderArtifactAbiWire, ShaderResourceDescriptorWire, VideoResourceDescriptorWire,
+        Model3dResourceDescriptorWire, MotionArtifactAbiWire, MotionArtifactDescriptorWire,
+        ResourceEntryWire, ShaderArtifactAbiWire, ShaderResourceDescriptorWire,
+        VideoResourceDescriptorWire,
     },
 };
 
@@ -343,11 +343,6 @@ enum VerifiedResourceFactsWire {
     },
     Image {
         descriptor: ImageResourceDescriptorWire,
-        temporal_footprint: VisualFootprintWire,
-    },
-    Lottie {
-        abi: LottieArtifactAbiWire,
-        descriptor: LottieResourceDescriptorWire,
         temporal_footprint: VisualFootprintWire,
     },
     Font {
@@ -780,15 +775,6 @@ impl VerifiedResourceFactsWire {
                 descriptor: descriptor.clone(),
                 temporal_footprint: VisualFootprintWire::from_domain(*temporal_footprint),
             },
-            VerifiedResourceFacts::Lottie {
-                abi,
-                descriptor,
-                temporal_footprint,
-            } => Self::Lottie {
-                abi: *abi,
-                descriptor: descriptor.clone(),
-                temporal_footprint: VisualFootprintWire::from_domain(*temporal_footprint),
-            },
             VerifiedResourceFacts::Font { descriptor, bytes } => Self::Font {
                 descriptor: descriptor.clone(),
                 bytes_base64: BASE64_STANDARD.encode(bytes),
@@ -1080,16 +1066,6 @@ impl VerifiedResourceFactsWire {
                 },
             ) => descriptor == expected,
             (
-                Self::Lottie {
-                    abi, descriptor, ..
-                },
-                ResourceEntryWire::Lottie {
-                    abi: expected_abi,
-                    descriptor: expected,
-                    ..
-                },
-            ) => abi == expected_abi && descriptor == expected,
-            (
                 Self::Font { descriptor, .. },
                 ResourceEntryWire::Font {
                     descriptor: expected,
@@ -1157,15 +1133,6 @@ impl VerifiedResourceFactsWire {
                 descriptor,
                 temporal_footprint: temporal_footprint.into_domain(),
             },
-            Self::Lottie {
-                abi,
-                descriptor,
-                temporal_footprint,
-            } => VerifiedResourceFacts::Lottie {
-                abi,
-                descriptor,
-                temporal_footprint: temporal_footprint.into_domain(),
-            },
             Self::Font {
                 descriptor,
                 bytes_base64,
@@ -1227,7 +1194,6 @@ pub(crate) fn resource_entry_digest(entry: &ResourceEntryWire) -> &ContentDigest
         ResourceEntryWire::Video { digest, .. }
         | ResourceEntryWire::Audio { digest, .. }
         | ResourceEntryWire::Image { digest, .. }
-        | ResourceEntryWire::Lottie { digest, .. }
         | ResourceEntryWire::Font { digest, .. }
         | ResourceEntryWire::Model3d { digest, .. }
         | ResourceEntryWire::Environment { digest, .. }

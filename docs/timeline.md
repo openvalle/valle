@@ -19,7 +19,6 @@ command output, project revisions and media processing.
 - [Audio and video sound](#audio-and-video-sound)
 - [Captions](#captions)
 - [Motion integration](#motion-integration)
-- [Lottie](#lottie)
 - [Adjustments](#adjustments)
 - [Validation and troubleshooting](#validation-and-troubleshooting)
 - [Schemas and verification](#schemas-and-verification)
@@ -147,7 +146,7 @@ not time values. FPS is the exception that also accepts a rational string.
 | --- | --- |
 | `start` | Required placement on the output timeline, in seconds |
 | `duration` | Required positive length on the output timeline, in seconds |
-| `trimStart` | Source offset, default `0`; video, audio, Lottie and Motion |
+| `trimStart` | Source offset, default `0`; video, audio and Motion |
 | `rate` | Positive playback multiplier, default `1`; cannot animate or be negative |
 | `end` | Source boundary policy: `error` (default), `hold`, `loop` |
 Motion source duration comes from the referenced component's `composition.duration`.
@@ -189,7 +188,7 @@ time zero at its end. Prepare a trimmed asset first when only a subrange should 
 
 | Band | Clip content | Behavior |
 | --- | --- | --- |
-| `visual` | `solid`, `image`, `video`, `lottie`, `motion` | Later tracks paint over earlier tracks |
+| `visual` | `solid`, `image`, `video`, `motion` | Later tracks paint over earlier tracks |
 | `audio` | Media source, gain and pan; no `kind` field | Active tracks mix together |
 | `caption` | Text or rich runs, layout and animation; no `kind` field | Composited above the visual result; later caption tracks are above earlier ones |
 | `adjustment` | Currently `color-grade` | Applied to the visual result before captions |
@@ -218,7 +217,6 @@ fields:
 | `solid` | `color` | None; a generated canvas-sized color surface |
 | `image` | `src` | `fit` |
 | `video` | `src` | `trimStart`, `rate`, `end`, `fit` |
-| `lottie` | `src` | `trimStart`, `rate`, `end`, `fit` |
 | `motion` | `component` | `fit`, `trimStart`, `rate`, `end`, `props`, `data`, `resources` |
 
 `solid` is a color, not a placeholder requiring an image file. Its `color` is
@@ -734,29 +732,6 @@ The CLI prepares each distinct binding set internally; no duplicate aliases are 
 Use the [Motion limitations](motion.md#troubleshooting-and-limits) when selecting
 advanced effects; Timeline placement does not remove their rendering constraints.
 
-## Lottie
-
-Lottie clips reference a JSON animation using `src`. Timeline reads the animation's
-`w`, `h`, `fr`, `ip` and `op` metadata; its duration is `(op - ip) / fr`.
-Use a self-contained export. The current CLI rejects external image references
-and declared font lists: embed images and convert text to shapes as appropriate.
-Valid Lottie JSON does not imply support for every exporter feature.
-
-Save as `lottie.timeline.json` beside a self-contained `badge.json`:
-
-```json
-{
-  "canvas": { "width": 640, "height": 360, "fps": 30, "background": "#102030" },
-  "resources": { "badge": "badge.json" },
-  "tracks": { "visual": [{ "clips": [{ "kind": "lottie", "src": "badge",
-    "start": 0, "duration": 3, "end": "loop", "position": [0.5,0.5]
-  }] }] }
-}
-```
-
-As with image/video clips, set scale based on the animation's dimensions. The
-Timeline FPS controls output sampling; it does not rewrite the Lottie animation.
-
 ## Adjustments
 
 The public adjustment catalog currently contains one kind:
@@ -856,7 +831,6 @@ invalid shapes/times, overlaps, curves, captions and resources, including malfor
 durations, resource preparation, video volume, stereo separation and Motion bindings.
 
 External-file examples require the explicitly named files; parameter/resource
-fragments are not standalone timelines. Lottie verification used a self-contained
-shape animation. These results do not claim coverage of every Lottie exporter,
-font, remote locator, color pipeline or Web renderer combination. Verification
+fragments are not standalone timelines. These results do not claim coverage of
+every font, remote locator, color pipeline or Web renderer combination. Verification
 scripts and generated media stay outside the public examples directory.

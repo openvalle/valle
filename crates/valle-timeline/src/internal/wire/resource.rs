@@ -41,11 +41,6 @@ pub enum ResourceEntryWire {
         digest: ContentDigest,
         descriptor: ImageResourceDescriptorWire,
     },
-    Lottie {
-        digest: ContentDigest,
-        abi: LottieArtifactAbiWire,
-        descriptor: LottieResourceDescriptorWire,
-    },
     Font {
         digest: ContentDigest,
         descriptor: FontResourceDescriptorWire,
@@ -113,18 +108,6 @@ pub struct ImageResourceDescriptorWire {
     pub height: u32,
     pub orientation: MediaOrientationWire,
     pub color: MediaColorDescriptorWire,
-}
-
-/// Frozen Lottie source clock, extent, and boundary-sample semantics.
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct LottieResourceDescriptorWire {
-    pub duration: RationalTime,
-    pub time_base: ExactRational,
-    pub width: u32,
-    pub height: u32,
-    pub boundary_sampling: ContinuousBoundarySamplingWire,
 }
 
 /// One concrete font face and its supported variable-font axes.
@@ -261,13 +244,6 @@ pub enum ContinuousBoundarySamplingWire {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MotionArtifactAbiWire {
     #[serde(rename = "valle.motion/artifact@1")]
-    Canonical,
-}
-
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum LottieArtifactAbiWire {
-    #[serde(rename = "valle.lottie/artifact@1")]
     Canonical,
 }
 

@@ -1,8 +1,6 @@
 export interface PlayerRuntimeAssets {
   engine: { glue: string; wasm: string };
-  canvasKit: {
-    full: { glue: string; wasm: string };
-  };
+  canvasKit: { glue: string; wasm: string };
   workers: { productFrame: string };
 }
 
@@ -10,9 +8,7 @@ export type EngineRuntimeAssets = PlayerRuntimeAssets["engine"];
 
 type RuntimeAssetsInput = {
   engine?: Partial<PlayerRuntimeAssets["engine"]>;
-  canvasKit?: {
-    full?: Partial<PlayerRuntimeAssets["canvasKit"]["full"]>;
-  };
+  canvasKit?: Partial<PlayerRuntimeAssets["canvasKit"]>;
   workers?: Partial<PlayerRuntimeAssets["workers"]>;
 };
 
@@ -21,8 +17,8 @@ type RuntimeAssetReader = (assets: RuntimeAssetsInput) => unknown;
 const REQUIRED_URLS: ReadonlyArray<readonly [string, RuntimeAssetReader]> = [
   ["engine.glue", (assets) => assets.engine?.glue],
   ["engine.wasm", (assets) => assets.engine?.wasm],
-  ["canvasKit.full.glue", (assets) => assets.canvasKit?.full?.glue],
-  ["canvasKit.full.wasm", (assets) => assets.canvasKit?.full?.wasm],
+  ["canvasKit.glue", (assets) => assets.canvasKit?.glue],
+  ["canvasKit.wasm", (assets) => assets.canvasKit?.wasm],
   ["workers.productFrame", (assets) => assets.workers?.productFrame],
 ];
 
@@ -52,10 +48,8 @@ export function resolvePlayerRuntimeAssets(
       wasm: resolve(assets.engine.wasm),
     },
     canvasKit: {
-      full: {
-        glue: resolve(assets.canvasKit.full.glue),
-        wasm: resolve(assets.canvasKit.full.wasm),
-      },
+      glue: resolve(assets.canvasKit.glue),
+      wasm: resolve(assets.canvasKit.wasm),
     },
     workers: {
       productFrame: resolve(assets.workers.productFrame),

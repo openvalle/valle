@@ -45,7 +45,6 @@ import type {
   GrDirectContext,
   Image,
   PartialImageInfo,
-  SkottieAnimation,
   Surface,
 } from "canvaskit-wasm";
 
@@ -232,14 +231,6 @@ interface TargetSurface {
   canvas: HTMLCanvasElement | null;
 }
 
-interface LottieRuntime {
-  animation: SkottieAnimation;
-  surface: Surface;
-  width: number;
-  height: number;
-  fps: number;
-}
-
 interface FrozenBundleResources {
   environments: Map<string, Uint8Array>;
   fonts: Map<string, Uint8Array>;
@@ -275,7 +266,6 @@ interface FulfilledFrame {
   dispose: Array<() => void>;
   videoFrames: number;
   videoTextureFrames: number;
-  lottieFrames: number;
   resourceCache: BrowserResourceCacheFrameReport;
 }
 
@@ -283,7 +273,6 @@ interface CachedBrowserResource {
   object: CanvasKitExternalObject;
   videoFrames: number;
   videoTextureFrames: number;
-  lottieFrames: number;
 }
 
 interface ProducedBrowserResource extends CachedBrowserResource {
@@ -294,7 +283,6 @@ interface ProducedBrowserResource extends CachedBrowserResource {
 export interface ProductRenderStats {
   videoFrames: number;
   gpuVideoFrames: number;
-  lottieFrames: number;
   passes: number;
   programs: number;
   physicalSurfaces: number;
@@ -396,7 +384,6 @@ export interface PlayerStats {
   fontsRegistered: number;
   videoFrames: number;
   gpuVideoFrames: number;
-  lottieFrames: number;
   clockMode: string;
   surfaceMode: string;
   gpuFrames: number;
@@ -565,7 +552,6 @@ export class BrowserValleWebPlayer {
   private readonly scene3dResourceTasks = new Map<string, Promise<void>>();
   private readonly videoRings = new Map<string, DecoderRing>();
   private readonly videoRingUsers = new Map<string, number>();
-  private readonly lottie = new Map<string, LottieRuntime>();
   private readonly fontBytes = new Map<string, Uint8Array>();
   private readonly modelBytes = new Map<string, Uint8Array>();
   private readonly environmentBytes = new Map<string, Uint8Array>();
@@ -766,7 +752,6 @@ export class BrowserValleWebPlayer {
       const stats: ProductRenderStats = {
         videoFrames: frameResources.videoFrames,
         gpuVideoFrames: frameResources.videoTextureFrames,
-        lottieFrames: frameResources.lottieFrames,
         passes: report.passes,
         programs: report.programs,
         physicalSurfaces: report.physicalSurfaces,
@@ -830,7 +815,6 @@ export class BrowserValleWebPlayer {
       this.stats.perfCaptureEncodeMs += captureEncodeMs;
       this.stats.videoFrames += stats.videoFrames;
       this.stats.gpuVideoFrames += stats.gpuVideoFrames;
-      this.stats.lottieFrames += stats.lottieFrames;
       this.stats.executionPasses += report.passes;
       this.stats.physicalSurfaces = Math.max(this.stats.physicalSurfaces, report.physicalSurfaces);
       this.stats.maximumLiveImages = Math.max(this.stats.maximumLiveImages, report.maximumLiveImages);
@@ -1181,16 +1165,11 @@ export class BrowserValleWebPlayer {
     this.stats.renderId = "";
     this.compositor?.dispose();
     for (const ring of this.videoRings.values()) ring.close();
-    for (const runtime of this.lottie.values()) {
-      runtime.animation.delete();
-      runtime.surface.delete();
-    }
     this.target?.surface.delete();
     this.target?.context?.delete();
     this.target = null;
     this.scene3dResourceTasks.clear();
     this.videoRings.clear();
-    this.lottie.clear();
     this.assetBytes.clear();
     this.videoBlobs.clear();
     this.audioBuffers.clear();
@@ -1352,13 +1331,8 @@ export class BrowserValleWebPlayer {
       this.resourceObjects.invalidateGeneration();
     }
     for (const ring of this.videoRings.values()) ring.close();
-    for (const runtime of this.lottie.values()) {
-      runtime.animation.delete();
-      runtime.surface.delete();
-    }
     this.scene3dResourceTasks.clear();
     this.videoRings.clear();
-    this.lottie.clear();
     this.assetBytes.clear();
     this.videoBlobs.clear();
     this.audioBuffers.clear();
@@ -1448,7 +1422,6 @@ export class BrowserValleWebPlayer {
               object: owned.object,
               videoFrames: owned.videoFrames,
               videoTextureFrames: owned.videoTextureFrames,
-              lottieFrames: owned.lottieFrames,
             };
             const retained = this.resourceObjects.insert(
               identity,
@@ -1466,7 +1439,6 @@ export class BrowserValleWebPlayer {
 
         let videoFrames = 0;
         let videoTextureFrames = 0;
-        let lottieFrames = 0;
         const seen = new Set<string>();
         for (const { handle, identity } of requests) {
           const value = resolved.get(identity);
@@ -1477,7 +1449,6 @@ export class BrowserValleWebPlayer {
           objects.set(handle, value.object);
           videoFrames += value.videoFrames;
           videoTextureFrames += value.videoTextureFrames;
-          lottieFrames += value.lottieFrames;
         }
         const resourceCache = this.resourceObjects.finishFrame(requests.length);
         return {
@@ -1485,7 +1456,6 @@ export class BrowserValleWebPlayer {
           dispose,
           videoFrames,
           videoTextureFrames,
-          lottieFrames,
           resourceCache,
         };
       } catch (error) {
@@ -1507,7 +1477,7 @@ export class BrowserValleWebPlayer {
     const interpretation = record(key.interpretation, "resource interpretation");
     const contentWire = contentDigestWire(key.content, "resource key content");
     const content = contentWire.slice("sha256:".length);
-    const empty = { videoFrames: 0, videoTextureFrames: 0, lottieFrames: 0 };
+    const empty = { videoFrames: 0, videoTextureFrames: 0 };
     if (expected.kind === "visualFrame") {
       assertCanvaskitImportLayout(expected);
       const asset = this.assetByDigest.get(content);
@@ -1524,19 +1494,6 @@ export class BrowserValleWebPlayer {
           dispose: result.dispose,
           videoFrames: 1,
           videoTextureFrames: Number(result.texture),
-          lottieFrames: 0,
-        };
-      }
-      if (asset.type === "lottie") {
-        const time = rationalSeconds(sample.time);
-        const image = await this.lottieImage(asset, time);
-        return {
-          object: { key, kind: "visual", image },
-          bytes,
-          dispose: () => image.delete(),
-          videoFrames: 0,
-          videoTextureFrames: 0,
-          lottieFrames: 1,
         };
       }
       const image = await this.staticImage(asset);
@@ -1745,34 +1702,6 @@ export class BrowserValleWebPlayer {
       if (this.videoRingUsers.has(id)) continue;
       ring.close(); this.videoRings.delete(id);
     }
-  }
-
-  private async lottieImage(asset: AdmittedBrowserAsset, timeS: number): Promise<Image> {
-    let runtime = this.lottie.get(asset.id);
-    if (!runtime) {
-      if (typeof this.CanvasKit.MakeAnimation !== "function") {
-        throw new Error("CanvasKit full runtime with Skottie is required for Lottie");
-      }
-      const text = new TextDecoder().decode(await this.fetchAssetBytes(asset));
-      const json = JSON.parse(text) as Record<string, unknown>;
-      const animation = this.CanvasKit.MakeAnimation(text);
-      if (!animation) throw new Error(`CanvasKit cannot parse Lottie asset '${asset.id}'`);
-      const size = animation.size();
-      const width = Math.max(1, Math.ceil(size[0] || finiteOr(asset.descriptor.width, finiteOr(json.w, 1))));
-      const height = Math.max(1, Math.ceil(size[1] || finiteOr(asset.descriptor.height, finiteOr(json.h, 1))));
-      const surface = this.CanvasKit.MakeSurface(width, height);
-      if (!surface) throw new Error(`CanvasKit cannot allocate Lottie surface ${width}x${height}`);
-      runtime = { animation, surface, width, height, fps: finiteOr(json.fr, 60) };
-      this.lottie.set(asset.id, runtime);
-    }
-    runtime.surface.getCanvas().clear(this.CanvasKit.TRANSPARENT);
-    runtime.animation.seekFrame(timeS * runtime.fps);
-    runtime.animation.render(
-      runtime.surface.getCanvas(),
-      this.CanvasKit.XYWHRect(0, 0, runtime.width, runtime.height),
-    );
-    runtime.surface.flush();
-    return runtime.surface.makeImageSnapshot();
   }
 
   private acquireTarget(width: number, height: number, forceCpu: boolean): TargetSurface {
@@ -2394,7 +2323,7 @@ function replaceMap<K, V>(target: Map<K, V>, source: ReadonlyMap<K, V>): void {
 function emptyPlayerStats(): PlayerStats {
   return {
     rAFFrames: 0, renders: 0, scrubs: 0, fontsRegistered: 0,
-    videoFrames: 0, gpuVideoFrames: 0, lottieFrames: 0,
+    videoFrames: 0, gpuVideoFrames: 0,
     clockMode: "performance", surfaceMode: "none",
     gpuFrames: 0, cpuFrames: 0, audioMode: "none", audioScheduledSources: 0,
     audioDecodeErrors: 0, audioPeaksDecodes: 0,
@@ -2442,11 +2371,11 @@ async function loadWasmModule(moduleUrl: string, wasmUrl: string): Promise<Valle
 
 async function loadCanvasKit(assets: PlayerRuntimeAssets["canvasKit"]): Promise<CanvasKit> {
   canvasKitPromise ??= (async () => {
-    const init = staticCanvasKitInit ?? await injectCanvasKitScript(assets.full.glue);
+    const init = staticCanvasKitInit ?? await injectCanvasKitScript(assets.glue);
     return init({
       locateFile: (file) => file.endsWith(".wasm")
-        ? assets.full.wasm
-        : new URL(file, assets.full.glue).href,
+        ? assets.wasm
+        : new URL(file, assets.glue).href,
     });
   })();
   return canvasKitPromise;
@@ -2672,10 +2601,6 @@ function finitePositive(value: unknown, label: string): number {
     throw new Error(`${label} must be finite and positive`);
   }
   return value;
-}
-
-function finiteOr(value: unknown, fallback: number): number {
-  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
 }
 
 function clamp(value: number, low: number, high: number): number {

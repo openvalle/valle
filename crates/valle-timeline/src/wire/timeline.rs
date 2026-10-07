@@ -708,17 +708,6 @@ pub enum TimelineVisualSourceWire {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         fit: Option<RasterFitWire>,
     },
-    Lottie {
-        src: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        trim_start: Option<TimelineTimeWire>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        rate: Option<TimelineTimeWire>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        end: Option<MediaEndBehaviorWire>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        fit: Option<RasterFitWire>,
-    },
     Motion {
         component: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1026,13 +1015,6 @@ fn parse_visual_source(
         },
         "image" => TimelineVisualSourceWire::Image {
             src: required_raw(fields, "src")?,
-            fit: take_raw(fields, "fit")?,
-        },
-        "lottie" => TimelineVisualSourceWire::Lottie {
-            src: required_raw(fields, "src")?,
-            trim_start: take_raw(fields, "trimStart")?,
-            rate: take_raw(fields, "rate")?,
-            end: take_raw(fields, "end")?,
             fit: take_raw(fields, "fit")?,
         },
         "motion" => TimelineVisualSourceWire::Motion {

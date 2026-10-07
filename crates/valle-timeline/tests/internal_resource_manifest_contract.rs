@@ -54,18 +54,6 @@ fn valid_manifest() -> Value {
                     "color": color()
                 }
             },
-            "asset:lottie": {
-                "kind": "lottie",
-                "digest": DIGEST,
-                "abi": "valle.lottie/artifact@1",
-                "descriptor": {
-                    "duration": "5/1",
-                    "timeBase": "1/60",
-                    "width": 1920,
-                    "height": 1080,
-                    "boundarySampling": "left-limit"
-                }
-            },
             "font:inter": {
                 "kind": "font",
                 "digest": DIGEST,
@@ -107,7 +95,7 @@ fn validated_manifest_owns_canonical_bytes() {
     let input = encoded(&valid_manifest());
     let manifest = decode_resource_manifest(&input).unwrap();
 
-    assert_eq!(manifest.entries().len(), 7);
+    assert_eq!(manifest.entries().len(), 6);
     assert_eq!(
         decode_resource_manifest(manifest.canonical_bytes())
             .unwrap()
@@ -206,8 +194,6 @@ fn media_dimensions_times_and_sample_rate_must_be_positive() {
         ("asset:audio", "sampleRate", json!(0)),
         ("asset:audio", "duration", json!("0/1")),
         ("asset:image", "width", json!(0)),
-        ("asset:lottie", "height", json!(0)),
-        ("asset:lottie", "duration", json!("0/1")),
     ] {
         let mut manifest = valid_manifest();
         manifest["entries"][resource]["descriptor"][field] = invalid;

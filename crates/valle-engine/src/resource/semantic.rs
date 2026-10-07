@@ -392,7 +392,7 @@ impl MediaDescriptor {
     fn validate_for(&self, kind: SemanticAssetKind) -> Result<(), DescriptorError> {
         self.validate()?;
         match kind {
-            SemanticAssetKind::Video | SemanticAssetKind::Lottie => {
+            SemanticAssetKind::Video => {
                 if self.visual.is_none() || self.duration.is_none() {
                     return Err(DescriptorError::KindMismatch);
                 }
@@ -468,7 +468,6 @@ pub enum SemanticAssetKind {
     Video,
     Image,
     Audio,
-    Lottie,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -594,7 +593,6 @@ impl FontFallbackChain {
 #[serde(rename_all = "camelCase")]
 pub enum StructureKind {
     Motion,
-    Lottie,
     RuntimeShader,
     Scene3d,
 }
@@ -614,11 +612,6 @@ pub enum StructureDescriptor {
         topology_digest: ContentDigest,
         bounds: Extent2d,
     },
-    Lottie {
-        topology_digest: ContentDigest,
-        bounds: Extent2d,
-        duration: RationalTime,
-    },
     RuntimeShader {
         work_per_pixel: valle_draw::requirements::ShaderWork,
         abi_digest: ContentDigest,
@@ -637,7 +630,6 @@ impl StructureDescriptor {
     pub const fn kind(&self) -> StructureKind {
         match self {
             Self::Motion { .. } => StructureKind::Motion,
-            Self::Lottie { .. } => StructureKind::Lottie,
             Self::RuntimeShader { .. } => StructureKind::RuntimeShader,
             Self::Scene3d { .. } => StructureKind::Scene3d,
         }
@@ -645,12 +637,6 @@ impl StructureDescriptor {
 
     fn validate(&self) -> Result<(), SnapshotError> {
         match self {
-            Self::Lottie { duration, .. } if duration.is_non_positive() => {
-                Err(SnapshotError::InvalidStructure {
-                    key: String::new(),
-                    reason: "lottie duration must be positive".to_owned(),
-                })
-            }
             Self::Scene3d {
                 bounds_min,
                 bounds_max,

@@ -533,7 +533,6 @@ import { VallePlayerElement, type VallePlayerElementOptions } from "valle-engine
         passes: rendered.stats.passes,
         programs: rendered.stats.programs,
         videoFrames: rendered.stats.videoFrames,
-        lottieFrames: rendered.stats.lottieFrames,
         pngBase64: bytesToBase64(requiredPng(rendered.png)),
       });
     }

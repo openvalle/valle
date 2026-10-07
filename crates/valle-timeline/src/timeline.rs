@@ -337,8 +337,7 @@ impl TimelineValidator {
     ) {
         self.positive_time(&clip.duration, &format!("{path}/duration"));
         match &mut clip.source {
-            TimelineVisualSourceWire::Video { src, rate, .. }
-            | TimelineVisualSourceWire::Lottie { src, rate, .. } => {
+            TimelineVisualSourceWire::Video { src, rate, .. } => {
                 self.resource_ref(src, &format!("{path}/src"), resources);
                 if let Some(rate) = rate {
                     self.positive_time(rate, &format!("{path}/rate"));

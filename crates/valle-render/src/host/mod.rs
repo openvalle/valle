@@ -9,8 +9,6 @@ mod audio;
 #[cfg(feature = "native")]
 mod delivery;
 mod frame;
-#[cfg(feature = "lottie")]
-mod lottie;
 #[cfg(feature = "native")]
 mod pipeline;
 #[cfg(feature = "native")]

@@ -163,7 +163,7 @@ async function handleRequest(request: any, state: any) {
         }
         else if (url.pathname === "/studio/boot.json") {
             return Response.json({
-                protocolVersion: 1,
+                protocolVersion: RUNTIME_MANIFEST.protocolVersion,
                 session: { kind: "timeline-file", input: "parity-timeline" },
                 capabilities: {
                     saveTimeline: false,
@@ -176,8 +176,8 @@ async function handleRequest(request: any, state: any) {
                     assetUrls: {
                         engineGlue: RUNTIME_MANIFEST.runtimeAssets.engine.glue,
                         engineWasm: RUNTIME_MANIFEST.runtimeAssets.engine.wasm,
-                        canvasKitFullGlue: RUNTIME_MANIFEST.runtimeAssets.canvasKit.full.glue,
-                        canvasKitFullWasm: RUNTIME_MANIFEST.runtimeAssets.canvasKit.full.wasm,
+                        canvasKitGlue: RUNTIME_MANIFEST.runtimeAssets.canvasKit.glue,
+                        canvasKitWasm: RUNTIME_MANIFEST.runtimeAssets.canvasKit.wasm,
                     },
                 },
             });

@@ -132,7 +132,7 @@ fn re_add_is_idempotent_and_merges() {
 }
 
 #[test]
-fn kind_detection_ttf_glb_jsx_lottie() {
+fn kind_detection_ttf_glb_jsx() {
     let tmp = tempfile::tempdir().unwrap();
     let home_dir = tmp.path().join("home");
     let c = ctx(&home_dir);
@@ -169,19 +169,6 @@ fn kind_detection_ttf_glb_jsx_lottie() {
         "metadata must record the companion file"
     );
     assert!(c.home.object_path(&hash, Some("keyframes.json")).exists());
-
-    // Detect Lottie by structure.
-    let lottie = write_sample(
-        tmp.path(),
-        "confetti.json",
-        br#"{"v":"5.7","layers":[],"op":60}"#,
-    );
-    assert_eq!(
-        add(&c, &lottie, AddMode::Reflink, None, None, &[])
-            .unwrap()
-            .kind,
-        AssetKind::Lottie
-    );
 
     // Reject ordinary JSON unless kind is explicitly overridden.
     let plain = write_sample(tmp.path(), "data.json", br#"{"a":1}"#);

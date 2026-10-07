@@ -131,18 +131,18 @@ fn make_runtime(root: &Path) -> PathBuf {
             Some("engine-core"),
         ),
         (
-            "canvas-full-glue",
+            "canvaskit-glue",
             "glue",
-            valle_cli::webruntime::CANVASKIT_FULL_GLUE_PATH,
-            b"canvas full glue",
-            Some("canvaskit-full"),
+            valle_cli::webruntime::CANVASKIT_GLUE_PATH,
+            b"canvaskit glue",
+            Some("canvaskit"),
         ),
         (
-            "canvas-full-wasm",
+            "canvaskit-wasm",
             "wasm",
-            valle_cli::webruntime::CANVASKIT_FULL_WASM_PATH,
-            b"canvas full wasm",
-            Some("canvaskit-full"),
+            valle_cli::webruntime::CANVASKIT_WASM_PATH,
+            b"canvaskit wasm",
+            Some("canvaskit"),
         ),
         (
             "worker",
@@ -205,9 +205,9 @@ fn make_runtime(root: &Path) -> PathBuf {
                     "wasm":[valle_cli::webruntime::ENGINE_WASM_PATH]
                 },
                 {
-                    "id":"canvaskit-full",
-                    "glue":valle_cli::webruntime::CANVASKIT_FULL_GLUE_PATH,
-                    "wasm":[valle_cli::webruntime::CANVASKIT_FULL_WASM_PATH]
+                    "id":"canvaskit",
+                    "glue":valle_cli::webruntime::CANVASKIT_GLUE_PATH,
+                    "wasm":[valle_cli::webruntime::CANVASKIT_WASM_PATH]
                 }
             ],
             "workers":[
@@ -400,8 +400,8 @@ fn run_project_studio_authoring_browser(home: &Path) -> Option<Value> {
     for name in [
         "engineGlue",
         "engineWasm",
-        "canvasKitFullGlue",
-        "canvasKitFullWasm",
+        "canvasKitGlue",
+        "canvasKitWasm",
         "productFrameWorker",
     ] {
         assert!(

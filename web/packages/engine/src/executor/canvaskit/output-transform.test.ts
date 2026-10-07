@@ -5,10 +5,10 @@ import { CanvasKitBuiltinRuntime } from "./builtin-runtime.ts";
 import { drawSrgbPreviewCpu } from "./output-transform.ts";
 import type { CanvasKit } from "canvaskit-wasm";
 
-const { default: init } = await import("canvaskit-wasm/full") as unknown as {
+const { default: init } = await import("canvaskit-wasm") as unknown as {
   default: (options: { locateFile(): string }) => Promise<CanvasKit>;
 };
-const ck = await init({ locateFile: () => Bun.resolveSync("canvaskit-wasm/bin/full/canvaskit.wasm", import.meta.dir) });
+const ck = await init({ locateFile: () => Bun.resolveSync("canvaskit-wasm/bin/canvaskit.wasm", import.meta.dir) });
 initSync({ module: await readFile(new URL("../../../generated/web/valle_engine_bg.wasm", import.meta.url)) });
 
 test("CPU SDR output matches shared SkSL across gamut, near-black and coverage boundaries", () => {

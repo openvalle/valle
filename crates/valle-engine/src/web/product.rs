@@ -1200,7 +1200,6 @@ fn push_hit<'a>(hits: &mut Vec<ProductHitRect<'a>>, layer: &'a PreparedLayer) {
         | PreparedSource::Program { source_kind, .. } => match source_kind {
             crate::prepare::PreparedSourceKind::Video => "video",
             crate::prepare::PreparedSourceKind::Image => "image",
-            crate::prepare::PreparedSourceKind::Lottie => "lottie",
             crate::prepare::PreparedSourceKind::Motion => "motion",
             crate::prepare::PreparedSourceKind::Solid => "solid",
         },

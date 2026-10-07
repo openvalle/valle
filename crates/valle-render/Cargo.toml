@@ -30,8 +30,6 @@ default = []
 motion = ["dep:skia-safe", "dep:valle-draw", "dep:serde_json"]
 # Native encoding, text, rasterization, and remote assets.
 native = ["motion", "valle-media/libav", "valle-engine/text", "dep:crossbeam-channel", "dep:png", "dep:reqwest", "dep:fs2", "dep:sha2", "dep:hex", "dep:tempfile", "dep:ttf-parser", "dep:objc2-metal", "dep:skia-bindings"]
-# Optional Skottie support; enabling it changes the native Skia build.
-lottie = ["native", "skia-safe/skottie"]
 
 [target.'cfg(target_os = "macos")'.dependencies]
 skia-safe = { workspace = true, optional = true, features = ["metal", "ganesh"] }

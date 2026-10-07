@@ -29,8 +29,8 @@ fn canvaskit_version() -> String {
 pub const BUILD_MANIFEST_FILE: &str = "runtime/manifest.json";
 pub const ENGINE_GLUE_PATH: &str = "runtime/engine/valle_engine.js";
 pub const ENGINE_WASM_PATH: &str = "runtime/engine/valle_engine_bg.wasm";
-pub const CANVASKIT_FULL_GLUE_PATH: &str = "runtime/canvaskit/canvaskit.js";
-pub const CANVASKIT_FULL_WASM_PATH: &str = "runtime/canvaskit/canvaskit.wasm";
+pub const CANVASKIT_GLUE_PATH: &str = "runtime/canvaskit/canvaskit.js";
+pub const CANVASKIT_WASM_PATH: &str = "runtime/canvaskit/canvaskit.wasm";
 pub const PRODUCT_FRAME_WORKER_PATH: &str = "runtime/workers/product-frame.js";
 pub const STUDIO_COMPILE_WORKER_PATH: &str = "runtime/workers/studio-compile.js";
 
@@ -38,9 +38,7 @@ pub const STUDIO_COMPILE_WORKER_PATH: &str = "runtime/workers/studio-compile.js"
 pub fn runtime_assets_json() -> serde_json::Value {
     serde_json::json!({
         "engine": { "glue": ENGINE_GLUE_PATH, "wasm": ENGINE_WASM_PATH },
-        "canvasKit": {
-            "full": { "glue": CANVASKIT_FULL_GLUE_PATH, "wasm": CANVASKIT_FULL_WASM_PATH }
-        },
+        "canvasKit": { "glue": CANVASKIT_GLUE_PATH, "wasm": CANVASKIT_WASM_PATH },
         "workers": {
             "productFrame": PRODUCT_FRAME_WORKER_PATH,
             "studioCompile": STUDIO_COMPILE_WORKER_PATH
@@ -86,7 +84,7 @@ struct BuildManifest {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct BuildRuntimeAssets {
     engine: BuildGlueWasmBinding,
-    canvas_kit: BuildCanvasKitBindings,
+    canvas_kit: BuildGlueWasmBinding,
     workers: BuildWorkerBindings,
 }
 
@@ -95,12 +93,6 @@ struct BuildRuntimeAssets {
 struct BuildGlueWasmBinding {
     glue: String,
     wasm: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct BuildCanvasKitBindings {
-    full: BuildGlueWasmBinding,
 }
 
 #[derive(Debug, Deserialize)]
@@ -391,16 +383,16 @@ fn verify_files(read: impl Fn(&str) -> Result<Vec<u8>>) -> Result<VerifiedBuild>
             Some("engine-core"),
         ),
         (
-            build.runtime_assets.canvas_kit.full.glue.as_str(),
-            CANVASKIT_FULL_GLUE_PATH,
+            build.runtime_assets.canvas_kit.glue.as_str(),
+            CANVASKIT_GLUE_PATH,
             "glue",
-            Some("canvaskit-full"),
+            Some("canvaskit"),
         ),
         (
-            build.runtime_assets.canvas_kit.full.wasm.as_str(),
-            CANVASKIT_FULL_WASM_PATH,
+            build.runtime_assets.canvas_kit.wasm.as_str(),
+            CANVASKIT_WASM_PATH,
             "wasm",
-            Some("canvaskit-full"),
+            Some("canvaskit"),
         ),
         (
             build.runtime_assets.workers.product_frame.as_str(),
@@ -851,18 +843,18 @@ mod tests {
                 Some("engine-core"),
             ),
             (
-                "canvas-full-glue",
+                "canvaskit-glue",
                 "glue",
-                CANVASKIT_FULL_GLUE_PATH,
-                b"canvas full glue",
-                Some("canvaskit-full"),
+                CANVASKIT_GLUE_PATH,
+                b"canvaskit glue",
+                Some("canvaskit"),
             ),
             (
-                "canvas-full-wasm",
+                "canvaskit-wasm",
                 "wasm",
-                CANVASKIT_FULL_WASM_PATH,
-                b"canvas full wasm",
-                Some("canvaskit-full"),
+                CANVASKIT_WASM_PATH,
+                b"canvaskit wasm",
+                Some("canvaskit"),
             ),
             (
                 "worker",
@@ -918,7 +910,7 @@ mod tests {
             "assets": assets,
             "assetGroups": [
                 { "id": "engine-core", "glue": ENGINE_GLUE_PATH, "wasm": [ENGINE_WASM_PATH] },
-                { "id": "canvaskit-full", "glue": CANVASKIT_FULL_GLUE_PATH, "wasm": [CANVASKIT_FULL_WASM_PATH] },
+                { "id": "canvaskit", "glue": CANVASKIT_GLUE_PATH, "wasm": [CANVASKIT_WASM_PATH] },
             ],
             "workers": [
                 { "id": "product-frame", "path": PRODUCT_FRAME_WORKER_PATH },
@@ -993,7 +985,7 @@ mod tests {
         let wrong_path_manifest = wrong_path.join(BUILD_MANIFEST_FILE);
         let mut value: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&wrong_path_manifest).unwrap()).unwrap();
-        value["runtimeAssets"]["engine"]["glue"] = serde_json::json!(CANVASKIT_FULL_GLUE_PATH);
+        value["runtimeAssets"]["engine"]["glue"] = serde_json::json!(CANVASKIT_GLUE_PATH);
         std::fs::write(
             &wrong_path_manifest,
             serde_json::to_vec_pretty(&value).unwrap(),
@@ -1251,7 +1243,7 @@ mod tests {
         let runtime = resolve(None).unwrap();
         assert_eq!(runtime.source, RuntimeSource::Embedded);
         let files = runtime.serving_map();
-        for path in [ENGINE_WASM_PATH, CANVASKIT_FULL_WASM_PATH] {
+        for path in [ENGINE_WASM_PATH, CANVASKIT_WASM_PATH] {
             let HostedFile::VerifiedRuntime(bytes) = &files[path] else {
                 panic!()
             };

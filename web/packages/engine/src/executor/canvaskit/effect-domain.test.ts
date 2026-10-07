@@ -8,11 +8,11 @@ type CanvasKitInitializer = (options: {
   locateFile(file: string): string;
 }) => Promise<CanvasKit>;
 
-const { default: CanvasKitInit } = await import("canvaskit-wasm/full") as unknown as {
+const { default: CanvasKitInit } = await import("canvaskit-wasm") as unknown as {
   default: CanvasKitInitializer;
 };
 const wasmPath = Bun.resolveSync(
-  "canvaskit-wasm/bin/full/canvaskit.wasm",
+  "canvaskit-wasm/bin/canvaskit.wasm",
   import.meta.dir,
 );
 

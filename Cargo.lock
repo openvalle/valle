@@ -3592,9 +3592,7 @@ version = "0.153.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c61cb643dac43067f3eb76c866635a74377ac0abca0ff2590674e1e295514c3d"
 dependencies = [
- "base64 0.23.1",
  "bitflags",
- "percent-encoding",
  "skia-bindings",
 ]
 

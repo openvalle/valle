@@ -12,7 +12,7 @@ import { CanvasKitExecutor, type CanvasKitExternalObject } from "./executor/canv
 const root = resolve(import.meta.dir, "../../../../");
 const cli = process.env.VALLE_TEST_CLI ?? join(root, "target/debug/valle");
 const backend = process.env.VALLE_TEST_NATIVE_BACKEND ?? "raster";
-const { default: CanvasKitInit } = await import("canvaskit-wasm/full") as unknown as {
+const { default: CanvasKitInit } = await import("canvaskit-wasm") as unknown as {
   default: (options: { locateFile(file: string): string }) => Promise<CanvasKit>;
 };
 type Probe = readonly [number, number, number, number, number, number?];
@@ -23,7 +23,7 @@ const mask = (source: string, attrs = "", sourceAttrs = "") => `<Mask key="mask"
   <MaskSource key="source" ${sourceAttrs}>${source}</MaskSource>${view("#fff")}</Mask>`;
 
 test("Motion composition, easing and color interpolation match analytic pixels on Native and CanvasKit", async () => {
-  const ck = await CanvasKitInit({ locateFile: () => Bun.resolveSync("canvaskit-wasm/bin/full/canvaskit.wasm", import.meta.dir) });
+  const ck = await CanvasKitInit({ locateFile: () => Bun.resolveSync("canvaskit-wasm/bin/canvaskit.wasm", import.meta.dir) });
   initSync({ module: await readFile(new URL("../generated/web/valle_engine_bg.wasm", import.meta.url)) });
   const dir = await mkdtemp(join(tmpdir(), "valle-compositing-"));
   const atlasBytes = await readFile(join(root, "crates/valle-compiler/tests/fixtures/motion/composition/atlas-sprites.png"));

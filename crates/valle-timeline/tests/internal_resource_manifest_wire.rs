@@ -57,18 +57,6 @@ fn valid_manifest() -> Value {
                     "color": color()
                 }
             },
-            "asset:lottie": {
-                "kind": "lottie",
-                "digest": DIGEST,
-                "abi": "valle.lottie/artifact@1",
-                "descriptor": {
-                    "duration": "5/1",
-                    "timeBase": "1/60",
-                    "width": 1920,
-                    "height": 1080,
-                    "boundarySampling": "left-limit"
-                }
-            },
             "font:inter": {
                 "kind": "font",
                 "digest": DIGEST,
@@ -105,7 +93,7 @@ fn valid_manifest() -> Value {
 fn all_closed_resource_kinds_decode_and_round_trip() {
     let manifest: ResourceManifestEnvelopeWire = serde_json::from_value(valid_manifest()).unwrap();
 
-    assert_eq!(manifest.entries.len(), 7);
+    assert_eq!(manifest.entries.len(), 6);
     assert!(matches!(
         manifest.entries["asset:video"],
         ResourceEntryWire::Video { .. }

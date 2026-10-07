@@ -62,7 +62,7 @@ valle assets add logo.png --title "Brand logo" --tag brand --tag approved --json
 Imports take file paths; your shell expands wildcards. `--title` and repeated
 `--tag` values apply to the batch's files. Media probing determines kind when
 possible. The accepted `--kind` values are `video`, `audio`, `image`, `font`,
-`model3d`, `lottie`, `component`, and `other`. Use an explicit kind when automatic
+`model3d`, `component`, and `other`. Use an explicit kind when automatic
 identification cannot recognize the input; it does not convert a file or prove
 that a rendering backend supports its contents. Audio/video probing can require
 FFmpeg even though semantic models are not needed.

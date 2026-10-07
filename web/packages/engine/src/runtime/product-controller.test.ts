@@ -559,25 +559,21 @@ test("a draft superseded while staging never replaces the active package", async
   expect(disposed).toEqual(["compositor", "planner", "engine"]);
 });
 
-
-test("video and Lottie source requests decode canonical rational time strings", async () => {
-  for (const type of ["video", "lottie"]) {
-    const player = Object.create(BrowserValleWebPlayer.prototype) as any;
-    const asset = { type };
-    const image = { delete() {} };
-    const times: number[] = [];
-    Object.assign(player, {
-      assetByDigest: new Map([[SCENE_DIGEST.slice(7), asset]]),
-      async videoImage(actual: unknown, time: number) { expect(actual).toBe(asset); times.push(time); return { image, texture: false, dispose() {} }; },
-      async lottieImage(actual: unknown, time: number) { expect(actual).toBe(asset); times.push(time); return image; },
-    });
-    const request = { key: { content: SCENE_DIGEST, interpretation: { kind: type } },
-      expected: { kind: "visualFrame", extent: { width: 64, height: 36 }, pixel_layout: "rgba8" }, sample: { kind: "sourceTime", time: "1001/30000" } };
-    const result = await player.fulfillRequestUncached(request, false);
-    expect(result.object.image).toBe(image);
-    expect(times).toEqual([1001 / 30000]);
-    for (const time of ["", "0/0", { numerator: 1, denominator: 30 }, 0.5]) {
-      await expect(player.fulfillRequestUncached({ ...request, sample: { ...request.sample, time } }, false)).rejects.toThrow("RationalTime");
-    }
+test("video source requests decode canonical rational time strings", async () => {
+  const player = Object.create(BrowserValleWebPlayer.prototype) as any;
+  const asset = { type: "video" };
+  const image = { delete() {} };
+  const times: number[] = [];
+  Object.assign(player, {
+    assetByDigest: new Map([[SCENE_DIGEST.slice(7), asset]]),
+    async videoImage(actual: unknown, time: number) { expect(actual).toBe(asset); times.push(time); return { image, texture: false, dispose() {} }; },
+  });
+  const request = { key: { content: SCENE_DIGEST, interpretation: { kind: "video" } },
+    expected: { kind: "visualFrame", extent: { width: 64, height: 36 }, pixel_layout: "rgba8" }, sample: { kind: "sourceTime", time: "1001/30000" } };
+  const result = await player.fulfillRequestUncached(request, false);
+  expect(result.object.image).toBe(image);
+  expect(times).toEqual([1001 / 30000]);
+  for (const time of ["", "0/0", { numerator: 1, denominator: 30 }, 0.5]) {
+    await expect(player.fulfillRequestUncached({ ...request, sample: { ...request.sample, time } }, false)).rejects.toThrow("RationalTime");
   }
 });

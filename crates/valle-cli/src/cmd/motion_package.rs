@@ -533,9 +533,7 @@ impl FixedResources {
     }
 
     pub(super) fn capabilities(&self) -> Capabilities {
-        let mut capabilities = Capabilities::new()
-            .with_artifact_abi("valle.motion/artifact@1")
-            .with_artifact_abi("valle.lottie/artifact@1");
+        let mut capabilities = Capabilities::new().with_artifact_abi("valle.motion/artifact@1");
         if self.has_shader {
             capabilities = capabilities.with_artifact_abi("valle.shader/artifact@1");
         }
@@ -653,7 +651,6 @@ fn entry_digest(entry: &ResourceEntryWire) -> &ContentDigest {
         ResourceEntryWire::Video { digest, .. }
         | ResourceEntryWire::Audio { digest, .. }
         | ResourceEntryWire::Image { digest, .. }
-        | ResourceEntryWire::Lottie { digest, .. }
         | ResourceEntryWire::Font { digest, .. }
         | ResourceEntryWire::Model3d { digest, .. }
         | ResourceEntryWire::Environment { digest, .. }

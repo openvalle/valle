@@ -9,7 +9,7 @@ import { transitionLabels } from "../../../apps/studio/src/timeline-edit.ts";
 
 const root = resolve(import.meta.dir, "../../../../");
 const cli = process.env.VALLE_TEST_CLI ?? join(root, "target/debug/valle");
-const { default: CanvasKitInit } = await import("canvaskit-wasm/full") as unknown as {
+const { default: CanvasKitInit } = await import("canvaskit-wasm") as unknown as {
   default: (options: { locateFile(file: string): string }) => Promise<CanvasKit>;
 };
 type Fixture = { name:string; command:"motion"|"timeline"; content:string; width:number; height:number; frames:number[]; reference?:string; referenceOffset?:number; different?:string; probe?:(pixels:Uint8Array,frame:number)=>void };
@@ -23,7 +23,7 @@ const pixel = (pixels:Uint8Array,width:number,x:number,y:number,rgba:number[]) =
 };
 
 test("Motion Transition shares all Timeline kernels and preserves nested subtree semantics across backends", async () => {
-  const ck = await CanvasKitInit({ locateFile:()=>Bun.resolveSync("canvaskit-wasm/bin/full/canvaskit.wasm",import.meta.dir) });
+  const ck = await CanvasKitInit({ locateFile:()=>Bun.resolveSync("canvaskit-wasm/bin/canvaskit.wasm",import.meta.dir) });
   initSync({module:await readFile(join(root,"web/packages/engine/generated/web/valle_engine_bg.wasm"))});
   const dir = await mkdtemp(join(tmpdir(),"valle-motion-transitions-"));
   const spawn = (args:string[]) => Bun.spawn([cli,"--json",...args],{cwd:dir,env:{...process.env,VALLE_HOME:join(dir,"home")},stdout:"pipe",stderr:"pipe"});

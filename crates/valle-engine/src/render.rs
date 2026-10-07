@@ -31,9 +31,8 @@ use valle_timeline::internal::{
     ResourceManifest, SampleTime,
     document::*,
     wire::resource::{
-        AudioChannelLayoutWire, AudioResourceDescriptorWire, ContinuousBoundarySamplingWire,
-        FontResourceDescriptorWire, FontVariationAxisWire, ImageResourceDescriptorWire,
-        LottieArtifactAbiWire, LottieResourceDescriptorWire, Model3dResourceDescriptorWire,
+        AudioChannelLayoutWire, AudioResourceDescriptorWire, FontResourceDescriptorWire,
+        FontVariationAxisWire, ImageResourceDescriptorWire, Model3dResourceDescriptorWire,
         MotionArtifactAbiWire, MotionArtifactDescriptorWire, ResourceEntryWire,
         ShaderArtifactAbiWire, ShaderResourceDescriptorWire, VideoResourceDescriptorWire,
     },
@@ -102,7 +101,6 @@ pub enum ResourceKind {
     Video,
     Audio,
     Image,
-    Lottie,
     Font,
     Model3d,
     Environment,
@@ -198,11 +196,6 @@ pub enum VerifiedResourceFacts {
         descriptor: ImageResourceDescriptorWire,
         temporal_footprint: VisualFootprint,
     },
-    Lottie {
-        abi: LottieArtifactAbiWire,
-        descriptor: LottieResourceDescriptorWire,
-        temporal_footprint: VisualFootprint,
-    },
     Font {
         descriptor: FontResourceDescriptorWire,
         /// Immutable bytes for the exact face pinned by the manifest digest.
@@ -246,7 +239,6 @@ impl VerifiedResourceFacts {
             Self::Video { .. } => ResourceKind::Video,
             Self::Audio { .. } => ResourceKind::Audio,
             Self::Image { .. } => ResourceKind::Image,
-            Self::Lottie { .. } => ResourceKind::Lottie,
             Self::Font { .. } => ResourceKind::Font,
             Self::Model3d { .. } => ResourceKind::Model3d,
             Self::Environment { .. } => ResourceKind::Environment,
@@ -1319,7 +1311,6 @@ struct EvaluationClocks {
 pub enum CompiledSourceKind {
     Video,
     Image,
-    Lottie,
     Motion,
     Solid,
     Audio,
@@ -1454,9 +1445,6 @@ enum CompiledSourcePayload {
     Image {
         fit: CompiledRasterFit,
     },
-    Lottie {
-        fit: CompiledRasterFit,
-    },
     Motion {
         instance: CompiledMotionInstance,
         fit: CompiledRasterFit,
@@ -1518,7 +1506,6 @@ impl CompiledSource {
         match &self.payload {
             CompiledSourcePayload::Video { fit }
             | CompiledSourcePayload::Image { fit }
-            | CompiledSourcePayload::Lottie { fit }
             | CompiledSourcePayload::Motion { fit, .. } => Some(*fit),
             _ => None,
         }
@@ -2705,7 +2692,7 @@ impl EvaluatedSourceRef {
 
     /// Exact discrete producer/request clock after applying the source boundary policy. The
     /// original [`MappedSourceTime`] sentinel remains available separately. This clock addresses
-    /// the final Motion ABI frame or Lottie descriptor tick; props use the host-local clock.
+    /// the final Motion ABI frame; props use the host-local clock.
     pub const fn sample_time(&self) -> RationalTime {
         self.sample_time
     }
@@ -3604,9 +3591,6 @@ fn collect_document_requirements(
                         VisualSource::Image(source) => {
                             (Some(&source.resource), Some(ResourceKind::Image), "image")
                         }
-                        VisualSource::Lottie(source) => {
-                            (Some(&source.resource), Some(ResourceKind::Lottie), "lottie")
-                        }
                         VisualSource::Motion(source) => {
                             resources.push(ResourceUse {
                                 role: format!("visual/{track_index}/{item_index}/motion-component"),
@@ -4011,7 +3995,6 @@ fn resource_kind(entry: &ResourceEntryWire) -> ResourceKind {
         ResourceEntryWire::Video { .. } => ResourceKind::Video,
         ResourceEntryWire::Audio { .. } => ResourceKind::Audio,
         ResourceEntryWire::Image { .. } => ResourceKind::Image,
-        ResourceEntryWire::Lottie { .. } => ResourceKind::Lottie,
         ResourceEntryWire::Font { .. } => ResourceKind::Font,
         ResourceEntryWire::Model3d { .. } => ResourceKind::Model3d,
         ResourceEntryWire::Environment { .. } => ResourceKind::Environment,
@@ -4025,7 +4008,6 @@ fn resource_digest(entry: &ResourceEntryWire) -> &ContentDigest {
         ResourceEntryWire::Video { digest, .. }
         | ResourceEntryWire::Audio { digest, .. }
         | ResourceEntryWire::Image { digest, .. }
-        | ResourceEntryWire::Lottie { digest, .. }
         | ResourceEntryWire::Font { digest, .. }
         | ResourceEntryWire::Model3d { digest, .. }
         | ResourceEntryWire::Environment { digest, .. }
@@ -4037,7 +4019,6 @@ fn resource_digest(entry: &ResourceEntryWire) -> &ContentDigest {
 fn resource_abi(entry: &ResourceEntryWire) -> Option<&'static str> {
     match entry {
         ResourceEntryWire::MotionArtifact { .. } => Some("valle.motion/artifact@1"),
-        ResourceEntryWire::Lottie { .. } => Some("valle.lottie/artifact@1"),
         ResourceEntryWire::Shader { .. } => Some("valle.shader/artifact@1"),
         _ => None,
     }
@@ -4080,16 +4061,6 @@ fn binding_facts_match(entry: &ResourceEntryWire, facts: &VerifiedResourceFacts)
                 ..
             },
         ) => descriptor == verified,
-        (
-            ResourceEntryWire::Lottie {
-                abi, descriptor, ..
-            },
-            VerifiedResourceFacts::Lottie {
-                abi: verified_abi,
-                descriptor: verified,
-                ..
-            },
-        ) => abi == verified_abi && descriptor == verified,
         (
             ResourceEntryWire::Font { descriptor, .. },
             VerifiedResourceFacts::Font {

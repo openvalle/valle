@@ -325,10 +325,8 @@ export function playerRuntimeAssetsFromStudioBoot(boot: StudioBoot): PlayerRunti
       wasm: required("engineWasm"),
     },
     canvasKit: {
-      full: {
-        glue: required("canvasKitFullGlue"),
-        wasm: required("canvasKitFullWasm"),
-      },
+      glue: required("canvasKitGlue"),
+      wasm: required("canvasKitWasm"),
     },
     workers: { productFrame: required("productFrameWorker") },
   };

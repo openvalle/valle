@@ -103,7 +103,6 @@ pub(super) fn compile_admitted_timeline(
         let kind = match source.kind {
             AdmittedSourceKind::Video => CompiledSourceKind::Video,
             AdmittedSourceKind::Image => CompiledSourceKind::Image,
-            AdmittedSourceKind::Lottie => CompiledSourceKind::Lottie,
             AdmittedSourceKind::Motion => CompiledSourceKind::Motion,
             AdmittedSourceKind::Solid => CompiledSourceKind::Solid,
             AdmittedSourceKind::Audio => CompiledSourceKind::Audio,
@@ -132,9 +131,6 @@ pub(super) fn compile_admitted_timeline(
                 fit: compile_fit(fit),
             },
             AdmittedSourcePayload::Image { fit } => CompiledSourcePayload::Image {
-                fit: compile_fit(fit),
-            },
-            AdmittedSourcePayload::Lottie { fit } => CompiledSourcePayload::Lottie {
                 fit: compile_fit(fit),
             },
             AdmittedSourcePayload::Motion { instance, fit } => CompiledSourcePayload::Motion {

@@ -1170,16 +1170,7 @@ pub(crate) fn prepare_program(
         })?;
         let kind_matches = match texture.kind {
             TextureKind::Video => asset.kind == SemanticAssetKind::Video,
-            TextureKind::Image => {
-                matches!(
-                    asset.kind,
-                    SemanticAssetKind::Image | SemanticAssetKind::Lottie
-                )
-            }
-            TextureKind::Generated => matches!(
-                asset.kind,
-                SemanticAssetKind::Image | SemanticAssetKind::Lottie
-            ),
+            TextureKind::Image | TextureKind::Generated => asset.kind == SemanticAssetKind::Image,
         };
         if !kind_matches {
             return Err(ProgramPrepareError::TextureKindMismatch {

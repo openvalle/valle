@@ -143,9 +143,7 @@ impl PackageResources {
     }
 
     fn capabilities(&self) -> Capabilities {
-        let capabilities = Capabilities::new()
-            .with_artifact_abi("valle.motion/artifact@1")
-            .with_artifact_abi("valle.lottie/artifact@1");
+        let capabilities = Capabilities::new().with_artifact_abi("valle.motion/artifact@1");
         if self.has_shader {
             capabilities.with_artifact_abi("valle.shader/artifact@1")
         } else {

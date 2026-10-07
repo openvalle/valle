@@ -101,7 +101,7 @@ test("frame edits delegate exact Timeline seconds to the Rust runtime", () => {
   });
 });
 
-test("left trim applies exact source-rate deltas for audio, video, lottie, and Motion", () => {
+test("left trim applies exact source-rate deltas for audio, video, and Motion", () => {
   const sourceDeltaCalls: Array<{ frames: number; fps: number | string; rate: number | null | undefined }> = [];
   const sourceDelta = (
     frames: number,
@@ -113,7 +113,7 @@ test("left trim applies exact source-rate deltas for audio, video, lottie, and M
   };
 
   for (const rate of [2, 0.5]) {
-    for (const kind of ["audio", "video", "lottie", "motion"] as const) {
+    for (const kind of ["audio", "video", "motion"] as const) {
       const authored = kind === "audio"
         ? ({
             canvas: { width: 640, height: 360, fps: 1 },
@@ -166,8 +166,6 @@ test("left trim applies exact source-rate deltas for audio, video, lottie, and M
     { frames: 1, fps: 1, rate: 2 },
     { frames: 1, fps: 1, rate: 2 },
     { frames: 1, fps: 1, rate: 2 },
-    { frames: 1, fps: 1, rate: 2 },
-    { frames: 1, fps: 1, rate: 0.5 },
     { frames: 1, fps: 1, rate: 0.5 },
     { frames: 1, fps: 1, rate: 0.5 },
     { frames: 1, fps: 1, rate: 0.5 },

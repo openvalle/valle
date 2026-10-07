@@ -146,12 +146,6 @@ fn validate_entry(
             require_positive_u32(resource_id, "width", descriptor.width)?;
             require_positive_u32(resource_id, "height", descriptor.height)?;
         }
-        ResourceEntryWire::Lottie { descriptor, .. } => {
-            require_positive_time(resource_id, "duration", descriptor.duration.is_positive())?;
-            require_positive_time(resource_id, "timeBase", descriptor.time_base.is_positive())?;
-            require_positive_u32(resource_id, "width", descriptor.width)?;
-            require_positive_u32(resource_id, "height", descriptor.height)?;
-        }
         ResourceEntryWire::Font { descriptor, .. } => {
             for (axis_tag, axis) in &descriptor.variation_axes {
                 if !is_valid_axis_tag(axis_tag) || !is_valid_axis(axis) {

@@ -68,7 +68,6 @@ pub struct PreparedBackground {
 pub enum PreparedSourceKind {
     Video,
     Image,
-    Lottie,
     Motion,
     Solid,
 }
@@ -438,9 +437,7 @@ impl<'a> PrepareState<'a> {
         let asset = SemanticAsset::new(id.clone(), *asset_kind, digest.clone(), descriptor.clone());
         let sample = match asset_kind {
             SemanticAssetKind::Image => ResourceSample::Static,
-            SemanticAssetKind::Video | SemanticAssetKind::Lottie => {
-                ResourceSample::SourceTime(source_time)
-            }
+            SemanticAssetKind::Video => ResourceSample::SourceTime(source_time),
             SemanticAssetKind::Audio => {
                 return Err(PrepareError::at(
                     path,
@@ -466,7 +463,6 @@ impl<'a> PrepareState<'a> {
             source_kind: match asset_kind {
                 SemanticAssetKind::Video => PreparedSourceKind::Video,
                 SemanticAssetKind::Image => PreparedSourceKind::Image,
-                SemanticAssetKind::Lottie => PreparedSourceKind::Lottie,
                 SemanticAssetKind::Audio => unreachable!(),
             },
             handle,

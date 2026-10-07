@@ -287,7 +287,7 @@ fn prepare_endpoint(
     state: &mut PrepareState<'_>,
 ) -> Result<PreparedLayer, PrepareError> {
     let mut prepared = match source.kind() {
-        CompiledSourceKind::Video | CompiledSourceKind::Image | CompiledSourceKind::Lottie => {
+        CompiledSourceKind::Video | CompiledSourceKind::Image => {
             let clip = adapt_endpoint(render, clip_id, track_id, source, layer, path)?;
             state.layer(&clip, path, source.sample_time())?
         }
@@ -638,9 +638,7 @@ fn compiled_motion_assets(
     for (control, resource) in source.motion_resources() {
         if matches!(
             resource.facts(),
-            VerifiedResourceFacts::Video { .. }
-                | VerifiedResourceFacts::Image { .. }
-                | VerifiedResourceFacts::Lottie { .. }
+            VerifiedResourceFacts::Video { .. } | VerifiedResourceFacts::Image { .. }
         ) {
             assets.insert(control.clone(), semantic_asset(resource, path)?);
         }
@@ -648,9 +646,7 @@ fn compiled_motion_assets(
     for resource in source.motion_artifact_dependencies() {
         if matches!(
             resource.facts(),
-            VerifiedResourceFacts::Video { .. }
-                | VerifiedResourceFacts::Image { .. }
-                | VerifiedResourceFacts::Lottie { .. }
+            VerifiedResourceFacts::Video { .. } | VerifiedResourceFacts::Image { .. }
         ) {
             let asset = semantic_asset(resource, path)?;
             assets
@@ -1000,7 +996,7 @@ fn adapt_endpoint(
     )?;
     let source_boundary = match source.kind() {
         CompiledSourceKind::Image => SourceBoundary::Static,
-        CompiledSourceKind::Video | CompiledSourceKind::Lottie => SourceBoundary::ClampToDescriptor,
+        CompiledSourceKind::Video => SourceBoundary::ClampToDescriptor,
         _ => {
             return Err(PrepareError::at(
                 format!("{path}.source"),
@@ -1283,19 +1279,6 @@ fn semantic_asset(
                     .map_err(|error| PrepareError::at(path, error))?,
                 None,
                 visual_interpretation(&descriptor.color, descriptor.orientation, false),
-            ),
-        ),
-        VerifiedResourceFacts::Lottie { descriptor, .. } => (
-            SemanticAssetKind::Lottie,
-            MediaDescriptor::video(
-                descriptor.width,
-                descriptor.height,
-                descriptor.duration,
-                VisualInterpretation::new(
-                    ColorDescription::SRGB,
-                    SignalLuminance::SDR_100,
-                    InputAlphaMode::StraightCoverage,
-                ),
             ),
         ),
         _ => {

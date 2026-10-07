@@ -400,7 +400,6 @@ pub enum BlendModeWire {
 pub enum VisualSourceWire {
     Video(VideoSourceWire),
     Image(ImageSourceWire),
-    Lottie(LottieSourceWire),
     Motion(MotionInstanceWire),
     Solid(SolidSourceWire),
 }
@@ -425,17 +424,6 @@ pub struct VideoSourceWire {
 pub struct ImageSourceWire {
     pub resource: ResourceId,
     pub sampling: RasterSamplingWire,
-}
-
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct LottieSourceWire {
-    pub resource: ResourceId,
-    pub source_start: ExactRational,
-    pub rate: ExactRational,
-    pub end_behavior: MediaEndBehaviorWire,
-    pub sampling: LottieSamplingWire,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -475,13 +463,6 @@ pub enum MediaEndBehaviorWire {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RasterSamplingWire {
-    pub fit: RasterFitWire,
-}
-
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct LottieSamplingWire {
     pub fit: RasterFitWire,
 }
 

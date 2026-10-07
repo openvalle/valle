@@ -149,8 +149,9 @@ fn verify_runtime(
     let runtime: Value = serde_json::from_slice(&fs::read(manifest_path)?)?;
     ensure!(
         runtime["schemaVersion"] == 2
-            && runtime["runtimeAssets"]["canvasKit"].get("base").is_none(),
-        "unexpected CanvasKit base binding"
+            && runtime["runtimeAssets"]["canvasKit"]["glue"] == "runtime/canvaskit/canvaskit.js"
+            && runtime["runtimeAssets"]["canvasKit"]["wasm"] == "runtime/canvaskit/canvaskit.wasm",
+        "unexpected CanvasKit runtime binding"
     );
     for asset in runtime["assets"]
         .as_array()

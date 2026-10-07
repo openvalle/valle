@@ -4,7 +4,7 @@
 
 import type { ResourceManifest, TimelineDocument } from "../internal-timeline.ts";
 
-export const STUDIO_HOST_PROTOCOL_VERSION = 1 as const;
+export const STUDIO_HOST_PROTOCOL_VERSION = 2 as const;
 export const MOTION_SOURCE_MAP_VERSION = 1 as const;
 
 export type ContentDigest = string;

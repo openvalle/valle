@@ -4,7 +4,7 @@ use valle_web_schema_gen::{MotionContextWire, StudioBootWire};
 fn fixed_motion_context() -> Value {
     serde_json::json!({
       "status": "ok",
-      "protocolVersion": 1,
+      "protocolVersion": 2,
       "generation": 3,
       "input": "components/Card.tsx",
       "artifactDigest": format!("sha256:{}", "a".repeat(64)),
@@ -50,7 +50,7 @@ fn fixed_motion_context() -> Value {
 #[test]
 fn non_timeline_host_protocols_remain_closed() {
     let boot = r#"{
-      "protocolVersion":1,
+      "protocolVersion":2,
       "session":{"kind":"timeline-file","input":"timeline.json","token":"file-token"},
       "capabilities":{
         "saveTimeline":false,
@@ -63,14 +63,14 @@ fn non_timeline_host_protocols_remain_closed() {
     serde_json::from_str::<StudioBootWire>(boot).expect("generated Studio boot accepts its DTO");
 
     let with_unknown = boot.replace(
-        "\"protocolVersion\":1",
-        "\"protocolVersion\":1,\"unsupportedTimeline\":{}",
+        "\"protocolVersion\":2",
+        "\"protocolVersion\":2,\"unsupportedTimeline\":{}",
     );
     assert!(serde_json::from_str::<StudioBootWire>(&with_unknown).is_err());
 
     let motion_error = r#"{
       "status":"error",
-      "protocolVersion":1,
+      "protocolVersion":2,
       "generation":2,
       "input":"components/Card.tsx",
       "diagnostics":[]
@@ -86,7 +86,7 @@ fn non_timeline_host_protocols_remain_closed() {
 fn motion_compiler_error_span_round_trips_the_real_producer_shape() {
     let error = r#"{
           "status":"error",
-          "protocolVersion":1,
+          "protocolVersion":2,
           "generation":2,
           "input":"components/Card.tsx",
           "diagnostics":[{

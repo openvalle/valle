@@ -29,9 +29,7 @@ const config: TimelineWorkspaceRuntimeConfig = {
   },
   runtimeAssets: {
     engine: { glue: "engine.js", wasm: "engine.wasm" },
-    canvasKit: {
-      full: { glue: "canvaskit-full.js", wasm: "canvaskit-full.wasm" },
-    },
+    canvasKit: { glue: "canvaskit.js", wasm: "canvaskit.wasm" },
     workers: { productFrame: "product-frame.js" },
   },
   runtimeBaseUrl: "http://studio.test/",

@@ -29,9 +29,9 @@ cd valle
 cargo xtask build
 ```
 
-首次构建需要联网，耗时可能较长。Cargo 从源码构建 Skia，以提供 Skottie 支持。已发布的 `valle-ffmpeg` 和 `valle-ffmpeg-sys` crate 包含固定的 FFmpeg 7.0/8.0/9.0 公共头文件；构建需要 libclang，无需安装 FFmpeg 或额外检出其他仓库。
+首次构建需要联网，耗时可能较长。Cargo 优先下载匹配的 Skia 预编译二进制；不可用时会从源码构建。已发布的 `valle-ffmpeg` 和 `valle-ffmpeg-sys` crate 包含固定的 FFmpeg 7.0/8.0/9.0 公共头文件；构建需要 libclang，无需安装 FFmpeg 或额外检出其他仓库。
 
-`cargo xtask build` 生成可执行文件 **`dist/bin/valle`**（Windows 为 `dist/bin/valle.exe`），内嵌 Studio Web 资源、CanvasKit full、字体和依赖声明。使用 `cargo xtask build --release` 进行优化构建。仅开发 CLI 时，`cargo build -p valle-cli` 会跳过这些内嵌资源；启动 Studio 时需传入 `--web-assets-dir /absolute/path/to/web/dist`。
+`cargo xtask build` 生成可执行文件 **`dist/bin/valle`**（Windows 为 `dist/bin/valle.exe`），内嵌 Studio Web 资源、CanvasKit、字体和依赖声明。使用 `cargo xtask build --release` 进行优化构建。仅开发 CLI 时，`cargo build -p valle-cli` 会跳过这些内嵌资源；启动 Studio 时需传入 `--web-assets-dir /absolute/path/to/web/dist`。
 
 FFmpeg 是可选的运行时依赖，不随 Valle 分发。媒体操作需要安装 FFmpeg 7.x、8.x 或 9.x **动态库**；检查、预览或渲染包含音频或视频的 Timeline 也属于媒体操作。Motion 检查、纯 Motion PNG 渲染及 Studio 启动无需 FFmpeg。
 

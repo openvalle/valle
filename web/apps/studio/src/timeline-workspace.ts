@@ -229,7 +229,7 @@ function fileStem(locator: string): string {
 }
 
 function kindTitle(kind: string, visual: VisualClip | null): string {
-  const names: Record<string, string> = { motion: "Motion", video: "Video", image: "Image", lottie: "Lottie",
+  const names: Record<string, string> = { motion: "Motion", video: "Video", image: "Image",
     solid: "Solid", audio: "Audio", caption: "Caption", adjustment: "Adjustment", transition: "Transition" };
   const name = names[kind] ?? `${kind.charAt(0).toUpperCase()}${kind.slice(1)}`;
   const role = visual?.source.type === "motion" ? visual.source.role.type : "clip";
@@ -460,7 +460,7 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
 
   function kindClassOf(kind: string): string {
     const value = kind.toLowerCase();
-    if (value.includes("motion") || value.includes("lottie")) return "kind-motion";
+    if (value.includes("motion")) return "kind-motion";
     if (value.includes("audio")) return "kind-audio";
     if (value.includes("caption") || value.includes("text")) return "kind-caption";
     if (value.includes("effect") || value.includes("adjustment")) return "kind-effect";
@@ -1010,7 +1010,7 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
           rows.push({ kind: "value", label: "Hold", value: visual.source.role.hold });
         }
       }
-      if (visual.source.type === "video" || visual.source.type === "lottie"
+      if (visual.source.type === "video"
         || (visual.source.type === "motion" && visual.source.role.type === "clip")) {
         rows.push(
           { kind: "number", key: "timing:sourceStartFrames", label: "Source start", value: projected.sourceStartFrame ?? 0, min: 0, step: 1, unit: "f" },

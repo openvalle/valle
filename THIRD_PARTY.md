@@ -28,7 +28,7 @@ We thank the authors and maintainers of the projects below. This document covers
 | **Takumi Core / Taffy / Parley** | Motion layout, style resolution, and text measurement. |
 | **cosmic-text / swash / ttf-parser** | Subtitle shaping, glyph processing, and font inspection. |
 | **RaTeX** | LaTeX parsing, font metrics, and formula layout, with Valle's drawing adapter. |
-| **Skia / skia-safe / Skottie / CanvasKit** | Native and Web drawing, compositing, effects, and Lottie rendering. |
+| **Skia / skia-safe / CanvasKit** | Native and Web drawing, compositing, and effects. |
 | **OXC / QuickJS / rquickjs** | Motion source parsing, transforms, and preparation-stage JavaScript execution. |
 | **FFmpeg / valle-ffmpeg / valle-ffmpeg-sys / MP4Box.js** | User-installed native media libraries are loaded on demand. The `valle-ffmpeg` and `valle-ffmpeg-sys` crates are maintained in [openvalle/ffmpeg-rs](https://github.com/openvalle/ffmpeg-rs), derived from the WTFPL-licensed `ffmpeg-next`/`ffmpeg-sys-next` 9.0.0 sources. They include typed FFmpeg 7/8/9 runtime adapters and pinned public headers with their upstream LGPL notices. Source hashes and changes are recorded in that repository and each published crate NOTICE. No FFmpeg libraries or codec binaries are shipped. Browser MP4 demuxing uses MP4Box.js and decoding uses WebCodecs. |
 | **x264 / x265 / libvpx / SVT-AV1 / dav1d / LAME / Opus** | Optional codecs in user-provided FFmpeg installations; not bundled. |

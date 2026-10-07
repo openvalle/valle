@@ -616,65 +616,6 @@ fn prepare_timeline_package_impl(
                 PreviewFile::Bytes(_) => unreachable!(),
             };
             let id = format!("resource:{name}");
-            if has_visual_source(&doc["tracks"], name, "lottie") {
-                let value: serde_json::Value = serde_json::from_slice(&bytes)?;
-                if value["assets"].as_array().is_some_and(|assets| {
-                    assets
-                        .iter()
-                        .any(|a| a["p"].as_str().is_some_and(|p| !p.starts_with("data:")))
-                }) || value["fonts"]["list"]
-                    .as_array()
-                    .is_some_and(|fonts| !fonts.is_empty())
-                {
-                    bail!(
-                        "Lottie {name}: external images and fonts must be embedded or converted to shapes before rendering"
-                    );
-                }
-                use valle_timeline::internal::wire::resource::*;
-                use valle_timeline::{
-                    RationalTime, time::ExactRational, wire::timeline::TimelineTimeWire,
-                };
-                let number = |key: &str| -> Result<ExactRational> {
-                    Ok(TimelineTimeWire::new(value[key].to_string())?.to_exact())
-                };
-                let fps = number("fr")?;
-                if !fps.is_positive() {
-                    bail!("Lottie frame rate must be positive");
-                }
-                let descriptor = LottieResourceDescriptorWire {
-                    duration: RationalTime::from_exact(
-                        number("op")?.checked_sub(number("ip")?)?.checked_div(fps)?,
-                    ),
-                    time_base: ExactRational::ONE.checked_div(fps)?,
-                    width: value["w"]
-                        .as_u64()
-                        .and_then(|n| u32::try_from(n).ok())
-                        .ok_or_else(|| anyhow!("invalid Lottie width"))?,
-                    height: value["h"]
-                        .as_u64()
-                        .and_then(|n| u32::try_from(n).ok())
-                        .ok_or_else(|| anyhow!("invalid Lottie height"))?,
-                    boundary_sampling: ContinuousBoundarySamplingWire::LeftLimit,
-                };
-                resources.add(
-                    &id,
-                    ResourceEntryWire::Lottie {
-                        digest: hash,
-                        abi: LottieArtifactAbiWire::Canonical,
-                        descriptor: descriptor.clone(),
-                    },
-                    valle_engine::render::VerifiedResourceFacts::Lottie {
-                        abi: LottieArtifactAbiWire::Canonical,
-                        descriptor,
-                        temporal_footprint: Default::default(),
-                    },
-                    Vec::new(),
-                )?;
-                if native {
-                    catalog.insert_file(hash, path);
-                }
-                continue;
-            }
             let kind = declared_kind
                 .or_else(|| {
                     if ttf_parser::Face::parse(&bytes, 0).is_ok() {
@@ -786,18 +727,6 @@ fn resource_kind(doc: &serde_json::Value, name: &str) -> Option<AssetKind> {
         }
     }
     scan(&doc["tracks"], name, false)
-}
-
-fn has_visual_source(value: &serde_json::Value, name: &str, kind: &str) -> bool {
-    match value {
-        serde_json::Value::Object(map) => {
-            (map.get("kind").and_then(|v| v.as_str()) == Some(kind)
-                && map.get("src").and_then(|v| v.as_str()) == Some(name))
-                || resource_fields(map).any(|(_, v)| has_visual_source(v, name, kind))
-        }
-        serde_json::Value::Array(values) => values.iter().any(|v| has_visual_source(v, name, kind)),
-        _ => false,
-    }
 }
 
 /// Compilation captures bound resource facts; vary the artifact by its actual preparation inputs.

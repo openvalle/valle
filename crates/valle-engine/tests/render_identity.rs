@@ -39,8 +39,6 @@ const AUDIO_DIGEST: &str =
     "sha256:1212121212121212121212121212121212121212121212121212121212121212";
 const VIDEO_DIGEST: &str =
     "sha256:2323232323232323232323232323232323232323232323232323232323232323";
-const LOTTIE_DIGEST: &str =
-    "sha256:3434343434343434343434343434343434343434343434343434343434343434";
 const MISMATCH_DIGEST: &str =
     "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a";
 const SCHEMA_DIGEST: &str =
@@ -227,21 +225,6 @@ fn video_entry(duration: &str) -> Value {
             },
             "videoStream": 0,
             "audioStream": null
-        }
-    })
-}
-
-fn lottie_entry(duration: &str) -> Value {
-    json!({
-        "kind": "lottie",
-        "digest": LOTTIE_DIGEST,
-        "abi": "valle.lottie/artifact@1",
-        "descriptor": {
-            "duration": duration,
-            "timeBase": "1/60",
-            "width": 1920,
-            "height": 1080,
-            "boundarySampling": "left-limit"
         }
     })
 }
@@ -485,13 +468,6 @@ fn verified_facts(entry: &ResourceEntryWire) -> VerifiedResourceFacts {
             descriptor: descriptor.clone(),
             temporal_footprint: VisualFootprint::default(),
         },
-        ResourceEntryWire::Lottie {
-            abi, descriptor, ..
-        } => VerifiedResourceFacts::Lottie {
-            abi: *abi,
-            descriptor: descriptor.clone(),
-            temporal_footprint: VisualFootprint::new(1, 0),
-        },
         ResourceEntryWire::Font { descriptor, .. } => VerifiedResourceFacts::Font {
             descriptor: descriptor.clone(),
             bytes: Arc::from(FONT_BYTES),
@@ -579,7 +555,6 @@ fn entry_digest(entry: &ResourceEntryWire) -> &ContentDigest {
         ResourceEntryWire::Video { digest, .. }
         | ResourceEntryWire::Audio { digest, .. }
         | ResourceEntryWire::Image { digest, .. }
-        | ResourceEntryWire::Lottie { digest, .. }
         | ResourceEntryWire::Font { digest, .. }
         | ResourceEntryWire::MotionArtifact { digest, .. }
         | ResourceEntryWire::Model3d { digest, .. }
@@ -1577,96 +1552,6 @@ fn hold_end_preserves_the_sentinel_and_uses_each_producers_abi_boundary() {
     assert_ne!(
         roundtrip_motion.resources.textures[0].slot, roundtrip_motion.resources.textures[1].slot,
         "template wire roundtrip must retain both same-key texture slots"
-    );
-
-    let mut lottie_value = document_with_source(
-        json!({
-            "type": "lottie",
-            "resource": "asset:lottie",
-            "sourceStart": "0/1",
-            "rate": "1/1",
-            "endBehavior": "hold",
-            "sampling": {"fit": "contain"}
-        }),
-        json!([]),
-        "track:lottie",
-        "clip:lottie",
-        json!({}),
-    );
-    lottie_value["document"]["canvas"]["fps"] = json!("3/1");
-    lottie_value["document"]["canvas"]["duration"] = json!("2/1");
-    lottie_value["document"]["visual"]["tracks"][0]["items"][0]["duration"] = json!("2/1");
-    let lottie_manifest = manifest(json!({"asset:lottie": lottie_entry("1/1")}));
-    let lottie_render = open(
-        &timeline(&lottie_value),
-        &lottie_manifest,
-        &ResourceBindings::new()
-            .with_binding(
-                "asset:lottie",
-                binding(&lottie_manifest, "asset:lottie", None, 51),
-            )
-            .unwrap(),
-        &Capabilities::new().with_artifact_abi("valle.lottie/artifact@1"),
-        &baseline_profile(),
-    )
-    .unwrap();
-    let lottie_frame = lottie_render.evaluate(held_frame).unwrap();
-    let EvaluatedVisualOperation::Clip(lottie_clip) = &lottie_frame.visual()[0] else {
-        panic!("held Lottie source must remain a visual clip")
-    };
-    assert_eq!(
-        lottie_clip.source().mapped_time(),
-        valle_engine::render::MappedSourceTime::HoldEnd
-    );
-    let lottie_boundary = valle_timeline::RationalTime::new(59, 60).unwrap();
-    assert_eq!(lottie_clip.source().sample_time(), lottie_boundary);
-    let lottie_output = valle_engine::prepare::prepare_compiled_render_frame_cached(
-        &lottie_render,
-        &lottie_frame,
-        &valle_engine::frame::RenderSpec::new(
-            1920,
-            1080,
-            valle_engine::frame::RenderQuality::Preview,
-            valle_engine::resource::OutputSpec::srgb_preview(
-                valle_engine::resource::OutputBackground::opaque_srgb([0, 0, 0]),
-            )
-            .unwrap(),
-        )
-        .unwrap(),
-        &mut valle_engine::prepare::ProductPrepareCaches::new(),
-    )
-    .unwrap();
-    assert_eq!(
-        lottie_output.resource_requests.requests()[0].sample(),
-        valle_engine::resource::ResourceSample::SourceTime(lottie_boundary)
-    );
-
-    let tiny_lottie_manifest = manifest(json!({"asset:lottie": lottie_entry("1/100")}));
-    let tiny_lottie_render = open(
-        &timeline(&lottie_value),
-        &tiny_lottie_manifest,
-        &ResourceBindings::new()
-            .with_binding(
-                "asset:lottie",
-                binding(&tiny_lottie_manifest, "asset:lottie", None, 52),
-            )
-            .unwrap(),
-        &Capabilities::new().with_artifact_abi("valle.lottie/artifact@1"),
-        &baseline_profile(),
-    )
-    .unwrap();
-    let tiny_lottie_frame = tiny_lottie_render.evaluate(held_frame).unwrap();
-    let EvaluatedVisualOperation::Clip(tiny_lottie_clip) = &tiny_lottie_frame.visual()[0] else {
-        panic!("tiny held Lottie source must remain a visual clip")
-    };
-    assert_eq!(
-        tiny_lottie_clip.source().mapped_time(),
-        valle_engine::render::MappedSourceTime::HoldEnd
-    );
-    assert_eq!(
-        tiny_lottie_clip.source().sample_time(),
-        valle_timeline::RationalTime::ZERO,
-        "a positive duration below one descriptor tick still has the tick-zero left boundary"
     );
 }
 

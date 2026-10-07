@@ -10,7 +10,7 @@ import type { Timeline } from "./index.ts";
 
 const root = resolve(import.meta.dir, "../../../../");
 const cli = process.env.VALLE_TEST_CLI ?? join(root, "target/debug/valle");
-const { default: CanvasKitInit } = await import("canvaskit-wasm/full") as unknown as {
+const { default: CanvasKitInit } = await import("canvaskit-wasm") as unknown as {
   default: (options: { locateFile(file: string): string }) => Promise<CanvasKit>;
 };
 const smooth = (x: number) => { x = Math.max(0, Math.min(1, x)); return x*x*(3-2*x); };
@@ -19,7 +19,7 @@ const encoded = (n: number) => Math.round(255*(n <= 0.0031308 ? n*12.92 : 1.055*
 const blend = (t: number) => encoded(linear(64)*(1-t)+linear(192)*t);
 
 test("all 13 Timeline transitions render exact endpoints and analytic midpoints on Native and CanvasKit", async () => {
-  const ck = await CanvasKitInit({ locateFile: () => Bun.resolveSync("canvaskit-wasm/bin/full/canvaskit.wasm", import.meta.dir) });
+  const ck = await CanvasKitInit({ locateFile: () => Bun.resolveSync("canvaskit-wasm/bin/canvaskit.wasm", import.meta.dir) });
   initSync({ module: await readFile(join(root,"web/packages/engine/generated/web/valle_engine_bg.wasm")) });
   const dir = await mkdtemp(join(tmpdir(),"valle-timeline-transitions-"));
   const spawn = (args: string[]) => Bun.spawn([cli,"--json",...args],{cwd:dir,env:{...process.env,VALLE_HOME:join(dir,"home")},stdout:"pipe",stderr:"pipe"});

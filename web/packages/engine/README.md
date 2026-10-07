@@ -23,10 +23,8 @@ const player = await createBrowserValleWebPlayer({
     },
     workers: { productFrame: "/valle/workers/product-frame.js" },
     canvasKit: {
-      full: {
-        glue: "/canvaskit/canvaskit.js",
-        wasm: "/canvaskit/canvaskit.wasm",
-      },
+      glue: "/canvaskit/canvaskit.js",
+      wasm: "/canvaskit/canvaskit.wasm",
     },
   },
 });
@@ -37,7 +35,7 @@ await player.seek(1.5);
 await player.close();
 ```
 
-Deploy this package's `wasm/` and `workers/` directories at the example `/valle/` location. Deploy `bin/full/canvaskit.js` and `bin/full/canvaskit.wasm` from the installed **official `canvaskit-wasm` dependency** together, or configure equivalent version-pinned URLs. These URLs are application configuration, not built-in CDN endpoints. The worker must be loadable by the browser under the application's origin and security policy.
+Deploy this package's `wasm/` and `workers/` directories at the example `/valle/` location. Deploy `bin/canvaskit.js` and `bin/canvaskit.wasm` from the installed **official `canvaskit-wasm` dependency** together, or configure equivalent version-pinned URLs. These URLs are application configuration, not built-in CDN endpoints. The worker must be loadable by the browser under the application's origin and security policy.
 
 The SDK archive contains one Engine WASM and no CanvasKit WASM, bundled font pack, or Studio files. Fonts and project assets are supplied by the host. The local CLI runtime separately keeps its CanvasKit and fonts available for offline Studio use.
 

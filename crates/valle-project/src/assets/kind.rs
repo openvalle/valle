@@ -15,7 +15,6 @@ pub enum AssetKind {
     Font,
     /// Motion Scene3D's locked GLB subset. Timeline continues to carry it as generic `data`.
     Model3d,
-    Lottie,
     /// JSX or HTML component with an optional same-stem keyframe companion.
     Component,
     Other,
@@ -29,7 +28,6 @@ impl AssetKind {
             AssetKind::Image => "image",
             AssetKind::Font => "font",
             AssetKind::Model3d => "model3d",
-            AssetKind::Lottie => "lottie",
             AssetKind::Component => "component",
             AssetKind::Other => "other",
         }
@@ -42,14 +40,13 @@ impl AssetKind {
             "image" => AssetKind::Image,
             "font" => AssetKind::Font,
             "model3d" => AssetKind::Model3d,
-            "lottie" => AssetKind::Lottie,
             "component" => AssetKind::Component,
             "other" => AssetKind::Other,
             other => {
                 return Err(AssetsError::unsupported_media(format!(
                     "unknown asset kind '{other}'"
                 ))
-                .with_hint("video|audio|image|font|model3d|lottie|component|other"));
+                .with_hint("video|audio|image|font|model3d|component|other"));
             }
         })
     }
@@ -73,7 +70,6 @@ mod tests {
             AssetKind::Image,
             AssetKind::Font,
             AssetKind::Model3d,
-            AssetKind::Lottie,
             AssetKind::Component,
             AssetKind::Other,
         ] {

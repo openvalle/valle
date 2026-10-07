@@ -214,10 +214,6 @@ fn all_visual_source_variants_have_closed_shapes() {
             "type": "image", "resource": "asset:i", "sampling": { "fit": "contain" }
         }),
         json!({
-            "type": "lottie", "resource": "asset:l", "sourceStart": "0/1", "rate": "1/1",
-            "endBehavior": "loop", "sampling": { "fit": "contain" }
-        }),
-        json!({
             "type": "motion", "component": "component:Title", "fit": "contain", "sourceStart": "0/1",
             "role": {"type":"clip"}, "sourceDuration": "4/1", "rate": "1/1", "endBehavior": "hold",
             "props": { "title": { "type": "constant", "value": "VALLE" } },

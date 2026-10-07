@@ -142,7 +142,6 @@ const KIND_ICON: Record<string, string> = {
   audio: "🎵",
   image: "🖼️",
   font: "🔤",
-  lottie: "✨",
   component: "🧩",
   other: "📄",
 };

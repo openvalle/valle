@@ -258,19 +258,17 @@ impl RequestAllocator {
         path: &str,
     ) -> Result<ExternalHandleId, RequestError> {
         let interpretation = match asset.kind {
-            SemanticAssetKind::Video | SemanticAssetKind::Image | SemanticAssetKind::Lottie => {
-                ResourceInterpretation::Visual {
-                    interpretation: asset
-                        .descriptor
-                        .visual_interpretation()
-                        .ok_or(RequestError::InvalidVisualDescriptor)?,
-                }
-            }
+            SemanticAssetKind::Video | SemanticAssetKind::Image => ResourceInterpretation::Visual {
+                interpretation: asset
+                    .descriptor
+                    .visual_interpretation()
+                    .ok_or(RequestError::InvalidVisualDescriptor)?,
+            },
             SemanticAssetKind::Audio => return Err(RequestError::VisualRequestedAsAudio),
         };
         let expected = match asset.kind {
             SemanticAssetKind::Video => super::video::expected(asset),
-            SemanticAssetKind::Image | SemanticAssetKind::Lottie => super::image::expected(asset),
+            SemanticAssetKind::Image => super::image::expected(asset),
             SemanticAssetKind::Audio => unreachable!("rejected above"),
         };
         self.allocate(

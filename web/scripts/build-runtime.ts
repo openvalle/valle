@@ -76,8 +76,8 @@ await withBuildDirectory(path.join(root, "dist"), async (dist) => {
   await assertCanvasKitBuildVersion(canvasKitRoot);
   const mp4boxRoot = path.dirname(path.dirname(Bun.resolveSync("mp4box", engineRoot)));
   for (const [source, target] of [
-    [path.join(canvasKitRoot, "bin", "full", "canvaskit.js"), "runtime/canvaskit/canvaskit.js"],
-    [path.join(canvasKitRoot, "bin", "full", "canvaskit.wasm"), "runtime/canvaskit/canvaskit.wasm"],
+    [path.join(canvasKitRoot, "bin", "canvaskit.js"), "runtime/canvaskit/canvaskit.js"],
+    [path.join(canvasKitRoot, "bin", "canvaskit.wasm"), "runtime/canvaskit/canvaskit.wasm"],
     [path.join(canvasKitRoot, "LICENSE"), "runtime/licenses/canvaskit.txt"],
     [path.join(mp4boxRoot, "LICENSE"), "runtime/licenses/mp4box.txt"],
   ] as const) {

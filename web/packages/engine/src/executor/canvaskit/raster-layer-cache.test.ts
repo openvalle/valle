@@ -8,13 +8,13 @@ import { CanvasKitExecutor, type CanvasKitExecutionReport } from "./executor.ts"
 
 const root = resolve(import.meta.dir, "../../../../../..");
 const cli = process.env.VALLE_TEST_CLI ?? join(root, "target/debug/valle");
-const { default: CanvasKitInit } = await import("canvaskit-wasm/full") as unknown as {
+const { default: CanvasKitInit } = await import("canvaskit-wasm") as unknown as {
   default: (options: { locateFile(file: string): string }) => Promise<CanvasKit>;
 };
 
 test("CanvasKit RasterProgram cache reuses exact pixels and invalidates on frame, output and surface changes", async () => {
   const CanvasKit = await CanvasKitInit({
-    locateFile: () => Bun.resolveSync("canvaskit-wasm/bin/full/canvaskit.wasm", import.meta.dir),
+    locateFile: () => Bun.resolveSync("canvaskit-wasm/bin/canvaskit.wasm", import.meta.dir),
   });
   initSync({ module: await readFile(join(root, "web/packages/engine/generated/web/valle_engine_bg.wasm")) });
   const directory = await mkdtemp(join(tmpdir(), "valle-raster-layer-cache-"));

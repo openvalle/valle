@@ -268,9 +268,6 @@ fn timeline_document_view_native(json: &str) -> Result<String, String> {
                             VisualSourceWire::Video(source) => {
                                 Some((source.source_start, source.rate))
                             }
-                            VisualSourceWire::Lottie(source) => {
-                                Some((source.source_start, source.rate))
-                            }
                             VisualSourceWire::Motion(source) => {
                                 Some((source.source_start, source.rate))
                             }

@@ -346,7 +346,6 @@ pub enum BlendMode {
 pub enum VisualSource {
     Video(VideoSource),
     Image(ImageSource),
-    Lottie(LottieSource),
     Motion(MotionInstance),
     Solid(SolidSource),
 }
@@ -365,15 +364,6 @@ pub struct VideoSource {
 pub struct ImageSource {
     pub resource: ResourceId,
     pub sampling: RasterSampling,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LottieSource {
-    pub resource: ResourceId,
-    pub source_start: RationalTime,
-    pub rate: RationalRate,
-    pub end_behavior: MediaEndBehavior,
-    pub sampling: LottieSampling,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -404,11 +394,6 @@ pub enum MediaEndBehavior {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RasterSampling {
-    pub fit: RasterFit,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LottieSampling {
     pub fit: RasterFit,
 }
 
@@ -1193,16 +1178,6 @@ fn visual_source_from_wire(
                 fit: raster_fit_from_wire(source.sampling.fit),
             },
         })),
-        wire::VisualSourceWire::Lottie(source) => Ok(VisualSource::Lottie(LottieSource {
-            resource: source.resource,
-            source_start: RationalTime::from_exact(source.source_start),
-            rate: RationalRate::from_exact(source.rate)
-                .map_err(|_| DocumentConversionError::RationalRate)?,
-            end_behavior: media_end_behavior_from_wire(source.end_behavior),
-            sampling: LottieSampling {
-                fit: raster_fit_from_wire(source.sampling.fit),
-            },
-        })),
         wire::VisualSourceWire::Motion(source) => {
             Ok(VisualSource::Motion(motion_instance_from_wire(source)?))
         }
@@ -1229,15 +1204,6 @@ fn visual_source_into_wire(source: VisualSource) -> wire::VisualSourceWire {
         VisualSource::Image(source) => wire::VisualSourceWire::Image(wire::ImageSourceWire {
             resource: source.resource,
             sampling: wire::RasterSamplingWire {
-                fit: raster_fit_into_wire(source.sampling.fit),
-            },
-        }),
-        VisualSource::Lottie(source) => wire::VisualSourceWire::Lottie(wire::LottieSourceWire {
-            resource: source.resource,
-            source_start: source.source_start.into_exact(),
-            rate: source.rate.into_exact(),
-            end_behavior: media_end_behavior_into_wire(source.end_behavior),
-            sampling: wire::LottieSamplingWire {
                 fit: raster_fit_into_wire(source.sampling.fit),
             },
         }),

@@ -648,20 +648,6 @@ impl<'a> Validator<'a> {
             VisualSourceWire::Image(source) => {
                 self.validate_resource_id(&source.resource, &format!("{path}/source/resource"));
             }
-            VisualSourceWire::Lottie(source) => {
-                self.validate_resource_id(&source.resource, &format!("{path}/source/resource"));
-                self.require_non_negative(
-                    source.source_start,
-                    &format!("{path}/source/sourceStart"),
-                    Some(&clip.id),
-                );
-                self.require_positive(
-                    source.rate,
-                    &format!("{path}/source/rate"),
-                    Some(&clip.id),
-                    "rate_non_positive",
-                );
-            }
             VisualSourceWire::Motion(source) => {
                 if matches!(source.role, crate::MotionRole::CaptionPresenter { .. }) {
                     self.error(

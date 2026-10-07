@@ -380,25 +380,6 @@ impl TimelineNormalizer {
                     },
                 })
             }
-            timeline::TimelineVisualSourceWire::Lottie {
-                src,
-                trim_start,
-                rate,
-                end,
-                fit,
-            } => document::VisualSourceWire::Lottie(document::LottieSourceWire {
-                resource: self.resolve(&src, &source_path)?,
-                source_start: trim_start.as_ref().map_or(ExactRational::ZERO, exact_time),
-                rate: rate.as_ref().map_or(ExactRational::ONE, exact_time),
-                end_behavior: end
-                    .map(lower_media_end)
-                    .unwrap_or(document::MediaEndBehaviorWire::Error),
-                sampling: document::LottieSamplingWire {
-                    fit: fit
-                        .map(lower_raster_fit)
-                        .unwrap_or(document::RasterFitWire::Contain),
-                },
-            }),
             timeline::TimelineVisualSourceWire::Motion {
                 component,
                 fit,

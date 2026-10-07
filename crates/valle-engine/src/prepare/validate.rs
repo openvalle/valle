@@ -420,12 +420,12 @@ impl Admission<'_> {
                             "image source must use a static resource sample",
                         ));
                     }
-                    PreparedSourceKind::Video | PreparedSourceKind::Lottie
+                    PreparedSourceKind::Video
                         if !matches!(request.sample(), ResourceSample::SourceTime(_)) =>
                     {
                         return Err(invalid(
                             path,
-                            "video and Lottie sources require an explicit source-time sample",
+                            "video sources require an explicit source-time sample",
                         ));
                     }
                     _ => {}
@@ -443,9 +443,7 @@ impl Admission<'_> {
                     PreparedSourceKind::Solid => {
                         (PreparedProgramKind::Solid, format!("{path}.solid"))
                     }
-                    PreparedSourceKind::Video
-                    | PreparedSourceKind::Image
-                    | PreparedSourceKind::Lottie => {
+                    PreparedSourceKind::Video | PreparedSourceKind::Image => {
                         return Err(invalid(path, "external source kind used a Draw program"));
                     }
                 };

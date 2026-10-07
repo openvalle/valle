@@ -70,7 +70,7 @@ pub fn add(
 
     // Determine kind, preferring an explicit override over extension or structural detection.
     let ext = file_ext(src);
-    let kind = match kind_override.or_else(|| detect_kind(src, ext.as_deref())) {
+    let kind = match kind_override.or_else(|| detect_kind(ext.as_deref())) {
         Some(k) => k,
         None => {
             return Err(AssetsError::unsupported_media(format!(
@@ -78,7 +78,7 @@ pub fn add(
                 src.display()
             ))
             .with_hint(
-                "specify --kind video|audio|image|font|model3d|lottie|component|other to override detection",
+                "specify --kind video|audio|image|font|model3d|component|other to override detection",
             ));
         }
     };
@@ -382,8 +382,8 @@ fn file_name(path: &Path) -> String {
         .to_owned()
 }
 
-/// Detect kind primarily by extension; identify Lottie JSON by its structure.
-fn detect_kind(path: &Path, ext: Option<&str>) -> Option<AssetKind> {
+/// Detect kind by extension.
+fn detect_kind(ext: Option<&str>) -> Option<AssetKind> {
     match ext {
         Some("mp4" | "mov" | "mkv" | "webm" | "avi" | "m4v") => Some(AssetKind::Video),
         Some("png" | "jpg" | "jpeg" | "webp" | "gif" | "bmp" | "tiff" | "tif" | "heic") => {
@@ -393,28 +393,6 @@ fn detect_kind(path: &Path, ext: Option<&str>) -> Option<AssetKind> {
         Some("ttf" | "otf" | "woff" | "woff2") => Some(AssetKind::Font),
         Some("glb") => Some(AssetKind::Model3d),
         Some("jsx" | "html") => Some(AssetKind::Component),
-        Some("json") => {
-            if looks_like_lottie(path) {
-                Some(AssetKind::Lottie)
-            } else {
-                None
-            }
-        }
         _ => None,
-    }
-}
-
-/// Detect top-level `v` and `layers` fields, reading at most 1 MiB.
-fn looks_like_lottie(path: &Path) -> bool {
-    let Ok(f) = std::fs::File::open(path) else {
-        return false;
-    };
-    let mut buf = Vec::new();
-    if f.take(1024 * 1024).read_to_end(&mut buf).is_err() {
-        return false;
-    }
-    match serde_json::from_slice::<serde_json::Value>(&buf) {
-        Ok(v) => v.get("v").is_some() && v.get("layers").is_some(),
-        Err(_) => false,
     }
 }

@@ -15,7 +15,7 @@ const cli = process.env.VALLE_TEST_CLI ?? join(root, "target/debug/valle");
 // Run with VALLE_TEST_NATIVE_BACKEND=metal outside the sandbox to exercise the GPU.
 const nativeBackend = process.env.VALLE_TEST_NATIVE_BACKEND ?? "raster";
 if (nativeBackend !== "raster" && nativeBackend !== "metal") throw new Error("unsupported test backend");
-const { default: CanvasKitInit } = await import("canvaskit-wasm/full") as unknown as {
+const { default: CanvasKitInit } = await import("canvaskit-wasm") as unknown as {
   default: (options: { locateFile(file: string): string }) => Promise<CanvasKit>;
 };
 
@@ -74,7 +74,7 @@ function pixelDifference(actual: Uint8Array, expected: Uint8Array, width: number
 }
 
 test("frozen shaders align Native/CanvasKit sampling and arbitrary-frame results", async () => {
-  const ck = await CanvasKitInit({ locateFile: () => Bun.resolveSync("canvaskit-wasm/bin/full/canvaskit.wasm", import.meta.dir) });
+  const ck = await CanvasKitInit({ locateFile: () => Bun.resolveSync("canvaskit-wasm/bin/canvaskit.wasm", import.meta.dir) });
   initSync({ module: await readFile(new URL("../generated/web/valle_engine_bg.wasm", import.meta.url)) });
   const dir = await mkdtemp(join(tmpdir(), "valle-shader-parity-"));
   const assets = ["--asset", "effect=effect.shader.json", "--asset", "image=steps.png", "--fps", "30"];

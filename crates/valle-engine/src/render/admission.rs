@@ -378,48 +378,6 @@ fn validate_resolved_admission(
         }
     }
 
-    for (track_index, track) in document.visual.tracks.iter().enumerate() {
-        for (item_index, item) in track.items.iter().enumerate() {
-            let VisualItem::Clip(clip) = item else {
-                continue;
-            };
-            let VisualSource::Lottie(source) = &clip.source else {
-                continue;
-            };
-            if source.end_behavior != MediaEndBehavior::Hold {
-                continue;
-            }
-            let Some(target) = resource_targets.get(&source.resource).copied() else {
-                continue;
-            };
-            let Some(VerifiedResourceFacts::Lottie { descriptor, .. }) = resources
-                .get(target as usize)
-                .map(|resource| &resource.facts)
-            else {
-                continue;
-            };
-            if lottie_hold_end_boundary(descriptor).is_err() {
-                diagnostics.push(diagnostic(
-                    EngineOpenDiagnosticCode::InvalidIntervalQuantization,
-                    format!(
-                        "/document/visual/tracks/{track_index}/items/{item_index}/source/resource"
-                    ),
-                    EngineOpenPhase::Admission,
-                    Some(&source.resource),
-                    details([
-                        (
-                            "reason",
-                            "hold-end-descriptor-boundary-clock-overflow".to_owned(),
-                        ),
-                        ("duration", descriptor.duration.to_string()),
-                        ("timeBase", descriptor.time_base.to_string()),
-                        ("boundarySampling", "left-limit".to_owned()),
-                    ]),
-                ));
-            }
-        }
-    }
-
     for (track_index, track) in document.captions.tracks.iter().enumerate() {
         for (item_index, item) in track.items.iter().enumerate() {
             let CaptionItem::Clip(caption) = item else {
@@ -756,7 +714,6 @@ struct AdmittedMotionInstance {
 enum AdmittedSourceKind {
     Video,
     Image,
-    Lottie,
     Motion,
     Solid,
     Audio,
@@ -768,9 +725,6 @@ enum AdmittedSourcePayload {
         fit: AdmittedRasterFit,
     },
     Image {
-        fit: AdmittedRasterFit,
-    },
-    Lottie {
         fit: AdmittedRasterFit,
     },
     Motion {
@@ -1742,37 +1696,6 @@ fn admit_visual_source(
                 },
             }
         }
-        VisualSource::Lottie(source) => {
-            let target =
-                required_resource_target(resource_targets, &source.resource, path, diagnostics);
-            let descriptor = lottie_resource_descriptor(resources, target);
-            let source_duration = descriptor.map(|descriptor| descriptor.duration);
-            let hold_end_time = (source.end_behavior == MediaEndBehavior::Hold)
-                .then(|| {
-                    descriptor.and_then(|descriptor| {
-                        lottie_hold_end_boundary(descriptor)
-                            .map_err(|_| {
-                                diagnostics.push(admit_fault(path, "lottie-hold-end-boundary"));
-                            })
-                            .ok()
-                    })
-                })
-                .flatten();
-            AdmittedSource {
-                kind: AdmittedSourceKind::Lottie,
-                resource_target: Some(target),
-                placement_start,
-                source_start: source.source_start,
-                source_duration,
-                hold_end_time,
-                rate: source.rate,
-                end_behavior: admit_end_behavior(source.end_behavior),
-                dependency_range: AdmittedDependencyRange::Frames { range },
-                payload: AdmittedSourcePayload::Lottie {
-                    fit: admit_raster_fit(source.sampling.fit),
-                },
-            }
-        }
         VisualSource::Motion(source) => {
             let target =
                 required_resource_target(resource_targets, &source.component, path, diagnostics);
@@ -2234,65 +2157,8 @@ fn visual_resource_duration(resources: &[ResolvedResource], target: u32) -> Opti
         .map(|resource| &resource.facts)
     {
         Some(VerifiedResourceFacts::Video { descriptor, .. }) => Some(descriptor.duration),
-        Some(VerifiedResourceFacts::Lottie { descriptor, .. }) => Some(descriptor.duration),
         _ => None,
     }
-}
-
-fn lottie_resource_descriptor(
-    resources: &[ResolvedResource],
-    target: u32,
-) -> Option<&LottieResourceDescriptorWire> {
-    match resources
-        .get(target as usize)
-        .map(|resource| &resource.facts)
-    {
-        Some(VerifiedResourceFacts::Lottie { descriptor, .. }) => Some(descriptor),
-        _ => None,
-    }
-}
-
-/// Resolves the Lottie ABI's `t -> D-` sentinel onto the descriptor clock. The selected tick is
-/// `ceil(D / timeBase) - 1`, which is the final deterministic descriptor boundary strictly below
-/// `D`; this is exact integer arithmetic, not an epsilon approximation or a canvas-frame sample.
-fn lottie_hold_end_boundary(descriptor: &LottieResourceDescriptorWire) -> Result<RationalTime, ()> {
-    if descriptor.boundary_sampling != ContinuousBoundarySamplingWire::LeftLimit {
-        return Err(());
-    }
-    let duration = descriptor.duration;
-    let time_base = RationalTime::from_exact(descriptor.time_base);
-    let duration_numerator = u128::try_from(duration.numerator()).map_err(|_| ())?;
-    let time_base_numerator = u128::try_from(time_base.numerator()).map_err(|_| ())?;
-    if duration_numerator == 0 || time_base_numerator == 0 {
-        return Err(());
-    }
-    let scaled_duration = duration_numerator
-        .checked_mul(u128::from(time_base.denominator()))
-        .ok_or(())?;
-    let scaled_tick = u128::from(duration.denominator())
-        .checked_mul(time_base_numerator)
-        .ok_or(())?;
-    let tick_count = (scaled_duration / scaled_tick)
-        .checked_add(u128::from(!scaled_duration.is_multiple_of(scaled_tick)))
-        .ok_or(())?;
-    let last_tick = tick_count.checked_sub(1).ok_or(())?;
-    let sample_numerator = last_tick.checked_mul(time_base_numerator).ok_or(())?;
-    let sample_denominator = u128::from(time_base.denominator());
-    let divisor = gcd_u128(sample_numerator, sample_denominator);
-    RationalTime::new(
-        i64::try_from(sample_numerator / divisor).map_err(|_| ())?,
-        u32::try_from(sample_denominator / divisor).map_err(|_| ())?,
-    )
-    .map_err(|_| ())
-}
-
-fn gcd_u128(mut left: u128, mut right: u128) -> u128 {
-    while right != 0 {
-        let remainder = left % right;
-        left = right;
-        right = remainder;
-    }
-    left
 }
 
 fn visual_footprint(resources: &[ResolvedResource], target: u32) -> VisualFootprint {
@@ -2304,9 +2170,6 @@ fn visual_footprint(resources: &[ResolvedResource], target: u32) -> VisualFootpr
             temporal_footprint, ..
         })
         | Some(VerifiedResourceFacts::Image {
-            temporal_footprint, ..
-        })
-        | Some(VerifiedResourceFacts::Lottie {
             temporal_footprint, ..
         })
         | Some(VerifiedResourceFacts::MotionArtifact {

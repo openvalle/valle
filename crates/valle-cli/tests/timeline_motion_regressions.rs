@@ -1400,7 +1400,7 @@ export default function Metadata(ctx, props, data) {
                 {"clips": [{"kind": "motion", "component": "scene", "start": 0, "duration": 1,
                     "data": {
                         "item": {"kind": "motion", "component": "scene", "font": "picture"},
-                        "decoy": {"kind": "lottie", "src": "picture"}
+                        "decoy": {"kind": "video", "src": "picture"}
                     }}]},
                 {"clips": [{"kind": "image", "src": "picture", "start": 0, "duration": 1}]}
             ]}
