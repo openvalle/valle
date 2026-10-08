@@ -83,7 +83,7 @@ shasum -a 256 -c SHA256SUMS
 
 Linux 将命令换成 `sha256sum -c`，文件名换成 Linux 版本。Windows 解压内层 ZIP 后，在 PowerShell 运行 `.\valle.exe --help`；可用 `Get-FileHash -Algorithm SHA256` 对照校验文件。已安装构建工具时，三个平台均可用 `cargo xtask verify-package /absolute/path/to/EXECUTABLE` 重新验证运行时。
 
-macOS 包要求 macOS 15+。手动打包使用 Developer ID 签名、Hardened Runtime、安全时间戳和 Apple 公证；本地打包及自动 CI 使用 ad-hoc 签名。独立 CLI 不能附加公证票据，Gatekeeper 需要联网获取 Apple 的票据。Linux 包在 Ubuntu 24.04（glibc 2.39）上构建，依赖系统 C/C++ 库、Fontconfig、FreeType 和 OpenBLAS；Ubuntu 可安装 `libfontconfig1 libfreetype6 libopenblas0-pthread`。Windows 使用 MSVC 构建，可能需要与包架构匹配的 Visual C++ Redistributable。ASR 转写和强制对齐目前支持 macOS、Linux，Windows 暂不支持。FFmpeg 和模型运行时仍为单独安装的可选依赖。
+macOS 包要求 macOS 15+。手动打包使用 Developer ID 签名、Hardened Runtime、安全时间戳和 Apple 公证；本地打包及自动 CI 使用 ad-hoc 签名。独立 CLI 不能附加公证票据，Gatekeeper 需要联网获取 Apple 的票据。Linux 包在 Ubuntu 24.04（glibc 2.39）上构建，依赖系统 C/C++ 库、Fontconfig 和 FreeType；Ubuntu 可安装 `libfontconfig1 libfreetype6`。Windows 使用 MSVC 构建，可能需要与包架构匹配的 Visual C++ Redistributable。ASR 转写和强制对齐仅支持 macOS，不支持 Linux 和 Windows。FFmpeg 和模型运行时仍为单独安装的可选依赖。
 
 macOS 手动打包需要配置 `MACOS_CERT_P12_BASE64`、`MACOS_CERT_PASSWORD`、`MACOS_SIGN_IDENTITY`、`APPLE_API_KEY_ID`、`APPLE_API_ISSUER_ID` 和 `APPLE_API_KEY_P8_BASE64` 六个 Actions secrets。凭据缺失、签名无效、公证拒绝或等待超过 60 分钟时，不上传分发包；日志保留公证提交 ID 和状态。
 

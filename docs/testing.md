@@ -54,7 +54,7 @@ cargo +1.96.0 llvm-cov --coverage-host-only --workspace \
 
 `ORT_DYLIB_PATH` must point to a compatible ONNX Runtime 1.28 library. The checked-in ONNX and CoreML test assets are documented in [the inference fixture README](../crates/valle-media/tests/fixtures/models/README.md). Rust tests load these assets directly. CoreML tests run the checked-in affine model through the native framework on macOS.
 
-Qwen acceptance tests require `VALLE_QWEN_ASR_DIR`, `VALLE_QWEN_ALIGNER_DIR`, and `VALLE_QWEN_FIXTURE_WAV`. The directories must contain the real pinned 1.0.0 model artifacts; the WAV is mono 16 kHz speech. These tests assert nonempty recognition and monotonic, bounded alignment timestamps. Other model adapters use deterministic graphs and exact pixel/sample/timing assertions.
+Qwen acceptance tests run only on macOS and require `VALLE_QWEN_ASR_DIR`, `VALLE_QWEN_ALIGNER_DIR`, and `VALLE_QWEN_FIXTURE_WAV`. The directories must contain the real pinned 1.0.0 model artifacts; the WAV is mono 16 kHz speech. These tests assert nonempty recognition and monotonic, bounded alignment timestamps. Linux and Windows instead verify that transcription is rejected before loading dependencies or changing output files. Other model adapters use deterministic graphs and exact pixel/sample/timing assertions.
 
 Media backend implementations are compiled for FFmpeg 7, 8, and 9. Repeat codec unit/integration tests and `shared_gpu_roundtrip` with `VALLE_FFMPEG_DIR` set to each actual ABI installation; two aliases pointing to one library do not verify two ABIs. Keep ignored library tests explicitly selected by name: some are child-process roles that require parent-provided environment variables.
 

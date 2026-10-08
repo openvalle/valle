@@ -15,7 +15,7 @@ mod error;
     feature = "tool-segment",
     feature = "tool-separate",
     feature = "tool-shots",
-    all(feature = "tool-transcribe", not(target_os = "windows")),
+    all(feature = "tool-transcribe", target_os = "macos"),
     feature = "tool-upscale"
 ))]
 mod model_session;
@@ -23,7 +23,7 @@ mod output;
 mod report;
 
 #[cfg(any(
-    all(feature = "tool-transcribe", not(target_os = "windows")),
+    all(feature = "tool-transcribe", target_os = "macos"),
     feature = "tool-separate"
 ))]
 mod audio_workspace;
@@ -42,7 +42,7 @@ pub mod segment;
 pub mod separate;
 #[cfg(feature = "tool-shots")]
 pub mod shots;
-#[cfg(all(feature = "tool-transcribe", not(target_os = "windows")))]
+#[cfg(all(feature = "tool-transcribe", target_os = "macos"))]
 pub mod transcribe;
 #[cfg(feature = "tool-upscale")]
 pub mod upscale;
@@ -64,7 +64,7 @@ pub use error::{ToolError, ToolErrorCode};
 #[cfg(any(
     feature = "tool-enhance",
     feature = "tool-separate",
-    all(feature = "tool-transcribe", not(target_os = "windows"))
+    all(feature = "tool-transcribe", target_os = "macos")
 ))]
 pub(crate) use report::probe_audio_input;
 pub use report::{

@@ -328,7 +328,7 @@ allows `--overwrite`.
 
 Important input/output details:
 
-- Transcription and forced alignment currently support macOS and Linux only; Windows is not yet supported. Transcription uses the native CPU route and accepts `--backend auto` only.
+- Transcription and forced alignment support macOS only; Linux and Windows are unsupported. Transcription uses the native CPU route and accepts `--backend auto` only.
   `--text-only` skips alignment and only needs the ASR model. It cannot be
   combined with `-o`; with `--json` the text is inside the run result.
 - Matting can use ONNX or macOS CoreML; the other listed non-ASR tools currently

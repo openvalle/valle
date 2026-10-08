@@ -29,7 +29,7 @@ pub struct ModelManager {
     #[cfg(all(
         feature = "model-store",
         feature = "model-qwen-native",
-        not(target_os = "windows")
+        target_os = "macos"
     ))]
     legacy_models_root: PathBuf,
     #[cfg(feature = "model-store")]
@@ -55,7 +55,7 @@ impl ModelManager {
             #[cfg(all(
                 feature = "model-store",
                 feature = "model-qwen-native",
-                not(target_os = "windows")
+                target_os = "macos"
             ))]
             legacy_models_root: legacy_cache_migration::models_root(),
             #[cfg(feature = "model-store")]
@@ -75,7 +75,7 @@ impl ModelManager {
             #[cfg(all(
                 feature = "model-store",
                 feature = "model-qwen-native",
-                not(target_os = "windows")
+                target_os = "macos"
             ))]
             legacy_models_root: models_root.clone(),
             models_root,
@@ -89,7 +89,7 @@ impl ModelManager {
         Self {
             install_capability_policy: InstallCapabilityPolicy::ArtifactManagement,
             catalog: CatalogRepository::with_source(models_root.clone(), source),
-            #[cfg(all(feature = "model-qwen-native", not(target_os = "windows")))]
+            #[cfg(all(feature = "model-qwen-native", target_os = "macos"))]
             legacy_models_root: models_root.clone(),
             models_root,
         }
@@ -128,7 +128,7 @@ impl ModelManager {
             ),
             feature = "model-realesrgan-onnx",
             feature = "model-rife-onnx",
-            all(feature = "model-qwen-native", not(target_os = "windows")),
+            all(feature = "model-qwen-native", target_os = "macos"),
             all(feature = "model-coreml", target_os = "macos")
         ))
     }
@@ -222,7 +222,7 @@ impl ModelManager {
                 route.artifact,
                 route.backend
             ));
-            #[cfg(all(feature = "model-qwen-native", not(target_os = "windows")))]
+            #[cfg(all(feature = "model-qwen-native", target_os = "macos"))]
             if let Some(migrated) =
                 self.migrate_legacy_qwen(&bundle, &fetched, route, artifact, progress)?
             {
@@ -270,7 +270,7 @@ impl ModelManager {
     #[cfg(all(
         feature = "model-store",
         feature = "model-qwen-native",
-        not(target_os = "windows")
+        target_os = "macos"
     ))]
     fn migrate_legacy_qwen(
         &self,
@@ -711,7 +711,7 @@ fn adapter_available(adapter: &str, version: u32, backend: Backend) -> bool {
         | ("modnet-image-matting", 1, Backend::Coreml) => true,
         #[cfg(feature = "model-modnet-onnx")]
         ("modnet-image-matting", 1, Backend::OnnxCpu) => true,
-        #[cfg(all(feature = "model-qwen-native", not(target_os = "windows")))]
+        #[cfg(all(feature = "model-qwen-native", target_os = "macos"))]
         ("qwen3-asr-transcription", 1, Backend::NativeCpu)
         | ("qwen3-forced-alignment", 1, Backend::NativeCpu) => true,
         #[cfg(feature = "model-dpdfnet-onnx")]
@@ -1165,6 +1165,49 @@ mod tests {
         let models = manager.list().unwrap();
         assert!(models.iter().any(|model| model.id == "birefnet"));
         assert!(models.iter().any(|model| model.id == "demucs"));
+    }
+
+    #[cfg(feature = "model-store")]
+    #[test]
+    fn qwen_routes_reject_linux_and_windows_for_both_architectures() {
+        use crate::models::spec::{Architecture, Platform};
+
+        for id in ["qwen3-asr-0.6b", "qwen3-aligner-0.6b"] {
+            let manifest = crate::models::spec::embedded_release_manifest(id, "1.0.0").unwrap();
+            assert_eq!(
+                adapter_available(&manifest.contract.adapter, 1, Backend::NativeCpu),
+                cfg!(all(feature = "model-qwen-native", target_os = "macos"))
+            );
+            for platform in [Platform::Linux, Platform::Windows] {
+                for architecture in [Architecture::Aarch64, Architecture::X86_64] {
+                    let environment = Environment {
+                        platform,
+                        architecture,
+                    };
+                    for policy in [
+                        InstallCapabilityPolicy::ArtifactManagement,
+                        InstallCapabilityPolicy::CompiledAdapters,
+                    ] {
+                        let error = select_install_routes(
+                            &manifest,
+                            InstallBackendSelection::Auto,
+                            environment,
+                            policy,
+                        )
+                        .unwrap_err();
+                        assert_eq!(
+                            error.code,
+                            ModelErrorCode::NoCompatibleRoute,
+                            "{id}: {platform}/{architecture}"
+                        );
+                    }
+                    assert!(
+                        compatible_routes(&manifest, RunBackendPreference::Auto, environment, true)
+                            .is_empty()
+                    );
+                }
+            }
+        }
     }
 
     #[cfg(feature = "model-store")]

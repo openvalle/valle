@@ -150,7 +150,7 @@ fn matte_video_honors_ranges_and_rejects_bad_range_syntax() {
     }
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "macos")]
 #[test]
 #[ignore = "requires pinned Qwen ASR/aligner weights and VALLE_QWEN_FIXTURE_WAV"]
 fn real_qwen_cli_publishes_valid_word_and_sentence_transcripts() {

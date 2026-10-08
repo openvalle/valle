@@ -22,7 +22,7 @@ pub mod segment;
 pub mod separate;
 pub mod shots;
 pub mod timeline;
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "macos")]
 pub mod transcribe;
 pub mod upscale;
 

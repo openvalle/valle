@@ -136,6 +136,7 @@ fn media_surface_owns_file_level_model_tools() {
     assert!(transcribe_help.contains("qwen3-asr-0.6b"));
     assert!(transcribe_help.contains("accepts `auto` only"));
     assert!(transcribe_help.contains("standalone word-level transcript"));
+    assert!(transcribe_help.contains("supported only on macOS"));
     assert!(transcribe_help.contains(".sentences.json"));
     assert!(transcribe_help.contains("valle models install"));
     assert!(transcribe_help.contains("before offline use"));
@@ -512,7 +513,7 @@ fn media_invalid_input_uses_exit_two_and_keeps_json_stderr_empty() {
     assert_eq!(envelope["error"]["code"], "invalid_input");
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "macos")]
 #[test]
 fn transcribe_rejects_explicit_non_native_backend_without_resolving_a_model() {
     let temporary = tempfile::tempdir().unwrap();
@@ -535,7 +536,7 @@ fn transcribe_rejects_explicit_non_native_backend_without_resolving_a_model() {
     assert_eq!(envelope["error"]["hint"], "use --backend auto");
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "macos")]
 #[test]
 fn transcribe_requires_installation_even_if_a_legacy_directory_exists() {
     let temporary = tempfile::tempdir().unwrap();
@@ -564,7 +565,7 @@ fn transcribe_requires_installation_even_if_a_legacy_directory_exists() {
     );
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "macos")]
 #[test]
 fn media_report_cannot_replace_the_primary_output() {
     let temporary = tempfile::tempdir().unwrap();

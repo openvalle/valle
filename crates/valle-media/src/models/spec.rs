@@ -1168,6 +1168,12 @@ mod tests {
             assert!(release.repository.starts_with("Qwen/"));
             assert_eq!(release.revision, manifest.provenance.revision);
             assert_eq!(release.manifest_path, "release.v1.json");
+            assert!(
+                manifest
+                    .routes
+                    .iter()
+                    .all(|route| route.platforms == [Platform::Macos])
+            );
             embedded_release_manifest(model, version).unwrap();
         }
     }

@@ -187,48 +187,6 @@
         "segment_seconds": 30
       },
       "notes": "The adapter supports Accelerate on Intel macOS, but this route has not run on hardware."
-    },
-    {
-      "id": "native-cpu-linux-x86_64",
-      "artifact": "safetensors-bf16",
-      "backend": "native-cpu",
-      "platforms": [
-        "linux"
-      ],
-      "architectures": [
-        "x86_64"
-      ],
-      "status": "unverified",
-      "priority": 100,
-      "requirements": {
-        "minimum_os": null,
-        "minimum_runtime": "qwen-asr 0.11.0 with OpenBLAS"
-      },
-      "options": {
-        "segment_seconds": 30
-      },
-      "notes": "The native runtime documents this target; no Valle hardware or CI gate has run yet."
-    },
-    {
-      "id": "native-cpu-linux-arm64",
-      "artifact": "safetensors-bf16",
-      "backend": "native-cpu",
-      "platforms": [
-        "linux"
-      ],
-      "architectures": [
-        "aarch64"
-      ],
-      "status": "unverified",
-      "priority": 100,
-      "requirements": {
-        "minimum_os": null,
-        "minimum_runtime": "qwen-asr 0.11.0 with OpenBLAS"
-      },
-      "options": {
-        "segment_seconds": 30
-      },
-      "notes": "The native runtime documents this target; no Valle hardware or CI gate has run yet."
     }
   ]
 }

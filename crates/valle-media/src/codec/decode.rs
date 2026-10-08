@@ -174,7 +174,7 @@ pub fn probe_av(path: &Path) -> Result<AvProbe> {
     test,
     feature = "tool-enhance",
     feature = "tool-separate",
-    all(feature = "tool-transcribe", not(target_os = "windows"))
+    all(feature = "tool-transcribe", target_os = "macos")
 ))]
 pub(crate) fn probe_av_details(path: &Path) -> Result<AvProbeDetails> {
     match backend::version()? {

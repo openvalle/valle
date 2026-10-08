@@ -31,13 +31,11 @@ block2 = { workspace = true, optional = true }
 objc2 = { workspace = true, optional = true }
 objc2-core-ml = { workspace = true, optional = true }
 objc2-foundation = { workspace = true, optional = true }
+# Native ASR and forced alignment are supported only on macOS.
+qwen-asr = { workspace = true, optional = true, features = ["blas", "vdsp"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-sys.workspace = true
-
-# Native ASR and forced alignment are not supported on Windows yet.
-[target.'cfg(not(target_os = "windows"))'.dependencies]
-qwen-asr = { workspace = true, optional = true, features = ["blas", "vdsp"] }
 
 [dev-dependencies]
 hound.workspace = true

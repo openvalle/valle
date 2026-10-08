@@ -102,9 +102,9 @@ export default function Test(){return <Scene style={{width:160,height:90,backgro
     ));
     assert!(std::fs::metadata(dir.join("image.png")).unwrap().len() > 100);
 }
-#[cfg(target_os = "windows")]
+#[cfg(not(target_os = "macos"))]
 #[test]
-fn windows_transcription_is_rejected_before_loading_or_writing() {
+fn non_macos_transcription_is_rejected_before_loading_or_writing() {
     let temp = tempfile::tempdir().unwrap();
     let dir = temp.path();
     let missing = dir.join("missing-ffmpeg");
@@ -137,7 +137,7 @@ fn windows_transcription_is_rejected_before_loading_or_writing() {
             diagnostic["error"]["message"]
                 .as_str()
                 .unwrap()
-                .contains("not supported on Windows yet")
+                .contains("supported only on macOS")
         );
     }
     assert_eq!(

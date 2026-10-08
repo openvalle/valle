@@ -183,7 +183,7 @@ pub enum MediaAction {
     Capabilities,
     /// Transcribe audio or video into a standalone word-level transcript.
     ///
-    /// ASR and forced alignment are currently unavailable on Windows.
+    /// ASR and forced alignment are supported only on macOS.
     Transcribe {
         #[command(flatten)]
         args: TranscribeArgs,
@@ -1203,15 +1203,15 @@ fn dispatch_media(action: MediaAction) -> Result<std::process::ExitCode> {
             args.report,
             args.json || output::machine(),
         ),
-        #[cfg(target_os = "windows")]
+        #[cfg(not(target_os = "macos"))]
         MediaAction::Transcribe { args } => cmd::media::render_error(
             &valle_media::tools::ToolError::new(
                 valle_media::tools::ToolErrorCode::UnsupportedAdapter,
-                "ASR and forced alignment are not supported on Windows yet",
+                "ASR and forced alignment are supported only on macOS",
             ),
             args.json || output::machine(),
         ),
-        #[cfg(not(target_os = "windows"))]
+        #[cfg(target_os = "macos")]
         MediaAction::Transcribe { args } => cmd::transcribe::run(
             &args.input,
             args.output,

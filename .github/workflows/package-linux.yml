@@ -74,7 +74,7 @@ jobs:
         run: |
           test "$(uname -m)" = '${{ matrix.machine }}'
           sudo apt-get update 2>&1 | tee "$PACKAGE_LOGS/install.log"
-          sudo apt-get install -y clang-18 llvm-18 libclang-18-dev cmake ninja-build pkg-config python3 curl libfontconfig1-dev libfreetype6-dev libopenblas-dev 2>&1 | tee -a "$PACKAGE_LOGS/install.log"
+          sudo apt-get install -y clang-18 llvm-18 libclang-18-dev cmake ninja-build pkg-config python3 curl libfontconfig1-dev libfreetype6-dev 2>&1 | tee -a "$PACKAGE_LOGS/install.log"
           echo "LIBCLANG_PATH=$(llvm-config-18 --libdir)" >> "$GITHUB_ENV"
           rustup show
           rustup target add '${{ matrix.target }}'

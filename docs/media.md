@@ -82,7 +82,7 @@ necessarily executable by an older Valle binary.
 
 | Operation | Supported model choices | Current execution backends |
 | --- | --- | --- |
-| `transcribe` | `qwen3-asr-0.6b`; timestamps also use `qwen3-aligner-0.6b` | `auto` only: native CPU, macOS/Linux |
+| `transcribe` | `qwen3-asr-0.6b`; timestamps also use `qwen3-aligner-0.6b` | `auto` only: native CPU, macOS only |
 | `matte` | `birefnet`, `modnet` | ONNX CPU; CoreML on supported macOS routes |
 | `shots` | `omnishotcut`, `transnetv2` | ONNX CPU |
 | Remaining operations | The default model in the operation table | ONNX CPU |
@@ -177,6 +177,9 @@ or `--hardware-encode` options. Read the run report's output summaries and warni
 when the exact encoding matters.
 
 ## Transcribe: speech to text
+
+ASR transcription and forced alignment are supported only on macOS. Linux and
+Windows reject `media transcribe` before loading models or writing output files.
 
 Install ASR and alignment for timestamped output:
 

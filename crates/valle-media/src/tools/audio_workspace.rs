@@ -53,7 +53,7 @@ struct SpoolFile {
 }
 
 impl AudioWorkspace {
-    #[cfg(any(all(feature = "tool-transcribe", not(target_os = "windows")), test))]
+    #[cfg(any(all(feature = "tool-transcribe", target_os = "macos"), test))]
     pub fn decode(
         input: &Path,
         sample_rate: u32,
