@@ -62,6 +62,8 @@ else {
     "darwin-arm64": "aarch64-apple-darwin", "darwin-x64": "x86_64-apple-darwin",
     "linux-arm64": "aarch64-unknown-linux-musl", "linux-x64": "x86_64-unknown-linux-musl",
     "win32-x64": "x86_64-pc-windows-msvc",
+    // Upstream ships only an x64 Windows CLI; Windows 11 Arm runs this build tool via emulation.
+    "win32-arm64": "x86_64-pc-windows-msvc",
   };
   const target = targets[`${process.platform}-${process.arch}`];
   if (!target) throw new Error(`Install wasm-bindgen-cli ${version} on PATH for ${process.platform}-${process.arch}`);

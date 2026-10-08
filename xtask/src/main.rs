@@ -9,7 +9,7 @@ mod notices;
 mod package;
 
 const MARKER: &str = ".valle-distribution";
-const USAGE: &str = "Usage: cargo xtask build [--release]\n       cargo xtask package [--min-macos VERSION]\n       cargo xtask verify-package BINARY";
+const USAGE: &str = "Usage: cargo xtask build [--release]\n       cargo xtask package [--target TRIPLE] [--min-macos VERSION]\n       cargo xtask verify-package BINARY";
 
 fn main() -> Result<()> {
     let args: Vec<_> = std::env::args().skip(1).collect();
@@ -223,8 +223,16 @@ mod contract_tests {
 
     #[test]
     fn commands_report_start_and_exit_failures() {
-        run(Command::new("/usr/bin/true").arg("unused")).unwrap();
-        assert!(run(Command::new("/usr/bin/false").arg("unused")).is_err());
+        #[cfg(unix)]
+        {
+            run(Command::new("/usr/bin/true").arg("unused")).unwrap();
+            assert!(run(Command::new("/usr/bin/false").arg("unused")).is_err());
+        }
+        #[cfg(windows)]
+        {
+            run(Command::new("cmd.exe").args(["/C", "exit", "0"])).unwrap();
+            assert!(run(Command::new("cmd.exe").args(["/C", "exit", "1"])).is_err());
+        }
         assert!(run(&mut Command::new("/nonexistent/valle-test-command")).is_err());
         let dir = tempfile::tempdir().unwrap();
         fs::create_dir(dir.path().join("dist")).unwrap();

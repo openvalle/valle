@@ -279,7 +279,7 @@ checksum = "e6e4313cd5fcd3dad5cafa179702e2b244f760991f45397d14d4ebf38247da75"
 
 [[package]]
 name = "valle-draw"
-version = "0.1.0"
+version = "0.1.0-rc.1"
 dependencies = [
  "hex",
  "libm",
@@ -291,7 +291,7 @@ dependencies = [
 
 [[package]]
 name = "valle-timeline"
-version = "0.1.0"
+version = "0.1.0-rc.1"
 dependencies = [
  "serde",
  "serde_jcs",
@@ -304,7 +304,7 @@ dependencies = [
 
 [[package]]
 name = "valle-web-schema-gen"
-version = "0.1.0"
+version = "0.1.0-rc.1"
 dependencies = [
  "serde",
  "serde_json",

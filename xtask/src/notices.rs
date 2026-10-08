@@ -21,6 +21,10 @@ pub fn generate(
         .lines()
         .find_map(|line| line.strip_prefix("host: "))
         .context("rustc host missing")?;
+    let target = environment
+        .get("CARGO_BUILD_TARGET")
+        .map(String::as_str)
+        .unwrap_or(host);
     let metadata: Value = serde_json::from_str(&super::package::capture(
         Command::new("cargo")
             .args([
@@ -29,7 +33,7 @@ pub fn generate(
                 "--format-version",
                 "1",
                 "--filter-platform",
-                host,
+                target,
             ])
             .current_dir(root),
     )?)?;

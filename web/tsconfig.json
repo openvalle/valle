@@ -19,6 +19,7 @@
     ]
   },
   "include": [
+    "../.github/scripts/**/*.ts",
     "apps/**/*.ts",
     "packages/**/*.ts",
     "scripts/**/*.ts",

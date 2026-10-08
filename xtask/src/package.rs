@@ -12,18 +12,23 @@ use std::{
 pub use verify::verify;
 
 pub fn package(root: &Path, args: &[String]) -> Result<()> {
-    host_platform()?;
-    let ceiling = match args {
-        [] => None,
-        [flag, value] if flag == "--min-macos" => {
-            ensure!(cfg!(target_os = "macos"), "--min-macos requires macOS");
-            Some(version(value)?)
-        }
-        _ => bail!("{}", super::USAGE),
-    };
+    let host = host_platform()?;
+    let (target, ceiling) = package_options(args)?;
+    let selected = target.map(target_platform).transpose()?.unwrap_or(host);
+    ensure!(
+        selected == host || (cfg!(target_os = "macos") && selected.starts_with("darwin-")),
+        "cross-compilation is supported only between macOS arm64 and x86_64"
+    );
+    ensure!(
+        ceiling.is_none() || cfg!(target_os = "macos"),
+        "--min-macos requires macOS"
+    );
     let output = root.join("target/package");
     super::check_output(&output)?;
     let mut environment = BTreeMap::new();
+    if let Some(target) = target {
+        environment.insert("CARGO_BUILD_TARGET".to_owned(), target.to_owned());
+    }
     if let Some(minimum) = ceiling {
         environment.insert(
             "MACOSX_DEPLOYMENT_TARGET".to_owned(),
@@ -39,6 +44,17 @@ pub fn package(root: &Path, args: &[String]) -> Result<()> {
     let name = executable_name();
     let binary = next.join(&name);
     fs::copy(root.join("dist/bin").join(executable_name()), &binary)?;
+    if cfg!(target_os = "macos") {
+        let expected = if selected == "darwin-arm64" {
+            "arm64"
+        } else {
+            "x86_64"
+        };
+        ensure!(
+            inspect(&binary)?.arch == expected,
+            "binary does not match requested platform {selected}"
+        );
+    }
     if let Some(ceiling) = ceiling {
         let minimum = version(&inspect(&binary)?.minimum)?;
         ensure!(
@@ -84,6 +100,36 @@ pub fn package(root: &Path, args: &[String]) -> Result<()> {
     Ok(())
 }
 
+fn package_options(args: &[String]) -> Result<(Option<&str>, Option<[u32; 3]>)> {
+    let mut target = None;
+    let mut minimum = None;
+    let mut args = args.iter();
+    while let Some(flag) = args.next() {
+        let value = args.next().context(super::USAGE)?;
+        match flag.as_str() {
+            "--target" if target.is_none() => {
+                target_platform(value)?;
+                target = Some(value.as_str());
+            }
+            "--min-macos" if minimum.is_none() => minimum = Some(version(value)?),
+            _ => bail!("{}", super::USAGE),
+        }
+    }
+    Ok((target, minimum))
+}
+
+fn target_platform(target: &str) -> Result<&'static str> {
+    match target {
+        "aarch64-apple-darwin" => platform("macos", "aarch64"),
+        "x86_64-apple-darwin" => platform("macos", "x86_64"),
+        "aarch64-unknown-linux-gnu" => platform("linux", "aarch64"),
+        "x86_64-unknown-linux-gnu" => platform("linux", "x86_64"),
+        "aarch64-pc-windows-msvc" => platform("windows", "aarch64"),
+        "x86_64-pc-windows-msvc" => platform("windows", "x86_64"),
+        _ => bail!("unsupported package target: {target}"),
+    }
+}
+
 fn host_platform() -> Result<&'static str> {
     ensure!(
         !cfg!(windows) || cfg!(target_env = "msvc"),
@@ -95,10 +141,13 @@ fn host_platform() -> Result<&'static str> {
 fn platform(os: &str, arch: &str) -> Result<&'static str> {
     match (os, arch) {
         ("macos", "aarch64") => Ok("darwin-arm64"),
+        ("macos", "x86_64") => Ok("darwin-x86_64"),
         ("linux", "x86_64") => Ok("linux-x86_64"),
+        ("linux", "aarch64") => Ok("linux-arm64"),
         ("windows", "x86_64") => Ok("windows-x86_64"),
+        ("windows", "aarch64") => Ok("windows-arm64"),
         _ => bail!(
-            "unsupported package host: {os}/{arch}; use macOS arm64, Linux x86_64 or Windows x86_64 MSVC"
+            "unsupported package host: {os}/{arch}; use macOS, Linux GNU or Windows MSVC on arm64 or x86_64"
         ),
     }
 }
@@ -170,6 +219,7 @@ fn system_library(value: &str) -> bool {
 
 #[derive(Debug)]
 struct MachO {
+    arch: String,
     dependencies: Vec<String>,
     rpaths: Vec<String>,
     minimum: String,
@@ -177,15 +227,19 @@ struct MachO {
 fn inspect(path: &Path) -> Result<MachO> {
     let arch = capture(Command::new("/usr/bin/lipo").arg("-archs").arg(path))?;
     ensure!(
-        arch == "arm64",
-        "{} is {arch}, expected arm64",
+        matches!(arch.as_str(), "arm64" | "x86_64"),
+        "{} has unsupported architecture {arch}",
         path.display()
     );
     let loads = capture(Command::new("/usr/bin/otool").arg("-l").arg(path))?;
-    parse_loads(&loads).with_context(|| format!("reading Mach-O {}", path.display()))
+    let mut info =
+        parse_loads(&loads).with_context(|| format!("reading Mach-O {}", path.display()))?;
+    info.arch = arch;
+    Ok(info)
 }
 fn parse_loads(text: &str) -> Result<MachO> {
     let mut result = MachO {
+        arch: String::new(),
         dependencies: Vec::new(),
         rpaths: Vec::new(),
         minimum: String::new(),
@@ -256,8 +310,88 @@ mod tests {
         assert_eq!(platform("macos", "aarch64")?, "darwin-arm64");
         assert_eq!(platform("linux", "x86_64")?, "linux-x86_64");
         assert_eq!(platform("windows", "x86_64")?, "windows-x86_64");
-        assert!(platform("linux", "aarch64").is_err());
+        assert_eq!(platform("macos", "x86_64")?, "darwin-x86_64");
+        assert_eq!(platform("linux", "aarch64")?, "linux-arm64");
+        assert_eq!(platform("windows", "aarch64")?, "windows-arm64");
         assert!(platform("windows", "x86").is_err());
+        Ok(())
+    }
+    #[test]
+    fn validates_cross_package_arguments_before_building() -> Result<()> {
+        let args = ["--target", "x86_64-apple-darwin", "--min-macos", "15.0"].map(str::to_owned);
+        assert_eq!(
+            package_options(&args)?,
+            (Some("x86_64-apple-darwin"), Some([15, 0, 0]))
+        );
+        for args in [
+            vec!["--target"],
+            vec!["--target", "wasm32-unknown-unknown"],
+            vec![
+                "--target",
+                "x86_64-apple-darwin",
+                "--target",
+                "aarch64-apple-darwin",
+            ],
+            vec!["--min-macos", "15.0", "--min-macos", "15.0"],
+        ] {
+            assert!(
+                package_options(&args.into_iter().map(str::to_owned).collect::<Vec<_>>()).is_err()
+            );
+        }
+        for target in [
+            "aarch64-apple-darwin",
+            "x86_64-apple-darwin",
+            "aarch64-unknown-linux-gnu",
+            "x86_64-unknown-linux-gnu",
+            "aarch64-pc-windows-msvc",
+            "x86_64-pc-windows-msvc",
+        ] {
+            target_platform(target)?;
+        }
+        Ok(())
+    }
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn prepares_both_macos_architectures_and_rejects_universal_binaries() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let source = temp.path().join("main.c");
+        fs::write(&source, "int main(void) { return 0; }\n")?;
+        let mut binaries = Vec::new();
+        for arch in ["arm64", "x86_64"] {
+            let binary = temp.path().join(arch);
+            super::super::run(
+                Command::new("/usr/bin/clang")
+                    .args([
+                        "-arch",
+                        arch,
+                        "-mmacosx-version-min=15.0",
+                        "-Wl,-rpath,/valle-test",
+                    ])
+                    .arg(&source)
+                    .arg("-o")
+                    .arg(&binary),
+            )?;
+            assert_eq!(inspect(&binary)?.arch, arch);
+            prepare_executable(&binary)?;
+            let info = inspect(&binary)?;
+            assert_eq!(info.arch, arch);
+            assert!(info.rpaths.is_empty());
+            super::super::run(
+                Command::new("/usr/bin/codesign")
+                    .args(["--verify", "--strict"])
+                    .arg(&binary),
+            )?;
+            binaries.push(binary);
+        }
+        let universal = temp.path().join("universal");
+        super::super::run(
+            Command::new("/usr/bin/lipo")
+                .arg("-create")
+                .args(&binaries)
+                .arg("-output")
+                .arg(&universal),
+        )?;
+        assert!(inspect(&universal).is_err());
         Ok(())
     }
     #[test]

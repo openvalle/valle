@@ -1,13 +1,18 @@
-name: Package macOS arm64
+name: Package macOS
 
 on:
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      ci:
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 concurrency:
-  group: package-macos-${{ github.ref }}
+  group: package-macos-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
 
 defaults:
@@ -16,7 +21,17 @@ defaults:
 
 jobs:
   package:
-    if: github.repository == 'openvalle/valle' && github.ref == 'refs/heads/main'
+    if: inputs.ci || (github.repository == 'openvalle/valle' && github.ref == 'refs/heads/main')
+    name: macOS ${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            target: aarch64-apple-darwin
+          - arch: x86_64
+            target: x86_64-apple-darwin
+    # Both targets use Apple Silicon; Intel binaries execute through Rosetta.
     runs-on: macos-15
     timeout-minutes: 240
     env:
@@ -36,6 +51,7 @@ jobs:
           echo "image=$ImageVersion" >> "$GITHUB_OUTPUT"
           mkdir -p "$RUNNER_TEMP/valle-package-logs"
       - name: Check signing and notarization credentials
+        if: '!inputs.ci'
         env:
           MACOS_CERT_P12_BASE64: ${{ secrets.MACOS_CERT_P12_BASE64 }}
           MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
@@ -57,13 +73,14 @@ jobs:
         id: dependencies
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          key: macos-15-${{ runner.arch }}-${{ steps.environment.outputs.image }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml', '.cargo/config.toml', 'web/bun.lock', 'web/package.json') }}
-          restore-keys: macos-15-${{ runner.arch }}-${{ steps.environment.outputs.image }}-
+          key: macos-15-${{ matrix.target }}-${{ steps.environment.outputs.image }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml', '.cargo/config.toml', 'web/bun.lock', 'web/package.json') }}
+          restore-keys: macos-15-${{ matrix.target }}-${{ steps.environment.outputs.image }}-
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             target/debug
             target/release
+            target/${{ matrix.target }}
             target/wasm32-unknown-unknown
             target/tools
             ${{ env.BUN_INSTALL_CACHE_DIR }}
@@ -72,20 +89,43 @@ jobs:
         run: |
           test "$(uname -m)" = arm64
           for attempt in 1 2 3; do
-            if brew install pkgconf llvm cmake ninja python ffmpeg ffmpeg@8 ffmpeg@7 2>&1 | tee -a "$PACKAGE_LOGS/install.log"; then break; fi
+            if brew install pkgconf llvm cmake ninja python 2>&1 | tee -a "$PACKAGE_LOGS/install.log"; then break; fi
             if [ "$attempt" = 3 ]; then exit 1; fi
             sleep $((attempt * 5))
           done
-          echo "VALLE_TEST_FFMPEG7_DIR=$(brew --prefix ffmpeg@7)/lib" >> "$GITHUB_ENV"
-          echo "VALLE_TEST_FFMPEG8_DIR=$(brew --prefix ffmpeg@8)/lib" >> "$GITHUB_ENV"
-          echo "VALLE_TEST_FFMPEG9_DIR=$(brew --prefix ffmpeg)/lib" >> "$GITHUB_ENV"
           echo "LIBCLANG_PATH=$(brew --prefix llvm)/lib" >> "$GITHUB_ENV"
           echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
           rustup show
+          rustup target add '${{ matrix.target }}'
+          if [ '${{ matrix.arch }}' = x86_64 ]; then
+            /usr/sbin/softwareupdate --install-rosetta --agree-to-license
+            /usr/bin/arch -x86_64 /usr/bin/true
+            if [ ! -x /usr/local/bin/brew ]; then
+              curl --fail --silent --show-error --location --retry 3 \
+                https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh \
+                -o "$RUNNER_TEMP/install-homebrew.sh"
+              NONINTERACTIVE=1 /usr/bin/arch -x86_64 /bin/bash "$RUNNER_TEMP/install-homebrew.sh"
+            fi
+            runtime_brew=(/usr/bin/arch -x86_64 /usr/local/bin/brew)
+            echo 'CARGO_TARGET_X86_64_APPLE_DARWIN_RUNNER=/usr/bin/arch -x86_64' >> "$GITHUB_ENV"
+          else
+            runtime_brew=(brew)
+          fi
+          for attempt in 1 2 3; do
+            if "${runtime_brew[@]}" install ffmpeg ffmpeg@8 ffmpeg@7 2>&1 | tee -a "$PACKAGE_LOGS/install.log"; then break; fi
+            if [ "$attempt" = 3 ]; then exit 1; fi
+            sleep $((attempt * 5))
+          done
           for major in 7 8 9; do
             formula="ffmpeg@$major"
             if [ "$major" = 9 ]; then formula=ffmpeg; fi
-            "$(brew --prefix "$formula")/bin/ffmpeg" -version > "$PACKAGE_LOGS/ffmpeg-cli-$major.txt"
+            prefix="$("${runtime_brew[@]}" --prefix "$formula")"
+            echo "VALLE_TEST_FFMPEG${major}_DIR=$prefix/lib" >> "$GITHUB_ENV"
+            if [ "$major" = 9 ]; then
+              echo "VALLE_FFMPEG_DIR=$prefix/lib" >> "$GITHUB_ENV"
+              echo "$prefix/bin" >> "$GITHUB_PATH"
+            fi
+            "$prefix/bin/ffmpeg" -version > "$PACKAGE_LOGS/ffmpeg-cli-$major.txt"
             grep -E "^ffmpeg version ${major}[. ]" "$PACKAGE_LOGS/ffmpeg-cli-$major.txt"
           done
       - name: Record build environment
@@ -108,7 +148,13 @@ jobs:
         run: cargo test --locked -p xtask 2>&1 | tee "$PACKAGE_LOGS/xtask-tests.log"
       # Local packaging uses ad-hoc signing. Sign the final artifact after the build tests.
       - name: Build and verify single executable
-        run: cargo xtask package --min-macos 15.0 2>&1 | tee "$PACKAGE_LOGS/package.log"
+        run: cargo xtask package --target '${{ matrix.target }}' --min-macos 15.0 2>&1 | tee "$PACKAGE_LOGS/package.log"
+      - name: Set distribution executable and version
+        run: |
+          binary="$GITHUB_WORKSPACE/target/package/valle"
+          echo "VALLE_TEST_BINARY=$binary" >> "$GITHUB_ENV"
+          version="$("$binary" --version)"
+          echo "VALLE_PACKAGE_VERSION=${version#valle }" >> "$GITHUB_ENV"
       - name: Record installed FFmpeg capabilities
         run: |
           for major in 7 8 9; do
@@ -125,19 +171,33 @@ jobs:
           VALLE_EMBED_WEB_DIR: ${{ github.workspace }}/web/dist
           VALLE_EMBED_NOTICES: ${{ github.workspace }}/target/distribution-notices.txt
         run: |
-          cargo test --locked --release -p valle-cli --features embedded-runtime --lib --test web_runtime --test edit_timeline_consistency --test ffmpeg_runtime -- --include-ignored --test-threads=1 2>&1 | tee "$PACKAGE_LOGS/cli-tests.log"
+          cargo test --locked --release --target '${{ matrix.target }}' -p valle-cli --features embedded-runtime --lib --test web_runtime --test edit_timeline_consistency --test ffmpeg_runtime -- --include-ignored --test-threads=1 2>&1 | tee "$PACKAGE_LOGS/cli-tests.log"
+      - name: Test Rust workspace
+        if: inputs.ci
+        env:
+          VALLE_EMBED_WEB_DIR: ${{ github.workspace }}/web/dist
+          VALLE_EMBED_NOTICES: ${{ github.workspace }}/target/distribution-notices.txt
+        run: cargo test --locked --release --target '${{ matrix.target }}' --workspace --features valle-cli/embedded-runtime --tests --no-fail-fast -- --test-threads=1 2>&1 | tee "$PACKAGE_LOGS/rust-tests.log"
+      - name: Test all Web code and generated boundaries
+        if: inputs.ci && matrix.arch == 'arm64'
+        working-directory: web
+        run: |
+          bun run verify:boundaries 2>&1 | tee "$PACKAGE_LOGS/web-boundaries.log"
+          bun test 2>&1 | tee "$PACKAGE_LOGS/web-all-tests.log"
       - name: Test media with each installed ABI
         run: |
           for major in 7 8 9; do
             variable="VALLE_TEST_FFMPEG${major}_DIR"
-            VALLE_FFMPEG_DIR="${!variable}" cargo test --locked --release -p valle-media --features libav --lib --test codec_roundtrip --test muxer --test no_ffmpeg_cli -- --test-threads=1 2>&1 | tee "$PACKAGE_LOGS/media-$major.log"
+            VALLE_FFMPEG_DIR="${!variable}" cargo test --locked --release --target '${{ matrix.target }}' -p valle-media --features libav --lib --test codec_roundtrip --test muxer --test no_ffmpeg_cli -- --test-threads=1 2>&1 | tee "$PACKAGE_LOGS/media-$major.log"
           done
       - name: Import Developer ID Application certificate
+        if: '!inputs.ci'
         uses: apple-actions/import-codesign-certs@5142e029c445c10ffc7149d172e540235a065466 # v7.0.0
         with:
           p12-file-base64: ${{ secrets.MACOS_CERT_P12_BASE64 }}
           p12-password: ${{ secrets.MACOS_CERT_PASSWORD }}
       - name: Sign the final executable
+        if: '!inputs.ci'
         working-directory: target/package
         env:
           MACOS_SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
@@ -158,15 +218,16 @@ jobs:
           echo "VALLE_TEST_BINARY=$PWD/$binary" >> "$GITHUB_ENV"
           version="$(./valle --version)"
           echo "VALLE_PACKAGE_VERSION=${version#valle }" >> "$GITHUB_ENV"
-      - name: Verify the signed executable and external FFmpeg libraries
+      - name: Verify distribution executable and external FFmpeg libraries
         env:
           VALLE_EMBED_WEB_DIR: ${{ github.workspace }}/web/dist
           VALLE_EMBED_NOTICES: ${{ github.workspace }}/target/distribution-notices.txt
         run: |
           cargo xtask verify-package "$VALLE_TEST_BINARY" 2>&1 | tee "$PACKAGE_LOGS/signed-package.log"
-          cargo test --locked --release -p valle-cli --features embedded-runtime --test ffmpeg_versions one_binary_renders_with_all_ffmpeg_abis -- --ignored --test-threads=1 2>&1 | tee "$PACKAGE_LOGS/cli-versions.log"
-          cargo test --locked --release -p valle-cli --features embedded-runtime --test ffmpeg_versions rejects_mixed_installations -- --ignored --test-threads=1 2>&1 | tee "$PACKAGE_LOGS/mixed-libraries.log"
+          cargo test --locked --release --target '${{ matrix.target }}' -p valle-cli --features embedded-runtime --test ffmpeg_versions one_binary_renders_with_all_ffmpeg_abis -- --ignored --test-threads=1 2>&1 | tee "$PACKAGE_LOGS/cli-versions.log"
+          cargo test --locked --release --target '${{ matrix.target }}' -p valle-cli --features embedded-runtime --test ffmpeg_versions rejects_mixed_installations -- --ignored --test-threads=1 2>&1 | tee "$PACKAGE_LOGS/mixed-libraries.log"
       - name: Notarize and require acceptance
+        if: '!inputs.ci'
         id: notarization
         timeout-minutes: 70
         env:
@@ -193,17 +254,22 @@ jobs:
         working-directory: target/package
         run: |
           binary="$(basename "$VALLE_TEST_BINARY")"
-          archive="valle-v${VALLE_PACKAGE_VERSION}-darwin-arm64.tar.gz"
+          archive="valle-v${VALLE_PACKAGE_VERSION}-darwin-${{ matrix.arch }}.tar.gz"
           COPYFILE_DISABLE=1 tar -czf "$archive" "$binary" SHA256SUMS
           shasum -a 256 "$archive" > "$archive.sha256"
+          shasum -a 256 -c "$archive.sha256"
+          extracted="$(mktemp -d "$RUNNER_TEMP/valle-package.XXXXXX")"
+          tar -xzf "$archive" -C "$extracted"
+          (cd "$extracted" && shasum -a 256 -c SHA256SUMS)
+          "$extracted/$binary" --version
       - name: Upload executable archive and checksum
-        if: success() && steps.notarization.outputs.status == 'Accepted'
+        if: success() && (inputs.ci || steps.notarization.outputs.status == 'Accepted')
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: valle-darwin-arm64-${{ github.sha }}
+          name: valle-darwin-${{ matrix.arch }}-${{ github.sha }}
           path: |
-            target/package/valle-*-darwin-arm64.tar.gz
-            target/package/valle-*-darwin-arm64.tar.gz.sha256
+            target/package/valle-*-darwin-${{ matrix.arch }}.tar.gz
+            target/package/valle-*-darwin-${{ matrix.arch }}.tar.gz.sha256
           if-no-files-found: error
           compression-level: 0
           retention-days: 30
@@ -217,6 +283,7 @@ jobs:
             ~/.cargo/git
             target/debug
             target/release
+            target/${{ matrix.target }}
             target/wasm32-unknown-unknown
             target/tools
             ${{ env.BUN_INSTALL_CACHE_DIR }}
@@ -230,12 +297,12 @@ jobs:
         run: |
           mkdir -p "$PACKAGE_LOGS"
           df -h > "$PACKAGE_LOGS/disk.txt"
-          du -sh target/release target/wasm32-unknown-unknown "$BUN_INSTALL_CACHE_DIR" "$HOMEBREW_CACHE" > "$PACKAGE_LOGS/cache-sizes.txt" 2>&1 || true
-          for log in target/release/build/skia-bindings-*/output target/release/build/skia-bindings-*/stderr; do
+          du -sh 'target/${{ matrix.target }}' target/wasm32-unknown-unknown "$BUN_INSTALL_CACHE_DIR" "$HOMEBREW_CACHE" > "$PACKAGE_LOGS/cache-sizes.txt" 2>&1 || true
+          for log in target/${{ matrix.target }}/release/build/skia-bindings-*/output target/${{ matrix.target }}/release/build/skia-bindings-*/stderr; do
             if [ -f "$log" ]; then cp "$log" "$PACKAGE_LOGS/$(basename "$(dirname "$log")")-$(basename "$log").txt"; fi
           done
           {
-            echo '### macOS arm64 package'
+            echo '### macOS ${{ matrix.arch }} package'
             echo "Status: $RUN_STATUS"
             echo "Commit: $GITHUB_SHA"
             echo ''
@@ -248,7 +315,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: valle-package-diagnostics-${{ github.sha }}-${{ github.run_attempt }}
+          name: valle-package-diagnostics-darwin-${{ matrix.arch }}-${{ github.sha }}-${{ github.run_attempt }}
           path: ${{ env.PACKAGE_LOGS }}
           if-no-files-found: warn
           retention-days: 14

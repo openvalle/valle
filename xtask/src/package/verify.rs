@@ -7,10 +7,15 @@ use std::{
 };
 
 pub fn verify(binary: &Path) -> Result<()> {
-    let platform = host_platform()?;
+    let mut platform = host_platform()?;
     let binary = binary.canonicalize()?;
     if cfg!(target_os = "macos") {
         verify_macos(&binary)?;
+        platform = if inspect(&binary)?.arch == "arm64" {
+            "darwin-arm64"
+        } else {
+            "darwin-x86_64"
+        };
     }
     // Copy only the executable, outside the checkout and into a path containing spaces.
     let temp = tempfile::Builder::new()

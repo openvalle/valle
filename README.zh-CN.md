@@ -50,7 +50,10 @@ FFmpeg 是可选的运行时依赖，不随 Valle 分发。媒体操作需要安
 ```sh
 # macOS arm64
 cargo xtask package --min-macos 15.0
-# Linux x86_64 或 Windows x86_64（MSVC）
+# 在安装了 Rosetta 的 Apple Silicon 上交叉编译 macOS x86_64
+rustup target add x86_64-apple-darwin
+cargo xtask package --target x86_64-apple-darwin --min-macos 15.0
+# Linux 或 Windows（MSVC），在对应的 arm64 或 x86_64 主机上构建
 cargo xtask package
 ```
 
@@ -58,11 +61,16 @@ cargo xtask package
 
 | Actions 工作流 | 分发压缩包 | 包内可执行文件 |
 | --- | --- | --- |
-| Package macOS arm64 | `valle-vVERSION-darwin-arm64.tar.gz` | `valle-vVERSION-darwin-arm64` |
-| Package Linux x86_64 | `valle-vVERSION-linux-x86_64.tar.gz` | `valle-vVERSION-linux-x86_64` |
-| Package Windows x86_64 | `valle-vVERSION-windows-x86_64.zip` | `valle-vVERSION-windows-x86_64.exe` |
+| Package macOS | `valle-vVERSION-darwin-arm64.tar.gz` | `valle` |
+| Package macOS | `valle-vVERSION-darwin-x86_64.tar.gz` | `valle` |
+| Package Linux | `valle-vVERSION-linux-arm64.tar.gz` | `valle` |
+| Package Linux | `valle-vVERSION-linux-x86_64.tar.gz` | `valle` |
+| Package Windows | `valle-vVERSION-windows-arm64.zip` | `valle.exe` |
+| Package Windows | `valle-vVERSION-windows-x86_64.zip` | `valle.exe` |
 
-在 **Actions → 对应工作流 → Run workflow** 手动触发。工作流上传压缩包及校验文件，产物保留 30 天，构建和测试日志单独保存，不会自动发布 GitHub Release。macOS 保留 FFmpeg 7/8/9 软件测试，打包流程不再要求 GPU 硬件测试。
+推送到 `main` 或提交 PR 时自动运行 CI：构建并校验全部六个平台的安装包，在每个目标上运行 Rust workspace 测试，并检查代码格式、Web 类型与测试、生成协议和 SDK 压缩包。两个 macOS 目标都使用 `macos-15` arm64 runner；x86_64 交叉编译后，通过 Rosetta 和 x86_64 FFmpeg 运行测试。Linux 和 Windows 使用各自架构的原生 runner。日常 CI 的 macOS 包使用 ad-hoc 签名，无需 Apple 凭据；所有检查通过后，`CI complete` 才成功。
+
+在 **Actions → 对应工作流 → Run workflow** 手动触发。工作流上传压缩包及校验文件，产物保留 30 天，构建和测试日志单独保存，不会自动发布 GitHub Release。macOS 手动打包限本仓库 `main`，对最终 Developer ID 签名的程序运行 FFmpeg 7/8/9 测试，Apple 公证返回 `Accepted` 后才上传分发包。打包流程不要求 GPU 硬件测试。
 
 先解压 GitHub 下载的 artifact，再解压里面的分发包。`.tar.gz` 会保留 macOS/Linux 的执行权限，无需再运行 `chmod`。macOS 示例：
 
@@ -70,12 +78,14 @@ cargo xtask package
 shasum -a 256 -c valle-vVERSION-darwin-arm64.tar.gz.sha256
 tar -xzf valle-vVERSION-darwin-arm64.tar.gz
 shasum -a 256 -c SHA256SUMS
-./valle-vVERSION-darwin-arm64 --help
+./valle --help
 ```
 
-Linux 将命令换成 `sha256sum -c`，文件名换成 Linux 版本。Windows 解压内层 ZIP 后，在 PowerShell 运行 `.\valle-vVERSION-windows-x86_64.exe --help`；可用 `Get-FileHash -Algorithm SHA256` 对照校验文件。已安装构建工具时，三个平台均可用 `cargo xtask verify-package /absolute/path/to/EXECUTABLE` 重新验证运行时。
+Linux 将命令换成 `sha256sum -c`，文件名换成 Linux 版本。Windows 解压内层 ZIP 后，在 PowerShell 运行 `.\valle.exe --help`；可用 `Get-FileHash -Algorithm SHA256` 对照校验文件。已安装构建工具时，三个平台均可用 `cargo xtask verify-package /absolute/path/to/EXECUTABLE` 重新验证运行时。
 
-macOS 包要求 macOS 15+，采用 ad-hoc 签名，未经过 Apple 公证。Linux 包在 Ubuntu 24.04（glibc 2.39）上构建，依赖系统 C/C++ 库、Fontconfig、FreeType 和 OpenBLAS；Ubuntu 可安装 `libfontconfig1 libfreetype6 libopenblas0-pthread`。Windows 使用 MSVC 构建，可能需要 x64 Visual C++ Redistributable；ASR 使用自带计算实现，无需外部 BLAS。FFmpeg 和模型运行时仍为单独安装的可选依赖。
+macOS 包要求 macOS 15+。手动打包使用 Developer ID 签名、Hardened Runtime、安全时间戳和 Apple 公证；本地打包及自动 CI 使用 ad-hoc 签名。独立 CLI 不能附加公证票据，Gatekeeper 需要联网获取 Apple 的票据。Linux 包在 Ubuntu 24.04（glibc 2.39）上构建，依赖系统 C/C++ 库、Fontconfig、FreeType 和 OpenBLAS；Ubuntu 可安装 `libfontconfig1 libfreetype6 libopenblas0-pthread`。Windows 使用 MSVC 构建，可能需要与包架构匹配的 Visual C++ Redistributable。ASR 转写和强制对齐目前支持 macOS、Linux，Windows 暂不支持。FFmpeg 和模型运行时仍为单独安装的可选依赖。
+
+macOS 手动打包需要配置 `MACOS_CERT_P12_BASE64`、`MACOS_CERT_PASSWORD`、`MACOS_SIGN_IDENTITY`、`APPLE_API_KEY_ID`、`APPLE_API_ISSUER_ID` 和 `APPLE_API_KEY_P8_BASE64` 六个 Actions secrets。凭据缺失、签名无效、公证拒绝或等待超过 60 分钟时，不上传分发包；日志保留公证提交 ID 和状态。
 
 `valle licenses`（或 `valle --json licenses`）可查看内嵌声明和依赖对应版本的源码链接。源码单独提供；分发前需公开该构建对应的 Valle 源码提交。参见[第三方依赖声明](THIRD_PARTY.md#binary-distribution-notices)。
 

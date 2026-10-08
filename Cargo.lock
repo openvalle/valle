@@ -4272,7 +4272,7 @@ dependencies = [
 
 [[package]]
 name = "valle-cli"
-version = "0.1.0"
+version = "0.1.0-rc.1"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -4303,7 +4303,7 @@ dependencies = [
 
 [[package]]
 name = "valle-compiler"
-version = "0.1.0"
+version = "0.1.0-rc.1"
 dependencies = [
  "anyhow",
  "kurbo",
@@ -4323,7 +4323,7 @@ dependencies = [
 
 [[package]]
 name = "valle-draw"
-version = "0.1.0"
+version = "0.1.0-rc.1"
 dependencies = [
  "hex",
  "libm",
@@ -4337,7 +4337,7 @@ dependencies = [
 
 [[package]]
 name = "valle-engine"
-version = "0.1.0"
+version = "0.1.0-rc.1"
 dependencies = [
  "base64 0.23.1",
  "cosmic-text",
@@ -4387,7 +4387,7 @@ dependencies = [
 
 [[package]]
 name = "valle-media"
-version = "0.1.0"
+version = "0.1.0-rc.1"
 dependencies = [
  "anyhow",
  "block2",
@@ -4417,7 +4417,7 @@ dependencies = [
 
 [[package]]
 name = "valle-motion"
-version = "0.1.0"
+version = "0.1.0-rc.1"
 dependencies = [
  "cssparser",
  "geo",
@@ -4447,7 +4447,7 @@ dependencies = [
 
 [[package]]
 name = "valle-project"
-version = "0.1.0"
+version = "0.1.0-rc.1"
 dependencies = [
  "fs2",
  "hex",
@@ -4467,7 +4467,7 @@ dependencies = [
 
 [[package]]
 name = "valle-render"
-version = "0.1.0"
+version = "0.1.0-rc.1"
 dependencies = [
  "anyhow",
  "cosmic-text",
@@ -4494,7 +4494,7 @@ dependencies = [
 
 [[package]]
 name = "valle-timeline"
-version = "0.1.0"
+version = "0.1.0-rc.1"
 dependencies = [
  "jsonschema",
  "schemars",
@@ -4897,7 +4897,7 @@ dependencies = [
 
 [[package]]
 name = "xtask"
-version = "0.1.0"
+version = "0.1.0-rc.1"
 dependencies = [
  "anyhow",
  "hex",
