@@ -1,5 +1,9 @@
 //! Mock semantic analysis covers shot transcripts, schema validation, synonyms, audio sentence units, adjacent-hit merging and optional frames.
 
+#[path = "common/analyzer.rs"]
+mod analyzer;
+
+use analyzer::AnalyzerStub;
 use std::path::Path;
 use std::time::Duration;
 
@@ -149,14 +153,6 @@ impl FrameExtractor for FakeExtractor {
     }
 }
 
-fn vlm_script(tmp: &Path, name: &str, body: &str) -> Vec<String> {
-    let p = tmp.join(name);
-    std::fs::write(&p, format!("#!/bin/sh\n{body}\n")).unwrap();
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
-    vec![p.to_string_lossy().into_owned()]
-}
-
 #[test]
 fn vlm_recipe_end_to_end_with_synonyms() {
     let tmp = tempfile::tempdir().unwrap();
@@ -165,14 +161,12 @@ fn vlm_recipe_end_to_end_with_synonyms() {
 
     // Mock schema-valid VLM output for both windows with synonyms; retain the request for assertions.
     let reqdump = tmp.path().join("req.json");
-    let argv = vlm_script(
-        tmp.path(),
-        "vlm.sh",
-        &format!(
-            "cat > {}\necho '{{\"items\":[{{\"start_ms\":0,\"end_ms\":3000,\"subjects\":[\"一名男子\"],\"event\":\"推着割草机修剪草坪\",\"scene\":\"庭院\",\"shot_scale\":\"全景\",\"empty_broll\":false,\"negative_space\":true,\"dominant_color\":\"绿色\",\"synonyms\":[\"割草机\",\"除草机\",\"打草机\"],\"summary\":\"男子在庭院修剪草坪\"}},{{\"start_ms\":3000,\"end_ms\":6000,\"subjects\":[],\"event\":\"空镜\",\"scene\":\"山顶远景\",\"shot_scale\":\"远景\",\"empty_broll\":true,\"negative_space\":true,\"dominant_color\":\"蓝色\",\"synonyms\":[\"山\",\"山顶\"],\"summary\":\"山顶空镜远景\"}}],\"cost\":{{\"ms\":4000,\"fen\":0}}}}'",
-            reqdump.display()
-        ),
-    );
+    let argv = AnalyzerStub {
+        stdout: r#"{"items":[{"start_ms":0,"end_ms":3000,"subjects":["一名男子"],"event":"推着割草机修剪草坪","scene":"庭院","shot_scale":"全景","empty_broll":false,"negative_space":true,"dominant_color":"绿色","synonyms":["割草机","除草机","打草机"],"summary":"男子在庭院修剪草坪"},{"start_ms":3000,"end_ms":6000,"subjects":[],"event":"空镜","scene":"山顶远景","shot_scale":"远景","empty_broll":true,"negative_space":true,"dominant_color":"蓝色","synonyms":["山","山顶"],"summary":"山顶空镜远景"}],"cost":{"ms":4000,"fen":0}}"#,
+        request_path: Some(&reqdump),
+        ..Default::default()
+    }
+    .command(tmp.path());
     let mut c2 = Ctx::bare(c.home.clone());
     c2.analyzers = vec![Box::new(VlmAnalyzer {
         argv,
@@ -226,10 +220,8 @@ fn vlm_recipe_end_to_end_with_synonyms() {
 
     // Include a representative frame path in each unit.
     assert!(
-        out["results"][0]["frame"]
-            .as_str()
-            .unwrap()
-            .contains("cache/frames")
+        Path::new(out["results"][0]["frame"].as_str().unwrap())
+            .starts_with(c.home.cache_dir().join("frames"))
     );
 }
 
@@ -240,14 +232,12 @@ fn vlm_recipe_runs_without_historical_asr_slot() {
     fabricate_shots(&c, &hash);
 
     let reqdump = tmp.path().join("req-without-asr.json");
-    let argv = vlm_script(
-        tmp.path(),
-        "vlm-without-asr.sh",
-        &format!(
-            "cat > {}\necho '{{\"items\":[{{\"start_ms\":0,\"end_ms\":3000,\"summary\":\"first\",\"synonyms\":[]}},{{\"start_ms\":3000,\"end_ms\":6000,\"summary\":\"second\",\"synonyms\":[]}}]}}'",
-            reqdump.display()
-        ),
-    );
+    let argv = AnalyzerStub {
+        stdout: r#"{"items":[{"start_ms":0,"end_ms":3000,"summary":"first","synonyms":[]},{"start_ms":3000,"end_ms":6000,"summary":"second","synonyms":[]}]}"#,
+        request_path: Some(&reqdump),
+        ..Default::default()
+    }
+    .command(tmp.path());
     let mut c2 = Ctx::bare(c.home.clone());
     c2.analyzers = vec![Box::new(VlmAnalyzer {
         argv,
@@ -284,14 +274,12 @@ fn vlm_invalid_output_retries_then_fails_without_slot() {
 
     let counter = tmp.path().join("calls");
     // Missing synonyms fail validation on both attempts.
-    let argv = vlm_script(
-        tmp.path(),
-        "bad_vlm.sh",
-        &format!(
-            "echo x >> {}\ncat > /dev/null\necho '{{\"items\":[{{\"start_ms\":0,\"end_ms\":3000,\"summary\":\"ok\"}},{{\"start_ms\":3000,\"end_ms\":6000,\"summary\":\"ok\"}}]}}'",
-            counter.display()
-        ),
-    );
+    let argv = AnalyzerStub {
+        stdout: r#"{"items":[{"start_ms":0,"end_ms":3000,"summary":"ok"},{"start_ms":3000,"end_ms":6000,"summary":"ok"}]}"#,
+        counter_path: Some(&counter),
+        ..Default::default()
+    }
+    .command(tmp.path());
     let mut c2 = Ctx::bare(c.home.clone());
     c2.analyzers = vec![Box::new(VlmAnalyzer {
         argv,

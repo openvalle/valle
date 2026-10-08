@@ -1,5 +1,9 @@
 //! External analyzer success, timeout, invalid JSON, batch process reuse and cache collection tests.
 
+#[path = "common/analyzer.rs"]
+mod analyzer;
+
+use analyzer::AnalyzerStub;
 use std::path::Path;
 use std::time::Duration;
 
@@ -25,14 +29,6 @@ fn setup(tmp: &Path) -> (Home, String) {
     (home, hash)
 }
 
-fn script(tmp: &Path, name: &str, body: &str) -> Vec<String> {
-    let p = tmp.join(name);
-    std::fs::write(&p, format!("#!/bin/sh\n{body}\n")).unwrap();
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
-    vec![p.to_string_lossy().into_owned()]
-}
-
 fn ext(name: &'static str, argv: Vec<String>, timeout_ms: u64) -> ExternalAnalyzer {
     ExternalAnalyzer {
         name,
@@ -51,14 +47,12 @@ fn success_batch_single_process() {
     let (home, hash) = setup(tmp.path());
     // Count one process invocation, consume the batch from stdin and return two items.
     let counter = tmp.path().join("spawns");
-    let argv = script(
-        tmp.path(),
-        "ok.sh",
-        &format!(
-            "echo x >> {}\ncat > /dev/null\necho '{{\"items\":[{{\"start_ms\":0,\"end_ms\":500,\"desc\":\"a\"}},{{\"start_ms\":500,\"end_ms\":900,\"desc\":\"b\"}}],\"cost\":{{\"ms\":7,\"fen\":3}}}}'",
-            counter.display()
-        ),
-    );
+    let argv = AnalyzerStub {
+        stdout: r#"{"items":[{"start_ms":0,"end_ms":500,"desc":"a"},{"start_ms":500,"end_ms":900,"desc":"b"}],"cost":{"ms":7,"fen":3}}"#,
+        counter_path: Some(&counter),
+        ..Default::default()
+    }
+    .command(tmp.path());
     let mut c = Ctx::bare(home.clone());
     c.analyzers = vec![Box::new(ext("vlm", argv, 5000))];
     let out = analyze(
@@ -89,11 +83,12 @@ fn success_batch_single_process() {
 fn timeout_kills_and_reports() {
     let tmp = tempfile::tempdir().unwrap();
     let (home, hash) = setup(tmp.path());
-    let argv = script(
-        tmp.path(),
-        "slow.sh",
-        "cat > /dev/null\nsleep 5\necho '{\"items\":[]}'",
-    );
+    let argv = AnalyzerStub {
+        stdout: r#"{"items":[]}"#,
+        delay_ms: 5000,
+        ..Default::default()
+    }
+    .command(tmp.path());
     let mut c = Ctx::bare(home);
     c.analyzers = vec![Box::new(ext("vlm", argv, 200))];
     let out = analyze(
@@ -119,11 +114,12 @@ fn timeout_kills_and_reports() {
 fn bad_json_reports_with_stderr_tail() {
     let tmp = tempfile::tempdir().unwrap();
     let (home, hash) = setup(tmp.path());
-    let argv = script(
-        tmp.path(),
-        "bad.sh",
-        "cat > /dev/null\necho 'boom log' >&2\necho 'not json at all'",
-    );
+    let argv = AnalyzerStub {
+        stdout: "not json at all",
+        stderr: "boom log",
+        ..Default::default()
+    }
+    .command(tmp.path());
     let mut c = Ctx::bare(home);
     c.analyzers = vec![Box::new(ext("vlm", argv, 5000))];
     let out = analyze(
@@ -147,11 +143,12 @@ fn bad_json_reports_with_stderr_tail() {
 fn direct_transport_error_codes() {
     // Check nonzero exit handling directly through run_external.
     let tmp = tempfile::tempdir().unwrap();
-    let argv = script(
-        tmp.path(),
-        "fail.sh",
-        "cat > /dev/null\necho 'oops' >&2\nexit 3",
-    );
+    let argv = AnalyzerStub {
+        stderr: "oops",
+        exit_code: 3,
+        ..Default::default()
+    }
+    .command(tmp.path());
     let err = valle_project::assets::transport::run_external(
         &argv,
         &json!({"x": 1}),
@@ -187,8 +184,10 @@ fn gc_cleans_cache_orphans_keeps_live() {
     assert!(!junk.exists());
     // Verify the cache key shape.
     assert!(
-        cache_path(&home, "frames", &hash, "1000", "jpg")
-            .to_string_lossy()
-            .ends_with(&format!("cache/frames/{hash}-1000.jpg"))
+        cache_path(&home, "frames", &hash, "1000", "jpg").ends_with(
+            Path::new("cache")
+                .join("frames")
+                .join(format!("{hash}-1000.jpg"))
+        )
     );
 }
