@@ -538,7 +538,7 @@ fn transcribe_rejects_explicit_non_native_backend_without_resolving_a_model() {
 
 #[cfg(target_os = "macos")]
 #[test]
-fn transcribe_requires_installation_even_if_a_legacy_directory_exists() {
+fn transcribe_requires_a_verified_installed_route_even_if_a_legacy_directory_exists() {
     let temporary = tempfile::tempdir().unwrap();
     let input = temporary.path().join("input.wav");
     let formal = temporary.path().join("formal-models");
@@ -557,12 +557,16 @@ fn transcribe_requires_installation_even_if_a_legacy_directory_exists() {
     assert_eq!(output.status.code(), Some(3));
     assert!(output.stderr.is_empty(), "JSON mode leaked stderr");
     let envelope: Value = serde_json::from_slice(&output.stdout).expect("media error envelope");
-    assert_eq!(envelope["error"]["code"], "model_not_installed");
-    assert!(
-        envelope["error"]["hint"]
-            .as_str()
-            .is_some_and(|hint| hint.contains("valle models install qwen3-asr-0.6b"))
-    );
+    if cfg!(target_arch = "aarch64") {
+        assert_eq!(envelope["error"]["code"], "model_not_installed");
+        assert!(
+            envelope["error"]["hint"]
+                .as_str()
+                .is_some_and(|hint| hint.contains("valle models install qwen3-asr-0.6b"))
+        );
+    } else {
+        assert_eq!(envelope["error"]["code"], "no_compatible_route");
+    }
 }
 
 #[cfg(target_os = "macos")]

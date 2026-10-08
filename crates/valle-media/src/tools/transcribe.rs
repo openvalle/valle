@@ -653,7 +653,7 @@ mod tests {
     }
 
     #[test]
-    fn missing_installed_qwen_artifact_never_falls_back_to_the_legacy_cache() {
+    fn legacy_qwen_cache_never_bypasses_formal_route_resolution() {
         let root = tempfile::tempdir().unwrap();
         std::fs::create_dir(root.path().join(ASR_MODEL_ID)).unwrap();
         let manager = ModelManager::from_models_root(root.path());
@@ -665,13 +665,18 @@ mod tests {
             Ok(_) => panic!("an empty formal model store must not resolve"),
             Err(error) => error,
         };
-        assert_eq!(error.code, ToolErrorCode::ModelNotInstalled);
-        assert!(
-            error
-                .hint
-                .as_deref()
-                .is_some_and(|hint| { hint.contains("valle models install qwen3-asr-0.6b") })
-        );
+        if cfg!(target_arch = "aarch64") {
+            assert_eq!(error.code, ToolErrorCode::ModelNotInstalled);
+            assert!(
+                error
+                    .hint
+                    .as_deref()
+                    .is_some_and(|hint| hint.contains("valle models install qwen3-asr-0.6b"))
+            );
+        } else {
+            // The Intel route remains unverified, even when legacy weights exist.
+            assert_eq!(error.code, ToolErrorCode::NoCompatibleRoute);
+        }
     }
 
     #[test]

@@ -50,14 +50,25 @@ fn graph(id: &str, path: &str) -> &'static [u8] {
 pub fn install(models_root: &Path, id: &str) -> PathBuf {
     let mut manifest = manifest(id);
     manifest["model"]["version"] = json!(VERSION);
-    let route = manifest["routes"]
+    let mut route = manifest["routes"]
         .as_array()
         .unwrap()
         .iter()
         .find(|route| route["backend"] == "onnx-cpu")
         .unwrap()
         .clone();
-    let artifact_id = route["artifact"].as_str().unwrap().to_owned();
+    // This isolated graph release tests the adapter on the current host. It does not change
+    // the published weights' verification status for other platforms or architectures.
+    route["id"] = json!("contract-onnx-cpu");
+    route["platforms"] = json!([std::env::consts::OS]);
+    route["architectures"] = json!([std::env::consts::ARCH]);
+    route["status"] = json!("verified");
+    route["requirements"]["minimum_os"] = Value::Null;
+    manifest["routes"] = json!([route]);
+    let artifact_id = manifest["routes"][0]["artifact"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     let root = models_root
         .join(id)
         .join(VERSION)

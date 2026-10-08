@@ -1,5 +1,8 @@
 //! Offline failure contracts for model tools. No model weights or network are needed.
 
+#[path = "../../valle-media/test_support/models.rs"]
+mod models;
+
 use std::{
     path::{Path, PathBuf},
     process::{Command, Output},
@@ -36,6 +39,16 @@ impl Fixture {
             format!("output.{extension}")
         });
         let report = root.path().join("report.json");
+        let id = match tool {
+            "inpaint" => "lama",
+            "upscale" => "realesrgan",
+            "interpolate" => "rife",
+            "separate" => "demucs",
+            _ => unreachable!(),
+        };
+        let artifact = models::install(&root.path().join("models"), id);
+        // Keep a compatible test release in the catalog, with no installed artifact.
+        std::fs::remove_dir_all(artifact).unwrap();
         Self {
             root,
             tool,
@@ -52,6 +65,7 @@ impl Fixture {
         command.env("VALLE_HOME", self.root.path().join("home"));
         command
             .args(["media", self.tool])
+            .args(["--model-version", models::VERSION])
             .arg(&self.input)
             .arg("--output")
             .arg(&self.output);
