@@ -832,26 +832,7 @@ fn require_real_directory(path: &Path, subject: &str) -> AssetsResult<()> {
 }
 
 fn sync_directory(path: &Path) -> AssetsResult<()> {
-    #[cfg(unix)]
-    File::open(path)?.sync_all()?;
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::OpenOptionsExt;
-
-        // Required by CreateFileW when opening a directory handle. Flushing
-        // that handle makes directory-entry publication durable just as
-        // fsync(2) does on Unix.
-        const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
-        OpenOptions::new()
-            .read(true)
-            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
-            .open(path)?
-            .sync_all()?;
-    }
-    #[cfg(not(any(unix, windows)))]
-    return Err(AssetsError::io(
-        "durable resource-root publication is unsupported on this platform",
-    ));
+    crate::sync_directory(path)?;
     Ok(())
 }
 

@@ -372,6 +372,8 @@ impl NativeRenderer {
             self.options.backend,
             self.options.raster_workers,
         );
+        // Release FFmpeg's output handle before publishing or deleting the file on Windows.
+        drop(sink);
         let report = finish_delivery(rendered, &temporary, output)?;
         self.validate_report_render_id(&report)?;
         Ok(RenderSummary {
@@ -442,6 +444,8 @@ impl NativeRenderer {
             self.options.backend,
             self.options.raster_workers,
         );
+        // Release FFmpeg's output handle before publishing or deleting the file on Windows.
+        drop(sink);
         let report = finish_delivery(rendered, &temporary, output)?;
         self.validate_report_render_id(&report)?;
         Ok(RenderSummary {

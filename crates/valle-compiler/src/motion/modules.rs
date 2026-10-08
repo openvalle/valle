@@ -1366,8 +1366,23 @@ fn normalize_path_buf(path: &Path) -> Result<String, String> {
     output
         .to_str()
         .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
+        .map(|value| value.replace(std::path::MAIN_SEPARATOR, "/"))
         .ok_or_else(|| format!("module path `{}` is empty or non-UTF-8", path.display()))
+}
+
+#[cfg(test)]
+mod path_tests {
+    use super::*;
+
+    #[test]
+    fn module_identity_keeps_forward_slashes_on_every_host() {
+        assert_eq!(
+            normalize_project_path("panels/../components/card.motion.tsx").unwrap(),
+            "components/card.motion.tsx"
+        );
+        assert!(normalize_project_path("../outside.motion.tsx").is_err());
+        assert!(normalize_project_path(r"components\card.motion.tsx").is_err());
+    }
 }
 
 fn linked_module_binding(module_ordinal: usize, original: &str) -> String {

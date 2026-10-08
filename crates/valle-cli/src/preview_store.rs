@@ -252,13 +252,14 @@ mod tests {
 
     #[test]
     fn unchanged_media_reuses_snapshot_and_edits_preserve_old_generation() {
-        let source = tempfile::NamedTempFile::new().unwrap();
+        // Keep the path alive while closing the Windows handle before replacement.
+        let source = tempfile::NamedTempFile::new().unwrap().into_temp_path();
         let bytes = vec![42; 2 * 1024 * 1024 + 17];
-        std::fs::write(source.path(), &bytes).unwrap();
+        std::fs::write(&source, &bytes).unwrap();
         let mut cache = FrozenMediaCache::default();
-        let (digest, first) = cache.get(source.path()).unwrap();
+        let (digest, first) = cache.get(&source).unwrap();
         assert_eq!(digest, ContentDigest::of_bytes(&bytes));
-        let (_, second) = cache.get(source.path()).unwrap();
+        let (_, second) = cache.get(&source).unwrap();
         let path = |file: &PreviewFile| match file {
             PreviewFile::File { path, .. } => path.clone(),
             _ => unreachable!(),
@@ -266,10 +267,10 @@ mod tests {
         assert_eq!(path(&first), path(&second));
         // Same-size replacement must also invalidate the cache.
         let replacement = vec![43; bytes.len()];
-        let new_source = tempfile::NamedTempFile::new_in(source.path().parent().unwrap()).unwrap();
+        let new_source = tempfile::NamedTempFile::new_in(source.parent().unwrap()).unwrap();
         std::fs::write(new_source.path(), &replacement).unwrap();
-        new_source.persist(source.path()).unwrap();
-        let (updated, third) = cache.get(source.path()).unwrap();
+        new_source.persist(&source).unwrap();
+        let (updated, third) = cache.get(&source).unwrap();
         assert_ne!(digest, updated);
         assert_eq!(std::fs::read(path(&first)).unwrap(), bytes);
         assert_eq!(std::fs::read(path(&third)).unwrap(), replacement);

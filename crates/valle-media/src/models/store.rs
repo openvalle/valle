@@ -864,7 +864,9 @@ fn migrate_legacy_file(source_root: &Path, staging_root: &Path, file: &ArtifactF
             )
         })?;
     }
-    File::open(&target)
+    OpenOptions::new()
+        .write(true)
+        .open(&target)
         .with_context(|| format!("failed to open migrated file {}", target.display()))?
         .sync_all()
         .with_context(|| format!("failed to sync migrated file {}", target.display()))?;

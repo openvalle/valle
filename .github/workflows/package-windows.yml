@@ -120,6 +120,16 @@ jobs:
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
           Get-Command link.exe | Format-List Source
+      - name: Verify native filesystem publication
+        # Probe the std-only production module before the workspace build.
+        run: |
+          $target = '${{ matrix.target }}'.ToUpperInvariant().Replace('-', '_')
+          $linker = [Environment]::GetEnvironmentVariable("CARGO_TARGET_${target}_LINKER")
+          $test = Join-Path $env:RUNNER_TEMP 'valle-filesystem-tests.exe'
+          rustc --edition=2024 --test crates/valle-project/src/fs.rs -C "linker=$linker" -o $test
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $test 2>&1 | Tee-Object -FilePath "$env:PACKAGE_LOGS/filesystem-tests.log"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Install verified FFmpeg test runtime
         run: bun .github/scripts/install-ffmpeg.ts
       - name: Verify native FFmpeg test runtime

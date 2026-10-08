@@ -12,3 +12,8 @@ pub mod assets;
 #[cfg(feature = "host")]
 mod resource_gc;
 pub mod revision;
+
+#[cfg(feature = "host")]
+mod fs;
+#[cfg(feature = "host")]
+use fs::sync_directory;

@@ -62,7 +62,7 @@ pub(crate) fn stage_atomic(
 }
 
 fn sync_dir(dir: &Path) -> Result<()> {
-    std::fs::File::open(dir)?.sync_all()?;
+    crate::sync_directory(dir)?;
     Ok(())
 }
 

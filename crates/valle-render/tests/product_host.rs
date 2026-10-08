@@ -138,7 +138,7 @@ fn native_renderer_summary_reports_the_pinned_render() {
     let output = std::env::temp_dir().join(format!(
         "valle-native-fixed-render-{}-{}.png",
         std::process::id(),
-        render
+        render.as_hex()
     ));
     let summary = NativeRenderer::new(project, options)
         .preview_frame_key(FrameKey::new(0), &output)

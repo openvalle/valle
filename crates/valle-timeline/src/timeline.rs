@@ -746,6 +746,8 @@ fn valid_resource_url(value: &str) -> bool {
     {
         return false;
     }
+    // canonicalize() produces verbatim Windows paths, whose prefix is not a URL scheme.
+    let value = value.strip_prefix(r"\\?\").unwrap_or(value);
     if let Some((scheme, rest)) = value.split_once(':') {
         let valid_scheme = !scheme.is_empty()
             && scheme.as_bytes()[0].is_ascii_alphabetic()
@@ -762,6 +764,32 @@ fn valid_resource_url(value: &str) -> bool {
         }
     }
     true
+}
+
+#[cfg(test)]
+mod resource_url_tests {
+    use super::valid_resource_url;
+
+    #[test]
+    fn canonical_windows_resources_and_urls_share_the_same_validation() {
+        for value in [
+            r"C:\assets\font.ttf",
+            r"\\?\C:\assets\font.ttf",
+            r"\\?\UNC\server\share\font.ttf",
+            "file:///C:/assets/font.ttf",
+            "https://example.com/font.ttf",
+        ] {
+            assert!(valid_resource_url(value), "{value}");
+        }
+        for value in [
+            r"\\?\C:",
+            "https:///font.ttf",
+            "https://",
+            "bad scheme:value",
+        ] {
+            assert!(!valid_resource_url(value), "{value}");
+        }
+    }
 }
 
 fn pointer_escape(value: &str) -> String {

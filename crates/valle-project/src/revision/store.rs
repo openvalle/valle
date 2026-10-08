@@ -879,7 +879,7 @@ fn write_atomic_replace_synced(
 }
 
 fn sync_dir(path: &Path) -> Result<(), StoreFault> {
-    File::open(path)?.sync_all()?;
+    crate::sync_directory(path)?;
     Ok(())
 }
 
