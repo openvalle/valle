@@ -44,11 +44,13 @@ if [ ! -f "$root/.complete" ] || [ "$(cat "$root/.complete")" != "$stamp" ]; the
     tar -xf "$sources/ffmpeg-$version.tar.xz" -C "$sources"
     (
       cd "$sources/ffmpeg-$version"
+      # Disabling only x86asm leaves FFmpeg 7's inline MMX scaling active;
+      # that path corrupts chroma under Rosetta. Use C for these test-only libraries.
       PKG_CONFIG_LIBDIR="$root/x264/lib/pkgconfig" ./configure \
         --prefix="$prefix" --enable-cross-compile --target-os=darwin \
         --arch=x86_64 --cc="$(xcrun -f clang)" --sysroot="$sdk" \
         --extra-cflags="$flags" --extra-ldflags="$flags" --pkg-config=pkg-config \
-        --disable-autodetect --disable-doc --disable-debug --disable-x86asm \
+        --disable-autodetect --disable-doc --disable-debug --disable-asm \
         --disable-static --enable-shared --enable-gpl --enable-libx264 --enable-zlib
       make -j "$jobs"
       make install
