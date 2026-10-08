@@ -105,6 +105,9 @@ jobs:
           Get-Command link.exe | Format-List Source
       - name: Install verified FFmpeg test runtime
         run: bun .github/scripts/install-ffmpeg.ts
+      - name: Install Web dependencies
+        working-directory: web
+        run: bun install --frozen-lockfile
       - name: Check packaging tool
         run: cargo test --locked -p xtask 2>&1 | Tee-Object -FilePath "$env:PACKAGE_LOGS/xtask-tests.log"
       - name: Build and verify single executable

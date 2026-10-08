@@ -92,6 +92,9 @@ jobs:
             cmake --version
             ninja --version
           } | tee "$PACKAGE_LOGS/toolchain.txt"
+      - name: Install Web dependencies
+        working-directory: web
+        run: bun install --frozen-lockfile
       - name: Check packaging tool
         run: cargo test --locked -p xtask 2>&1 | tee "$PACKAGE_LOGS/xtask-tests.log"
       - name: Build and verify single executable

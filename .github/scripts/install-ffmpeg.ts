@@ -60,6 +60,10 @@ if (!windows) {
   await appendFile(required("GITHUB_ENV"), `LD_LIBRARY_PATH=${libraries}\n`);
 }
 const version = Bun.spawn([path.join(bin, windows ? "ffmpeg.exe" : "ffmpeg"), "-version"], {
-  env: { ...process.env, LD_LIBRARY_PATH: libraries }, stdout: "inherit", stderr: "inherit",
+  env: { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`, LD_LIBRARY_PATH: libraries },
+  stdout: "inherit", stderr: "inherit",
 });
-if (await version.exited !== 0) throw new Error("FFmpeg test runtime failed to start");
+const exitCode = await version.exited;
+if (exitCode !== 0) {
+  throw new Error(`FFmpeg test runtime failed to start: exit ${exitCode} (0x${(exitCode >>> 0).toString(16)}), signal ${version.signalCode}`);
+}
