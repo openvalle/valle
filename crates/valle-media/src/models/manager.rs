@@ -586,7 +586,8 @@ fn install_compatible_routes(
         .routes
         .iter()
         .filter(|route| {
-            install_route_compatibility(route, preference, environment).is_ok()
+            adapter_platform_compatibility(manifest, environment).is_ok()
+                && install_route_compatibility(route, preference, environment).is_ok()
                 && (capability_policy == InstallCapabilityPolicy::ArtifactManagement
                     || (adapter_available(
                         &manifest.contract.adapter,
@@ -635,6 +636,7 @@ fn route_compatibility(
     environment: Environment,
     allow_unverified: bool,
 ) -> Result<(), String> {
+    adapter_platform_compatibility(manifest, environment)?;
     route_contract_compatibility(route, preference, environment, allow_unverified)?;
     if !adapter_available(
         &manifest.contract.adapter,
@@ -647,6 +649,23 @@ fn route_compatibility(
         ));
     }
     minimum_runtime_compatibility(manifest, route)?;
+    Ok(())
+}
+
+#[cfg(feature = "model-store")]
+fn adapter_platform_compatibility(
+    manifest: &ModelManifest,
+    environment: Environment,
+) -> Result<(), String> {
+    // Published manifests also describe upstream targets. Keep their bytes stable so existing
+    // installations retain their identity; Valle's supported platforms are a separate policy.
+    if matches!(
+        manifest.contract.adapter.as_str(),
+        "qwen3-asr-transcription" | "qwen3-forced-alignment"
+    ) && environment.platform != crate::models::spec::Platform::Macos
+    {
+        return Err("ASR and forced alignment are supported only on macOS".to_owned());
+    }
     Ok(())
 }
 
@@ -906,6 +925,9 @@ fn no_installable_route_error(
     environment: Environment,
     capability_policy: InstallCapabilityPolicy,
 ) -> ModelError {
+    if let Err(message) = adapter_platform_compatibility(manifest, environment) {
+        return ModelError::new(ModelErrorCode::NoCompatibleRoute, message);
+    }
     let has_contract_route = manifest
         .routes
         .iter()
@@ -945,6 +967,9 @@ fn no_compatible_route_error(
     preference: RunBackendPreference,
     environment: Environment,
 ) -> ModelError {
+    if let Err(message) = adapter_platform_compatibility(manifest, environment) {
+        return ModelError::new(ModelErrorCode::NoCompatibleRoute, message);
+    }
     let platform_routes = manifest.routes.iter().filter(|route| {
         route.platforms.contains(&environment.platform)
             && route.architectures.contains(&environment.architecture)
@@ -1200,11 +1225,19 @@ mod tests {
                             ModelErrorCode::NoCompatibleRoute,
                             "{id}: {platform}/{architecture}"
                         );
+                        assert!(error.message.contains("supported only on macOS"));
                     }
                     assert!(
                         compatible_routes(&manifest, RunBackendPreference::Auto, environment, true)
                             .is_empty()
                     );
+                    let error = no_compatible_route_error(
+                        &manifest,
+                        RunBackendPreference::Auto,
+                        environment,
+                    );
+                    assert_eq!(error.code, ModelErrorCode::NoCompatibleRoute);
+                    assert!(error.message.contains("supported only on macOS"));
                 }
             }
         }

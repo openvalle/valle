@@ -1172,9 +1172,38 @@ mod tests {
                 manifest
                     .routes
                     .iter()
+                    .filter(|route| route.status == ValidationStatus::Verified)
                     .all(|route| route.platforms == [Platform::Macos])
             );
             embedded_release_manifest(model, version).unwrap();
+        }
+    }
+
+    #[cfg(feature = "model-store")]
+    #[test]
+    fn qwen_release_bytes_preserve_installed_manifest_identity() {
+        use sha2::{Digest, Sha256};
+
+        // An installed artifact records this exact digest. Platform policy changes must not
+        // invalidate existing multi-gigabyte model installations.
+        for (model, expected) in [
+            (
+                "qwen3-asr-0.6b",
+                "2d9eee05168ada5ab973b0e960bafd14805cacb3da030b3d18fbae64da484ee1",
+            ),
+            (
+                "qwen3-aligner-0.6b",
+                "b10c790254670df2eb0480a087a169ef13c54fe19b91490917adb44b216287fb",
+            ),
+        ] {
+            let release = EMBEDDED_RELEASES
+                .iter()
+                .find(|release| release.model == model && release.version == "1.0.0")
+                .unwrap();
+            assert_eq!(
+                hex::encode(Sha256::digest(release.json.as_bytes())),
+                expected
+            );
         }
     }
 
