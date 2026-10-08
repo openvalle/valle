@@ -217,6 +217,7 @@ pub struct FrameRunner<P> {
     next_generation: u64,
 }
 
+#[cfg(feature = "native")]
 pub(crate) struct FramePreparationStage<P> {
     render: EngineRender,
     compiler: FrameCompiler,
@@ -225,6 +226,7 @@ pub(crate) struct FramePreparationStage<P> {
     next_generation: u64,
 }
 
+#[cfg(feature = "native")]
 pub(crate) struct FrameExecutionStage {
     executor: SkiaExecutor,
     cpu_delivery_surface: Option<Surface>,
@@ -307,6 +309,7 @@ impl<P: ResourceProvider> FrameRunner<P> {
         &mut self.provider
     }
 
+    #[cfg(feature = "native")]
     pub(crate) fn into_stages(self) -> (FramePreparationStage<P>, FrameExecutionStage) {
         let capabilities = self.executor.capabilities().clone();
         (
@@ -461,6 +464,7 @@ impl<P: ResourceProvider> FrameRunner<P> {
     }
 }
 
+#[cfg(feature = "native")]
 impl<P: ResourceProvider> FramePreparationStage<P> {
     pub(crate) fn prepare_frame(
         &mut self,
@@ -479,6 +483,7 @@ impl<P: ResourceProvider> FramePreparationStage<P> {
     }
 }
 
+#[cfg(feature = "native")]
 impl FrameExecutionStage {
     pub(crate) fn render_prepared_rgba8(
         &mut self,
