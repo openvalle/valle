@@ -3,7 +3,11 @@ import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createHash } from "node:crypto";
-import { resolveBrowser } from "./parity/lib/browser.ts";
+import {
+  browserExitError,
+  readBrowserStderrTail,
+  resolveBrowser,
+} from "./parity/lib/browser.ts";
 
 const root = resolve(import.meta.dir, "../..");
 const mode = process.argv[2] ?? "audio";
@@ -48,6 +52,7 @@ async function deadline<T>(
   }
 }
 async function stop(child: ReturnType<typeof Bun.spawn>): Promise<void> {
+  if (child.exitCode !== null) return;
   child.kill("SIGTERM");
   try {
     await deadline(child.exited, "process shutdown", 5_000);
@@ -141,38 +146,59 @@ async function run(
       while (!(await reader.read()).done) {}
       reader.releaseLock();
     })();
-    const profile = await mkdtemp(join(evidence, "chrome-"));
-    chrome = Bun.spawn(
-      [
-        browser!,
-        "--headless=new",
-        "--no-sandbox",
-        "--no-first-run",
-        "--no-default-browser-check",
-        "--disable-extensions",
-        "--mute-audio",
-        "--window-size=1280,900",
-        "--remote-debugging-port=0",
-        `--user-data-dir=${profile}`,
-        "about:blank",
-      ],
-      { stdout: "ignore", stderr: Bun.file(join(evidence, "chrome.log")) },
-    );
-    const debugPort = await poll(
-      async () => {
-        try {
-          return Number(
-            (await readFile(join(profile, "DevToolsActivePort"), "utf8")).split(
-              "\n",
-            )[0],
-          );
-        } catch {
-          return 0;
-        }
-      },
-      (p) => p > 0,
-      "Chrome startup",
-    );
+    let debugPort = 0;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      const profile = await mkdtemp(join(evidence, "chrome-"));
+      const chromeLog = join(evidence, `chrome-${attempt}.log`);
+      chrome = Bun.spawn(
+        [
+          browser!,
+          "--headless=new",
+          "--no-sandbox",
+          "--no-first-run",
+          "--no-default-browser-check",
+          "--disable-extensions",
+          "--mute-audio",
+          "--window-size=1280,900",
+          "--remote-debugging-port=0",
+          `--user-data-dir=${profile}`,
+          "about:blank",
+        ],
+        { stdout: "ignore", stderr: Bun.file(chromeLog) },
+      );
+      try {
+        debugPort = await poll(
+          async () => {
+            if (chrome!.exitCode !== null)
+              throw browserExitError({
+                operation: "Chrome startup",
+                binary: browser!,
+                pageUrl: "about:blank",
+                exitCode: chrome!.exitCode,
+                signalCode: chrome!.signalCode,
+                stderr: await readBrowserStderrTail(chromeLog),
+              });
+            try {
+              return Number(
+                (await readFile(join(profile, "DevToolsActivePort"), "utf8")).split(
+                  "\n",
+                )[0],
+              );
+            } catch {
+              return 0;
+            }
+          },
+          (p) => p > 0,
+          "Chrome startup",
+        );
+        break;
+      } catch (error) {
+        console.error(`Chrome startup attempt ${attempt}: ${error}`);
+        console.error(await readBrowserStderrTail(chromeLog));
+        await stop(chrome);
+        if (attempt === 3) throw error;
+      }
+    }
     const targets = (await (
       await fetch(`http://127.0.0.1:${debugPort}/json/list`)
     ).json()) as Array<{ type: string; webSocketDebuggerUrl: string }>;
