@@ -59,7 +59,7 @@ jobs:
         id: dependencies
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          key: linux-${{ matrix.target }}-${{ steps.environment.outputs.image }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml', '.cargo/config.toml', 'web/bun.lock', 'web/package.json', '.github/scripts/install-ffmpeg.ts') }}
+          key: linux-${{ matrix.target }}-${{ steps.environment.outputs.image }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml', '.cargo/config.toml', 'web/bun.lock', 'web/package.json', '.github/scripts/install-ffmpeg.ts') }}-${{ github.run_id }}
           restore-keys: linux-${{ matrix.target }}-${{ steps.environment.outputs.image }}-
           path: |
             ~/.cargo/registry

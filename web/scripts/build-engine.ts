@@ -7,6 +7,20 @@ const workspace = path.resolve(root, "..");
 const outDir = path.resolve(root, "packages", "engine", "generated", "web");
 
 async function wasmCompilerEnv(): Promise<typeof process.env> {
+  if (process.platform === "win32") {
+    const quickjs = metadata.packages.find(pkg => pkg.name === "rquickjs-sys");
+    if (!quickjs) throw new Error("rquickjs-sys is missing from Cargo metadata");
+    // Clang cannot reliably resolve nested headers through canonical Windows UNC paths.
+    const include = path.join(path.dirname(quickjs.manifest_path), "vendor/wasi-libc/include")
+      .replace(/^\\\\\?\\/, "").replaceAll("\\", "/");
+    if (!await Bun.file(path.join(include, "bits/alltypes.h")).exists()) {
+      throw new Error(`QuickJS WASM libc headers are missing: ${include}`);
+    }
+    return {
+      ...process.env,
+      C_INCLUDE_PATH: [include, process.env.C_INCLUDE_PATH].filter(Boolean).join(path.delimiter),
+    };
+  }
   if (process.platform !== "darwin" || process.env.CC_wasm32_unknown_unknown
     || process.env.TARGET_CC || process.env.CC) return process.env;
   const brew = Bun.which("brew");
@@ -24,14 +38,14 @@ async function run(args: string[], env = process.env): Promise<void> {
   if (await child.exited !== 0) throw new Error(`engine build failed: ${args.join(" ")}`);
 }
 
-const metadataProcess = Bun.spawn(["cargo", "metadata", "--no-deps", "--locked", "--format-version", "1"], {
+const metadataProcess = Bun.spawn(["cargo", "metadata", ...(process.platform === "win32" ? [] : ["--no-deps"]), "--locked", "--format-version", "1"], {
   cwd: workspace, stdout: "pipe", stderr: "inherit",
 });
 const metadataText = await new Response(metadataProcess.stdout).text();
 if (await metadataProcess.exited !== 0) throw new Error("cannot read Cargo workspace metadata");
 const metadata = JSON.parse(metadataText) as {
   target_directory: string;
-  packages: Array<{ name: string; version: string; description: string; license: string; repository: string }>;
+  packages: Array<{ name: string; version: string; description: string; license: string; repository: string; manifest_path: string }>;
 };
 const engine = metadata.packages.find(pkg => pkg.name === "valle-engine");
 if (!engine) throw new Error("valle-engine is missing from the Cargo workspace");

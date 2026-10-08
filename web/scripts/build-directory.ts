@@ -12,18 +12,32 @@ export async function withBuildDirectory(output: string, build: (next: string) =
     await mkdir(next);
     await build(next);
     if (await exists(output)) {
-      await rename(output, previous);
+      await renameDirectory(output, previous);
       backedUp = true;
     }
-    try { await rename(next, output); }
+    try { await renameDirectory(next, output); }
     catch (error) {
-      if (backedUp) { await rename(previous, output); backedUp = false; }
+      if (backedUp) { await renameDirectory(previous, output); backedUp = false; }
       throw error;
     }
-    await rm(scratch, { recursive: true });
+    await rm(scratch, { recursive: true, maxRetries: 10, retryDelay: 100 });
   } catch (error) {
-    if (!backedUp) await rm(scratch, { recursive: true, force: true });
+    if (!backedUp) {
+      try { await rm(scratch, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); }
+      catch (cleanup) { throw new AggregateError([error, cleanup], "Build and temporary directory cleanup failed"); }
+    }
     throw error;
+  }
+}
+
+async function renameDirectory(from: string, to: string): Promise<void> {
+  for (let attempt = 0; ; attempt++) {
+    try { await rename(from, to); return; }
+    catch (error) {
+      if (process.platform !== "win32" || attempt >= 10
+        || !["EPERM", "EBUSY", "EACCES"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error;
+      await new Promise(resolve => setTimeout(resolve, 100 * (attempt + 1)));
+    }
   }
 }
 

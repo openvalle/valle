@@ -59,7 +59,7 @@ fi
 
 for major in 7 8 9; do
   prefix="$root/$major"
-  lipo -verify_arch x86_64 "$prefix/lib/libavcodec.dylib"
+  lipo "$prefix/lib/libavcodec.dylib" -verify_arch x86_64
   "$prefix/bin/ffmpeg" -version > "$PACKAGE_LOGS/ffmpeg-cli-$major.txt"
   grep -E "^ffmpeg version ${major}[. ]" "$PACKAGE_LOGS/ffmpeg-cli-$major.txt"
   echo "VALLE_TEST_FFMPEG${major}_DIR=$prefix/lib" >> "$GITHUB_ENV"
