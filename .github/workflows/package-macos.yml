@@ -340,6 +340,15 @@ jobs:
           for log in target/${{ matrix.target }}/release/build/skia-bindings-*/output target/${{ matrix.target }}/release/build/skia-bindings-*/stderr; do
             if [ -f "$log" ]; then cp "$log" "$PACKAGE_LOGS/$(basename "$(dirname "$log")")-$(basename "$log").txt"; fi
           done
+          for evidence in "${TMPDIR%/}"/valle-studio-machine-*; do
+            [ -d "$evidence" ] || continue
+            destination="$PACKAGE_LOGS/studio-browser/$(basename "$evidence")"
+            while IFS= read -r -d '' evidence_file; do
+              relative="${evidence_file#"$evidence"/}"
+              mkdir -p "$destination/$(dirname "$relative")"
+              cp "$evidence_file" "$destination/$relative"
+            done < <(find "$evidence" -maxdepth 2 -type f -print0)
+          done
           {
             echo '### macOS ${{ matrix.arch }} package'
             echo "Status: $RUN_STATUS"

@@ -52,13 +52,26 @@ async function deadline<T>(
   }
 }
 async function stop(child: ReturnType<typeof Bun.spawn>): Promise<void> {
-  if (child.exitCode !== null) return;
-  child.kill("SIGTERM");
+  const signal = (value: "SIGTERM" | "SIGKILL") => {
+    if (process.platform === "win32") {
+      if (child.exitCode === null) child.kill(value);
+    } else {
+      try {
+        process.kill(-child.pid, value);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+      }
+    }
+  };
+  signal("SIGTERM");
   try {
     await deadline(child.exited, "process shutdown", 5_000);
   } catch {
-    child.kill("SIGKILL");
+    signal("SIGKILL");
     await deadline(child.exited, "forced process shutdown", 5_000);
+  } finally {
+    // Chrome helpers and Studio subprocesses can outlive their original parent.
+    if (process.platform !== "win32") signal("SIGKILL");
   }
 }
 async function poll<T>(
@@ -122,8 +135,13 @@ async function run(
       runtime,
       ...args,
     ],
-    { stdout: "pipe", stderr: Bun.file(join(evidence, "studio.log")) },
+    {
+      stdout: "pipe",
+      stderr: Bun.file(join(evidence, "studio.log")),
+      detached: process.platform !== "win32",
+    },
   );
+  const browserEvents: unknown[] = [];
   let chrome: ReturnType<typeof Bun.spawn> | undefined,
     socket: WebSocket | undefined;
   try {
@@ -164,7 +182,11 @@ async function run(
           `--user-data-dir=${profile}`,
           "about:blank",
         ],
-        { stdout: "ignore", stderr: Bun.file(chromeLog) },
+        {
+          stdout: "ignore",
+          stderr: Bun.file(chromeLog),
+          detached: process.platform !== "win32",
+        },
       );
       try {
         debugPort = await poll(
@@ -220,7 +242,13 @@ async function run(
     socket.onmessage = (event) => {
       const reply = JSON.parse(String(event.data));
       const waiter = pending.get(reply.id);
-      if (!waiter) return;
+      if (!waiter) {
+        if (
+          browserEvents.length < 200 &&
+          ["Runtime.exceptionThrown", "Log.entryAdded", "Network.loadingFailed"].includes(reply.method)
+        ) browserEvents.push(reply);
+        return;
+      }
       pending.delete(reply.id);
       if (reply.error) waiter.bad(new Error(JSON.stringify(reply.error)));
       else waiter.ok(reply.result);
@@ -252,6 +280,8 @@ async function run(
     };
     await cdp("Page.enable");
     await cdp("Runtime.enable");
+    await cdp("Log.enable");
+    await cdp("Network.enable");
     await cdp("Page.navigate", { url: `http://127.0.0.1:${port}/studio` });
     const state = () =>
       evaluate(
@@ -366,6 +396,15 @@ async function run(
       JSON.stringify(report, null, 2),
     );
     console.log(JSON.stringify(report));
+  } catch (error) {
+    await writeFile(
+      join(evidence, "failure.json"),
+      JSON.stringify({
+        message: error instanceof Error ? error.stack : String(error),
+        browserEvents,
+      }, null, 2),
+    );
+    throw error;
   } finally {
     socket?.close();
     try {
