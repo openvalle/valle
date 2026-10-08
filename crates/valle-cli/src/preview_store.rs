@@ -22,12 +22,15 @@ struct SourceStamp {
     modified: std::time::SystemTime,
     #[cfg(unix)]
     identity: (u64, u64, i64, i64),
+    #[cfg(windows)]
+    identity: (u64, [u8; 16]),
 }
 
 impl SourceStamp {
-    fn read(metadata: std::fs::Metadata) -> Result<Self> {
+    fn read(file: &std::fs::File) -> Result<Self> {
         #[cfg(unix)]
         use std::os::unix::fs::MetadataExt;
+        let metadata = file.metadata()?;
         Ok(Self {
             len: metadata.len(),
             modified: metadata.modified()?,
@@ -38,8 +41,47 @@ impl SourceStamp {
                 metadata.ctime(),
                 metadata.ctime_nsec(),
             ),
+            #[cfg(windows)]
+            identity: windows_file_identity(file)?,
         })
     }
+}
+
+#[cfg(windows)]
+fn windows_file_identity(file: &std::fs::File) -> std::io::Result<(u64, [u8; 16])> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{
+        BY_HANDLE_FILE_INFORMATION, FILE_ID_INFO, FileIdInfo, GetFileInformationByHandle,
+        GetFileInformationByHandleEx,
+    };
+
+    let mut extended = std::mem::MaybeUninit::<FILE_ID_INFO>::uninit();
+    // Query the opened source so an atomic path replacement cannot mix identities.
+    let found = unsafe {
+        GetFileInformationByHandleEx(
+            file.as_raw_handle(),
+            FileIdInfo,
+            extended.as_mut_ptr().cast(),
+            std::mem::size_of::<FILE_ID_INFO>() as u32,
+        )
+    };
+    if found != 0 {
+        // The successful call initialized the complete FILE_ID_INFO buffer.
+        let info = unsafe { extended.assume_init() };
+        return Ok((info.VolumeSerialNumber, info.FileId.Identifier));
+    }
+
+    // Filesystems without extended IDs still expose the legacy volume/file index.
+    let mut legacy = std::mem::MaybeUninit::<BY_HANDLE_FILE_INFORMATION>::uninit();
+    if unsafe { GetFileInformationByHandle(file.as_raw_handle(), legacy.as_mut_ptr()) } == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // The successful call initialized the complete BY_HANDLE_FILE_INFORMATION buffer.
+    let info = unsafe { legacy.assume_init() };
+    let index = (u64::from(info.nFileIndexHigh) << 32) | u64::from(info.nFileIndexLow);
+    let mut identity = [0; 16];
+    identity[..8].copy_from_slice(&index.to_le_bytes());
+    Ok((u64::from(info.dwVolumeSerialNumber), identity))
 }
 
 struct CachedMedia {
@@ -64,7 +106,7 @@ impl FrozenMediaCache {
             .retain(|_, entry| entry.directory.strong_count() > 0);
         let source = source.canonicalize()?;
         let mut input = std::fs::File::open(&source)?;
-        let stamp = SourceStamp::read(input.metadata()?)?;
+        let stamp = SourceStamp::read(&input)?;
         if let Some(entry) = self.entries.get(&source) {
             if entry.stamp == stamp {
                 if let Some(directory) = entry.directory.upgrade() {
@@ -90,8 +132,8 @@ impl FrozenMediaCache {
             hash.update(&buffer[..count]);
             output.write_all(&buffer[..count])?;
         }
-        if stamp != SourceStamp::read(input.metadata()?)?
-            || stamp != SourceStamp::read(std::fs::metadata(&source)?)?
+        if stamp != SourceStamp::read(&input)?
+            || stamp != SourceStamp::read(&std::fs::File::open(&source)?)?
         {
             bail!(
                 "media changed while preparing preview: {}",
@@ -269,7 +311,13 @@ mod tests {
         let replacement = vec![43; bytes.len()];
         let new_source = tempfile::NamedTempFile::new_in(source.parent().unwrap()).unwrap();
         std::fs::write(new_source.path(), &replacement).unwrap();
+        let modified = std::fs::metadata(&source).unwrap().modified().unwrap();
+        new_source.as_file().set_modified(modified).unwrap();
         new_source.persist(&source).unwrap();
+        assert_eq!(
+            std::fs::metadata(&source).unwrap().modified().unwrap(),
+            modified
+        );
         let (updated, third) = cache.get(&source).unwrap();
         assert_ne!(digest, updated);
         assert_eq!(std::fs::read(path(&first)).unwrap(), bytes);

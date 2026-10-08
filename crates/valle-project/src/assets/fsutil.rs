@@ -9,10 +9,12 @@ use crate::assets::report::{AssetsError, Result};
 /// Atomically write bytes, fsync the file, rename, then fsync the directory.
 pub fn write_atomic(path: &Path, bytes: &[u8], crash_label: &str) -> Result<()> {
     stage_atomic(path, crash_label, |staged| {
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(staged)?;
+        let mut file = retry_io(|| {
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(staged)
+        })?;
         file.write_all(bytes)?;
         Ok(())
     })
@@ -36,7 +38,16 @@ pub(crate) fn stage_atomic(
     let reservation = tempfile::Builder::new().prefix(&prefix).tempfile_in(dir)?;
     let (reservation_file, temporary_path) = reservation.into_parts();
     drop(reservation_file);
-    std::fs::remove_file(&temporary_path)?;
+    retry_io(|| std::fs::remove_file(&temporary_path))?;
+    #[cfg(windows)]
+    retry_io(|| match std::fs::symlink_metadata(&temporary_path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+        Ok(_) => Err(std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            "staging reservation was replaced before population",
+        )),
+    })?;
     populate(&temporary_path)?;
 
     let metadata = std::fs::symlink_metadata(&temporary_path)?;
@@ -46,24 +57,80 @@ pub(crate) fn stage_atomic(
             temporary_path.display()
         )));
     }
-    let file = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(&temporary_path)?;
-    file.sync_all()?;
+    let file = retry_io(|| {
+        std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&temporary_path)
+    })?;
+    retry_io(|| file.sync_all())?;
     maybe_crash(&format!("{crash_label}-before-rename"));
     let temporary = tempfile::NamedTempFile::from_parts(file, temporary_path);
-    temporary
-        .persist(path)
-        .map_err(|error| AssetsError::from(error.error))?;
+    persist_atomic(temporary, path)?;
     sync_dir(dir)?;
     maybe_crash(&format!("{crash_label}-after-rename"));
     Ok(())
 }
 
 fn sync_dir(dir: &Path) -> Result<()> {
-    crate::sync_directory(dir)?;
+    retry_io(|| crate::sync_directory(dir))?;
     Ok(())
+}
+
+fn retry_io<T>(mut operation: impl FnMut() -> std::io::Result<T>) -> std::io::Result<T> {
+    #[cfg(not(windows))]
+    return operation();
+    #[cfg(windows)]
+    {
+        let started = std::time::Instant::now();
+        loop {
+            match operation() {
+                Err(error) if retryable_windows_error(&error, started) => {
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                result => return result,
+            }
+        }
+    }
+}
+
+#[cfg(windows)]
+fn retryable_windows_error(error: &std::io::Error, started: std::time::Instant) -> bool {
+    // Concurrent replacement and scanners can temporarily retain Windows handles.
+    matches!(error.raw_os_error(), Some(5 | 32 | 33))
+        && started.elapsed() < std::time::Duration::from_secs(1)
+}
+
+fn persist_atomic(temporary: tempfile::NamedTempFile, path: &Path) -> Result<()> {
+    #[cfg(not(windows))]
+    {
+        temporary
+            .persist(path)
+            .map_err(|error| AssetsError::from(error.error))?;
+        Ok(())
+    }
+    #[cfg(windows)]
+    {
+        let started = std::time::Instant::now();
+        let mut pending = temporary;
+        loop {
+            match pending.persist(path) {
+                Ok(_) => return Ok(()),
+                Err(error) if retryable_windows_error(&error.error, started) => {
+                    // Keep the complete, synced staging file for the next rename.
+                    pending = error.file;
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                Err(error) => {
+                    return Err(AssetsError::io(format!(
+                        "publishing atomic file {}: {}",
+                        path.display(),
+                        error.error
+                    )));
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -83,6 +150,44 @@ mod tests {
             .filter(|e| e.file_name().to_string_lossy().contains(".tmp"))
             .collect();
         assert!(leftovers.is_empty());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn write_atomic_waits_for_a_reader_to_release_the_destination() {
+        use std::os::windows::fs::OpenOptionsExt;
+
+        let temporary = tempfile::tempdir().unwrap();
+        let target = temporary.path().join("state.json");
+        std::fs::write(&target, b"old truth").unwrap();
+        // Permit reads and writes while withholding FILE_SHARE_DELETE, as a
+        // scanner or another reader can do while a replacement is published.
+        let reader = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0x0000_0001 | 0x0000_0002)
+            .open(&target)
+            .unwrap();
+        let writer_target = target.clone();
+        let (finished, result) = std::sync::mpsc::channel();
+        let writer = std::thread::spawn(move || {
+            finished
+                .send(write_atomic(&writer_target, b"new truth", "reader"))
+                .unwrap();
+        });
+
+        assert!(matches!(
+            result.recv_timeout(std::time::Duration::from_millis(250)),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+        ));
+        assert_eq!(std::fs::read(&target).unwrap(), b"old truth");
+        drop(reader);
+        result
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap()
+            .unwrap();
+        writer.join().unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), b"new truth");
+        assert_eq!(std::fs::read_dir(temporary.path()).unwrap().count(), 1);
     }
 
     #[cfg(unix)]

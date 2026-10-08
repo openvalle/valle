@@ -95,6 +95,7 @@ fn crash_matrix_no_partial_truth_and_self_heal() {
         assert_eq!(n, 1, "{label}: retry must repair the index");
 
         // Reindexing recreates the index from persisted metadata.
+        drop(db);
         std::fs::remove_file(home.index_db_path()).unwrap();
         let mut db = Db::open(&home).unwrap();
         let rebuilt = db.reindex_assets(&home).unwrap();

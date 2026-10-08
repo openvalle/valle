@@ -52,5 +52,8 @@ libmimalloc-sys = { workspace = true, features = ["extended"] }
 [target.'cfg(target_os = "macos")'.dependencies]
 valle-media = { workspace = true, features = ["model-coreml"] }
 
+[target.'cfg(windows)'.dependencies]
+windows-sys.workspace = true
+
 [dev-dependencies]
 toml.workspace = true

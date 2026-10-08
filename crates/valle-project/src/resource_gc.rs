@@ -277,10 +277,9 @@ impl ResourceRootStore {
         temporary.as_file_mut().flush().map_err(AssetsError::from)?;
         temporary.as_file().sync_all().map_err(AssetsError::from)?;
         crate::assets::crash::maybe_crash("resource-root-active-lease-after-file-fsync");
-        temporary
-            .as_file()
-            .lock_exclusive()
-            .map_err(AssetsError::from)?;
+        // GC must read live records while an exclusive lock probe detects
+        // their owners. Shared locks also permit those reads on Windows.
+        FileExt::lock_shared(temporary.as_file()).map_err(AssetsError::from)?;
         let path = leases.join(format!("{lease_id}.json"));
         let file = temporary.persist_noclobber(&path).map_err(|error| {
             AssetsError::io(format!("publishing active lease: {}", error.error))
