@@ -179,11 +179,14 @@ pub fn generate(
     // or unrelated old versions. Workspace packages retain the project-level notices above.
     let script = r#"
 import fs from 'node:fs'; import path from 'node:path'; import {createRequire} from 'node:module';
+const workspaces = ['apps','packages'].flatMap(group => fs.readdirSync(group).sort()
+  .map(name => path.resolve(group, name)).filter(dir => fs.existsSync(path.join(dir,'package.json'))));
+const internal = new Set(workspaces.map(dir => fs.realpathSync(dir)));
 const seen = new Set(), result = [];
 function visit(dir) {
   dir = fs.realpathSync(dir); if (seen.has(dir)) return; seen.add(dir);
   const file = path.join(dir, 'package.json'), p = JSON.parse(fs.readFileSync(file, 'utf8'));
-  if (!p.name.startsWith('@valle/')) result.push({dir, name:p.name, version:p.version, license:p.license});
+  if (!internal.has(dir)) result.push({dir, name:p.name, version:p.version, license:p.license});
   const require = createRequire(file);
   for (const name of Object.keys(p.dependencies || {})) {
     let located = null;
@@ -195,9 +198,7 @@ function visit(dir) {
     visit(located);
   }
 }
-for (const group of ['apps','packages']) for (const name of fs.readdirSync(group).sort()) {
-  const dir = path.resolve(group, name); if (fs.existsSync(path.join(dir,'package.json'))) visit(dir);
-}
+for (const dir of workspaces) visit(dir);
 process.stdout.write(JSON.stringify(result.sort((a,b)=>(a.name+a.version).localeCompare(b.name+b.version))));
 "#;
     let npm: Vec<Value> = serde_json::from_str(&super::package::capture(

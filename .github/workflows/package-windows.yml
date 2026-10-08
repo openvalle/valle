@@ -105,6 +105,16 @@ jobs:
           Get-Command link.exe | Format-List Source
       - name: Install verified FFmpeg test runtime
         run: bun .github/scripts/install-ffmpeg.ts
+      - name: Verify native FFmpeg test runtime
+        run: |
+          & "$env:VALLE_FFMPEG_DIR/ffmpeg.exe" -version 2>&1 | Tee-Object -FilePath "$env:PACKAGE_LOGS/ffmpeg-version.txt"
+          $status = $LASTEXITCODE
+          if ($status -ne 0) {
+            Get-ChildItem "$env:VALLE_FFMPEG_DIR/*.dll" | ForEach-Object {
+              llvm-readobj --file-headers --coff-imports $_.FullName
+            } | Tee-Object -FilePath "$env:PACKAGE_LOGS/ffmpeg-imports.txt"
+            throw ('FFmpeg failed: exit {0} (0x{1:X8})' -f $status, ($status -band 0xffffffffL))
+          }
       - name: Install Web dependencies
         working-directory: web
         run: bun install --frozen-lockfile

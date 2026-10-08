@@ -59,11 +59,11 @@ await appendFile(required("GITHUB_PATH"), `${bin}\n`);
 if (!windows) {
   await appendFile(required("GITHUB_ENV"), `LD_LIBRARY_PATH=${libraries}\n`);
 }
-const version = Bun.spawn([path.join(bin, windows ? "ffmpeg.exe" : "ffmpeg"), "-version"], {
-  env: { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`, LD_LIBRARY_PATH: libraries },
-  stdout: "inherit", stderr: "inherit",
-});
-const exitCode = await version.exited;
-if (exitCode !== 0) {
-  throw new Error(`FFmpeg test runtime failed to start: exit ${exitCode} (0x${(exitCode >>> 0).toString(16)}), signal ${version.signalCode}`);
+// Windows validates with PowerShell so native NTSTATUS values are retained.
+if (!windows) {
+  const version = Bun.spawn([path.join(bin, "ffmpeg"), "-version"], {
+    env: { ...process.env, LD_LIBRARY_PATH: libraries }, stdout: "inherit", stderr: "inherit",
+  });
+  const exitCode = await version.exited;
+  if (exitCode !== 0) throw new Error(`FFmpeg test runtime failed to start: exit ${exitCode}`);
 }

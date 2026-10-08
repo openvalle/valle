@@ -270,6 +270,7 @@ mod contract_tests {
         let output = temp.path().join("notices.txt");
         notices::generate(root, &output, false, &Default::default()).unwrap();
         let text = fs::read_to_string(output).unwrap();
+        assert!(!text.contains("===== Web: valle-engine "));
         for required in [
             "Valle base revision:",
             "Apache License",
