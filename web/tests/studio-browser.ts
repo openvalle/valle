@@ -5,6 +5,7 @@ import { join, resolve } from "node:path";
 import { createHash } from "node:crypto";
 import {
   browserExitError,
+  browserLaunchCommand,
   readBrowserStderrTail,
   resolveBrowser,
 } from "./parity/lib/browser.ts";
@@ -59,7 +60,9 @@ async function stop(child: ReturnType<typeof Bun.spawn>): Promise<void> {
       try {
         process.kill(-child.pid, value);
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+        const code = (error as NodeJS.ErrnoException).code;
+        // macOS can report EPERM for an exited group with no signalable members.
+        if (code !== "ESRCH" && !(code === "EPERM" && child.exitCode !== null)) throw error;
       }
     }
   };
@@ -170,7 +173,7 @@ async function run(
       const chromeLog = join(evidence, `chrome-${attempt}.log`);
       chrome = Bun.spawn(
         [
-          browser!,
+          ...browserLaunchCommand(browser!),
           "--headless=new",
           "--no-sandbox",
           "--no-first-run",

@@ -6,7 +6,7 @@ import { requiredOption } from "../lib/args.ts";
 import { createTempDirectory, directoryName, ensureDirectory, joinPath, readText, relativePath, removeDirectory, repositoryPath, resolveRequestPath, resolveUnder, writeBytes, } from "../lib/files.ts";
 import { readPng } from "../lib/png.ts";
 import { comparePngs, countNonBlackPixels } from "../lib/metrics.ts";
-import { pollBrowserReport, resolveBrowser, terminateBrowser, waitForUnexpectedBrowserExit } from "../lib/browser.ts";
+import { browserLaunchCommand, pollBrowserReport, resolveBrowser, terminateBrowser, waitForUnexpectedBrowserExit } from "../lib/browser.ts";
 const WEB_DIST_DIR = repositoryPath("web/dist");
 const RUNTIME_MANIFEST = JSON.parse(await readText(joinPath(WEB_DIST_DIR, "runtime/manifest.json")));
 const APP_HTML = new Map(RUNTIME_MANIFEST.apps.map(({ id, html }: any) => [`${id}.html`, joinPath(WEB_DIST_DIR, html)]));
@@ -95,7 +95,7 @@ async function runBrowser(requestPath: any) {
     const stderrPath = joinPath(profileDir, "chrome.stderr.log");
     const child = Bun.spawn({
         cmd: [
-            browser,
+            ...browserLaunchCommand(browser),
             "--headless=new",
             "--no-sandbox",
             `--user-data-dir=${profileDir}`,

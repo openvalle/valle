@@ -53,6 +53,18 @@ export function resolveBrowser(): string | null {
   return null;
 }
 
+let appleSiliconHost: boolean | undefined;
+
+/** Keep Chrome native even when an x86_64 Rust test selects Rosetta for its descendants. */
+export function browserLaunchCommand(browser: string): string[] {
+  if (process.platform !== "darwin") return [browser];
+  appleSiliconHost ??= process.arch === "arm64" || new TextDecoder().decode(Bun.spawnSync(
+    ["/usr/sbin/sysctl", "-in", "hw.optional.arm64"],
+    { stdout: "pipe", stderr: "ignore" },
+  ).stdout).trim() === "1";
+  return appleSiliconHost ? ["/usr/bin/arch", "-arm64", browser] : [browser];
+}
+
 export interface BrowserExitContext {
   operation: string;
   binary: string;
@@ -242,7 +254,7 @@ export async function decodeVideoFramesInBrowser(
   const stderrPath = `${profileDir}/chrome.stderr.log`;
   const child = Bun.spawn({
     cmd: [
-      browser,
+      ...browserLaunchCommand(browser),
       "--headless=new",
       "--no-sandbox",
       `--user-data-dir=${profileDir}`,

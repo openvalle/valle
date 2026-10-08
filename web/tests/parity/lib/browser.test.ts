@@ -1,7 +1,36 @@
 import { describe, expect, test } from "bun:test";
 
-import { browserExitError, pollBrowserReport, terminateBrowser, waitForUnexpectedBrowserExit } from "./browser.ts";
+import { browserExitError, browserLaunchCommand, pollBrowserReport, terminateBrowser, waitForUnexpectedBrowserExit } from "./browser.ts";
 import { createTempDirectory, joinPath, removeDirectory } from "./files.ts";
+
+const appleSilicon = process.platform === "darwin" && process.arch === "arm64";
+const rosettaAvailable = appleSilicon && Bun.spawnSync([
+  "/usr/bin/arch", "-x86_64", "/usr/bin/uname", "-m",
+], { stderr: "ignore" }).exitCode === 0;
+
+test.skipIf(!appleSilicon)("launches universal executables with the native host architecture", () => {
+  const child = Bun.spawnSync([...browserLaunchCommand("/usr/bin/uname"), "-m"]);
+  expect(child.exitCode).toBe(0);
+  expect(new TextDecoder().decode(child.stdout).trim()).toBe("arm64");
+});
+
+test.skipIf(!rosettaAvailable)(
+  "launches universal executables natively from a Rosetta parent",
+  () => {
+    const module = new URL("./browser.ts", import.meta.url).href;
+    const probe = `
+      import { browserLaunchCommand } from ${JSON.stringify(module)};
+      const child = Bun.spawnSync([...browserLaunchCommand("/usr/bin/uname"), "-m"]);
+      process.stdout.write(child.stdout);
+      process.exit(child.exitCode);
+    `;
+    const child = Bun.spawnSync([
+      "/usr/bin/arch", "-x86_64", "/usr/bin/env", process.execPath, "-e", probe,
+    ]);
+    expect(child.exitCode).toBe(0);
+    expect(new TextDecoder().decode(child.stdout).trim()).toBe("arm64");
+  },
+);
 
 describe("browser subprocess diagnostics", () => {
   test("classifies an early signal as a browser exit, not a timeout", () => {
