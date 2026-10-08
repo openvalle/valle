@@ -152,7 +152,7 @@ jobs:
           compression-level: 0
           retention-days: 30
       - name: Save build dependencies even after a failed build
-        if: always() && steps.dependencies.outcome == 'success' && steps.dependencies.outputs.cache-hit != 'true'
+        if: ${{ !cancelled() && steps.dependencies.outcome == 'success' && steps.dependencies.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           key: ${{ steps.dependencies.outputs.cache-primary-key }}

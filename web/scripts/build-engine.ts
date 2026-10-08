@@ -1,4 +1,4 @@
-import { mkdir, rm } from "node:fs/promises";
+import { cp, mkdir, rm } from "node:fs/promises";
 import path from "node:path";
 import { withBuildDirectory } from "./build-directory.ts";
 
@@ -10,15 +10,20 @@ async function wasmCompilerEnv(): Promise<typeof process.env> {
   if (process.platform === "win32") {
     const quickjs = metadata.packages.find(pkg => pkg.name === "rquickjs-sys");
     if (!quickjs) throw new Error("rquickjs-sys is missing from Cargo metadata");
-    // Clang cannot reliably resolve nested headers through canonical Windows UNC paths.
-    const include = path.join(path.dirname(quickjs.manifest_path), "vendor/wasi-libc/include")
+    // Use a distinct directory: Clang deduplicates aliases of the vendored UNC include path.
+    const include = path.join(metadata.target_directory, "tools", `rquickjs-sys-${quickjs.version}-wasm-include`)
       .replace(/^\\\\\?\\/, "").replaceAll("\\", "/");
     if (!await Bun.file(path.join(include, "bits/alltypes.h")).exists()) {
-      throw new Error(`QuickJS WASM libc headers are missing: ${include}`);
+      const source = path.join(path.dirname(quickjs.manifest_path), "vendor/wasi-libc/include");
+      await withBuildDirectory(include, next => cp(source, next, { recursive: true }));
+      if (!await Bun.file(path.join(include, "bits/alltypes.h")).exists()) {
+        throw new Error(`QuickJS WASM libc headers are missing: ${include}`);
+      }
     }
     return {
       ...process.env,
-      C_INCLUDE_PATH: [include, process.env.C_INCLUDE_PATH].filter(Boolean).join(path.delimiter),
+      CC_SHELL_ESCAPED_FLAGS: "1",
+      CFLAGS_wasm32_unknown_unknown: [process.env.CFLAGS_wasm32_unknown_unknown, `-I"${include}"`].filter(Boolean).join(" "),
     };
   }
   if (process.platform !== "darwin" || process.env.CC_wasm32_unknown_unknown
