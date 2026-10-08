@@ -37,7 +37,7 @@ jobs:
       - name: Restore compiled Rust dependencies
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          key: rust-build-v1-web-engine-ubuntu-24.04-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'crates/*/Cargo.toml', 'xtask/Cargo.toml', 'rust-toolchain.toml', '.cargo/config.toml') }}
+          key: rust-build-v1-web-engine-ubuntu-24.04-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'crates/*/Cargo.toml', 'xtask/Cargo.toml', 'rust-toolchain.toml', '.cargo/config.toml', 'web/tools/schema-gen/Cargo.toml', 'web/tools/schema-gen/Cargo.lock') }}
           restore-keys: rust-build-v1-web-engine-ubuntu-24.04-${{ runner.arch }}-
           # Keep libraries and build-script outputs; omit test binaries, downloads,
           # and Skia records so Cargo downloads its prebuilt binaries again.
@@ -62,6 +62,16 @@ jobs:
             !target/**/build/valle-cli-*
             !target/**/build/valle-cli-*/**
             !target/**/deps/*valle_cli-*
+            web/tools/schema-gen/target/**/.fingerprint/*
+            web/tools/schema-gen/target/**/build/*
+            web/tools/schema-gen/target/**/deps/*.rlib
+            web/tools/schema-gen/target/**/deps/*.rmeta
+            web/tools/schema-gen/target/**/deps/*.d
+            web/tools/schema-gen/target/**/deps/*.so
+            web/tools/schema-gen/target/**/deps/*.dylib
+            web/tools/schema-gen/target/**/deps/*.dll
+            web/tools/schema-gen/target/**/deps/*.lib
+            web/tools/schema-gen/target/**/deps/*.a
       - name: Install Web dependencies
         working-directory: web
         run: bun install --frozen-lockfile
