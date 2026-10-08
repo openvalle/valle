@@ -22,6 +22,9 @@ jobs:
     env:
       CARGO_BUILD_JOBS: '2'
       CARGO_NET_RETRY: '3'
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
     steps:
       - name: Set Bun cache directory
         run: echo "BUN_INSTALL_CACHE_DIR=$RUNNER_TEMP/valle-bun-cache" >> "$GITHUB_ENV"
@@ -31,18 +34,34 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version-file: web/package.json
-      - name: Cache build dependencies
+      - name: Restore compiled Rust dependencies
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          key: web-engine-ubuntu-24.04-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml', 'web/bun.lock', 'web/package.json') }}
-          restore-keys: web-engine-ubuntu-24.04-${{ runner.arch }}-
+          key: rust-build-v1-web-engine-ubuntu-24.04-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'crates/*/Cargo.toml', 'xtask/Cargo.toml', 'rust-toolchain.toml', '.cargo/config.toml') }}
+          restore-keys: rust-build-v1-web-engine-ubuntu-24.04-${{ runner.arch }}-
+          # Keep libraries and build-script outputs; omit test binaries, downloads,
+          # and Skia records so Cargo downloads its prebuilt binaries again.
           path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target/debug
-            target/wasm32-unknown-unknown
-            target/tools
-            ${{ runner.temp }}/valle-bun-cache
+            target/**/.fingerprint/*
+            target/**/build/*
+            target/**/deps/*.rlib
+            target/**/deps/*.rmeta
+            target/**/deps/*.d
+            target/**/deps/*.so
+            target/**/deps/*.dylib
+            target/**/deps/*.dll
+            target/**/deps/*.lib
+            target/**/deps/*.a
+            !target/**/.fingerprint/skia-bindings-*
+            !target/**/.fingerprint/skia-bindings-*/**
+            !target/**/build/skia-bindings-*
+            !target/**/build/skia-bindings-*/**
+            !target/**/deps/*skia_bindings-*
+            !target/**/.fingerprint/valle-cli-*
+            !target/**/.fingerprint/valle-cli-*/**
+            !target/**/build/valle-cli-*
+            !target/**/build/valle-cli-*/**
+            !target/**/deps/*valle_cli-*
       - name: Install Web dependencies
         working-directory: web
         run: bun install --frozen-lockfile
