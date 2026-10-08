@@ -811,29 +811,25 @@ fn numeric_version_at_least(actual: &str, required: &str) -> bool {
 
 #[cfg(feature = "model-store")]
 fn minimum_os_satisfied(route: &Route) -> bool {
-    let Some(requirement) = route.requirements.minimum_os.as_deref() else {
-        return true;
-    };
-    #[cfg(target_os = "macos")]
-    if let Some(required) = requirement.strip_prefix("macOS ") {
-        let Some(required_major) = required
-            .split('.')
-            .next()
+    match route.requirements.minimum_os.as_deref() {
+        None => true,
+        #[cfg(target_os = "macos")]
+        Some(requirement) => requirement
+            .strip_prefix("macOS ")
+            .and_then(|required| required.split('.').next())
             .and_then(|value| value.parse().ok())
-        else {
-            return false;
-        };
-        return macos_product_major().is_some_and(|actual| actual >= required_major);
+            .is_some_and(|required| macos_product_major().is_some_and(|actual| actual >= required)),
+        #[cfg(all(target_os = "linux", target_env = "gnu"))]
+        Some(requirement) => requirement
+            .split("glibc ")
+            .nth(1)
+            .and_then(|value| value.strip_suffix(')'))
+            .is_some_and(|required| {
+                glibc_version().is_some_and(|actual| version_at_least(&actual, required))
+            }),
+        #[cfg(not(any(target_os = "macos", all(target_os = "linux", target_env = "gnu"))))]
+        Some(_) => false,
     }
-    #[cfg(all(target_os = "linux", target_env = "gnu"))]
-    if let Some(required) = requirement
-        .split("glibc ")
-        .nth(1)
-        .and_then(|value| value.strip_suffix(')'))
-    {
-        return glibc_version().is_some_and(|actual| version_at_least(&actual, required));
-    }
-    false
 }
 
 #[cfg(all(feature = "model-store", target_os = "macos"))]

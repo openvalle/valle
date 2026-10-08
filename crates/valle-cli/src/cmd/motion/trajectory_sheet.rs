@@ -108,7 +108,7 @@ pub(super) fn render(
         }
     }
     let parent = output.parent().unwrap_or_else(|| Path::new("."));
-    let mut builder = tempfile::Builder::new();
+    let builder = &mut tempfile::Builder::new();
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;

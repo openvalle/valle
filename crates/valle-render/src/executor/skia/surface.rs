@@ -268,7 +268,7 @@ unsafe extern "C" fn gpu_finished(context: *mut core::ffi::c_void) {
     done.store(true, Ordering::Release);
 }
 use thiserror::Error;
-#[cfg(feature = "native")]
+#[cfg(all(target_os = "macos", feature = "native"))]
 use valle_engine::compositor::ExternalObject;
 use valle_engine::{
     compositor::lower::{

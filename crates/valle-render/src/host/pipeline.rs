@@ -1,7 +1,9 @@
 //! One Native frame loop for every delivery mode.
 
+#[cfg(target_os = "macos")]
+use std::collections::VecDeque;
 use std::{
-    collections::{BTreeSet, VecDeque},
+    collections::BTreeSet,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -18,9 +20,9 @@ use valle_engine::{
 #[cfg(target_os = "macos")]
 use valle_media::SharedVideoFramePool;
 
-use super::{
-    DeliveredFrame, DeliveredSharedFrame, FrameDelivery, FrameRenderError, FrameSink, NativeProject,
-};
+#[cfg(target_os = "macos")]
+use super::DeliveredSharedFrame;
+use super::{DeliveredFrame, FrameDelivery, FrameRenderError, FrameSink, NativeProject};
 use crate::executor::skia::{SkiaBackendKind, SkiaExecutionProfile};
 
 #[derive(Clone, Default)]
