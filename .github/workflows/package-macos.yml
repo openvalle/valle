@@ -178,6 +178,7 @@ jobs:
         run: |
           binary="$GITHUB_WORKSPACE/target/package/valle"
           echo "VALLE_TEST_BINARY=$binary" >> "$GITHUB_ENV"
+          echo "VALLE_TEST_CLI=$binary" >> "$GITHUB_ENV"
           version="$("$binary" --version)"
           echo "VALLE_PACKAGE_VERSION=${version#valle }" >> "$GITHUB_ENV"
       - name: Record installed FFmpeg capabilities
