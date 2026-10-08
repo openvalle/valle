@@ -38,6 +38,9 @@ jobs:
       MACOSX_DEPLOYMENT_TARGET: '15.0'
       CARGO_BUILD_JOBS: '2'
       CARGO_NET_RETRY: '3'
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
       HOMEBREW_NO_ANALYTICS: '1'
       HOMEBREW_NO_AUTO_UPDATE: '1'
       HOMEBREW_NO_INSTALL_CLEANUP: '1'
@@ -174,7 +177,7 @@ jobs:
         env:
           VALLE_EMBED_WEB_DIR: ${{ github.workspace }}/web/dist
           VALLE_EMBED_NOTICES: ${{ github.workspace }}/target/distribution-notices.txt
-        run: cargo test --locked --release --target '${{ matrix.target }}' --workspace --features valle-cli/embedded-runtime --tests --no-fail-fast -- --test-threads=1 2>&1 | tee "$PACKAGE_LOGS/rust-tests.log"
+        run: cargo test --locked --target '${{ matrix.target }}' --workspace --features valle-cli/embedded-runtime --tests --no-fail-fast -- --test-threads=1 2>&1 | tee "$PACKAGE_LOGS/rust-tests.log"
       - name: Test all Web code and generated boundaries
         if: inputs.ci && matrix.arch == 'arm64'
         working-directory: web

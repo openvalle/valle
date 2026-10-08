@@ -6,6 +6,8 @@ The `CI` workflow runs for pull requests and pushes to `main`. Reusable packagin
 
 The macOS arm64 job also runs all Web tests and generated-boundary checks. Separate jobs check Rust formatting and the packed Web SDK. The `CI complete` job requires every job to succeed. Hardware, real model-weight and opt-in runtime acceptance tests remain explicitly selected outside the ordinary suite as described below.
 
+The full Rust workspace uses the default test profile with debug assertions enabled, reusing native dependencies built by the packaging-tool checks and avoiding thin-LTO linking of every test executable. CI disables debug symbols and incremental compilation to limit disk usage. Release-mode CLI runtime contracts and codec/muxer tests separately exercise the packaged build configuration.
+
 Automatic macOS CI uses ad-hoc signing without Apple secrets. Manually dispatched macOS packaging requires Developer ID signing and accepted notarization for both architectures.
 
 ## Local tests and coverage
