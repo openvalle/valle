@@ -1,0 +1,17 @@
+name: CI Linux x86_64
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-linux-x86_64-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    uses: ./.github/workflows/package-linux-x86_64.yml
+    with:
+      ci: true

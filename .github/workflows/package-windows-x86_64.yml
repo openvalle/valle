@@ -1,0 +1,26 @@
+name: Package Windows x86_64
+
+on:
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      ci:
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: package-windows-x86_64-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  package:
+    uses: ./.github/workflows/build-windows.yml
+    with:
+      ci: ${{ inputs.ci || false }}
+      arch: x86_64
+      target: x86_64-pc-windows-msvc
+      msvc: x64
+      machine: IMAGE_FILE_MACHINE_AMD64

@@ -1,19 +1,27 @@
-name: Package Windows
+name: Build and verify Windows
 
+# Internal implementation shared by the single-platform CI and Package entries.
 on:
-  workflow_dispatch:
   workflow_call:
     inputs:
       ci:
         type: boolean
         default: false
+      arch:
+        type: string
+        required: true
+      target:
+        type: string
+        required: true
+      msvc:
+        type: string
+        required: true
+      machine:
+        type: string
+        required: true
 
 permissions:
   contents: read
-
-concurrency:
-  group: package-windows-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: false
 
 defaults:
   run:
@@ -21,22 +29,8 @@ defaults:
 
 jobs:
   package:
-    name: Windows ${{ matrix.arch }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - arch: x86_64
-            runner: windows-2022
-            target: x86_64-pc-windows-msvc
-            msvc: x64
-            machine: IMAGE_FILE_MACHINE_AMD64
-          - arch: arm64
-            runner: windows-11-arm
-            target: aarch64-pc-windows-msvc
-            msvc: arm64
-            machine: IMAGE_FILE_MACHINE_ARM64
-    runs-on: ${{ matrix.runner }}
+    name: Windows ${{ inputs.arch }}
+    runs-on: ${{ inputs.arch == 'arm64' && 'windows-11-arm' || 'windows-2022' }}
     timeout-minutes: 240
     env:
       CARGO_BUILD_JOBS: '2'
@@ -59,12 +53,13 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version-file: web/package.json
+          no-cache: true
       - name: Restore compiled Rust dependencies
         id: dependencies
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          key: rust-build-v1-windows-${{ matrix.target }}-${{ steps.environment.outputs.image }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'crates/*/Cargo.toml', 'xtask/Cargo.toml', 'rust-toolchain.toml', '.cargo/config.toml') }}
-          restore-keys: rust-build-v1-windows-${{ matrix.target }}-${{ steps.environment.outputs.image }}-
+          key: rust-build-v1-windows-${{ inputs.target }}-${{ steps.environment.outputs.image }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'crates/*/Cargo.toml', 'xtask/Cargo.toml', 'rust-toolchain.toml', '.cargo/config.toml') }}
+          restore-keys: rust-build-v1-windows-${{ inputs.target }}-${{ steps.environment.outputs.image }}-
           # Keep libraries and build-script outputs; omit test binaries, downloads,
           # and Skia records so Cargo downloads its prebuilt binaries again.
           path: |
@@ -91,13 +86,13 @@ jobs:
       - name: Set up MSVC
         uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
         with:
-          arch: ${{ matrix.msvc }}
+          arch: ${{ inputs.msvc }}
       - name: Prepare LLVM and linker
         run: |
           # Git's link.exe is a different tool; Cargo must use the MSVC linker.
-          $linker = Join-Path $env:VCToolsInstallDir 'bin/Host${{ matrix.msvc }}/${{ matrix.msvc }}/link.exe'
+          $linker = Join-Path $env:VCToolsInstallDir 'bin/Host${{ inputs.msvc }}/${{ inputs.msvc }}/link.exe'
           if (!(Test-Path $linker -PathType Leaf)) { throw 'MSVC linker is missing' }
-          $target = '${{ matrix.target }}'.ToUpperInvariant().Replace('-', '_')
+          $target = '${{ inputs.target }}'.ToUpperInvariant().Replace('-', '_')
           "CARGO_TARGET_${target}_LINKER=$linker" >> $env:GITHUB_ENV
           $llvm = "$env:ProgramFiles/LLVM"
           if (!(Test-Path "$llvm/bin/libclang.dll")) { throw 'LLVM libclang.dll is missing' }
@@ -106,13 +101,13 @@ jobs:
           "$llvm/bin" >> $env:GITHUB_PATH
       - name: Record build environment
         run: |
-          rustup set default-host '${{ matrix.target }}'
+          rustup set default-host '${{ inputs.target }}'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           rustup show
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           rustc -vV | Tee-Object -FilePath "$env:PACKAGE_LOGS/toolchain.txt"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          if (!(Select-String -Path "$env:PACKAGE_LOGS/toolchain.txt" -SimpleMatch 'host: ${{ matrix.target }}' -Quiet)) {
+          if (!(Select-String -Path "$env:PACKAGE_LOGS/toolchain.txt" -SimpleMatch 'host: ${{ inputs.target }}' -Quiet)) {
             throw 'Rust host does not match the package architecture'
           }
           foreach ($tool in @('clang', 'python', 'bun', 'cmake', 'ninja')) {
@@ -123,7 +118,7 @@ jobs:
       - name: Verify native filesystem publication
         # Probe the std-only production module before the workspace build.
         run: |
-          $target = '${{ matrix.target }}'.ToUpperInvariant().Replace('-', '_')
+          $target = '${{ inputs.target }}'.ToUpperInvariant().Replace('-', '_')
           $linker = [Environment]::GetEnvironmentVariable("CARGO_TARGET_${target}_LINKER")
           $test = Join-Path $env:RUNNER_TEMP 'valle-filesystem-tests.exe'
           rustc --edition=2024 --test crates/valle-project/src/fs.rs -C "linker=$linker" -o $test
@@ -142,18 +137,25 @@ jobs:
             } | Tee-Object -FilePath "$env:PACKAGE_LOGS/ffmpeg-imports.txt"
             throw ('FFmpeg failed: exit {0} (0x{1:X8})' -f $status, ($status -band 0xffffffffL))
           }
+      - name: Check Rust formatting
+        if: inputs.ci
+        run: |
+          cargo fmt --all --check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo fmt --manifest-path web/tools/schema-gen/Cargo.toml --check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Install Web dependencies
         working-directory: web
         run: bun install --frozen-lockfile
       - name: Check packaging tool
         run: cargo test --locked -p xtask 2>&1 | Tee-Object -FilePath "$env:PACKAGE_LOGS/xtask-tests.log"
       - name: Build and verify single executable
-        run: cargo xtask package --target '${{ matrix.target }}' 2>&1 | Tee-Object -FilePath "$env:PACKAGE_LOGS/package.log"
+        run: cargo xtask package --target '${{ inputs.target }}' 2>&1 | Tee-Object -FilePath "$env:PACKAGE_LOGS/package.log"
       - name: Record and verify startup libraries
         run: |
           llvm-readobj --file-headers --coff-imports ./dist/bin/valle.exe | Tee-Object -FilePath "$env:PACKAGE_LOGS/startup-libraries.txt"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          if (!(Select-String -Path "$env:PACKAGE_LOGS/startup-libraries.txt" -SimpleMatch '${{ matrix.machine }}' -Quiet)) {
+          if (!(Select-String -Path "$env:PACKAGE_LOGS/startup-libraries.txt" -SimpleMatch '${{ inputs.machine }}' -Quiet)) {
             throw 'Executable architecture does not match the package'
           }
           if (Select-String -Path "$env:PACKAGE_LOGS/startup-libraries.txt" -Pattern '(avcodec|avformat|avutil|swscale|swresample).*\.dll' -Quiet) {
@@ -169,15 +171,15 @@ jobs:
         env:
           VALLE_EMBED_WEB_DIR: ${{ github.workspace }}/web/dist
           VALLE_EMBED_NOTICES: ${{ github.workspace }}/target/distribution-notices.txt
-        run: cargo test --locked --release --target '${{ matrix.target }}' -p valle-cli --features embedded-runtime --test web_runtime --test ffmpeg_runtime -- --test-threads=1 2>&1 | Tee-Object -FilePath "$env:PACKAGE_LOGS/cli-tests.log"
+        run: cargo test --locked --release --target '${{ inputs.target }}' -p valle-cli --features embedded-runtime --test web_runtime --test ffmpeg_runtime -- --test-threads=1 2>&1 | Tee-Object -FilePath "$env:PACKAGE_LOGS/cli-tests.log"
       - name: Test Rust workspace
         if: inputs.ci
         env:
           VALLE_EMBED_WEB_DIR: ${{ github.workspace }}/web/dist
           VALLE_EMBED_NOTICES: ${{ github.workspace }}/target/distribution-notices.txt
-        run: cargo test --locked --target '${{ matrix.target }}' --workspace --features valle-cli/embedded-runtime --tests --no-fail-fast -- --test-threads=1 2>&1 | Tee-Object -FilePath "$env:PACKAGE_LOGS/rust-tests.log"
+        run: cargo test --locked --target '${{ inputs.target }}' --workspace --features valle-cli/embedded-runtime --tests --no-fail-fast -- --test-threads=1 2>&1 | Tee-Object -FilePath "$env:PACKAGE_LOGS/rust-tests.log"
       - name: Test media roundtrips
-        run: cargo test --locked --release --target '${{ matrix.target }}' -p valle-media --features libav --test codec_roundtrip --test muxer -- --test-threads=1 2>&1 | Tee-Object -FilePath "$env:PACKAGE_LOGS/media-tests.log"
+        run: cargo test --locked --release --target '${{ inputs.target }}' -p valle-media --features libav --test codec_roundtrip --test muxer -- --test-threads=1 2>&1 | Tee-Object -FilePath "$env:PACKAGE_LOGS/media-tests.log"
       - name: Archive executable and verify extraction
         working-directory: target/package
         shell: pwsh
@@ -185,7 +187,7 @@ jobs:
           $binary = Get-Item 'valle.exe'
           $version = & .\valle.exe --version
           if ($LASTEXITCODE -ne 0) { throw 'Cannot read executable version' }
-          $archive = "valle-v$($version -replace '^valle ', '')-windows-${{ matrix.arch }}.zip"
+          $archive = "valle-v$($version -replace '^valle ', '')-windows-${{ inputs.arch }}.zip"
           Compress-Archive -LiteralPath $binary.Name, 'SHA256SUMS' -DestinationPath $archive
           $hash = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant()
           Set-Content "$archive.sha256" "$hash  $archive`n" -NoNewline -Encoding ascii
@@ -216,10 +218,10 @@ jobs:
       - name: Upload executable archive and checksum
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: valle-windows-${{ matrix.arch }}-${{ github.sha }}
+          name: valle-windows-${{ inputs.arch }}-${{ github.sha }}
           path: |
-            target/package/valle-*-windows-${{ matrix.arch }}.zip
-            target/package/valle-*-windows-${{ matrix.arch }}.zip.sha256
+            target/package/valle-*-windows-${{ inputs.arch }}.zip
+            target/package/valle-*-windows-${{ inputs.arch }}.zip.sha256
           if-no-files-found: error
           compression-level: 0
           retention-days: 30
@@ -255,7 +257,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: valle-package-diagnostics-windows-${{ matrix.arch }}-${{ github.sha }}-${{ github.run_attempt }}
+          name: valle-package-diagnostics-windows-${{ inputs.arch }}-${{ github.sha }}-${{ github.run_attempt }}
           path: ${{ env.PACKAGE_LOGS }}
           if-no-files-found: warn
           retention-days: 14

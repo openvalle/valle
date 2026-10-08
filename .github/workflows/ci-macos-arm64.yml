@@ -1,0 +1,17 @@
+name: CI macOS arm64
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-macos-arm64-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    uses: ./.github/workflows/package-macos-arm64.yml
+    with:
+      ci: true

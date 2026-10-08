@@ -2,13 +2,19 @@
 
 ## Continuous integration
 
-The `CI` workflow runs for pull requests and pushes to `main`. Reusable packaging workflows build and verify macOS, Linux and Windows on both arm64 and x86_64, run the ordinary Rust workspace tests for every target, and exercise real FFmpeg codec/muxer roundtrips. macOS x86_64 is cross-compiled on an arm64 `macos-15` runner and tested under Rosetta with FFmpeg 7/8/9 shared libraries cross-compiled from SHA-256-verified sources by `.github/scripts/install-ffmpeg-macos.sh`; macOS arm64 uses Homebrew. Linux and Windows use native runners and SHA-256-verified FFmpeg 9 shared-library bundles pinned in `.github/scripts/install-ffmpeg.ts`. Test runtimes are not included in the distributed packages.
+Six manually dispatched `CI <OS> <architecture>` workflows independently build and verify macOS, Linux and Windows on arm64 and x86_64, run the ordinary Rust workspace tests for that target, and exercise real FFmpeg codec/muxer roundtrips. Each calls its matching `Package <OS> <architecture>` entry, backed by reusable OS build workflows. macOS x86_64 is cross-compiled on an arm64 `macos-15` runner and tested under Rosetta with FFmpeg 7/8/9 shared libraries cross-compiled from SHA-256-verified sources by `.github/scripts/install-ffmpeg-macos.sh`; Chrome runs natively on the arm64 host. macOS arm64 uses Homebrew. Linux and Windows use native runners and SHA-256-verified FFmpeg 9 shared-library bundles pinned in `.github/scripts/install-ffmpeg.ts`. Test runtimes are not included in the distributed packages.
 
-The macOS arm64 job also runs all Web tests and generated-boundary checks. Separate jobs check Rust formatting and the packed Web SDK. The `CI complete` job requires every job to succeed. Hardware, real model-weight and opt-in runtime acceptance tests remain explicitly selected outside the ordinary suite as described below.
+The macOS arm64 job also runs all Web tests and generated-boundary checks. Formatting and packed Web SDK validation run automatically on pull requests and pushes to `main`. Native CI entries run only when dispatched, so a platform-specific fix can be verified without rebuilding the other five targets:
+
+```sh
+gh workflow run ci-macos-x86_64.yml --ref main
+```
+
+Hardware, real model-weight and opt-in runtime acceptance tests remain explicitly selected outside the ordinary suite as described below.
 
 The full Rust workspace uses the default test profile with debug assertions enabled, reusing native dependencies built by the packaging-tool checks and avoiding thin-LTO linking of every test executable. CI disables debug symbols and incremental compilation to limit disk usage. Release-mode CLI runtime contracts and codec/muxer tests separately exercise the packaged build configuration.
 
-Automatic macOS CI uses ad-hoc signing without Apple secrets. Manually dispatched macOS packaging requires Developer ID signing and accepted notarization for both architectures.
+macOS CI uses ad-hoc signing without Apple secrets. Manually dispatched macOS packaging requires Developer ID signing and accepted notarization for the selected architecture.
 
 ## Local tests and coverage
 

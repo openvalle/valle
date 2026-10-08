@@ -1,0 +1,26 @@
+name: Package Windows arm64
+
+on:
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      ci:
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: package-windows-arm64-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  package:
+    uses: ./.github/workflows/build-windows.yml
+    with:
+      ci: ${{ inputs.ci || false }}
+      arch: arm64
+      target: aarch64-pc-windows-msvc
+      msvc: arm64
+      machine: IMAGE_FILE_MACHINE_ARM64

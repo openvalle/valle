@@ -1,0 +1,38 @@
+name: Package macOS x86_64
+
+on:
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      ci:
+        type: boolean
+        default: false
+    secrets:
+      MACOS_CERT_P12_BASE64:
+        required: false
+      MACOS_CERT_PASSWORD:
+        required: false
+      MACOS_SIGN_IDENTITY:
+        required: false
+      APPLE_API_KEY_ID:
+        required: false
+      APPLE_API_ISSUER_ID:
+        required: false
+      APPLE_API_KEY_P8_BASE64:
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: package-macos-x86_64-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  package:
+    uses: ./.github/workflows/build-macos.yml
+    with:
+      ci: ${{ inputs.ci || false }}
+      arch: x86_64
+      target: x86_64-apple-darwin
+    secrets: inherit

@@ -1,0 +1,17 @@
+name: CI Windows arm64
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-windows-arm64-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    uses: ./.github/workflows/package-windows-arm64.yml
+    with:
+      ci: true
