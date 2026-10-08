@@ -35,7 +35,11 @@ pub enum StudioSessionWire {
         input: String,
         generation: u64,
         token: String,
-        #[serde(rename = "authorInputs", default, skip_serializing_if = "Option::is_none")]
+        #[serde(
+            rename = "authorInputs",
+            default,
+            skip_serializing_if = "Option::is_none"
+        )]
         #[ts(rename = "authorInputs", optional)]
         author_inputs: Option<StudioMotionInputsWire>,
     },
