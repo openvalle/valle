@@ -135,11 +135,8 @@ fn native_renderer_summary_reports_the_pinned_render() {
     let mut options = NativeRenderOptions::default();
     options.background = OutputBackground::opaque_srgb([12, 34, 56]);
     options.raster_workers = Some(1);
-    let output = std::env::temp_dir().join(format!(
-        "valle-native-fixed-render-{}-{}.png",
-        std::process::id(),
-        render.as_hex()
-    ));
+    let directory = tempfile::tempdir().unwrap();
+    let output = directory.path().join("frame.png");
     let summary = NativeRenderer::new(project, options)
         .preview_frame_key(FrameKey::new(0), &output)
         .unwrap();
