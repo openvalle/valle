@@ -4,7 +4,7 @@
 transcripts, foregrounds, cleaned audio, stems, shot lists, masks and new media.
 It does not modify a Timeline, Project or asset-library entry automatically.
 
-This guide covers the current CLI's nine processing operations. Use the
+This guide covers the current CLI's ten processing operations. Use the
 [CLI guide](cli.md) for installation, shared output modes and exit codes, the
 [Timeline reference](timeline.md) to assemble results, and the
 [Motion reference](motion.md) to animate them.
@@ -15,6 +15,7 @@ This guide covers the current CLI's nine processing operations. Use the
 - [Models and runtimes](#models-and-runtimes)
 - [Shared options and file rules](#shared-options-and-file-rules)
 - [Transcribe: speech to text](#transcribe-speech-to-text)
+- [Synthesize: text to speech](#synthesize-text-to-speech)
 - [Matte: automatic foreground extraction](#matte-automatic-foreground-extraction)
 - [Enhance: speech noise reduction](#enhance-speech-noise-reduction)
 - [Separate: vocals and instrumental](#separate-vocals-and-instrumental)
@@ -35,6 +36,7 @@ before running an operation. Each subcommand exposes its options through `--help
 | Operation | Input | Primary output | Default model |
 | --- | --- | --- | --- |
 | `transcribe` | Audio, or video with audio | Word/sentence JSON, or text-only result | `qwen3-asr-0.6b` plus `qwen3-aligner-0.6b` for timestamps |
+| `synthesize` | Text plus a 0.5–15 second reference voice | Mono 24 kHz WAV | `qwen3-tts-0.6b-base-q8` |
 | `matte` | PNG or video | Transparent PNG or lossless RGBA MOV | `birefnet` |
 | `enhance` | Audio, or video with audio | 48 kHz mono WAV/FLAC | `dpdfnet` |
 | `separate` | Audio, or video with audio | Directory with two 44.1 kHz stereo WAV files | `demucs` |
@@ -82,7 +84,8 @@ necessarily executable by an older Valle binary.
 
 | Operation | Supported model choices | Current execution backends |
 | --- | --- | --- |
-| `transcribe` | `qwen3-asr-0.6b`; timestamps also use `qwen3-aligner-0.6b` | `auto` only: native CPU, macOS only |
+| `transcribe` | `qwen3-asr-0.6b`; timestamps also use `qwen3-aligner-0.6b` | `auto` only: native CPU on macOS ARM64, Linux x86_64 and Windows x86_64 |
+| `synthesize` | `qwen3-tts-0.6b-base-q8`, `qwen3-tts-0.6b-base-q4` | Native CPU on macOS ARM64, Linux x86_64 and Windows x86_64 |
 | `matte` | `birefnet`, `modnet` | ONNX CPU; CoreML on supported macOS routes |
 | `shots` | `omnishotcut`, `transnetv2` | ONNX CPU |
 | Remaining operations | The default model in the operation table | ONNX CPU |
@@ -114,7 +117,7 @@ Weights and runtime libraries are separate dependencies:
   Set `ORT_DYLIB_PATH` to the full library filename, or place the runtime beside
   the Valle executable: `libonnxruntime.dylib` on macOS, `libonnxruntime.so` on
   Linux, or `onnxruntime.dll` on Windows. Supply its dependent libraries too.
-- CoreML matting uses macOS's runtime. Native CPU transcription does not use ONNX
+- CoreML matting uses macOS's runtime. Native CPU transcription and voice cloning do not use ONNX
   Runtime. These routes still need FFmpeg when decoding audio/video.
 
 For example, on macOS with an ONNX Runtime installation:
@@ -178,8 +181,11 @@ when the exact encoding matters.
 
 ## Transcribe: speech to text
 
-ASR transcription and forced alignment are supported only on macOS. Linux and
-Windows reject `media transcribe` before loading models or writing output files.
+ASR transcription and forced alignment use the published `valle-asr` crate on
+macOS ARM64, Linux x86_64 and Windows x86_64. Audio is processed in bounded
+30-second windows; ASR weights are released before loading the forced aligner.
+The current pinned release is `1.1.0`. Reinstalling reuses verified files from
+older cache slots and downloads only the missing tokenizer configuration.
 
 Install ASR and alignment for timestamped output:
 
@@ -226,6 +232,37 @@ The first command prints text to stdout. In JSON mode read `result.text`.
 paths default to `<stem>.words.json` or `<stem>.sentences.json`. There is no direct
 SRT/VTT export or automatic insertion into Timeline captions; see
 [using analysis results](#use-results-in-a-timeline-or-motion).
+
+## Synthesize: text to speech
+
+Install the voice cloning model, then provide text and a reference voice:
+
+```sh
+valle models install qwen3-tts-0.6b-base-q8 --events
+valle media synthesize --text "Hello, welcome to Valle." --reference voice.wav -o speech.wav
+valle media synthesize --text-file narration.txt --reference voice.wav --ref-text-file voice.txt --lang en -o narration.wav --json
+```
+
+The reference audio must be between 0.5 and 15 seconds. Audio or a video's audio
+track is decoded to mono 24 kHz. Use `--ref-text` or `--ref-text-file` for its exact
+transcript; omission uses speaker embedding conditioning only. The synthesis
+language is `auto`, `zh` or `en`.
+
+Output is mono 24 kHz float WAV. Chunks stream into a private staging file;
+cancellation or inference failure cleans up partial output, and the final file
+is published only after its header and sample count validate. `--overwrite`
+allows replacement, and `--report` records model identity and run timings.
+
+`--model qwen3-tts-0.6b-base-q4` selects the smaller Q4 talker; install it separately
+before use. Both models use the published `valle-tts` CPU backend and share a
+Q8 codec. They support macOS ARM64, Linux x86_64 and Windows x86_64; x86_64
+requires AVX2, FMA and F16C. No ONNX runtime or external TTS executable is required.
+Building from source needs CMake 3.20+ and a C++17 compiler.
+
+Sampling defaults are `--seed 42`, `--temperature 0.9`, `--max-tokens 512` and
+`--max-chunk-chars 160`. The token budget applies per text chunk; reaching it
+without EOS fails the job rather than publishing truncated speech. For long
+narration, text is split into bounded chunks while output remains streamed.
 
 ## Matte: automatic foreground extraction
 

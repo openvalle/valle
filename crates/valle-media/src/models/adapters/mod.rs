@@ -3,8 +3,11 @@
 #[cfg(feature = "tool-matte")]
 pub(crate) mod birefnet;
 
-#[cfg(all(feature = "tool-transcribe", target_os = "macos"))]
+#[cfg(feature = "tool-transcribe")]
 pub(crate) mod qwen_asr;
+
+#[cfg(feature = "tool-synthesize")]
+pub(crate) mod qwen_tts;
 
 #[cfg(feature = "model-dpdfnet-onnx")]
 pub(crate) mod dpdfnet;

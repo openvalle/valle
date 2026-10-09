@@ -243,6 +243,19 @@ impl HubClient {
         artifact_id: &str,
         models_root: &Path,
     ) -> Result<InstallResult> {
+        self.install_artifact_reusing(release, fetched, artifact_id, models_root, &[])
+    }
+
+    /// Reuse matching files from older cache slots while downloading newly required files.
+    /// Every reused file is verified against the new manifest and copied into the staging slot.
+    pub(crate) fn install_artifact_reusing(
+        &self,
+        release: &CatalogRelease,
+        fetched: &FetchedManifest,
+        artifact_id: &str,
+        models_root: &Path,
+        sources: &[PathBuf],
+    ) -> Result<InstallResult> {
         let manifest = &fetched.manifest;
         let plan = prepare_install(release, fetched, artifact_id, models_root)?;
         let artifact = &plan.artifact;
@@ -267,8 +280,16 @@ impl HubClient {
         let staging = StagingSlot::create(&root)?;
 
         let mut downloaded_files = 0;
+        let mut reused_files = 0;
         for file in self_contained_files(manifest, artifact) {
             let target = safe_join(staging.path(), &file.path)?;
+            if let Some(source) = sources.iter().find(|source| {
+                safe_join(source, &file.path).is_ok_and(|path| verify_file(&path, file).is_ok())
+            }) {
+                migrate_legacy_file(source, staging.path(), file)?;
+                reused_files += 1;
+                continue;
+            }
             if let Some(bytes) = crate::models::spec::embedded_support_file(manifest, file) {
                 ensure!(
                     bytes.len() as u64 == file.bytes && sha256_bytes(bytes) == file.sha256,
@@ -308,7 +329,7 @@ impl HubClient {
             entrypoint,
             artifact: artifact.id.clone(),
             downloaded_files,
-            reused_files: 0,
+            reused_files,
         })
     }
 
@@ -1356,7 +1377,7 @@ mod tests {
             .unwrap()
             .clone();
         let mut manifest =
-            crate::models::spec::embedded_release_manifest("qwen3-asr-0.6b", "1.0.0").unwrap();
+            crate::models::spec::embedded_release_manifest("qwen3-asr-0.6b", "1.1.0").unwrap();
         // Exercise the real official-source plan with tiny payloads, not multi-GB test weights.
         for file in &mut manifest.artifacts[0].files {
             file.bytes = 4;
@@ -1399,7 +1420,7 @@ mod tests {
             .install_artifact(&release, &fetched, "safetensors-bf16", root.path())
             .unwrap();
         server.join().unwrap();
-        assert_eq!(installed.downloaded_files, 4);
+        assert_eq!(installed.downloaded_files, 5);
         assert_eq!(
             std::fs::read(installed.root.join("card/LICENSE")).unwrap(),
             include_bytes!("catalog/qwen-LICENSE")
@@ -1408,7 +1429,7 @@ mod tests {
             .install_artifact(&release, &fetched, "safetensors-bf16", root.path())
             .unwrap();
         assert_eq!(reused.downloaded_files, 0);
-        assert_eq!(reused.reused_files, 5);
+        assert_eq!(reused.reused_files, 6);
     }
 
     #[test]
@@ -1634,6 +1655,50 @@ mod tests {
         assert_eq!(status.bytes, Some(10));
         assert!(status.error.is_none());
         fs::remove_dir_all(cache).unwrap();
+    }
+
+    #[test]
+    fn installing_a_new_release_reuses_matching_weights_and_redownloads_corrupt_metadata() {
+        let (fetched, release) = tiny_release();
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("older-release");
+        fs::create_dir(&source).unwrap();
+        fs::write(source.join("tiny.onnx"), b"model").unwrap();
+        fs::write(source.join("LICENSE"), b"wrong").unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0_u8; 4096];
+            let count = stream.read(&mut request).unwrap();
+            let request = String::from_utf8_lossy(&request[..count]);
+            assert!(request.starts_with("GET /valle/modnet/resolve/0123456789012345678901234567890123456789/modnet/LICENSE "), "{request}");
+            stream
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\nmodel",
+                )
+                .unwrap();
+        });
+        let installed = HubClient::new(&endpoint, None)
+            .unwrap()
+            .install_artifact_reusing(
+                &release,
+                &fetched,
+                "onnx-fp32",
+                &root.path().join("models"),
+                std::slice::from_ref(&source),
+            )
+            .unwrap();
+        server.join().unwrap();
+        assert_eq!(installed.downloaded_files, 1);
+        assert_eq!(installed.reused_files, 1);
+        assert_eq!(
+            fs::read(installed.root.join("tiny.onnx")).unwrap(),
+            b"model"
+        );
+        assert_eq!(fs::read(installed.root.join("LICENSE")).unwrap(), b"model");
+        assert_eq!(fs::read(source.join("LICENSE")).unwrap(), b"wrong");
+        assert_eq!(fs::read(source.join("tiny.onnx")).unwrap(), b"model");
     }
 
     #[test]

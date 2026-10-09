@@ -21,8 +21,8 @@ mod render_delivery;
 pub mod segment;
 pub mod separate;
 pub mod shots;
+pub mod synthesize;
 pub mod timeline;
-#[cfg(target_os = "macos")]
 pub mod transcribe;
 pub mod upscale;
 

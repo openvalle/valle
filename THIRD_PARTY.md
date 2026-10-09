@@ -32,7 +32,7 @@ We thank the authors and maintainers of the projects below. This document covers
 | **OXC / QuickJS / rquickjs** | Motion source parsing, transforms, and preparation-stage JavaScript execution. |
 | **FFmpeg / valle-ffmpeg / valle-ffmpeg-sys / MP4Box.js** | User-installed native media libraries are loaded on demand. The `valle-ffmpeg` and `valle-ffmpeg-sys` crates are maintained in [openvalle/ffmpeg-rs](https://github.com/openvalle/ffmpeg-rs), derived from the WTFPL-licensed `ffmpeg-next`/`ffmpeg-sys-next` 9.0.0 sources. They include typed FFmpeg 7/8/9 runtime adapters and pinned public headers with their upstream LGPL notices. Source hashes and changes are recorded in that repository and each published crate NOTICE. No FFmpeg libraries or codec binaries are shipped. Browser MP4 demuxing uses MP4Box.js and decoding uses WebCodecs. |
 | **x264 / x265 / libvpx / SVT-AV1 / dav1d / LAME / Opus** | Optional codecs in user-provided FFmpeg installations; not bundled. |
-| **ONNX Runtime / ort / qwen-asr** | Model inference and speech recognition. |
+| **ONNX Runtime / ort / valle-asr / valle-tts** | Model inference and speech recognition. |
 | **Apple CoreML / Metal / objc2** | macOS inference and graphics integration, including platform APIs and Rust bindings. |
 | **geo / kurbo / libm / image / png / RustFFT** | Geometry, paths, deterministic math, image processing, and signal processing. |
 | **Serde / serde_json / serde_jcs / Schemars / jsonschema** | Serialization, canonical JSON, and schema generation and validation. |

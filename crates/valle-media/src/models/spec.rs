@@ -17,7 +17,13 @@ pub const SCHEMA_VERSION: u32 = 1;
 
 /// Direct upstream models use a manifest owned by Valle, not a republished HF package.
 pub fn uses_local_manifest(model_id: &str) -> bool {
-    matches!(model_id, "qwen3-asr-0.6b" | "qwen3-aligner-0.6b")
+    matches!(
+        model_id,
+        "qwen3-asr-0.6b"
+            | "qwen3-aligner-0.6b"
+            | "qwen3-tts-0.6b-base-q8"
+            | "qwen3-tts-0.6b-base-q4"
+    )
 }
 
 /// Official Qwen repositories declare Apache-2.0 but do not ship a standalone license file.
@@ -70,6 +76,10 @@ pub const EMBEDDED_RELEASES: &[EmbeddedReleaseSnapshot] = &[
     embedded_release!("transnetv2", "1.0.0"),
     embedded_release!("qwen3-asr-0.6b", "1.0.0"),
     embedded_release!("qwen3-aligner-0.6b", "1.0.0"),
+    embedded_release!("qwen3-asr-0.6b", "1.1.0"),
+    embedded_release!("qwen3-aligner-0.6b", "1.1.0"),
+    embedded_release!("qwen3-tts-0.6b-base-q8", "1.0.0"),
+    embedded_release!("qwen3-tts-0.6b-base-q4", "1.0.0"),
 ];
 
 /// Resolve an offline release manifest and verify it against the embedded catalog identity.
@@ -1123,6 +1133,31 @@ mod tests {
                     version,
                     route.id
                 );
+                if matches!(
+                    manifest.contract.adapter.as_str(),
+                    "qwen3-asr-transcription"
+                        | "qwen3-forced-alignment"
+                        | "qwen3-tts-voice-cloning"
+                ) && route
+                    .requirements
+                    .minimum_runtime
+                    .as_deref()
+                    .is_some_and(|runtime| {
+                        runtime.starts_with("valle-asr ") || runtime.starts_with("valle-tts ")
+                    })
+                {
+                    assert!(
+                        matches!(
+                            (route.platforms[0], route.architectures[0]),
+                            (Platform::Macos, Architecture::Aarch64)
+                                | (Platform::Linux | Platform::Windows, Architecture::X86_64)
+                        ),
+                        "{model}@{version}: {} is outside the published speech crate validation matrix",
+                        route.id
+                    );
+                    assert!(route.notes.contains("published"));
+                    continue;
+                }
                 assert_ne!(
                     route.platforms[0],
                     Platform::Windows,

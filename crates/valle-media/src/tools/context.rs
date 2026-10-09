@@ -91,6 +91,11 @@ impl CancellationToken {
     pub fn is_cancelled(&self) -> bool {
         self.0.load(Ordering::Acquire)
     }
+
+    #[cfg(any(feature = "tool-transcribe", feature = "tool-synthesize"))]
+    pub(crate) fn shared_flag(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.0)
+    }
 }
 
 /// Resource ceilings for one foreground media job.
@@ -183,6 +188,32 @@ impl<'a> RunContext<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "tool-transcribe")]
+    #[test]
+    fn media_and_asr_share_cancellation_in_both_directions() {
+        let media = CancellationToken::new();
+        let asr = valle_asr::CancellationToken::from_shared_flag(media.shared_flag());
+        media.cancel();
+        assert!(asr.is_cancelled());
+        let media = CancellationToken::new();
+        let asr = valle_asr::CancellationToken::from_shared_flag(media.shared_flag());
+        asr.cancel();
+        assert!(media.is_cancelled());
+    }
+
+    #[cfg(feature = "tool-synthesize")]
+    #[test]
+    fn media_and_tts_share_cancellation_in_both_directions() {
+        let media = CancellationToken::new();
+        let tts = valle_tts::CancellationToken::from_shared_flag(media.shared_flag());
+        media.cancel();
+        assert!(tts.is_cancelled());
+        let media = CancellationToken::new();
+        let tts = valle_tts::CancellationToken::from_shared_flag(media.shared_flag());
+        tts.cancel();
+        assert!(media.is_cancelled());
+    }
 
     #[test]
     fn resource_policy_rejects_unbounded_zero_capacity() {

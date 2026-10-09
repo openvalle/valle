@@ -183,10 +183,15 @@ pub enum MediaAction {
     Capabilities,
     /// Transcribe audio or video into a standalone word-level transcript.
     ///
-    /// ASR and forced alignment are supported only on macOS.
+    /// Local CPU ASR and forced alignment run on macOS, Linux and Windows.
     Transcribe {
         #[command(flatten)]
         args: TranscribeArgs,
+    },
+    /// Generate a speech WAV from text and a reference voice on the local CPU.
+    Synthesize {
+        #[command(flatten)]
+        args: SynthesizeArgs,
     },
     /// Extract a transparent foreground from an image or video.
     Matte {
@@ -283,6 +288,65 @@ pub struct TranscribeArgs {
     #[arg(long, value_name = "PATH")]
     pub report: Option<PathBuf>,
     /// Emit one versioned machine-readable envelope to stdout.
+    #[arg(skip)]
+    pub json: bool,
+}
+
+/// Arguments for `valle media synthesize`.
+#[derive(clap::Args)]
+pub struct SynthesizeArgs {
+    /// Text to speak; use --text-file for a UTF-8 document.
+    #[arg(
+        long,
+        required_unless_present = "text_file",
+        conflicts_with = "text_file"
+    )]
+    pub text: Option<String>,
+    /// Read the text to speak from a UTF-8 file.
+    #[arg(long, required_unless_present = "text", conflicts_with = "text")]
+    pub text_file: Option<PathBuf>,
+    /// Reference voice audio or video, between 0.5 and 15 seconds.
+    #[arg(long)]
+    pub reference: PathBuf,
+    /// Transcript of the reference voice. Omission uses its speaker embedding only.
+    #[arg(long, conflicts_with = "ref_text_file")]
+    pub ref_text: Option<String>,
+    /// Read the reference voice transcript from a UTF-8 file.
+    #[arg(long, conflicts_with = "ref_text")]
+    pub ref_text_file: Option<PathBuf>,
+    /// Output mono 24 kHz WAV.
+    #[arg(short, long)]
+    pub output: PathBuf,
+    /// Synthesis language; auto detects Chinese or English from the text.
+    #[arg(long, default_value = "auto", value_parser = ["auto", "zh", "en"])]
+    pub lang: String,
+    /// Voice cloning model. Install its pinned GGUF weights with `valle models install` first.
+    #[arg(long, default_value = "qwen3-tts-0.6b-base-q8")]
+    pub model: String,
+    /// Exact non-default model version.
+    #[arg(long)]
+    pub model_version: Option<String>,
+    /// Voice cloning accepts auto only; its native CPU route remains internal.
+    #[arg(long, value_enum, default_value_t)]
+    pub backend: MediaBackendArg,
+    /// Sampling seed; use -1 for a random seed.
+    #[arg(long, default_value_t = 42, allow_hyphen_values = true)]
+    pub seed: i64,
+    /// Maximum generated codec frames per text chunk (1..4096).
+    #[arg(long, default_value_t = 512)]
+    pub max_tokens: u32,
+    /// Sampling temperature (0..2).
+    #[arg(long, default_value_t = 0.9)]
+    pub temperature: f32,
+    /// Maximum characters per text chunk (1..500).
+    #[arg(long, default_value_t = 160)]
+    pub max_chunk_chars: usize,
+    /// Replace an existing output atomically where the platform supports it.
+    #[arg(long)]
+    pub overwrite: bool,
+    /// Persist the same versioned run envelope emitted by --json.
+    #[arg(long, value_name = "PATH")]
+    pub report: Option<PathBuf>,
     #[arg(skip)]
     pub json: bool,
 }
@@ -1187,6 +1251,10 @@ pub fn dispatch(cmd: Cmd) -> Result<std::process::ExitCode> {
 
 fn dispatch_media(action: MediaAction) -> Result<std::process::ExitCode> {
     match action {
+        MediaAction::Synthesize { args } => {
+            let json = args.json || output::machine();
+            cmd::synthesize::run(args, json)
+        }
         MediaAction::Capabilities => {
             output::emit(valle_media::codec::ffi::ffmpeg_capabilities()?);
             Ok(std::process::ExitCode::SUCCESS)
@@ -1203,15 +1271,6 @@ fn dispatch_media(action: MediaAction) -> Result<std::process::ExitCode> {
             args.report,
             args.json || output::machine(),
         ),
-        #[cfg(not(target_os = "macos"))]
-        MediaAction::Transcribe { args } => cmd::media::render_error(
-            &valle_media::tools::ToolError::new(
-                valle_media::tools::ToolErrorCode::UnsupportedAdapter,
-                "ASR and forced alignment are supported only on macOS",
-            ),
-            args.json || output::machine(),
-        ),
-        #[cfg(target_os = "macos")]
         MediaAction::Transcribe { args } => cmd::transcribe::run(
             &args.input,
             args.output,

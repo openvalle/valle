@@ -99,6 +99,7 @@ fn media_surface_owns_file_level_model_tools() {
         [
             "capabilities",
             "transcribe",
+            "synthesize",
             "matte",
             "enhance",
             "separate",
@@ -109,7 +110,7 @@ fn media_surface_owns_file_level_model_tools() {
             "interpolate",
             "help",
         ],
-        "the public media surface contains runtime diagnostics and the nine designed tools"
+        "the public media surface contains runtime diagnostics and the ten designed tools"
     );
 
     let transcribe = valle()
@@ -136,7 +137,7 @@ fn media_surface_owns_file_level_model_tools() {
     assert!(transcribe_help.contains("qwen3-asr-0.6b"));
     assert!(transcribe_help.contains("accepts `auto` only"));
     assert!(transcribe_help.contains("standalone word-level transcript"));
-    assert!(transcribe_help.contains("supported only on macOS"));
+    assert!(transcribe_help.contains("macOS, Linux and Windows"));
     assert!(transcribe_help.contains(".sentences.json"));
     assert!(transcribe_help.contains("valle models install"));
     assert!(transcribe_help.contains("before offline use"));
@@ -513,7 +514,116 @@ fn media_invalid_input_uses_exit_two_and_keeps_json_stderr_empty() {
     assert_eq!(envelope["error"]["code"], "invalid_input");
 }
 
-#[cfg(target_os = "macos")]
+#[test]
+fn synthesize_requires_one_text_source_and_exposes_voice_cloning_options() {
+    let help = valle()
+        .args(["media", "synthesize", "--help"])
+        .output()
+        .unwrap();
+    assert!(help.status.success());
+    let help = String::from_utf8(help.stdout).unwrap();
+    for flag in [
+        "--text",
+        "--text-file",
+        "--reference",
+        "--ref-text",
+        "--ref-text-file",
+        "--output",
+        "--lang",
+        "--model",
+        "--seed",
+        "--temperature",
+        "--max-tokens",
+        "--max-chunk-chars",
+        "--report",
+        "--json",
+    ] {
+        assert!(help.contains(flag), "missing {flag}: {help}");
+    }
+    for text_args in [vec![], vec!["--text", "Hello", "--text-file", "speech.txt"]] {
+        let output = valle()
+            .args([
+                "media",
+                "synthesize",
+                "--reference",
+                "voice.wav",
+                "-o",
+                "speech.wav",
+            ])
+            .args(text_args)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2));
+    }
+}
+
+#[test]
+fn synthesize_reports_text_file_errors_and_never_overwrites_a_text_source() {
+    let root = tempfile::tempdir().unwrap();
+    let text = root.path().join("speech.wav");
+    let reference = root.path().join("voice.wav");
+    std::fs::write(&text, "你好，Valle。\n").unwrap();
+    std::fs::write(&reference, b"not decoded during validation").unwrap();
+    for (source, output_path) in [
+        (
+            root.path().join("missing.txt"),
+            root.path().join("output.wav"),
+        ),
+        (text.clone(), text.clone()),
+    ] {
+        let output = valle()
+            .args(["media", "synthesize", "--text-file"])
+            .arg(source)
+            .arg("--reference")
+            .arg(&reference)
+            .arg("-o")
+            .arg(output_path)
+            .args(["--overwrite", "--json"])
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2));
+        assert!(output.stderr.is_empty());
+        let envelope: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(envelope["error"]["code"], "invalid_input");
+        assert_eq!(std::fs::read_to_string(&text).unwrap(), "你好，Valle。\n");
+    }
+}
+
+#[test]
+fn synthesize_uses_offline_model_installation_and_keeps_existing_output() {
+    let root = tempfile::tempdir().unwrap();
+    let reference = root.path().join("voice.wav");
+    let output_path = root.path().join("speech.wav");
+    std::fs::write(&reference, b"resolution precedes decode").unwrap();
+    std::fs::write(&output_path, b"existing audio").unwrap();
+    let output = valle()
+        .args(["media", "synthesize", "--text", "Hello", "--reference"])
+        .arg(reference)
+        .arg("-o")
+        .arg(&output_path)
+        .args(["--overwrite", "--json"])
+        .env("VALLE_MODEL_CACHE", root.path().join("empty-model-cache"))
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(3));
+    assert!(output.stderr.is_empty());
+    let envelope: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        envelope["error"]["code"],
+        if cfg!(all(target_os = "macos", target_arch = "aarch64"))
+            || cfg!(all(
+                any(target_os = "linux", target_os = "windows"),
+                target_arch = "x86_64"
+            ))
+        {
+            "model_not_installed"
+        } else {
+            "no_compatible_route"
+        }
+    );
+    assert_eq!(std::fs::read(output_path).unwrap(), b"existing audio");
+}
+
 #[test]
 fn transcribe_rejects_explicit_non_native_backend_without_resolving_a_model() {
     let temporary = tempfile::tempdir().unwrap();
@@ -536,7 +646,6 @@ fn transcribe_rejects_explicit_non_native_backend_without_resolving_a_model() {
     assert_eq!(envelope["error"]["hint"], "use --backend auto");
 }
 
-#[cfg(target_os = "macos")]
 #[test]
 fn transcribe_requires_a_verified_installed_route_even_if_a_legacy_directory_exists() {
     let temporary = tempfile::tempdir().unwrap();
@@ -557,7 +666,12 @@ fn transcribe_requires_a_verified_installed_route_even_if_a_legacy_directory_exi
     assert_eq!(output.status.code(), Some(3));
     assert!(output.stderr.is_empty(), "JSON mode leaked stderr");
     let envelope: Value = serde_json::from_slice(&output.stdout).expect("media error envelope");
-    if cfg!(target_arch = "aarch64") {
+    if cfg!(all(target_os = "macos", target_arch = "aarch64"))
+        || cfg!(all(
+            any(target_os = "linux", target_os = "windows"),
+            target_arch = "x86_64"
+        ))
+    {
         assert_eq!(envelope["error"]["code"], "model_not_installed");
         assert!(
             envelope["error"]["hint"]
@@ -569,7 +683,6 @@ fn transcribe_requires_a_verified_installed_route_even_if_a_legacy_directory_exi
     }
 }
 
-#[cfg(target_os = "macos")]
 #[test]
 fn media_report_cannot_replace_the_primary_output() {
     let temporary = tempfile::tempdir().unwrap();

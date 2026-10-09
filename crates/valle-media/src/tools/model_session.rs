@@ -7,7 +7,7 @@
 
 use anyhow::Error;
 
-#[cfg(all(feature = "tool-transcribe", target_os = "macos"))]
+#[cfg(feature = "tool-transcribe")]
 use crate::models::ResolvedModelCandidates;
 #[cfg(any(
     feature = "tool-enhance",
@@ -17,6 +17,7 @@ use crate::models::ResolvedModelCandidates;
     feature = "tool-segment",
     feature = "tool-separate",
     feature = "tool-shots",
+    feature = "tool-synthesize",
     feature = "tool-upscale"
 ))]
 use crate::models::{ModelManager, ModelSelection, ResolveRequest};
@@ -45,6 +46,7 @@ impl ModelSessionCandidates {
         feature = "tool-segment",
         feature = "tool-separate",
         feature = "tool-shots",
+        feature = "tool-synthesize",
         feature = "tool-upscale"
     ))]
     pub(crate) fn resolve(
@@ -63,7 +65,7 @@ impl ModelSessionCandidates {
         })
     }
 
-    #[cfg(all(feature = "tool-transcribe", target_os = "macos"))]
+    #[cfg(feature = "tool-transcribe")]
     pub(crate) fn from_resolved(
         preference: RunBackendPreference,
         candidates: ResolvedModelCandidates,

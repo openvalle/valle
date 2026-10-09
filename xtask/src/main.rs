@@ -273,6 +273,10 @@ mod contract_tests {
         assert!(!text.contains("===== Web: valle-engine "));
         for required in [
             "Valle base revision:",
+            "Rust: valle-asr 0.1.0",
+            "Rust: valle-tts 0.1.0",
+            "vendor/qwentts/LICENSE",
+            "vendor/ggml/LICENSE",
             "Apache License",
             "cssparser",
             "https://static.crates.io/",

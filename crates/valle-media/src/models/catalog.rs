@@ -378,7 +378,7 @@ mod direct_upstream_tests {
         for id in ["qwen3-asr-0.6b", "qwen3-aligner-0.6b"] {
             let pinned = catalog.offline_release(id, None).unwrap();
             assert!(pinned.release.repository.starts_with("Qwen/"));
-            for version in [None, Some("1.0.0"), Some("latest")] {
+            for version in [None, Some("1.1.0"), Some("latest")] {
                 let bundle = catalog.install_release(id, version, true, &hub).unwrap();
                 assert_eq!(bundle.release, pinned.release);
             }

@@ -123,11 +123,13 @@ pub fn run(
                 model,
                 request.lang.as_deref(),
                 context.resources.cpu_threads,
+                &context.cancellation,
             )
         },
     )?;
     let mut asr = opened.session;
     let asr_provenance = ModelProvenance::from(&opened.model.resolved);
+    let asr_model = opened.model;
     let mut warnings = opened.warnings;
     // Resolving a candidate is not the same as using its model. Empty ASR output skips alignment,
     // so record aligner provenance only after a concrete aligner session opens successfully.
@@ -146,6 +148,7 @@ pub fn run(
     let total_windows = workspace.total_frames().div_ceil(asr_window_frames);
     let mut text = String::new();
     let mut segments = Vec::new();
+    let mut detected_language = None;
     for window_index in 0..total_windows {
         check_cancelled(context)?;
         let start_frame = window_index * asr_window_frames;
@@ -155,6 +158,9 @@ pub fn run(
         let output = asr
             .transcribe(&chunk.samples, start_frame)
             .map_err(|error| {
+                if error.is::<valle_asr::Cancelled>() {
+                    return ToolError::new(ToolErrorCode::Cancelled, "transcription cancelled");
+                }
                 ToolError::new(
                     ToolErrorCode::InferenceFailed,
                     format!(
@@ -165,6 +171,9 @@ pub fn run(
                 )
             })?;
         inference_seconds += inference_started.elapsed().as_secs_f64();
+        if detected_language.is_none() && !output.text.is_empty() && !output.language.is_empty() {
+            detected_language = Some(output.language.clone());
+        }
         append_transcript_text(&mut text, &output.text);
         let window_start_ms = frames_to_millis(start_frame);
         let window_end_ms = frames_to_millis(end_frame);
@@ -184,9 +193,11 @@ pub fn run(
     }
     drop(asr);
 
-    let (alignment_language, lang_code) =
-        resolve_alignment_language(request.lang.as_deref(), &text)
-            .map_err(|error| ToolError::new(ToolErrorCode::InvalidInput, error.to_string()))?;
+    let (alignment_language, lang_code) = resolve_alignment_language(
+        request.lang.as_deref().or(detected_language.as_deref()),
+        &text,
+    )
+    .map_err(|error| ToolError::new(ToolErrorCode::InvalidInput, error.to_string()))?;
     let mut words = Vec::new();
     if request.align && !text.is_empty() {
         context.progress.event(ToolEvent::phase(ToolPhase::Loading));
@@ -196,7 +207,14 @@ pub fn run(
             .expect("alignment model was resolved when alignment was requested");
         let opened = candidates.open(
             &format!("load {ALIGNER_MODEL_ID}@{ALIGNER_RELEASE_VERSION}"),
-            |model| QwenAlignerSession::open(model, context.resources.cpu_threads),
+            |model| {
+                QwenAlignerSession::open(
+                    &asr_model,
+                    model,
+                    context.resources.cpu_threads,
+                    &context.cancellation,
+                )
+            },
         )?;
         let mut aligner = opened.session;
         aligner_provenance = Some(ModelProvenance::from(&opened.model.resolved));
@@ -223,6 +241,9 @@ pub fn run(
             let aligned = aligner
                 .align(&chunk.samples, &segment.text, alignment_language)
                 .map_err(|error| {
+                    if error.is::<valle_asr::Cancelled>() {
+                        return ToolError::new(ToolErrorCode::Cancelled, "alignment cancelled");
+                    }
                     ToolError::new(
                         ToolErrorCode::InferenceFailed,
                         format!(

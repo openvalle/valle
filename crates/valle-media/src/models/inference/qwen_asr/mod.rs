@@ -7,7 +7,9 @@
 
 use std::path::Path;
 #[cfg(feature = "model-qwen-native")]
-use std::sync::atomic::{AtomicBool, Ordering};
+use valle_asr::{
+    AsrModel, Audio, CancellationToken, TimestampMode, TranscribeOptions, models::qwen3::Qwen3,
+};
 
 #[cfg(any(feature = "model-qwen-native", test))]
 use crate::models::spec::Backend;
@@ -18,13 +20,13 @@ use serde::{Deserialize, Serialize};
 
 pub const ASR_MODEL_ID: &str = "qwen3-asr-0.6b";
 pub const ALIGNER_MODEL_ID: &str = "qwen3-aligner-0.6b";
-pub const ASR_RELEASE_VERSION: &str = "1.0.0";
-pub const ALIGNER_RELEASE_VERSION: &str = "1.0.0";
+pub const ASR_RELEASE_VERSION: &str = "1.1.0";
+pub const ALIGNER_RELEASE_VERSION: &str = "1.1.0";
 pub const ASR_ADAPTER: &str = "qwen3-asr-transcription";
 pub const ALIGNER_ADAPTER: &str = "qwen3-forced-alignment";
 pub const CONTRACT_VERSION: u32 = 1;
 pub const SAMPLE_RATE_HZ: u32 = 16_000;
-pub const MAX_ALIGNER_AUDIO_SECONDS: u32 = 300;
+pub const MAX_ALIGNER_AUDIO_SECONDS: u32 = 30;
 /// Exact release-owned license file used to complete a fully offline legacy-cache migration.
 pub const APACHE_2_LICENSE_PATH: &str = "card/LICENSE";
 pub const APACHE_2_LICENSE_BYTES: &[u8] = include_bytes!("../../catalog/qwen-LICENSE");
@@ -112,149 +114,145 @@ pub struct AlignedTranscription {
     pub units: Vec<AlignedUnit>,
 }
 
-/// Exclusive ownership of qwen-asr's process-global kernel pool.
-///
-/// qwen-asr 0.11 exposes one mutable global thread count and documents that its pool cannot be
-/// dispatched concurrently by independent callers. Failing a competing open is preferable to
-/// racing two jobs with different resource ceilings or deadlocking inside the shared pool.
-#[cfg(feature = "model-qwen-native")]
-struct KernelPoolLease;
-
-#[cfg(feature = "model-qwen-native")]
-static KERNEL_POOL_LEASED: AtomicBool = AtomicBool::new(false);
-
-#[cfg(feature = "model-qwen-native")]
-impl KernelPoolLease {
-    fn acquire(cpu_threads: usize) -> Result<Self> {
-        validate_cpu_threads(cpu_threads)?;
-        KERNEL_POOL_LEASED
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .map_err(|_| {
-                anyhow::anyhow!(
-                    "Qwen native kernel pool is already in use by another inference session"
-                )
-            })?;
-        qwen_asr::kernels::set_threads(cpu_threads);
-        Ok(Self)
-    }
-}
-
-#[cfg(feature = "model-qwen-native")]
-impl Drop for KernelPoolLease {
-    fn drop(&mut self) {
-        KERNEL_POOL_LEASED.store(false, Ordering::Release);
-    }
-}
-
+/// One independently owned valle-asr backend and a per-session CPU thread pool.
 #[cfg(feature = "model-qwen-native")]
 pub struct QwenAsrSession {
-    context: qwen_asr::context::QwenCtx,
+    model: Qwen3,
+    pool: rayon::ThreadPool,
     max_chunk_samples: usize,
-    _kernel_pool_lease: KernelPoolLease,
+    cancellation: CancellationToken,
 }
 
 #[cfg(feature = "model-qwen-native")]
 impl QwenAsrSession {
     pub fn open(request: OpenRequest<'_>) -> Result<Self> {
         validate_open_request(request, ModelKind::Asr)?;
-        let kernel_pool_lease = KernelPoolLease::acquire(request.cpu_threads)?;
-        let mut context = load_context(request.artifact_root)?;
-        ensure!(
-            !context.config.is_aligner(),
-            "Qwen ASR release resolved to forced-aligner weights"
-        );
         let options: AsrRouteOptions = serde_json::from_value(request.route.options.clone())
             .context("Qwen ASR route options are invalid")?;
         ensure!(
-            options.segment_seconds.is_finite() && options.segment_seconds > 0.0,
-            "Qwen ASR segment_seconds must be finite and positive"
+            options.segment_seconds.is_finite()
+                && options.segment_seconds > 0.0
+                && options.segment_seconds <= 30.0,
+            "Qwen ASR segment_seconds must be within (0, 30]"
         );
-        context.segment_sec = options.segment_seconds;
-        let max_chunk_samples = seconds_to_samples(options.segment_seconds)?;
         Ok(Self {
-            context,
-            max_chunk_samples,
-            _kernel_pool_lease: kernel_pool_lease,
+            model: Qwen3::load(ASR_MODEL_ID, request.artifact_root, None)?,
+            pool: cpu_pool(request.cpu_threads)?,
+            max_chunk_samples: seconds_to_samples(options.segment_seconds)?,
+            cancellation: CancellationToken::default(),
         })
     }
 
-    /// Maximum number of samples accepted by [`Self::transcribe_chunk`].
+    pub fn set_cancellation(&mut self, cancellation: CancellationToken) {
+        self.cancellation = cancellation;
+    }
+
     pub const fn max_chunk_samples(&self) -> usize {
         self.max_chunk_samples
     }
 
-    /// Transcribe one bounded window without retaining cross-window decode state.
-    ///
-    /// Language mode is applied afresh on every call. Empty tail windows are a
-    /// valid no-op. Returned segment timestamps include `chunk.start_sample`.
-    /// Callers that intentionally overlap windows must merge/de-duplicate the
-    /// returned text and segments themselves.
     pub fn transcribe_chunk(
         &mut self,
         chunk: PcmChunk<'_>,
         language: Option<&str>,
     ) -> Result<ChunkTranscription> {
+        self.cancellation.check()?;
         validate_chunk(chunk, self.max_chunk_samples)?;
-        let forced_language = configure_asr_language(&mut self.context, language)?;
+        let forced_language = language
+            .map(|value| {
+                canonical_language(value)
+                    .with_context(|| format!("unsupported ASR language {value:?}"))
+            })
+            .transpose()?;
         if chunk.samples.is_empty() {
             return Ok(empty_chunk_transcription(chunk, forced_language));
         }
-        let transcription = transcribe_local(&mut self.context, chunk.samples)?;
+        let transcription = self.transcribe(chunk.samples, language)?;
         Ok(offset_chunk_transcription(chunk, transcription))
     }
 
-    /// Whole-slice convenience for already bounded inputs.
-    ///
-    /// Long-media callers should repeatedly invoke [`Self::transcribe_chunk`] so their decoded
-    /// audio workspace remains fixed-size. `language` accepts a supported English language name
-    /// or ISO-639 code; `None` enables the model's language-detection path.
+    /// In-memory convenience; file tools supply bounded windows instead.
     pub fn transcribe(&mut self, samples: &[f32], language: Option<&str>) -> Result<Transcription> {
         validate_samples(samples)?;
-        configure_asr_language(&mut self.context, language)?;
-        transcribe_local(&mut self.context, samples)
+        let options = TranscribeOptions {
+            language: language
+                .map(|value| {
+                    canonical_language(value)
+                        .map(str::to_owned)
+                        .with_context(|| format!("unsupported ASR language {value:?}"))
+                })
+                .transpose()?,
+            timestamps: TimestampMode::None,
+            cancellation: self.cancellation.clone(),
+            ..Default::default()
+        };
+        let audio = Audio::from_mono(samples.to_vec(), SAMPLE_RATE_HZ)?;
+        let model = &mut self.model;
+        let output = self.pool.install(|| model.transcribe(&audio, &options))?;
+        Ok(Transcription {
+            language: language_to_code(&output.language)
+                .unwrap_or(&output.language)
+                .to_owned(),
+            duration_ms: output.duration_ms,
+            text: output.text,
+            segments: output
+                .segments
+                .into_iter()
+                .map(|segment| TranscriptSegment {
+                    text: segment.text,
+                    start_ms: segment.start_ms,
+                    end_ms: segment.end_ms,
+                })
+                .collect(),
+        })
     }
 }
 
 #[cfg(feature = "model-qwen-native")]
 pub struct QwenAlignerSession {
-    context: qwen_asr::context::QwenCtx,
-    max_chunk_samples: usize,
-    _kernel_pool_lease: KernelPoolLease,
+    model: Qwen3,
+    pool: rayon::ThreadPool,
+    cancellation: CancellationToken,
 }
 
 #[cfg(feature = "model-qwen-native")]
 impl QwenAlignerSession {
-    pub fn open(request: OpenRequest<'_>) -> Result<Self> {
-        validate_open_request(request, ModelKind::Aligner)?;
-        let kernel_pool_lease = KernelPoolLease::acquire(request.cpu_threads)?;
-        let context = load_context(request.artifact_root)?;
-        ensure!(
-            context.config.is_aligner(),
-            "Qwen aligner release resolved to transcription weights"
-        );
+    /// The ASR directory supplies the tokenizer/configuration required by valle-asr's
+    /// combined backend. Its neural weights remain unloaded during standalone alignment.
+    pub fn open(asr: OpenRequest<'_>, aligner: OpenRequest<'_>) -> Result<Self> {
+        validate_open_request(asr, ModelKind::Asr)?;
+        validate_open_request(aligner, ModelKind::Aligner)?;
         Ok(Self {
-            context,
-            max_chunk_samples: MAX_ALIGNER_AUDIO_SECONDS as usize * SAMPLE_RATE_HZ as usize,
-            _kernel_pool_lease: kernel_pool_lease,
+            model: Qwen3::load(
+                ASR_MODEL_ID,
+                asr.artifact_root,
+                Some(aligner.artifact_root.to_owned()),
+            )?,
+            pool: cpu_pool(aligner.cpu_threads)?,
+            cancellation: CancellationToken::default(),
         })
     }
 
-    pub const fn max_chunk_samples(&self) -> usize {
-        self.max_chunk_samples
+    pub fn set_cancellation(&mut self, cancellation: CancellationToken) {
+        self.cancellation = cancellation;
     }
 
-    /// Align one bounded transcript window and return absolute source timestamps.
+    pub const fn max_chunk_samples(&self) -> usize {
+        MAX_ALIGNER_AUDIO_SECONDS as usize * SAMPLE_RATE_HZ as usize
+    }
+
     pub fn align_chunk(
         &mut self,
         chunk: PcmChunk<'_>,
         text: &str,
         language: &str,
     ) -> Result<Vec<AlignedUnit>> {
-        validate_chunk(chunk, self.max_chunk_samples)?;
+        self.cancellation.check()?;
+        validate_chunk(chunk, self.max_chunk_samples())?;
         if chunk.samples.is_empty() {
             ensure!(
                 text.trim().is_empty(),
-                "cannot align non-empty text against an empty audio chunk"
+                "cannot align text against an empty audio chunk"
             );
             return Ok(Vec::new());
         }
@@ -270,14 +268,13 @@ impl QwenAlignerSession {
             .collect())
     }
 
-    /// Align a known transcript against 16 kHz mono `f32` PCM.
     pub fn align(
         &mut self,
         samples: &[f32],
         text: &str,
         language: &str,
     ) -> Result<Vec<AlignedUnit>> {
-        validate_chunk(PcmChunk::new(samples, 0), self.max_chunk_samples)?;
+        validate_chunk(PcmChunk::new(samples, 0), self.max_chunk_samples())?;
         self.align_local(samples, text, language)
     }
 
@@ -291,14 +288,18 @@ impl QwenAlignerSession {
         ensure!(!text.trim().is_empty(), "alignment text must not be empty");
         let language = canonical_aligner_language(language)
             .with_context(|| format!("unsupported Qwen aligner language {language:?}"))?;
-        let aligned = qwen_asr::align::forced_align(&mut self.context, samples, text, language)
-            .context("Qwen forced alignment failed")?;
+        let audio = Audio::from_mono(samples.to_vec(), SAMPLE_RATE_HZ)?;
+        let model = &mut self.model;
+        let cancellation = &self.cancellation;
+        let aligned = self
+            .pool
+            .install(|| model.align_with_cancellation(&audio, text, language, cancellation))?;
         let mut last_start = 0_u64;
-        Ok(aligned
+        let mut units = aligned
             .into_iter()
             .map(|unit| {
-                let start_ms = f32_millis(unit.start_ms).max(last_start);
-                let end_ms = f32_millis(unit.end_ms).max(start_ms);
+                let start_ms = unit.start_ms.max(last_start);
+                let end_ms = unit.end_ms.max(start_ms);
                 last_start = start_ms;
                 AlignedUnit {
                     text: unit.text,
@@ -306,56 +307,67 @@ impl QwenAlignerSession {
                     end_ms,
                 }
             })
-            .collect())
+            .collect::<Vec<_>>();
+        restore_aligned_text(text, &mut units)?;
+        Ok(units)
     }
 }
 
-#[cfg(feature = "model-qwen-native")]
-fn configure_asr_language(
-    context: &mut qwen_asr::context::QwenCtx,
-    language: Option<&str>,
-) -> Result<Option<&'static str>> {
-    // Language detection belongs to this window; never fall back to the
-    // preceding call's detected header if the current window has no header.
-    context.detected_language = None;
-    match language {
-        Some(language) => {
-            let language = canonical_language(language)
-                .with_context(|| format!("unsupported Qwen ASR language {language:?}"))?;
-            context
-                .set_force_language(language)
-                .map_err(|()| anyhow::anyhow!("qwen-asr rejected language {language:?}"))?;
-            Ok(Some(language))
-        }
-        None => {
-            // This also clears any forced language from the preceding chunk.
-            context.set_multilingual(true);
-            Ok(None)
-        }
+/// The aligner strips separators before assigning timestamps. Canonical Valle words carry
+/// source text spans so concatenation preserves spaces and sentence-ending punctuation.
+#[cfg(any(feature = "model-qwen-native", test))]
+fn restore_aligned_text(text: &str, units: &mut [AlignedUnit]) -> Result<()> {
+    if units.is_empty() {
+        return Ok(());
     }
+    let text = text.trim();
+    let significant = |character: char| character.is_alphanumeric() || character == '\'';
+    let mut source = text.char_indices();
+    let mut ranges = Vec::with_capacity(units.len());
+    for unit in units.iter() {
+        let mut start = None;
+        let mut end = 0;
+        for expected in unit.text.chars() {
+            let (index, actual) = source
+                .by_ref()
+                .find(|(_, character)| significant(*character))
+                .context("aligned words extend past the source transcript")?;
+            ensure!(
+                actual == expected,
+                "aligned word does not match the source transcript"
+            );
+            start.get_or_insert(index);
+            end = index + actual.len_utf8();
+        }
+        ranges.push((start.context("aligned word is empty")?, end));
+    }
+    ensure!(
+        !source.any(|(_, character)| significant(character)),
+        "aligned words do not cover the source transcript"
+    );
+    let mut start = 0;
+    for (index, unit) in units.iter_mut().enumerate() {
+        let end = if let Some(next) = ranges.get(index + 1) {
+            let previous_end = ranges[index].1;
+            text[previous_end..next.0]
+                .find(char::is_whitespace)
+                .map_or(next.0, |offset| previous_end + offset)
+        } else {
+            text.len()
+        };
+        unit.text = text[start..end].to_owned();
+        start = end;
+    }
+    Ok(())
 }
 
 #[cfg(feature = "model-qwen-native")]
-fn transcribe_local(
-    context: &mut qwen_asr::context::QwenCtx,
-    samples: &[f32],
-) -> Result<Transcription> {
-    let output = qwen_asr::transcribe::transcribe_full(context, None, samples, None)
-        .context("Qwen ASR produced no transcription")?;
-    Ok(Transcription {
-        language: output.language,
-        duration_ms: output.duration_ms,
-        text: output.text,
-        segments: output
-            .segments
-            .into_iter()
-            .map(|segment| TranscriptSegment {
-                text: segment.text,
-                start_ms: segment.start_ms,
-                end_ms: segment.end_ms,
-            })
-            .collect(),
-    })
+fn cpu_pool(cpu_threads: usize) -> Result<rayon::ThreadPool> {
+    validate_cpu_threads(cpu_threads)?;
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(cpu_threads)
+        .build()
+        .context("create ASR session CPU thread pool")
 }
 
 #[cfg(any(feature = "model-qwen-native", test))]
@@ -421,7 +433,7 @@ pub fn transcribe_then_align(
         .and_then(canonical_language)
         .or_else(|| canonical_language(&transcription.language))
         .context("Qwen ASR did not produce a supported alignment language")?;
-    let mut session = QwenAlignerSession::open(aligner)?;
+    let mut session = QwenAlignerSession::open(asr, aligner)?;
     let mut units = Vec::new();
     let mut last_start = 0_u64;
     for segment in &transcription.segments {
@@ -519,6 +531,7 @@ fn validate_open_request(request: OpenRequest<'_>, kind: ModelKind) -> Result<()
         "merges.txt",
         "model.safetensors",
         "vocab.json",
+        "tokenizer_config.json",
     ] {
         ensure!(
             request
@@ -577,8 +590,8 @@ fn validate_contract_shape(manifest: &ModelManifest, kind: ModelKind) -> Result<
     );
     if matches!(kind, ModelKind::Aligner) {
         ensure!(
-            preprocess.maximum_audio_seconds == Some(300),
-            "Qwen aligner contract must preserve the five-minute input limit"
+            preprocess.maximum_audio_seconds == Some(MAX_ALIGNER_AUDIO_SECONDS),
+            "Qwen aligner contract must declare the 30-second input limit"
         );
     }
     Ok(())
@@ -607,15 +620,6 @@ struct PcmContract {
     sample_range: [f32; 2],
     #[serde(default)]
     maximum_audio_seconds: Option<u32>,
-}
-
-#[cfg(feature = "model-qwen-native")]
-fn load_context(root: &Path) -> Result<qwen_asr::context::QwenCtx> {
-    let root = root
-        .to_str()
-        .with_context(|| format!("Qwen artifact root is not UTF-8: {}", root.display()))?;
-    qwen_asr::context::QwenCtx::load(root)
-        .with_context(|| format!("failed to load Qwen model from {root}"))
 }
 
 #[cfg(any(feature = "model-qwen-native", test))]
@@ -661,7 +665,7 @@ fn samples_to_millis(samples: u64) -> u64 {
 }
 
 #[cfg(any(feature = "model-qwen-native", test))]
-fn canonical_language(language: &str) -> Option<&'static str> {
+pub(crate) fn canonical_language(language: &str) -> Option<&'static str> {
     let normalized = language.trim().to_ascii_lowercase();
     LANGUAGE_TABLE
         .iter()
@@ -676,20 +680,11 @@ fn canonical_aligner_language(language: &str) -> Option<&'static str> {
 }
 
 #[cfg(any(feature = "model-qwen-native", test))]
-fn language_to_code(language: &str) -> Option<&'static str> {
+pub(crate) fn language_to_code(language: &str) -> Option<&'static str> {
     LANGUAGE_TABLE
         .iter()
         .find(|(name, _)| *name == language)
         .map(|(_, code)| *code)
-}
-
-#[cfg(feature = "model-qwen-native")]
-fn f32_millis(value: f32) -> u64 {
-    if value.is_finite() && value > 0.0 {
-        value.round() as u64
-    } else {
-        0
-    }
 }
 
 #[cfg(feature = "model-qwen-native")]
@@ -743,8 +738,6 @@ const ALIGNER_LANGUAGES: &[&str] = &[
     "French",
     "German",
     "Italian",
-    "Japanese",
-    "Korean",
     "Portuguese",
     "Russian",
     "Spanish",
@@ -755,6 +748,71 @@ mod tests {
     use super::*;
 
     #[test]
+    fn alignment_preserves_source_spacing_punctuation_and_timestamps() {
+        for (source, words, expected) in [
+            (
+                "Hello, world!",
+                vec!["Hello", "world"],
+                vec!["Hello,", " world!"],
+            ),
+            (
+                "你好，世界。 Hello!",
+                vec!["你", "好", "世", "界", "Hello"],
+                vec!["你", "好，", "世", "界。", " Hello!"],
+            ),
+            (
+                "«L'école» -- well-known!",
+                vec!["L'école", "wellknown"],
+                vec!["«L'école»", " -- well-known!"],
+            ),
+        ] {
+            let mut units = words
+                .iter()
+                .enumerate()
+                .map(|(index, word)| AlignedUnit {
+                    text: (*word).into(),
+                    start_ms: index as u64 * 100,
+                    end_ms: index as u64 * 100 + 50,
+                })
+                .collect::<Vec<_>>();
+            restore_aligned_text(source, &mut units).unwrap();
+            assert_eq!(
+                units
+                    .iter()
+                    .map(|word| word.text.as_str())
+                    .collect::<Vec<_>>(),
+                expected
+            );
+            assert_eq!(
+                units
+                    .iter()
+                    .map(|word| word.text.as_str())
+                    .collect::<String>(),
+                source
+            );
+            assert!(
+                units
+                    .iter()
+                    .enumerate()
+                    .all(|(index, word)| word.start_ms == index as u64 * 100
+                        && word.end_ms == index as u64 * 100 + 50)
+            );
+        }
+    }
+
+    #[test]
+    fn alignment_text_drift_is_rejected_instead_of_publishing_a_wrong_transcript() {
+        for word in ["Hi", "Helloagain", ""] {
+            let mut units = vec![AlignedUnit {
+                text: word.into(),
+                start_ms: 0,
+                end_ms: 100,
+            }];
+            assert!(restore_aligned_text("Hello world.", &mut units).is_err());
+        }
+    }
+
+    #[test]
     fn native_cpu_thread_budget_must_be_positive() {
         assert!(validate_cpu_threads(1).is_ok());
         assert!(validate_cpu_threads(0).is_err());
@@ -762,20 +820,12 @@ mod tests {
 
     #[cfg(feature = "model-qwen-native")]
     #[test]
-    fn native_kernel_pool_has_one_exclusive_thread_budget_lease() {
-        let first = KernelPoolLease::acquire(2).unwrap();
-        assert_eq!(qwen_asr::kernels::get_num_threads(), 2);
-
-        let overlap = match KernelPoolLease::acquire(1) {
-            Ok(_) => panic!("a second Qwen session must not share the global kernel pool"),
-            Err(error) => error,
-        };
-        assert!(overlap.to_string().contains("already in use"));
-
-        drop(first);
-        let second = KernelPoolLease::acquire(1).unwrap();
-        assert_eq!(qwen_asr::kernels::get_num_threads(), 1);
-        drop(second);
+    fn native_sessions_have_independent_cpu_thread_budgets() {
+        let first = cpu_pool(2).unwrap();
+        let second = cpu_pool(1).unwrap();
+        assert_eq!(first.install(rayon::current_num_threads), 2);
+        assert_eq!(second.install(rayon::current_num_threads), 1);
+        assert_eq!(first.install(rayon::current_num_threads), 2);
     }
 
     #[test]
@@ -784,7 +834,7 @@ mod tests {
         assert_eq!(canonical_language("English"), Some("English"));
         assert_eq!(canonical_language("YUE"), Some("Cantonese"));
         assert_eq!(canonical_language("unknown"), None);
-        assert_eq!(canonical_aligner_language("ja"), Some("Japanese"));
+        assert_eq!(canonical_aligner_language("ja"), None);
         assert_eq!(canonical_aligner_language("ar"), None);
     }
 
@@ -841,11 +891,11 @@ mod tests {
     #[test]
     fn both_committed_release_contracts_match_the_shared_adapter() {
         let asr: ModelManifest = serde_json::from_str(include_str!(
-            "../../catalog/release-qwen3-asr-0.6b-1.0.0.json"
+            "../../catalog/release-qwen3-asr-0.6b-1.1.0.json"
         ))
         .unwrap();
         let aligner: ModelManifest = serde_json::from_str(include_str!(
-            "../../catalog/release-qwen3-aligner-0.6b-1.0.0.json"
+            "../../catalog/release-qwen3-aligner-0.6b-1.1.0.json"
         ))
         .unwrap();
         assert_eq!(asr.model.version, ASR_RELEASE_VERSION);
@@ -874,11 +924,11 @@ mod tests {
             .collect();
 
         let asr: ModelManifest = serde_json::from_str(include_str!(
-            "../../catalog/release-qwen3-asr-0.6b-1.0.0.json"
+            "../../catalog/release-qwen3-asr-0.6b-1.1.0.json"
         ))
         .unwrap();
         let aligner: ModelManifest = serde_json::from_str(include_str!(
-            "../../catalog/release-qwen3-aligner-0.6b-1.0.0.json"
+            "../../catalog/release-qwen3-aligner-0.6b-1.1.0.json"
         ))
         .unwrap();
         let asr_route = &asr.routes[0];

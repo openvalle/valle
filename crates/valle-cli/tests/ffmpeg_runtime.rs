@@ -102,9 +102,8 @@ export default function Test(){return <Scene style={{width:160,height:90,backgro
     ));
     assert!(std::fs::metadata(dir.join("image.png")).unwrap().len() > 100);
 }
-#[cfg(not(target_os = "macos"))]
 #[test]
-fn non_macos_transcription_is_rejected_before_loading_or_writing() {
+fn transcription_rejects_missing_input_before_loading_or_writing() {
     let temp = tempfile::tempdir().unwrap();
     let dir = temp.path();
     let missing = dir.join("missing-ffmpeg");
@@ -129,15 +128,15 @@ fn non_macos_transcription_is_rejected_before_loading_or_writing() {
         ],
     ] {
         let output = run(dir, &missing, &args);
-        assert_eq!(output.status.code(), Some(3));
+        assert_eq!(output.status.code(), Some(2));
         assert!(output.stderr.is_empty(), "JSON mode leaked stderr");
         let diagnostic: Value = serde_json::from_slice(&output.stdout).unwrap();
-        assert_eq!(diagnostic["error"]["code"], "unsupported_adapter");
+        assert_eq!(diagnostic["error"]["code"], "invalid_input");
         assert!(
             diagnostic["error"]["message"]
                 .as_str()
                 .unwrap()
-                .contains("supported only on macOS")
+                .contains("input does not exist")
         );
     }
     assert_eq!(

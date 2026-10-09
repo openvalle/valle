@@ -128,7 +128,8 @@ impl ModelManager {
             ),
             feature = "model-realesrgan-onnx",
             feature = "model-rife-onnx",
-            all(feature = "model-qwen-native", target_os = "macos"),
+            feature = "model-qwen-native",
+            feature = "model-qwen-tts",
             all(feature = "model-coreml", target_os = "macos")
         ))
     }
@@ -239,12 +240,14 @@ impl ModelManager {
                 ));
                 continue;
             }
+            let reuse_roots = self.artifact_reuse_roots(&bundle, artifact);
             let installed = hub
-                .install_artifact(
+                .install_artifact_reusing(
                     &bundle.release,
                     &fetched,
                     &route.artifact,
                     &self.models_root,
+                    &reuse_roots,
                 )
                 .map_err(|error| store_error("install model artifact", error))?;
             downloaded_files = downloaded_files.saturating_add(installed.downloaded_files);
@@ -262,6 +265,38 @@ impl ModelManager {
             downloaded_files,
             reused_files,
         })
+    }
+
+    #[cfg(feature = "model-store")]
+    fn artifact_reuse_roots(&self, bundle: &ReleaseBundle, artifact: &Artifact) -> Vec<PathBuf> {
+        let catalog = self.catalog.embedded();
+        let mut roots = Vec::new();
+        if let Some(model) = catalog.model(&bundle.manifest.model.id) {
+            for release in &model.releases {
+                if release.version == bundle.release.version {
+                    continue;
+                }
+                let key = ArtifactKey {
+                    model: model.id.clone(),
+                    version: release.version.clone(),
+                    revision: release.revision.clone(),
+                    artifact: artifact.id.clone(),
+                };
+                if let Ok(root) = key.install_root(&self.models_root)
+                    && root.is_dir()
+                {
+                    roots.push(root);
+                }
+            }
+        }
+        #[cfg(all(feature = "model-qwen-native", target_os = "macos"))]
+        if let Some(root) = legacy_cache_migration::migration_source(
+            &self.legacy_models_root,
+            &bundle.manifest.model.id,
+        ) {
+            roots.push(root);
+        }
+        roots
     }
 
     /// Import a complete Phase-0 Qwen cache into its immutable artifact slot before considering
@@ -289,6 +324,15 @@ impl ModelManager {
         ) else {
             return Ok(None);
         };
+        if artifact
+            .files
+            .iter()
+            .any(|file| !legacy_root.join(&file.path).is_file())
+        {
+            // A newer tokenizer contract can add small files. The ordinary installer reuses
+            // individually verified legacy files and downloads only what is missing.
+            return Ok(None);
+        }
         progress(&format!(
             "migrating verified legacy cache {} into immutable artifact {}",
             legacy_root.display(),
@@ -586,8 +630,7 @@ fn install_compatible_routes(
         .routes
         .iter()
         .filter(|route| {
-            adapter_platform_compatibility(manifest, environment).is_ok()
-                && install_route_compatibility(route, preference, environment).is_ok()
+            install_route_compatibility(route, preference, environment).is_ok()
                 && (capability_policy == InstallCapabilityPolicy::ArtifactManagement
                     || (adapter_available(
                         &manifest.contract.adapter,
@@ -636,7 +679,6 @@ fn route_compatibility(
     environment: Environment,
     allow_unverified: bool,
 ) -> Result<(), String> {
-    adapter_platform_compatibility(manifest, environment)?;
     route_contract_compatibility(route, preference, environment, allow_unverified)?;
     if !adapter_available(
         &manifest.contract.adapter,
@@ -649,23 +691,6 @@ fn route_compatibility(
         ));
     }
     minimum_runtime_compatibility(manifest, route)?;
-    Ok(())
-}
-
-#[cfg(feature = "model-store")]
-fn adapter_platform_compatibility(
-    manifest: &ModelManifest,
-    environment: Environment,
-) -> Result<(), String> {
-    // Published manifests also describe upstream targets. Keep their bytes stable so existing
-    // installations retain their identity; Valle's supported platforms are a separate policy.
-    if matches!(
-        manifest.contract.adapter.as_str(),
-        "qwen3-asr-transcription" | "qwen3-forced-alignment"
-    ) && environment.platform != crate::models::spec::Platform::Macos
-    {
-        return Err("ASR and forced alignment are supported only on macOS".to_owned());
-    }
     Ok(())
 }
 
@@ -730,9 +755,11 @@ fn adapter_available(adapter: &str, version: u32, backend: Backend) -> bool {
         | ("modnet-image-matting", 1, Backend::Coreml) => true,
         #[cfg(feature = "model-modnet-onnx")]
         ("modnet-image-matting", 1, Backend::OnnxCpu) => true,
-        #[cfg(all(feature = "model-qwen-native", target_os = "macos"))]
+        #[cfg(feature = "model-qwen-native")]
         ("qwen3-asr-transcription", 1, Backend::NativeCpu)
         | ("qwen3-forced-alignment", 1, Backend::NativeCpu) => true,
+        #[cfg(feature = "model-qwen-tts")]
+        ("qwen3-tts-voice-cloning", 1, Backend::NativeCpu) => true,
         #[cfg(feature = "model-dpdfnet-onnx")]
         ("dpdfnet-streaming-enhancement", 1, Backend::OnnxCpu) => true,
         #[cfg(feature = "model-demucs-onnx")]
@@ -772,7 +799,13 @@ fn minimum_runtime_compatibility(manifest: &ModelManifest, route: &Route) -> Res
                 ("qwen3-asr-transcription", 1) | ("qwen3-forced-alignment", 1)
             ) =>
         {
-            ("qwen-asr", "0.11.0")
+            ("valle-asr", "0.1.0")
+        }
+        Backend::NativeCpu
+            if manifest.contract.adapter == "qwen3-tts-voice-cloning"
+                && manifest.contract.version == 1 =>
+        {
+            ("valle-tts", "0.1.0")
         }
         _ => {
             return Err(format!(
@@ -921,9 +954,6 @@ fn no_installable_route_error(
     environment: Environment,
     capability_policy: InstallCapabilityPolicy,
 ) -> ModelError {
-    if let Err(message) = adapter_platform_compatibility(manifest, environment) {
-        return ModelError::new(ModelErrorCode::NoCompatibleRoute, message);
-    }
     let has_contract_route = manifest
         .routes
         .iter()
@@ -963,9 +993,6 @@ fn no_compatible_route_error(
     preference: RunBackendPreference,
     environment: Environment,
 ) -> ModelError {
-    if let Err(message) = adapter_platform_compatibility(manifest, environment) {
-        return ModelError::new(ModelErrorCode::NoCompatibleRoute, message);
-    }
     let platform_routes = manifest.routes.iter().filter(|route| {
         route.platforms.contains(&environment.platform)
             && route.architectures.contains(&environment.architecture)
@@ -1190,51 +1217,78 @@ mod tests {
 
     #[cfg(feature = "model-store")]
     #[test]
-    fn qwen_routes_reject_linux_and_windows_for_both_architectures() {
+    fn speech_routes_support_the_published_three_platform_matrix() {
         use crate::models::spec::{Architecture, Platform};
 
-        for id in ["qwen3-asr-0.6b", "qwen3-aligner-0.6b"] {
-            let manifest = crate::models::spec::embedded_release_manifest(id, "1.0.0").unwrap();
+        for (id, version, feature_enabled) in [
+            (
+                "qwen3-asr-0.6b",
+                "1.1.0",
+                cfg!(feature = "model-qwen-native"),
+            ),
+            (
+                "qwen3-aligner-0.6b",
+                "1.1.0",
+                cfg!(feature = "model-qwen-native"),
+            ),
+            (
+                "qwen3-tts-0.6b-base-q8",
+                "1.0.0",
+                cfg!(feature = "model-qwen-tts"),
+            ),
+            (
+                "qwen3-tts-0.6b-base-q4",
+                "1.0.0",
+                cfg!(feature = "model-qwen-tts"),
+            ),
+        ] {
+            let manifest = crate::models::spec::embedded_release_manifest(id, version).unwrap();
             assert_eq!(
                 adapter_available(&manifest.contract.adapter, 1, Backend::NativeCpu),
-                cfg!(all(feature = "model-qwen-native", target_os = "macos"))
+                feature_enabled
             );
-            for platform in [Platform::Linux, Platform::Windows] {
-                for architecture in [Architecture::Aarch64, Architecture::X86_64] {
-                    let environment = Environment {
-                        platform,
-                        architecture,
-                    };
-                    for policy in [
-                        InstallCapabilityPolicy::ArtifactManagement,
-                        InstallCapabilityPolicy::CompiledAdapters,
-                    ] {
-                        let error = select_install_routes(
-                            &manifest,
-                            InstallBackendSelection::Auto,
-                            environment,
-                            policy,
-                        )
-                        .unwrap_err();
-                        assert_eq!(
-                            error.code,
-                            ModelErrorCode::NoCompatibleRoute,
-                            "{id}: {platform}/{architecture}"
-                        );
-                        assert!(error.message.contains("supported only on macOS"));
-                    }
-                    assert!(
-                        compatible_routes(&manifest, RunBackendPreference::Auto, environment, true)
-                            .is_empty()
-                    );
-                    let error = no_compatible_route_error(
+            for (platform, architecture) in [
+                (Platform::Macos, Architecture::Aarch64),
+                (Platform::Linux, Architecture::X86_64),
+                (Platform::Windows, Architecture::X86_64),
+            ] {
+                let environment = Environment {
+                    platform,
+                    architecture,
+                };
+                let routes = select_install_routes(
+                    &manifest,
+                    InstallBackendSelection::Auto,
+                    environment,
+                    InstallCapabilityPolicy::ArtifactManagement,
+                )
+                .unwrap();
+                assert_eq!(routes.len(), 1, "{id}: {platform}/{architecture}");
+                assert!(minimum_runtime_compatibility(&manifest, routes[0]).is_ok());
+                assert_eq!(
+                    compatible_routes(&manifest, RunBackendPreference::Auto, environment, false)
+                        .len(),
+                    usize::from(feature_enabled)
+                );
+            }
+            for (platform, architecture) in [
+                (Platform::Macos, Architecture::X86_64),
+                (Platform::Linux, Architecture::Aarch64),
+                (Platform::Windows, Architecture::Aarch64),
+            ] {
+                let environment = Environment {
+                    platform,
+                    architecture,
+                };
+                assert!(
+                    select_install_routes(
                         &manifest,
-                        RunBackendPreference::Auto,
+                        InstallBackendSelection::Auto,
                         environment,
-                    );
-                    assert_eq!(error.code, ModelErrorCode::NoCompatibleRoute);
-                    assert!(error.message.contains("supported only on macOS"));
-                }
+                        InstallCapabilityPolicy::ArtifactManagement
+                    )
+                    .is_err()
+                );
             }
         }
     }

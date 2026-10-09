@@ -67,7 +67,7 @@ pub(super) fn font_dependency_role(artifact: &SceneArtifact, bytes: &[u8], index
         .iter()
         .any(|node| matches!(node.kind, valle_motion::NodeKind::MathFormula { .. }));
     let is_formula = has_formula
-        && valle_motion::math_formula::formula_font_pack().any(|(_, font)| font.as_ref() == bytes);
+        && valle_motion::math_formula::formula_font_pack().any(|(_, font)| font == bytes);
     format!(
         "{}:{index}",
         if is_formula { "formula-font" } else { "font" }

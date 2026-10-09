@@ -174,7 +174,8 @@ pub struct ProcessingReport {
 #[cfg(any(
     feature = "tool-enhance",
     feature = "tool-separate",
-    all(feature = "tool-transcribe", target_os = "macos"),
+    feature = "tool-synthesize",
+    feature = "tool-transcribe",
     all(test, feature = "libav")
 ))]
 pub(crate) struct ProbedAudioInput {
@@ -186,7 +187,8 @@ pub(crate) struct ProbedAudioInput {
 #[cfg(any(
     feature = "tool-enhance",
     feature = "tool-separate",
-    all(feature = "tool-transcribe", target_os = "macos"),
+    feature = "tool-synthesize",
+    feature = "tool-transcribe",
     all(test, feature = "libav")
 ))]
 pub(crate) fn probe_audio_input(path: &Path) -> Result<ProbedAudioInput, ToolError> {
@@ -227,7 +229,8 @@ pub(crate) fn probe_audio_input(path: &Path) -> Result<ProbedAudioInput, ToolErr
 #[cfg(any(
     feature = "tool-enhance",
     feature = "tool-separate",
-    all(feature = "tool-transcribe", target_os = "macos"),
+    feature = "tool-synthesize",
+    feature = "tool-transcribe",
     all(test, feature = "libav")
 ))]
 fn valid_duration(duration: f64) -> Option<f64> {

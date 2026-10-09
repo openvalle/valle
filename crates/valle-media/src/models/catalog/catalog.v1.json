@@ -146,8 +146,14 @@
       "id": "qwen3-asr-0.6b",
       "display_name": "Qwen3-ASR 0.6B",
       "task": "speech-transcription",
-      "latest": "1.0.0",
+      "latest": "1.1.0",
       "releases": [
+        {
+          "version": "1.1.0",
+          "repository": "Qwen/Qwen3-ASR-0.6B",
+          "revision": "5eb144179a02acc5e5ba31e748d22b0cf3e303b0",
+          "manifest_path": "release.v1.json"
+        },
         {
           "version": "1.0.0",
           "repository": "Qwen/Qwen3-ASR-0.6B",
@@ -160,12 +166,46 @@
       "id": "qwen3-aligner-0.6b",
       "display_name": "Qwen3 ForcedAligner 0.6B",
       "task": "forced-alignment",
-      "latest": "1.0.0",
+      "latest": "1.1.0",
       "releases": [
+        {
+          "version": "1.1.0",
+          "repository": "Qwen/Qwen3-ForcedAligner-0.6B",
+          "revision": "c7cbfc2048c462b0d63a45797104fc9db3ad62b7",
+          "manifest_path": "release.v1.json"
+        },
         {
           "version": "1.0.0",
           "repository": "Qwen/Qwen3-ForcedAligner-0.6B",
           "revision": "c7cbfc2048c462b0d63a45797104fc9db3ad62b7",
+          "manifest_path": "release.v1.json"
+        }
+      ]
+    },
+    {
+      "id": "qwen3-tts-0.6b-base-q8",
+      "display_name": "Qwen3-TTS 0.6B Base Q8",
+      "task": "speech-synthesis",
+      "latest": "1.0.0",
+      "releases": [
+        {
+          "version": "1.0.0",
+          "repository": "Serveurperso/Qwen3-TTS-GGUF",
+          "revision": "b7ee2e8c7459c3bea99da23e3d178125a7d1713c",
+          "manifest_path": "release.v1.json"
+        }
+      ]
+    },
+    {
+      "id": "qwen3-tts-0.6b-base-q4",
+      "display_name": "Qwen3-TTS 0.6B Base Q4",
+      "task": "speech-synthesis",
+      "latest": "1.0.0",
+      "releases": [
+        {
+          "version": "1.0.0",
+          "repository": "Serveurperso/Qwen3-TTS-GGUF",
+          "revision": "b7ee2e8c7459c3bea99da23e3d178125a7d1713c",
           "manifest_path": "release.v1.json"
         }
       ]

@@ -26,6 +26,7 @@ pub(crate) type QwenAlignedUnit = AlignedUnit;
 #[derive(Debug, Clone)]
 pub(crate) struct QwenChunkTranscription {
     pub text: String,
+    pub language: String,
     pub segments: Vec<QwenSegment>,
 }
 
@@ -39,9 +40,13 @@ impl QwenAsrSession {
         model: &ResolvedModel,
         language: Option<&str>,
         cpu_threads: usize,
+        cancellation: &crate::tools::CancellationToken,
     ) -> Result<Self> {
-        let inner = SharedAsrSession::open(open_request(model, cpu_threads))
+        let mut inner = SharedAsrSession::open(open_request(model, cpu_threads))
             .with_context(|| format!("open formal {} release", ASR_MODEL_ID))?;
+        inner.set_cancellation(valle_asr::CancellationToken::from_shared_flag(
+            cancellation.shared_flag(),
+        ));
         Ok(Self {
             inner,
             language: language.map(str::to_owned),
@@ -59,6 +64,7 @@ impl QwenAsrSession {
         )?;
         Ok(QwenChunkTranscription {
             text: output.text.trim().to_owned(),
+            language: output.language,
             segments: output.segments,
         })
     }
@@ -73,11 +79,21 @@ pub(crate) struct QwenAlignerSession {
 }
 
 impl QwenAlignerSession {
-    pub(crate) fn open(model: &ResolvedModel, cpu_threads: usize) -> Result<Self> {
-        Ok(Self {
-            inner: SharedAlignerSession::open(open_request(model, cpu_threads))
-                .with_context(|| format!("open formal {} release", ALIGNER_MODEL_ID))?,
-        })
+    pub(crate) fn open(
+        asr: &ResolvedModel,
+        model: &ResolvedModel,
+        cpu_threads: usize,
+        cancellation: &crate::tools::CancellationToken,
+    ) -> Result<Self> {
+        let mut inner = SharedAlignerSession::open(
+            open_request(asr, cpu_threads),
+            open_request(model, cpu_threads),
+        )
+        .with_context(|| format!("open formal {} release", ALIGNER_MODEL_ID))?;
+        inner.set_cancellation(valle_asr::CancellationToken::from_shared_flag(
+            cancellation.shared_flag(),
+        ));
+        Ok(Self { inner })
     }
 
     pub(crate) fn align(
@@ -108,16 +124,18 @@ fn open_request(model: &ResolvedModel, cpu_threads: usize) -> OpenRequest<'_> {
 }
 
 fn resolve_lang(lang: Option<&str>, transcript: &str) -> Result<(&'static str, &'static str)> {
-    match lang.map(str::to_ascii_lowercase).as_deref() {
-        Some("zh" | "chinese") => Ok(("Chinese", "zh")),
-        Some("en" | "english") => Ok(("English", "en")),
-        Some(other) => Err(anyhow!("unsupported language {other:?} (zh / en)")),
-        None => Ok(if transcript.chars().any(is_cjk) {
-            ("Chinese", "zh")
-        } else {
-            ("English", "en")
-        }),
-    }
+    use crate::models::inference::qwen_asr::{canonical_language, language_to_code};
+    let language = match lang {
+        Some(value) => {
+            canonical_language(value).ok_or_else(|| anyhow!("unsupported language {value:?}"))?
+        }
+        None if transcript.chars().any(is_cjk) => "Chinese",
+        None => "English",
+    };
+    Ok((
+        language,
+        language_to_code(language).expect("canonical languages have ISO codes"),
+    ))
 }
 
 fn is_cjk(character: char) -> bool {
@@ -136,7 +154,8 @@ mod tests {
             resolve_lang(Some("English"), "").unwrap(),
             ("English", "en")
         );
-        assert!(resolve_lang(Some("fr"), "").is_err());
+        assert_eq!(resolve_lang(Some("fr"), "").unwrap(), ("French", "fr"));
+        assert!(resolve_lang(Some("unknown"), "").is_err());
         assert_eq!(resolve_lang(None, "你好 world").unwrap().1, "zh");
         assert_eq!(resolve_lang(None, "hello world").unwrap().1, "en");
     }

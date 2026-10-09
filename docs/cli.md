@@ -317,6 +317,7 @@ allows `--overwrite`.
 | Operation | Model to install | Command |
 | --- | --- | --- |
 | Word transcription | `qwen3-asr-0.6b` and `qwen3-aligner-0.6b` | `valle media transcribe speech.wav --lang en -o words.json` |
+| Voice cloning | `qwen3-tts-0.6b-base-q8` | `valle media synthesize --text "Hello" --reference voice.wav -o speech.wav` |
 | Foreground matting | `birefnet` | `valle media matte input.png -o foreground.png` |
 | Speech enhancement | `dpdfnet` | `valle media enhance speech.wav -o clean.wav` |
 | Stem separation | `demucs` | `valle media separate song.wav -o stems` |
@@ -328,10 +329,13 @@ allows `--overwrite`.
 
 Important input/output details:
 
-- Transcription and forced alignment support macOS only; Linux and Windows are unsupported. Transcription uses the native CPU route and accepts `--backend auto` only.
+- Transcription, forced alignment and voice cloning support macOS ARM64, Linux x86_64 and Windows x86_64. Transcription uses the native CPU route and accepts `--backend auto` only.
   `--text-only` skips alignment and only needs the ASR model. It cannot be
   combined with `-o`; with `--json` the text is inside the run result.
-- Matting can use ONNX or macOS CoreML; the other listed non-ASR tools currently
+- Voice cloning takes a 0.5–15 second reference voice and writes mono 24 kHz WAV.
+  Add `--ref-text` when its exact transcript is available; omit it to use only the
+  speaker embedding. It uses the native CPU route.
+- Matting can use ONNX or macOS CoreML; the other listed non-speech tools currently
   implement ONNX. Explicit backend requests never silently fall back.
 - Segmentation requires exactly three labeled points in source-pixel coordinates.
   Supply coordinates for your image in the prompt file. The mask must be strict binary

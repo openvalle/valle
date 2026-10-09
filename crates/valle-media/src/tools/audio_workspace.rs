@@ -53,7 +53,7 @@ struct SpoolFile {
 }
 
 impl AudioWorkspace {
-    #[cfg(any(all(feature = "tool-transcribe", target_os = "macos"), test))]
+    #[cfg(any(feature = "tool-transcribe", test))]
     pub fn decode(
         input: &Path,
         sample_rate: u32,
@@ -361,7 +361,12 @@ impl SpoolFile {
         // equally large `Vec<u8>`.
         let mut bytes = [0_u8; SPOOL_WRITE_SAMPLES * size_of::<f32>()];
         for samples in samples.chunks(SPOOL_WRITE_SAMPLES) {
-            for (target, sample) in bytes.chunks_exact_mut(size_of::<f32>()).zip(samples) {
+            for (target, sample) in bytes
+                .as_chunks_mut::<{ size_of::<f32>() }>()
+                .0
+                .iter_mut()
+                .zip(samples)
+            {
                 target.copy_from_slice(&sample.to_le_bytes());
             }
             let byte_len = samples
@@ -398,8 +403,10 @@ impl SpoolFile {
             .read_exact(&mut bytes)
             .map_err(|error| spool_error(&self.path, error))?;
         Ok(bytes
-            .chunks_exact(size_of::<f32>())
-            .map(|bytes| f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+            .as_chunks::<{ size_of::<f32>() }>()
+            .0
+            .iter()
+            .map(|bytes| f32::from_le_bytes(*bytes))
             .collect())
     }
 }

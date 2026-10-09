@@ -150,7 +150,6 @@ fn matte_video_honors_ranges_and_rejects_bad_range_syntax() {
     }
 }
 
-#[cfg(target_os = "macos")]
 #[test]
 #[ignore = "requires pinned Qwen ASR/aligner weights and VALLE_QWEN_FIXTURE_WAV"]
 fn real_qwen_cli_publishes_valid_word_and_sentence_transcripts() {
@@ -164,11 +163,13 @@ fn real_qwen_cli_publishes_valid_word_and_sentence_transcripts() {
         let root = tempfile::tempdir().unwrap();
         let input = root.path().join("speech.wav");
         std::fs::copy(&source, &input).unwrap();
+        let report = root.path().join("run.json");
         let mut cmd = command(root.path());
         cmd.env("VALLE_MODEL_CACHE", models_root)
             .args(["media", "transcribe"])
             .arg(&input)
-            .args(["--lang", "en", "--level", level]);
+            .args(["--lang", "en", "--level", level, "--report"])
+            .arg(&report);
         if json {
             cmd.arg("--json");
         }
@@ -180,11 +181,22 @@ fn real_qwen_cli_publishes_valid_word_and_sentence_transcripts() {
         });
         let document: serde_json::Value =
             serde_json::from_slice(&std::fs::read(output).unwrap()).unwrap();
+        let saved: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(report).unwrap()).unwrap();
+        let recognized = saved["result"]["text"].as_str().unwrap();
         if level == "word" {
             let transcript: valle_media::analysis::Transcript =
                 serde_json::from_value(document).unwrap();
             transcript.validate().unwrap();
             assert!(!transcript.words.is_empty());
+            assert_eq!(
+                transcript
+                    .words
+                    .iter()
+                    .map(|word| word.text.as_str())
+                    .collect::<String>(),
+                recognized
+            );
             assert!(
                 !result.unwrap()["result"]["text"]
                     .as_str()
@@ -193,6 +205,56 @@ fn real_qwen_cli_publishes_valid_word_and_sentence_transcripts() {
             );
         } else {
             assert!(!document["sentences"].as_array().unwrap().is_empty());
+            assert_eq!(
+                document["sentences"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|sentence| sentence["text"].as_str().unwrap())
+                    .collect::<String>(),
+                recognized
+            );
         }
     }
+}
+
+#[test]
+#[ignore = "requires installed Qwen TTS weights, VALLE_QWEN_TTS_DIR and VALLE_TTS_REFERENCE_WAV"]
+fn real_tts_cli_streams_valid_audio_and_publishes_the_same_report() {
+    let source = std::path::PathBuf::from(
+        std::env::var_os("VALLE_TTS_REFERENCE_WAV").expect("reference voice WAV"),
+    );
+    let artifact = std::path::PathBuf::from(
+        std::env::var_os("VALLE_QWEN_TTS_DIR").expect("installed TTS artifact"),
+    );
+    let root = tempfile::tempdir().unwrap();
+    let text = root.path().join("narration.txt");
+    let audio = root.path().join("speech.wav");
+    let report = root.path().join("report.json");
+    std::fs::write(&text, "Hello, welcome to Valle.").unwrap();
+    let mut cmd = command(root.path());
+    cmd.env("VALLE_MODEL_CACHE", artifact.ancestors().nth(4).unwrap())
+        .args(["media", "synthesize", "--text-file"])
+        .arg(&text)
+        .arg("--reference")
+        .arg(&source)
+        .args(["--lang", "en", "--json", "--report"])
+        .arg(&report)
+        .arg("-o")
+        .arg(&audio);
+    let envelope = success(cmd.output().unwrap(), true).unwrap();
+    let saved: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&report).unwrap()).unwrap();
+    assert_eq!(saved, envelope);
+    let samples = envelope["result"]["samples"].as_u64().unwrap();
+    assert!(samples > 0);
+    valle_media::codec::validate_float_wav(&audio, 24_000, 1, samples).unwrap();
+    let output = &envelope["report"]["outputs"][0]["summary"];
+    assert_eq!(output["sampleRateHz"], 24_000);
+    assert_eq!(output["channels"], 1);
+    assert_eq!(output["audioCodec"], "pcm_f32le");
+    assert_eq!(
+        std::fs::read_to_string(text).unwrap(),
+        "Hello, welcome to Valle."
+    );
 }

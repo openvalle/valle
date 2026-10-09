@@ -18,10 +18,10 @@ macOS CI uses ad-hoc signing without Apple secrets. Manually dispatched macOS pa
 
 ## Local tests and coverage
 
-Use the toolchain pinned in `rust-toolchain.toml`: Rust 1.96.0. The native coverage run uses `cargo-llvm-cov` 0.9.1 and Rust's matching LLVM 22.1.2 tools; do not merge profiles from another Rust/LLVM version.
+Use the toolchain pinned in `rust-toolchain.toml`: Rust 1.99.0. The native coverage run uses `cargo-llvm-cov` 0.9.1 and Rust's matching LLVM 23.1.1 tools; do not merge profiles from another Rust/LLVM version.
 
 ```sh
-rustup component add llvm-tools-preview --toolchain 1.96.0
+rustup component add llvm-tools-preview --toolchain 1.99.0
 cargo install cargo-llvm-cov --version 0.9.1 --locked
 ```
 
@@ -30,14 +30,14 @@ Build the Web runtime and distribution notices before selecting the CLI's `embed
 Use a dedicated coverage target directory to keep instrumentation separate from ordinary builds. Start with fresh profiles and matching workspace artifacts when validating changed source; retain the baseline JSON for comparison. Cached executables from older source versions can contribute obsolete coverage mappings. Clean workspace coverage artifacts before a new run, or generate reports from the current Cargo artifact list and all executed acceptance binaries.
 
 ```sh
-export CARGO_LLVM_COV_TARGET_DIR="$PWD/target/llvm-cov-native-1.96.0"
+export CARGO_LLVM_COV_TARGET_DIR="$PWD/target/llvm-cov-native-1.99.0"
 export CARGO_INCREMENTAL=0
 export CARGO_PROFILE_DEV_DEBUG=0
 export CARGO_PROFILE_TEST_DEBUG=0
 
-cargo +1.96.0 llvm-cov clean --workspace
+cargo +1.99.0 llvm-cov clean --workspace
 
-cargo +1.96.0 llvm-cov --coverage-host-only --workspace \
+cargo +1.99.0 llvm-cov --coverage-host-only --workspace \
   --features valle-cli/embedded-runtime --tests --locked \
   --no-report --no-fail-fast -- --test-threads=1
 ```
@@ -45,17 +45,17 @@ cargo +1.96.0 llvm-cov --coverage-host-only --workspace \
 The ordinary run leaves explicitly ignored runtime/hardware tests unselected. Run the following acceptance targets separately on a machine with the required libraries and hardware:
 
 ```sh
-cargo +1.96.0 llvm-cov --coverage-host-only --workspace \
+cargo +1.99.0 llvm-cov --coverage-host-only --workspace \
   --features valle-cli/embedded-runtime --locked --no-report \
   --test contract_graph --test media_contract --test shared_gpu_roundtrip \
   --test motion_metal --test motion_host_time \
   -- --include-ignored --test-threads=1
 
-cargo +1.96.0 llvm-cov --coverage-host-only --workspace \
+cargo +1.99.0 llvm-cov --coverage-host-only --workspace \
   --features valle-cli/embedded-runtime --locked --no-report \
   --lib -- tools::segment::contract_tests --ignored --test-threads=1
 
-cargo +1.96.0 llvm-cov --coverage-host-only --workspace \
+cargo +1.99.0 llvm-cov --coverage-host-only --workspace \
   --features valle-cli/embedded-runtime --locked --no-report \
   --lib -- transport::shared_frame::contract_tests --ignored --test-threads=1
 ```
@@ -71,11 +71,11 @@ Crash recovery tests deliberately abort. Ordinary process-exit profile writing l
 Generate reports using the same source scope as the baseline:
 
 ```sh
-cargo +1.96.0 llvm-cov report \
+cargo +1.99.0 llvm-cov report \
   --ignore-filename-regex '(^|/)(tests|test_support)(/|\.rs$)|/[^/]+_tests?\.rs$' \
   --json --output-path target/coverage/rust.json --fail-under-file-lines 70
 
-cargo +1.96.0 llvm-cov report \
+cargo +1.99.0 llvm-cov report \
   --ignore-filename-regex '(^|/)(tests|test_support)(/|\.rs$)|/[^/]+_tests?\.rs$' \
   --html --output-dir target/coverage/rust
 ```

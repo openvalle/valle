@@ -18,7 +18,7 @@ members = [
 version = "0.1.0-rc.1"
 edition = "2024"
 license = "Apache-2.0"
-rust-version = "1.96"
+rust-version = "1.99"
 repository = "https://github.com/openvalle/valle"
 publish = false
 
@@ -50,7 +50,9 @@ objc2-metal = { version = "0.3.2", default-features = false }
 oxc = "0.151.0"
 ort = { version = "=2.0.0-rc.13", default-features = false, features = ["api-28", "ndarray", "std", "load-dynamic"] }
 png = "0.18.1"
-qwen-asr = { version = "=0.11.0", default-features = false }
+valle-asr = { version = "=0.1.0", default-features = false, features = ["qwen3"] }
+valle-tts = { version = "=0.1.0", default-features = false, features = ["qwen3"] }
+rayon = "1.12.0"
 reflink-copy = "0.1.30"
 reqwest = { version = "0.13.4", default-features = false, features = ["blocking", "rustls"] }
 rquickjs = "0.14.0"
@@ -180,4 +182,39 @@ opt-level = 3
 [profile.test.package.sha2]
 opt-level = 3
 [profile.test.package.skia-bindings]
+opt-level = 3
+
+# Keep local CPU ASR kernels optimized, as they are in release builds.
+[profile.dev.package.valle-asr]
+opt-level = 3
+[profile.dev.package.candle-core]
+opt-level = 3
+[profile.dev.package.candle-nn]
+opt-level = 3
+[profile.dev.package.gemm]
+opt-level = 3
+[profile.dev.package.gemm-common]
+opt-level = 3
+[profile.dev.package.gemm-f32]
+opt-level = 3
+[profile.dev.package.gemm-f16]
+opt-level = 3
+[profile.dev.package.pulp]
+opt-level = 3
+
+[profile.test.package.valle-asr]
+opt-level = 3
+[profile.test.package.candle-core]
+opt-level = 3
+[profile.test.package.candle-nn]
+opt-level = 3
+[profile.test.package.gemm]
+opt-level = 3
+[profile.test.package.gemm-common]
+opt-level = 3
+[profile.test.package.gemm-f32]
+opt-level = 3
+[profile.test.package.gemm-f16]
+opt-level = 3
+[profile.test.package.pulp]
 opt-level = 3
