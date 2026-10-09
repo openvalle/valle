@@ -269,7 +269,7 @@ mod contract_tests {
         let temp = tempfile::tempdir().unwrap();
         let output = temp.path().join("notices.txt");
         notices::generate(root, &output, false, &Default::default()).unwrap();
-        let text = fs::read_to_string(output).unwrap();
+        let text = fs::read_to_string(output).unwrap().replace('\\', "/");
         assert!(!text.contains("===== Web: valle-engine "));
         for required in [
             "Valle base revision:",
