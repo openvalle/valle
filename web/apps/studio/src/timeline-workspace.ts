@@ -830,7 +830,8 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
           }
           canvas.title = "Source keyframes";
         } else {
-          drawing.strokeStyle = "#78b7a0"; drawing.lineWidth = 1; drawing.beginPath();
+          drawing.strokeStyle = getComputedStyle(canvas).getPropertyValue("--kind-edge").trim() || "#a4a9b3";
+          drawing.lineWidth = 1; drawing.beginPath();
           for (let x = 0; x < width; x += 2) {
             const time = media.sourceStartS + x / width * media.sourceDurationS;
             const index = Math.floor(time / Math.max(1e-9, data.durationS) * data.peaks.length);

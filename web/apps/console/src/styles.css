@@ -15,8 +15,8 @@ body {
   .topbar {
     display: flex;
     align-items: center;
-    gap: 16px;
-    padding: 0 18px;
+    gap: 32px;
+    padding: 0 32px;
     border-bottom: 1px solid var(--line);
     background: var(--panel);
     min-width: 0;
@@ -25,33 +25,24 @@ body {
   .brand {
     display: inline-flex;
     align-items: center;
-    gap: 7px;
+    gap: 16px;
     font-weight: 650;
     font-size: 15px;
     user-select: none;
     white-space: nowrap;
   }
 
-  .brand svg {
-    width: 20px;
-    height: 20px;
-    stroke: var(--text);
-    stroke-width: 1.8;
-    fill: none;
-    stroke-linecap: round;
-    stroke-linejoin: round;
-  }
-
   .brand .sub {
     color: var(--muted);
     font-weight: 500;
     font-size: 12px;
-    margin-left: 2px;
+    padding-left: 16px;
+    border-left: 1px solid var(--line-strong);
   }
 
   .tabs {
     display: inline-flex;
-    gap: 14px;
+    gap: 24px;
     height: 100%;
   }
 
@@ -84,20 +75,35 @@ body {
   .panel {
     min-height: 0;
     overflow: auto;
-    padding: 14px 18px 24px;
+    width: 100%;
+    max-width: 1504px;
+    margin-inline: auto;
+    padding: 32px;
+    scrollbar-width: thin;
+    scrollbar-color: var(--line-strong) transparent;
   }
+
+  .panel-heading { margin-bottom: 24px; }
+  .panel-heading h1 { margin: 0; font-size: 28px; line-height: 1.25; font-weight: 500; letter-spacing: -0.035em; }
+  .panel-heading p { margin: 8px 0 0; color: var(--muted); font-size: 13px; line-height: 1.6; }
 
   .toolbar {
     display: flex;
     align-items: center;
-    gap: 10px;
-    margin-bottom: 14px;
+    gap: 16px;
+    margin-bottom: 20px;
+    padding: 12px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--panel);
     flex-wrap: wrap;
   }
 
   .toolbar input[type="search"],
   .toolbar input[type="text"] {
-    width: min(360px, 100%);
+    width: min(420px, 100%);
+    height: 36px;
+    padding-inline: 12px;
   }
 
   .toolbar label {
@@ -116,10 +122,8 @@ body {
   }
 
   .dash span {
-    background: var(--control);
-    border: 1px solid var(--line);
-    border-radius: 6px;
-    padding: 4px 10px;
+    padding: 0 12px 0 0;
+    border-right: 1px solid var(--line);
     font-size: 12px;
     color: var(--muted);
   }
@@ -132,14 +136,14 @@ body {
 
   .grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-    gap: 12px;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 20px;
   }
 
   .card {
     background: var(--panel);
     border: 1px solid var(--line);
-    border-radius: 6px;
+    border-radius: 10px;
     overflow: hidden;
     cursor: pointer;
     text-align: left;
@@ -148,7 +152,7 @@ body {
   }
 
   .card:hover {
-    border-color: var(--accent);
+    border-color: var(--line-strong);
     background: var(--panel);
   }
 
@@ -166,11 +170,14 @@ body {
     display: block;
   }
 
-  .card-title { padding: 8px 10px 0; font-size: 13px; font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .card-meta { display: flex; align-items: center; gap: 8px; padding: 4px 10px 10px; font-size: 12px; color: var(--muted); }
+  .card-title { padding: 14px 14px 0; font-size: 13px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .card-meta { display: flex; align-items: center; gap: 8px; padding: 6px 14px 14px; font-size: 12px; color: var(--muted); }
   .card .thumb { position: relative; display: grid; place-items: center; }
   .thumb-icon { font-size: 28px; color: var(--muted); }
-  .evidence { font-size: 12px; color: var(--muted); padding: 0 10px 10px; }
+  .evidence { font-size: 12px; color: var(--muted); padding: 0 14px 14px; line-height: 1.6; }
+  .card-tags { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 14px 14px; }
+  .card-tags .chip { border: 1px solid var(--line); border-radius: 4px; padding: 2px 6px; color: var(--muted); font-size: 11px; }
+  .card-meta .removed { color: var(--warning); }
 
   .list {
     display: grid;
@@ -234,7 +241,7 @@ body {
     border-left: 1px solid var(--line);
     box-shadow: -12px 0 30px #0006;
     overflow: auto;
-    padding: 16px;
+    padding: 24px;
     z-index: 30;
   }
 
@@ -315,5 +322,18 @@ body {
   }
 
   @media (max-width: 780px) {
-    .grid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
+    .topbar { gap: 20px; padding-inline: 16px; }
+    .brand { gap: 10px; }
+    .brand .sub { padding-left: 10px; }
+    .panel { padding: 24px 16px; }
+    .grid { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 12px; }
+  }
+
+  @media (max-width: 520px) {
+    :root { --topbar-height: 96px; }
+    .topbar { flex-wrap: wrap; gap: 0 24px; padding-block: 12px 0; }
+    .tabs { order: 3; flex-basis: 100%; height: 40px; }
+    .panel-heading h1 { font-size: 24px; }
+    .toolbar { gap: 12px; }
+    .toolbar input[type="search"] { width: 100%; }
   }

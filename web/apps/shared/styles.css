@@ -1,43 +1,49 @@
-/* Valle Studio design system — shared tokens and base controls. */
+/* Brand assets and interface tokens shared by Console, Preview and Studio. */
 :root {
   color-scheme: dark;
   /* Surfaces step lighter toward the front: window < stage < island < raised < hover. */
-  --bg: #08090a;
-  --stage-bg: #0c0d0f;
-  --panel: #121315;
-  --control: #191a1d;
-  --hover: #1f2124;
-  --line: rgba(255, 255, 255, 0.06);
-  --line-strong: rgba(255, 255, 255, 0.11);
+  --bg: #0a0b0d;
+  --stage-bg: #0a0b0d;
+  --panel: #121317;
+  --control: #1a1c21;
+  --hover: #23262d;
+  --line: #262930;
+  --line-strong: #383d47;
   --border: var(--line);
-  --text: #f2f2f4;
-  --muted: #a3a6ae;
-  --disabled: #6b6e76;
-  --accent: #7b8cff;
-  --accent-hover: #95a3ff;
-  --accent-soft: rgba(123, 140, 255, 0.16);
-  --accent-glow: rgba(123, 140, 255, 0.45);
+  --text: #f2f3f5;
+  --muted: #a4a9b3;
+  --secondary-text: #a4a9b3;
+  --disabled: #80868f;
+  --accent: #5e99f3;
+  --accent-hover: #80aff7;
+  --action: #1165e4;
+  --action-hover: #0e58c8;
+  --action-text: #ffffff;
+  --accent-soft: rgba(52, 127, 240, 0.12);
+  --accent-glow: transparent;
   --selected: var(--accent-soft);
-  --success: #4ade80;
-  --warning: #fbbf24;
+  --success: #24ba68;
+  --warning: #f5b83d;
   --warning-bg: rgba(251, 191, 36, 0.1);
-  --error: #f87171;
+  --error: #f5534b;
   --error-bg: rgba(248, 113, 113, 0.1);
-  --radius: 7px;
-  --island-radius: 12px;
+  --radius: 6px;
+  --island-radius: 8px;
   --gap: 8px;
-  --control-height: 28px;
+  --control-height: 32px;
   --shadow-float: 0 12px 32px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.08);
   --inspector-width: 304px;
   --timeline-height: 240px;
   --label-width: 152px;
   --lane-width: 950px;
-  --topbar-height: 48px;
+  --topbar-height: 56px;
   --stage-toolbar-height: 0px;
   --transport-height: 52px;
   --timeline-toolbar-height: 0px;
   --statusbar-height: 0px;
-  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  --ease: cubic-bezier(0.2, 0, 0, 1);
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
   font-size: 13px;
   line-height: 1.45;
   font-synthesis: none;
@@ -66,7 +72,7 @@ button, a, input, select, textarea {
 button {
   cursor: pointer;
   border: 0;
-  transition: background 0.1s, color 0.1s, border-color 0.1s;
+  transition: background 150ms var(--ease), color 150ms var(--ease), border-color 150ms var(--ease);
 }
 
 button:disabled {
@@ -88,6 +94,19 @@ a:focus-visible {
 
 [hidden] { display: none !important; }
 svg { display: block; }
+
+/* The supplied outlined wordmark keeps the brand's letter shapes and spacing intact. */
+.brand-lockup {
+  display: inline-block;
+  width: 108px;
+  height: 24px;
+  flex: 0 0 auto;
+  background: url("./brand/valle-logo-dark.svg") center / contain no-repeat;
+}
+
+code, pre, kbd, .time-code, .time-total, .time-input-wrap {
+  font-family: var(--font-mono);
+}
 
 .icon {
   width: 16px;
@@ -136,13 +155,13 @@ a { color: inherit; text-decoration: none; }
 }
 
 .button.primary {
-  background: var(--accent);
-  color: #0b0c0e;
+  background: var(--action);
+  color: var(--action-text);
   border-color: transparent;
   font-weight: 600;
 }
 
-.button.primary:hover:not(:disabled) { background: var(--accent-hover); }
+.button.primary:hover:not(:disabled) { background: var(--action-hover); }
 
 .button.quiet {
   background: transparent;
@@ -165,14 +184,10 @@ a { color: inherit; text-decoration: none; }
 .icon-button:hover:not(:disabled) { color: var(--text); }
 .icon-button[aria-pressed="true"] { color: var(--accent); }
 
-/* Clip type tokens: one hue per kind, used as a thin edge and a faint tint. */
-.kind-visual { --kind-edge: #60a5fa; }
-.kind-motion { --kind-edge: #a78bfa; }
-.kind-audio { --kind-edge: #34d399; }
-.kind-caption { --kind-edge: #fbbf24; }
-.kind-effect { --kind-edge: #94a3b8; }
+/* Kinds remain neutral; icons, labels and media samples identify the content. */
+.kind-visual, .kind-motion, .kind-audio, .kind-caption, .kind-effect { --kind-edge: #a4a9b3; }
 .kind-visual, .kind-motion, .kind-audio, .kind-caption, .kind-effect {
-  --kind-bg: color-mix(in srgb, var(--kind-edge) 15%, #141518);
+  --kind-bg: var(--control);
   --kind-ink: var(--text);
 }
 
@@ -355,7 +370,7 @@ input[aria-invalid="true"] {
   .play-button:active:not(:disabled) { transform: scale(0.94); }
   .play-button[aria-pressed="true"] {
     color: #fff;
-    background: var(--accent);
+    background: var(--action);
     box-shadow: 0 4px 16px var(--accent-glow);
   }
   .play-button .icon { width: 15px; height: 15px; fill: currentColor; stroke-width: 1.4; }

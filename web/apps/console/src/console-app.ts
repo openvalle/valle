@@ -9,8 +9,7 @@ export class ValleConsoleApp extends LitElement {
     return html`
 <header class="topbar">
   <span class="brand">
-    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4 5 8 15L20 5M9 5l3 6 3-6"/></svg>
-    valle
+    <span class="brand-lockup" role="img" aria-label="Valle"></span>
     <span class="sub">Console</span>
   </span>
   <nav class="tabs" role="tablist">
@@ -22,6 +21,10 @@ export class ValleConsoleApp extends LitElement {
 
 
   <section class="panel" id="panelLibrary" role="tabpanel">
+    <div class="panel-heading">
+      <h1>Asset library</h1>
+      <p>Find your media, review details and prepare your next edit.</p>
+    </div>
     <div class="toolbar">
       <input type="search" id="libSearch" placeholder="Search titles, annotations, transcripts…" />
       <label><input type="checkbox" id="libRemoved" />Show removed</label>
@@ -36,6 +39,10 @@ export class ValleConsoleApp extends LitElement {
   </section>
 
   <section class="panel" id="panelProjects" role="tabpanel" hidden>
+    <div class="panel-heading">
+      <h1>Projects</h1>
+      <p>Review the project connected to this workspace.</p>
+    </div>
     <div class="toolbar">
       <span class="muted">Project attached to this host</span>
       <button class="button quiet" id="projRefresh" type="button">Refresh</button>
