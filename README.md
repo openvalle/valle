@@ -50,8 +50,7 @@ Build on the platform you want to distribute:
 ```sh
 # macOS arm64
 cargo xtask package --min-macos 15.0
-# macOS x86_64, cross-compiled on Apple Silicon with Rosetta installed
-rustup target add x86_64-apple-darwin
+# macOS x86_64, on an Intel Mac
 cargo xtask package --target x86_64-apple-darwin --min-macos 15.0
 # Linux or Windows (MSVC), arm64 or x86_64, on the matching native host
 cargo xtask package
@@ -68,7 +67,7 @@ The command writes the executable and `SHA256SUMS` under `target/package/`, afte
 | Package Windows arm64 | `valle-vVERSION-windows-arm64.zip` | `valle.exe` |
 | Package Windows x86_64 | `valle-vVERSION-windows-x86_64.zip` | `valle.exe` |
 
-Each platform has its own manually dispatched **CI** and **Package** workflow. CI builds and verifies that platform's package, runs its Rust workspace tests and checks formatting and Web runtime contracts. The entries share reusable OS workflows and keep compiled caches separate by target. Both macOS targets use `macos-15` arm64 runners; x86_64 is cross-compiled and tested through Rosetta with x86_64 FFmpeg libraries, while Chrome runs natively on the arm64 host. Linux and Windows use native arm64 and x86_64 runners. CI macOS packages use ad-hoc signing and do not require Apple credentials. Web SDK validation and formatting run separately on pushes to `main` and pull requests.
+Each platform has its own manually dispatched **CI** and **Package** workflow. CI builds and verifies that platform's package, runs its Rust workspace tests and checks formatting and Web runtime contracts. The entries share reusable OS workflows and keep compiled caches separate by target. macOS arm64 uses `macos-15`; macOS x86_64 uses the official `macos-15-intel` runner, including native Rust, FFmpeg and Chrome execution. Linux and Windows also use native arm64 and x86_64 runners. CI macOS packages use ad-hoc signing and do not require Apple credentials. Web SDK validation and formatting run separately on pushes to `main` and pull requests.
 
 After fixing one platform, run only its workflow under **Actions → Run workflow**, or use the CLI:
 
@@ -91,7 +90,7 @@ shasum -a 256 -c SHA256SUMS
 
 On Linux, use `sha256sum -c` with the Linux filenames. On Windows, extract the inner ZIP and run `.\valle.exe --help` in PowerShell; `Get-FileHash -Algorithm SHA256` can be compared with the supplied checksum. To repeat the runtime checks on any supported host with build tools installed, run `cargo xtask verify-package /absolute/path/to/EXECUTABLE`.
 
-macOS packages target macOS 15+. Manually dispatched macOS packages use Developer ID signing with Hardened Runtime, a secure timestamp and Apple notarization; local `cargo xtask package` and CI builds use ad-hoc signing. Standalone CLI executables cannot carry a stapled notarization ticket, so Gatekeeper needs network access to retrieve Apple's ticket. Linux packages build on Ubuntu 24.04 (glibc 2.39) and require system C/C++ libraries, Fontconfig and FreeType; on Ubuntu, install `libfontconfig1 libfreetype6`. Windows packages use MSVC and may require the Visual C++ Redistributable matching the package architecture. ASR, forced alignment and voice cloning run locally on CPU on macOS ARM64, Linux x86_64 and Windows x86_64. FFmpeg and ONNX Runtime remain optional external installations.
+macOS packages target macOS 15+. Manually dispatched macOS packages use Developer ID signing with Hardened Runtime, a secure timestamp and Apple notarization; local `cargo xtask package` and CI builds use ad-hoc signing. Standalone CLI executables cannot carry a stapled notarization ticket, so Gatekeeper needs network access to retrieve Apple's ticket. Linux packages build on Ubuntu 24.04 (glibc 2.39) and require system C/C++ libraries, Fontconfig and FreeType; on Ubuntu, install `libfontconfig1 libfreetype6`. Windows packages use MSVC and may require the Visual C++ Redistributable matching the package architecture. ASR, forced alignment and voice cloning run locally on CPU on macOS, Linux and Windows, each on ARM64 and x86_64. FFmpeg and ONNX Runtime remain optional external installations.
 
 The macOS workflow requires `MACOS_CERT_P12_BASE64`, `MACOS_CERT_PASSWORD`, `MACOS_SIGN_IDENTITY`, `APPLE_API_KEY_ID`, `APPLE_API_ISSUER_ID` and `APPLE_API_KEY_P8_BASE64` as Actions secrets. Missing credentials, invalid signatures, rejected notarization or a notarization wait exceeding 60 minutes prevent artifact publication. Diagnostics retain the submission ID and status so a pending request can be inspected without resubmitting it. The certificate is imported into a temporary keychain, and the API private key is removed after submission processing.
 

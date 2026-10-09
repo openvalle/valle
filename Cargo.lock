@@ -4981,9 +4981,9 @@ dependencies = [
 
 [[package]]
 name = "valle-asr"
-version = "0.1.0"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5e073a2eb59e37712d25e85e691b09742ca2cd382498c0fe5a2abbb272c13bd0"
+checksum = "743b789b36e97ee131d15191d16f2086e9d288c56bf739c590d97dc427885c2e"
 dependencies = [
  "anyhow",
  "candle-core",
@@ -5000,7 +5000,7 @@ dependencies = [
 
 [[package]]
 name = "valle-cli"
-version = "0.1.0-rc.1"
+version = "0.1.0-rc.2"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -5032,7 +5032,7 @@ dependencies = [
 
 [[package]]
 name = "valle-compiler"
-version = "0.1.0-rc.1"
+version = "0.1.0-rc.2"
 dependencies = [
  "anyhow",
  "kurbo",
@@ -5052,7 +5052,7 @@ dependencies = [
 
 [[package]]
 name = "valle-draw"
-version = "0.1.0-rc.1"
+version = "0.1.0-rc.2"
 dependencies = [
  "hex",
  "libm",
@@ -5066,7 +5066,7 @@ dependencies = [
 
 [[package]]
 name = "valle-engine"
-version = "0.1.0-rc.1"
+version = "0.1.0-rc.2"
 dependencies = [
  "base64 0.23.1",
  "cosmic-text",
@@ -5116,7 +5116,7 @@ dependencies = [
 
 [[package]]
 name = "valle-media"
-version = "0.1.0-rc.1"
+version = "0.1.0-rc.2"
 dependencies = [
  "anyhow",
  "block2",
@@ -5148,7 +5148,7 @@ dependencies = [
 
 [[package]]
 name = "valle-motion"
-version = "0.1.0-rc.1"
+version = "0.1.0-rc.2"
 dependencies = [
  "cssparser",
  "geo",
@@ -5178,7 +5178,7 @@ dependencies = [
 
 [[package]]
 name = "valle-project"
-version = "0.1.0-rc.1"
+version = "0.1.0-rc.2"
 dependencies = [
  "fs2",
  "hex",
@@ -5198,7 +5198,7 @@ dependencies = [
 
 [[package]]
 name = "valle-render"
-version = "0.1.0-rc.1"
+version = "0.1.0-rc.2"
 dependencies = [
  "anyhow",
  "cosmic-text",
@@ -5225,7 +5225,7 @@ dependencies = [
 
 [[package]]
 name = "valle-timeline"
-version = "0.1.0-rc.1"
+version = "0.1.0-rc.2"
 dependencies = [
  "jsonschema",
  "schemars",
@@ -5241,9 +5241,9 @@ dependencies = [
 
 [[package]]
 name = "valle-tts"
-version = "0.1.0"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b1867e0df8ef393bb7955d17bcefc07cb4b2ec1149d9d3352594352a8333581a"
+checksum = "f1446c9b5d6a8bbf7c49dad0aebce83b063be2adb5185e753392bdf61c55eee8"
 dependencies = [
  "anyhow",
  "cmake",
@@ -5642,7 +5642,7 @@ dependencies = [
 
 [[package]]
 name = "xtask"
-version = "0.1.0-rc.1"
+version = "0.1.0-rc.2"
 dependencies = [
  "anyhow",
  "hex",

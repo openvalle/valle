@@ -1377,7 +1377,7 @@ mod tests {
             .unwrap()
             .clone();
         let mut manifest =
-            crate::models::spec::embedded_release_manifest("qwen3-asr-0.6b", "1.1.0").unwrap();
+            crate::models::spec::embedded_release_manifest("qwen3-asr-0.6b", "1.2.0").unwrap();
         // Exercise the real official-source plan with tiny payloads, not multi-GB test weights.
         for file in &mut manifest.artifacts[0].files {
             file.bytes = 4;

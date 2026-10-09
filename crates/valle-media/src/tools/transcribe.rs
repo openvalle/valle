@@ -686,12 +686,13 @@ mod tests {
             Ok(_) => panic!("an empty formal model store must not resolve"),
             Err(error) => error,
         };
-        if cfg!(any(
-            all(target_os = "macos", target_arch = "aarch64"),
-            all(
-                any(target_os = "linux", target_os = "windows"),
-                target_arch = "x86_64"
-            )
+        if cfg!(all(
+            any(
+                target_os = "macos",
+                target_os = "linux",
+                target_os = "windows"
+            ),
+            any(target_arch = "aarch64", target_arch = "x86_64")
         )) {
             assert_eq!(error.code, ToolErrorCode::ModelNotInstalled);
             assert!(

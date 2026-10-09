@@ -329,7 +329,7 @@ allows `--overwrite`.
 
 Important input/output details:
 
-- Transcription, forced alignment and voice cloning support macOS ARM64, Linux x86_64 and Windows x86_64. Transcription uses the native CPU route and accepts `--backend auto` only.
+- Transcription, forced alignment and voice cloning support macOS, Linux and Windows on ARM64 and x86_64. Transcription uses the native CPU route and accepts `--backend auto` only.
   `--text-only` skips alignment and only needs the ASR model. It cannot be
   combined with `-o`; with `--json` the text is inside the run result.
 - Voice cloning takes a 0.5–15 second reference voice and writes mono 24 kHz WAV.

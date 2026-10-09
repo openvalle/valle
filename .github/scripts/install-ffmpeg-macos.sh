@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Intel Homebrew no longer publishes bottles. Build test-only shared libraries on
-# Apple Silicon instead; x264 is linked statically into each FFmpeg installation.
-test "$(uname -m)" = arm64
+# Build test-only shared libraries on the native Intel runner;
+# x264 is linked statically into each FFmpeg installation.
+test "$(uname -m)" = x86_64
 root="$GITHUB_WORKSPACE/target/ci-ffmpeg/x86_64"
 sources="$RUNNER_TEMP/valle-ffmpeg-sources"
 stamp="$(shasum -a 256 "$0" | cut -d ' ' -f 1)"
@@ -17,7 +17,7 @@ download() {
 
 if [ ! -f "$root/.complete" ] || [ "$(cat "$root/.complete")" != "$stamp" ]; then
   sdk="$(xcrun --show-sdk-path)"
-  flags='-arch x86_64 -mmacosx-version-min=15.0'
+  flags='-mmacosx-version-min=15.0'
   jobs="${CARGO_BUILD_JOBS:-2}"
   x264=31e19f92f00c7003fa115047ce50978bc98c3a0d
   download "https://github.com/mirror/x264/archive/$x264.tar.gz" "$sources/x264.tar.gz" \
@@ -26,7 +26,7 @@ if [ ! -f "$root/.complete" ] || [ "$(cat "$root/.complete")" != "$stamp" ]; the
   (
     cd "$sources/x264-$x264"
     CC="$(xcrun -f clang)" ./configure --prefix="$root/x264" \
-      --host=x86_64-apple-darwin --sysroot="$sdk" \
+      --sysroot="$sdk" \
       --extra-cflags="$flags" --extra-ldflags="$flags" \
       --enable-static --enable-pic --disable-cli --disable-asm --disable-opencl
     make -j "$jobs"
@@ -44,11 +44,8 @@ if [ ! -f "$root/.complete" ] || [ "$(cat "$root/.complete")" != "$stamp" ]; the
     tar -xf "$sources/ffmpeg-$version.tar.xz" -C "$sources"
     (
       cd "$sources/ffmpeg-$version"
-      # Disabling only x86asm leaves FFmpeg 7's inline MMX scaling active;
-      # that path corrupts chroma under Rosetta. Use C for these test-only libraries.
       PKG_CONFIG_LIBDIR="$root/x264/lib/pkgconfig" ./configure \
-        --prefix="$prefix" --enable-cross-compile --target-os=darwin \
-        --arch=x86_64 --cc="$(xcrun -f clang)" --sysroot="$sdk" \
+        --prefix="$prefix" --cc="$(xcrun -f clang)" --sysroot="$sdk" \
         --extra-cflags="$flags" --extra-ldflags="$flags" --pkg-config=pkg-config \
         --disable-autodetect --disable-doc --disable-debug --disable-asm \
         --disable-static --enable-shared --enable-gpl --enable-libx264 --enable-zlib

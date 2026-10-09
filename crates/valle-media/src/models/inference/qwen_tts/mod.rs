@@ -10,7 +10,7 @@ use crate::models::spec::{Artifact, Backend, ModelManifest, Route};
 pub use valle_tts::{AudioChunk, ReferenceVoice, SynthesisOptions, SynthesisSummary};
 
 pub const DEFAULT_MODEL_ID: &str = "qwen3-tts-0.6b-base-q8";
-pub const RELEASE_VERSION: &str = "1.0.0";
+pub const RELEASE_VERSION: &str = "1.1.0";
 pub const ADAPTER: &str = "qwen3-tts-voice-cloning";
 pub const SAMPLE_RATE_HZ: u32 = 24_000;
 pub const MAX_REFERENCE_SECONDS: u32 = 15;

@@ -799,13 +799,13 @@ fn minimum_runtime_compatibility(manifest: &ModelManifest, route: &Route) -> Res
                 ("qwen3-asr-transcription", 1) | ("qwen3-forced-alignment", 1)
             ) =>
         {
-            ("valle-asr", "0.1.0")
+            ("valle-asr", "0.2.0")
         }
         Backend::NativeCpu
             if manifest.contract.adapter == "qwen3-tts-voice-cloning"
                 && manifest.contract.version == 1 =>
         {
-            ("valle-tts", "0.1.0")
+            ("valle-tts", "0.2.0")
         }
         _ => {
             return Err(format!(
@@ -1217,28 +1217,28 @@ mod tests {
 
     #[cfg(feature = "model-store")]
     #[test]
-    fn speech_routes_support_the_published_three_platform_matrix() {
+    fn speech_routes_support_the_published_six_platform_matrix() {
         use crate::models::spec::{Architecture, Platform};
 
         for (id, version, feature_enabled) in [
             (
                 "qwen3-asr-0.6b",
-                "1.1.0",
+                "1.2.0",
                 cfg!(feature = "model-qwen-native"),
             ),
             (
                 "qwen3-aligner-0.6b",
-                "1.1.0",
+                "1.2.0",
                 cfg!(feature = "model-qwen-native"),
             ),
             (
                 "qwen3-tts-0.6b-base-q8",
-                "1.0.0",
+                "1.1.0",
                 cfg!(feature = "model-qwen-tts"),
             ),
             (
                 "qwen3-tts-0.6b-base-q4",
-                "1.0.0",
+                "1.1.0",
                 cfg!(feature = "model-qwen-tts"),
             ),
         ] {
@@ -1249,8 +1249,11 @@ mod tests {
             );
             for (platform, architecture) in [
                 (Platform::Macos, Architecture::Aarch64),
+                (Platform::Macos, Architecture::X86_64),
                 (Platform::Linux, Architecture::X86_64),
+                (Platform::Linux, Architecture::Aarch64),
                 (Platform::Windows, Architecture::X86_64),
+                (Platform::Windows, Architecture::Aarch64),
             ] {
                 let environment = Environment {
                     platform,
@@ -1269,25 +1272,6 @@ mod tests {
                     compatible_routes(&manifest, RunBackendPreference::Auto, environment, false)
                         .len(),
                     usize::from(feature_enabled)
-                );
-            }
-            for (platform, architecture) in [
-                (Platform::Macos, Architecture::X86_64),
-                (Platform::Linux, Architecture::Aarch64),
-                (Platform::Windows, Architecture::Aarch64),
-            ] {
-                let environment = Environment {
-                    platform,
-                    architecture,
-                };
-                assert!(
-                    select_install_routes(
-                        &manifest,
-                        InstallBackendSelection::Auto,
-                        environment,
-                        InstallCapabilityPolicy::ArtifactManagement
-                    )
-                    .is_err()
                 );
             }
         }

@@ -20,8 +20,8 @@ use serde::{Deserialize, Serialize};
 
 pub const ASR_MODEL_ID: &str = "qwen3-asr-0.6b";
 pub const ALIGNER_MODEL_ID: &str = "qwen3-aligner-0.6b";
-pub const ASR_RELEASE_VERSION: &str = "1.1.0";
-pub const ALIGNER_RELEASE_VERSION: &str = "1.1.0";
+pub const ASR_RELEASE_VERSION: &str = "1.2.0";
+pub const ALIGNER_RELEASE_VERSION: &str = "1.2.0";
 pub const ASR_ADAPTER: &str = "qwen3-asr-transcription";
 pub const ALIGNER_ADAPTER: &str = "qwen3-forced-alignment";
 pub const CONTRACT_VERSION: u32 = 1;
@@ -891,11 +891,11 @@ mod tests {
     #[test]
     fn both_committed_release_contracts_match_the_shared_adapter() {
         let asr: ModelManifest = serde_json::from_str(include_str!(
-            "../../catalog/release-qwen3-asr-0.6b-1.1.0.json"
+            "../../catalog/release-qwen3-asr-0.6b-1.2.0.json"
         ))
         .unwrap();
         let aligner: ModelManifest = serde_json::from_str(include_str!(
-            "../../catalog/release-qwen3-aligner-0.6b-1.1.0.json"
+            "../../catalog/release-qwen3-aligner-0.6b-1.2.0.json"
         ))
         .unwrap();
         assert_eq!(asr.model.version, ASR_RELEASE_VERSION);
@@ -924,11 +924,11 @@ mod tests {
             .collect();
 
         let asr: ModelManifest = serde_json::from_str(include_str!(
-            "../../catalog/release-qwen3-asr-0.6b-1.1.0.json"
+            "../../catalog/release-qwen3-asr-0.6b-1.2.0.json"
         ))
         .unwrap();
         let aligner: ModelManifest = serde_json::from_str(include_str!(
-            "../../catalog/release-qwen3-aligner-0.6b-1.1.0.json"
+            "../../catalog/release-qwen3-aligner-0.6b-1.2.0.json"
         ))
         .unwrap();
         let asr_route = &asr.routes[0];

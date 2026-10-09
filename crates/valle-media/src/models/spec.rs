@@ -80,6 +80,10 @@ pub const EMBEDDED_RELEASES: &[EmbeddedReleaseSnapshot] = &[
     embedded_release!("qwen3-aligner-0.6b", "1.1.0"),
     embedded_release!("qwen3-tts-0.6b-base-q8", "1.0.0"),
     embedded_release!("qwen3-tts-0.6b-base-q4", "1.0.0"),
+    embedded_release!("qwen3-asr-0.6b", "1.2.0"),
+    embedded_release!("qwen3-aligner-0.6b", "1.2.0"),
+    embedded_release!("qwen3-tts-0.6b-base-q8", "1.1.0"),
+    embedded_release!("qwen3-tts-0.6b-base-q4", "1.1.0"),
 ];
 
 /// Resolve an offline release manifest and verify it against the embedded catalog identity.
@@ -1146,12 +1150,30 @@ mod tests {
                         runtime.starts_with("valle-asr ") || runtime.starts_with("valle-tts ")
                     })
                 {
-                    assert!(
+                    let six_platform_runtime = route
+                        .requirements
+                        .minimum_runtime
+                        .as_deref()
+                        .is_some_and(|runtime| {
+                            matches!(runtime, "valle-asr 0.2.0" | "valle-tts 0.2.0")
+                        });
+                    let published_host = if six_platform_runtime {
+                        matches!(
+                            (route.platforms[0], route.architectures[0]),
+                            (
+                                Platform::Macos | Platform::Linux | Platform::Windows,
+                                Architecture::Aarch64 | Architecture::X86_64
+                            )
+                        )
+                    } else {
                         matches!(
                             (route.platforms[0], route.architectures[0]),
                             (Platform::Macos, Architecture::Aarch64)
                                 | (Platform::Linux | Platform::Windows, Architecture::X86_64)
-                        ),
+                        )
+                    };
+                    assert!(
+                        published_host,
                         "{model}@{version}: {} is outside the published speech crate validation matrix",
                         route.id
                     );

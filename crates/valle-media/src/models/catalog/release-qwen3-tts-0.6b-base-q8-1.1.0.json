@@ -1,0 +1,250 @@
+{
+  "schema_version": 1,
+  "model": {
+    "id": "qwen3-tts-0.6b-base-q8",
+    "version": "1.1.0",
+    "display_name": "Qwen3-TTS 0.6B Base Q8",
+    "task": "speech-synthesis",
+    "description": "Local Chinese/English reference voice cloning with the published valle-tts GGML CPU backend"
+  },
+  "license": {
+    "spdx": "Apache-2.0",
+    "redistribution": "allowed",
+    "files": [
+      {
+        "path": "card/LICENSE",
+        "bytes": 11357,
+        "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+      }
+    ],
+    "notes": [
+      "The pinned valle-tts model catalog declares Apache-2.0. Valle supplies the license text locally."
+    ]
+  },
+  "provenance": {
+    "repository": "https://huggingface.co/Serveurperso/Qwen3-TTS-GGUF",
+    "revision": "b7ee2e8c7459c3bea99da23e3d178125a7d1713c",
+    "weights": [
+      {
+        "id": "qwen-talker-0.6b-base-Q8_0.gguf",
+        "source": "https://huggingface.co/Serveurperso/Qwen3-TTS-GGUF/resolve/b7ee2e8c7459c3bea99da23e3d178125a7d1713c/qwen-talker-0.6b-base-Q8_0.gguf",
+        "bytes": 992615488,
+        "sha256": "d54dbaf10591421fa764ed630d764efa717ae40cd959bd48c66d4eb1af226426"
+      },
+      {
+        "id": "qwen-tokenizer-12hz-Q8_0.gguf",
+        "source": "https://huggingface.co/Serveurperso/Qwen3-TTS-GGUF/resolve/b7ee2e8c7459c3bea99da23e3d178125a7d1713c/qwen-tokenizer-12hz-Q8_0.gguf",
+        "bytes": 291150624,
+        "sha256": "1883beeed99348fc35e23dd225e9082f93f6f8c109330a33d935baa8acdbfd94"
+      }
+    ],
+    "notes": [
+      "The GGUF files and hashes are pinned to the published valle-tts 0.2.0 model catalog."
+    ]
+  },
+  "release": {
+    "state": "ready",
+    "repository": "Serveurperso/Qwen3-TTS-GGUF"
+  },
+  "contract": {
+    "adapter": "qwen3-tts-voice-cloning",
+    "version": 1,
+    "inputs": [
+      {
+        "name": "text",
+        "dtype": "utf8",
+        "layout": "scalar",
+        "shape": [
+          1
+        ],
+        "range": null,
+        "description": "Text to synthesize"
+      },
+      {
+        "name": "reference_audio",
+        "dtype": "f32",
+        "layout": "mono-samples",
+        "shape": [
+          "samples"
+        ],
+        "range": [
+          -1,
+          1
+        ],
+        "description": "Reference voice PCM at 24 kHz"
+      },
+      {
+        "name": "reference_text",
+        "dtype": "utf8",
+        "layout": "scalar",
+        "shape": [
+          1
+        ],
+        "range": null,
+        "description": "Matching reference transcript; empty selects speaker-embedding-only conditioning"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "audio",
+        "dtype": "f32",
+        "layout": "mono-samples",
+        "shape": [
+          "samples"
+        ],
+        "range": null,
+        "description": "Streamed mono PCM at 24 kHz"
+      }
+    ],
+    "preprocess": {
+      "sample_rate": 24000,
+      "channels": 1,
+      "sample_format": "f32",
+      "minimum_reference_seconds": 0.5,
+      "maximum_reference_seconds": 15,
+      "file_decode_owner": "consumer",
+      "resample_owner": "consumer"
+    },
+    "postprocess": {
+      "sample_rate": 24000,
+      "channels": 1,
+      "streaming": true
+    }
+  },
+  "artifacts": [
+    {
+      "id": "gguf-q8",
+      "format": "gguf",
+      "precision": "q8_0",
+      "entrypoint": "qwen-talker-0.6b-base-Q8_0.gguf",
+      "files": [
+        {
+          "path": "qwen-talker-0.6b-base-Q8_0.gguf",
+          "bytes": 992615488,
+          "sha256": "d54dbaf10591421fa764ed630d764efa717ae40cd959bd48c66d4eb1af226426"
+        },
+        {
+          "path": "qwen-tokenizer-12hz-Q8_0.gguf",
+          "bytes": 291150624,
+          "sha256": "1883beeed99348fc35e23dd225e9082f93f6f8c109330a33d935baa8acdbfd94"
+        }
+      ],
+      "metadata": {
+        "runtime": "valle-tts 0.2.0",
+        "codec": "qwen-tokenizer-12hz-Q8_0.gguf",
+        "sample_rate": 24000,
+        "channels": 1
+      }
+    }
+  ],
+  "routes": [
+    {
+      "id": "native-cpu-macos-arm64",
+      "artifact": "gguf-q8",
+      "backend": "native-cpu",
+      "platforms": [
+        "macos"
+      ],
+      "architectures": [
+        "aarch64"
+      ],
+      "status": "verified",
+      "priority": 100,
+      "requirements": {
+        "minimum_os": null,
+        "minimum_runtime": "valle-tts 0.2.0"
+      },
+      "notes": "The published valle-tts 0.2.0 CPU backend validates voice cloning on macOS, Linux and Windows, each on ARM64 and x86_64. x86_64 requires AVX2, FMA and F16C."
+    },
+    {
+      "id": "native-cpu-macos-x86_64",
+      "artifact": "gguf-q8",
+      "backend": "native-cpu",
+      "platforms": [
+        "macos"
+      ],
+      "architectures": [
+        "x86_64"
+      ],
+      "status": "verified",
+      "priority": 100,
+      "requirements": {
+        "minimum_os": null,
+        "minimum_runtime": "valle-tts 0.2.0"
+      },
+      "notes": "The published valle-tts 0.2.0 CPU backend validates voice cloning on macOS, Linux and Windows, each on ARM64 and x86_64. x86_64 requires AVX2, FMA and F16C."
+    },
+    {
+      "id": "native-cpu-linux-x86_64",
+      "artifact": "gguf-q8",
+      "backend": "native-cpu",
+      "platforms": [
+        "linux"
+      ],
+      "architectures": [
+        "x86_64"
+      ],
+      "status": "verified",
+      "priority": 100,
+      "requirements": {
+        "minimum_os": null,
+        "minimum_runtime": "valle-tts 0.2.0"
+      },
+      "notes": "The published valle-tts 0.2.0 CPU backend validates voice cloning on macOS, Linux and Windows, each on ARM64 and x86_64. x86_64 requires AVX2, FMA and F16C."
+    },
+    {
+      "id": "native-cpu-linux-arm64",
+      "artifact": "gguf-q8",
+      "backend": "native-cpu",
+      "platforms": [
+        "linux"
+      ],
+      "architectures": [
+        "aarch64"
+      ],
+      "status": "verified",
+      "priority": 100,
+      "requirements": {
+        "minimum_os": null,
+        "minimum_runtime": "valle-tts 0.2.0"
+      },
+      "notes": "The published valle-tts 0.2.0 CPU backend validates voice cloning on macOS, Linux and Windows, each on ARM64 and x86_64. x86_64 requires AVX2, FMA and F16C."
+    },
+    {
+      "id": "native-cpu-windows-x86_64",
+      "artifact": "gguf-q8",
+      "backend": "native-cpu",
+      "platforms": [
+        "windows"
+      ],
+      "architectures": [
+        "x86_64"
+      ],
+      "status": "verified",
+      "priority": 100,
+      "requirements": {
+        "minimum_os": null,
+        "minimum_runtime": "valle-tts 0.2.0"
+      },
+      "notes": "The published valle-tts 0.2.0 CPU backend validates voice cloning on macOS, Linux and Windows, each on ARM64 and x86_64. x86_64 requires AVX2, FMA and F16C."
+    },
+    {
+      "id": "native-cpu-windows-arm64",
+      "artifact": "gguf-q8",
+      "backend": "native-cpu",
+      "platforms": [
+        "windows"
+      ],
+      "architectures": [
+        "aarch64"
+      ],
+      "status": "verified",
+      "priority": 100,
+      "requirements": {
+        "minimum_os": null,
+        "minimum_runtime": "valle-tts 0.2.0"
+      },
+      "notes": "The published valle-tts 0.2.0 CPU backend validates voice cloning on macOS, Linux and Windows, each on ARM64 and x86_64. x86_64 requires AVX2, FMA and F16C."
+    }
+  ]
+}

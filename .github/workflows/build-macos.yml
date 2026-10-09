@@ -38,8 +38,7 @@ jobs:
   package:
     if: inputs.ci || (github.repository == 'openvalle/valle' && github.ref == 'refs/heads/main')
     name: macOS ${{ inputs.arch }}
-    # Both targets use Apple Silicon; Intel binaries execute through Rosetta.
-    runs-on: macos-15
+    runs-on: ${{ inputs.arch == 'x86_64' && 'macos-15-intel' || 'macos-15' }}
     timeout-minutes: 240
     env:
       MACOSX_DEPLOYMENT_TARGET: '15.0'
@@ -84,8 +83,8 @@ jobs:
         id: dependencies
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          key: rust-build-v1-macos-15-${{ inputs.target }}-${{ steps.environment.outputs.image }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'crates/*/Cargo.toml', 'xtask/Cargo.toml', 'rust-toolchain.toml', '.cargo/config.toml') }}
-          restore-keys: rust-build-v1-macos-15-${{ inputs.target }}-${{ steps.environment.outputs.image }}-
+          key: rust-build-v1-macos-15-${{ inputs.target }}${{ inputs.arch == 'x86_64' && '-native-intel' || '' }}-${{ steps.environment.outputs.image }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'crates/*/Cargo.toml', 'xtask/Cargo.toml', 'rust-toolchain.toml', '.cargo/config.toml') }}
+          restore-keys: rust-build-v1-macos-15-${{ inputs.target }}${{ inputs.arch == 'x86_64' && '-native-intel' || '' }}-${{ steps.environment.outputs.image }}-
           # Keep libraries and build-script outputs; omit test binaries, downloads,
           # and Skia records so Cargo downloads its prebuilt binaries again.
           path: |
@@ -114,11 +113,11 @@ jobs:
         id: ffmpeg
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          key: ffmpeg-build-v1-macos-15-x86_64-${{ steps.environment.outputs.image }}-${{ hashFiles('.github/scripts/install-ffmpeg-macos.sh') }}
+          key: ffmpeg-build-v2-macos-15-native-x86_64-${{ steps.environment.outputs.image }}-${{ hashFiles('.github/scripts/install-ffmpeg-macos.sh') }}
           path: target/ci-ffmpeg/x86_64
       - name: Prepare build tools
         run: |
-          test "$(uname -m)" = arm64
+          test "$(uname -m)" = '${{ inputs.arch }}'
           for attempt in 1 2 3; do
             if brew install pkgconf llvm cmake ninja python 2>&1 | tee -a "$PACKAGE_LOGS/install.log"; then break; fi
             if [ "$attempt" = 3 ]; then exit 1; fi
@@ -126,12 +125,12 @@ jobs:
           done
           echo "LIBCLANG_PATH=$(brew --prefix llvm)/lib" >> "$GITHUB_ENV"
           echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
+          rustup set default-host '${{ inputs.target }}'
           rustup show
+          rustc -vV | tee "$PACKAGE_LOGS/rust-host.txt"
+          grep -Fx 'host: ${{ inputs.target }}' "$PACKAGE_LOGS/rust-host.txt"
           rustup target add '${{ inputs.target }}'
           if [ '${{ inputs.arch }}' = x86_64 ]; then
-            /usr/sbin/softwareupdate --install-rosetta --agree-to-license
-            /usr/bin/arch -x86_64 /usr/bin/true
-            echo 'CARGO_TARGET_X86_64_APPLE_DARWIN_RUNNER=/usr/bin/arch -x86_64' >> "$GITHUB_ENV"
             bash .github/scripts/install-ffmpeg-macos.sh 2>&1 | tee -a "$PACKAGE_LOGS/install.log"
             exit 0
           fi
