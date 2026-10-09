@@ -118,13 +118,23 @@ jobs:
       - name: Prepare build tools
         run: |
           test "$(uname -m)" = '${{ inputs.arch }}'
-          for attempt in 1 2 3; do
-            if brew install pkgconf llvm cmake ninja python 2>&1 | tee -a "$PACKAGE_LOGS/install.log"; then break; fi
-            if [ "$attempt" = 3 ]; then exit 1; fi
-            sleep $((attempt * 5))
-          done
-          echo "LIBCLANG_PATH=$(brew --prefix llvm)/lib" >> "$GITHUB_ENV"
-          echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
+          if [ '${{ inputs.arch }}' = x86_64 ]; then
+            # The Intel image provides these tools; new Homebrew bottles are unavailable.
+            llvm="$(brew --prefix llvm@18)"
+            for tool in pkg-config cmake ninja python3; do "$tool" --version; done
+          else
+            for attempt in 1 2 3; do
+              if brew install pkgconf llvm cmake ninja python 2>&1 | tee -a "$PACKAGE_LOGS/install.log"; then break; fi
+              if [ "$attempt" = 3 ]; then exit 1; fi
+              sleep $((attempt * 5))
+            done
+            llvm="$(brew --prefix llvm)"
+          fi
+          test -x "$llvm/bin/clang"
+          test -f "$llvm/lib/libclang.dylib"
+          echo "LIBCLANG_PATH=$llvm/lib" >> "$GITHUB_ENV"
+          echo "CC_wasm32_unknown_unknown=$llvm/bin/clang" >> "$GITHUB_ENV"
+          echo "$llvm/bin" >> "$GITHUB_PATH"
           rustup set default-host '${{ inputs.target }}'
           rustup show
           rustc -vV | tee "$PACKAGE_LOGS/rust-host.txt"
@@ -169,7 +179,10 @@ jobs:
             rustc -vV
             python3 --version
             bun --version
-            brew list --versions pkgconf llvm cmake ninja
+            clang --version
+            cmake --version
+            ninja --version
+            pkg-config --version
           } | tee "$PACKAGE_LOGS/toolchain.txt"
           brew list --versions > "$PACKAGE_LOGS/homebrew-installed.txt"
           sysctl hw.memsize hw.ncpu > "$PACKAGE_LOGS/runner-resources.txt"
