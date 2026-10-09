@@ -58,8 +58,8 @@ jobs:
         id: dependencies
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          key: rust-build-v1-windows-${{ inputs.target }}-${{ steps.environment.outputs.image }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'crates/*/Cargo.toml', 'xtask/Cargo.toml', 'rust-toolchain.toml', '.cargo/config.toml') }}
-          restore-keys: rust-build-v1-windows-${{ inputs.target }}-${{ steps.environment.outputs.image }}-
+          key: rust-build-v1-windows-${{ inputs.target }}${{ inputs.arch == 'arm64' && '-clang-cl' || '' }}-${{ steps.environment.outputs.image }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'crates/*/Cargo.toml', 'xtask/Cargo.toml', 'rust-toolchain.toml', '.cargo/config.toml') }}
+          restore-keys: rust-build-v1-windows-${{ inputs.target }}${{ inputs.arch == 'arm64' && '-clang-cl' || '' }}-${{ steps.environment.outputs.image }}-
           # Keep libraries and build-script outputs; omit test binaries, downloads,
           # and Skia records so Cargo downloads its prebuilt binaries again.
           path: |
@@ -99,6 +99,14 @@ jobs:
           "LLVM_HOME=$llvm" >> $env:GITHUB_ENV
           "LIBCLANG_PATH=$llvm/bin" >> $env:GITHUB_ENV
           "$llvm/bin" >> $env:GITHUB_PATH
+          if ('${{ inputs.arch }}' -eq 'arm64') {
+            # GGML's portable ARM backend requires Clang when GGML_NATIVE is off.
+            $clang = Join-Path $llvm 'bin/clang-cl.exe'
+            if (!(Test-Path $clang -PathType Leaf)) { throw 'LLVM clang-cl.exe is missing' }
+            "CC_aarch64_pc_windows_msvc=$clang" >> $env:GITHUB_ENV
+            "CXX_aarch64_pc_windows_msvc=$clang" >> $env:GITHUB_ENV
+            "CMAKE_GENERATOR_aarch64_pc_windows_msvc=Ninja" >> $env:GITHUB_ENV
+          }
       - name: Record build environment
         run: |
           rustup set default-host '${{ inputs.target }}'
