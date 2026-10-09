@@ -9,6 +9,10 @@ export async function thirdPartyNotices(repo: string): Promise<string> {
       notices.push(`${path.relative(repo, file)}\n\n${await Bun.file(file).text()}`);
     }
   }
+  const mediaRoot = path.dirname(path.dirname(Bun.resolveSync("mediabunny", path.join(repo, "web/packages/engine"))));
+  // Mediabunny's entry lives under dist/modules/src; retain its license in bundled runtimes too.
+  const mediaLicense = path.resolve(mediaRoot, "../../LICENSE");
+  notices.push(`mediabunny (MPL-2.0) — https://github.com/Vanilagy/mediabunny\n\n${await Bun.file(mediaLicense).text()}`);
   return notices.join("\n\n");
 }
 

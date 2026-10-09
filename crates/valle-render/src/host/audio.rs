@@ -5,8 +5,7 @@ use std::{collections::BTreeMap, sync::Arc};
 use thiserror::Error;
 use valle_engine::{
     render::{
-        CanvasClockError, CompiledAudioChannelMap, CompiledRender, ResourceKind, RuntimeFault,
-        SampleRange,
+        CanvasClockError, CompiledAudioChannelMap, CompiledRender, RuntimeFault, SampleRange,
     },
     resource::ContentDigest,
 };
@@ -84,7 +83,13 @@ impl CompiledAudioMixer {
             return Ok(None);
         }
         let range = SampleRange::new(self.cursor, target)?;
-        let block = self.render.audio().evaluate_block(range)?;
+        let requirements = self
+            .render
+            .audio()
+            .source_requirements(range)?
+            .into_iter()
+            .map(|source| (source.source_index, source))
+            .collect::<BTreeMap<_, _>>();
         let frames = usize::try_from(range.len()).map_err(|_| AudioMixError::Budget)?;
         // The common audio ABI accumulates in f64 in stable track/endpoint/source order and
         // quantizes exactly once after the terminal clamp. Decoder PCM remains f32, but no
@@ -92,33 +97,24 @@ impl CompiledAudioMixer {
         let mut mixed = vec![0.0_f64; frames.checked_mul(2).ok_or(AudioMixError::Budget)?];
         let mut lanes = BTreeMap::<(u32, usize, u32), (ContentDigest, Vec<MixPoint>)>::new();
 
-        for (output, sample) in block.samples().iter().enumerate() {
-            for track in sample.tracks() {
-                for (endpoint_index, endpoint) in track.endpoints().iter().enumerate() {
-                    let resource = endpoint.source().resource().ok_or(
-                        AudioMixError::MissingCompiledResource {
-                            source_index: endpoint.source_index(),
-                        },
-                    )?;
-                    if resource.kind() != ResourceKind::Audio {
-                        return Err(AudioMixError::WrongResourceKind {
-                            source_index: endpoint.source_index(),
-                        });
-                    }
-                    let digest = *resource.digest();
-                    lanes
-                        .entry((track.track_order(), endpoint_index, endpoint.source_index()))
-                        .or_insert_with(|| (digest, Vec::new()))
-                        .1
-                        .push(MixPoint {
-                            output,
-                            source_sample_index: endpoint.source_sample_index(),
-                            left_gain: endpoint.left_gain(),
-                            right_gain: endpoint.right_gain(),
-                        });
-                }
-            }
-        }
+        self.render
+            .audio()
+            .visit_mix_points::<AudioMixError>(range, |point| {
+                let source = requirements
+                    .get(&point.source_index)
+                    .expect("active mix point has a source requirement");
+                lanes
+                    .entry((point.track_order, point.endpoint_index, point.source_index))
+                    .or_insert_with(|| (source.digest, Vec::new()))
+                    .1
+                    .push(MixPoint {
+                        output: point.output,
+                        source_sample_index: point.source_sample_index,
+                        left_gain: point.left_gain,
+                        right_gain: point.right_gain,
+                    });
+                Ok(())
+            })?;
 
         for ((_, _, source_index), (digest, points)) in lanes {
             let channel_map = self
@@ -261,10 +257,6 @@ pub enum AudioMixError {
         actual_rate: u32,
         channels: u16,
     },
-    #[error("compiled audio source {source_index} has no frozen resource")]
-    MissingCompiledResource { source_index: u32 },
-    #[error("compiled source {source_index} did not resolve to audio")]
-    WrongResourceKind { source_index: u32 },
     #[error("compiled audio source {source_index} has no frozen channel map")]
     MissingCompiledChannelMap { source_index: u32 },
     #[error("audio source {source_index} is absent from the Native fulfillment catalog")]
@@ -721,6 +713,70 @@ mod tests {
             *right_requests.lock().expect("right request log poisoned"),
             vec![(2, 4), (0, 1), (0, 2)]
         );
+    }
+
+    #[test]
+    fn direct_pcm_matches_native_goldens_and_sample_evaluation_without_packets() {
+        for (layout, channels) in [("mono", 1_usize), ("stereo", 2_usize)] {
+            let render = audio_render(layout);
+            let program = render.compiled().audio();
+            let (left, right) = pcm_sources(channels as u16);
+            let read = |source: u32, sample: i64| {
+                let input = if source == 0 { &left } else { &right };
+                let offset = sample as usize * channels;
+                Ok([input[offset], input[offset + channels - 1]])
+            };
+            let range = SampleRange::new(0, 8).unwrap();
+            let direct = program.mix_pcm(range, read).unwrap();
+            let (mut native, _, _) = mixer_with_memory_pcm(render.compiled_arc(), 0);
+            let native = native.mix_until_sample(8).unwrap().unwrap();
+            assert_eq!(direct, native.samples);
+            let chunked = [(0, 1), (1, 3), (3, 6), (6, 8)]
+                .into_iter()
+                .flat_map(|(start, end)| {
+                    program
+                        .mix_pcm(SampleRange::new(start, end).unwrap(), read)
+                        .unwrap()
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(chunked, direct);
+            assert_eq!(
+                program
+                    .mix_pcm(SampleRange::new(2, 8).unwrap(), read)
+                    .unwrap(),
+                direct[4..]
+            );
+            assert_eq!(
+                program
+                    .source_requirements(SampleRange::new(0, 3).unwrap())
+                    .unwrap()
+                    .len(),
+                1
+            );
+            assert_eq!(
+                program
+                    .source_requirements(SampleRange::new(3, 5).unwrap())
+                    .unwrap()
+                    .len(),
+                2
+            );
+            program
+                .visit_mix_points::<RuntimeFault>(range, |point| {
+                    let sample = program.evaluate_sample(point.output as i64)?;
+                    let track = sample
+                        .tracks()
+                        .iter()
+                        .find(|track| track.track_order() == point.track_order)
+                        .unwrap();
+                    let endpoint = &track.endpoints()[point.endpoint_index];
+                    assert_eq!(point.source_index, endpoint.source_index());
+                    assert_eq!(point.source_sample_index, endpoint.source_sample_index());
+                    assert_eq!(point.left_gain.to_bits(), endpoint.left_gain().to_bits());
+                    assert_eq!(point.right_gain.to_bits(), endpoint.right_gain().to_bits());
+                    Ok(())
+                })
+                .unwrap();
+        }
     }
 
     #[test]

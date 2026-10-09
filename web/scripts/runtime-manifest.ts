@@ -42,7 +42,7 @@ export async function emitRuntimeManifests(
   dist: string,
   valleBuildVersion: string,
   runtimeProtocolVersion: number,
-  dependencyVersions: { canvasKit: string; mp4box: string },
+  dependencyVersions: { canvasKit: string; mediabunny: string },
 ): Promise<RootRuntimeManifest> {
   if (!valleBuildVersion) throw new Error("Valle runtime build version is required");
   if (!Number.isSafeInteger(runtimeProtocolVersion) || runtimeProtocolVersion <= 0) {
@@ -91,8 +91,8 @@ export async function emitRuntimeManifests(
     spec("canvaskit-glue", "glue", "runtime/canvaskit/canvaskit.js", "BSD-3-Clause", "canvaskit", `npm:canvaskit-wasm@${dependencyVersions.canvasKit}`),
     spec("canvaskit-wasm", "wasm", "runtime/canvaskit/canvaskit.wasm", "BSD-3-Clause", "canvaskit", `npm:canvaskit-wasm@${dependencyVersions.canvasKit}`),
     spec("canvaskit-license", "license", "runtime/licenses/canvaskit.txt", "BSD-3-Clause", undefined, `npm:canvaskit-wasm@${dependencyVersions.canvasKit}`),
-    spec("mp4box-license", "license", "runtime/licenses/mp4box.txt", "BSD-3-Clause", undefined, `npm:mp4box@${dependencyVersions.mp4box}`),
-    spec("valle-third-party-notices", "license", "runtime/licenses/valle-and-third-party.txt", "Apache-2.0 AND MIT AND ISC AND OFL-1.1 AND CC-BY-4.0"),
+    spec("mediabunny-license", "license", "runtime/licenses/mediabunny.txt", "MPL-2.0", undefined, `npm:mediabunny@${dependencyVersions.mediabunny}`),
+    spec("valle-third-party-notices", "license", "runtime/licenses/valle-and-third-party.txt", "Apache-2.0 AND MIT AND ISC AND OFL-1.1 AND CC-BY-4.0 AND MPL-2.0"),
     ...sharedChunks.map((file, index) => spec(`shared-app-${index}`, "shared", file, "Apache-2.0")),
   ]);
 

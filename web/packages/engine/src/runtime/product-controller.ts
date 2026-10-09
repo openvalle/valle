@@ -17,7 +17,8 @@ import type {
   ResourceManifest,
   TimelineDocument,
 } from "../internal-timeline.ts";
-import { createDecoderRing, keyframeThumbnails, type DecoderRing } from "../media/decoder-ring.ts";
+import { createDecoderRing, keyframeThumbnails, type DecoderRing } from "../media/video-source.ts";
+import { decodeAudioBuffer } from "../media/audio-source.ts";
 import { resolvePlayerRuntimeAssets, type PlayerRuntimeAssets } from "../runtime-assets.ts";
 import { canonicalizeTimelineDocumentWithWasm } from "../compiler.ts";
 import {
@@ -180,40 +181,10 @@ interface CompiledAudioPlayback {
   startSample: number;
 }
 
-export interface AudioBlockWire {
-  renderId: string;
-  sampleRate: number;
-  startSample: number;
-  endSample: number;
-  samples: AudioSampleWire[];
-}
-
-export interface AudioSampleWire {
-  renderId: string;
-  sample: number;
-  sampleTime: string;
-  tracks: Array<{
-    trackOrder: number;
-    endpoints: AudioEndpointWire[];
-  }>;
-}
-
-export interface AudioEndpointWire {
+interface AudioSourceRequirement {
   sourceIndex: number;
-  sourceSampleIndex: number;
-  mappedTime:
-    | { type: "static" }
-    | { type: "exact"; time: string }
-    | { type: "hold-start" }
-    | { type: "hold-end" };
-  digest: string | null;
-  handle: number | null;
+  digest: ContentDigestWire;
   sourceChannels: 1 | 2;
-  crossfadeGain: number;
-  gain: number;
-  pan: number;
-  leftGain: number;
-  rightGain: number;
 }
 
 interface AudioGraph {
@@ -624,6 +595,11 @@ export class BrowserValleWebPlayer {
   durationS(): number {
     const receipt = this.requireRenderReceipt();
     return receipt.sampleCount / receipt.sampleRate;
+  }
+
+  /** The admitted frame/sample schedule, independent of preview resolution and playback clocks. */
+  get renderInfo(): Readonly<ProductRenderReceipt> {
+    return { ...this.requireRenderReceipt() };
   }
 
   lastFrameTimeS(): number {
@@ -1110,7 +1086,7 @@ export class BrowserValleWebPlayer {
     const bytes = await this.fetchAssetBytes(asset);
     this.stats.audioPeaksDecodes += 1;
     const context = new OfflineAudioContext(1, 1, 8000);
-    const decoded = await context.decodeAudioData(bytes.slice().buffer);
+    const decoded = await decodeAudioBuffer({ buffer: bytes }, context);
     const source = decoded.getChannelData(0);
     const peaks = new Float32Array(buckets);
     for (let bucket = 0; bucket < buckets; bucket += 1) {
@@ -1851,6 +1827,7 @@ export class BrowserValleWebPlayer {
     context: BaseAudioContext,
     declaredDigest: ContentDigestWire,
     sourceChannels: 1 | 2,
+    cacheLimit = 2,
   ): Promise<AudioBuffer> {
     const digest = contentDigestHex(declaredDigest, "audio resource digest");
     const key = `${digest}@${context.sampleRate}/${sourceChannels}`;
@@ -1859,7 +1836,7 @@ export class BrowserValleWebPlayer {
       const asset = this.assetByDigest.get(digest);
       if (!asset) throw new Error(`compiled audio resource sha256:${digest} has no browser source`);
       promise = this.fetchAssetBytes(asset, digest)
-        .then((bytes) => context.decodeAudioData(bytes.slice().buffer))
+        .then((bytes) => decodeAudioBuffer({ buffer: bytes }, context))
         .then((buffer) => {
           if (buffer.sampleRate !== context.sampleRate || buffer.numberOfChannels !== sourceChannels) {
             throw new Error(
@@ -1871,7 +1848,7 @@ export class BrowserValleWebPlayer {
       this.audioBuffers.set(key, promise);
       void promise.catch(() => { if (this.audioBuffers.get(key) === promise) this.audioBuffers.delete(key); });
       // Long files are decoded once, but retired sources must not accumulate across the timeline.
-      while (this.audioBuffers.size > 2) this.audioBuffers.delete(this.audioBuffers.keys().next().value!);
+      while (this.audioBuffers.size > Math.max(2, cacheLimit)) this.audioBuffers.delete(this.audioBuffers.keys().next().value!);
     } else {
       this.audioBuffers.delete(key); this.audioBuffers.set(key, promise);
     }
@@ -1898,62 +1875,53 @@ export class BrowserValleWebPlayer {
     ) {
       throw new RangeError(`invalid compiled audio range [${startSample}, ${endSample})`);
     }
+    const engine = this.engine;
+    const renderId = this.renderId;
     const output = context.createBuffer(2, endSample - startSample, program.sampleRate);
     const leftOutput = output.getChannelData(0);
     const rightOutput = output.getChannelData(1);
     const blockSize = 8_192;
     for (let blockStart = startSample; blockStart < endSample; blockStart += blockSize) {
       const blockEnd = Math.min(endSample, blockStart + blockSize);
-      const block = parseAudioBlock(JSON.parse(this.engine.audio_block_json(
-        this.renderId,
-        BigInt(blockStart),
-        BigInt(blockEnd),
+      const requirements = parseAudioSources(JSON.parse(engine.audio_sources_json(
+        renderId, BigInt(blockStart), BigInt(blockEnd),
       )));
-      if (
-        block.renderId !== this.renderId
-        || block.sampleRate !== program.sampleRate
-        || block.startSample !== blockStart
-        || block.endSample !== blockEnd
-        || block.samples.length !== blockEnd - blockStart
-      ) {
-        throw new Error("compiled audio block does not match the active RenderId/range");
+      const unique = new Map<string, AudioSourceRequirement>();
+      for (const source of requirements) {
+        const prior = unique.get(source.digest);
+        if (prior && prior.sourceChannels !== source.sourceChannels) {
+          throw new Error(`audio source ${source.digest} has conflicting source channels`);
+        }
+        unique.set(source.digest, source);
       }
-      const requirements = new Map<string, {
-        declaredDigest: ContentDigestWire;
-        sourceChannels: 1 | 2;
-      }>();
-      for (const sample of block.samples) {
-        for (const track of sample.tracks) {
-          for (const endpoint of track.endpoints) {
-            if (!endpoint.digest) throw new Error(`audio source ${endpoint.sourceIndex} has no admitted digest`);
-            const declaredDigest = contentDigestWire(
-              endpoint.digest,
-              "audio endpoint resource digest",
-            );
-            const digest = declaredDigest.slice("sha256:".length);
-            const prior = requirements.get(digest);
-            if (prior && prior.sourceChannels !== endpoint.sourceChannels) {
-              throw new Error(`audio source sha256:${digest} has conflicting source channels`);
-            }
-            requirements.set(digest, {
-              declaredDigest,
-              sourceChannels: endpoint.sourceChannels,
-            });
-          }
+      const decoded = await Promise.all([...unique.values()].map(async (source) => ({
+        source,
+        buffer: await this.audioBufferForDigest(context, source.digest, source.sourceChannels, unique.size),
+      })));
+      // Decode may outlive a seek/package replacement. Never register PCM into a retired engine.
+      if (this.closed || this.engine !== engine || this.renderId !== renderId) {
+        throw new Error("audio render was superseded by a different render package");
+      }
+      while (this.audioBuffers.size > Math.max(2, unique.size)) {
+        this.audioBuffers.delete(this.audioBuffers.keys().next().value!);
+      }
+      // Register every required plane synchronously before mixing. This also keeps overlapping
+      // play/seek requests safe when the previous block retired one of their cached sources.
+      for (const { source, buffer } of decoded) {
+        if (!engine.has_audio_pcm(renderId, source.digest)) {
+          engine.register_audio_pcm(renderId, source.digest, buffer.getChannelData(0),
+            source.sourceChannels === 2 ? buffer.getChannelData(1) : new Float32Array(0));
         }
       }
-      const decoded = new Map<string, AudioBuffer>();
-      await Promise.all([...requirements].map(async ([digest, requirement]) => {
-        decoded.set(digest, await this.audioBufferForDigest(
-          context,
-          requirement.declaredDigest,
-          requirement.sourceChannels,
-        ));
-      }));
-      const mixed = mixCommonAudioBlockPcm(block, decoded);
-      const outputOffset = blockStart - startSample;
-      leftOutput.set(mixed.left, outputOffset);
-      rightOutput.set(mixed.right, outputOffset);
+      const mixed = engine.mix_audio_pcm(renderId, BigInt(blockStart), BigInt(blockEnd));
+      if (!(mixed instanceof Float32Array) || mixed.length !== (blockEnd - blockStart) * 2) {
+        throw new Error("compiled audio PCM does not match the requested sample range");
+      }
+      const offset = blockStart - startSample;
+      for (let index = 0; index < blockEnd - blockStart; index += 1) {
+        leftOutput[offset + index] = mixed[index * 2]!;
+        rightOutput[offset + index] = mixed[index * 2 + 1]!;
+      }
     }
     return output;
   }
@@ -2403,64 +2371,6 @@ async function fetchBytes(url: string): Promise<Uint8Array> {
   return new Uint8Array(await response.arrayBuffer());
 }
 
-/**
- * Deterministic common-profile PCM mix used by production playback and bit-exact Web goldens.
- * Engine has already frozen effects, gain, pan, and crossfade into each endpoint's left/right
- * gain. This stage only accumulates admitted f32 source PCM in packet order using f64 JavaScript
- * numbers, clamps, and rounds once when assigning the terminal Float32Array.
- */
-export function mixCommonAudioBlockPcm(
-  block: AudioBlockWire,
-  decoded: ReadonlyMap<string, Pick<AudioBuffer, "length" | "numberOfChannels" | "getChannelData">>,
-): { left: Float32Array; right: Float32Array } {
-  const frameCount = block.endSample - block.startSample;
-  if (!Number.isSafeInteger(frameCount) || frameCount < 0 || block.samples.length !== frameCount) {
-    throw new Error("compiled audio block has an invalid sample range");
-  }
-  const leftOutput = new Float32Array(frameCount);
-  const rightOutput = new Float32Array(frameCount);
-  for (let index = 0; index < block.samples.length; index += 1) {
-    const sample = block.samples[index]!;
-    const expectedSample = block.startSample + index;
-    if (sample.renderId !== block.renderId || sample.sample !== expectedSample) {
-      throw new Error(`compiled audio sample identity drift at ${expectedSample}`);
-    }
-    let left = 0;
-    let right = 0;
-    for (const track of sample.tracks) {
-      for (const endpoint of track.endpoints) {
-        const digest = endpoint.digest == null
-          ? null
-          : contentDigestHex(endpoint.digest, "compiled audio endpoint digest");
-        const source = digest ? decoded.get(digest) : undefined;
-        if (!source) throw new Error(`audio source ${endpoint.sourceIndex} is unavailable`);
-        if (source.numberOfChannels !== endpoint.sourceChannels) {
-          throw new Error(
-            `audio source ${endpoint.sourceIndex} channel proof drifted after fulfillment`,
-          );
-        }
-        if (!Number.isSafeInteger(endpoint.sourceSampleIndex)
-          || endpoint.sourceSampleIndex < 0
-          || endpoint.sourceSampleIndex >= source.length) {
-          throw new Error(
-            `compiled audio source sample ${endpoint.sourceSampleIndex} is outside decoded source ${source.length}`,
-          );
-        }
-        const sourceFrame = endpoint.sourceSampleIndex;
-        const sourceLeft = source.getChannelData(0)[sourceFrame] ?? 0;
-        const sourceRight = source.numberOfChannels > 1
-          ? source.getChannelData(1)[sourceFrame] ?? 0
-          : sourceLeft;
-        left += sourceLeft * endpoint.leftGain;
-        right += sourceRight * endpoint.rightGain;
-      }
-    }
-    leftOutput[index] = clamp(left, -1, 1);
-    rightOutput[index] = clamp(right, -1, 1);
-  }
-  return { left: leftOutput, right: rightOutput };
-}
-
 async function videoFrameToRgba(frame: VideoFrame): Promise<{ width: number; height: number; data: Uint8Array }> {
   const width = frame.displayWidth;
   const height = frame.displayHeight;
@@ -2649,35 +2559,20 @@ function parseCompiledAudioProgram(value: unknown): CompiledAudioProgramWire {
   return wire as CompiledAudioProgramWire;
 }
 
-function parseAudioBlock(value: unknown): AudioBlockWire {
-  const wire = record(value, "compiled audio block");
-  if (typeof wire.renderId !== "string" || !Array.isArray(wire.samples)) {
-    throw new TypeError("compiled audio block is malformed");
-  }
-  for (const field of ["sampleRate", "startSample", "endSample"] as const) {
-    if (!Number.isSafeInteger(wire[field])) {
-      throw new TypeError(`compiled audio block ${field} must be a safe integer`);
+function parseAudioSources(value: unknown): AudioSourceRequirement[] {
+  if (!Array.isArray(value)) throw new TypeError("compiled audio sources must be an array");
+  return value.map((entry) => {
+    const source = record(entry, "compiled audio source");
+    if (!Number.isSafeInteger(source.sourceIndex) || source.sourceIndex < 0
+      || (source.sourceChannels !== 1 && source.sourceChannels !== 2)) {
+      throw new TypeError("compiled audio source has invalid index/channels");
     }
-  }
-  for (const [sampleIndex, sampleValue] of wire.samples.entries()) {
-    const sample = record(sampleValue, `compiled audio sample ${sampleIndex}`);
-    if (!Array.isArray(sample.tracks)) {
-      throw new TypeError(`compiled audio sample ${sampleIndex} must contain tracks`);
-    }
-    for (const [trackIndex, trackValue] of sample.tracks.entries()) {
-      const track = record(trackValue, `compiled audio track ${trackIndex}`);
-      if (!Array.isArray(track.endpoints)) {
-        throw new TypeError(`compiled audio track ${trackIndex} must contain endpoints`);
-      }
-      for (const [endpointIndex, endpointValue] of track.endpoints.entries()) {
-        const endpoint = record(endpointValue, `compiled audio endpoint ${endpointIndex}`);
-        if (endpoint.sourceChannels !== 1 && endpoint.sourceChannels !== 2) {
-          throw new TypeError(`compiled audio endpoint ${endpointIndex} has invalid source channels`);
-        }
-      }
-    }
-  }
-  return wire as AudioBlockWire;
+    return {
+      sourceIndex: source.sourceIndex,
+      digest: contentDigestWire(source.digest, "compiled audio source digest"),
+      sourceChannels: source.sourceChannels,
+    };
+  });
 }
 
 class AudioMasterClock {

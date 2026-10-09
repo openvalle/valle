@@ -19,8 +19,10 @@ export interface ProductEngineWire {
   frame_at_seconds(renderId: string, seconds: number): bigint;
   sample_at_seconds(renderId: string, seconds: number): bigint;
   audio_program_json(renderId: string): string;
-  audio_sample_json(renderId: string, sample: bigint): string;
-  audio_block_json(renderId: string, startSample: bigint, endSample: bigint): string;
+  audio_sources_json(renderId: string, startSample: bigint, endSample: bigint): string;
+  has_audio_pcm(renderId: string, digest: string): boolean;
+  register_audio_pcm(renderId: string, digest: string, left: Float32Array, right: Float32Array): void;
+  mix_audio_pcm(renderId: string, startSample: bigint, endSample: bigint): Float32Array;
   compiled_execution_resources_json(renderId: string): string;
   compiled_resource_bytes(
     renderId: string,

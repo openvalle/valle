@@ -19,16 +19,12 @@ use crate::{
     frame::{RenderQuality, RenderSpec},
     prepare::{DeviceRect, PreparedLayer, PreparedSource, PreparedVisualItem},
     product::{BoundTicket, EngineRender, FrameCompiler, LoweredTicket, PreparedTicket},
-    render::{
-        CompiledExecutionResourceKind, EvaluatedAudioSample, MappedSourceTime, SampleRange,
-        VerifiedResourceFacts,
-    },
+    render::{AudioPcmMixError, CompiledExecutionResourceKind, SampleRange},
     resource::{
         ContentDigest, Extent2d, ExternalGeneration, ExternalPixelLayout, OutputBackground,
         OutputSpec, TextureFormat, TextureUsage,
     },
 };
-use valle_timeline::internal::wire::resource::AudioChannelLayoutWire;
 
 const MAX_SCENE3D_PREPARED_CACHE: usize = 128;
 const MAX_SCENE3D_FRAME_CACHE: usize = 64;
@@ -84,48 +80,6 @@ struct Scene3dResourceNeeds {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct AudioSamplePacket {
-    render_id: String,
-    sample: i64,
-    sample_time: valle_timeline::RationalTime,
-    tracks: Vec<AudioTrackPacket>,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct AudioBlockPacket {
-    render_id: String,
-    sample_rate: u32,
-    start_sample: i64,
-    end_sample: i64,
-    samples: Vec<AudioSamplePacket>,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct AudioTrackPacket {
-    track_order: u32,
-    endpoints: Vec<AudioEndpointPacket>,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct AudioEndpointPacket {
-    source_index: u32,
-    source_sample_index: i64,
-    mapped_time: MappedSourceTimePacket,
-    digest: Option<ContentDigest>,
-    handle: Option<u64>,
-    source_channels: u16,
-    crossfade_gain: f64,
-    gain: f64,
-    pan: f64,
-    left_gain: f64,
-    right_gain: f64,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
 struct CompiledExecutionResourcePacket<'a> {
     resource_id: &'a str,
     kind: CompiledExecutionResourceKind,
@@ -133,17 +87,9 @@ struct CompiledExecutionResourcePacket<'a> {
     abi_digest: Option<&'a ContentDigest>,
 }
 
-#[derive(Serialize)]
-#[serde(
-    tag = "type",
-    rename_all = "kebab-case",
-    rename_all_fields = "camelCase"
-)]
-enum MappedSourceTimePacket {
-    Static,
-    Exact { time: valle_timeline::RationalTime },
-    HoldStart,
-    HoldEnd,
+struct DecodedAudioPcm {
+    left: Vec<f32>,
+    right: Vec<f32>, // Empty for mono; the shared mixer duplicates its left channel.
 }
 
 struct GeneratedScene3dFrame {
@@ -188,6 +134,7 @@ pub struct ProductEngine {
         Arc<valle_motion::scene3d::PreparedScene>,
     >,
     scene3d_frames: BTreeMap<ContentDigest, GeneratedScene3dFrame>,
+    audio_pcm: BTreeMap<ContentDigest, DecodedAudioPcm>,
     active_render: Option<EngineRender>,
     compiler: Option<FrameCompiler>,
     tickets: BTreeMap<u32, Ticket>,
@@ -204,6 +151,7 @@ impl ProductEngine {
             scene3d_textures: BTreeMap::new(),
             scene3d_prepared: BTreeMap::new(),
             scene3d_frames: BTreeMap::new(),
+            audio_pcm: BTreeMap::new(),
             active_render: None,
             compiler: None,
             tickets: BTreeMap::new(),
@@ -456,6 +404,7 @@ impl ProductEngine {
         self.scene3d_textures.clear();
         self.scene3d_prepared.clear();
         self.scene3d_frames.clear();
+        self.audio_pcm.clear();
         self.active_render = None;
         self.compiler = None;
         self.tickets.clear();
@@ -481,6 +430,7 @@ impl ProductEngine {
         .map_err(|error| JsError::new(&error))?;
         let render = opened.engine_render();
         self.compiler = Some(render.frame_compiler());
+        self.audio_pcm.clear();
         self.active_render = Some(render);
         self.tickets.clear();
         self.next_ticket = 1;
@@ -573,56 +523,159 @@ impl ProductEngine {
             .map_err(|error| js_error("compiled_resource", error))
     }
 
-    /// Evaluate one output sample from the frozen CompiledAudioProgram.
-    pub fn audio_sample_json(&self, render_id: &str, sample: i64) -> Result<String, JsError> {
-        let render = self.active_render(render_id)?;
-        let evaluated = render
-            .compiled()
-            .audio()
-            .evaluate_sample(sample)
-            .map_err(|error| js_error("audio_sample", error))?;
-        serde_json::to_string(&audio_sample_packet(render.render_id(), &evaluated))
-            .map_err(|error| js_error("audio_sample", error))
-    }
-
-    /// Evaluate a bounded half-open output sample range from the immutable
-    /// CompiledAudioProgram. The cap prevents an untrusted Web caller from
-    /// materializing an unbounded JSON packet in WASM memory.
-    pub fn audio_block_json(
+    /// Small fulfillment list: one record per active source, never one per sample.
+    pub fn audio_sources_json(
         &self,
         render_id: &str,
         start_sample: i64,
         end_sample: i64,
     ) -> Result<String, JsError> {
-        let render = self.active_render(render_id)?;
-        let len = end_sample
-            .checked_sub(start_sample)
-            .ok_or_else(|| JsError::new("[audio_block] sample range length overflowed"))?;
-        if len > MAX_WEB_AUDIO_BLOCK_SAMPLES {
-            return Err(JsError::new(&format!(
-                "[audio_block] range length {len} exceeds {MAX_WEB_AUDIO_BLOCK_SAMPLES}"
-            )));
-        }
-        let range = SampleRange::new(start_sample, end_sample)
-            .map_err(|error| js_error("audio_block", error))?;
-        let evaluated = render
+        let range = self.audio_range(render_id, start_sample, end_sample)?;
+        let sources = self
+            .active_render(render_id)?
             .compiled()
             .audio()
-            .evaluate_block(range)
-            .map_err(|error| js_error("audio_block", error))?;
-        let render_id = render.render_id();
-        serde_json::to_string(&AudioBlockPacket {
-            render_id: render_id.to_string(),
-            sample_rate: render.compiled().canvas().sample_rate(),
-            start_sample,
-            end_sample,
-            samples: evaluated
-                .samples()
-                .iter()
-                .map(|sample| audio_sample_packet(render_id, sample))
-                .collect(),
-        })
-        .map_err(|error| js_error("audio_block", error))
+            .source_requirements(range)
+            .map_err(|error| js_error("audio_sources", error))?;
+        serde_json::to_string(&sources).map_err(|error| js_error("audio_sources", error))
+    }
+
+    pub fn has_audio_pcm(&self, render_id: &str, digest: &str) -> Result<bool, JsError> {
+        self.active_render(render_id)?;
+        let digest =
+            ContentDigest::parse(digest).map_err(|error| js_error("audio_digest", error))?;
+        Ok(self.audio_pcm.contains_key(&digest))
+    }
+
+    /// Copy decoded planes once per admitted resource. Repeated blocks reuse them; opening a
+    /// different render clears this cache, and mixing retires sources no longer in the window.
+    pub fn register_audio_pcm(
+        &mut self,
+        render_id: &str,
+        digest: &str,
+        left: Vec<f32>,
+        right: Vec<f32>,
+    ) -> Result<(), JsError> {
+        let render = self.active_render(render_id)?;
+        let digest =
+            ContentDigest::parse(digest).map_err(|error| js_error("audio_digest", error))?;
+        let sources = render
+            .compiled()
+            .audio()
+            .source_requirements(
+                SampleRange::new(0, render.compiled().canvas().sample_count())
+                    .map_err(|error| js_error("audio_pcm", error))?,
+            )
+            .map_err(|error| js_error("audio_pcm", error))?;
+        let expected = sources
+            .iter()
+            .find(|source| source.digest == digest)
+            .ok_or_else(|| JsError::new("[audio_pcm] resource is not admitted audio"))?;
+        if left.is_empty()
+            || (expected.source_channels == 1 && !right.is_empty())
+            || (expected.source_channels == 2 && left.len() != right.len())
+        {
+            return Err(JsError::new(
+                "[audio_pcm] decoded channel layout does not match admitted audio",
+            ));
+        }
+        self.audio_pcm
+            .insert(digest, DecodedAudioPcm { left, right });
+        Ok(())
+    }
+
+    /// Execute the compact program and return only interleaved stereo f32 PCM.
+    pub fn mix_audio_pcm(
+        &mut self,
+        render_id: &str,
+        start_sample: i64,
+        end_sample: i64,
+    ) -> Result<Vec<f32>, JsError> {
+        let range = self.audio_range(render_id, start_sample, end_sample)?;
+        let render = self.active_render(render_id)?;
+        let program = render.compiled().audio();
+        let sources = program
+            .source_requirements(range)
+            .map_err(|error| js_error("audio_mix", error))?;
+        let mut decoded = vec![None; render.compiled().sources().len()];
+        for source in &sources {
+            let pcm = self.audio_pcm.get(&source.digest).ok_or_else(|| {
+                js_error(
+                    "audio_mix",
+                    AudioPcmMixError::MissingSource {
+                        source_index: source.source_index,
+                    },
+                )
+            })?;
+            if (source.source_channels == 1) != pcm.right.is_empty() {
+                return Err(JsError::new(
+                    "[audio_mix] cached PCM channel layout does not match the source",
+                ));
+            }
+            decoded[source.source_index as usize] = Some(pcm);
+        }
+        let output = program
+            .mix_pcm(range, |source_index, sample| {
+                let pcm = decoded[source_index as usize]
+                    .ok_or(AudioPcmMixError::MissingSource { source_index })?;
+                let index = usize::try_from(sample).map_err(|_| {
+                    AudioPcmMixError::SourceSampleOutOfRange {
+                        source_index,
+                        sample,
+                    }
+                })?;
+                let left =
+                    *pcm.left
+                        .get(index)
+                        .ok_or(AudioPcmMixError::SourceSampleOutOfRange {
+                            source_index,
+                            sample,
+                        })?;
+                let right = if pcm.right.is_empty() {
+                    left
+                } else {
+                    *pcm.right
+                        .get(index)
+                        .ok_or(AudioPcmMixError::SourceSampleOutOfRange {
+                            source_index,
+                            sample,
+                        })?
+                };
+                Ok([left, right])
+            })
+            .map_err(|error| js_error("audio_mix", error))?;
+        let active = sources
+            .iter()
+            .map(|source| source.digest)
+            .collect::<std::collections::BTreeSet<_>>();
+        while self.audio_pcm.len() > active.len().max(2) {
+            let retired = self
+                .audio_pcm
+                .keys()
+                .find(|digest| !active.contains(digest))
+                .copied();
+            if let Some(digest) = retired {
+                self.audio_pcm.remove(&digest);
+            } else {
+                break;
+            }
+        }
+        Ok(output)
+    }
+
+    fn audio_range(&self, render_id: &str, start: i64, end: i64) -> Result<SampleRange, JsError> {
+        let render = self.active_render(render_id)?;
+        if end
+            .checked_sub(start)
+            .is_none_or(|len| len < 0 || len > MAX_WEB_AUDIO_BLOCK_SAMPLES)
+            || start < 0
+            || end > render.compiled().canvas().sample_count()
+        {
+            return Err(JsError::new(
+                "[audio_range] invalid or unbounded audio block",
+            ));
+        }
+        SampleRange::new(start, end).map_err(|error| js_error("audio_range", error))
     }
 
     /// Report the immutable model/texture content that the host still needs for one exact
@@ -1302,64 +1355,6 @@ impl Default for ProductEngine {
     }
 }
 
-fn audio_sample_packet(
-    render_id: valle_timeline::internal::RenderId,
-    evaluated: &EvaluatedAudioSample,
-) -> AudioSamplePacket {
-    AudioSamplePacket {
-        render_id: render_id.to_string(),
-        sample: evaluated.sample(),
-        sample_time: evaluated.sample_time(),
-        tracks: evaluated
-            .tracks()
-            .iter()
-            .map(|track| AudioTrackPacket {
-                track_order: track.track_order(),
-                endpoints: track
-                    .endpoints()
-                    .iter()
-                    .map(|endpoint| {
-                        let resource = endpoint.source().resource();
-                        let source_channels = match resource.map(|resource| resource.facts()) {
-                            Some(VerifiedResourceFacts::Audio { descriptor, .. }) => {
-                                match descriptor.channel_layout {
-                                    AudioChannelLayoutWire::Mono => 1,
-                                    AudioChannelLayoutWire::Stereo => 2,
-                                    AudioChannelLayoutWire::Surround51
-                                    | AudioChannelLayoutWire::Surround71 => unreachable!(
-                                        "audio admission rejects unsupported channel layouts"
-                                    ),
-                                }
-                            }
-                            _ => unreachable!("admitted audio endpoint carries audio facts"),
-                        };
-                        AudioEndpointPacket {
-                            source_index: endpoint.source_index(),
-                            source_sample_index: endpoint.source_sample_index(),
-                            mapped_time: match endpoint.mapped_time() {
-                                MappedSourceTime::Static => MappedSourceTimePacket::Static,
-                                MappedSourceTime::Exact(time) => {
-                                    MappedSourceTimePacket::Exact { time }
-                                }
-                                MappedSourceTime::HoldStart => MappedSourceTimePacket::HoldStart,
-                                MappedSourceTime::HoldEnd => MappedSourceTimePacket::HoldEnd,
-                            },
-                            digest: resource.map(|resource| *resource.digest()),
-                            handle: resource.map(|resource| resource.handle().get()),
-                            source_channels,
-                            crossfade_gain: endpoint.crossfade_gain(),
-                            gain: endpoint.gain(),
-                            pan: endpoint.pan(),
-                            left_gain: endpoint.left_gain(),
-                            right_gain: endpoint.right_gain(),
-                        }
-                    })
-                    .collect(),
-            })
-            .collect(),
-    }
-}
-
 fn open_product_fixed_package(
     fixed_package_manifest_json: &str,
     timeline_json: &str,
@@ -1509,14 +1504,10 @@ mod tests {
             serde_json::from_str(&engine.compiled_execution_resources_json(render_id).unwrap())
                 .unwrap();
         assert_eq!(execution_resources, serde_json::json!([]));
-        let audio_sample: serde_json::Value =
-            serde_json::from_str(&engine.audio_sample_json(render_id, 0).unwrap()).unwrap();
-        assert_eq!(audio_sample["renderId"], render_id);
-        assert_eq!(audio_sample["sample"], 0);
-        let audio_block: serde_json::Value =
-            serde_json::from_str(&engine.audio_block_json(render_id, 0, 3).unwrap()).unwrap();
-        assert_eq!(audio_block["sampleRate"], 48_000);
-        assert_eq!(audio_block["samples"].as_array().unwrap().len(), 3);
+        let sources: serde_json::Value =
+            serde_json::from_str(&engine.audio_sources_json(render_id, 0, 3).unwrap()).unwrap();
+        assert_eq!(sources, serde_json::json!([]));
+        assert_eq!(engine.mix_audio_pcm(render_id, 0, 3).unwrap(), vec![0.0; 6]);
 
         engine.reset();
         let second: serde_json::Value = serde_json::from_str(

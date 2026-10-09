@@ -7,6 +7,7 @@
     ".": "./src/index.ts",
     "./element": "./src/element.ts",
     "./compiler": "./src/compiler.ts",
+    "./export": "./src/export.ts",
     "./runtime-assets": "./src/runtime-assets.ts",
     "./internal": "./src/internal-timeline.ts",
     "./protocol": "./src/generated/protocol.ts",
@@ -14,7 +15,7 @@
   },
   "dependencies": {
     "canvaskit-wasm": "catalog:",
-    "mp4box": "2.4.1"
+    "mediabunny": "1.61.3"
   },
   "peerDependencies": {
     "lit": "3.3.3"

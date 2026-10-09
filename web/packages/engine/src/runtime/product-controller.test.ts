@@ -1,12 +1,7 @@
 import { expect, test } from "bun:test";
 import { BrowserResourceCache } from "./resource-cache.ts";
 
-import {
-  BrowserValleWebPlayer,
-  mixCommonAudioBlockPcm,
-  type AudioBlockWire,
-  type AudioEndpointWire,
-} from "./product-controller.ts";
+import { BrowserValleWebPlayer } from "./product-controller.ts";
 
 const RENDER_ID = "sha256:1111111111111111111111111111111111111111111111111111111111111111";
 const SCENE_DIGEST = `sha256:${"4".repeat(64)}`;
@@ -182,35 +177,41 @@ test("slow preview follows the media clock and still presents the final frame", 
 const LEFT_DIGEST = "1111111111111111111111111111111111111111111111111111111111111111";
 const RIGHT_DIGEST = "2222222222222222222222222222222222222222222222222222222222222222";
 
-test("preview uses native audio decoding without requiring identical PCM bytes", async () => {
+test("preview uses the shared media reader and caches admitted audio without requiring PCM digests", async () => {
   const player = Object.create(BrowserValleWebPlayer.prototype) as any;
-  const encoded = Uint8Array.from([1, 2, 3]);
-  const decoded = { sampleRate: 48000, numberOfChannels: 2 };
-  let decodes = 0;
+  const encoded = new Uint8Array(44 + 16);
+  const view = new DataView(encoded.buffer);
+  const text = (offset: number, value: string) => encoded.set(new TextEncoder().encode(value), offset);
+  text(0, "RIFF"); view.setUint32(4, encoded.length - 8, true); text(8, "WAVEfmt ");
+  view.setUint32(16, 16, true); view.setUint16(20, 1, true); view.setUint16(22, 2, true);
+  view.setUint32(24, 48_000, true); view.setUint32(28, 192_000, true); view.setUint16(32, 4, true);
+  view.setUint16(34, 16, true); text(36, "data"); view.setUint32(40, 16, true);
+  for (let i = 0; i < 4; i++) { view.setInt16(44 + i * 4, 8192, true); view.setInt16(46 + i * 4, -16384, true); }
+  let reads = 0;
+  const decoded = { sampleRate: 48000, numberOfChannels: 2, length: 4,
+    getChannelData: (channel: number) => channels[channel]! };
+  const channels = [new Float32Array(4), new Float32Array(4)];
   Object.assign(player, {
     audioBuffers: new Map(),
     assetByDigest: new Map([[LEFT_DIGEST, { id: "dialogue" }]]),
-    async fetchAssetBytes() { return encoded; },
+    async fetchAssetBytes() { reads++; return encoded; },
   });
   const context = {
     sampleRate: 48000,
-    async decodeAudioData(bytes: ArrayBuffer) {
-      decodes++;
-      expect(new Uint8Array(bytes)).toEqual(encoded);
-      expect(bytes).not.toBe(encoded.buffer); // Native decoding can detach its input.
-      return decoded;
-    },
+    createBuffer: () => decoded,
   } as unknown as BaseAudioContext;
   expect(await player.audioBufferForDigest(context, `sha256:${LEFT_DIGEST}`, 2)).toBe(decoded);
   expect(await player.audioBufferForDigest(context, `sha256:${LEFT_DIGEST}`, 2)).toBe(decoded);
-  expect(decodes).toBe(1);
+  expect(reads).toBe(1);
+  expect([...channels[0]!]).toEqual([0.25, 0.25, 0.25, 0.25]);
+  expect([...channels[1]!]).toEqual([-0.5, -0.5, -0.5, -0.5]);
   await expect(player.audioBufferForDigest(context, `sha256:${LEFT_DIGEST}`, 1)).rejects.toThrow("channels; expected");
-  decoded.sampleRate = 44100;
+  decoded.numberOfChannels = 1;
   player.audioBuffers.clear();
-  await expect(player.audioBufferForDigest(context, `sha256:${LEFT_DIGEST}`, 2)).rejects.toThrow("44100 Hz");
+  await expect(player.audioBufferForDigest(context, `sha256:${LEFT_DIGEST}`, 2)).rejects.toThrow("1 channels; expected");
 });
 
-function pcmBuffer(channels: number[][]): AudioBuffer {
+function pcmBuffer(channels: ReadonlyArray<ArrayLike<number>>): AudioBuffer {
   const data = channels.map((channel) => Float32Array.from(channel));
   return {
     length: data[0]!.length,
@@ -220,122 +221,6 @@ function pcmBuffer(channels: number[][]): AudioBuffer {
     },
   } as AudioBuffer;
 }
-
-function endpoint(
-  sourceIndex: number,
-  sourceSampleIndex: number,
-  leftGain: number,
-  rightGain: number,
-): AudioEndpointWire {
-  const left = sourceIndex === 0;
-  return {
-    sourceIndex,
-    sourceSampleIndex,
-    mappedTime: { type: "exact", time: `${sourceSampleIndex}/4` },
-    digest: `sha256:${left ? LEFT_DIGEST : RIGHT_DIGEST}`,
-    handle: left ? 1 : 2,
-    sourceChannels: 2,
-    crossfadeGain: 1,
-    gain: left ? 0.7 : 0.6,
-    pan: left ? -0.25 : 0.4,
-    leftGain,
-    rightGain,
-  };
-}
-
-function commonAudioGoldenBlock(): AudioBlockWire {
-  const left = (sample: number, crossfade = 1) => endpoint(
-    0,
-    sample,
-    0.004200000000000001 * crossfade,
-    0.0031500000000000005 * crossfade,
-  );
-  const right = (sample: number, crossfade = 1) => endpoint(
-    1,
-    sample,
-    0.108 * crossfade,
-    0.18 * crossfade,
-  );
-  const endpoints = [
-    [left(0)],
-    [left(1)],
-    [left(2)],
-    [left(3), right(0, 0)],
-    [left(4, 0.5), right(0, 0.5)],
-    [left(5, 0), right(1)],
-    [right(2)],
-    [right(3)],
-  ];
-  return {
-    renderId: RENDER_ID,
-    sampleRate: 4,
-    startSample: 0,
-    endSample: endpoints.length,
-    samples: endpoints.map((sampleEndpoints, sample) => ({
-      renderId: RENDER_ID,
-      sample,
-      sampleTime: `${sample}/4`,
-      tracks: [{ trackOrder: 0, endpoints: sampleEndpoints }],
-    })),
-  };
-}
-
-function sliceBlock(block: AudioBlockWire, start: number, end: number): AudioBlockWire {
-  return {
-    ...block,
-    startSample: start,
-    endSample: end,
-    samples: block.samples.slice(start, end),
-  };
-}
-
-function interleavedBits(left: Float32Array, right: Float32Array): number[] {
-  const interleaved = new Float32Array(left.length * 2);
-  for (let index = 0; index < left.length; index += 1) {
-    interleaved[index * 2] = left[index]!;
-    interleaved[index * 2 + 1] = right[index]!;
-  }
-  const view = new DataView(interleaved.buffer);
-  return Array.from(
-    { length: interleaved.length },
-    (_, index) => view.getUint32(index * 4, true),
-  );
-}
-
-test("Web common-profile mixer matches the Native fixed PCM bits and chunk/seek boundaries", () => {
-  const block = commonAudioGoldenBlock();
-  const decoded = new Map([
-    [LEFT_DIGEST, pcmBuffer([
-      [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8],
-      [-0.2, -0.3, -0.4, -0.5, -0.6, -0.7, -0.8, -0.9],
-    ])],
-    [RIGHT_DIGEST, pcmBuffer([
-      [-0.15, -0.25, -0.35, -0.45, -0.55, -0.65, -0.75, -0.85],
-      [0.25, 0.35, 0.45, 0.55, 0.65, 0.75, 0.85, 0.95],
-    ])],
-  ]);
-  const whole = mixCommonAudioBlockPcm(block, decoded);
-  expect(interleavedBits(whole.left, whole.right)).toEqual([
-    0x39dc3372, 0xba252696, 0x3a5c3372, 0xba77b9e1,
-    0x3aa52696, 0xbaa52696, 0x3adc3372, 0xbace703b,
-    0xbbe703b0, 0x3cb0941c, 0xbcdd2f1b, 0x3d810625,
-    0xbd1ad42c, 0x3da5e354, 0xbd4710cb, 0x3dcac083,
-  ]);
-
-  const chunkedLeft: number[] = [];
-  const chunkedRight: number[] = [];
-  for (const [start, end] of [[0, 1], [1, 3], [3, 6], [6, 8]]) {
-    const mixed = mixCommonAudioBlockPcm(sliceBlock(block, start!, end!), decoded);
-    chunkedLeft.push(...mixed.left);
-    chunkedRight.push(...mixed.right);
-  }
-  expect(chunkedLeft).toEqual([...whole.left]);
-  expect(chunkedRight).toEqual([...whole.right]);
-
-  const seek = mixCommonAudioBlockPcm(sliceBlock(block, 2, 8), decoded);
-  expect([...seek.left]).toEqual([...whole.left.slice(2)]);
-  expect([...seek.right]).toEqual([...whole.right.slice(2)]);
-});
 
 test("Shader data textures use verified bytes and raw storage dimensions", async () => {
   const encoded = new Uint8Array([1, 2, 3]);
@@ -459,30 +344,57 @@ test("Scene3D textures share encoded bytes and keep color/data registrations dis
   expect(registered).toEqual([`${SCENE_DIGEST}:color`,`${SCENE_DIGEST}:data`]);
 });
 
-test("compiled audio keeps canonical ContentDigest wire until decode admission", async () => {
-  const block = sliceBlock(commonAudioGoldenBlock(), 0, 1);
+test("compiled audio registers canonical source planes once and accepts only bounded PCM output", async () => {
   const declared: string[] = [];
-  const output = [new Float32Array(1), new Float32Array(1)];
+  const registered: string[] = [];
+  const planes = [new Float32Array([0.1, 0.2]), new Float32Array([-0.2, -0.3])];
+  const decoded = pcmBuffer(planes);
+  const player = Object.create(BrowserValleWebPlayer.prototype) as any;
+  const engine = {
+    audio_sources_json: () => JSON.stringify([{ sourceIndex: 0, digest: `sha256:${LEFT_DIGEST}`, sourceChannels: 2 }]),
+    has_audio_pcm: () => registered.length > 0,
+    register_audio_pcm(_id: string, digest: string, left: Float32Array, right: Float32Array) {
+      registered.push(digest); expect(left).toBe(decoded.getChannelData(0)); expect(right).toBe(decoded.getChannelData(1));
+    },
+    mix_audio_pcm: (_id: string, start: bigint, end: bigint) => {
+      expect(start).toBe(0n); expect(end).toBe(2n);
+      return new Float32Array([0.05, -0.1, 0.1, -0.15]);
+    },
+  };
+  Object.assign(player, {
+    renderId: RENDER_ID, engine, audioBuffers: new Map(),
+    requireCompiledAudioProgram: () => ({ sampleRate: 4, sampleCount: 2 }),
+    async audioBufferForDigest(_context: BaseAudioContext, digest: string) {
+      declared.push(digest); return decoded;
+    },
+  });
+  const context = { sampleRate: 4, createBuffer: (_channels: number, length: number) => pcmBuffer([
+    new Float32Array(length), new Float32Array(length),
+  ]) } as unknown as BaseAudioContext;
+  for (let run = 0; run < 2; run++) {
+    const output = await player.renderCompiledAudioBuffer(context, 0, 2);
+    expect([...output.getChannelData(0)]).toEqual([...new Float32Array([0.05, 0.1])]);
+    expect([...output.getChannelData(1)]).toEqual([...new Float32Array([-0.1, -0.15])]);
+  }
+  expect(declared).toEqual([`sha256:${LEFT_DIGEST}`, `sha256:${LEFT_DIGEST}`]);
+  expect(registered).toEqual([`sha256:${LEFT_DIGEST}`]);
+  engine.mix_audio_pcm = () => new Float32Array(1);
+  await expect(player.renderCompiledAudioBuffer(context, 0, 2)).rejects.toThrow("sample range");
+});
+
+test("audio decode finishing after package replacement never writes into the retired engine", async () => {
   const player = Object.create(BrowserValleWebPlayer.prototype) as any;
   Object.assign(player, {
     renderId: RENDER_ID,
-    engine: { audio_block_json: () => JSON.stringify(block) },
-    requireCompiledAudioProgram: () => ({ sampleRate: 4, sampleCount: 1 }),
-    async audioBufferForDigest(
-      _context: BaseAudioContext,
-      digest: string,
-    ) {
-      declared.push(digest);
-      return pcmBuffer([[0.1], [-0.2]]);
+    engine: {
+      audio_sources_json: () => JSON.stringify([{ sourceIndex: 0, digest: `sha256:${LEFT_DIGEST}`, sourceChannels: 2 }]),
+      has_audio_pcm: () => { throw new Error("retired engine touched"); },
     },
+    requireCompiledAudioProgram: () => ({ sampleRate: 4, sampleCount: 1 }),
+    async audioBufferForDigest() { player.engine = {}; return pcmBuffer([[0.1], [-0.2]]); },
   });
-  const context = {
-    sampleRate: 4,
-    createBuffer: () => ({ getChannelData: (channel: number) => output[channel]! }),
-  } as unknown as BaseAudioContext;
-
-  await player.renderCompiledAudioBuffer(context, 0, 1);
-  expect(declared).toEqual([`sha256:${LEFT_DIGEST}`]);
+  const context = { sampleRate: 4, createBuffer: () => pcmBuffer([[0], [0]]) } as unknown as BaseAudioContext;
+  await expect(player.renderCompiledAudioBuffer(context, 0, 1)).rejects.toThrow("superseded");
 });
 
 test("failed render-package staging preserves the last-good runtime", async () => {

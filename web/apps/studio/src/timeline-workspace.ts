@@ -1,4 +1,5 @@
 import { DraftPreview } from "./draft-preview.ts";
+import { bindStudioVideoExport } from "./browser-export.ts";
 import type { StudioSourceEditor } from "./source-editor.ts";
 import type { Timeline, MotionRole } from "valle-engine";
 import { createTimelineCompilerRuntime } from "valle-engine";
@@ -2087,6 +2088,34 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
   }
   syncTransport();
   shell.dispatchIntent({ type: "preview-status", status: previewAvailable ? "ready" : "loading", message: null });
+  bindStudioVideoExport(shell, () => {
+    if (!previewAvailable || shell.shellState.previewStatus !== "ready"
+      || JSON.stringify(config.timeline) !== JSON.stringify(workingCopy)) {
+      throw new Error("Wait for the current preview to finish updating before exporting.");
+    }
+    const replacement = fixedPackageReplacement(config);
+    if (!replacement) throw new Error("The current preview has no render package to export.");
+    const receipt = player.controller?.player?.renderInfo;
+    if (!receipt) throw new Error("The current preview is not ready to export.");
+    return {
+      input: {
+        ...replacement,
+        assets: replacement.assets?.map((asset) => ({ ...asset })),
+        runtimeAssets: config.runtimeAssets,
+        runtimeBaseUrl: config.runtimeBaseUrl ?? location.href,
+        assetBaseUrl: config.assetBaseUrl,
+        proxyBase: config.proxyBase,
+        fonts: config.fonts,
+        gpu: config.gpu,
+      },
+      width: receipt.canvasWidth,
+      height: receipt.canvasHeight,
+      frameRate: receipt.frameRate,
+      durationS: receipt.sampleCount / receipt.sampleRate,
+      sampleRate: receipt.sampleRate,
+      hasAudio: player.hasAudio(),
+    };
+  });
   transport.disabled = !previewAvailable;
   window.addEventListener("beforeunload", (event) => { if (dirty) { event.preventDefault(); event.returnValue = ""; } });
   if (!previewAvailable || sourceEditor?.dirty) scheduleDraftPreview();

@@ -31,6 +31,7 @@ export const ICON_PATHS = {
   copy: "M8 8h13v13H8V8ZM16 8V3H3v13h5",
   check: "m5 12 4 4L19 6",
   save: "M5 4h12l2 2v14H5V4Zm3 0v6h8V4M8 20v-6h8v6",
+  download: "M12 3v12m-5-5 5 5 5-5M4 15v5h16v-5",
 } as const;
 
 export type IconName = keyof typeof ICON_PATHS;

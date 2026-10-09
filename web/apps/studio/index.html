@@ -32,6 +32,11 @@
       <button class="button quiet" id="saveAsTimeline" type="button" hidden>Save as Timeline</button>
       <studio-project-controls id="projectControls"></studio-project-controls>
       <button class="icon-button" id="inspectorToggle" type="button" title="Show / hide inspector (⌥⌘I)" aria-label="Show / hide inspector" aria-pressed="true" data-icon="panel"></button>
+      <span class="top-sep export-sep" aria-hidden="true"></span>
+      <button class="button export-trigger" id="exportVideo" type="button" disabled
+        title="Export video" aria-haspopup="dialog" aria-controls="exportVideoDialog">
+        <span data-icon="download"></span><span>Export</span>
+      </button>
     </div>
   </header>
 
@@ -141,6 +146,110 @@
         <button class="button quiet" id="saveAsTimelineCancel" type="button">Cancel</button>
         <button class="button primary" type="submit">Save Timeline</button>
       </div>
+    </form>
+  </dialog>
+
+  <dialog id="exportVideoDialog" class="studio-dialog export-dialog" data-state="setup"
+    aria-labelledby="exportVideoTitle" aria-describedby="exportVideoStatus">
+    <header class="export-header">
+      <span class="export-state-icon" id="exportVideoIcon" aria-hidden="true"><span data-icon="download"></span></span>
+      <div class="export-heading">
+        <h2 id="exportVideoTitle">Export video</h2>
+        <p id="exportVideoStatus" role="status" aria-live="polite">Choose your settings and save an MP4.</p>
+      </div>
+      <button class="icon-button export-dismiss" id="exportVideoDismiss" type="button" aria-label="Close export" data-icon="close"></button>
+    </header>
+    <form id="exportVideoForm" class="export-form">
+      <div class="export-body">
+        <section class="export-file-card" aria-label="Export details">
+          <div class="export-file-row">
+            <span class="export-file-icon" data-icon="film"></span>
+            <div class="export-file-info">
+              <label id="exportVideoNameLabel" for="exportVideoName">File name</label>
+              <div class="export-name-field" id="exportVideoNameField">
+                <input id="exportVideoName" type="text" required maxlength="180" spellcheck="false"
+                  autocomplete="off" autocapitalize="off" aria-describedby="exportVideoNameHint" />
+                <span aria-hidden="true">.mp4</span>
+              </div>
+              <div class="export-file-name" id="exportVideoFileName" hidden></div>
+            </div>
+          </div>
+          <dl class="export-facts" id="exportVideoFacts" hidden>
+            <div><dt>Resolution</dt><dd id="exportVideoResolution">—</dd></div>
+            <div><dt>Frame rate</dt><dd id="exportVideoFrameRate">—</dd></div>
+            <div><dt>Duration</dt><dd id="exportVideoDuration">—</dd></div>
+            <div><dt>Audio</dt><dd id="exportVideoAudio">—</dd></div>
+            <div><dt>Video bitrate</dt><dd id="exportVideoVideoBitrate">—</dd></div>
+            <div><dt>Audio bitrate</dt><dd id="exportVideoAudioBitrateValue">—</dd></div>
+          </dl>
+        </section>
+        <fieldset class="export-settings" id="exportVideoSettings">
+          <div class="export-section-heading"><h3>Video</h3><span>MP4 · H.264</span></div>
+          <div class="export-settings-grid">
+            <label>Resolution
+              <select id="exportVideoResolutionPreset">
+                <option value="source">Original</option>
+                <option value="2160">4K</option>
+                <option value="1080">1080p</option>
+                <option value="720">720p</option>
+                <option value="480">480p</option>
+              </select>
+            </label>
+            <label>Frame rate
+              <select id="exportVideoFps">
+                <option value="source">Original</option>
+                <option value="24">24 fps</option>
+                <option value="25">25 fps</option>
+                <option value="30">30 fps</option>
+                <option value="50">50 fps</option>
+                <option value="60">60 fps</option>
+              </select>
+            </label>
+            <label class="export-bitrate-field">Video bitrate
+              <span class="export-number-field"><input id="exportVideoBitrate" type="number" min="0.1" max="200" step="0.1" required value="8" /><span>Mbps</span></span>
+            </label>
+            <div class="export-quality-hint"><span id="exportVideoBitrateHint">Suggested: 8 Mbps</span><p>Higher bitrate keeps more detail and creates a larger file.</p></div>
+          </div>
+          <div class="export-audio-heading">
+            <h3>Audio</h3>
+            <label class="export-audio-toggle"><span>Include audio</span><input id="exportVideoIncludeAudio" type="checkbox" role="switch" checked /></label>
+          </div>
+          <div class="export-settings-grid" id="exportVideoAudioSettings">
+            <label>Audio bitrate
+              <select id="exportVideoAudioBitrate">
+                <option value="128000">128 kbps</option>
+                <option value="192000" selected>192 kbps</option>
+                <option value="256000">256 kbps</option>
+                <option value="320000">320 kbps</option>
+              </select>
+            </label>
+            <div class="export-audio-format"><span id="exportVideoAudioFormat">Stereo · 48 kHz</span><p id="exportVideoSourceSummary">Full timeline</p></div>
+          </div>
+        </fieldset>
+        <p class="export-name-hint" id="exportVideoNameHint">Choose where to save in the next step.</p>
+        <section class="export-progress" id="exportVideoProgressGroup" aria-label="Export progress" hidden>
+          <div class="export-progress-heading">
+            <span id="exportVideoPhase">Preparing video</span>
+            <span id="exportVideoPercent" aria-hidden="true">Starting…</span>
+          </div>
+          <progress id="exportVideoProgress" aria-label="Video export progress" max="1"></progress>
+          <div class="export-progress-detail"><span id="exportVideoFrames">Loading your timeline…</span></div>
+        </section>
+        <details class="export-error-details" id="exportVideoErrorDetails" hidden>
+          <summary>Technical details</summary>
+          <pre id="exportVideoError"></pre>
+        </details>
+      </div>
+      <footer class="export-footer">
+        <span class="export-footer-note" id="exportVideoNote">Estimated size —</span>
+        <div class="export-actions">
+          <button class="button quiet" id="exportVideoCancel" type="button">Cancel</button>
+          <button class="button quiet" id="exportVideoClose" type="button" hidden>Close</button>
+          <button class="button primary" id="exportVideoStart" type="submit" autofocus>
+            <span id="exportVideoStartLabel">Export video</span><span data-icon="download"></span>
+          </button>
+        </div>
+      </footer>
     </form>
   </dialog>
 </valle-studio-app>

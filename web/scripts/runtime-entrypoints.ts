@@ -9,6 +9,7 @@ export const PACKAGE_BUILDS = [
     "packages/engine/src/index.ts",
     "packages/engine/src/element.ts",
     "packages/engine/src/compiler.ts",
+    "packages/engine/src/export.ts",
   ]],
 ] as const;
 

@@ -74,12 +74,12 @@ await withBuildDirectory(path.join(root, "dist"), async (dist) => {
   const engineRoot = path.join(root, "packages", "engine");
   const canvasKitRoot = path.dirname(path.dirname(Bun.resolveSync("canvaskit-wasm", engineRoot)));
   await assertCanvasKitBuildVersion(canvasKitRoot);
-  const mp4boxRoot = path.dirname(path.dirname(Bun.resolveSync("mp4box", engineRoot)));
+  const mediabunnyRoot = path.resolve(path.dirname(Bun.resolveSync("mediabunny", engineRoot)), "../../..");
   for (const [source, target] of [
     [path.join(canvasKitRoot, "bin", "canvaskit.js"), "runtime/canvaskit/canvaskit.js"],
     [path.join(canvasKitRoot, "bin", "canvaskit.wasm"), "runtime/canvaskit/canvaskit.wasm"],
     [path.join(canvasKitRoot, "LICENSE"), "runtime/licenses/canvaskit.txt"],
-    [path.join(mp4boxRoot, "LICENSE"), "runtime/licenses/mp4box.txt"],
+    [path.join(mediabunnyRoot, "LICENSE"), "runtime/licenses/mediabunny.txt"],
   ] as const) {
     const destination = path.join(dist, target);
     await mkdir(path.dirname(destination), { recursive: true });
@@ -91,7 +91,7 @@ await withBuildDirectory(path.join(root, "dist"), async (dist) => {
 
   await emitRuntimeManifests(dist, valleBuildVersion, runtimeProtocolVersion, {
     canvasKit: (await Bun.file(path.join(canvasKitRoot, "package.json")).json()).version,
-    mp4box: (await Bun.file(path.join(mp4boxRoot, "package.json")).json()).version,
+    mediabunny: (await Bun.file(path.join(mediabunnyRoot, "package.json")).json()).version,
   });
 
   const outputs = await listFiles(dist);

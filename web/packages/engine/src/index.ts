@@ -21,7 +21,7 @@ export * from "./executor/canvaskit/index.ts";
 
 export * from "./runtime/controller.ts";
 export * from "./controller.ts";
-export { createDecoderRing, keyframeThumbnails } from "./media/decoder-ring.ts";
+export { createDecoderRing, keyframeThumbnails } from "./media/video-source.ts";
 export {
   resolveEngineRuntimeAssets,
   resolvePlayerRuntimeAssets,

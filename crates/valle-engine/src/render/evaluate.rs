@@ -448,7 +448,31 @@ pub(super) fn evaluate_audio_sample(
     sample: i64,
 ) -> Result<EvaluatedAudioSample, RuntimeFault> {
     let composition_time = sample_time(sample, program.sample_rate)?;
-    let mut tracks = Vec::new();
+    let mut tracks: Vec<EvaluatedAudioTrack> = Vec::new();
+    visit_audio_endpoints::<RuntimeFault>(program, sample, |order, _, clip, time, crossfade| {
+        let endpoint = evaluate_audio_endpoint(program, clip, time, crossfade)?;
+        if tracks.last().is_none_or(|track| track.track_order != order) {
+            tracks.push(EvaluatedAudioTrack {
+                track_order: order,
+                endpoints: Vec::new(),
+            });
+        }
+        tracks.last_mut().unwrap().endpoints.push(endpoint);
+        Ok(())
+    })?;
+    Ok(EvaluatedAudioSample {
+        sample,
+        sample_time: composition_time,
+        tracks,
+    })
+}
+
+pub(super) fn visit_audio_endpoints<E: From<RuntimeFault>>(
+    program: &CompiledAudioProgram,
+    sample: i64,
+    mut visit: impl FnMut(u32, usize, &CompiledAudioClip, RationalTime, f64) -> Result<(), E>,
+) -> Result<(), E> {
+    let composition_time = sample_time(sample, program.sample_rate)?;
     for track in &program.tracks {
         let active_crossfade = track.items.iter().find_map(|item| match item {
             CompiledAudioItem::Crossfade { crossfade } if crossfade.window.contains(sample) => {
@@ -456,7 +480,7 @@ pub(super) fn evaluate_audio_sample(
             }
             _ => None,
         });
-        let endpoints = if let Some(crossfade) = active_crossfade {
+        if let Some(crossfade) = active_crossfade {
             let from = audio_clip_at(&track.items, crossfade.from_item)
                 .expect("admitted crossfade left endpoint exists");
             let to = audio_clip_at(&track.items, crossfade.to_item)
@@ -465,35 +489,16 @@ pub(super) fn evaluate_audio_sample(
                 .progress_at(sample)
                 .expect("active admitted crossfade has progress")
                 .as_f64();
-            vec![
-                evaluate_audio_endpoint(program, from, composition_time, 1.0 - progress)?,
-                evaluate_audio_endpoint(program, to, composition_time, progress)?,
-            ]
+            visit(track.order, 0, from, composition_time, 1.0 - progress)?;
+            visit(track.order, 1, to, composition_time, progress)?;
         } else if let Some(clip) = track.items.iter().find_map(|item| match item {
             CompiledAudioItem::Clip { clip } if clip.range.contains(sample) => Some(clip),
             _ => None,
         }) {
-            vec![evaluate_audio_endpoint(
-                program,
-                clip,
-                composition_time,
-                1.0,
-            )?]
-        } else {
-            Vec::new()
-        };
-        if !endpoints.is_empty() {
-            tracks.push(EvaluatedAudioTrack {
-                track_order: track.order,
-                endpoints,
-            });
+            visit(track.order, 0, clip, composition_time, 1.0)?;
         }
     }
-    Ok(EvaluatedAudioSample {
-        sample,
-        sample_time: composition_time,
-        tracks,
-    })
+    Ok(())
 }
 
 fn audio_clip_at(items: &[CompiledAudioItem], index: u32) -> Option<&CompiledAudioClip> {
@@ -509,6 +514,58 @@ fn evaluate_audio_endpoint(
     composition_time: RationalTime,
     crossfade_gain: f64,
 ) -> Result<EvaluatedAudioEndpoint, RuntimeFault> {
+    let mixed = evaluate_audio_mix_endpoint(program, clip, composition_time, crossfade_gain)?;
+    let source = program
+        .sources
+        .source(clip.source)
+        .expect("admitted audio source exists");
+    let sample_time = RationalTime::new(
+        mixed.source_sample_index,
+        source
+            .audio_source_sample_rate()
+            .expect("admitted audio source has a sample rate"),
+    )
+    .map_err(|_| RuntimeFault::ExactTimeOverflow)?;
+    let resource = source
+        .resource_target
+        .map(|target| evaluate_resource_ref(&program.resources, target, "audio/clip"));
+    Ok(EvaluatedAudioEndpoint {
+        source: EvaluatedSourceRef {
+            source_index: clip.source,
+            kind: source.kind,
+            mapped_time: mixed.mapped_time,
+            sample_time,
+            resource,
+            motion_props: None,
+            motion_host: None,
+            motion_resources: BTreeMap::new(),
+            motion_artifact_dependencies: Vec::new(),
+        },
+        source_sample_index: mixed.source_sample_index,
+        crossfade_gain,
+        effect_multiplier: clip.effect_multiplier,
+        gain: mixed.gain,
+        pan: mixed.pan,
+        left_gain: mixed.left_gain,
+        right_gain: mixed.right_gain,
+    })
+}
+
+pub(super) struct AudioMixEndpoint {
+    pub source_sample_index: i64,
+    pub mapped_time: MappedSourceTime,
+    pub gain: f64,
+    pub pan: f64,
+    pub left_gain: f64,
+    pub right_gain: f64,
+}
+
+pub(super) fn evaluate_audio_mix_endpoint(
+    program: &CompiledAudioProgram,
+    clip: &CompiledAudioClip,
+    composition_time: RationalTime,
+    crossfade_gain: f64,
+) -> Result<AudioMixEndpoint, RuntimeFault> {
     let source = program
         .sources
         .source(clip.source)
@@ -531,31 +588,9 @@ fn evaluate_audio_endpoint(
     let right_after_pan = after_effect_and_gain * (1.0 + pan.min(0.0));
     let mapped_time = source.map_time(composition_time)?;
     let source_sample_index = evaluate_source_sample_index(source, mapped_time)?;
-    let sample_time = RationalTime::new(
+    Ok(AudioMixEndpoint {
         source_sample_index,
-        source
-            .audio_source_sample_rate()
-            .expect("admitted audio source has a sample rate"),
-    )
-    .map_err(|_| RuntimeFault::ExactTimeOverflow)?;
-    let resource = source
-        .resource_target
-        .map(|target| evaluate_resource_ref(&program.resources, target, "audio/clip"));
-    Ok(EvaluatedAudioEndpoint {
-        source: EvaluatedSourceRef {
-            source_index: clip.source,
-            kind: source.kind,
-            mapped_time,
-            sample_time,
-            resource,
-            motion_props: None,
-            motion_host: None,
-            motion_resources: BTreeMap::new(),
-            motion_artifact_dependencies: Vec::new(),
-        },
-        source_sample_index,
-        crossfade_gain,
-        effect_multiplier: clip.effect_multiplier,
+        mapped_time,
         gain,
         pan,
         left_gain: left_after_pan * crossfade_gain,

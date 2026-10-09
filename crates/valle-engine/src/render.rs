@@ -10,7 +10,10 @@
 
 mod admission;
 mod audio_gain;
+mod audio_mix;
 mod evaluate;
+
+pub use audio_mix::{AudioMixPoint, AudioPcmMixError, AudioSourceRequirement};
 
 use std::{
     collections::{BTreeMap, BTreeSet},
