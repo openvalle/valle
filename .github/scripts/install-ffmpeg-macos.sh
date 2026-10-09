@@ -44,11 +44,18 @@ if [ ! -f "$root/.complete" ] || [ "$(cat "$root/.complete")" != "$stamp" ]; the
     tar -xf "$sources/ffmpeg-$version.tar.xz" -C "$sources"
     (
       cd "$sources/ffmpeg-$version"
-      PKG_CONFIG_LIBDIR="$root/x264/lib/pkgconfig" ./configure \
+      if ! PKG_CONFIG_LIBDIR="$root/x264/lib/pkgconfig" ./configure \
         --prefix="$prefix" --cc="$(xcrun -f clang)" --sysroot="$sdk" \
         --extra-cflags="$flags" --extra-ldflags="$flags" --pkg-config=pkg-config \
+        --host-cflags="$flags -isysroot $sdk" --host-ldflags="$flags -isysroot $sdk" \
         --disable-autodetect --disable-doc --disable-debug --disable-asm \
-        --disable-static --enable-shared --enable-gpl --enable-libx264 --enable-zlib
+        --disable-static --enable-shared --enable-gpl --enable-libx264 --enable-zlib; then
+        if [ -f ffbuild/config.log ]; then
+          cp ffbuild/config.log "$PACKAGE_LOGS/ffmpeg-config-$version.log"
+          tail -n 80 ffbuild/config.log
+        fi
+        exit 1
+      fi
       make -j "$jobs"
       make install
     )
