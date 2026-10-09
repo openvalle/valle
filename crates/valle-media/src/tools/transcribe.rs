@@ -686,7 +686,13 @@ mod tests {
             Ok(_) => panic!("an empty formal model store must not resolve"),
             Err(error) => error,
         };
-        if cfg!(target_arch = "aarch64") {
+        if cfg!(any(
+            all(target_os = "macos", target_arch = "aarch64"),
+            all(
+                any(target_os = "linux", target_os = "windows"),
+                target_arch = "x86_64"
+            )
+        )) {
             assert_eq!(error.code, ToolErrorCode::ModelNotInstalled);
             assert!(
                 error
@@ -695,7 +701,7 @@ mod tests {
                     .is_some_and(|hint| hint.contains("valle models install qwen3-asr-0.6b"))
             );
         } else {
-            // The Intel route remains unverified, even when legacy weights exist.
+            // Unverified hosts stay unavailable even when legacy weights exist.
             assert_eq!(error.code, ToolErrorCode::NoCompatibleRoute);
         }
     }
