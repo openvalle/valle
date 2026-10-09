@@ -203,6 +203,7 @@ pub(super) fn apply_bloom_into(
     source: &Image,
     source_roi: IRect,
     offset: [i32; 2],
+    output_roi: IRect,
     params: BloomParams,
 ) -> Result<(), DrawError> {
     if !params.threshold.is_finite()
@@ -218,8 +219,7 @@ pub(super) fn apply_bloom_into(
             "invalid GPU bloom parameters".into(),
         ));
     }
-    let dimensions = target.image_info().dimensions();
-    let (width, height) = (dimensions.width, dimensions.height);
+    let (width, height) = (output_roi.width(), output_roi.height());
     if width <= 0 || height <= 0 || i64::from(width) * i64::from(height) > 16_777_216 {
         return Err(DrawError::Unsupported("invalid GPU bloom extent".into()));
     }
@@ -235,6 +235,7 @@ pub(super) fn apply_bloom_into(
             target,
             source_roi,
             offset,
+            output_roi,
             params.radius,
             params.radius,
             |target, offset| {
@@ -256,6 +257,7 @@ pub(super) fn apply_glow_into(
     source: &Image,
     source_roi: IRect,
     offset: [i32; 2],
+    output_roi: IRect,
     params: GlowParams,
 ) -> Result<(), DrawError> {
     if !params.intensity.is_finite()
@@ -267,8 +269,7 @@ pub(super) fn apply_glow_into(
     {
         return Err(DrawError::Unsupported("invalid GPU glow parameters".into()));
     }
-    let dimensions = target.image_info().dimensions();
-    let (width, height) = (dimensions.width, dimensions.height);
+    let (width, height) = (output_roi.width(), output_roi.height());
     if width <= 0 || height <= 0 || i64::from(width) * i64::from(height) > 16_777_216 {
         return Err(DrawError::Unsupported("invalid GPU glow extent".into()));
     }
@@ -284,6 +285,7 @@ pub(super) fn apply_glow_into(
             target,
             source_roi,
             offset,
+            output_roi,
             params.radius,
             params.radius * 2.0,
             |target, offset| {
@@ -304,6 +306,7 @@ fn render_region(
     target: &mut Surface,
     source_roi: IRect,
     offset: [i32; 2],
+    output_roi: IRect,
     radius: f32,
     spread_radius: f32,
     render: impl FnOnce(&mut Surface, [i32; 2]) -> Result<(), DrawError>,
@@ -311,27 +314,39 @@ fn render_region(
     let info = target.image_info();
     let region = PyramidRegion::new(
         [source_roi.width() as u32, source_roi.height() as u32],
-        [info.width() as u32, info.height() as u32],
-        offset,
+        [output_roi.width() as u32, output_roi.height() as u32],
+        [offset[0] - output_roi.left(), offset[1] - output_roi.top()],
         radius,
         spread_radius,
     )
     .map_err(|error| DrawError::Surface(error.to_string()))?;
-    if region.origin == [0, 0] && region.size == [info.width() as u32, info.height() as u32] {
+    if output_roi == IRect::from_size(info.dimensions())
+        && region.origin == [0, 0]
+        && region.size == [info.width() as u32, info.height() as u32]
+    {
         return render(target, offset);
     }
     let mut working = target
         .new_surface(&info.with_dimensions((region.size[0] as i32, region.size[1] as i32)))
         .ok_or_else(|| DrawError::Surface("GPU pyramid working region allocation failed".into()))?;
     render(&mut working, region.input_offset)?;
-    target.canvas().clear(Color4f::new(0.0, 0.0, 0.0, 0.0));
     let mut paint = Paint::default();
     paint.set_blend_mode(BlendMode::Src);
-    target.canvas().draw_image(
+    // Composite the padded pyramid directly into its owned region. Reused slot
+    // capacity must not enlarge the pyramid or require an extra ROI surface.
+    let canvas = target.canvas();
+    let save = canvas.save();
+    canvas.clip_rect(Rect::from(output_roi), None, false);
+    canvas.clear(Color4f::new(0.0, 0.0, 0.0, 0.0));
+    canvas.draw_image(
         &working.image_snapshot(),
-        (region.origin[0] as f32, region.origin[1] as f32),
+        (
+            (output_roi.left() + region.origin[0]) as f32,
+            (output_roi.top() + region.origin[1]) as f32,
+        ),
         Some(&paint),
     );
+    canvas.restore_to_count(save);
     Ok(())
 }
 

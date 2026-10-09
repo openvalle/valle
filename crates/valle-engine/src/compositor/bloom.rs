@@ -249,43 +249,46 @@ fn push_pyramid_pass(
 }
 
 #[derive(Clone)]
-struct Level {
+struct Level<const CHANNELS: usize> {
     width: usize,
     height: usize,
-    pixels: Vec<[f32; 3]>,
+    pixels: Vec<[f32; CHANNELS]>,
 }
 
-impl Level {
+impl<const CHANNELS: usize> Level<CHANNELS> {
     fn empty(width: usize, height: usize) -> Self {
         Self {
             width,
             height,
-            pixels: vec![[0.0; 3]; width * height],
+            pixels: vec![[0.0; CHANNELS]; width * height],
         }
     }
 
-    fn at(&self, x: i32, y: i32) -> [f32; 3] {
+    fn at(&self, x: i32, y: i32) -> [f32; CHANNELS] {
         if x < 0 || y < 0 || x >= self.width as i32 || y >= self.height as i32 {
-            return [0.0; 3];
+            return [0.0; CHANNELS];
         }
         let (x, y) = (x as usize, y as usize);
         self.pixels[y * self.width + x]
     }
 
-    fn bilinear(&self, x: f64, y: f64) -> [f64; 3] {
-        let x0 = x.floor() as i32;
-        let y0 = y.floor() as i32;
-        let fx = x - f64::from(x0);
-        let fy = y - f64::from(y0);
+    fn sample(&self, x: Option<usize>, y: Option<usize>) -> [f32; CHANNELS] {
+        match (x, y) {
+            (Some(x), Some(y)) => self.pixels[y * self.width + x],
+            _ => [0.0; CHANNELS],
+        }
+    }
+
+    fn bilinear(&self, x: LinearAxis, y: LinearAxis) -> [f64; CHANNELS] {
         let weights = [
-            (x0, y0, (1.0 - fx) * (1.0 - fy)),
-            (x0 + 1, y0, fx * (1.0 - fy)),
-            (x0, y0 + 1, (1.0 - fx) * fy),
-            (x0 + 1, y0 + 1, fx * fy),
+            (x.indices[0], y.indices[0], x.weights[0] * y.weights[0]),
+            (x.indices[1], y.indices[0], x.weights[1] * y.weights[0]),
+            (x.indices[0], y.indices[1], x.weights[0] * y.weights[1]),
+            (x.indices[1], y.indices[1], x.weights[1] * y.weights[1]),
         ];
-        let mut value = [0.0; 3];
+        let mut value = [0.0; CHANNELS];
         for (sx, sy, weight) in weights {
-            for (dst, src) in value.iter_mut().zip(self.at(sx, sy)) {
+            for (dst, src) in value.iter_mut().zip(self.sample(sx, sy)) {
                 *dst += f64::from(src) * weight;
             }
         }
@@ -293,9 +296,33 @@ impl Level {
     }
 }
 
+#[derive(Clone, Copy)]
+struct LinearAxis {
+    indices: [Option<usize>; 2],
+    weights: [f64; 2],
+}
+
+impl LinearAxis {
+    fn new(position: f64, extent: usize) -> Self {
+        let lower = position.floor() as i32;
+        let fraction = position - f64::from(lower);
+        Self {
+            indices: [sample_index(lower, extent), sample_index(lower + 1, extent)],
+            weights: [1.0 - fraction, fraction],
+        }
+    }
+}
+
+fn sample_index(position: i32, extent: usize) -> Option<usize> {
+    (position >= 0 && position < extent as i32).then_some(position as usize)
+}
+
 // Pyramid passes write independent rows. Keep each pixel's tap and summation order
 // unchanged so native workers and the single-threaded Web build produce the same F16 bytes.
-fn fill_rows(next: &mut Level, fill: impl Fn(usize, &mut [[f32; 3]]) + Sync) {
+fn fill_rows<const CHANNELS: usize>(
+    next: &mut Level<CHANNELS>,
+    fill: impl Fn(usize, &mut [[f32; CHANNELS]]) + Sync,
+) {
     #[cfg(not(target_family = "wasm"))]
     {
         let width = next.width;
@@ -484,7 +511,7 @@ fn apply_bloom_region_f16(
         return Ok(encode_output(&base));
     }
 
-    let mut bright = Level::empty(output_width as usize, output_height as usize);
+    let mut bright = Level::<3>::empty(output_width as usize, output_height as usize);
     for (dst, pixel) in bright.pixels.iter_mut().zip(&base) {
         let alpha = f64::from(pixel[3]);
         if alpha <= 0.0 {
@@ -553,9 +580,9 @@ fn apply_glow_region_f16(
     if params.radius == 0.0 || params.intensity == 0.0 || params.color[3] == 0.0 {
         return Ok(encode_output(&base));
     }
-    let mut coverage = Level::empty(output_width as usize, output_height as usize);
+    let mut coverage = Level::<1>::empty(output_width as usize, output_height as usize);
     for (target, source) in coverage.pixels.iter_mut().zip(&base) {
-        *target = [source[3]; 3];
+        *target = [source[3]];
     }
     // Keep the level count tied to the authored radius while widening each tent
     // tap to approximate a Gaussian sigma without adding a global coarse tail.
@@ -617,7 +644,11 @@ pub(crate) fn read_base(
     Ok(base)
 }
 
-fn pyramid_halo(bright: Level, depth_radius: f32, spread_radius: f32) -> Result<Level, BloomError> {
+fn pyramid_halo<const CHANNELS: usize>(
+    bright: Level<CHANNELS>,
+    depth_radius: f32,
+    spread_radius: f32,
+) -> Result<Level<CHANNELS>, BloomError> {
     let graph = PyramidGraph::new(
         u32::try_from(bright.width).map_err(|_| BloomError::InvalidImage)?,
         u32::try_from(bright.height).map_err(|_| BloomError::InvalidImage)?,
@@ -636,7 +667,7 @@ fn pyramid_halo(bright: Level, depth_radius: f32, spread_radius: f32) -> Result<
                 fine,
                 local_weight,
             } => {
-                let up = upsample_9(
+                let mut up = upsample_9(
                     source(coarse),
                     pass.width() as usize,
                     pass.height() as usize,
@@ -644,21 +675,16 @@ fn pyramid_halo(bright: Level, depth_radius: f32, spread_radius: f32) -> Result<
                 );
                 if let Some(fine) = fine {
                     let local = source(fine);
-                    let mut combined = Level::empty(local.width, local.height);
-                    for ((out, local), far) in
-                        combined.pixels.iter_mut().zip(&local.pixels).zip(up.pixels)
-                    {
-                        for channel in 0..3 {
-                            out[channel] = quantize_half(
+                    for (far, local) in up.pixels.iter_mut().zip(&local.pixels) {
+                        for channel in 0..CHANNELS {
+                            far[channel] = quantize_half(
                                 local_weight * f64::from(local[channel])
                                     + (1.0 - local_weight) * f64::from(far[channel]),
                             );
                         }
                     }
-                    combined
-                } else {
-                    up
                 }
+                up
             }
         };
         debug_assert_eq!(
@@ -685,14 +711,14 @@ pub(crate) fn pixel_count(width: u32, height: u32) -> Result<usize, BloomError> 
     Ok(count)
 }
 
-fn downsample_13(source: &Level) -> Level {
+fn downsample_13<const CHANNELS: usize>(source: &Level<CHANNELS>) -> Level<CHANNELS> {
     let mut next = Level::empty(source.width.div_ceil(2), source.height.div_ceil(2));
     let width = next.width;
     fill_rows(&mut next, |start_y, rows| {
         for (row_index, row) in rows.chunks_mut(width).enumerate() {
             let y = start_y + row_index;
             for (x, out) in row.iter_mut().enumerate() {
-                let mut sum = [0.0_f64; 3];
+                let mut sum = [0.0_f64; CHANNELS];
                 let cx = (x * 2 + 1) as i32;
                 let cy = (y * 2 + 1) as i32;
                 for (dx, dy, weight) in DOWN_TAPS {
@@ -707,18 +733,34 @@ fn downsample_13(source: &Level) -> Level {
     next
 }
 
-fn blur_9(source: &Level, spread: f64) -> Level {
+fn blur_9<const CHANNELS: usize>(source: &Level<CHANNELS>, spread: f64) -> Level<CHANNELS> {
     let mut next = Level::empty(source.width, source.height);
+    // Each row/column uses the same taps. Preserve the original round operation,
+    // but perform it once per axis instead of nine times per output pixel.
+    let axes = |extent| {
+        (0..extent)
+            .map(|position| {
+                [-1, 0, 1].map(|tap| {
+                    sample_index(
+                        (position as f64 + f64::from(tap) * spread).round() as i32,
+                        extent,
+                    )
+                })
+            })
+            .collect::<Vec<_>>()
+    };
+    let columns = axes(source.width);
+    let lines = axes(source.height);
     let width = next.width;
     fill_rows(&mut next, |start_y, rows| {
         for (row_index, row) in rows.chunks_mut(width).enumerate() {
             let y = start_y + row_index;
             for (x, out) in row.iter_mut().enumerate() {
-                let mut sum = [0.0_f64; 3];
+                let mut sum = [0.0_f64; CHANNELS];
                 for (dx, dy, weight) in TENT {
-                    let sx = (x as f64 + f64::from(dx) * spread).round() as i32;
-                    let sy = (y as f64 + f64::from(dy) * spread).round() as i32;
-                    for (acc, value) in sum.iter_mut().zip(source.at(sx, sy)) {
+                    let sx = columns[x][(dx + 1) as usize];
+                    let sy = lines[y][(dy + 1) as usize];
+                    for (acc, value) in sum.iter_mut().zip(source.sample(sx, sy)) {
                         *acc += weight * f64::from(value);
                     }
                 }
@@ -729,20 +771,33 @@ fn blur_9(source: &Level, spread: f64) -> Level {
     next
 }
 
-fn upsample_9(source: &Level, width: usize, height: usize, spread: f64) -> Level {
+fn upsample_9<const CHANNELS: usize>(
+    source: &Level<CHANNELS>,
+    width: usize,
+    height: usize,
+    spread: f64,
+) -> Level<CHANNELS> {
     let mut next = Level::empty(width, height);
+    let axes = |extent, source_extent| {
+        (0..extent)
+            .map(|position| {
+                let center = (position as f64 + 0.5) * source_extent as f64 / extent as f64 - 0.5;
+                [-1, 0, 1].map(|tap| {
+                    LinearAxis::new(center + f64::from(tap) * 0.5 * spread, source_extent)
+                })
+            })
+            .collect::<Vec<_>>()
+    };
+    let columns = axes(width, source.width);
+    let lines = axes(height, source.height);
     fill_rows(&mut next, |start_y, rows| {
         for (row_index, row) in rows.chunks_mut(width).enumerate() {
             let y = start_y + row_index;
             for (x, out) in row.iter_mut().enumerate() {
-                let sx = (x as f64 + 0.5) * source.width as f64 / width as f64 - 0.5;
-                let sy = (y as f64 + 0.5) * source.height as f64 / height as f64 - 0.5;
-                let mut sum = [0.0_f64; 3];
+                let mut sum = [0.0_f64; CHANNELS];
                 for (dx, dy, weight) in TENT {
-                    let sample = source.bilinear(
-                        sx + f64::from(dx) * 0.5 * spread,
-                        sy + f64::from(dy) * 0.5 * spread,
-                    );
+                    let sample =
+                        source.bilinear(columns[x][(dx + 1) as usize], lines[y][(dy + 1) as usize]);
                     for (acc, value) in sum.iter_mut().zip(sample) {
                         *acc += weight * value;
                     }
@@ -821,6 +876,99 @@ fn round_even(value: u32, shift: u32) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sha2::{Digest, Sha256};
+
+    #[test]
+    fn glow_and_bloom_preserve_reference_f16_bytes() {
+        let mut pixels = Vec::new();
+        for y in 0..13 {
+            for x in 0..19 {
+                let alpha = ((x * 17 + y * 11) % 97) as f32 / 96.0;
+                let red = ((x * 13 + y * 7) % 29) as f32 / 28.0;
+                let blue = ((x * 5 + y * 3) % 11) as f32 / 10.0 - 0.25;
+                pixels.push([
+                    alpha * red * 1.5,
+                    alpha * (0.1 + red * 0.5),
+                    alpha * blue,
+                    alpha,
+                ]);
+            }
+        }
+        let input = encode_output(&pixels);
+        let hash = |output: Vec<u8>| {
+            Sha256::digest(output)
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>()
+        };
+        // Captured from the original three-channel, per-pixel sampling kernel.
+        // Odd dimensions, fractional radii, HDR/negative colors and a clipped
+        // input pin the tap order, transparent borders and F16 quantization.
+        for (radius, glow_hash, bloom_hash) in [
+            (
+                0.0,
+                "d979a904a910241c1531f7670a418e788f2cc56d81304dc9555a428781a6467b",
+                "d979a904a910241c1531f7670a418e788f2cc56d81304dc9555a428781a6467b",
+            ),
+            (
+                0.5,
+                "2930313f6761f65dc5ac4cf225abc3cccb1ba5435eeccafeac9d8ba10d27f2b7",
+                "5ddc958698726fa0652b6089800ca2b66f71c6a9ddc23b9eb58b0fcb511579d1",
+            ),
+            (
+                2.5,
+                "2930313f6761f65dc5ac4cf225abc3cccb1ba5435eeccafeac9d8ba10d27f2b7",
+                "5ddc958698726fa0652b6089800ca2b66f71c6a9ddc23b9eb58b0fcb511579d1",
+            ),
+            (
+                8.25,
+                "37d437708a0541eae5f587386d04ecf6345d6654889f833967d27aa2097c4f2e",
+                "3aca5351bbf0489dfd33817667958d51e866752e00908fa61609c298bd0d50e9",
+            ),
+            (
+                23.5,
+                "b3c5169209c28e8ef56b01fdfa52b5dbd1d0e2148ee567fd42596f757434da08",
+                "3f272f1560b0e41c919dbfe69c422bfd2fe963ce948464d0e8257dd3440397ab",
+            ),
+            (
+                48.0,
+                "373d63ca7450537d3c1181a7a2168f8f2cf6b8da48fa91ccaf883f2af31cfd83",
+                "9fe4cb564f8907f80fb2352977d64c31d2b1ffa24e1447593c01baf69818c1bd",
+            ),
+        ] {
+            let glow = apply_glow_f16(
+                &input,
+                19,
+                13,
+                83,
+                61,
+                [-7, 11],
+                GlowParams {
+                    color: [0.05, 0.4, 0.7, 0.8],
+                    intensity: 0.75,
+                    radius,
+                },
+            )
+            .unwrap();
+            let bloom = apply_bloom_f16(
+                &input,
+                19,
+                13,
+                83,
+                61,
+                [-7, 11],
+                BloomParams {
+                    threshold: 0.25,
+                    knee: 0.15,
+                    intensity: 0.75,
+                    radius,
+                },
+            )
+            .unwrap();
+            assert_eq!(hash(glow), glow_hash, "glow radius {radius}");
+            assert_eq!(hash(bloom), bloom_hash, "bloom radius {radius}");
+        }
+    }
 
     #[test]
     fn offscreen_glow_and_bloom_equal_cropped_larger_outputs() {

@@ -288,7 +288,7 @@ async function run(
     await cdp("Page.navigate", { url: `http://127.0.0.1:${port}/studio` });
     const state = () =>
       evaluate(
-        `(()=>{const app=document.querySelector('valle-studio-app');return {state:app?.shellState,source:document.querySelector('#sourceText')?.value,status:document.querySelector('#sourceStatus')?.textContent,previewStatusClass:document.querySelector('#previewStatus')?.className,compiles:performance.getEntriesByName('valle-studio-compile').length,text:document.body.innerText};})()`,
+        `(()=>{const app=document.querySelector('valle-studio-app');return {state:app?.shellState,source:document.querySelector('#sourceText')?.value,status:document.querySelector('#sourceStatus')?.textContent,previewStatusClass:document.querySelector('#previewStatus')?.className,compiles:performance.getEntriesByName('valle-studio-compile').length,text:document.body?.innerText??""};})()`,
       );
     await poll(
       state,

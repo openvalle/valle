@@ -574,6 +574,7 @@ impl ProgramRuntime {
             extent,
             info,
             target_origin,
+            output_roi,
             cpu_filter_input.as_ref(),
         );
         if let Some(count) = clip {
@@ -596,6 +597,7 @@ impl ProgramRuntime {
         extent: Extent2d,
         info: &ImageInfo,
         target_origin: [i32; 2],
+        output_roi: DeviceRect,
         cpu_filter_input: Option<&ProgramImage>,
     ) -> Result<(), DrawError> {
         match pass {
@@ -754,6 +756,7 @@ impl ProgramRuntime {
                         filter,
                         local_to_device,
                         target_origin,
+                        output_roi,
                         lens_frame,
                     )
                 } else {
@@ -2040,6 +2043,7 @@ fn apply_filter_program_into(
     filter: &Filter,
     local_to_device: [f64; 9],
     target_origin: [i32; 2],
+    output_roi: DeviceRect,
     lens_frame: Option<[f32; 4]>,
 ) -> Result<(), DrawError> {
     let filter = program_filter_in_device_space(filter, local_to_device)?;
@@ -2049,6 +2053,14 @@ fn apply_filter_program_into(
             input.roi.x - target_origin[0],
             input.roi.y - target_origin[1],
         ];
+        let output_bounds = IRect::from_xywh(
+            output_roi.x - target_origin[0],
+            output_roi.y - target_origin[1],
+            i32::try_from(output_roi.width)
+                .map_err(|_| DrawError::Internal("filter ROI width overflow".into()))?,
+            i32::try_from(output_roi.height)
+                .map_err(|_| DrawError::Internal("filter ROI height overflow".into()))?,
+        );
         match &filter {
             Filter::Bloom {
                 threshold,
@@ -2061,6 +2073,7 @@ fn apply_filter_program_into(
                     &input.image,
                     source_roi,
                     offset,
+                    output_bounds,
                     valle_engine::compositor::bloom::BloomParams {
                         threshold: *threshold,
                         knee: *knee,
@@ -2080,6 +2093,7 @@ fn apply_filter_program_into(
                     &input.image,
                     source_roi,
                     offset,
+                    output_bounds,
                     valle_engine::compositor::bloom::GlowParams {
                         color: [color.red, color.green, color.blue, color.alpha],
                         intensity: *intensity,
@@ -2140,7 +2154,14 @@ fn apply_filter_program_into(
         }
     }
     if uses_cpu_f16_filter(&filter) {
-        return apply_f16_filter_program_into(surface, input, target_origin, &filter, lens_frame);
+        return apply_f16_filter_program_into(
+            surface,
+            input,
+            target_origin,
+            output_roi,
+            &filter,
+            lens_frame,
+        );
     }
     apply_filter_chain_program_into(surface, input, std::slice::from_ref(&filter), target_origin)
 }
@@ -2179,6 +2200,7 @@ fn apply_f16_filter_program_into(
     surface: &mut Surface,
     input: &ProgramImage,
     target_origin: [i32; 2],
+    output_roi: DeviceRect,
     filter: &Filter,
     lens_frame: Option<[f32; 4]>,
 ) -> Result<(), DrawError> {
@@ -2206,17 +2228,21 @@ fn apply_f16_filter_program_into(
             copy_started.elapsed().as_secs_f64() * 1_000.0
         );
     }
-    let output_info = surface.image_info();
+    // The bound pass owns only this ROI; pooled surface capacity is not output.
+    let output_info = surface.image_info().with_dimensions((
+        i32::try_from(output_roi.width)
+            .map_err(|_| DrawError::Internal("filter ROI width overflow".into()))?,
+        i32::try_from(output_roi.height)
+            .map_err(|_| DrawError::Internal("filter ROI height overflow".into()))?,
+    ));
     let dimensions = (
         width as u32,
         height as u32,
         output_info.width() as u32,
         output_info.height() as u32,
     );
-    let offset = [
-        input.roi.x - target_origin[0],
-        input.roi.y - target_origin[1],
-    ];
+    let offset = [input.roi.x - output_roi.x, input.roi.y - output_roi.y];
+    let output_origin = [output_roi.x, output_roi.y];
     let kernel_started = std::time::Instant::now();
     let output = match filter {
         Filter::Bloom {
@@ -2266,7 +2292,7 @@ fn apply_f16_filter_program_into(
                 dimensions.2,
                 dimensions.3,
                 offset,
-                target_origin,
+                output_origin,
                 valle_engine::compositor::radial::RadialBlurParams {
                     center: *center,
                     amount: *amount,
@@ -2281,7 +2307,7 @@ fn apply_f16_filter_program_into(
                 dimensions.2,
                 dimensions.3,
                 offset,
-                target_origin,
+                output_origin,
                 valle_engine::compositor::film::FilmGrainParams {
                     seed: *seed,
                     amount: *amount,
@@ -2297,7 +2323,7 @@ fn apply_f16_filter_program_into(
                 dimensions.2,
                 dimensions.3,
                 offset,
-                target_origin,
+                output_origin,
                 valle_engine::compositor::lens::LensDistortionParams {
                     k1: *k1,
                     k2: *k2,
@@ -2312,8 +2338,10 @@ fn apply_f16_filter_program_into(
     .map_err(|error| DrawError::Surface(error.to_string()))?;
     if std::env::var_os("VALLE_TRACE_F16_STAGES").is_some() {
         eprintln!(
-            "[valle f16] cpu-kernel {:.3}ms",
-            kernel_started.elapsed().as_secs_f64() * 1_000.0
+            "[valle f16] cpu-kernel {:.3}ms ({}x{})",
+            kernel_started.elapsed().as_secs_f64() * 1_000.0,
+            dimensions.2,
+            dimensions.3,
         );
     }
     let upload_started = std::time::Instant::now();
@@ -2329,7 +2357,10 @@ fn apply_f16_filter_program_into(
     paint.set_blend_mode(SkBlendMode::Src);
     surface.canvas().draw_image_with_sampling_options(
         &image,
-        (0.0, 0.0),
+        (
+            (output_roi.x - target_origin[0]) as f32,
+            (output_roi.y - target_origin[1]) as f32,
+        ),
         SamplingOptions::default(),
         Some(&paint),
     );
@@ -3404,6 +3435,94 @@ impl From<SurfaceError> for DrawError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn f16_filters_use_owned_roi_in_an_oversized_scratch_surface() {
+        let info = ImageInfo::new(
+            (19, 13),
+            ColorType::RGBAF16,
+            AlphaType::Premul,
+            Some(working_color_space().unwrap()),
+        );
+        let mut source = skia_safe::surfaces::raster(&info, None, None).unwrap();
+        source.canvas().clear(Color4f::new(0.25, 0.1, 0.5, 0.8));
+        let mut paint = SkPaint::default();
+        paint.set_color4f(Color4f::new(0.9, 0.7, 0.2, 1.0), None);
+        source
+            .canvas()
+            .draw_rect(SkRect::from_xywh(3.0, 4.0, 7.0, 5.0), &paint);
+        let input = ProgramImage {
+            image: source.image_snapshot(),
+            roi: DeviceRect::new(-26, 34, 19, 13),
+        };
+        let roi = DeviceRect::new(-19, 23, 83, 61);
+        let read_info = info.with_dimensions((83, 61));
+        // If a padded pyramid processes this whole slot, it exceeds MAX_PIXELS.
+        // The owned ROI must still succeed, independently of pool capacity.
+        let mut large =
+            skia_safe::surfaces::raster(&info.with_dimensions((4096, 4096)), None, None).unwrap();
+        let origin = [-32, 16];
+        let at = (roi.x - origin[0], roi.y - origin[1]);
+        large.canvas().clip_rect(
+            SkRect::from_xywh(
+                at.0 as f32,
+                at.1 as f32,
+                roi.width as f32,
+                roi.height as f32,
+            ),
+            None,
+            false,
+        );
+        for filter in [
+            Filter::Glow {
+                color: valle_draw::program::AuthorColor {
+                    red: 0.2,
+                    green: 0.6,
+                    blue: 0.8,
+                    alpha: 0.8,
+                },
+                intensity: 0.75,
+                radius: 8.25,
+            },
+            Filter::Bloom {
+                threshold: 0.25,
+                knee: 0.15,
+                intensity: 0.75,
+                radius: 8.25,
+            },
+            Filter::RadialBlur {
+                center: [-15.0, 32.0],
+                amount: 8.25,
+            },
+            Filter::FilmGrain {
+                seed: 17,
+                amount: 0.2,
+                size: 2.5,
+            },
+            Filter::LensDistortion {
+                k1: -0.275,
+                k2: 0.125,
+            },
+        ] {
+            let mut small = skia_safe::surfaces::raster(&read_info, None, None).unwrap();
+            let frame = Some([-30.0, 20.0, 40.0, 35.0]);
+            apply_f16_filter_program_into(&mut small, &input, [roi.x, roi.y], roi, &filter, frame)
+                .unwrap();
+            apply_f16_filter_program_into(&mut large, &input, origin, roi, &filter, frame).unwrap();
+            let mut expected = vec![0_u8; 83 * 61 * 8];
+            let mut actual = expected.clone();
+            assert!(small.read_pixels(&read_info, &mut expected, 83 * 8, (0, 0)));
+            assert!(large.read_pixels(&read_info, &mut actual, 83 * 8, at));
+            assert!(
+                expected.iter().any(|byte| *byte != 0),
+                "empty output for {filter:?}"
+            );
+            assert_eq!(
+                actual, expected,
+                "slot capacity or origin changed {filter:?}"
+            );
+        }
+    }
 
     #[test]
     fn instance_round_rect_affine_and_stroke_change_raster() {
