@@ -344,6 +344,15 @@ impl Muxer {
             Inner::V9(inner) => inner.shared_frame_pool().map(Into::into),
         }
     }
+
+    /// Per-export encoder CPU wall timings when VALLE_PERF is enabled.
+    pub fn encoder_timings(&self) -> Option<super::perf::EncoderTimings> {
+        match &self.0 {
+            Inner::V7(inner) => inner.encoder_timings(),
+            Inner::V8(inner) => inner.encoder_timings(),
+            Inner::V9(inner) => inner.encoder_timings(),
+        }
+    }
     pub fn expect_external_audio(&mut self) {
         match &mut self.0 {
             Inner::V7(inner) => inner.expect_external_audio(),

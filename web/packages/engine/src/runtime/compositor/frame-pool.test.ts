@@ -333,11 +333,12 @@ function manualTemplateWorker() {
     emit(message: ProductFrameWorkerResponse) {
       this.onmessage?.({ data: message } as MessageEvent<unknown>);
     },
-    complete(job: Batch["jobs"][number], planPacket: Uint8Array | null, templateHash = RENDER_ID) {
+    complete(job: Batch["jobs"][number], planPacket: Uint8Array | null, templateHash = RENDER_ID, gpuBytes = 0) {
       const {key, renderId, epoch, frame, generation} = job.request;
       this.emit({ protocolVersion: PRODUCT_FRAME_WORKER_PROTOCOL_VERSION, type: "requests", id: job.id,
         stage: { key, renderId, epoch, frame, generation, requestPacket: new Uint8Array(),
           inspectionJson: "{}", evaluatePrepareMs: 0, requestInspectMs: 0,
+          ...(gpuBytes ? { gpuScene3d: { [SCENE_CONTENT]: new Float32Array(gpuBytes / 4) } } : {}),
           workerTurnGapMs: 0, previousReleaseMs: 0 } });
       this.emit({ protocolVersion: PRODUCT_FRAME_WORKER_PROTOCOL_VERSION, type: "ready", id: job.id,
         stage: { key, renderId, epoch, frame, generation, templateHash, planPacket,
@@ -348,6 +349,35 @@ function manualTemplateWorker() {
   };
   return { worker, batches };
 }
+
+const SCENE_CONTENT = `sha256:${"a".repeat(64)}`;
+
+test("ready byte pressure keeps imminent frames, accounts GPU preparation and still serves demand", async () => {
+  const {worker,batches}=manualTemplateWorker();let generation=0n;
+  const pool=new ProductFramePlannerPool({workerUrl:"frame-worker.js",size:1,maxReadyBytes:32,
+    workerFactory:()=>worker,allocateGeneration:()=>++generation});
+  const bootstrap=emptyProductEngineBootstrap("engine.js","engine.wasm","{}","{}","{}","{}");
+  bootstrap.expectedRenderId=RENDER_ID;await pool.init(bootstrap);
+  const input={frame:1,width:1920,height:1080,transparent:false,maxSurfaceBytes:1024n,maxFrameBytes:2048n};
+  try {
+    const near=pool.prefetch(input,1),far=pool.prefetch({...input,frame:100},100);
+    await Promise.resolve();
+    expect(batches[0]!.jobs.map(j=>j.request.frame)).toEqual([1,100]);
+    worker.complete(batches[0]!.jobs[0]!,new Uint8Array(16),RENDER_ID,16);
+    worker.complete(batches[0]!.jobs[1]!,new Uint8Array(16),RENDER_ID,16);
+    await near.ready;await far.ready;
+    expect(pool.snapshot()).toMatchObject({readyBytes:32,readyFrames:1,cancelled:1});
+    expect(pool.prepare(input).key).toBe(near.key);
+    pool.release(near.key);
+    const next=pool.prefetch({...input,frame:2},2);await Promise.resolve();
+    expect(batches.length).toBe(1);
+    pool.prepare({...input,frame:2});await Promise.resolve();
+    expect(batches.length).toBe(2);
+    worker.complete(batches[1]!.jobs[0]!,null);
+    await next.ready;
+    expect(pool.snapshot().errors).toBe(0);
+  } finally {pool.close();}
+});
 
 test("a cancelled prefetch still supplies the template needed by the next seek", async () => {
   const { worker, batches } = manualTemplateWorker();

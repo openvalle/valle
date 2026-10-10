@@ -9,6 +9,9 @@ const WARMUP_FRAMES: usize = 8;
 const RECHECK_FRAMES: usize = 12;
 const COOLDOWN_FRAMES: usize = 96;
 const MINIMUM_EXTRA_BYTES: u64 = 512 * 1024 * 1024;
+// Optional copies of a nearly full reuse cache must fit this conservative retained-data
+// allowance. Other workloads use the device budget and measured throughput probes.
+const REUSE_RESIDENCY_BYTES: u64 = 512 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug)]
 pub(super) struct MetalMemory {
@@ -46,6 +49,12 @@ pub(super) struct QueueSample {
     pub sink_us: u64,
     pub submit_us: u64,
     pub execute_us: u64,
+    /// Current persistent managed surfaces for the sampled context, not a frame delta.
+    pub context_surface_bytes: u64,
+    /// Encoder-owned BGRA surfaces for the bounded pending window, shared by all contexts.
+    pub shared_output_bytes: u64,
+    /// This context's useful opacity-image cache has reached 75% of its bounded capacity.
+    pub reuse_cache_pressure: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -66,6 +75,15 @@ impl Window {
         self.sample.sink_us = self.sample.sink_us.saturating_add(sample.sink_us);
         self.sample.submit_us = self.sample.submit_us.saturating_add(sample.submit_us);
         self.sample.execute_us = self.sample.execute_us.saturating_add(sample.execute_us);
+        self.sample.context_surface_bytes = self
+            .sample
+            .context_surface_bytes
+            .max(sample.context_surface_bytes);
+        self.sample.shared_output_bytes = self
+            .sample
+            .shared_output_bytes
+            .max(sample.shared_output_bytes);
+        self.sample.reuse_cache_pressure |= sample.reuse_cache_pressure;
     }
 
     fn gpu_bound(self) -> bool {
@@ -90,6 +108,21 @@ impl Window {
         let current = u128::from(self.sample.execute_us) * previous.frames as u128;
         let prior = u128::from(previous.sample.execute_us) * self.frames as u128;
         current * 4 >= prior * 3 && current * 4 <= prior * 5
+    }
+
+    fn same_work(self, previous: Self) -> bool {
+        let current = u128::from(
+            self.sample
+                .submit_us
+                .saturating_add(self.sample.gpu_wait_us),
+        ) * previous.frames as u128;
+        let prior = u128::from(
+            previous
+                .sample
+                .submit_us
+                .saturating_add(previous.sample.gpu_wait_us),
+        ) * self.frames as u128;
+        self.comparable(previous) && current * 4 >= prior * 3 && current * 4 <= prior * 5
     }
 }
 
@@ -122,6 +155,7 @@ pub(super) struct AdaptiveQueues {
     window: Window,
     probe: Option<Probe>,
     idle_windows: usize,
+    rejected: Option<(usize, Window)>,
 }
 
 impl AdaptiveQueues {
@@ -135,6 +169,7 @@ impl AdaptiveQueues {
             window: Window::default(),
             probe: None,
             idle_windows: 0,
+            rejected: None,
         }
     }
 
@@ -145,6 +180,7 @@ impl AdaptiveQueues {
         self.probe = None;
         self.window = Window::default();
         self.warmup = WARMUP_FRAMES;
+        self.rejected = None;
     }
 
     fn change(
@@ -234,6 +270,7 @@ impl AdaptiveQueues {
                         return self.change(previous, candidate, "recheck-changing-work");
                     }
                     if !window.improves(reference) {
+                        self.rejected = Some((self.queues, reference));
                         self.cooldown = COOLDOWN_FRAMES;
                         return self.change(previous, previous, "no-throughput-gain");
                     }
@@ -250,6 +287,7 @@ impl AdaptiveQueues {
                         return self.change(candidate, candidate, "confirmed-throughput-gain");
                     }
                     self.cooldown = COOLDOWN_FRAMES;
+                    self.rejected = Some((candidate, window));
                     return self.change(previous, previous, "no-confirmed-throughput-gain");
                 }
             }
@@ -280,10 +318,21 @@ impl AdaptiveQueues {
             // Cover the bounded in-flight window when memory permits. Going
             // through two queues first can thrash temporal caches and does not
             // predict the benefit of three independent frame contexts.
-            let target = (self.queues + 1..=self.maximum)
-                .rev()
-                .find(|&target| memory.is_some_and(|m| m.permits_growth(self.queues, target)));
+            let target = (self.queues + 1..=self.maximum).rev().find(|&target| {
+                memory.is_some_and(|m| {
+                    self.window_fits_contexts(window, target, m.budget)
+                        && m.permits_growth(self.queues, target)
+                        && (!window.sample.reuse_cache_pressure
+                            || self.window_fits_contexts(window, target, REUSE_RESIDENCY_BYTES))
+                })
+            });
             if let Some(target) = target {
+                if self.rejected.is_some_and(|(rejected_target, reference)| {
+                    target <= rejected_target && window.same_work(reference)
+                }) {
+                    return None;
+                }
+                self.rejected = None;
                 self.probe = Some(Probe::Expanded {
                     previous: self.queues,
                     reference: window,
@@ -292,6 +341,15 @@ impl AdaptiveQueues {
             }
         }
         None
+    }
+
+    fn window_fits_contexts(&self, window: Window, target: usize, budget: u64) -> bool {
+        window
+            .sample
+            .context_surface_bytes
+            .saturating_mul(target as u64)
+            .saturating_add(window.sample.shared_output_bytes)
+            <= budget
     }
 }
 
@@ -367,6 +425,84 @@ mod tests {
         assert_eq!(result[0].queues, 1);
         assert_eq!(result[0].reason, "no-throughput-gain");
         assert!(feed(&mut policy, sample(20_000, 12_000), MEMORY).is_empty());
+    }
+
+    #[test]
+    fn failed_probes_wait_for_a_change_in_renderer_work() {
+        let mut policy = AdaptiveQueues::new(3);
+        start_probe(&mut policy, MEMORY);
+        assert_eq!(
+            feed(&mut policy, sample(20_000, 12_000), MEMORY)[0].reason,
+            "no-throughput-gain"
+        );
+        for _ in 0..20 {
+            assert!(feed(&mut policy, sample(20_000, 12_000), MEMORY).is_empty());
+        }
+        // GPU work can change without a different retained node/recording count.
+        assert_eq!(
+            feed(&mut policy, sample(40_000, 30_000), MEMORY)[0].queues,
+            3
+        );
+    }
+
+    #[test]
+    fn persistent_surface_working_set_can_limit_or_prevent_growth() {
+        let mut policy = AdaptiveQueues::new(3);
+        let mut work = sample(20_000, 12_000);
+        let memory = MetalMemory {
+            allocated: 100 * 1024 * 1024,
+            budget: 2500 * 1024 * 1024,
+        };
+        work.context_surface_bytes = 1024 * 1024 * 1024;
+        assert_eq!(feed(&mut policy, work, memory)[0].queues, 2);
+        let mut policy = AdaptiveQueues::new(3);
+        work.context_surface_bytes = 1500 * 1024 * 1024;
+        assert!(feed(&mut policy, work, memory).is_empty());
+        let mut policy = AdaptiveQueues::new(3);
+        work.context_surface_bytes = 1200 * 1024 * 1024;
+        work.shared_output_bytes = 200 * 1024 * 1024;
+        assert!(feed(&mut policy, work, memory).is_empty());
+    }
+
+    #[test]
+    fn cache_headroom_is_not_the_device_working_set_budget() {
+        let mut policy = AdaptiveQueues::new(3);
+        let mut work = sample(20_000, 12_000);
+        work.context_surface_bytes = 200 * 1024 * 1024;
+        work.shared_output_bytes = 100 * 1024 * 1024;
+        // Required surfaces exceed shared cache headroom, but fit the actual device
+        // working-set allowance. Three contexts must remain eligible for a fair probe.
+        assert_eq!(feed(&mut policy, work, MEMORY)[0].queues, 3);
+    }
+
+    #[test]
+    fn pressure_in_reused_images_limits_optional_residency_without_blocking_light_work() {
+        let mut policy = AdaptiveQueues::new(3);
+        let mut work = sample(20_000, 12_000);
+        work.context_surface_bytes = 222 * 1024 * 1024;
+        work.shared_output_bytes = 95 * 1024 * 1024;
+        work.reuse_cache_pressure = true;
+        assert!(feed(&mut policy, work, MEMORY).is_empty());
+        let mut policy = AdaptiveQueues::new(3);
+        work.context_surface_bytes = 128 * 1024 * 1024;
+        assert_eq!(feed(&mut policy, work, MEMORY)[0].queues, 3);
+    }
+
+    #[test]
+    fn a_failed_two_context_probe_does_not_reject_a_larger_available_target() {
+        let mut policy = AdaptiveQueues::new(3);
+        let mut work = sample(20_000, 12_000);
+        work.context_surface_bytes = 3 * 1024 * 1024 * 1024;
+        assert_eq!(feed(&mut policy, work, MEMORY)[0].queues, 2);
+        assert_eq!(
+            feed(&mut policy, work, MEMORY)[0].reason,
+            "no-throughput-gain"
+        );
+        for _ in 0..20 {
+            assert!(feed(&mut policy, work, MEMORY).is_empty());
+        }
+        work.context_surface_bytes = 1024 * 1024 * 1024;
+        assert_eq!(feed(&mut policy, work, MEMORY)[0].queues, 3);
     }
 
     #[test]

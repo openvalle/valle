@@ -855,6 +855,254 @@ pub fn render_scene_without_depth_of_field(
     render_scene_impl(prepared, frame, None, default_raster_workers(), false)
 }
 
+/// Prepare exact CPU coverage, depth, normals and shadow visibility for GPU lighting/DOF.
+/// Uses a temporary ROI plane, then exports only covered pixels and separable camera rays.
+/// No color plane is allocated. Callers admit static opaque procedural meshes before this stage.
+/// Packet v1: version, width, height, mesh count, eye xyz, depth scale; width+height ray xyz;
+/// ROI x/y/width/height, covered count; sorted rows of pixel offset, normal xyz, depth, id,
+/// and two directional-light visibility values.
+pub fn prepare_gpu_lighting_input(
+    prepared: &PreparedScene,
+    frame: &Frame3DState,
+) -> Result<Vec<f32>, ContractErrors> {
+    frame.validate_for(&prepared.scene)?;
+    prepared.budget.validate()?;
+    let camera = Camera::new(frame, prepared.width, prepared.height)?;
+    let rays = PixelRays::new(&camera);
+    let mut depth_scale = 1.0;
+    while camera.far * depth_scale >= 1.0 {
+        depth_scale *= 0.5;
+    }
+    let mut output = vec![
+        1.0,
+        prepared.width as f32,
+        prepared.height as f32,
+        prepared.meshes.len() as f32,
+        camera.eye.x,
+        camera.eye.y,
+        camera.eye.z,
+        depth_scale,
+    ];
+    for value in rays.columns.iter().chain(&rays.rows) {
+        output.extend([value.x, value.y, value.z]);
+    }
+    // The integer coverage/depth stage is inexpensive and defines exact pixel ownership.
+    // Share it with CPU, leaving lighting, transfer functions and all DOF gathers on the GPU.
+    let lights = Lights::new(&prepared.scene, frame, prepared.environment.clone());
+    let mut frame_meshes = Vec::new();
+    let mut shadow_triangles = Vec::new();
+    let mut commands = Vec::new();
+    let mut bounds = [prepared.width, prepared.height, 0, 0];
+    for (mesh_index, (mesh, state)) in prepared.meshes.iter().zip(&frame.meshes).enumerate() {
+        let transform = MeshTransform::new(state.transform);
+        let mut materials = mesh.materials.clone();
+        for m in &mut materials {
+            m.values.apply_values(&state.material);
+        }
+        frame_meshes.push(FrameMesh { mesh, materials });
+        for instance in &mesh.model.instances {
+            let source = mesh.model.meshes[instance.mesh as usize];
+            for primitive in &mesh.model.primitives[source.first_primitive as usize
+                ..(source.first_primitive + source.primitive_count) as usize]
+            {
+                let mut cache = vec![None; primitive.vertex_count as usize];
+                let start = primitive.first_index as usize;
+                for triangle in mesh.model.indices[start..start + primitive.index_count as usize]
+                    .chunks_exact(3)
+                {
+                    let world = std::array::from_fn(|corner| {
+                        let index = triangle[corner];
+                        *cache[(index - primitive.first_vertex) as usize].get_or_insert_with(|| {
+                            transformed_vertex(
+                                mesh.model.vertices[index as usize],
+                                instance.transform,
+                                transform,
+                            )
+                        })
+                    });
+                    if prepared.scene.pbr.shadows {
+                        shadow_triangles.push(shadow::ShadowTriangle {
+                            vertices: world,
+                            mesh_index,
+                            material_index: primitive
+                                .material_index
+                                .map_or(mesh.model.materials.len(), |i| i as usize),
+                        });
+                    }
+                    project_world_triangle(world, &camera, |mut screen| {
+                        let signed = orient_f32(screen[0], screen[1], screen[2]);
+                        if signed.abs() <= 1.0e-8
+                            || (signed > 0.0
+                                && !prepared.scene.meshes[mesh_index]
+                                    .material
+                                    .double_sided
+                                    .unwrap_or(false))
+                        {
+                            return;
+                        }
+                        if signed < 0.0 {
+                            screen.swap(1, 2);
+                        } else {
+                            for v in &mut screen {
+                                v.normal = v.normal * -1.0;
+                            }
+                        }
+                        let fixed = screen.map(|v| FixedPoint {
+                            x: libm::roundf(v.x * SUBPIXEL_SCALE) as i64,
+                            y: libm::roundf(v.y * SUBPIXEL_SCALE) as i64,
+                        });
+                        if orient_fixed(fixed[0], fixed[1], fixed[2]) <= 0 {
+                            return;
+                        }
+                        let x0 = screen
+                            .iter()
+                            .map(|v| v.x)
+                            .fold(f32::INFINITY, f32::min)
+                            .floor()
+                            .max(0.0) as u32;
+                        let y0 = screen
+                            .iter()
+                            .map(|v| v.y)
+                            .fold(f32::INFINITY, f32::min)
+                            .floor()
+                            .max(0.0) as u32;
+                        let x1 = screen
+                            .iter()
+                            .map(|v| v.x)
+                            .fold(f32::NEG_INFINITY, f32::max)
+                            .ceil()
+                            .min(prepared.width as f32 - 1.0)
+                            as u32;
+                        let y1 = screen
+                            .iter()
+                            .map(|v| v.y)
+                            .fold(f32::NEG_INFINITY, f32::max)
+                            .ceil()
+                            .min(prepared.height as f32 - 1.0)
+                            as u32;
+                        if x0 > x1 || y0 > y1 {
+                            return;
+                        }
+                        bounds = [
+                            bounds[0].min(x0),
+                            bounds[1].min(y0),
+                            bounds[2].max(x1 + 1),
+                            bounds[3].max(y1 + 1),
+                        ];
+                        commands.push((screen, fixed, mesh_index as u32 + 1, [x0, y0, x1, y1]));
+                    });
+                }
+            }
+        }
+    }
+    if commands.is_empty() {
+        bounds = [0, 0, 1, 1];
+    }
+    let [left, top, right, bottom] = bounds;
+    let width = (right - left) as usize;
+    let height = (bottom - top) as usize;
+    let mut pixels = vec![[0.0, 0.0, 0.0, CLEAR_DEPTH, 0.0]; width * height];
+    for (vertices, fixed, id, [x0, y0, x1, y1]) in commands {
+        let area = orient_fixed(fixed[0], fixed[1], fixed[2]);
+        let inv_area = 1.0 / area as f32;
+        let top_left = [
+            is_top_left(fixed[1], fixed[2]),
+            is_top_left(fixed[2], fixed[0]),
+            is_top_left(fixed[0], fixed[1]),
+        ];
+        let first = FixedPoint {
+            x: (i64::from(x0) << SUBPIXEL_BITS) + (1 << (SUBPIXEL_BITS - 1)),
+            y: (i64::from(y0) << SUBPIXEL_BITS) + (1 << (SUBPIXEL_BITS - 1)),
+        };
+        let mut row_edge = [
+            orient_fixed(fixed[1], fixed[2], first),
+            orient_fixed(fixed[2], fixed[0], first),
+            orient_fixed(fixed[0], fixed[1], first),
+        ];
+        let step_x = [
+            -(fixed[2].y - fixed[1].y) * SUBPIXEL_STEP,
+            -(fixed[0].y - fixed[2].y) * SUBPIXEL_STEP,
+            -(fixed[1].y - fixed[0].y) * SUBPIXEL_STEP,
+        ];
+        let step_y = [
+            (fixed[2].x - fixed[1].x) * SUBPIXEL_STEP,
+            (fixed[0].x - fixed[2].x) * SUBPIXEL_STEP,
+            (fixed[1].x - fixed[0].x) * SUBPIXEL_STEP,
+        ];
+        for y in y0..=y1 {
+            let mut edge = row_edge;
+            for x in x0..=x1 {
+                let current = edge;
+                for i in 0..3 {
+                    edge[i] += step_x[i];
+                }
+                if current
+                    .iter()
+                    .zip(top_left)
+                    .any(|(v, owns)| *v < 0 || (*v == 0 && !owns))
+                {
+                    continue;
+                }
+                let bary = [
+                    current[0] as f32 * inv_area,
+                    current[1] as f32 * inv_area,
+                    current[2] as f32 * inv_area,
+                ];
+                let sum = bary[0] * vertices[0].inv_z
+                    + bary[1] * vertices[1].inv_z
+                    + bary[2] * vertices[2].inv_z;
+                if sum <= 0.0 {
+                    continue;
+                }
+                let depth = 1.0 / sum;
+                let pixel = &mut pixels[(y - top) as usize * width + (x - left) as usize];
+                if depth > pixel[3]
+                    || (depth == pixel[3] && pixel[4] != 0.0 && id as f32 >= pixel[4])
+                {
+                    continue;
+                }
+                let weights = perspective_weights(bary, vertices, sum);
+                let n = (vertices[0].normal * weights[0]
+                    + vertices[1].normal * weights[1]
+                    + vertices[2].normal * weights[2])
+                    .normalized();
+                *pixel = [n.x, n.y, n.z, depth, id as f32];
+            }
+            for i in 0..3 {
+                row_edge[i] += step_y[i];
+            }
+        }
+    }
+    output.extend([left as f32, top as f32, width as f32, height as f32]);
+    let covered = pixels.iter().filter(|p| p[4] != 0.0).count();
+    output.push(covered as f32);
+    let maps = if prepared.scene.pbr.shadows {
+        shadow::render_maps(&lights.directional, &shadow_triangles, &frame_meshes, 1)
+    } else {
+        Vec::new()
+    };
+    for (i, p) in pixels.iter().enumerate() {
+        if p[4] == 0.0 {
+            continue;
+        }
+        output.push(i as f32);
+        output.extend_from_slice(&p[..4]);
+        output.push(p[4]);
+        let normal = V3::new(p[0], p[1], p[2]);
+        let x = left + i as u32 % width as u32;
+        let y = top + i as u32 / width as u32;
+        let position = camera.eye + rays.at(x, y) * p[3];
+        for light in 0..2 {
+            output.push(
+                maps.get(light)
+                    .and_then(|m| m.as_ref())
+                    .map_or(1.0, |map| map.visibility(position, normal)),
+            );
+        }
+    }
+    Ok(output)
+}
+
 fn render_scene_impl(
     prepared: &PreparedScene,
     frame: &Frame3DState,
@@ -963,56 +1211,77 @@ fn render_scene_impl(
                     .material_index
                     .map_or(mesh.model.materials.len(), |i| i as usize);
                 let start = primitive.first_index as usize;
+                // Static indexed primitives reuse the exact same transformed vertex in
+                // adjacent triangles. Keep the cache local to this instance/primitive/frame;
+                // deformed face normals retain the existing per-triangle path below.
+                let mut transformed_vertices = (instance.skin.is_none()
+                    && instance.weights.is_empty())
+                .then(|| vec![None; primitive.vertex_count as usize]);
                 for triangle in mesh.model.indices[start..start + primitive.index_count as usize]
                     .chunks_exact(3)
                 {
-                    let mut local = std::array::from_fn(|corner| {
-                        morphed_vertex(
-                            &mesh.model,
-                            primitive_index,
-                            triangle[corner],
-                            &instance.weights,
-                        )
-                    });
-                    if instance.skin.is_some() {
-                        let attributes = mesh.model.skin_vertices[primitive_index]
-                            .as_ref()
-                            .expect("admission requires skin attributes");
+                    let mut vertices = if let Some(cache) = &mut transformed_vertices {
+                        let mut vertices = [WorldVertex {
+                            position: V3::new(0.0, 0.0, 0.0),
+                            normal: V3::new(0.0, 0.0, 0.0),
+                            uv: V2 { x: 0.0, y: 0.0 },
+                        }; 3];
                         for (corner, &index) in triangle.iter().enumerate() {
-                            local[corner] = skinned_vertex(
-                                local[corner],
-                                attributes[(index - primitive.first_vertex) as usize],
-                                &instance.joint_palette,
-                            );
+                            let entry = &mut cache[(index - primitive.first_vertex) as usize];
+                            vertices[corner] = if let Some(vertex) = *entry {
+                                vertex
+                            } else {
+                                let vertex = mesh.model.vertices[index as usize];
+                                validate_deformed_position(vertex, instance.transform)?;
+                                let vertex =
+                                    transformed_vertex(vertex, instance.transform, transform);
+                                *entry = Some(vertex);
+                                vertex
+                            };
                         }
-                    }
-                    if !primitive.has_normal
-                        && (!instance.weights.is_empty() || instance.skin.is_some())
-                    {
-                        let p = local.map(|vertex| {
-                            V3::new(vertex.position[0], vertex.position[1], vertex.position[2])
-                        });
-                        let normal = (p[1] - p[0]).cross(p[2] - p[0]).normalized();
-                        for vertex in &mut local {
-                            vertex.normal = [normal.x, normal.y, normal.z];
-                        }
-                    }
-                    let node_transform = if instance.skin.is_some() {
-                        super::asset::Affine::identity()
+                        vertices
                     } else {
-                        instance.transform
+                        let mut local = std::array::from_fn(|corner| {
+                            morphed_vertex(
+                                &mesh.model,
+                                primitive_index,
+                                triangle[corner],
+                                &instance.weights,
+                            )
+                        });
+                        if instance.skin.is_some() {
+                            let attributes = mesh.model.skin_vertices[primitive_index]
+                                .as_ref()
+                                .expect("admission requires skin attributes");
+                            for (corner, &index) in triangle.iter().enumerate() {
+                                local[corner] = skinned_vertex(
+                                    local[corner],
+                                    attributes[(index - primitive.first_vertex) as usize],
+                                    &instance.joint_palette,
+                                );
+                            }
+                        }
+                        if !primitive.has_normal
+                            && (!instance.weights.is_empty() || instance.skin.is_some())
+                        {
+                            let p = local.map(|vertex| {
+                                V3::new(vertex.position[0], vertex.position[1], vertex.position[2])
+                            });
+                            let normal = (p[1] - p[0]).cross(p[2] - p[0]).normalized();
+                            for vertex in &mut local {
+                                vertex.normal = [normal.x, normal.y, normal.z];
+                            }
+                        }
+                        let node_transform = if instance.skin.is_some() {
+                            super::asset::Affine::identity()
+                        } else {
+                            instance.transform
+                        };
+                        for vertex in local {
+                            validate_deformed_position(vertex, node_transform)?;
+                        }
+                        local.map(|vertex| transformed_vertex(vertex, node_transform, transform))
                     };
-                    if local.iter().any(|vertex| {
-                        node_transform.point(vertex.position).iter().any(|value| {
-                            !value.is_finite() || value.abs() > super::MAX_ABS_POSITION
-                        })
-                    }) {
-                        let mut errors = ContractErrors::default();
-                        errors.push("/frame/deformation", "deformed positions must remain finite and bounded after node transforms");
-                        return Err(errors);
-                    }
-                    let mut vertices =
-                        local.map(|vertex| transformed_vertex(vertex, node_transform, transform));
                     if (instance.skin.is_none() && instance.transform.mirrored)
                         != transform.mirrored()
                     {
@@ -1731,6 +2000,25 @@ impl super::asset::Affine {
             1.0,
         ])
     }
+}
+
+fn validate_deformed_position(
+    vertex: ModelVertex,
+    node: super::asset::Affine,
+) -> Result<(), ContractErrors> {
+    if node
+        .point(vertex.position)
+        .iter()
+        .any(|value| !value.is_finite() || value.abs() > super::MAX_ABS_POSITION)
+    {
+        let mut errors = ContractErrors::default();
+        errors.push(
+            "/frame/deformation",
+            "deformed positions must remain finite and bounded after node transforms",
+        );
+        return Err(errors);
+    }
+    Ok(())
 }
 
 fn morphed_vertex(

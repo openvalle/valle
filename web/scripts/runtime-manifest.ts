@@ -82,6 +82,12 @@ export async function emitRuntimeManifests(
     .filter((file) => file.endsWith(".js") || file.endsWith(".css"))
     .map((file) => path.relative(dist, file).replaceAll(path.sep, "/"))
     .filter((file) => !claimedAppScripts.has(file));
+  // File-loader dependencies of shared app chunks live outside the app directories. They must
+  // enter the verified serving closure too, including the SDK/worker copies of the same LUT.
+  const scene3dLookups = (await listFiles(dist))
+    .filter((file) => /^dfg-[\w-]+\.rg16f$/.test(path.basename(file)))
+    .map((file) => path.relative(dist, file).replaceAll(path.sep, "/"))
+    .sort();
   const engine = await manifestOf(dist, "engine", [
     spec("engine-glue", "glue", "runtime/engine/valle_engine.js", "Apache-2.0", "engine-core"),
     spec("engine-wasm", "wasm", "runtime/engine/valle_engine_bg.wasm", "Apache-2.0", "engine-core"),
@@ -94,6 +100,8 @@ export async function emitRuntimeManifests(
     spec("mediabunny-license", "license", "runtime/licenses/mediabunny.txt", "MPL-2.0", undefined, `npm:mediabunny@${dependencyVersions.mediabunny}`),
     spec("valle-third-party-notices", "license", "runtime/licenses/valle-and-third-party.txt", "Apache-2.0 AND MIT AND ISC AND OFL-1.1 AND CC-BY-4.0 AND MPL-2.0"),
     ...sharedChunks.map((file, index) => spec(`shared-app-${index}`, "shared", file, "Apache-2.0")),
+    ...scene3dLookups.map((file, index) => spec(`scene3d-lookup-${index}`, "lookup", file,
+      "MIT", undefined, "https://github.com/mrdoob/three.js")),
   ]);
 
   const packages = [engine, ...apps];

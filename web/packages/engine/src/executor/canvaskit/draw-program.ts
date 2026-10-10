@@ -2,6 +2,7 @@ import {
   DRAW_PROGRAM_ABI,
   PROGRAM_PATCH_ABI,
 } from "../../generated/packed-abi.ts";
+import { PathArenaCache } from "./path-arena-cache.ts";
 
 export { DRAW_PROGRAM_ABI };
 
@@ -126,7 +127,7 @@ export function applyDrawProgramPatch(
 }
 
 /** Decode the DrawProgram arena before any CanvasKit object or surface is allocated. */
-export async function decodeDrawProgram(input: ArrayBuffer | ArrayBufferView): Promise<DrawProgramWire> {
+export async function decodeDrawProgram(input: ArrayBuffer | ArrayBufferView, cache?: PathArenaCache): Promise<DrawProgramWire> {
   const bytes = exactBytes(input);
   if (bytes.byteLength > DRAW_PROGRAM_ABI.maximumBytes) {
     fail(`byte budget exceeded (${bytes.byteLength} > ${DRAW_PROGRAM_ABI.maximumBytes})`);
@@ -183,9 +184,13 @@ export async function decodeDrawProgram(input: ArrayBuffer | ArrayBufferView): P
       }
       const batchBytes = bytes.subarray(offset, end);
       value = { bytes: batchBytes, view: dataView(batchBytes), count } satisfies BatchInstanceTableWire;
+    } else if (kind === 3) {
+      try { value = (cache ?? new PathArenaCache(0)).decode(bytes.subarray(offset, end), count); }
+      catch (cause) { fail(`path arena is invalid: ${errorText(cause)}`); }
     } else {
       try {
-        value = JSON.parse(decoder.decode(bytes.subarray(offset, end)));
+        const json = decoder.decode(bytes.subarray(offset, end));
+        value = JSON.parse(json);
       } catch (cause) {
         fail(`section ${kind} is not canonical UTF-8 JSON: ${errorText(cause)}`);
       }
@@ -205,7 +210,7 @@ export async function decodeDrawProgram(input: ArrayBuffer | ArrayBufferView): P
   if (!isBatchInstanceTable(batchInstances)) fail("InstanceBatch instance table is invalid");
   if (!isStrokeColorTable(strokeColors)) fail("InstanceBatch stroke color table is invalid");
   if (!isDashOffsetTable(dashOffsets)) fail("InstanceBatch dash offset table is invalid");
-  if (!Array.isArray(paths) || !paths.every(isPath)) fail("paths are invalid");
+  if (!Array.isArray(paths) || (!cache && !paths.every(isPath))) fail("paths are invalid");
   validateInstanceBatches(nodes as TaggedWire[], batchInstances, strokeColors, dashOffsets, paths.length);
   if (!Array.isArray(paints) || !paints.every(isRecord)) fail("paints are invalid");
   if (!isRect(viewport) || viewport.width <= 0 || viewport.height <= 0) fail("viewport is invalid");

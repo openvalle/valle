@@ -257,6 +257,7 @@ pub(crate) struct InstanceEvalPlan {
     sample_dependent: Vec<bool>,
     live: Vec<bool>,
     shared_count: usize,
+    pub(crate) reads_host: bool,
 }
 
 impl InstanceEvalPlan {
@@ -352,6 +353,17 @@ impl InstanceEvalPlan {
             }
         }
         Self {
+            reads_host: group.exprs.iter().zip(&live).any(|(expr, live)| {
+                *live
+                    && matches!(
+                        expr,
+                        Expr::Context {
+                            input: ContextInput::HostSeconds
+                                | ContextInput::HostDuration
+                                | ContextInput::HostProgress
+                        }
+                    )
+            }),
             row_dependent,
             row_order,
             sample_dependent: eval_plan.sample_dependent,

@@ -198,14 +198,14 @@ impl PlanProgram {
         content_hash: ContentDigest,
         viewport: Rect,
         packed: Vec<u8>,
+        runtime_program: Option<Arc<DrawProgram>>,
         requirements: DrawRequirements,
         resources: PlanProgramResources,
         destination_uses: Vec<PreparedDestinationUse>,
         local_plan: ProgramPlan,
         local_schedule: ProgramSchedule,
     ) -> Result<Self, PlanValidationError> {
-        let actual_content_hash = ContentDigest::of_bytes(&packed);
-        if content_hash != actual_content_hash {
+        if runtime_program.is_none() && content_hash != ContentDigest::of_bytes(&packed) {
             return Err(invalid(
                 "program.contentHash",
                 "content hash does not name the packed DrawProgram",
@@ -251,7 +251,7 @@ impl PlanProgram {
             frame_patch,
             frame: OnceLock::from(frame),
             packed: OnceLock::from(packed),
-            runtime_program: None,
+            runtime_program,
             structure_hash: OnceLock::from(structure_hash),
             admitted_baseline: OnceLock::from(PlanProgramAdmissionKey {
                 content: baseline_content_hash,
@@ -343,6 +343,7 @@ impl PlanProgram {
         content_hash: ContentDigest,
         viewport: Rect,
         packed: Vec<u8>,
+        runtime_program: Option<Arc<DrawProgram>>,
         requirements: DrawRequirements,
         resources: PlanProgramResources,
         destination_uses: Vec<PreparedDestinationUse>,
@@ -350,7 +351,7 @@ impl PlanProgram {
         local_schedule: ProgramSchedule,
         layout: &PlanProgramLayout,
     ) -> Result<Self, PlanValidationError> {
-        if content_hash != ContentDigest::of_bytes(&packed) {
+        if runtime_program.is_none() && content_hash != ContentDigest::of_bytes(&packed) {
             return Err(invalid(
                 "program.contentHash",
                 "content hash does not name the packed DrawProgram",
@@ -394,7 +395,7 @@ impl PlanProgram {
             frame_patch,
             frame: OnceLock::from(frame),
             packed: OnceLock::from(packed),
-            runtime_program: None,
+            runtime_program,
             structure_hash: OnceLock::from(structure_hash),
             admitted_baseline: OnceLock::from(PlanProgramAdmissionKey {
                 content: layout.baseline_content_hash.clone(),
@@ -2021,6 +2022,47 @@ impl RenderPlanTemplate {
             output,
             estimated_peak_surface_bytes,
             true,
+            true,
+        )
+    }
+
+    /// The closed Product builder supplies the admission proof, but Web still needs the same
+    /// canonical wire packet and hash as public checked lowering. Do not decode the producer's
+    /// validated baselines a second time; receivers retain independent baseline validation.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new_constructed_wire(
+        render_id: RenderId,
+        capability_fingerprint: ContentDigest,
+        render_spec: RenderSpec,
+        logical_pass_count: u32,
+        logical_resource_count: u32,
+        required_capabilities: Vec<GraphCapability>,
+        frame_programs: Vec<PlanProgram>,
+        binding_layout: PlanBindingLayout,
+        resources: Vec<PlanResource>,
+        surface_slots: Vec<SurfaceSlot>,
+        passes: Vec<ExecutionPass>,
+        optimization: OptimizationReport,
+        output: PlanResourceId,
+        estimated_peak_surface_bytes: u64,
+    ) -> Result<Self, PlanValidationError> {
+        Self::new_impl(
+            render_id,
+            capability_fingerprint,
+            render_spec,
+            logical_pass_count,
+            logical_resource_count,
+            required_capabilities,
+            frame_programs,
+            binding_layout,
+            resources,
+            surface_slots,
+            passes,
+            optimization,
+            output,
+            estimated_peak_surface_bytes,
+            false,
+            true,
         )
     }
 
@@ -2061,6 +2103,7 @@ impl RenderPlanTemplate {
             output,
             estimated_peak_surface_bytes,
             false,
+            false,
         )
     }
 
@@ -2081,6 +2124,7 @@ impl RenderPlanTemplate {
         output: PlanResourceId,
         estimated_peak_surface_bytes: u64,
         verify_template: bool,
+        wire: bool,
     ) -> Result<Self, PlanValidationError> {
         let programs = frame_programs
             .iter_mut()
@@ -2109,13 +2153,15 @@ impl RenderPlanTemplate {
             constructed: false,
             frame_programs,
         };
-        template.finalize(verify_template)
+        template.finalize(verify_template, wire)
     }
 
-    fn finalize(mut self, verify_template: bool) -> Result<Self, PlanValidationError> {
+    fn finalize(mut self, verify_template: bool, wire: bool) -> Result<Self, PlanValidationError> {
         self.structure_hash = self.compute_structure_hash()?;
         if verify_template {
             self.validate()?;
+        }
+        if wire {
             let packed = super::packed::encode(
                 &self,
                 super::packed::Contract::plan(RENDER_PLAN_FORMAT_VERSION),
@@ -2389,7 +2435,7 @@ impl TryFrom<RenderPlanTemplateWire> for RenderPlanTemplate {
                 "template structure hash does not describe the decoded static contract",
             ));
         }
-        template.finalize(true)
+        template.finalize(true, true)
     }
 }
 
@@ -3641,6 +3687,71 @@ mod arena_tests {
         attached.admit_layout(&layout).unwrap();
         assert!(Arc::ptr_eq(&arena, attached.runtime_program().unwrap()));
         assert_eq!(arena.packed_bytes().unwrap(), attached.packed());
+    }
+
+    #[test]
+    fn constructed_wire_programs_keep_checked_packets_and_receiver_admission() {
+        let (arena, source) = constructed_program();
+        let first = |runtime| {
+            PlanProgram::from_lowered(
+                source.id,
+                source.kind,
+                source.semantic_path.clone(),
+                *source.content_hash(),
+                source.viewport,
+                source.packed().to_vec(),
+                runtime,
+                source.requirements.clone(),
+                source.resources.clone(),
+                source.destination_uses.clone(),
+                source.local_plan.clone(),
+                source.local_schedule.clone(),
+            )
+            .unwrap()
+        };
+        let mut checked = first(None);
+        let mut trusted = first(Some(Arc::clone(&arena)));
+        assert_eq!(
+            serde_json::to_vec(&checked).unwrap(),
+            serde_json::to_vec(&trusted).unwrap(),
+        );
+        assert!(Arc::ptr_eq(&arena, trusted.runtime_program().unwrap()));
+        let checked_layout = checked.take_initial_layout().unwrap();
+        let trusted_layout = trusted.take_initial_layout().unwrap();
+        assert_eq!(checked_layout, trusted_layout);
+        let next = |runtime| {
+            PlanProgram::from_lowered_for_layout(
+                source.id,
+                source.kind,
+                source.semantic_path.clone(),
+                *source.content_hash(),
+                source.viewport,
+                source.packed().to_vec(),
+                runtime,
+                source.requirements.clone(),
+                source.resources.clone(),
+                source.destination_uses.clone(),
+                source.local_plan.clone(),
+                source.local_schedule.clone(),
+                &trusted_layout,
+            )
+            .unwrap()
+        };
+        let checked = next(None);
+        let trusted = next(Some(Arc::clone(&arena)));
+        assert_eq!(
+            serde_json::to_vec(&checked).unwrap(),
+            serde_json::to_vec(&trusted).unwrap(),
+        );
+        let wire = serde_json::to_value(&trusted).unwrap();
+        let decoded: PlanProgram = serde_json::from_value(wire.clone()).unwrap();
+        assert!(decoded.runtime_program().is_none());
+        decoded.admit_layout(&trusted_layout).unwrap();
+        assert_eq!(decoded.packed(), source.packed());
+        let mut corrupted = wire;
+        corrupted["frameHash"] = serde_json::to_value(ContentDigest::from_bytes([0; 32])).unwrap();
+        let corrupted: PlanProgram = serde_json::from_value(corrupted).unwrap();
+        assert!(corrupted.admit_layout(&trusted_layout).is_err());
     }
 
     #[test]

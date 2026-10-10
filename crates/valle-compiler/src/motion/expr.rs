@@ -178,11 +178,7 @@ impl<'s> Compiler<'s> {
         };
         // Only truncate nodes added by this lowering operation.
         if id.0 as usize >= mark {
-            self.expr_arena.values.truncate(mark);
-            self.expr_arena.types.truncate(mark);
-            self.expr_arena.spans.truncate(mark);
-            self.expr_arena.expansion_stacks.truncate(mark);
-            self.expr_arena.reads_runtime.truncate(mark);
+            self.expr_arena.truncate(mark);
         }
         Some(self.push(Expr::Const { value }, expression.span()))
     }

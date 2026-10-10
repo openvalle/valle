@@ -72,6 +72,7 @@ mod geometry;
 mod glass;
 mod instance_capture;
 mod instance_formula;
+mod interner;
 mod jsx;
 mod role;
 // Native delivery observations use the host clock. Browser compilation must not call the
@@ -829,12 +830,15 @@ struct ExprArena {
     expansion_stacks: Vec<Vec<String>>,
     /// Incremental mirror of `expr_reads_runtime_inputs` for each expression.
     reads_runtime: Vec<bool>,
+    /// Compile-local reuse only: no values survive props, scenes, or instance rollback.
+    interner: interner::ExprInterner,
     /// Current recursive lowering depth, guarded by `MAX_EXPR_NESTING`.
     depth: usize,
 }
 
 impl ExprArena {
     fn truncate(&mut self, len: usize) {
+        self.interner.truncate(len);
         self.values.truncate(len);
         self.types.truncate(len);
         self.spans.truncate(len);

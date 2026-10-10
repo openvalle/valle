@@ -319,6 +319,23 @@ fn sample_index(position: i32, extent: usize) -> Option<usize> {
 
 // Pyramid passes write independent rows. Keep each pixel's tap and summation order
 // unchanged so native workers and the single-threaded Web build produce the same F16 bytes.
+#[cfg(not(target_family = "wasm"))]
+static PYRAMID_WORKERS: std::sync::LazyLock<Option<rayon::ThreadPool>> =
+    std::sync::LazyLock::new(|| {
+        let workers = std::thread::available_parallelism()
+            .map_or(1, usize::from)
+            .min(8);
+        (workers > 1)
+            .then(|| {
+                rayon::ThreadPoolBuilder::new()
+                    .num_threads(workers)
+                    .thread_name(|index| format!("valle-pyramid-{index}"))
+                    .build()
+                    .ok()
+            })
+            .flatten()
+    });
+
 fn fill_rows<const CHANNELS: usize>(
     next: &mut Level<CHANNELS>,
     fill: impl Fn(usize, &mut [[f32; CHANNELS]]) + Sync,
@@ -326,13 +343,18 @@ fn fill_rows<const CHANNELS: usize>(
     #[cfg(not(target_family = "wasm"))]
     {
         let width = next.width;
-        let workers = std::thread::available_parallelism().map_or(1, usize::from);
-        if workers > 1 && next.height >= 128 && next.pixels.len() >= 65_536 {
+        // All frame workers share one bounded pool instead of spawning another
+        // machine-sized set of OS threads for every stage of every frame.
+        if next.height >= 128
+            && next.pixels.len() >= 65_536
+            && let Some(pool) = &*PYRAMID_WORKERS
+        {
+            let workers = pool.current_num_threads();
             let rows_per_worker = next.height.div_ceil(workers).max(16);
-            std::thread::scope(|scope| {
+            pool.scope(|scope| {
                 for (index, chunk) in next.pixels.chunks_mut(rows_per_worker * width).enumerate() {
                     let fill = &fill;
-                    scope.spawn(move || fill(index * rows_per_worker, chunk));
+                    scope.spawn(move |_| fill(index * rows_per_worker, chunk));
                 }
             });
             return;
@@ -341,8 +363,9 @@ fn fill_rows<const CHANNELS: usize>(
     fill(0, &mut next.pixels);
 }
 
-/// Working region includes offscreen input. Align every level to the input's
-/// origin and a 32-pixel grid so viewport cropping cannot shift the pyramid taps.
+/// Working region includes the offscreen input that can affect the visible output.
+/// Align every level to the input's origin and a 32-pixel grid so cropping cannot
+/// shift the pyramid taps. The complete support margin also covers every fine level.
 #[derive(Debug, Clone, Copy)]
 pub struct PyramidRegion {
     pub origin: [i32; 2],
@@ -388,8 +411,16 @@ impl PyramidRegion {
         };
         for axis in 0..2 {
             let source = i64::from(offset[axis]);
-            let start = source + (source.min(0) - margin - source).div_euclid(32) * 32;
-            let end = (source + i64::from(input[axis])).max(i64::from(output[axis])) + margin;
+            let visible_end = i64::from(output[axis]);
+            // Contributions farther than the complete pyramid support cannot
+            // reach the output. Keep a second zero-filled support margin around
+            // their intersection, including when the source is wholly offscreen.
+            let relevant_start = source.max(-margin).min(0);
+            let relevant_end = (source + i64::from(input[axis]))
+                .min(visible_end + margin)
+                .max(visible_end);
+            let start = source + (relevant_start - margin - source).div_euclid(32) * 32;
+            let end = relevant_end + margin;
             let size = ((end - start + 31) / 32) * 32;
             result.origin[axis] = start.try_into().map_err(|_| BloomError::InvalidImage)?;
             result.size[axis] = size.try_into().map_err(|_| BloomError::InvalidImage)?;
@@ -918,7 +949,13 @@ pub(crate) fn quantize_half(value: f64) -> f32 {
     if (0x3880_0000..0x477f_f000).contains(&magnitude) {
         return f32::from_bits((bits + 0x0fff + ((bits >> 13) & 1)) & !0x1fff);
     }
-    // Preserve the reference handling of half subnormals, overflow, infinities and NaNs.
+    if magnitude < 0x3880_0000 {
+        // Half subnormals lie on the 2^-24 grid. Power-of-two scaling is exact
+        // throughout this bounded f32 range; ties-to-even matches f32_to_half,
+        // including signed zero, without encoding and decoding the exponent.
+        return (value * 16_777_216.0).round_ties_even() * (1.0 / 16_777_216.0);
+    }
+    // Preserve the reference handling of overflow, infinities and NaNs.
     half_to_f32(f32_to_half(value))
 }
 
@@ -1236,6 +1273,85 @@ mod tests {
                     &reference[(y * 192 + 64) * 8..(y + 1) * 192 * 8]
                 );
             }
+        }
+    }
+
+    #[test]
+    fn distant_input_clipping_preserves_visible_f16_samples() {
+        let input = encode_output(
+            &(0..384 * 288)
+                .map(|index| {
+                    let alpha = (index % 17) as f32 / 16.0;
+                    [alpha * 1.5, alpha * 0.25, alpha * -0.125, alpha]
+                })
+                .collect::<Vec<_>>(),
+        );
+        // The larger reference includes the entire input. Crop at a multiple of
+        // every pyramid scale, including odd viewport dimensions and wide halos.
+        for radius in [4.0, 12.0, 48.0, 128.0] {
+            for glow in [true, false] {
+                let render = |size: [u32; 2], offset| {
+                    if glow {
+                        apply_glow_f16(
+                            &input,
+                            384,
+                            288,
+                            size[0],
+                            size[1],
+                            offset,
+                            GlowParams {
+                                color: [0.05, 0.4, 0.7, 0.8],
+                                intensity: 0.75,
+                                radius,
+                            },
+                        )
+                    } else {
+                        apply_bloom_f16(
+                            &input,
+                            384,
+                            288,
+                            size[0],
+                            size[1],
+                            offset,
+                            BloomParams {
+                                threshold: 0.25,
+                                knee: 0.15,
+                                intensity: 0.75,
+                                radius,
+                            },
+                        )
+                    }
+                    .unwrap()
+                };
+                let clipped = render([101, 77], [-228, -100]);
+                let reference = render([640, 512], [28, 92]);
+                for y in 0..77 {
+                    assert_eq!(
+                        &clipped[y * 101 * 8..(y + 1) * 101 * 8],
+                        &reference[((y + 192) * 640 + 256) * 8..((y + 192) * 640 + 357) * 8],
+                        "glow={glow}, radius={radius}, row={y}",
+                    );
+                }
+            }
+        }
+        let clipped = PyramidRegion::new([384, 288], [101, 77], [-228, -100], 4.0, 4.0).unwrap();
+        assert!(clipped.size[0] < 384 && clipped.size[1] < 288);
+        for offset in [[-1000, 1000], [1000, -1000]] {
+            let empty = apply_glow_f16(
+                &input,
+                384,
+                288,
+                101,
+                77,
+                offset,
+                GlowParams {
+                    color: [1.0; 4],
+                    intensity: 1.0,
+                    radius: 12.0,
+                },
+            )
+            .unwrap();
+            assert!(empty.iter().all(|byte| *byte == 0));
         }
     }
 

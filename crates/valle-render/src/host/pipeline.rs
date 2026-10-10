@@ -373,6 +373,9 @@ fn render_shared_staged(
                     sample.wall_us = started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64;
                     sample.prepare_wait_us = prepare_wait_us;
                     sample.submit_us = submit_us;
+                    sample.shared_output_bytes = u64::from(spec.width())
+                        .saturating_mul(u64::from(spec.height()))
+                        .saturating_mul(4 * MAXIMUM_PENDING_FRAMES as u64);
                     if let Some(change) =
                         queues.observe(sample, frames.len() - sequence - 1, metal_memory)
                     {
@@ -507,9 +510,19 @@ fn deliver_shared_head(
     if let Some(progress) = progress {
         progress(*delivered, total);
     }
+    let (opacity_cache_bytes, reuse_cache_pressure) =
+        executors[executor].opacity_layer_cache_usage();
     Ok(QueueSample {
         gpu_wait_us: evidence.timings.gpu_completion_wait_us.unwrap_or(0),
         execute_us: evidence.timings.execute_us,
+        // The aggregate pool already includes retained scratch and delivery surfaces.
+        context_surface_bytes: evidence
+            .execution
+            .surfaces
+            .pool_bytes
+            .saturating_add(evidence.execution.raster_layer_cache_bytes as u64)
+            .saturating_add(opacity_cache_bytes as u64),
+        reuse_cache_pressure,
         sink_us,
         ..Default::default()
     })

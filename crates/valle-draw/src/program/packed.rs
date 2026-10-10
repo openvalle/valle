@@ -3,15 +3,16 @@ use thiserror::Error;
 
 use super::{
     Affine2d, DrawProgram, DrawProgramError, GlyphRun, Group, ImageNode, InstanceBatchNode,
-    InstanceColumns, InstanceShape, Node, NodeId, Paint, PathData, PathNode, RuntimeShaderNode,
-    Scene3dNode, ShadowNode,
+    InstanceColumns, InstanceShape, Node, NodeId, Paint, PathData, PathNode, PathVerb,
+    RuntimeShaderNode, Scene3dNode, ShadowNode,
     validate::{
-        MAX_BATCH_INSTANCES, MAX_NODES, MAX_PACKED_BYTES, MAX_PAINTS, MAX_PATHS, MAX_ROOTS,
+        MAX_BATCH_INSTANCES, MAX_NODES, MAX_PACKED_BYTES, MAX_PAINTS, MAX_PATH_POINTS,
+        MAX_PATH_VERBS, MAX_PATHS, MAX_ROOTS,
     },
 };
 use crate::requirements::DrawRequirements;
 
-pub const DRAW_PROGRAM_FORMAT_VERSION: u32 = 1;
+pub const DRAW_PROGRAM_FORMAT_VERSION: u32 = 2;
 
 const MAGIC: &[u8; 8] = b"VLDRAW\0\0";
 const ENDIAN_MARKER: u32 = 0x0102_0304;
@@ -22,6 +23,8 @@ const TABLE_END: usize = HEADER_LEN + ENTRY_LEN * SECTION_COUNT;
 const BATCH_INSTANCE_BYTES: usize = 72;
 const STROKE_COLOR_BYTES: usize = 16;
 const DASH_OFFSET_BYTES: usize = 4;
+const PATH_HEADER_BYTES: usize = 8;
+const PATH_POINT_BYTES: usize = 16;
 
 const ROOTS: u16 = 1;
 const NODES: u16 = 2;
@@ -150,7 +153,7 @@ pub(crate) fn encode(program: &DrawProgram) -> Result<Vec<u8>, PackedDrawError> 
         encode_batch_instances(&batch_instances)?,
         encode_stroke_colors(&stroke_colors)?,
         encode_dash_offsets(&dash_offsets)?,
-        encode_section(PATHS, program.paths.len(), &program.paths)?,
+        encode_paths(&program.paths)?,
         encode_section(PAINTS, program.paints.len(), &program.paints)?,
         encode_section(VIEWPORT, 1, &program.viewport)?,
         encode_section(REQUIREMENTS, 1, &program.requirements)?,
@@ -194,6 +197,94 @@ pub(crate) fn encode(program: &DrawProgram) -> Result<Vec<u8>, PackedDrawError> 
     }
     debug_assert_eq!(wire.len(), total_len);
     Ok(wire)
+}
+
+fn encode_paths(paths: &[PathData]) -> Result<EncodedSection, PackedDrawError> {
+    let length = paths.iter().try_fold(0usize, |sum, path| {
+        sum.checked_add(PATH_HEADER_BYTES + path.verbs.len() + path.points.len() * PATH_POINT_BYTES)
+            .ok_or_else(|| PackedDrawError::InvalidSectionTable("path arena size overflows".into()))
+    })?;
+    check_section_budget(PATHS, paths.len(), length)?;
+    let mut bytes = Vec::with_capacity(length);
+    for path in paths {
+        bytes.extend_from_slice(&(path.verbs.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(&(path.points.len() as u32).to_le_bytes());
+        for verb in &path.verbs {
+            bytes.push(match verb {
+                PathVerb::MoveTo => 0,
+                PathVerb::LineTo => 1,
+                PathVerb::QuadTo => 2,
+                PathVerb::CubicTo => 3,
+                PathVerb::Close => 4,
+            });
+        }
+        for point in &path.points {
+            bytes.extend_from_slice(&point[0].to_le_bytes());
+            bytes.extend_from_slice(&point[1].to_le_bytes());
+        }
+    }
+    Ok(EncodedSection {
+        kind: PATHS,
+        count: paths.len(),
+        bytes,
+    })
+}
+
+fn decode_paths(bytes: &[u8], entry: SectionEntry) -> Result<Vec<PathData>, PackedDrawError> {
+    let bytes = section_bytes(bytes, entry);
+    let invalid =
+        |reason: &str| PackedDrawError::InvalidSectionTable(format!("path arena: {reason}"));
+    if entry.count > bytes.len() / PATH_HEADER_BYTES {
+        return Err(invalid("truncated row headers"));
+    }
+    let mut cursor = 0usize;
+    let mut total_verbs = 0usize;
+    let mut total_points = 0usize;
+    let mut paths = Vec::with_capacity(entry.count);
+    for _ in 0..entry.count {
+        if bytes.len() - cursor < PATH_HEADER_BYTES {
+            return Err(invalid("truncated row header"));
+        }
+        let verb_count = u32_at(bytes, cursor) as usize;
+        let point_count = u32_at(bytes, cursor + 4) as usize;
+        cursor += PATH_HEADER_BYTES;
+        total_verbs = total_verbs.saturating_add(verb_count);
+        total_points = total_points.saturating_add(point_count);
+        if total_verbs > MAX_PATH_VERBS || total_points > MAX_PATH_POINTS {
+            return Err(invalid("verb or point budget exceeded"));
+        }
+        let length = verb_count + point_count * PATH_POINT_BYTES;
+        if length > bytes.len() - cursor {
+            return Err(invalid("row exceeds section"));
+        }
+        let verbs = bytes[cursor..cursor + verb_count]
+            .iter()
+            .map(|code| match code {
+                0 => Ok(PathVerb::MoveTo),
+                1 => Ok(PathVerb::LineTo),
+                2 => Ok(PathVerb::QuadTo),
+                3 => Ok(PathVerb::CubicTo),
+                4 => Ok(PathVerb::Close),
+                _ => Err(invalid("unknown verb")),
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        cursor += verb_count;
+        let points = bytes[cursor..cursor + point_count * PATH_POINT_BYTES]
+            .chunks_exact(PATH_POINT_BYTES)
+            .map(|point| {
+                [
+                    f64::from_le_bytes(point[..8].try_into().expect("eight coordinate bytes")),
+                    f64::from_le_bytes(point[8..].try_into().expect("eight coordinate bytes")),
+                ]
+            })
+            .collect();
+        cursor += point_count * PATH_POINT_BYTES;
+        paths.push(PathData { verbs, points });
+    }
+    if cursor != bytes.len() {
+        return Err(invalid("trailing bytes"));
+    }
+    Ok(paths)
 }
 
 pub(crate) fn decode(bytes: &[u8]) -> Result<DrawProgram, PackedDrawError> {
@@ -292,7 +383,7 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<DrawProgram, PackedDrawError> {
         ));
     }
 
-    for entry_index in [0usize, 1, 5, 6] {
+    for entry_index in [0usize, 1, 6] {
         let entry = entries[entry_index];
         let actual = count_top_level_array(section_bytes(bytes, entry)).map_err(|reason| {
             PackedDrawError::InvalidSectionTable(format!("section {}: {reason}", entry.kind))
@@ -321,7 +412,7 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<DrawProgram, PackedDrawError> {
     let stroke_colors = decode_stroke_colors(bytes, entries[3])?;
     let dash_offsets = decode_dash_offsets(bytes, entries[4])?;
     let nodes = decode_nodes(packed_nodes, batch_instances, stroke_colors, dash_offsets)?;
-    let paths: Vec<PathData> = decode_section(bytes, entries[5])?;
+    let paths = decode_paths(bytes, entries[5])?;
     let paints: Vec<Paint> = decode_section(bytes, entries[6])?;
     let viewport: crate::Rect = decode_section(bytes, entries[7])?;
     let requirements: DrawRequirements = decode_section(bytes, entries[8])?;

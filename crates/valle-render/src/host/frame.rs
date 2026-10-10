@@ -510,6 +510,11 @@ impl<P: ResourceProvider> FramePreparationStage<P> {
 
 #[cfg(feature = "native")]
 impl FrameExecutionStage {
+    #[cfg(all(target_os = "macos", feature = "native"))]
+    pub(crate) fn opacity_layer_cache_usage(&self) -> (usize, bool) {
+        self.executor.opacity_layer_cache_usage()
+    }
+
     /// Record one frame directly into an encoder-owned VideoToolbox surface. The returned token
     /// keeps every CoreVideo/Metal/Skia owner alive until [`Self::finish_shared_frame`] observes
     /// Ganesh completion; callers can queue a small bounded number to overlap GPU work and encode.
@@ -610,6 +615,14 @@ fn prepare_frame_with<P: ResourceProvider>(
     let prepared = compiler.evaluate_prepare(render_id, frame, spec)?;
     let evaluate_prepare_us = elapsed_us(stage_started);
     drop(evaluate_span);
+    if let Some(trace) = &trace {
+        for (owner, stats) in render.compiled().motion_instance_cache_stats() {
+            trace.counters(
+                "prepare.instance_cache",
+                serde_json::json!({"owner":owner,"scope":"admitted-motion-lifetime","stats":stats}),
+            );
+        }
+    }
     let requests = prepared.prepared().resource_requests.clone();
     let generation = allocate_generation(next_generation)?;
     let overlap_started = Instant::now();

@@ -2763,3 +2763,71 @@ fn material_index_overrides_merge_with_complete_frame_values_and_common_alpha_ru
         assert!(prepare_scene(&spec, 64, 64, &resources).is_err());
     }
 }
+
+#[test]
+fn gpu_lighting_input_keeps_reference_depth_and_pixel_ownership() {
+    let mut scene = pbr_scene();
+    scene.meshes[0].model_control = None;
+    scene.meshes[0].geometry = Some(ProceduralGeometry::Extrude {
+        path: PathData::new(
+            vec![
+                PathVerb::Move,
+                PathVerb::Line,
+                PathVerb::Line,
+                PathVerb::Line,
+                PathVerb::Close,
+            ],
+            vec![
+                Point::new(-0.8, -1.0),
+                Point::new(0.8, -1.0),
+                Point::new(0.8, 1.0),
+                Point::new(-0.8, 1.0),
+            ],
+        )
+        .unwrap(),
+        depth: 0.5,
+        bevel: 0.05,
+    });
+    scene.pbr.shadows = false;
+    let mut other = scene.meshes[0].clone();
+    other.key = "other".into();
+    scene.meshes.push(other);
+    let mut frame = pbr_frame();
+    let mut other = frame.meshes[0].clone();
+    other.key = "other".into();
+    frame.meshes.push(other);
+    let prepared = prepare_scene(&scene, 127, 65, &SceneResources::default()).unwrap();
+    for angle in [0.0, 45.0, 89.0, 120.0] {
+        frame.meshes[0].transform.rotation_degrees = Vec3::new(23.0, angle, 0.0);
+        frame.meshes[1].transform.translation = Vec3::new(0.2, 0.1, -0.3);
+        for near in [0.1, 4.0] {
+            frame.camera.near = near;
+            let reference = render_scene_with_workers(&prepared, &frame, 1).unwrap();
+            let input =
+                valle_motion::scene3d::prepare_gpu_lighting_input(&prepared, &frame).unwrap();
+            assert_eq!(&input[..4], &[1.0, 127.0, 65.0, 2.0]);
+            let header = 8 + 3 * (127 + 65);
+            let x = input[header] as usize;
+            let y = input[header + 1] as usize;
+            let w = input[header + 2] as usize;
+            let count = input[header + 4] as usize;
+            assert_eq!(input.len(), header + 5 + count * 8);
+            let mut ids = vec![0; 127 * 65];
+            let mut depths = vec![f32::MAX; 127 * 65];
+            for row in input[header + 5..].chunks_exact(8) {
+                let at = row[0] as usize;
+                let index = (y + at / w) * 127 + x + at % w;
+                ids[index] = row[5] as u32;
+                depths[index] = row[4];
+                assert!(row[1..4].iter().all(|v| v.is_finite()));
+                assert_eq!(&row[6..], &[1.0, 1.0]);
+            }
+            assert_eq!(ids, reference.object_ids, "angle={angle}, near={near}");
+            assert_eq!(
+                f32_bytes(&depths),
+                reference.depth_f32_le_bytes(),
+                "angle={angle}, near={near}"
+            );
+        }
+    }
+}

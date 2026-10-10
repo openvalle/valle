@@ -138,6 +138,7 @@ test("Timeline compiler rejects a hosted render projection from another working 
 test("Timeline preview receives the exact fixed-package bytes", async () => {
   const previewConfig = {
     ...config,
+    cpuThreads: 3,
     render: {
       ...config.render,
       fixedPackageManifestJson: "{\"format\":\"valle.fixed-render-package@1\"}",
@@ -162,6 +163,8 @@ test("Timeline preview receives the exact fixed-package bytes", async () => {
   );
 
   expect(runtime.previewAvailable).toBe(true);
+  expect(loads[0]?.renderMode).toBe("realtime");
+  expect(loads[0]?.cpuThreads).toBe(3);
   expect(loads[0]?.fixedPackageManifestJson).toBe(
     "{\"format\":\"valle.fixed-render-package@1\"}",
   );

@@ -40,48 +40,99 @@ pub fn apply_film_grain_f16(
         return Ok(encode_output(&pixels));
     }
     let width = output_width as usize;
-    for (index, pixel) in pixels.iter_mut().enumerate() {
-        let alpha = pixel[3];
-        if alpha == 0.0 {
-            continue;
-        }
-        let x = i64::from(output_origin[0]) + (index % width) as i64;
-        let y = i64::from(output_origin[1]) + (index / width) as i64;
-        let noise = lattice_noise(x, y, params.seed, f64::from(params.size));
-        // Construct symmetric noise in display encoding, where perceived gray
-        // levels are reviewed. Limiting amplitude to both endpoint margins keeps
-        // the distribution symmetric without clipping (including at amount=1).
-        let mut encoded = super::reference::working_to_extended_srgb([
-            pixel[0] / alpha,
-            pixel[1] / alpha,
-            pixel[2] / alpha,
-        ])
-        .map_err(|_| BloomError::InvalidParameters)?;
-        for channel in &mut encoded {
-            let margin = channel.min(1.0 - *channel).max(0.0);
-            *channel += (noise * f64::from(params.amount) * f64::from(margin)) as f32;
-        }
-        let working = super::reference::extended_srgb_to_working(encoded)
-            .map_err(|_| BloomError::InvalidParameters)?;
-        for (channel, value) in pixel[..3].iter_mut().zip(working) {
-            *channel = quantize_half(f64::from(value * alpha));
+    // This exact one-entry memo is local to the invocation. Uniform spans share their
+    // straight display conversion, while alpha and signed-zero bits remain part of the key.
+    let mut previous_key = None;
+    let mut previous_encoded = [0.0; 3];
+    for (row_index, row) in pixels.chunks_exact_mut(width).enumerate() {
+        let y = i64::from(output_origin[1]) + row_index as i64;
+        let mut lattice = LatticeRow::new(y, params.seed, f64::from(params.size));
+        for (column, pixel) in row.iter_mut().enumerate() {
+            let alpha = pixel[3];
+            if alpha == 0.0 {
+                continue;
+            }
+            let x = i64::from(output_origin[0]) + column as i64;
+            let noise = lattice.at(x);
+            // Construct symmetric noise in display encoding, where perceived gray
+            // levels are reviewed. Limiting amplitude to both endpoint margins keeps
+            // the distribution symmetric without clipping (including at amount=1).
+            let key = pixel.map(f32::to_bits);
+            let mut encoded = if previous_key == Some(key) {
+                previous_encoded
+            } else {
+                let encoded = super::reference::working_to_extended_srgb([
+                    pixel[0] / alpha,
+                    pixel[1] / alpha,
+                    pixel[2] / alpha,
+                ])
+                .map_err(|_| BloomError::InvalidParameters)?;
+                previous_key = Some(key);
+                previous_encoded = encoded;
+                encoded
+            };
+            for channel in &mut encoded {
+                let margin = channel.min(1.0 - *channel).max(0.0);
+                *channel += (noise * f64::from(params.amount) * f64::from(margin)) as f32;
+            }
+            let working = super::reference::extended_srgb_to_working(encoded)
+                .map_err(|_| BloomError::InvalidParameters)?;
+            for (channel, value) in pixel[..3].iter_mut().zip(working) {
+                *channel = quantize_half(f64::from(value * alpha));
+            }
         }
     }
     Ok(encode_output(&pixels))
 }
 
-fn lattice_noise(x: i64, y: i64, seed: u32, size: f64) -> f64 {
-    let nx = x as f64 / size;
-    let ny = y as f64 / size;
-    let x0 = nx.floor() as i64;
-    let y0 = ny.floor() as i64;
-    let fx = nx - x0 as f64;
-    let fy = ny - y0 as f64;
-    let a = hash_noise(x0, y0, seed);
-    let b = hash_noise(x0 + 1, y0, seed);
-    let c = hash_noise(x0, y0 + 1, seed);
-    let d = hash_noise(x0 + 1, y0 + 1, seed);
-    (a * (1.0 - fx) + b * fx) * (1.0 - fy) + (c * (1.0 - fx) + d * fx) * fy
+struct LatticeRow {
+    seed: u32,
+    size: f64,
+    y0: i64,
+    fy: f64,
+    x0: Option<i64>,
+    corners: [f64; 4],
+}
+
+impl LatticeRow {
+    fn new(y: i64, seed: u32, size: f64) -> Self {
+        let ny = y as f64 / size;
+        let y0 = ny.floor() as i64;
+        Self {
+            seed,
+            size,
+            y0,
+            fy: ny - y0 as f64,
+            x0: None,
+            corners: [0.0; 4],
+        }
+    }
+
+    fn at(&mut self, x: i64) -> f64 {
+        let nx = x as f64 / self.size;
+        let x0 = nx.floor() as i64;
+        let fx = nx - x0 as f64;
+        if self.x0 != Some(x0) {
+            self.corners = if self.x0 == Some(x0 - 1) {
+                [
+                    self.corners[1],
+                    hash_noise(x0 + 1, self.y0, self.seed),
+                    self.corners[3],
+                    hash_noise(x0 + 1, self.y0 + 1, self.seed),
+                ]
+            } else {
+                [
+                    hash_noise(x0, self.y0, self.seed),
+                    hash_noise(x0 + 1, self.y0, self.seed),
+                    hash_noise(x0, self.y0 + 1, self.seed),
+                    hash_noise(x0 + 1, self.y0 + 1, self.seed),
+                ]
+            };
+            self.x0 = Some(x0);
+        }
+        let [a, b, c, d] = self.corners;
+        (a * (1.0 - fx) + b * fx) * (1.0 - self.fy) + (c * (1.0 - fx) + d * fx) * self.fy
+    }
 }
 
 /// Seeded lattice value shared with GPU texture preparation.
@@ -105,6 +156,128 @@ pub fn hash_noise_bits(x: i64, y: i64, seed: u32) -> u32 {
 mod tests {
     use super::*;
     use crate::compositor::bloom::{f32_to_half, half_to_f32};
+
+    fn scalar_noise(x: i64, y: i64, seed: u32, size: f64) -> f64 {
+        let nx = x as f64 / size;
+        let ny = y as f64 / size;
+        let x0 = nx.floor() as i64;
+        let y0 = ny.floor() as i64;
+        let fx = nx - x0 as f64;
+        let fy = ny - y0 as f64;
+        let a = hash_noise(x0, y0, seed);
+        let b = hash_noise(x0 + 1, y0, seed);
+        let c = hash_noise(x0, y0 + 1, seed);
+        let d = hash_noise(x0 + 1, y0 + 1, seed);
+        (a * (1.0 - fx) + b * fx) * (1.0 - fy) + (c * (1.0 - fx) + d * fx) * fy
+    }
+
+    // Keep the pre-optimization scalar traversal as the byte-level reference.
+    fn scalar_film(
+        input: &[u8],
+        output_size: [u32; 2],
+        input_offset: [i32; 2],
+        output_origin: [i32; 2],
+        params: FilmGrainParams,
+    ) -> Vec<u8> {
+        let mut pixels =
+            read_base(input, 17, 11, output_size[0], output_size[1], input_offset).unwrap();
+        if params.amount == 0.0 {
+            return encode_output(&pixels);
+        }
+        for (index, pixel) in pixels.iter_mut().enumerate() {
+            let alpha = pixel[3];
+            if alpha == 0.0 {
+                continue;
+            }
+            let x = i64::from(output_origin[0]) + (index % output_size[0] as usize) as i64;
+            let y = i64::from(output_origin[1]) + (index / output_size[0] as usize) as i64;
+            let noise = scalar_noise(x, y, params.seed, f64::from(params.size));
+            let mut encoded = super::super::reference::working_to_extended_srgb([
+                pixel[0] / alpha,
+                pixel[1] / alpha,
+                pixel[2] / alpha,
+            ])
+            .unwrap();
+            for channel in &mut encoded {
+                let margin = channel.min(1.0 - *channel).max(0.0);
+                *channel += (noise * f64::from(params.amount) * f64::from(margin)) as f32;
+            }
+            let working = super::super::reference::extended_srgb_to_working(encoded).unwrap();
+            for (channel, value) in pixel[..3].iter_mut().zip(working) {
+                *channel = quantize_half(f64::from(value * alpha));
+            }
+        }
+        encode_output(&pixels)
+    }
+
+    #[test]
+    fn lattice_row_reuse_preserves_scalar_bits_with_skips_and_negative_origins() {
+        for seed in [0, 17, u32::MAX] {
+            for size in [1.0_f32, 1.4, 2.0, 16.0, f32::MAX] {
+                for origin in [i32::MIN, -19, 0, 47, i32::MAX] {
+                    let y = i64::from(origin);
+                    let mut row = LatticeRow::new(y, seed, f64::from(size));
+                    for dx in [0, 1, 2, 3, 9, 10, 8, 31, 31, 32] {
+                        let x = i64::from(origin) + dx;
+                        assert_eq!(
+                            row.at(x).to_bits(),
+                            scalar_noise(x, y, seed, f64::from(size)).to_bits()
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn grain_reuse_matches_scalar_f16_for_alpha_hdr_signed_zero_and_crops() {
+        let palette = [
+            [0.0_f32; 4],
+            [-0.0, 0.0, -0.0, 1.0],
+            [0.25, 0.5, 0.125, 1.0],
+            [0.25, 0.5, 0.125, 0.5],
+            [-0.125, 1.5, 2.0, 0.25],
+            [8.0, 3.0, -2.0, 1.0],
+            [0.125, 0.25, 0.0625, 0.5],
+            [0.25, 0.5, 0.125, 1.0],
+        ];
+        let input = (0..17 * 11)
+            .flat_map(|index| {
+                palette[(index / 5) % palette.len()]
+                    .into_iter()
+                    .flat_map(|c| f32_to_half(c).to_le_bytes())
+            })
+            .collect::<Vec<_>>();
+        for seed in [0, 17, u32::MAX] {
+            for size in [1.0, 1.4, 16.0] {
+                for amount in [0.0, 0.105, 1.0] {
+                    let params = FilmGrainParams { seed, amount, size };
+                    for (output_size, offset, origin) in [
+                        ([17, 11], [0, 0], [-19, -17]),
+                        ([23, 17], [3, -2], [9, -5]),
+                        ([80, 80], [3, -2], [9, -5]),
+                        ([9, 7], [-5, -3], [i32::MAX, i32::MIN]),
+                    ] {
+                        assert_eq!(
+                            apply_film_grain_f16(
+                                &input,
+                                17,
+                                11,
+                                output_size[0],
+                                output_size[1],
+                                offset,
+                                origin,
+                                params
+                            )
+                            .unwrap(),
+                            scalar_film(&input, output_size, offset, origin, params),
+                            "seed={seed} size={size} amount={amount} origin={origin:?} offset={offset:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn grain_is_seeded_and_roi_stable() {

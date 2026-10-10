@@ -5,6 +5,7 @@
 
 mod motion_compiler;
 mod product;
+mod scene3d_dof;
 mod timeline;
 pub use motion_compiler::{compile_motion_jsx, compile_motion_modules};
 pub use product::ProductEngine;

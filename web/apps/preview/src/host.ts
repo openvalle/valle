@@ -117,6 +117,7 @@ import { VallePlayerElement, type VallePlayerElementOptions } from "valle-engine
   const stageWrap = $<HTMLElement>("stageWrap");
 
   player.configure({
+    renderMode: "realtime",
     gpu: params.get("gpu") === "0" ? false : config.gpu,
     fixedPackageManifestJson: config.fixedPackageManifestJson,
     timelineJson: config.timelineJson,

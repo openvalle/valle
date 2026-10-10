@@ -105,37 +105,98 @@ pub fn transform_srgb_preview_pixels(
             channels.copy_from_slice(&encoded);
             continue;
         }
-        // F16 storage can underflow coverage before an HDR channel. As in the output shader,
-        // zero coverage discards that residual RGB instead of attempting to unpremultiply it.
-        let pixel = if input[3] == 0.0 {
-            PremulRgba32::TRANSPARENT
-        } else {
-            PremulRgba32::from_premultiplied(input)?
-        };
-        let target = working_to_primaries(pixel.straight_rgb()?, ColorPrimaries::Rec709)?;
-        let mapped = gamut_map(
-            target,
-            ColorPrimaries::Rec709,
-            1.0,
-            GamutMap::ChromaCompress,
-        )?;
-        let encoded = encode_output_rgb(
-            mapped,
-            TransferFunction::Srgb,
-            ColorPrimaries::Rec709,
-            crate::resource::SignalLuminance::SDR_100,
-        )?;
-        let alpha = if opaque { 1.0 } else { pixel.alpha() };
-        let output = [
-            encoded[0] * alpha,
-            encoded[1] * alpha,
-            encoded[2] * alpha,
-            alpha,
-        ];
+        let output = srgb_preview_pixel(input, opaque)?;
         channels.copy_from_slice(&output);
         previous = Some((input, output));
     }
     Ok(())
+}
+
+/// Preview math with CanvasKit CPU's portable F16 storage conversion: flush half
+/// subnormals to zero and truncate normal mantissas. Match its float read/write
+/// path; canonical Engine/Native F16 quantization remains unchanged. Flat spans
+/// reuse exact packed values, with no state surviving this call.
+pub fn transform_canvaskit_srgb_preview_f16(
+    pixels: &mut [u8],
+    opaque: bool,
+) -> Result<(), OutputMathError> {
+    use crate::compositor::bloom::half_to_f32;
+    if !pixels.len().is_multiple_of(8) {
+        return Err(OutputMathError::InvalidRgbaBuffer);
+    }
+    let mut previous: Option<(u64, [f32; 4], [u8; 8])> = None;
+    for bytes in pixels.chunks_exact_mut(8) {
+        let packed = u64::from_le_bytes(bytes.try_into().expect("complete F16 pixel"));
+        if let Some((source, _, encoded)) = previous
+            && source == packed
+        {
+            bytes.copy_from_slice(&encoded);
+            continue;
+        }
+        let input = std::array::from_fn(|channel| {
+            let bits = u16::from_le_bytes([bytes[channel * 2], bytes[channel * 2 + 1]]);
+            if bits & 0x7fff < 0x0400 {
+                0.0
+            } else {
+                half_to_f32(bits)
+            }
+        });
+        // Match the float path's adjacent equality, including positive/negative zero.
+        let encoded = if let Some((_, source, encoded)) = previous
+            && source == input
+        {
+            encoded
+        } else {
+            let output = srgb_preview_pixel(input, opaque)?.map(|value| {
+                let bits = value.to_bits();
+                let sign = bits & 0x8000_0000;
+                let magnitude = bits ^ sign;
+                if magnitude < 0x3880_0000 {
+                    0
+                } else {
+                    ((sign >> 16) + (magnitude >> 13) - ((127 - 15) << 10)) as u16
+                }
+            });
+            let mut encoded = [0; 8];
+            for (channel, value) in output.iter().enumerate() {
+                encoded[channel * 2..channel * 2 + 2].copy_from_slice(&value.to_le_bytes());
+            }
+            encoded
+        };
+        bytes.copy_from_slice(&encoded);
+        previous = Some((packed, input, encoded));
+    }
+    Ok(())
+}
+
+fn srgb_preview_pixel(input: [f32; 4], opaque: bool) -> Result<[f32; 4], OutputMathError> {
+    // F16 storage can underflow coverage before an HDR channel. As in the output shader,
+    // zero coverage discards that residual RGB instead of attempting to unpremultiply it.
+    let pixel = if input[3] == 0.0 {
+        PremulRgba32::TRANSPARENT
+    } else {
+        PremulRgba32::from_premultiplied(input)?
+    };
+    let target = working_to_primaries(pixel.straight_rgb()?, ColorPrimaries::Rec709)?;
+    let mapped = gamut_map(
+        target,
+        ColorPrimaries::Rec709,
+        1.0,
+        GamutMap::ChromaCompress,
+    )?;
+    let encoded = encode_output_rgb(
+        mapped,
+        TransferFunction::Srgb,
+        ColorPrimaries::Rec709,
+        crate::resource::SignalLuminance::SDR_100,
+    )?;
+    let alpha = if opaque { 1.0 } else { pixel.alpha() };
+    Ok([
+        encoded[0] * alpha,
+        encoded[1] * alpha,
+        encoded[2] * alpha,
+        alpha,
+    ])
 }
 
 pub fn tone_map(rgb: [f32; 3], method: ToneMap) -> Result<[f32; 3], OutputMathError> {
@@ -382,6 +443,76 @@ mod tests {
         }
         assert!(transform_srgb_preview_pixels(&mut [0.0; 3], false).is_err());
         assert!(transform_srgb_preview_pixels(&mut [f32::NAN, 0.0, 0.0, 1.0], false).is_err());
+    }
+
+    #[test]
+    fn packed_f16_preview_matches_float_pipeline_and_storage_rounding() {
+        use crate::compositor::bloom::{f32_to_half, half_to_f32};
+        let mut input = Vec::new();
+        for alpha in [0.0, 1e-8, 1e-6, 1.0 / 255.0, 0.25, 0.5, 1.0] {
+            for rgb in [
+                [0.0; 3],
+                [1.0; 3],
+                [-0.5, 0.2, 1.4],
+                [0.0031308; 3],
+                [2.0, -1.0, 0.1],
+            ] {
+                let pixel = [rgb[0] * alpha, rgb[1] * alpha, rgb[2] * alpha, alpha];
+                for _ in 0..3 {
+                    input.extend(
+                        pixel
+                            .map(f32_to_half)
+                            .into_iter()
+                            .flat_map(u16::to_le_bytes),
+                    );
+                }
+            }
+        }
+        // Pin subnormal boundaries and sign-zero equality with adjacent flat spans.
+        for bits in [0_u16, 1, 0x03ff, 0x0400, 0x1a68, 0x8000] {
+            input.extend(
+                [bits, bits, bits, 0x3c00]
+                    .into_iter()
+                    .flat_map(u16::to_le_bytes),
+            );
+        }
+        for opaque in [false, true] {
+            let mut floats = input
+                .chunks_exact(2)
+                .map(|bytes| {
+                    let bits = u16::from_le_bytes([bytes[0], bytes[1]]);
+                    if bits & 0x7fff < 0x0400 {
+                        0.0
+                    } else {
+                        half_to_f32(bits)
+                    }
+                })
+                .collect::<Vec<_>>();
+            transform_srgb_preview_pixels(&mut floats, opaque).unwrap();
+            let reference = floats
+                .into_iter()
+                .flat_map(|value| {
+                    let nearest = f32_to_half(value);
+                    let bits = if value.abs() < half_to_f32(0x0400) {
+                        0
+                    } else if half_to_f32(nearest).abs() > value.abs() {
+                        nearest - 1
+                    } else {
+                        nearest
+                    };
+                    bits.to_le_bytes()
+                })
+                .collect::<Vec<_>>();
+            let mut actual = input.clone();
+            transform_canvaskit_srgb_preview_f16(&mut actual, opaque).unwrap();
+            assert_eq!(actual, reference);
+        }
+        assert!(transform_canvaskit_srgb_preview_f16(&mut [0; 7], false).is_err());
+        let mut invalid = [0x7c00_u16, 0, 0, 0x3c00]
+            .into_iter()
+            .flat_map(u16::to_le_bytes)
+            .collect::<Vec<_>>();
+        assert!(transform_canvaskit_srgb_preview_f16(&mut invalid, false).is_err());
     }
 
     fn spec(

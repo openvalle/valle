@@ -1,0 +1,11 @@
+
+uniform shader base;
+uniform shader halo;
+uniform float intensity;
+half4 main(float2 xy) {
+    float4 source = float4(base.eval(xy));
+    float3 bloom = float3(halo.eval(xy).rgb);
+    float3 color = clamp(source.rgb + intensity * bloom, -65504.0, 65504.0);
+    float alpha = max(source.a, min(max(max(bloom.r, bloom.g), bloom.b), 1.0));
+    return half4(color, alpha);
+}

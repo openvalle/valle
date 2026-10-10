@@ -8,6 +8,7 @@ mod color;
 mod composite;
 mod effect;
 mod executor;
+mod gamma;
 mod output;
 mod pixel;
 mod transition;

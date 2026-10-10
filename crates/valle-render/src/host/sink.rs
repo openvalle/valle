@@ -297,6 +297,14 @@ impl FrameSink for Mp4Sink {
                 self.audio_encode_us as f64 / 1_000.0,
                 started.elapsed().as_secs_f64() * 1_000.0,
             );
+            if let Some(timing) = self.muxer.encoder_timings() {
+                eprintln!(
+                    "[valle encoder] send={:.3}ms drain-mux={:.3}ms automatic-silence={:.3}ms",
+                    timing.send_ns as f64 / 1_000_000.0,
+                    timing.drain_mux_ns as f64 / 1_000_000.0,
+                    timing.automatic_silence_ns as f64 / 1_000_000.0
+                );
+            }
         }
         result
     }

@@ -73,10 +73,9 @@ fn opacity_layer_bounds(
     clip: IRect,
     origin: [i32; 2],
 ) -> Option<IRect> {
-    let local = Matrix::translate((
-        matrix.translate_x() - origin[0] as f32,
-        matrix.translate_y() - origin[1] as f32,
-    ));
+    let mut local = matrix;
+    local.set_translate_x(matrix.translate_x() - origin[0] as f32);
+    local.set_translate_y(matrix.translate_y() - origin[1] as f32);
     let mapped = local.map_rect(sk_rect(bounds)).0;
     if ![mapped.left, mapped.top, mapped.right, mapped.bottom]
         .into_iter()
@@ -444,7 +443,10 @@ impl ProgramRuntime {
             ProgramTerminal::Scratch(_) => [0, 0],
         };
 
+        let trace_passes = std::env::var_os("VALLE_COMPOSITOR_TRACE_PASSES").is_some();
+        let mut pass_times = BTreeMap::<&str, (u64, u64)>::new();
         for (pass, step) in plan.local_plan().passes().iter().zip(schedule.passes()) {
+            let started = trace_passes.then(std::time::Instant::now);
             let output = step.output();
             if step.pass() != pass.id || output != pass.kind.output() {
                 return Err(DrawError::Internal(
@@ -516,6 +518,33 @@ impl ProgramRuntime {
             for resource in step.retire_after() {
                 resources.remove(resource);
             }
+            if let Some(started) = started {
+                let name = match &pass.kind {
+                    ProgramPassKind::RasterNode { .. } | ProgramPassKind::RasterTree { .. } => {
+                        "raster"
+                    }
+                    ProgramPassKind::ApplyFilter {
+                        filter: Filter::Glow { .. },
+                        ..
+                    } => "glow",
+                    ProgramPassKind::ApplyFilter {
+                        filter: Filter::Bloom { .. },
+                        ..
+                    } => "bloom",
+                    ProgramPassKind::ApplyFilter { .. } => "filter",
+                    ProgramPassKind::ApplyOpacity { .. } => "opacity",
+                    ProgramPassKind::SourceOver { .. } | ProgramPassKind::Blend { .. } => {
+                        "composite"
+                    }
+                    _ => "other",
+                };
+                let entry = pass_times.entry(name).or_default();
+                entry.0 += 1;
+                entry.1 += started.elapsed().as_micros() as u64;
+            }
+        }
+        if trace_passes {
+            eprintln!("[valle local passes] {pass_times:?}");
         }
 
         let image = resources
@@ -1007,7 +1036,8 @@ impl ProgramRuntime {
         if target.direct_context().is_none()
             || target.image_info().color_type() != ColorType::RGBAF16
             || target.image_info().alpha_type() != AlphaType::Premul
-            || !matrix.is_translate()
+            || !matrix.is_scale_translate()
+            || !matrix.is_finite()
             || matrix.translate_x().fract() != 0.0
             || matrix.translate_y().fract() != 0.0
             || std::env::var_os("VALLE_SMALL_OPACITY_CACHE_REFERENCE").is_some()
@@ -1056,8 +1086,8 @@ impl ProgramRuntime {
                 && [color.red, color.green, color.blue, color.alpha]
                     .into_iter()
                     .all(|value| (0.0..=1.0).contains(&value))
-                && layer_clip.width() <= 16
-                && layer_clip.height() <= 16
+                && layer_clip.width() <= 32
+                && layer_clip.height() <= 32
             {
                 leaves.push((id, *child, layer_clip, group.opacity));
                 continue;
@@ -1101,6 +1131,8 @@ impl ProgramRuntime {
                 }
                 key.extend_from_slice(&bounds.width().to_le_bytes());
                 key.extend_from_slice(&bounds.height().to_le_bytes());
+                key.extend_from_slice(&matrix.scale_x().to_bits().to_le_bytes());
+                key.extend_from_slice(&matrix.scale_y().to_bits().to_le_bytes());
                 key.extend_from_slice(
                     &(matrix.translate_x() - bounds.left as f32)
                         .to_bits()
@@ -1160,9 +1192,27 @@ impl ProgramRuntime {
         }
         let mut pages = Vec::new();
         for chunk in misses.chunks(64) {
-            let info = target
-                .image_info()
-                .with_dimensions((128, chunk.len().div_ceil(8) as i32 * 16));
+            // Pack the actual isolated rectangles rather than rounding each leaf to a
+            // 32x32 cell. At 4K that padding can fill the entire cache with one frame,
+            // evicting Echo's reusable history before its next request.
+            let mut sources = Vec::with_capacity(chunk.len());
+            let (mut x, mut y, mut row_height) = (0, 0, 0);
+            for &((_, _, bounds, _), _) in chunk {
+                if x + bounds.width() > 128 {
+                    x = 0;
+                    y += row_height;
+                    row_height = 0;
+                }
+                sources.push(SkRect::from_xywh(
+                    x as f32,
+                    y as f32,
+                    bounds.width() as f32,
+                    bounds.height() as f32,
+                ));
+                x += bounds.width();
+                row_height = row_height.max(bounds.height());
+            }
+            let info = target.image_info().with_dimensions((128, y + row_height));
             let mut atlas = target
                 .new_surface(&info)
                 .ok_or_else(|| DrawError::Surface("opacity atlas allocation failed".into()))?;
@@ -1170,14 +1220,8 @@ impl ProgramRuntime {
             canvas.clear(Color::TRANSPARENT);
             let image_index = result.images.len();
             for (index, &((id, child, bounds, opacity), _)) in chunk.iter().enumerate() {
-                let x = (index % 8) as i32 * 16;
-                let y = (index / 8) as i32 * 16;
-                let source = SkRect::from_xywh(
-                    x as f32,
-                    y as f32,
-                    bounds.width() as f32,
-                    bounds.height() as f32,
-                );
+                let source = sources[index];
+                let (x, y) = (source.left as i32, source.top as i32);
                 canvas.save();
                 canvas.clip_rect(source, None, false);
                 // Retain Skia's local device origin and backing size. Drawing the
@@ -1197,17 +1241,7 @@ impl ProgramRuntime {
             let entries = chunk
                 .iter()
                 .enumerate()
-                .map(|(index, ((_, _, bounds, _), key))| {
-                    (
-                        *key,
-                        SkRect::from_xywh(
-                            (index % 8 * 16) as f32,
-                            (index / 8 * 16) as f32,
-                            bounds.width() as f32,
-                            bounds.height() as f32,
-                        ),
-                    )
-                })
+                .map(|(index, (_, key))| (*key, sources[index]))
                 .collect();
             result.images.push(image.clone());
             pages.push((image, entries));
@@ -3785,7 +3819,12 @@ mod tests {
         };
         let mut context = gpu::direct_contexts::make_metal(&backend, None).unwrap();
         let cache = Arc::new(std::sync::Mutex::new(SmallOpacityCache::default()));
-        for (color_scale, opacity_scale) in [(1.0, 1.0), (0.7, 1.0), (1.0, 0.4)] {
+        for (color_scale, opacity_scale, position_scale) in [
+            (1.0, 1.0, 1.0),
+            (0.7, 1.0, 1.0),
+            (1.0, 0.4, 1.0),
+            (1.0, 1.0, 0.25),
+        ] {
             let mut builder = DrawProgramBuilder::new(Rect::new(0.0, 0.0, 1920.0, 1080.0));
             let mut children = Vec::new();
             for index in 0..256 {
@@ -3803,6 +3842,7 @@ mod tests {
                         1.1 + (index % 11) as f64 * 0.19,
                     ),
                 };
+                let (x, y) = (x * position_scale, y * position_scale);
                 let k = r * 0.5522847498307936;
                 let mut verbs = vec![
                     PathVerb::MoveTo,
@@ -3854,7 +3894,12 @@ mod tests {
             }
             let mut group = Group::plain(children);
             group.opacity = 0.63;
-            group.layer_bounds = Some(Rect::new(597.0008, 158.9998, 726.6062, 725.6012));
+            group.layer_bounds = Some(Rect::new(
+                597.0008 * position_scale,
+                158.9998 * position_scale,
+                726.6062 * position_scale,
+                725.6012 * position_scale,
+            ));
             let root = builder.push_node(Node::Group(group));
             builder.add_root(root);
             let runtime = ProgramRuntime {
@@ -3868,18 +3913,30 @@ mod tests {
                 mask_coverage: None,
                 opacity_layers: Arc::clone(&cache),
             };
-            for (width, height, offset) in [
-                (1920, 1080, (0.0, 0.0)),
-                (768, 768, (-596.0, -157.0)),
-                (1920, 1080, (0.25, 0.0)),
-            ] {
+            let cases = if position_scale == 1.0 {
+                vec![
+                    (1920, 1080, (0.0, 0.0), (1.0, 1.0)),
+                    (768, 768, (-596.0, -157.0), (1.0, 1.0)),
+                    (1920, 1080, (0.25, 0.0), (1.0, 1.0)),
+                ]
+            } else {
+                vec![
+                    (3840, 2160, (0.0, 0.0), (6.0, 6.0)),
+                    (1600, 900, (0.0, 0.0), (2.0, 3.0)),
+                    (1600, 900, (0.0, 0.0), (1.25, 2.5)),
+                    (1920, 1080, (1900.0, 0.0), (-3.0, 2.0)),
+                    (1920, 1080, (0.25, 0.0), (2.0, 2.0)),
+                ]
+            };
+            for (width, height, offset, scale) in cases {
                 let info = ImageInfo::new(
                     (width, height),
                     ColorType::RGBAF16,
                     AlphaType::Premul,
                     Some(working_color_space().unwrap()),
                 );
-                let matrix = Matrix::translate(offset);
+                let mut matrix = Matrix::translate(offset);
+                matrix.pre_scale(scale, None);
                 let mut expected: Option<Vec<u8>> = None;
                 for attempt in 0..4 {
                     let mut target = gpu::surfaces::render_target(
@@ -3901,7 +3958,17 @@ mod tests {
                         None
                     };
                     if attempt >= 2 && offset.0.fract() == 0.0 {
-                        assert!(atlas.as_ref().unwrap().layers.len() > 200);
+                        assert!(atlas.as_ref().unwrap().layers.len() > 150);
+                        if scale == (6.0, 6.0) {
+                            assert!(
+                                atlas
+                                    .as_ref()
+                                    .unwrap()
+                                    .layers
+                                    .values()
+                                    .any(|(_, _, destination, _)| destination.width() > 16.0)
+                            );
+                        }
                     }
                     if offset.0.fract() != 0.0 {
                         assert!(atlas.is_none());
@@ -3920,7 +3987,7 @@ mod tests {
                         let different = pixels.iter().zip(expected).filter(|(a, b)| a != b).count();
                         assert_eq!(
                             different, 0,
-                            "F16 bytes changed: offset={offset:?} attempt={attempt} color={color_scale} opacity={opacity_scale}"
+                            "F16 bytes changed: offset={offset:?} scale={scale:?} attempt={attempt} color={color_scale} opacity={opacity_scale}"
                         );
                     } else {
                         expected = Some(pixels);

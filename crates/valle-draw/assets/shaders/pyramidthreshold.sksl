@@ -1,0 +1,17 @@
+
+uniform shader source;
+uniform float threshold;
+uniform float knee;
+half4 main(float2 xy) {
+    float4 pixel = float4(source.eval(xy));
+    if (pixel.a <= 0.0) return half4(0.0, 0.0, 0.0, 1.0);
+    float luminance = dot(pixel.rgb, float3(0.2627, 0.6780, 0.0593)) / pixel.a;
+    float weight;
+    if (knee == 0.0) {
+        weight = luminance >= threshold ? 1.0 : 0.0;
+    } else {
+        float t = clamp((luminance - threshold + knee) / (2.0 * knee), 0.0, 1.0);
+        weight = t * t * (3.0 - 2.0 * t);
+    }
+    return half4(pixel.rgb * weight, 1.0);
+}

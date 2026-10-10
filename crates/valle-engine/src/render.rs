@@ -2359,6 +2359,29 @@ impl CompiledRender {
         &self.sources
     }
 
+    /// Lifetime counters and retained CPU storage for each distinct admitted Motion payload.
+    /// Multiple placements and frame workers share one owner; these cumulative snapshots must
+    /// not be summed across frames. No raster surfaces or GPU handles are included.
+    pub fn motion_instance_cache_stats(
+        &self,
+    ) -> Vec<(u32, valle_motion::layout::InstanceCacheStats)> {
+        let mut seen = std::collections::BTreeSet::new();
+        self.sources
+            .entries
+            .iter()
+            .filter_map(|source| {
+                let motion = source.motion()?;
+                if !seen.insert(motion.component_target) {
+                    return None;
+                }
+                Some((
+                    motion.component_target,
+                    self.motion_scene(motion)?.instance_cache_stats()?,
+                ))
+            })
+            .collect()
+    }
+
     /// Resolves a Motion source frame under this render's exact clock and
     /// source end-behavior. The explicit RenderId prevents stale inspector
     /// requests from crossing a replacement boundary.

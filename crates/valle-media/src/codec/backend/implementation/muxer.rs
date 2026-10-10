@@ -99,6 +99,7 @@ pub struct Muxer {
     /// Renderer/encoder frame handoff. SharedGpu owns the AVHWFramesContext used by `venc`.
     video_transport: VideoFrameTransport,
     shared_frame_pool: Option<SharedVideoFramePool>,
+    encoder_timings: Option<crate::perf::EncoderTimings>,
 }
 
 impl Muxer {
@@ -530,12 +531,18 @@ impl Muxer {
             finished: false,
             video_transport,
             shared_frame_pool,
+            encoder_timings: crate::perf::EncoderTimings::from_env(),
         })
     }
 
     /// Clone the encoder-owned frame pool for a GPU raster worker.
     pub fn shared_frame_pool(&self) -> Option<SharedVideoFramePool> {
         self.shared_frame_pool.clone()
+    }
+
+    /// Opt-in CPU wall timings for this muxer, independent of other active exports.
+    pub fn encoder_timings(&self) -> Option<crate::perf::EncoderTimings> {
+        self.encoder_timings
     }
 
     /// Declare externally supplied audio before the first video frame to disable automatic silence.
@@ -794,8 +801,22 @@ impl Muxer {
                 .push_back((pts, duration_ticks.unwrap_or(0)));
         }
         crate::perf::time_enc_submit(|| -> Result<()> {
-            self.venc.send_frame(&yuv)?;
-            self.drain_video_packets()
+            let (result, elapsed) =
+                crate::perf::time_encoder_part(self.encoder_timings.is_some(), || {
+                    self.venc.send_frame(&yuv)
+                });
+            if let Some(timing) = &mut self.encoder_timings {
+                timing.send_ns = timing.send_ns.saturating_add(elapsed);
+            }
+            result?;
+            let (result, elapsed) =
+                crate::perf::time_encoder_part(self.encoder_timings.is_some(), || {
+                    self.drain_video_packets()
+                });
+            if let Some(timing) = &mut self.encoder_timings {
+                timing.drain_mux_ns = timing.drain_mux_ns.saturating_add(elapsed);
+            }
+            result
         })?;
         self.frame_idx += 1;
         self.last_video_pts = Some(pts);
@@ -808,7 +829,14 @@ impl Muxer {
             // Advance silence alongside video to keep the interleave queue bounded; external audio
             // is supplied by the caller.
             let video_time_s = self.video_duration_seconds()?;
-            self.pump_silence_until(video_time_s)?;
+            let (result, elapsed) =
+                crate::perf::time_encoder_part(self.encoder_timings.is_some(), || {
+                    self.pump_silence_until(video_time_s)
+                });
+            if let Some(timing) = &mut self.encoder_timings {
+                timing.automatic_silence_ns = timing.automatic_silence_ns.saturating_add(elapsed);
+            }
+            result?;
         }
         Ok(yuv)
     }

@@ -70,7 +70,7 @@ await withBuildDirectory(path.join(root, "dist"), async (dist) => {
     module: "./index.mjs",
     types: "./types/index.d.ts",
     exports: { ...exports, "./wasm/*": "./wasm/*", "./workers/*": "./workers/*", "./package.json": "./package.json" },
-    files: ["**/*.mjs", "types", "wasm", "workers", "LICENSE", "NOTICE.txt", "README.md"],
+    files: ["**/*.mjs", "**/*.rg16f", "types", "wasm", "workers", "LICENSE", "NOTICE.txt", "README.md"],
     sideEffects: ["./element.mjs", "./wasm/snippets/**"],
     dependencies: { ...sdk.dependencies, "canvaskit-wasm": workspace.workspaces.catalog["canvaskit-wasm"] },
     peerDependencies: sdk.peerDependencies,

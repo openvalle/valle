@@ -1,14 +1,34 @@
+import { PreviewBuffer } from "./compositor/preview-buffer.ts";
+import { waitForGpuCompletion } from "../executor/webgl/gpu-completion.ts";
 import type { RenderTrace } from "./render-trace.ts";
 import { MediaBlobCache } from "../media/media-blob-cache.ts";
 import { createMotionFontLoader, type MotionFontSource } from "../fonts.ts";
 import canvasKitPackage from "canvaskit-wasm/package.json";
+import {
+  CanvasKitScene3dDof,
+  decodeDeferredScene3dDof,
+} from "../executor/canvaskit/scene3d-dof.ts";
+import { createScene3dGpu } from "../executor/webgl/scene3d-factory.ts";
+import type {
+  GpuScene3D,
+  Scene3dGpuRequest,
+} from "../executor/webgl/scene3d.js";
+import { GpuCircles } from "../executor/webgl/circles.js";
+import {
+  resetCanvasKitContext,
+  untrackGpuState,
+} from "../executor/webgl/gpu-state.ts";
 // Browser Product Compositor host.
 //
 // Rust/WASM owns Timeline evaluation, Motion/caption preparation, RenderGraph construction and
 // lowering. This file owns only browser resources, clock/scheduling, an opaque generation-scoped
 // object table, CanvasKit execution and presentation.
 
-import { RESOURCE_REQUESTS_ABI, decodePackedAbi, type PackedValue } from "../abi/packed.ts";
+import {
+  RESOURCE_REQUESTS_ABI,
+  decodePackedAbi,
+  type PackedValue,
+} from "../abi/packed.ts";
 import {
   CanvasKitExecutor,
   type CanvasKitExecutionProfile,
@@ -18,9 +38,16 @@ import type {
   ResourceManifest,
   TimelineDocument,
 } from "../internal-timeline.ts";
-import { createDecoderRing, keyframeThumbnails, type DecoderRing } from "../media/video-source.ts";
+import {
+  createDecoderRing,
+  keyframeThumbnails,
+  type DecoderRing,
+} from "../media/video-source.ts";
 import { decodeAudioBuffer } from "../media/audio-source.ts";
-import { resolvePlayerRuntimeAssets, type PlayerRuntimeAssets } from "../runtime-assets.ts";
+import {
+  resolvePlayerRuntimeAssets,
+  type PlayerRuntimeAssets,
+} from "../runtime-assets.ts";
 import { canonicalizeTimelineDocumentWithWasm } from "../compiler.ts";
 import {
   ProductFramePlannerPool,
@@ -80,6 +107,10 @@ export interface BrowserValleWebPlayerOptions {
   runtimeBaseUrl?: string | URL;
   pxScale?: number;
   gpu?: boolean;
+  /** CPU planning budget (1..8), with cores reserved for presentation by default. */
+  cpuThreads?: number;
+  /** Select accelerated preview stages, or retain the reference export path. */
+  renderMode?: "reference" | "realtime";
   /** Optional bounded CPU trace; capture readbacks and GPU device time are separate. */
   trace?: RenderTrace;
   audioContext?: AudioContext | null;
@@ -93,7 +124,9 @@ export type RenderPackageReplacement = Pick<
   | "resourceManifestJson"
   | "verifiedBindingBundleJson"
 > &
-  Partial<Pick<BrowserValleWebPlayerOptions, "assets">> & { isCurrent?: () => boolean };
+  Partial<Pick<BrowserValleWebPlayerOptions, "assets">> & {
+    isCurrent?: () => boolean;
+  };
 
 export interface CanonicalTimelineDocument {
   timeline: TimelineDocument;
@@ -145,7 +178,12 @@ interface RenderOptions {
 }
 
 interface BrowserProductEngineWire extends ProductEngineWire {
-  decode_shader_data_texture(digest: string, encoded: Uint8Array, width: number, height: number): Uint8Array;
+  decode_shader_data_texture(
+    digest: string,
+    encoded: Uint8Array,
+    width: number,
+    height: number,
+  ): Uint8Array;
   register_scene3d_model(digest: string, bytes: Uint8Array): void;
   register_scene3d_environment(digest: string, bytes: Uint8Array): void;
   scene3d_resource_needs_json(canonicalRequest: Uint8Array): string;
@@ -159,14 +197,36 @@ interface BrowserProductEngineWire extends ProductEngineWire {
     topologyDigest: string,
     canonicalRequest: Uint8Array,
   ): Uint8Array;
+  render_scene3d_request_deferred?(
+    contentDigest: string,
+    topologyDigest: string,
+    canonicalRequest: Uint8Array,
+  ): Uint8Array;
+  admit_scene3d_gpu_request?(
+    contentDigest: string,
+    topologyDigest: string,
+    canonicalRequest: Uint8Array,
+  ): void;
+  scene3d_gpu_lighting_input?(request: Uint8Array): Float32Array;
+  has_scene3d_frame?(contentDigest: string): boolean;
   scene3d_frame_width(contentDigest: string): number;
   scene3d_frame_height(contentDigest: string): number;
-  scene3d_pick_json(contentDigest: string, pixelX: number, pixelY: number): string;
+  scene3d_pick_json(
+    contentDigest: string,
+    pixelX: number,
+    pixelY: number,
+  ): string;
   reset(): void;
 }
 
 interface ValleWasmModule {
-  with_motion_fonts(packageJson: string, timelineJson: string, manifestJson: string, bundleJson: string, fontsJson: string): string;
+  with_motion_fonts(
+    packageJson: string,
+    timelineJson: string,
+    manifestJson: string,
+    bundleJson: string,
+    fontsJson: string,
+  ): string;
   default(wasmUrl: string): Promise<void>;
   canonicalize_timeline_document(timelineJson: string): string;
   timeline_document_view(timelineJson: string): string;
@@ -237,10 +297,27 @@ interface StagedRenderPackage {
 
 interface FulfilledFrame {
   objects: Map<number, CanvasKitExternalObject>;
+  scene3dRequests?: Map<
+    string,
+    { canonical: Uint8Array; topology: string; width: number; height: number }
+  >;
   dispose: Array<() => void>;
   videoFrames: number;
   videoTextureFrames: number;
   resourceCache: BrowserResourceCacheFrameReport;
+}
+
+interface CompletedPreview {
+  result: ProductRenderResult;
+  inspection: ProductFrameInspection;
+  requests: NonNullable<FulfilledFrame["scene3dRequests"]>;
+  width: number;
+  height: number;
+  scaleX: number;
+  scaleY: number;
+}
+interface BufferedPreview extends CompletedPreview {
+  bitmap: ImageBitmap;
 }
 
 interface CachedBrowserResource {
@@ -310,7 +387,17 @@ interface ProductFrameInspection {
     clipId: string;
     contentHash: string;
     bounds: { x: number; y: number; width: number; height: number };
-    deviceFromLocal: [number, number, number, number, number, number, number, number, number];
+    deviceFromLocal: [
+      number,
+      number,
+      number,
+      number,
+      number,
+      number,
+      number,
+      number,
+      number,
+    ];
   }>;
 }
 
@@ -384,6 +471,7 @@ export interface PlayerStats {
   programGroups: number;
   programTransformGroups: number;
   programClipGroups: number;
+  pathClipElisions: number;
   programOpacityGroups: number;
   programFilterGroups: number;
   programMaskGroups: number;
@@ -452,9 +540,10 @@ export const CANVASKIT_VERSION = canvasKitPackage.version;
 export const BROWSER_PLAYER_IMPLEMENTATION = `valle-product-compositor+canvaskit-wasm@${CANVASKIT_VERSION}`;
 
 let canvasKitPromise: Promise<CanvasKit> | null = null;
-const staticCanvasKitInit = typeof globalThis.CanvasKitInit === "function"
-  ? globalThis.CanvasKitInit
-  : null;
+const staticCanvasKitInit =
+  typeof globalThis.CanvasKitInit === "function"
+    ? globalThis.CanvasKitInit
+    : null;
 
 export async function createBrowserValleWebPlayer(
   options: BrowserValleWebPlayerOptions,
@@ -472,7 +561,8 @@ export function resolveAssetUrl(
   if (/^https?:\/\//.test(value) && proxyBase) {
     return `${proxyBase}?url=${encodeURIComponent(value)}`;
   }
-  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(value) || value.startsWith("/")) return value;
+  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(value) || value.startsWith("/"))
+    return value;
   const base = assetBaseUrl.endsWith("/") ? assetBaseUrl : `${assetBaseUrl}/`;
   return `${base}${value.split("/").map(encodeURIComponent).join("/")}`;
 }
@@ -507,6 +597,16 @@ export class BrowserValleWebPlayer {
   private wasm!: ValleWasmModule;
   private engine!: BrowserProductEngineWire;
   private planner: ProductFramePlannerPool | null = null;
+  private scene3dDof: CanvasKitScene3dDof | null = null;
+  private scene3dGpu: GpuScene3D | null = null;
+  private scene3dGpuInit: Promise<GpuScene3D | null> | null = null;
+  private gpuCircles: GpuCircles | null = null;
+  private currentScene3dRequests = new Map<
+    string,
+    { canonical: Uint8Array; topology: string; width: number; height: number }
+  >();
+  private readonly renderMode: "reference" | "realtime";
+  private readonly cpuThreads: number;
   private bootstrap!: ProductEngineBootstrap;
   private CanvasKit!: CanvasKit;
   private compositor!: CanvasKitExecutor;
@@ -516,7 +616,11 @@ export class BrowserValleWebPlayer {
   private playGeneration = 0;
   private rafId: number | null = null;
   private renderInFlight: Promise<unknown> | null = null;
+  private renderTail: Promise<void> | null = null;
+  private warmedPreviewRenderId: string | null = null;
+  private warmedPreviewTarget: TargetSurface | null = null;
   private playbackPump: Promise<void> | null = null;
+  private previewBuffer: PreviewBuffer<BufferedPreview> | null = null;
   private audioPump: Promise<void> | null = null;
   private playbackFrame: number | null = null;
   private target: TargetSurface | null = null;
@@ -552,23 +656,50 @@ export class BrowserValleWebPlayer {
   private lastRender: ProductRenderResult | null = null;
 
   constructor(options: BrowserValleWebPlayerOptions) {
-    if (!options?.fixedPackageManifestJson) throw new Error("fixedPackageManifestJson is required");
+    if (!options?.fixedPackageManifestJson)
+      throw new Error("fixedPackageManifestJson is required");
     if (!options?.timelineJson) throw new Error("timelineJson is required");
-    if (!options.resourceManifestJson) throw new Error("resourceManifestJson is required");
-    if (!options.verifiedBindingBundleJson) throw new Error("verifiedBindingBundleJson is required");
-    this.runtimeAssets = resolvePlayerRuntimeAssets(options.runtimeAssets, options.runtimeBaseUrl);
+    if (!options.resourceManifestJson)
+      throw new Error("resourceManifestJson is required");
+    if (!options.verifiedBindingBundleJson)
+      throw new Error("verifiedBindingBundleJson is required");
+    const cores =
+      typeof navigator === "undefined" ? 1 : navigator.hardwareConcurrency || 1;
+    const threads =
+      options.cpuThreads ??
+      Math.min(
+        options.renderMode === "realtime" ? 6 : 2,
+        Math.max(1, options.renderMode === "realtime" ? cores - 2 : Math.floor(cores / 2)),
+      );
+    if (!Number.isSafeInteger(threads) || threads < 1 || threads > 8) {
+      throw new RangeError("cpuThreads must be an integer in 1..8");
+    }
+    this.cpuThreads = threads;
+    this.renderMode = options.renderMode ?? "reference";
+    if (this.renderMode !== "reference" && this.renderMode !== "realtime")
+      throw new Error("Invalid renderMode");
+    this.runtimeAssets = resolvePlayerRuntimeAssets(
+      options.runtimeAssets,
+      options.runtimeBaseUrl,
+    );
     this.wasmModuleUrl = this.runtimeAssets.engine.glue;
     this.wasmUrl = this.runtimeAssets.engine.wasm;
     this.fixedPackageManifestJson = options.fixedPackageManifestJson;
     this.timelineJson = options.timelineJson;
     this.timeline = JSON.parse(options.timelineJson) as TimelineDocument;
     this.resourceManifestJson = options.resourceManifestJson;
-    this.resourceManifest = JSON.parse(options.resourceManifestJson) as ResourceManifest;
+    this.resourceManifest = JSON.parse(
+      options.resourceManifestJson,
+    ) as ResourceManifest;
     this.verifiedBindingBundleJson = options.verifiedBindingBundleJson;
     this.assets = options.assets ?? [];
     if (options.fonts !== undefined) {
-      const pageUrl = typeof location === "undefined" ? import.meta.url : location.href;
-      this.loadMotionFonts = createMotionFontLoader(options.fonts, new URL(options.assetBaseUrl ?? pageUrl, pageUrl).href);
+      const pageUrl =
+        typeof location === "undefined" ? import.meta.url : location.href;
+      this.loadMotionFonts = createMotionFontLoader(
+        options.fonts,
+        new URL(options.assetBaseUrl ?? pageUrl, pageUrl).href,
+      );
     }
     this.canvas = options.canvas ?? null;
     this.assetBaseUrl = options.assetBaseUrl ?? "/assets/";
@@ -576,8 +707,9 @@ export class BrowserValleWebPlayer {
     this.pxScale = finitePositive(options.pxScale ?? 1, "pxScale");
     this.gpu = options.gpu ?? true;
     this.trace = options.trace;
-    this.audioContext = options.audioContext
-      ?? maybeCreateAudioContext(this.timeline.document.canvas.sampleRate);
+    this.audioContext =
+      options.audioContext ??
+      maybeCreateAudioContext(this.timeline.document.canvas.sampleRate);
     this.resourceObjects = new BrowserResourceCache(options.resourceCache);
     this.clock = new AudioMasterClock(this.audioContext);
     this.stats = emptyPlayerStats();
@@ -591,9 +723,12 @@ export class BrowserValleWebPlayer {
     const stageStarted = performance.now();
     const staged = await this.stageRenderPackage(this.currentRenderPackage());
     this.commitStagedRenderPackage(staged);
-    performance.mark("valle-player-package-stage", { detail: {
-      mode: "initial", durationMs: performance.now() - stageStarted,
-    } });
+    performance.mark("valle-player-package-stage", {
+      detail: {
+        mode: "initial",
+        durationMs: performance.now() - stageStarted,
+      },
+    });
     return this;
   }
 
@@ -607,9 +742,19 @@ export class BrowserValleWebPlayer {
     return { ...this.requireRenderReceipt() };
   }
 
+  get scene3dGpuDiagnostics() {
+    return this.scene3dGpu ? { ...this.scene3dGpu.stats } : null;
+  }
+  get geometryGpuDiagnostics() {
+    return this.gpuCircles ? { ...this.gpuCircles.stats } : null;
+  }
+
   lastFrameTimeS(): number {
     const receipt = this.requireRenderReceipt();
-    return (receipt.frameCount - 1) / canonicalRationalNumber(receipt.frameRate, "frameRate");
+    return (
+      (receipt.frameCount - 1) /
+      canonicalRationalNumber(receipt.frameRate, "frameRate")
+    );
   }
 
   currentTime(): number {
@@ -644,28 +789,69 @@ export class BrowserValleWebPlayer {
   }
 
   async renderTime(timeS: number, options: RenderOptions = {}) {
-    const frame = options.frame ?? this.frameAtSeconds(clamp(timeS, 0, this.lastFrameTimeS()));
+    const frame =
+      options.frame ??
+      this.frameAtSeconds(clamp(timeS, 0, this.lastFrameTimeS()));
     return this.renderFrame(frame, options);
   }
 
   async renderFrame(frame: number, options: RenderOptions = {}) {
+    return (await this.renderFrameDetailed(frame, options, true)).result;
+  }
+  private renderFrameDetailed(
+    frame: number,
+    options: RenderOptions,
+    publish: boolean,
+    afterRender?: (completed: CompletedPreview) => Promise<void>,
+  ): Promise<CompletedPreview> {
+    // Working surfaces and GPU fulfillment belong to one frame at a time, including when
+    // cooperative drawing yields to presentation, a seek or a direct SDK render call.
+    const job = (this.renderTail ?? Promise.resolve()).then(async () => {
+      const completed = await this.renderFrameNow(frame, options, publish);
+      // Deferred presentation still owns this GPU target until its deadline. SDK calls and seeks
+      // must not overwrite it between drawing a frame and presenting that frame.
+      await afterRender?.(completed);
+      return completed;
+    });
+    this.renderTail = job.then(() => undefined, () => undefined);
+    return job;
+  }
+  private async renderFrameNow(
+    frame: number,
+    options: RenderOptions,
+    publish: boolean,
+    cooperative = true,
+  ): Promise<CompletedPreview> {
     if (this.closed) throw new Error("browser player is closed");
     const renderId = this.renderId;
     if (!renderId) throw new Error("browser player has no open RenderId");
     const receipt = this.requireRenderReceipt();
     const frameCount = receipt.frameCount;
     if (!Number.isSafeInteger(frame) || frame < 0 || frame >= frameCount) {
-      throw new RangeError(`frame ${frame} is outside fixed render range [0, ${frameCount})`);
+      throw new RangeError(
+        `frame ${frame} is outside fixed render range [0, ${frameCount})`,
+      );
     }
     const canvasWidth = receipt.canvasWidth;
     const canvasHeight = receipt.canvasHeight;
-    const scale = finitePositive(options.rasterScale ?? this.pxScale, "rasterScale");
+    const scale = finitePositive(
+      options.rasterScale ?? this.pxScale,
+      "rasterScale",
+    );
     const width = Math.max(1, Math.round(canvasWidth * scale));
     const height = Math.max(1, Math.round(canvasHeight * scale));
     const forceCpu = options.png === true;
     const target = this.acquireTarget(width, height, forceCpu);
     const frameStarted = performance.now();
-    const planningInput = { ...this.framePlanningInput(frame, width, height, options.transparent === true), trace: this.trace !== undefined };
+    const planningInput = {
+      ...this.framePlanningInput(
+        frame,
+        width,
+        height,
+        options.transparent === true,
+      ),
+      trace: this.trace !== undefined,
+    };
     const planner = this.requirePlanner();
     const endPrepareWait = this.trace?.span("prepare.wait", { frame });
     const planning = planner.prepare(planningInput);
@@ -673,10 +859,24 @@ export class BrowserValleWebPlayer {
     try {
       const requestStage = await planning.requests;
       endPrepareWait?.();
-      this.trace?.worker("prepare.evaluate", requestStage.workerTimeOriginMs, requestStage.evaluateStartedMs, requestStage.evaluatePrepareMs, frame);
-      this.trace?.worker("prepare.inspect", requestStage.workerTimeOriginMs, requestStage.inspectStartedMs, requestStage.requestInspectMs, frame);
+      this.trace?.worker(
+        "prepare.evaluate",
+        requestStage.workerTimeOriginMs,
+        requestStage.evaluateStartedMs,
+        requestStage.evaluatePrepareMs,
+        frame,
+      );
+      this.trace?.worker(
+        "prepare.inspect",
+        requestStage.workerTimeOriginMs,
+        requestStage.inspectStartedMs,
+        requestStage.requestInspectMs,
+        frame,
+      );
       this.assertActiveRenderId(renderId, requestStage.renderId);
-      const frameInspection = JSON.parse(requestStage.inspectionJson) as ProductFrameInspection;
+      const frameInspection = JSON.parse(
+        requestStage.inspectionJson,
+      ) as ProductFrameInspection;
       this.assertActiveRenderId(renderId, frameInspection.renderId);
       if (frameInspection.compositionFrame !== frame) {
         throw new Error(
@@ -693,8 +893,14 @@ export class BrowserValleWebPlayer {
       this.stats.requestBytes += requestStage.requestPacket.byteLength;
       const fulfillmentStarted = performance.now();
       const endFulfill = this.trace?.span("resource.fulfill", { frame });
-      const fulfillment = this.fulfillRequests(requestStage.requestPacket, target.gpu).finally(() => endFulfill?.());
-      const endOverlapWait = this.trace?.span("prepare.overlap_wait", { frame });
+      const fulfillment = this.fulfillRequests(
+        requestStage.requestPacket,
+        target.gpu,
+        requestStage.gpuScene3d,
+      ).finally(() => endFulfill?.());
+      const endOverlapWait = this.trace?.span("prepare.overlap_wait", {
+        frame,
+      });
       const endLowerWait = this.trace?.span("lower_bind.wait", { frame });
       const [readyResult, fulfillmentResult] = await Promise.allSettled([
         planning.ready.finally(() => endLowerWait?.()),
@@ -702,12 +908,26 @@ export class BrowserValleWebPlayer {
       ] as const);
       endOverlapWait?.();
       // Successful fulfillment owns a frame lease even if planning failed or was superseded.
-      if (fulfillmentResult.status === "fulfilled") fulfilled = fulfillmentResult.value;
+      if (fulfillmentResult.status === "fulfilled")
+        fulfilled = fulfillmentResult.value;
       if (readyResult.status === "rejected") throw readyResult.reason;
-      if (fulfillmentResult.status === "rejected") throw fulfillmentResult.reason;
+      if (fulfillmentResult.status === "rejected")
+        throw fulfillmentResult.reason;
       const readyStage = readyResult.value;
-      this.trace?.worker("lower", readyStage.workerTimeOriginMs, readyStage.lowerStartedMs, readyStage.lowerMs, frame);
-      this.trace?.worker("bind", readyStage.workerTimeOriginMs, readyStage.bindStartedMs, readyStage.bindPacketsMs, frame);
+      this.trace?.worker(
+        "lower",
+        readyStage.workerTimeOriginMs,
+        readyStage.lowerStartedMs,
+        readyStage.lowerMs,
+        frame,
+      );
+      this.trace?.worker(
+        "bind",
+        readyStage.workerTimeOriginMs,
+        readyStage.bindStartedMs,
+        readyStage.bindPacketsMs,
+        frame,
+      );
       this.assertActiveRenderId(renderId, readyStage.renderId);
       const frameResources = fulfillmentResult.value;
       const resourceFulfillMs = performance.now() - fulfillmentStarted;
@@ -715,11 +935,31 @@ export class BrowserValleWebPlayer {
       const planPacket = readyStage.planPacket;
       const bindingPacket = readyStage.bindingPacket;
       const schedulePacket = readyStage.schedulePacket;
-      this.stats.planBytes += readyStage.planPacketTransferred ? planPacket.byteLength : 0;
+      this.stats.planBytes += readyStage.planPacketTransferred
+        ? planPacket.byteLength
+        : 0;
       this.stats.bindingBytes += bindingPacket.byteLength;
       this.stats.scheduleBytes += schedulePacket.byteLength;
-      const endExecute = this.trace?.span("execute.record", { frame, gpu: target.gpu });
+      // GPU fulfillment and first-use material admission can each consume most of a frame
+      // interval. Give presentation its turn before combining both into one long main task.
+      if (!publish && target.gpu && cooperative && performance.now() - frameStarted >= 6)
+        await yieldToHost();
+      const endExecute = this.trace?.span("execute.record", {
+        frame,
+        gpu: target.gpu,
+      });
       const executeStarted = performance.now();
+      const passTimings = this.trace
+        ? new Map<
+            string,
+            {
+              count: number;
+              pixels: number;
+              drawMs: number;
+              snapshotMs: number;
+            }
+          >()
+        : null;
       this.assertActiveRenderId(renderId, readyStage.renderId);
       const report = await this.compositor.execute(
         planPacket,
@@ -728,17 +968,53 @@ export class BrowserValleWebPlayer {
         { generation, objects: frameResources.objects },
         {
           surface: target.surface,
+          deferGpuFlush: this.renderMode === "realtime",
+          boundedPathClipLayers: this.renderMode === "realtime",
+          fuseClipPaints: this.renderMode === "realtime",
+          retainRasterTrees: this.renderMode === "realtime",
+          geometryRenderer: this.gpuCircles,
+          yieldToPresentation: !publish && target.gpu && cooperative
+            ? yieldToHost
+            : undefined,
           directContext: target.context,
           maxSurfaceBytes: planningInput.maxSurfaceBytes,
           maxFrameBytes: planningInput.maxFrameBytes,
+          onPassTiming: passTimings
+            ? (timing) => {
+                const totals = passTimings.get(timing.kind) ?? {
+                  count: 0,
+                  pixels: 0,
+                  drawMs: 0,
+                  snapshotMs: 0,
+                };
+                totals.count++;
+                totals.pixels += timing.width * timing.height;
+                totals.drawMs += timing.drawMs;
+                totals.snapshotMs += timing.snapshotMs;
+                passTimings.set(timing.kind, totals);
+              }
+            : undefined,
         },
       );
       this.assertActiveRenderId(renderId, readyStage.renderId);
       const executeMs = performance.now() - executeStarted;
       endExecute?.();
-      const endPresent = this.trace?.span("delivery.present", { frame, cpuReadback: !target.gpu });
+      if (passTimings)
+        this.trace?.evidence("execute.breakdown", {
+          frame,
+          packetAdmissionMs: report.packetAdmissionMs,
+          programAdmissionMs: report.programAdmissionMs,
+          scheduleAdmissionMs: report.scheduleAdmissionMs,
+          renderMs: report.renderMs,
+          passes: Object.fromEntries(passTimings),
+          directRasterPrograms: report.directRasterPrograms,
+        });
+      const endPresent = this.trace?.span("delivery.present", {
+        frame,
+        cpuReadback: !target.gpu,
+      });
       const presentStarted = performance.now();
-      this.presentTarget(target, width, height);
+      if (publish) this.presentTarget(target, width, height);
       const presentMs = performance.now() - presentStarted;
       endPresent?.();
       const captureEncodeStarted = performance.now();
@@ -753,9 +1029,18 @@ export class BrowserValleWebPlayer {
         maximumLiveImages: report.maximumLiveImages,
         surfaceAllocations: report.surfaceAllocations,
         surfaceReuses: report.surfaceReuses,
-        surfaceAllocatedBytes: exactBigIntNumber(report.surfaceAllocatedBytes, "surface allocated bytes"),
-        surfaceResidentBytes: exactBigIntNumber(report.surfaceResidentBytes, "surface resident bytes"),
-        surfacePeakBytes: exactBigIntNumber(report.surfacePeakBytes, "surface peak bytes"),
+        surfaceAllocatedBytes: exactBigIntNumber(
+          report.surfaceAllocatedBytes,
+          "surface allocated bytes",
+        ),
+        surfaceResidentBytes: exactBigIntNumber(
+          report.surfaceResidentBytes,
+          "surface resident bytes",
+        ),
+        surfacePeakBytes: exactBigIntNumber(
+          report.surfacePeakBytes,
+          "surface peak bytes",
+        ),
         surfacePoolEvictions: report.surfacePoolEvictions,
         templateCacheHit: readyStage.templateCacheHit,
         programCacheHits: report.programCacheHits,
@@ -769,17 +1054,25 @@ export class BrowserValleWebPlayer {
         rasterLayerCacheEntries: report.rasterLayerCacheEntries,
         rasterLayerCacheBytes: report.rasterLayerCacheBytes,
         resourceCacheGeneration: frameResources.resourceCache.generation,
-        resourceCacheGenerationInvalidations: frameResources.resourceCache.generationInvalidations,
+        resourceCacheGenerationInvalidations:
+          frameResources.resourceCache.generationInvalidations,
         resourceCacheHits: frameResources.resourceCache.hits,
         resourceCacheMisses: frameResources.resourceCache.misses,
         resourceCacheInsertions: frameResources.resourceCache.insertions,
         resourceCacheEvictions: frameResources.resourceCache.evictions,
         resourceCacheBypasses: frameResources.resourceCache.bypasses,
-        resourceCacheResidentEntries: frameResources.resourceCache.residentEntries,
+        resourceCacheResidentEntries:
+          frameResources.resourceCache.residentEntries,
         resourceCacheResidentBytes: frameResources.resourceCache.residentBytes,
       };
-      this.trace?.evidence("frame.caches", { frame, ...stats, requestBytes: requestStage.requestPacket.byteLength,
-        planBytes: readyStage.planPacketTransferred ? planPacket.byteLength : 0, bindingBytes: bindingPacket.byteLength, scheduleBytes: schedulePacket.byteLength });
+      this.trace?.evidence("frame.caches", {
+        frame,
+        ...stats,
+        requestBytes: requestStage.requestPacket.byteLength,
+        planBytes: readyStage.planPacketTransferred ? planPacket.byteLength : 0,
+        bindingBytes: bindingPacket.byteLength,
+        scheduleBytes: schedulePacket.byteLength,
+      });
       const frameMs = performance.now() - frameStarted;
       this.stats.renders += 1;
       this.stats.preparedFrames += 1;
@@ -802,6 +1095,7 @@ export class BrowserValleWebPlayer {
       this.stats.programGroups += report.programGroups;
       this.stats.programTransformGroups += report.programTransformGroups;
       this.stats.programClipGroups += report.programClipGroups;
+      this.stats.pathClipElisions += report.pathClipElisions;
       this.stats.programOpacityGroups += report.programOpacityGroups;
       this.stats.programFilterGroups += report.programFilterGroups;
       this.stats.programMaskGroups += report.programMaskGroups;
@@ -813,14 +1107,26 @@ export class BrowserValleWebPlayer {
       this.stats.videoFrames += stats.videoFrames;
       this.stats.gpuVideoFrames += stats.gpuVideoFrames;
       this.stats.executionPasses += report.passes;
-      this.stats.physicalSurfaces = Math.max(this.stats.physicalSurfaces, report.physicalSurfaces);
-      this.stats.maximumLiveImages = Math.max(this.stats.maximumLiveImages, report.maximumLiveImages);
+      this.stats.physicalSurfaces = Math.max(
+        this.stats.physicalSurfaces,
+        report.physicalSurfaces,
+      );
+      this.stats.maximumLiveImages = Math.max(
+        this.stats.maximumLiveImages,
+        report.maximumLiveImages,
+      );
       this.stats.surfaceAllocations += report.surfaceAllocations;
       this.stats.surfaceReuses += report.surfaceReuses;
-      this.stats.surfaceAllocatedBytes += exactBigIntNumber(report.surfaceAllocatedBytes, "surface allocated bytes");
+      this.stats.surfaceAllocatedBytes += exactBigIntNumber(
+        report.surfaceAllocatedBytes,
+        "surface allocated bytes",
+      );
       this.stats.maximumSurfaceResidentBytes = Math.max(
         this.stats.maximumSurfaceResidentBytes,
-        exactBigIntNumber(report.surfaceResidentBytes, "surface resident bytes"),
+        exactBigIntNumber(
+          report.surfaceResidentBytes,
+          "surface resident bytes",
+        ),
       );
       this.stats.maximumSurfacePeakBytes = Math.max(
         this.stats.maximumSurfacePeakBytes,
@@ -838,17 +1144,21 @@ export class BrowserValleWebPlayer {
       this.stats.rasterLayerCacheHits += report.rasterLayerCacheHits;
       this.stats.rasterLayerCacheMisses += report.rasterLayerCacheMisses;
       this.stats.maximumRasterLayerCacheEntries = Math.max(
-        this.stats.maximumRasterLayerCacheEntries, report.rasterLayerCacheEntries,
+        this.stats.maximumRasterLayerCacheEntries,
+        report.rasterLayerCacheEntries,
       );
       this.stats.maximumRasterLayerCacheBytes = Math.max(
-        this.stats.maximumRasterLayerCacheBytes, report.rasterLayerCacheBytes,
+        this.stats.maximumRasterLayerCacheBytes,
+        report.rasterLayerCacheBytes,
       );
       this.stats.resourceCacheGenerationInvalidations +=
         frameResources.resourceCache.generationInvalidations;
       this.stats.resourceCacheHits += frameResources.resourceCache.hits;
       this.stats.resourceCacheMisses += frameResources.resourceCache.misses;
-      this.stats.resourceCacheInsertions += frameResources.resourceCache.insertions;
-      this.stats.resourceCacheEvictions += frameResources.resourceCache.evictions;
+      this.stats.resourceCacheInsertions +=
+        frameResources.resourceCache.insertions;
+      this.stats.resourceCacheEvictions +=
+        frameResources.resourceCache.evictions;
       this.stats.resourceCacheBypasses += frameResources.resourceCache.bypasses;
       this.stats.maximumResourceCacheEntries = Math.max(
         this.stats.maximumResourceCacheEntries,
@@ -864,7 +1174,7 @@ export class BrowserValleWebPlayer {
       for (const motion of frameInspection.motion) {
         this.stats.motionExecuteClips[motion.clipId] =
           (this.stats.motionExecuteClips[motion.clipId] ?? 0) + 1;
-        const clip = this.stats.motionPerformance[motion.clipId] ??= {
+        const clip = (this.stats.motionPerformance[motion.clipId] ??= {
           frames: 0,
           evaluatePrepareMs: 0,
           requestInspectMs: 0,
@@ -879,7 +1189,7 @@ export class BrowserValleWebPlayer {
           renderMs: 0,
           bindingBytes: 0,
           scheduleBytes: 0,
-        };
+        });
         clip.frames += 1;
         clip.evaluatePrepareMs += requestStage.evaluatePrepareMs;
         clip.requestInspectMs += requestStage.requestInspectMs;
@@ -896,7 +1206,7 @@ export class BrowserValleWebPlayer {
         clip.scheduleBytes += schedulePacket.byteLength;
       }
       this.syncPlannerStats();
-      this.lastRender = {
+      const result: ProductRenderResult = {
         implementation: BROWSER_PLAYER_IMPLEMENTATION,
         runtimeFlavor: target.gpu ? "product-gpu" : "product-cpu",
         executionProfile: report.profile,
@@ -910,14 +1220,17 @@ export class BrowserValleWebPlayer {
         },
         stats,
       };
-      this.frameInspection = frameInspection;
-      this.hitRects = frameInspection.hitRects;
-      this.inspectedFrame = frame;
-      this.inspectionScaleX = width / canvasWidth;
-      this.inspectionScaleY = height / canvasHeight;
-      this.onFramePresented?.(frame, performance.now(), this.playing
-        ? clamp(this.clock.now(), 0, this.lastFrameTimeS()) : this.timeS);
-      return this.lastRender;
+      const completed = {
+        result,
+        inspection: frameInspection,
+        requests: frameResources.scene3dRequests ?? new Map(),
+        width,
+        height,
+        scaleX: width / canvasWidth,
+        scaleY: height / canvasHeight,
+      };
+      if (publish) this.publishInspection(completed);
+      return completed;
     } finally {
       planner.release(planning.key);
       if (fulfilled) {
@@ -930,27 +1243,75 @@ export class BrowserValleWebPlayer {
     }
   }
 
+  private publishInspection(completed: CompletedPreview): void {
+    this.lastRender = completed.result;
+    this.frameInspection = completed.inspection;
+    this.currentScene3dRequests = completed.requests;
+    this.hitRects = completed.inspection.hitRects;
+    this.inspectedFrame = completed.result.frame.index;
+    this.inspectionScaleX = completed.scaleX;
+    this.inspectionScaleY = completed.scaleY;
+    this.onFramePresented?.(
+      completed.result.frame.index,
+      performance.now(),
+      this.playing
+        ? clamp(this.clock.now(), 0, this.lastFrameTimeS())
+        : this.timeS,
+    );
+  }
+
   async play(): Promise<void> {
     if (this.closed) throw new Error("browser player is closed");
     if (this.playing) return;
     const generation = ++this.playGeneration;
     if (this.renderInFlight) await this.renderInFlight.catch(() => undefined);
+    if (this.renderTail) await this.renderTail;
     if (generation !== this.playGeneration || this.closed) return;
     if (this.timeS >= this.lastFrameTimeS()) this.timeS = 0;
+    if (this.renderMode === "realtime") {
+      const receipt = this.requireRenderReceipt();
+      this.acquireTarget(Math.max(1, Math.round(receipt.canvasWidth * this.pxScale)),
+        Math.max(1, Math.round(receipt.canvasHeight * this.pxScale)), false);
+    }
+    // Distant video frames require decoder seeks; keep their preview warmup sequential.
+    const hasVideoInputs = this.renderMode === "realtime" &&
+      [...this.assetByDigest.values()].some(asset => asset.type === "video");
+    if (this.renderMode === "realtime" && !hasVideoInputs && this.target?.gpu &&
+        (this.warmedPreviewRenderId !== this.renderId || this.warmedPreviewTarget !== this.target)) {
+      const renderId = this.renderId, last = this.requireRenderReceipt().frameCount - 1;
+      // Compile common material/coverage variants before starting the clock. Sample the work's
+      // time range rather than special-casing a film, and retain no rendered sample bitmaps.
+      // Neighboring frames can switch native coverage/material variants at an extent or alpha
+      // boundary. Warm both sides of each sampled boundary instead of discovering the second
+      // pipeline synchronously after the playback clock has started.
+      const samples = new Set([Math.floor(last / 4), Math.floor(last / 2), Math.floor(last * 3 / 4), last]
+        .flatMap(frame => [frame, Math.min(last, frame + 1)]));
+      for (const frame of samples) {
+        if (generation !== this.playGeneration || this.closed || this.renderId !== renderId) return;
+        const pending = this.renderFrameDetailed(frame, {}, false);
+        this.renderInFlight = pending;
+        try { await pending; }
+        catch (error) {
+          if (generation !== this.playGeneration || this.closed || this.renderId !== renderId) return;
+          throw error;
+        }
+        finally { if (this.renderInFlight === pending) this.renderInFlight = null; }
+      }
+      this.warmedPreviewRenderId = renderId;
+      this.warmedPreviewTarget = this.target;
+    }
     const planning = this.prefetchPlanningWindow(
-      this.frameAtSeconds(this.timeS),
+      this.frameAtSeconds(this.timeS), true,
     );
     const audio = this.prefetchAudio(this.timeS, this.audioContext);
     // Start the media clock only after a bounded decode-independent cushion exists. Without this
     // phase the clock spends its first transition consuming the very frames the worker is still
     // producing, and a realtime-capable planner can never recover that initial debt.
-    const prebufferFrames = Math.min(16, Math.max(1,
-      Math.ceil(canonicalRationalNumber(this.requireRenderReceipt().frameRate, "frameRate") * 0.1),
-    ));
+    // Await one demanded frame: speculative preparation may stop at its byte budget.
     let prefetched: CompiledAudioPlayback | null;
     try {
       [, prefetched] = await Promise.all([
-        Promise.all(planning.slice(0, prebufferFrames).map((job) => job.ready)),
+        Promise.all(planning.slice(0,1).map(job=>job.ready)),
         audio,
       ]);
     } catch (error) {
@@ -959,11 +1320,95 @@ export class BrowserValleWebPlayer {
       throw error;
     }
     if (generation !== this.playGeneration || this.closed) return;
+    if (!hasVideoInputs && this.renderMode === "realtime" && this.target?.gpu) {
+      // Pure Motion has no pixel queue. Let parallel preparation fill a small packet cushion
+      // before its media clock starts. The deadline also covers plans that cannot fit together
+      // in the existing byte budget; they remain speculative and never bypass that budget.
+      await Promise.race([
+        Promise.allSettled(planning.slice(0, 6).map(job => job.ready)),
+        waitMilliseconds(180),
+      ]);
+      if (generation !== this.playGeneration || this.closed) return;
+    }
+    if (
+      this.renderMode === "realtime" &&
+      hasVideoInputs &&
+      this.target?.gpu &&
+      this.target.canvas &&
+      this.canvas &&
+      typeof createImageBitmap === "function"
+    ) {
+      const start = this.frameAtSeconds(this.timeS),
+        first = Math.max(
+          start,
+          this.playbackFrame === null ? start : this.playbackFrame + 1,
+        );
+      const target = this.target,
+        capacity = Math.max(
+          1,
+          Math.min(
+            8,
+            Math.floor(
+              (64 * 1024 * 1024) /
+                (target.canvas!.width * target.canvas!.height * 4),
+            ),
+          ),
+        );
+      const buffer = new PreviewBuffer(
+        first,
+        this.requireRenderReceipt().frameCount - 1,
+        capacity,
+        async (frame) => {
+          this.prefetchPlanningWindow(frame);
+          const pending = (async () => {
+            const started = performance.now();
+            let preview: BufferedPreview | null = null;
+            await this.renderFrameDetailed(frame, {}, false, async completed => {
+              if (frame === first + capacity - 1) {
+                const gl = target.canvas!.getContext("webgl2");
+                if (gl) await waitForGpuCompletion(gl);
+              }
+              if (performance.now() - started >= 6) await yieldToHost();
+              // Snapshot completion belongs to the same render slot as its GPU writes.
+              const bitmap = await createImageBitmap(target.canvas!);
+              preview = { ...completed, bitmap };
+            });
+            return preview!;
+          })();
+          this.renderInFlight = pending;
+          try {
+            return await pending;
+          } finally {
+            if (this.renderInFlight === pending) this.renderInFlight = null;
+          }
+        },
+        (completed) => completed.bitmap.close(),
+        () => this.frameAtSeconds(this.playing
+          ? clamp(this.clock.now(), 0, this.lastFrameTimeS())
+          : this.timeS),
+      );
+      this.previewBuffer = buffer;
+      try {
+        await buffer.prebuffer(capacity);
+      } catch (error) {
+        buffer.close();
+        if (generation === this.playGeneration && !this.closed) throw error;
+        return;
+      }
+      if (generation !== this.playGeneration || this.closed) {
+        buffer.close();
+        return;
+      }
+    }
     await this.clock.start(this.timeS, { useAudioClock: prefetched !== null });
     if (generation !== this.playGeneration || this.closed) return;
     this.teardownAudioGraph();
     if (this.audioContext && prefetched) {
-      this.audioGraph = this.scheduleAudioGraph(this.audioContext, prefetched, this.timeS);
+      this.audioGraph = this.scheduleAudioGraph(
+        this.audioContext,
+        prefetched,
+        this.timeS,
+      );
       this.stats.audioMode = "webaudio";
     } else {
       this.stats.audioMode = "performance";
@@ -972,32 +1417,47 @@ export class BrowserValleWebPlayer {
     this.stats.clockMode = this.clock.mode;
     this.scheduleTick();
     if (this.audioGraph && this.audioContext) {
-      const audioPump = this.runAudioPump(generation, this.audioContext, this.audioGraph);
+      const audioPump = this.runAudioPump(
+        generation,
+        this.audioContext,
+        this.audioGraph,
+      );
       this.audioPump = audioPump;
-      audioPump.catch((error) => {
-        if (generation !== this.playGeneration || this.closed) return;
-        this.pause();
-        queueMicrotask(() => { throw error; });
-      }).finally(() => {
-        if (this.audioPump === audioPump) this.audioPump = null;
-      });
+      audioPump
+        .catch((error) => {
+          if (generation !== this.playGeneration || this.closed) return;
+          this.pause();
+          queueMicrotask(() => {
+            throw error;
+          });
+        })
+        .finally(() => {
+          if (this.audioPump === audioPump) this.audioPump = null;
+        });
     }
     const pump = this.runPlaybackPump(generation);
     this.playbackPump = pump;
-    pump.catch((error) => {
-      if (generation !== this.playGeneration || this.closed) return;
-      this.pause();
-      queueMicrotask(() => { throw error; });
-    }).finally(() => {
-      if (this.playbackPump === pump) this.playbackPump = null;
-    });
+    pump
+      .catch((error) => {
+        if (generation !== this.playGeneration || this.closed) return;
+        this.pause();
+        queueMicrotask(() => {
+          throw error;
+        });
+      })
+      .finally(() => {
+        if (this.playbackPump === pump) this.playbackPump = null;
+      });
   }
 
   pause(): void {
+    this.previewBuffer?.close();
+    this.previewBuffer = null;
     this.playGeneration += 1;
     if (this.rafId !== null) cancelAnimationFrame(this.rafId);
     this.rafId = null;
-    if (this.playing) this.timeS = clamp(this.clock.now(), 0, this.lastFrameTimeS());
+    if (this.playing)
+      this.timeS = clamp(this.clock.now(), 0, this.lastFrameTimeS());
     this.playing = false;
     this.clock.pause(this.timeS);
     this.teardownAudioGraph();
@@ -1044,24 +1504,39 @@ export class BrowserValleWebPlayer {
     if (endSample <= startSample) return null;
     const frames = endSample - startSample;
     const offline = new OfflineAudioContext(2, frames, sampleRate);
-    const buffer = await this.renderCompiledAudioBuffer(offline, startSample, endSample);
-    this.scheduleAudioGraph(offline, { buffer, startSample }, start, offline.destination);
+    const buffer = await this.renderCompiledAudioBuffer(
+      offline,
+      startSample,
+      endSample,
+    );
+    this.scheduleAudioGraph(
+      offline,
+      { buffer, startSample },
+      start,
+      offline.destination,
+    );
     return offline.startRendering();
   }
 
   async replaceRenderPackage(next: RenderPackageReplacement) {
     if (this.closed) throw new Error("browser player is closed");
-    if (!next?.timelineJson) throw new Error("replaceRenderPackage requires timelineJson");
+    if (!next?.timelineJson)
+      throw new Error("replaceRenderPackage requires timelineJson");
     const resume = this.playing;
     this.pause();
     if (this.renderInFlight) await this.renderInFlight.catch(() => undefined);
+    if (this.renderTail) await this.renderTail;
     let staged: StagedRenderPackage;
     const stageStarted = performance.now();
     try {
       staged = await this.stageRenderPackage(next);
     } catch (error) {
       if (resume) {
-        try { await this.play(); } catch { /* preserve the admission failure */ }
+        try {
+          await this.play();
+        } catch {
+          /* preserve the admission failure */
+        }
       }
       throw error;
     }
@@ -1073,22 +1548,33 @@ export class BrowserValleWebPlayer {
       return undefined;
     }
     this.commitStagedRenderPackage(staged);
-    performance.mark("valle-player-package-stage", { detail: {
-      mode: "replace", durationMs: performance.now() - stageStarted,
-    } });
+    performance.mark("valle-player-package-stage", {
+      detail: {
+        mode: "replace",
+        durationMs: performance.now() - stageStarted,
+      },
+    });
     this.timeS = clamp(this.timeS, 0, this.lastFrameTimeS());
     const frameStarted = performance.now();
     const rendered = await this.seek(this.timeS);
-    performance.mark("valle-player-first-frame", { detail: {
-      mode: "replace", durationMs: performance.now() - frameStarted,
-    } });
+    performance.mark("valle-player-first-frame", {
+      detail: {
+        mode: "replace",
+        durationMs: performance.now() - frameStarted,
+      },
+    });
     if (resume) await this.play();
     return rendered;
   }
 
   /** Validate one complete generated document with the same Rust constructor used by Project. */
-  canonicalizeTimelineDocument(timeline: TimelineDocument): CanonicalTimelineDocument {
-    if (!this.wasm) throw new Error("Timeline canonical validation requires a loaded player runtime");
+  canonicalizeTimelineDocument(
+    timeline: TimelineDocument,
+  ): CanonicalTimelineDocument {
+    if (!this.wasm)
+      throw new Error(
+        "Timeline canonical validation requires a loaded player runtime",
+      );
     return canonicalizeTimelineDocumentWithWasm(this.wasm, timeline);
   }
 
@@ -1097,12 +1583,18 @@ export class BrowserValleWebPlayer {
     { height = 26, maxCount = 60 }: { height?: number; maxCount?: number } = {},
   ) {
     const asset = this.requireAsset(assetId, "video");
-    const blob = await this.videoBlobs.get(this.assetUrl(asset), contentDigestHex(asset.contentDigest, "video digest"));
+    const blob = await this.videoBlobs.get(
+      this.assetUrl(asset),
+      contentDigestHex(asset.contentDigest, "video digest"),
+    );
     this.stats.videoThumbExtracts += 1;
     return keyframeThumbnails({ blob, height, maxCount });
   }
 
-  async audioPeaks(assetId: string, { buckets = 2000 }: { buckets?: number } = {}) {
+  async audioPeaks(
+    assetId: string,
+    { buckets = 2000 }: { buckets?: number } = {},
+  ) {
     const asset = this.requireAsset(assetId, "audio");
     const bytes = await this.fetchAssetBytes(asset);
     this.stats.audioPeaksDecodes += 1;
@@ -1111,10 +1603,11 @@ export class BrowserValleWebPlayer {
     const source = decoded.getChannelData(0);
     const peaks = new Float32Array(buckets);
     for (let bucket = 0; bucket < buckets; bucket += 1) {
-      const start = Math.floor(bucket * source.length / buckets);
-      const end = Math.floor((bucket + 1) * source.length / buckets);
+      const start = Math.floor((bucket * source.length) / buckets);
+      const end = Math.floor(((bucket + 1) * source.length) / buckets);
       let peak = 0;
-      for (let index = start; index < end; index += 1) peak = Math.max(peak, Math.abs(source[index]!));
+      for (let index = start; index < end; index += 1)
+        peak = Math.max(peak, Math.abs(source[index]!));
       peaks[bucket] = peak;
     }
     return { peaks, durationS: decoded.duration };
@@ -1132,9 +1625,13 @@ export class BrowserValleWebPlayer {
   }> {
     const frame = this.frameAtSeconds(this.timeS);
     if (this.inspectedFrame !== frame) await this.renderFrame(frame);
-    const inspection = this.frameInspection.motion.find((value) => value.clipId === clipId);
+    const inspection = this.frameInspection.motion.find(
+      (value) => value.clipId === clipId,
+    );
     if (!inspection) {
-      const active = this.frameInspection.motion.map((value) => value.clipId).join(", ") || "none";
+      const active =
+        this.frameInspection.motion.map((value) => value.clipId).join(", ") ||
+        "none";
       throw new Error(
         `motion clip '${clipId}' is inactive at frame ${frame}; active Motion clips: ${active}`,
       );
@@ -1150,8 +1647,9 @@ export class BrowserValleWebPlayer {
   async close(): Promise<void> {
     if (this.closed) return;
     this.pause();
-    if (this.renderInFlight) await this.renderInFlight.catch(() => undefined);
     this.closed = true;
+    if (this.renderInFlight) await this.renderInFlight.catch(() => undefined);
+    if (this.renderTail) await this.renderTail;
     this.resourceObjects.dispose();
     this.planner?.close();
     this.planner = null;
@@ -1161,10 +1659,22 @@ export class BrowserValleWebPlayer {
     this.compiledAudioProgram = null;
     this.stats.renderId = "";
     this.compositor?.dispose();
+    this.scene3dDof?.dispose();
+    this.scene3dDof = null;
+    this.scene3dGpu?.dispose();
+    this.scene3dGpu = null;
+    this.scene3dGpuInit = null;
+    this.gpuCircles?.dispose();
+    this.gpuCircles = null;
+    const closingGl = this.target?.canvas?.getContext("webgl2");
+    if (closingGl) untrackGpuState(closingGl);
+    this.currentScene3dRequests.clear();
     for (const ring of this.videoRings.values()) ring.close();
     this.target?.surface.delete();
     this.target?.context?.delete();
     this.target = null;
+    this.warmedPreviewTarget = null;
+    this.warmedPreviewRenderId = null;
     this.scene3dResourceTasks.clear();
     this.videoRings.clear();
     this.assetBytes.clear();
@@ -1197,19 +1707,29 @@ export class BrowserValleWebPlayer {
     };
   }
 
-  private async stageRenderPackage(next: RenderPackageReplacement): Promise<StagedRenderPackage> {
+  private async stageRenderPackage(
+    next: RenderPackageReplacement,
+  ): Promise<StagedRenderPackage> {
     const markPhase = (phase: string, started: number): void => {
-      performance.mark("valle-player-package-phase", { detail: {
-        phase, durationMs: performance.now() - started,
-      } });
+      performance.mark("valle-player-package-phase", {
+        detail: {
+          phase,
+          durationMs: performance.now() - started,
+        },
+      });
     };
     if (this.loadMotionFonts) {
       const fontsStarted = performance.now();
       const fontsJson = await this.loadMotionFonts();
-      const selected = JSON.parse(this.wasm.with_motion_fonts(
-        next.fixedPackageManifestJson, next.timelineJson, next.resourceManifestJson,
-        next.verifiedBindingBundleJson, fontsJson,
-      )) as RenderPackageReplacement;
+      const selected = JSON.parse(
+        this.wasm.with_motion_fonts(
+          next.fixedPackageManifestJson,
+          next.timelineJson,
+          next.resourceManifestJson,
+          next.verifiedBindingBundleJson,
+          fontsJson,
+        ),
+      ) as RenderPackageReplacement;
       next = { ...next, ...selected };
       markPhase("fonts", fontsStarted);
     }
@@ -1218,13 +1738,17 @@ export class BrowserValleWebPlayer {
       JSON.parse(next.timelineJson) as TimelineDocument,
     );
     if (next.timelineJson !== canonical.timelineJson) {
-      throw new Error("timelineJson must contain the exact canonical Timeline bytes");
+      throw new Error(
+        "timelineJson must contain the exact canonical Timeline bytes",
+      );
     }
     markPhase("canonical", canonicalStarted);
     const fixedPackageManifestJson = next.fixedPackageManifestJson;
     const resourceManifestJson = next.resourceManifestJson;
     const verifiedBindingBundleJson = next.verifiedBindingBundleJson;
-    const resourceManifest = JSON.parse(resourceManifestJson) as ResourceManifest;
+    const resourceManifest = JSON.parse(
+      resourceManifestJson,
+    ) as ResourceManifest;
     const assets = (next.assets ?? this.assets).map((asset) => ({ ...asset }));
     const admittedAssets = admitBrowserAssets(assets, resourceManifest);
     let frozenResources: FrozenBundleResources;
@@ -1240,29 +1764,38 @@ export class BrowserValleWebPlayer {
         resourceManifestJson,
         verifiedBindingBundleJson,
       );
+      bootstrap.gpuScene3d = this.gpu && this.renderMode === "realtime";
       const openStarted = performance.now();
-      const receipt = parseProductRenderReceipt(engine.open_fixed_package(
-        bootstrap.fixedPackageManifestJson,
-        bootstrap.timelineJson,
-        bootstrap.resourceManifestJson,
-        bootstrap.verifiedBindingBundleJson,
-      ));
+      const receipt = parseProductRenderReceipt(
+        engine.open_fixed_package(
+          bootstrap.fixedPackageManifestJson,
+          bootstrap.timelineJson,
+          bootstrap.resourceManifestJson,
+          bootstrap.verifiedBindingBundleJson,
+        ),
+      );
       markPhase("open", openStarted);
       const indexStarted = performance.now();
-      frozenResources = indexCompiledExecutionResources(engine, receipt.renderId);
+      frozenResources = indexCompiledExecutionResources(
+        engine,
+        receipt.renderId,
+      );
       bootstrap.expectedRenderId = receipt.renderId;
-      const audioProgram = parseCompiledAudioProgram(JSON.parse(
-        engine.audio_program_json(receipt.renderId),
-      ));
+      const audioProgram = parseCompiledAudioProgram(
+        JSON.parse(engine.audio_program_json(receipt.renderId)),
+      );
       markPhase("index", indexStarted);
       if (
-        audioProgram.sampleRate !== receipt.sampleRate
-        || audioProgram.sampleCount !== receipt.sampleCount
+        audioProgram.sampleRate !== receipt.sampleRate ||
+        audioProgram.sampleCount !== receipt.sampleCount
       ) {
-        throw new Error("compiled audio program does not match the opened render receipt");
+        throw new Error(
+          "compiled audio program does not match the opened render receipt",
+        );
       }
       planner = new ProductFramePlannerPool({
         workerUrl: this.runtimeAssets.workers.productFrame,
+        size: this.cpuThreads,
         allocateGeneration: () => this.allocateGeneration(),
       });
       const plannerStarted = performance.now();
@@ -1301,6 +1834,12 @@ export class BrowserValleWebPlayer {
       executor: this.compositor as CanvasKitExecutor | undefined,
     };
 
+    this.scene3dGpu?.dispose();
+    this.scene3dGpu = null;
+    this.scene3dGpuInit = null;
+    this.scene3dDof?.dispose();
+    this.scene3dDof = null;
+    this.currentScene3dRequests?.clear();
     this.fixedPackageManifestJson = staged.fixedPackageManifestJson;
     this.timelineJson = staged.timelineJson;
     this.timeline = staged.timeline;
@@ -1324,7 +1863,11 @@ export class BrowserValleWebPlayer {
     this.stats.renderId = staged.receipt.renderId;
     this.stats.fontsRegistered = staged.frozenResources.fonts.size;
 
-    if (previousRuntime.engine || previousRuntime.planner || previousRuntime.executor) {
+    if (
+      previousRuntime.engine ||
+      previousRuntime.planner ||
+      previousRuntime.executor
+    ) {
       this.resourceObjects.invalidateGeneration();
     }
     for (const ring of this.videoRings.values()) ring.close();
@@ -1353,26 +1896,63 @@ export class BrowserValleWebPlayer {
     this.syncPlannerStats();
   }
 
-  private async fulfillRequests(packet: Uint8Array, gpu: boolean): Promise<FulfilledFrame> {
+  private async fulfillRequests(
+    packet: Uint8Array,
+    gpu: boolean,
+    projected?: Record<string, Float32Array>,
+  ): Promise<FulfilledFrame> {
     const decoded = await decodePackedAbi(packet, RESOURCE_REQUESTS_ABI);
-    if (!Array.isArray(decoded)) throw new Error("ResourceRequestSet must decode to an array");
+    if (!Array.isArray(decoded))
+      throw new Error("ResourceRequestSet must decode to an array");
     this.resourceObjects.beginFrame();
     try {
       const objects = new Map<number, CanvasKitExternalObject>();
+      const scene3dRequests: NonNullable<FulfilledFrame["scene3dRequests"]> =
+        new Map();
       const dispose: Array<() => void> = [];
       const requests = decoded.map((value) => {
         const request = record(value, "resource request") as PackedValue & Wire;
+        if (
+          this.renderMode === "realtime" &&
+          record(request.expected, "resource expected").kind === "scene3d"
+        ) {
+          const key = record(request.key, "Scene3D key"),
+            payload = record(request.payload, "Scene3D payload");
+          const canonical = packedByteArray(
+            payload.canonical_request,
+            "Scene3D canonical request",
+          );
+          const frame = JSON.parse(
+            new TextDecoder().decode(canonical),
+          ) as Scene3dGpuRequest;
+          scene3dRequests.set(
+            contentDigestWire(key.content, "Scene3D content"),
+            {
+              canonical,
+              topology: contentDigestWire(
+                record(key.interpretation, "Scene3D interpretation")
+                  .topology_digest,
+                "Scene3D topology",
+              ),
+              width: frame.width,
+              height: frame.height,
+            },
+          );
+        }
         return {
           request,
           handle: exactInteger(request.handle, "resource handle"),
           identity: resourceRequestCacheIdentity(request),
         };
       });
-      const groups = new Map<string, {
-        request: PackedValue & Wire;
-        cached: CachedBrowserResource | undefined;
-        produced: ProducedBrowserResource | null;
-      }>();
+      const groups = new Map<
+        string,
+        {
+          request: PackedValue & Wire;
+          cached: CachedBrowserResource | undefined;
+          produced: ProducedBrowserResource | null;
+        }
+      >();
       for (const { identity, request } of requests) {
         if (!groups.has(identity)) {
           groups.set(identity, { request, cached: undefined, produced: null });
@@ -1381,33 +1961,49 @@ export class BrowserValleWebPlayer {
       for (const [identity, group] of groups) {
         group.cached = this.resourceObjects.lookup(identity);
       }
-      const produced = await Promise.all([...groups.values()].map(async (group) => {
-        if (group.cached !== undefined) return null;
-        try {
-          return { value: await this.fulfillRequestUncached(group.request, gpu) } as const;
-        } catch (error) {
-          return { error } as const;
-        }
-      }));
+      const produced = await Promise.all(
+        [...groups.values()].map(async (group) => {
+          if (group.cached !== undefined) return null;
+          try {
+            return {
+              value: await this.fulfillRequestUncached(
+                group.request,
+                gpu,
+                projected,
+              ),
+            } as const;
+          } catch (error) {
+            return { error } as const;
+          }
+        }),
+      );
       const failure = produced.find(
-        (result): result is { readonly error: unknown } => result !== null && "error" in result,
+        (result): result is { readonly error: unknown } =>
+          result !== null && "error" in result,
       );
       if (failure) {
-        disposeAll(produced.flatMap((result) => (
-          result && "value" in result && result.value ? [result.value.dispose] : []
-        )));
+        disposeAll(
+          produced.flatMap((result) =>
+            result && "value" in result && result.value
+              ? [result.value.dispose]
+              : [],
+          ),
+        );
         throw failure.error;
       }
       for (const [index, group] of [...groups.values()].entries()) {
         const generated = produced[index];
-        group.produced = generated && "value" in generated && generated.value
-          ? generated.value
-          : null;
+        group.produced =
+          generated && "value" in generated && generated.value
+            ? generated.value
+            : null;
       }
 
       const resolved = new Map<string, CachedBrowserResource>();
       const pendingDisposals = new Set(
-        [...groups.values()].flatMap((group) => group.produced ? [group.produced.dispose] : []),
+        [...groups.values()].flatMap((group) =>
+          group.produced ? [group.produced.dispose] : [],
+        ),
       );
       try {
         for (const [identity, group] of groups) {
@@ -1440,9 +2036,11 @@ export class BrowserValleWebPlayer {
         for (const { handle, identity } of requests) {
           const value = resolved.get(identity);
           if (!value) throw new Error("resource fulfillment result is missing");
-          if (seen.has(identity)) this.resourceObjects.recordFrameReuse(identity);
+          if (seen.has(identity))
+            this.resourceObjects.recordFrameReuse(identity);
           else seen.add(identity);
-          if (objects.has(handle)) throw new Error(`resource handle ${handle} is duplicated`);
+          if (objects.has(handle))
+            throw new Error(`resource handle ${handle} is duplicated`);
           objects.set(handle, value.object);
           videoFrames += value.videoFrames;
           videoTextureFrames += value.videoTextureFrames;
@@ -1454,6 +2052,7 @@ export class BrowserValleWebPlayer {
           videoFrames,
           videoTextureFrames,
           resourceCache,
+          scene3dRequests,
         };
       } catch (error) {
         disposeAll(pendingDisposals);
@@ -1468,17 +2067,24 @@ export class BrowserValleWebPlayer {
   private async fulfillRequestUncached(
     request: PackedValue & Wire,
     gpu: boolean,
+    projected?: Record<string, Float32Array>,
   ): Promise<ProducedBrowserResource> {
     const key = record(request.key, "resource key") as PackedValue & Wire;
     const expected = record(request.expected, "resource expected descriptor");
-    const interpretation = record(key.interpretation, "resource interpretation");
+    const interpretation = record(
+      key.interpretation,
+      "resource interpretation",
+    );
     const contentWire = contentDigestWire(key.content, "resource key content");
     const content = contentWire.slice("sha256:".length);
     const empty = { videoFrames: 0, videoTextureFrames: 0 };
     if (expected.kind === "visualFrame") {
       assertCanvaskitImportLayout(expected);
       const asset = this.assetByDigest.get(content);
-      if (!asset) throw new Error(`visual resource ${content} has no admitted browser asset`);
+      if (!asset)
+        throw new Error(
+          `visual resource ${content} has no admitted browser asset`,
+        );
       const extent = record(expected.extent, "visual resource extent");
       const bytes = pixelBytes(extent.width, extent.height, 4);
       const sample = record(request.sample, "resource sample");
@@ -1502,34 +2108,64 @@ export class BrowserValleWebPlayer {
       };
     }
     if (expected.kind === "dataTexture") {
-      if (interpretation.kind !== "dataTexture") throw new Error("data texture request has wrong interpretation");
+      if (interpretation.kind !== "dataTexture")
+        throw new Error("data texture request has wrong interpretation");
       const asset = this.assetByDigest.get(content);
-      if (!asset || asset.type !== "image") throw new Error(`data texture ${content} has no admitted image asset`);
+      if (!asset || asset.type !== "image")
+        throw new Error(`data texture ${content} has no admitted image asset`);
       const extent = record(expected.extent, "data texture extent");
-      const width = Number(extent.width), height = Number(extent.height);
+      const width = Number(extent.width),
+        height = Number(extent.height);
       const encoded = await this.fetchAssetBytes(asset, content);
-      const pixels = this.engine.decode_shader_data_texture(contentWire, encoded, width, height);
+      const pixels = this.engine.decode_shader_data_texture(
+        contentWire,
+        encoded,
+        width,
+        height,
+      );
       const bytes = pixelBytes(width, height, 8);
-      if (pixels.byteLength !== bytes) throw new Error("data texture decoder returned invalid storage");
-      const image = this.CanvasKit.MakeImage({
-        width: width * 2, height: height * 4,
-        colorType: this.CanvasKit.ColorType.Alpha_8,
-        alphaType: this.CanvasKit.AlphaType.Premul,
-        colorSpace: this.CanvasKit.ColorSpace.SRGB,
-      }, pixels, width * 2);
-      if (!image) throw new Error(`CanvasKit cannot wrap data texture ${content}`);
-      return { object: { key, kind: "dataTexture", image }, bytes, dispose: () => image.delete(), ...empty };
+      if (pixels.byteLength !== bytes)
+        throw new Error("data texture decoder returned invalid storage");
+      const image = this.CanvasKit.MakeImage(
+        {
+          width: width * 2,
+          height: height * 4,
+          colorType: this.CanvasKit.ColorType.Alpha_8,
+          alphaType: this.CanvasKit.AlphaType.Premul,
+          colorSpace: this.CanvasKit.ColorSpace.SRGB,
+        },
+        pixels,
+        width * 2,
+      );
+      if (!image)
+        throw new Error(`CanvasKit cannot wrap data texture ${content}`);
+      return {
+        object: { key, kind: "dataTexture", image },
+        bytes,
+        dispose: () => image.delete(),
+        ...empty,
+      };
     }
     if (expected.kind === "fontBytes") {
-      if (interpretation.kind !== "fontFace") throw new Error("font request has wrong interpretation");
+      if (interpretation.kind !== "fontFace")
+        throw new Error("font request has wrong interpretation");
       const bytes = this.fontBytes.get(content);
       if (!bytes) throw new Error(`font bytes ${content} are not registered`);
-      return { object: { key, kind: "font", bytes }, bytes: bytes.byteLength, dispose: noop, ...empty };
+      return {
+        object: { key, kind: "font", bytes },
+        bytes: bytes.byteLength,
+        dispose: noop,
+        ...empty,
+      };
     }
     if (expected.kind === "runtimeShader") {
-      const abi = contentDigestHex(interpretation.abi_digest, "runtime shader ABI digest");
+      const abi = contentDigestHex(
+        interpretation.abi_digest,
+        "runtime shader ABI digest",
+      );
       const bytes = this.shaderBytes.get(`${content}:${abi}`);
-      if (!bytes) throw new Error(`runtime shader ${content}:${abi} is not registered`);
+      if (!bytes)
+        throw new Error(`runtime shader ${content}:${abi} is not registered`);
       return {
         object: { key, kind: "runtimeShader", bytes },
         bytes: bytes.byteLength,
@@ -1541,10 +2177,10 @@ export class BrowserValleWebPlayer {
       const payload = record(request.payload, "Scene3D request payload");
       const payloadKeys = Object.keys(payload).sort();
       if (
-        payload.kind !== "scene3dFrame"
-        || payloadKeys.length !== 2
-        || payloadKeys[0] !== "canonical_request"
-        || payloadKeys[1] !== "kind"
+        payload.kind !== "scene3dFrame" ||
+        payloadKeys.length !== 2 ||
+        payloadKeys[0] !== "canonical_request" ||
+        payloadKeys[1] !== "kind"
       ) {
         throw new Error("Scene3D request has an invalid payload shape");
       }
@@ -1557,21 +2193,107 @@ export class BrowserValleWebPlayer {
         interpretation.topology_digest,
         "Scene3D topology digest",
       );
-      const rgba = this.engine.render_scene3d_request(contentWire, topology, canonicalRequest);
+      if (
+        this.renderMode === "realtime" &&
+        gpu &&
+        this.target?.context &&
+        this.target.canvas &&
+        this.engine.admit_scene3d_gpu_request &&
+        this.engine.scene3d_gpu_lighting_input
+      ) {
+        const target = this.target,
+          activeEngine = this.engine;
+        this.scene3dGpuInit ??= createScene3dGpu(
+          this.CanvasKit,
+          target.canvas!,
+          target.context!,
+          target.surface,
+          () =>
+            this.target === target &&
+            this.engine === activeEngine &&
+            !this.closed,
+        ).then((renderer) => {
+          if (
+            this.engine !== activeEngine ||
+            this.target !== target ||
+            this.closed
+          ) {
+            renderer?.dispose();
+            return null;
+          }
+          this.scene3dGpu = renderer;
+          return renderer;
+        });
+        const renderer = await this.scene3dGpuInit;
+        const value = JSON.parse(
+          new TextDecoder().decode(canonicalRequest),
+        ) as Scene3dGpuRequest;
+        if (renderer?.accepts(value)) {
+          this.engine.admit_scene3d_gpu_request(
+            contentWire,
+            topology,
+            canonicalRequest,
+          );
+          value.lightingInput =
+            projected?.[contentWire] ??
+            this.engine.scene3d_gpu_lighting_input?.(canonicalRequest);
+          const image = await renderer.render(value);
+          return {
+            object: { key, kind: "scene3d", image },
+            bytes: pixelBytes(value.width, value.height, 8),
+            dispose: () => image.delete(),
+            ...empty,
+          };
+        }
+      }
+      if (
+        this.renderMode === "realtime" &&
+        gpu &&
+        this.target?.context &&
+        this.engine.render_scene3d_request_deferred
+      ) {
+        const packet = this.engine.render_scene3d_request_deferred(
+          contentWire,
+          topology,
+          canonicalRequest,
+        );
+        const input = decodeDeferredScene3dDof(packet);
+        this.scene3dDof ??= new CanvasKitScene3dDof(
+          this.CanvasKit,
+          this.target.context,
+        );
+        const image = this.scene3dDof.render(input);
+        return {
+          object: { key, kind: "scene3d", image },
+          bytes: pixelBytes(input.width, input.height, 8),
+          dispose: () => image.delete(),
+          ...empty,
+        };
+      }
+      const rgba = this.engine.render_scene3d_request(
+        contentWire,
+        topology,
+        canonicalRequest,
+      );
       const width = this.engine.scene3d_frame_width(contentWire);
       const height = this.engine.scene3d_frame_height(contentWire);
       const bytes = pixelBytes(width, height, 8);
       if (rgba.byteLength !== bytes) {
         throw new Error(`Scene3D ${content} returned an invalid RGBA16F plane`);
       }
-      const image = this.CanvasKit.MakeImage({
-        width,
-        height,
-        colorType: this.CanvasKit.ColorType.RGBA_F16,
-        alphaType: this.CanvasKit.AlphaType.Premul,
-        colorSpace: this.CanvasKit.ColorSpace.SRGB,
-      }, rgba, width * 8);
-      if (!image) throw new Error(`CanvasKit cannot wrap Scene3D frame ${content}`);
+      const image = this.CanvasKit.MakeImage(
+        {
+          width,
+          height,
+          colorType: this.CanvasKit.ColorType.RGBA_F16,
+          alphaType: this.CanvasKit.AlphaType.Premul,
+          colorSpace: this.CanvasKit.ColorSpace.SRGB,
+        },
+        rgba,
+        width * 8,
+      );
+      if (!image)
+        throw new Error(`CanvasKit cannot wrap Scene3D frame ${content}`);
       return {
         object: { key, kind: "scene3d", image },
         bytes,
@@ -1579,24 +2301,43 @@ export class BrowserValleWebPlayer {
         ...empty,
       };
     }
-    throw new Error(`unsupported browser resource descriptor '${String(expected.kind)}'`);
+    throw new Error(
+      `unsupported browser resource descriptor '${String(expected.kind)}'`,
+    );
   }
 
-  private async ensureScene3dResources(canonicalRequest: Uint8Array): Promise<void> {
-    const needs = JSON.parse(this.engine.scene3d_resource_needs_json(canonicalRequest)) as {
+  private async ensureScene3dResources(
+    canonicalRequest: Uint8Array,
+  ): Promise<void> {
+    const needs = JSON.parse(
+      this.engine.scene3d_resource_needs_json(canonicalRequest),
+    ) as {
       models: string[];
-      textures: {digest:string;role:"color" | "data"}[];
+      textures: { digest: string; role: "color" | "data" }[];
       environments: string[];
     };
     await Promise.all([
-      ...needs.environments.map((digest) => this.ensureScene3dResource("environment", digest)),
-      ...needs.models.map((digest) => this.ensureScene3dResource("model", digest)),
-      ...needs.textures.map(({digest,role}) => this.ensureScene3dResource("texture", digest, role)),
+      ...needs.environments.map((digest) =>
+        this.ensureScene3dResource("environment", digest),
+      ),
+      ...needs.models.map((digest) =>
+        this.ensureScene3dResource("model", digest),
+      ),
+      ...needs.textures.map(({ digest, role }) =>
+        this.ensureScene3dResource("texture", digest, role),
+      ),
     ]);
   }
 
-  private async ensureScene3dResource(kind: "model" | "texture" | "environment", declaredDigest: string, role?: "color" | "data"): Promise<void> {
-    const digestWire = contentDigestWire(declaredDigest, `Scene3D ${kind} digest`);
+  private async ensureScene3dResource(
+    kind: "model" | "texture" | "environment",
+    declaredDigest: string,
+    role?: "color" | "data",
+  ): Promise<void> {
+    const digestWire = contentDigestWire(
+      declaredDigest,
+      `Scene3D ${kind} digest`,
+    );
     const digest = digestWire.slice("sha256:".length);
     const key = `${kind}:${digest}:${role ?? ""}`;
     const existing = this.scene3dResourceTasks.get(key);
@@ -1604,20 +2345,30 @@ export class BrowserValleWebPlayer {
     const task = (async () => {
       if (kind === "environment") {
         const bytes = this.environmentBytes.get(digest);
-        if (!bytes) throw new Error(`Scene3D environment ${digest} has no admitted frozen payload`);
+        if (!bytes)
+          throw new Error(
+            `Scene3D environment ${digest} has no admitted frozen payload`,
+          );
         this.engine.register_scene3d_environment(digestWire, bytes);
         return;
       }
       if (kind === "model") {
         const bytes = this.modelBytes.get(digest);
-        if (!bytes) throw new Error(`Scene3D model ${digest} has no admitted frozen payload`);
+        if (!bytes)
+          throw new Error(
+            `Scene3D model ${digest} has no admitted frozen payload`,
+          );
         this.engine.register_scene3d_model(digestWire, bytes);
         return;
       }
       const asset = this.assetByDigest.get(digest);
-      if (!asset) throw new Error(`Scene3D ${kind} ${digest} has no admitted browser asset`);
+      if (!asset)
+        throw new Error(
+          `Scene3D ${kind} ${digest} has no admitted browser asset`,
+        );
       const bytes = await this.fetchAssetBytes(asset, digest);
-      if (role !== "color" && role !== "data") throw new Error("Scene3D texture requires a color/data role");
+      if (role !== "color" && role !== "data")
+        throw new Error("Scene3D texture requires a color/data role");
       this.engine.register_scene3d_texture(digestWire, bytes, role);
     })();
     this.scene3dResourceTasks.set(key, task);
@@ -1630,8 +2381,11 @@ export class BrowserValleWebPlayer {
   }
 
   private async staticImage(asset: AdmittedBrowserAsset): Promise<Image> {
-    const image = this.CanvasKit.MakeImageFromEncoded(await this.fetchAssetBytes(asset));
-    if (!image) throw new Error(`CanvasKit cannot decode image asset '${asset.id}'`);
+    const image = this.CanvasKit.MakeImageFromEncoded(
+      await this.fetchAssetBytes(asset),
+    );
+    if (!image)
+      throw new Error(`CanvasKit cannot decode image asset '${asset.id}'`);
     return image;
   }
 
@@ -1641,14 +2395,18 @@ export class BrowserValleWebPlayer {
     gpu: boolean,
   ): Promise<{ image: Image; texture: boolean; dispose: () => void }> {
     const started = performance.now();
-    this.videoRingUsers.set(asset.id, (this.videoRingUsers.get(asset.id) ?? 0) + 1);
+    this.videoRingUsers.set(
+      asset.id,
+      (this.videoRingUsers.get(asset.id) ?? 0) + 1,
+    );
     let frame: VideoFrame;
     try {
       const ring = await this.videoRing(asset);
       frame = await ring.frameAt(timeS);
     } finally {
       const users = (this.videoRingUsers.get(asset.id) ?? 1) - 1;
-      if (users) this.videoRingUsers.set(asset.id, users); else this.videoRingUsers.delete(asset.id);
+      if (users) this.videoRingUsers.set(asset.id, users);
+      else this.videoRingUsers.delete(asset.id);
       this.trimVideoRings();
     }
     this.stats.perfVideoDecodeMs += performance.now() - started;
@@ -1659,18 +2417,31 @@ export class BrowserValleWebPlayer {
         colorType: this.CanvasKit.ColorType.RGBA_8888,
         alphaType: this.CanvasKit.AlphaType.Opaque,
       });
-      if (image) return { image, texture: true, dispose: () => { image.delete(); frame.close(); } };
+      if (image)
+        return {
+          image,
+          texture: true,
+          dispose: () => {
+            image.delete();
+            frame.close();
+          },
+        };
     }
     try {
       const rgba = await videoFrameToRgba(frame);
-      const image = this.CanvasKit.MakeImage({
-        width: rgba.width,
-        height: rgba.height,
-        colorType: this.CanvasKit.ColorType.RGBA_8888,
-        alphaType: this.CanvasKit.AlphaType.Unpremul,
-        colorSpace: this.CanvasKit.ColorSpace.SRGB,
-      }, rgba.data, rgba.width * 4);
-      if (!image) throw new Error(`CanvasKit cannot wrap video frame for '${asset.id}'`);
+      const image = this.CanvasKit.MakeImage(
+        {
+          width: rgba.width,
+          height: rgba.height,
+          colorType: this.CanvasKit.ColorType.RGBA_8888,
+          alphaType: this.CanvasKit.AlphaType.Unpremul,
+          colorSpace: this.CanvasKit.ColorSpace.SRGB,
+        },
+        rgba.data,
+        rgba.width * 4,
+      );
+      if (!image)
+        throw new Error(`CanvasKit cannot wrap video frame for '${asset.id}'`);
       return { image, texture: false, dispose: () => image.delete() };
     } finally {
       frame.close();
@@ -1680,7 +2451,10 @@ export class BrowserValleWebPlayer {
   private async videoRing(asset: AdmittedBrowserAsset): Promise<DecoderRing> {
     let ring = this.videoRings.get(asset.id);
     if (!ring) {
-      const blob = await this.videoBlobs.get(this.assetUrl(asset), contentDigestHex(asset.contentDigest, "video digest"));
+      const blob = await this.videoBlobs.get(
+        this.assetUrl(asset),
+        contentDigestHex(asset.contentDigest, "video digest"),
+      );
       if (this.closed) throw new Error("player closed during video load");
       ring = this.videoRings.get(asset.id);
       if (!ring) {
@@ -1697,39 +2471,86 @@ export class BrowserValleWebPlayer {
     for (const [id, ring] of this.videoRings) {
       if (this.videoRings.size <= 2) break;
       if (this.videoRingUsers.has(id)) continue;
-      ring.close(); this.videoRings.delete(id);
+      ring.close();
+      this.videoRings.delete(id);
     }
   }
 
-  private acquireTarget(width: number, height: number, forceCpu: boolean): TargetSurface {
+  private acquireTarget(
+    width: number,
+    height: number,
+    forceCpu: boolean,
+  ): TargetSurface {
     const gpu = this.gpu && !forceCpu && typeof document !== "undefined";
     const key = `${gpu ? "gpu" : "cpu"}:${width}x${height}`;
     if (this.target?.key === key) return this.target;
+    this.warmedPreviewTarget = null;
     if (this.target) this.resourceObjects.invalidateGeneration();
+    this.scene3dDof?.dispose();
+    this.scene3dDof = null;
+    this.scene3dGpu?.dispose();
+    this.scene3dGpu = null;
+    this.scene3dGpuInit = null;
+    this.gpuCircles?.dispose();
+    this.gpuCircles = null;
+    const retiredGl = this.target?.canvas?.getContext("webgl2");
+    if (retiredGl) untrackGpuState(retiredGl);
     this.target?.surface.delete();
     this.target?.context?.delete();
     if (gpu) {
       const canvas = document.createElement("canvas");
       canvas.width = width;
       canvas.height = height;
-      const handle = this.CanvasKit.GetWebGLContext(canvas, { preserveDrawingBuffer: 1 });
+      const handle = this.CanvasKit.GetWebGLContext(canvas, {
+        preserveDrawingBuffer: 1,
+      });
       const context = handle ? this.CanvasKit.MakeWebGLContext(handle) : null;
       const surface = context
-        ? this.CanvasKit.MakeOnScreenGLSurface(context, width, height, this.CanvasKit.ColorSpace.SRGB)
+        ? this.CanvasKit.MakeOnScreenGLSurface(
+            context,
+            width,
+            height,
+            this.CanvasKit.ColorSpace.SRGB,
+          )
         : null;
       if (surface && context) {
         this.target = { key, surface, gpu: true, context, canvas };
+        const gl = canvas.getContext("webgl2");
+        if (
+          this.renderMode === "realtime" &&
+          gl?.getExtension("EXT_color_buffer_float")
+        ) {
+          this.gpuCircles = new GpuCircles({
+            CanvasKit: this.CanvasKit,
+            context,
+            gl,
+            resetContext: () => resetCanvasKitContext(surface),
+          });
+        }
         return this.target;
       }
       context?.delete();
     }
     const surface = this.CanvasKit.MakeSurface(width, height);
-    if (!surface) throw new Error(`CanvasKit cannot allocate product target ${width}x${height}`);
-    this.target = { key: `cpu:${width}x${height}`, surface, gpu: false, context: null, canvas: null };
+    if (!surface)
+      throw new Error(
+        `CanvasKit cannot allocate product target ${width}x${height}`,
+      );
+    this.target = {
+      key: `cpu:${width}x${height}`,
+      surface,
+      gpu: false,
+      context: null,
+      canvas: null,
+    };
     return this.target;
   }
 
-  private presentTarget(target: TargetSurface, width: number, height: number): void {
+  private presentTarget(
+    target: TargetSurface,
+    width: number,
+    height: number,
+  ): void {
     if (!this.canvas) return;
     if (this.canvas.width !== width) this.canvas.width = width;
     if (this.canvas.height !== height) this.canvas.height = height;
@@ -1748,8 +2569,13 @@ export class BrowserValleWebPlayer {
       alphaType: this.CanvasKit.AlphaType.Unpremul,
       colorSpace: this.CanvasKit.ColorSpace.SRGB,
     });
-    if (!(pixels instanceof Uint8Array)) throw new Error("CanvasKit target readback failed");
-    context.putImageData(new ImageData(Uint8ClampedArray.from(pixels), width, height), 0, 0);
+    if (!(pixels instanceof Uint8Array))
+      throw new Error("CanvasKit target readback failed");
+    context.putImageData(
+      new ImageData(Uint8ClampedArray.from(pixels), width, height),
+      0,
+      0,
+    );
   }
 
   private encodeTargetPng(surface: Surface): Uint8Array {
@@ -1780,6 +2606,10 @@ export class BrowserValleWebPlayer {
   }
 
   private async runPlaybackPump(generation: number): Promise<void> {
+    if (this.previewBuffer)
+      return this.runBufferedPlayback(generation, this.previewBuffer);
+    if (this.renderMode === "realtime" && this.target?.gpu)
+      return this.runDirectGpuPlayback(generation);
     const receipt = this.requireRenderReceipt();
     const fps = canonicalRationalNumber(receipt.frameRate, "frameRate");
     const lastFrame = receipt.frameCount - 1;
@@ -1788,19 +2618,32 @@ export class BrowserValleWebPlayer {
       clockFrame,
       this.playbackFrame === null ? clockFrame : this.playbackFrame + 1,
     );
-    while (this.playing && !this.closed && generation === this.playGeneration && frame <= lastFrame) {
+    while (
+      this.playing &&
+      !this.closed &&
+      generation === this.playGeneration &&
+      frame <= lastFrame
+    ) {
       // Preview follows the media clock. After a slow frame, seek planning forward instead of
       // replaying an ever-growing backlog; exact renderFrame/seek and offline export keep every
       // requested frame. The clamped clock still lets us present the final frame once.
-      frame = Math.max(frame, this.frameAtSeconds(clamp(this.clock.now(), 0, this.lastFrameTimeS())));
+      frame = Math.max(
+        frame,
+        this.frameAtSeconds(clamp(this.clock.now(), 0, this.lastFrameTimeS())),
+      );
       this.prefetchPlanningWindow(frame);
       const dueTime = frame / fps;
-      while (this.playing && !this.closed && generation === this.playGeneration) {
+      while (
+        this.playing &&
+        !this.closed &&
+        generation === this.playGeneration
+      ) {
         const remainingMs = (dueTime - this.clock.now()) * 1000;
         if (remainingMs <= 0.5) break;
         await waitMilliseconds(Math.min(8, remainingMs));
       }
-      if (!this.playing || this.closed || generation !== this.playGeneration) return;
+      if (!this.playing || this.closed || generation !== this.playGeneration)
+        return;
       const job = this.renderFrame(frame).then(() => {
         this.playbackFrame = frame;
       });
@@ -1812,10 +2655,122 @@ export class BrowserValleWebPlayer {
       }
       frame += 1;
     }
-    if (!this.playing || this.closed || generation !== this.playGeneration) return;
+    if (!this.playing || this.closed || generation !== this.playGeneration)
+      return;
     this.pause();
     this.timeS = this.lastFrameTimeS();
     this.onTimeUpdate?.(this.timeS);
+  }
+
+  private async runDirectGpuPlayback(generation: number): Promise<void> {
+    const receipt = this.requireRenderReceipt(), fps = canonicalRationalNumber(receipt.frameRate, "frameRate");
+    const last = receipt.frameCount - 1;
+    let frame = Math.max(this.frameAtSeconds(this.timeS), this.playbackFrame === null ? 0 : this.playbackFrame + 1);
+    while (this.playing && !this.closed && generation === this.playGeneration && frame <= last) {
+      frame = Math.max(frame, this.frameAtSeconds(clamp(this.clock.now(), 0, this.lastFrameTimeS())));
+      this.prefetchPlanningWindow(frame);
+      // Submit the next frame before its display deadline. GPU work then overlaps the media
+      // clock's wait instead of starting after that deadline. There is exactly one pixel owner.
+      const job = this.renderFrameDetailed(frame, {}, false, async completed => {
+        while (this.playing && !this.closed && generation === this.playGeneration) {
+          const remaining = (frame / fps - this.clock.now()) * 1000;
+          if (remaining <= 0.5) break;
+          await waitMilliseconds(Math.min(8, remaining));
+        }
+        if (!this.playing || this.closed || generation !== this.playGeneration) return;
+        this.presentTarget(this.target!, completed.width, completed.height);
+        this.publishInspection(completed);
+        this.playbackFrame = frame;
+      });
+      this.renderInFlight = job;
+      try { await job; }
+      finally { if (this.renderInFlight === job) this.renderInFlight = null; }
+      frame++;
+    }
+    if (this.playing && !this.closed && generation === this.playGeneration) {
+      this.pause();this.timeS = this.lastFrameTimeS();this.onTimeUpdate?.(this.timeS);
+    }
+  }
+
+  private async runBufferedPlayback(
+    generation: number,
+    buffer: PreviewBuffer<BufferedPreview>,
+  ): Promise<void> {
+    const receipt = this.requireRenderReceipt(),
+      fps = canonicalRationalNumber(receipt.frameRate, "frameRate"),
+      last = receipt.frameCount - 1;
+    let frame = Math.max(
+      this.frameAtSeconds(this.timeS),
+      this.playbackFrame === null ? 0 : this.playbackFrame + 1,
+    );
+    try {
+      while (
+        this.playing &&
+        !this.closed &&
+        generation === this.playGeneration &&
+        frame <= last
+      ) {
+        frame = Math.max(
+          frame,
+          this.frameAtSeconds(
+            clamp(this.clock.now(), 0, this.lastFrameTimeS()),
+          ),
+        );
+        const next = await buffer.take(frame);
+        if (!next) return;
+        const completed = next.value;
+        frame = next.frame;
+        // A sustained producer deficit is not a reason to keep a pixel queue. Retire its
+        // in-flight owner, then let the direct pump demand the current clock frame.
+        if (frame + 1 < this.frameAtSeconds(clamp(this.clock.now(), 0, this.lastFrameTimeS()))) {
+          completed.bitmap.close();
+          buffer.close();
+          if (this.previewBuffer === buffer) this.previewBuffer = null;
+          await buffer.producer;
+          if (this.playing && !this.closed && generation === this.playGeneration)
+            return this.runPlaybackPump(generation);
+          return;
+        }
+        try {
+          while (
+            this.playing &&
+            !this.closed &&
+            generation === this.playGeneration
+          ) {
+            const remaining = (frame / fps - this.clock.now()) * 1000;
+            if (remaining <= 0.5) break;
+            await waitMilliseconds(Math.min(8, remaining));
+          }
+          if (
+            !this.playing ||
+            this.closed ||
+            generation !== this.playGeneration
+          )
+            return;
+          const canvas = this.canvas!,
+            context = canvas.getContext("2d");
+          if (!context)
+            throw new Error("visible canvas 2D context is unavailable");
+          if (canvas.width !== completed.width) canvas.width = completed.width;
+          if (canvas.height !== completed.height)
+            canvas.height = completed.height;
+          context.clearRect(0, 0, canvas.width, canvas.height);
+          context.drawImage(completed.bitmap, 0, 0);
+          this.publishInspection(completed);
+          this.playbackFrame = frame;
+        } finally {
+          completed.bitmap.close();
+        }
+        frame++;
+      }
+    } finally {
+      buffer.close();
+    }
+    if (this.playing && !this.closed && generation === this.playGeneration) {
+      this.pause();
+      this.timeS = this.lastFrameTimeS();
+      this.onTimeUpdate?.(this.timeS);
+    }
   }
 
   private async prefetchAudio(
@@ -1857,11 +2812,17 @@ export class BrowserValleWebPlayer {
     let promise = this.audioBuffers.get(key);
     if (!promise) {
       const asset = this.assetByDigest.get(digest);
-      if (!asset) throw new Error(`compiled audio resource sha256:${digest} has no browser source`);
+      if (!asset)
+        throw new Error(
+          `compiled audio resource sha256:${digest} has no browser source`,
+        );
       promise = this.fetchAssetBytes(asset, digest)
         .then((bytes) => decodeAudioBuffer({ buffer: bytes }, context))
         .then((buffer) => {
-          if (buffer.sampleRate !== context.sampleRate || buffer.numberOfChannels !== sourceChannels) {
+          if (
+            buffer.sampleRate !== context.sampleRate ||
+            buffer.numberOfChannels !== sourceChannels
+          ) {
             throw new Error(
               `decoded audio sha256:${digest} is ${buffer.sampleRate} Hz/${buffer.numberOfChannels} channels; expected ${context.sampleRate} Hz/${sourceChannels}`,
             );
@@ -1869,11 +2830,16 @@ export class BrowserValleWebPlayer {
           return buffer;
         });
       this.audioBuffers.set(key, promise);
-      void promise.catch(() => { if (this.audioBuffers.get(key) === promise) this.audioBuffers.delete(key); });
+      void promise.catch(() => {
+        if (this.audioBuffers.get(key) === promise)
+          this.audioBuffers.delete(key);
+      });
       // Long files are decoded once, but retired sources must not accumulate across the timeline.
-      while (this.audioBuffers.size > Math.max(2, cacheLimit)) this.audioBuffers.delete(this.audioBuffers.keys().next().value!);
+      while (this.audioBuffers.size > Math.max(2, cacheLimit))
+        this.audioBuffers.delete(this.audioBuffers.keys().next().value!);
     } else {
-      this.audioBuffers.delete(key); this.audioBuffers.set(key, promise);
+      this.audioBuffers.delete(key);
+      this.audioBuffers.set(key, promise);
     }
     return promise;
   }
@@ -1890,40 +2856,67 @@ export class BrowserValleWebPlayer {
       );
     }
     if (
-      !Number.isSafeInteger(startSample)
-      || !Number.isSafeInteger(endSample)
-      || startSample < 0
-      || endSample <= startSample
-      || endSample > program.sampleCount
+      !Number.isSafeInteger(startSample) ||
+      !Number.isSafeInteger(endSample) ||
+      startSample < 0 ||
+      endSample <= startSample ||
+      endSample > program.sampleCount
     ) {
-      throw new RangeError(`invalid compiled audio range [${startSample}, ${endSample})`);
+      throw new RangeError(
+        `invalid compiled audio range [${startSample}, ${endSample})`,
+      );
     }
     const engine = this.engine;
     const renderId = this.renderId;
-    const output = context.createBuffer(2, endSample - startSample, program.sampleRate);
+    const output = context.createBuffer(
+      2,
+      endSample - startSample,
+      program.sampleRate,
+    );
     const leftOutput = output.getChannelData(0);
     const rightOutput = output.getChannelData(1);
     const blockSize = 8_192;
-    for (let blockStart = startSample; blockStart < endSample; blockStart += blockSize) {
+    for (
+      let blockStart = startSample;
+      blockStart < endSample;
+      blockStart += blockSize
+    ) {
       const blockEnd = Math.min(endSample, blockStart + blockSize);
-      const requirements = parseAudioSources(JSON.parse(engine.audio_sources_json(
-        renderId, BigInt(blockStart), BigInt(blockEnd),
-      )));
+      const requirements = parseAudioSources(
+        JSON.parse(
+          engine.audio_sources_json(
+            renderId,
+            BigInt(blockStart),
+            BigInt(blockEnd),
+          ),
+        ),
+      );
       const unique = new Map<string, AudioSourceRequirement>();
       for (const source of requirements) {
         const prior = unique.get(source.digest);
         if (prior && prior.sourceChannels !== source.sourceChannels) {
-          throw new Error(`audio source ${source.digest} has conflicting source channels`);
+          throw new Error(
+            `audio source ${source.digest} has conflicting source channels`,
+          );
         }
         unique.set(source.digest, source);
       }
-      const decoded = await Promise.all([...unique.values()].map(async (source) => ({
-        source,
-        buffer: await this.audioBufferForDigest(context, source.digest, source.sourceChannels, unique.size),
-      })));
+      const decoded = await Promise.all(
+        [...unique.values()].map(async (source) => ({
+          source,
+          buffer: await this.audioBufferForDigest(
+            context,
+            source.digest,
+            source.sourceChannels,
+            unique.size,
+          ),
+        })),
+      );
       // Decode may outlive a seek/package replacement. Never register PCM into a retired engine.
       if (this.closed || this.engine !== engine || this.renderId !== renderId) {
-        throw new Error("audio render was superseded by a different render package");
+        throw new Error(
+          "audio render was superseded by a different render package",
+        );
       }
       while (this.audioBuffers.size > Math.max(2, unique.size)) {
         this.audioBuffers.delete(this.audioBuffers.keys().next().value!);
@@ -1932,13 +2925,28 @@ export class BrowserValleWebPlayer {
       // play/seek requests safe when the previous block retired one of their cached sources.
       for (const { source, buffer } of decoded) {
         if (!engine.has_audio_pcm(renderId, source.digest)) {
-          engine.register_audio_pcm(renderId, source.digest, buffer.getChannelData(0),
-            source.sourceChannels === 2 ? buffer.getChannelData(1) : new Float32Array(0));
+          engine.register_audio_pcm(
+            renderId,
+            source.digest,
+            buffer.getChannelData(0),
+            source.sourceChannels === 2
+              ? buffer.getChannelData(1)
+              : new Float32Array(0),
+          );
         }
       }
-      const mixed = engine.mix_audio_pcm(renderId, BigInt(blockStart), BigInt(blockEnd));
-      if (!(mixed instanceof Float32Array) || mixed.length !== (blockEnd - blockStart) * 2) {
-        throw new Error("compiled audio PCM does not match the requested sample range");
+      const mixed = engine.mix_audio_pcm(
+        renderId,
+        BigInt(blockStart),
+        BigInt(blockEnd),
+      );
+      if (
+        !(mixed instanceof Float32Array) ||
+        mixed.length !== (blockEnd - blockStart) * 2
+      ) {
+        throw new Error(
+          "compiled audio PCM does not match the requested sample range",
+        );
       }
       const offset = blockStart - startSample;
       for (let index = 0; index < blockEnd - blockStart; index += 1) {
@@ -1980,29 +2988,40 @@ export class BrowserValleWebPlayer {
   ): Promise<void> {
     const program = this.requireCompiledAudioProgram();
     while (
-      this.playing
-      && !this.closed
-      && generation === this.playGeneration
-      && this.audioGraph === graph
-      && graph.nextSample < program.sampleCount
+      this.playing &&
+      !this.closed &&
+      generation === this.playGeneration &&
+      this.audioGraph === graph &&
+      graph.nextSample < program.sampleCount
     ) {
       if (graph.scheduledUntilContextTime - context.currentTime > 0.5) {
         await waitMilliseconds(50);
         continue;
       }
       const startSample = graph.nextSample;
-      const endSample = Math.min(program.sampleCount, startSample + program.sampleRate);
-      const buffer = await this.renderCompiledAudioBuffer(context, startSample, endSample);
+      const endSample = Math.min(
+        program.sampleCount,
+        startSample + program.sampleRate,
+      );
+      const buffer = await this.renderCompiledAudioBuffer(
+        context,
+        startSample,
+        endSample,
+      );
       if (
-        !this.playing
-        || this.closed
-        || generation !== this.playGeneration
-        || this.audioGraph !== graph
-      ) return;
+        !this.playing ||
+        this.closed ||
+        generation !== this.playGeneration ||
+        this.audioGraph !== graph
+      )
+        return;
       const source = context.createBufferSource();
       source.buffer = buffer;
       source.connect(graph.master);
-      const when = Math.max(context.currentTime, graph.scheduledUntilContextTime);
+      const when = Math.max(
+        context.currentTime,
+        graph.scheduledUntilContextTime,
+      );
       source.start(when);
       graph.sources.push(source);
       graph.nextSample = endSample;
@@ -2014,7 +3033,11 @@ export class BrowserValleWebPlayer {
   private teardownAudioGraph(): void {
     if (!this.audioGraph) return;
     for (const source of this.audioGraph.sources) {
-      try { source.stop(); } catch { /* already ended */ }
+      try {
+        source.stop();
+      } catch {
+        /* already ended */
+      }
       source.disconnect();
     }
     this.audioGraph.master.disconnect();
@@ -2022,22 +3045,37 @@ export class BrowserValleWebPlayer {
   }
 
   private applyMasterVolume(): void {
-    if (this.audioGraph) this.audioGraph.master.gain.value = this.muted ? 0 : this.volume;
+    if (this.audioGraph)
+      this.audioGraph.master.gain.value = this.muted ? 0 : this.volume;
   }
 
-  private async fetchAssetBytes(asset: AdmittedBrowserAsset, expectedDigest?: string): Promise<Uint8Array> {
+  private async fetchAssetBytes(
+    asset: AdmittedBrowserAsset,
+    expectedDigest?: string,
+  ): Promise<Uint8Array> {
     const url = this.assetUrl(asset);
-    const expected = expectedDigest ?? contentDigestHex(asset.contentDigest, `asset '${asset.id}' digest`);
+    const expected =
+      expectedDigest ??
+      contentDigestHex(asset.contentDigest, `asset '${asset.id}' digest`);
     const key = `${expected}:${url}`;
     let promise = this.assetBytes.get(key);
     if (!promise) {
       promise = fetchBytes(url);
       this.assetBytes.set(key, promise);
-      void promise.catch(() => { if (this.assetBytes.get(key) === promise) this.assetBytes.delete(key); });
+      void promise.catch(() => {
+        if (this.assetBytes.get(key) === promise) this.assetBytes.delete(key);
+      });
       // Keep small shared resources, but do not retain every long encoded audio source.
-      void promise.then((bytes) => {
-        if (bytes.byteLength > 32 * 1024 * 1024 && this.assetBytes.get(key) === promise) this.assetBytes.delete(key);
-      }, () => {});
+      void promise.then(
+        (bytes) => {
+          if (
+            bytes.byteLength > 32 * 1024 * 1024 &&
+            this.assetBytes.get(key) === promise
+          )
+            this.assetBytes.delete(key);
+        },
+        () => {},
+      );
     }
     return promise;
   }
@@ -2056,17 +3094,20 @@ export class BrowserValleWebPlayer {
   private requireAsset(id: string, type?: string): AdmittedBrowserAsset {
     const asset = this.assetsById.get(id);
     if (!asset) throw new Error(`asset '${id}' is not registered`);
-    if (type && asset.type !== type) throw new Error(`asset '${id}' is not ${type}`);
+    if (type && asset.type !== type)
+      throw new Error(`asset '${id}' is not ${type}`);
     return asset;
   }
 
   private requireRenderReceipt(): ProductRenderReceipt {
-    if (!this.renderReceipt) throw new Error("browser player has no open fixed render");
+    if (!this.renderReceipt)
+      throw new Error("browser player has no open fixed render");
     return this.renderReceipt;
   }
 
   private requireCompiledAudioProgram(): CompiledAudioProgramWire {
-    if (!this.compiledAudioProgram) throw new Error("browser player has no compiled audio program");
+    if (!this.compiledAudioProgram)
+      throw new Error("browser player has no compiled audio program");
     return this.compiledAudioProgram;
   }
 
@@ -2102,18 +3143,26 @@ export class BrowserValleWebPlayer {
     transparent: boolean,
   ): ProductFramePlanningInput {
     const surfaceBytes = BigInt(width) * BigInt(height) * 8n;
-    const maxSurfaceBytes = maxBigInt(surfaceBytes, 64n * 1024n * 1024n);
+    // Keep the existing total frame budget. Offscreen shader/filter inputs can be
+    // larger than the root, so let one surface consume up to a quarter of that budget.
+    const maxFrameBytes = maxBigInt(
+      maxBigInt(surfaceBytes, 64n * 1024n * 1024n) * 16n,
+      512n * 1024n * 1024n,
+    );
+    const maxSurfaceBytes = maxFrameBytes / 4n;
     return {
       frame,
       width,
       height,
       transparent,
       maxSurfaceBytes,
-      maxFrameBytes: maxBigInt(maxSurfaceBytes * 16n, 512n * 1024n * 1024n),
+      maxFrameBytes,
     };
   }
 
-  private prefetchPlanningWindow(currentFrame: number): ProductFramePlanningJob[] {
+  private prefetchPlanningWindow(
+    currentFrame: number, demandFirst=false,
+  ): ProductFramePlanningJob[] {
     const planner = this.requirePlanner();
     const receipt = this.requireRenderReceipt();
     const lastFrame = receipt.frameCount - 1;
@@ -2135,14 +3184,19 @@ export class BrowserValleWebPlayer {
     for (let offset = firstOffset; offset <= lookahead; offset += 1) {
       const candidate = frame + offset;
       if (candidate > lastFrame) break;
-      jobs.push(planner.prefetch(this.framePlanningInput(candidate, width, height, false), offset));
+      jobs.push(
+        demandFirst && offset===firstOffset
+          ? planner.prepare(this.framePlanningInput(candidate,width,height,false),0)
+          : planner.prefetch(this.framePlanningInput(candidate,width,height,false),offset),
+      );
     }
     this.syncPlannerStats();
     return jobs;
   }
 
   private requirePlanner(): ProductFramePlannerPool {
-    if (!this.planner) throw new Error("Product frame planner is not initialized");
+    if (!this.planner)
+      throw new Error("Product frame planner is not initialized");
     return this.planner;
   }
 
@@ -2194,13 +3248,42 @@ export class BrowserValleWebPlayer {
       const local = applyHomography(inverse, devicePoint);
       if (!local) continue;
       const { x, y, width, height } = placement.bounds;
-      if (width <= 0 || height <= 0
-        || local[0] < x || local[1] < y
-        || local[0] >= x + width || local[1] >= y + height) continue;
-      const frameWidth = this.engine.scene3d_frame_width(placement.contentHash);
-      const frameHeight = this.engine.scene3d_frame_height(placement.contentHash);
-      const pixelX = Math.min(frameWidth - 1, Math.floor((local[0] - x) / width * frameWidth));
-      const pixelY = Math.min(frameHeight - 1, Math.floor((local[1] - y) / height * frameHeight));
+      if (
+        width <= 0 ||
+        height <= 0 ||
+        local[0] < x ||
+        local[1] < y ||
+        local[0] >= x + width ||
+        local[1] >= y + height
+      )
+        continue;
+      const gpuRequest = this.currentScene3dRequests.get(placement.contentHash);
+      if (
+        gpuRequest &&
+        !this.engine.has_scene3d_frame?.(placement.contentHash)
+      ) {
+        // Picking is infrequent. Retain the reference depth/id rules without making every
+        // preview frame rasterize a complete CPU color/depth plane in advance.
+        this.engine.render_scene3d_request(
+          placement.contentHash,
+          gpuRequest.topology,
+          gpuRequest.canonical,
+        );
+      }
+      const frameWidth =
+        gpuRequest?.width ??
+        this.engine.scene3d_frame_width(placement.contentHash);
+      const frameHeight =
+        gpuRequest?.height ??
+        this.engine.scene3d_frame_height(placement.contentHash);
+      const pixelX = Math.min(
+        frameWidth - 1,
+        Math.floor(((local[0] - x) / width) * frameWidth),
+      );
+      const pixelY = Math.min(
+        frameHeight - 1,
+        Math.floor(((local[1] - y) / height) * frameHeight),
+      );
       const pick = JSON.parse(
         this.engine.scene3d_pick_json(placement.contentHash, pixelX, pixelY),
       ) as { semanticAddress: string; nodeId: number } | null;
@@ -2208,7 +3291,6 @@ export class BrowserValleWebPlayer {
     }
     return null;
   }
-
 }
 
 function admitBrowserAssets(
@@ -2218,12 +3300,18 @@ function admitBrowserAssets(
   const byId = new Map<string, AdmittedBrowserAsset>();
   const byDigest = new Map<string, AdmittedBrowserAsset>();
   for (const asset of assets) {
-    if (byId.has(asset.id)) throw new Error(`asset '${asset.id}' is duplicated`);
+    if (byId.has(asset.id))
+      throw new Error(`asset '${asset.id}' is duplicated`);
     const entry = manifest.entries[asset.id];
     if (!entry) {
-      throw new Error(`browser locator '${asset.id}' is absent from the pinned ResourceManifest`);
+      throw new Error(
+        `browser locator '${asset.id}' is absent from the pinned ResourceManifest`,
+      );
     }
-    const digest = contentDigestHex(entry.digest, `resource '${asset.id}' digest`);
+    const digest = contentDigestHex(
+      entry.digest,
+      `resource '${asset.id}' digest`,
+    );
     const admitted: AdmittedBrowserAsset = {
       ...asset,
       type: entry.kind,
@@ -2244,26 +3332,33 @@ function indexCompiledExecutionResources(
   const models = new Map<string, Uint8Array>();
   const environments = new Map<string, Uint8Array>();
   const shaders = new Map<string, Uint8Array>();
-  const resources = JSON.parse(engine.compiled_execution_resources_json(renderId));
+  const resources = JSON.parse(
+    engine.compiled_execution_resources_json(renderId),
+  );
   if (!Array.isArray(resources)) {
     throw new Error("compiled execution resource index must be an array");
   }
   for (const rawResource of resources) {
     const resource = record(rawResource, "compiled execution resource");
-    if (typeof resource.resourceId !== "string" || resource.resourceId.length === 0) {
+    if (
+      typeof resource.resourceId !== "string" ||
+      resource.resourceId.length === 0
+    ) {
       throw new Error("compiled execution resource id must be non-empty");
     }
     if (
-      typeof resource.contentDigest !== "string"
-      || !/^sha256:[0-9a-f]{64}$/.test(resource.contentDigest)
+      typeof resource.contentDigest !== "string" ||
+      !/^sha256:[0-9a-f]{64}$/.test(resource.contentDigest)
     ) {
-      throw new Error(`compiled execution resource '${resource.resourceId}' has an invalid digest`);
+      throw new Error(
+        `compiled execution resource '${resource.resourceId}' has an invalid digest`,
+      );
     }
     if (
-      resource.kind !== "font-bytes"
-      && resource.kind !== "model3d-bytes"
-      && resource.kind !== "environment-bytes"
-      && resource.kind !== "runtime-shader"
+      resource.kind !== "font-bytes" &&
+      resource.kind !== "model3d-bytes" &&
+      resource.kind !== "environment-bytes" &&
+      resource.kind !== "runtime-shader"
     ) {
       throw new Error(
         `compiled execution resource '${resource.resourceId}' has unknown kind '${String(resource.kind)}'`,
@@ -2271,13 +3366,17 @@ function indexCompiledExecutionResources(
     }
     if (resource.kind === "runtime-shader") {
       if (
-        typeof resource.abiDigest !== "string"
-        || !/^sha256:[0-9a-f]{64}$/.test(resource.abiDigest)
+        typeof resource.abiDigest !== "string" ||
+        !/^sha256:[0-9a-f]{64}$/.test(resource.abiDigest)
       ) {
-        throw new Error(`compiled runtime shader '${resource.resourceId}' has an invalid ABI digest`);
+        throw new Error(
+          `compiled runtime shader '${resource.resourceId}' has an invalid ABI digest`,
+        );
       }
     } else if (resource.abiDigest != null) {
-      throw new Error(`compiled resource '${resource.resourceId}' unexpectedly declares an ABI digest`);
+      throw new Error(
+        `compiled resource '${resource.resourceId}' unexpectedly declares an ABI digest`,
+      );
     }
     const bytes = engine.compiled_resource_bytes(
       renderId,
@@ -2313,60 +3412,121 @@ function replaceMap<K, V>(target: Map<K, V>, source: ReadonlyMap<K, V>): void {
 
 function emptyPlayerStats(): PlayerStats {
   return {
-    rAFFrames: 0, renders: 0, scrubs: 0, fontsRegistered: 0,
-    videoFrames: 0, gpuVideoFrames: 0,
-    clockMode: "performance", surfaceMode: "none",
-    gpuFrames: 0, cpuFrames: 0, audioMode: "none", audioScheduledSources: 0,
-    audioDecodeErrors: 0, audioPeaksDecodes: 0,
-    preparedFrames: 0, perfFrameMs: 0, perfEvaluatePrepareMs: 0,
-    perfRequestInspectMs: 0, perfResourceFulfillMs: 0, perfLowerMs: 0,
-    perfBindPacketsMs: 0, perfExecuteMs: 0,
-    perfExecutorPacketAdmissionMs: 0, perfExecutorProgramAdmissionMs: 0,
-    perfExecutorScheduleAdmissionMs: 0, perfExecutorRenderMs: 0,
-    programLocalPasses: 0, directRasterPrograms: 0, programGroups: 0,
-    programTransformGroups: 0, programClipGroups: 0, programOpacityGroups: 0,
-    programFilterGroups: 0, programMaskGroups: 0, programShaderGroups: 0,
-    programBackdropGroups: 0, programBlendGroups: 0,
-    perfPresentMs: 0, perfCaptureEncodeMs: 0,
-    perfVideoDecodeMs: 0, perfVideoCopyMs: 0, perfVideoWrapMs: 0,
-    videoThumbExtracts: 0, planBytes: 0, bindingBytes: 0, scheduleBytes: 0, requestBytes: 0,
-    executionPasses: 0, physicalSurfaces: 0, maximumLiveImages: 0,
-    surfaceAllocations: 0, surfaceReuses: 0, surfaceAllocatedBytes: 0,
-    maximumSurfaceResidentBytes: 0, maximumSurfacePeakBytes: 0, surfacePoolEvictions: 0,
-    templateCacheHits: 0, templateCacheMisses: 0,
-    programCacheHits: 0, programCacheMisses: 0,
-    fontCacheHits: 0, fontCacheMisses: 0,
-    shaderCacheHits: 0, shaderCacheMisses: 0,
-    rasterLayerCacheHits: 0, rasterLayerCacheMisses: 0,
-    maximumRasterLayerCacheEntries: 0, maximumRasterLayerCacheBytes: 0,
+    rAFFrames: 0,
+    renders: 0,
+    scrubs: 0,
+    fontsRegistered: 0,
+    videoFrames: 0,
+    gpuVideoFrames: 0,
+    clockMode: "performance",
+    surfaceMode: "none",
+    gpuFrames: 0,
+    cpuFrames: 0,
+    audioMode: "none",
+    audioScheduledSources: 0,
+    audioDecodeErrors: 0,
+    audioPeaksDecodes: 0,
+    preparedFrames: 0,
+    perfFrameMs: 0,
+    perfEvaluatePrepareMs: 0,
+    perfRequestInspectMs: 0,
+    perfResourceFulfillMs: 0,
+    perfLowerMs: 0,
+    perfBindPacketsMs: 0,
+    perfExecuteMs: 0,
+    perfExecutorPacketAdmissionMs: 0,
+    perfExecutorProgramAdmissionMs: 0,
+    perfExecutorScheduleAdmissionMs: 0,
+    perfExecutorRenderMs: 0,
+    programLocalPasses: 0,
+    directRasterPrograms: 0,
+    programGroups: 0,
+    programTransformGroups: 0,
+    programClipGroups: 0,
+    pathClipElisions: 0,
+    programOpacityGroups: 0,
+    programFilterGroups: 0,
+    programMaskGroups: 0,
+    programShaderGroups: 0,
+    programBackdropGroups: 0,
+    programBlendGroups: 0,
+    perfPresentMs: 0,
+    perfCaptureEncodeMs: 0,
+    perfVideoDecodeMs: 0,
+    perfVideoCopyMs: 0,
+    perfVideoWrapMs: 0,
+    videoThumbExtracts: 0,
+    planBytes: 0,
+    bindingBytes: 0,
+    scheduleBytes: 0,
+    requestBytes: 0,
+    executionPasses: 0,
+    physicalSurfaces: 0,
+    maximumLiveImages: 0,
+    surfaceAllocations: 0,
+    surfaceReuses: 0,
+    surfaceAllocatedBytes: 0,
+    maximumSurfaceResidentBytes: 0,
+    maximumSurfacePeakBytes: 0,
+    surfacePoolEvictions: 0,
+    templateCacheHits: 0,
+    templateCacheMisses: 0,
+    programCacheHits: 0,
+    programCacheMisses: 0,
+    fontCacheHits: 0,
+    fontCacheMisses: 0,
+    shaderCacheHits: 0,
+    shaderCacheMisses: 0,
+    rasterLayerCacheHits: 0,
+    rasterLayerCacheMisses: 0,
+    maximumRasterLayerCacheEntries: 0,
+    maximumRasterLayerCacheBytes: 0,
     resourceCacheGenerationInvalidations: 0,
-    resourceCacheHits: 0, resourceCacheMisses: 0,
-    resourceCacheInsertions: 0, resourceCacheEvictions: 0, resourceCacheBypasses: 0,
-    maximumResourceCacheEntries: 0, maximumResourceCacheBytes: 0,
+    resourceCacheHits: 0,
+    resourceCacheMisses: 0,
+    resourceCacheInsertions: 0,
+    resourceCacheEvictions: 0,
+    resourceCacheBypasses: 0,
+    maximumResourceCacheEntries: 0,
+    maximumResourceCacheBytes: 0,
     renderId: "",
-    framePlannerWorkers: 0, framePlannerReadyHits: 0, framePlannerWaitHits: 0,
-    framePlannerQueued: 0, framePlannerCompleted: 0, framePlannerCancelled: 0,
-    framePlannerErrors: 0, framePlannerQueueDepth: 0, framePlannerReadyFrames: 0,
-    framePlannerReadyBytes: 0, perfFramePlannerWorkerMs: 0,
+    framePlannerWorkers: 0,
+    framePlannerReadyHits: 0,
+    framePlannerWaitHits: 0,
+    framePlannerQueued: 0,
+    framePlannerCompleted: 0,
+    framePlannerCancelled: 0,
+    framePlannerErrors: 0,
+    framePlannerQueueDepth: 0,
+    framePlannerReadyFrames: 0,
+    framePlannerReadyBytes: 0,
+    perfFramePlannerWorkerMs: 0,
     perfFramePlannerTurnGapMs: 0,
     perfFramePlannerReleaseMs: 0,
-    motionExecuteClips: {}, motionPerformance: {}, degradations: [],
+    motionExecuteClips: {},
+    motionPerformance: {},
+    degradations: [],
   };
 }
 
-async function loadWasmModule(moduleUrl: string, wasmUrl: string): Promise<ValleWasmModule> {
-  const module = await import(moduleUrl) as unknown as ValleWasmModule;
+async function loadWasmModule(
+  moduleUrl: string,
+  wasmUrl: string,
+): Promise<ValleWasmModule> {
+  const module = (await import(moduleUrl)) as unknown as ValleWasmModule;
   await module.default(wasmUrl);
   return module;
 }
 
-async function loadCanvasKit(assets: PlayerRuntimeAssets["canvasKit"]): Promise<CanvasKit> {
+async function loadCanvasKit(
+  assets: PlayerRuntimeAssets["canvasKit"],
+): Promise<CanvasKit> {
   canvasKitPromise ??= (async () => {
-    const init = staticCanvasKitInit ?? await injectCanvasKitScript(assets.glue);
+    const init =
+      staticCanvasKitInit ?? (await injectCanvasKitScript(assets.glue));
     return init({
-      locateFile: (file) => file.endsWith(".wasm")
-        ? assets.wasm
-        : new URL(file, assets.glue).href,
+      locateFile: (file) =>
+        file.endsWith(".wasm") ? assets.wasm : new URL(file, assets.glue).href,
     });
   })();
   return canvasKitPromise;
@@ -2380,10 +3540,12 @@ function injectCanvasKitScript(src: string): Promise<CanvasKitInitializer> {
     }
     const script = document.createElement("script");
     script.src = src;
-    script.onload = () => typeof globalThis.CanvasKitInit === "function"
-      ? resolve(globalThis.CanvasKitInit)
-      : reject(new Error(`CanvasKitInit missing after loading ${src}`));
-    script.onerror = () => reject(new Error(`failed to load CanvasKit script ${src}`));
+    script.onload = () =>
+      typeof globalThis.CanvasKitInit === "function"
+        ? resolve(globalThis.CanvasKitInit)
+        : reject(new Error(`CanvasKitInit missing after loading ${src}`));
+    script.onerror = () =>
+      reject(new Error(`failed to load CanvasKit script ${src}`));
     document.head.appendChild(script);
   });
 }
@@ -2394,7 +3556,9 @@ async function fetchBytes(url: string): Promise<Uint8Array> {
   return new Uint8Array(await response.arrayBuffer());
 }
 
-async function videoFrameToRgba(frame: VideoFrame): Promise<{ width: number; height: number; data: Uint8Array }> {
+async function videoFrameToRgba(
+  frame: VideoFrame,
+): Promise<{ width: number; height: number; data: Uint8Array }> {
   const width = frame.displayWidth;
   const height = frame.displayHeight;
   try {
@@ -2434,7 +3598,9 @@ type ContentDigestWire = `sha256:${string}`;
 
 function contentDigestWire(value: unknown, label: string): ContentDigestWire {
   if (typeof value !== "string" || !/^sha256:[0-9a-f]{64}$/.test(value)) {
-    throw new Error(`${label} must be a sha256:<64 lowercase hex> ContentDigest`);
+    throw new Error(
+      `${label} must be a sha256:<64 lowercase hex> ContentDigest`,
+    );
   }
   return value as ContentDigestWire;
 }
@@ -2445,24 +3611,38 @@ function contentDigestHex(value: unknown, label: string): string {
 
 function packedByteArray(value: unknown, label: string): Uint8Array {
   if (!Array.isArray(value)) throw new Error(`${label} must be a byte array`);
-  return Uint8Array.from(value.map((item, index) => {
-    const number = typeof item === "bigint" ? Number(item) : item;
-    if (!Number.isInteger(number) || Number(number) < 0 || Number(number) > 255) {
-      throw new Error(`${label}[${index}] is not a byte`);
-    }
-    return Number(number);
-  }));
+  return Uint8Array.from(
+    value.map((item, index) => {
+      const number = typeof item === "bigint" ? Number(item) : item;
+      if (
+        !Number.isInteger(number) ||
+        Number(number) < 0 ||
+        Number(number) > 255
+      ) {
+        throw new Error(`${label}[${index}] is not a byte`);
+      }
+      return Number(number);
+    }),
+  );
 }
 
 function inverseHomography(matrix: readonly number[]): number[] | null {
   if (matrix.length !== 9 || !matrix.every(Number.isFinite)) return null;
   const [a, b, c, d, e, f, g, h, i] = matrix as [
-    number, number, number, number, number, number, number, number, number,
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
   ];
-  const determinant = a * (e * i - f * h)
-    - b * (d * i - f * g)
-    + c * (d * h - e * g);
-  if (!Number.isFinite(determinant) || Math.abs(determinant) <= Number.EPSILON) return null;
+  const determinant =
+    a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g);
+  if (!Number.isFinite(determinant) || Math.abs(determinant) <= Number.EPSILON)
+    return null;
   const scale = 1 / determinant;
   const inverse = [
     (e * i - f * h) * scale,
@@ -2478,7 +3658,10 @@ function inverseHomography(matrix: readonly number[]): number[] | null {
   return inverse.every(Number.isFinite) ? inverse : null;
 }
 
-function applyHomography(matrix: readonly number[], point: readonly [number, number]): [number, number] | null {
+function applyHomography(
+  matrix: readonly number[],
+  point: readonly [number, number],
+): [number, number] | null {
   const [x, y] = point;
   const w = matrix[6]! * x + matrix[7]! * y + matrix[8]!;
   if (!Number.isFinite(w) || Math.abs(w) <= Number.EPSILON) return null;
@@ -2490,23 +3673,35 @@ function applyHomography(matrix: readonly number[], point: readonly [number, num
 }
 
 function rationalSeconds(value: unknown): number {
-  if (typeof value !== "string" || !/^-?(0|[1-9]\d*)\/[1-9]\d*$/.test(value)) throw new Error("RationalTime must be an exact num/den string");
+  if (typeof value !== "string" || !/^-?(0|[1-9]\d*)\/[1-9]\d*$/.test(value))
+    throw new Error("RationalTime must be an exact num/den string");
   const [numerator, denominator] = value.split("/").map(Number);
-  if (!Number.isSafeInteger(numerator) || !Number.isSafeInteger(denominator) || denominator! <= 0) throw new Error("RationalTime is invalid");
+  if (
+    !Number.isSafeInteger(numerator) ||
+    !Number.isSafeInteger(denominator) ||
+    denominator! <= 0
+  )
+    throw new Error("RationalTime is invalid");
   return numerator! / denominator!;
 }
 
 function exactInteger(value: unknown, label: string): number {
   const number = typeof value === "bigint" ? Number(value) : value;
-  if (!Number.isSafeInteger(number) || Number(number) <= 0) throw new Error(`${label} must be positive`);
+  if (!Number.isSafeInteger(number) || Number(number) <= 0)
+    throw new Error(`${label} must be positive`);
   return Number(number);
 }
 
-function pixelBytes(width: unknown, height: unknown, bytesPerPixel: number): number {
+function pixelBytes(
+  width: unknown,
+  height: unknown,
+  bytesPerPixel: number,
+): number {
   const w = exactInteger(width, "resource width");
   const h = exactInteger(height, "resource height");
   const bytes = w * h * bytesPerPixel;
-  if (!Number.isSafeInteger(bytes)) throw new Error("resource byte size overflowed");
+  if (!Number.isSafeInteger(bytes))
+    throw new Error("resource byte size overflowed");
   return bytes;
 }
 
@@ -2525,7 +3720,8 @@ function disposeAll(disposers: Iterable<() => void>): void {
 }
 
 function positiveInteger(value: unknown, label: string): number {
-  if (!Number.isInteger(value) || Number(value) <= 0) throw new Error(`${label} must be positive`);
+  if (!Number.isInteger(value) || Number(value) <= 0)
+    throw new Error(`${label} must be positive`);
   return Number(value);
 }
 
@@ -2546,17 +3742,38 @@ function maxBigInt(left: bigint, right: bigint): bigint {
 
 function exactBigIntNumber(value: bigint, label: string): number {
   const number = Number(value);
-  if (!Number.isSafeInteger(number) || number < 0) throw new Error(`${label} exceeds the exact reporting range`);
+  if (!Number.isSafeInteger(number) || number < 0)
+    throw new Error(`${label} exceeds the exact reporting range`);
   return number;
 }
 
 function maybeCreateAudioContext(sampleRate: number): AudioContext | null {
   const Constructor = globalThis.AudioContext ?? globalThis.webkitAudioContext;
-  try { return Constructor ? new Constructor({ sampleRate }) : null; } catch { return null; }
+  try {
+    return Constructor ? new Constructor({ sampleRate }) : null;
+  } catch {
+    return null;
+  }
 }
 
 function waitMilliseconds(milliseconds: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, Math.max(0, milliseconds)));
+  return new Promise((resolve) =>
+    setTimeout(resolve, Math.max(0, milliseconds)),
+  );
+}
+
+/** Let worker replies and UI events run without accumulating nested timer clamps. */
+function yieldToHost(): Promise<void> {
+  const scheduler = (globalThis as unknown as { scheduler?: { yield(): Promise<void> } }).scheduler;
+  if (scheduler?.yield) return scheduler.yield();
+  if (typeof MessageChannel === "undefined") return waitMilliseconds(0);
+  const channel = new MessageChannel();
+  return new Promise(resolve => {
+    channel.port1.onmessage = () => {
+      channel.port1.close(); channel.port2.close(); resolve();
+    };
+    channel.port2.postMessage(null);
+  });
 }
 
 function canonicalRationalNumber(value: string, label: string): number {
@@ -2565,7 +3782,8 @@ function canonicalRationalNumber(value: string, label: string): number {
   const numerator = Number(match[1]);
   const denominator = Number(match[2]);
   const result = numerator / denominator;
-  if (!Number.isFinite(result)) throw new TypeError(`${label} exceeds the Web numeric range`);
+  if (!Number.isFinite(result))
+    throw new TypeError(`${label} exceeds the Web numeric range`);
   return result;
 }
 
@@ -2576,18 +3794,24 @@ function parseCompiledAudioProgram(value: unknown): CompiledAudioProgramWire {
   }
   for (const field of ["sampleRate", "sampleCount"] as const) {
     if (!Number.isSafeInteger(wire[field]) || Number(wire[field]) <= 0) {
-      throw new TypeError(`compiled audio program ${field} must be a positive safe integer`);
+      throw new TypeError(
+        `compiled audio program ${field} must be a positive safe integer`,
+      );
     }
   }
   return wire as CompiledAudioProgramWire;
 }
 
 function parseAudioSources(value: unknown): AudioSourceRequirement[] {
-  if (!Array.isArray(value)) throw new TypeError("compiled audio sources must be an array");
+  if (!Array.isArray(value))
+    throw new TypeError("compiled audio sources must be an array");
   return value.map((entry) => {
     const source = record(entry, "compiled audio source");
-    if (!Number.isSafeInteger(source.sourceIndex) || source.sourceIndex < 0
-      || (source.sourceChannels !== 1 && source.sourceChannels !== 2)) {
+    if (
+      !Number.isSafeInteger(source.sourceIndex) ||
+      source.sourceIndex < 0 ||
+      (source.sourceChannels !== 1 && source.sourceChannels !== 2)
+    ) {
       throw new TypeError("compiled audio source has invalid index/channels");
     }
     return {
@@ -2604,7 +3828,10 @@ class AudioMasterClock {
   private startedAt = 0;
   constructor(private readonly context: AudioContext | null) {}
 
-  async start(mediaTime: number, { useAudioClock }: { useAudioClock: boolean }): Promise<void> {
+  async start(
+    mediaTime: number,
+    { useAudioClock }: { useAudioClock: boolean },
+  ): Promise<void> {
     this.mediaTime = mediaTime;
     if (useAudioClock && this.context) {
       if (this.context.state === "suspended") await this.context.resume();
@@ -2617,9 +3844,10 @@ class AudioMasterClock {
   }
 
   now(): number {
-    const clock = this.mode === "audio" && this.context
-      ? this.context.currentTime
-      : performance.now() / 1000;
+    const clock =
+      this.mode === "audio" && this.context
+        ? this.context.currentTime
+        : performance.now() / 1000;
     return this.mediaTime + Math.max(0, clock - this.startedAt);
   }
 

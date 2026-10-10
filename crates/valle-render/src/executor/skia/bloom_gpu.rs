@@ -13,154 +13,21 @@ use valle_engine::compositor::bloom::{
 
 use super::draw::DrawError;
 
-const THRESHOLD: &str = r#"
-uniform shader source;
-uniform float threshold;
-uniform float knee;
-half4 main(float2 xy) {
-    float4 pixel = float4(source.eval(xy));
-    if (pixel.a <= 0.0) return half4(0.0, 0.0, 0.0, 1.0);
-    float luminance = dot(pixel.rgb, float3(0.2627, 0.6780, 0.0593)) / pixel.a;
-    float weight;
-    if (knee == 0.0) {
-        weight = luminance >= threshold ? 1.0 : 0.0;
-    } else {
-        float t = clamp((luminance - threshold + knee) / (2.0 * knee), 0.0, 1.0);
-        weight = t * t * (3.0 - 2.0 * t);
-    }
-    return half4(pixel.rgb * weight, 1.0);
-}
-"#;
+const THRESHOLD: &str = include_str!("../../../../valle-draw/assets/shaders/pyramidthreshold.sksl");
 
-const COVERAGE: &str = r#"
-uniform shader source;
-half4 main(float2 xy) {
-    float alpha = float(source.eval(xy).a);
-    return half4(alpha, alpha, alpha, 1.0);
-}
-"#;
+const COVERAGE: &str = include_str!("../../../../valle-draw/assets/shaders/pyramidcoverage.sksl");
 
-const DOWNSAMPLE: &str = r#"
-uniform shader source;
-uniform float2 sourceSize;
-float3 at(float2 xy) {
-    if (any(lessThan(xy, float2(0.0))) || any(greaterThanEqual(xy, sourceSize))) return float3(0.0);
-    return float3(source.eval(xy + 0.5).rgb);
-}
-half4 main(float2 xy) {
-    float2 center = floor(xy) * 2.0 + 1.0;
-    float3 sum = at(center) * 4.0;
-    sum += at(center + float2(-1.0,  0.0)) * 2.0;
-    sum += at(center + float2( 1.0,  0.0)) * 2.0;
-    sum += at(center + float2( 0.0, -1.0)) * 2.0;
-    sum += at(center + float2( 0.0,  1.0)) * 2.0;
-    sum += at(center + float2(-1.0, -1.0));
-    sum += at(center + float2( 1.0, -1.0));
-    sum += at(center + float2(-1.0,  1.0));
-    sum += at(center + float2( 1.0,  1.0));
-    sum += at(center + float2(-2.0,  0.0));
-    sum += at(center + float2( 2.0,  0.0));
-    sum += at(center + float2( 0.0, -2.0));
-    sum += at(center + float2( 0.0,  2.0));
-    return half4(sum / 20.0, 1.0);
-}
-"#;
+const DOWNSAMPLE: &str =
+    include_str!("../../../../valle-draw/assets/shaders/pyramiddownsample.sksl");
 
-const BLUR: &str = r#"
-uniform shader source;
-uniform float2 sourceSize;
-uniform float spread;
-float rounded(float value) {
-    return sign(value) * floor(abs(value) + 0.5);
-}
-float3 at(float2 xy) {
-    float2 sample = float2(rounded(xy.x), rounded(xy.y));
-    if (any(lessThan(sample, float2(0.0))) || any(greaterThanEqual(sample, sourceSize))) return float3(0.0);
-    return float3(source.eval(sample + 0.5).rgb);
-}
-half4 main(float2 xy) {
-    float2 center = floor(xy);
-    float3 sum = at(center + float2(-spread, -spread));
-    sum += at(center + float2(0.0, -spread)) * 2.0;
-    sum += at(center + float2(spread, -spread));
-    sum += at(center + float2(-spread, 0.0)) * 2.0;
-    sum += at(center) * 4.0;
-    sum += at(center + float2(spread, 0.0)) * 2.0;
-    sum += at(center + float2(-spread, spread));
-    sum += at(center + float2(0.0, spread)) * 2.0;
-    sum += at(center + float2(spread, spread));
-    return half4(sum / 16.0, 1.0);
-}
-"#;
+const BLUR: &str = include_str!("../../../../valle-draw/assets/shaders/pyramidblur.sksl");
 
-const UPSAMPLE: &str = r#"
-uniform shader coarse;
-uniform shader fine;
-uniform float2 coarseSize;
-uniform float2 outputSize;
-uniform float spread;
-uniform float localWeight;
-float3 at(float2 xy) {
-    if (any(lessThan(xy, float2(0.0))) || any(greaterThanEqual(xy, coarseSize))) return float3(0.0);
-    return float3(coarse.eval(xy + 0.5).rgb);
-}
-float3 bilinear(float2 xy) {
-    float2 base = floor(xy);
-    float2 fraction = xy - base;
-    float3 top = at(base) * (1.0 - fraction.x) + at(base + float2(1.0, 0.0)) * fraction.x;
-    float3 bottom = at(base + float2(0.0, 1.0)) * (1.0 - fraction.x)
-        + at(base + float2(1.0, 1.0)) * fraction.x;
-    return top * (1.0 - fraction.y) + bottom * fraction.y;
-}
-half4 main(float2 xy) {
-    float2 pixel = floor(xy);
-    float2 center = (pixel + 0.5) * coarseSize / outputSize - 0.5;
-    float tap = 0.5 * spread;
-    float3 sum = bilinear(center + float2(-tap, -tap));
-    sum += bilinear(center + float2(0.0, -tap)) * 2.0;
-    sum += bilinear(center + float2(tap, -tap));
-    sum += bilinear(center + float2(-tap, 0.0)) * 2.0;
-    sum += bilinear(center) * 4.0;
-    sum += bilinear(center + float2(tap, 0.0)) * 2.0;
-    sum += bilinear(center + float2(-tap, tap));
-    sum += bilinear(center + float2(0.0, tap)) * 2.0;
-    sum += bilinear(center + float2(tap, tap));
-    float3 far = sum / 16.0;
-    float3 local = localWeight > 0.0 ? float3(fine.eval(xy).rgb) : float3(0.0);
-    return half4(localWeight * local + (1.0 - localWeight) * far, 1.0);
-}
-"#;
+const UPSAMPLE: &str = include_str!("../../../../valle-draw/assets/shaders/pyramidupsample.sksl");
 
-const COMPOSITE: &str = r#"
-uniform shader base;
-uniform shader halo;
-uniform float intensity;
-half4 main(float2 xy) {
-    float4 source = float4(base.eval(xy));
-    float3 bloom = float3(halo.eval(xy).rgb);
-    float3 color = clamp(source.rgb + intensity * bloom, -65504.0, 65504.0);
-    float alpha = max(source.a, min(max(max(bloom.r, bloom.g), bloom.b), 1.0));
-    return half4(color, alpha);
-}
-"#;
+const COMPOSITE: &str = include_str!("../../../../valle-draw/assets/shaders/pyramidcomposite.sksl");
 
-const GLOW_COMPOSITE: &str = r#"
-uniform shader base;
-uniform shader halo;
-uniform float4 color;
-uniform float intensity;
-half4 main(float2 xy) {
-    float4 source = float4(base.eval(xy));
-    float coverage = float(halo.eval(xy).r);
-    float gain = coverage * intensity * 12.0;
-    float peak = max(max(color.r, color.g), color.b);
-    float colorGain = peak > 0.0 ? min(gain, 1.0 / peak) : gain;
-    float haloAlpha = min(gain * color.a, 1.0);
-    float3 rgb = clamp(source.rgb + colorGain * color.rgb * (1.0 - source.a), -65504.0, 65504.0);
-    float alpha = source.a + haloAlpha * (1.0 - source.a);
-    return half4(rgb, alpha);
-}
-"#;
+const GLOW_COMPOSITE: &str =
+    include_str!("../../../../valle-draw/assets/shaders/pyramidglowcomposite.sksl");
 
 struct Effects {
     threshold: RuntimeEffect,

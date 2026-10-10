@@ -1,0 +1,25 @@
+
+uniform shader source;
+uniform float2 sourceSize;
+uniform float spread;
+float rounded(float value) {
+    return sign(value) * floor(abs(value) + 0.5);
+}
+float3 at(float2 xy) {
+    float2 sample = float2(rounded(xy.x), rounded(xy.y));
+    if (any(lessThan(sample, float2(0.0))) || any(greaterThanEqual(sample, sourceSize))) return float3(0.0);
+    return float3(source.eval(sample + 0.5).rgb);
+}
+half4 main(float2 xy) {
+    float2 center = floor(xy);
+    float3 sum = at(center + float2(-spread, -spread));
+    sum += at(center + float2(0.0, -spread)) * 2.0;
+    sum += at(center + float2(spread, -spread));
+    sum += at(center + float2(-spread, 0.0)) * 2.0;
+    sum += at(center) * 4.0;
+    sum += at(center + float2(spread, 0.0)) * 2.0;
+    sum += at(center + float2(-spread, spread));
+    sum += at(center + float2(0.0, spread)) * 2.0;
+    sum += at(center + float2(spread, spread));
+    return half4(sum / 16.0, 1.0);
+}

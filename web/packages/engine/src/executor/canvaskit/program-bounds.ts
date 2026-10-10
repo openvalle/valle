@@ -3,6 +3,7 @@ import type { DrawProgramWire, PathWire, RectWire } from "./draw-program.ts";
 type Wire = Record<string, any>;
 // null is empty; undefined means that a safe bound cannot be derived.
 type Bounds = RectWire | null | undefined;
+const immutablePathBounds = new WeakMap<PathWire, RectWire | null>();
 
 function finiteRect(value: RectWire): Bounds {
   return [value.x, value.y, value.width, value.height].every(Number.isFinite)
@@ -45,6 +46,7 @@ function outset(bounds: Bounds, amount: number): Bounds {
 
 function pathBounds(path: PathWire | undefined): Bounds {
   if (!path) return undefined;
+  if (immutablePathBounds.has(path)) return immutablePathBounds.get(path);
   if (path.points.length === 0) return null;
   let left = path.points[0]![0], top = path.points[0]![1];
   let right = left, bottom = top;
@@ -54,7 +56,12 @@ function pathBounds(path: PathWire | undefined): Bounds {
     right = Math.max(right, x); bottom = Math.max(bottom, y);
   }
   // Retain zero-area path hulls until their stroke has been added.
-  return { x: left, y: top, width: right - left, height: bottom - top };
+  const result = { x: left, y: top, width: right - left, height: bottom - top };
+  // Foreign/mutable wires keep the ordinary calculation; only sealed contour data is memoized.
+  if (Object.isFrozen(path) && Object.isFrozen(path.points) && path.points.every(Object.isFrozen)) {
+    immutablePathBounds.set(path, Object.freeze(result));
+  }
+  return result;
 }
 
 function strokeOutset(stroke: Wire): number {
@@ -146,7 +153,7 @@ function batchBounds(program: DrawProgramWire, node: Wire): Bounds {
   return result;
 }
 
-function clipBounds(program: DrawProgramWire, clip: Wire): Bounds {
+export function programClipBounds(program: DrawProgramWire, clip: Wire): Bounds {
   if (clip.kind === "rect") return finiteRect(clip.value as RectWire);
   if (clip.kind === "roundRect") return finiteRect(clip.value.rect as RectWire);
   if (clip.kind === "path") return pathBounds(program.paths[clip.value.path as number]);
@@ -196,7 +203,7 @@ export function programNodeBounds(
         || node.glass != null || node.glassForeground != null || node.filters.length !== 0) return undefined;
       result = null;
       for (const child of node.children as number[]) result = union(result, programNodeBounds(program, child, cache, depth + 1));
-      if (node.clip != null) result = intersect(result, clipBounds(program, node.clip));
+      if (node.clip != null) result = intersect(result, programClipBounds(program, node.clip));
       if (node.opacity === 0) result = null;
       result = mapMatrix(result, node.transform as number[]);
       break;

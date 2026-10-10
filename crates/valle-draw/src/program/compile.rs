@@ -301,6 +301,9 @@ impl<'a> RecordingCompiler<'a> {
         for root in self.roots {
             self.builder.add_root(root);
         }
+        if super::instance_compact::enabled() {
+            self.builder = super::instance_compact::compact(self.builder);
+        }
         self.builder.finish().map_err(Into::into)
     }
 

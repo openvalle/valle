@@ -218,6 +218,10 @@ test("frozen shaders align Native/CanvasKit sampling and arbitrary-frame results
         let cpuOutputCalls = 0;
         executor = new CanvasKitExecutor(ck, {
           transform_srgb_preview_pixels(pixels, opaque) {
+            // A transparent target can use the CPU path only after exact working-alpha proof.
+            if (!opaque) {
+              for (let alpha = 3; alpha < pixels.length; alpha += 4) expect(pixels[alpha]).toBe(1);
+            }
             cpuOutputCalls += 1;
             engine!.transform_srgb_preview_pixels(pixels, opaque);
           },
@@ -339,8 +343,14 @@ test("frozen shaders align Native/CanvasKit sampling and arbitrary-frame results
           if (frame === 60) { if (first) expect(web).toEqual(first); else first = web; }
         }
         const priorCpuOutputCalls = cpuOutputCalls;
-        await renderWeb(engine, opened.renderId, 60, true);
-        expect(cpuOutputCalls, "coverage output must retain the SkSL conversion").toBe(priorCpuOutputCalls);
+        const coverage = await renderWeb(engine, opened.renderId, 60, true);
+        const partialCoverage = coverage.some((value, index) => index % 4 === 3 && value < 255);
+        if (partialCoverage) {
+          expect(cpuOutputCalls, "partial coverage must retain the SkSL conversion").toBe(priorCpuOutputCalls);
+        } else {
+          // Fully opaque shader content is eligible; the hook above checks unrounded alpha.
+          expect(cpuOutputCalls - priorCpuOutputCalls).toBeLessThanOrEqual(1);
+        }
         if (scene3d) {await rm(join(dir,"model.glb"));await rm(join(dir,"effect.vsksl"));}
         const fresh = open();
         try { expect(await renderWeb(fresh.engine, fresh.renderId, 60)).toEqual(first!); } finally { fresh.engine.free(); }

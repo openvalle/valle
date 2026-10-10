@@ -259,7 +259,7 @@ fn native_caption_fixture_has_a_canonical_artifact_shared_with_wasm() {
     );
     assert_eq!(
         digest.to_string(),
-        "sha256:d90151d0b0c9cb726ba76b4c1d42c214edcb0d0536ce51c51df14a0c3f17797f"
+        "sha256:db7103728d50db2bb6ea16a4e3147e64193e4d61b7adc20b06309b8b17b7ff42"
     );
 }
 

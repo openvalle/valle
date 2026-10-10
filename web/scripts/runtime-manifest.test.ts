@@ -25,6 +25,18 @@ describe("root runtime manifest closure", () => {
     await expect(assertRuntimeManifest(dist, manifest)).resolves.toBeUndefined();
   });
 
+  test("includes emitted Scene3D lookup textures in the frozen host serving closure", async () => {
+    const files = await Array.fromAsync(new Bun.Glob("**/dfg-*.rg16f").scan({ cwd: dist }));
+    expect(files.length).toBeGreaterThan(0);
+    for (const file of files) {
+      const asset = manifest.assets.find((asset) => asset.path === file);
+      expect(asset?.owner).toBe("engine");
+      expect(asset?.role).toBe("lookup");
+      expect(asset?.license).toBe("MIT");
+      expect(asset?.bytes).toBe(1024);
+    }
+  });
+
   test("rejects a glue path outside its declared closure", async () => {
     const splitGroup = structuredClone(manifest);
     splitGroup.assetGroups[0].glue = manifest.runtimeAssets.workers.productFrame;

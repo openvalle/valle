@@ -79,6 +79,11 @@ export function renderPackedAbi(sources: PackedAbiSources): string {
       sectionEntryBytes: rustInteger(sources.drawPacked, "ENTRY_LEN"),
       sectionCount: rustInteger(sources.drawPacked, "SECTION_COUNT"),
       batchInstanceBytes: rustInteger(sources.drawPacked, "BATCH_INSTANCE_BYTES"),
+      pathHeaderBytes: rustInteger(sources.drawPacked, "PATH_HEADER_BYTES"),
+      pathPointBytes: rustInteger(sources.drawPacked, "PATH_POINT_BYTES"),
+      maximumPathVerbs: rustInteger(sources.drawValidate, "MAX_PATH_VERBS"),
+      maximumPathPoints: rustInteger(sources.drawValidate, "MAX_PATH_POINTS"),
+      maximumPaths: rustInteger(sources.drawValidate, "MAX_PATHS"),
     },
     renderPlan: envelopeModel(
       "RenderPlanTemplate",

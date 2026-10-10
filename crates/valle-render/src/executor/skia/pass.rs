@@ -143,6 +143,16 @@ impl SkiaExecutor {
     }
 
     #[cfg(all(target_os = "macos", feature = "native"))]
+    pub(crate) fn opacity_layer_cache_usage(&self) -> (usize, bool) {
+        let cache = self
+            .caches
+            .opacity_layers
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        (cache.bytes(), cache.under_pressure())
+    }
+
+    #[cfg(all(target_os = "macos", feature = "native"))]
     pub(crate) fn finish_shared_frame(
         &mut self,
         submitted: super::surface::SubmittedSharedMetalFrame,

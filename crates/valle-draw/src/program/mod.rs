@@ -9,6 +9,8 @@ mod compile;
 pub mod glass;
 mod group;
 mod interpolation;
+mod instance_compact;
+pub use instance_compact::with_instance_compaction;
 pub(crate) use interpolation::determinism_samples as gradient_determinism_samples;
 mod node;
 mod packed;

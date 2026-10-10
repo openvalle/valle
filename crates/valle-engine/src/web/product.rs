@@ -139,6 +139,7 @@ pub struct ProductEngine {
     compiler: Option<FrameCompiler>,
     tickets: BTreeMap<u32, Ticket>,
     next_ticket: u32,
+    realtime_geometry: bool,
 }
 
 #[wasm_bindgen]
@@ -156,6 +157,7 @@ impl ProductEngine {
             compiler: None,
             tickets: BTreeMap::new(),
             next_ticket: 1,
+            realtime_geometry: false,
         }
     }
 
@@ -168,6 +170,131 @@ impl ProductEngine {
     ) -> Result<(), JsError> {
         crate::compositor::reference::transform_srgb_preview_pixels(pixels, opaque)
             .map_err(|error| js_error("srgb_preview_output", error))
+    }
+
+    pub fn transform_srgb_preview_f16(
+        &self,
+        pixels: &mut [u8],
+        opaque: bool,
+    ) -> Result<(), JsError> {
+        crate::compositor::reference::transform_canvaskit_srgb_preview_f16(pixels, opaque)
+            .map_err(|error| js_error("srgb_preview_output", error))
+    }
+
+    /// GPU host recipe for the same padded F16 pyramid as Native. Only pass dimensions,
+    /// uniforms and resource lifetimes cross WASM; source pixels stay on the GPU.
+    pub fn plan_pyramid_filter(
+        &self,
+        input_width: u32,
+        input_height: u32,
+        output_width: u32,
+        output_height: u32,
+        offset_x: i32,
+        offset_y: i32,
+        filter_json: &str,
+    ) -> Result<Vec<f64>, JsError> {
+        use crate::compositor::bloom::{PyramidGraph, PyramidPassKind, PyramidRegion};
+        use valle_draw::program::Filter;
+        let filter: Filter = parse_json(filter_json, "GPU pyramid filter")?;
+        let (radius, spread_radius, parameters, inactive) = match filter {
+            Filter::Glow {
+                color,
+                intensity,
+                radius,
+            } => {
+                let color = color.to_working();
+                (
+                    radius,
+                    radius * 2.0,
+                    [color.red, color.green, color.blue, color.alpha, intensity],
+                    intensity == 0.0 || color.alpha == 0.0,
+                )
+            }
+            Filter::Bloom {
+                threshold,
+                knee,
+                intensity,
+                radius,
+            } => {
+                if !threshold.is_finite()
+                    || !(0.0..=1.0).contains(&threshold)
+                    || !knee.is_finite()
+                    || !(0.0..=1.0).contains(&knee)
+                {
+                    return Err(JsError::new("[gpu_pyramid] invalid bloom parameters"));
+                }
+                (
+                    radius,
+                    radius,
+                    [threshold, knee, 0.0, 0.0, intensity],
+                    intensity == 0.0,
+                )
+            }
+            _ => {
+                return Err(JsError::new(
+                    "[gpu_pyramid] only bloom and glow have pyramid recipes",
+                ));
+            }
+        };
+        if !radius.is_finite()
+            || radius < 0.0
+            || !parameters[4].is_finite()
+            || !(0.0..=4.0).contains(&parameters[4])
+        {
+            return Err(JsError::new("[gpu_pyramid] invalid radius or intensity"));
+        }
+        if radius == 0.0 || inactive {
+            return Ok(Vec::new());
+        }
+        let region = PyramidRegion::new(
+            [input_width, input_height],
+            [output_width, output_height],
+            [offset_x, offset_y],
+            radius,
+            spread_radius,
+        )
+        .map_err(|e| js_error("gpu_pyramid_region", e))?;
+        let graph = PyramidGraph::new(region.size[0], region.size[1], radius, spread_radius)
+            .map_err(|e| js_error("gpu_pyramid_graph", e))?;
+        // Header: padded origin/extent/input offset, spread, output/resource IDs,
+        // five color/threshold/intensity uniforms and pass count. Each pass contains
+        // kind/input/fine/weight/output/extent/retirement count followed by retired IDs.
+        let mut recipe = vec![
+            f64::from(region.origin[0]),
+            f64::from(region.origin[1]),
+            f64::from(region.size[0]),
+            f64::from(region.size[1]),
+            f64::from(region.input_offset[0]),
+            f64::from(region.input_offset[1]),
+            graph.spread(),
+            graph.output() as f64,
+            graph.resource_count() as f64,
+        ];
+        recipe.extend(parameters.into_iter().map(f64::from));
+        recipe.push(graph.passes().len() as f64);
+        for pass in graph.passes() {
+            let (kind, input, fine, weight) = match pass.kind() {
+                PyramidPassKind::Downsample { input } => (0.0, input, -1.0, 0.0),
+                PyramidPassKind::Blur { input } => (1.0, input, -1.0, 0.0),
+                PyramidPassKind::Upsample {
+                    coarse,
+                    fine,
+                    local_weight,
+                } => (2.0, coarse, fine.map_or(-1.0, |id| id as f64), local_weight),
+            };
+            recipe.extend([
+                kind,
+                input as f64,
+                fine,
+                weight,
+                pass.output() as f64,
+                f64::from(pass.width()),
+                f64::from(pass.height()),
+                pass.retire_after().len() as f64,
+            ]);
+            recipe.extend(pass.retire_after().iter().map(|&id| id as f64));
+        }
+        Ok(recipe)
     }
 
     /// Apply the same working-linear F16 bloom pyramid used by the Native executor.
@@ -411,6 +538,10 @@ impl ProductEngine {
         self.next_ticket = 1;
     }
 
+    pub fn set_realtime_geometry(&mut self, enabled: bool) {
+        self.realtime_geometry = enabled;
+    }
+
     /// Atomically open one verified fixed package. Its Timeline, resource
     /// manifest and binding bundle cross the boundary together; no mutable
     /// authoring registry is consulted after this call.
@@ -464,6 +595,13 @@ impl ProductEngine {
         let render = self.active_render(render_id)?;
         serde_json::to_string(render.compiled().audio())
             .map_err(|error| js_error("audio_program", error))
+    }
+
+    /// Read-only, render-local preparation cache counters, independent of executor caches.
+    pub fn motion_instance_cache_stats_json(&self, render_id: &str) -> Result<String, JsError> {
+        let render = self.active_render(render_id)?;
+        serde_json::to_string(&render.compiled().motion_instance_cache_stats())
+            .map_err(|error| js_error("motion_instance_cache_stats", error))
     }
 
     /// Enumerates fixed backend payloads carried by the active compiled
@@ -778,6 +916,108 @@ impl ProductEngine {
         topology_digest: &str,
         canonical_request: &[u8],
     ) -> Result<Vec<u8>, JsError> {
+        self.render_scene3d_request_impl(content_digest, topology_digest, canonical_request, false)
+    }
+
+    /// Keep the reference geometry rasterizer and picking metadata; let the GPU finish DOF.
+    /// Returns a versioned, cropped color/depth packet rather than a CPU-blurred color plane.
+    pub fn render_scene3d_request_deferred(
+        &mut self,
+        content_digest: &str,
+        topology_digest: &str,
+        canonical_request: &[u8],
+    ) -> Result<Vec<u8>, JsError> {
+        self.render_scene3d_request_impl(content_digest, topology_digest, canonical_request, true)
+    }
+
+    /// Admission stays in Rust even when the browser fulfills pixels on its GPU.
+    pub fn admit_scene3d_gpu_request(
+        &mut self,
+        content_digest: &str,
+        topology_digest: &str,
+        canonical_request: &[u8],
+    ) -> Result<(), JsError> {
+        let frame = parse_scene3d_request(canonical_request)?;
+        let content = ContentDigest::parse(content_digest)
+            .map_err(|error| js_error("scene3d_content_digest", error))?;
+        let topology = ContentDigest::parse(topology_digest)
+            .map_err(|error| js_error("scene3d_topology_digest", error))?;
+        if frame
+            .content_digest()
+            .map_err(|error| js_error("scene3d_request", error))?
+            != content
+            || frame
+                .topology_digest()
+                .map_err(|error| js_error("scene3d_request", error))?
+                != topology
+        {
+            return Err(js_error("scene3d_request", "GPU request identity mismatch"));
+        }
+        frame
+            .scene
+            .validate()
+            .map_err(|error| js_error("scene3d_request", error))?;
+        frame
+            .frame
+            .validate_for(&frame.scene)
+            .map_err(|error| js_error("scene3d_request", error))?;
+        // Include aggregate geometry and layer budgets, not just each primitive's validation.
+        let resources = valle_motion::scene3d::SceneResources::default();
+        let key = valle_motion::scene3d::prepare_cache_key(
+            &frame.scene,
+            frame.width,
+            frame.height,
+            &resources,
+        )
+        .map_err(|error| js_error("scene3d_gpu_admission", error))?;
+        if !self.scene3d_prepared.contains_key(&key) {
+            let prepared = valle_motion::scene3d::prepare_scene(
+                &frame.scene,
+                frame.width,
+                frame.height,
+                &resources,
+            )
+            .map_err(|error| js_error("scene3d_gpu_admission", error))?;
+            if self.scene3d_prepared.len() >= MAX_SCENE3D_PREPARED_CACHE {
+                self.scene3d_prepared.clear();
+            }
+            self.scene3d_prepared.insert(key, Arc::new(prepared));
+        }
+        Ok(())
+    }
+
+    pub fn has_scene3d_frame(&self, content_digest: &str) -> bool {
+        ContentDigest::parse(content_digest)
+            .is_ok_and(|digest| self.scene3d_frames.contains_key(&digest))
+    }
+
+    pub fn scene3d_gpu_lighting_input(
+        &self,
+        canonical_request: &[u8],
+    ) -> Result<Vec<f32>, JsError> {
+        let frame = parse_scene3d_request(canonical_request)?;
+        let resources = valle_motion::scene3d::SceneResources::default();
+        let key = valle_motion::scene3d::prepare_cache_key(
+            &frame.scene,
+            frame.width,
+            frame.height,
+            &resources,
+        )
+        .map_err(|error| js_error("scene3d_gpu_vertices", error))?;
+        let prepared = self.scene3d_prepared.get(&key).ok_or_else(|| {
+            js_error("scene3d_gpu_vertices", "GPU request must be admitted first")
+        })?;
+        valle_motion::scene3d::prepare_gpu_lighting_input(prepared, &frame.frame)
+            .map_err(|error| js_error("scene3d_gpu_vertices", error))
+    }
+
+    fn render_scene3d_request_impl(
+        &mut self,
+        content_digest: &str,
+        topology_digest: &str,
+        canonical_request: &[u8],
+        defer_dof: bool,
+    ) -> Result<Vec<u8>, JsError> {
         let content_digest = ContentDigest::parse(content_digest)
             .map_err(|error| js_error("scene3d_content_digest", error))?;
         let topology_digest = ContentDigest::parse(topology_digest)
@@ -867,8 +1107,12 @@ impl ProductEngine {
                 .insert(cache_key, Arc::clone(&prepared));
             prepared
         };
-        let raster = valle_motion::scene3d::render_scene(&prepared, &frame.frame)
-            .map_err(|error| js_error("scene3d_render", error))?;
+        let raster = if defer_dof {
+            valle_motion::scene3d::render_scene_without_depth_of_field(&prepared, &frame.frame)
+        } else {
+            valle_motion::scene3d::render_scene(&prepared, &frame.frame)
+        }
+        .map_err(|error| js_error("scene3d_render", error))?;
         let scene_key = frame
             .provider_key
             .strip_prefix("scene3d://")
@@ -876,7 +1120,11 @@ impl ProductEngine {
         let metadata = raster
             .metadata(scene_key, &frame.scene)
             .map_err(|error| js_error("scene3d_metadata", error))?;
-        let rgba = raster.premul_rgba16f_le_bytes();
+        let rgba = if defer_dof {
+            super::scene3d_dof::encode(&raster, &frame.frame.camera)
+        } else {
+            raster.premul_rgba16f_le_bytes()
+        };
         if self.scene3d_frames.len() >= MAX_SCENE3D_FRAME_CACHE
             && !self.scene3d_frames.contains_key(&content_digest)
         {
@@ -959,12 +1207,14 @@ impl ProductEngine {
             .compiler
             .as_mut()
             .ok_or_else(|| JsError::new("[render_closed] call open_fixed_package first"))?;
-        let mut ticket = compiler
-            .evaluate_prepare(
-                render_id,
-                valle_timeline::internal::FrameKey::new(frame),
-                spec,
-            )
+        let mut ticket =
+            valle_draw::program::with_instance_compaction(self.realtime_geometry, || {
+                compiler.evaluate_prepare(
+                    render_id,
+                    valle_timeline::internal::FrameKey::new(frame),
+                    spec,
+                )
+            })
             .map_err(|error| js_error("evaluate_prepare", error))?;
         ticket
             .adapt_external_pixel_layouts(&CANVAS_KIT_EXTERNAL_PIXEL_LAYOUTS)
@@ -1276,8 +1526,17 @@ fn push_scene3d_placements(
         .iter()
         .find(|candidate| candidate.id == *program)
         .ok_or_else(|| JsError::new("[frame_inspection] Motion program is missing"))?;
-    let draw = valle_draw::program::DrawProgram::from_packed(&prepared.packed)
-        .map_err(|error| js_error("frame_inspection", error))?;
+    // Preparation already admitted this exact DrawProgram. Re-decoding its packed form for
+    // picking repeated all node/geometry validation even on large, entirely 2D frames.
+    // Deserialized fixture programs still go through the original admission boundary.
+    let decoded;
+    let draw = if let Some(runtime) = prepared.runtime_program() {
+        runtime.as_ref()
+    } else {
+        decoded = valle_draw::program::DrawProgram::from_packed(&prepared.packed)
+            .map_err(|error| js_error("frame_inspection", error))?;
+        &decoded
+    };
     let viewport = draw.viewport();
     let normalize = valle_draw::program::Transform2d([
         viewport.width.recip(),
@@ -1294,7 +1553,7 @@ fn push_scene3d_placements(
     for root in draw.roots() {
         collect_scene3d_placements(
             output,
-            &draw,
+            draw,
             *root,
             valle_draw::program::Transform2d::IDENTITY,
             normalize,

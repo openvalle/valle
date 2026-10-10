@@ -286,6 +286,16 @@ fn product_plan_cache_is_render_spec_and_mode_scoped() {
         .lower(&backend)
         .unwrap();
     assert!(!first.template_cache_hit());
+    let checked = valle_engine::compositor::lower::lower_render_graph(
+        first.graph(),
+        &first.prepared().dynamic,
+        &backend,
+    )
+    .unwrap();
+    assert_eq!(
+        first.template().packed_bytes().unwrap(),
+        checked.packed_bytes().unwrap(),
+    );
 
     let mut second_worker = render.frame_compiler();
     let second = second_worker

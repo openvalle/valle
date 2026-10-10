@@ -564,7 +564,7 @@ pub fn property_spec(name: &str) -> PropertySpec<'_> {
         ) {
             spec.lowering = Lowering::Motion;
             spec.impact = Impact::TRANSFORM;
-            spec.geometry_reuse = Reuse::Rebuild;
+            spec.geometry_reuse = Reuse::AcrossFrames;
             spec.post_layout = true;
             return spec.typed(&[T::Number], false);
         }
@@ -576,7 +576,7 @@ pub fn property_spec(name: &str) -> PropertySpec<'_> {
         ) {
             spec.lowering = Lowering::Motion;
             spec.impact = Impact::COMPOSITE;
-            spec.geometry_reuse = Reuse::Rebuild;
+            spec.geometry_reuse = Reuse::AcrossFrames;
             spec.post_layout = true;
             return spec.typed(
                 if matches!(suffix, "x" | "y") {
@@ -602,7 +602,7 @@ pub fn property_spec(name: &str) -> PropertySpec<'_> {
     match name {
         "motion-filter-frame" => {
             spec.lowering = Lowering::Motion;
-            spec.geometry_reuse = Reuse::Rebuild;
+            spec.geometry_reuse = Reuse::AcrossFrames;
             spec.typed(&[T::Number], false)
         }
         "motion-inline-image" => {
@@ -628,7 +628,8 @@ pub fn property_spec(name: &str) -> PropertySpec<'_> {
         }
         "transform" | "filter" | "backdrop-filter" => {
             spec.impact = Impact::TRANSFORM;
-            spec.geometry_reuse = Reuse::Rebuild;
+            // Reuse requires a fixed containing-block presence, proved by validate_post_layout.
+            spec.geometry_reuse = Reuse::AcrossFrames;
             spec.closed_css = true;
             spec.reads_destination = name == "backdrop-filter";
             // Admission proves presence stable; the layout probe keeps that CSS structure.
@@ -644,7 +645,8 @@ pub fn property_spec(name: &str) -> PropertySpec<'_> {
         "rotate-x" | "rotate-y" | "perspective" | "transform-style" | "backface-visibility" => {
             spec.lowering = Lowering::Motion;
             spec.impact = Impact::TRANSFORM;
-            spec.geometry_reuse = Reuse::Rebuild;
+            // These are post-layout projection inputs; boxes and text metrics do not change.
+            spec.geometry_reuse = Reuse::AcrossFrames;
             spec.post_layout = true;
             spec.typed(
                 match name {

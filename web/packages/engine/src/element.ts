@@ -20,6 +20,8 @@ export class VallePlayerElement extends LitElement {
   static properties = {
     autoplay: { type: Boolean, reflect: true },
     gpu: { type: Boolean, reflect: true },
+    cpuThreads: { attribute: false },
+    renderMode: { attribute: false },
     pxScale: { type: Number, attribute: "px-scale" },
     assetBaseUrl: { type: String, attribute: "asset-base-url" },
     proxyBase: { type: String, attribute: "proxy-base" },
@@ -106,6 +108,8 @@ export class VallePlayerElement extends LitElement {
   declare runtimeAssets: VallePlayerOptions["runtimeAssets"] | null;
   declare runtimeBaseUrl: VallePlayerOptions["runtimeBaseUrl"];
   declare audioContext: VallePlayerOptions["audioContext"];
+  declare cpuThreads: VallePlayerOptions["cpuThreads"];
+  declare renderMode: VallePlayerOptions["renderMode"];
 
   declare state: VallePlayerState;
   declare errorMessage: string;
@@ -117,6 +121,7 @@ export class VallePlayerElement extends LitElement {
     super();
     this.autoplay = false;
     this.gpu = true;
+    this.renderMode = "reference";
     this.pxScale = 1;
     this.assetBaseUrl = "/assets/";
     this.proxyBase = null;
@@ -201,6 +206,8 @@ export class VallePlayerElement extends LitElement {
     this.proxyBase = options.proxyBase ?? null;
     this.pxScale = options.pxScale ?? this.pxScale;
     this.gpu = options.gpu ?? this.gpu;
+    this.cpuThreads = options.cpuThreads;
+    this.renderMode = options.renderMode ?? "reference";
     this.audioContext = options.audioContext;
   }
 
@@ -237,6 +244,8 @@ export class VallePlayerElement extends LitElement {
       runtimeBaseUrl: this.runtimeBaseUrl,
       pxScale: this.pxScale,
       gpu: this.gpu,
+      cpuThreads: this.cpuThreads,
+      renderMode: this.renderMode,
       audioContext: this.audioContext,
     });
     this.#controller = controller;

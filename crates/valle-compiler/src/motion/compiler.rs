@@ -1153,13 +1153,23 @@ impl<'s> Compiler<'s> {
 
     pub(super) fn push(&mut self, expression: Expr, span: Span) -> ExprId {
         let id = ExprId(self.expr_arena.values.len() as u32);
+        let mut errors = Vec::new();
         let ty = valle_motion::expr::validate_next_expr(
             &expression,
             &self.expr_arena.values,
             &self.expr_arena.types,
             &self.controls,
-            &mut Vec::new(),
+            &mut errors,
         );
+        // Lowering has already closed lexical/time/node scopes and assigned child identities.
+        // Equal typed expressions in this arena therefore read exactly the same runtime inputs.
+        // Invalid expressions retain their own source location for the final admission report.
+        if ty.is_some()
+            && errors.is_empty()
+            && let Some(existing) = self.expr_arena.interner.intern(&expression, id)
+        {
+            return existing;
+        }
         self.expr_arena.types.push(ty);
         // Children precede parents in the arena; treat invalid indices as runtime-dependent.
         let flag = valle_motion::expr_reads_runtime_inputs(&expression)

@@ -193,6 +193,7 @@ pub struct PreparedScene {
     /// Expand compact numeric formulas once at load time, keeping frame lookup in dense arrays.
     materialized_instance_groups: Arc<Vec<Option<InstanceGroup>>>,
     instance_eval_plans: Arc<Vec<InstanceEvalPlan>>,
+    instance_cache: Arc<std::sync::Mutex<super::instance_cache::InstanceBatchCache>>,
     /// Force trajectories are baked once at scene preparation, never integrated during a frame.
     particle_trajectories: Arc<Vec<Option<BakedParticleTrajectories>>>,
     instance_activation: Arc<Vec<Option<InstanceRangeGate>>>,
@@ -269,6 +270,23 @@ impl PreparedScene {
 
     pub fn artifact(&self) -> &SceneArtifact {
         &self.artifact
+    }
+
+    /// Configure preparation reuse for this scene and its internal temporal projection. A zero
+    /// limit selects full recomputation; existing clones keep their previous cache owner.
+    pub fn with_instance_cache_limits(mut self, max_entries: usize, max_bytes: usize) -> Self {
+        self.instance_cache = Arc::new(std::sync::Mutex::new(
+            super::instance_cache::InstanceBatchCache::new(max_entries, max_bytes),
+        ));
+        if let Some(sample) = &mut self.sample_scene {
+            Arc::make_mut(sample).instance_cache = Arc::clone(&self.instance_cache);
+        }
+        self
+    }
+
+    /// Shared across this scene's main/temporal requests and Native preparer clones.
+    pub fn instance_cache_stats(&self) -> Option<super::InstanceCacheStats> {
+        self.instance_cache.lock().ok().map(|cache| cache.stats())
     }
 
     pub(super) fn sample_value_cache(&self) -> Option<RequestValueCache> {
@@ -493,11 +511,20 @@ fn prepare_admitted(
     let layout_reusable = super::reuse::eligible(&artifact, &types);
     let auto_blur_translations =
         analytic_auto_blur_translations(&artifact, &dependencies, layout_reusable);
+    let instance_cache = Arc::new(std::sync::Mutex::new(
+        super::instance_cache::InstanceBatchCache::default(),
+    ));
     let sample_scene = if is_sample {
         None
     } else {
         super::temporal::sample_artifact(&artifact, &dependencies)
-            .map(|subset| prepare_admitted(subset, true).map(Arc::new))
+            .map(|subset| {
+                prepare_admitted(subset, true).map(|mut sample| {
+                    // Temporal projection preserves instance tables and indices exactly.
+                    sample.instance_cache = Arc::clone(&instance_cache);
+                    Arc::new(sample)
+                })
+            })
             .transpose()?
     };
     let sample_roots = is_sample.then(|| {
@@ -538,6 +565,7 @@ fn prepare_admitted(
         activation,
         materialized_instance_groups: Arc::new(materialized_instance_groups),
         instance_eval_plans: Arc::new(instance_eval_plans),
+        instance_cache,
         particle_trajectories: Arc::new(particle_trajectories),
         instance_activation: Arc::new(instance_activation),
         layout_classes,
@@ -806,6 +834,9 @@ pub(super) fn build_tree_inner(
             .filter(|snapshot| Some(&snapshot.key) == geometry_key.as_ref())
             .cloned()
     });
+    let cached_origins = cached
+        .as_ref()
+        .and_then(|snapshot| snapshot.css_3d_origins.clone());
     let (layout, keys, boxes, scene3d_content_boxes) = if let Some(snapshot) = cached {
         if let Some(timings) = timings.as_deref_mut() {
             timings.layout_reused = true;
@@ -896,6 +927,7 @@ pub(super) fn build_tree_inner(
                 keys: keys.clone(),
                 boxes: boxes.clone(),
                 scene3d_boxes: scene3d_content_boxes.clone(),
+                css_3d_origins: None,
             }));
         }
         (layout, keys, boxes, scene3d_content_boxes)
@@ -935,7 +967,9 @@ pub(super) fn build_tree_inner(
     check_post_layout_origins(artifact, &values, &boxes)?;
     // Read the current frame's author cascade before adding derived depth. This includes
     // conditional utilities, inline declarations, and importance in one computed result.
-    let author_styles = if artifact.nodes.iter().any(|node| {
+    let author_styles = if let Some(origins) = cached_origins {
+        origins
+    } else if artifact.nodes.iter().any(|node| {
         node.styles.iter().any(|style| {
             style.property.starts_with("motion-transform-3d-")
                 || matches!(
@@ -960,9 +994,22 @@ pub(super) fn build_tree_inner(
             &layout_instances,
         )?;
         let author_root = RenderNode::from_node(&render_context, author_node);
-        css_3d_author_styles(artifact, &author_root, &boxes, &inactive_nodes)?
+        let origins = Arc::new(css_3d_author_styles(
+            artifact,
+            &author_root,
+            &boxes,
+            &inactive_nodes,
+        )?);
+        // Eligibility freezes transform-origin, inherited metrics and the author cascade. Only
+        // the projection/depth changes each frame, so a second styled tree adds no information.
+        if let Some(cache) = geometry_cache {
+            if let Some(snapshot) = cache.borrow_mut().as_mut() {
+                snapshot.css_3d_origins = Some(Arc::clone(&origins));
+            }
+        }
+        origins
     } else {
-        HashMap::new()
+        Arc::new(HashMap::new())
     };
     let css_3d_planes = resolve_css_3d_planes(artifact, &values, &boxes, opts, &author_styles)?;
 
@@ -1463,7 +1510,9 @@ pub(super) fn build_tree_inner(
                     .ok_or(LayoutError::BadNode { at })?;
                 batches.insert(
                     node.key.clone(),
-                    resolve_instance_batch(
+                    resolve_instance_batch_cached(
+                        prepared,
+                        group_index,
                         group,
                         plan,
                         activation.as_ref(),
@@ -2826,6 +2875,62 @@ fn resolve_layout_instance_node(
     })
 }
 
+fn resolve_instance_batch_cached(
+    prepared: &PreparedScene,
+    group_index: usize,
+    group: &valle_motion::InstanceGroup,
+    plan: &InstanceEvalPlan,
+    activation: Option<&InstanceRowSelection>,
+    ctx: &valle_motion::MotionContext,
+    props: &ResolvedProps,
+    viewport: Option<(f64, f64)>,
+    shared: Option<&mut SampleValueCache>,
+) -> Result<crate::layout::bridge::BatchContent, LayoutError> {
+    let rows = activation.map_or(0..group.rows(), |selection| selection.rows.clone());
+    // Limit initial caching to expensive full solid Circle batches in scenes with Echo. Other
+    // geometry and non-overlapping Shutter samples keep their existing allocation behavior.
+    let eligible = plan.work_for_rows(rows.len()) >= 8192
+        && group.circle_template_parameters().is_some()
+        && prepared
+            .dependencies
+            .temporal_nodes()
+            .iter()
+            .any(|node| matches!(node.sampling, TemporalSampling::Echo { .. }))
+        && prepared
+            .instance_cache
+            .lock()
+            .ok()
+            .is_some_and(|cache| cache.enabled());
+    let key = eligible
+        .then(|| {
+            super::instance_cache::BatchKey::new(
+                group_index,
+                ctx,
+                plan.reads_host,
+                props,
+                viewport,
+                rows,
+            )
+        })
+        .flatten();
+    if let Some(key) = &key
+        && let Some(content) = prepared
+            .instance_cache
+            .lock()
+            .ok()
+            .and_then(|mut cache| cache.get(key))
+    {
+        return Ok(content);
+    }
+    let content = resolve_instance_batch(group, plan, activation, ctx, props, viewport, shared)?;
+    if let Some(key) = key
+        && let Ok(mut cache) = prepared.instance_cache.lock()
+    {
+        cache.insert(key, &content);
+    }
+    Ok(content)
+}
+
 fn resolve_instance_batch(
     group: &valle_motion::InstanceGroup,
     plan: &InstanceEvalPlan,
@@ -3645,7 +3750,7 @@ struct Css3dState {
 }
 
 #[derive(Clone, Copy)]
-struct Css3dAuthorStyle {
+pub(super) struct Css3dAuthorStyle {
     origin: valle_draw::Point,
 }
 

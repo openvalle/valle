@@ -17,21 +17,36 @@ const suite = await Bun.file(path.join(BASE, "suite.json")).json() as {
 };
 const args = Bun.argv.slice(2);
 if (args.includes("--help")) {
-  console.log("bun web/tests/performance/run.ts --output NEW_DIR [--mode qa|bench|all] [--cases ID,...] [--backends native-cpu,native-metal,web-cpu,web-gpu] [--profile preview|1080] [--target-4k] [--compare BASELINE/run.json] [--update-golden]");
+  console.log("bun web/tests/performance/run.ts --output NEW_DIR [--mode qa|bench|all] [--cases ID,...] [--backends native-cpu,native-metal,web-cpu,web-gpu] [--profile preview|1080] [--target-4k] [--qa-4k --golden-dir DIR] [--browser-timeout-ms 300000] [--cpu-output-f32] [--cli BINARY --fixed-runner BINARY --web-assets-dir DIR] [--compare BASELINE/run.json] [--update-golden]");
   process.exit(0);
 }
 const output = path.resolve(option(args, "--output"));
 const cli = path.resolve(option(args, "--cli", path.join(ROOT, "target/release/valle")));
-const fixedRunner = path.join(ROOT, "target/release/examples/performance_fixed_package");
+const fixedRunner = path.resolve(option(args, "--fixed-runner", path.join(ROOT, "target/release/examples/performance_fixed_package")));
+const webAssetsDir = path.resolve(option(args, "--web-assets-dir", path.join(ROOT, "web/dist")));
 const mode = option(args, "--mode", "qa");
 if (!["qa","bench","all"].includes(mode)) throw new Error(`invalid mode ${mode}`);
+const browserTimeoutMs = Number(option(args, "--browser-timeout-ms", "300000"));
+if (!Number.isSafeInteger(browserTimeoutMs) || browserTimeoutMs < 1000 || browserTimeoutMs > 1_800_000) throw new Error("browser timeout must be 1000..1800000 ms");
+const memorySampleLimit = Math.ceil(browserTimeoutMs / 250) + 4;
+// Diagnostic control: exercise the retained F32 API without changing product artifacts.
+const cpuOutputF32 = args.includes("--cpu-output-f32");
 const selected = option(args, "--cases", suite.cases.map(c => c.id).join(",")).split(",");
 const cases = selected.map(id => { const c = suite.cases.find(c => c.id === id); if (!c) throw new Error(`unknown case ${id}`); return c; });
 const backends = option(args, "--backends", "native-cpu,native-metal,web-cpu,web-gpu").split(",");
 if (backends.some(b => !["native-cpu","native-metal","web-cpu","web-gpu"].includes(b))) throw new Error("unknown backend");
 if (await Bun.file(path.join(output, "run.json")).exists()) throw new Error("result directory already used");
 await mkdir(output, { recursive: true });
-const goldenDir = path.join(BASE, "golden");
+const goldenDir = path.resolve(option(args, "--golden-dir", path.join(BASE, "golden")));
+if (args.includes("--qa-4k")) {
+  if (goldenDir === path.join(BASE, "golden")) throw new Error("4K QA requires a separate --golden-dir; preserve the registered preview references");
+  const scaleX = suite.performance.target.width / suite.qa.width;
+  const scaleY = suite.performance.target.height / suite.qa.height;
+  suite.qa.width = suite.performance.target.width;
+  suite.qa.height = suite.performance.target.height;
+  for (const c of cases) c.regions = c.regions.map(region => ({ ...region,
+    x: region.x * scaleX, y: region.y * scaleY, width: region.width * scaleX, height: region.height * scaleY }));
+}
 const assetArgs = (c: Case) => Object.entries(c.assets).flatMap(([id, file]) => ["--asset", `${id}=${path.join(ROOT,file)}`]);
 const source = (c: Case) => path.join(BASE, c.source);
 const identity = (c: Case) => ({ sourceSha256: sha256(source(c)), assets: Object.fromEntries(Object.entries(c.assets).map(([k,p]) => [k,sha256(path.join(ROOT,p))])) });
@@ -41,6 +56,7 @@ const performance = { ...suite.performance, ...suite.performance.profiles[profil
 const report: any = { startedAt: new Date().toISOString(), status: "running", host: {platform:os.platform(),arch:os.arch(),cpus:os.cpus().length,cpu:os.cpus()[0]?.model,totalMemory:os.totalmem()},
   settings: { mode, backends, qa:suite.qa, performance }, identities: { cli:sha256(cli), suite:sha256(path.join(BASE,"suite.json")),
     cases:Object.fromEntries(cases.map(c => [c.id,identity(c)])) }, qa:[], benchmarks:[], unmeasured:[], failures:[] };
+report.diagnostics = { browserTimeoutMs, cpuOutputRepresentation: cpuOutputF32 ? "forced-f32" : "product-default" };
 report.unmeasured.push(
   {metric:"GPU device execution time",reason:"CPU submit/completion waits are measured; no device timestamp queries"},
   {metric:"browser footprint / VRAM",reason:"process-tree RSS is sampled and reported separately; cache bytes are owner estimates"},
@@ -77,7 +93,8 @@ async function native(c: Case, backend: string, argv: string[], folder: string, 
     } finally { prepared.host.kill(); await prepared.host.exited; }
   }
   const started = performanceNow();
-  const env = {...process.env}; delete env.VALLE_RENDER_TRACE; delete env.VALLE_PERF; delete env.VALLE_TRACE_PIPELINE;
+  const env = {...process.env};
+  for (const key of ["VALLE_RENDER_TRACE", "VALLE_PERF", "VALLE_TRACE_PIPELINE", "VALLE_COMPOSITOR_TRACE_PASSES", "VALLE_PERF_SCENE3D"]) delete env[key];
   if (trace) env.VALLE_RENDER_TRACE = tracePath;
   // macOS time's footprint includes attributed GPU memory; RSS is reported separately.
   const timed = process.platform === "darwin" ? ["/usr/bin/time","-l",...cmd] : cmd;
@@ -101,7 +118,7 @@ function performanceNow() { return globalThis.performance.now(); }
 async function resourceHost(c:Case, folder:string) {
   const started = performanceNow();
   const host = Bun.spawn([cli,"--json",c.kind === "timeline" ? "timeline" : "motion","studio",source(c),
-    ...(c.kind === "timeline" ? [] : assetArgs(c)),"--port","0","--web-assets-dir",path.join(ROOT,"web/dist")],
+    ...(c.kind === "timeline" ? [] : assetArgs(c)),"--port","0","--web-assets-dir",webAssetsDir],
     {cwd:ROOT,stdout:"pipe",stderr:Bun.file(path.join(folder,"host.stderr.log"))});
   try {
     const reader = host.stdout.getReader(); let line="";
@@ -152,17 +169,24 @@ async function browserJob(c: Case, backend: string, job: Record<string,unknown>,
       const url = new URL(request.url);
       if(url.pathname === "/")return new Response('<!doctype html><meta charset="utf-8"><script>addEventListener("error",e=>fetch("/result",{method:"POST",body:JSON.stringify({status:"failed",error:e.message})}));addEventListener("unhandledrejection",e=>fetch("/result",{method:"POST",body:JSON.stringify({status:"failed",error:String(e.reason)})}));</script><script type="module" src="/client.js"></script>',{headers:{"content-type":"text/html"}});
       if(url.pathname === "/client.js")return new Response(build.outputs[0],{headers:{"content-type":"text/javascript"}});
-      if(url.pathname === "/job.json")return Response.json({...job,gpu:backend === "web-gpu",input:{...config,assets:config.resourceLocators??config.assets}});
+      if(url.pathname === "/job.json")return Response.json({...job,gpu:backend === "web-gpu",cpuOutputF32,input:{...config,assets:config.resourceLocators??config.assets}});
       if(url.pathname === "/result" && request.method === "POST") {resolveResult(await request.json());return new Response("ok");}
       if(url.pathname.startsWith("/artifact/") && request.method === "POST") {
         const name = url.pathname.slice(10); if(!/^[\w.-]+\.(png|mp4)$/.test(name))return new Response("invalid name",{status:400});
         const write = Bun.write(path.join(folder,name), await request.arrayBuffer());uploads.push(write);await write;return new Response("ok");
       }
       if (["/packages/", "/chunks/", "/runtime/"].some(prefix => url.pathname.startsWith(prefix))) {
-        const dist = path.join(ROOT,"web/dist");
+        const dist = webAssetsDir;
         const file = path.resolve(dist, `.${url.pathname}`);
         if (!file.startsWith(dist + path.sep)) return new Response("invalid path",{status:400});
-        const asset = Bun.file(file); if(await asset.exists())return new Response(asset);
+        const asset = Bun.file(file); if(await asset.exists()) {
+          if (cpuOutputF32 && url.pathname === new URL(config.runtimeAssets.engine.glue, server!.url).pathname) {
+            const glue = await asset.text();
+            if (!glue.includes("export class ProductEngine")) throw new Error("unexpected Engine glue for F32 control");
+            return new Response(glue + "\nProductEngine.prototype.transform_srgb_preview_f16 = undefined;\n", {headers:{"content-type":"text/javascript"}});
+          }
+          return new Response(asset);
+        }
       }
       return fetch(`${upstream}${url.pathname}${url.search}`,{headers:request.headers});
     }});
@@ -181,10 +205,10 @@ async function browserJob(c: Case, backend: string, job: Record<string,unknown>,
       const pids = new Set([browserPid]);
       for(let size=-1;size!==pids.size;) {size=pids.size;for(const [pid,ppid] of rows)if(pids.has(ppid!))pids.add(pid!);}
       const alive = rows.filter(([pid])=>pids.has(pid!));
-      if(memorySamples.length<1200)memorySamples.push({timeMs:performanceNow()-browserStarted,processes:alive.length,rssBytes:alive.reduce((sum,row)=>sum+row[2]!*1024,0)});
+      if(memorySamples.length<memorySampleLimit)memorySamples.push({timeMs:performanceNow()-browserStarted,processes:alive.length,rssBytes:alive.reduce((sum,row)=>sum+row[2]!*1024,0)});
     };
     sampleMemory(); memoryTimer = setInterval(sampleMemory,250);
-    timer=setTimeout(()=>rejectResult(new Error("browser job timed out")),300_000);
+    timer=setTimeout(()=>rejectResult(new Error(`browser job timed out after ${browserTimeoutMs} ms`)),browserTimeoutMs);
     const result = await Promise.race([resultPromise,waitForUnexpectedBrowserExit(child,{operation:"performance baseline",binary:browser,pageUrl:server.url.toString(),stderrPath:path.join(folder,"chrome.stderr.log"),isCompleted:()=>completed})]);
     completed=true; await Promise.all(uploads);
     clearInterval(memoryTimer); memoryTimer=undefined;sampleMemory();
@@ -282,12 +306,20 @@ try {
   report.identities.gitHead=runSync(["git","rev-parse","HEAD"]).toString().trim();
   report.identities.gitStatus=runSync(["git","status","--short"]).toString();
   report.identities.wasm=sha256(path.join(ROOT,"web/packages/engine/generated/web/valle_engine_bg.wasm"));
-  report.identities.runtime=sha256(path.join(ROOT,"web/dist/packages/engine/index.mjs"));
-  report.identities.runtimeManifest=sha256(path.join(ROOT,"web/dist/runtime/manifests/engine.json"));
+  report.identities.webAssetsDir=webAssetsDir;
+  report.identities.runtime=sha256(path.join(webAssetsDir,"packages/engine/index.mjs"));
+  report.identities.runtimeManifest=sha256(path.join(webAssetsDir,"runtime/manifests/engine.json"));
+  // Browser jobs load the served distribution; generated artifacts can belong to a different
+  // build while native binaries or old runtime snapshots are being compared.
+  report.identities.servedWasm=sha256(path.join(webAssetsDir,"runtime/engine/valle_engine_bg.wasm"));
+  report.identities.servedEngineGlue=sha256(path.join(webAssetsDir,"runtime/engine/valle_engine.js"));
+  report.identities.runner=sha256(import.meta.path);
+  report.identities.browserClient=sha256(path.join(BASE,"browser-client.ts"));
   report.identities.fixedRunner=await Bun.file(fixedRunner).exists()?sha256(fixedRunner):null;
   if(args.includes("--update-golden")) {
     await mkdir(goldenDir,{recursive:true});
     const golden:any=await Bun.file(path.join(goldenDir,"manifest.json")).exists()?await Bun.file(path.join(goldenDir,"manifest.json")).json():{createdAt:new Date().toISOString(),reference:"Native Raster",code:report.identities.gitHead,qa:suite.qa,cases:{}};
+    if (JSON.stringify(golden.qa) !== JSON.stringify(suite.qa)) throw new Error("golden QA settings differ; use a separate reference directory");
     for(const c of cases) {
       const folder=path.join(output,"golden",c.id),sheet=path.join(folder,"sheet.png");
       await native(c,"native-cpu",["--frames",suite.qa.frames.join(","),"--storyboard",sheet,"--output-size",`${suite.qa.width}x${suite.qa.height}`,"--workers","1"],folder);
@@ -299,6 +331,7 @@ try {
   }
   if(mode!=="bench") {
     const golden=await Bun.file(path.join(goldenDir,"manifest.json")).json();
+    if (JSON.stringify(golden.qa) !== JSON.stringify(suite.qa)) throw new Error("golden QA settings differ from requested resolution/order");
     for(const c of cases)for(const backend of backends) {
       if(backend==="native-metal"&&process.platform!=="darwin"){report.unmeasured.push({backend,reason:"Metal requires macOS"});continue;}
       if(backend.startsWith("web")&&!resolveBrowser()){report.unmeasured.push({backend,reason:"Chromium unavailable"});continue;}

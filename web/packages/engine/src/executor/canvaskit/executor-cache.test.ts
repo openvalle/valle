@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { resolve } from "node:path";
-import type { CanvasKit } from "canvaskit-wasm";
+import type { CanvasKit, GrDirectContext } from "canvaskit-wasm";
 
 import {
   CANVASKIT_GLYPH_COVERAGE_PROFILE,
@@ -25,6 +25,54 @@ const wasmPath = Bun.resolveSync(
 );
 
 describe("long-lived CanvasKit executor caches", () => {
+  test("GPU retention follows the admitted frame budget and changes with its context", async () => {
+    const ck = await CanvasKitInit({ locateFile: () => wasmPath });
+    const executor = new CanvasKitExecutor(ck);
+    const limits: number[] = [], otherLimits: number[] = [];
+    // No surface is needed to test admission of cache limits; allocation/pixels are tested on
+    // real CPU surfaces below and by the browser GPU performance harness.
+    const context = { setResourceCacheLimitBytes: (bytes: number) => limits.push(bytes) } as unknown as GrDirectContext;
+    const other = { setResourceCacheLimitBytes: (bytes: number) => otherLimits.push(bytes) } as unknown as GrDirectContext;
+    try {
+      executor.arena(context, 128, 96, 1024n, 8192n).endFrame();
+      executor.arena(context, 128, 96, 1024n, 8192n).endFrame();
+      expect(limits).toEqual([8192]);
+      executor.arena(context, 128, 96, 1024n, 4096n).endFrame();
+      expect(limits).toEqual([8192, 4096]);
+      executor.arena(other, 128, 96, 1024n, 1n << 40n).endFrame();
+      expect(otherLimits).toEqual([256 * 1024 * 1024]);
+      executor.arena(null, 128, 96, 1024n, 4096n).endFrame();
+      expect(limits).toEqual([8192, 4096]);
+    } finally { executor.dispose(); }
+  });
+
+  test("transient reuse retains physical capacity when the logical ROI shrinks and grows", async () => {
+    const ck = await CanvasKitInit({ locateFile: () => wasmPath });
+    const executor = new CanvasKitExecutor(ck);
+    const budget = 1024n * 1024n;
+    try {
+      const arena = executor.arena(null, 128, 96, budget, budget);
+      const backing = arena.transient(64, 48);
+      arena.releaseTransient(backing);
+      for (const [width, height] of [[16,12],[48,32],[32,24],[64,48]]) {
+        const reused = arena.transient(width, height);
+        expect(reused).toBe(backing);
+        expect(reused.width()).toBe(64);
+        expect(reused.height()).toBe(48);
+        arena.releaseTransient(reused);
+      }
+      expect(arena.frameAllocations).toBe(1);
+      expect(arena.frameReuses).toBe(4);
+      expect(arena.residentBytes).toBe(64n * 48n * 8n);
+      arena.endFrame();
+      const next = executor.arena(null, 128, 96, budget, budget);
+      const reused = next.transient(48, 40);
+      expect(reused).toBe(backing);
+      next.releaseTransient(reused);
+      next.endFrame();
+    } finally { executor.dispose(); }
+  });
+
   test("glyph coverage profile identifies the embedded renderer and frozen knobs", () => {
     expect(CANVASKIT_GLYPH_COVERAGE_PROFILE).toEqual({
       rasterizer: "freetype",

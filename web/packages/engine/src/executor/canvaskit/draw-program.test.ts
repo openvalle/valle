@@ -7,6 +7,7 @@ import {
   decodeDrawProgram,
 } from "./draw-program.ts";
 import { PROGRAM_PATCH_ABI } from "../../generated/packed-abi.ts";
+import { encodeTestPaths } from "./path-arena.test-helper.ts";
 
 const HEADER_BYTES = DRAW_PROGRAM_ABI.headerBytes;
 const ENTRY_BYTES = DRAW_PROGRAM_ABI.sectionEntryBytes;
@@ -52,7 +53,7 @@ function fixture(
     batch,
     strokeBytes,
     dashBytes,
-    json(geometry === "path" ? [{ verbs: ["moveTo", "lineTo", "lineTo", "close"], points: [[0, 0], [5, 0], [0, 5]] }] : []),
+    encodeTestPaths(geometry === "path" ? [{ verbs: ["moveTo", "lineTo", "lineTo", "close"], points: [[0, 0], [5, 0], [0, 5]] }] : []),
     json([]),
     json({ x: 0, y: 0, width: 16, height: 9 }),
     json({}),
@@ -70,7 +71,7 @@ function fixture(
   for (const [index, section] of sections.entries()) {
     const entry = HEADER_BYTES + index * ENTRY_BYTES;
     view.setUint16(entry, KINDS[index]!, true);
-    view.setUint32(entry + 4, index === 2 ? 1 : index === 3 ? strokeBytes.byteLength / 16 : index === 4 ? dashBytes.byteLength / 4 : index === 7 || index === 8 ? 1 : JSON.parse(new TextDecoder().decode(section)).length, true);
+    view.setUint32(entry + 4, index === 2 ? 1 : index === 3 ? strokeBytes.byteLength / 16 : index === 4 ? dashBytes.byteLength / 4 : index === 5 ? (geometry === "path" ? 1 : 0) : index === 7 || index === 8 ? 1 : JSON.parse(new TextDecoder().decode(section)).length, true);
     view.setBigUint64(entry + 8, BigInt(offset), true);
     view.setBigUint64(entry + 16, BigInt(section.byteLength), true);
     bytes.set(section, offset);

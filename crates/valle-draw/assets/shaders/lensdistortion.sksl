@@ -1,0 +1,126 @@
+// GPU-resident lens sampling. Keep the low word of pixel coordinates until interpolation:
+// a single float loses subpixel precision when a large source origin is subtracted.
+uniform shader source;
+uniform float2 sourceSize;
+uniform float2 inputOffset;
+uniform float2 outputOrigin;
+uniform float4 frame;
+uniform float k1;
+uniform float k2;
+
+float2 addPair(float2 a, float2 b) {
+    float s = a.x + b.x;
+    float v = s - a.x;
+    float e = (a.x - (s - v)) + (b.x - v) + a.y + b.y;
+    float h = s + e;
+    return float2(h, e - (h - s));
+}
+float2 mulPair(float2 a, float2 b) {
+    float ac = 4097.0 * a.x;
+    float ah = ac - (ac - a.x);
+    float al = a.x - ah;
+    float bc = 4097.0 * b.x;
+    float bh = bc - (bc - b.x);
+    float bl = b.x - bh;
+    float p = a.x * b.x;
+    float e = ((ah * bh - p) + ah * bl + al * bh) + al * bl;
+    e += a.x * b.y + a.y * b.x;
+    float h = p + e;
+    return float2(h, e - (h - p));
+}
+float2 divPair(float2 a, float2 b) {
+    float q = a.x / b.x;
+    float2 residual = addPair(a, -mulPair(b, float2(q, 0.0)));
+    return addPair(float2(q, 0.0), float2((residual.x + residual.y) / b.x, 0.0));
+}
+float halfStep(float value) {
+    // Products by powers of two are exact. exp2/log2 can move an otherwise exact half
+    // below its store boundary on a GPU; a subsequent truncating store then loses one ULP.
+    float magnitude = abs(value) * 16384.0;
+    float stepSize = 0.000000059604644775390625;
+    if (magnitude >= 65536.0) { magnitude *= 0.0000152587890625; stepSize *= 65536.0; }
+    if (magnitude >= 256.0) { magnitude *= 0.00390625; stepSize *= 256.0; }
+    if (magnitude >= 16.0) { magnitude *= 0.0625; stepSize *= 16.0; }
+    if (magnitude >= 4.0) { magnitude *= 0.25; stepSize *= 4.0; }
+    if (magnitude >= 2.0) stepSize *= 2.0;
+    return stepSize;
+}
+float truncateHalf(float v) {
+    float magnitude = abs(v);
+    if (magnitude == 0.0) return v;
+    float stepSize = halfStep(v);
+    return sign(v) * floor(magnitude / stepSize) * stepSize;
+}
+float nearestHalf(float v) {
+    float magnitude = abs(v);
+    if (magnitude == 0.0) return v;
+    float stepSize = halfStep(v);
+    float scaled = magnitude / stepSize;
+    float base = floor(scaled);
+    float fraction = scaled - base;
+    float increment = fraction > 0.5 || (fraction == 0.5 && mod(base, 2.0) == 1.0) ? 1.0 : 0.0;
+    return sign(v) * (base + increment) * stepSize;
+}
+float4 at(int2 pixel) {
+    if (pixel.x < 0 || pixel.y < 0 || float(pixel.x) >= sourceSize.x || float(pixel.y) >= sourceSize.y) {
+        return float4(0.0);
+    }
+    // Match CanvasKit's RGBA_F16 readback conversion before the shared CPU kernel.
+    float4 v = float4(source.eval(float2(pixel) + 0.5));
+    return float4(truncateHalf(v.r), truncateHalf(v.g), truncateHalf(v.b), truncateHalf(v.a));
+}
+float4 bilinearDecal(float2 x, float2 y) {
+    float bx = floor(x.x);
+    float by = floor(y.x);
+    float2 fx = addPair(x, float2(-bx, 0.0));
+    float2 fy = addPair(y, float2(-by, 0.0));
+    if (fx.x + fx.y < 0.0) { bx -= 1.0; fx = addPair(fx, float2(1.0, 0.0)); }
+    if (fy.x + fy.y < 0.0) { by -= 1.0; fy = addPair(fy, float2(1.0, 0.0)); }
+    if (fx.x + fx.y >= 1.0) { bx += 1.0; fx = addPair(fx, float2(-1.0, 0.0)); }
+    if (fy.x + fy.y >= 1.0) { by += 1.0; fy = addPair(fy, float2(-1.0, 0.0)); }
+    int2 origin = int2(bx, by);
+    float2 nx = addPair(float2(1.0, 0.0), -fx);
+    float2 ny = addPair(float2(1.0, 0.0), -fy);
+    float2 w0 = mulPair(nx, ny), w1 = mulPair(fx, ny);
+    float2 w2 = mulPair(nx, fy), w3 = mulPair(fx, fy);
+    float4 c0 = at(origin), c1 = at(origin + int2(1, 0));
+    float4 c2 = at(origin + int2(0, 1)), c3 = at(origin + int2(1, 1));
+    float4 value;
+    for (int i = 0; i < 4; i++) {
+        float2 sum = mulPair(float2(c0[i], 0.0), w0);
+        sum = addPair(sum, mulPair(float2(c1[i], 0.0), w1));
+        sum = addPair(sum, mulPair(float2(c2[i], 0.0), w2));
+        sum = addPair(sum, mulPair(float2(c3[i], 0.0), w3));
+        value[i] = nearestHalf(sum.x);
+    }
+    return value;
+}
+half4 main(float2 xy) {
+    float2 pixel = floor(xy);
+    if (k1 == 0.0 && k2 == 0.0) return half4(at(int2(pixel - inputOffset)));
+    float2 px = addPair(float2(outputOrigin.x, 0.0), float2(pixel.x + 0.5, 0.0));
+    float2 py = addPair(float2(outputOrigin.y, 0.0), float2(pixel.y + 0.5, 0.0));
+    float2 right = addPair(float2(frame.x, 0.0), float2(frame.z, 0.0));
+    float2 bottom = addPair(float2(frame.y, 0.0), float2(frame.w, 0.0));
+    float2 leftDelta = addPair(px, float2(-frame.x, 0.0));
+    float2 topDelta = addPair(py, float2(-frame.y, 0.0));
+    float2 rightDelta = addPair(px, -right);
+    float2 bottomDelta = addPair(py, -bottom);
+    if (leftDelta.x + leftDelta.y < 0.0 || topDelta.x + topDelta.y < 0.0 ||
+        rightDelta.x + rightDelta.y >= 0.0 || bottomDelta.x + bottomDelta.y >= 0.0) return half4(0.0);
+    float2 cx = addPair(float2(frame.x, 0.0), float2(frame.z * 0.5, 0.0));
+    float2 cy = addPair(float2(frame.y, 0.0), float2(frame.w * 0.5, 0.0));
+    float2 dx = addPair(px, -cx);
+    float2 dy = addPair(py, -cy);
+    float2 radius = mulPair(addPair(mulPair(float2(frame.z, 0.0), float2(frame.z, 0.0)),
+        mulPair(float2(frame.w, 0.0), float2(frame.w, 0.0))), float2(0.25, 0.0));
+    float2 r2 = divPair(addPair(mulPair(dx, dx), mulPair(dy, dy)), radius);
+    if (r2.x + r2.y > 1.0) r2 = float2(1.0, 0.0);
+    float2 scale = addPair(addPair(float2(1.0, 0.0), mulPair(float2(k1, 0.0), r2)),
+        mulPair(mulPair(float2(k2, 0.0), r2), r2));
+    float2 sx = addPair(addPair(cx, mulPair(dx, scale)),
+        float2(-outputOrigin.x - inputOffset.x, -0.5));
+    float2 sy = addPair(addPair(cy, mulPair(dy, scale)),
+        float2(-outputOrigin.y - inputOffset.y, -0.5));
+    return half4(bilinearDecal(sx, sy));
+}

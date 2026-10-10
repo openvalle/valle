@@ -936,6 +936,15 @@ impl SurfaceArena {
                 "Metal command-buffer submission failed".into(),
             ));
         }
+        if std::env::var_os("VALLE_TRACE_F16_STAGES").is_some() {
+            let usage = context.resource_cache_usage();
+            eprintln!(
+                "[valle ganesh] cache-bytes={} purgeable-bytes={} limit-bytes={}",
+                usage.resource_bytes,
+                context.resource_cache_purgeable_bytes(),
+                context.resource_cache_limit(),
+            );
+        }
         Ok(SubmittedSharedMetalFrame {
             surface: target.surface,
             texture: target.texture,

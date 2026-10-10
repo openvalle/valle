@@ -33,8 +33,14 @@
     "repeats": 3,
     "workers": 4,
     "profiles": {
-      "preview": { "width": 320, "height": 180 },
-      "1080": { "width": 1920, "height": 1080 }
+      "preview": {
+        "width": 320,
+        "height": 180
+      },
+      "1080": {
+        "width": 1920,
+        "height": 1080
+      }
     },
     "bitrate": 20000000,
     "hardwareEncode": true,
@@ -244,6 +250,29 @@
       "assets": {
         "clip": "web/tests/fixtures/video-offset-bframes.mp4"
       },
+      "rule": {
+        "rgb": 2,
+        "alpha": 2
+      },
+      "repeatRule": {
+        "rgb": 0,
+        "alpha": 0
+      },
+      "regions": [
+        {
+          "name": "center",
+          "x": 40,
+          "y": 30,
+          "width": 240,
+          "height": 120
+        }
+      ]
+    },
+    {
+      "id": "echo-circles",
+      "source": "fixtures/echo-circles.motion.tsx",
+      "group": "special",
+      "assets": {},
       "rule": {
         "rgb": 2,
         "alpha": 2

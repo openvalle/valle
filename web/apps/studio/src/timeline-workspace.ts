@@ -624,7 +624,7 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
       await player.replaceRenderPackage({ ...replacement, isCurrent });
     } else {
       const loadStarted = performance.now();
-      await player.load({ ...replacement, runtimeAssets: next.runtimeAssets, runtimeBaseUrl: next.runtimeBaseUrl ?? location.href });
+      await player.load({ ...replacement, renderMode: "realtime", cpuThreads: next.cpuThreads, runtimeAssets: next.runtimeAssets, runtimeBaseUrl: next.runtimeBaseUrl ?? location.href });
       performance.mark("valle-studio-player-load", { detail: {
         durationMs: performance.now() - loadStarted,
       } });

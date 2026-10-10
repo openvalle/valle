@@ -2047,7 +2047,7 @@ fn template_expression_count_is_independent_of_rows() {
             .collect::<Vec<_>>(),
         ["d", "x", "y"],
     );
-    assert_eq!(expression_count(&small), 21);
+    assert_eq!(expression_count(&small), 19);
     assert!(
         small.instance_groups[0]
             .columns
@@ -2133,7 +2133,8 @@ fn ineligible_map_keeps_the_expanded_scene() {
     let compiled = compile_motion(&source).unwrap();
     assert!(compiled.artifact.instance_groups.is_empty());
     assert_eq!(compiled.artifact.nodes.len(), 65);
-    assert_eq!(compiled.artifact.exprs.len(), 1088);
+    // Node expansion remains, while identical time/math expressions are now shared.
+    assert_eq!(compiled.artifact.exprs.len(), 139);
     let percent_position = grid(8).replace("left: cell.x", "left: \"10%\"");
     let compiled = compile_motion(&percent_position).unwrap();
     assert!(compiled.artifact.instance_groups.is_empty());

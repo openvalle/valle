@@ -39,7 +39,17 @@ pub fn lower_render_graph(
     dynamic: &DynamicBindings,
     capabilities: &BackendCapabilities,
 ) -> Result<RenderPlanTemplate, LowerError> {
-    lower_render_graph_impl(graph, dynamic, capabilities, true)
+    lower_render_graph_impl(graph, dynamic, capabilities, LoweringMode::CheckedWire)
+}
+
+/// Same-process Product construction already owns the validated graph and DrawProgram arenas.
+/// Retain that proof while producing the exact independently admitted Web transport packet.
+pub(crate) fn lower_constructed_wire_render_graph(
+    graph: &RenderGraph,
+    dynamic: &DynamicBindings,
+    capabilities: &BackendCapabilities,
+) -> Result<RenderPlanTemplate, LowerError> {
+    lower_render_graph_impl(graph, dynamic, capabilities, LoweringMode::ConstructedWire)
 }
 
 pub(crate) fn lower_constructed_render_graph(
@@ -47,15 +57,23 @@ pub(crate) fn lower_constructed_render_graph(
     dynamic: &DynamicBindings,
     capabilities: &BackendCapabilities,
 ) -> Result<RenderPlanTemplate, LowerError> {
-    lower_render_graph_impl(graph, dynamic, capabilities, false)
+    lower_render_graph_impl(graph, dynamic, capabilities, LoweringMode::Constructed)
+}
+
+#[derive(Clone, Copy)]
+enum LoweringMode {
+    CheckedWire,
+    ConstructedWire,
+    Constructed,
 }
 
 fn lower_render_graph_impl(
     graph: &RenderGraph,
     dynamic: &DynamicBindings,
     capabilities: &BackendCapabilities,
-    verify_packed_programs: bool,
+    mode: LoweringMode,
 ) -> Result<RenderPlanTemplate, LowerError> {
+    let verify_packed_programs = matches!(mode, LoweringMode::CheckedWire);
     if verify_packed_programs {
         graph.validate()?;
     }
@@ -67,7 +85,7 @@ fn lower_render_graph_impl(
     let bindings = lower_binding_layout(graph, dynamic)?;
     let backdrop_choices = choose_backdrop_resources(graph, capabilities);
     let mut passes = lower_passes(graph, &backdrop_choices)?;
-    let programs = lower_programs(graph, &bindings.external_by_handle, !verify_packed_programs)?;
+    let programs = lower_programs(graph, &bindings.external_by_handle, mode)?;
     let (mut resources, mut surface_drafts) =
         lower_resources(graph, &bindings.external_by_resource, &backdrop_choices)?;
     let optimization =
@@ -105,10 +123,10 @@ fn lower_render_graph_impl(
         .map_err(|_| LowerError::CountBudgetExceeded { kind: "resource" })?;
     let output = plan_resource_id(graph.output)?;
 
-    let build = if verify_packed_programs {
-        RenderPlanTemplate::new
-    } else {
-        RenderPlanTemplate::new_constructed
+    let build = match mode {
+        LoweringMode::CheckedWire => RenderPlanTemplate::new,
+        LoweringMode::ConstructedWire => RenderPlanTemplate::new_constructed_wire,
+        LoweringMode::Constructed => RenderPlanTemplate::new_constructed,
     };
     build(
         graph.render_id,
@@ -821,16 +839,16 @@ fn lower_binding_layout(
 fn lower_programs(
     graph: &RenderGraph,
     external_slots: &BTreeMap<ExternalHandleId, ExternalSlotId>,
-    constructed: bool,
+    mode: LoweringMode,
 ) -> Result<Vec<PlanProgram>, LowerError> {
-    lower_programs_impl(graph, external_slots, None, constructed)
+    lower_programs_impl(graph, external_slots, None, mode)
 }
 
 fn lower_programs_impl(
     graph: &RenderGraph,
     external_slots: &BTreeMap<ExternalHandleId, ExternalSlotId>,
     layouts: Option<&[PlanProgramLayout]>,
-    constructed: bool,
+    mode: LoweringMode,
 ) -> Result<Vec<PlanProgram>, LowerError> {
     if let Some(layouts) = layouts
         && layouts.len() != graph.programs.len()
@@ -886,7 +904,12 @@ fn lower_programs_impl(
                 )?,
                 scenes: lower_structure_bindings(&program.resources.scenes, external_slots)?,
             };
-            let result = match (layouts, constructed) {
+            // Only a same-process producer may attach the immutable admitted arena. A wire
+            // decoder cannot manufacture this proof and continues through full admission.
+            let admitted_runtime = matches!(mode, LoweringMode::ConstructedWire)
+                .then(|| program.runtime_program().cloned())
+                .flatten();
+            let result = match (layouts, matches!(mode, LoweringMode::Constructed)) {
                 (Some(layouts), true) => PlanProgram::from_lowered_constructed_for_layout(
                     program.id,
                     program.kind,
@@ -909,6 +932,7 @@ fn lower_programs_impl(
                     program.content_hash.clone(),
                     program.viewport,
                     program.packed.clone(),
+                    admitted_runtime,
                     program.requirements.clone(),
                     resources,
                     program.destination_uses.clone(),
@@ -937,6 +961,7 @@ fn lower_programs_impl(
                     program.content_hash.clone(),
                     program.viewport,
                     program.packed.clone(),
+                    admitted_runtime,
                     program.requirements.clone(),
                     resources,
                     program.destination_uses.clone(),
@@ -1004,7 +1029,7 @@ pub(crate) fn lower_programs_for_template(
         graph,
         &external_by_handle,
         Some(template.program_layouts()),
-        false,
+        LoweringMode::ConstructedWire,
     )
 }
 
@@ -1057,7 +1082,7 @@ pub(crate) fn lower_constructed_programs_for_template(
         graph,
         &external_by_handle,
         Some(template.program_layouts()),
-        true,
+        LoweringMode::Constructed,
     )
 }
 

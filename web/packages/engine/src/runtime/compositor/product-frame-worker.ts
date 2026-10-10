@@ -12,10 +12,15 @@ import {
   type ProductFrameWorkerResponse,
   type ProductWasmModule,
 } from "./frame-protocol.ts";
+import { decodePackedAbi, RESOURCE_REQUESTS_ABI } from "../../abi/packed.ts";
+import { supportsScene3dGpu } from "./scene3d-gpu-request.ts";
 
 interface ProductWorkerScope {
   onmessage: ((event: MessageEvent<unknown>) => void) | null;
-  postMessage(message: ProductFrameWorkerResponse, transfer?: Transferable[]): void;
+  postMessage(
+    message: ProductFrameWorkerResponse,
+    transfer?: Transferable[],
+  ): void;
 }
 
 const scope = globalThis as unknown as ProductWorkerScope;
@@ -25,6 +30,7 @@ let messageChain = Promise.resolve();
 const sentTemplateHashes = new Set<string>();
 let lastReadyAt: number | null = null;
 let lastReleaseMs = 0;
+let gpuScene3d = false;
 // Dispatch can still prefetch multiple jobs, but publish each frame immediately. Waiting for
 // eight evaluate/prepare calls delays both resource fulfillment and the first visible frame.
 const RESULT_BATCH_FRAMES = 1;
@@ -37,22 +43,28 @@ interface StartedFrame {
 }
 
 scope.onmessage = (event) => {
-  messageChain = messageChain.then(() => handleIncomingMessage(event.data)).catch((error) => {
-    // A response-delivery failure cannot be assigned to one task. Try once to fail the worker
-    // explicitly; if the message channel itself is broken, the browser's worker error owns it.
-    try {
-      scope.postMessage(productFrameWorkerFatalResponse(event.data, "protocol", error));
-    } catch {
-      // Nothing else can be delivered through this worker channel.
-    }
-  });
+  messageChain = messageChain
+    .then(() => handleIncomingMessage(event.data))
+    .catch((error) => {
+      // A response-delivery failure cannot be assigned to one task. Try once to fail the worker
+      // explicitly; if the message channel itself is broken, the browser's worker error owns it.
+      try {
+        scope.postMessage(
+          productFrameWorkerFatalResponse(event.data, "protocol", error),
+        );
+      } catch {
+        // Nothing else can be delivered through this worker channel.
+      }
+    });
 };
 
 async function handleIncomingMessage(value: unknown): Promise<void> {
   try {
     assertProductFrameWorkerRequest(value);
   } catch (error) {
-    scope.postMessage(productFrameWorkerFatalResponse(value, "protocol", error));
+    scope.postMessage(
+      productFrameWorkerFatalResponse(value, "protocol", error),
+    );
     return;
   }
 
@@ -68,25 +80,38 @@ async function handleIncomingMessage(value: unknown): Promise<void> {
       });
       return;
     }
-    scope.postMessage(productFrameWorkerFatalResponse(value, "prepareBatch", error));
+    scope.postMessage(
+      productFrameWorkerFatalResponse(value, "prepareBatch", error),
+    );
   }
 }
 
-async function handleMessage(message: ProductFrameWorkerRequest): Promise<void> {
+async function handleMessage(
+  message: ProductFrameWorkerRequest,
+): Promise<void> {
   if (message.type === "configure") {
+    gpuScene3d = message.bootstrap.gpuScene3d === true;
     engine?.free();
     engine = null;
     renderId = null;
     sentTemplateHashes.clear();
     lastReadyAt = null;
     lastReleaseMs = 0;
-    const wasm = await import(message.bootstrap.wasmModuleUrl) as ProductWasmModule;
+    const wasm = (await import(
+      message.bootstrap.wasmModuleUrl
+    )) as ProductWasmModule;
     await wasm.default(message.bootstrap.wasmUrl);
-    const canonicalTimelineJson = wasm.canonicalize_timeline_document(message.bootstrap.timelineJson);
-    const bootstrap = { ...message.bootstrap, timelineJson: canonicalTimelineJson };
+    const canonicalTimelineJson = wasm.canonicalize_timeline_document(
+      message.bootstrap.timelineJson,
+    );
+    const bootstrap = {
+      ...message.bootstrap,
+      timelineJson: canonicalTimelineJson,
+    };
     const next = new wasm.ProductEngine();
     try {
       const openedRenderId = applyProductEngineBootstrap(next, bootstrap);
+      next.set_realtime_geometry?.(gpuScene3d);
       engine = next;
       renderId = openedRenderId;
       scope.postMessage({
@@ -102,12 +127,16 @@ async function handleMessage(message: ProductFrameWorkerRequest): Promise<void> 
     return;
   }
 
-  for (let offset = 0; offset < message.jobs.length; offset += RESULT_BATCH_FRAMES) {
+  for (
+    let offset = 0;
+    offset < message.jobs.length;
+    offset += RESULT_BATCH_FRAMES
+  ) {
     const jobs = message.jobs.slice(offset, offset + RESULT_BATCH_FRAMES);
     const started: StartedFrame[] = [];
     for (const [index, job] of jobs.entries()) {
       try {
-        started.push(startFrame(job.id, job.request, index === 0));
+        started.push(await startFrame(job.id, job.request, index === 0));
       } catch (error) {
         postTaskError(job.id, job.request, error);
       }
@@ -116,17 +145,31 @@ async function handleMessage(message: ProductFrameWorkerRequest): Promise<void> 
     const bundledRequests = bundleByteArrays(
       started.map((frame) => frame.requestStage.requestPacket),
     );
-    scope.postMessage({
-      protocolVersion: PRODUCT_FRAME_WORKER_PROTOCOL_VERSION,
-      type: "requestsBatch",
-      id: `requests-${message.id}-${offset}`,
-      entries: started.map((frame, index) => ({
-        id: frame.id,
-        stage: { ...frame.requestStage, requestPacket: bundledRequests.views[index]! },
-      })),
-    }, [bundledRequests.buffer.buffer]);
+    scope.postMessage(
+      {
+        protocolVersion: PRODUCT_FRAME_WORKER_PROTOCOL_VERSION,
+        type: "requestsBatch",
+        id: `requests-${message.id}-${offset}`,
+        entries: started.map((frame, index) => ({
+          id: frame.id,
+          stage: {
+            ...frame.requestStage,
+            requestPacket: bundledRequests.views[index]!,
+          },
+        })),
+      },
+      [
+        bundledRequests.buffer.buffer,
+        ...started.flatMap((f) =>
+          Object.values(f.requestStage.gpuScene3d ?? {}).map(
+            (v) => v.buffer as ArrayBuffer,
+          ),
+        ),
+      ],
+    );
 
-    const ready: Array<{ id: string; stage: ProductFrameWorkerReadyStage }> = [];
+    const ready: Array<{ id: string; stage: ProductFrameWorkerReadyStage }> =
+      [];
     for (const frame of started) {
       try {
         ready.push({ id: frame.id, stage: finishFrame(frame) });
@@ -136,51 +179,66 @@ async function handleMessage(message: ProductFrameWorkerRequest): Promise<void> 
     }
     if (ready.length === 0) continue;
     const chunks: Uint8Array[] = [];
-    const packetIndexes: Array<{ plan: number | null; binding: number; schedule: number }> = [];
+    const packetIndexes: Array<{
+      plan: number | null;
+      binding: number;
+      schedule: number;
+    }> = [];
     for (const entry of ready) {
-      const plan = entry.stage.planPacket === null ? null : chunks.push(entry.stage.planPacket) - 1;
+      const plan =
+        entry.stage.planPacket === null
+          ? null
+          : chunks.push(entry.stage.planPacket) - 1;
       const binding = chunks.push(entry.stage.bindingPacket) - 1;
       const schedule = chunks.push(entry.stage.schedulePacket) - 1;
       packetIndexes.push({ plan, binding, schedule });
     }
     const bundledReady = bundleByteArrays(chunks);
     lastReadyAt = performance.now();
-    scope.postMessage({
-      protocolVersion: PRODUCT_FRAME_WORKER_PROTOCOL_VERSION,
-      type: "readyBatch",
-      id: `ready-${message.id}-${offset}`,
-      entries: ready.map((entry, index) => {
-        const packets = packetIndexes[index]!;
-        return {
-          id: entry.id,
-          stage: {
-            ...entry.stage,
-            planPacket: packets.plan === null ? null : bundledReady.views[packets.plan]!,
-            bindingPacket: bundledReady.views[packets.binding]!,
-            schedulePacket: bundledReady.views[packets.schedule]!,
-          },
-        };
-      }),
-    }, [bundledReady.buffer.buffer]);
+    scope.postMessage(
+      {
+        protocolVersion: PRODUCT_FRAME_WORKER_PROTOCOL_VERSION,
+        type: "readyBatch",
+        id: `ready-${message.id}-${offset}`,
+        entries: ready.map((entry, index) => {
+          const packets = packetIndexes[index]!;
+          return {
+            id: entry.id,
+            stage: {
+              ...entry.stage,
+              planPacket:
+                packets.plan === null
+                  ? null
+                  : bundledReady.views[packets.plan]!,
+              bindingPacket: bundledReady.views[packets.binding]!,
+              schedulePacket: bundledReady.views[packets.schedule]!,
+            },
+          };
+        }),
+      },
+      [bundledReady.buffer.buffer],
+    );
   }
 }
 
-function startFrame(
+async function startFrame(
   messageId: string,
   request: ProductFrameRequest,
   measureTurnGap: boolean,
-): StartedFrame {
+): Promise<StartedFrame> {
   const active = engine;
   const activeRenderId = renderId;
-  if (!active || !activeRenderId) throw new Error("Product frame worker is not configured");
+  if (!active || !activeRenderId)
+    throw new Error("Product frame worker is not configured");
   if (request.renderId !== activeRenderId) {
     throw new Error(
       `Product frame request RenderId drift: expected ${activeRenderId}, got ${request.renderId}`,
     );
   }
-  const workerTurnGapMs = !measureTurnGap || lastReadyAt === null
-    ? 0
-    : performance.now() - lastReadyAt;
+  const workerTurnGapMs =
+    !measureTurnGap || lastReadyAt === null
+      ? 0
+      : performance.now() - lastReadyAt;
   const evaluateStarted = performance.now();
   const ticket = active.evaluate_prepare_preview(
     activeRenderId,
@@ -194,6 +252,37 @@ function startFrame(
     const inspectStarted = performance.now();
     const requestPacket = active.resource_requests(ticket);
     const inspectionJson = active.frame_inspection_json(ticket);
+    const gpuPackets: Record<string, Float32Array> = {};
+    if (
+      gpuScene3d &&
+      active.admit_scene3d_gpu_request &&
+      active.scene3d_gpu_lighting_input
+    ) {
+      const requests = (await decodePackedAbi(
+        requestPacket,
+        RESOURCE_REQUESTS_ABI,
+      )) as Record<string, any>[];
+      for (const request of requests) {
+        if (request.expected.kind !== "scene3d") continue;
+        const canonical = Uint8Array.from(
+          request.payload.canonical_request,
+          Number,
+        );
+        const value = JSON.parse(new TextDecoder().decode(canonical)) as Record<
+          string,
+          any
+        >;
+        if (!supportsScene3dGpu(value)) continue;
+        const content = request.key.content;
+        if (gpuPackets[content]) continue;
+        active.admit_scene3d_gpu_request(
+          content,
+          request.key.interpretation.topology_digest,
+          canonical,
+        );
+        gpuPackets[content] = active.scene3d_gpu_lighting_input(canonical);
+      }
+    }
     const requestInspectMs = performance.now() - inspectStarted;
     return {
       id: messageId,
@@ -207,7 +296,14 @@ function startFrame(
         generation: request.generation,
         requestPacket,
         inspectionJson,
-        ...(request.trace ? { workerTimeOriginMs: performance.timeOrigin, evaluateStartedMs: evaluateStarted, inspectStartedMs: inspectStarted } : {}),
+        ...(Object.keys(gpuPackets).length ? { gpuScene3d: gpuPackets } : {}),
+        ...(request.trace
+          ? {
+              workerTimeOriginMs: performance.timeOrigin,
+              evaluateStartedMs: evaluateStarted,
+              inspectStartedMs: inspectStarted,
+            }
+          : {}),
         evaluatePrepareMs,
         requestInspectMs,
         workerTurnGapMs,
@@ -224,7 +320,8 @@ function finishFrame(frame: StartedFrame): ProductFrameWorkerReadyStage {
   const { request, ticket } = frame;
   const active = engine;
   const activeRenderId = renderId;
-  if (!active || !activeRenderId) throw new Error("Product frame worker is not configured");
+  if (!active || !activeRenderId)
+    throw new Error("Product frame worker is not configured");
   if (request.renderId !== activeRenderId) {
     throw new Error(
       `Product frame finish RenderId drift: expected ${activeRenderId}, got ${request.renderId}`,
@@ -232,7 +329,11 @@ function finishFrame(frame: StartedFrame): ProductFrameWorkerReadyStage {
   }
   try {
     const lowerStarted = performance.now();
-    active.lower_canvas_kit(ticket, request.maxSurfaceBytes, request.maxFrameBytes);
+    active.lower_canvas_kit(
+      ticket,
+      request.maxSurfaceBytes,
+      request.maxFrameBytes,
+    );
     const lowerMs = performance.now() - lowerStarted;
     const templateCacheHit = active.template_cache_hit(ticket);
     const templateHash = active.plan_template_hash(ticket);
@@ -260,13 +361,20 @@ function finishFrame(frame: StartedFrame): ProductFrameWorkerReadyStage {
       bindingPacket,
       schedulePacket,
       templateCacheHit,
-      ...(request.trace ? { workerTimeOriginMs: performance.timeOrigin, lowerStartedMs: lowerStarted, bindStartedMs: bindStarted } : {}),
+      ...(request.trace
+        ? {
+            workerTimeOriginMs: performance.timeOrigin,
+            lowerStartedMs: lowerStarted,
+            bindStartedMs: bindStarted,
+          }
+        : {}),
       lowerMs,
       bindPacketsMs,
-      totalWorkerMs: frame.requestStage.evaluatePrepareMs
-        + frame.requestStage.requestInspectMs
-        + lowerMs
-        + bindPacketsMs,
+      totalWorkerMs:
+        frame.requestStage.evaluatePrepareMs +
+        frame.requestStage.requestInspectMs +
+        lowerMs +
+        bindPacketsMs,
     };
   } finally {
     const releaseStarted = performance.now();
@@ -275,7 +383,11 @@ function finishFrame(frame: StartedFrame): ProductFrameWorkerReadyStage {
   }
 }
 
-function postTaskError(id: string, request: ProductFrameRequest, error: unknown): void {
+function postTaskError(
+  id: string,
+  request: ProductFrameRequest,
+  error: unknown,
+): void {
   scope.postMessage({
     protocolVersion: PRODUCT_FRAME_WORKER_PROTOCOL_VERSION,
     type: "taskError",
@@ -288,7 +400,9 @@ function postTaskError(id: string, request: ProductFrameRequest, error: unknown)
 }
 
 function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.stack ?? error.message : String(error);
+  return error instanceof Error
+    ? (error.stack ?? error.message)
+    : String(error);
 }
 
 function bundleByteArrays(chunks: Uint8Array[]): {

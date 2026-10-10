@@ -29,6 +29,9 @@ swash = { workspace = true, optional = true }
 wasm-bindgen = { workspace = true, optional = true }
 js-sys = { workspace = true, optional = true }
 
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+rayon.workspace = true
+
 [features]
 default = []
 # Pure Rust shaping and glyph rendering shared by native and Wasm hosts.

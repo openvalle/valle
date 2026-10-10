@@ -19,7 +19,8 @@ use crate::{
         lower::{
             BackendCapabilities, BindingContractError, LowerError, RenderBindings,
             RenderPlanTemplate, lower_constructed_programs_for_template,
-            lower_constructed_render_graph, lower_programs_for_template, lower_render_graph,
+            lower_constructed_render_graph, lower_constructed_wire_render_graph,
+            lower_programs_for_template,
         },
     },
     frame::RenderSpec,
@@ -222,7 +223,7 @@ impl PreparedTicket {
         // remains the reusable topology key.
         let candidate = match mode {
             FrameProgramMode::Wire => {
-                lower_render_graph(&graph, &self.prepared.dynamic, capabilities)?
+                lower_constructed_wire_render_graph(&graph, &self.prepared.dynamic, capabilities)?
             }
             FrameProgramMode::Constructed => {
                 lower_constructed_render_graph(&graph, &self.prepared.dynamic, capabilities)?

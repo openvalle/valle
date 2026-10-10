@@ -7,6 +7,143 @@ const RENDER_ID = "sha256:111111111111111111111111111111111111111111111111111111
 const SCENE_DIGEST = `sha256:${"4".repeat(64)}`;
 const TOPOLOGY_DIGEST = `sha256:${"5".repeat(64)}`;
 
+test("preview pipeline preparation is bounded, unpublished and reused within one package", async () => {
+  const player = Object.create(BrowserValleWebPlayer.prototype) as any;
+  const frames: Array<[number, boolean]> = [];
+  const target = {gpu: true};
+  const stop = new Error("stop after warmup");
+  Object.assign(player, {
+    closed: false, playing: false, playGeneration: 0, timeS: 0, renderId: RENDER_ID,
+    target, pxScale: 1, renderMode: "realtime", renderInFlight: null, assetByDigest: new Map(),
+    acquireTarget: () => target,
+    lastFrameTimeS: () => 10, frameAtSeconds: () => 0,
+    requireRenderReceipt: () => ({frameCount: 300, frameRate: "30/1", canvasWidth: 1920, canvasHeight: 1080}),
+    renderFrameDetailed: async (frame: number, _: unknown, publish: boolean) => { frames.push([frame,publish]); },
+    prefetchPlanningWindow: () => [{ready: Promise.reject(stop)}],
+    prefetchAudio: async () => null,
+  });
+  expect(await player.play().catch((e: unknown) => e)).toBe(stop);
+  expect(frames).toEqual([[74,false],[75,false],[149,false],[150,false],[224,false],[225,false],[299,false]]);
+  expect(await player.play().catch((e: unknown) => e)).toBe(stop);
+  expect(frames.length).toBe(7);
+  player.renderId = `sha256:${"9".repeat(64)}`;
+  expect(await player.play().catch((e: unknown) => e)).toBe(stop);
+  expect(frames.length).toBe(14);
+  player.assetByDigest.set("video", {type: "video"});
+  player.renderId = `sha256:${"6".repeat(64)}`;
+  expect(await player.play().catch((e: unknown) => e)).toBe(stop);
+  expect(frames.length).toBe(14);
+  expect(player.currentTime()).toBe(0);
+});
+
+test("direct and buffered frames retain exclusive GPU ownership across yields", async () => {
+  const player = Object.create(BrowserValleWebPlayer.prototype) as any;
+  const release = Promise.withResolvers<void>();
+  const started: number[] = [];
+  let active = 0, peak = 0;
+  player.renderFrameNow = async (frame: number) => {
+    started.push(frame);
+    peak = Math.max(peak, ++active);
+    if (frame === 0) await release.promise;
+    active--;
+    return { result: { frame: { index: frame } } };
+  };
+  const buffered = player.renderFrameDetailed(0, {}, false);
+  const direct = player.renderFrame(1);
+  await Bun.sleep(0);
+  expect(started).toEqual([0]);
+  release.resolve();
+  await buffered;
+  expect((await direct).frame.index).toBe(1);
+  expect(started).toEqual([0, 1]);
+  expect(peak).toBe(1);
+});
+
+test("a rejected frame releases GPU ownership for the next SDK request", async () => {
+  const player = Object.create(BrowserValleWebPlayer.prototype) as any;
+  const error = new Error("draw failed");
+  player.renderFrameNow = async (frame: number) => {
+    await Bun.sleep(0);
+    if (frame === 0) throw error;
+    return { result: { frame: { index: frame } } };
+  };
+  const failed = player.renderFrame(0).catch((cause: unknown) => cause);
+  const next = player.renderFrame(1);
+  expect(await failed).toBe(error);
+  expect((await next).frame.index).toBe(1);
+});
+
+test("GPU presentation deadlines retain surface ownership until the displayed frame is published", async () => {
+  const player = Object.create(BrowserValleWebPlayer.prototype) as any;
+  const deadline = Promise.withResolvers<void>();
+  const started: number[] = [], presented: number[] = [];
+  player.renderFrameNow = async (frame: number) => {
+    started.push(frame);
+    return { result: { frame: { index: frame } } };
+  };
+  const pending = player.renderFrameDetailed(1, {}, false, async (frame: any) => {
+    await deadline.promise;
+    presented.push(frame.result.frame.index);
+  });
+  const foreign = player.renderFrame(2);
+  await Bun.sleep(0);
+  expect(started).toEqual([1]);
+  expect(presented).toEqual([]);
+  deadline.resolve();
+  await pending;
+  expect((await foreign).frame.index).toBe(2);
+  expect(started).toEqual([1, 2]);
+  expect(presented).toEqual([1]);
+});
+
+test("pausing an ahead GPU frame cancels its presentation and releases the surface for SDK rendering", async () => {
+  const player = Object.create(BrowserValleWebPlayer.prototype) as any;
+  const rendered: number[] = [], presented: number[] = [];
+  Object.assign(player, {
+    closed:false, playing:true, playGeneration:1, timeS:0, playbackFrame:null, target:{gpu:true},
+    requireRenderReceipt:()=>({frameCount:3,frameRate:"30/1"}),
+    frameAtSeconds:(t:number)=>Math.floor(t*30),lastFrameTimeS:()=>2/30,
+    clock:{now:()=>0},prefetchPlanningWindow(){},presentTarget(){},
+    publishInspection(completed:any){presented.push(completed.result.frame.index);},
+    async renderFrameNow(frame:number){rendered.push(frame);return {result:{frame:{index:frame}},width:2,height:2};},
+    pause(){this.playing=false;this.playGeneration++;},
+  });
+  const pump=player.runDirectGpuPlayback(1);
+  await Bun.sleep(1); expect(rendered).toEqual([0,1]); expect(presented).toEqual([0]);
+  player.pause(); const sdk=player.renderFrame(2);
+  await pump; expect((await sdk).frame.index).toBe(2);
+  expect(presented).toEqual([0]); expect(rendered).toEqual([0,1,2]);
+});
+
+test("the ahead GPU pump publishes its final frame once and stops at the fixed media endpoint", async () => {
+  const player=Object.create(BrowserValleWebPlayer.prototype) as any;
+  let clock=0;const presented:number[]=[],times:number[]=[];
+  Object.assign(player,{
+    closed:false,playing:true,playGeneration:1,timeS:0,playbackFrame:null,target:{gpu:true},
+    requireRenderReceipt:()=>({frameCount:3,frameRate:"30/1"}),
+    frameAtSeconds:(t:number)=>Math.floor(t*30),lastFrameTimeS:()=>2/30,
+    clock:{now:()=>clock},prefetchPlanningWindow(){},presentTarget(){},
+    publishInspection(c:any){presented.push(c.result.frame.index);},
+    async renderFrameNow(frame:number){clock=(frame+1)/30;return {result:{frame:{index:frame}},width:2,height:2};},
+    pause(){this.playing=false;this.playGeneration++;},onTimeUpdate(t:number){times.push(t);},
+  });
+  await player.runDirectGpuPlayback(1);
+  expect(presented).toEqual([0,1,2]);expect(player.playing).toBe(false);
+  expect(player.playbackFrame).toBe(2);expect(player.timeS).toBe(2/30);expect(times).toEqual([2/30]);
+});
+
+test("offscreen filter surfaces share the existing total frame budget", () => {
+  const player = Object.create(BrowserValleWebPlayer.prototype) as any;
+  for (const [width, height] of [[320,180],[1920,1080],[3840,2160],[7680,4320]]) {
+    const root = BigInt(width!) * BigInt(height!) * 8n;
+    const oldSurfaceLimit = root > 64n * 1024n * 1024n ? root : 64n * 1024n * 1024n;
+    const limits = player.framePlanningInput(10, width, height, false);
+    expect(limits.maxFrameBytes).toBe(oldSurfaceLimit * 16n);
+    expect(limits.maxSurfaceBytes).toBe(limits.maxFrameBytes / 4n);
+    expect(limits.maxSurfaceBytes).toBeGreaterThanOrEqual(root);
+  }
+});
+
 test("rapid seeks wait for playback and preserve every requested frame", async () => {
   const player = Object.create(BrowserValleWebPlayer.prototype) as any;
   const playback = Promise.withResolvers<void>();
@@ -172,6 +309,73 @@ test("slow preview follows the media clock and still presents the final frame", 
   expect(player.playbackFrame).toBe(9);
   expect(player.timeS).toBe(0.3);
   expect(player.playing).toBe(false);
+});
+
+test("a late preview retires the bitmap producer before directly rendering the clock frame", async () => {
+  const player = Object.create(BrowserValleWebPlayer.prototype) as any;
+  const producer = Promise.withResolvers<void>();
+  const presented: number[] = [];
+  let mediaTime = 4 / 30, bitmapsClosed = 0, closed = 0;
+  const buffer = {
+    producer: producer.promise,
+    async take() { return { frame: 0, value: { bitmap: { close() { bitmapsClosed++; } } } }; },
+    close() { closed++; },
+  };
+  Object.assign(player, {
+    playing: true, closed: false, playGeneration: 1, timeS: 0, playbackFrame: null,
+    previewBuffer: buffer,
+    clock: { now: () => mediaTime },
+    lastFrameTimeS: () => 5 / 30,
+    frameAtSeconds: (time: number) => Math.round(time * 30),
+    requireRenderReceipt: () => ({ frameRate: "30/1", frameCount: 6 }),
+    prefetchPlanningWindow() {},
+    async renderFrame(frame: number) { presented.push(frame); mediaTime = (frame + 1) / 30; },
+    pause() { this.playing = false; },
+  });
+  const pump = player.runBufferedPlayback(1, buffer);
+  await Bun.sleep(0);
+  expect(bitmapsClosed).toBe(1);
+  expect(player.previewBuffer).toBeNull();
+  expect(presented).toEqual([]);
+  producer.resolve();
+  await pump;
+  expect(presented).toEqual([4, 5]);
+  expect(closed).toBeGreaterThan(0);
+  expect(player.timeS).toBe(5 / 30);
+});
+
+test("prebuffering uses the paused media position until the playback clock starts", async () => {
+  const player = Object.create(BrowserValleWebPlayer.prototype) as any;
+  const made: number[] = [];
+  let clockStarts = 0;
+  const target = { gpu: true, canvas: { width: 2, height: 2, getContext: () => null } };
+  const bitmap = globalThis.createImageBitmap;
+  globalThis.createImageBitmap = (async () => ({ close() {} })) as unknown as typeof createImageBitmap;
+  Object.assign(player, {
+    closed: false, playing: false, playGeneration: 0, timeS: 0, pxScale: 1,
+    renderId: "render", target, canvas: {}, playbackFrame: null, stats: {}, assetByDigest: new Map([["video", { type: "video" }]]),
+    renderMode: "realtime",
+    acquireTarget: () => target,
+    requireRenderReceipt: () => ({ frameCount: 30, frameRate: "30/1", canvasWidth: 2, canvasHeight: 2 }),
+    frameAtSeconds: (time: number) => Math.round(time * 30),
+    lastFrameTimeS: () => 29 / 30,
+    async renderFrameDetailed(frame: number, _options: unknown, _publish: boolean,
+      afterRender?: (completed: any) => Promise<void>) {
+      made.push(frame); const completed = {}; await afterRender?.(completed); return completed;
+    },
+    prefetchPlanningWindow: () => [], prefetchAudio: async () => null,
+    clock: { mode: "performance", now: () => 10, async start() { clockStarts++; } },
+    teardownAudioGraph() {}, scheduleTick() {}, async runPlaybackPump() {},
+  });
+  try {
+    await player.play();
+    expect(clockStarts).toBe(1);
+    expect(made).toEqual([0,1,2,3,4,5,6,7]);
+  } finally {
+    player.previewBuffer?.close();
+    await player.previewBuffer?.producer;
+    globalThis.createImageBitmap = bitmap;
+  }
 });
 
 const LEFT_DIGEST = "1111111111111111111111111111111111111111111111111111111111111111";

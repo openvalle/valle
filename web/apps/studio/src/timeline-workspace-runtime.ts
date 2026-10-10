@@ -113,6 +113,7 @@ export async function initializeTimelineWorkspaceRuntime(
   ) {
     const loadStarted = performance.now();
     await player.load({
+      renderMode: "realtime",
       fixedPackageManifestJson,
       timelineJson: config.render.timelineJson,
       resourceManifestJson,
@@ -124,6 +125,7 @@ export async function initializeTimelineWorkspaceRuntime(
       runtimeBaseUrl: config.runtimeBaseUrl,
       pxScale: config.pxScale,
       gpu: config.gpu,
+      cpuThreads: config.cpuThreads,
       audioContext: config.audioContext,
     });
     performance.mark("valle-studio-player-load", { detail: {

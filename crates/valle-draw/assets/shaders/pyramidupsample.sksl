@@ -1,0 +1,36 @@
+
+uniform shader coarse;
+uniform shader fine;
+uniform float2 coarseSize;
+uniform float2 outputSize;
+uniform float spread;
+uniform float localWeight;
+float3 at(float2 xy) {
+    if (any(lessThan(xy, float2(0.0))) || any(greaterThanEqual(xy, coarseSize))) return float3(0.0);
+    return float3(coarse.eval(xy + 0.5).rgb);
+}
+float3 bilinear(float2 xy) {
+    float2 base = floor(xy);
+    float2 fraction = xy - base;
+    float3 top = at(base) * (1.0 - fraction.x) + at(base + float2(1.0, 0.0)) * fraction.x;
+    float3 bottom = at(base + float2(0.0, 1.0)) * (1.0 - fraction.x)
+        + at(base + float2(1.0, 1.0)) * fraction.x;
+    return top * (1.0 - fraction.y) + bottom * fraction.y;
+}
+half4 main(float2 xy) {
+    float2 pixel = floor(xy);
+    float2 center = (pixel + 0.5) * coarseSize / outputSize - 0.5;
+    float tap = 0.5 * spread;
+    float3 sum = bilinear(center + float2(-tap, -tap));
+    sum += bilinear(center + float2(0.0, -tap)) * 2.0;
+    sum += bilinear(center + float2(tap, -tap));
+    sum += bilinear(center + float2(-tap, 0.0)) * 2.0;
+    sum += bilinear(center) * 4.0;
+    sum += bilinear(center + float2(tap, 0.0)) * 2.0;
+    sum += bilinear(center + float2(-tap, tap));
+    sum += bilinear(center + float2(0.0, tap)) * 2.0;
+    sum += bilinear(center + float2(tap, tap));
+    float3 far = sum / 16.0;
+    float3 local = localWeight > 0.0 ? float3(fine.eval(xy).rgb) : float3(0.0);
+    return half4(localWeight * local + (1.0 - localWeight) * far, 1.0);
+}

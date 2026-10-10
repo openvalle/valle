@@ -1,4 +1,4 @@
-//! Whole-scene geometry reuse for fixed text/layout and dynamic 2D transforms/opacity only.
+//! Whole-scene geometry reuse for fixed text/layout and admitted post-layout paint/projection.
 use super::scene::{LayoutTimings, build_tree_inner};
 use super::{LayoutError, LayoutOptions, LayoutTree, PreparedScene, StyleCache};
 use crate::{MotionContext, NodeKind, ResolvedProps, SceneArtifact, StyleValue, TextValue};
@@ -103,6 +103,7 @@ pub(super) struct GeometrySnapshot {
     pub keys: Arc<HashMap<u64, String>>,
     pub boxes: Arc<BTreeMap<String, valle_draw::Rect>>,
     pub scene3d_boxes: Arc<BTreeMap<String, valle_draw::Rect>>,
+    pub css_3d_origins: Option<Arc<HashMap<String, super::scene::Css3dAuthorStyle>>>,
 }
 
 /// One admitted scene and immutable font registry with at most one geometry snapshot. It never

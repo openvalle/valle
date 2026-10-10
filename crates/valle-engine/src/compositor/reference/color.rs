@@ -157,20 +157,24 @@ pub(crate) fn primaries_to_working(
     rgb: [f32; 3],
     primaries: ColorPrimaries,
 ) -> Result<[f32; 3], ColorMathError> {
-    if primaries == ColorPrimaries::Rec2020 {
-        return validate_rgb(rgb);
-    }
-    multiply_matrix_pair(XYZ_TO_REC2020, primaries_to_xyz(primaries), rgb)
+    let matrix = match primaries {
+        ColorPrimaries::Rec709 => REC709_TO_WORKING,
+        ColorPrimaries::DisplayP3 => DISPLAY_P3_TO_WORKING,
+        ColorPrimaries::Rec2020 => return validate_rgb(rgb),
+    };
+    multiply_matrix(matrix, rgb)
 }
 
 pub(crate) fn working_to_primaries(
     rgb: [f32; 3],
     primaries: ColorPrimaries,
 ) -> Result<[f32; 3], ColorMathError> {
-    if primaries == ColorPrimaries::Rec2020 {
-        return validate_rgb(rgb);
-    }
-    multiply_matrix_pair(xyz_to_primaries(primaries), REC2020_TO_XYZ, rgb)
+    let matrix = match primaries {
+        ColorPrimaries::Rec709 => WORKING_TO_REC709,
+        ColorPrimaries::DisplayP3 => WORKING_TO_DISPLAY_P3,
+        ColorPrimaries::Rec2020 => return validate_rgb(rgb),
+    };
+    multiply_matrix(matrix, rgb)
 }
 
 pub(crate) fn decode_transfer(value: f32, transfer: TransferFunction) -> f32 {
@@ -443,10 +447,10 @@ fn linear_luminance(rgb: [f32; 3], primaries: ColorPrimaries) -> f32 {
     weights[0] * rgb[0] + weights[1] * rgb[1] + weights[2] * rgb[2]
 }
 
-// Reference results enter canonical Native/WASM parity evidence. Always call the repository's
-// exact, pure-Rust libm implementation and round only once at the explicit f32 boundary.
+// Keep the pinned result at the explicit f32 boundary. The gamma specialization
+// falls back to the original pure-Rust libm whenever its rounding interval is ambiguous.
 fn powf(base: f32, exponent: f32) -> f32 {
-    math::pow(f64::from(base), f64::from(exponent)) as f32
+    super::gamma::powf(base, exponent)
 }
 
 fn sqrtf(value: f32) -> f32 {
@@ -465,34 +469,28 @@ fn log10f(value: f32) -> f32 {
     math::log10(f64::from(value)) as f32
 }
 
-fn primaries_to_xyz(primaries: ColorPrimaries) -> [[f64; 3]; 3] {
-    match primaries {
-        ColorPrimaries::Rec709 => REC709_TO_XYZ,
-        ColorPrimaries::DisplayP3 => DISPLAY_P3_TO_XYZ,
-        ColorPrimaries::Rec2020 => REC2020_TO_XYZ,
-    }
-}
-
-fn xyz_to_primaries(primaries: ColorPrimaries) -> [[f64; 3]; 3] {
-    match primaries {
-        ColorPrimaries::Rec709 => XYZ_TO_REC709,
-        ColorPrimaries::DisplayP3 => XYZ_TO_DISPLAY_P3,
-        ColorPrimaries::Rec2020 => XYZ_TO_REC2020,
-    }
-}
-
 // Compose in f64 before applying to f32 RGB. Rounding an intermediate XYZ value
 // introduces chroma into neutral gray; non-separable blends can amplify that tiny
 // error into a visible hue because saturation divides by the channel spread.
-fn multiply_matrix_pair(
-    left: [[f64; 3]; 3],
-    right: [[f64; 3]; 3],
-    value: [f32; 3],
-) -> Result<[f32; 3], ColorMathError> {
-    let matrix = std::array::from_fn(|row| {
-        std::array::from_fn(|column| (0..3).map(|i| left[row][i] * right[i][column]).sum())
-    });
-    multiply_matrix(matrix, value)
+// The fixed primaries pairs are composed once, in the same order as Iterator::sum.
+const fn compose_matrix_pair(left: [[f64; 3]; 3], right: [[f64; 3]; 3]) -> [[f64; 3]; 3] {
+    let mut matrix = [[0.0; 3]; 3];
+    let mut row = 0;
+    while row < 3 {
+        let mut column = 0;
+        while column < 3 {
+            let mut sum = -0.0;
+            let mut i = 0;
+            while i < 3 {
+                sum += left[row][i] * right[i][column];
+                i += 1;
+            }
+            matrix[row][column] = sum;
+            column += 1;
+        }
+        row += 1;
+    }
+    matrix
 }
 
 fn multiply_matrix(matrix: [[f64; 3]; 3], value: [f32; 3]) -> Result<[f32; 3], ColorMathError> {
@@ -608,6 +606,11 @@ const XYZ_TO_REC2020: [[f64; 3]; 3] = [
     ],
 ];
 
+const REC709_TO_WORKING: [[f64; 3]; 3] = compose_matrix_pair(XYZ_TO_REC2020, REC709_TO_XYZ);
+const DISPLAY_P3_TO_WORKING: [[f64; 3]; 3] = compose_matrix_pair(XYZ_TO_REC2020, DISPLAY_P3_TO_XYZ);
+const WORKING_TO_REC709: [[f64; 3]; 3] = compose_matrix_pair(XYZ_TO_REC709, REC2020_TO_XYZ);
+const WORKING_TO_DISPLAY_P3: [[f64; 3]; 3] = compose_matrix_pair(XYZ_TO_DISPLAY_P3, REC2020_TO_XYZ);
+
 #[derive(Debug, Error, Clone, PartialEq)]
 pub enum ColorMathError {
     #[error(transparent)]
@@ -629,6 +632,38 @@ pub enum ColorMathError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fixed_primaries_matrices_match_ordered_reference_bits() {
+        let pairs = [
+            (XYZ_TO_REC2020, REC709_TO_XYZ, REC709_TO_WORKING),
+            (XYZ_TO_REC2020, DISPLAY_P3_TO_XYZ, DISPLAY_P3_TO_WORKING),
+            (XYZ_TO_REC709, REC2020_TO_XYZ, WORKING_TO_REC709),
+            (XYZ_TO_DISPLAY_P3, REC2020_TO_XYZ, WORKING_TO_DISPLAY_P3),
+        ];
+        let mut state = 0x5a39_174b_u32;
+        for (left, right, prepared) in pairs {
+            let reference: [[f64; 3]; 3] = std::array::from_fn(|row| {
+                std::array::from_fn(|column| (0..3).map(|i| left[row][i] * right[i][column]).sum())
+            });
+            assert_eq!(
+                prepared.map(|r| r.map(f64::to_bits)),
+                reference.map(|r| r.map(f64::to_bits))
+            );
+            for _ in 0..4096 {
+                let rgb = std::array::from_fn(|_| {
+                    state ^= state << 13;
+                    state ^= state >> 17;
+                    state ^= state << 5;
+                    f32::from_bits(state)
+                });
+                assert_eq!(
+                    multiply_matrix(prepared, rgb).map(|rgb| rgb.map(f32::to_bits)),
+                    multiply_matrix(reference, rgb).map(|rgb| rgb.map(f32::to_bits))
+                );
+            }
+        }
+    }
 
     fn rec709_video(alpha: InputAlphaMode) -> VisualInterpretation {
         VisualInterpretation::new(

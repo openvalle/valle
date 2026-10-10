@@ -76,12 +76,13 @@ pub(super) fn draw(
     } else {
         convolve(&pixels, width, height, 4, &horizontal, &vertical)
     };
-    let bytes = blurred
-        .iter()
-        .flat_map(|value| value.to_ne_bytes())
-        .collect::<Vec<_>>();
+    // The convolution no longer needs its input. Release it before allocating the image's
+    // owned output storage, especially when several CPU frames are being rendered at once.
+    drop(pixels);
+    let data = copy_float_data(&blurred);
+    drop(blurred);
     let output_info = info.with_dimensions((output_width as i32, output_height as i32));
-    let image = images::raster_from_data(&output_info, Data::new_copy(&bytes), output_width * 16)
+    let image = images::raster_from_data(&output_info, data, output_width * 16)
         .ok_or_else(|| DrawError::Surface("float blur output allocation failed".into()))?;
     let mut paint = Paint::default();
     paint.set_blend_mode(BlendMode::Src);
@@ -120,6 +121,16 @@ pub(super) fn draw(
         );
     }
     Ok(true)
+}
+
+/// Copy native float bits straight into Skia-owned storage without an intermediate byte Vec.
+fn copy_float_data(pixels: &[f32]) -> Data {
+    // SAFETY: initialized f32 values contain exactly four initialized bytes with no padding.
+    // u8 has alignment 1. new_copy detaches the borrowed view before this function returns.
+    let bytes = unsafe {
+        std::slice::from_raw_parts(pixels.as_ptr().cast::<u8>(), std::mem::size_of_val(pixels))
+    };
+    Data::new_copy(bytes)
 }
 
 pub(super) fn is_raster_float(canvas: &Canvas, input: &Image) -> bool {
@@ -219,33 +230,42 @@ fn convolve_blocked(
     let input_stride = width * channels;
     let stride = output_width * channels;
     let mut horizontal = vec![0.0; stride * height];
+    let mut work = Vec::new();
     for (input, output) in source
         .chunks_exact(input_stride)
         .zip(horizontal.chunks_exact_mut(stride))
     {
-        for start in (0..stride).step_by(HORIZONTAL_BLOCK) {
-            let end = (start + HORIZONTAL_BLOCK).min(stride);
-            for (tap, weight) in x.iter().enumerate() {
-                let offset = tap * channels;
-                let from = start.max(offset);
-                let to = end.min(offset + input_stride);
-                if from < to {
-                    accumulate(
-                        &mut output[from..to],
-                        &input[from - offset..to - offset],
-                        *weight,
-                    );
+        constant_horizontal_spans(input, output, channels, x, &mut work);
+        for span in &work {
+            for start in (span.start..span.end).step_by(HORIZONTAL_BLOCK) {
+                let end = (start + HORIZONTAL_BLOCK).min(span.end);
+                for (tap, weight) in x.iter().enumerate() {
+                    let offset = tap * channels;
+                    let from = start.max(offset);
+                    let to = end.min(offset + input_stride);
+                    if from < to {
+                        accumulate(
+                            &mut output[from..to],
+                            &input[from - offset..to - offset],
+                            *weight,
+                        );
+                    }
                 }
             }
         }
     }
     let mut output = vec![0.0; stride * (height + y.len() - 1)];
+    let mut constant_rows = vec![false; height + y.len() - 1];
+    fill_constant_vertical_rows(&horizontal, &mut output, stride, y, &mut constant_rows);
     // One input row feeds y.len() output rows; size blocks so those spans stay in L2.
     let block = (VERTICAL_WINDOW / y.len()).next_multiple_of(8).max(64);
     for start in (0..stride).step_by(block) {
         let end = (start + block).min(stride);
         for (row, input) in horizontal.chunks_exact(stride).enumerate() {
             for (tap, weight) in y.iter().enumerate() {
+                if constant_rows[row + tap] {
+                    continue;
+                }
                 let base = (row + tap) * stride;
                 accumulate(
                     &mut output[base + start..base + end],
@@ -256,6 +276,118 @@ fn convolve_blocked(
         }
     }
     output
+}
+
+/// A full-support window inside a constant pixel span has the same ordered sum at every pixel.
+/// Calculate that sum once, leaving the edges and varying spans to the ordinary convolution.
+fn constant_horizontal_spans(
+    input: &[f32],
+    output: &mut [f32],
+    channels: usize,
+    weights: &[f32],
+    work: &mut Vec<std::ops::Range<usize>>,
+) {
+    work.clear();
+    // Four-channel windows repay the scan at moderate radii. One-channel masks and short
+    // kernels stay on the vectorized dense loop; their vertical row reuse still applies.
+    if weights.len() < 13 || channels != 4 {
+        work.push(0..output.len());
+        return;
+    }
+    let bits = float_bits(input);
+    let (pixel_bits, _) = bits.as_chunks::<4>();
+    let pixels = input.len() / channels;
+    // Noisy or smoothly varying rows rarely contain useful constant windows. Sampling only
+    // chooses the work strategy; a missed span is evaluated by the unchanged dense path.
+    if pixels < weights.len() + 8
+        || !(0..4).any(|sample| {
+            let at = ((sample * 2 + 1) * pixels / 8).min(pixels - 2) * channels;
+            bits[at..at + channels] == bits[at + channels..at + channels * 2]
+        })
+    {
+        work.push(0..output.len());
+        return;
+    }
+    let mut first = 0;
+    let mut next_work = 0;
+    while first < pixels {
+        let mut end = first + 1;
+        let value = pixel_bits[first];
+        while end < pixels && same_pixel_bits(value, pixel_bits[end]) {
+            end += 1;
+        }
+        if end - first >= weights.len() + 8 {
+            let from = (first + weights.len() - 1) * channels;
+            let to = end * channels;
+            if next_work < from {
+                work.push(next_work..from);
+            }
+            let mut sum = [0.0_f32; 4];
+            for weight in weights {
+                for channel in 0..channels {
+                    sum[channel] += input[first * channels + channel] * weight;
+                }
+            }
+            for pixel in output[from..to].chunks_exact_mut(channels) {
+                pixel.copy_from_slice(&sum[..channels]);
+            }
+            next_work = to;
+        }
+        first = end;
+    }
+    if next_work < output.len() {
+        work.push(next_work..output.len());
+    }
+}
+
+#[inline(always)]
+fn same_pixel_bits(a: [u32; 4], b: [u32; 4]) -> bool {
+    a[0] == b[0] && a[1] == b[1] && a[2] == b[2] && a[3] == b[3]
+}
+
+/// Identical horizontal rows also produce identical full-support vertical rows. The existing
+/// input-row loop visits a given output's weights in reverse order; preserve that order here.
+fn fill_constant_vertical_rows(
+    horizontal: &[f32],
+    output: &mut [f32],
+    stride: usize,
+    weights: &[f32],
+    constant: &mut [bool],
+) {
+    if weights.len() < 5 {
+        return;
+    }
+    let bits = float_bits(horizontal);
+    let height = horizontal.len() / stride;
+    let mut first = 0;
+    while first < height {
+        let mut end = first + 1;
+        let row = &bits[first * stride..(first + 1) * stride];
+        while end < height && row == &bits[end * stride..(end + 1) * stride] {
+            end += 1;
+        }
+        let from = first + weights.len() - 1;
+        if end - first >= weights.len() + 2 {
+            let input = &horizontal[first * stride..(first + 1) * stride];
+            let start = from * stride;
+            for weight in weights.iter().rev() {
+                accumulate(&mut output[start..start + stride], input, *weight);
+            }
+            let (before, after) = output.split_at_mut(start + stride);
+            let value = &before[start..];
+            for row in after[..(end - from - 1) * stride].chunks_exact_mut(stride) {
+                row.copy_from_slice(value);
+            }
+            constant[from..end].fill(true);
+        }
+        first = end;
+    }
+}
+
+fn float_bits(values: &[f32]) -> &[u32] {
+    // SAFETY: f32 and u32 have the same size and alignment, all u32 bit patterns are valid,
+    // and this read-only view cannot outlive the source. Bit comparison distinguishes -0/NaNs.
+    unsafe { std::slice::from_raw_parts(values.as_ptr().cast::<u32>(), values.len()) }
 }
 
 /// Horizontal-pass output block in floats: the block plus its input span fit in L1.
@@ -276,6 +408,80 @@ mod tests {
     use super::*;
     use skia_safe::{Color4f, Rect, Surface, surfaces};
     use valle_draw::program::LinearColor;
+
+    #[test]
+    fn float_image_storage_preserves_bits_and_outlives_the_convolution() {
+        let pixels = vec![
+            0.0_f32,
+            -0.0,
+            0.25,
+            -1.5,
+            f32::from_bits(1),
+            f32::from_bits(0x7fc0_1234),
+            f32::INFINITY,
+        ];
+        let expected: Vec<_> = pixels
+            .iter()
+            .flat_map(|pixel| pixel.to_ne_bytes())
+            .collect();
+        let data = copy_float_data(&pixels);
+        drop(pixels);
+        assert_eq!(data.as_bytes(), expected);
+        assert!(copy_float_data(&[]).is_empty());
+    }
+
+    #[test]
+    fn constant_spans_and_rows_preserve_every_convolution_bit() {
+        for channels in [1, 4] {
+            let (width, height) = (337, 113);
+            for pattern in 0..4 {
+                let mut source = vec![0.0_f32; width * height * channels];
+                for row in 0..height {
+                    for column in 0..width {
+                        for channel in 0..channels {
+                            let value = match pattern {
+                                0 => [0.25, -0.0, -0.125, 0.5][channel],
+                                1 if column > 7
+                                    && column < width - 11
+                                    && row > 5
+                                    && row < height - 9 =>
+                                {
+                                    [1.0, 0.25, 0.0, 1.0][channel]
+                                }
+                                2 => {
+                                    if column < width / 2 {
+                                        0.125
+                                    } else {
+                                        -0.5
+                                    }
+                                }
+                                3 => {
+                                    if row < height / 2 {
+                                        f32::from_bits(1)
+                                    } else {
+                                        -0.0
+                                    }
+                                }
+                                _ => 0.0,
+                            };
+                            source[(row * width + column) * channels + channel] = value;
+                        }
+                    }
+                }
+                for (sx, sy) in [(0.0, 0.0), (0.7, 0.0), (0.0, 8.3), (2.4, 8.3), (32.0, 1.0)] {
+                    let x = kernel(sx).unwrap();
+                    let y = kernel(sy).unwrap();
+                    let expected = convolve_unblocked(&source, width, height, channels, &x, &y);
+                    let actual = convolve(&source, width, height, channels, &x, &y);
+                    assert_eq!(
+                        float_bits(&actual),
+                        float_bits(&expected),
+                        "pattern={pattern}, channels={channels}, sigma=({sx},{sy})"
+                    );
+                }
+            }
+        }
+    }
 
     /// The previous unblocked convolution at the portable vector width.
     fn convolve_unblocked(

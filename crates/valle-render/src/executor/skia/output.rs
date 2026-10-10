@@ -25,6 +25,9 @@ impl StagedOutput {
 
 /// Largest staged target pixel: four 16-bit channels.
 const MAX_STAGED_PIXEL_BYTES: usize = 8;
+// The encoded destination needs a full frame; the float readback does not. Processing stripes
+// bounds this scratch to 3.75 MiB at 4K instead of retaining 126.6 MiB in every CPU worker.
+const OUTPUT_STRIPE_ROWS: usize = 64;
 type EncodedPixel = [u8; MAX_STAGED_PIXEL_BYTES];
 
 /// Reusable CPU buffers for exact output staging. Capacity persists across frames; contents never
@@ -120,16 +123,6 @@ pub(crate) fn stage_output_into(
         .ok_or_else(|| DrawError::Surface("output image is too large".into()))?;
     // read_pixels overwrites every sample, so stale contents from a prior frame are never read.
     let working = &mut staging.working;
-    working.resize(sample_count, 0.0);
-    if !image.read_pixels(
-        &read_info,
-        working.as_mut_slice(),
-        row_bytes,
-        (0, 0),
-        CachingHint::Disallow,
-    ) {
-        return Err(DrawError::Surface("working output readback failed".into()));
-    }
 
     let color_type = target_info.color_type();
     let pixel_bytes = color_type.bytes_per_pixel();
@@ -151,58 +144,76 @@ pub(crate) fn stage_output_into(
     // Flat regions repeat the previous pixel; check it before hashing.
     let mut previous = None::<([u32; 4], EncodedPixel)>;
     let mut encode_buffer = Vec::with_capacity(MAX_STAGED_PIXEL_BYTES);
-    for (index, (channels, output)) in working
-        .chunks_exact(4)
-        .zip(pixels.chunks_exact_mut(pixel_bytes))
-        .enumerate()
-    {
-        let channels = [channels[0], channels[1], channels[2], channels[3]];
-        let key = channels.map(f32::to_bits);
-        if cacheable {
-            if let Some((prior, encoded)) = &previous {
-                if *prior == key {
-                    output.copy_from_slice(&encoded[..pixel_bytes]);
-                    continue;
+    for top in (0..height).step_by(OUTPUT_STRIPE_ROWS) {
+        let rows = OUTPUT_STRIPE_ROWS.min(height - top);
+        working.resize(width * rows * 4, 0.0);
+        if !image.read_pixels(
+            &read_info.with_dimensions((image.width(), rows as i32)),
+            working.as_mut_slice(),
+            row_bytes,
+            (0, top as i32),
+            CachingHint::Disallow,
+        ) {
+            return Err(DrawError::Surface("working output readback failed".into()));
+        }
+        let start_pixel = top * width;
+        let stripe_output =
+            &mut pixels[start_pixel * pixel_bytes..(start_pixel + rows * width) * pixel_bytes];
+        for (local_index, (channels, output)) in working
+            .chunks_exact(4)
+            .zip(stripe_output.chunks_exact_mut(pixel_bytes))
+            .enumerate()
+        {
+            // Dither remains anchored to the original frame, including the last short stripe.
+            let index = start_pixel + local_index;
+            let channels = [channels[0], channels[1], channels[2], channels[3]];
+            let key = channels.map(f32::to_bits);
+            if cacheable {
+                if let Some((prior, encoded)) = &previous {
+                    if *prior == key {
+                        output.copy_from_slice(&encoded[..pixel_bytes]);
+                        continue;
+                    }
                 }
             }
-        }
-        let hash = key
-            .iter()
-            .fold(0_u32, |hash, bits| hash.rotate_left(5) ^ bits)
-            .wrapping_mul(0x9e3779b9);
-        let slot = (hash >> (32 - SDR_CACHE_BITS)) as usize;
-        let cached = if cacheable {
-            cache[slot].filter(|(prior, _)| *prior == key)
-        } else {
-            None
-        };
-        let encoded = if let Some((_, encoded)) = cached {
-            encoded
-        } else {
-            let sample = transform_working_pixel(
-                canonical_rgba(channels)?,
-                spec,
-                [(index % width) as u32, (index / width) as u32],
-            )
-            .map_err(|error| DrawError::Surface(error.to_string()))?;
-            encode_buffer.clear();
-            append_storage(&mut encode_buffer, sample.storage, color_type, spec)?;
-            if encode_buffer.len() != pixel_bytes {
-                return Err(DrawError::Surface(format!(
-                    "{color_type:?} staging produced {} bytes per pixel",
-                    encode_buffer.len()
-                )));
-            }
-            let mut encoded = [0_u8; MAX_STAGED_PIXEL_BYTES];
-            encoded[..pixel_bytes].copy_from_slice(&encode_buffer);
+            let hash = key
+                .iter()
+                .fold(0_u32, |hash, bits| hash.rotate_left(5) ^ bits)
+                .wrapping_mul(0x9e3779b9);
+            let slot = (hash >> (32 - SDR_CACHE_BITS)) as usize;
+            let cached = if cacheable {
+                cache[slot].filter(|(prior, _)| *prior == key)
+            } else {
+                None
+            };
+            let encoded = if let Some((_, encoded)) = cached {
+                encoded
+            } else {
+                let sample = transform_working_pixel(
+                    canonical_rgba(channels)?,
+                    spec,
+                    [(index % width) as u32, (index / width) as u32],
+                )
+                .map_err(|error| DrawError::Surface(error.to_string()))?;
+                encode_buffer.clear();
+                append_storage(&mut encode_buffer, sample.storage, color_type, spec)?;
+                if encode_buffer.len() != pixel_bytes {
+                    return Err(DrawError::Surface(format!(
+                        "{color_type:?} staging produced {} bytes per pixel",
+                        encode_buffer.len()
+                    )));
+                }
+                let mut encoded = [0_u8; MAX_STAGED_PIXEL_BYTES];
+                encoded[..pixel_bytes].copy_from_slice(&encode_buffer);
+                if cacheable {
+                    cache[slot] = Some((key, encoded));
+                }
+                encoded
+            };
+            output.copy_from_slice(&encoded[..pixel_bytes]);
             if cacheable {
-                cache[slot] = Some((key, encoded));
+                previous = Some((key, encoded));
             }
-            encoded
-        };
-        output.copy_from_slice(&encoded[..pixel_bytes]);
-        if cacheable {
-            previous = Some((key, encoded));
         }
     }
     width
@@ -264,19 +275,10 @@ pub(crate) fn stage_sdr_output_into(
         Some(linear),
     );
     let width = image.width() as usize;
-    let pixel_count = width * image.height() as usize;
+    let height = image.height() as usize;
+    let pixel_count = width * height;
     // read_pixels overwrites every sample, so stale contents from a prior frame are never read.
     let samples = &mut staging.working;
-    samples.resize(pixel_count * 4, 0.0);
-    if !image.read_pixels(
-        &info,
-        samples.as_mut_slice(),
-        width * 16,
-        (0, 0),
-        CachingHint::Disallow,
-    ) {
-        return Err(DrawError::Surface("linear output conversion failed".into()));
-    }
     // Loop invariants, queried once rather than per pixel.
     let maximum = f32::from(spec.reference_white().get()) / 100.0;
     let curve = transfer_lut(spec.target().transfer);
@@ -294,58 +296,75 @@ pub(crate) fn stage_sdr_output_into(
     // Gradients repeat a color down a column rather than along a row, so a small exact-key cache
     // catches what the previous-pixel check misses. Keys are the input bits, so hits are exact.
     let mut cache = vec![None::<([u32; 4], [u8; 4])>; SDR_CACHE_SLOTS];
-    for (pixel, output) in samples.chunks_exact(4).zip(pixels.chunks_exact_mut(4)) {
-        let key = [
-            pixel[0].to_bits(),
-            pixel[1].to_bits(),
-            pixel[2].to_bits(),
-            pixel[3].to_bits(),
-        ];
-        if let Some((prior, codes)) = previous
-            && prior == key
-        {
-            output.copy_from_slice(&codes);
-            continue;
+    for top in (0..height).step_by(OUTPUT_STRIPE_ROWS) {
+        let rows = OUTPUT_STRIPE_ROWS.min(height - top);
+        samples.resize(width * rows * 4, 0.0);
+        if !image.read_pixels(
+            &info.with_dimensions((image.width(), rows as i32)),
+            samples.as_mut_slice(),
+            width * 16,
+            (0, top as i32),
+            CachingHint::Disallow,
+        ) {
+            return Err(DrawError::Surface("linear output conversion failed".into()));
         }
-        let slot = (key
-            .iter()
-            .fold(0_u32, |hash, bits| hash.rotate_left(5) ^ bits)
-            .wrapping_mul(0x9e37_79b9)
-            >> (32 - SDR_CACHE_BITS)) as usize;
-        if let Some((prior, codes)) = cache[slot]
-            && prior == key
+        let stripe_output = &mut pixels[top * width * 4..(top + rows) * width * 4];
+        for (pixel, output) in samples
+            .chunks_exact(4)
+            .zip(stripe_output.chunks_exact_mut(4))
         {
+            let key = [
+                pixel[0].to_bits(),
+                pixel[1].to_bits(),
+                pixel[2].to_bits(),
+                pixel[3].to_bits(),
+            ];
+            if let Some((prior, codes)) = previous
+                && prior == key
+            {
+                output.copy_from_slice(&codes);
+                continue;
+            }
+            let slot = (key
+                .iter()
+                .fold(0_u32, |hash, bits| hash.rotate_left(5) ^ bits)
+                .wrapping_mul(0x9e37_79b9)
+                >> (32 - SDR_CACHE_BITS)) as usize;
+            if let Some((prior, codes)) = cache[slot]
+                && prior == key
+            {
+                output.copy_from_slice(&codes);
+                previous = Some((key, codes));
+                continue;
+            }
+            let pixel = canonical_rgba([pixel[0], pixel[1], pixel[2], pixel[3]])?;
+            if alpha_mode == OutputAlphaMode::Opaque && pixel[3] != 1.0 {
+                return Err(DrawError::Surface("opaque output has transparency".into()));
+            }
+            let mapped = valle_engine::compositor::delivery::map_output_gamut(
+                [pixel[0], pixel[1], pixel[2]],
+                primaries,
+                maximum,
+                gamut_map,
+            )
+            .map_err(|error| DrawError::Surface(error.to_string()))?;
+            let coverage = if alpha_mode == OutputAlphaMode::PremultipliedCoverage {
+                pixel[3]
+            } else {
+                1.0
+            };
+            let code = |value: f32| round_code(transfer_code(value / maximum, curve) * coverage);
+            let (red, blue) = if swap_red_blue { (2, 0) } else { (0, 2) };
+            let codes = [
+                code(mapped[red]),
+                code(mapped[1]),
+                code(mapped[blue]),
+                round_code(pixel[3] * 255.0),
+            ];
             output.copy_from_slice(&codes);
             previous = Some((key, codes));
-            continue;
+            cache[slot] = Some((key, codes));
         }
-        let pixel = canonical_rgba([pixel[0], pixel[1], pixel[2], pixel[3]])?;
-        if alpha_mode == OutputAlphaMode::Opaque && pixel[3] != 1.0 {
-            return Err(DrawError::Surface("opaque output has transparency".into()));
-        }
-        let mapped = valle_engine::compositor::delivery::map_output_gamut(
-            [pixel[0], pixel[1], pixel[2]],
-            primaries,
-            maximum,
-            gamut_map,
-        )
-        .map_err(|error| DrawError::Surface(error.to_string()))?;
-        let coverage = if alpha_mode == OutputAlphaMode::PremultipliedCoverage {
-            pixel[3]
-        } else {
-            1.0
-        };
-        let code = |value: f32| round_code(transfer_code(value / maximum, curve) * coverage);
-        let (red, blue) = if swap_red_blue { (2, 0) } else { (0, 2) };
-        let codes = [
-            code(mapped[red]),
-            code(mapped[1]),
-            code(mapped[blue]),
-            round_code(pixel[3] * 255.0),
-        ];
-        output.copy_from_slice(&codes);
-        previous = Some((key, codes));
-        cache[slot] = Some((key, codes));
     }
     Ok(Some(row_bytes))
 }
@@ -806,7 +825,9 @@ mod tests {
             [0.9, 0.1, 0.05, 1.0],
             [0.0, 0.0, 0.0, 1.0],
         ];
-        let samples = (0..1024)
+        // Cross both stripe boundaries and a final one-row stripe, including position-dependent
+        // dithering. Every pixel is compared with the independent per-pixel delivery reference.
+        let samples = (0..32 * 129)
             .map(|i| {
                 let run = i / 7;
                 if run % 2 == 0 {
@@ -822,7 +843,7 @@ mod tests {
             .flat_map(|value| value.to_ne_bytes())
             .collect::<Vec<_>>();
         let source = ImageInfo::new(
-            (32, 32),
+            (32, 129),
             ColorType::RGBAF32,
             AlphaType::Premul,
             Some(working_color_space().unwrap()),
@@ -844,7 +865,7 @@ mod tests {
                     continue;
                 };
                 let target = ImageInfo::new(
-                    (32, 32),
+                    (32, 129),
                     color_type,
                     AlphaType::Opaque,
                     Some(output_color_space(spec).unwrap()),
@@ -877,6 +898,13 @@ mod tests {
         let mut staging = OutputStaging::default();
         // Grow and shrink the same buffers, switch both delivery paths, then reuse a prior size.
         for (width, height, bit_depth, color_type, transfer) in [
+            (
+                32,
+                133,
+                OutputBitDepth::Eight,
+                ColorType::RGBA8888,
+                TransferFunction::Srgb,
+            ),
             (
                 32,
                 8,
@@ -970,6 +998,9 @@ mod tests {
                 target.min_row_bytes()
             );
             assert_eq!(staging.pixels(), expected);
+            // A tall frame must not retain its full float plane. Later cases poison and reuse
+            // this same storage across changing sizes and output formats.
+            assert!(staging.working.capacity() <= 64 * OUTPUT_STRIPE_ROWS * 4);
             if bit_depth == OutputBitDepth::Eight {
                 let fresh = stage_sdr_output(&image, spec, &target).unwrap().unwrap();
                 staging.working.fill(f32::NAN);

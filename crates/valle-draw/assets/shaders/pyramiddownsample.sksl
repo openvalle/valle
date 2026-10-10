@@ -1,0 +1,24 @@
+
+uniform shader source;
+uniform float2 sourceSize;
+float3 at(float2 xy) {
+    if (any(lessThan(xy, float2(0.0))) || any(greaterThanEqual(xy, sourceSize))) return float3(0.0);
+    return float3(source.eval(xy + 0.5).rgb);
+}
+half4 main(float2 xy) {
+    float2 center = floor(xy) * 2.0 + 1.0;
+    float3 sum = at(center) * 4.0;
+    sum += at(center + float2(-1.0,  0.0)) * 2.0;
+    sum += at(center + float2( 1.0,  0.0)) * 2.0;
+    sum += at(center + float2( 0.0, -1.0)) * 2.0;
+    sum += at(center + float2( 0.0,  1.0)) * 2.0;
+    sum += at(center + float2(-1.0, -1.0));
+    sum += at(center + float2( 1.0, -1.0));
+    sum += at(center + float2(-1.0,  1.0));
+    sum += at(center + float2( 1.0,  1.0));
+    sum += at(center + float2(-2.0,  0.0));
+    sum += at(center + float2( 2.0,  0.0));
+    sum += at(center + float2( 0.0, -2.0));
+    sum += at(center + float2( 0.0,  2.0));
+    return half4(sum / 20.0, 1.0);
+}

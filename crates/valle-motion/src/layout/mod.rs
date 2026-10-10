@@ -6,6 +6,7 @@ mod activation;
 pub(crate) mod bridge;
 mod dependencies;
 mod hit;
+mod instance_cache;
 mod reuse;
 mod review;
 mod scene;
@@ -15,6 +16,7 @@ pub use dependencies::{
     NodeDependencies, SceneDependencies, SceneReference, SceneReferenceKind, TemporalWindow,
 };
 pub use hit::layout_box_at_point;
+pub use instance_cache::InstanceCacheStats;
 pub use reuse::LayoutCache;
 pub use review::{
     MotionReview, MotionReviewIssue, MotionTrajectory, MotionTrajectoryPoint, review_motion,

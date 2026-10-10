@@ -18,3 +18,12 @@ License: GL-Transitions-MIT.txt
 
 Changes include SkSL sampling interfaces, fixed transition parameters, and
 reduced sampling in dreamyzoom. Original author credits are retained above.
+
+Browser GPU preview coverage in web/packages/engine/src/executor/webgl/circles.js
+follows Skia's AAConvexPathRenderer / GrPathUtils quadratic fitting and coverage.
+Source: https://skia.googlesource.com/skia/
+License: Skia-BSD.txt
+
+The browser Scene3D lighting path reuses the existing Three.js DFG lookup table.
+Source: https://github.com/mrdoob/three.js
+License: three-dfg-MIT.txt

@@ -8,6 +8,115 @@ import {
 
 initSync({ module: await readFile(new URL("../generated/web/valle_engine_bg.wasm", import.meta.url)) });
 
+test("Wasm reuses closed expressions while random seeks keep current frame inputs", () => {
+  const compiled = compileMotionJsxWithWasm({ compile_motion_jsx }, `
+    export const composition={width:64,height:32,fps:4,duration:1};
+    const width=(t)=>t*20+10;
+    export default function Main(ctx){return <Scene>
+      <View key="a" className="absolute" style={{left:0,top:0,width:width(ctx.seconds),height:10}}/>
+      <View key="b" className="absolute" style={{left:32,top:0,width:width(ctx.seconds),height:10}}/>
+    </Scene>;}`);
+  const nodes = compiled.artifact.nodes as Array<{key:string;styles:Array<{property:string;value:{expr?:number}}>} >;
+  const ids = ["a", "b"].map(key => nodes.find(node => node.key === key)!.styles.find(style => style.property === "width")!.value.expr);
+  expect(ids[0]).toBeDefined();
+  expect(ids[1]).toBe(ids[0]);
+  const preview = preparePreviewPackageWithWasm({ prepare_preview_package }, {
+    authorTimeline: {canvas:{width:64,height:32,fps:4},resources:{main:"main.motion.tsx"},
+      tracks:{visual:[{clips:[{kind:"motion",component:"main",start:0,duration:1}]}]}},
+    motionInstances:[{clipPath:"/tracks/visual/0/clips/0",artifact:compiled.artifact,artifactDigest:compiled.artifactDigest,fonts:[]}],
+  });
+  const engine = new ProductEngine();
+  try {
+    const receipt = JSON.parse(engine.open_fixed_package(preview.fixedPackageManifestJson,
+      preview.timelineJson,preview.resourceManifestJson,preview.verifiedBindingBundleJson));
+    for (const frame of [3,0,2,2,1,3,0]) {
+      const ticket = engine.evaluate_prepare_preview(receipt.renderId,BigInt(frame),64,32,false);
+      try {
+        const boxes = JSON.parse(engine.frame_inspection_json(ticket)).motion[0].boxes;
+        expect(boxes.a).toEqual([0,0,10+frame*5,10]);
+        expect(boxes.b).toEqual([32,0,10+frame*5,10]);
+      } finally {engine.release_ticket(ticket);}
+    }
+  } finally {engine.free();}
+});
+
+test("prepared inspection keeps visible Scene3D placement through nested transforms and random seeks", () => {
+  const compiled = compileMotionJsxWithWasm({compile_motion_jsx}, `
+    export const composition={width:64,height:32,fps:4,duration:1};
+    export default function Main(ctx){return <Scene>
+      <View key="moving" className="absolute" style={{left:ctx.seconds*8,top:0,width:64,height:32}}>
+        <Scene3D key="stage" style={{position:"absolute",left:4,top:3,width:16,height:16}}
+          camera={{position:[0,0,3],target:[0,0,0],fov:45}}>
+          <Mesh key="visible-mesh" geometry={extrude(path("M -1 -1 L 1 -1 L 1 1 L -1 1 Z"),{depth:0.5})}
+            material={{type:"unlit",color:"white"}}/>
+        </Scene3D>
+      </View>
+      <View style={{opacity:0}}><Scene3D key="hidden" style={{width:16,height:16}}
+        camera={{position:[0,0,3],target:[0,0,0],fov:45}}>
+        <Mesh key="hidden-mesh" geometry={extrude(path("M -1 -1 L 1 -1 L 1 1 Z"),{depth:0.5})}/>
+      </Scene3D></View>
+    </Scene>;}`);
+  const preview = preparePreviewPackageWithWasm({prepare_preview_package}, {
+    authorTimeline:{canvas:{width:64,height:32,fps:4},resources:{main:"main.motion.tsx"},
+      tracks:{visual:[{clips:[{kind:"motion",component:"main",start:0,duration:1}]}]}},
+    motionInstances:[{clipPath:"/tracks/visual/0/clips/0",artifact:compiled.artifact,
+      artifactDigest:compiled.artifactDigest,fonts:[]}],
+  });
+  const engine = new ProductEngine();
+  try {
+    const receipt = JSON.parse(engine.open_fixed_package(preview.fixedPackageManifestJson,
+      preview.timelineJson,preview.resourceManifestJson,preview.verifiedBindingBundleJson));
+    const seen = new Map<number, string>();
+    const transforms = new Map<number, number[]>();
+    for (const frame of [3,0,2,2,1,3,0]) {
+      const ticket = engine.evaluate_prepare_preview(receipt.renderId,BigInt(frame),64,32,false);
+      try {
+        const json = engine.frame_inspection_json(ticket), inspection = JSON.parse(json);
+        expect(inspection.renderId).toBe(receipt.renderId);
+        expect(inspection.compositionFrame).toBe(frame);
+        expect(inspection.scene3d).toHaveLength(1);
+        const placement = inspection.scene3d[0];
+        expect(placement.clipId).toBe(inspection.motion[0].clipId);
+        expect(placement.contentHash).toMatch(/^sha256:[a-f0-9]{64}$/);
+        expect(placement.deviceFromLocal.every(Number.isFinite)).toBe(true);
+        transforms.set(frame,placement.deviceFromLocal);
+        if (seen.has(frame)) expect(json).toBe(seen.get(frame)!);
+        seen.set(frame,json);
+      } finally {engine.release_ticket(ticket);}
+    }
+    expect(transforms.get(3)![2]! - transforms.get(0)![2]!).toBeCloseTo(6,6);
+  } finally {engine.free();}
+});
+
+test("Wasm shares bounded Circle preparation with Echo and resets it on package replacement", async () => {
+  const source = await readFile(new URL("../../../tests/performance/fixtures/echo-circles.motion.tsx", import.meta.url), "utf8");
+  const compiled = compileMotionJsxWithWasm({compile_motion_jsx}, source);
+  const preview = preparePreviewPackageWithWasm({prepare_preview_package}, {
+    authorTimeline:{canvas:{width:640,height:360,fps:60},resources:{main:"main.motion.tsx"},
+      tracks:{visual:[{clips:[{kind:"motion",component:"main",start:0,duration:10}]}]}},
+    motionInstances:[{clipPath:"/tracks/visual/0/clips/0",artifact:compiled.artifact,artifactDigest:compiled.artifactDigest,fonts:[]}],
+  });
+  const engine = new ProductEngine();
+  const open = () => JSON.parse(engine.open_fixed_package(preview.fixedPackageManifestJson,
+    preview.timelineJson,preview.resourceManifestJson,preview.verifiedBindingBundleJson)).renderId as string;
+  try {
+    const id = open();
+    const stats = () => JSON.parse(engine.motion_instance_cache_stats_json(id))[0][1];
+    expect(stats().entries).toBe(0);
+    for (const frame of [...Array.from({length:42},(_,i)=>i),41,0,30,30,59]) {
+      const ticket = engine.evaluate_prepare_preview(id,BigInt(frame),640,360,false);
+      engine.release_ticket(ticket);
+      const current = stats();
+      expect(current.entries).toBeLessThanOrEqual(current.max_entries);
+      expect(current.resident_bytes).toBeLessThanOrEqual(current.max_bytes);
+    }
+    expect(stats().hits).toBeGreaterThan(0);
+    expect(stats().evictions).toBeGreaterThan(0);
+    const replacement = open();
+    expect(JSON.parse(engine.motion_instance_cache_stats_json(replacement))[0][1].entries).toBe(0);
+  } finally {engine.free();}
+});
+
 test("Wasm keeps host endpoints and geometry moving while the source holds", () => {
   const compiled = compileMotionJsxWithWasm({ compile_motion_jsx }, `
     export const composition={width:64,height:32,fps:4,duration:1};
@@ -132,7 +241,7 @@ test("pulse audio analysis produces the Native artifact digest in WASM", async (
     audioSources: [{ control: "beat", contentHash: hash, sampleRate: 8000, samples }],
   });
   expect(compiled.artifactDigest)
-    .toBe("sha256:ae43252a3fde55d8c7f9a540d55ac34483def1d6234635102bea454660883179");
+    .toBe("sha256:82d61da73ab94fb5464aaeb6be988695b0937bae457a67af3a892d32f6b36787");
 });
 
 test("WASM admits shared staggered stops and a local frame-time path paint", () => {
@@ -253,7 +362,7 @@ test("Wasm compiles the same closed caption role and frozen input as Native", as
     {data:{source:"captions.json",value:data}});
   expect(compiled.artifact.role).toEqual({type:"captionPresenter",intro:"3/20",outro:"3/20"});
   expect(compiled.artifact.controls).toEqual({props:{},data:{},assets:{caption:{kind:"font",required:true}}});
-  expect(compiled.artifactDigest).toBe("sha256:d90151d0b0c9cb726ba76b4c1d42c214edcb0d0536ce51c51df14a0c3f17797f");
+  expect(compiled.artifactDigest).toBe("sha256:db7103728d50db2bb6ea16a4e3147e64193e4d61b7adc20b06309b8b17b7ff42");
   const movedOrigin = compileMotionJsxWithWasm({compile_motion_jsx}, source,
     {data:{source:"elsewhere.json",value:data}});
   expect(movedOrigin.artifactDigest).toBe(compiled.artifactDigest);

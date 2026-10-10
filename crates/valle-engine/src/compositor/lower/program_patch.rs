@@ -9,6 +9,9 @@ use std::collections::HashMap;
 
 use thiserror::Error;
 
+#[path = "program_patch_sections.rs"]
+mod sections;
+
 const MAGIC: &[u8; 8] = b"VLDPAT\0\0";
 const HEADER_BYTES: usize = 16;
 const MATCH_KEY_BYTES: usize = 16;
@@ -42,6 +45,10 @@ enum Instruction {
 pub fn encode(base: &[u8], target: &[u8]) -> Result<Vec<u8>, ProgramPatchError> {
     check_budget(base.len())?;
     check_budget(target.len())?;
+    if let Some(patch) = sections::encode(base, target) {
+        check_budget(patch.len())?;
+        return Ok(patch);
+    }
     if base == target && !target.is_empty() {
         return encode_instructions(
             target.len(),

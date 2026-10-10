@@ -21,6 +21,8 @@ const FONT_CACHE_LIMIT: usize = 256;
 const SHADER_CACHE_LIMIT: usize = 128;
 const RASTER_LAYER_CACHE_LIMIT: usize = 64;
 const RASTER_LAYER_CACHE_BYTES: usize = 64 * 1024 * 1024;
+const LARGE_RASTER_LAYER_BYTES: usize = 8 * 1024 * 1024;
+const LARGE_RASTER_HISTORY_LIMIT: usize = 256;
 
 /// A destination-independent RasterProgram result in the executor's working color space.
 /// Full device-matrix bits retain subpixel phase; ROI retains tile clipping and origin.
@@ -35,6 +37,7 @@ pub(crate) struct RasterLayerKey {
 
 pub(crate) struct RasterLayerCache {
     images: BoundedCache<RasterLayerKey, PlanImage>,
+    observed_large: BoundedCache<RasterLayerKey, ()>,
     hits: u64,
     misses: u64,
 }
@@ -54,6 +57,7 @@ impl RasterLayerCache {
         Self {
             images: BoundedCache::new(RASTER_LAYER_CACHE_LIMIT)
                 .with_weight_limit(RASTER_LAYER_CACHE_BYTES),
+            observed_large: BoundedCache::new(LARGE_RASTER_HISTORY_LIMIT),
             hits: 0,
             misses: 0,
         }
@@ -62,6 +66,7 @@ impl RasterLayerCache {
     pub(crate) fn clear(&mut self) {
         self.images =
             BoundedCache::new(RASTER_LAYER_CACHE_LIMIT).with_weight_limit(RASTER_LAYER_CACHE_BYTES);
+        self.observed_large = BoundedCache::new(LARGE_RASTER_HISTORY_LIMIT);
     }
 
     pub(crate) fn get(&mut self, key: &RasterLayerKey) -> Option<PlanImage> {
@@ -79,6 +84,22 @@ impl RasterLayerCache {
 
     pub(crate) fn insert(&mut self, key: RasterLayerKey, image: PlanImage) {
         let weight = usize::try_from(image.roi().pixels().saturating_mul(8)).unwrap_or(usize::MAX);
+        if weight > RASTER_LAYER_CACHE_BYTES {
+            return;
+        }
+        if weight >= LARGE_RASTER_LAYER_BYTES && image.image().is_some_and(Image::is_texture_backed)
+        {
+            // A full dynamic frame otherwise pins its snapshot and forces copy-on-write
+            // on every subsequent GPU rasterization, despite never producing a cache hit.
+            // Retain only bounded keys on the first GPU request. CPU images keep their
+            // established admission/retirement behavior; dropping these snapshots earlier
+            // increased measured CPU peak footprint without improving export throughput.
+            let repeated = self.observed_large.get(&key).is_some();
+            self.observed_large.insert(key.clone(), ());
+            if !repeated {
+                return;
+            }
+        }
         self.images.insert_weighted(key, image, weight);
     }
 
@@ -179,6 +200,9 @@ impl SmallOpacityCache {
 
     pub(crate) fn bytes(&self) -> usize {
         self.bytes
+    }
+    pub(crate) fn under_pressure(&self) -> bool {
+        self.bytes >= self.byte_limit / 4 * 3
     }
     pub(crate) fn clear(&mut self) {
         self.layers.clear();
@@ -445,6 +469,101 @@ impl BackendCaches {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn large_raster_key(index: u32) -> RasterLayerKey {
+        RasterLayerKey {
+            program: ContentDigest::of_bytes(&index.to_le_bytes()),
+            frame: ContentDigest::of_bytes(b"frame"),
+            render_spec: ContentDigest::of_bytes(b"spec"),
+            transform: [0; 9],
+            roi: (0, 0, 1536, 1024),
+        }
+    }
+
+    #[test]
+    fn large_cpu_layers_keep_immediate_admission() {
+        let info = skia_safe::ImageInfo::new(
+            (1536, 1024),
+            skia_safe::ColorType::RGBAF16,
+            skia_safe::AlphaType::Premul,
+            None,
+        );
+        let image = PlanImage::new(
+            skia_safe::surfaces::raster(&info, None, None)
+                .unwrap()
+                .image_snapshot(),
+            valle_engine::prepare::DeviceRect::full(1536, 1024),
+        );
+        assert!(!image.image().unwrap().is_texture_backed());
+        let mut cache = RasterLayerCache::new();
+        cache.insert(large_raster_key(0), image);
+        assert!(cache.get(&large_raster_key(0)).is_some());
+        assert_eq!(cache.counters().3, 1536 * 1024 * 8);
+        assert!(cache.observed_large.values.is_empty());
+        cache.clear();
+        assert!(cache.get(&large_raster_key(0)).is_none());
+        assert_eq!(cache.counters().3, 0);
+    }
+
+    #[cfg(all(feature = "native", target_os = "macos"))]
+    #[test]
+    #[ignore = "requires a real Metal device"]
+    fn large_gpu_layers_require_reuse_and_keep_bounded_cold_history() {
+        use objc2_metal::MTLDevice;
+        use skia_safe::gpu;
+        let device = objc2_metal::MTLCreateSystemDefaultDevice().unwrap();
+        let queue = device.newCommandQueue().unwrap();
+        // SAFETY: BackendContext retains the live Metal device and command queue.
+        let backend = unsafe {
+            gpu::mtl::BackendContext::new(
+                std::ptr::from_ref(&*device).cast(),
+                std::ptr::from_ref(&*queue).cast(),
+            )
+        };
+        let mut context = gpu::direct_contexts::make_metal(&backend, None).unwrap();
+        let info = skia_safe::ImageInfo::new(
+            (1536, 1024),
+            skia_safe::ColorType::RGBAF16,
+            skia_safe::AlphaType::Premul,
+            None,
+        );
+        let mut surface = gpu::surfaces::render_target(
+            &mut context,
+            gpu::Budgeted::Yes,
+            &info,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        surface.canvas().clear(skia_safe::Color::TRANSPARENT);
+        let image = PlanImage::new(
+            surface.image_snapshot(),
+            valle_engine::prepare::DeviceRect::full(1536, 1024),
+        );
+        assert!(image.image().unwrap().is_texture_backed());
+        let key = large_raster_key;
+        let mut cache = RasterLayerCache::new();
+        assert!(cache.get(&key(0)).is_none());
+        cache.insert(key(0), image.clone());
+        assert_eq!(cache.counters().3, 0);
+        assert!(cache.get(&key(0)).is_none());
+        cache.insert(key(0), image.clone());
+        assert!(cache.get(&key(0)).is_some());
+        let retained = cache.counters().3;
+        assert_eq!(retained, 1536 * 1024 * 8);
+        for index in 1..1000 {
+            cache.insert(key(index), image.clone());
+            assert_eq!(cache.counters().3, retained);
+            assert!(cache.observed_large.values.len() <= LARGE_RASTER_HISTORY_LIMIT);
+        }
+        cache.clear();
+        cache.insert(key(0), image);
+        assert!(cache.get(&key(0)).is_none());
+        assert_eq!(cache.counters().3, 0);
+    }
 
     #[test]
     fn opacity_cache_observes_reuse_and_bounds_its_history() {

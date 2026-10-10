@@ -1,0 +1,16 @@
+
+uniform shader base;
+uniform shader halo;
+uniform float4 color;
+uniform float intensity;
+half4 main(float2 xy) {
+    float4 source = float4(base.eval(xy));
+    float coverage = float(halo.eval(xy).r);
+    float gain = coverage * intensity * 12.0;
+    float peak = max(max(color.r, color.g), color.b);
+    float colorGain = peak > 0.0 ? min(gain, 1.0 / peak) : gain;
+    float haloAlpha = min(gain * color.a, 1.0);
+    float3 rgb = clamp(source.rgb + colorGain * color.rgb * (1.0 - source.a), -65504.0, 65504.0);
+    float alpha = source.a + haloAlpha * (1.0 - source.a);
+    return half4(rgb, alpha);
+}

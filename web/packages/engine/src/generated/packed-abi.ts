@@ -29,14 +29,19 @@ export const PACKED_VALUE_LIMITS = Object.freeze({
 export const DRAW_PROGRAM_ABI = Object.freeze({
   "kind": "DrawProgram",
   "magic": "VLDRAW\u0000\u0000",
-  "formatVersion": 1,
+  "formatVersion": 2,
   "headerBytes": 28,
   "endianness": "little",
   "endiannessMarker": 16909060,
   "maximumBytes": 67108864,
   "sectionEntryBytes": 24,
   "sectionCount": 9,
-  "batchInstanceBytes": 72
+  "batchInstanceBytes": 72,
+  "pathHeaderBytes": 8,
+  "pathPointBytes": 16,
+  "maximumPathVerbs": 1000000,
+  "maximumPathPoints": 2000000,
+  "maximumPaths": 65536
 });
 
 export const RENDER_PLAN_ABI = Object.freeze({

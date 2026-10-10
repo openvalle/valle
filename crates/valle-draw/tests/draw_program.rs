@@ -634,6 +634,33 @@ fn packed_header_format_version_length_and_endianness_fail_closed() {
 }
 
 #[test]
+fn binary_path_rows_reject_invalid_counts_verbs_coordinates_and_old_json_format() {
+    let bytes = fixture(false).packed_bytes().unwrap();
+    let entry = 28 + 5 * 24;
+    let offset = u64::from_le_bytes(bytes[entry + 8..entry + 16].try_into().unwrap()) as usize;
+    let verbs = u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap()) as usize;
+    let mut version = bytes.clone();
+    version[8..12].copy_from_slice(&1u32.to_le_bytes());
+    assert!(matches!(
+        DrawProgram::from_packed(&version),
+        Err(valle_draw::program::PackedDrawError::UnsupportedFormatVersion { .. })
+    ));
+    let mut bad = bytes.clone();
+    bad[offset + 8] = 255;
+    assert!(DrawProgram::from_packed(&bad).is_err());
+    let mut bad = bytes.clone();
+    bad[offset + 4..offset + 8].copy_from_slice(&u32::MAX.to_le_bytes());
+    assert!(DrawProgram::from_packed(&bad).is_err());
+    let mut bad = bytes.clone();
+    bad[offset + 8 + verbs..offset + 16 + verbs].copy_from_slice(&f64::NAN.to_le_bytes());
+    assert!(DrawProgram::from_packed(&bad).is_err());
+    let mut bad = bytes.clone();
+    bad[entry + 4..entry + 8].copy_from_slice(&0u32.to_le_bytes());
+    assert!(DrawProgram::from_packed(&bad).is_err());
+    assert_eq!(DrawProgram::from_packed(&bytes).unwrap(), fixture(false));
+}
+
+#[test]
 fn arbitrary_packed_input_never_panics() {
     let mut state = 0x9e37_79b9_7f4a_7c15_u64;
     let cases = std::env::var("VALLE_NIGHTLY_FUZZ_CASES")

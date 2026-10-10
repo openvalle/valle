@@ -29,6 +29,11 @@ function assertPath(result: ProductRenderResult) {
 async function run() {
   const gpu = identity();
   if (job.gpu && /swiftshader|llvmpipe|software|unavailable/i.test(gpu.renderer)) throw new Error(`real browser GPU unavailable: ${gpu.renderer}`);
+  if (job.cpuOutputF32) {
+    const glueUrl = new URL(job.input.runtimeAssets.engine.glue, location.href).href;
+    const { ProductEngine } = await import(glueUrl);
+    if (typeof ProductEngine.prototype.transform_srgb_preview_f16 === "function") throw new Error("F32 diagnostic control did not disable the F16 API");
+  }
   if (job.mode === "qa") {
     const outputs: unknown[] = [];
     // A new player provides a cold baseline; repeated/reverse requests exercise warm caches.

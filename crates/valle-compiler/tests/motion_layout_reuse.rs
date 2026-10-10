@@ -157,15 +157,58 @@ fn unsupported_and_geometry_changing_scenes_use_the_full_path() {
         ("One fixed paragraph.", "{ctx.localFrame}"),
         (
             "backgroundColor:\"#28445b\"",
-            "backgroundColor:\"#28445b\",filter:\"blur(2px)\"",
+            "backgroundColor:\"#28445b\",filter:ctx.localFrame<30?'none':'blur(2px)'",
         ),
-        ("rotate:interpolate", "rotateX:interpolate"),
     ] {
         let source = SOURCE.replace(from, to);
         assert_ne!(source, SOURCE);
         let a = compile_motion(&source).unwrap().artifact;
         let p = prepare_scene(&a).unwrap();
         assert!(LayoutCache::new(&p, &fonts).is_none(), "{to}");
+    }
+}
+
+#[test]
+fn css_3d_projection_and_filters_reuse_boxes_without_retaining_previous_paint() {
+    let source = r##"
+export default function Projection(ctx) {
+ return <Scene style={{width:640,height:480,perspective:1200}}>
+  <Group style={{width:640,height:480,transformStyle:"preserve-3d",transform:`rotateX(${ctx.localFrame*.1}deg) scale(1.05)`}}>
+   <View style={{position:"absolute",left:90,top:60,width:300,height:180,transformOrigin:"15% 70%",backfaceVisibility:"hidden",transform:`translate3d(${ctx.localFrame}px,20px,${ctx.localFrame*.2}px) rotateY(${ctx.localFrame*.3}deg)`,filter:`blur(${ctx.localFrame*.01}px) brightness(0.9)`,backgroundColor:"#28445b",opacity:.85}}>
+    <Text style={{fontSize:24}}>Fixed text / current projection</Text>
+   </View>
+  </Group>
+ </Scene>;
+}
+"##;
+    let artifact = compile_motion(source).unwrap().artifact;
+    let prepared = prepare_scene(&artifact).unwrap();
+    let fonts = fonts("NotoSans-Regular.ttf");
+    let cache = LayoutCache::new(&prepared, &fonts).expect("fixed 3D layout must be reusable");
+    let props = valle_motion::resolve_props(&artifact.controls, &BTreeMap::new()).unwrap();
+    for viewport in [Viewport::new((640, 480)), Viewport::new((960, 720))] {
+        cache.clear();
+        for (at, frame) in [0, 89, 30, 1, 89, 0].into_iter().enumerate() {
+            let ctx =
+                valle_motion::motion_context_at_frame(frame, 120, FrameRate::new(30, 1).unwrap())
+                    .unwrap();
+            let cold = valle_motion::build_tree(
+                &prepared,
+                &ctx,
+                &props,
+                &LayoutOptions {
+                    viewport,
+                    fonts: &fonts,
+                    styles: None,
+                },
+            )
+            .unwrap();
+            let (cached, timing) = cache
+                .build_tree_profiled(&ctx, &props, viewport, None)
+                .unwrap();
+            assert_eq!(timing.layout_reused, at > 0);
+            assert_eq!(bytes(&cold), bytes(&cached), "frame {frame}");
+        }
     }
 }
 
