@@ -610,12 +610,14 @@ fn synthesize_uses_offline_model_installation_and_keeps_existing_output() {
     let envelope: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(
         envelope["error"]["code"],
-        if cfg!(all(target_os = "macos", target_arch = "aarch64"))
-            || cfg!(all(
-                any(target_os = "linux", target_os = "windows"),
-                target_arch = "x86_64"
-            ))
-        {
+        if cfg!(all(
+            any(
+                target_os = "macos",
+                target_os = "linux",
+                target_os = "windows"
+            ),
+            any(target_arch = "aarch64", target_arch = "x86_64")
+        )) {
             "model_not_installed"
         } else {
             "no_compatible_route"
@@ -666,12 +668,14 @@ fn transcribe_requires_a_verified_installed_route_even_if_a_legacy_directory_exi
     assert_eq!(output.status.code(), Some(3));
     assert!(output.stderr.is_empty(), "JSON mode leaked stderr");
     let envelope: Value = serde_json::from_slice(&output.stdout).expect("media error envelope");
-    if cfg!(all(target_os = "macos", target_arch = "aarch64"))
-        || cfg!(all(
-            any(target_os = "linux", target_os = "windows"),
-            target_arch = "x86_64"
-        ))
-    {
+    if cfg!(all(
+        any(
+            target_os = "macos",
+            target_os = "linux",
+            target_os = "windows"
+        ),
+        any(target_arch = "aarch64", target_arch = "x86_64")
+    )) {
         assert_eq!(envelope["error"]["code"], "model_not_installed");
         assert!(
             envelope["error"]["hint"]
