@@ -1629,14 +1629,14 @@ function executeProgramPass(
           const kernel = engineKernels?.apply_lens_distortion_f16;
           if (!kernel) fail("lens_distortion_kernel", "working-linear F16 lens distortion kernel is unavailable");
           const frame = programLensFrame(localPlan, kind.input, matrix);
-          return kernel(input, ...dimensions, outputRoi.x, outputRoi.y,
+          return kernel.call(engineKernels, input, ...dimensions, outputRoi.x, outputRoi.y,
             finiteNumber(filter.k1, "lens distortion k1"),
             finiteNumber(filter.k2, "lens distortion k2"),
             ...frame);
         })() : filter.kind === "bloom" ? (() => {
           const kernel = engineKernels?.apply_bloom_f16;
           if (!kernel) fail("bloom_kernel", "working-linear F16 bloom kernel is unavailable");
-          return kernel(input, ...dimensions,
+          return kernel.call(engineKernels, input, ...dimensions,
             finiteNumber(filter.threshold, "bloom threshold"),
             finiteNumber(filter.knee, "bloom knee"),
             finiteNumber(filter.intensity, "bloom intensity"),
@@ -1644,7 +1644,7 @@ function executeProgramPass(
         })() : (() => {
           const kernel = engineKernels?.apply_glow_f16;
           if (!kernel) fail("glow_kernel", "working-linear F16 glow kernel is unavailable");
-          return kernel(input, ...dimensions,
+          return kernel.call(engineKernels, input, ...dimensions,
             JSON.stringify(record(filter.color, "glow color")),
             finiteNumber(filter.intensity, "glow intensity"),
             finiteNumber(filter.radius, "glow radius"));

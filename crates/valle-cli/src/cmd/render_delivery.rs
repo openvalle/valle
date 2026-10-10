@@ -15,13 +15,34 @@ use valle_render::host::{NativeRenderer, RenderSummary};
 pub(super) struct DeliveryObservation {
     pub trace: CompilationTrace,
     pub started: Instant,
+    pub performance: Option<(valle_render::host::RenderTrace, PathBuf)>,
 }
 
 impl DeliveryObservation {
-    pub fn new() -> Self {
-        Self {
+    pub fn new() -> Result<Self> {
+        let performance = std::env::var_os("VALLE_RENDER_TRACE").map(|path| {
+            (
+                valle_render::host::RenderTrace::new(50_000),
+                PathBuf::from(path),
+            )
+        });
+        if let Some((_, path)) = &performance {
+            super::fixed_render::require_new_output(path)?;
+        }
+        let render_trace = performance.as_ref().map(|(trace, _)| trace.clone());
+        Ok(Self {
+            performance,
             started: Instant::now(),
-            trace: CompilationTrace::new(|event| {
+            trace: CompilationTrace::new(move |event| {
+                if let Some(trace) = &render_trace {
+                    trace.record(
+                        "compile",
+                        Instant::now()
+                            .checked_sub(event.elapsed)
+                            .unwrap_or_else(Instant::now),
+                        json!({"entry": event.entry}),
+                    );
+                }
                 if crate::output::events() {
                     crate::events::emit(crate::events::EventKind::MotionCompilation {
                         entry: event.entry.clone(),
@@ -29,7 +50,7 @@ impl DeliveryObservation {
                     });
                 }
             }),
-        }
+        })
     }
 }
 
@@ -220,6 +241,13 @@ impl DeliveryPlan {
     ) -> Result<()> {
         let started = Instant::now();
         let prepared = observation.started.elapsed();
+        if let Some((trace, _)) = &observation.performance {
+            trace.record(
+                "package.prepare_total",
+                observation.started,
+                json!({"includesCompilation": true}),
+            );
+        }
         let (summary, details) = self.execute(renderer)?;
         let mut report = super::fixed_render::delivery_report(
             opened,
@@ -237,6 +265,11 @@ impl DeliveryPlan {
         timing["prepareMs"] =
             json!(prepared.saturating_sub(metrics.elapsed).as_secs_f64() * 1000.0);
         timing["renderMs"] = json!(started.elapsed().as_secs_f64() * 1000.0);
+        if let Some((trace, path)) = &observation.performance {
+            trace.record("export.total", observation.started, json!({}));
+            trace.write(path, json!({"backend": report["delivery"]["backend"], "status": "ok", "report": report}))
+                .with_context(|| format!("writing render trace {}", path.display()))?;
+        }
         crate::output::emit(report);
         Ok(())
     }

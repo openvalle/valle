@@ -22,6 +22,7 @@ mod resource;
 mod schedule;
 #[cfg(feature = "native")]
 mod sink;
+mod trace;
 
 #[cfg(feature = "native")]
 pub use audio::{AudioMixError, CompiledAudioMixer};
@@ -49,3 +50,4 @@ pub use schedule::{FrameSchedule, FrameScheduleError};
 pub use sink::{
     DeliveredFrame, DeliveredSharedFrame, FrameSink, Mp4Sink, PngSink, StoryboardSink, write_png,
 };
+pub use trace::RenderTrace;

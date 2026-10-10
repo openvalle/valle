@@ -41,6 +41,8 @@ export interface BrowserVideoExportResult {
   frameRate: string;
   durationS: number;
   hasAudio: boolean;
+  /** Physical compositor paths actually used by the export. */
+  executionBackends?: readonly string[];
 }
 
 /**
@@ -71,7 +73,9 @@ export async function exportBrowserVideo(
       pxScale: 1,
       audioContext: null,
     });
+    const endInit = input.trace?.span("package.prepare_total");
     await player.init();
+    endInit?.();
     checkCancelled();
     const info = player.renderInfo;
     const plan = resolveExportPlan(info, options);
@@ -118,10 +122,12 @@ export async function exportBrowserVideo(
         audioSample = endSample;
       }
     };
+    const executionBackends = new Set<string>();
     for (let frame = 0; frame < plan.frameCount; frame++) {
       checkCancelled();
       const sourceFrame = plan.sourceFrame(frame);
       const result = await player.renderFrame(sourceFrame, { rasterScale: plan.rasterScale });
+      executionBackends.add(result.executionProfile.surfaceBackend);
       if (result.frame.renderId !== info.renderId || result.frame.index !== sourceFrame) {
         throw new Error("Export frame does not match the frozen render package.");
       }
@@ -129,7 +135,9 @@ export async function exportBrowserVideo(
       // Derive every timestamp from the absolute frame number, never an accumulated float clock.
       const timestamp = plan.timestamp(frame);
       const nextTimestamp = plan.endTimestamp(frame);
+      const endEncode = input.trace?.span("encode.push", { frame: sourceFrame });
       await video.add(timestamp, nextTimestamp - timestamp);
+      endEncode?.();
       await addAudioUntil(nextTimestamp);
       options.onProgress?.({ phase: "rendering", framesCompleted: frame + 1, frameCount: plan.frameCount });
       // Let progress, cancellation, and the rest of Studio run even with fully cached fast frames.
@@ -140,7 +148,9 @@ export async function exportBrowserVideo(
     await audio?.finish();
     checkCancelled();
     options.onProgress?.({ phase: "finalizing", framesCompleted: plan.frameCount, frameCount: plan.frameCount });
+    const endFinalize = input.trace?.span("encode.drain_mux");
     await output.finalize();
+    endFinalize?.();
     checkCancelled();
     await fileSink?.commit();
     return {
@@ -152,6 +162,7 @@ export async function exportBrowserVideo(
       frameRate: plan.frameRate,
       durationS: plan.durationS,
       hasAudio,
+      executionBackends: [...executionBackends],
     };
   } catch (error) {
     audio?.close();

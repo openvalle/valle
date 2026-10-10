@@ -258,7 +258,7 @@ fn render(
     {
         bail!("H.264 encoder options require .mp4 output");
     }
-    let observation = DeliveryObservation::new();
+    let observation = DeliveryObservation::new()?;
     let explicit_fonts = read_font_files(font_paths)?;
     let fonts = authoring_font_blobs(&explicit_fonts);
     let prepared = match compile_and_prepare(input, asset_specs, &fonts, data, None, true)? {
@@ -325,6 +325,13 @@ fn render(
             bitrate: tuning.bitrate.map(|value| value as usize),
             encode_threads: tuning.encode_threads.map(usize::from),
             output_size: tuning.output_size,
+            control: observation
+                .performance
+                .as_ref()
+                .map(|(trace, _)| {
+                    valle_render::host::RenderControl::default().with_trace(trace.clone())
+                })
+                .unwrap_or_default(),
             progress: crate::output::render_progress(),
             ..NativeRenderOptions::default()
         },

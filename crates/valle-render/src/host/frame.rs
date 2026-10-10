@@ -1,5 +1,6 @@
 use std::{sync::Arc, time::Instant};
 
+use super::{RenderTrace, trace::TraceFrame};
 use skia_safe::{Surface, surfaces};
 use thiserror::Error;
 use valle_engine::{
@@ -182,6 +183,7 @@ pub struct FrameTimings {
 }
 
 pub(crate) struct PreparedFrame {
+    trace: Option<TraceFrame>,
     started: Instant,
     render_id: RenderId,
     frame: i64,
@@ -216,6 +218,7 @@ impl PreparedFrame {
 
 #[cfg(all(target_os = "macos", feature = "native"))]
 pub(crate) struct SubmittedSharedFrame {
+    trace: Option<TraceFrame>,
     submitted: SubmittedSharedMetalFrame,
     evidence: FrameEvidence,
     started: Instant,
@@ -223,6 +226,7 @@ pub(crate) struct SubmittedSharedFrame {
 
 /// The one Native per-frame orchestration path.
 pub struct FrameRunner<P> {
+    trace: Option<RenderTrace>,
     render: EngineRender,
     compiler: FrameCompiler,
     executor: SkiaExecutor,
@@ -236,6 +240,7 @@ pub struct FrameRunner<P> {
 
 #[cfg(feature = "native")]
 pub(crate) struct FramePreparationStage<P> {
+    trace: Option<RenderTrace>,
     render: EngineRender,
     compiler: FrameCompiler,
     provider: P,
@@ -282,6 +287,7 @@ impl<P: ResourceProvider> FrameRunner<P> {
         )?;
         let compiler = render.frame_compiler();
         let mut runner = Self {
+            trace: None,
             render,
             compiler,
             executor: SkiaExecutor::metal(capabilities)?,
@@ -303,6 +309,7 @@ impl<P: ResourceProvider> FrameRunner<P> {
     ) -> Result<Self, FrameRenderError> {
         let compiler = render.frame_compiler();
         let mut runner = Self {
+            trace: None,
             render,
             compiler,
             executor: SkiaExecutor::new(capabilities)?,
@@ -312,6 +319,10 @@ impl<P: ResourceProvider> FrameRunner<P> {
         };
         runner.configure_provider_backend()?;
         Ok(runner)
+    }
+
+    pub(crate) fn set_trace(&mut self, trace: Option<RenderTrace>) {
+        self.trace = trace;
     }
 
     pub const fn render(&self) -> &EngineRender {
@@ -331,6 +342,7 @@ impl<P: ResourceProvider> FrameRunner<P> {
         let capabilities = self.executor.capabilities().clone();
         (
             FramePreparationStage {
+                trace: self.trace,
                 render: self.render,
                 compiler: self.compiler,
                 provider: self.provider,
@@ -376,6 +388,7 @@ impl<P: ResourceProvider> FrameRunner<P> {
     ) -> Result<PreparedFrame, FrameRenderError> {
         let capabilities = self.executor.capabilities().clone();
         prepare_frame_with(
+            self.trace.as_ref(),
             &self.render,
             &mut self.compiler,
             &mut self.provider,
@@ -431,6 +444,10 @@ impl<P: ResourceProvider> FrameRunner<P> {
 #[cfg(feature = "native")]
 impl<P: ResourceProvider> FramePreparationStage<P> {
     #[cfg(target_os = "macos")]
+    pub(crate) fn set_trace(&mut self, trace: Option<RenderTrace>) {
+        self.trace = trace;
+    }
+    #[cfg(target_os = "macos")]
     pub(crate) fn new(
         render: EngineRender,
         mut provider: P,
@@ -443,6 +460,7 @@ impl<P: ResourceProvider> FramePreparationStage<P> {
             }
         })?;
         Ok(Self {
+            trace: None,
             compiler: render.frame_compiler(),
             render,
             provider,
@@ -478,6 +496,7 @@ impl<P: ResourceProvider> FramePreparationStage<P> {
         spec: RenderSpec,
     ) -> Result<PreparedFrame, FrameRenderError> {
         prepare_frame_with(
+            self.trace.as_ref(),
             &self.render,
             &mut self.compiler,
             &mut self.provider,
@@ -513,8 +532,11 @@ impl FrameExecutionStage {
             return Err(FrameRenderError::SharedFrameRequiresMetal);
         }
         let started = prepared.started;
+        let trace = prepared.trace.clone();
+        let acquire_span = trace.as_ref().map(|t| t.span("delivery.surface_acquire"));
         let output = spec.output();
         let mut shared = self.executor.acquire_shared_frame(pool, output)?;
+        drop(acquire_span);
         let surface = shared.surface_mut().map_err(SkiaExecuteError::from)?;
         let mut target = SkiaTarget::direct_gpu(surface, output)?;
         let mut evidence = execute_prepared_with(
@@ -524,9 +546,12 @@ impl FrameExecutionStage {
             FrameDelivery::SharedGpu,
         )?;
         drop(target);
+        let submit_span = trace.as_ref().map(|t| t.span("execute.submit"));
         let submitted = self.executor.submit_shared_frame(shared)?;
+        drop(submit_span);
         evidence.timings.total_us = elapsed_us(started);
         Ok(SubmittedSharedFrame {
+            trace,
             submitted,
             evidence,
             started,
@@ -538,9 +563,14 @@ impl FrameExecutionStage {
         &mut self,
         submitted: SubmittedSharedFrame,
     ) -> Result<(SharedVideoFrame, FrameEvidence), FrameRenderError> {
+        let wait_span = submitted
+            .trace
+            .as_ref()
+            .map(|t| t.span("execute.gpu_completion_wait"));
         let wait_started = Instant::now();
         let frame = self.executor.finish_shared_frame(submitted.submitted)?;
         let wait_us = elapsed_us(wait_started);
+        drop(wait_span);
         let mut evidence = submitted.evidence;
         evidence.timings.gpu_completion_wait_us = Some(wait_us);
         evidence.timings.total_us = elapsed_us(submitted.started);
@@ -563,6 +593,7 @@ impl FrameExecutionStage {
 
 #[allow(clippy::too_many_arguments)]
 fn prepare_frame_with<P: ResourceProvider>(
+    trace: Option<&RenderTrace>,
     render: &EngineRender,
     compiler: &mut FrameCompiler,
     provider: &mut P,
@@ -571,21 +602,27 @@ fn prepare_frame_with<P: ResourceProvider>(
     frame: FrameKey,
     spec: RenderSpec,
 ) -> Result<PreparedFrame, FrameRenderError> {
+    let trace = trace.map(|t| t.frame(frame.index()));
+    let evaluate_span = trace.as_ref().map(|t| t.span("prepare.evaluate"));
     let frame_started = Instant::now();
     let stage_started = Instant::now();
     let render_id = render.render_id();
     let prepared = compiler.evaluate_prepare(render_id, frame, spec)?;
     let evaluate_prepare_us = elapsed_us(stage_started);
+    drop(evaluate_span);
     let requests = prepared.prepared().resource_requests.clone();
     let generation = allocate_generation(next_generation)?;
     let overlap_started = Instant::now();
     provider.begin_frame();
     let ((fulfilled, fulfillment_us), (bound, lower_us)) = std::thread::scope(|scope| {
+        let lower_trace = trace.clone();
         let lower = scope.spawn(move || {
+            let _span = lower_trace.as_ref().map(|t| t.span("lower"));
             let started = Instant::now();
             let result = prepared.lower_constructed(capabilities);
             (result, elapsed_us(started))
         });
+        let fulfillment_span = trace.as_ref().map(|t| t.span("resource.fulfill"));
         let started = Instant::now();
         let mut fulfilled = ResourceFulfillment::with_capacity(requests.requests().len());
         let fulfillment: Result<ResourceFulfillment, FrameRenderError> = (|| {
@@ -602,6 +639,8 @@ fn prepare_frame_with<P: ResourceProvider>(
             Ok(fulfilled)
         })();
         let fulfillment = (fulfillment, elapsed_us(started));
+        drop(fulfillment_span);
+        let _join_span = trace.as_ref().map(|t| t.span("lower.wait"));
         let lower = lower
             .join()
             .map_err(|_| FrameRenderError::PlannerPanicked)?;
@@ -610,6 +649,14 @@ fn prepare_frame_with<P: ResourceProvider>(
     let fulfilled = fulfilled?;
     let resource_report = provider.finish_frame(requests.requests());
     let resource_cache = resource_report.cache;
+    if let Some(trace) = &trace {
+        trace.counters("resource.cache", serde_json::json!({
+        "hits": resource_cache.hits, "misses": resource_cache.misses,
+        "residentBytes": resource_cache.resident_bytes, "residentEntries": resource_cache.resident_entries,
+        "scope": "this resource provider", "scene3dPrepareUs": resource_report.scene3d.prepare_us,
+        "scene3dRasterUs": resource_report.scene3d.raster_us, "scene3dUploadUs": resource_report.scene3d.upload_us,
+    }));
+    }
     let scene3d = resource_report.scene3d;
     let request_count = u64::try_from(requests.requests().len())
         .map_err(|_| FrameRenderError::InvalidResourceCacheEvidence)?;
@@ -649,6 +696,7 @@ fn prepare_frame_with<P: ResourceProvider>(
     let bound = bound?;
     let fulfill_lower_wall_us = elapsed_us(overlap_started);
     let template_cache_hit = bound.template_cache_hit();
+    let bind_span = trace.as_ref().map(|t| t.span("bind"));
     let stage_started = Instant::now();
     let bound = bound.bind_constructed(generation)?;
     let (template, bindings) = bound.into_plan();
@@ -656,7 +704,9 @@ fn prepare_frame_with<P: ResourceProvider>(
     let execution_passes = template.passes().len();
     let objects: SkiaObjectTable = ExternalObjectTable::try_from_entries(generation, fulfilled)?;
     let bind_us = elapsed_us(stage_started);
+    drop(bind_span);
     Ok(PreparedFrame {
+        trace,
         started: frame_started,
         render_id,
         frame: frame.index(),
@@ -697,6 +747,7 @@ fn execute_prepared_with(
     target: &mut SkiaTarget<'_>,
     delivery: FrameDelivery,
 ) -> Result<FrameEvidence, FrameRenderError> {
+    let execute_span = prepared.trace.as_ref().map(|t| t.span("execute.record"));
     let stage_started = Instant::now();
     let execution = executor.execute(
         &prepared.template,
@@ -705,6 +756,16 @@ fn execute_prepared_with(
         target,
     )?;
     let execute_us = elapsed_us(stage_started);
+    drop(execute_span);
+    if let Some(trace) = &prepared.trace {
+        trace.counters("execute.cache", serde_json::json!({
+        "scope": "this executor", "programHits": execution.program_cache_hits,
+        "programMisses": execution.program_cache_misses, "rasterLayerHits": execution.raster_layer_cache_hits,
+        "rasterLayerBytes": execution.raster_layer_cache_bytes,
+        "surfacePoolBytes": execution.surfaces.pool_bytes,
+        "uploadBytes": execution.cpu_upload_bytes,
+    }));
+    }
     let mut timings = prepared.timings;
     timings.execute_us = execute_us;
     timings.total_us = elapsed_us(prepared.started);
@@ -736,6 +797,7 @@ fn render_prepared_rgba8_with(
     spec: RenderSpec,
 ) -> Result<(RgbaFrame, FrameEvidence), FrameRenderError> {
     let delivery_started = prepared.started;
+    let trace = prepared.trace.clone();
     let extent = Extent2d::new(spec.width(), spec.height())?;
     let info = rgba8_target_info(spec.output(), extent)
         .map_err(|error| FrameRenderError::TargetFormat(error.to_string()))?;
@@ -763,6 +825,7 @@ fn render_prepared_rgba8_with(
             return Err(error);
         }
     };
+    let readback_span = trace.as_ref().map(|t| t.span("delivery.readback"));
     let readback_started = Instant::now();
     let mut data = vec![0_u8; size];
     if !surface.read_pixels(&info, &mut data, row_bytes, (0, 0)) {
@@ -771,6 +834,7 @@ fn render_prepared_rgba8_with(
     }
     *cpu_delivery_surface = Some(surface);
     evidence.timings.delivery_readback_us = Some(elapsed_us(readback_started));
+    drop(readback_span);
     evidence.delivery = FrameDelivery::CpuReadback;
     evidence.delivery_readback_bytes = u64::try_from(size).unwrap_or(u64::MAX);
     evidence.timings.total_us = elapsed_us(delivery_started);

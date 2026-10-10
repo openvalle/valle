@@ -61,7 +61,7 @@ fn render_document_impl(
     checking: bool,
 ) -> Result<std::process::ExitCode> {
     let plan = DeliveryPlan::new(delivery)?;
-    let observation = DeliveryObservation::new();
+    let observation = DeliveryObservation::new()?;
     let prepared = prepare_timeline_package(timeline, base)?;
     // Package preparation already admitted and opened the closed package; reuse it.
     let opened = prepared.opened;
@@ -75,6 +75,13 @@ fn render_document_impl(
                     opened.engine_render().canvas().background_rgba(),
                 ),
             },
+            control: observation
+                .performance
+                .as_ref()
+                .map(|(trace, _)| {
+                    valle_render::host::RenderControl::default().with_trace(trace.clone())
+                })
+                .unwrap_or_default(),
             progress: crate::output::render_progress(),
             ..NativeRenderOptions::default()
         },

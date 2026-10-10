@@ -38,6 +38,7 @@ interface WorkerSlot {
 }
 
 export interface ProductFramePlanningInput {
+  trace?: boolean;
   frame: number;
   width: number;
   height: number;

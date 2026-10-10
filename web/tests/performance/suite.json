@@ -1,0 +1,266 @@
+{
+  "version": 1,
+  "qa": {
+    "width": 320,
+    "height": 180,
+    "frames": [
+      0,
+      30,
+      59
+    ],
+    "order": [
+      0,
+      30,
+      59,
+      59,
+      30,
+      0,
+      30,
+      0,
+      59
+    ],
+    "parallelWorkers": [
+      1,
+      4
+    ],
+    "resourceCacheBytes": 1
+  },
+  "performance": {
+    "width": 1920,
+    "height": 1080,
+    "fps": 60,
+    "durationS": 10,
+    "repeats": 3,
+    "workers": 4,
+    "profiles": {
+      "preview": { "width": 320, "height": 180 },
+      "1080": { "width": 1920, "height": 1080 }
+    },
+    "bitrate": 20000000,
+    "hardwareEncode": true,
+    "regressionTolerance": {
+      "wallPercent": 10,
+      "memoryPercent": 10
+    },
+    "target": {
+      "width": 3840,
+      "height": 2160,
+      "fps": 60,
+      "rtfMedian": 1
+    }
+  },
+  "cases": [
+    {
+      "id": "text-alpha",
+      "source": "fixtures/text-alpha.motion.tsx",
+      "group": "regular",
+      "assets": {},
+      "rule": {
+        "rgb": 2,
+        "alpha": 2
+      },
+      "repeatRule": {
+        "rgb": 0,
+        "alpha": 0
+      },
+      "regions": [
+        {
+          "name": "center",
+          "x": 40,
+          "y": 30,
+          "width": 240,
+          "height": 120
+        }
+      ]
+    },
+    {
+      "id": "geometry",
+      "source": "fixtures/geometry.motion.tsx",
+      "group": "regular",
+      "assets": {},
+      "rule": {
+        "rgb": 2,
+        "alpha": 2
+      },
+      "repeatRule": {
+        "rgb": 0,
+        "alpha": 0
+      },
+      "regions": [
+        {
+          "name": "center",
+          "x": 40,
+          "y": 30,
+          "width": 240,
+          "height": 120
+        }
+      ]
+    },
+    {
+      "id": "image",
+      "source": "fixtures/image.motion.tsx",
+      "group": "regular",
+      "assets": {
+        "sprites": "crates/valle-compiler/tests/fixtures/motion/composition/atlas-sprites.png"
+      },
+      "rule": {
+        "rgb": 2,
+        "alpha": 2
+      },
+      "repeatRule": {
+        "rgb": 0,
+        "alpha": 0
+      },
+      "regions": [
+        {
+          "name": "center",
+          "x": 40,
+          "y": 30,
+          "width": 240,
+          "height": 120
+        }
+      ]
+    },
+    {
+      "id": "particles",
+      "source": "fixtures/particles.motion.tsx",
+      "group": "regular",
+      "assets": {},
+      "rule": {
+        "rgb": 2,
+        "alpha": 2
+      },
+      "repeatRule": {
+        "rgb": 0,
+        "alpha": 0
+      },
+      "regions": [
+        {
+          "name": "center",
+          "x": 40,
+          "y": 30,
+          "width": 240,
+          "height": 120
+        }
+      ]
+    },
+    {
+      "id": "mask",
+      "source": "fixtures/mask.motion.tsx",
+      "group": "regular",
+      "assets": {},
+      "rule": {
+        "rgb": 2,
+        "alpha": 2
+      },
+      "repeatRule": {
+        "rgb": 0,
+        "alpha": 0
+      },
+      "regions": [
+        {
+          "name": "center",
+          "x": 40,
+          "y": 30,
+          "width": 240,
+          "height": 120
+        }
+      ]
+    },
+    {
+      "id": "bloom",
+      "source": "fixtures/bloom.motion.tsx",
+      "group": "special",
+      "assets": {},
+      "rule": {
+        "rgb": 2,
+        "alpha": 2
+      },
+      "repeatRule": {
+        "rgb": 0,
+        "alpha": 0
+      },
+      "regions": [
+        {
+          "name": "center",
+          "x": 40,
+          "y": 30,
+          "width": 240,
+          "height": 120
+        }
+      ]
+    },
+    {
+      "id": "echo",
+      "source": "fixtures/echo.motion.tsx",
+      "group": "special",
+      "assets": {},
+      "rule": {
+        "rgb": 2,
+        "alpha": 2
+      },
+      "repeatRule": {
+        "rgb": 0,
+        "alpha": 0
+      },
+      "regions": [
+        {
+          "name": "center",
+          "x": 40,
+          "y": 30,
+          "width": 240,
+          "height": 120
+        }
+      ]
+    },
+    {
+      "id": "shutter",
+      "source": "fixtures/shutter.motion.tsx",
+      "group": "special",
+      "assets": {},
+      "rule": {
+        "rgb": 2,
+        "alpha": 2
+      },
+      "repeatRule": {
+        "rgb": 0,
+        "alpha": 0
+      },
+      "regions": [
+        {
+          "name": "center",
+          "x": 40,
+          "y": 30,
+          "width": 240,
+          "height": 120
+        }
+      ]
+    },
+    {
+      "id": "video",
+      "source": "fixtures/video.timeline.json",
+      "kind": "timeline",
+      "group": "regular",
+      "assets": {
+        "clip": "web/tests/fixtures/video-offset-bframes.mp4"
+      },
+      "rule": {
+        "rgb": 2,
+        "alpha": 2
+      },
+      "repeatRule": {
+        "rgb": 0,
+        "alpha": 0
+      },
+      "regions": [
+        {
+          "name": "center",
+          "x": 40,
+          "y": 30,
+          "width": 240,
+          "height": 120
+        }
+      ]
+    }
+  ]
+}

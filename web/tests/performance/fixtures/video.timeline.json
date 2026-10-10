@@ -1,0 +1,12 @@
+{
+  "canvas": { "width": 640, "height": 360, "fps": 60 },
+  "resources": { "clip": "../../fixtures/video-offset-bframes.mp4" },
+  "tracks": {
+    "visual": [{ "clips": [
+      { "kind": "video", "src": "clip", "start": 0, "duration": 3 },
+      { "kind": "video", "src": "clip", "start": 3, "duration": 3 },
+      { "kind": "video", "src": "clip", "start": 6, "duration": 3 },
+      { "kind": "video", "src": "clip", "start": 9, "duration": 1 }
+    ] }]
+  }
+}

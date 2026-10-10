@@ -19,6 +19,7 @@ export {
 } from "./abi/packed.ts";
 export * from "./executor/canvaskit/index.ts";
 
+export { RenderTrace } from "./runtime/render-trace.ts";
 export * from "./runtime/controller.ts";
 export * from "./controller.ts";
 export { createDecoderRing, keyframeThumbnails } from "./media/video-source.ts";

@@ -54,3 +54,7 @@ required-features = ["native"]
 [[test]]
 name = "scene3d_fixed_package"
 required-features = ["native"]
+
+[[example]]
+name = "performance_fixed_package"
+required-features = ["native"]

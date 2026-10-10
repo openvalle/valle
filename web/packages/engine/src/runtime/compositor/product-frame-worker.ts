@@ -207,6 +207,7 @@ function startFrame(
         generation: request.generation,
         requestPacket,
         inspectionJson,
+        ...(request.trace ? { workerTimeOriginMs: performance.timeOrigin, evaluateStartedMs: evaluateStarted, inspectStartedMs: inspectStarted } : {}),
         evaluatePrepareMs,
         requestInspectMs,
         workerTurnGapMs,
@@ -259,6 +260,7 @@ function finishFrame(frame: StartedFrame): ProductFrameWorkerReadyStage {
       bindingPacket,
       schedulePacket,
       templateCacheHit,
+      ...(request.trace ? { workerTimeOriginMs: performance.timeOrigin, lowerStartedMs: lowerStarted, bindStartedMs: bindStarted } : {}),
       lowerMs,
       bindPacketsMs,
       totalWorkerMs: frame.requestStage.evaluatePrepareMs

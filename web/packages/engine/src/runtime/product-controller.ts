@@ -1,3 +1,4 @@
+import type { RenderTrace } from "./render-trace.ts";
 import { MediaBlobCache } from "../media/media-blob-cache.ts";
 import { createMotionFontLoader, type MotionFontSource } from "../fonts.ts";
 import canvasKitPackage from "canvaskit-wasm/package.json";
@@ -79,6 +80,8 @@ export interface BrowserValleWebPlayerOptions {
   runtimeBaseUrl?: string | URL;
   pxScale?: number;
   gpu?: boolean;
+  /** Optional bounded CPU trace; capture readbacks and GPU device time are separate. */
+  trace?: RenderTrace;
   audioContext?: AudioContext | null;
   resourceCache?: BrowserResourceCacheLimits;
 }
@@ -496,6 +499,7 @@ export class BrowserValleWebPlayer {
   readonly stats: PlayerStats;
   hitRects: ProductHitRect[] = [];
 
+  private readonly trace?: RenderTrace;
   private readonly loadMotionFonts?: () => Promise<string>;
   private readonly runtimeAssets: PlayerRuntimeAssets;
   private readonly wasmModuleUrl: string;
@@ -571,6 +575,7 @@ export class BrowserValleWebPlayer {
     this.proxyBase = options.proxyBase ?? null;
     this.pxScale = finitePositive(options.pxScale ?? 1, "pxScale");
     this.gpu = options.gpu ?? true;
+    this.trace = options.trace;
     this.audioContext = options.audioContext
       ?? maybeCreateAudioContext(this.timeline.document.canvas.sampleRate);
     this.resourceObjects = new BrowserResourceCache(options.resourceCache);
@@ -660,12 +665,16 @@ export class BrowserValleWebPlayer {
     const forceCpu = options.png === true;
     const target = this.acquireTarget(width, height, forceCpu);
     const frameStarted = performance.now();
-    const planningInput = this.framePlanningInput(frame, width, height, options.transparent === true);
+    const planningInput = { ...this.framePlanningInput(frame, width, height, options.transparent === true), trace: this.trace !== undefined };
     const planner = this.requirePlanner();
+    const endPrepareWait = this.trace?.span("prepare.wait", { frame });
     const planning = planner.prepare(planningInput);
     let fulfilled: FulfilledFrame | null = null;
     try {
       const requestStage = await planning.requests;
+      endPrepareWait?.();
+      this.trace?.worker("prepare.evaluate", requestStage.workerTimeOriginMs, requestStage.evaluateStartedMs, requestStage.evaluatePrepareMs, frame);
+      this.trace?.worker("prepare.inspect", requestStage.workerTimeOriginMs, requestStage.inspectStartedMs, requestStage.requestInspectMs, frame);
       this.assertActiveRenderId(renderId, requestStage.renderId);
       const frameInspection = JSON.parse(requestStage.inspectionJson) as ProductFrameInspection;
       this.assertActiveRenderId(renderId, frameInspection.renderId);
@@ -683,16 +692,22 @@ export class BrowserValleWebPlayer {
       }
       this.stats.requestBytes += requestStage.requestPacket.byteLength;
       const fulfillmentStarted = performance.now();
-      const fulfillment = this.fulfillRequests(requestStage.requestPacket, target.gpu);
+      const endFulfill = this.trace?.span("resource.fulfill", { frame });
+      const fulfillment = this.fulfillRequests(requestStage.requestPacket, target.gpu).finally(() => endFulfill?.());
+      const endOverlapWait = this.trace?.span("prepare.overlap_wait", { frame });
+      const endLowerWait = this.trace?.span("lower_bind.wait", { frame });
       const [readyResult, fulfillmentResult] = await Promise.allSettled([
-        planning.ready,
+        planning.ready.finally(() => endLowerWait?.()),
         fulfillment,
       ] as const);
+      endOverlapWait?.();
       // Successful fulfillment owns a frame lease even if planning failed or was superseded.
       if (fulfillmentResult.status === "fulfilled") fulfilled = fulfillmentResult.value;
       if (readyResult.status === "rejected") throw readyResult.reason;
       if (fulfillmentResult.status === "rejected") throw fulfillmentResult.reason;
       const readyStage = readyResult.value;
+      this.trace?.worker("lower", readyStage.workerTimeOriginMs, readyStage.lowerStartedMs, readyStage.lowerMs, frame);
+      this.trace?.worker("bind", readyStage.workerTimeOriginMs, readyStage.bindStartedMs, readyStage.bindPacketsMs, frame);
       this.assertActiveRenderId(renderId, readyStage.renderId);
       const frameResources = fulfillmentResult.value;
       const resourceFulfillMs = performance.now() - fulfillmentStarted;
@@ -703,6 +718,7 @@ export class BrowserValleWebPlayer {
       this.stats.planBytes += readyStage.planPacketTransferred ? planPacket.byteLength : 0;
       this.stats.bindingBytes += bindingPacket.byteLength;
       this.stats.scheduleBytes += schedulePacket.byteLength;
+      const endExecute = this.trace?.span("execute.record", { frame, gpu: target.gpu });
       const executeStarted = performance.now();
       this.assertActiveRenderId(renderId, readyStage.renderId);
       const report = await this.compositor.execute(
@@ -719,9 +735,12 @@ export class BrowserValleWebPlayer {
       );
       this.assertActiveRenderId(renderId, readyStage.renderId);
       const executeMs = performance.now() - executeStarted;
+      endExecute?.();
+      const endPresent = this.trace?.span("delivery.present", { frame, cpuReadback: !target.gpu });
       const presentStarted = performance.now();
       this.presentTarget(target, width, height);
       const presentMs = performance.now() - presentStarted;
+      endPresent?.();
       const captureEncodeStarted = performance.now();
       const png = options.png ? this.encodeTargetPng(target.surface) : null;
       const captureEncodeMs = performance.now() - captureEncodeStarted;
@@ -759,6 +778,8 @@ export class BrowserValleWebPlayer {
         resourceCacheResidentEntries: frameResources.resourceCache.residentEntries,
         resourceCacheResidentBytes: frameResources.resourceCache.residentBytes,
       };
+      this.trace?.evidence("frame.caches", { frame, ...stats, requestBytes: requestStage.requestPacket.byteLength,
+        planBytes: readyStage.planPacketTransferred ? planPacket.byteLength : 0, bindingBytes: bindingPacket.byteLength, scheduleBytes: schedulePacket.byteLength });
       const frameMs = performance.now() - frameStarted;
       this.stats.renders += 1;
       this.stats.preparedFrames += 1;
@@ -1715,6 +1736,8 @@ export class BrowserValleWebPlayer {
     const context = this.canvas.getContext("2d");
     if (!context) throw new Error("visible canvas 2D context is unavailable");
     if (target.gpu && target.canvas) {
+      // The presented frame replaces its predecessor, including transparent pixels.
+      context.clearRect(0, 0, width, height);
       context.drawImage(target.canvas, 0, 0);
       return;
     }

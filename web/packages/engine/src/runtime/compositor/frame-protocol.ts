@@ -85,6 +85,7 @@ export interface ProductRenderReceipt {
 }
 
 export interface ProductFrameRequest {
+  trace?: boolean;
   key: string;
   renderId: string;
   epoch: number;
@@ -117,6 +118,9 @@ export interface ProductFrameRequestStage {
   generation: bigint;
   requestPacket: Uint8Array;
   inspectionJson: string;
+  workerTimeOriginMs?: number;
+  evaluateStartedMs?: number;
+  inspectStartedMs?: number;
   evaluatePrepareMs: number;
   requestInspectMs: number;
   workerTurnGapMs: number;
@@ -135,6 +139,9 @@ export interface ProductFrameReadyStage {
   bindingPacket: Uint8Array;
   schedulePacket: Uint8Array;
   templateCacheHit: boolean;
+  workerTimeOriginMs?: number;
+  lowerStartedMs?: number;
+  bindStartedMs?: number;
   lowerMs: number;
   bindPacketsMs: number;
   totalWorkerMs: number;
