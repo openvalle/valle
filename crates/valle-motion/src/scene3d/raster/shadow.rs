@@ -6,6 +6,43 @@ use super::{
 
 const SHADOW_SIZE: usize = 1024;
 
+pub(super) fn render_maps(
+    directions: &[(V3, [f32; 3])],
+    triangles: &[ShadowTriangle],
+    meshes: &[FrameMesh<'_>],
+    workers: usize,
+) -> Vec<Option<ShadowMap>> {
+    let workers = if cfg!(target_arch = "wasm32") {
+        1
+    } else {
+        workers.clamp(1, super::MAX_RASTER_WORKERS)
+    }
+    .min(directions.len());
+    if workers <= 1 {
+        return directions
+            .iter()
+            .map(|(direction, _)| ShadowMap::render(*direction, triangles, meshes))
+            .collect();
+    }
+    // Lights are independent. Keep each result in its original slot so shadow
+    // lookup and light accumulation retain their deterministic ordering.
+    let mut maps = (0..directions.len()).map(|_| None).collect::<Vec<_>>();
+    let chunk_size = directions.len().div_ceil(workers);
+    std::thread::scope(|scope| {
+        for (maps, directions) in maps
+            .chunks_mut(chunk_size)
+            .zip(directions.chunks(chunk_size))
+        {
+            scope.spawn(move || {
+                for (map, (direction, _)) in maps.iter_mut().zip(directions) {
+                    *map = ShadowMap::render(*direction, triangles, meshes);
+                }
+            });
+        }
+    });
+    maps
+}
+
 #[derive(Clone, Copy)]
 pub(super) struct ShadowTriangle {
     pub vertices: [WorldVertex; 3],
@@ -255,25 +292,75 @@ impl ShadowMap {
             .max(0.0001);
         let ix = libm::floorf(x) as i32;
         let iy = libm::floorf(y) as i32;
-        let mut visible = 0.0;
-        for dy in -1..=1 {
-            for dx in -1..=1 {
-                let sx = ix + dx;
-                let sy = iy + dy;
-                if sx < 0
-                    || sy < 0
-                    || sx >= SHADOW_SIZE as i32
-                    || sy >= SHADOW_SIZE as i32
-                    || receiver_depth - bias <= self.depth[sy as usize * SHADOW_SIZE + sx as usize]
-                {
-                    visible += 1.0;
-                }
+        pcf(&self.depth, ix, iy, receiver_depth - bias)
+    }
+}
+
+fn pcf(depth: &[f32], ix: i32, iy: i32, receiver: f32) -> f32 {
+    if ix > 0 && iy > 0 && ix < SHADOW_SIZE as i32 - 1 && iy < SHADOW_SIZE as i32 - 1 {
+        // Most samples are interior: validate the footprint once instead of
+        // checking four edges separately for each of the nine taps.
+        let first = (iy as usize - 1) * SHADOW_SIZE + ix as usize - 1;
+        let mut visible = 0_u32;
+        for offset in [0, SHADOW_SIZE, 2 * SHADOW_SIZE] {
+            let row = &depth[first + offset..first + offset + 3];
+            visible += u32::from(receiver <= row[0])
+                + u32::from(receiver <= row[1])
+                + u32::from(receiver <= row[2]);
+        }
+        return visible as f32 / 9.0;
+    }
+    let mut visible = 0.0;
+    for dy in -1..=1 {
+        for dx in -1..=1 {
+            let sx = ix + dx;
+            let sy = iy + dy;
+            if sx < 0
+                || sy < 0
+                || sx >= SHADOW_SIZE as i32
+                || sy >= SHADOW_SIZE as i32
+                || receiver <= depth[sy as usize * SHADOW_SIZE + sx as usize]
+            {
+                visible += 1.0;
             }
         }
-        visible / 9.0
     }
+    visible / 9.0
 }
 
 fn orient(a: ShadowVertex, b: ShadowVertex, c: ShadowVertex) -> f32 {
     (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pcf_matches_reference_at_edges_and_interior() {
+        let depth = (0..SHADOW_SIZE * SHADOW_SIZE)
+            .map(|i| ((i * 19) % 31) as f32 / 16.0)
+            .collect::<Vec<_>>();
+        for iy in [0, 1, 2, 511, 1022, 1023] {
+            for ix in [0, 1, 2, 511, 1022, 1023] {
+                for receiver in [0.0, 0.5, 1.0, 1.5, 2.0, f32::MAX] {
+                    let mut reference = 0.0;
+                    for dy in -1..=1 {
+                        for dx in -1..=1 {
+                            let (x, y) = (ix + dx, iy + dy);
+                            if x < 0
+                                || y < 0
+                                || x >= SHADOW_SIZE as i32
+                                || y >= SHADOW_SIZE as i32
+                                || receiver <= depth[y as usize * SHADOW_SIZE + x as usize]
+                            {
+                                reference += 1.0;
+                            }
+                        }
+                    }
+                    assert_eq!(pcf(&depth, ix, iy, receiver), reference / 9.0);
+                }
+            }
+        }
+    }
 }

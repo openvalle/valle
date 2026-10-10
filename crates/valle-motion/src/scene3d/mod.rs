@@ -20,7 +20,7 @@ pub use raster::{
     RasterFrame, Scene3DAnchorMetadata, Scene3DFrameMetadata, Scene3DObjectMetadata, Scene3DPick,
     ScenePrepareCacheKey, SceneResources, prepare_cache_key, prepare_scene, project_anchors,
     render_scene, render_scene_reusing, render_scene_reusing_with_workers,
-    render_scene_with_workers,
+    render_scene_with_workers, render_scene_without_depth_of_field,
 };
 
 use std::collections::BTreeSet;

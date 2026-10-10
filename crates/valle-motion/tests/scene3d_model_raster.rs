@@ -2175,6 +2175,18 @@ fn directional_shadow_map_catches_offscreen_casters_and_tracks_light_direction()
         *direction = Vec3::new(1.6, 0.0, 1.0);
     }
     assert!(first == render_scene_with_workers(&prepared, &state, 1).unwrap());
+    // Multiple shadow maps may build concurrently, but must keep their light slots.
+    state.lights.push(LightFrameState::Directional {
+        color: Color4([0.3, 0.7, 1.0, 1.0]),
+        direction: Vec3::new(-1.6, 0.4, 1.0),
+        intensity: 0.7,
+    });
+    spec.lights.push(LightKind::Directional);
+    let prepared = prepare_scene(&spec, 64, 64, &scene_resources).unwrap();
+    assert!(
+        render_scene_with_workers(&prepared, &state, 1).unwrap()
+            == render_scene_with_workers(&prepared, &state, 8).unwrap()
+    );
 }
 
 #[test]

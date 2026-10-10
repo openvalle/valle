@@ -15,6 +15,7 @@ fn render_size(dir: &Path, name: &str, source: &str, backend: &str, size: (u32, 
         name if name.starts_with("radial-") => Some("gpu-radial-blur"),
         name if name.starts_with("film-") => Some("gpu-film-grain"),
         name if name.starts_with("lens-") => Some("gpu-lens-distortion"),
+        name if name.starts_with("scene3d-dof-") => Some("gpu-scene3d-dof"),
         _ => None,
     };
     let input = dir.join(format!("{name}.motion.tsx"));
@@ -38,6 +39,7 @@ fn render_size(dir: &Path, name: &str, source: &str, backend: &str, size: (u32, 
     command.env_remove("VALLE_RADIAL_BLUR_CPU_REFERENCE");
     command.env_remove("VALLE_FILM_GRAIN_CPU_REFERENCE");
     command.env_remove("VALLE_LENS_DISTORTION_CPU_REFERENCE");
+    command.env_remove("VALLE_SCENE3D_DOF_CPU_REFERENCE");
     if gpu_stage.is_some() && backend == "metal" {
         command.env("VALLE_TRACE_F16_STAGES", "1");
     }
@@ -233,4 +235,55 @@ fn fullhd_sphere_matches_raster_on_real_metal() {
         renders.push(pixels);
     }
     assert_eq!(renders[0], renders[1]);
+}
+
+#[test]
+#[ignore = "requires a real Metal device; run outside the sandbox with --ignored"]
+fn scene3d_dof_stays_on_metal_and_matches_cpu_at_depth_boundaries() {
+    let dir = tempfile::tempdir().unwrap();
+    // Near/far overlap, a focus-plane surface, translucent color, and clipped geometry.
+    // All geometry is procedural, so this also exercises deferred Scene3D resource binding.
+    let source = r##"
+export const composition = { width: 640, height: 360, fps: 30, duration: 2 };
+const BALL = lathe(path("M 0 -1 C 0.5523 -1 1 -0.5523 1 0 C 1 0.5523 0.5523 1 0 1"), { segments: 32 });
+const PLANE = extrude(path("M -1 -1 L 1 -1 L 1 1 L -1 1 Z"), { depth: 0.01 });
+export default function DepthOfField() {
+  return <Scene>
+    <Scene3D key="depth" style={{ width: 640, height: 360 }}
+      camera={{ position: [0,0,5], target: [0,0,0], fov: 45,
+        depthOfField: { focusDistance: 5, maxBlurRadius: RADIUS } }}>
+      <Mesh key="far" geometry={BALL} position={[0.3,0,-2]} material={{ type: "unlit", color: "#3366EE" }} />
+      <Mesh key="focus" geometry={PLANE} position={[1.8,0,0]} scale={[0.45,0.7,1]} material={{ type: "unlit", color: "#33DD66" }} />
+      <Mesh key="near" geometry={BALL} position={[-0.7,0,2]} scale={[0.55,0.55,0.55]} material={{ type: "unlit", color: "#FF553399" }} />
+      <Mesh key="edge" geometry={BALL} position={[-3.6,0,0]} material={{ type: "unlit", color: "#FFFFFF" }} />
+    </Scene3D>
+  </Scene>;
+}
+"##;
+    let sharp = render(
+        dir.path(),
+        "scene3d-sharp",
+        &source.replace("RADIUS", "0"),
+        "raster",
+    );
+    for radius in [0.5, 0.75, 6.0, 12.5, 16.0] {
+        let source = source.replace("RADIUS", &radius.to_string());
+        let name = format!("scene3d-dof-{radius}");
+        let raster = render(dir.path(), &name, &source, "raster");
+        let metal = render(dir.path(), &name, &source, "metal");
+        if radius >= 6.0 {
+            assert_ne!(raster, sharp, "CPU depth of field did not change the image");
+            assert_ne!(
+                metal, sharp,
+                "Metal depth of field did not change the image"
+            );
+        }
+        let worst = raster
+            .iter()
+            .zip(&metal)
+            .map(|(a, b)| a.abs_diff(*b))
+            .max()
+            .unwrap();
+        assert!(worst <= 2, "{name}: Raster/Metal max channel diff {worst}");
+    }
 }

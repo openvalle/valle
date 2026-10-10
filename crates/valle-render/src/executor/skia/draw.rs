@@ -34,7 +34,7 @@ use valle_engine::{
 use super::{
     SkiaExternalObject,
     blend::BlendRuntime,
-    cache::BackendCaches,
+    cache::{BackendCaches, SmallOpacityCache},
     effect::{draw_filters, set_working_color, straight_color},
     glass::{
         admit_motion_glass_shader, render_motion_glass_foreground_into, render_motion_glass_into,
@@ -60,6 +60,39 @@ struct ProgramImage {
     roi: DeviceRect,
 }
 
+struct SmallOpacityAtlas {
+    images: Vec<Image>,
+    layers: BTreeMap<u32, (usize, SkRect, SkRect, f32)>,
+}
+
+/// Mirror Skia's image-filter RoundOut (including its 1e-3 tolerance) in the
+/// current saveLayer's coordinates, then map back to the owning surface.
+fn opacity_layer_bounds(
+    bounds: Rect,
+    matrix: Matrix,
+    clip: IRect,
+    origin: [i32; 2],
+) -> Option<IRect> {
+    let local = Matrix::translate((
+        matrix.translate_x() - origin[0] as f32,
+        matrix.translate_y() - origin[1] as f32,
+    ));
+    let mapped = local.map_rect(sk_rect(bounds)).0;
+    if ![mapped.left, mapped.top, mapped.right, mapped.bottom]
+        .into_iter()
+        .all(|value| value.is_finite() && value.abs() < 16_777_216.0)
+    {
+        return None;
+    }
+    let bounds = IRect::new(
+        ((mapped.left + 1.0e-3).floor() as i32 + origin[0]).max(clip.left),
+        ((mapped.top + 1.0e-3).floor() as i32 + origin[1]).max(clip.top),
+        ((mapped.right - 1.0e-3).ceil() as i32 + origin[0]).min(clip.right),
+        ((mapped.bottom - 1.0e-3).ceil() as i32 + origin[1]).min(clip.bottom),
+    );
+    (bounds.width() > 0 && bounds.height() > 0).then_some(bounds)
+}
+
 /// Fully decoded and backend-admitted DrawProgram. All fallible font parsing and runtime shader
 /// compilation happens before any compositor surface is allocated.
 pub(crate) struct ProgramRuntime {
@@ -67,10 +100,11 @@ pub(crate) struct ProgramRuntime {
     pub(crate) textures: BTreeMap<ExternalTexture, ProgramTexture>,
     pub(crate) fonts: BTreeMap<(ContentDigest, u32), Typeface>,
     pub(crate) shaders: BTreeMap<String, Arc<RuntimeEffect>>,
-    pub(crate) scenes: BTreeMap<ContentDigest, Image>,
+    scenes: BTreeMap<ContentDigest, SceneImage>,
     glass: Option<RuntimeEffect>,
     blend: Option<BlendRuntime>,
     mask_coverage: Option<RuntimeEffect>,
+    opacity_layers: Arc<std::sync::Mutex<SmallOpacityCache>>,
 }
 
 #[derive(Debug, Clone)]
@@ -220,9 +254,16 @@ impl ProgramRuntime {
                         .is_some_and(|object| object.key().content == digest)
                 })
                 .ok_or_else(|| DrawError::MissingScene(requirement.content_hash.as_hex()))?;
-            let image = visual(bound, binding.slot)
-                .ok_or_else(|| DrawError::MissingScene(requirement.content_hash.as_hex()))?
-                .clone();
+            let image = match visual(bound, binding.slot) {
+                Some(image) => SceneImage::Ready(image.clone()),
+                None if bound
+                    .get(binding.slot)
+                    .is_some_and(|object| object.deferred_scene3d_dof().is_some()) =>
+                {
+                    SceneImage::Deferred(binding.slot)
+                }
+                None => return Err(DrawError::MissingScene(requirement.content_hash.as_hex())),
+            };
             if scenes.insert(digest, image).is_some() {
                 return Err(DrawError::DuplicateResource(
                     requirement.content_hash.as_hex(),
@@ -315,6 +356,7 @@ impl ProgramRuntime {
             );
         }
         Ok(Self {
+            opacity_layers: Arc::clone(&caches.opacity_layers),
             mask_coverage,
             program,
             textures,
@@ -324,6 +366,20 @@ impl ProgramRuntime {
             glass,
             blend,
         })
+    }
+
+    pub(crate) fn resolve_deferred_scenes(
+        &mut self,
+        images: &BTreeMap<ExternalSlotId, Image>,
+    ) -> Result<(), DrawError> {
+        for scene in self.scenes.values_mut() {
+            if let SceneImage::Deferred(slot) = scene {
+                *scene = SceneImage::Ready(images.get(slot).cloned().ok_or_else(|| {
+                    DrawError::Internal("deferred Scene3D image is missing".into())
+                })?);
+            }
+        }
+        Ok(())
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -924,16 +980,255 @@ impl ProgramRuntime {
         transform: DeviceTransform,
         target_origin: [i32; 2],
     ) -> Result<(), DrawError> {
+        let mut matrix = Matrix::translate((-target_origin[0] as f32, -target_origin[1] as f32));
+        matrix.pre_concat(&self.device_matrix(plan, output, transform)?);
+        let atlas = self.small_opacity_atlas(surface, node_ids, matrix)?;
         let canvas = surface.canvas();
         canvas.clear(Color4f::new(0.0, 0.0, 0.0, 0.0));
         canvas.save();
         canvas.translate((-target_origin[0] as f32, -target_origin[1] as f32));
         canvas.concat(&self.device_matrix(plan, output, transform)?);
         for node_id in node_ids {
-            self.raster_node(canvas, *node_id)?;
+            self.raster_node_with_atlas(canvas, *node_id, atlas.as_ref())?;
         }
         canvas.restore();
         Ok(())
+    }
+
+    fn small_opacity_atlas(
+        &self,
+        target: &mut Surface,
+        roots: &[valle_draw::program::NodeId],
+        matrix: Matrix,
+    ) -> Result<Option<SmallOpacityAtlas>, DrawError> {
+        // Cache the original F16 coverage of small solid leaves. Keep the isolated
+        // write and later opacity restore; folding alpha or relocating the vector
+        // rasterization changes Skia's AA. Other trees retain ordinary saveLayer.
+        if target.direct_context().is_none()
+            || target.image_info().color_type() != ColorType::RGBAF16
+            || target.image_info().alpha_type() != AlphaType::Premul
+            || !matrix.is_translate()
+            || matrix.translate_x().fract() != 0.0
+            || matrix.translate_y().fract() != 0.0
+            || std::env::var_os("VALLE_SMALL_OPACITY_CACHE_REFERENCE").is_some()
+        {
+            return Ok(None);
+        }
+        let mut leaves = Vec::new();
+        let Some(clip) = target.canvas().device_clip_bounds() else {
+            return Ok(None);
+        };
+        let mut pending = roots
+            .iter()
+            .map(|id| (*id, clip, [0, 0]))
+            .collect::<Vec<_>>();
+        while let Some((id, clip, origin)) = pending.pop() {
+            let Node::Group(group) = &self.program.nodes()[id.raw() as usize] else {
+                continue;
+            };
+            if !group.is_raster_tree_group()
+                || group.clip.is_some()
+                || group.transform != Transform2d::IDENTITY
+                || group.opacity == 0.0
+            {
+                continue;
+            }
+            let (layer_clip, layer_origin) = if group.opacity < 1.0 {
+                let Some(bounds) = self
+                    .program
+                    .geometry(id)
+                    .and_then(|g| g.output_bounds.rect())
+                    .and_then(|bounds| opacity_layer_bounds(bounds, matrix, clip, origin))
+                else {
+                    continue;
+                };
+                (bounds, [bounds.left, bounds.top])
+            } else {
+                (clip, origin)
+            };
+            if group.opacity < 1.0
+                && let [child] = group.children.as_slice()
+                && let Node::Path(path) = &self.program.nodes()[child.raw() as usize]
+                && path.stroke.is_none()
+                && self.program.paths()[path.path.raw() as usize].points.len() <= 64
+                && let Some(fill) = path.fill
+                && let Paint::Solid(color) = self.program.paints()[fill.raw() as usize]
+                && [color.red, color.green, color.blue, color.alpha]
+                    .into_iter()
+                    .all(|value| (0.0..=1.0).contains(&value))
+                && layer_clip.width() <= 16
+                && layer_clip.height() <= 16
+            {
+                leaves.push((id, *child, layer_clip, group.opacity));
+                continue;
+            }
+            // Nested opacity bounds can change a clipped child's layer origin.
+            pending.extend(
+                group
+                    .children
+                    .iter()
+                    .map(|id| (*id, layer_clip, layer_origin)),
+            );
+        }
+        if leaves.len() < 64 {
+            return Ok(None);
+        }
+        let mut result = SmallOpacityAtlas {
+            images: Vec::new(),
+            layers: BTreeMap::new(),
+        };
+        let color_space = target
+            .image_info()
+            .color_space()
+            .map(|space| space.serialize());
+        let keys = leaves
+            .iter()
+            .map(|&(_, child, bounds, _)| {
+                let Node::Path(node) = &self.program.nodes()[child.raw() as usize] else {
+                    unreachable!()
+                };
+                let path = &self.program.paths()[node.path.raw() as usize];
+                let Paint::Solid(color) = self.program.paints()[node.fill.unwrap().raw() as usize]
+                else {
+                    unreachable!()
+                };
+                let mut key = Vec::with_capacity(160 + path.verbs.len() + path.points.len() * 16);
+                key.extend_from_slice(
+                    &(color_space.as_ref().map_or(0, |data| data.len()) as u32).to_le_bytes(),
+                );
+                if let Some(space) = &color_space {
+                    key.extend_from_slice(space.as_bytes());
+                }
+                key.extend_from_slice(&bounds.width().to_le_bytes());
+                key.extend_from_slice(&bounds.height().to_le_bytes());
+                key.extend_from_slice(
+                    &(matrix.translate_x() - bounds.left as f32)
+                        .to_bits()
+                        .to_le_bytes(),
+                );
+                key.extend_from_slice(
+                    &(matrix.translate_y() - bounds.top as f32)
+                        .to_bits()
+                        .to_le_bytes(),
+                );
+                key.push(node.fill_rule as u8);
+                key.extend_from_slice(&(path.verbs.len() as u32).to_le_bytes());
+                for verb in &path.verbs {
+                    key.push(*verb as u8);
+                }
+                for point in &path.points {
+                    for value in point {
+                        key.extend_from_slice(&value.to_bits().to_le_bytes());
+                    }
+                }
+                for value in [color.red, color.green, color.blue, color.alpha] {
+                    key.extend_from_slice(&value.to_bits().to_le_bytes());
+                }
+                ContentDigest::of_bytes(&key)
+            })
+            .collect::<Vec<_>>();
+        let mut hits = Vec::new();
+        let mut misses = Vec::new();
+        {
+            let mut cache = self
+                .opacity_layers
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            if !cache.observe(&keys) {
+                return Ok(None);
+            }
+            for (leaf, key) in leaves.into_iter().zip(keys) {
+                if let Some(image) = cache.get(&key) {
+                    hits.push((leaf, image.clone()));
+                } else {
+                    misses.push((leaf, key));
+                }
+            }
+        }
+        let hit_count = hits.len();
+        let miss_count = misses.len();
+        let mut images = BTreeMap::new();
+        for ((id, _, bounds, opacity), (image, source)) in hits {
+            let index = *images.entry(image.unique_id()).or_insert_with(|| {
+                let index = result.images.len();
+                result.images.push(image.clone());
+                index
+            });
+            result
+                .layers
+                .insert(id.raw(), (index, source, SkRect::from(bounds), opacity));
+        }
+        let mut pages = Vec::new();
+        for chunk in misses.chunks(64) {
+            let info = target
+                .image_info()
+                .with_dimensions((128, chunk.len().div_ceil(8) as i32 * 16));
+            let mut atlas = target
+                .new_surface(&info)
+                .ok_or_else(|| DrawError::Surface("opacity atlas allocation failed".into()))?;
+            let canvas = atlas.canvas();
+            canvas.clear(Color::TRANSPARENT);
+            let image_index = result.images.len();
+            for (index, &((id, child, bounds, opacity), _)) in chunk.iter().enumerate() {
+                let x = (index % 8) as i32 * 16;
+                let y = (index / 8) as i32 * 16;
+                let source = SkRect::from_xywh(
+                    x as f32,
+                    y as f32,
+                    bounds.width() as f32,
+                    bounds.height() as f32,
+                );
+                canvas.save();
+                canvas.clip_rect(source, None, false);
+                // Retain Skia's local device origin and backing size. Drawing the
+                // curve directly at its atlas position changes analytic AA.
+                canvas.save_layer_alpha_f(None, 1.0);
+                canvas.translate(((x - bounds.left) as f32, (y - bounds.top) as f32));
+                canvas.concat(&matrix);
+                self.raster_node(canvas, child)?;
+                canvas.restore();
+                canvas.restore();
+                result.layers.insert(
+                    id.raw(),
+                    (image_index, source, SkRect::from(bounds), opacity),
+                );
+            }
+            let image = atlas.image_snapshot();
+            let entries = chunk
+                .iter()
+                .enumerate()
+                .map(|(index, ((_, _, bounds, _), key))| {
+                    (
+                        *key,
+                        SkRect::from_xywh(
+                            (index % 8 * 16) as f32,
+                            (index / 8 * 16) as f32,
+                            bounds.width() as f32,
+                            bounds.height() as f32,
+                        ),
+                    )
+                })
+                .collect();
+            result.images.push(image.clone());
+            pages.push((image, entries));
+        }
+        {
+            let mut cache = self
+                .opacity_layers
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            for (image, entries) in pages {
+                cache.insert_page(image, entries);
+            }
+            if std::env::var_os("VALLE_TRACE_F16_STAGES").is_some() {
+                eprintln!(
+                    "[valle f16] opacity-cache hits={hit_count} misses={miss_count} pages={} retained-bytes={}",
+                    result.images.len(),
+                    cache.bytes()
+                );
+            }
+        }
+        Ok(Some(result))
     }
 
     fn raster_node(
@@ -941,6 +1236,32 @@ impl ProgramRuntime {
         canvas: &skia_safe::Canvas,
         node_id: valle_draw::program::NodeId,
     ) -> Result<(), DrawError> {
+        self.raster_node_with_atlas(canvas, node_id, None)
+    }
+
+    fn raster_node_with_atlas(
+        &self,
+        canvas: &skia_safe::Canvas,
+        node_id: valle_draw::program::NodeId,
+        atlas: Option<&SmallOpacityAtlas>,
+    ) -> Result<(), DrawError> {
+        if let Some(atlas) = atlas
+            && let Some(&(image, source, destination, opacity)) = atlas.layers.get(&node_id.raw())
+        {
+            let mut paint = SkPaint::default();
+            paint.set_alpha_f(opacity);
+            canvas.save();
+            canvas.reset_matrix();
+            canvas.draw_image_rect_with_sampling_options(
+                &atlas.images[image],
+                Some((&source, skia_safe::canvas::SrcRectConstraint::Strict)),
+                destination,
+                SamplingOptions::default(),
+                &paint,
+            );
+            canvas.restore();
+            return Ok(());
+        }
         let node = self
             .program
             .nodes()
@@ -1005,6 +1326,11 @@ impl ProgramRuntime {
                     .scenes
                     .get(&digest)
                     .ok_or_else(|| DrawError::MissingScene(scene.scene.content_hash.as_hex()))?;
+                let SceneImage::Ready(image) = image else {
+                    return Err(DrawError::Internal(
+                        "Scene3D DOF was not materialized".into(),
+                    ));
+                };
                 canvas.draw_image_rect_with_sampling_options(
                     image,
                     None,
@@ -1046,7 +1372,7 @@ impl ProgramRuntime {
                 let result = group
                     .children
                     .iter()
-                    .try_for_each(|child| self.raster_node(canvas, *child));
+                    .try_for_each(|child| self.raster_node_with_atlas(canvas, *child, atlas));
                 if let Some(outline) = path_coverage {
                     // Use filled-path coverage, exactly as an opaque alpha mask does. Skia's
                     // clipPath rasterizer otherwise disagrees at a few antialiased edge pixels.
@@ -1513,6 +1839,11 @@ impl ProgramRuntime {
         let local = Matrix::translate((bounds.x as f32, bounds.y as f32));
         Ok(effect.make_shader(Data::new_copy(&data), &children, Some(&local)))
     }
+}
+
+enum SceneImage {
+    Ready(Image),
+    Deferred(ExternalSlotId),
 }
 
 fn visual<'a>(
@@ -3436,6 +3767,169 @@ impl From<SurfaceError> for DrawError {
 mod tests {
     use super::*;
 
+    #[cfg(all(feature = "native", target_os = "macos"))]
+    #[test]
+    #[ignore = "requires a real Metal device"]
+    fn small_opacity_atlas_preserves_metal_coverage() {
+        use objc2_metal::MTLDevice;
+        use skia_safe::gpu;
+        use valle_draw::program::{DrawProgramBuilder, Group, PathNode};
+        let device = objc2_metal::MTLCreateSystemDefaultDevice().unwrap();
+        let queue = device.newCommandQueue().unwrap();
+        // SAFETY: BackendContext retains the live Metal device and command queue.
+        let backend = unsafe {
+            gpu::mtl::BackendContext::new(
+                std::ptr::from_ref(&*device).cast(),
+                std::ptr::from_ref(&*queue).cast(),
+            )
+        };
+        let mut context = gpu::direct_contexts::make_metal(&backend, None).unwrap();
+        let cache = Arc::new(std::sync::Mutex::new(SmallOpacityCache::default()));
+        for (color_scale, opacity_scale) in [(1.0, 1.0), (0.7, 1.0), (1.0, 0.4)] {
+            let mut builder = DrawProgramBuilder::new(Rect::new(0.0, 0.0, 1920.0, 1080.0));
+            let mut children = Vec::new();
+            for index in 0..256 {
+                // Include small curves at large coordinates, open contours, and
+                // edges near Skia's saveLayer rounding tolerance. Moving these
+                // vectors directly into an atlas used to change their AA badly.
+                let (x, y, r) = match index {
+                    0 => (1236.2065438392028, 708.6099831308577, 1.4023485364782),
+                    1 => (893.9088078798618, 461.41540269381926, 1.6761841660817),
+                    2 => (601.4009999, 190.5, 1.4),
+                    3 => (600.3995, 180.9995, 1.4),
+                    _ => (
+                        589.7007 + (index % 43) as f64 * 16.1,
+                        150.2998 + (index % 31) as f64 * 18.3,
+                        1.1 + (index % 11) as f64 * 0.19,
+                    ),
+                };
+                let k = r * 0.5522847498307936;
+                let mut verbs = vec![
+                    PathVerb::MoveTo,
+                    PathVerb::CubicTo,
+                    PathVerb::CubicTo,
+                    PathVerb::CubicTo,
+                    PathVerb::CubicTo,
+                ];
+                if index % 2 == 1 {
+                    verbs.push(PathVerb::Close);
+                }
+                let path = builder.push_path(PathData {
+                    verbs,
+                    points: vec![
+                        [x + r, y],
+                        [x + r, y + k],
+                        [x + k, y + r],
+                        [x, y + r],
+                        [x - k, y + r],
+                        [x - r, y + k],
+                        [x - r, y],
+                        [x - r, y - k],
+                        [x - k, y - r],
+                        [x, y - r],
+                        [x + k, y - r],
+                        [x + r, y - k],
+                        [x + r, y],
+                    ],
+                });
+                let fill = builder.push_paint(Paint::Solid(LinearColor::new(
+                    0.6 * color_scale,
+                    0.1,
+                    0.4,
+                    0.8,
+                )));
+                let leaf = builder.push_node(Node::Path(PathNode {
+                    path,
+                    fill_rule: FillRule::NonZero,
+                    fill: Some(fill),
+                    stroke: None,
+                }));
+                let mut group = Group::plain(vec![leaf]);
+                group.opacity = (index % 15 + 1) as f32 / 16.0 * opacity_scale;
+                if index == 255 {
+                    // Unsupported transforms must retain normal rendering.
+                    group.transform = Transform2d([1.0, 0.0, 0.25, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]);
+                }
+                children.push(builder.push_node(Node::Group(group)));
+            }
+            let mut group = Group::plain(children);
+            group.opacity = 0.63;
+            group.layer_bounds = Some(Rect::new(597.0008, 158.9998, 726.6062, 725.6012));
+            let root = builder.push_node(Node::Group(group));
+            builder.add_root(root);
+            let runtime = ProgramRuntime {
+                program: Arc::new(builder.finish().unwrap()),
+                textures: BTreeMap::new(),
+                fonts: BTreeMap::new(),
+                shaders: BTreeMap::new(),
+                scenes: BTreeMap::new(),
+                glass: None,
+                blend: None,
+                mask_coverage: None,
+                opacity_layers: Arc::clone(&cache),
+            };
+            for (width, height, offset) in [
+                (1920, 1080, (0.0, 0.0)),
+                (768, 768, (-596.0, -157.0)),
+                (1920, 1080, (0.25, 0.0)),
+            ] {
+                let info = ImageInfo::new(
+                    (width, height),
+                    ColorType::RGBAF16,
+                    AlphaType::Premul,
+                    Some(working_color_space().unwrap()),
+                );
+                let matrix = Matrix::translate(offset);
+                let mut expected: Option<Vec<u8>> = None;
+                for attempt in 0..4 {
+                    let mut target = gpu::surfaces::render_target(
+                        &mut context,
+                        gpu::Budgeted::Yes,
+                        &info,
+                        None,
+                        gpu::SurfaceOrigin::TopLeft,
+                        None,
+                        None,
+                        None,
+                    )
+                    .unwrap();
+                    let atlas = if attempt > 0 {
+                        runtime
+                            .small_opacity_atlas(&mut target, runtime.program.roots(), matrix)
+                            .unwrap()
+                    } else {
+                        None
+                    };
+                    if attempt >= 2 && offset.0.fract() == 0.0 {
+                        assert!(atlas.as_ref().unwrap().layers.len() > 200);
+                    }
+                    if offset.0.fract() != 0.0 {
+                        assert!(atlas.is_none());
+                    }
+                    target.canvas().clear(Color4f::new(0.01, 0.04, 0.02, 1.0));
+                    target.canvas().concat(&matrix);
+                    for root in runtime.program.roots() {
+                        runtime
+                            .raster_node_with_atlas(target.canvas(), *root, atlas.as_ref())
+                            .unwrap();
+                    }
+                    context.flush_submit_and_sync_cpu();
+                    let mut pixels = vec![0_u8; width as usize * height as usize * 8];
+                    assert!(target.read_pixels(&info, &mut pixels, width as usize * 8, (0, 0)));
+                    if let Some(expected) = &expected {
+                        let different = pixels.iter().zip(expected).filter(|(a, b)| a != b).count();
+                        assert_eq!(
+                            different, 0,
+                            "F16 bytes changed: offset={offset:?} attempt={attempt} color={color_scale} opacity={opacity_scale}"
+                        );
+                    } else {
+                        expected = Some(pixels);
+                    }
+                }
+            }
+        }
+    }
+
     #[test]
     fn f16_filters_use_owned_roi_in_an_oversized_scratch_surface() {
         let info = ImageInfo::new(
@@ -3635,6 +4129,7 @@ mod tests {
                 glass: None,
                 blend: None,
                 mask_coverage: None,
+                opacity_layers: Default::default(),
             };
             surface.canvas().clear(Color4f::new(0.0, 0.0, 0.0, 0.0));
             for root in runtime.program.roots() {
@@ -3687,6 +4182,7 @@ mod tests {
             glass: None,
             blend: None,
             mask_coverage: None,
+            opacity_layers: Default::default(),
         };
         let info = ImageInfo::new(
             (1920, 1080),
@@ -3763,6 +4259,7 @@ mod tests {
             glass: None,
             blend: None,
             mask_coverage: None,
+            opacity_layers: Default::default(),
         };
         let info = ImageInfo::new(
             (32, 32),
@@ -3847,6 +4344,7 @@ mod tests {
             glass: None,
             blend: None,
             mask_coverage: None,
+            opacity_layers: Default::default(),
         };
         let info = ImageInfo::new(
             (32, 32),
@@ -3954,6 +4452,7 @@ mod tests {
                     glass: None,
                     blend: None,
                     mask_coverage: None,
+                    opacity_layers: Default::default(),
                 };
                 let root = runtime.program.roots()[0];
                 let Node::Group(group) = &runtime.program.nodes()[root.raw() as usize] else {

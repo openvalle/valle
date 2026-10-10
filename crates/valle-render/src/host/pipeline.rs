@@ -22,6 +22,8 @@ use valle_media::SharedVideoFramePool;
 
 #[cfg(target_os = "macos")]
 use super::DeliveredSharedFrame;
+#[cfg(target_os = "macos")]
+use super::gpu_schedule::{AdaptiveQueues, QueueSample, metal_memory};
 use super::{DeliveredFrame, FrameDelivery, FrameRenderError, FrameSink, NativeProject};
 use crate::executor::skia::{SkiaBackendKind, SkiaExecutionProfile};
 
@@ -152,11 +154,15 @@ pub fn render_schedule(
     backend: SkiaBackendKind,
     requested_workers: Option<usize>,
 ) -> Result<PipelineReport, PipelineError> {
+    let workers = raster_worker_count(
+        frames.len(),
+        backend_default_workers(backend, requested_workers),
+    )?;
     if let Some(pool) = sink.shared_frame_pool() {
         #[cfg(target_os = "macos")]
         {
-            return render_shared_serial(
-                project, frames, spec, sink, control, progress, backend, pool,
+            return render_shared_staged(
+                project, frames, spec, sink, control, progress, backend, pool, workers,
             );
         }
         #[cfg(not(target_os = "macos"))]
@@ -165,10 +171,6 @@ pub fn render_schedule(
             return Err(PipelineError::SharedGpuUnavailable);
         }
     }
-    let workers = raster_worker_count(
-        frames.len(),
-        backend_default_workers(backend, requested_workers),
-    )?;
     if workers == 1 && frames.len() <= 1 {
         return render_serial(project, frames, spec, sink, control, progress, backend);
     }
@@ -181,7 +183,15 @@ pub fn render_schedule(
 }
 
 #[cfg(target_os = "macos")]
-fn render_shared_serial(
+struct PendingSharedFrame {
+    executor: usize,
+    sequence: usize,
+    key: FrameKey,
+    submitted: super::SubmittedSharedFrame,
+}
+
+#[cfg(target_os = "macos")]
+fn render_shared_staged(
     project: &NativeProject,
     frames: &[FrameKey],
     spec: RenderSpec,
@@ -190,62 +200,235 @@ fn render_shared_serial(
     progress: Option<&ProgressCallback>,
     backend: SkiaBackendKind,
     pool: SharedVideoFramePool,
+    workers: usize,
 ) -> Result<PipelineReport, PipelineError> {
     const MAXIMUM_PENDING_FRAMES: usize = 3;
 
-    let mut runner = project.frame_runner(backend)?;
+    let (first_preparer, executor) = project.frame_runner(backend)?.into_stages();
+    // CPU preparation remains parallel. Additional GPU contexts are allocated only
+    // after sustained GPU completion waits justify a bounded throughput probe.
+    let mut executors = vec![executor];
+    let mut active_queues = 1;
+    let mut queues = AdaptiveQueues::new(workers.min(MAXIMUM_PENDING_FRAMES));
+    let mut ordered_shadows = false;
+    if std::env::var_os("VALLE_PERF").is_some() {
+        eprintln!(
+            "[valle metal] shared-queues=1 adaptive=true pending-limit={MAXIMUM_PENDING_FRAMES}"
+        );
+    }
+    let capabilities = first_preparer.capabilities().clone();
+    let mut preparers = vec![first_preparer];
+    for _ in 1..workers {
+        preparers.push(project.frame_preparer(backend, capabilities.clone())?);
+    }
+    let abort = Arc::new(AtomicBool::new(false));
     let mut metrics = PipelineAccumulator::for_render_id(project.render_id());
     let mut pending = VecDeque::with_capacity(MAXIMUM_PENDING_FRAMES);
     let mut delivered = 0_usize;
-    let mut maximum_pending = 0_usize;
+    let mut first_error = None;
 
-    for (sequence, key) in frames.iter().copied().enumerate() {
-        control.check()?;
-        let submitted = runner.render_shared_frame(key, spec, &pool)?;
-        pending.push_back((sequence, key, submitted));
-        maximum_pending = maximum_pending.max(pending.len());
-        if pending.len() == MAXIMUM_PENDING_FRAMES {
-            deliver_shared_head(
-                &mut runner,
-                &mut pending,
-                sink,
-                &mut metrics,
-                &mut delivered,
-                frames.len(),
-                progress,
-            )?;
+    std::thread::scope(|scope| {
+        let mut receivers = Vec::with_capacity(workers);
+        for (worker, mut preparer) in preparers.into_iter().enumerate().take(frames.len()) {
+            // A rendezvous retains at most one prepared/in-progress frame per CPU worker.
+            // GPU contexts and encoder surfaces stay on the ordered execution thread.
+            let (sender, receiver) = crossbeam_channel::bounded(0);
+            receivers.push(receiver);
+            let worker_abort = Arc::clone(&abort);
+            scope.spawn(move || {
+                let result = (|| -> Result<(), PipelineError> {
+                    for sequence in (worker..frames.len()).step_by(workers) {
+                        if worker_abort.load(Ordering::Acquire) {
+                            break;
+                        }
+                        control.check()?;
+                        let key = frames[sequence];
+                        let prepared = preparer.prepare_frame_for_sequence(sequence, key, spec)?;
+                        if sender.send(Ok((sequence, key, prepared))).is_err() {
+                            break;
+                        }
+                    }
+                    Ok(())
+                })();
+                if let Err(error) = result {
+                    worker_abort.store(true, Ordering::Release);
+                    let _ = sender.send(Err(error));
+                }
+            });
         }
-    }
-    while !pending.is_empty() {
-        control.check()?;
-        deliver_shared_head(
-            &mut runner,
-            &mut pending,
-            sink,
-            &mut metrics,
-            &mut delivered,
-            frames.len(),
-            progress,
-        )?;
+
+        let result = (|| -> Result<(), PipelineError> {
+            for sequence in 0..frames.len() {
+                control.check()?;
+                let started = Instant::now();
+                let (actual, key, prepared) = receivers[sequence % workers]
+                    .recv()
+                    .map_err(|_| PipelineError::IncompleteEvidence)??;
+                let prepare_wait_us =
+                    started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64;
+                if actual != sequence {
+                    return Err(PipelineError::OutOfOrder {
+                        expected: sequence,
+                        actual,
+                    });
+                }
+                control.check()?;
+                if !ordered_shadows && prepared.needs_ordered_shadow_context() {
+                    // Drain with the owning contexts before reducing the queue
+                    // count. This also preserves ordered delivery on cancellation
+                    // or a sink error during the transition.
+                    while !pending.is_empty() {
+                        control.check()?;
+                        deliver_shared_head(
+                            &mut executors,
+                            &mut pending,
+                            sink,
+                            &mut metrics,
+                            &mut delivered,
+                            frames.len(),
+                            progress,
+                        )?;
+                    }
+                    executors.truncate(1);
+                    active_queues = 1;
+                    ordered_shadows = true;
+                    queues.restrict_to(1);
+                    if std::env::var_os("VALLE_PERF").is_some() {
+                        eprintln!(
+                            "[valle metal] shared-queues=1 ordered-shadow-cache frame={sequence}"
+                        );
+                    }
+                }
+                let owner = sequence % active_queues;
+                let submit_started = Instant::now();
+                let submitted =
+                    executors[owner].render_prepared_shared_frame(prepared, spec, &pool)?;
+                let submit_us = submit_started
+                    .elapsed()
+                    .as_micros()
+                    .min(u128::from(u64::MAX)) as u64;
+                pending.push_back(PendingSharedFrame {
+                    executor: owner,
+                    sequence,
+                    key,
+                    submitted,
+                });
+                if pending.len() == MAXIMUM_PENDING_FRAMES {
+                    let mut sample = deliver_shared_head(
+                        &mut executors,
+                        &mut pending,
+                        sink,
+                        &mut metrics,
+                        &mut delivered,
+                        frames.len(),
+                        progress,
+                    )?;
+                    sample.wall_us = started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64;
+                    sample.prepare_wait_us = prepare_wait_us;
+                    sample.submit_us = submit_us;
+                    if let Some(change) =
+                        queues.observe(sample, frames.len() - sequence - 1, metal_memory)
+                    {
+                        // Explicit owners remain valid throughout draining and error cleanup.
+                        // Reconfiguration happens only after every previous GPU user completes.
+                        while !pending.is_empty() {
+                            control.check()?;
+                            deliver_shared_head(
+                                &mut executors,
+                                &mut pending,
+                                sink,
+                                &mut metrics,
+                                &mut delivered,
+                                frames.len(),
+                                progress,
+                            )?;
+                        }
+                        while executors.len() < change.retained_queues {
+                            match project.frame_runner(backend) {
+                                Ok(runner) => executors.push(runner.into_stages().1),
+                                Err(error) => {
+                                    // Optional concurrency must not make a render fail when its
+                                    // already initialized contexts can complete the same work.
+                                    queues.restrict_to(executors.len());
+                                    if std::env::var_os("VALLE_PERF").is_some() {
+                                        eprintln!("[valle metal] queue-probe unavailable: {error}");
+                                    }
+                                    break;
+                                }
+                            }
+                        }
+                        executors.truncate(change.retained_queues);
+                        active_queues = change.queues.min(executors.len());
+                        if std::env::var_os("VALLE_PERF").is_some() {
+                            eprintln!(
+                                "[valle metal] shared-queues={} retained-queues={} reason={} frame={}",
+                                active_queues,
+                                executors.len(),
+                                change.reason,
+                                sequence + 1
+                            );
+                        }
+                    }
+                }
+            }
+            while !pending.is_empty() {
+                control.check()?;
+                deliver_shared_head(
+                    &mut executors,
+                    &mut pending,
+                    sink,
+                    &mut metrics,
+                    &mut delivered,
+                    frames.len(),
+                    progress,
+                )?;
+            }
+            Ok(())
+        })();
+        if let Err(error) = result {
+            first_error = Some(error);
+            abort.store(true, Ordering::Release);
+            drain_workers(&receivers, &mut first_error);
+        }
+    });
+
+    if let Some(error) = first_error {
+        // A cancelled/failed sink must not release encoder or decoder surfaces while GPU
+        // commands still reference them. Complete outstanding work without delivering it.
+        while let Some(frame) = pending.pop_front() {
+            let _ = executors[frame.executor].finish_shared_frame(frame.submitted);
+        }
+        return Err(error);
     }
     control.check()?;
     sink.finish()
         .map_err(|error| PipelineError::Sink(error.to_string()))?;
-    metrics.finish(delivered, usize::from(!frames.is_empty()), maximum_pending)
+    // Workers each own at most one preparing/waiting frame. Execution has at most three
+    // additional frames (including the current handoff), independently of video duration.
+    metrics.finish(
+        delivered,
+        workers.min(frames.len()),
+        frames.len().min(workers + MAXIMUM_PENDING_FRAMES),
+    )
 }
 
 #[cfg(target_os = "macos")]
 #[allow(clippy::too_many_arguments)]
 fn deliver_shared_head(
-    runner: &mut super::FrameRunner<super::NativeResourceProvider>,
-    pending: &mut VecDeque<(usize, FrameKey, super::SubmittedSharedFrame)>,
+    executors: &mut [super::frame::FrameExecutionStage],
+    pending: &mut VecDeque<PendingSharedFrame>,
     sink: &mut dyn FrameSink,
     metrics: &mut PipelineAccumulator,
     delivered: &mut usize,
     total: usize,
     progress: Option<&ProgressCallback>,
-) -> Result<(), PipelineError> {
-    let (sequence, key, submitted) = pending
+) -> Result<QueueSample, PipelineError> {
+    let PendingSharedFrame {
+        executor,
+        sequence,
+        key,
+        submitted,
+    } = pending
         .pop_front()
         .ok_or(PipelineError::IncompleteEvidence)?;
     if sequence != *delivered {
@@ -254,8 +437,9 @@ fn deliver_shared_head(
             actual: sequence,
         });
     }
-    let (frame, evidence) = runner.finish_shared_frame(submitted)?;
+    let (frame, evidence) = executors[executor].finish_shared_frame(submitted)?;
     metrics.add(&evidence)?;
+    let sink_started = Instant::now();
     sink.push_shared(DeliveredSharedFrame {
         sequence,
         key,
@@ -263,13 +447,19 @@ fn deliver_shared_head(
         evidence: &evidence,
     })
     .map_err(|error| PipelineError::Sink(error.to_string()))?;
+    let sink_us = sink_started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64;
     *delivered = delivered
         .checked_add(1)
         .ok_or(PipelineError::CounterOverflow)?;
     if let Some(progress) = progress {
         progress(*delivered, total);
     }
-    Ok(())
+    Ok(QueueSample {
+        gpu_wait_us: evidence.timings.gpu_completion_wait_us.unwrap_or(0),
+        execute_us: evidence.timings.execute_us,
+        sink_us,
+        ..Default::default()
+    })
 }
 
 fn render_serial(
@@ -628,6 +818,9 @@ impl PipelineAccumulator {
                     "evaluatePrepareUs": t.evaluate_prepare_us, "fulfillLowerWallUs": t.fulfill_lower_wall_us,
                     "bindUs": t.bind_us, "executeUs": t.execute_us, "readbackUs": t.delivery_readback_us,
                     "totalUs": t.total_us,
+                    "scene3dPrepareUs": evidence.scene3d.prepare_us,
+                    "scene3dRasterUs": evidence.scene3d.raster_us,
+                    "scene3dUploadUs": evidence.scene3d.upload_us,
                 })
             );
         }

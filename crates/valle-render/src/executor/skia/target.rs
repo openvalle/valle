@@ -15,6 +15,29 @@ use valle_engine::{
 
 use super::surface::{input_color_space, raster_surface, working_color_space, working_info};
 
+/// Copy directly into Skia-owned storage instead of first allocating a byte Vec.
+/// The returned Data owns its bytes independently of the raster frame.
+#[cfg(test)]
+fn copy_rgba16f_data(pixels: &[u16]) -> Data {
+    #[cfg(target_endian = "little")]
+    {
+        // SAFETY: every initialized u16 consists of two initialized bytes. u8 has
+        // alignment 1, and the borrowed view lives only until new_copy returns.
+        let bytes = unsafe {
+            std::slice::from_raw_parts(pixels.as_ptr().cast::<u8>(), std::mem::size_of_val(pixels))
+        };
+        Data::new_copy(bytes)
+    }
+    #[cfg(target_endian = "big")]
+    {
+        let bytes: Vec<_> = pixels
+            .iter()
+            .flat_map(|value| value.to_le_bytes())
+            .collect();
+        Data::new_copy(&bytes)
+    }
+}
+
 pub type SkiaObjectTable = ExternalObjectTable<SkiaExternalObject>;
 
 /// One executor-owned object. Metadata is the immutable Engine contract; the payload never enters
@@ -35,6 +58,7 @@ enum SkiaObjectPayload {
     FontBytes(Arc<[u8]>),
     RuntimeShader(Arc<[u8]>),
     Scene3d(Image),
+    Scene3dDof(super::scene3d_dof::Scene3dDofInput),
 }
 
 impl core::fmt::Debug for SkiaExternalObject {
@@ -47,6 +71,7 @@ impl core::fmt::Debug for SkiaExternalObject {
             SkiaObjectPayload::FontBytes(_) => "fontBytes",
             SkiaObjectPayload::RuntimeShader(_) => "runtimeShader",
             SkiaObjectPayload::Scene3d(_) => "scene3d",
+            SkiaObjectPayload::Scene3dDof(_) => "scene3dDof",
         };
         formatter
             .debug_struct("SkiaExternalObject")
@@ -303,6 +328,41 @@ impl SkiaExternalObject {
         })
     }
 
+    pub(crate) fn scene3d_deferred_dof(
+        key: ResourceKey,
+        extent: Extent2d,
+        premul_rgba16f: &[u16],
+        camera_depth: &[f32],
+        focus_distance: f32,
+        max_blur_radius: f32,
+        far: f32,
+    ) -> Result<Self, SkiaObjectError> {
+        if !matches!(key.interpretation, ResourceInterpretation::Scene3d { .. }) {
+            return Err(SkiaObjectError::WrongInterpretation {
+                expected: "scene3d",
+            });
+        }
+        Ok(Self {
+            key,
+            descriptor: ExternalResourceDesc::Scene3d,
+            payload: SkiaObjectPayload::Scene3dDof(super::scene3d_dof::Scene3dDofInput::new(
+                extent,
+                premul_rgba16f,
+                camera_depth,
+                focus_distance,
+                max_blur_radius,
+                far,
+            )?),
+        })
+    }
+
+    pub(crate) fn deferred_scene3d_dof(&self) -> Option<&super::scene3d_dof::Scene3dDofInput> {
+        match &self.payload {
+            SkiaObjectPayload::Scene3dDof(input) => Some(input),
+            _ => None,
+        }
+    }
+
     /// Normalize premultiplied sRGB half-float Scene3D pixels into the working color space.
     pub fn scene3d_rgba16f(
         key: ResourceKey,
@@ -317,7 +377,7 @@ impl SkiaExternalObject {
         let width = usize::try_from(extent.width()).map_err(|_| SkiaObjectError::InvalidExtent)?;
         let height =
             usize::try_from(extent.height()).map_err(|_| SkiaObjectError::InvalidExtent)?;
-        let row_bytes = width.checked_mul(8).ok_or(SkiaObjectError::InvalidExtent)?;
+        width.checked_mul(8).ok_or(SkiaObjectError::InvalidExtent)?;
         if premul_rgba.len()
             != width
                 .checked_mul(height)
@@ -326,11 +386,17 @@ impl SkiaExternalObject {
         {
             return Err(SkiaObjectError::InvalidPixelPayload);
         }
+        let working_info =
+            working_info(extent).map_err(|_| SkiaObjectError::InvalidWorkingPayload)?;
+        let mut surface =
+            raster_surface(&working_info).map_err(|_| SkiaObjectError::InvalidWorkingPayload)?;
+        // Raster surfaces start zeroed. Convert only nonzero source pixels; retain
+        // the full logical extent so later placement and filtering are unchanged.
+        let Some(region) = super::scene3d_region::Region::rgba(premul_rgba, width) else {
+            return Self::scene3d(key, surface.image_snapshot());
+        };
         let input_info = ImageInfo::new(
-            (
-                i32::try_from(extent.width()).map_err(|_| SkiaObjectError::InvalidExtent)?,
-                i32::try_from(extent.height()).map_err(|_| SkiaObjectError::InvalidExtent)?,
-            ),
+            (region.width() as i32, region.height() as i32),
             ColorType::RGBAF16,
             AlphaType::Premul,
             Some(
@@ -338,22 +404,24 @@ impl SkiaExternalObject {
                     .map_err(|_| SkiaObjectError::InvalidInputColorSpace)?,
             ),
         );
-        let bytes = premul_rgba
-            .iter()
-            .flat_map(|value| value.to_le_bytes())
-            .collect::<Vec<_>>();
-        let input = images::raster_from_data(&input_info, Data::new_copy(&bytes), row_bytes)
-            .ok_or(SkiaObjectError::InvalidPixelPayload)?;
-        let working_info =
-            working_info(extent).map_err(|_| SkiaObjectError::InvalidWorkingPayload)?;
-        let mut surface =
-            raster_surface(&working_info).map_err(|_| SkiaObjectError::InvalidWorkingPayload)?;
-        // A same-extent Src draw writes every pixel, alpha included, so no clear is needed.
+        let input = images::raster_from_data(
+            &input_info,
+            region.color_data(premul_rgba, width),
+            region.width() * 8,
+        )
+        .ok_or(SkiaObjectError::InvalidPixelPayload)?;
         let mut paint = Paint::default();
         paint.set_blend_mode(BlendMode::Src);
         surface
             .canvas()
-            .draw_image(&input, (0.0, 0.0), Some(&paint));
+            .draw_image(&input, (region.x0 as f32, region.y0 as f32), Some(&paint));
+        if std::env::var_os("VALLE_PERF_SCENE3D").is_some() {
+            eprintln!(
+                "[valle scene3d-region] cpu-convert pixels={} full={}",
+                region.pixels(),
+                width * height
+            );
+        }
         Self::scene3d(key, surface.image_snapshot())
     }
 
@@ -401,7 +469,8 @@ impl SkiaExternalObject {
             SkiaObjectPayload::Visual(image) | SkiaObjectPayload::Scene3d(image) => Some(image),
             #[cfg(feature = "native")]
             SkiaObjectPayload::DecodedVideo(_) => None,
-            SkiaObjectPayload::DataTexture(_)
+            SkiaObjectPayload::Scene3dDof(_)
+            | SkiaObjectPayload::DataTexture(_)
             | SkiaObjectPayload::FontBytes(_)
             | SkiaObjectPayload::RuntimeShader(_) => None,
         }
@@ -454,6 +523,7 @@ impl SkiaExternalObject {
     #[cfg(feature = "native")]
     pub(crate) fn resident_bytes(&self) -> Option<u64> {
         match &self.payload {
+            SkiaObjectPayload::Scene3dDof(input) => Some(input.resident_bytes()),
             SkiaObjectPayload::Visual(image)
             | SkiaObjectPayload::Scene3d(image)
             | SkiaObjectPayload::DataTexture(image) => {
@@ -637,6 +707,98 @@ pub enum SkiaTargetError {
 mod contract_tests {
     use super::*;
     use valle_engine::resource::ContentDigest;
+
+    #[test]
+    fn compact_scene3d_conversion_matches_full_frame_half_float_bits() {
+        for (width, height) in [(1, 1), (37, 23), (128, 65)] {
+            let extent = Extent2d::new(width, height).unwrap();
+            let key = ResourceKey::new(
+                ContentDigest::of_bytes(b"region"),
+                ResourceInterpretation::Scene3d {
+                    topology_digest: ContentDigest::of_bytes(b"topology"),
+                },
+            );
+            for placement in 0..4 {
+                let mut pixels = vec![0_u16; (width * height * 4) as usize];
+                for y in 0..height {
+                    for x in 0..width {
+                        let covered = match placement {
+                            0 => false,
+                            1 => {
+                                x >= width / 3
+                                    && x < (width * 2 / 3).max(1)
+                                    && y >= height / 3
+                                    && y < (height * 2 / 3).max(1)
+                            }
+                            2 => x + 1 == width || y + 1 == height,
+                            _ => true,
+                        };
+                        if covered {
+                            let color = if (x + y) % 2 == 0 {
+                                [0x3400, 0x3000, 0x3555, 0x3800]
+                            } else {
+                                [0x3bff, 0x0001, 0x3555, 0x3c00]
+                            };
+                            pixels[((y * width + x) * 4) as usize
+                                ..((y * width + x) * 4 + 4) as usize]
+                                .copy_from_slice(&color);
+                        }
+                    }
+                }
+                let input_info = ImageInfo::new(
+                    (width as i32, height as i32),
+                    ColorType::RGBAF16,
+                    AlphaType::Premul,
+                    Some(
+                        input_color_space(valle_engine::resource::ColorDescription::SRGB).unwrap(),
+                    ),
+                );
+                let input = images::raster_from_data(
+                    &input_info,
+                    copy_rgba16f_data(&pixels),
+                    width as usize * 8,
+                )
+                .unwrap();
+                let info = working_info(extent).unwrap();
+                let mut expected = raster_surface(&info).unwrap();
+                let mut paint = Paint::default();
+                paint.set_blend_mode(BlendMode::Src);
+                expected
+                    .canvas()
+                    .draw_image(&input, (0.0, 0.0), Some(&paint));
+                let actual =
+                    SkiaExternalObject::scene3d_rgba16f(key.clone(), extent, &pixels).unwrap();
+                let read = |image: &Image| {
+                    let mut bytes = vec![0; (width * height * 8) as usize];
+                    assert!(image.read_pixels(
+                        &info,
+                        &mut bytes,
+                        width as usize * 8,
+                        (0, 0),
+                        CachingHint::Disallow
+                    ));
+                    bytes
+                };
+                assert_eq!(
+                    read(actual.visual_image().unwrap()),
+                    read(&expected.image_snapshot()),
+                    "{width}x{height}, placement {placement}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn half_float_upload_owns_an_exact_copy_of_the_source() {
+        let data = {
+            let mut pixels = [0, 0x3c00, 0x3555, 0x0001];
+            let data = copy_rgba16f_data(&pixels);
+            pixels.fill(0xffff);
+            data
+        };
+        assert_eq!(data.as_bytes(), &[0, 0, 0, 0x3c, 0x55, 0x35, 1, 0]);
+        assert!(copy_rgba16f_data(&[]).is_empty());
+    }
 
     #[test]
     fn resource_payload_accessors_and_resident_accounting_follow_the_admitted_kind() {

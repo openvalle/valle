@@ -1128,8 +1128,8 @@ pub struct PreparedProgram {
 }
 
 impl PreparedProgram {
-    pub(crate) fn runtime_program(&self) -> Option<&DrawProgram> {
-        self.runtime_program.as_deref()
+    pub(crate) fn runtime_program(&self) -> Option<&Arc<DrawProgram>> {
+        self.runtime_program.as_ref()
     }
 }
 

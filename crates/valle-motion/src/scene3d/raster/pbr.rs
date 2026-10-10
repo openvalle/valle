@@ -16,6 +16,15 @@ impl<'a> Triangle<'a> {
         material: &'a ModelMaterial,
         vertices: [WorldVertex; 3],
     ) -> Self {
+        if material.normal_texture.is_none() {
+            return Self {
+                kind,
+                material,
+                tangent: V3::new(0.0, 0.0, 0.0),
+                bitangent: V3::new(0.0, 0.0, 0.0),
+                has_basis: false,
+            };
+        }
         let e1 = vertices[1].position - vertices[0].position;
         let e2 = vertices[2].position - vertices[0].position;
         let u1 = vertices[1].uv.x - vertices[0].uv.x;
@@ -98,35 +107,54 @@ fn sample(mesh: &PreparedMesh, binding: ModelTextureBinding, uv: V2, d: [f32; 4]
     image.sample(binding, [uv.x, uv.y], lod)
 }
 
-// Isotropic GGX with height-correlated Smith visibility and Schlick Fresnel.
-fn direct(base: [f32; 3], metallic: f32, roughness: f32, n: V3, v: V3, l: V3) -> [f32; 3] {
-    let nl = n.dot(l).max(0.0);
-    let nv = n.dot(v).max(0.0);
-    if nl == 0.0 || nv == 0.0 {
-        return [0.0; 3];
+// Isotropic GGX. Material/view terms are shared by every light at this pixel;
+// keep their original operation order to preserve the reference f32 results.
+struct DirectBrdf {
+    nv: f32,
+    a2: f32,
+    view_visibility: f32,
+    diffuse: [f32; 3],
+    f0: [f32; 3],
+    compensation: [f32; 3],
+}
+
+impl DirectBrdf {
+    fn new(base: [f32; 3], metallic: f32, roughness: f32, nv: f32, fab: [f32; 2]) -> Self {
+        let alpha = roughness * roughness;
+        let a2 = alpha * alpha;
+        let energy = (fab[0] + fab[1]).max(1e-6);
+        let f0 = base.map(|base| 0.04 * (1.0 - metallic) + base * metallic);
+        Self {
+            nv,
+            a2,
+            view_visibility: libm::sqrtf(nv * nv * (1.0 - a2) + a2),
+            diffuse: base.map(|base| base * (1.0 - metallic)),
+            f0,
+            compensation: f0.map(|f0| 1.0 + f0 * (1.0 / energy - 1.0)),
+        }
     }
-    let h = (v + l).normalized();
-    let nh = n.dot(h).max(0.0);
-    let vh = v.dot(h).clamp(0.0, 1.0);
-    let alpha = roughness * roughness;
-    let a2 = alpha * alpha;
-    let denom = nh * nh * (a2 - 1.0) + 1.0;
-    let distribution = a2 / (core::f32::consts::PI * denom * denom);
-    let visibility = 0.5
-        / (nl * libm::sqrtf(nv * nv * (1.0 - a2) + a2)
-            + nv * libm::sqrtf(nl * nl * (1.0 - a2) + a2))
-        .max(1.0e-8);
-    let fresnel = libm::powf(1.0 - vh, 5.0);
-    let fab = super::lighting::dfg(roughness, nv);
-    let energy = (fab[0] + fab[1]).max(1e-6);
-    std::array::from_fn(|i| {
-        let f0 = 0.04 * (1.0 - metallic) + base[i] * metallic;
-        let f = f0 + (1.0 - f0) * fresnel;
-        let compensation = 1.0 + f0 * (1.0 / energy - 1.0);
-        let dielectric_fresnel = 0.04 + 0.96 * fresnel;
-        nl * (base[i] * (1.0 - metallic) * (1.0 - dielectric_fresnel) / core::f32::consts::PI
-            + f * distribution * visibility * compensation)
-    })
+
+    fn reflect(&self, n: V3, v: V3, l: V3) -> [f32; 3] {
+        let nl = n.dot(l).max(0.0);
+        if nl == 0.0 || self.nv == 0.0 {
+            return [0.0; 3];
+        }
+        let h = (v + l).normalized();
+        let nh = n.dot(h).max(0.0);
+        let vh = v.dot(h).clamp(0.0, 1.0);
+        let denom = nh * nh * (self.a2 - 1.0) + 1.0;
+        let distribution = self.a2 / (core::f32::consts::PI * denom * denom);
+        let visibility = 0.5
+            / (nl * self.view_visibility
+                + self.nv * libm::sqrtf(nl * nl * (1.0 - self.a2) + self.a2))
+            .max(1.0e-8);
+        let (dielectric_fresnel, fresnel) = super::fresnel::coefficients(vh, self.f0);
+        std::array::from_fn(|i| {
+            let f = fresnel[i];
+            nl * (self.diffuse[i] * (1.0 - dielectric_fresnel) / core::f32::consts::PI
+                + f * distribution * visibility * self.compensation[i])
+        })
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -159,8 +187,13 @@ pub(super) fn shade(
         .map(|b| 1.0 + m.occlusion_strength * (tex(b)[0] - 1.0))
         .unwrap_or(1.0);
     let emission = m.emissive_texture.map(tex).unwrap_or([1.0; 4]);
+    let fab = if triangle.kind == MaterialKind::Pbr {
+        super::lighting::dfg(roughness, n.dot(v).clamp(0.0, 1.0))
+    } else {
+        [0.0; 2]
+    };
     let mut radiance = match triangle.kind {
-        MaterialKind::Pbr => indirect(base, metallic, roughness, n, v, ao, lights),
+        MaterialKind::Pbr => indirect(base, metallic, roughness, n, v, ao, lights, fab),
         MaterialKind::Lambert => {
             let factor = lights.factor(n, ao, position);
             std::array::from_fn(|i| base[i] * factor[i])
@@ -170,9 +203,14 @@ pub(super) fn shade(
     for i in 0..3 {
         radiance[i] += m.emissive[i] * m.emissive_intensity * emission[i];
     }
-    if triangle.kind == MaterialKind::Pbr {
+    if triangle.kind == MaterialKind::Pbr && !lights.directional.is_empty() {
+        let brdf = DirectBrdf::new(base, metallic, roughness, n.dot(v).max(0.0), fab);
         for (index, &(direction, intensity)) in lights.directional.iter().enumerate() {
-            let reflected = direct(base, metallic, roughness, n, v, direction);
+            let reflected = brdf.reflect(n, v, direction);
+            // A back-facing light contributes zero regardless of its shadow map.
+            if reflected == [0.0; 3] {
+                continue;
+            }
             let visibility = lights.shadow_visibility(index, position, n);
             for i in 0..3 {
                 radiance[i] += reflected[i] * intensity[i] * visibility;
@@ -199,6 +237,7 @@ fn scattering(f0: f32, fab: [f32; 2]) -> [f32; 2] {
     ]
 }
 
+#[allow(clippy::too_many_arguments)]
 fn indirect(
     base: [f32; 3],
     metallic: f32,
@@ -207,9 +246,9 @@ fn indirect(
     v: V3,
     ao: f32,
     lights: &Lights,
+    fab: [f32; 2],
 ) -> [f32; 3] {
     let nv = n.dot(v).clamp(0.0, 1.0);
-    let fab = super::lighting::dfg(roughness, nv);
     let dielectric = scattering(0.04, fab);
     let diffuse_energy = 1.0 - dielectric[0] - dielectric[1];
     let mut irradiance = lights.ambient.map(|v| v / core::f32::consts::PI);
@@ -245,8 +284,45 @@ fn indirect(
 }
 
 #[cfg(test)]
+#[path = "pbr_reference.rs"]
+mod reference;
+
+#[cfg(test)]
 mod tests {
     use super::*;
+
+    fn direct(base: [f32; 3], metallic: f32, roughness: f32, n: V3, v: V3, l: V3) -> [f32; 3] {
+        let nv = n.dot(v).max(0.0);
+        DirectBrdf::new(
+            base,
+            metallic,
+            roughness,
+            nv,
+            super::super::lighting::dfg(roughness, nv),
+        )
+        .reflect(n, v, l)
+    }
+
+    #[test]
+    fn shared_brdf_terms_match_reference_before_color_quantization() {
+        let mut seed = 41_u32;
+        let mut next = || {
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            (seed >> 8) as f32 / 16_777_215.0
+        };
+        for _ in 0..10_000 {
+            let base = [next(), next(), next()];
+            let metallic = next();
+            let roughness = next().max(0.0525);
+            let [n, v, l] = std::array::from_fn(|_| {
+                V3::new(next() * 2.0 - 1.0, next() * 2.0 - 1.0, next() * 2.0 - 1.0).normalized()
+            });
+            assert_eq!(
+                direct(base, metallic, roughness, n, v, l).map(f32::to_bits),
+                reference::direct(base, metallic, roughness, n, v, l).map(f32::to_bits),
+            );
+        }
+    }
 
     #[test]
     fn ggx_known_normal_incidence_and_grazing_are_finite() {

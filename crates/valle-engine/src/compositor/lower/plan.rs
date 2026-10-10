@@ -6,7 +6,11 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use valle_draw::{Rect, program::BlendMode, requirements::DrawRequirements};
+use valle_draw::{
+    Rect,
+    program::{BlendMode, DrawProgram},
+    requirements::DrawRequirements,
+};
 use valle_timeline::internal::RenderId;
 
 use crate::{
@@ -78,6 +82,10 @@ pub struct PlanProgram {
     frame: OnceLock<PlanProgramFrame>,
     #[serde(skip)]
     packed: OnceLock<Vec<u8>>,
+    /// The producer's immutable validated arena, retained only by in-process frame packets.
+    /// Wire decoding cannot supply this proof and must admit its own packed DrawProgram.
+    #[serde(skip)]
+    runtime_program: Option<Arc<DrawProgram>>,
     #[serde(skip)]
     structure_hash: OnceLock<ContentDigest>,
     #[serde(skip)]
@@ -243,6 +251,7 @@ impl PlanProgram {
             frame_patch,
             frame: OnceLock::from(frame),
             packed: OnceLock::from(packed),
+            runtime_program: None,
             structure_hash: OnceLock::from(structure_hash),
             admitted_baseline: OnceLock::from(PlanProgramAdmissionKey {
                 content: baseline_content_hash,
@@ -267,6 +276,7 @@ impl PlanProgram {
         content_hash: ContentDigest,
         viewport: Rect,
         packed: Vec<u8>,
+        runtime_program: Arc<DrawProgram>,
         requirements: DrawRequirements,
         resources: PlanProgramResources,
         destination_uses: Vec<PreparedDestinationUse>,
@@ -312,6 +322,7 @@ impl PlanProgram {
             frame_patch: Vec::new(),
             frame: OnceLock::from(frame),
             packed: OnceLock::from(packed),
+            runtime_program: Some(runtime_program),
             structure_hash: OnceLock::from(structure_hash),
             admitted_baseline: OnceLock::from(PlanProgramAdmissionKey {
                 content: baseline_content_hash,
@@ -383,6 +394,7 @@ impl PlanProgram {
             frame_patch,
             frame: OnceLock::from(frame),
             packed: OnceLock::from(packed),
+            runtime_program: None,
             structure_hash: OnceLock::from(structure_hash),
             admitted_baseline: OnceLock::from(PlanProgramAdmissionKey {
                 content: layout.baseline_content_hash.clone(),
@@ -407,6 +419,7 @@ impl PlanProgram {
         content_hash: ContentDigest,
         viewport: Rect,
         packed: Vec<u8>,
+        runtime_program: Arc<DrawProgram>,
         requirements: DrawRequirements,
         resources: PlanProgramResources,
         destination_uses: Vec<PreparedDestinationUse>,
@@ -425,12 +438,13 @@ impl PlanProgram {
             local_plan,
             local_schedule,
         };
-        Self::from_constructed_frame(content_hash, packed, frame, layout)
+        Self::from_constructed_frame(content_hash, packed, runtime_program, frame, layout)
     }
 
     fn from_constructed_frame(
         content_hash: ContentDigest,
         packed: Vec<u8>,
+        runtime_program: Arc<DrawProgram>,
         frame: PlanProgramFrame,
         layout: &PlanProgramLayout,
     ) -> Result<Self, PlanValidationError> {
@@ -462,6 +476,7 @@ impl PlanProgram {
             frame_patch: Vec::new(),
             frame: OnceLock::from(frame),
             packed: OnceLock::from(packed),
+            runtime_program: Some(runtime_program),
             structure_hash: OnceLock::from(layout.structure_hash.clone()),
             admitted_baseline: OnceLock::from(PlanProgramAdmissionKey {
                 content: layout.baseline_content_hash.clone(),
@@ -482,6 +497,7 @@ impl PlanProgram {
                 || !self.frame_patch.is_empty()
                 || self.frame.get().is_none()
                 || self.packed.get().is_none()
+                || self.runtime_program.is_none()
                 || self.structure_hash.get().is_none()
                 || self.admitted_baseline.get().is_none()
                 || self.frame_hash != self.content_hash
@@ -641,6 +657,7 @@ impl PlanProgram {
             }),
             initial_layout: None,
             constructed: false,
+            runtime_program: self.runtime_program.clone(),
         })
     }
 
@@ -656,7 +673,13 @@ impl PlanProgram {
             .frame
             .into_inner()
             .ok_or_else(|| invalid("program.frame", "frame program has not been admitted"))?;
-        Self::from_constructed_frame(self.content_hash, packed, frame, layout)
+        let runtime_program = self.runtime_program.ok_or_else(|| {
+            invalid(
+                "program.constructed",
+                "validated DrawProgram arena is absent",
+            )
+        })?;
+        Self::from_constructed_frame(self.content_hash, packed, runtime_program, frame, layout)
     }
 
     pub const fn frame_id(&self) -> ProgramId {
@@ -675,6 +698,12 @@ impl PlanProgram {
         self.packed
             .get()
             .expect("template admission reconstructs every frame DrawProgram")
+    }
+
+    /// Shares the exact validated arena produced by trusted in-process lowering. Deserialized
+    /// programs return `None`; executors must independently decode and validate their bytes.
+    pub fn runtime_program(&self) -> Option<&Arc<DrawProgram>> {
+        self.runtime_program.as_ref()
     }
 
     pub fn local_plan(&self) -> &ProgramPlan {
@@ -736,6 +765,7 @@ impl TryFrom<PlanProgramWire> for PlanProgram {
             frame_patch: value.frame_patch,
             frame: OnceLock::new(),
             packed: OnceLock::new(),
+            runtime_program: None,
             structure_hash: OnceLock::new(),
             admitted_baseline: OnceLock::new(),
             initial_layout: None,
@@ -3550,4 +3580,84 @@ pub enum PlanValidationError {
     Binding(#[from] BindingContractError),
     #[error(transparent)]
     Id(#[from] PlanIdError),
+}
+
+#[cfg(test)]
+mod arena_tests {
+    use super::*;
+    use valle_draw::program::{
+        DrawProgramBuilder, FillRule, LinearColor, Node, Paint, PathData, PathNode, PathVerb,
+    };
+
+    fn constructed_program() -> (Arc<DrawProgram>, PlanProgram) {
+        let mut builder = DrawProgramBuilder::new(Rect::new(0.0, 0.0, 32.0, 32.0));
+        let path = builder.push_path(PathData {
+            verbs: vec![
+                PathVerb::MoveTo,
+                PathVerb::LineTo,
+                PathVerb::LineTo,
+                PathVerb::Close,
+            ],
+            points: vec![[2.0, 3.0], [21.0, 4.0], [9.0, 25.0]],
+        });
+        let paint = builder.push_paint(Paint::Solid(LinearColor::new(0.5, 0.25, 0.1, 1.0)));
+        let root = builder.push_node(Node::Path(PathNode {
+            path,
+            fill_rule: FillRule::NonZero,
+            fill: Some(paint),
+            stroke: None,
+        }));
+        builder.add_root(root);
+        let arena = Arc::new(builder.finish().unwrap());
+        let packed = arena.packed_bytes().unwrap();
+        let local_plan = ProgramPlan::derive(&arena).unwrap();
+        let local_schedule = ProgramSchedule::derive(&local_plan).unwrap();
+        let program = PlanProgram::from_lowered_constructed(
+            ProgramId::try_from(1).unwrap(),
+            PreparedProgramKind::Motion,
+            "visual[0].program".into(),
+            ContentDigest::of_bytes(&packed),
+            arena.viewport(),
+            packed,
+            Arc::clone(&arena),
+            arena.requirements().clone(),
+            PlanProgramResources::default(),
+            Vec::new(),
+            local_plan,
+            local_schedule,
+        )
+        .unwrap();
+        (arena, program)
+    }
+
+    #[test]
+    fn constructed_program_shares_its_arena_through_template_attachment() {
+        let (arena, mut program) = constructed_program();
+        assert!(Arc::ptr_eq(&arena, program.runtime_program().unwrap()));
+        let cloned = program.clone();
+        assert!(Arc::ptr_eq(&arena, cloned.runtime_program().unwrap()));
+        let layout = program.take_initial_layout().unwrap();
+        let attached = program.into_constructed(&layout).unwrap();
+        attached.admit_layout(&layout).unwrap();
+        assert!(Arc::ptr_eq(&arena, attached.runtime_program().unwrap()));
+        assert_eq!(arena.packed_bytes().unwrap(), attached.packed());
+    }
+
+    #[test]
+    fn wire_program_cannot_inherit_the_in_process_arena_or_bypass_admission() {
+        let (arena, mut program) = constructed_program();
+        let layout = program.take_initial_layout().unwrap();
+        let wire = serde_json::to_value(program.rebase(&layout).unwrap()).unwrap();
+        let decoded: PlanProgram = serde_json::from_value(wire.clone()).unwrap();
+        assert!(decoded.runtime_program().is_none());
+        decoded.admit_layout(&layout).unwrap();
+        assert!(decoded.runtime_program().is_none());
+        assert_eq!(*arena, DrawProgram::from_packed(decoded.packed()).unwrap());
+
+        let mut tampered = wire;
+        tampered["contentHash"] = serde_json::to_value(ContentDigest::from_bytes([0; 32])).unwrap();
+        let tampered: PlanProgram = serde_json::from_value(tampered).unwrap();
+        assert!(tampered.runtime_program().is_none());
+        assert!(tampered.admit_layout(&layout).is_err());
+    }
 }

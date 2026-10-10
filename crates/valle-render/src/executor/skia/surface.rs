@@ -960,10 +960,15 @@ impl SurfaceArena {
             if submitted.completion.is_ready() {
                 break;
             }
-            if spins < 64 {
+            if spins < 8 {
                 std::hint::spin_loop();
             } else {
-                std::thread::yield_now();
+                // Ganesh retires Metal buffers and invokes the finished callback
+                // in check_async_work_completion, so this thread must keep polling.
+                // Yielding continuously burns a CPU core during a GPU backlog.
+                // Brief bounded sleeps retain prompt delivery without busy waiting.
+                let micros = 50_u64 << (spins - 8).min(2);
+                std::thread::sleep(std::time::Duration::from_micros(micros));
             }
             spins = spins.saturating_add(1);
         }

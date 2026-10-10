@@ -771,6 +771,82 @@ fn blur_9<const CHANNELS: usize>(source: &Level<CHANNELS>, spread: f64) -> Level
     next
 }
 
+const UPSAMPLE_TILE_WIDTH: usize = 8;
+const UPSAMPLE_TILE_HEIGHT: usize = 4;
+
+struct UpsampleTiles {
+    columns: usize,
+    active: Vec<bool>,
+}
+
+// The entire support must be zero, including bilinear neighbours and every tent
+// tap. Occupied tiles retain the reference summation and F16 rounding order.
+fn upsample_tiles<const CHANNELS: usize>(
+    source: &Level<CHANNELS>,
+    columns: &[[LinearAxis; 3]],
+    lines: &[[LinearAxis; 3]],
+) -> Option<UpsampleTiles> {
+    if source.pixels.len() < 16_384 {
+        return None;
+    }
+    let stride = source.width.div_ceil(64);
+    let mut occupied = vec![0_u64; stride * source.height];
+    let mut count = 0;
+    for (y, row) in source.pixels.chunks(source.width).enumerate() {
+        for (x, pixel) in row.iter().enumerate() {
+            if pixel.iter().any(|channel| *channel != 0.0) {
+                occupied[y * stride + x / 64] |= 1_u64 << (x % 64);
+                count += 1;
+                // Avoid building output tiles for dense images.
+                if count > source.pixels.len() / 2 {
+                    return None;
+                }
+            }
+        }
+    }
+    let span = |axes: &[[LinearAxis; 3]]| {
+        axes.iter()
+            .flat_map(|taps| taps.iter())
+            .flat_map(|axis| axis.indices.into_iter().flatten())
+            .fold(None, |range: Option<(usize, usize)>, index| {
+                Some(range.map_or((index, index), |(lo, hi)| (lo.min(index), hi.max(index))))
+            })
+    };
+    let xs = columns
+        .chunks(UPSAMPLE_TILE_WIDTH)
+        .map(span)
+        .collect::<Vec<_>>();
+    let ys = lines
+        .chunks(UPSAMPLE_TILE_HEIGHT)
+        .map(span)
+        .collect::<Vec<_>>();
+    let mut active = vec![false; xs.len() * ys.len()];
+    for (tile_y, yrange) in ys.into_iter().enumerate() {
+        let Some((top, bottom)) = yrange else {
+            continue;
+        };
+        for (tile_x, xrange) in xs.iter().copied().enumerate() {
+            let Some((left, right)) = xrange else {
+                continue;
+            };
+            let first_word = left / 64;
+            let last_word = right / 64;
+            active[tile_y * xs.len() + tile_x] = (top..=bottom).any(|y| {
+                (first_word..=last_word).any(|word| {
+                    let start = if word == first_word { left % 64 } else { 0 };
+                    let end = if word == last_word { right % 64 } else { 63 };
+                    let mask = (u64::MAX << start) & (u64::MAX >> (63 - end));
+                    occupied[y * stride + word] & mask != 0
+                })
+            });
+        }
+    }
+    Some(UpsampleTiles {
+        columns: xs.len(),
+        active,
+    })
+}
+
 fn upsample_9<const CHANNELS: usize>(
     source: &Level<CHANNELS>,
     width: usize,
@@ -790,19 +866,28 @@ fn upsample_9<const CHANNELS: usize>(
     };
     let columns = axes(width, source.width);
     let lines = axes(height, source.height);
+    let tiles = upsample_tiles(source, &columns, &lines);
     fill_rows(&mut next, |start_y, rows| {
         for (row_index, row) in rows.chunks_mut(width).enumerate() {
             let y = start_y + row_index;
-            for (x, out) in row.iter_mut().enumerate() {
-                let mut sum = [0.0_f64; CHANNELS];
-                for (dx, dy, weight) in TENT {
-                    let sample =
-                        source.bilinear(columns[x][(dx + 1) as usize], lines[y][(dy + 1) as usize]);
-                    for (acc, value) in sum.iter_mut().zip(sample) {
-                        *acc += weight * value;
-                    }
+            for (tile_x, tile) in row.chunks_mut(UPSAMPLE_TILE_WIDTH).enumerate() {
+                if tiles.as_ref().is_some_and(|tiles| {
+                    !tiles.active[(y / UPSAMPLE_TILE_HEIGHT) * tiles.columns + tile_x]
+                }) {
+                    continue;
                 }
-                *out = sum.map(|channel| quantize_half(channel / 16.0));
+                for (offset, out) in tile.iter_mut().enumerate() {
+                    let x = tile_x * UPSAMPLE_TILE_WIDTH + offset;
+                    let mut sum = [0.0_f64; CHANNELS];
+                    for (dx, dy, weight) in TENT {
+                        let sample = source
+                            .bilinear(columns[x][(dx + 1) as usize], lines[y][(dy + 1) as usize]);
+                        for (acc, value) in sum.iter_mut().zip(sample) {
+                            *acc += weight * value;
+                        }
+                    }
+                    *out = sum.map(|channel| quantize_half(channel / 16.0));
+                }
             }
         }
     });
@@ -819,8 +904,22 @@ pub(crate) fn encode_output(pixels: &[[f32; 4]]) -> Vec<u8> {
     bytes
 }
 
+#[inline]
 pub(crate) fn quantize_half(value: f64) -> f32 {
-    half_to_f32(f32_to_half(value as f32))
+    let value = value as f32;
+    let bits = value.to_bits();
+    let magnitude = bits & 0x7fff_ffff;
+    // Values through the halfway point below the smallest half subnormal round to
+    // signed zero. Normal half values only need their low 13 mantissa bits rounded
+    // away; keep the f32 exponent rather than encoding and decoding it again.
+    if magnitude <= 0x3300_0000 {
+        return f32::from_bits(bits & 0x8000_0000);
+    }
+    if (0x3880_0000..0x477f_f000).contains(&magnitude) {
+        return f32::from_bits((bits + 0x0fff + ((bits >> 13) & 1)) & !0x1fff);
+    }
+    // Preserve the reference handling of half subnormals, overflow, infinities and NaNs.
+    half_to_f32(f32_to_half(value))
 }
 
 pub(crate) fn half_to_f32(bits: u16) -> f32 {
@@ -877,6 +976,124 @@ fn round_even(value: u32, shift: u32) -> u32 {
 mod tests {
     use super::*;
     use sha2::{Digest, Sha256};
+
+    #[test]
+    fn sparse_upsampling_preserves_every_reference_f16_sample() {
+        fn check<const CHANNELS: usize>(spread: f64, dense: bool) {
+            let mut source = Level::<CHANNELS>::empty(129, 131);
+            for (index, pixel) in source.pixels.iter_mut().enumerate() {
+                for (channel, value) in pixel.iter_mut().enumerate() {
+                    if dense || index % 37 == 0 || index == 129 * 131 - 1 {
+                        *value = quantize_half((index % 29) as f64 / 16.0 - channel as f64 * 0.75);
+                    } else if index % 13 == 0 {
+                        *value = -0.0;
+                    }
+                }
+            }
+            let (width, height) = (257, 263);
+            let result = upsample_9(&source, width, height, spread);
+            let columns = (0..width)
+                .map(|x| {
+                    [-1, 0, 1].map(|tap| {
+                        LinearAxis::new(
+                            (x as f64 + 0.5) * source.width as f64 / width as f64 - 0.5
+                                + f64::from(tap) * 0.5 * spread,
+                            source.width,
+                        )
+                    })
+                })
+                .collect::<Vec<_>>();
+            let lines = (0..height)
+                .map(|y| {
+                    [-1, 0, 1].map(|tap| {
+                        LinearAxis::new(
+                            (y as f64 + 0.5) * source.height as f64 / height as f64 - 0.5
+                                + f64::from(tap) * 0.5 * spread,
+                            source.height,
+                        )
+                    })
+                })
+                .collect::<Vec<_>>();
+            let mask = upsample_tiles(&source, &columns, &lines);
+            if dense {
+                assert!(mask.is_none());
+            } else if spread < 1.0 {
+                assert!(mask.as_ref().unwrap().active.iter().any(|active| !active));
+            }
+            for y in 0..height {
+                for x in 0..width {
+                    let cx = (x as f64 + 0.5) * source.width as f64 / width as f64 - 0.5;
+                    let cy = (y as f64 + 0.5) * source.height as f64 / height as f64 - 0.5;
+                    let mut sum = [0.0; CHANNELS];
+                    for (dx, dy, weight) in TENT {
+                        let sample = source.bilinear(
+                            LinearAxis::new(cx + f64::from(dx) * 0.5 * spread, source.width),
+                            LinearAxis::new(cy + f64::from(dy) * 0.5 * spread, source.height),
+                        );
+                        for (acc, value) in sum.iter_mut().zip(sample) {
+                            *acc += weight * value;
+                        }
+                    }
+                    let expected = sum.map(|value| quantize_half(value / 16.0));
+                    assert_eq!(
+                        result.pixels[y * width + x].map(f32::to_bits),
+                        expected.map(f32::to_bits),
+                        "sample ({x},{y}), spread={spread}, dense={dense}"
+                    );
+                }
+            }
+        }
+        for spread in [0.125, 5.0 / 24.0, 0.999, 2.625, 6.25] {
+            check::<1>(spread, false);
+            check::<3>(spread, false);
+        }
+        check::<1>(0.125, true);
+        check::<3>(2.625, true);
+    }
+
+    #[test]
+    fn half_quantization_fast_path_preserves_reference_rounding() {
+        let check = |value: f64| {
+            assert_eq!(
+                quantize_half(value).to_bits(),
+                half_to_f32(f32_to_half(value as f32)).to_bits(),
+                "input {value:?} ({:016x})",
+                value.to_bits(),
+            );
+        };
+        // Check every finite half value and both sides of every rounding midpoint,
+        // including ties with even/odd mantissas and exponent/subnormal boundaries.
+        for bits in 0..0x7bff_u16 {
+            let lower = half_to_f32(bits);
+            let upper = half_to_f32(bits + 1);
+            let middle = (f64::from(lower) + f64::from(upper)) * 0.5;
+            for sign in [-1.0, 1.0] {
+                check(sign * f64::from(lower));
+                check(sign * middle);
+                let middle_bits = (middle as f32).to_bits();
+                check(sign * f64::from(f32::from_bits(middle_bits - 1)));
+                check(sign * f64::from(f32::from_bits(middle_bits + 1)));
+            }
+        }
+        for value in [
+            0.0,
+            -0.0,
+            65504.0,
+            65519.0,
+            65520.0,
+            65536.0,
+            f64::INFINITY,
+            f64::NAN,
+        ] {
+            check(value);
+            check(-value);
+        }
+        let mut bits = 0_u32;
+        for _ in 0..1_000_000 {
+            bits = bits.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            check(f64::from(f32::from_bits(bits)));
+        }
+    }
 
     #[test]
     fn glow_and_bloom_preserve_reference_f16_bytes() {

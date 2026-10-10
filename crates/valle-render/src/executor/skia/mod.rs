@@ -17,6 +17,8 @@ mod lens_gpu;
 mod output;
 mod pass;
 mod radial_gpu;
+mod scene3d_dof;
+mod scene3d_region;
 mod surface;
 mod target;
 

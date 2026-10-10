@@ -1,6 +1,9 @@
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::{BTreeMap, BTreeSet, VecDeque},
+    sync::Arc,
+};
 
-use skia_safe::{FontMgr, RuntimeEffect, Typeface};
+use skia_safe::{FontMgr, Image, Rect as SkRect, RuntimeEffect, Typeface};
 use valle_draw::program::DrawProgram;
 use valle_engine::{
     compositor::{
@@ -86,6 +89,103 @@ impl RasterLayerCache {
             self.images.values.len(),
             self.images.weight,
         )
+    }
+}
+
+// GPU pages belong to one executor/context. Store pixels before the leaf's group
+// opacity, so an Echo or a fade can reuse coverage without merging alpha stages.
+const SMALL_OPACITY_CACHE_BYTES: usize = 32 * 1024 * 1024;
+const SMALL_OPACITY_CACHE_ENTRIES: usize = 32_768;
+
+pub(crate) struct SmallOpacityCache {
+    layers: BTreeMap<ContentDigest, (Image, SkRect)>,
+    pages: VecDeque<(Image, Vec<ContentDigest>)>,
+    seen: BTreeSet<ContentDigest>,
+    seen_order: VecDeque<ContentDigest>,
+    bytes: usize,
+    byte_limit: usize,
+}
+
+impl Default for SmallOpacityCache {
+    fn default() -> Self {
+        Self {
+            layers: BTreeMap::new(),
+            pages: VecDeque::new(),
+            seen: BTreeSet::new(),
+            seen_order: VecDeque::new(),
+            bytes: 0,
+            byte_limit: SMALL_OPACITY_CACHE_BYTES,
+        }
+    }
+}
+
+impl std::fmt::Debug for SmallOpacityCache {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("SmallOpacityCache")
+            .field("entries", &self.layers.len())
+            .field("bytes", &self.bytes)
+            .finish()
+    }
+}
+
+impl SmallOpacityCache {
+    // First observe reuse. Unique moving shapes retain ordinary saveLayer rendering
+    // instead of paying for an atlas that will never be sampled on a later frame.
+    pub(crate) fn observe(&mut self, keys: &[ContentDigest]) -> bool {
+        let repeated = keys
+            .iter()
+            .filter(|key| self.seen.contains(key) || self.layers.contains_key(key))
+            .count();
+        for &key in keys {
+            if self.seen.insert(key) {
+                self.seen_order.push_back(key);
+            }
+        }
+        while self.seen.len() > SMALL_OPACITY_CACHE_ENTRIES {
+            self.seen.remove(&self.seen_order.pop_front().unwrap());
+        }
+        !keys.is_empty() && repeated >= keys.len().div_ceil(4)
+    }
+
+    pub(crate) fn get(&self, key: &ContentDigest) -> Option<&(Image, SkRect)> {
+        self.layers.get(key)
+    }
+
+    pub(crate) fn insert_page(&mut self, image: Image, entries: Vec<(ContentDigest, SkRect)>) {
+        self.bytes += image.width() as usize * image.height() as usize * 8;
+        let mut keys = Vec::with_capacity(entries.len());
+        for (key, rect) in entries {
+            keys.push(key);
+            self.layers.insert(key, (image.clone(), rect));
+        }
+        self.pages.push_back((image, keys));
+        // Retire complete pages; counting only small occupied rectangles would
+        // undercount the GPU allocation retained by their shared image.
+        while self.bytes > self.byte_limit || self.layers.len() > SMALL_OPACITY_CACHE_ENTRIES {
+            let (image, keys) = self.pages.pop_front().unwrap();
+            self.bytes -= image.width() as usize * image.height() as usize * 8;
+            for key in keys {
+                if self
+                    .layers
+                    .get(&key)
+                    .is_some_and(|(value, _)| value.unique_id() == image.unique_id())
+                {
+                    self.layers.remove(&key);
+                }
+            }
+        }
+    }
+
+    pub(crate) fn bytes(&self) -> usize {
+        self.bytes
+    }
+    pub(crate) fn clear(&mut self) {
+        self.layers.clear();
+        self.pages.clear();
+        self.seen.clear();
+        self.seen_order.clear();
+        self.bytes = 0;
     }
 }
 
@@ -205,6 +305,7 @@ pub(crate) struct BackendCaches {
     shaders: BoundedCache<ResourceKey, Arc<RuntimeEffect>>,
     counters: BackendCacheCounters,
     font_manager: FontMgr,
+    pub(crate) opacity_layers: Arc<std::sync::Mutex<SmallOpacityCache>>,
 }
 
 impl BackendCaches {
@@ -215,6 +316,7 @@ impl BackendCaches {
             shaders: BoundedCache::new(SHADER_CACHE_LIMIT),
             counters: BackendCacheCounters::default(),
             font_manager: FontMgr::default(),
+            opacity_layers: Default::default(),
         }
     }
 
@@ -234,10 +336,16 @@ impl BackendCaches {
         }
 
         self.counters.program_misses = self.counters.program_misses.saturating_add(1);
-        let program = Arc::new(
-            DrawProgram::from_packed(plan.packed())
-                .map_err(|error| DrawError::ProgramDecode(error.to_string()))?,
-        );
+        // Native lowering already holds this frame's validated arena. Preserve its identity
+        // instead of repeating packed JSON decode, geometry derivation, and canonical encoding
+        // on the ordered GPU execution thread. Wire programs retain independent admission.
+        let program = match plan.runtime_program() {
+            Some(program) => Arc::clone(program),
+            None => Arc::new(
+                DrawProgram::from_packed(plan.packed())
+                    .map_err(|error| DrawError::ProgramDecode(error.to_string()))?,
+            ),
+        };
         // Charge the packed payload plus decoded node/geometry slots. This is a bounded
         // retained-program cost, not an assertion about allocator or process RSS.
         let weight = plan
@@ -337,6 +445,65 @@ impl BackendCaches {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn opacity_cache_observes_reuse_and_bounds_its_history() {
+        let key = |index: u32| {
+            let mut bytes = [0; 32];
+            bytes[..4].copy_from_slice(&index.to_le_bytes());
+            ContentDigest::from_bytes(bytes)
+        };
+        let mut cache = SmallOpacityCache::default();
+        assert!(!cache.observe(&[key(0)]));
+        assert!(cache.observe(&[key(0)]));
+        assert!(!cache.observe(&[key(1)]));
+        let unique = (2..SMALL_OPACITY_CACHE_ENTRIES as u32 + 4)
+            .map(key)
+            .collect::<Vec<_>>();
+        assert!(!cache.observe(&unique));
+        assert_eq!(cache.seen.len(), SMALL_OPACITY_CACHE_ENTRIES);
+        assert_eq!(cache.seen_order.len(), SMALL_OPACITY_CACHE_ENTRIES);
+        assert!(!cache.seen.contains(&key(0)));
+        assert!(cache.observe(&unique[unique.len() - 4..]));
+        cache.clear();
+        assert!(!cache.observe(&unique[unique.len() - 4..]));
+    }
+
+    #[test]
+    fn opacity_cache_retires_whole_pages_without_removing_newer_entries() {
+        let image = |size| {
+            let info = skia_safe::ImageInfo::new(
+                (size, size),
+                skia_safe::ColorType::RGBAF16,
+                skia_safe::AlphaType::Premul,
+                None,
+            );
+            skia_safe::surfaces::raster(&info, None, None)
+                .unwrap()
+                .image_snapshot()
+        };
+        let a = ContentDigest::of_bytes(b"a");
+        let b = ContentDigest::of_bytes(b"b");
+        let c = ContentDigest::of_bytes(b"c");
+        let rect = SkRect::from_wh(1.0, 1.0);
+        let mut cache = SmallOpacityCache {
+            byte_limit: 64,
+            ..SmallOpacityCache::default()
+        };
+        cache.insert_page(image(2), vec![(a, rect), (b, rect)]);
+        let newer = image(2);
+        cache.insert_page(newer.clone(), vec![(a, rect)]);
+        cache.insert_page(image(2), vec![(c, rect)]);
+        assert_eq!(cache.bytes(), 64);
+        assert!(cache.get(&b).is_none());
+        assert_eq!(cache.get(&a).unwrap().0.unique_id(), newer.unique_id());
+        assert!(cache.get(&c).is_some());
+        // Charge the full page, even though its only occupied rectangle is 1x1.
+        cache.insert_page(image(4), vec![(a, rect)]);
+        assert_eq!(cache.bytes(), 0);
+        assert!(cache.layers.is_empty());
+        assert!(cache.pages.is_empty());
+    }
 
     #[test]
     fn byte_budget_evicts_cold_entries_and_bypasses_oversized_programs() {

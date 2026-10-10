@@ -9,6 +9,8 @@ mod audio;
 #[cfg(feature = "native")]
 mod delivery;
 mod frame;
+#[cfg(all(feature = "native", target_os = "macos"))]
+mod gpu_schedule;
 #[cfg(feature = "native")]
 mod pipeline;
 #[cfg(feature = "native")]

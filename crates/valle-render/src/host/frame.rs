@@ -198,6 +198,23 @@ pub(crate) struct PreparedFrame {
 }
 
 #[cfg(all(target_os = "macos", feature = "native"))]
+impl PreparedFrame {
+    pub(crate) fn needs_ordered_shadow_context(&self) -> bool {
+        // Ganesh's blurred shape masks can round differently after a different
+        // cache history. Keep these frames on one persistent context, including
+        // subsequent frames after a shadow disappears and later reappears.
+        self.bindings.programs().iter().any(|program| {
+            program.runtime_program().is_none_or(|program| {
+                program.nodes().iter().any(|node| {
+                    matches!(node, valle_draw::program::Node::Shadow(shadow)
+                        if shadow.sigma_x > 0.0 || shadow.sigma_y > 0.0)
+                })
+            })
+        })
+    }
+}
+
+#[cfg(all(target_os = "macos", feature = "native"))]
 pub(crate) struct SubmittedSharedFrame {
     submitted: SubmittedSharedMetalFrame,
     evidence: FrameEvidence,
@@ -378,59 +395,6 @@ impl<P: ResourceProvider> FrameRunner<P> {
         execute_prepared_with(&mut self.executor, prepared, target, delivery)
     }
 
-    /// Record one frame directly into an encoder-owned VideoToolbox surface. The returned token
-    /// keeps every CoreVideo/Metal/Skia owner alive until [`Self::finish_shared_frame`] observes
-    /// Ganesh completion; callers can queue a small bounded number to overlap GPU work and encode.
-    #[cfg(all(target_os = "macos", feature = "native"))]
-    pub(crate) fn render_shared_frame(
-        &mut self,
-        frame: FrameKey,
-        spec: RenderSpec,
-        pool: &SharedVideoFramePool,
-    ) -> Result<SubmittedSharedFrame, FrameRenderError> {
-        if pool.dimensions() != (spec.width(), spec.height()) {
-            return Err(FrameRenderError::SharedFrameExtent {
-                expected_width: spec.width(),
-                expected_height: spec.height(),
-                actual_width: pool.dimensions().0,
-                actual_height: pool.dimensions().1,
-            });
-        }
-        if self.executor.backend_kind() != SkiaBackendKind::Metal {
-            return Err(FrameRenderError::SharedFrameRequiresMetal);
-        }
-        let started = Instant::now();
-        let output = spec.output();
-        let prepared = self.prepare_frame(frame, spec)?;
-        let mut shared = self.executor.acquire_shared_frame(pool, output)?;
-        let surface = shared.surface_mut().map_err(SkiaExecuteError::from)?;
-        let mut target = SkiaTarget::direct_gpu(surface, output)?;
-        let mut evidence =
-            self.execute_prepared(prepared, &mut target, FrameDelivery::SharedGpu)?;
-        drop(target);
-        let submitted = self.executor.submit_shared_frame(shared)?;
-        evidence.timings.total_us = elapsed_us(started);
-        Ok(SubmittedSharedFrame {
-            submitted,
-            evidence,
-            started,
-        })
-    }
-
-    #[cfg(all(target_os = "macos", feature = "native"))]
-    pub(crate) fn finish_shared_frame(
-        &mut self,
-        submitted: SubmittedSharedFrame,
-    ) -> Result<(SharedVideoFrame, FrameEvidence), FrameRenderError> {
-        let wait_started = Instant::now();
-        let frame = self.executor.finish_shared_frame(submitted.submitted)?;
-        let wait_us = elapsed_us(wait_started);
-        let mut evidence = submitted.evidence;
-        evidence.timings.gpu_completion_wait_us = Some(wait_us);
-        evidence.timings.total_us = elapsed_us(submitted.started);
-        Ok((frame, evidence))
-    }
-
     /// CPU delivery convenience used by preview/PNG/software encode. The same `render_into` path
     /// remains available to a GPU/shared-frame target, so this is a sink choice rather than a
     pub fn render_rgba8(
@@ -466,6 +430,48 @@ impl<P: ResourceProvider> FrameRunner<P> {
 
 #[cfg(feature = "native")]
 impl<P: ResourceProvider> FramePreparationStage<P> {
+    #[cfg(target_os = "macos")]
+    pub(crate) fn new(
+        render: EngineRender,
+        mut provider: P,
+        backend: SkiaBackendKind,
+        capabilities: BackendCapabilities,
+    ) -> Result<Self, FrameRenderError> {
+        provider.configure_backend(backend).map_err(|error| {
+            FrameRenderError::ResourceBackendConfiguration {
+                reason: error.to_string(),
+            }
+        })?;
+        Ok(Self {
+            compiler: render.frame_compiler(),
+            render,
+            provider,
+            capabilities,
+            next_generation: 1,
+        })
+    }
+
+    #[cfg(target_os = "macos")]
+    pub(crate) fn capabilities(&self) -> &BackendCapabilities {
+        &self.capabilities
+    }
+
+    /// Preparers feeding one executor share its generation namespace. Assign by delivery
+    /// sequence, not worker-local counters or frame keys (which can repeat during seeks).
+    #[cfg(target_os = "macos")]
+    pub(crate) fn prepare_frame_for_sequence(
+        &mut self,
+        sequence: usize,
+        frame: FrameKey,
+        spec: RenderSpec,
+    ) -> Result<PreparedFrame, FrameRenderError> {
+        self.next_generation = u64::try_from(sequence)
+            .ok()
+            .and_then(|sequence| sequence.checked_add(1))
+            .ok_or(FrameRenderError::GenerationExhausted)?;
+        self.prepare_frame(frame, spec)
+    }
+
     pub(crate) fn prepare_frame(
         &mut self,
         frame: FrameKey,
@@ -485,6 +491,62 @@ impl<P: ResourceProvider> FramePreparationStage<P> {
 
 #[cfg(feature = "native")]
 impl FrameExecutionStage {
+    /// Record one frame directly into an encoder-owned VideoToolbox surface. The returned token
+    /// keeps every CoreVideo/Metal/Skia owner alive until [`Self::finish_shared_frame`] observes
+    /// Ganesh completion; callers can queue a small bounded number to overlap GPU work and encode.
+    #[cfg(all(target_os = "macos", feature = "native"))]
+    pub(crate) fn render_prepared_shared_frame(
+        &mut self,
+        prepared: PreparedFrame,
+        spec: RenderSpec,
+        pool: &SharedVideoFramePool,
+    ) -> Result<SubmittedSharedFrame, FrameRenderError> {
+        if pool.dimensions() != (spec.width(), spec.height()) {
+            return Err(FrameRenderError::SharedFrameExtent {
+                expected_width: spec.width(),
+                expected_height: spec.height(),
+                actual_width: pool.dimensions().0,
+                actual_height: pool.dimensions().1,
+            });
+        }
+        if self.executor.backend_kind() != SkiaBackendKind::Metal {
+            return Err(FrameRenderError::SharedFrameRequiresMetal);
+        }
+        let started = prepared.started;
+        let output = spec.output();
+        let mut shared = self.executor.acquire_shared_frame(pool, output)?;
+        let surface = shared.surface_mut().map_err(SkiaExecuteError::from)?;
+        let mut target = SkiaTarget::direct_gpu(surface, output)?;
+        let mut evidence = execute_prepared_with(
+            &mut self.executor,
+            prepared,
+            &mut target,
+            FrameDelivery::SharedGpu,
+        )?;
+        drop(target);
+        let submitted = self.executor.submit_shared_frame(shared)?;
+        evidence.timings.total_us = elapsed_us(started);
+        Ok(SubmittedSharedFrame {
+            submitted,
+            evidence,
+            started,
+        })
+    }
+
+    #[cfg(all(target_os = "macos", feature = "native"))]
+    pub(crate) fn finish_shared_frame(
+        &mut self,
+        submitted: SubmittedSharedFrame,
+    ) -> Result<(SharedVideoFrame, FrameEvidence), FrameRenderError> {
+        let wait_started = Instant::now();
+        let frame = self.executor.finish_shared_frame(submitted.submitted)?;
+        let wait_us = elapsed_us(wait_started);
+        let mut evidence = submitted.evidence;
+        evidence.timings.gpu_completion_wait_us = Some(wait_us);
+        evidence.timings.total_us = elapsed_us(submitted.started);
+        Ok((frame, evidence))
+    }
+
     pub(crate) fn render_prepared_rgba8(
         &mut self,
         prepared: PreparedFrame,

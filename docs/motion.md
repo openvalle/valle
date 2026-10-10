@@ -2213,6 +2213,57 @@ post-process softens geometry before and after the focus plane and spreads blurr
 foreground silhouettes over more distant pixels. It changes the Scene3D color
 plane; depth, anchors and picking retain the original geometric values.
 
+Scene3D geometry rasterization runs on the CPU. With the native Raster backend,
+depth of field uses bounded row workers and skips transparent regions beyond the
+blur's reach; Web uses the same CPU kernel. With the native Metal backend, the
+resolved color and depth are uploaded once and depth of field runs on the GPU,
+keeping its result on the composition device without an intermediate readback.
+On little-endian hosts, depth upload copies the existing float bytes directly;
+the shader resolves clear-depth sentinels without a separate CPU packing buffer.
+`VALLE_SCENE3D_DOF_CPU_REFERENCE=1` selects the CPU kernel for Metal comparisons;
+`VALLE_TRACE_F16_STAGES=1` reports the GPU stage when it is used.
+
+CPU depth of field decodes a compact source rectangle covering the output and
+its complete sampling halo. Sample coordinates and accumulation order stay in
+the original layer space. Native sRGB-to-working-color conversion also copies
+and converts only the nonzero source rectangle into a full-size, zeroed surface.
+Metal stages compact color/depth inputs with two blur-radius margins, retaining
+depth even at transparent pixels within that footprint. Their shaders sample in
+original layer coordinates, and resource accounting uses the compact input size.
+`VALLE_PERF_SCENE3D=1` reports processed versus full pixel counts for nonempty CPU
+regions; the GPU F16 trace includes the compact input dimensions. Logical layer
+dimensions and the exported frame remain unchanged.
+
+Opaque raster colors cache sRGB transfer results at the half-float boundary;
+bins near a rounding boundary and fractional coverage retain the reference math.
+CPU depth of field also caches the inverse transfer for opaque half-float inputs.
+Its fixed foreground sampling kernel is prepared once per frame, and sample
+coordinates convert directly to integers with the reference rounding rule.
+Integer offsets and their distances are reused only when every coordinate along
+the layer's axes matches that rule; fractional ties retain per-pixel sampling.
+Rasterization separates camera rays into row and column terms without changing
+their floating-point operation order. Materials without textures skip UV
+gradients, and materials without a normal map skip tangent-basis construction.
+PBR reuses material/view terms across lights at each pixel; lights with zero
+reflected contribution do not need a shadow lookup.
+Direct-light Schlick Fresnel uses a guarded multiplication fast path: a verified
+one-ULP interval around the fifth power must produce identical final f32
+coefficients at both endpoints. Rounding boundaries retain `libm::powf`, so the
+optimization preserves the reference BRDF bits without a shared cache. This
+accelerates the CPU geometry renderer used by both Raster and native Metal.
+Directional shadow maps build independently within the raster worker limit;
+their results retain the original light order. Interior shadow samples use the
+same nine PCF taps with one footprint check.
+After changing transfer math, run the exhaustive equivalence check with
+`cargo test -p valle-motion --lib opaque_encode_matches_reference_for_every_accelerated_f32 -- --ignored`.
+After changing libm or the Fresnel power calculation, verify its entire input
+domain with `cargo test -p valle-motion --lib fifth_power_bound_covers_every_schlick_input -- --ignored`.
+`VALLE_PERF_SCENE3D=1` logs per-scene allocation, geometry, shadow-map, binning,
+raster and depth-of-field timings in microseconds. With `VALLE_PERF_FRAMES=1`,
+the native host additionally reports `scene3dPrepareUs`, `scene3dRasterUs` and
+`scene3dUploadUs`; the last includes resource packing and materialization, rather
+than measuring GPU transfer time in isolation.
+
 ```tsx
 <Scene3D
   camera={{ position: [0, 0, 3], target: [0, 0, 0],
@@ -2591,6 +2642,16 @@ For export controls, `--backend raster` selects CPU composition, `metal` require
 Metal and `auto` chooses an available backend. `--workers` accepts 1–8; defaults
 are at most two for Raster and one for Metal. `--hardware-encode` is independent
 of the compositor and fails if the requested hardware encoder is unavailable.
+On macOS, Metal with hardware encoding honors `--workers` through independent
+CPU frame preparers feeding one persistent Metal executor. Prepared frames are
+consumed in delivery order and written directly into encoder-owned shared GPU
+surfaces, with no CPU output readback. Each preparer holds at most one preparing
+or waiting frame; execution retains up to three more frames. Cancellation or a
+delivery failure drains the preparers and completes pending GPU work before
+releasing its surfaces. PNG and CPU-delivery paths also honor the requested frame
+worker count. Scene3D's internal CPU raster workers are separate and use up to
+eight available threads per frame renderer, so increasing frame workers can also
+increase CPU contention and memory use.
 `--ffmpeg-log-level info` adds encoder diagnostics on stderr; `--events` adds
 machine-readable progress on stdout. See [CLI output](cli.md#output-contract-for-scripts-and-agents).
 

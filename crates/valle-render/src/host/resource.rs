@@ -13,6 +13,7 @@ use valle_engine::{
         scene3d::{
             AdmittedModel, MaterialImage, PreparedScene, ScenePrepareCacheKey, SceneResources,
             TextureRole, admit_glb, prepare_cache_key, prepare_scene, render_scene,
+            render_scene_without_depth_of_field,
         },
     },
     resource::{
@@ -276,6 +277,7 @@ pub struct NativeResourceProvider {
     bytes: BTreeMap<ContentDigest, Arc<[u8]>>,
     video: BTreeMap<ContentDigest, LibavVideoSource>,
     video_transport: VideoFrameTransport,
+    defer_scene3d_dof: bool,
     models: BTreeMap<ContentDigest, Arc<AdmittedModel>>,
     environments: BTreeMap<ContentDigest, Arc<valle_engine::motion::scene3d::EnvironmentAsset>>,
     textures: BTreeMap<(ContentDigest, TextureRole), Arc<MaterialImage>>,
@@ -303,6 +305,7 @@ impl NativeResourceProvider {
             bytes: BTreeMap::new(),
             video: BTreeMap::new(),
             video_transport: VideoFrameTransport::Cpu,
+            defer_scene3d_dof: false,
             models: BTreeMap::new(),
             environments: BTreeMap::new(),
             textures: BTreeMap::new(),
@@ -481,18 +484,44 @@ impl NativeResourceProvider {
             prepare_started.elapsed(),
         )?;
         let raster_started = Instant::now();
-        let raster = render_scene(&prepared, &frame.frame).map_err(|error| {
-            NativeResourceError::SceneRender {
-                reason: error.to_string(),
-            }
+        let deferred_dof = self.defer_scene3d_dof
+            && frame
+                .frame
+                .camera
+                .depth_of_field
+                .is_some_and(|dof| dof.max_blur_radius > 0.0);
+        let raster = if deferred_dof {
+            render_scene_without_depth_of_field(&prepared, &frame.frame)
+        } else {
+            render_scene(&prepared, &frame.frame)
+        }
+        .map_err(|error| NativeResourceError::SceneRender {
+            reason: error.to_string(),
         })?;
         add_elapsed(&mut self.frame_scene3d.raster_us, raster_started.elapsed())?;
         let upload_started = Instant::now();
-        let object = SkiaExternalObject::scene3d_rgba16f(
-            request.key().clone(),
-            extent,
-            &raster.premul_rgba16f,
-        )?;
+        let object = if deferred_dof {
+            let dof = frame
+                .frame
+                .camera
+                .depth_of_field
+                .expect("deferred DOF was checked");
+            SkiaExternalObject::scene3d_deferred_dof(
+                request.key().clone(),
+                extent,
+                &raster.premul_rgba16f,
+                &raster.depth,
+                dof.focus_distance,
+                dof.max_blur_radius,
+                frame.frame.camera.far,
+            )?
+        } else {
+            SkiaExternalObject::scene3d_rgba16f(
+                request.key().clone(),
+                extent,
+                &raster.premul_rgba16f,
+            )?
+        };
         add_elapsed(&mut self.frame_scene3d.upload_us, upload_started.elapsed())?;
         Ok(object)
     }
@@ -764,6 +793,13 @@ impl ResourceProvider for NativeResourceProvider {
             #[cfg(target_os = "macos")]
             SkiaBackendKind::Metal => VideoFrameTransport::SharedGpu,
         };
+        let defer_scene3d_dof = backend != SkiaBackendKind::Raster
+            && std::env::var_os("VALLE_SCENE3D_DOF_CPU_REFERENCE").is_none();
+        if defer_scene3d_dof != self.defer_scene3d_dof && !self.objects.entries.is_empty() {
+            // A deferred GPU image is not usable on Raster after a backend switch.
+            self.invalidate_generation()?;
+        }
+        self.defer_scene3d_dof = defer_scene3d_dof;
         Ok(())
     }
 }
@@ -892,6 +928,21 @@ mod tests {
         ColorDescription, ExternalHandleId, InputAlphaMode, ResourceKey, SignalLuminance,
         VisualInterpretation,
     };
+
+    #[test]
+    fn switching_back_to_raster_invalidates_deferred_resource_generation() {
+        let mut provider = NativeResourceProvider::new(Arc::new(NativeResourceCatalog::new()));
+        provider.defer_scene3d_dof = true;
+        let (identity, object) = cached_frame(0);
+        provider
+            .objects
+            .insert(identity, object, 8, true, &mut provider.frame_cache)
+            .unwrap();
+        provider.configure_backend(SkiaBackendKind::Raster).unwrap();
+        assert!(!provider.defer_scene3d_dof);
+        assert!(provider.objects.entries.is_empty());
+        assert_eq!(provider.cache_generation, 2);
+    }
 
     fn cached_frame(id: u8) -> (NativeResourceCacheIdentity, SkiaExternalObject) {
         let key = ResourceKey::new(

@@ -85,6 +85,11 @@ impl SkiaExecutor {
     /// loss; extent or output-contract changes invalidate the generation automatically.
     pub fn invalidate_surface_generation(&mut self) {
         self.raster_layers.clear();
+        self.caches
+            .opacity_layers
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
         self.surfaces.invalidate();
     }
 
@@ -350,7 +355,7 @@ impl AdmittedSkiaFrame<'_> {
     }
 
     fn execute_with_arena(
-        self,
+        mut self,
         target: &mut SkiaTarget<'_>,
         arena: &mut SurfaceArena,
         raster_layers: &mut RasterLayerCache,
@@ -369,6 +374,11 @@ impl AdmittedSkiaFrame<'_> {
         )?;
         let (layer_hits_before, layer_misses_before, _, _) = raster_layers.counters();
         let external_images = materialize_external_visuals(&self.bound, &mut surface_frame)?;
+        for program in self.programs.values_mut() {
+            program
+                .resolve_deferred_scenes(&external_images.images)
+                .map_err(|error| SkiaExecuteError::Program(error.to_string()))?;
+        }
 
         // Deep per-pass tracing is intentionally separate from the stable aggregate VALLE_PERF
         // report: printing from parallel raster workers perturbs the wall-clock gate it diagnoses.
@@ -1210,7 +1220,18 @@ fn materialize_external_visuals(
     let cpu_upload_bytes = 0_u64;
     for binding in bound.objects() {
         let object = binding.object();
-        let image = if let Some(image) = object.visual_image() {
+        let image = if let Some(input) = object.deferred_scene3d_dof() {
+            #[cfg(feature = "native")]
+            {
+                cpu_upload_bytes = cpu_upload_bytes
+                    .checked_add(input.resident_bytes())
+                    .ok_or(SkiaExecuteError::ExternalTransferAccounting)?;
+            }
+            Some(
+                super::scene3d_dof::render(input, surfaces)
+                    .map_err(|error| SkiaExecuteError::Program(error.to_string()))?,
+            )
+        } else if let Some(image) = object.visual_image() {
             #[cfg(all(feature = "native", target_os = "macos"))]
             if surfaces.backend_kind() == super::surface::SkiaBackendKind::Metal {
                 cpu_upload_bytes = cpu_upload_bytes

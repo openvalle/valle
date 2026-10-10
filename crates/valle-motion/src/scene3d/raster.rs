@@ -11,7 +11,9 @@ use super::{
     MaterialImage, MaterialKind, MaterialSpec, ModelMaterial, ModelVertex, Scene3DSpec,
     TextureRole, Transform3D, Vec3,
 };
+mod color;
 mod dof;
+mod fresnel;
 mod lighting;
 mod pbr;
 mod shadow;
@@ -840,6 +842,36 @@ pub fn render_scene_reusing_with_workers(
     reusable: Option<RasterFrame>,
     workers: usize,
 ) -> Result<RasterFrame, ContractErrors> {
+    render_scene_impl(prepared, frame, reusable, workers, true)
+}
+
+/// Resolve color and depth for a host that runs the same depth-of-field kernel on its GPU.
+/// Validation, rasterization, color encoding and metadata match `render_scene`; only DOF is
+/// deferred. Hosts must finish that stage before exposing the image to the compositor.
+pub fn render_scene_without_depth_of_field(
+    prepared: &PreparedScene,
+    frame: &Frame3DState,
+) -> Result<RasterFrame, ContractErrors> {
+    render_scene_impl(prepared, frame, None, default_raster_workers(), false)
+}
+
+fn render_scene_impl(
+    prepared: &PreparedScene,
+    frame: &Frame3DState,
+    reusable: Option<RasterFrame>,
+    workers: usize,
+    apply_depth_of_field: bool,
+) -> Result<RasterFrame, ContractErrors> {
+    // Opt-in phase diagnostics only; not part of frame identity or render decisions.
+    let trace = !cfg!(target_arch = "wasm32") && std::env::var_os("VALLE_PERF_SCENE3D").is_some();
+    let mut phase = trace.then(std::time::Instant::now);
+    let mut phases = Vec::new();
+    let mut checkpoint = |name: &'static str| {
+        if let Some(start) = phase.as_mut() {
+            phases.push((name, start.elapsed().as_micros()));
+            *start = std::time::Instant::now();
+        }
+    };
     prepared.scene.validate()?;
     frame.validate_for(&prepared.scene)?;
     prepared.budget.validate()?;
@@ -868,6 +900,7 @@ pub fn render_scene_reusing_with_workers(
         },
     };
     let camera = Camera::new(frame, prepared.width, prepared.height)?;
+    checkpoint("allocate");
     let mut lights = Lights::new(&prepared.scene, frame, prepared.environment.clone());
     let environment_background = prepared
         .scene
@@ -1037,15 +1070,16 @@ pub fn render_scene_reusing_with_workers(
             }
         }
     }
+    checkpoint("geometry");
     if prepared.scene.pbr.shadows {
-        lights.shadow_maps = lights
-            .directional
-            .iter()
-            .map(|(direction, _)| {
-                shadow::ShadowMap::render(*direction, &shadow_triangles, &frame_meshes)
-            })
-            .collect();
+        lights.shadow_maps = shadow::render_maps(
+            &lights.directional,
+            &shadow_triangles,
+            &frame_meshes,
+            workers,
+        );
     }
+    checkpoint("shadows");
     let column_count = prepared.width.div_ceil(TILE_COLUMNS) as usize;
     let row_count = prepared.height.div_ceil(TILE_ROWS) as usize;
     let mut bins = vec![Vec::new(); row_count * column_count];
@@ -1086,6 +1120,8 @@ pub fn render_scene_reusing_with_workers(
             commands: command_indices,
         });
     }
+    let pixel_rays = PixelRays::new(&camera);
+    checkpoint("binning");
     if worker_count == 1 {
         for job in worker_jobs.pop().expect("validated layer has one tile") {
             render_tile(
@@ -1093,6 +1129,7 @@ pub fn render_scene_reusing_with_workers(
                 &commands,
                 &frame_meshes,
                 &camera,
+                &pixel_rays,
                 &lights,
                 environment_background,
             );
@@ -1103,6 +1140,7 @@ pub fn render_scene_reusing_with_workers(
                 let commands = &commands;
                 let frame_meshes = &frame_meshes;
                 let camera = &camera;
+                let pixel_rays = &pixel_rays;
                 let lights = &lights;
                 scope.spawn(move || {
                     for job in jobs {
@@ -1111,6 +1149,7 @@ pub fn render_scene_reusing_with_workers(
                             commands,
                             frame_meshes,
                             camera,
+                            pixel_rays,
                             lights,
                             environment_background,
                         );
@@ -1119,8 +1158,21 @@ pub fn render_scene_reusing_with_workers(
             }
         });
     }
-    dof::apply(&mut output, &frame.camera);
+    checkpoint("raster");
+    if apply_depth_of_field {
+        dof::apply(&mut output, &frame.camera, workers);
+    }
+    checkpoint("dof");
     output.anchors = anchor_projections(&prepared.scene, &camera, &transforms);
+    if trace {
+        eprintln!(
+            "[valle scene3d] {}x{} triangles={} tile-refs={} phase-us={phases:?}",
+            prepared.width,
+            prepared.height,
+            commands.len(),
+            tile_references
+        );
+    }
     Ok(output)
 }
 
@@ -1193,6 +1245,7 @@ fn render_tile(
     commands: &[RasterCommand],
     frame_meshes: &[FrameMesh<'_>],
     camera: &Camera,
+    pixel_rays: &PixelRays,
     lights: &Lights,
     environment_background: bool,
 ) {
@@ -1245,6 +1298,7 @@ fn render_tile(
             &shading,
             command.node_id,
             camera,
+            pixel_rays,
             lights,
             &mut tile,
             None,
@@ -1274,6 +1328,7 @@ fn render_tile(
                 &shading,
                 command.node_id,
                 camera,
+                pixel_rays,
                 lights,
                 &mut tile,
                 Some(&mut oit),
@@ -1440,6 +1495,39 @@ struct Camera {
     far: f32,
     width: u32,
     height: u32,
+}
+
+/// The camera ray is separable by screen axis. Preserve the original arithmetic
+/// order while sharing divisions and camera-basis products across every fragment.
+/// Only rasterization needs these O(width + height) tables; anchor projection does not.
+struct PixelRays {
+    columns: Vec<V3>,
+    rows: Vec<V3>,
+}
+
+impl PixelRays {
+    fn new(camera: &Camera) -> Self {
+        Self {
+            columns: (0..camera.width)
+                .map(|x| {
+                    camera.forward
+                        + camera.right
+                            * ((2.0 * (x as f32 + 0.5) / camera.width as f32 - 1.0) * camera.aspect
+                                / camera.focal)
+                })
+                .collect(),
+            rows: (0..camera.height)
+                .map(|y| {
+                    camera.up
+                        * ((1.0 - 2.0 * (y as f32 + 0.5) / camera.height as f32) / camera.focal)
+                })
+                .collect(),
+        }
+    }
+
+    fn at(&self, x: u32, y: u32) -> V3 {
+        self.columns[x as usize] + self.rows[y as usize]
+    }
 }
 
 impl super::CameraFrameState {
@@ -1929,12 +2017,11 @@ fn raster_projected_triangle(
     shading: &pbr::Triangle<'_>,
     node_id: u32,
     camera: &Camera,
+    pixel_rays: &PixelRays,
     lights: &Lights,
     output: &mut RasterTile<'_>,
     mut oit: Option<&mut [OitPixel]>,
 ) {
-    let width = output.width;
-    let height = output.height;
     let tile_columns = (output.end_x - output.start_x) as usize;
     let transparent = oit.is_some();
     let signed_area = orient_f32(vertices[0], vertices[1], vertices[2]);
@@ -1952,7 +2039,10 @@ fn raster_projected_triangle(
     } else {
         vertices.swap(1, 2);
     }
-    let gradients = pbr::Gradients::new(vertices);
+    let gradients = shading
+        .material
+        .uses_uv()
+        .then(|| pbr::Gradients::new(vertices));
     let fixed = vertices.map(|vertex| FixedPoint {
         x: libm::roundf(vertex.x * SUBPIXEL_SCALE) as i64,
         y: libm::roundf(vertex.y * SUBPIXEL_SCALE) as i64,
@@ -2056,16 +2146,17 @@ fn raster_projected_triangle(
                 continue;
             }
             let corrected = perspective_weights(bary, vertices, perspective_sum);
-            let uv = interpolated_uv(vertices, corrected);
+            let (uv, derivatives) = if let Some(gradients) = &gradients {
+                let uv = interpolated_uv(vertices, corrected);
+                (uv, gradients.at(uv, perspective_sum))
+            } else {
+                (V2 { x: 0.0, y: 0.0 }, [0.0; 4])
+            };
             let normal = (vertices[0].normal * corrected[0]
                 + vertices[1].normal * corrected[1]
                 + vertices[2].normal * corrected[2])
                 .normalized();
-            let ray = camera.forward
-                + camera.right
-                    * ((2.0 * (x as f32 + 0.5) / width as f32 - 1.0) * camera.aspect
-                        / camera.focal)
-                + camera.up * ((1.0 - 2.0 * (y as f32 + 0.5) / height as f32) / camera.focal);
+            let ray = pixel_rays.at(x, y);
             let view = (ray * -1.0).normalized();
             let position = camera.eye + ray * view_z;
             let Some((radiance, alpha)) = pbr::shade(
@@ -2074,7 +2165,7 @@ fn raster_projected_triangle(
                 normal,
                 view,
                 uv,
-                gradients.at(uv, perspective_sum),
+                derivatives,
                 position,
                 lights,
             ) else {
@@ -2142,8 +2233,11 @@ fn output_color(
     exposure: f32,
 ) -> [u16; 4] {
     let color = display_linear(radiance, tone, exposure);
-    let rgb =
-        color.map(|v| f32_to_f16_bits(super::asset::linear_to_srgb(v).clamp(0.0, 1.0) * alpha));
+    let rgb = if alpha == 1.0 {
+        color.map(color::encode_opaque)
+    } else {
+        color.map(|v| f32_to_f16_bits(super::asset::linear_to_srgb(v).clamp(0.0, 1.0) * alpha))
+    };
     [rgb[0], rgb[1], rgb[2], f32_to_f16_bits(alpha)]
 }
 
@@ -2248,8 +2342,47 @@ fn rotate_axis(value: V3, axis: V3, sin: f32, cos: f32) -> V3 {
 mod precision_tests {
     use std::collections::BTreeSet;
 
-    use super::{f32_to_f16_bits, output_color};
+    use super::{Camera, PixelRays, V3, f32_to_f16_bits, output_color};
     use crate::scene3d::ToneMapping;
+
+    #[test]
+    fn separable_pixel_rays_preserve_reference_float_bits() {
+        let bits = |v: V3| [v.x.to_bits(), v.y.to_bits(), v.z.to_bits()];
+        for (width, height) in [(1, 1), (127, 65), (1920, 1080), (3840, 2160)] {
+            for forward in [
+                V3::new(0.0, 0.0, -1.0),
+                V3::new(0.2, -0.4, -0.9).normalized(),
+            ] {
+                let right = forward.cross(V3::Y).normalized();
+                for focal in [0.02, 1.0, 2.414_213_7, 100.0] {
+                    let camera = Camera {
+                        eye: V3::new(0.0, 0.0, 5.0),
+                        forward,
+                        right,
+                        up: right.cross(forward).normalized(),
+                        focal,
+                        aspect: width as f32 / height as f32,
+                        near: 0.1,
+                        far: 100.0,
+                        width,
+                        height,
+                    };
+                    let rays = PixelRays::new(&camera);
+                    for sample in 0..10_000_u32 {
+                        let x = sample.wrapping_mul(1543) % width;
+                        let y = sample.wrapping_mul(3461) % height;
+                        let reference = camera.forward
+                            + camera.right
+                                * ((2.0 * (x as f32 + 0.5) / width as f32 - 1.0) * camera.aspect
+                                    / camera.focal)
+                            + camera.up
+                                * ((1.0 - 2.0 * (y as f32 + 0.5) / height as f32) / camera.focal);
+                        assert_eq!(bits(rays.at(x, y)), bits(reference));
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn half_float_color_preserves_more_lighting_levels_than_rgba8() {

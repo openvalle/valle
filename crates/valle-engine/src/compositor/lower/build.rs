@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, sync::Arc};
 
 use thiserror::Error;
 use valle_draw::program::DrawProgram;
@@ -844,17 +844,15 @@ fn lower_programs_impl(
         .iter()
         .enumerate()
         .map(|(index, program)| {
-            let decoded_storage;
             let decoded = if let Some(decoded) = program.runtime_program() {
-                decoded
+                Arc::clone(decoded)
             } else {
-                decoded_storage = DrawProgram::from_packed(&program.packed).map_err(|error| {
+                Arc::new(DrawProgram::from_packed(&program.packed).map_err(|error| {
                     LowerError::InvalidProgramPlan {
                         program: program.id,
                         reason: error.to_string(),
                     }
-                })?;
-                &decoded_storage
+                })?)
             };
             let local_plan = ProgramPlan::derive(&decoded)?;
             let local_schedule = ProgramSchedule::derive(&local_plan)?;
@@ -896,6 +894,7 @@ fn lower_programs_impl(
                     program.content_hash.clone(),
                     program.viewport,
                     program.packed.clone(),
+                    decoded,
                     program.requirements.clone(),
                     resources,
                     program.destination_uses.clone(),
@@ -924,6 +923,7 @@ fn lower_programs_impl(
                     program.content_hash.clone(),
                     program.viewport,
                     program.packed.clone(),
+                    decoded,
                     program.requirements.clone(),
                     resources,
                     program.destination_uses.clone(),
