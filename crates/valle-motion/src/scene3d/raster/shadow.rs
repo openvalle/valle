@@ -27,17 +27,21 @@ pub(super) fn render_maps(
     // Lights are independent. Keep each result in its original slot so shadow
     // lookup and light accumulation retain their deterministic ordering.
     let mut maps = (0..directions.len()).map(|_| None).collect::<Vec<_>>();
-    let chunk_size = directions.len().div_ceil(workers);
-    std::thread::scope(|scope| {
-        for (maps, directions) in maps
+    crate::cpu::parallel_scope(workers, |scope, workers| {
+        let chunk_size = directions.len().div_ceil(workers);
+        let mut chunks = maps
             .chunks_mut(chunk_size)
-            .zip(directions.chunks(chunk_size))
-        {
+            .zip(directions.chunks(chunk_size));
+        let (caller_maps, caller_directions) = chunks.next().unwrap();
+        for (maps, directions) in chunks {
             scope.spawn(move || {
                 for (map, (direction, _)) in maps.iter_mut().zip(directions) {
                     *map = ShadowMap::render(*direction, triangles, meshes);
                 }
             });
+        }
+        for (map, (direction, _)) in caller_maps.iter_mut().zip(caller_directions) {
+            *map = ShadowMap::render(*direction, triangles, meshes);
         }
     });
     maps

@@ -231,17 +231,20 @@ pub(super) fn apply(frame: &mut RasterFrame, camera: &CameraFrameState, workers:
                 .clamp(1, super::MAX_RASTER_WORKERS)
                 .min(max_y - min_y + 1)
         };
-    if worker_count == 1 {
-        render_rows(min_y, rows);
-    } else {
-        let rows_per_job = (max_y - min_y + 1).div_ceil(worker_count);
-        std::thread::scope(|scope| {
-            for (job, rows) in rows.chunks_mut(rows_per_job * stride).enumerate() {
+    crate::cpu::parallel_scope(worker_count, |scope, worker_count| {
+        if worker_count == 1 {
+            render_rows(min_y, rows);
+        } else {
+            let rows_per_job = (max_y - min_y + 1).div_ceil(worker_count);
+            let mut chunks = rows.chunks_mut(rows_per_job * stride).enumerate();
+            let (_, caller_rows) = chunks.next().unwrap();
+            for (job, rows) in chunks {
                 let render_rows = &render_rows;
                 scope.spawn(move || render_rows(min_y + job * rows_per_job, rows));
             }
-        });
-    }
+            render_rows(min_y, caller_rows);
+        }
+    });
 }
 
 fn effective_depth(depth: f32, far: f32) -> f32 {

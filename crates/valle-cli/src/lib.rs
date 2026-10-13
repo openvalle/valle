@@ -639,22 +639,43 @@ pub enum RenderVideoCodec {
     Prores4444,
 }
 
+/// Runtime resource controls shared by Motion, Timeline and fixed-package delivery.
+#[derive(clap::Args, Debug, Clone, Default)]
+pub struct RenderBudgetArgs {
+    /// Total admitted CPU computation allowance, including nested kernels and software codecs.
+    #[arg(long, value_parser = clap::value_parser!(u16).range(1..))]
+    pub threads: Option<u16>,
+    /// Managed Native working-memory budget, in bytes or with KiB/MiB/GiB suffix (for example 2GiB).
+    #[arg(long, value_parser = parse_memory_budget, value_name = "BYTES")]
+    pub memory_budget: Option<u64>,
+}
+
+impl RenderBudgetArgs {
+    pub(crate) fn native(&self) -> Result<valle_render::host::NativeRenderBudget> {
+        Ok(valle_render::host::NativeRenderBudget::new(
+            self.threads
+                .map(usize::from)
+                .unwrap_or_else(|| std::thread::available_parallelism().map_or(1, usize::from)),
+            self.memory_budget,
+        )?)
+    }
+}
+
 /// Delivery controls independent of the logical Motion authoring canvas.
 #[derive(clap::Args, Debug, Clone, Default)]
 pub struct MotionRenderTuningArgs {
     /// Output frame rate; overrides the optional composition default.
     #[arg(long)]
     pub fps: Option<String>,
-    /// Concurrent frame renderers (1-8). Defaults: Raster at most 2; Metal 1.
-    #[arg(long, value_parser = clap::value_parser!(u8).range(1..=8))]
-    pub workers: Option<u8>,
+    #[command(flatten)]
+    pub budget: RenderBudgetArgs,
     /// Require hardware H.264 encoding. Fails if unavailable; no software fallback.
     #[arg(long, conflicts_with_all = ["frame", "frames", "storyboard"])]
     pub hardware_encode: bool,
     /// Hardware encoder target bitrate in bits/second. Defaults to a resolution-based estimate.
     #[arg(long, requires = "hardware_encode", conflicts_with_all = ["frame", "frames", "storyboard"], value_parser = clap::value_parser!(u32).range(1..))]
     pub bitrate: Option<u32>,
-    /// Software H.264 encoder threads. Defaults to automatic selection.
+    /// Software H.264 CPU share; defaults to one quarter of --threads, leaving rendering capacity.
     #[arg(long, conflicts_with_all = ["hardware_encode", "frame", "frames", "storyboard"], value_parser = clap::value_parser!(u16).range(1..))]
     pub encode_threads: Option<u16>,
     /// Delivery dimensions; scales the composition canvas proportionally without changing layout.
@@ -825,11 +846,15 @@ pub enum FixedRenderAction {
         frame: i64,
         #[arg(short, long)]
         output: PathBuf,
+        #[command(flatten)]
+        budget: RenderBudgetArgs,
     },
     /// Export the complete admitted fixed package to MP4 (or audio-only media when applicable).
     Export {
         #[arg(short, long)]
         output: PathBuf,
+        #[command(flatten)]
+        budget: RenderBudgetArgs,
     },
 }
 
@@ -1184,6 +1209,8 @@ pub enum TimelineAction {
         input: PathBuf,
         #[command(flatten)]
         delivery: RenderOutputArgs,
+        #[command(flatten)]
+        budget: RenderBudgetArgs,
     },
 }
 
@@ -1501,6 +1528,60 @@ mod project_revision_tests {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn runtime_budget_flags_are_shared_by_motion_and_timeline_delivery() {
+        use clap::Parser;
+        for kind in ["motion", "timeline"] {
+            assert!(
+                super::Cli::try_parse_from([
+                    "valle",
+                    kind,
+                    "render",
+                    "input.json",
+                    "-o",
+                    "out.mp4",
+                    "--threads",
+                    "1",
+                    "--memory-budget",
+                    "2GiB"
+                ])
+                .is_ok()
+            );
+        }
+        assert!(
+            super::Cli::try_parse_from([
+                "valle",
+                "motion",
+                "render",
+                "input.motion.tsx",
+                "-o",
+                "out.mp4",
+                "--threads",
+                "4",
+                "--workers",
+                "4"
+            ])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn render_memory_budget_units_are_exact_and_overflow_is_rejected() {
+        assert_eq!(
+            super::parse_memory_budget("2GiB").unwrap(),
+            2 * 1024 * 1024 * 1024
+        );
+        assert_eq!(
+            super::parse_memory_budget("512MiB").unwrap(),
+            512 * 1024 * 1024
+        );
+        assert_eq!(super::parse_memory_budget("1GB").unwrap(), 1_000_000_000);
+        assert_eq!(super::parse_memory_budget("1024").unwrap(), 1024);
+        for invalid in ["0", "-1", "1.5GiB", "1G", "18446744073709551615GiB", "GiB"] {
+            assert!(super::parse_memory_budget(invalid).is_err(), "{invalid}");
+        }
+    }
+
     use super::*;
 
     #[test]
@@ -1529,6 +1610,28 @@ mod tests {
             assert_eq!(error.kind(), clap::error::ErrorKind::UnknownArgument);
         }
     }
+}
+
+fn parse_memory_budget(value: &str) -> Result<u64, String> {
+    let value = value.trim();
+    let digit_count = value.bytes().take_while(u8::is_ascii_digit).count();
+    let (number, suffix) = value.split_at(digit_count);
+    let multiplier = match suffix.trim().to_ascii_lowercase().as_str() {
+        "" | "b" => 1_u64,
+        "kib" => 1024,
+        "mib" => 1024 * 1024,
+        "gib" => 1024 * 1024 * 1024,
+        "kb" => 1000,
+        "mb" => 1000 * 1000,
+        "gb" => 1000 * 1000 * 1000,
+        _ => return Err("memory budget requires bytes or a KiB/MiB/GiB/KB/MB/GB suffix".into()),
+    };
+    number
+        .parse::<u64>()
+        .ok()
+        .and_then(|bytes| bytes.checked_mul(multiplier))
+        .filter(|bytes| *bytes > 0)
+        .ok_or_else(|| "memory budget must be a positive integer within u64 range".into())
 }
 
 fn parse_canvas_size(value: &str) -> Result<(u32, u32), String> {

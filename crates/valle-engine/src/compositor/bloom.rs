@@ -343,6 +343,24 @@ fn fill_rows<const CHANNELS: usize>(
     #[cfg(not(target_family = "wasm"))]
     {
         let width = next.width;
+        if valle_motion::cpu::is_budgeted() {
+            let requested = if next.height >= 128 && next.pixels.len() >= 65_536 {
+                8
+            } else {
+                1
+            };
+            valle_motion::cpu::parallel_scope(requested, |scope, count| {
+                let rows_per_job = next.height.div_ceil(count).max(16);
+                let mut chunks = next.pixels.chunks_mut(rows_per_job * width).enumerate();
+                let (_, caller_rows) = chunks.next().unwrap();
+                for (index, rows) in chunks {
+                    let fill = &fill;
+                    scope.spawn(move || fill(index * rows_per_job, rows));
+                }
+                fill(0, caller_rows);
+            });
+            return;
+        }
         // All frame workers share one bounded pool instead of spawning another
         // machine-sized set of OS threads for every stage of every frame.
         if next.height >= 128
@@ -374,15 +392,8 @@ pub struct PyramidRegion {
 }
 
 impl PyramidRegion {
-    pub fn new(
-        input: [u32; 2],
-        output: [u32; 2],
-        offset: [i32; 2],
-        radius: f32,
-        spread_radius: f32,
-    ) -> Result<Self, BloomError> {
-        pixel_count(input[0], input[1])?;
-        pixel_count(output[0], output[1])?;
+    /// Complete finite support in device pixels, including every pyramid level.
+    fn support_margin(radius: f32, spread_radius: f32) -> Result<u32, BloomError> {
         if !radius.is_finite() || radius < 0.0 || !spread_radius.is_finite() || spread_radius < 0.0
         {
             return Err(BloomError::InvalidParameters);
@@ -390,19 +401,34 @@ impl PyramidRegion {
         let levels = ((f64::from(radius) / 2.0).log2().ceil() as u32).clamp(1, 5);
         let scale = f64::from(1_u32 << levels);
         let spread = (f64::from(spread_radius) / 48.0).max(0.125);
-        // Downsample support, widest blur, and all bilinear/tent upsample taps.
-        // Retain these zero-filled margins until the complete pyramid is evaluated.
         let margin = if radius == 0.0 {
-            0
+            0.0
         } else {
             (2.0 * (scale - 1.0)
                 + spread.round() * scale
                 + (0.5 * spread + 1.0) * (2.0 * scale - 2.0))
-                .ceil() as i64
+                .ceil()
         };
-        if margin > i64::from(i32::MAX) {
+        if margin > f64::from(i32::MAX) {
             return Err(BloomError::InvalidImage);
         }
+        Ok(margin as u32)
+    }
+
+    pub fn new(
+        input: [u32; 2],
+        output: [u32; 2],
+        offset: [i32; 2],
+        radius: f32,
+        spread_radius: f32,
+    ) -> Result<Self, BloomError> {
+        // Input describes an existing image. Only the output and the allocated working region
+        // are limited by MAX_PIXELS; distant source pixels never enter the pyramid.
+        source_pixel_count(input[0], input[1])?;
+        pixel_count(output[0], output[1])?;
+        // Downsample support, widest blur, and all bilinear/tent upsample taps.
+        // Retain these zero-filled margins until the complete pyramid is evaluated.
+        let margin = i64::from(Self::support_margin(radius, spread_radius)?);
 
         let mut result = Self {
             origin: [0; 2],
@@ -458,17 +484,11 @@ pub fn apply_bloom_f16(
         region.input_offset,
         params,
     )?;
-    if region.origin == [0, 0] && region.size == [output_width, output_height] {
-        return Ok(pixels);
-    }
-    Ok(encode_output(&read_base(
+    Ok(encode_region(
         &pixels,
-        region.size[0],
-        region.size[1],
-        output_width,
-        output_height,
-        region.origin,
-    )?))
+        region,
+        [output_width, output_height],
+    ))
 }
 
 pub fn apply_glow_f16(
@@ -496,17 +516,11 @@ pub fn apply_glow_f16(
         region.input_offset,
         params,
     )?;
-    if region.origin == [0, 0] && region.size == [output_width, output_height] {
-        return Ok(pixels);
-    }
-    Ok(encode_output(&read_base(
+    Ok(encode_region(
         &pixels,
-        region.size[0],
-        region.size[1],
-        output_width,
-        output_height,
-        region.origin,
-    )?))
+        region,
+        [output_width, output_height],
+    ))
 }
 
 /// Source ROI is placed at `offset` inside the output ROI. All dimensions are device pixels.
@@ -518,7 +532,7 @@ fn apply_bloom_region_f16(
     output_height: u32,
     offset: [i32; 2],
     params: BloomParams,
-) -> Result<Vec<u8>, BloomError> {
+) -> Result<Vec<[f32; 4]>, BloomError> {
     if !params.threshold.is_finite()
         || !(0.0..=1.0).contains(&params.threshold)
         || !params.knee.is_finite()
@@ -539,7 +553,7 @@ fn apply_bloom_region_f16(
         offset,
     )?;
     if params.radius == 0.0 || params.intensity == 0.0 {
-        return Ok(encode_output(&base));
+        return Ok(base);
     }
 
     let mut bright = Level::<3>::empty(output_width as usize, output_height as usize);
@@ -577,7 +591,7 @@ fn apply_bloom_region_f16(
         let halo_alpha = halo.into_iter().fold(0.0_f32, f32::max).min(1.0);
         source[3] = source[3].max(halo_alpha);
     }
-    Ok(encode_output(&base))
+    Ok(base)
 }
 
 /// Alpha-contour glow uses the same reduced-resolution pyramid, then tints the
@@ -590,7 +604,7 @@ fn apply_glow_region_f16(
     output_height: u32,
     offset: [i32; 2],
     params: GlowParams,
-) -> Result<Vec<u8>, BloomError> {
+) -> Result<Vec<[f32; 4]>, BloomError> {
     if !params.intensity.is_finite()
         || !(0.0..=4.0).contains(&params.intensity)
         || !params.radius.is_finite()
@@ -609,7 +623,7 @@ fn apply_glow_region_f16(
         offset,
     )?;
     if params.radius == 0.0 || params.intensity == 0.0 || params.color[3] == 0.0 {
-        return Ok(encode_output(&base));
+        return Ok(base);
     }
     let mut coverage = Level::<1>::empty(output_width as usize, output_height as usize);
     for (target, source) in coverage.pixels.iter_mut().zip(&base) {
@@ -636,7 +650,30 @@ fn apply_glow_region_f16(
         }
         source[3] = quantize_half(source_alpha + halo_alpha * (1.0 - source_alpha));
     }
-    Ok(encode_output(&base))
+    Ok(base)
+}
+
+/// PyramidRegion always contains the output. Encode that window directly, avoiding a padded
+/// F16 allocation followed by decoding into another full-size f32 image just to crop it.
+fn encode_region(pixels: &[[f32; 4]], region: PyramidRegion, output: [u32; 2]) -> Vec<u8> {
+    let left = (-i64::from(region.origin[0])) as usize;
+    let top = (-i64::from(region.origin[1])) as usize;
+    let (width, height) = (output[0] as usize, output[1] as usize);
+    debug_assert!(left + width <= region.size[0] as usize);
+    debug_assert!(top + height <= region.size[1] as usize);
+    let mut bytes = Vec::with_capacity(width * height * 8);
+    for row in pixels
+        .chunks_exact(region.size[0] as usize)
+        .skip(top)
+        .take(height)
+    {
+        for pixel in &row[left..left + width] {
+            for &channel in pixel {
+                bytes.extend_from_slice(&f32_to_half(channel).to_le_bytes());
+            }
+        }
+    }
+    bytes
 }
 
 pub(crate) fn read_base(
@@ -647,9 +684,9 @@ pub(crate) fn read_base(
     output_height: u32,
     offset: [i32; 2],
 ) -> Result<Vec<[f32; 4]>, BloomError> {
-    let input_count = pixel_count(input_width, input_height)?;
+    let input_count = source_pixel_count(input_width, input_height)?;
     let output_count = pixel_count(output_width, output_height)?;
-    if input.len() != input_count * 8 {
+    if input_count.checked_mul(8) != Some(input.len()) {
         return Err(BloomError::InvalidImage);
     }
     let iw = input_width as usize;
@@ -732,11 +769,19 @@ fn pyramid_halo<const CHANNELS: usize>(
         .expect("pyramid output is live"))
 }
 
-pub(crate) fn pixel_count(width: u32, height: u32) -> Result<usize, BloomError> {
+fn source_pixel_count(width: u32, height: u32) -> Result<usize, BloomError> {
     let count = (width as usize)
         .checked_mul(height as usize)
         .ok_or(BloomError::InvalidImage)?;
-    if count == 0 || count > MAX_PIXELS {
+    if count == 0 {
+        return Err(BloomError::InvalidImage);
+    }
+    Ok(count)
+}
+
+pub(crate) fn pixel_count(width: u32, height: u32) -> Result<usize, BloomError> {
+    let count = source_pixel_count(width, height)?;
+    if count > MAX_PIXELS {
         return Err(BloomError::InvalidImage);
     }
     Ok(count)
@@ -1352,6 +1397,103 @@ mod tests {
             )
             .unwrap();
             assert!(empty.iter().all(|byte| *byte == 0));
+        }
+    }
+
+    #[test]
+    fn oversized_source_metadata_does_not_enlarge_the_pyramid_allocation() {
+        let region =
+            PyramidRegion::new([7645, 5891], [3840, 2160], [-2430, -1579], 8.0, 16.0).unwrap();
+        assert!(region.size[0] < 4000 && region.size[1] < 2400);
+        assert!(PyramidGraph::new(region.size[0], region.size[1], 8.0, 16.0).is_ok());
+        assert!(PyramidRegion::new([0, 1], [3840, 2160], [0, 0], 8.0, 16.0).is_err());
+        assert!(PyramidRegion::new([7645, 5891], [8192, 8192], [0, 0], 8.0, 16.0).is_err());
+        assert!(PyramidGraph::new(8192, 8192, 8.0, 16.0).is_err());
+        // Metadata admission must not admit a truncated F16 payload.
+        assert!(read_base(&[0; 8], 7645, 5891, 1, 1, [0, 0]).is_err());
+    }
+
+    #[test]
+    fn aligned_input_crops_preserve_visible_f16_bytes() {
+        let (width, height) = (640_u32, 512_u32);
+        let input = encode_output(
+            &(0..width * height)
+                .map(|index| {
+                    let alpha = (index % 17) as f32 / 16.0;
+                    [alpha * 1.5, alpha * 0.25, alpha * -0.125, alpha]
+                })
+                .collect::<Vec<_>>(),
+        );
+        for radius in [0.0, 4.0, 8.0, 12.0, 48.0, 128.0] {
+            for glow in [true, false] {
+                let render = |bytes: &[u8], size: [u32; 2], offset| {
+                    if glow {
+                        apply_glow_f16(
+                            bytes,
+                            size[0],
+                            size[1],
+                            101,
+                            77,
+                            offset,
+                            GlowParams {
+                                color: [0.05, 0.4, 0.7, 0.8],
+                                intensity: 0.75,
+                                radius,
+                            },
+                        )
+                    } else {
+                        apply_bloom_f16(
+                            bytes,
+                            size[0],
+                            size[1],
+                            101,
+                            77,
+                            offset,
+                            BloomParams {
+                                threshold: 0.25,
+                                knee: 0.15,
+                                intensity: 0.75,
+                                radius,
+                            },
+                        )
+                    }
+                    .unwrap()
+                };
+                let offset = [-228, -196];
+                let region = PyramidRegion::new(
+                    [width, height],
+                    [101, 77],
+                    offset,
+                    radius,
+                    radius * if glow { 2.0 } else { 1.0 },
+                )
+                .unwrap();
+                let left = (region.origin[0] - offset[0]).max(0) as usize;
+                let top = (region.origin[1] - offset[1]).max(0) as usize;
+                let right = (i64::from(region.origin[0]) + i64::from(region.size[0])
+                    - i64::from(offset[0]))
+                .min(i64::from(width)) as usize;
+                let bottom = (i64::from(region.origin[1]) + i64::from(region.size[1])
+                    - i64::from(offset[1]))
+                .min(i64::from(height)) as usize;
+                assert_eq!((left % 32, top % 32), (0, 0));
+                let cropped = (top..bottom)
+                    .flat_map(|y| {
+                        input[(y * width as usize + left) * 8..(y * width as usize + right) * 8]
+                            .iter()
+                            .copied()
+                    })
+                    .collect::<Vec<_>>();
+                assert_eq!(
+                    render(
+                        &cropped,
+                        [(right - left) as u32, (bottom - top) as u32],
+                        [offset[0] + left as i32, offset[1] + top as i32]
+                    ),
+                    render(&input, [width, height], offset),
+                    "glow={glow}, radius={radius}",
+                );
+            }
         }
     }
 

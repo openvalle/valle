@@ -263,8 +263,8 @@ struct ResourceCacheCounters {
     bypasses: u64,
 }
 
-/// Worker-local fulfillment state. Decoder and Scene3D caches are deliberately not shared across
-/// frame workers; immutable source bytes and the Engine render remain shared.
+/// Mutable resource ownership. Native schedules share one instance between preparation tasks;
+/// returned immutable images retain their own lifetime independently of this cache.
 pub struct NativeResourceProvider {
     catalog: Arc<NativeResourceCatalog>,
     runtime_shaders: BTreeMap<(ContentDigest, ContentDigest), Arc<[u8]>>,
@@ -276,6 +276,7 @@ pub struct NativeResourceProvider {
     frame_scene3d: Scene3dFrameReport,
     bytes: BTreeMap<ContentDigest, Arc<[u8]>>,
     video: BTreeMap<ContentDigest, LibavVideoSource>,
+    video_memory: BTreeMap<ContentDigest, Option<valle_engine::motion::memory::MemoryLease>>,
     video_transport: VideoFrameTransport,
     defer_scene3d_dof: bool,
     models: BTreeMap<ContentDigest, Arc<AdmittedModel>>,
@@ -304,6 +305,7 @@ impl NativeResourceProvider {
             frame_scene3d: Scene3dFrameReport::default(),
             bytes: BTreeMap::new(),
             video: BTreeMap::new(),
+            video_memory: BTreeMap::new(),
             video_transport: VideoFrameTransport::Cpu,
             defer_scene3d_dof: false,
             models: BTreeMap::new(),
@@ -341,8 +343,93 @@ impl NativeResourceProvider {
         self
     }
 
+    pub(super) fn retain_media(&mut self, fulfilled_requests: &[ResourceRequest]) {
+        self.video_memory.retain(|digest, _| {
+            fulfilled_requests.iter().any(|request| {
+                &request.key().content == digest
+                    && matches!(request.sample(), ResourceSample::SourceTime(_))
+            })
+        });
+        self.video.retain(|digest, _| {
+            fulfilled_requests.iter().any(|request| {
+                &request.key().content == digest
+                    && matches!(request.sample(), ResourceSample::SourceTime(_))
+            })
+        });
+    }
+
+    pub(super) fn frame_report(&mut self) -> ResourceFrameReport {
+        let generation_invalidations = self.cache_invalidations - self.reported_cache_invalidations;
+        self.reported_cache_invalidations = self.cache_invalidations;
+        ResourceFrameReport {
+            cache: ResourceCacheFrameReport {
+                generation: self.cache_generation,
+                generation_invalidations,
+                requests: self.frame_cache.requests,
+                hits: self.frame_cache.hits,
+                misses: self.frame_cache.misses,
+                insertions: self.frame_cache.insertions,
+                evictions: self.frame_cache.evictions,
+                bypasses: self.frame_cache.bypasses,
+                resident_entries: self.objects.entries.len(),
+                resident_bytes: self.objects.resident_bytes,
+            },
+            scene3d: self.frame_scene3d,
+        }
+    }
+
     pub fn catalog(&self) -> &Arc<NativeResourceCatalog> {
         &self.catalog
+    }
+
+    pub(super) fn lookup_request(
+        &mut self,
+        request: &ResourceRequest,
+    ) -> Result<Option<SkiaExternalObject>, NativeResourceError> {
+        increment(&mut self.frame_cache.requests)?;
+        if matches!(request.expected(), ExternalResourceDesc::Scene3d) {
+            increment(&mut self.frame_scene3d.requests)?;
+        }
+        let identity = NativeResourceCacheIdentity {
+            generation: self.cache_generation,
+            request: request.cache_identity()?,
+        };
+        if let Some(object) = self.objects.get(&identity)? {
+            increment(&mut self.frame_cache.hits)?;
+            return Ok(Some(object));
+        }
+        increment(&mut self.frame_cache.misses)?;
+        Ok(None)
+    }
+
+    pub(super) fn cache_fulfilled(
+        &mut self,
+        request: &ResourceRequest,
+        mut object: SkiaExternalObject,
+    ) -> Result<SkiaExternalObject, NativeResourceError> {
+        let identity = NativeResourceCacheIdentity {
+            generation: self.cache_generation,
+            request: request.cache_identity()?,
+        };
+        // Independent preparation tasks can finish the same immutable 3D request together.
+        // Keep the first admitted allocation rather than retaining or rejecting its duplicate.
+        if let Some(existing) = self.objects.get(&identity)? {
+            return Ok(existing);
+        }
+        object.charge_memory()?;
+        let bytes = object
+            .resident_bytes()
+            .ok_or(NativeResourceError::CacheByteOverflow)?;
+        let transient = matches!(request.sample(), ResourceSample::SourceTime(_))
+            || matches!(request.expected(), ExternalResourceDesc::Scene3d);
+        self.objects.insert(
+            identity,
+            object.clone(),
+            bytes,
+            transient,
+            &mut self.frame_cache,
+        )?;
+        Ok(object)
     }
 
     fn fulfill_visual(
@@ -366,13 +453,26 @@ impl NativeResourceProvider {
             ResourceSample::SourceTime(time) => {
                 let path = source_path(&source)?;
                 if !self.video.contains_key(&request.key().content) {
+                    let memory = valle_engine::motion::memory::reserve(
+                        valle_engine::motion::memory::MemoryKind::Media,
+                        u64::from(extent.width()) * u64::from(extent.height()) * 12,
+                    )?;
+                    self.video_memory.insert(request.key().content, memory);
                     self.video.insert(
                         request.key().content.clone(),
-                        LibavVideoSource::open_with_transport(&path, self.video_transport)
-                            .map_err(|error| NativeResourceError::Video {
-                                digest: request.key().content.to_string(),
-                                reason: error.to_string(),
-                            })?,
+                        if valle_engine::motion::cpu::is_budgeted() {
+                            LibavVideoSource::open_with_transport_and_threads(
+                                &path,
+                                self.video_transport,
+                                1,
+                            )
+                        } else {
+                            LibavVideoSource::open_with_transport(&path, self.video_transport)
+                        }
+                        .map_err(|error| NativeResourceError::Video {
+                            digest: request.key().content.to_string(),
+                            reason: error.to_string(),
+                        })?,
                     );
                 }
                 let decoder = self
@@ -417,10 +517,10 @@ impl NativeResourceProvider {
         }
     }
 
-    fn fulfill_scene3d(
+    pub(super) fn prepare_scene3d(
         &mut self,
         request: &ResourceRequest,
-    ) -> Result<SkiaExternalObject, NativeResourceError> {
+    ) -> Result<Scene3dWork, NativeResourceError> {
         let prepare_started = Instant::now();
         let ResourcePayload::Scene3dFrame { canonical_request } = request
             .payload()
@@ -476,6 +576,11 @@ impl NativeResourceProvider {
                     },
                 )?,
             );
+            // Immutable topology is small compared with frame pixels, but moving/generated
+            // scenes must not accumulate for the duration of a long render.
+            while self.scenes.len() >= 8 {
+                self.scenes.pop_first();
+            }
             self.scenes.insert(cache_key, Arc::clone(&prepared));
             prepared
         };
@@ -483,47 +588,21 @@ impl NativeResourceProvider {
             &mut self.frame_scene3d.prepare_us,
             prepare_started.elapsed(),
         )?;
-        let raster_started = Instant::now();
-        let deferred_dof = self.defer_scene3d_dof
-            && frame
-                .frame
-                .camera
-                .depth_of_field
-                .is_some_and(|dof| dof.max_blur_radius > 0.0);
-        let raster = if deferred_dof {
-            render_scene_without_depth_of_field(&prepared, &frame.frame)
-        } else {
-            render_scene(&prepared, &frame.frame)
-        }
-        .map_err(|error| NativeResourceError::SceneRender {
-            reason: error.to_string(),
-        })?;
-        add_elapsed(&mut self.frame_scene3d.raster_us, raster_started.elapsed())?;
-        let upload_started = Instant::now();
-        let object = if deferred_dof {
-            let dof = frame
-                .frame
-                .camera
-                .depth_of_field
-                .expect("deferred DOF was checked");
-            SkiaExternalObject::scene3d_deferred_dof(
-                request.key().clone(),
-                extent,
-                &raster.premul_rgba16f,
-                &raster.depth,
-                dof.focus_distance,
-                dof.max_blur_radius,
-                frame.frame.camera.far,
-            )?
-        } else {
-            SkiaExternalObject::scene3d_rgba16f(
-                request.key().clone(),
-                extent,
-                &raster.premul_rgba16f,
-            )?
-        };
-        add_elapsed(&mut self.frame_scene3d.upload_us, upload_started.elapsed())?;
-        Ok(object)
+        Ok(Scene3dWork {
+            frame,
+            prepared,
+            extent,
+            key: request.key().clone(),
+            defer_dof: self.defer_scene3d_dof,
+        })
+    }
+
+    fn fulfill_scene3d(
+        &mut self,
+        request: &ResourceRequest,
+    ) -> Result<SkiaExternalObject, NativeResourceError> {
+        self.prepare_scene3d(request)?
+            .render(&mut self.frame_scene3d)
     }
 
     fn scene_resources(
@@ -713,8 +792,79 @@ impl NativeResourceProvider {
     }
 }
 
+/// Immutable geometry and frame state leave the shared cache before CPU rasterization begins.
+pub(super) struct Scene3dWork {
+    frame: Scene3DFrameRequest,
+    prepared: Arc<PreparedScene>,
+    extent: Extent2d,
+    key: valle_engine::resource::ResourceKey,
+    defer_dof: bool,
+}
+impl Scene3dWork {
+    pub(super) fn render(
+        self,
+        report: &mut Scene3dFrameReport,
+    ) -> Result<SkiaExternalObject, NativeResourceError> {
+        let Self {
+            frame,
+            prepared,
+            extent,
+            key,
+            defer_dof,
+        } = self;
+        let _working = valle_engine::motion::memory::reserve(
+            valle_engine::motion::memory::MemoryKind::Temporary,
+            u64::from(frame.width) * u64::from(frame.height) * 96,
+        )?;
+        let raster_started = Instant::now();
+        let deferred_dof = defer_dof
+            && frame
+                .frame
+                .camera
+                .depth_of_field
+                .is_some_and(|dof| dof.max_blur_radius > 0.0);
+        let raster = if deferred_dof {
+            render_scene_without_depth_of_field(&prepared, &frame.frame)
+        } else {
+            render_scene(&prepared, &frame.frame)
+        }
+        .map_err(|error| NativeResourceError::SceneRender {
+            reason: error.to_string(),
+        })?;
+        add_elapsed(&mut report.raster_us, raster_started.elapsed())?;
+        let upload_started = Instant::now();
+        let object = if deferred_dof {
+            let dof = frame
+                .frame
+                .camera
+                .depth_of_field
+                .expect("deferred DOF was checked");
+            SkiaExternalObject::scene3d_deferred_dof(
+                key.clone(),
+                extent,
+                &raster.premul_rgba16f,
+                &raster.depth,
+                dof.focus_distance,
+                dof.max_blur_radius,
+                frame.frame.camera.far,
+            )?
+        } else {
+            SkiaExternalObject::scene3d_rgba16f(key.clone(), extent, &raster.premul_rgba16f)?
+        };
+        add_elapsed(&mut report.upload_us, upload_started.elapsed())?;
+        Ok(object)
+    }
+}
 impl ResourceProvider for NativeResourceProvider {
     type Error = NativeResourceError;
+
+    fn trim_memory(&mut self) {
+        self.objects.clear();
+        // Keep bounded immutable topology. Clearing it whenever another frame waits for bytes
+        // repeats geometry construction and serializes the shared provider under pressure.
+        self.video.clear();
+        self.video_memory.clear();
+    }
 
     fn begin_frame(&mut self) {
         self.frame_cache = ResourceCacheCounters::default();
@@ -722,53 +872,16 @@ impl ResourceProvider for NativeResourceProvider {
     }
 
     fn fulfill(&mut self, request: &ResourceRequest) -> Result<SkiaExternalObject, Self::Error> {
-        increment(&mut self.frame_cache.requests)?;
-        if matches!(request.expected(), ExternalResourceDesc::Scene3d) {
-            increment(&mut self.frame_scene3d.requests)?;
-        }
-        let identity = NativeResourceCacheIdentity {
-            generation: self.cache_generation,
-            request: request.cache_identity()?,
-        };
-        if let Some(object) = self.objects.get(&identity)? {
-            increment(&mut self.frame_cache.hits)?;
+        if let Some(object) = self.lookup_request(request)? {
             return Ok(object);
         }
-        increment(&mut self.frame_cache.misses)?;
         let object = self.fulfill_uncached(request)?;
-        let bytes = object
-            .resident_bytes()
-            .ok_or(NativeResourceError::CacheByteOverflow)?;
-        let transient = matches!(request.sample(), ResourceSample::SourceTime(_))
-            || matches!(request.expected(), ExternalResourceDesc::Scene3d);
-        self.objects.insert(
-            identity,
-            object.clone(),
-            bytes,
-            transient,
-            &mut self.frame_cache,
-        )?;
-        Ok(object)
+        self.cache_fulfilled(request, object)
     }
 
-    fn finish_frame(&mut self, _fulfilled_requests: &[ResourceRequest]) -> ResourceFrameReport {
-        let generation_invalidations = self.cache_invalidations - self.reported_cache_invalidations;
-        self.reported_cache_invalidations = self.cache_invalidations;
-        ResourceFrameReport {
-            cache: ResourceCacheFrameReport {
-                generation: self.cache_generation,
-                generation_invalidations,
-                requests: self.frame_cache.requests,
-                hits: self.frame_cache.hits,
-                misses: self.frame_cache.misses,
-                insertions: self.frame_cache.insertions,
-                evictions: self.frame_cache.evictions,
-                bypasses: self.frame_cache.bypasses,
-                resident_entries: self.objects.entries.len(),
-                resident_bytes: self.objects.resident_bytes,
-            },
-            scene3d: self.frame_scene3d,
-        }
+    fn finish_frame(&mut self, fulfilled_requests: &[ResourceRequest]) -> ResourceFrameReport {
+        self.retain_media(fulfilled_requests);
+        self.frame_report()
     }
 
     fn invalidate_generation(&mut self) -> Result<(), Self::Error> {
@@ -849,6 +962,8 @@ fn source_path(source: &NativeResourceSource) -> Result<PathBuf, NativeResourceE
 
 #[derive(Debug, Error)]
 pub enum NativeResourceError {
+    #[error(transparent)]
+    Memory(#[from] valle_engine::motion::memory::MemoryError),
     #[error("resource cache limits must have non-zero entry and byte capacity")]
     InvalidCacheLimits,
     #[error("resource cache byte accounting overflowed")]

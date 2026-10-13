@@ -34,6 +34,10 @@ use crate::{
     resource::{ContentDigest, ExternalGeneration, ExternalPixelLayout, ResourceContractError},
 };
 
+#[cfg(test)]
+#[path = "product_motion_kernel_tests.rs"]
+mod motion_kernel_tests;
+
 /// One immutable, fully preflighted Engine render.
 #[derive(Debug, Clone)]
 pub struct EngineRender {
@@ -106,6 +110,71 @@ pub struct FrameCompiler {
 }
 
 impl FrameCompiler {
+    pub(crate) fn motion_kernel_available(&self) -> bool {
+        let render = self.render.compiled();
+        (0..render.sources().len())
+            .filter_map(|index| render.sources().source(index as u32))
+            .filter_map(|source| source.motion())
+            .filter_map(|instance| render.motion_scene(instance))
+            .any(|scene| scene.artifact().nodes.len() >= 128)
+    }
+
+    pub(crate) fn motion_definition(&self, id: &str) -> Option<&str> {
+        self.caches.motion_preparation.definition(id)
+    }
+
+    pub(crate) fn capture_motion_jobs(
+        &mut self,
+        render_id: RenderId,
+        key: FrameKey,
+        spec: RenderSpec,
+    ) -> Result<Vec<crate::prepare::motion_kernel::MotionKernelJob>, ProductEngineError> {
+        use crate::prepare::motion_kernel::Stage;
+        self.caches.motion_preparation.stage = Some(Stage::Capture(Vec::new()));
+        let result = self.evaluate_prepare(render_id, key, spec);
+        let stage = self.caches.motion_preparation.stage.take();
+        result?;
+        match stage {
+            Some(Stage::Capture(jobs)) => {
+                // A very wide frame can exceed the bounded immutable-definition cache. Keep
+                // its ordinary preparation path instead of retaining every visited scene.
+                if jobs.len() <= 128
+                    && jobs.iter().all(|job| {
+                        job.input_json.len() <= 8 * 1024 * 1024
+                            && self.motion_definition(&job.definition_id).is_some()
+                    })
+                {
+                    Ok(jobs)
+                } else {
+                    Ok(Vec::new())
+                }
+            }
+            _ => unreachable!("capture is scoped to this call"),
+        }
+    }
+
+    pub(crate) fn evaluate_prepare_motion(
+        &mut self,
+        render_id: RenderId,
+        key: FrameKey,
+        spec: RenderSpec,
+        packet: &[u8],
+    ) -> Result<PreparedTicket, ProductEngineError> {
+        use crate::prepare::motion_kernel::{Stage, decode_results};
+        let results =
+            decode_results(packet).map_err(|error| PrepareError::at("motionKernel", error))?;
+        self.caches.motion_preparation.stage = Some(Stage::Complete(results));
+        let result = self.evaluate_prepare(render_id, key, spec);
+        let stage = self.caches.motion_preparation.stage.take();
+        let ticket = result?;
+        if !matches!(stage, Some(Stage::Complete(ref results)) if results.is_empty()) {
+            return Err(
+                PrepareError::at("motionKernel", "unexpected Motion kernel results").into(),
+            );
+        }
+        Ok(ticket)
+    }
+
     /// Evaluate and prepare one frame without waiting for any platform resource. The returned
     /// request set is complete and may be fulfilled while [`PreparedTicket::lower`] runs.
     pub fn evaluate_prepare(

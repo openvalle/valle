@@ -11,7 +11,7 @@ const { default: init } = await import("canvaskit-wasm") as unknown as {
 const ck = await init({ locateFile: () => Bun.resolveSync("canvaskit-wasm/bin/canvaskit.wasm", import.meta.dir) });
 initSync({ module: await readFile(new URL("../../../generated/web/valle_engine_bg.wasm", import.meta.url)) });
 
-test("CPU SDR output matches shared SkSL across gamut, near-black and coverage boundaries", () => {
+test("CPU SDR output matches shared SkSL across gamut, near-black and coverage boundaries", async () => {
   const engine = new ProductEngine();
   const builtins = new CanvasKitBuiltinRuntime(ck);
   const colors = [[0,0,0], [1,1,1], [1,0,0], [0,1,0], [0,0,1], [-.2,.5,1.4], [2,-1,.1]];
@@ -33,7 +33,7 @@ test("CPU SDR output matches shared SkSL across gamut, near-black and coverage b
       const paint = new ck.Paint(); paint.setShader(shader); paint.setBlendMode(ck.BlendMode.Src);
       try {
         reference!.getCanvas().drawPaint(paint);
-        drawSrgbPreviewCpu(ck, actual!.getCanvas(), image, engine, opaque);
+        await drawSrgbPreviewCpu(ck, actual!.getCanvas(), image, engine, opaque);
         for (const alphaType of [ck.AlphaType.Premul, ck.AlphaType.Unpremul]) {
           const read = (surface: typeof reference) => {
             const target = ck.MakeSurface(width, height)!;
@@ -56,7 +56,7 @@ test("CPU SDR output matches shared SkSL across gamut, near-black and coverage b
   } finally { image?.delete(); for (const s of surfaces) s.delete(); for (const m of allocations) ck.Free(m); builtins.dispose(); engine.free(); }
 });
 
-test("CPU output rejects malformed and nonfinite pixels", () => {
+test("CPU output rejects malformed and nonfinite pixels", async () => {
   const engine = new ProductEngine();
   try {
     expect(() => engine.transform_srgb_preview_pixels(new Float32Array(3), false)).toThrow();
@@ -69,7 +69,7 @@ test("CPU output rejects malformed and nonfinite pixels", () => {
   } finally { engine.free(); }
 });
 
-test("F16 output preserves the float read/convert/write result across stripes", () => {
+test("F16 output preserves the float read/convert/write result across stripes", async () => {
   const engine = new ProductEngine();
   const width = 17, height = 129;
   const info = { width, height, colorType: ck.ColorType.RGBA_F16, alphaType: ck.AlphaType.Premul, colorSpace: ck.ColorSpace.SRGB };
@@ -93,15 +93,15 @@ test("F16 output preserves the float read/convert/write result across stripes", 
       finally { snapshot.delete(); }
     };
     for (const opaque of [false, true]) {
-      expect(drawSrgbPreviewCpu(ck, surfaces[1]!.getCanvas(), image, floatKernel, opaque)).toBe(true);
-      expect(drawSrgbPreviewCpu(ck, surfaces[2]!.getCanvas(), image, engine, opaque)).toBe(true);
+      expect(await drawSrgbPreviewCpu(ck, surfaces[1]!.getCanvas(), image, floatKernel, opaque)).toBe(true);
+      expect(await drawSrgbPreviewCpu(ck, surfaces[2]!.getCanvas(), image, engine, opaque)).toBe(true);
       expect(read(surfaces[2]!)).toEqual(read(surfaces[1]!));
     }
     expect(srgbPreviewScratchBytes(3840, 2160, true)).toBe(1_966_080n);
   } finally { image?.delete(); for (const surface of surfaces) surface.delete(); for (const memory of allocations) ck.Free(memory); engine.free(); }
 });
 
-for (const f16 of [false, true]) test(`coverage probe rejects partial pixels without drawing (${f16 ? "F16" : "F32"})`, () => {
+for (const f16 of [false, true]) test(`coverage probe rejects partial pixels without drawing (${f16 ? "F16" : "F32"})`, async () => {
   const width = 3, height = 129;
   const info = { width, height, colorType: ck.ColorType.RGBA_F16, alphaType: ck.AlphaType.Premul, colorSpace: ck.ColorSpace.SRGB };
   const memory = ck.Malloc(Uint8Array, width * height * 8);
@@ -135,14 +135,14 @@ for (const f16 of [false, true]) test(`coverage probe rejects partial pixels wit
       source.getCanvas().writePixels(new Uint8Array(pixels.buffer), width, height, 0, 0,
         ck.AlphaType.Premul, ck.ColorType.RGBA_F32, ck.ColorSpace.SRGB);
       image = source.makeImageSnapshot();
-      expect(drawSrgbPreviewCpu(ck, target.getCanvas(), image, kernel, false, true)).toBe(false);
+      expect(await drawSrgbPreviewCpu(ck, target.getCanvas(), image, kernel, false, true)).toBe(false);
       expect(readTarget()).toEqual(before);
       image.delete(); image = null;
     }
     expect(calls).toBe(0);
     source.getCanvas().clear(ck.Color4f(.1, .2, .3, 1));
     image = source.makeImageSnapshot();
-    expect(drawSrgbPreviewCpu(ck, target.getCanvas(), image, kernel, false, true)).toBe(true);
+    expect(await drawSrgbPreviewCpu(ck, target.getCanvas(), image, kernel, false, true)).toBe(true);
     expect(calls).toBeGreaterThan(1);
     expect(transformedPixels).toBe(width * height);
     expect(readTarget().filter((_, i) => i % 4 === 3)).toEqual(new Uint8Array(width * height).fill(255));

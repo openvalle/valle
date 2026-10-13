@@ -1,7 +1,8 @@
 [alias]
 xtask = "run --package xtask --"
 
-# Reserve 4 MiB for recursive Wasm layout and CSS parsing.
-# Setting RUSTFLAGS overrides these flags; preserve this stack size in custom configurations.
+# Reserve 4 MiB for recursive Wasm layout and CSS parsing. The Web runtime targets SIMD128
+# browsers; this also selects sha2's SIMD backend for canonical program and binding digests.
+# Setting RUSTFLAGS overrides these flags; preserve both options in custom configurations.
 [target.wasm32-unknown-unknown]
-rustflags = ["-C", "link-arg=-zstack-size=4194304"]
+rustflags = ["-C", "link-arg=-zstack-size=4194304", "-C", "target-feature=+simd128"]

@@ -1382,29 +1382,30 @@ fn render_scene_impl(
         workers.max(1).min(MAX_RASTER_WORKERS)
     }
     .min(tiles.len());
-    let mut worker_jobs = (0..worker_count).map(|_| Vec::new()).collect::<Vec<_>>();
-    for (index, (tile, command_indices)) in tiles.into_iter().zip(bins).enumerate() {
-        worker_jobs[index % worker_count].push(TileJob {
-            tile,
-            commands: command_indices,
-        });
-    }
     let pixel_rays = PixelRays::new(&camera);
     checkpoint("binning");
-    if worker_count == 1 {
-        for job in worker_jobs.pop().expect("validated layer has one tile") {
-            render_tile(
-                job,
-                &commands,
-                &frame_meshes,
-                &camera,
-                &pixel_rays,
-                &lights,
-                environment_background,
-            );
+    crate::cpu::parallel_scope(worker_count, |scope, worker_count| {
+        let mut worker_jobs = (0..worker_count).map(|_| Vec::new()).collect::<Vec<_>>();
+        for (index, (tile, command_indices)) in tiles.into_iter().zip(bins).enumerate() {
+            worker_jobs[index % worker_count].push(TileJob {
+                tile,
+                commands: command_indices,
+            });
         }
-    } else {
-        std::thread::scope(|scope| {
+        if worker_count == 1 {
+            for job in worker_jobs.pop().expect("validated layer has one tile") {
+                render_tile(
+                    job,
+                    &commands,
+                    &frame_meshes,
+                    &camera,
+                    &pixel_rays,
+                    &lights,
+                    environment_background,
+                );
+            }
+        } else {
+            let caller_jobs = worker_jobs.pop().unwrap();
             for jobs in worker_jobs {
                 let commands = &commands;
                 let frame_meshes = &frame_meshes;
@@ -1425,8 +1426,19 @@ fn render_scene_impl(
                     }
                 });
             }
-        });
-    }
+            for job in caller_jobs {
+                render_tile(
+                    job,
+                    &commands,
+                    &frame_meshes,
+                    &camera,
+                    &pixel_rays,
+                    &lights,
+                    environment_background,
+                );
+            }
+        }
+    });
     checkpoint("raster");
     if apply_depth_of_field {
         dof::apply(&mut output, &frame.camera, workers);

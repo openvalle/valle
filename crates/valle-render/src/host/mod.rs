@@ -4,8 +4,11 @@
 //! export, storyboard and CLI capture—uses [`FrameRunner`], while the sealed executor consumes only
 //! plan/bindings/backend objects.
 
+mod admission;
 #[cfg(feature = "native")]
 mod audio;
+#[cfg(feature = "native")]
+mod budget;
 #[cfg(feature = "native")]
 mod delivery;
 mod frame;
@@ -21,11 +24,15 @@ mod render;
 mod resource;
 mod schedule;
 #[cfg(feature = "native")]
+mod shared_resource;
+#[cfg(feature = "native")]
 mod sink;
 mod trace;
 
 #[cfg(feature = "native")]
 pub use audio::{AudioMixError, CompiledAudioMixer};
+#[cfg(feature = "native")]
+pub use budget::{NativeBudgetError, NativeBudgetReport, NativeRenderBudget};
 #[cfg(all(target_os = "macos", feature = "native"))]
 pub(crate) use frame::SubmittedSharedFrame;
 pub use frame::{

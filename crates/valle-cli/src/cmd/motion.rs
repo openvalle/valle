@@ -320,7 +320,7 @@ fn render(
             } else {
                 valle_engine::resource::OutputBackground::Transparent
             },
-            raster_workers: tuning.workers.map(usize::from),
+            budget: tuning.budget.native()?,
             hardware_encode: tuning.hardware_encode,
             bitrate: tuning.bitrate.map(|value| value as usize),
             encode_threads: tuning.encode_threads.map(usize::from),

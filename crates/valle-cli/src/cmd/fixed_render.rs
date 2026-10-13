@@ -78,10 +78,17 @@ pub fn run(
     }
     let catalog = Arc::new(catalog);
     let project = NativeProject::from_render(opened.engine_render(), catalog);
+    let budget = match &action {
+        FixedRenderAction::Preview { budget, .. } | FixedRenderAction::Export { budget, .. } => {
+            budget.clone()
+        }
+        _ => unreachable!("non-render actions returned before Native delivery"),
+    };
     let renderer = NativeRenderer::new(
         project,
         NativeRenderOptions {
             backend: SkiaBackendKind::Raster,
+            budget: budget.native()?,
             ..NativeRenderOptions::default()
         },
     );
@@ -89,12 +96,12 @@ pub fn run(
         FixedRenderAction::Open | FixedRenderAction::Pin | FixedRenderAction::Unpin => {
             unreachable!("non-render actions returned before Native delivery")
         }
-        FixedRenderAction::Preview { frame, output } => {
+        FixedRenderAction::Preview { frame, output, .. } => {
             require_new_output(&output)?;
             let summary = renderer.preview_frame_key(FrameKey::new(frame), &output)?;
             ("preview", output, summary)
         }
-        FixedRenderAction::Export { output } => {
+        FixedRenderAction::Export { output, .. } => {
             require_new_output(&output)?;
             let summary = renderer.export_mp4(&output)?;
             ("export", output, summary)
@@ -227,6 +234,19 @@ pub(super) fn delivery_report(
             "audioOnly": summary.audio_only,
         }),
     );
+    if let Some(pipeline) = &summary.pipeline {
+        if let Some(budget) = pipeline.budget {
+            report.get_mut("delivery").expect("delivery report")["budget"] = json!({
+                "cpuThreads":budget.cpu_threads,"peakGrantedCpuSlots":budget.peak_cpu_slots,
+                "memoryBudgetBytes":budget.memory_budget_bytes,"resourceProviders":budget.resource_providers,"executors":budget.executors,
+                "configuredCapacityBytes":budget.configured_capacity_bytes,
+                "managedPeakBytes":budget.memory.peak_bytes,"managedPeakLiveBytes":budget.memory.peak_live_bytes,"managedRemainingBytes":budget.memory.used_bytes,
+                "managedPeakByKindBytes":budget.memory.peak_by_kind,
+                "memoryScope":"shared frame reservations, resource/surface storage, conservative CPU filter/3D scratch and decoded media windows; excludes immutable inputs, bounded plan/topology metadata and driver/codec internals; not process RSS",
+                "frameParallelism":pipeline.preparation_tasks,"maximumInFlightFrames":pipeline.maximum_in_flight_frames,
+            });
+        }
+    }
     if let Some(timing) = timing {
         report.get_mut("delivery").expect("delivery report")["timing"] = timing;
     }

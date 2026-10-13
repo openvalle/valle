@@ -1,14 +1,101 @@
 import { expect, test } from "bun:test";
 import { BrowserResourceCache } from "./resource-cache.ts";
+import { BrowserRuntimeBudget } from "./runtime-budget.ts";
 
 import { BrowserValleWebPlayer } from "./product-controller.ts";
+
+function playerFixture(): any {
+  const player = Object.create(BrowserValleWebPlayer.prototype) as any;
+  player.planner = { call: async (method: string, args: unknown[]) => player.engine[method](...args) };
+  player.runtimeBudget = new BrowserRuntimeBudget();
+  player.runtimeAbort = new AbortController();
+  player.memoryOwner = {};
+  player.audioMemoryOwner = {};
+  player.audioTail = Promise.resolve();
+  player.audioPeakTasks = new Set();
+  player.audioReaders = new Map();
+  player.audioBuffers = new Map();
+  player.runtimeBudget.register(player.memoryOwner, () => {});
+  player.runtimeBudget.register(player.audioMemoryOwner, () => player.audioBuffers.clear());
+  return player;
+}
+
+test("waveform peaks stream bounded PCM and preserve bucket boundaries, including empty buckets", async () => {
+  const previous = globalThis.OfflineAudioContext;
+  const rate = 8000, length = rate * 2 + 5;
+  const bytes = new Uint8Array(44 + length * 2), header = new DataView(bytes.buffer);
+  const label = (offset: number, value: string) => bytes.set(new TextEncoder().encode(value), offset);
+  label(0, "RIFF"); header.setUint32(4, bytes.length - 8, true); label(8, "WAVEfmt ");
+  header.setUint32(16, 16, true); header.setUint16(20, 1, true); header.setUint16(22, 1, true);
+  header.setUint32(24, rate, true); header.setUint32(28, rate * 2, true); header.setUint16(32, 2, true); header.setUint16(34, 16, true);
+  label(36, "data"); header.setUint32(40, length * 2, true);
+  for (let i = 0; i < length; i++) header.setInt16(44 + i * 2, (i * 13 % 60000) - 30000, true);
+  let maximum = 0;
+  globalThis.OfflineAudioContext = class {
+    sampleRate = rate;
+    createBuffer(channels: number, count: number) {
+      maximum = Math.max(maximum, count);
+      const planes = Array.from({ length: channels }, () => new Float32Array(count));
+      return { length: count, getChannelData: (channel: number) => planes[channel]! };
+    }
+  } as any;
+  const player = playerFixture();
+  Object.assign(player, { requireAsset: () => ({}), fetchAssetBytes: async () => bytes, stats: { audioPeaksDecodes: 0 } });
+  try {
+    for (const buckets of [37, length + 3]) {
+      const result = await player.audioPeaks("audio", { buckets });
+      const expected = new Float32Array(buckets);
+      for (let b = 0; b < buckets; b++) for (let i = Math.floor(b * length / buckets); i < Math.floor((b + 1) * length / buckets); i++) {
+        expected[b] = Math.max(expected[b]!, Math.abs(header.getInt16(44 + i * 2, true) / 32768));
+      }
+      expect(result.peaks).toEqual(expected);
+      expect(result.durationS).toBe(length / rate);
+    }
+    expect(maximum).toBe(rate);
+    expect(player.audioPeakTasks.size).toBe(0);
+    expect(player.runtimeBudget.snapshot().kernelWorkingBytes).toBe(0);
+    expect(player.runtimeBudget.snapshot().activeCpuSlots).toBe(0);
+    await expect(player.audioPeaks("audio", { buckets: 0 })).rejects.toThrow("positive integer");
+    player.runtimeAbort.abort();
+    await expect(player.audioPeaks("audio")).rejects.toThrow();
+  } finally { globalThis.OfflineAudioContext = previous; }
+});
 
 const RENDER_ID = "sha256:1111111111111111111111111111111111111111111111111111111111111111";
 const SCENE_DIGEST = `sha256:${"4".repeat(64)}`;
 const TOPOLOGY_DIGEST = `sha256:${"5".repeat(64)}`;
 
+test("switching video sources retires idle decoders before decoding and preserves active sources", async () => {
+  for (const allBusy of [false, true]) {
+    const player = playerFixture();
+    const closed: string[] = [];
+    const pinned = { close: () => closed.push("pinned") };
+    const previous = { close: () => closed.push("previous") };
+    Object.assign(player, {
+      closed: false,
+      videoRings: new Map([["pinned", pinned], ["previous", previous]]),
+      videoRingUsers: new Map([["pinned", 1], ["next", 1]]),
+      videoBlobs: { get: async () => new Blob([new Uint8Array(1)]) },
+      assetUrl: () => "https://example.invalid/video",
+    });
+    if (allBusy) player.videoRingUsers.set("previous", 1);
+    const ring = await player.videoRing({ id: "next", contentDigest: SCENE_DIGEST });
+    try {
+      // No frameAt call has completed yet: the first frame may still be decoding.
+      expect(closed).toEqual(allBusy ? [] : ["previous"]);
+      expect(player.videoRings.has("pinned")).toBe(true);
+      expect(player.videoRings.get("next")).toBe(ring);
+      expect(player.videoRings.size).toBe(allBusy ? 3 : 2);
+      player.videoRingUsers.delete("previous");
+      player.trimVideoRings();
+      expect(closed).toEqual(["previous"]);
+      expect(player.videoRings.size).toBe(2);
+    } finally { ring.close(); }
+  }
+});
+
 test("preview pipeline preparation is bounded, unpublished and reused within one package", async () => {
-  const player = Object.create(BrowserValleWebPlayer.prototype) as any;
+  const player = playerFixture();
   const frames: Array<[number, boolean]> = [];
   const target = {gpu: true};
   const stop = new Error("stop after warmup");
@@ -37,7 +124,7 @@ test("preview pipeline preparation is bounded, unpublished and reused within one
 });
 
 test("direct and buffered frames retain exclusive GPU ownership across yields", async () => {
-  const player = Object.create(BrowserValleWebPlayer.prototype) as any;
+  const player = playerFixture();
   const release = Promise.withResolvers<void>();
   const started: number[] = [];
   let active = 0, peak = 0;
@@ -60,7 +147,7 @@ test("direct and buffered frames retain exclusive GPU ownership across yields", 
 });
 
 test("a rejected frame releases GPU ownership for the next SDK request", async () => {
-  const player = Object.create(BrowserValleWebPlayer.prototype) as any;
+  const player = playerFixture();
   const error = new Error("draw failed");
   player.renderFrameNow = async (frame: number) => {
     await Bun.sleep(0);
@@ -74,7 +161,7 @@ test("a rejected frame releases GPU ownership for the next SDK request", async (
 });
 
 test("GPU presentation deadlines retain surface ownership until the displayed frame is published", async () => {
-  const player = Object.create(BrowserValleWebPlayer.prototype) as any;
+  const player = playerFixture();
   const deadline = Promise.withResolvers<void>();
   const started: number[] = [], presented: number[] = [];
   player.renderFrameNow = async (frame: number) => {
@@ -97,7 +184,7 @@ test("GPU presentation deadlines retain surface ownership until the displayed fr
 });
 
 test("pausing an ahead GPU frame cancels its presentation and releases the surface for SDK rendering", async () => {
-  const player = Object.create(BrowserValleWebPlayer.prototype) as any;
+  const player = playerFixture();
   const rendered: number[] = [], presented: number[] = [];
   Object.assign(player, {
     closed:false, playing:true, playGeneration:1, timeS:0, playbackFrame:null, target:{gpu:true},
@@ -116,7 +203,7 @@ test("pausing an ahead GPU frame cancels its presentation and releases the surfa
 });
 
 test("the ahead GPU pump publishes its final frame once and stops at the fixed media endpoint", async () => {
-  const player=Object.create(BrowserValleWebPlayer.prototype) as any;
+  const player=playerFixture();
   let clock=0;const presented:number[]=[],times:number[]=[];
   Object.assign(player,{
     closed:false,playing:true,playGeneration:1,timeS:0,playbackFrame:null,target:{gpu:true},
@@ -133,19 +220,18 @@ test("the ahead GPU pump publishes its final frame once and stops at the fixed m
 });
 
 test("offscreen filter surfaces share the existing total frame budget", () => {
-  const player = Object.create(BrowserValleWebPlayer.prototype) as any;
+  const player = playerFixture();
   for (const [width, height] of [[320,180],[1920,1080],[3840,2160],[7680,4320]]) {
     const root = BigInt(width!) * BigInt(height!) * 8n;
-    const oldSurfaceLimit = root > 64n * 1024n * 1024n ? root : 64n * 1024n * 1024n;
     const limits = player.framePlanningInput(10, width, height, false);
-    expect(limits.maxFrameBytes).toBe(oldSurfaceLimit * 16n);
-    expect(limits.maxSurfaceBytes).toBe(limits.maxFrameBytes / 4n);
+    expect(limits.maxFrameBytes).toBe(BigInt(player.runtimeBudget.memoryBytes));
+    expect(limits.maxSurfaceBytes).toBe(limits.maxFrameBytes);
     expect(limits.maxSurfaceBytes).toBeGreaterThanOrEqual(root);
   }
 });
 
 test("rapid seeks wait for playback and preserve every requested frame", async () => {
-  const player = Object.create(BrowserValleWebPlayer.prototype) as any;
+  const player = playerFixture();
   const playback = Promise.withResolvers<void>();
   const renders = [Promise.withResolvers<void>(), Promise.withResolvers<void>()];
   const started: number[] = [];
@@ -184,7 +270,7 @@ test("rapid seeks wait for playback and preserve every requested frame", async (
 });
 
 test("a failed seek rejects its caller without blocking the next seek", async () => {
-  const player = Object.create(BrowserValleWebPlayer.prototype) as any;
+  const player = playerFixture();
   const failed = Promise.withResolvers<void>();
   const error = new Error("frame rendering failed");
   Object.assign(player, {
@@ -207,7 +293,7 @@ test("a failed seek rejects its caller without blocking the next seek", async ()
 });
 
 test("seeking during playback prebuffering cancels the old play request quietly", async () => {
-  const player = Object.create(BrowserValleWebPlayer.prototype) as any;
+  const player = playerFixture();
   const ready = Promise.withResolvers<void>();
   let clockStarts = 0;
   Object.assign(player, {
@@ -231,7 +317,7 @@ test("seeking during playback prebuffering cancels the old play request quietly"
 });
 
 test("playback still reports an active prebuffer failure", async () => {
-  const player = Object.create(BrowserValleWebPlayer.prototype) as any;
+  const player = playerFixture();
   const error = new Error("worker failed");
   Object.assign(player, {
     closed: false, playing: false, playGeneration: 0, timeS: 0, renderInFlight: null,
@@ -244,11 +330,11 @@ test("playback still reports an active prebuffer failure", async () => {
   expect(await player.play().catch((actual: unknown) => actual)).toBe(error);
 });
 
-test("failed frame planning releases resources that finished loading", async () => {
-  const player = Object.create(BrowserValleWebPlayer.prototype) as any;
+test("failed frame planning releases its slot before admitting or loading resources", async () => {
+  const player = playerFixture();
   const resources = new BrowserResourceCache();
   const error = new Error("planning failed after requests");
-  let disposed = 0;
+  let fulfilled = 0;
   let released = 0;
   Object.assign(player, {
     closed: false, renderId: RENDER_ID, pxScale: 1, resourceObjects: resources,
@@ -269,19 +355,21 @@ test("failed frame planning releases resources that finished loading", async () 
       release() { released += 1; },
     }),
     async fulfillRequests() {
+      fulfilled++;
       resources.beginFrame();
       resources.finishFrame(0);
-      return { dispose: [() => { disposed += 1; }] };
+      return { dispose: [] };
     },
   });
   expect(await player.renderFrame(0).catch((actual: unknown) => actual)).toBe(error);
   expect(released).toBe(1);
-  expect(disposed).toBe(1);
+  expect(fulfilled).toBe(0);
+  expect(player.runtimeBudget.snapshot().managedBytes).toBe(0);
   expect(() => resources.dispose()).not.toThrow();
 });
 
 test("slow preview follows the media clock and still presents the final frame", async () => {
-  const player = Object.create(BrowserValleWebPlayer.prototype) as any;
+  const player = playerFixture();
   let time = 0;
   const presented: number[] = [];
   const prefetched: number[] = [];
@@ -312,7 +400,7 @@ test("slow preview follows the media clock and still presents the final frame", 
 });
 
 test("a late preview retires the bitmap producer before directly rendering the clock frame", async () => {
-  const player = Object.create(BrowserValleWebPlayer.prototype) as any;
+  const player = playerFixture();
   const producer = Promise.withResolvers<void>();
   const presented: number[] = [];
   let mediaTime = 4 / 30, bitmapsClosed = 0, closed = 0;
@@ -345,7 +433,7 @@ test("a late preview retires the bitmap producer before directly rendering the c
 });
 
 test("prebuffering uses the paused media position until the playback clock starts", async () => {
-  const player = Object.create(BrowserValleWebPlayer.prototype) as any;
+  const player = playerFixture();
   const made: number[] = [];
   let clockStarts = 0;
   const target = { gpu: true, canvas: { width: 2, height: 2, getContext: () => null } };
@@ -382,7 +470,7 @@ const LEFT_DIGEST = "11111111111111111111111111111111111111111111111111111111111
 const RIGHT_DIGEST = "2222222222222222222222222222222222222222222222222222222222222222";
 
 test("preview uses the shared media reader and caches admitted audio without requiring PCM digests", async () => {
-  const player = Object.create(BrowserValleWebPlayer.prototype) as any;
+  const player = playerFixture();
   const encoded = new Uint8Array(44 + 16);
   const view = new DataView(encoded.buffer);
   const text = (offset: number, value: string) => encoded.set(new TextEncoder().encode(value), offset);
@@ -404,15 +492,16 @@ test("preview uses the shared media reader and caches admitted audio without req
     sampleRate: 48000,
     createBuffer: () => decoded,
   } as unknown as BaseAudioContext;
-  expect(await player.audioBufferForDigest(context, `sha256:${LEFT_DIGEST}`, 2)).toBe(decoded);
-  expect(await player.audioBufferForDigest(context, `sha256:${LEFT_DIGEST}`, 2)).toBe(decoded);
+  const request = { digest: `sha256:${LEFT_DIGEST}`, sourceChannels: 2, startSample: 0, endSample: 4 };
+  const reader = await player.audioReaderForDigest(request);
+  expect(await player.audioWindow(context, request, reader)).toBe(decoded);
+  expect(await player.audioWindow(context, request, reader)).toBe(decoded);
   expect(reads).toBe(1);
   expect([...channels[0]!]).toEqual([0.25, 0.25, 0.25, 0.25]);
   expect([...channels[1]!]).toEqual([-0.5, -0.5, -0.5, -0.5]);
-  await expect(player.audioBufferForDigest(context, `sha256:${LEFT_DIGEST}`, 1)).rejects.toThrow("channels; expected");
-  decoded.numberOfChannels = 1;
-  player.audioBuffers.clear();
-  await expect(player.audioBufferForDigest(context, `sha256:${LEFT_DIGEST}`, 2)).rejects.toThrow("1 channels; expected");
+  await expect(player.audioReaderForDigest({ ...request, sourceChannels: 1 })).rejects.toThrow("channels; expected");
+  reader.close();
+
 });
 
 function pcmBuffer(channels: ReadonlyArray<ArrayLike<number>>): AudioBuffer {
@@ -430,7 +519,7 @@ test("Shader data textures use verified bytes and raw storage dimensions", async
   const encoded = new Uint8Array([1, 2, 3]);
   const pixels = new Uint8Array(16);
   const image = { delete() {} };
-  const player = Object.create(BrowserValleWebPlayer.prototype) as any;
+  const player = playerFixture();
   const digest = SCENE_DIGEST.slice("sha256:".length);
   const asset = { type: "image" };
   Object.assign(player, {
@@ -460,7 +549,7 @@ test("Shader data textures use verified bytes and raw storage dimensions", async
 test("Scene3D keeps canonical ContentDigest wires at every WASM boundary", async () => {
   const calls: Array<[string, string]> = [];
   const image = { delete() {} };
-  const player = Object.create(BrowserValleWebPlayer.prototype) as any;
+  const player = playerFixture();
   Object.assign(player, {
     engine: {
       render_scene3d_request(content: string, topology: string) {
@@ -496,7 +585,7 @@ test("Scene3D keeps canonical ContentDigest wires at every WASM boundary", async
       interpretation: { kind: "scene3d", topology_digest: TOPOLOGY_DIGEST },
     },
     expected: { kind: "scene3d" },
-    payload: { kind: "scene3dFrame", canonical_request: [1, 2, 3] },
+    payload: { kind: "scene3dFrame", canonical_request: [...new TextEncoder().encode(JSON.stringify({width:1,height:1}))] },
   }, false);
 
   expect(calls).toEqual([[SCENE_DIGEST, TOPOLOGY_DIGEST]]);
@@ -508,7 +597,7 @@ test("Scene3D model and environment admission use frozen bytes and deduplicate r
   for (const kind of ["model", "environment"]) {
   const bytes = Uint8Array.from([1, 2, 3]);
   const registered: string[] = [];
-  const player = Object.create(BrowserValleWebPlayer.prototype) as any;
+  const player = playerFixture();
   Object.assign(player, {
     scene3dResourceTasks: new Map(),
     [kind === "model" ? "modelBytes" : "environmentBytes"]: new Map([[SCENE_DIGEST.slice("sha256:".length), bytes]]),
@@ -525,7 +614,7 @@ test("Scene3D model and environment admission use frozen bytes and deduplicate r
 
 test("runtime shader fulfillment reads the Rust resource interpretation fields", async () => {
   const bytes = Uint8Array.from([1, 2, 3]);
-  const player = Object.create(BrowserValleWebPlayer.prototype) as any;
+  const player = playerFixture();
   player.shaderBytes = new Map([[`${SCENE_DIGEST.slice(7)}:${TOPOLOGY_DIGEST.slice(7)}`, bytes]]);
   const produced = await player.fulfillRequestUncached({
     key: {content: SCENE_DIGEST, interpretation: {kind: "runtimeShader", abi_digest: TOPOLOGY_DIGEST}},
@@ -537,7 +626,7 @@ test("runtime shader fulfillment reads the Rust resource interpretation fields",
 test("Scene3D textures share encoded bytes and keep color/data registrations distinct", async () => {
   const encoded=Uint8Array.from([1,2,3]);
   const registered:string[]=[];
-  const player=Object.create(BrowserValleWebPlayer.prototype) as any;
+  const player=playerFixture();
   Object.assign(player,{
     scene3dResourceTasks:new Map(),
     assetByDigest:new Map([[SCENE_DIGEST.slice(7),{id:"texture"}]]),
@@ -548,70 +637,60 @@ test("Scene3D textures share encoded bytes and keep color/data registrations dis
   expect(registered).toEqual([`${SCENE_DIGEST}:color`,`${SCENE_DIGEST}:data`]);
 });
 
-test("compiled audio registers canonical source planes once and accepts only bounded PCM output", async () => {
-  const declared: string[] = [];
-  const registered: string[] = [];
-  const planes = [new Float32Array([0.1, 0.2]), new Float32Array([-0.2, -0.3])];
-  const decoded = pcmBuffer(planes);
-  const player = Object.create(BrowserValleWebPlayer.prototype) as any;
+test("compiled audio sends one atomic bounded-window mix call and rejects malformed output", async () => {
+  const player = playerFixture();
+  const decoded = pcmBuffer([[0.1, 0.2], [-0.2, -0.3]]);
+  let calls = 0;
   const engine = {
-    audio_sources_json: () => JSON.stringify([{ sourceIndex: 0, digest: `sha256:${LEFT_DIGEST}`, sourceChannels: 2 }]),
-    has_audio_pcm: () => registered.length > 0,
-    register_audio_pcm(_id: string, digest: string, left: Float32Array, right: Float32Array) {
-      registered.push(digest); expect(left).toBe(decoded.getChannelData(0)); expect(right).toBe(decoded.getChannelData(1));
-    },
-    mix_audio_pcm: (_id: string, start: bigint, end: bigint) => {
-      expect(start).toBe(0n); expect(end).toBe(2n);
+    audio_windows_json: () => JSON.stringify([{ digest: `sha256:${LEFT_DIGEST}`, sourceChannels: 2, startSample: 0, endSample: 2 }]),
+    mix_audio_windows(_id: string, start: bigint, end: bigint, windows: any[]) {
+      calls++; expect(start).toBe(0n); expect(end).toBe(2n);
+      expect(windows).toEqual([{ digest: `sha256:${LEFT_DIGEST}`, startSample: 0, left: decoded.getChannelData(0), right: decoded.getChannelData(1) }]);
       return new Float32Array([0.05, -0.1, 0.1, -0.15]);
     },
   };
   Object.assign(player, {
-    renderId: RENDER_ID, engine, audioBuffers: new Map(),
+    renderId: RENDER_ID, engine,
     requireCompiledAudioProgram: () => ({ sampleRate: 4, sampleCount: 2 }),
-    async audioBufferForDigest(_context: BaseAudioContext, digest: string) {
-      declared.push(digest); return decoded;
-    },
+    async audioReaderForDigest() { return { workingBytes: () => 100 }; },
+    async audioWindow() { return decoded; },
   });
-  const context = { sampleRate: 4, createBuffer: (_channels: number, length: number) => pcmBuffer([
-    new Float32Array(length), new Float32Array(length),
-  ]) } as unknown as BaseAudioContext;
+  const context = { sampleRate: 4, createBuffer: (_channels: number, length: number) => pcmBuffer([new Float32Array(length), new Float32Array(length)]) } as unknown as BaseAudioContext;
   for (let run = 0; run < 2; run++) {
     const output = await player.renderCompiledAudioBuffer(context, 0, 2);
     expect([...output.getChannelData(0)]).toEqual([...new Float32Array([0.05, 0.1])]);
     expect([...output.getChannelData(1)]).toEqual([...new Float32Array([-0.1, -0.15])]);
   }
-  expect(declared).toEqual([`sha256:${LEFT_DIGEST}`, `sha256:${LEFT_DIGEST}`]);
-  expect(registered).toEqual([`sha256:${LEFT_DIGEST}`]);
-  engine.mix_audio_pcm = () => new Float32Array(1);
+  expect(calls).toBe(2);
+  expect(player.runtimeBudget.snapshot().managedBytes).toBe(0);
+  engine.mix_audio_windows = () => new Float32Array(1);
   await expect(player.renderCompiledAudioBuffer(context, 0, 2)).rejects.toThrow("sample range");
 });
 
 test("audio decode finishing after package replacement never writes into the retired engine", async () => {
-  const player = Object.create(BrowserValleWebPlayer.prototype) as any;
+  const player = playerFixture();
   Object.assign(player, {
     renderId: RENDER_ID,
     engine: {
-      audio_sources_json: () => JSON.stringify([{ sourceIndex: 0, digest: `sha256:${LEFT_DIGEST}`, sourceChannels: 2 }]),
-      has_audio_pcm: () => { throw new Error("retired engine touched"); },
+      audio_windows_json: () => JSON.stringify([{ digest: `sha256:${LEFT_DIGEST}`, sourceChannels: 2, startSample: 0, endSample: 1 }]),
+      mix_audio_windows: () => { throw new Error("retired engine touched"); },
     },
     requireCompiledAudioProgram: () => ({ sampleRate: 4, sampleCount: 1 }),
-    async audioBufferForDigest() { player.engine = {}; return pcmBuffer([[0.1], [-0.2]]); },
+    async audioReaderForDigest() { return { workingBytes: () => 100 }; },
+    async audioWindow() { player.engine = {}; return pcmBuffer([[0.1], [-0.2]]); },
   });
   const context = { sampleRate: 4, createBuffer: () => pcmBuffer([[0], [0]]) } as unknown as BaseAudioContext;
   await expect(player.renderCompiledAudioBuffer(context, 0, 1)).rejects.toThrow("superseded");
 });
 
 test("failed render-package staging preserves the last-good runtime", async () => {
-  const player = Object.create(BrowserValleWebPlayer.prototype) as any;
+  const player = playerFixture();
   let engineFreed = 0;
   let plannerClosed = 0;
   let executorDisposed = 0;
   let resumed = 0;
   const oldEngine = {
-    frame_at_seconds: (renderId: string) => {
-      expect(renderId).toBe(RENDER_ID);
-      return 7n;
-    },
+    quantize_frame_seconds: () => 7n,
     free: () => { engineFreed += 1; },
   };
   const oldPlanner = { close: () => { plannerClosed += 1; } };
@@ -622,6 +701,7 @@ test("failed render-package staging preserves the last-good runtime", async () =
     renderInFlight: null,
     renderId: RENDER_ID,
     engine: oldEngine,
+    renderReceipt: { frameRate: "30/1", frameCount: 300 },
     planner: oldPlanner,
     compositor: activeExecutor,
     fixedPackageManifestJson: "old-package-manifest",
@@ -654,7 +734,7 @@ test("failed render-package staging preserves the last-good runtime", async () =
 });
 
 test("a draft superseded while staging never replaces the active package", async () => {
-  const player = Object.create(BrowserValleWebPlayer.prototype) as any;
+  const player = playerFixture();
   const disposed: string[] = [];
   let committed = false;
   Object.assign(player, {
@@ -676,7 +756,7 @@ test("a draft superseded while staging never replaces the active package", async
 });
 
 test("video source requests decode canonical rational time strings", async () => {
-  const player = Object.create(BrowserValleWebPlayer.prototype) as any;
+  const player = playerFixture();
   const asset = { type: "video" };
   const image = { delete() {} };
   const times: number[] = [];

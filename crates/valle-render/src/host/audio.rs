@@ -5,7 +5,8 @@ use std::{collections::BTreeMap, sync::Arc};
 use thiserror::Error;
 use valle_engine::{
     render::{
-        CanvasClockError, CompiledAudioChannelMap, CompiledRender, RuntimeFault, SampleRange,
+        CanvasClockError, CompiledAudioChannelMap, CompiledAudioItem, CompiledRender, RuntimeFault,
+        SampleRange,
     },
     resource::ContentDigest,
 };
@@ -29,12 +30,66 @@ pub struct CompiledAudioMixer {
     render: Arc<CompiledRender>,
     catalog: Arc<NativeResourceCatalog>,
     live: BTreeMap<u32, Box<dyn AudioSource>>,
+    windows: BTreeMap<u32, Option<valle_engine::motion::memory::MemoryLease>>,
     sample_rate: u32,
     channels: u16,
     cursor: i64,
 }
 
 impl CompiledAudioMixer {
+    /// Pure metadata preflight: only sources/lanes overlapping this frame are admitted, so a
+    /// long timeline with sequential clips does not reserve every source's PCM simultaneously.
+    pub(crate) fn frame_working_bytes(&self, frame: i64) -> Result<u64, AudioMixError> {
+        let canvas = self.render.canvas();
+        let next = frame.checked_add(1).ok_or(AudioMixError::Budget)?;
+        let range = SampleRange::new(
+            canvas.sample_boundary_at_frame(frame)?,
+            canvas.sample_boundary_at_frame(next)?,
+        )?;
+        let scratch = self.scratch_bytes(range)?;
+        self.render
+            .audio()
+            .source_requirements(range)?
+            .iter()
+            .try_fold(scratch, |bytes, source| {
+                // Two-second ring plus a one-second returned decode chunk. The chunk may be much
+                // wider than the output frame when the source is sped up.
+                bytes
+                    .checked_add(
+                        u64::from(self.sample_rate) * u64::from(source.source_channels) * 12,
+                    )
+                    .ok_or(AudioMixError::Budget)
+            })
+    }
+
+    fn scratch_bytes(&self, range: SampleRange) -> Result<u64, AudioMixError> {
+        let overlaps =
+            |other: SampleRange| range.start() < other.end() && other.start() < range.end();
+        let lanes = self
+            .render
+            .audio()
+            .tracks()
+            .iter()
+            .flat_map(|track| track.items())
+            .try_fold(0_u64, |lanes, item| {
+                let count = match item {
+                    CompiledAudioItem::Clip { clip } if overlaps(clip.range()) => 1,
+                    CompiledAudioItem::Crossfade { crossfade } if overlaps(crossfade.window()) => 2,
+                    _ => 0,
+                };
+                lanes.checked_add(count).ok_or(AudioMixError::Budget)
+            })?;
+        // Vec growth can retain nearly twice the active mix-point count. Count lanes rather
+        // than unique sources: several overlapping tracks may read the same decoded source.
+        let per_frame = lanes
+            .checked_mul(2 * std::mem::size_of::<MixPoint>() as u64 + 16)
+            .and_then(|bytes| bytes.checked_add(24))
+            .ok_or(AudioMixError::Budget)?;
+        (range.len() as u64)
+            .checked_mul(per_frame)
+            .ok_or(AudioMixError::Budget)
+    }
+
     pub fn new(
         render: Arc<CompiledRender>,
         catalog: Arc<NativeResourceCatalog>,
@@ -55,6 +110,7 @@ impl CompiledAudioMixer {
             render,
             catalog,
             live: BTreeMap::new(),
+            windows: BTreeMap::new(),
             sample_rate,
             channels,
             cursor,
@@ -90,10 +146,18 @@ impl CompiledAudioMixer {
             .into_iter()
             .map(|source| (source.source_index, source))
             .collect::<BTreeMap<_, _>>();
+        self.live
+            .retain(|source, _| requirements.contains_key(source));
+        self.windows
+            .retain(|source, _| requirements.contains_key(source));
         let frames = usize::try_from(range.len()).map_err(|_| AudioMixError::Budget)?;
         // The common audio ABI accumulates in f64 in stable track/endpoint/source order and
         // quantizes exactly once after the terminal clamp. Decoder PCM remains f32, but no
         // endpoint gain or partial sum is rounded back to f32 along the way.
+        let _working = valle_engine::motion::memory::reserve(
+            valle_engine::motion::memory::MemoryKind::Media,
+            self.scratch_bytes(range)?,
+        )?;
         let mut mixed = vec![0.0_f64; frames.checked_mul(2).ok_or(AudioMixError::Budget)?];
         let mut lanes = BTreeMap::<(u32, usize, u32), (ContentDigest, Vec<MixPoint>)>::new();
 
@@ -215,14 +279,19 @@ impl CompiledAudioMixer {
             }
             None => return Err(AudioMixError::MissingSource { source_index }),
         };
-        let decoder =
-            LibavAudioSource::open(&path, self.sample_rate, decoded_channels).map_err(|error| {
-                AudioMixError::Decode {
-                    source_index,
-                    reason: error.to_string(),
-                }
+        // Two seconds cover one-second delivery blocks plus packet/resampler lookahead.
+        let memory = valle_engine::motion::memory::reserve(
+            valle_engine::motion::memory::MemoryKind::Media,
+            u64::from(self.sample_rate) * u64::from(decoded_channels) * 8,
+        )?;
+        let decoder = LibavAudioSource::open(&path, self.sample_rate, decoded_channels)
+            .and_then(|decoder| decoder.with_pcm_window(self.sample_rate as usize * 2))
+            .map_err(|error| AudioMixError::Decode {
+                source_index,
+                reason: error.to_string(),
             })?;
         self.live.insert(source_index, Box::new(decoder));
+        self.windows.insert(source_index, memory);
         Ok(())
     }
 }
@@ -249,6 +318,8 @@ fn contiguous_runs(points: &[MixPoint]) -> Vec<&[MixPoint]> {
 
 #[derive(Debug, Error)]
 pub enum AudioMixError {
+    #[error(transparent)]
+    Memory(#[from] valle_engine::motion::memory::MemoryError),
     #[error(
         "Native PCM requires {expected_rate} Hz stereo, got {actual_rate} Hz/{channels} channels"
     )]
@@ -691,6 +762,12 @@ mod tests {
         let (mut chunked_mixer, _, _) = mixer_with_memory_pcm(render.compiled_arc(), 0);
         let mut chunked = Vec::new();
         for boundary in [1, 3, 6, 8] {
+            // The host retires inactive decoders. Supply reopenable immutable test PCM too;
+            // production reopens it from the catalog instead of retaining all future sources.
+            let (sources, _, _) = mixer_with_memory_pcm(render.compiled_arc(), 0);
+            for (index, source) in sources.live {
+                chunked_mixer.live.entry(index).or_insert(source);
+            }
             chunked.extend(
                 chunked_mixer
                     .mix_until_sample(boundary)

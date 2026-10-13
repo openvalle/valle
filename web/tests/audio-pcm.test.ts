@@ -80,10 +80,34 @@ test("actual WASM rejects invalid fulfillment and resets PCM even for the same r
     engine.register_audio_pcm(id, digests[0]!, new Float32Array([0]), new Float32Array([0]));
     expect(() => engine.mix_audio_pcm(id, 1n, 2n)).toThrow("outside decoded PCM");
     engine.register_audio_pcm(id, digests[0]!, plane, plane);
+    expect(() => engine.register_audio_pcm(id, digests[0]!, plane, new Float32Array(0))).toThrow("channel layout");
     expect([...engine.mix_audio_pcm(id, 0n, 1n)]).toEqual([0.25, 0.25]);
     expect(open()).toBe(id);
     expect(engine.has_audio_pcm(id, digests[0]!)).toBe(false);
     engine.reset();
     expect(() => engine.has_audio_pcm(id, digests[0]!)).toThrow("render_closed");
+  } finally { engine.free(); }
+});
+
+test("actual WASM mixes bounded windows bit-exactly across loops, trims, distant reads and source boundaries", () => {
+  const { engine, id, digests } = fixture([{ clips: [{ src: "s0", start: 0, duration: 2,
+    trimStart: 0.5, rate: 3, end: "loop", gain: 0.7 }] }], ["mono"], 6);
+  const source = Float32Array.from({ length: rate * 6 }, (_, sample) => Math.sin(sample * 0.071) * 0.7);
+  try {
+    for (const start of [0, 47000, 17000, 8192, 47000]) {
+      const end = Math.min(start + 8192, rate * 2);
+      engine.register_audio_pcm(id, digests[0]!, source, new Float32Array(0));
+      const reference = engine.mix_audio_pcm(id, BigInt(start), BigInt(end));
+      const windows = JSON.parse(engine.audio_windows_json(id, BigInt(start), BigInt(end)));
+      engine.clear_audio_pcm(id);
+      for (const window of windows) {
+        expect(window.endSample - window.startSample).toBeLessThanOrEqual(rate);
+        engine.register_audio_pcm_window(id, window.digest, BigInt(window.startSample),
+          source.slice(window.startSample, window.endSample), new Float32Array(0));
+      }
+      expect(engine.mix_audio_pcm(id, BigInt(start), BigInt(end))).toEqual(reference);
+      engine.clear_audio_pcm(id);
+      expect(engine.has_audio_pcm(id, digests[0]!)).toBe(false);
+    }
   } finally { engine.free(); }
 });

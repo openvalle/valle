@@ -20,6 +20,7 @@ export {
 export * from "./executor/canvaskit/index.ts";
 
 export { RenderTrace } from "./runtime/render-trace.ts";
+export { BrowserRuntimeBudget, type RuntimePriority } from "./runtime/runtime-budget.ts";
 export * from "./runtime/controller.ts";
 export * from "./controller.ts";
 export { createDecoderRing, keyframeThumbnails } from "./media/video-source.ts";

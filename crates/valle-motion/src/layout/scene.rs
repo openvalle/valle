@@ -210,6 +210,10 @@ pub struct PreparedScene {
     requires_explicit_viewport: bool,
     layout_classes: Vec<Vec<String>>,
     layout_probes: Vec<(crate::ExprId, MotionValue)>,
+    // Mask sources and transition children have special containing-block placement. Compute
+    // membership once rather than searching every scene node for every emitted node.
+    positioned_children: Arc<Vec<u8>>,
+    has_post_layout_values: bool,
 }
 
 struct LayoutInstanceRow {
@@ -557,6 +561,33 @@ fn prepare_admitted(
         }
         eval_plan.schedule(roots)
     });
+    let mut positioned_children = vec![0_u8; artifact.nodes.len()];
+    let node_indices: HashMap<_, _> = artifact
+        .nodes
+        .iter()
+        .enumerate()
+        .map(|(index, node)| (node.key.as_str(), index))
+        .collect();
+    for node in &artifact.nodes {
+        match &node.kind {
+            NodeKind::Mask {
+                source: MaskValue::Subtree { source },
+                ..
+            } => {
+                if let Some(index) = node_indices.get(source.as_str()) {
+                    positioned_children[*index] |= 1;
+                }
+            }
+            NodeKind::Transition { .. } => {
+                for child in &artifact.node_children
+                    [node.children.start as usize..node.children.end as usize]
+                {
+                    positioned_children[child.0 as usize] |= 2;
+                }
+            }
+            _ => {}
+        }
+    }
     Ok(PreparedScene {
         sample_scene,
         sample_roots,
@@ -581,6 +612,8 @@ fn prepare_admitted(
         artifact: Arc::new(artifact),
         stylesheet,
         layout_probes,
+        positioned_children: Arc::new(positioned_children),
+        has_post_layout_values: post_layout.iter().any(|dependent| *dependent),
     })
 }
 
@@ -837,6 +870,7 @@ pub(super) fn build_tree_inner(
     let cached_origins = cached
         .as_ref()
         .and_then(|snapshot| snapshot.css_3d_origins.clone());
+    let mut evaluated_root = None;
     let (layout, keys, boxes, scene3d_content_boxes) = if let Some(snapshot) = cached {
         if let Some(timings) = timings.as_deref_mut() {
             timings.layout_reused = true;
@@ -930,6 +964,9 @@ pub(super) fn build_tree_inner(
                 css_3d_origins: None,
             }));
         }
+        // Only the cascade is reused here. The final CSS projection may still require a new
+        // render tree; layout results and frame values remain independently evaluated.
+        evaluated_root = Some(layout_root);
         (layout, keys, boxes, scene3d_content_boxes)
     };
 
@@ -982,18 +1019,28 @@ pub(super) fn build_tree_inner(
                 )
         })
     }) {
-        let author_node = node_of(
-            prepared,
-            artifact.root.0 as usize,
-            &values,
-            opts.styles,
-            camera.as_ref(),
-            &formulas,
-            None,
-            &inactive_nodes,
-            &layout_instances,
-        )?;
-        let author_root = RenderNode::from_node(&render_context, author_node);
+        let author_root = if !prepared.has_post_layout_values {
+            evaluated_root.take()
+        } else {
+            None
+        };
+        let author_root = match author_root {
+            Some(root) => root,
+            None => {
+                let author_node = node_of(
+                    prepared,
+                    artifact.root.0 as usize,
+                    &values,
+                    opts.styles,
+                    camera.as_ref(),
+                    &formulas,
+                    None,
+                    &inactive_nodes,
+                    &layout_instances,
+                )?;
+                RenderNode::from_node(&render_context, author_node)
+            }
+        };
         let origins = Arc::new(css_3d_author_styles(
             artifact,
             &author_root,
@@ -1016,18 +1063,29 @@ pub(super) fn build_tree_inner(
     // Post-layout values are admitted only into paint/transform slots or sidecar geometry. Rebuild
     // the same fixed-topology RenderNode with their final values, but keep the already-computed
     // LayoutResults. This makes `translate: project3d(...)` visible without a layout feedback pass.
-    let final_node = node_of(
-        prepared,
-        artifact.root.0 as usize,
-        &values,
-        opts.styles,
-        camera.as_ref(),
-        &formulas,
-        Some(&css_3d_planes),
-        &inactive_nodes,
-        &layout_instances,
-    )?;
-    let mut root = RenderNode::from_node(&render_context, final_node);
+    let existing_root = if !prepared.has_post_layout_values && css_3d_planes.is_empty() {
+        evaluated_root.take()
+    } else {
+        None
+    };
+    drop(evaluated_root);
+    let mut root = match existing_root {
+        Some(root) => root,
+        None => {
+            let final_node = node_of(
+                prepared,
+                artifact.root.0 as usize,
+                &values,
+                opts.styles,
+                camera.as_ref(),
+                &formulas,
+                Some(&css_3d_planes),
+                &inactive_nodes,
+                &layout_instances,
+            )?;
+            RenderNode::from_node(&render_context, final_node)
+        }
+    };
     super::transform::preserve_identity(&mut root);
     apply_css_3d_depth(artifact, &mut root, &css_3d_planes, &inactive_nodes);
 
@@ -5780,15 +5838,6 @@ fn projected_nodes_of(
     // effect.
     //
     // `isolation: isolate` creates the required stacking context without altering opacity or color.
-    let is_mask_source = artifact.nodes.iter().any(|node| {
-        matches!(&node.kind, NodeKind::Mask { source: MaskValue::Subtree { source }, .. } if source == &template.key)
-    });
-    let is_transition_child = artifact.nodes.iter().any(|node| {
-        matches!(node.kind, NodeKind::Transition { .. })
-            && artifact.node_children[node.children.start as usize..node.children.end as usize]
-                .iter()
-                .any(|child| child.0 as usize == at)
-    });
     if matches!(
         template.kind,
         NodeKind::Mask { .. }
@@ -5804,6 +5853,8 @@ fn projected_nodes_of(
     ) {
         preset.push_str("width: 100%; height: 100%;");
     }
+    let is_mask_source = prepared.positioned_children[at] & 1 != 0;
+    let is_transition_child = prepared.positioned_children[at] & 2 != 0;
     if is_mask_source || is_transition_child {
         // Source placement is in the mask's coordinate system and never consumes content flow.
         preset.push_str("position: absolute; left: 0; top: 0; width: 100%; height: 100%;");

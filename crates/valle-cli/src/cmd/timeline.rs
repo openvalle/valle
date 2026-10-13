@@ -1,7 +1,7 @@
 //! File and project Timeline delivery through the fixed-package admission path.
 use super::render_delivery::{DeliveryObservation, DeliveryPlan};
 use crate::{
-    RenderOutputArgs, TimelineAction,
+    RenderBudgetArgs, RenderOutputArgs, TimelineAction,
     preview_store::{FrozenMediaCache, PreviewFile},
 };
 use anyhow::{Context, Result, anyhow, bail};
@@ -35,13 +35,24 @@ pub fn run(action: TimelineAction) -> Result<std::process::ExitCode> {
                     ..Default::default()
                 },
                 true,
+                RenderBudgetArgs::default(),
             )?;
             crate::output::emit(serde_json::json!({"status":"ok", "input":input}));
             Ok(std::process::ExitCode::SUCCESS)
         }
-        TimelineAction::Render { input, delivery } => {
+        TimelineAction::Render {
+            input,
+            delivery,
+            budget,
+        } => {
             let timeline = decode_timeline(&super::read(&input)?)?;
-            render_document(timeline, input.parent().unwrap_or(Path::new(".")), delivery)
+            render_document_impl(
+                timeline,
+                input.parent().unwrap_or(Path::new(".")),
+                delivery,
+                false,
+                budget,
+            )
         }
     }
 }
@@ -51,7 +62,7 @@ pub(super) fn render_document(
     base: &Path,
     delivery: RenderOutputArgs,
 ) -> Result<std::process::ExitCode> {
-    render_document_impl(timeline, base, delivery, false)
+    render_document_impl(timeline, base, delivery, false, RenderBudgetArgs::default())
 }
 
 fn render_document_impl(
@@ -59,6 +70,7 @@ fn render_document_impl(
     base: &Path,
     delivery: RenderOutputArgs,
     checking: bool,
+    budget: RenderBudgetArgs,
 ) -> Result<std::process::ExitCode> {
     let plan = DeliveryPlan::new(delivery)?;
     let observation = DeliveryObservation::new()?;
@@ -70,6 +82,7 @@ fn render_document_impl(
         NativeProject::from_render(opened.engine_render(), Arc::new(catalog)),
         NativeRenderOptions {
             backend: valle_render::executor::skia::SkiaBackendKind::Raster,
+            budget: budget.native()?,
             background: valle_engine::resource::OutputBackground::AuthorSrgbStraight {
                 color: valle_engine::resource::AuthorSrgbStraight(
                     opened.engine_render().canvas().background_rgba(),

@@ -10,6 +10,15 @@ pub struct AudioSourceRequirement {
     pub source_channels: u16,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AudioSourceWindow {
+    pub digest: ContentDigest,
+    pub source_channels: u16,
+    pub start_sample: i64,
+    pub end_sample: i64,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct AudioMixPoint {
     pub output: usize,
@@ -36,6 +45,40 @@ pub enum AudioPcmMixError {
 }
 
 impl CompiledAudioProgram {
+    /// At most one second per source window. Discontinuous/reversed time maps create separate
+    /// windows rather than admitting the enormous gap between their first and last samples.
+    pub fn source_windows(
+        &self,
+        range: SampleRange,
+    ) -> Result<Vec<AudioSourceWindow>, AudioPcmMixError> {
+        let sources = self
+            .source_requirements(range)?
+            .into_iter()
+            .map(|source| (source.source_index, source))
+            .collect::<BTreeMap<_, _>>();
+        let quantum = i64::from(self.sample_rate);
+        let mut windows = BTreeMap::<(ContentDigest, i64), AudioSourceWindow>::new();
+        self.visit_mix_points::<AudioPcmMixError>(range, |point| {
+            let source = &sources[&point.source_index];
+            let start = point.source_sample_index.div_euclid(quantum) * quantum;
+            let end = point
+                .source_sample_index
+                .checked_add(1)
+                .ok_or(AudioPcmMixError::Budget)?;
+            let window = windows
+                .entry((source.digest, start))
+                .or_insert(AudioSourceWindow {
+                    digest: source.digest,
+                    source_channels: source.source_channels,
+                    start_sample: start,
+                    end_sample: end,
+                });
+            window.end_sample = window.end_sample.max(end);
+            Ok(())
+        })?;
+        Ok(windows.into_values().collect())
+    }
+
     fn validate_mix_range(&self, range: SampleRange) -> Result<(), RuntimeFault> {
         if range.start < 0 || range.end < range.start || range.end > self.sample_count {
             return Err(RuntimeFault::SampleRangeOutOfRange {

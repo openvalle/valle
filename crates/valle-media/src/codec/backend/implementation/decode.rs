@@ -258,16 +258,27 @@ impl LibavVideoSource {
         if threads == 0 {
             return Err(anyhow!("video decoder thread count must be positive"));
         }
-        Self::open_with_transport_and_threads(path, VideoFrameTransport::Cpu, Some(threads))
+        Self::open_configured(path, VideoFrameTransport::Cpu, Some(threads))
     }
 
     /// Open a streaming source and optionally request platform hardware frames. Unsupported codecs,
     /// machines and formats fall back to the existing software decoder without changing semantics.
     pub fn open_with_transport(path: &Path, transport: VideoFrameTransport) -> Result<Self> {
-        Self::open_with_transport_and_threads(path, transport, None)
+        Self::open_configured(path, transport, None)
     }
 
-    fn open_with_transport_and_threads(
+    pub fn open_with_transport_and_threads(
+        path: &Path,
+        transport: VideoFrameTransport,
+        threads: usize,
+    ) -> Result<Self> {
+        if threads == 0 {
+            return Err(anyhow!("video decoder thread count must be positive"));
+        }
+        Self::open_configured(path, transport, Some(threads))
+    }
+
+    fn open_configured(
         path: &Path,
         transport: VideoFrameTransport,
         requested_threads: Option<usize>,

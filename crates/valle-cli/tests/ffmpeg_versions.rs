@@ -52,7 +52,7 @@ fn render(dir: &Path, libraries: &Path, hardware: bool) {
     if hardware {
         args.push("--hardware-encode");
     } else {
-        args.extend(["--workers", "2", "--encode-threads", "2"]);
+        args.extend(["--threads", "4", "--encode-threads", "2"]);
     }
     let value = success(&run(dir, libraries, &args));
     assert_eq!(value["frameCount"], 6, "{value}");

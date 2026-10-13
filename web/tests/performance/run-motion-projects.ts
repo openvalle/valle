@@ -12,7 +12,7 @@ if (args.includes("--help")) {
 const output = path.resolve(option(args, "--output"));
 const cli = path.resolve(option(args, "--cli", path.join(ROOT, "target/release/valle")));
 const sources = option(args, "--sources").split(",").map(source => path.resolve(source));
-const settings = { width: 1920, height: 1080, fps: 30, durationS: 10, workers: 4, bitrate: 20_000_000, repeats: 3 };
+const settings = { width: 1920, height: 1080, fps: 30, durationS: 10, threads: 4, bitrate: 20_000_000, repeats: 3 };
 const backends = ["raster", "metal"];
 const regressionTolerancePercent = 10;
 if (process.platform !== "darwin") throw new Error("this project CPU/Metal comparison requires macOS");
@@ -34,7 +34,7 @@ async function render(source: string, backend: string, round: number, trace: boo
   const tracePath = path.join(folder, "trace.json");
   const cmd = [cli, "--json", "motion", "render", source, "-o", video, "--backend", backend,
     "--fps", String(settings.fps), "--output-size", `${settings.width}x${settings.height}`,
-    "--workers", String(settings.workers), "--hardware-encode", "--bitrate", String(settings.bitrate)];
+    "--threads", String(settings.threads), "--hardware-encode", "--bitrate", String(settings.bitrate)];
   const env = { ...process.env };
   for (const key of ["VALLE_RENDER_TRACE", "VALLE_PERF", "VALLE_TRACE_PIPELINE", "VALLE_COMPOSITOR_TRACE_PASSES", "VALLE_PERF_SCENE3D"]) delete env[key];
   if (trace) env.VALLE_RENDER_TRACE = tracePath;

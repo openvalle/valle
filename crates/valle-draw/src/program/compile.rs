@@ -4,7 +4,10 @@
 //! producer is being moved to the structured builder in the Product Compositor module; its output
 //! is always the current DrawProgram contract and no executor can consume the recording itself.
 
-use std::collections::BTreeMap;
+use std::{
+    collections::{BTreeMap, HashMap},
+    hash::{DefaultHasher, Hash, Hasher},
+};
 
 use thiserror::Error;
 
@@ -267,6 +270,7 @@ struct RecordingCompiler<'a> {
     roots: Vec<NodeId>,
     stack: Vec<RecordingFrame>,
     paths: BTreeMap<(u32, u32, u32, u32), PathId>,
+    path_contents: HashMap<u64, Vec<(crate::PathRef, PathId)>>,
     paints: Vec<(Paint, PaintId)>,
     catalog: Option<&'a dyn ProgramResourceCatalog>,
 }
@@ -284,6 +288,7 @@ impl<'a> RecordingCompiler<'a> {
             roots: Vec::new(),
             stack: Vec::new(),
             paths: BTreeMap::new(),
+            path_contents: HashMap::new(),
             paints: Vec::new(),
             catalog,
         }
@@ -934,7 +939,35 @@ impl<'a> RecordingCompiler<'a> {
                 index: path.points.start,
             },
         )?;
-        let path = self.builder.push_path(PathData {
+        // Text runs and repeated decorations can record identical outlines into different
+        // spans. Intern their exact content before validation, packing and hashing. The hash
+        // only selects candidates: bitwise comparison preserves signed zero and collisions
+        // cannot alias distinct geometry. IDs still follow first-use order.
+        let mut hash = DefaultHasher::new();
+        verbs.len().hash(&mut hash);
+        for verb in verbs {
+            (*verb as u8).hash(&mut hash);
+        }
+        for point in points {
+            point.x.to_bits().hash(&mut hash);
+            point.y.to_bits().hash(&mut hash);
+        }
+        let hash = hash.finish();
+        if let Some(candidates) = self.path_contents.get(&hash) {
+            for (previous, id) in candidates {
+                let (previous_verbs, previous_points) = self.source.path_data(*previous);
+                if previous_verbs == verbs
+                    && previous_points.len() == points.len()
+                    && previous_points.iter().zip(points).all(|(a, b)| {
+                        a.x.to_bits() == b.x.to_bits() && a.y.to_bits() == b.y.to_bits()
+                    })
+                {
+                    self.paths.insert(key, *id);
+                    return Ok(*id);
+                }
+            }
+        }
+        let id = self.builder.push_path(PathData {
             verbs: verbs
                 .iter()
                 .map(|verb| match verb {
@@ -947,8 +980,9 @@ impl<'a> RecordingCompiler<'a> {
                 .collect(),
             points: points.iter().map(|point| [point.x, point.y]).collect(),
         });
-        self.paths.insert(key, path);
-        Ok(path)
+        self.path_contents.entry(hash).or_default().push((path, id));
+        self.paths.insert(key, id);
+        Ok(id)
     }
 
     fn paint(
@@ -1464,6 +1498,45 @@ mod tests {
                 .unwrap_err()
                 .to_string()
                 .contains("more than one source")
+        );
+    }
+
+    #[test]
+    fn separately_recorded_paths_share_only_bit_identical_geometry() {
+        use crate::program::{
+            compile_recording,
+            recording::{Paint, ProgramRecording, RecordCmd},
+        };
+        use crate::{Point, Rect, Rgba};
+        let mut recording = ProgramRecording::new();
+        for x in [0.0, 0.0, -0.0, 0.25, 0.25] {
+            let path = recording
+                .begin_path()
+                .move_to(Point::new(x, 0.0))
+                .line_to(Point::new(8.0, 8.0))
+                .finish();
+            recording.push(RecordCmd::Path {
+                path,
+                fill_rule: Default::default(),
+                fill: Some(Paint::Solid(Rgba::new(255, 0, 0, 255))),
+                stroke: None,
+            });
+        }
+        let program = compile_recording(Rect::new(0.0, 0.0, 16.0, 16.0), &recording).unwrap();
+        assert_eq!(program.paths().len(), 3);
+        assert_eq!(program.paths()[0].points[0][0].to_bits(), 0.0_f64.to_bits());
+        assert_eq!(
+            program.paths()[1].points[0][0].to_bits(),
+            (-0.0_f64).to_bits()
+        );
+        program.validate().unwrap();
+        let packed = program.packed_bytes().unwrap();
+        assert_eq!(
+            crate::program::DrawProgram::from_packed(&packed)
+                .unwrap()
+                .packed_bytes()
+                .unwrap(),
+            packed
         );
     }
 

@@ -78,21 +78,4 @@ impl NativeProject {
             backend,
         )
     }
-
-    /// An independent CPU compiler/resource cache for an existing physical executor.
-    #[cfg(target_os = "macos")]
-    pub(crate) fn frame_preparer(
-        &self,
-        backend: crate::executor::skia::SkiaBackendKind,
-        capabilities: valle_engine::compositor::lower::BackendCapabilities,
-    ) -> Result<super::frame::FramePreparationStage<NativeResourceProvider>, super::FrameRenderError>
-    {
-        super::frame::FramePreparationStage::new(
-            self.render.clone(),
-            NativeResourceProvider::new(Arc::clone(&self.catalog))
-                .with_render_resources(self.compiled()),
-            backend,
-            capabilities,
-        )
-    }
 }

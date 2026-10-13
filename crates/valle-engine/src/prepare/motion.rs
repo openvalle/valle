@@ -140,9 +140,36 @@ pub(crate) struct CompiledMotionProgramContext<'a> {
 /// Timeline Motion producer. Every input is already compiled or a
 /// resolver-verified immutable fact; no Timeline `MotionContent`, WordsDoc,
 /// registry, or locator is reconstructed here.
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct MotionFrameInput {
+    pub props: BTreeMap<String, valle_motion::MotionValue>,
+    pub motion_context: valle_motion::MotionContext,
+    pub viewport: Extent2d,
+    pub source_clip: Option<Rect>,
+    pub program_to_device: super::DeviceTransform,
+    pub clip_id: String,
+    pub render_seed: u32,
+    pub assets: BTreeMap<String, SemanticAsset>,
+    pub model_resources: BTreeMap<String, ContentDigest>,
+}
+
 pub(crate) fn build_compiled_motion_program(
     context: CompiledMotionProgramContext<'_>,
 ) -> Result<BuiltMotionProgram, ProgramPrepareError> {
+    let input = resolve_motion_input(&context)?;
+    build_motion_program(
+        context.prepared,
+        &input,
+        context.styles,
+        context.faces,
+        context.fonts,
+    )
+}
+
+pub(super) fn resolve_motion_input(
+    context: &CompiledMotionProgramContext<'_>,
+) -> Result<MotionFrameInput, ProgramPrepareError> {
     let artifact = context.prepared.artifact();
     let overrides = compiled_motion_overrides(
         artifact,
@@ -210,48 +237,68 @@ pub(crate) fn build_compiled_motion_program(
             .ok_or_else(|| ProgramPrepareError::CompiledInvariant {
                 reason: "compiled Motion host context is missing".into(),
             })?;
+    Ok(MotionFrameInput {
+        props: props.as_map().clone(),
+        motion_context,
+        viewport: context.viewport,
+        source_clip: context.source_clip,
+        program_to_device: context.program_to_device,
+        clip_id: context.clip_id.to_owned(),
+        render_seed: context.render_seed,
+        assets: context.assets.clone(),
+        model_resources: context.model_resources.clone(),
+    })
+}
+
+pub(super) fn build_motion_program(
+    prepared: &valle_motion::PreparedScene,
+    input: &MotionFrameInput,
+    styles: &valle_motion::StyleCache,
+    faces: &valle_motion::FaceCache,
+    fonts: &MotionFontSet,
+) -> Result<BuiltMotionProgram, ProgramPrepareError> {
+    let artifact = prepared.artifact();
+    let props = valle_motion::resolve_props(&artifact.controls, &input.props).map_err(|error| {
+        ProgramPrepareError::MotionProps {
+            reason: error.to_string(),
+        }
+    })?;
+    let motion_context = input.motion_context;
+    let local_frame = motion_context.local_frame;
     let options = valle_motion::LayoutOptions {
-        viewport: valle_motion::Viewport::new((
-            context.viewport.width(),
-            context.viewport.height(),
-        )),
-        fonts: context.fonts,
+        viewport: valle_motion::Viewport::new((input.viewport.width(), input.viewport.height())),
+        fonts: fonts,
         #[cfg(target_arch = "wasm32")]
-        formula_fonts: &context.fonts.formulas,
-        styles: Some(context.styles),
+        formula_fonts: &fonts.formulas,
+        styles: Some(styles),
     };
     let reused = {
-        let mut cache = context.fonts.layout.borrow_mut();
-        if cache
-            .as_ref()
-            .is_none_or(|cache| !cache.is_for(context.prepared))
-        {
-            *cache = valle_motion::layout::LayoutCache::new(context.prepared, &context.fonts.text);
+        let mut cache = fonts.layout.borrow_mut();
+        if cache.as_ref().is_none_or(|cache| !cache.is_for(prepared)) {
+            *cache = valle_motion::layout::LayoutCache::new(prepared, &fonts.text);
         }
         cache.as_ref().map(|cache| {
             cache.build_tree(&motion_context, &props, options.viewport, options.styles)
         })
     };
     let mut tree = reused
-        .unwrap_or_else(|| {
-            valle_motion::build_tree(context.prepared, &motion_context, &props, &options)
-        })
+        .unwrap_or_else(|| valle_motion::build_tree(prepared, &motion_context, &props, &options))
         .map_err(|error| ProgramPrepareError::MotionLayout {
             reason: format!("{error} at frame {local_frame}"),
         })?;
     if !tree.glass.surfaces.is_empty() {
         let glass = tree.glass.clone();
-        let instance = valle_timeline::internal::MotionInstanceId::new(context.clip_id.to_owned())
+        let instance = valle_timeline::internal::MotionInstanceId::new(input.clip_id.to_owned())
             .map_err(|error| ProgramPrepareError::MotionGlass {
                 reason: error.to_string(),
             })?;
         install_glass_programs(
             &mut tree,
             &[(motion_context.sample, glass)],
-            context.program_to_device,
-            context.viewport,
+            input.program_to_device,
+            input.viewport,
             instance,
-            context.render_seed,
+            input.render_seed,
         )?;
     }
     let layout_boxes = valle_motion::layout_boxes(artifact, &tree).map_err(|error| {
@@ -260,21 +307,21 @@ pub(crate) fn build_compiled_motion_program(
         }
     })?;
     let catalog = CompiledMotionProgramCatalog {
-        assets: context.assets,
-        model_resources: context.model_resources,
+        assets: &input.assets,
+        model_resources: &input.model_resources,
     };
-    let report = match context.source_clip {
+    let report = match input.source_clip {
         Some(clip) => valle_motion::emit::emit_program_with_faces_clipped(
             &tree,
             &valle_motion::default_font_naming,
-            Some(context.faces),
+            Some(faces),
             &catalog,
             clip,
         ),
         None => valle_motion::emit_program_with_faces(
             &tree,
             &valle_motion::default_font_naming,
-            Some(context.faces),
+            Some(faces),
             &catalog,
         ),
     }

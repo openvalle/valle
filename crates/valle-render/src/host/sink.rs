@@ -32,6 +32,12 @@ pub struct DeliveredSharedFrame<'a> {
 }
 
 pub trait FrameSink {
+    /// Extra host-owned working storage needed while delivering this sequence (e.g. PCM).
+    /// Included in frame admission before preparation starts, independent of drawing backend.
+    fn working_bytes(&self, _sequence: usize) -> Result<u64> {
+        Ok(0)
+    }
+
     fn push(&mut self, frame: DeliveredFrame<'_>) -> Result<()>;
 
     /// Returns an encoder-owned pool only when the sink requires direct shared-GPU delivery.
@@ -265,6 +271,18 @@ impl Mp4Sink {
 }
 
 impl FrameSink for Mp4Sink {
+    fn working_bytes(&self, sequence: usize) -> Result<u64> {
+        let frame = i64::try_from(sequence)?
+            .checked_add(self.start_frame_boundary)
+            .context("audio delivery frame overflow")?;
+        Ok(self
+            .audio
+            .as_ref()
+            .map(|audio| audio.frame_working_bytes(frame))
+            .transpose()?
+            .unwrap_or(0))
+    }
+
     fn push(&mut self, frame: DeliveredFrame<'_>) -> Result<()> {
         let started = std::time::Instant::now();
         self.muxer.encode_video(frame.pixels)?;

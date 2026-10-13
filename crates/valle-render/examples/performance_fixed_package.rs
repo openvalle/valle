@@ -55,6 +55,10 @@ fn main() -> Result<()> {
             RenderControl::default().with_trace(trace.clone())
         });
     let qa = string("mode")? == "qa";
+    let budget = valle_render::host::NativeRenderBudget::new(
+        usize::try_from(number("threads")?)?,
+        job["memoryBytes"].as_u64(),
+    )?;
     let renderer = NativeRenderer::new(
         NativeProject::from_render(package.engine_render(), Arc::new(catalog)),
         NativeRenderOptions {
@@ -63,7 +67,7 @@ fn main() -> Result<()> {
                 u32::try_from(number("width")?)?,
                 u32::try_from(number("height")?)?,
             )),
-            raster_workers: Some(usize::try_from(number("workers")?)?),
+            budget: budget.clone(),
             hardware_encode: true,
             bitrate: Some(usize::try_from(number("bitrate")?)?),
             background: if qa {
@@ -91,7 +95,12 @@ fn main() -> Result<()> {
     } else {
         renderer.export_mp4(output)?
     };
-    let result = json!({"delivery": {"backend": if string("backend")? == "native-metal" {"metal"} else {"raster"}}, "frames": summary.frames, "width": summary.width, "height": summary.height});
+    let memory = budget.memory_report();
+    let result = json!({"delivery": {"backend": if string("backend")? == "native-metal" {"metal"} else {"raster"}, "budget": {
+        "cpuThreads": budget.threads(), "memoryBudgetBytes": job["memoryBytes"].as_u64(),
+        "managedPeakBytes": memory.peak_bytes, "managedPeakLiveBytes": memory.peak_live_bytes,
+        "managedRemainingBytes": memory.used_bytes,
+    }}, "frames": summary.frames, "width": summary.width, "height": summary.height});
     if let Some((trace, file)) = trace {
         trace.record("export.total", started, json!({}));
         trace.write(

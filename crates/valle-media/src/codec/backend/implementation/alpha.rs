@@ -68,6 +68,38 @@ impl TransparentVideoMuxer {
             Some(Rational(fps_num as i32, fps_den as i32)),
             false,
             codec,
+            None,
+        )
+    }
+
+    pub fn open_with_codec_and_threads(
+        path: &Path,
+        width: u32,
+        height: u32,
+        fps_num: u32,
+        fps_den: u32,
+        codec: TransparentVideoCodec,
+        threads: usize,
+    ) -> Result<Self> {
+        if threads == 0
+            || fps_num == 0
+            || fps_den == 0
+            || fps_num > i32::MAX as u32
+            || fps_den > i32::MAX as u32
+        {
+            return Err(anyhow!(
+                "transparent video clock and thread count must be positive"
+            ));
+        }
+        Self::open_with_clock(
+            path,
+            width,
+            height,
+            Rational(fps_den as i32, fps_num as i32),
+            Some(Rational(fps_num as i32, fps_den as i32)),
+            false,
+            codec,
+            Some(threads),
         )
     }
 
@@ -91,6 +123,7 @@ impl TransparentVideoMuxer {
             nominal_frame_rate,
             true,
             TransparentVideoCodec::Qtrle,
+            None,
         )
     }
 
@@ -102,6 +135,7 @@ impl TransparentVideoMuxer {
         nominal_frame_rate: Option<Rational>,
         preserve_start_timestamp: bool,
         codec_kind: TransparentVideoCodec,
+        threads: Option<usize>,
     ) -> Result<Self> {
         ffmpeg_init()?;
         if width == 0 || height == 0 {
@@ -147,6 +181,11 @@ impl TransparentVideoMuxer {
         }
         if global_header {
             video.set_flags(codec::Flags::GLOBAL_HEADER);
+        }
+        if let Some(threads) = threads {
+            let mut threading = codec::threading::Config::kind(codec::threading::Type::Slice);
+            threading.count = threads;
+            video.set_threading(threading);
         }
         let venc = if codec_kind == TransparentVideoCodec::ProRes4444 {
             let mut options = Dictionary::new();

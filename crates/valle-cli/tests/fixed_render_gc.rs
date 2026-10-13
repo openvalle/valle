@@ -170,6 +170,7 @@ fn fixed_package_test_helper() {
         .as_str()
     {
         "preview" => valle_cli::FixedRenderAction::Preview {
+            budget: Default::default(),
             frame: 0,
             output: output.unwrap(),
         },

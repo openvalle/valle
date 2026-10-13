@@ -47,13 +47,13 @@ try {
     const afterFolder = path.join(afterDir, "qa", backend, c);
     const start = report.rows.length;
     if (backend.startsWith("native")) {
-      for (const workers of qa.parallelWorkers) {
-        const reference = await readPng(path.join(beforeFolder, `workers-${workers}`, "sheet.png"));
-        const actual = await readPng(path.join(afterFolder, `workers-${workers}`, "sheet.png"));
+      for (const threads of qa.threadAllowances) {
+        const reference = await readPng(path.join(beforeFolder, `threads-${threads}`, "sheet.png"));
+        const actual = await readPng(path.join(afterFolder, `threads-${threads}`, "sheet.png"));
         const columns = Math.min(4, qa.order.length);
         for (const [sequence, frame] of qa.order.entries()) {
           const x = (sequence % columns) * qa.width, y = Math.floor(sequence / columns) * qa.height;
-          await compare(crop(reference, x, y, qa.width, qa.height), crop(actual, x, y, qa.width, qa.height), c, backend, `w${workers}-${sequence}`, frame);
+          await compare(crop(reference, x, y, qa.width, qa.height), crop(actual, x, y, qa.width, qa.height), c, backend, `n${threads}-${sequence}`, frame);
         }
       }
     } else {

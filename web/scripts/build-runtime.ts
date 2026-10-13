@@ -28,6 +28,7 @@ await withBuildDirectory(path.join(root, "dist"), async (dist) => {
       entrypoints: entrypoints.map((entry) => path.join(root, entry)),
       outdir: path.join(dist, "packages", name),
       format: "esm",
+      splitting: true,
       target: "browser",
       sourcemap: "external",
       naming: { entry: "[dir]/[name].mjs" },

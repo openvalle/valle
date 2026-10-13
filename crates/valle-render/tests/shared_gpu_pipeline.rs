@@ -218,13 +218,13 @@ fn parallel_shared_delivery_preserves_seek_order_exact_pixels_and_no_readback() 
             &frames,
             spec(),
             &mut sink,
-            &RenderControl::default(),
+            &RenderControl::default()
+                .with_budget(valle_render::host::NativeRenderBudget::new(workers, None).unwrap()),
             None,
             SkiaBackendKind::Metal,
-            Some(workers),
         )
         .unwrap();
-        assert_eq!(report.raster_workers, workers);
+        assert_eq!(report.preparation_tasks, workers.min(4));
         assert_eq!(report.frames, frames.len());
         assert_eq!(report.delivery, Some(FrameDelivery::SharedGpu));
         assert_eq!(report.delivery_readback_bytes, 0);
@@ -264,7 +264,6 @@ fn shared_delivery_cancellation_and_sink_failure_drain_blocked_preparers() {
             &control,
             Some(&progress),
             SkiaBackendKind::Metal,
-            Some(8),
         )
         .unwrap_err();
         if failure {
@@ -281,10 +280,10 @@ fn shared_delivery_cancellation_and_sink_failure_drain_blocked_preparers() {
 
 #[test]
 #[ignore = "requires real Metal and VideoToolbox"]
-fn shared_delivery_deadline_and_invalid_worker_count_do_not_finish_the_sink() {
+fn shared_delivery_deadline_does_not_finish_the_sink() {
     let project = project();
     let dir = tempfile::tempdir().unwrap();
-    for workers in [0, 8] {
+    for workers in [1, 8] {
         let mut sink = InspectSink::new(&dir.path().join(format!("deadline-{workers}.mp4")));
         let control = RenderControl::with_deadline(Instant::now());
         let error = render_schedule(
@@ -295,13 +294,9 @@ fn shared_delivery_deadline_and_invalid_worker_count_do_not_finish_the_sink() {
             &control,
             None,
             SkiaBackendKind::Metal,
-            Some(workers),
         )
         .unwrap_err();
-        assert!(matches!(
-            (workers, error),
-            (0, PipelineError::InvalidWorkerCount) | (8, PipelineError::Deadline)
-        ));
+        assert!(matches!(error, PipelineError::Deadline));
         assert!(sink.keys.is_empty());
         assert!(!sink.finished);
     }

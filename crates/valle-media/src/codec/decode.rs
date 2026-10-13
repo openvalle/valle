@@ -56,6 +56,26 @@ impl LibavVideoSource {
                 .map(Into::into),
         }
     }
+    pub fn open_with_transport_and_threads(
+        path: &Path,
+        transport: VideoFrameTransport,
+        threads: usize,
+    ) -> Result<Self> {
+        match backend::version()? {
+            Version::V7 => backend::v7::decode::LibavVideoSource::open_with_transport_and_threads(
+                path, transport, threads,
+            )
+            .map(Into::into),
+            Version::V8 => backend::v8::decode::LibavVideoSource::open_with_transport_and_threads(
+                path, transport, threads,
+            )
+            .map(Into::into),
+            Version::V9 => backend::v9::decode::LibavVideoSource::open_with_transport_and_threads(
+                path, transport, threads,
+            )
+            .map(Into::into),
+        }
+    }
     pub fn open_with_transport(path: &Path, transport: VideoFrameTransport) -> Result<Self> {
         match backend::version()? {
             Version::V7 => {

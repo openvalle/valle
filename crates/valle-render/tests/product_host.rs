@@ -134,7 +134,7 @@ fn native_renderer_summary_reports_the_pinned_render() {
     let render = project.render_id();
     let mut options = NativeRenderOptions::default();
     options.background = OutputBackground::opaque_srgb([12, 34, 56]);
-    options.raster_workers = Some(1);
+    options.budget = valle_render::host::NativeRenderBudget::new(1, None).unwrap();
     let directory = tempfile::tempdir().unwrap();
     let output = directory.path().join("frame.png");
     let summary = NativeRenderer::new(project, options)
@@ -177,7 +177,7 @@ fn cancelled_multi_frame_delivery_discards_sequence_and_storyboard() {
         project(),
         NativeRenderOptions {
             control,
-            raster_workers: Some(1),
+            budget: valle_render::host::NativeRenderBudget::new(1, None).unwrap(),
             progress: Some(Arc::new(move |completed, _| {
                 if completed == 1 {
                     cancel.cancel();

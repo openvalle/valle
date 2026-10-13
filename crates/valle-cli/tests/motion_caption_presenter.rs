@@ -56,7 +56,7 @@ fn caption_words_use_the_host_clock_reserved_font_and_repeatable_frames() {
             &backend,
             "--frames",
             "0,3,5,7",
-            "--workers",
+            "--threads",
             "2",
             "-o",
             "sequence-%d.png",

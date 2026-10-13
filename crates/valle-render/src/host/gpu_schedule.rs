@@ -529,7 +529,7 @@ mod tests {
     }
 
     #[test]
-    fn short_tails_and_one_worker_do_not_probe() {
+    fn short_tails_and_single_context_limits_do_not_probe() {
         let mut policy = AdaptiveQueues::new(3);
         for _ in 0..100 {
             assert!(

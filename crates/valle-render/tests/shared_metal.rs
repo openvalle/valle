@@ -138,7 +138,8 @@ fn shared_queues_preserve_order_pixels_and_complete_on_sink_failure_or_cancel() 
         (4, true, false),
         (4, false, true),
     ] {
-        let control = RenderControl::default();
+        let control = RenderControl::default()
+            .with_budget(valle_render::host::NativeRenderBudget::new(workers, None).unwrap());
         let mut sink = ProbeSink {
             pool: pool.clone(),
             frames: Vec::new(),
@@ -154,7 +155,6 @@ fn shared_queues_preserve_order_pixels_and_complete_on_sink_failure_or_cancel() 
             &control,
             None,
             SkiaBackendKind::Metal,
-            Some(workers),
         );
         if fail || cancel {
             let error = result.unwrap_err().to_string();

@@ -24,6 +24,16 @@ const RASTER_LAYER_CACHE_BYTES: usize = 64 * 1024 * 1024;
 const LARGE_RASTER_LAYER_BYTES: usize = 8 * 1024 * 1024;
 const LARGE_RASTER_HISTORY_LIMIT: usize = 256;
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct SkiaCacheLimits {
+    /// Skia counts both live and purgeable GPU resources toward this soft cache target.
+    pub(crate) gpu_resources: usize,
+    pub(crate) programs: usize,
+    pub(crate) raster_layers: usize,
+    pub(crate) opacity_layers: usize,
+    pub(crate) surface_pool: u64,
+}
+
 /// A destination-independent RasterProgram result in the executor's working color space.
 /// Full device-matrix bits retain subpixel phase; ROI retains tile clipping and origin.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -53,6 +63,10 @@ impl std::fmt::Debug for RasterLayerCache {
 }
 
 impl RasterLayerCache {
+    pub(crate) fn set_byte_limit(&mut self, bytes: usize) {
+        self.images = BoundedCache::new(RASTER_LAYER_CACHE_LIMIT).with_weight_limit(bytes);
+        self.observed_large = BoundedCache::new(LARGE_RASTER_HISTORY_LIMIT);
+    }
     pub(crate) fn new() -> Self {
         Self {
             images: BoundedCache::new(RASTER_LAYER_CACHE_LIMIT)
@@ -64,8 +78,8 @@ impl RasterLayerCache {
     }
 
     pub(crate) fn clear(&mut self) {
-        self.images =
-            BoundedCache::new(RASTER_LAYER_CACHE_LIMIT).with_weight_limit(RASTER_LAYER_CACHE_BYTES);
+        let limit = self.images.maximum_weight;
+        self.images = BoundedCache::new(RASTER_LAYER_CACHE_LIMIT).with_weight_limit(limit);
         self.observed_large = BoundedCache::new(LARGE_RASTER_HISTORY_LIMIT);
     }
 
@@ -82,9 +96,9 @@ impl RasterLayerCache {
         }
     }
 
-    pub(crate) fn insert(&mut self, key: RasterLayerKey, image: PlanImage) {
+    pub(crate) fn insert(&mut self, key: RasterLayerKey, mut image: PlanImage) {
         let weight = usize::try_from(image.roi().pixels().saturating_mul(8)).unwrap_or(usize::MAX);
-        if weight > RASTER_LAYER_CACHE_BYTES {
+        if weight > self.images.maximum_weight {
             return;
         }
         if weight >= LARGE_RASTER_LAYER_BYTES && image.image().is_some_and(Image::is_texture_backed)
@@ -100,7 +114,9 @@ impl RasterLayerCache {
                 return;
             }
         }
-        self.images.insert_weighted(key, image, weight);
+        if image.admit_retention(weight as u64) {
+            self.images.insert_weighted(key, image, weight);
+        }
     }
 
     pub(crate) fn counters(&self) -> (u64, u64, usize, usize) {
@@ -120,7 +136,11 @@ const SMALL_OPACITY_CACHE_ENTRIES: usize = 32_768;
 
 pub(crate) struct SmallOpacityCache {
     layers: BTreeMap<ContentDigest, (Image, SkRect)>,
-    pages: VecDeque<(Image, Vec<ContentDigest>)>,
+    pages: VecDeque<(
+        Image,
+        Vec<ContentDigest>,
+        Option<valle_engine::motion::memory::MemoryLease>,
+    )>,
     seen: BTreeSet<ContentDigest>,
     seen_order: VecDeque<ContentDigest>,
     bytes: usize,
@@ -174,17 +194,24 @@ impl SmallOpacityCache {
     }
 
     pub(crate) fn insert_page(&mut self, image: Image, entries: Vec<(ContentDigest, SkRect)>) {
-        self.bytes += image.width() as usize * image.height() as usize * 8;
+        let bytes = image.width() as usize * image.height() as usize * 8;
+        let Ok(memory) = valle_engine::motion::memory::reserve(
+            valle_engine::motion::memory::MemoryKind::Surface,
+            bytes as u64,
+        ) else {
+            return;
+        };
+        self.bytes += bytes;
         let mut keys = Vec::with_capacity(entries.len());
         for (key, rect) in entries {
             keys.push(key);
             self.layers.insert(key, (image.clone(), rect));
         }
-        self.pages.push_back((image, keys));
+        self.pages.push_back((image, keys, memory));
         // Retire complete pages; counting only small occupied rectangles would
         // undercount the GPU allocation retained by their shared image.
         while self.bytes > self.byte_limit || self.layers.len() > SMALL_OPACITY_CACHE_ENTRIES {
-            let (image, keys) = self.pages.pop_front().unwrap();
+            let (image, keys, _memory) = self.pages.pop_front().unwrap();
             self.bytes -= image.width() as usize * image.height() as usize * 8;
             for key in keys {
                 if self
@@ -333,6 +360,15 @@ pub(crate) struct BackendCaches {
 }
 
 impl BackendCaches {
+    pub(crate) fn set_limits(&mut self, limits: SkiaCacheLimits) {
+        self.programs = BoundedCache::new(PROGRAM_CACHE_LIMIT).with_weight_limit(limits.programs);
+        let mut opacity = self
+            .opacity_layers
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        opacity.clear();
+        opacity.byte_limit = limits.opacity_layers;
+    }
     pub(crate) fn new() -> Self {
         Self {
             programs: BoundedCache::new(PROGRAM_CACHE_LIMIT).with_weight_limit(PROGRAM_CACHE_BYTES),

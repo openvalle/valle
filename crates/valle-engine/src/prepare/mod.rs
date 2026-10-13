@@ -11,6 +11,7 @@ mod external;
 mod image;
 mod mask;
 mod motion;
+pub(crate) mod motion_kernel;
 mod request;
 mod transition;
 mod validate;
@@ -345,6 +346,7 @@ pub struct ProductPrepareCaches {
     motion_styles: valle_motion::StyleCache,
     motion_faces: valle_motion::FaceCache,
     motion_fonts: motion::MotionFontCache,
+    pub(crate) motion_preparation: motion_kernel::MotionPreparation,
     #[cfg(feature = "text")]
     text_semantics: crate::text_semantic::TextSemantics,
 }
@@ -355,6 +357,7 @@ impl ProductPrepareCaches {
             motion_styles: valle_motion::StyleCache::new(),
             motion_faces: valle_motion::FaceCache::new(),
             motion_fonts: motion::MotionFontCache::default(),
+            motion_preparation: motion_kernel::MotionPreparation::default(),
             #[cfg(feature = "text")]
             text_semantics: crate::text_semantic::TextSemantics::product(),
         }
@@ -382,6 +385,7 @@ struct PrepareState<'a> {
     motion_styles: &'a valle_motion::StyleCache,
     motion_faces: &'a valle_motion::FaceCache,
     motion_fonts: &'a mut motion::MotionFontCache,
+    motion_preparation: &'a mut motion_kernel::MotionPreparation,
     #[cfg(feature = "text")]
     text_semantics: Option<&'a mut crate::text_semantic::TextSemantics>,
     requests: request::RequestAllocator,
@@ -409,6 +413,7 @@ impl<'a> PrepareState<'a> {
             motion_styles: &caches.motion_styles,
             motion_faces: &caches.motion_faces,
             motion_fonts: &mut caches.motion_fonts,
+            motion_preparation: &mut caches.motion_preparation,
             #[cfg(feature = "text")]
             text_semantics: Some(&mut caches.text_semantics),
             requests: request::RequestAllocator::default(),
@@ -886,7 +891,7 @@ pub struct PrepareError {
 }
 
 impl PrepareError {
-    fn at(path: impl Into<String>, reason: impl std::fmt::Display) -> Self {
+    pub(crate) fn at(path: impl Into<String>, reason: impl std::fmt::Display) -> Self {
         Self {
             path: path.into(),
             reason: reason.to_string(),

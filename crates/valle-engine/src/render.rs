@@ -13,7 +13,7 @@ mod audio_gain;
 mod audio_mix;
 mod evaluate;
 
-pub use audio_mix::{AudioMixPoint, AudioPcmMixError, AudioSourceRequirement};
+pub use audio_mix::{AudioMixPoint, AudioPcmMixError, AudioSourceRequirement, AudioSourceWindow};
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -1035,7 +1035,7 @@ pub enum CanvasClockError {
     },
 }
 
-fn quantize_seconds_clock(
+pub(crate) fn quantize_seconds_clock(
     seconds: f64,
     units_per_second: f64,
     count: i64,

@@ -2201,8 +2201,16 @@ fn validate_path(path: &PathData, index: usize) -> Result<(), DrawProgramError> 
         );
     }
     for (point_index, [x, y]) in path.points.iter().copied().enumerate() {
-        finite_f64(x, &format!("paths[{index}].points[{point_index}].x"))?;
-        finite_f64(y, &format!("paths[{index}].points[{point_index}].y"))?;
+        // Glyph outlines carry thousands of coordinates. Construct a diagnostic only on the
+        // failing path; formatting both locations for every valid point dominated WASM emission.
+        for (axis, value) in [("x", x), ("y", y)] {
+            if !value.is_finite() || value.abs() > MAX_LOCAL_COORDINATE {
+                finite_f64(
+                    value,
+                    &format!("paths[{index}].points[{point_index}].{axis}"),
+                )?;
+            }
+        }
     }
     let mut subpath_open = false;
     for (verb_index, verb) in path.verbs.iter().enumerate() {

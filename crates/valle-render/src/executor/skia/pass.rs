@@ -44,6 +44,14 @@ pub struct SkiaExecutor {
 }
 
 impl SkiaExecutor {
+    #[cfg(feature = "native")]
+    pub(crate) fn set_cache_limits(&mut self, limits: super::cache::SkiaCacheLimits) {
+        self.caches.set_limits(limits);
+        self.raster_layers.set_byte_limit(limits.raster_layers);
+        self.surfaces.set_pool_byte_limit(limits.surface_pool);
+        self.surfaces
+            .set_gpu_resource_cache_limit(limits.gpu_resources);
+    }
     pub fn new(capabilities: BackendCapabilities) -> Result<Self, SkiaExecuteError> {
         // Selects Skia's CPU-specific raster pipeline (e.g. AVX2/F16C); idempotent.
         skia_safe::graphics::init();

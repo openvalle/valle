@@ -2108,6 +2108,7 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
         proxyBase: config.proxyBase,
         fonts: config.fonts,
         gpu: config.gpu,
+        runtimeBudget: player.controller!.player!.runtimeBudget,
       },
       width: receipt.canvasWidth,
       height: receipt.canvasHeight,

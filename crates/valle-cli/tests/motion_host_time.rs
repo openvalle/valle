@@ -72,7 +72,7 @@ fn host_duration_is_shared_by_check_review_and_exact_frame_delivery() {
             "0,3,7",
             "-o",
             "sequence-%d.png",
-            "--workers",
+            "--threads",
             "2",
             "--json",
         ],

@@ -91,7 +91,12 @@ pub(super) fn apply_bloom_into(
         return Err(DrawError::Unsupported("invalid GPU bloom extent".into()));
     }
     if std::env::var_os("VALLE_TRACE_F16_STAGES").is_some() {
-        eprintln!("[valle f16] gpu-bloom {width}x{height} (no intermediate readback)");
+        eprintln!(
+            "[valle f16] gpu-bloom {width}x{height} source={}x{} offset={offset:?} radius={} (no intermediate readback)",
+            source_roi.width(),
+            source_roi.height(),
+            params.radius,
+        );
     }
     EFFECTS.with(|cell| {
         let mut shaders = cell.borrow_mut();
@@ -141,7 +146,12 @@ pub(super) fn apply_glow_into(
         return Err(DrawError::Unsupported("invalid GPU glow extent".into()));
     }
     if std::env::var_os("VALLE_TRACE_F16_STAGES").is_some() {
-        eprintln!("[valle f16] gpu-glow {width}x{height} (no intermediate readback)");
+        eprintln!(
+            "[valle f16] gpu-glow {width}x{height} source={}x{} offset={offset:?} radius={} (no intermediate readback)",
+            source_roi.width(),
+            source_roi.height(),
+            params.radius,
+        );
     }
     EFFECTS.with(|cell| {
         let mut shaders = cell.borrow_mut();

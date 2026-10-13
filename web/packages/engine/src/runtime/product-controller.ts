@@ -1,3 +1,4 @@
+import { BrowserRuntimeBudget, sharedBrowserRuntimeBudget, type RuntimePriority } from "./runtime-budget.ts";
 import { PreviewBuffer } from "./compositor/preview-buffer.ts";
 import { waitForGpuCompletion } from "../executor/webgl/gpu-completion.ts";
 import type { RenderTrace } from "./render-trace.ts";
@@ -26,6 +27,7 @@ import {
 
 import {
   RESOURCE_REQUESTS_ABI,
+  BOUND_PROGRAM_SCHEDULES_ABI,
   decodePackedAbi,
   type PackedValue,
 } from "../abi/packed.ts";
@@ -43,7 +45,7 @@ import {
   keyframeThumbnails,
   type DecoderRing,
 } from "../media/video-source.ts";
-import { decodeAudioBuffer } from "../media/audio-source.ts";
+import { BrowserAudioWindowReader } from "../media/audio-source.ts";
 import {
   resolvePlayerRuntimeAssets,
   type PlayerRuntimeAssets,
@@ -60,6 +62,8 @@ import {
   type ProductEngineBootstrap,
   type ProductEngineWire,
   type ProductRenderReceipt,
+  type ProductRuntimeSnapshot,
+  type ProductRuntimeMethod,
 } from "./compositor/frame-protocol.ts";
 import { assertCanvaskitImportLayout } from "./visual-layout.ts";
 import {
@@ -107,8 +111,11 @@ export interface BrowserValleWebPlayerOptions {
   runtimeBaseUrl?: string | URL;
   pxScale?: number;
   gpu?: boolean;
-  /** CPU planning budget (1..8), with cores reserved for presentation by default. */
+  /** CPU task allowance (1..8); does not pin or reserve physical cores. */
   cpuThreads?: number;
+  memoryBytes?: number;
+  runtimeBudget?: BrowserRuntimeBudget;
+  runtimePurpose?: "preview" | "export";
   /** Select accelerated preview stages, or retain the reference export path. */
   renderMode?: "reference" | "realtime";
   /** Optional bounded CPU trace; capture readbacks and GPU device time are separate. */
@@ -245,9 +252,10 @@ interface CompiledAudioPlayback {
 }
 
 interface AudioSourceRequirement {
-  sourceIndex: number;
   digest: ContentDigestWire;
   sourceChannels: 1 | 2;
+  startSample: number;
+  endSample: number;
 }
 
 interface AudioGraph {
@@ -549,8 +557,8 @@ export async function createBrowserValleWebPlayer(
   options: BrowserValleWebPlayerOptions,
 ): Promise<BrowserValleWebPlayer> {
   const player = new BrowserValleWebPlayer(options);
-  await player.init();
-  return player;
+  try { await player.init(); return player; }
+  catch (error) { await player.close(); throw error; }
 }
 
 export function resolveAssetUrl(
@@ -606,7 +614,10 @@ export class BrowserValleWebPlayer {
     { canonical: Uint8Array; topology: string; width: number; height: number }
   >();
   private readonly renderMode: "reference" | "realtime";
-  private readonly cpuThreads: number;
+  readonly runtimeBudget: BrowserRuntimeBudget;
+  private readonly runtimePurpose: "preview" | "export";
+  private readonly runtimeAbort = new AbortController();
+  private readonly memoryOwner = {};
   private bootstrap!: ProductEngineBootstrap;
   private CanvasKit!: CanvasKit;
   private compositor!: CanvasKitExecutor;
@@ -638,7 +649,11 @@ export class BrowserValleWebPlayer {
   private readonly resourceObjects: BrowserResourceCache<CachedBrowserResource>;
   private renderReceipt: ProductRenderReceipt | null = null;
   private compiledAudioProgram: CompiledAudioProgramWire | null = null;
-  private audioBuffers = new Map<string, Promise<AudioBuffer>>();
+  private audioBuffers = new Map<string, AudioBuffer>();
+  private audioReaders = new Map<string, BrowserAudioWindowReader>();
+  private audioTail: Promise<unknown> = Promise.resolve();
+  private readonly audioPeakTasks = new Set<Promise<unknown>>();
+  private readonly audioMemoryOwner = {};
   private audioGraph: AudioGraph | null = null;
   private readonly audioContext: AudioContext | null;
   private readonly clock: AudioMasterClock;
@@ -663,18 +678,11 @@ export class BrowserValleWebPlayer {
       throw new Error("resourceManifestJson is required");
     if (!options.verifiedBindingBundleJson)
       throw new Error("verifiedBindingBundleJson is required");
-    const cores =
-      typeof navigator === "undefined" ? 1 : navigator.hardwareConcurrency || 1;
-    const threads =
-      options.cpuThreads ??
-      Math.min(
-        options.renderMode === "realtime" ? 6 : 2,
-        Math.max(1, options.renderMode === "realtime" ? cores - 2 : Math.floor(cores / 2)),
-      );
-    if (!Number.isSafeInteger(threads) || threads < 1 || threads > 8) {
+    if (options.cpuThreads !== undefined && (!Number.isSafeInteger(options.cpuThreads) || options.cpuThreads < 1 || options.cpuThreads > 8)) {
       throw new RangeError("cpuThreads must be an integer in 1..8");
     }
-    this.cpuThreads = threads;
+    this.runtimeBudget = options.runtimeBudget ?? sharedBrowserRuntimeBudget(options.cpuThreads, options.memoryBytes);
+    this.runtimePurpose = options.runtimePurpose ?? "preview";
     this.renderMode = options.renderMode ?? "reference";
     if (this.renderMode !== "reference" && this.renderMode !== "realtime")
       throw new Error("Invalid renderMode");
@@ -707,12 +715,17 @@ export class BrowserValleWebPlayer {
     this.pxScale = finitePositive(options.pxScale ?? 1, "pxScale");
     this.gpu = options.gpu ?? true;
     this.trace = options.trace;
-    this.audioContext =
-      options.audioContext ??
-      maybeCreateAudioContext(this.timeline.document.canvas.sampleRate);
+    this.audioContext = options.audioContext === undefined
+      ? maybeCreateAudioContext(this.timeline.document.canvas.sampleRate)
+      : options.audioContext;
     this.resourceObjects = new BrowserResourceCache(options.resourceCache);
     this.clock = new AudioMasterClock(this.audioContext);
     this.stats = emptyPlayerStats();
+    this.runtimeBudget.register(this.audioMemoryOwner, () => this.audioBuffers.clear());
+    this.runtimeBudget.register(this.memoryOwner, () => {
+      this.resourceObjects.dispose();
+      this.compositor?.trimWorkingMemory();
+    });
   }
 
   async init(): Promise<this> {
@@ -807,7 +820,11 @@ export class BrowserValleWebPlayer {
     // Working surfaces and GPU fulfillment belong to one frame at a time, including when
     // cooperative drawing yields to presentation, a seek or a direct SDK render call.
     const job = (this.renderTail ?? Promise.resolve()).then(async () => {
-      const completed = await this.renderFrameNow(frame, options, publish);
+      const priority: RuntimePriority = this.runtimePurpose === "export" ? "export" : this.playing ? "playback" : "interaction";
+      const release = await this.runtimeBudget.acquirePresentation(priority, this.runtimeAbort.signal);
+      let completed: CompletedPreview;
+      try { completed = await this.renderFrameNow(frame, options, publish); }
+      finally { release(); }
       // Deferred presentation still owns this GPU target until its deadline. SDK calls and seeks
       // must not overwrite it between drawing a frame and presenting that frame.
       await afterRender?.(completed);
@@ -841,7 +858,6 @@ export class BrowserValleWebPlayer {
     const width = Math.max(1, Math.round(canvasWidth * scale));
     const height = Math.max(1, Math.round(canvasHeight * scale));
     const forceCpu = options.png === true;
-    const target = this.acquireTarget(width, height, forceCpu);
     const frameStarted = performance.now();
     const planningInput = {
       ...this.framePlanningInput(
@@ -856,6 +872,8 @@ export class BrowserValleWebPlayer {
     const endPrepareWait = this.trace?.span("prepare.wait", { frame });
     const planning = planner.prepare(planningInput);
     let fulfilled: FulfilledFrame | null = null;
+    let finishMemory: ((retainedBytes: number) => void) | undefined;
+    let retainedBytes = 0;
     try {
       const requestStage = await planning.requests;
       endPrepareWait?.();
@@ -891,29 +909,29 @@ export class BrowserValleWebPlayer {
         }
       }
       this.stats.requestBytes += requestStage.requestPacket.byteLength;
+      const readyStage = await planning.ready;
+      const schedule = record(await decodePackedAbi(readyStage.schedulePacket, BOUND_PROGRAM_SCHEDULES_ABI), "working-set schedule");
+      const requests = await decodePackedAbi(requestStage.requestPacket, RESOURCE_REQUESTS_ABI);
+      if (!Array.isArray(requests)) throw new Error("ResourceRequestSet must decode to an array");
+      const programBytes = Math.max(0, ...(schedule.programs as Wire[]).map(program => Number(program.estimatedSurfaceBytes)));
+      const outer = (schedule.surfaceSlots as Wire[]).reduce((sum, slot) => sum + Number(slot.estimatedBytes), 0);
+      let required = outer + programBytes * 5 + width * height * 32 + 8 * 1024 ** 2;
+      for (const request of requests as Wire[]) {
+        const expected = request.expected;
+        if (expected.extent) required += Number(expected.extent.width) * Number(expected.extent.height) * 32;
+        if (expected.kind === "scene3d") {
+          const value = JSON.parse(new TextDecoder().decode(packedByteArray(request.payload.canonical_request, "Scene3D request")));
+          required += value.width * value.height * 128;
+        }
+      }
+      // The frame envelope now owns the projected packets, replacing their background leases.
+      planner.adoptPreparationMemory(planning.key);
+      finishMemory = await this.runtimeBudget.admitFrameAfterKernels(this.memoryOwner, required, this.runtimeAbort.signal);
+      const target = this.acquireTarget(width, height, forceCpu);
       const fulfillmentStarted = performance.now();
       const endFulfill = this.trace?.span("resource.fulfill", { frame });
-      const fulfillment = this.fulfillRequests(
-        requestStage.requestPacket,
-        target.gpu,
-        requestStage.gpuScene3d,
-      ).finally(() => endFulfill?.());
-      const endOverlapWait = this.trace?.span("prepare.overlap_wait", {
-        frame,
-      });
-      const endLowerWait = this.trace?.span("lower_bind.wait", { frame });
-      const [readyResult, fulfillmentResult] = await Promise.allSettled([
-        planning.ready.finally(() => endLowerWait?.()),
-        fulfillment,
-      ] as const);
-      endOverlapWait?.();
-      // Successful fulfillment owns a frame lease even if planning failed or was superseded.
-      if (fulfillmentResult.status === "fulfilled")
-        fulfilled = fulfillmentResult.value;
-      if (readyResult.status === "rejected") throw readyResult.reason;
-      if (fulfillmentResult.status === "rejected")
-        throw fulfillmentResult.reason;
-      const readyStage = readyResult.value;
+      fulfilled = await this.fulfillRequests(requestStage.requestPacket, target.gpu, requestStage.gpuScene3d)
+        .finally(() => endFulfill?.());
       this.trace?.worker(
         "lower",
         readyStage.workerTimeOriginMs,
@@ -929,7 +947,7 @@ export class BrowserValleWebPlayer {
         frame,
       );
       this.assertActiveRenderId(renderId, readyStage.renderId);
-      const frameResources = fulfillmentResult.value;
+      const frameResources = fulfilled;
       const resourceFulfillMs = performance.now() - fulfillmentStarted;
       const generation = readyStage.generation;
       const planPacket = readyStage.planPacket;
@@ -997,6 +1015,7 @@ export class BrowserValleWebPlayer {
         },
       );
       this.assertActiveRenderId(renderId, readyStage.renderId);
+      retainedBytes = Number(report.surfaceResidentBytes) + report.rasterLayerCacheBytes + frameResources.resourceCache.residentBytes + planner.snapshot().readyBytes;
       const executeMs = performance.now() - executeStarted;
       endExecute?.();
       if (passTimings)
@@ -1232,13 +1251,18 @@ export class BrowserValleWebPlayer {
       if (publish) this.publishInspection(completed);
       return completed;
     } finally {
-      planner.release(planning.key);
-      if (fulfilled) {
-        try {
-          this.resourceObjects.releaseFrame();
-        } finally {
-          disposeAll(fulfilled.dispose);
+      try {
+        planner.release(planning.key);
+        if (fulfilled) {
+          try { this.resourceObjects.releaseFrame(); }
+          finally { disposeAll(fulfilled.dispose); }
         }
+      } finally {
+        if (finishMemory && retainedBytes === 0) {
+          this.resourceObjects.dispose();
+          this.compositor?.trimWorkingMemory();
+        }
+        finishMemory?.(retainedBytes);
       }
     }
   }
@@ -1325,8 +1349,8 @@ export class BrowserValleWebPlayer {
       // before its media clock starts. The deadline also covers plans that cannot fit together
       // in the existing byte budget; they remain speculative and never bypass that budget.
       await Promise.race([
-        Promise.allSettled(planning.slice(0, 6).map(job => job.ready)),
-        waitMilliseconds(180),
+        Promise.allSettled(planning.slice(0, 24).map(job => job.ready)),
+        waitMilliseconds(800),
       ]);
       if (generation !== this.playGeneration || this.closed) return;
     }
@@ -1526,6 +1550,7 @@ export class BrowserValleWebPlayer {
     this.pause();
     if (this.renderInFlight) await this.renderInFlight.catch(() => undefined);
     if (this.renderTail) await this.renderTail;
+    await this.audioTail.catch(() => undefined);
     let staged: StagedRenderPackage;
     const stageStarted = performance.now();
     try {
@@ -1595,22 +1620,48 @@ export class BrowserValleWebPlayer {
     assetId: string,
     { buckets = 2000 }: { buckets?: number } = {},
   ) {
+    if (!Number.isSafeInteger(buckets) || buckets < 1) throw new RangeError("audio peak buckets must be a positive integer");
+    this.runtimeAbort.signal.throwIfAborted();
+    const work = this.readAudioPeaks(assetId, buckets);
+    this.audioPeakTasks.add(work);
+    try { return await work; }
+    finally { this.audioPeakTasks.delete(work); }
+  }
+
+  private async readAudioPeaks(assetId: string, buckets: number) {
     const asset = this.requireAsset(assetId, "audio");
     const bytes = await this.fetchAssetBytes(asset);
     this.stats.audioPeaksDecodes += 1;
     const context = new OfflineAudioContext(1, 1, 8000);
-    const decoded = await decodeAudioBuffer({ buffer: bytes }, context);
-    const source = decoded.getChannelData(0);
-    const peaks = new Float32Array(buckets);
-    for (let bucket = 0; bucket < buckets; bucket += 1) {
-      const start = Math.floor((bucket * source.length) / buckets);
-      const end = Math.floor(((bucket + 1) * source.length) / buckets);
-      let peak = 0;
-      for (let index = start; index < end; index += 1)
-        peak = Math.max(peak, Math.abs(source[index]!));
-      peaks[bucket] = peak;
+    const reader = await BrowserAudioWindowReader.open({ buffer: bytes });
+    let outputMemory: Awaited<ReturnType<BrowserRuntimeBudget["acquireKernel"]>> | undefined;
+    try {
+      const length = Math.round(reader.duration * context.sampleRate);
+      if (!Number.isSafeInteger(length) || length < 1) throw new Error("audio track has no playable samples");
+      const windowBytes = reader.workingBytes(context.sampleRate);
+      if (windowBytes + buckets * 4 > this.runtimeBudget.memoryBytes) throw new RangeError("audio peaks exceed runtime memory budget");
+      outputMemory = await this.runtimeBudget.acquireKernel(windowBytes + buckets * 4, this.runtimeAbort.signal);
+      const peaks = new Float32Array(buckets);
+      for (let start = 0; start < length; start += context.sampleRate) {
+        let releaseCpu: (() => void) | undefined;
+        try {
+          releaseCpu = await this.runtimeBudget.acquireCpu("prefetch", this.runtimeAbort.signal);
+          const end = Math.min(length, start + context.sampleRate);
+          const source = (await reader.read(context, start, end)).getChannelData(0);
+          this.runtimeAbort.signal.throwIfAborted();
+          for (let index = 0; index < source.length; index++) {
+            // Preserve the old floor(bucket * length / buckets) interval boundaries,
+            // including empty buckets when there are fewer samples than buckets.
+            const bucket = Math.ceil((start + index + 1) * buckets / length) - 1;
+            peaks[bucket] = Math.max(peaks[bucket]!, Math.abs(source[index]!));
+          }
+        } finally { releaseCpu?.(); }
+      }
+      return { peaks, durationS: length / context.sampleRate };
+    } finally {
+      outputMemory?.release();
+      reader.close();
     }
-    return { peaks, durationS: decoded.duration };
   }
 
   async motionInspection(
@@ -1637,7 +1688,7 @@ export class BrowserValleWebPlayer {
       );
     }
     return {
-      object: this.pickScene3d(canvasX, canvasY, clipId),
+      object: await this.pickScene3d(canvasX, canvasY, clipId),
       compositionFrame: inspection.compositionFrame,
       sourceFrame: inspection.sourceFrame,
       boxes: inspection.boxes,
@@ -1648,11 +1699,16 @@ export class BrowserValleWebPlayer {
     if (this.closed) return;
     this.pause();
     this.closed = true;
+    this.runtimeAbort.abort();
     if (this.renderInFlight) await this.renderInFlight.catch(() => undefined);
     if (this.renderTail) await this.renderTail;
+    await this.audioTail.catch(() => undefined);
+    await Promise.allSettled(this.audioPeakTasks);
     this.resourceObjects.dispose();
     this.planner?.close();
     this.planner = null;
+    this.runtimeBudget.unregister(this.memoryOwner);
+    this.runtimeBudget.unregister(this.audioMemoryOwner);
     this.engine?.free();
     this.renderId = "";
     this.renderReceipt = null;
@@ -1680,6 +1736,8 @@ export class BrowserValleWebPlayer {
     this.assetBytes.clear();
     this.videoBlobs.clear();
     this.audioBuffers.clear();
+    for (const reader of this.audioReaders.values()) reader.close();
+    this.audioReaders.clear();
     this.fontBytes.clear();
     this.modelBytes.clear();
     this.environmentBytes.clear();
@@ -1766,42 +1824,34 @@ export class BrowserValleWebPlayer {
       );
       bootstrap.gpuScene3d = this.gpu && this.renderMode === "realtime";
       const openStarted = performance.now();
-      const receipt = parseProductRenderReceipt(
-        engine.open_fixed_package(
-          bootstrap.fixedPackageManifestJson,
-          bootstrap.timelineJson,
-          bootstrap.resourceManifestJson,
-          bootstrap.verifiedBindingBundleJson,
-        ),
-      );
-      markPhase("open", openStarted);
-      const indexStarted = performance.now();
-      frozenResources = indexCompiledExecutionResources(
-        engine,
-        receipt.renderId,
-      );
-      bootstrap.expectedRenderId = receipt.renderId;
-      const audioProgram = parseCompiledAudioProgram(
-        JSON.parse(engine.audio_program_json(receipt.renderId)),
-      );
-      markPhase("index", indexStarted);
-      if (
-        audioProgram.sampleRate !== receipt.sampleRate ||
-        audioProgram.sampleCount !== receipt.sampleCount
-      ) {
-        throw new Error(
-          "compiled audio program does not match the opened render receipt",
-        );
-      }
       planner = new ProductFramePlannerPool({
         workerUrl: this.runtimeAssets.workers.productFrame,
-        size: this.cpuThreads,
+        runtimeBudget: this.runtimeBudget,
+        priority: this.runtimePurpose === "export" ? "export" : "playback",
+        maxReadyBytes: Math.max(1024, Math.min(96 * 1024 ** 2, Math.floor(this.runtimeBudget.memoryBytes / 16))),
         allocateGeneration: () => this.allocateGeneration(),
       });
-      const plannerStarted = performance.now();
       await planner.init(bootstrap);
-      markPhase("planner", plannerStarted);
-      compositor = new CanvasKitExecutor(this.CanvasKit, engine);
+      const snapshot = planner.initialization;
+      if (!snapshot) throw new Error("Product worker did not return the admitted package snapshot");
+      const receipt = parseProductRenderReceipt(JSON.stringify(snapshot.receipt));
+      bootstrap.expectedRenderId = receipt.renderId;
+      markPhase("open", openStarted);
+      frozenResources = indexCompiledExecutionResources(snapshot);
+      const audioProgram = parseCompiledAudioProgram(JSON.parse(snapshot.audioProgramJson));
+      if (audioProgram.sampleRate !== receipt.sampleRate || audioProgram.sampleCount !== receipt.sampleCount) {
+        throw new Error("compiled audio program does not match the opened render receipt");
+      }
+      // The UI engine owns only stateless GPU recipes and the common clock, never a Timeline.
+      const runtime = planner;
+      const kernels = new Proxy(engine, { get(target, property) {
+        if (typeof property === "string" && ((property.startsWith("apply_") && property.endsWith("_f16")) || property.startsWith("transform_srgb_preview_"))) {
+          return (...args: unknown[]) => runtime.call<Uint8Array>(property as ProductRuntimeMethod, args);
+        }
+        const value = Reflect.get(target, property);
+        return typeof value === "function" ? value.bind(target) : value;
+      } });
+      compositor = new CanvasKitExecutor(this.CanvasKit, kernels);
       return {
         fixedPackageManifestJson,
         timelineJson: canonical.timelineJson,
@@ -1876,6 +1926,8 @@ export class BrowserValleWebPlayer {
     this.assetBytes.clear();
     this.videoBlobs.clear();
     this.audioBuffers.clear();
+    for (const reader of this.audioReaders.values()) reader.close();
+    this.audioReaders.clear();
     this.playbackFrame = null;
     this.hitRects = [];
     this.frameInspection = {
@@ -1913,7 +1965,6 @@ export class BrowserValleWebPlayer {
       const requests = decoded.map((value) => {
         const request = record(value, "resource request") as PackedValue & Wire;
         if (
-          this.renderMode === "realtime" &&
           record(request.expected, "resource expected").kind === "scene3d"
         ) {
           const key = record(request.key, "Scene3D key"),
@@ -2117,7 +2168,7 @@ export class BrowserValleWebPlayer {
       const width = Number(extent.width),
         height = Number(extent.height);
       const encoded = await this.fetchAssetBytes(asset, content);
-      const pixels = this.engine.decode_shader_data_texture(
+      const pixels = await this.runtimeCall<Uint8Array>("decode_shader_data_texture",
         contentWire,
         encoded,
         width,
@@ -2188,7 +2239,9 @@ export class BrowserValleWebPlayer {
         payload.canonical_request,
         "Scene3D canonical request",
       );
-      await this.ensureScene3dResources(canonicalRequest);
+      // A projected packet has already passed Rust admission on a stateless kernel worker.
+      // Supported packets have no external model/texture dependencies.
+      if (!projected?.[contentWire]) await this.ensureScene3dResources(canonicalRequest);
       const topology = contentDigestWire(
         interpretation.topology_digest,
         "Scene3D topology digest",
@@ -2198,8 +2251,7 @@ export class BrowserValleWebPlayer {
         gpu &&
         this.target?.context &&
         this.target.canvas &&
-        this.engine.admit_scene3d_gpu_request &&
-        this.engine.scene3d_gpu_lighting_input
+        this.planner
       ) {
         const target = this.target,
           activeEngine = this.engine;
@@ -2229,14 +2281,14 @@ export class BrowserValleWebPlayer {
           new TextDecoder().decode(canonicalRequest),
         ) as Scene3dGpuRequest;
         if (renderer?.accepts(value)) {
-          this.engine.admit_scene3d_gpu_request(
+          if (!projected?.[contentWire]) await this.runtimeCall<void>("admit_scene3d_gpu_request",
             contentWire,
             topology,
             canonicalRequest,
           );
           value.lightingInput =
             projected?.[contentWire] ??
-            this.engine.scene3d_gpu_lighting_input?.(canonicalRequest);
+            await this.runtimeCall<Float32Array>("scene3d_gpu_lighting_input", canonicalRequest);
           const image = await renderer.render(value);
           return {
             object: { key, kind: "scene3d", image },
@@ -2250,9 +2302,9 @@ export class BrowserValleWebPlayer {
         this.renderMode === "realtime" &&
         gpu &&
         this.target?.context &&
-        this.engine.render_scene3d_request_deferred
+        this.planner
       ) {
-        const packet = this.engine.render_scene3d_request_deferred(
+        const packet = await this.runtimeCall<Uint8Array>("render_scene3d_request_deferred",
           contentWire,
           topology,
           canonicalRequest,
@@ -2270,13 +2322,12 @@ export class BrowserValleWebPlayer {
           ...empty,
         };
       }
-      const rgba = this.engine.render_scene3d_request(
+      const rgba = await this.runtimeCall<Uint8Array>("render_scene3d_request",
         contentWire,
         topology,
         canonicalRequest,
       );
-      const width = this.engine.scene3d_frame_width(contentWire);
-      const height = this.engine.scene3d_frame_height(contentWire);
+      const { width, height } = JSON.parse(new TextDecoder().decode(canonicalRequest)) as { width: number; height: number };
       const bytes = pixelBytes(width, height, 8);
       if (rgba.byteLength !== bytes) {
         throw new Error(`Scene3D ${content} returned an invalid RGBA16F plane`);
@@ -2306,11 +2357,15 @@ export class BrowserValleWebPlayer {
     );
   }
 
+  private runtimeCall<T>(method: ProductRuntimeMethod, ...args: unknown[]): Promise<T> {
+    return this.requirePlanner().call<T>(method, args);
+  }
+
   private async ensureScene3dResources(
     canonicalRequest: Uint8Array,
   ): Promise<void> {
     const needs = JSON.parse(
-      this.engine.scene3d_resource_needs_json(canonicalRequest),
+      await this.runtimeCall<string>("scene3d_resource_needs_json", canonicalRequest),
     ) as {
       models: string[];
       textures: { digest: string; role: "color" | "data" }[];
@@ -2349,7 +2404,7 @@ export class BrowserValleWebPlayer {
           throw new Error(
             `Scene3D environment ${digest} has no admitted frozen payload`,
           );
-        this.engine.register_scene3d_environment(digestWire, bytes);
+        await this.runtimeCall<void>("register_scene3d_environment", digestWire, bytes);
         return;
       }
       if (kind === "model") {
@@ -2358,7 +2413,7 @@ export class BrowserValleWebPlayer {
           throw new Error(
             `Scene3D model ${digest} has no admitted frozen payload`,
           );
-        this.engine.register_scene3d_model(digestWire, bytes);
+        await this.runtimeCall<void>("register_scene3d_model", digestWire, bytes);
         return;
       }
       const asset = this.assetByDigest.get(digest);
@@ -2369,7 +2424,7 @@ export class BrowserValleWebPlayer {
       const bytes = await this.fetchAssetBytes(asset, digest);
       if (role !== "color" && role !== "data")
         throw new Error("Scene3D texture requires a color/data role");
-      this.engine.register_scene3d_texture(digestWire, bytes, role);
+      await this.runtimeCall<void>("register_scene3d_texture", digestWire, bytes, role);
     })();
     this.scene3dResourceTasks.set(key, task);
     try {
@@ -2464,6 +2519,9 @@ export class BrowserValleWebPlayer {
     }
     this.videoRings.delete(asset.id);
     this.videoRings.set(asset.id, ring);
+    // Retire idle decoders before awaiting the new source's first frame. Otherwise an
+    // entire extra decode window remains resident during every asynchronous source switch.
+    this.trimVideoRings();
     return ring;
   }
 
@@ -2801,50 +2859,48 @@ export class BrowserValleWebPlayer {
     }
   }
 
-  private audioBufferForDigest(
-    context: BaseAudioContext,
-    declaredDigest: ContentDigestWire,
-    sourceChannels: 1 | 2,
-    cacheLimit = 2,
-  ): Promise<AudioBuffer> {
-    const digest = contentDigestHex(declaredDigest, "audio resource digest");
-    const key = `${digest}@${context.sampleRate}/${sourceChannels}`;
-    let promise = this.audioBuffers.get(key);
-    if (!promise) {
+  private async audioReaderForDigest(source: AudioSourceRequirement): Promise<BrowserAudioWindowReader> {
+    const digest = contentDigestHex(source.digest, "audio resource digest");
+    let reader = this.audioReaders.get(digest);
+    if (!reader) {
       const asset = this.assetByDigest.get(digest);
-      if (!asset)
-        throw new Error(
-          `compiled audio resource sha256:${digest} has no browser source`,
-        );
-      promise = this.fetchAssetBytes(asset, digest)
-        .then((bytes) => decodeAudioBuffer({ buffer: bytes }, context))
-        .then((buffer) => {
-          if (
-            buffer.sampleRate !== context.sampleRate ||
-            buffer.numberOfChannels !== sourceChannels
-          ) {
-            throw new Error(
-              `decoded audio sha256:${digest} is ${buffer.sampleRate} Hz/${buffer.numberOfChannels} channels; expected ${context.sampleRate} Hz/${sourceChannels}`,
-            );
-          }
-          return buffer;
-        });
-      this.audioBuffers.set(key, promise);
-      void promise.catch(() => {
-        if (this.audioBuffers.get(key) === promise)
-          this.audioBuffers.delete(key);
-      });
-      // Long files are decoded once, but retired sources must not accumulate across the timeline.
-      while (this.audioBuffers.size > Math.max(2, cacheLimit))
-        this.audioBuffers.delete(this.audioBuffers.keys().next().value!);
-    } else {
-      this.audioBuffers.delete(key);
-      this.audioBuffers.set(key, promise);
+      if (!asset) throw new Error(`compiled audio resource ${source.digest} has no browser source`);
+      const bytes = await this.fetchAssetBytes(asset, digest);
+      reader = await BrowserAudioWindowReader.open({ blob: new Blob([Uint8Array.from(bytes).buffer]) });
+      this.audioReaders.set(digest, reader);
     }
-    return promise;
+    if (reader.channels !== source.sourceChannels) throw new Error(`decoded audio has ${reader.channels} channels; expected ${source.sourceChannels}`);
+    this.audioReaders.delete(digest); this.audioReaders.set(digest, reader);
+    return reader;
   }
 
-  private async renderCompiledAudioBuffer(
+  private async audioWindow(context: BaseAudioContext, source: AudioSourceRequirement, reader: BrowserAudioWindowReader): Promise<AudioBuffer> {
+    const key = `${source.digest}@${context.sampleRate}/${source.startSample}`;
+    let buffer = this.audioBuffers.get(key);
+    if (!buffer) {
+      const end = Math.min(source.startSample + context.sampleRate, Math.round(reader.duration * context.sampleRate));
+      if (end < source.endSample) throw new Error("compiled source sample is outside decoded PCM");
+      buffer = await reader.read(context, source.startSample, end);
+      this.audioBuffers.set(key, buffer);
+    }
+    this.audioBuffers.delete(key); this.audioBuffers.set(key, buffer);
+    const cacheBytes = Math.min(4 * 1024 ** 2, this.runtimeBudget.memoryBytes / 16);
+    while (this.audioCacheBytes() > cacheBytes && this.audioBuffers.size) this.audioBuffers.delete(this.audioBuffers.keys().next().value!);
+    return buffer;
+  }
+
+  private audioCacheBytes(): number {
+    let bytes = 0; for (const buffer of this.audioBuffers.values()) bytes += buffer.length * buffer.numberOfChannels * 4;
+    return bytes;
+  }
+
+  private renderCompiledAudioBuffer(context: BaseAudioContext, start: number, end: number): Promise<AudioBuffer> {
+    const work = this.audioTail.catch(() => undefined).then(() => this.renderCompiledAudioBufferNow(context, start, end));
+    this.audioTail = work;
+    return work;
+  }
+
+  private async renderCompiledAudioBufferNow(
     context: BaseAudioContext,
     startSample: number,
     endSample: number,
@@ -2882,64 +2938,33 @@ export class BrowserValleWebPlayer {
       blockStart += blockSize
     ) {
       const blockEnd = Math.min(endSample, blockStart + blockSize);
-      const requirements = parseAudioSources(
-        JSON.parse(
-          engine.audio_sources_json(
-            renderId,
-            BigInt(blockStart),
-            BigInt(blockEnd),
-          ),
-        ),
-      );
-      const unique = new Map<string, AudioSourceRequirement>();
-      for (const source of requirements) {
-        const prior = unique.get(source.digest);
-        if (prior && prior.sourceChannels !== source.sourceChannels) {
-          throw new Error(
-            `audio source ${source.digest} has conflicting source channels`,
-          );
+      const priority: RuntimePriority = this.runtimePurpose === "export" ? "export" : "playback";
+      const release = await this.runtimeBudget.acquirePresentation(priority, this.runtimeAbort.signal);
+      let finishMemory: ((retainedBytes: number) => void) | undefined;
+      let mixed: Float32Array;
+      try {
+        this.runtimeAbort.signal.throwIfAborted();
+        const requirements = parseAudioSources(JSON.parse(await this.runtimeCall<string>("audio_windows_json",
+          renderId, BigInt(blockStart), BigInt(blockEnd))));
+        const readers = [];
+        for (const source of requirements) readers.push({ source, reader: await this.audioReaderForDigest(source) });
+        const workingBytes = readers.reduce((sum, entry) => sum + entry.reader.workingBytes(context.sampleRate),
+          (blockEnd - blockStart) * 24 + 1024 * 1024);
+        finishMemory = await this.runtimeBudget.admitFrameAfterKernels(this.audioMemoryOwner, workingBytes, this.runtimeAbort.signal);
+        const windows = [];
+        for (const { source, reader } of readers) {
+          const buffer = await this.audioWindow(context, source, reader);
+          windows.push({ digest: source.digest, startSample: source.startSample, left: buffer.getChannelData(0),
+            right: source.sourceChannels === 2 ? buffer.getChannelData(1) : new Float32Array(0) });
         }
-        unique.set(source.digest, source);
+        if (this.closed || this.engine !== engine || this.renderId !== renderId) throw new Error("audio render was superseded by a different render package");
+        mixed = await this.runtimeCall<Float32Array>("mix_audio_windows", renderId, BigInt(blockStart), BigInt(blockEnd), windows);
+        const active = new Set(requirements.map(source => contentDigestHex(source.digest, "audio digest")));
+        for (const [digest, reader] of this.audioReaders) if (!active.has(digest)) { reader.close(); this.audioReaders.delete(digest); }
+      } finally {
+        try { finishMemory?.(this.audioCacheBytes()); }
+        finally { release(); }
       }
-      const decoded = await Promise.all(
-        [...unique.values()].map(async (source) => ({
-          source,
-          buffer: await this.audioBufferForDigest(
-            context,
-            source.digest,
-            source.sourceChannels,
-            unique.size,
-          ),
-        })),
-      );
-      // Decode may outlive a seek/package replacement. Never register PCM into a retired engine.
-      if (this.closed || this.engine !== engine || this.renderId !== renderId) {
-        throw new Error(
-          "audio render was superseded by a different render package",
-        );
-      }
-      while (this.audioBuffers.size > Math.max(2, unique.size)) {
-        this.audioBuffers.delete(this.audioBuffers.keys().next().value!);
-      }
-      // Register every required plane synchronously before mixing. This also keeps overlapping
-      // play/seek requests safe when the previous block retired one of their cached sources.
-      for (const { source, buffer } of decoded) {
-        if (!engine.has_audio_pcm(renderId, source.digest)) {
-          engine.register_audio_pcm(
-            renderId,
-            source.digest,
-            buffer.getChannelData(0),
-            source.sourceChannels === 2
-              ? buffer.getChannelData(1)
-              : new Float32Array(0),
-          );
-        }
-      }
-      const mixed = engine.mix_audio_pcm(
-        renderId,
-        BigInt(blockStart),
-        BigInt(blockEnd),
-      );
       if (
         !(mixed instanceof Float32Array) ||
         mixed.length !== (blockEnd - blockStart) * 2
@@ -2972,6 +2997,7 @@ export class BrowserValleWebPlayer {
     source.connect(master);
     source.start(now);
     const sources = [source];
+    source.onended = () => { source.disconnect(); source.buffer = null; const index = sources.indexOf(source); if (index >= 0) sources.splice(index, 1); };
     this.stats.audioScheduledSources += sources.length;
     return {
       master,
@@ -3024,6 +3050,7 @@ export class BrowserValleWebPlayer {
       );
       source.start(when);
       graph.sources.push(source);
+      source.onended = () => { source.disconnect(); source.buffer = null; const index = graph.sources.indexOf(source); if (index >= 0) graph.sources.splice(index, 1); };
       graph.nextSample = endSample;
       graph.scheduledUntilContextTime = when + buffer.duration;
       this.stats.audioScheduledSources += 1;
@@ -3114,7 +3141,7 @@ export class BrowserValleWebPlayer {
   private frameAtSeconds(seconds: number): number {
     if (!this.renderId) throw new Error("browser player has no open RenderId");
     return exactBigIntNumber(
-      this.engine.frame_at_seconds(this.renderId, seconds),
+      this.engine.quantize_frame_seconds(seconds, ...this.requireRenderReceipt().frameRate.split("/").map(Number) as [number, number], BigInt(this.requireRenderReceipt().frameCount)),
       "compiled frame clock",
     );
   }
@@ -3124,7 +3151,7 @@ export class BrowserValleWebPlayer {
     if (allowEnd && seconds >= this.durationS()) return program.sampleCount;
     if (!this.renderId) throw new Error("browser player has no open RenderId");
     return exactBigIntNumber(
-      this.engine.sample_at_seconds(this.renderId, seconds),
+      this.engine.quantize_sample_seconds(seconds, program.sampleRate, BigInt(program.sampleCount)),
       "compiled sample clock",
     );
   }
@@ -3142,14 +3169,10 @@ export class BrowserValleWebPlayer {
     height: number,
     transparent: boolean,
   ): ProductFramePlanningInput {
-    const surfaceBytes = BigInt(width) * BigInt(height) * 8n;
-    // Keep the existing total frame budget. Offscreen shader/filter inputs can be
-    // larger than the root, so let one surface consume up to a quarter of that budget.
-    const maxFrameBytes = maxBigInt(
-      maxBigInt(surfaceBytes, 64n * 1024n * 1024n) * 16n,
-      512n * 1024n * 1024n,
-    );
-    const maxSurfaceBytes = maxFrameBytes / 4n;
+    // Every surface borrows from the same frame/host allowance. An arbitrary quarter-frame
+    // ceiling must not reject a large offscreen input when the complete live plan fits.
+    const maxFrameBytes = BigInt(this.runtimeBudget.memoryBytes);
+    const maxSurfaceBytes = maxFrameBytes;
     return {
       frame,
       width,
@@ -3229,11 +3252,11 @@ export class BrowserValleWebPlayer {
     this.stats.framePlannerReadyBytes = snapshot.readyBytes;
   }
 
-  private pickScene3d(
+  private async pickScene3d(
     canvasX: number,
     canvasY: number,
     clipId?: string,
-  ): { semanticAddress: string; nodeId: number } | null {
+  ): Promise<{ semanticAddress: string; nodeId: number } | null> {
     if (!Number.isFinite(canvasX) || !Number.isFinite(canvasY)) {
       throw new Error("Scene3D pick coordinates must be finite");
     }
@@ -3258,24 +3281,13 @@ export class BrowserValleWebPlayer {
       )
         continue;
       const gpuRequest = this.currentScene3dRequests.get(placement.contentHash);
-      if (
-        gpuRequest &&
-        !this.engine.has_scene3d_frame?.(placement.contentHash)
-      ) {
-        // Picking is infrequent. Retain the reference depth/id rules without making every
-        // preview frame rasterize a complete CPU color/depth plane in advance.
-        this.engine.render_scene3d_request(
-          placement.contentHash,
-          gpuRequest.topology,
-          gpuRequest.canonical,
-        );
-      }
+      if (!gpuRequest) continue;
       const frameWidth =
         gpuRequest?.width ??
-        this.engine.scene3d_frame_width(placement.contentHash);
+        JSON.parse(new TextDecoder().decode(gpuRequest!.canonical)).width;
       const frameHeight =
         gpuRequest?.height ??
-        this.engine.scene3d_frame_height(placement.contentHash);
+        JSON.parse(new TextDecoder().decode(gpuRequest!.canonical)).height;
       const pixelX = Math.min(
         frameWidth - 1,
         Math.floor(((local[0] - x) / width) * frameWidth),
@@ -3284,9 +3296,13 @@ export class BrowserValleWebPlayer {
         frameHeight - 1,
         Math.floor(((local[1] - y) / height) * frameHeight),
       );
-      const pick = JSON.parse(
-        this.engine.scene3d_pick_json(placement.contentHash, pixelX, pixelY),
-      ) as { semanticAddress: string; nodeId: number } | null;
+      const memory = await this.runtimeBudget.acquireKernel(frameWidth * frameHeight * 128 + 8 * 1024 ** 2, this.runtimeAbort.signal);
+      let pick: { semanticAddress: string; nodeId: number } | null;
+      try {
+        await this.ensureScene3dResources(gpuRequest.canonical);
+        pick = JSON.parse(await this.runtimeCall<string>("pick_scene3d_request",
+          placement.contentHash, gpuRequest.topology, gpuRequest.canonical, pixelX, pixelY));
+      } finally { memory.release(); }
       if (pick) return pick;
     }
     return null;
@@ -3324,17 +3340,12 @@ function admitBrowserAssets(
   return { byId, byDigest };
 }
 
-function indexCompiledExecutionResources(
-  engine: ProductEngineWire,
-  renderId: string,
-): FrozenBundleResources {
+function indexCompiledExecutionResources(snapshot: ProductRuntimeSnapshot): FrozenBundleResources {
   const fonts = new Map<string, Uint8Array>();
   const models = new Map<string, Uint8Array>();
   const environments = new Map<string, Uint8Array>();
   const shaders = new Map<string, Uint8Array>();
-  const resources = JSON.parse(
-    engine.compiled_execution_resources_json(renderId),
-  );
+  const resources = snapshot.resources;
   if (!Array.isArray(resources)) {
     throw new Error("compiled execution resource index must be an array");
   }
@@ -3378,12 +3389,8 @@ function indexCompiledExecutionResources(
         `compiled resource '${resource.resourceId}' unexpectedly declares an ABI digest`,
       );
     }
-    const bytes = engine.compiled_resource_bytes(
-      renderId,
-      resource.kind,
-      resource.contentDigest,
-      resource.abiDigest,
-    );
+    const bytes = resource.bytes;
+    if (!(bytes instanceof Uint8Array)) throw new Error("compiled resource bytes are missing");
     const content = contentDigestHex(
       resource.contentDigest,
       `compiled resource '${resource.resourceId}' content digest`,
@@ -3808,14 +3815,15 @@ function parseAudioSources(value: unknown): AudioSourceRequirement[] {
   return value.map((entry) => {
     const source = record(entry, "compiled audio source");
     if (
-      !Number.isSafeInteger(source.sourceIndex) ||
-      source.sourceIndex < 0 ||
+      !Number.isSafeInteger(source.startSample) || source.startSample < 0 ||
+      !Number.isSafeInteger(source.endSample) || source.endSample <= source.startSample ||
       (source.sourceChannels !== 1 && source.sourceChannels !== 2)
     ) {
       throw new TypeError("compiled audio source has invalid index/channels");
     }
     return {
-      sourceIndex: source.sourceIndex,
+      startSample: source.startSample,
+      endSample: source.endSample,
       digest: contentDigestWire(source.digest, "compiled audio source digest"),
       sourceChannels: source.sourceChannels,
     };

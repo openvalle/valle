@@ -48,6 +48,30 @@ impl TransparentVideoMuxer {
             .map(Into::into),
         }
     }
+    pub fn open_with_codec_and_threads(
+        path: &Path,
+        width: u32,
+        height: u32,
+        fps_num: u32,
+        fps_den: u32,
+        codec: TransparentVideoCodec,
+        threads: usize,
+    ) -> Result<Self> {
+        match backend::version()? {
+            Version::V7 => backend::v7::alpha::TransparentVideoMuxer::open_with_codec_and_threads(
+                path, width, height, fps_num, fps_den, codec, threads,
+            )
+            .map(Into::into),
+            Version::V8 => backend::v8::alpha::TransparentVideoMuxer::open_with_codec_and_threads(
+                path, width, height, fps_num, fps_den, codec, threads,
+            )
+            .map(Into::into),
+            Version::V9 => backend::v9::alpha::TransparentVideoMuxer::open_with_codec_and_threads(
+                path, width, height, fps_num, fps_den, codec, threads,
+            )
+            .map(Into::into),
+        }
+    }
     #[cfg(feature = "tool-segment")]
     pub(crate) fn open_timed(
         path: &Path,

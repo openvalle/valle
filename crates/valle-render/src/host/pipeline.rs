@@ -1,5 +1,7 @@
 //! One Native frame loop for every delivery mode.
 
+mod tasks;
+
 #[cfg(target_os = "macos")]
 use std::collections::VecDeque;
 use std::{
@@ -30,22 +32,103 @@ use crate::executor::skia::{SkiaBackendKind, SkiaExecutionProfile};
 #[derive(Clone, Default)]
 pub struct RenderControl {
     trace: Option<super::RenderTrace>,
+    admission: Option<Arc<super::admission::FrameAdmission>>,
     cancelled: Arc<AtomicBool>,
     deadline: Option<Instant>,
+    budget: Option<super::NativeRenderBudget>,
+    residency_owners: super::budget::ResidencyOwners,
+    maximum_gpu_contexts: usize,
 }
 
 impl RenderControl {
-    pub fn with_trace(mut self, trace: super::RenderTrace) -> Self {
-        self.trace = Some(trace);
+    /// Keep ordered frame roots on their controllers and share the pool between their kernels.
+    /// A kernel join must not steal another complete frame and delay its own ordered delivery.
+    fn compute<R: Send>(&self, work: impl FnOnce() -> R + Send) -> R {
+        self.budget
+            .as_ref()
+            .expect("schedule resolves a host budget")
+            .cpu
+            .run(work)
+    }
+
+    pub fn with_budget(mut self, budget: super::NativeRenderBudget) -> Self {
+        self.budget = Some(budget);
         self
     }
 
-    fn traced_runner<P>(&self, mut runner: super::FrameRunner<P>) -> super::FrameRunner<P>
-    where
-        P: super::ResourceProvider,
-    {
-        runner.set_trace(self.trace.clone());
-        runner
+    fn execution_stage(
+        &self,
+        _project: &NativeProject,
+        backend: SkiaBackendKind,
+        spec: RenderSpec,
+    ) -> Result<super::frame::FrameExecutionStage, PipelineError> {
+        let budget = self.budget.as_ref().expect("resolved host budget");
+        let limits = budget.owner_limits(self.residency_owners, spec)?;
+        let capabilities = self.stage_capabilities(spec)?;
+        Ok(super::frame::FrameExecutionStage::for_backend(
+            backend,
+            capabilities,
+            limits,
+            budget.cpu.clone(),
+        )?)
+    }
+
+    fn stage_capabilities(
+        &self,
+        spec: RenderSpec,
+    ) -> Result<valle_engine::compositor::lower::BackendCapabilities, PipelineError> {
+        let limits = self
+            .budget
+            .as_ref()
+            .unwrap()
+            .owner_limits(self.residency_owners, spec)?;
+        let capabilities = crate::executor::skia::cpu_capabilities(
+            valle_engine::resource::Extent2d::new(16_384, 16_384).unwrap(),
+            limits.map_or(2 * 1024 * 1024 * 1024, |l| {
+                l.frame_surfaces.min(2 * 1024 * 1024 * 1024)
+            }),
+            limits.map_or(4 * 1024 * 1024 * 1024, |l| {
+                l.frame_surfaces.min(4 * 1024 * 1024 * 1024)
+            }),
+        )
+        .map_err(FrameRenderError::from)?;
+        Ok(capabilities)
+    }
+
+    fn preparation_stage(
+        &self,
+        project: &NativeProject,
+        backend: SkiaBackendKind,
+        spec: RenderSpec,
+    ) -> Result<
+        super::frame::FramePreparationStage<super::shared_resource::SharedResourceProvider>,
+        PipelineError,
+    > {
+        let budget = self.budget.as_ref().unwrap();
+        let limits = budget.owner_limits(self.residency_owners, spec)?;
+        let provider = super::NativeResourceProvider::with_cache_limits(
+            Arc::clone(project.catalog()),
+            limits.map_or_else(super::NativeResourceCacheLimits::default, |l| {
+                super::NativeResourceCacheLimits::new(256, l.resource_cache).unwrap()
+            }),
+        )
+        .with_render_resources(project.compiled());
+        let mut preparer = super::frame::FramePreparationStage::new(
+            project.render().clone(),
+            provider,
+            backend,
+            self.stage_capabilities(spec)?,
+        )?
+        .share_resources(backend)?;
+        preparer.set_cpu_budget(budget.cpu.clone());
+        preparer.set_trace(self.trace.clone());
+        preparer.set_admission(self.admission.clone());
+        Ok(preparer)
+    }
+
+    pub fn with_trace(mut self, trace: super::RenderTrace) -> Self {
+        self.trace = Some(trace);
+        self
     }
 
     pub fn with_deadline(deadline: Instant) -> Self {
@@ -77,6 +160,13 @@ impl RenderControl {
     }
 }
 
+fn budget_pressure(control: &RenderControl) -> bool {
+    control
+        .budget
+        .as_ref()
+        .is_some_and(|budget| budget.memory.under_pressure())
+}
+
 pub type ProgressCallback = Arc<dyn Fn(usize, usize) + Send + Sync>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -88,8 +178,9 @@ pub struct PipelineReport {
     pub resource_requests: usize,
     pub execution_passes: usize,
     pub unique_templates: usize,
-    pub raster_workers: usize,
+    pub preparation_tasks: usize,
     pub maximum_in_flight_frames: usize,
+    pub budget: Option<super::NativeBudgetReport>,
     pub template_cache_hits: usize,
     pub template_cache_misses: usize,
     pub resource_cache_hits: u64,
@@ -166,11 +257,63 @@ pub fn render_schedule(
     control: &RenderControl,
     progress: Option<&ProgressCallback>,
     backend: SkiaBackendKind,
-    requested_workers: Option<usize>,
 ) -> Result<PipelineReport, PipelineError> {
+    let mut resolved = control.clone();
+    let budget = resolved
+        .budget
+        .get_or_insert_with(super::NativeRenderBudget::default)
+        .clone();
+    if budget.cpu.is_current() {
+        return Err(super::NativeBudgetError::ReentrantSession.into());
+    }
+    let mut workers =
+        budget.frame_parallelism(budget.threads().min(4).min(frames.len()).max(1), spec)?;
+    let shared = sink.shared_frame_pool().is_some();
+    let mut contexts = if shared { 3 } else { 1 };
+    loop {
+        let owners = super::budget::ResidencyOwners {
+            providers: 1,
+            executors: if shared {
+                contexts
+            } else if backend == SkiaBackendKind::Raster {
+                workers
+            } else {
+                1
+            },
+            gpu: backend != SkiaBackendKind::Raster,
+        };
+        match budget.owner_limits(owners, spec) {
+            Ok(_) => {
+                resolved.residency_owners = owners;
+                break;
+            }
+            Err(_) if contexts > 1 => contexts -= 1,
+            Err(_) if workers > 1 => workers -= 1,
+            Err(error) => return Err(error.into()),
+        }
+    }
+    resolved.maximum_gpu_contexts = contexts;
+    resolved.admission = if budget.memory_bytes().is_some() {
+        let delivery_bytes = (0..frames.len())
+            .map(|sequence| sink.working_bytes(sequence))
+            .collect::<anyhow::Result<Vec<_>>>()
+            .map_err(|error| PipelineError::Sink(error.to_string()))?;
+        Some(Arc::new(
+            super::admission::FrameAdmission::new(
+                budget.memory.clone(),
+                resolved.cancelled.clone(),
+                resolved.deadline,
+            )
+            .with_delivery_bytes(delivery_bytes),
+        ))
+    } else {
+        None
+    };
+    let control = &resolved;
     let mut traced_sink = TraceSink {
         sink,
         trace: control.trace.as_ref(),
+        cpu: &budget.cpu,
     };
     let sink: &mut dyn FrameSink = &mut traced_sink;
     let _pipeline_span = control.trace.as_ref().map(|t| {
@@ -179,32 +322,37 @@ pub fn render_schedule(
             serde_json::json!({"frames": frames.len(), "backend": format!("{backend:?}")}),
         )
     });
-    let workers = raster_worker_count(
-        frames.len(),
-        backend_default_workers(backend, requested_workers),
-    )?;
-    if let Some(pool) = sink.shared_frame_pool() {
+    if let Some(trace) = &control.trace {
+        trace.evidence("runtime.budget", serde_json::json!({"cpuThreads":budget.threads(), "memoryBudgetBytes":budget.memory_bytes(), "resourceProviders":control.residency_owners.providers,"executors":control.residency_owners.executors,
+            "covered":"shared frame reservations, resource images, working and retained surfaces, conservative CPU filter/3D scratch and decoded media windows",
+            "notCharged":"immutable compiled inputs, bounded plan/topology metadata, driver and codec implementation allocations; managed claims are not process RSS"}));
+    }
+    let result = if let Some(pool) = sink.shared_frame_pool() {
         #[cfg(target_os = "macos")]
         {
-            return render_shared_staged(
+            render_shared_staged(
                 project, frames, spec, sink, control, progress, backend, pool, workers,
-            );
+            )
         }
         #[cfg(not(target_os = "macos"))]
         {
             let _ = pool;
-            return Err(PipelineError::SharedGpuUnavailable);
+            Err(PipelineError::SharedGpuUnavailable)
         }
+    } else {
+        tasks::render(
+            project, frames, spec, sink, control, progress, backend, workers,
+        )
+    };
+    if let Some(admission) = &control.admission {
+        admission.stop();
     }
-    if workers == 1 && frames.len() <= 1 {
-        return render_serial(project, frames, spec, sink, control, progress, backend);
+    let mut report = result?;
+    report.budget = Some(budget.report(control.residency_owners, spec)?);
+    if let Some(trace) = &control.trace {
+        trace.evidence("runtime.budget.complete", serde_json::json!({"cpuThreads":budget.threads(),"peakCpuSlots":budget.cpu.peak_slots(),"capacityBytes":report.budget.unwrap().configured_capacity_bytes}));
     }
-    if workers == 1 {
-        return render_staged_serial(project, frames, spec, sink, control, progress, backend);
-    }
-    render_parallel(
-        project, frames, spec, sink, control, progress, backend, workers,
-    )
+    Ok(report)
 }
 
 #[cfg(target_os = "macos")]
@@ -229,27 +377,24 @@ fn render_shared_staged(
 ) -> Result<PipelineReport, PipelineError> {
     const MAXIMUM_PENDING_FRAMES: usize = 3;
 
-    let (first_preparer, executor) = control
-        .traced_runner(project.frame_runner(backend)?)
-        .into_stages();
+    let first_preparer = control.preparation_stage(project, backend, spec)?;
+    let executor = control.execution_stage(project, backend, spec)?;
     // CPU preparation remains parallel. Additional GPU contexts are allocated only
     // after sustained GPU completion waits justify a bounded throughput probe.
     let mut executors = vec![executor];
     let mut active_queues = 1;
-    let mut queues = AdaptiveQueues::new(workers.min(MAXIMUM_PENDING_FRAMES));
+    let mut queues = AdaptiveQueues::new(control.maximum_gpu_contexts);
     let mut ordered_shadows = false;
     if std::env::var_os("VALLE_PERF").is_some() {
         eprintln!(
             "[valle metal] shared-queues=1 adaptive=true pending-limit={MAXIMUM_PENDING_FRAMES}"
         );
     }
-    let capabilities = first_preparer.capabilities().clone();
-    let mut preparers = vec![first_preparer];
+    let mut preparers = Vec::with_capacity(workers);
     for _ in 1..workers {
-        let mut preparer = project.frame_preparer(backend, capabilities.clone())?;
-        preparer.set_trace(control.trace.clone());
-        preparers.push(preparer);
+        preparers.push(first_preparer.fork());
     }
+    preparers.insert(0, first_preparer);
     let abort = Arc::new(AtomicBool::new(false));
     let mut metrics = PipelineAccumulator::for_render_id(project.render_id());
     let mut pending = VecDeque::with_capacity(MAXIMUM_PENDING_FRAMES);
@@ -265,41 +410,61 @@ fn render_shared_staged(
             receivers.push(receiver);
             let worker_abort = Arc::clone(&abort);
             scope.spawn(move || {
-                let result = (|| -> Result<(), PipelineError> {
-                    for sequence in (worker..frames.len()).step_by(workers) {
-                        if worker_abort.load(Ordering::Acquire) {
-                            break;
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+                    || -> Result<(), PipelineError> {
+                        for sequence in (worker..frames.len()).step_by(workers) {
+                            if worker_abort.load(Ordering::Acquire) {
+                                break;
+                            }
+                            control.check()?;
+                            let key = frames[sequence];
+                            let prepared = control.compute(|| {
+                                preparer.prepare_frame_for_sequence(sequence, key, spec)
+                            })?;
+                            let _send_span = control.trace.as_ref().map(|t| {
+                                t.span(
+                                    "prepare.backpressure",
+                                    serde_json::json!({"frame": key.index(), "sequence": sequence}),
+                                )
+                            });
+                            if sender.send(Ok((sequence, key, prepared))).is_err() {
+                                break;
+                            }
                         }
-                        control.check()?;
-                        let key = frames[sequence];
-                        let prepared = preparer.prepare_frame_for_sequence(sequence, key, spec)?;
-                        let _send_span = control.trace.as_ref().map(|t| {
-                            t.span(
-                                "prepare.backpressure",
-                                serde_json::json!({"frame": key.index(), "sequence": sequence}),
-                            )
-                        });
-                        if sender.send(Ok((sequence, key, prepared))).is_err() {
-                            break;
-                        }
-                    }
-                    Ok(())
-                })();
+                        Ok(())
+                    },
+                ))
+                .unwrap_or(Err(PipelineError::StagePanicked));
                 if let Err(error) = result {
+                    if let Some(admission) = &control.admission {
+                        admission.stop();
+                    }
                     worker_abort.store(true, Ordering::Release);
                     let _ = sender.send(Err(error));
                 }
             });
         }
 
-        let result = (|| -> Result<(), PipelineError> {
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<(), PipelineError> {
             for sequence in 0..frames.len() {
                 control.check()?;
                 let wait_span = control.trace.as_ref().map(|t| t.span("prepare.wait", serde_json::json!({"frame": frames[sequence].index(), "sequence": sequence})));
                 let started = Instant::now();
-                let (actual, key, prepared) = receivers[sequence % workers]
-                    .recv()
-                    .map_err(|_| PipelineError::IncompleteEvidence)??;
+                let (actual, key, prepared) = loop {
+                    control.check()?;
+                    if budget_pressure(control) && pending.is_empty() {
+                        for executor in &mut executors { executor.trim_memory(); }
+                    }
+                    match receivers[sequence % workers].recv_timeout(std::time::Duration::from_millis(2)) {
+                        Ok(packet) => break packet?,
+                        Err(crossbeam_channel::RecvTimeoutError::Disconnected) => return Err(PipelineError::IncompleteEvidence),
+                        Err(crossbeam_channel::RecvTimeoutError::Timeout) if !pending.is_empty() => {
+                            deliver_shared_head(&mut executors, &mut pending, sink, &mut metrics,
+                                &mut delivered, frames.len(), progress)?;
+                        },
+                        Err(crossbeam_channel::RecvTimeoutError::Timeout) => {},
+                    }
+                };
                 drop(wait_span);
                 let prepare_wait_us =
                     started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64;
@@ -394,10 +559,8 @@ fn render_shared_staged(
                             )?;
                         }
                         while executors.len() < change.retained_queues {
-                            match project.frame_runner(backend) {
-                                Ok(runner) => {
-                                    executors.push(control.traced_runner(runner).into_stages().1)
-                                }
+                            match control.execution_stage(project, backend, spec) {
+                                Ok(executor) => executors.push(executor),
                                 Err(error) => {
                                     // Optional concurrency must not make a render fail when its
                                     // already initialized contexts can complete the same work.
@@ -440,9 +603,12 @@ fn render_shared_staged(
                 )?;
             }
             Ok(())
-        })();
+        })).unwrap_or(Err(PipelineError::StagePanicked));
         if let Err(error) = result {
             first_error = Some(error);
+            if let Some(admission) = &control.admission {
+                admission.stop();
+            }
             abort.store(true, Ordering::Release);
             drain_workers(&receivers, &mut first_error);
         }
@@ -493,15 +659,22 @@ fn deliver_shared_head(
             actual: sequence,
         });
     }
+    let memory = submitted.memory_credit.clone();
     let (frame, evidence) = executors[executor].finish_shared_frame(submitted)?;
     metrics.add(&evidence)?;
     let sink_started = Instant::now();
-    sink.push_shared(DeliveredSharedFrame {
-        sequence,
-        key,
-        frame,
-        evidence: &evidence,
-    })
+    let push = || {
+        sink.push_shared(DeliveredSharedFrame {
+            sequence,
+            key,
+            frame,
+            evidence: &evidence,
+        })
+    };
+    match memory {
+        Some(credit) => credit.run(push),
+        None => push(),
+    }
     .map_err(|error| PipelineError::Sink(error.to_string()))?;
     let sink_us = sink_started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64;
     *delivered = delivered
@@ -528,294 +701,13 @@ fn deliver_shared_head(
     })
 }
 
-fn render_serial(
-    project: &NativeProject,
-    frames: &[FrameKey],
-    spec: RenderSpec,
-    sink: &mut dyn FrameSink,
-    control: &RenderControl,
-    progress: Option<&ProgressCallback>,
-    backend: SkiaBackendKind,
-) -> Result<PipelineReport, PipelineError> {
-    let mut runner = control.traced_runner(project.frame_runner(backend)?);
-    let mut metrics = PipelineAccumulator::for_render_id(project.render_id());
-    for (sequence, key) in frames.iter().copied().enumerate() {
-        control.check()?;
-        let (pixels, evidence) = runner.render_rgba8(key, spec)?;
-        metrics.add(&evidence)?;
-        sink.push(DeliveredFrame {
-            sequence,
-            key,
-            pixels: &pixels,
-            evidence: &evidence,
-        })
-        .map_err(|error| PipelineError::Sink(error.to_string()))?;
-        if let Some(progress) = progress {
-            progress(sequence + 1, frames.len());
-        }
-    }
-    control.check()?;
-    sink.finish()
-        .map_err(|error| PipelineError::Sink(error.to_string()))?;
-    metrics.finish(
-        frames.len(),
-        usize::from(!frames.is_empty()),
-        usize::from(!frames.is_empty()),
-    )
-}
-
-/// One ordered CPU preparer stays one frame ahead of one persistent physical executor. This is
-/// the Metal CPU-delivery default, but it also gives explicitly single-worker Raster schedules the
-/// same bounded stage overlap. The channel contains at most one `PreparedFrame`; no completed RGBA
-/// frame waits outside the executor/sink, and template/resource caches remain single-owner and
-/// strictly ordered.
-fn render_staged_serial(
-    project: &NativeProject,
-    frames: &[FrameKey],
-    spec: RenderSpec,
-    sink: &mut dyn FrameSink,
-    control: &RenderControl,
-    progress: Option<&ProgressCallback>,
-    backend: SkiaBackendKind,
-) -> Result<PipelineReport, PipelineError> {
-    let abort = Arc::new(AtomicBool::new(false));
-    let runner = control.traced_runner(project.frame_runner(backend)?);
-    let (mut preparer, mut executor) = runner.into_stages();
-    let mut metrics = PipelineAccumulator::for_render_id(project.render_id());
-    let mut delivered = 0_usize;
-    let mut first_error = None;
-
-    std::thread::scope(|scope| {
-        let (sender, receiver) = crossbeam_channel::bounded(1);
-        let worker_control = control.clone();
-        let worker_abort = Arc::clone(&abort);
-        scope.spawn(move || {
-            let result = (|| -> Result<(), PipelineError> {
-                for (sequence, key) in frames.iter().copied().enumerate() {
-                    if worker_abort.load(Ordering::Acquire) {
-                        break;
-                    }
-                    worker_control.check()?;
-                    let prepared = preparer.prepare_frame(key, spec)?;
-                    let _send_span = worker_control.trace.as_ref().map(|t| {
-                        t.span(
-                            "prepare.backpressure",
-                            serde_json::json!({"frame": key.index(), "sequence": sequence}),
-                        )
-                    });
-                    if sender.send(Ok((sequence, key, prepared))).is_err() {
-                        break;
-                    }
-                }
-                Ok(())
-            })();
-            if let Err(error) = result {
-                worker_abort.store(true, Ordering::Release);
-                let _ = sender.send(Err(error));
-            }
-        });
-
-        for sequence in 0..frames.len() {
-            let wait_span = control.trace.as_ref().map(|t| {
-                t.span(
-                    "prepare.wait",
-                    serde_json::json!({"frame": frames[sequence].index(), "sequence": sequence}),
-                )
-            });
-            let (actual, key, prepared) = match receiver.recv() {
-                Ok(Ok(frame)) => frame,
-                Ok(Err(error)) => {
-                    first_error = Some(error);
-                    break;
-                }
-                Err(_) => {
-                    first_error = Some(PipelineError::IncompleteEvidence);
-                    break;
-                }
-            };
-            drop(wait_span);
-            if actual != sequence {
-                first_error = Some(PipelineError::OutOfOrder {
-                    expected: sequence,
-                    actual,
-                });
-                break;
-            }
-            let (pixels, evidence) = match executor.render_prepared_rgba8(prepared, spec) {
-                Ok(rendered) => rendered,
-                Err(error) => {
-                    first_error = Some(error.into());
-                    break;
-                }
-            };
-            if let Err(error) = metrics.add(&evidence) {
-                first_error = Some(error);
-                break;
-            }
-            if let Err(error) = sink.push(DeliveredFrame {
-                sequence,
-                key,
-                pixels: &pixels,
-                evidence: &evidence,
-            }) {
-                first_error = Some(PipelineError::Sink(error.to_string()));
-                break;
-            }
-            delivered += 1;
-            if let Some(progress) = progress {
-                progress(delivered, frames.len());
-            }
-        }
-        if first_error.is_some() {
-            abort.store(true, Ordering::Release);
-            while receiver.recv().is_ok() {}
-        }
-    });
-
-    if let Some(error) = first_error {
-        return Err(error);
-    }
-    control.check()?;
-    sink.finish()
-        .map_err(|error| PipelineError::Sink(error.to_string()))?;
-    metrics.finish(delivered, 1, frames.len().min(2))
-}
-
 struct CompletedFrame {
+    _memory: Option<valle_engine::motion::memory::MemoryCredit>,
+    _delivery_memory: Option<valle_engine::motion::memory::MemoryLease>,
     sequence: usize,
     key: FrameKey,
     pixels: valle_media::frame::RgbaFrame,
     evidence: super::FrameEvidence,
-}
-
-fn render_parallel(
-    project: &NativeProject,
-    frames: &[FrameKey],
-    spec: RenderSpec,
-    sink: &mut dyn FrameSink,
-    control: &RenderControl,
-    progress: Option<&ProgressCallback>,
-    backend: SkiaBackendKind,
-    workers: usize,
-) -> Result<PipelineReport, PipelineError> {
-    let abort = Arc::new(AtomicBool::new(false));
-    let mut metrics = PipelineAccumulator::for_render_id(project.render_id());
-    let mut delivered = 0_usize;
-    let mut first_error = None;
-
-    std::thread::scope(|scope| {
-        let mut receivers = Vec::with_capacity(workers);
-        for worker in 0..workers {
-            if worker >= frames.len() {
-                break;
-            }
-            // Interleave canonical frame numbers across workers. Each channel holds one completed
-            // frame, so all workers remain active while the sink consumes 0,1,2... in exact order;
-            // the in-flight memory bound is still one RGBA frame per worker and needs no reorder
-            // map whose size could grow with timeline length.
-            let (sender, receiver) = crossbeam_channel::bounded(1);
-            receivers.push(receiver);
-            let project = project.clone();
-            let control = control.clone();
-            let abort = Arc::clone(&abort);
-            scope.spawn(move || {
-                let result = (|| -> Result<(), PipelineError> {
-                    let mut runner = control.traced_runner(project.frame_runner(backend)?);
-                    for sequence in (worker..frames.len()).step_by(workers) {
-                        if abort.load(Ordering::Acquire) {
-                            break;
-                        }
-                        control.check()?;
-                        let key = frames[sequence];
-                        let (pixels, evidence) = runner.render_rgba8(key, spec)?;
-                        let _send_span = control.trace.as_ref().map(|t| {
-                            t.span(
-                                "delivery.backpressure",
-                                serde_json::json!({"frame": key.index(), "sequence": sequence}),
-                            )
-                        });
-                        if sender
-                            .send(Ok(CompletedFrame {
-                                sequence,
-                                key,
-                                pixels,
-                                evidence,
-                            }))
-                            .is_err()
-                        {
-                            break;
-                        }
-                    }
-                    Ok(())
-                })();
-                if let Err(error) = result {
-                    abort.store(true, Ordering::Release);
-                    let _ = sender.send(Err(error));
-                }
-            });
-        }
-
-        let active_workers = receivers.len();
-        for sequence in 0..frames.len() {
-            let wait_span = control.trace.as_ref().map(|t| {
-                t.span(
-                    "delivery.wait",
-                    serde_json::json!({"frame": frames[sequence].index(), "sequence": sequence}),
-                )
-            });
-            let message = receivers[sequence % active_workers].recv();
-            drop(wait_span);
-            let frame = match message {
-                Ok(Ok(frame)) => frame,
-                Ok(Err(error)) => {
-                    first_error = Some(error);
-                    break;
-                }
-                Err(_) => {
-                    first_error = Some(PipelineError::IncompleteEvidence);
-                    break;
-                }
-            };
-            if frame.sequence != sequence {
-                first_error = Some(PipelineError::OutOfOrder {
-                    expected: sequence,
-                    actual: frame.sequence,
-                });
-                break;
-            }
-            if let Err(error) = metrics.add(&frame.evidence) {
-                first_error = Some(error);
-                break;
-            }
-            if let Err(error) = sink.push(DeliveredFrame {
-                sequence: frame.sequence,
-                key: frame.key,
-                pixels: &frame.pixels,
-                evidence: &frame.evidence,
-            }) {
-                first_error = Some(PipelineError::Sink(error.to_string()));
-                break;
-            }
-            delivered += 1;
-            if let Some(progress) = progress {
-                progress(delivered, frames.len());
-            }
-        }
-        if first_error.is_some() {
-            abort.store(true, Ordering::Release);
-            // A worker may already be blocked on its one-slot channel. Drain every channel before
-            // the scoped threads join so cancellation cannot deadlock the error path.
-            drain_workers(&receivers, &mut first_error);
-        }
-    });
-
-    if let Some(error) = first_error {
-        return Err(error);
-    }
-    control.check()?;
-    sink.finish()
-        .map_err(|error| PipelineError::Sink(error.to_string()))?;
-    metrics.finish(delivered, workers, workers)
 }
 
 #[derive(Default)]
@@ -1117,7 +1009,7 @@ impl PipelineAccumulator {
     fn finish(
         self,
         frames: usize,
-        raster_workers: usize,
+        preparation_tasks: usize,
         maximum_in_flight_frames: usize,
     ) -> Result<PipelineReport, PipelineError> {
         if add_usize(self.template_cache_hits, self.template_cache_misses)? != frames {
@@ -1125,7 +1017,7 @@ impl PipelineAccumulator {
         }
         if std::env::var_os("VALLE_PERF").is_some() {
             eprintln!(
-                "[valle pipeline] frames={frames} workers={raster_workers} evaluate-prepare={:.3}ms fulfill-lower-wall={:.3}ms bind={:.3}ms execute={:.3}ms readback={:.3}ms gpu-wait={:.3}ms max-frame={:.3}ms template-hits={} template-misses={} scratch-allocations={} scratch-reuses={} max-scratch-bytes={} max-program-cache-entries={} max-program-cache-cost-bytes={} raster-layer-hits={} raster-layer-misses={} max-raster-layer-bytes={}",
+                "[valle pipeline] frames={frames} preparation-tasks={preparation_tasks} evaluate-prepare={:.3}ms fulfill-lower-wall={:.3}ms bind={:.3}ms execute={:.3}ms readback={:.3}ms gpu-wait={:.3}ms max-frame={:.3}ms template-hits={} template-misses={} scratch-allocations={} scratch-reuses={} max-scratch-bytes={} max-program-cache-entries={} max-program-cache-cost-bytes={} raster-layer-hits={} raster-layer-misses={} max-raster-layer-bytes={}",
                 self.evaluate_prepare_us as f64 / 1000.0,
                 self.fulfill_lower_wall_us as f64 / 1000.0,
                 self.bind_us as f64 / 1000.0,
@@ -1153,8 +1045,9 @@ impl PipelineAccumulator {
             resource_requests: self.requests,
             execution_passes: self.passes,
             unique_templates: self.templates.len(),
-            raster_workers,
+            preparation_tasks,
             maximum_in_flight_frames,
+            budget: None,
             template_cache_hits: self.template_cache_hits,
             template_cache_misses: self.template_cache_misses,
             resource_cache_hits: self.resource_cache_hits,
@@ -1232,44 +1125,12 @@ fn add_u64(left: u64, right: u64) -> Result<u64, PipelineError> {
         .ok_or(PipelineError::CounterOverflow)
 }
 
-fn raster_worker_count(
-    frame_count: usize,
-    requested_workers: Option<usize>,
-) -> Result<usize, PipelineError> {
-    if frame_count == 0 {
-        return Ok(1);
-    }
-    if requested_workers == Some(0) {
-        return Err(PipelineError::InvalidWorkerCount);
-    }
-    let available = std::thread::available_parallelism()
-        .map(usize::from)
-        .unwrap_or(1);
-    Ok(requested_workers
-        .unwrap_or_else(|| available.min(2))
-        .min(8)
-        .min(frame_count)
-        .max(1))
-}
-
-/// One Metal device/context is the physical renderer for CPU delivery. Multiple independent
-/// contexts contend for the same GPU and make export slower; one ordered CPU preparer instead
-/// stays one frame ahead of the single persistent executor, while that executor overlaps the
-/// sink/encoder. Raster remains CPU-parallel, and an explicit caller override is always honored.
-fn backend_default_workers(
-    backend: SkiaBackendKind,
-    requested_workers: Option<usize>,
-) -> Option<usize> {
-    #[cfg(all(target_os = "macos", feature = "native"))]
-    if backend == SkiaBackendKind::Metal && requested_workers.is_none() {
-        return Some(1);
-    }
-    let _ = backend;
-    requested_workers
-}
-
 #[derive(Debug, Error)]
 pub enum PipelineError {
+    #[error("render stage panicked")]
+    StagePanicked,
+    #[error(transparent)]
+    Budget(#[from] super::NativeBudgetError),
     #[error(transparent)]
     Frame(#[from] FrameRenderError),
     #[error("render cancelled")]
@@ -1294,8 +1155,6 @@ pub enum PipelineError {
     SharedGpuUnavailable,
     #[error("pipeline evidence does not cover every delivered frame")]
     IncompleteEvidence,
-    #[error("raster worker count must be positive")]
-    InvalidWorkerCount,
     #[error("raster workers produced frame {actual} while ordered delivery expected {expected}")]
     OutOfOrder { expected: usize, actual: usize },
 }
@@ -1351,23 +1210,28 @@ mod worker_error_tests {
 struct TraceSink<'a> {
     sink: &'a mut dyn FrameSink,
     trace: Option<&'a super::RenderTrace>,
+    cpu: &'a valle_engine::motion::cpu::CpuBudget,
 }
 impl FrameSink for TraceSink<'_> {
+    fn working_bytes(&self, sequence: usize) -> anyhow::Result<u64> {
+        self.sink.working_bytes(sequence)
+    }
+
     fn push(&mut self, frame: DeliveredFrame<'_>) -> anyhow::Result<()> {
         let _span = self.trace.map(|t| t.span("encode.push", serde_json::json!({"frame": frame.key.index(), "sequence": frame.sequence, "readbackBytes": frame.evidence.delivery_readback_bytes})));
-        self.sink.push(frame)
+        self.cpu.run(|| self.sink.push(frame))
     }
     fn shared_frame_pool(&self) -> Option<valle_media::SharedVideoFramePool> {
         self.sink.shared_frame_pool()
     }
     fn push_shared(&mut self, frame: super::DeliveredSharedFrame<'_>) -> anyhow::Result<()> {
         let _span = self.trace.map(|t| t.span("encode.push", serde_json::json!({"frame": frame.key.index(), "sequence": frame.sequence, "readbackBytes": frame.evidence.delivery_readback_bytes})));
-        self.sink.push_shared(frame)
+        self.cpu.run(|| self.sink.push_shared(frame))
     }
     fn finish(&mut self) -> anyhow::Result<()> {
         let _span = self
             .trace
             .map(|t| t.span("encode.drain_mux", serde_json::json!({})));
-        self.sink.finish()
+        self.cpu.run(|| self.sink.finish())
     }
 }

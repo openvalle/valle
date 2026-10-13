@@ -22,6 +22,7 @@ mod scene3d_region;
 mod surface;
 mod target;
 
+pub(crate) use cache::SkiaCacheLimits;
 pub(crate) use output::rgba8_target_info;
 pub use pass::{
     AdmittedSkiaFrame, SkiaExecuteError, SkiaExecutionReport, SkiaExecutor, SkiaSurfaceReport,

@@ -41,11 +41,8 @@ pub struct NativeRenderOptions {
     pub bitrate: Option<usize>,
     pub hardware_encode: bool,
     pub encode_threads: Option<usize>,
-    /// Requested frame concurrency. `None` selects a bounded backend-aware default; zero is
-    /// rejected. A value above one creates independent ordered runners. Exactly one splits a
-    /// single runner into one CPU preparation owner and one physical executor with at most one
-    /// queued `PreparedFrame`; it never creates a second GPU context.
-    pub raster_workers: Option<usize>,
+    /// Shared across deliveries created by this renderer. Native driver/codec internals are not a process hard cap.
+    pub budget: super::NativeRenderBudget,
     pub control: RenderControl,
     pub progress: Option<ProgressCallback>,
 }
@@ -59,7 +56,7 @@ impl Default for NativeRenderOptions {
             bitrate: None,
             hardware_encode: false,
             encode_threads: None,
-            raster_workers: None,
+            budget: super::NativeRenderBudget::default(),
             control: RenderControl::default(),
             progress: None,
         }
@@ -84,6 +81,57 @@ pub struct NativeRenderer {
 impl NativeRenderer {
     pub fn new(project: NativeProject, options: NativeRenderOptions) -> Self {
         Self { project, options }
+    }
+
+    fn encoder_slots(&self) -> Result<usize, NativeRenderError> {
+        let requested = self
+            .options
+            .encode_threads
+            .unwrap_or_else(|| (self.options.budget.threads() / 4).max(1));
+        if requested == 0 || requested > self.options.budget.threads().saturating_sub(1).max(1) {
+            return Err(super::NativeBudgetError::EncoderShare {
+                requested,
+                available: self.options.budget.threads().saturating_sub(1).max(1),
+            }
+            .into());
+        }
+        Ok(requested)
+    }
+
+    fn render_control(&self) -> RenderControl {
+        self.options
+            .control
+            .clone()
+            .with_budget(self.options.budget.clone())
+    }
+
+    fn reserve_codec(
+        &self,
+    ) -> Result<Option<valle_engine::motion::cpu::CodecReservation>, NativeRenderError> {
+        if self.options.hardware_encode {
+            return Ok(None);
+        }
+        let slots = self.encoder_slots()?;
+        // A one-thread software codec is synchronous; the sink accounts for its caller. Higher
+        // codec counts can keep computing between encode_video calls, so retain their share.
+        if slots > 1 {
+            Ok(Some(
+                self.options
+                    .budget
+                    .cpu
+                    .reserve_codec_slots(slots, || self.options.control.check())?,
+            ))
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn encoder_threads(&self) -> Result<Option<usize>, NativeRenderError> {
+        if self.options.hardware_encode {
+            Ok(None)
+        } else {
+            Ok(Some(self.encoder_slots()?))
+        }
     }
 
     pub fn project(&self) -> &NativeProject {
@@ -185,10 +233,11 @@ impl NativeRenderer {
             frames,
             spec,
             &mut sink,
-            &self.options.control,
+            &self
+                .render_control()
+                .with_budget(self.options.budget.for_preview()),
             self.options.progress.as_ref(),
             self.options.backend,
-            self.options.raster_workers,
         )?;
         self.validate_report_render_id(&report)?;
         self.options.control.check()?;
@@ -283,13 +332,15 @@ impl NativeRenderer {
         let fps = canvas.frame_rate();
         let fps_num =
             u32::try_from(fps.numerator()).map_err(|_| NativeRenderError::InvalidFrameRate)?;
-        let muxer = TransparentVideoMuxer::open_with_codec(
+        let _codec = self.reserve_codec()?;
+        let muxer = TransparentVideoMuxer::open_with_codec_and_threads(
             transaction.temporary(0),
             width,
             height,
             fps_num,
             fps.denominator(),
             codec,
+            self.encoder_slots()?,
         )?;
         let mut sink = TransparentVideoSink(muxer);
         let report = render_schedule(
@@ -297,10 +348,9 @@ impl NativeRenderer {
             &frames,
             spec,
             &mut sink,
-            &self.options.control,
+            &self.render_control(),
             self.options.progress.as_ref(),
             self.options.backend,
-            self.options.raster_workers,
         )?;
         drop(sink);
         self.validate_report_render_id(&report)?;
@@ -345,6 +395,7 @@ impl NativeRenderer {
         let fps = canvas.frame_rate();
         let fps_num =
             u32::try_from(fps.numerator()).map_err(|_| NativeRenderError::InvalidFrameRate)?;
+        let _codec = self.reserve_codec()?;
         let muxer = Muxer::open_ext_rational_with_transport(
             &temporary,
             width,
@@ -353,7 +404,7 @@ impl NativeRenderer {
             fps.denominator(),
             self.options.bitrate,
             self.options.hardware_encode,
-            self.options.encode_threads,
+            self.encoder_threads()?,
             selected_video_transport(self.options.hardware_encode, self.options.backend),
         )?;
         let mut sink = Mp4Sink::new(
@@ -367,10 +418,9 @@ impl NativeRenderer {
             &frames,
             spec,
             &mut sink,
-            &self.options.control,
+            &self.render_control(),
             self.options.progress.as_ref(),
             self.options.backend,
-            self.options.raster_workers,
         );
         // Release FFmpeg's output handle before publishing or deleting the file on Windows.
         drop(sink);
@@ -417,6 +467,7 @@ impl NativeRenderer {
         let fps = self.project.compiled().canvas().frame_rate();
         let fps_num =
             u32::try_from(fps.numerator()).map_err(|_| NativeRenderError::InvalidFrameRate)?;
+        let _codec = self.reserve_codec()?;
         let muxer = Muxer::open_ext_rational_with_transport(
             &temporary,
             width,
@@ -425,7 +476,7 @@ impl NativeRenderer {
             fps.denominator(),
             self.options.bitrate,
             self.options.hardware_encode,
-            self.options.encode_threads,
+            self.encoder_threads()?,
             selected_video_transport(self.options.hardware_encode, self.options.backend),
         )?;
         let mut sink = Mp4Sink::new(
@@ -439,10 +490,9 @@ impl NativeRenderer {
             &frames,
             spec,
             &mut sink,
-            &self.options.control,
+            &self.render_control(),
             self.options.progress.as_ref(),
             self.options.backend,
-            self.options.raster_workers,
         );
         // Release FFmpeg's output handle before publishing or deleting the file on Windows.
         drop(sink);
@@ -479,12 +529,18 @@ impl NativeRenderer {
             while target < sample_count {
                 self.options.control.check()?;
                 target = target.saturating_add(chunk).min(sample_count);
-                if let Some(samples) = mixer.mix_until_sample(target)? {
-                    muxer.encode_audio(&samples)?;
-                }
+                self.options
+                    .budget
+                    .cpu
+                    .run(|| -> Result<(), NativeRenderError> {
+                        if let Some(samples) = mixer.mix_until_sample(target)? {
+                            muxer.encode_audio(&samples)?;
+                        }
+                        Ok(())
+                    })?;
             }
             self.options.control.check()?;
-            muxer.finish()?;
+            self.options.budget.cpu.run(|| muxer.finish())?;
             Ok(())
         })();
         if let Err(error) = rendered {
@@ -642,6 +698,8 @@ fn publish_output(temporary: &Path, output: &Path) -> Result<(), NativeRenderErr
 
 #[derive(Debug, Error)]
 pub enum NativeRenderError {
+    #[error(transparent)]
+    Budget(#[from] super::NativeBudgetError),
     #[error(transparent)]
     Pipeline(#[from] PipelineError),
     #[error(transparent)]

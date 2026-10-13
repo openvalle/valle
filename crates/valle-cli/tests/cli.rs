@@ -1147,7 +1147,7 @@ export default function Demo(ctx) {
             "info",
             "--backend",
             "raster",
-            "--workers",
+            "--threads",
             "4",
             "--encode-threads",
             "2",

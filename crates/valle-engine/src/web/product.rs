@@ -26,7 +26,7 @@ use crate::{
     },
 };
 
-const MAX_SCENE3D_PREPARED_CACHE: usize = 128;
+const MAX_SCENE3D_PREPARED_CACHE: usize = 8;
 const MAX_SCENE3D_FRAME_CACHE: usize = 64;
 const MAX_WEB_AUDIO_BLOCK_SAMPLES: i64 = 8_192;
 const CANVAS_KIT_EXTERNAL_PIXEL_LAYOUTS: [ExternalPixelLayout; 2] =
@@ -88,6 +88,7 @@ struct CompiledExecutionResourcePacket<'a> {
 }
 
 struct DecodedAudioPcm {
+    start: i64,
     left: Vec<f32>,
     right: Vec<f32>, // Empty for mono; the shared mixer duplicates its left channel.
 }
@@ -134,16 +135,57 @@ pub struct ProductEngine {
         Arc<valle_motion::scene3d::PreparedScene>,
     >,
     scene3d_frames: BTreeMap<ContentDigest, GeneratedScene3dFrame>,
-    audio_pcm: BTreeMap<ContentDigest, DecodedAudioPcm>,
+    audio_pcm: BTreeMap<ContentDigest, Vec<DecodedAudioPcm>>,
     active_render: Option<EngineRender>,
     compiler: Option<FrameCompiler>,
     tickets: BTreeMap<u32, Ticket>,
     next_ticket: u32,
     realtime_geometry: bool,
+    motion_kernel: crate::prepare::motion_kernel::MotionKernel,
 }
 
 #[wasm_bindgen]
 impl ProductEngine {
+    /// UI clock for a receipt already admitted by the worker. Uses the same rounding and range
+    /// checks as CompiledCanvas without retaining another compiled Timeline on the UI thread.
+    pub fn quantize_frame_seconds(
+        &self,
+        seconds: f64,
+        numerator: u32,
+        denominator: u32,
+        count: i64,
+    ) -> Result<i64, JsError> {
+        if numerator == 0 || denominator == 0 || count <= 0 {
+            return Err(JsError::new("invalid frame clock"));
+        }
+        crate::render::quantize_seconds_clock(
+            seconds,
+            f64::from(numerator) / f64::from(denominator),
+            count,
+            false,
+            "frame",
+        )
+        .map_err(|error| js_error("frame_clock", error))
+    }
+
+    pub fn quantize_sample_seconds(
+        &self,
+        seconds: f64,
+        sample_rate: u32,
+        count: i64,
+    ) -> Result<i64, JsError> {
+        if sample_rate == 0 || count <= 0 {
+            return Err(JsError::new("invalid sample clock"));
+        }
+        crate::render::quantize_seconds_clock(
+            seconds,
+            f64::from(sample_rate),
+            count,
+            false,
+            "sample",
+        )
+        .map_err(|error| js_error("sample_clock", error))
+    }
     #[wasm_bindgen(constructor)]
     pub fn new() -> Self {
         Self {
@@ -158,6 +200,7 @@ impl ProductEngine {
             tickets: BTreeMap::new(),
             next_ticket: 1,
             realtime_geometry: false,
+            motion_kernel: Default::default(),
         }
     }
 
@@ -526,6 +569,7 @@ impl ProductEngine {
     /// Clear the active render, frame tickets and host-side fulfillment caches. Backend objects
     /// remain JS-owned and must be retired by the host under the matching external generation.
     pub fn reset(&mut self) {
+        self.motion_kernel = Default::default();
         self.scene3d_models.clear();
         self.scene3d_environments.clear();
         self.scene3d_textures.clear();
@@ -685,12 +729,51 @@ impl ProductEngine {
         Ok(self.audio_pcm.contains_key(&digest))
     }
 
+    pub fn audio_windows_json(
+        &self,
+        render_id: &str,
+        start_sample: i64,
+        end_sample: i64,
+    ) -> Result<String, JsError> {
+        let range = self.audio_range(render_id, start_sample, end_sample)?;
+        let windows = self
+            .active_render(render_id)?
+            .compiled()
+            .audio()
+            .source_windows(range)
+            .map_err(|error| js_error("audio_windows", error))?;
+        serde_json::to_string(&windows).map_err(|error| js_error("audio_windows", error))
+    }
+
+    pub fn clear_audio_pcm(&mut self, render_id: &str) -> Result<(), JsError> {
+        self.active_render(render_id)?;
+        self.audio_pcm.clear();
+        Ok(())
+    }
+
     /// Copy decoded planes once per admitted resource. Repeated blocks reuse them; opening a
     /// different render clears this cache, and mixing retires sources no longer in the window.
     pub fn register_audio_pcm(
         &mut self,
         render_id: &str,
         digest: &str,
+        left: Vec<f32>,
+        right: Vec<f32>,
+    ) -> Result<(), JsError> {
+        let key = ContentDigest::parse(digest).map_err(|error| js_error("audio_digest", error))?;
+        self.register_audio_pcm_window(render_id, digest, 0, left, right)?;
+        self.audio_pcm
+            .get_mut(&key)
+            .unwrap()
+            .retain(|window| window.start == 0);
+        Ok(())
+    }
+
+    pub fn register_audio_pcm_window(
+        &mut self,
+        render_id: &str,
+        digest: &str,
+        start: i64,
         left: Vec<f32>,
         right: Vec<f32>,
     ) -> Result<(), JsError> {
@@ -709,7 +792,9 @@ impl ProductEngine {
             .iter()
             .find(|source| source.digest == digest)
             .ok_or_else(|| JsError::new("[audio_pcm] resource is not admitted audio"))?;
-        if left.is_empty()
+        if start < 0
+            || start.checked_add(left.len() as i64).is_none()
+            || left.is_empty()
             || (expected.source_channels == 1 && !right.is_empty())
             || (expected.source_channels == 2 && left.len() != right.len())
         {
@@ -717,8 +802,9 @@ impl ProductEngine {
                 "[audio_pcm] decoded channel layout does not match admitted audio",
             ));
         }
-        self.audio_pcm
-            .insert(digest, DecodedAudioPcm { left, right });
+        let windows = self.audio_pcm.entry(digest).or_default();
+        windows.retain(|window| window.start != start);
+        windows.push(DecodedAudioPcm { start, left, right });
         Ok(())
     }
 
@@ -745,7 +831,10 @@ impl ProductEngine {
                     },
                 )
             })?;
-            if (source.source_channels == 1) != pcm.right.is_empty() {
+            if pcm
+                .iter()
+                .any(|window| (source.source_channels == 1) != window.right.is_empty())
+            {
                 return Err(JsError::new(
                     "[audio_mix] cached PCM channel layout does not match the source",
                 ));
@@ -754,9 +843,18 @@ impl ProductEngine {
         }
         let output = program
             .mix_pcm(range, |source_index, sample| {
-                let pcm = decoded[source_index as usize]
+                let windows = decoded[source_index as usize]
                     .ok_or(AudioPcmMixError::MissingSource { source_index })?;
-                let index = usize::try_from(sample).map_err(|_| {
+                let pcm = windows
+                    .iter()
+                    .find(|window| {
+                        sample >= window.start && sample - window.start < window.left.len() as i64
+                    })
+                    .ok_or(AudioPcmMixError::SourceSampleOutOfRange {
+                        source_index,
+                        sample,
+                    })?;
+                let index = usize::try_from(sample - pcm.start).map_err(|_| {
                     AudioPcmMixError::SourceSampleOutOfRange {
                         source_index,
                         sample,
@@ -991,6 +1089,12 @@ impl ProductEngine {
             .is_ok_and(|digest| self.scene3d_frames.contains_key(&digest))
     }
 
+    /// Browser delivery owns the returned pixels. Do not retain additional full color/depth/id
+    /// planes after that job; interactive picking can render and inspect one atomic job on demand.
+    pub fn clear_scene3d_frames(&mut self) {
+        self.scene3d_frames.clear();
+    }
+
     pub fn scene3d_gpu_lighting_input(
         &self,
         canonical_request: &[u8],
@@ -1176,6 +1280,88 @@ impl ProductEngine {
         height: u32,
         transparent: bool,
     ) -> Result<u32, JsError> {
+        let spec = self.preview_spec(width, height, transparent)?;
+        self.evaluate_prepare_with_spec(render_id, frame, spec)
+    }
+
+    pub fn motion_kernel_available(&self) -> bool {
+        self.compiler
+            .as_ref()
+            .is_some_and(FrameCompiler::motion_kernel_available)
+    }
+
+    pub fn capture_motion_jobs_preview(
+        &mut self,
+        render_id: &str,
+        frame: i64,
+        width: u32,
+        height: u32,
+        transparent: bool,
+    ) -> Result<String, JsError> {
+        let spec = self.preview_spec(width, height, transparent)?;
+        let id = self.active_render_id(render_id)?;
+        let compiler = self
+            .compiler
+            .as_mut()
+            .ok_or_else(|| JsError::new("render closed"))?;
+        let jobs = compiler
+            .capture_motion_jobs(id, valle_timeline::internal::FrameKey::new(frame), spec)
+            .map_err(|error| js_error("capture_motion", error))?;
+        serde_json::to_string(&jobs).map_err(|error| js_error("motion_jobs", error))
+    }
+
+    pub fn motion_kernel_definition(&self, id: &str) -> Result<String, JsError> {
+        self.compiler
+            .as_ref()
+            .and_then(|compiler| compiler.motion_definition(id))
+            .map(str::to_owned)
+            .ok_or_else(|| JsError::new("unknown Motion kernel definition"))
+    }
+
+    pub fn run_motion_kernel(
+        &mut self,
+        definition_id: &str,
+        definition_json: &str,
+        input_json: &str,
+        compact: bool,
+    ) -> Result<Vec<u8>, JsError> {
+        self.motion_kernel
+            .run(definition_id, definition_json, input_json, compact)
+            .map_err(|error| js_error("motion_kernel", error))
+    }
+
+    pub fn evaluate_prepare_motion_preview(
+        &mut self,
+        render_id: &str,
+        frame: i64,
+        width: u32,
+        height: u32,
+        transparent: bool,
+        results: &[u8],
+    ) -> Result<u32, JsError> {
+        let spec = self.preview_spec(width, height, transparent)?;
+        let id = self.active_render_id(render_id)?;
+        let compiler = self
+            .compiler
+            .as_mut()
+            .ok_or_else(|| JsError::new("render closed"))?;
+        let ticket = compiler
+            .evaluate_prepare_motion(
+                id,
+                valle_timeline::internal::FrameKey::new(frame),
+                spec,
+                results,
+            )
+            .map_err(|error| js_error("complete_motion", error))?;
+        self.store_prepared_ticket(ticket)
+    }
+
+    fn preview_spec(
+        &self,
+        width: u32,
+        height: u32,
+        transparent: bool,
+    ) -> Result<RenderSpec, JsError> {
         let background = if transparent {
             OutputBackground::Transparent
         } else {
@@ -1191,9 +1377,8 @@ impl ProductEngine {
         };
         let output =
             OutputSpec::srgb_preview(background).map_err(|error| js_error("output_spec", error))?;
-        let spec = RenderSpec::new(width, height, RenderQuality::Preview, output)
-            .map_err(|error| js_error("render_spec", error))?;
-        self.evaluate_prepare_with_spec(render_id, frame, spec)
+        RenderSpec::new(width, height, RenderQuality::Preview, output)
+            .map_err(|error| js_error("render_spec", error))
     }
 
     fn evaluate_prepare_with_spec(
@@ -1207,15 +1392,18 @@ impl ProductEngine {
             .compiler
             .as_mut()
             .ok_or_else(|| JsError::new("[render_closed] call open_fixed_package first"))?;
-        let mut ticket =
-            valle_draw::program::with_instance_compaction(self.realtime_geometry, || {
-                compiler.evaluate_prepare(
-                    render_id,
-                    valle_timeline::internal::FrameKey::new(frame),
-                    spec,
-                )
-            })
-            .map_err(|error| js_error("evaluate_prepare", error))?;
+        let ticket = valle_draw::program::with_instance_compaction(self.realtime_geometry, || {
+            compiler.evaluate_prepare(
+                render_id,
+                valle_timeline::internal::FrameKey::new(frame),
+                spec,
+            )
+        })
+        .map_err(|error| js_error("evaluate_prepare", error))?;
+        self.store_prepared_ticket(ticket)
+    }
+
+    fn store_prepared_ticket(&mut self, mut ticket: PreparedTicket) -> Result<u32, JsError> {
         ticket
             .adapt_external_pixel_layouts(&CANVAS_KIT_EXTERNAL_PIXEL_LAYOUTS)
             .map_err(|error| js_error("canvas_kit_layouts", error))?;

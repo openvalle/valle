@@ -2569,20 +2569,59 @@ fn apply_f16_filter_program_into(
     filter: &Filter,
     lens_frame: Option<[f32; 4]>,
 ) -> Result<(), DrawError> {
-    let width = input.roi.width as usize;
-    let height = input.roi.height as usize;
+    let mut working_pixels = u64::from(output_roi.width) * u64::from(output_roi.height);
+    let mut source_roi = IRect::from_wh(input.roi.width as i32, input.roi.height as i32);
+    let offset = [input.roi.x - output_roi.x, input.roi.y - output_roi.y];
+    let pyramid_radius = match filter {
+        Filter::Glow { radius, .. } => Some((*radius, *radius * 2.0)),
+        Filter::Bloom { radius, .. } => Some((*radius, *radius)),
+        _ => None,
+    };
+    if let Some((radius, spread)) = pyramid_radius {
+        let region = valle_engine::compositor::bloom::PyramidRegion::new(
+            [input.roi.width, input.roi.height],
+            [output_roi.width, output_roi.height],
+            offset,
+            radius,
+            spread,
+        )
+        .map_err(|error| DrawError::Surface(error.to_string()))?;
+        working_pixels = u64::from(region.size[0]) * u64::from(region.size[1]);
+        // Preserve the raster image and its coverage; read only pixels the padded pyramid uses.
+        // The region is aligned to this image's original 32-pixel grid.
+        let window = IRect::from_xywh(
+            -region.input_offset[0],
+            -region.input_offset[1],
+            region.size[0] as i32,
+            region.size[1] as i32,
+        );
+        let Some(cropped) = IRect::intersect(&source_roi, &window) else {
+            return clear_surface(surface);
+        };
+        source_roi = cropped;
+    }
+    let width = source_roi.width() as usize;
+    let height = source_roi.height() as usize;
     let info = ImageInfo::new(
         (width as i32, height as i32),
         ColorType::RGBAF16,
         AlphaType::Premul,
         input.image.color_space(),
     );
+    let _working = valle_engine::motion::memory::reserve(
+        valle_engine::motion::memory::MemoryKind::Temporary,
+        working_pixels * 72 + (width * height * 8) as u64,
+    )
+    .map_err(|error| DrawError::Surface(error.to_string()))?;
     let mut bytes = vec![0_u8; width * height * 8];
     let copy_started = std::time::Instant::now();
-    if !input
-        .image
-        .read_pixels(&info, &mut bytes, width * 8, (0, 0), CachingHint::Disallow)
-    {
+    if !input.image.read_pixels(
+        &info,
+        &mut bytes,
+        width * 8,
+        (source_roi.left(), source_roi.top()),
+        CachingHint::Disallow,
+    ) {
         return Err(DrawError::Surface(
             "shared F16 filter input read failed".into(),
         ));
@@ -2606,7 +2645,7 @@ fn apply_f16_filter_program_into(
         output_info.width() as u32,
         output_info.height() as u32,
     );
-    let offset = [input.roi.x - output_roi.x, input.roi.y - output_roi.y];
+    let offset = [offset[0] + source_roi.left(), offset[1] + source_roi.top()];
     let output_origin = [output_roi.x, output_roi.y];
     let kernel_started = std::time::Instant::now();
     let output = match filter {
@@ -3993,6 +4032,101 @@ mod tests {
                         expected = Some(pixels);
                     }
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn cropped_f16_reads_match_full_image_kernels() {
+        use valle_engine::compositor::bloom::{
+            BloomParams, GlowParams, apply_bloom_f16, apply_glow_f16,
+        };
+        let info = ImageInfo::new(
+            (512, 384),
+            ColorType::RGBAF16,
+            AlphaType::Premul,
+            Some(working_color_space().unwrap()),
+        );
+        let mut source = skia_safe::surfaces::raster(&info, None, None).unwrap();
+        source.canvas().clear(Color4f::new(0.25, 0.1, 0.5, 0.8));
+        let mut paint = SkPaint::default();
+        paint.set_color4f(Color4f::new(0.9, 0.7, 0.2, 1.0), None);
+        source.canvas().draw_circle((250.5, 207.25), 23.5, &paint);
+        let mut bytes = vec![0; 512 * 384 * 8];
+        assert!(source.read_pixels(&info, &mut bytes, 512 * 8, (0, 0)));
+        let roi = DeviceRect::new(-19, 23, 83, 61);
+        let target_info = info.with_dimensions((83, 61));
+        let color = valle_draw::program::AuthorColor {
+            red: 0.2,
+            green: 0.6,
+            blue: 0.8,
+            alpha: 0.8,
+        };
+        for at in [[-249, -173], [1000, -1000]] {
+            let input = ProgramImage {
+                image: source.image_snapshot(),
+                roi: DeviceRect::new(at[0], at[1], 512, 384),
+            };
+            let offset = [at[0] - roi.x, at[1] - roi.y];
+            for filter in [
+                Filter::Glow {
+                    color,
+                    intensity: 0.75,
+                    radius: 8.25,
+                },
+                Filter::Bloom {
+                    threshold: 0.25,
+                    knee: 0.15,
+                    intensity: 0.75,
+                    radius: 8.25,
+                },
+            ] {
+                let expected = if matches!(filter, Filter::Glow { .. }) {
+                    let c = color.to_working();
+                    apply_glow_f16(
+                        &bytes,
+                        512,
+                        384,
+                        83,
+                        61,
+                        offset,
+                        GlowParams {
+                            color: [c.red, c.green, c.blue, c.alpha],
+                            intensity: 0.75,
+                            radius: 8.25,
+                        },
+                    )
+                } else {
+                    apply_bloom_f16(
+                        &bytes,
+                        512,
+                        384,
+                        83,
+                        61,
+                        offset,
+                        BloomParams {
+                            threshold: 0.25,
+                            knee: 0.15,
+                            intensity: 0.75,
+                            radius: 8.25,
+                        },
+                    )
+                }
+                .unwrap();
+                let mut target = skia_safe::surfaces::raster(&target_info, None, None).unwrap();
+                target.canvas().clear(Color4f::new(1.0, 1.0, 1.0, 1.0));
+                apply_f16_filter_program_into(
+                    &mut target,
+                    &input,
+                    [roi.x, roi.y],
+                    roi,
+                    &filter,
+                    None,
+                )
+                .unwrap();
+                let mut actual = vec![0; 83 * 61 * 8];
+                assert!(target.read_pixels(&target_info, &mut actual, 83 * 8, (0, 0)));
+                assert_eq!(actual, expected, "filter={filter:?}, at={at:?}");
             }
         }
     }

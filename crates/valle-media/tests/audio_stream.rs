@@ -4,6 +4,58 @@
 use valle_media::frame::RgbaFrame;
 
 #[test]
+fn long_upsampled_audio_keeps_a_bounded_window_through_eof() {
+    use valle_media::codec::{AudioSource, LibavAudioSource};
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("upsampled.wav");
+    let mut writer = hound::WavWriter::create(
+        &path,
+        hound::WavSpec {
+            channels: 2,
+            sample_rate: 44_100,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        },
+    )
+    .unwrap();
+    for sample in 0..44_100 * 45 {
+        writer
+            .write_sample(((f64::from(sample) * 0.07).sin() * 8_000.0) as i16)
+            .unwrap();
+        writer
+            .write_sample(((f64::from(sample) * 0.03).sin() * 6_000.0) as i16)
+            .unwrap();
+    }
+    writer.finalize().unwrap();
+    let mut reference = LibavAudioSource::open(&path, 48_000, 2).unwrap();
+    let expected = reference.samples_by_index(0, 48_000 * 45).unwrap();
+    let mut bounded = LibavAudioSource::open(&path, 48_000, 2)
+        .unwrap()
+        .with_pcm_window(96_000)
+        .unwrap();
+    for frame in 0..30 * 45 {
+        let start = frame * 1_600;
+        let actual = bounded.samples_by_index(start, start + 1_600).unwrap();
+        assert_eq!(
+            actual.samples,
+            expected.samples[start as usize * 2..(start as usize + 1_600) * 2]
+        );
+    }
+    assert!(
+        bounded
+            .samples_by_index(48_000 * 45, 48_000 * 45 + 1_600)
+            .unwrap()
+            .samples
+            .iter()
+            .all(|&sample| sample == 0.0)
+    );
+    assert!(
+        bounded.buf_high_water() < 48_000 / 2,
+        "packet buffering should not grow with duration"
+    );
+}
+
+#[test]
 fn forward_audio_stream_reads_bounded_chunks_until_the_actual_end() {
     use valle_media::codec::{AudioMuxer, LibavAudioStream};
     use valle_media::frame::AudioBuffer;
@@ -78,7 +130,10 @@ fn audio_stream_catchup_bounded_and_exact() {
     }
     let want = lin.samples(10.0, 0.5).expect("lin chunk");
     // Cold catch-up: read [10, 10.5) from a fresh source.
-    let mut cold = LibavAudioSource::open(&out, 48000, 2).expect("open cold");
+    let mut cold = LibavAudioSource::open(&out, 48000, 2)
+        .expect("open cold")
+        .with_pcm_window(96000)
+        .expect("bounded PCM window");
     let got = cold.samples(10.0, 0.5).expect("cold chunk");
     assert_eq!(
         got.samples, want.samples,
@@ -88,6 +143,18 @@ fn audio_stream_catchup_bounded_and_exact() {
         cold.buf_high_water() < 48000 * 2,
         "catch-up buffering must be O(chunk); observed high-water mark: {} samples",
         cold.buf_high_water()
+    );
+    assert!(
+        cold.samples(0.0, 2.1)
+            .unwrap_err()
+            .to_string()
+            .contains("admitted window")
+    );
+    let mut reference = LibavAudioSource::open(&out, 48000, 2).unwrap();
+    reference.samples(10.0, 0.5).unwrap();
+    assert!(
+        cold.samples(1.0, 0.5).unwrap().samples == reference.samples(1.0, 0.5).unwrap().samples,
+        "bounded and unbounded readers preserve the same backward-seek output"
     );
     let _ = std::fs::remove_file(&out);
 }

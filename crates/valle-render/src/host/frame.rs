@@ -1,4 +1,8 @@
 use std::{sync::Arc, time::Instant};
+use valle_engine::motion::{
+    cpu::CpuBudget,
+    memory::{MemoryCredit, MemoryError},
+};
 
 use super::{RenderTrace, trace::TraceFrame};
 use skia_safe::{Surface, surfaces};
@@ -38,6 +42,10 @@ pub trait ResourceProvider {
     type Error: std::error::Error + Send + Sync + 'static;
 
     fn begin_frame(&mut self) {}
+
+    /// Drop only optional retained data; already fulfilled immutable objects stay alive in
+    /// prepared frames. This is called before frame admission, without a compute slot.
+    fn trim_memory(&mut self) {}
 
     fn fulfill(&mut self, request: &ResourceRequest) -> Result<SkiaExternalObject, Self::Error>;
 
@@ -183,6 +191,8 @@ pub struct FrameTimings {
 }
 
 pub(crate) struct PreparedFrame {
+    pub(crate) memory_credit: Option<MemoryCredit>,
+    pub(crate) delivery_memory_bytes: u64,
     trace: Option<TraceFrame>,
     started: Instant,
     render_id: RenderId,
@@ -218,6 +228,7 @@ impl PreparedFrame {
 
 #[cfg(all(target_os = "macos", feature = "native"))]
 pub(crate) struct SubmittedSharedFrame {
+    pub(crate) memory_credit: Option<MemoryCredit>,
     trace: Option<TraceFrame>,
     submitted: SubmittedSharedMetalFrame,
     evidence: FrameEvidence,
@@ -227,6 +238,7 @@ pub(crate) struct SubmittedSharedFrame {
 /// The one Native per-frame orchestration path.
 pub struct FrameRunner<P> {
     trace: Option<RenderTrace>,
+    cpu_budget: Option<CpuBudget>,
     render: EngineRender,
     compiler: FrameCompiler,
     executor: SkiaExecutor,
@@ -234,13 +246,15 @@ pub struct FrameRunner<P> {
     /// Reused CPU delivery target for preview, PNG and software encoders. The Product executor
     /// still renders transactionally into private plan surfaces; this host surface is overwritten
     /// only by the terminal commit and can therefore persist safely across frames.
-    cpu_delivery_surface: Option<Surface>,
+    cpu_delivery_surface: Option<(Surface, Option<valle_engine::motion::memory::MemoryLease>)>,
     next_generation: u64,
 }
 
 #[cfg(feature = "native")]
 pub(crate) struct FramePreparationStage<P> {
+    admission: Option<Arc<super::admission::FrameAdmission>>,
     trace: Option<RenderTrace>,
+    cpu_budget: Option<CpuBudget>,
     render: EngineRender,
     compiler: FrameCompiler,
     provider: P,
@@ -250,8 +264,9 @@ pub(crate) struct FramePreparationStage<P> {
 
 #[cfg(feature = "native")]
 pub(crate) struct FrameExecutionStage {
+    cpu_budget: Option<CpuBudget>,
     executor: SkiaExecutor,
-    cpu_delivery_surface: Option<Surface>,
+    cpu_delivery_surface: Option<(Surface, Option<valle_engine::motion::memory::MemoryLease>)>,
 }
 
 impl<P: ResourceProvider> FrameRunner<P> {
@@ -285,9 +300,19 @@ impl<P: ResourceProvider> FrameRunner<P> {
             2 * 1024 * 1024 * 1024,
             4 * 1024 * 1024 * 1024,
         )?;
+        Self::metal_with_capabilities(render, provider, capabilities)
+    }
+
+    #[cfg(all(target_os = "macos", feature = "native"))]
+    fn metal_with_capabilities(
+        render: EngineRender,
+        provider: P,
+        capabilities: BackendCapabilities,
+    ) -> Result<Self, FrameRenderError> {
         let compiler = render.frame_compiler();
         let mut runner = Self {
             trace: None,
+            cpu_budget: None,
             render,
             compiler,
             executor: SkiaExecutor::metal(capabilities)?,
@@ -310,6 +335,7 @@ impl<P: ResourceProvider> FrameRunner<P> {
         let compiler = render.frame_compiler();
         let mut runner = Self {
             trace: None,
+            cpu_budget: None,
             render,
             compiler,
             executor: SkiaExecutor::new(capabilities)?,
@@ -319,10 +345,6 @@ impl<P: ResourceProvider> FrameRunner<P> {
         };
         runner.configure_provider_backend()?;
         Ok(runner)
-    }
-
-    pub(crate) fn set_trace(&mut self, trace: Option<RenderTrace>) {
-        self.trace = trace;
     }
 
     pub const fn render(&self) -> &EngineRender {
@@ -335,25 +357,6 @@ impl<P: ResourceProvider> FrameRunner<P> {
 
     pub fn provider_mut(&mut self) -> &mut P {
         &mut self.provider
-    }
-
-    #[cfg(feature = "native")]
-    pub(crate) fn into_stages(self) -> (FramePreparationStage<P>, FrameExecutionStage) {
-        let capabilities = self.executor.capabilities().clone();
-        (
-            FramePreparationStage {
-                trace: self.trace,
-                render: self.render,
-                compiler: self.compiler,
-                provider: self.provider,
-                capabilities,
-                next_generation: self.next_generation,
-            },
-            FrameExecutionStage {
-                executor: self.executor,
-                cpu_delivery_surface: self.cpu_delivery_surface,
-            },
-        )
     }
 
     /// Invalidates backend-owned reusable surfaces after an explicit context/device loss. Normal
@@ -387,16 +390,20 @@ impl<P: ResourceProvider> FrameRunner<P> {
         spec: RenderSpec,
     ) -> Result<PreparedFrame, FrameRenderError> {
         let capabilities = self.executor.capabilities().clone();
-        prepare_frame_with(
-            self.trace.as_ref(),
-            &self.render,
-            &mut self.compiler,
-            &mut self.provider,
-            &capabilities,
-            &mut self.next_generation,
-            frame,
-            spec,
-        )
+        let budget = self.cpu_budget.clone();
+        budgeted(budget.as_ref(), || {
+            prepare_frame_with(
+                self.trace.as_ref(),
+                &self.render,
+                &mut self.compiler,
+                &mut self.provider,
+                &capabilities,
+                &mut self.next_generation,
+                frame,
+                spec,
+                None,
+            )
+        })
     }
 
     fn execute_prepared(
@@ -405,7 +412,10 @@ impl<P: ResourceProvider> FrameRunner<P> {
         target: &mut SkiaTarget<'_>,
         delivery: FrameDelivery,
     ) -> Result<FrameEvidence, FrameRenderError> {
-        execute_prepared_with(&mut self.executor, prepared, target, delivery)
+        let budget = self.cpu_budget.clone();
+        budgeted(budget.as_ref(), || {
+            execute_prepared_with(&mut self.executor, prepared, target, delivery)
+        })
     }
 
     /// CPU delivery convenience used by preview/PNG/software encode. The same `render_into` path
@@ -424,12 +434,15 @@ impl<P: ResourceProvider> FrameRunner<P> {
         prepared: PreparedFrame,
         spec: RenderSpec,
     ) -> Result<(RgbaFrame, FrameEvidence), FrameRenderError> {
-        render_prepared_rgba8_with(
-            &mut self.executor,
-            &mut self.cpu_delivery_surface,
-            prepared,
-            spec,
-        )
+        let budget = self.cpu_budget.clone();
+        budgeted(budget.as_ref(), || {
+            render_prepared_rgba8_with(
+                &mut self.executor,
+                &mut self.cpu_delivery_surface,
+                prepared,
+                spec,
+            )
+        })
     }
 
     fn configure_provider_backend(&mut self) -> Result<(), FrameRenderError> {
@@ -443,11 +456,18 @@ impl<P: ResourceProvider> FrameRunner<P> {
 
 #[cfg(feature = "native")]
 impl<P: ResourceProvider> FramePreparationStage<P> {
-    #[cfg(target_os = "macos")]
+    pub(crate) fn set_admission(
+        &mut self,
+        admission: Option<Arc<super::admission::FrameAdmission>>,
+    ) {
+        self.admission = admission;
+    }
+    pub(crate) fn set_cpu_budget(&mut self, budget: CpuBudget) {
+        self.cpu_budget = Some(budget);
+    }
     pub(crate) fn set_trace(&mut self, trace: Option<RenderTrace>) {
         self.trace = trace;
     }
-    #[cfg(target_os = "macos")]
     pub(crate) fn new(
         render: EngineRender,
         mut provider: P,
@@ -460,7 +480,9 @@ impl<P: ResourceProvider> FramePreparationStage<P> {
             }
         })?;
         Ok(Self {
+            admission: None,
             trace: None,
+            cpu_budget: None,
             compiler: render.frame_compiler(),
             render,
             provider,
@@ -469,14 +491,8 @@ impl<P: ResourceProvider> FramePreparationStage<P> {
         })
     }
 
-    #[cfg(target_os = "macos")]
-    pub(crate) fn capabilities(&self) -> &BackendCapabilities {
-        &self.capabilities
-    }
-
     /// Preparers feeding one executor share its generation namespace. Assign by delivery
     /// sequence, not worker-local counters or frame keys (which can repeat during seeks).
-    #[cfg(target_os = "macos")]
     pub(crate) fn prepare_frame_for_sequence(
         &mut self,
         sequence: usize,
@@ -495,21 +511,50 @@ impl<P: ResourceProvider> FramePreparationStage<P> {
         frame: FrameKey,
         spec: RenderSpec,
     ) -> Result<PreparedFrame, FrameRenderError> {
-        prepare_frame_with(
-            self.trace.as_ref(),
-            &self.render,
-            &mut self.compiler,
-            &mut self.provider,
-            &self.capabilities,
-            &mut self.next_generation,
-            frame,
-            spec,
-        )
+        let budget = self.cpu_budget.clone();
+        budgeted(budget.as_ref(), || {
+            prepare_frame_with(
+                self.trace.as_ref(),
+                &self.render,
+                &mut self.compiler,
+                &mut self.provider,
+                &self.capabilities,
+                &mut self.next_generation,
+                frame,
+                spec,
+                self.admission.as_deref(),
+            )
+        })
     }
 }
 
 #[cfg(feature = "native")]
 impl FrameExecutionStage {
+    pub(crate) fn trim_memory(&mut self) {
+        self.cpu_delivery_surface = None;
+        self.executor.invalidate_surface_generation();
+    }
+    pub(crate) fn for_backend(
+        backend: SkiaBackendKind,
+        capabilities: BackendCapabilities,
+        limits: Option<super::budget::OwnerMemoryLimits>,
+        cpu_budget: CpuBudget,
+    ) -> Result<Self, FrameRenderError> {
+        let mut executor = match backend {
+            SkiaBackendKind::Raster => SkiaExecutor::new(capabilities)?,
+            #[cfg(target_os = "macos")]
+            SkiaBackendKind::Metal => SkiaExecutor::metal(capabilities)?,
+        };
+        if let Some(limits) = limits {
+            executor.set_cache_limits(limits.caches);
+        }
+        Ok(Self {
+            cpu_budget: Some(cpu_budget),
+            executor,
+            cpu_delivery_surface: None,
+        })
+    }
+
     #[cfg(all(target_os = "macos", feature = "native"))]
     pub(crate) fn opacity_layer_cache_usage(&self) -> (usize, bool) {
         self.executor.opacity_layer_cache_usage()
@@ -525,6 +570,7 @@ impl FrameExecutionStage {
         spec: RenderSpec,
         pool: &SharedVideoFramePool,
     ) -> Result<SubmittedSharedFrame, FrameRenderError> {
+        let memory_credit = prepared.memory_credit.clone();
         if pool.dimensions() != (spec.width(), spec.height()) {
             return Err(FrameRenderError::SharedFrameExtent {
                 expected_width: spec.width(),
@@ -544,18 +590,22 @@ impl FrameExecutionStage {
         drop(acquire_span);
         let surface = shared.surface_mut().map_err(SkiaExecuteError::from)?;
         let mut target = SkiaTarget::direct_gpu(surface, output)?;
-        let mut evidence = execute_prepared_with(
-            &mut self.executor,
-            prepared,
-            &mut target,
-            FrameDelivery::SharedGpu,
-        )?;
+        let budget = self.cpu_budget.clone();
+        let mut evidence = budgeted(budget.as_ref(), || {
+            execute_prepared_with(
+                &mut self.executor,
+                prepared,
+                &mut target,
+                FrameDelivery::SharedGpu,
+            )
+        })?;
         drop(target);
         let submit_span = trace.as_ref().map(|t| t.span("execute.submit"));
         let submitted = self.executor.submit_shared_frame(shared)?;
         drop(submit_span);
         evidence.timings.total_us = elapsed_us(started);
         Ok(SubmittedSharedFrame {
+            memory_credit,
             trace,
             submitted,
             evidence,
@@ -587,12 +637,64 @@ impl FrameExecutionStage {
         prepared: PreparedFrame,
         spec: RenderSpec,
     ) -> Result<(RgbaFrame, FrameEvidence), FrameRenderError> {
-        render_prepared_rgba8_with(
-            &mut self.executor,
-            &mut self.cpu_delivery_surface,
-            prepared,
-            spec,
-        )
+        let budget = self.cpu_budget.clone();
+        budgeted(budget.as_ref(), || {
+            render_prepared_rgba8_with(
+                &mut self.executor,
+                &mut self.cpu_delivery_surface,
+                prepared,
+                spec,
+            )
+        })
+    }
+}
+
+#[cfg(feature = "native")]
+impl FramePreparationStage<super::NativeResourceProvider> {
+    pub(crate) fn share_resources(
+        self,
+        backend: SkiaBackendKind,
+    ) -> Result<
+        FramePreparationStage<super::shared_resource::SharedResourceProvider>,
+        FrameRenderError,
+    > {
+        let provider = super::shared_resource::SharedResourceProvider::new(self.provider, backend)
+            .map_err(|error| FrameRenderError::ResourceBackendConfiguration {
+                reason: error.to_string(),
+            })?;
+        Ok(FramePreparationStage {
+            admission: self.admission,
+            trace: self.trace,
+            cpu_budget: self.cpu_budget,
+            render: self.render,
+            compiler: self.compiler,
+            provider,
+            capabilities: self.capabilities,
+            next_generation: self.next_generation,
+        })
+    }
+}
+
+#[cfg(feature = "native")]
+impl FramePreparationStage<super::shared_resource::SharedResourceProvider> {
+    pub(crate) fn fork(&self) -> Self {
+        Self {
+            admission: self.admission.clone(),
+            trace: self.trace.clone(),
+            cpu_budget: self.cpu_budget.clone(),
+            compiler: self.render.frame_compiler(),
+            render: self.render.clone(),
+            provider: self.provider.clone(),
+            capabilities: self.capabilities.clone(),
+            next_generation: 1,
+        }
+    }
+}
+
+fn budgeted<R>(budget: Option<&CpuBudget>, work: impl FnOnce() -> R) -> R {
+    match budget {
+        Some(budget) => budget.run(work),
+        None => work(),
     }
 }
 
@@ -606,6 +708,7 @@ fn prepare_frame_with<P: ResourceProvider>(
     next_generation: &mut u64,
     frame: FrameKey,
     spec: RenderSpec,
+    admission: Option<&super::admission::FrameAdmission>,
 ) -> Result<PreparedFrame, FrameRenderError> {
     let trace = trace.map(|t| t.frame(frame.index()));
     let evaluate_span = trace.as_ref().map(|t| t.span("prepare.evaluate"));
@@ -626,40 +729,64 @@ fn prepare_frame_with<P: ResourceProvider>(
     let requests = prepared.prepared().resource_requests.clone();
     let generation = allocate_generation(next_generation)?;
     let overlap_started = Instant::now();
+    let lower_span = trace.as_ref().map(|t| t.span("lower"));
+    let lower_started = Instant::now();
+    let bound = prepared.lower_constructed(capabilities)?;
+    let lower_us = elapsed_us(lower_started);
+    drop(lower_span);
+    let template_cache_hit = bound.template_cache_hit();
+    let bind_span = trace.as_ref().map(|t| t.span("bind"));
+    let bind_started = Instant::now();
+    let (template, bindings) = bound.bind_constructed(generation)?.into_plan();
+    let bind_us = elapsed_us(bind_started);
+    drop(bind_span);
+    let delivery_memory_bytes =
+        admission.map_or(0, |a| a.delivery_bytes((generation.get() - 1) as usize));
+    let admitted = admission
+        .map(|admission| {
+            let (bytes, execution_bytes) = frame_working_bytes(
+                &template,
+                &bindings,
+                capabilities,
+                requests.requests(),
+                spec,
+            )?;
+            let bytes = super::admission::checked_add(bytes, delivery_memory_bytes)?;
+            let execution_bytes =
+                super::admission::checked_add(execution_bytes, delivery_memory_bytes)?;
+            let credit = admission.admit((generation.get() - 1) as usize, bytes, || {
+                provider.trim_memory()
+            })?;
+            Ok::<_, FrameRenderError>((credit, execution_bytes))
+        })
+        .transpose()?;
+    let memory_credit = admitted.as_ref().map(|(credit, _)| credit.clone());
     provider.begin_frame();
-    let ((fulfilled, fulfillment_us), (bound, lower_us)) = std::thread::scope(|scope| {
-        let lower_trace = trace.clone();
-        let lower = scope.spawn(move || {
-            let _span = lower_trace.as_ref().map(|t| t.span("lower"));
-            let started = Instant::now();
-            let result = prepared.lower_constructed(capabilities);
-            (result, elapsed_us(started))
-        });
-        let fulfillment_span = trace.as_ref().map(|t| t.span("resource.fulfill"));
-        let started = Instant::now();
+    let fulfillment_span = trace.as_ref().map(|t| t.span("resource.fulfill"));
+    let fulfillment_started = Instant::now();
+    let mut fulfill = || -> Result<ResourceFulfillment, FrameRenderError> {
         let mut fulfilled = ResourceFulfillment::with_capacity(requests.requests().len());
-        let fulfillment: Result<ResourceFulfillment, FrameRenderError> = (|| {
-            for request in requests.requests() {
-                let object =
-                    provider
-                        .fulfill(request)
-                        .map_err(|error| FrameRenderError::Fulfillment {
-                            handle: request.handle().get(),
-                            reason: error.to_string(),
-                        })?;
-                fulfilled.push((request.handle(), object));
-            }
-            Ok(fulfilled)
-        })();
-        let fulfillment = (fulfillment, elapsed_us(started));
-        drop(fulfillment_span);
-        let _join_span = trace.as_ref().map(|t| t.span("lower.wait"));
-        let lower = lower
-            .join()
-            .map_err(|_| FrameRenderError::PlannerPanicked)?;
-        Ok::<_, FrameRenderError>((fulfillment, lower))
-    })?;
-    let fulfilled = fulfilled?;
+        for request in requests.requests() {
+            let object =
+                provider
+                    .fulfill(request)
+                    .map_err(|error| FrameRenderError::Fulfillment {
+                        handle: request.handle().get(),
+                        reason: error.to_string(),
+                    })?;
+            fulfilled.push((request.handle(), object));
+        }
+        Ok(fulfilled)
+    };
+    let fulfilled = match &memory_credit {
+        Some(credit) => credit.run(fulfill),
+        None => fulfill(),
+    }?;
+    if let Some((credit, execution_bytes)) = admitted {
+        credit.limit_remaining(execution_bytes);
+    }
+    let fulfillment_us = elapsed_us(fulfillment_started);
+    drop(fulfillment_span);
     let resource_report = provider.finish_frame(requests.requests());
     let resource_cache = resource_report.cache;
     if let Some(trace) = &trace {
@@ -706,19 +833,16 @@ fn prepare_frame_with<P: ResourceProvider>(
     {
         return Err(FrameRenderError::InvalidScene3dEvidence);
     }
-    let bound = bound?;
     let fulfill_lower_wall_us = elapsed_us(overlap_started);
-    let template_cache_hit = bound.template_cache_hit();
-    let bind_span = trace.as_ref().map(|t| t.span("bind"));
-    let stage_started = Instant::now();
-    let bound = bound.bind_constructed(generation)?;
-    let (template, bindings) = bound.into_plan();
     let template_hash = template.template_hash()?;
     let execution_passes = template.passes().len();
     let objects: SkiaObjectTable = ExternalObjectTable::try_from_entries(generation, fulfilled)?;
-    let bind_us = elapsed_us(stage_started);
-    drop(bind_span);
     Ok(PreparedFrame {
+        memory_credit,
+        delivery_memory_bytes: super::admission::checked_add(
+            delivery_memory_bytes,
+            8 * 1024 * 1024,
+        )?,
         trace,
         started: frame_started,
         render_id,
@@ -754,6 +878,65 @@ fn allocate_generation(next_generation: &mut u64) -> Result<ExternalGeneration, 
     ExternalGeneration::new(value).map_err(Into::into)
 }
 
+// Admission is a conservative envelope derived from this frame's bound dimensions, not from
+// the output canvas alone. Leases below track owned storage and conservative scratch claims;
+// they are neither allocator instrumentation nor a measurement of whole-process memory.
+// The envelope includes simultaneous F16 inputs, f32 filter pyramids, 3D buffers and delivery.
+fn frame_working_bytes(
+    template: &RenderPlanTemplate,
+    bindings: &RenderBindings,
+    caps: &BackendCapabilities,
+    requests: &[ResourceRequest],
+    spec: RenderSpec,
+) -> Result<(u64, u64), FrameRenderError> {
+    use super::admission::checked_add;
+    use valle_engine::resource::{ExternalResourceDesc, ResourcePayload};
+    let schedules = template
+        .bind_program_schedules(bindings, caps)
+        .map_err(SkiaExecuteError::from)?;
+    let outer = schedules
+        .surface_slots()
+        .iter()
+        .try_fold(0, |n, slot| checked_add(n, slot.estimated_bytes()))?;
+    let program = schedules
+        .programs()
+        .iter()
+        .map(|p| p.estimated_surface_bytes())
+        .max()
+        .unwrap_or(0);
+    let canvas = u64::from(spec.width()) * u64::from(spec.height());
+    let mut bytes = checked_add(outer, program.saturating_mul(5))?;
+    bytes = checked_add(bytes, canvas.saturating_mul(32))?;
+    let execution_bytes = checked_add(bytes, 8 * 1024 * 1024)?;
+    bytes = execution_bytes;
+    for request in requests {
+        let resource = match request.expected() {
+            ExternalResourceDesc::VisualFrame { extent, .. }
+            | ExternalResourceDesc::DataTexture { extent } => {
+                u64::from(extent.width()) * u64::from(extent.height()) * 32
+            }
+            ExternalResourceDesc::Scene3d => {
+                let Some(ResourcePayload::Scene3dFrame { canonical_request }) = request.payload()
+                else {
+                    continue;
+                };
+                let frame: valle_engine::motion::Scene3DFrameRequest =
+                    serde_json::from_slice(canonical_request).map_err(|error| {
+                        FrameRenderError::Fulfillment {
+                            handle: request.handle().get(),
+                            reason: error.to_string(),
+                        }
+                    })?;
+                u64::from(frame.width) * u64::from(frame.height) * 128
+            }
+            _ => 0,
+        };
+        bytes = checked_add(bytes, resource)?;
+    }
+    // Bounded plan/geometry bookkeeping, independently of retained pixel caches.
+    Ok((bytes, execution_bytes))
+}
+
 fn execute_prepared_with(
     executor: &mut SkiaExecutor,
     prepared: PreparedFrame,
@@ -762,12 +945,18 @@ fn execute_prepared_with(
 ) -> Result<FrameEvidence, FrameRenderError> {
     let execute_span = prepared.trace.as_ref().map(|t| t.span("execute.record"));
     let stage_started = Instant::now();
-    let execution = executor.execute(
-        &prepared.template,
-        &prepared.bindings,
-        &prepared.objects,
-        target,
-    )?;
+    let mut execute = || {
+        executor.execute(
+            &prepared.template,
+            &prepared.bindings,
+            &prepared.objects,
+            target,
+        )
+    };
+    let execution = match &prepared.memory_credit {
+        Some(credit) => credit.run(execute),
+        None => execute(),
+    }?;
     let execute_us = elapsed_us(stage_started);
     drop(execute_span);
     if let Some(trace) = &prepared.trace {
@@ -805,7 +994,7 @@ fn execute_prepared_with(
 
 fn render_prepared_rgba8_with(
     executor: &mut SkiaExecutor,
-    cpu_delivery_surface: &mut Option<Surface>,
+    cpu_delivery_surface: &mut Option<(Surface, Option<valle_engine::motion::memory::MemoryLease>)>,
     prepared: PreparedFrame,
     spec: RenderSpec,
 ) -> Result<(RgbaFrame, FrameEvidence), FrameRenderError> {
@@ -823,9 +1012,24 @@ fn render_prepared_rgba8_with(
             usize::try_from(spec.height()).map_err(|_| FrameRenderError::TargetAllocation)?,
         )
         .ok_or(FrameRenderError::TargetAllocation)?;
-    let mut surface = match cpu_delivery_surface.take() {
-        Some(surface) if surface.image_info() == info => surface,
-        _ => surfaces::raster(&info, None, None).ok_or(FrameRenderError::TargetAllocation)?,
+    let (mut surface, memory) = match cpu_delivery_surface.take() {
+        Some((surface, memory)) if surface.image_info() == info => (surface, memory),
+        _ => {
+            let reserve = || {
+                valle_engine::motion::memory::reserve(
+                    valle_engine::motion::memory::MemoryKind::Delivery,
+                    size as u64,
+                )
+            };
+            let memory = match &prepared.memory_credit {
+                Some(credit) => credit.run(reserve),
+                None => reserve(),
+            }?;
+            (
+                surfaces::raster(&info, None, None).ok_or(FrameRenderError::TargetAllocation)?,
+                memory,
+            )
+        }
     };
     let rendered: Result<FrameEvidence, FrameRenderError> = (|| {
         let mut target = SkiaTarget::new(&mut surface, spec.output())?;
@@ -834,7 +1038,7 @@ fn render_prepared_rgba8_with(
     let mut evidence = match rendered {
         Ok(evidence) => evidence,
         Err(error) => {
-            *cpu_delivery_surface = Some(surface);
+            *cpu_delivery_surface = Some((surface, memory));
             return Err(error);
         }
     };
@@ -842,10 +1046,10 @@ fn render_prepared_rgba8_with(
     let readback_started = Instant::now();
     let mut data = vec![0_u8; size];
     if !surface.read_pixels(&info, &mut data, row_bytes, (0, 0)) {
-        *cpu_delivery_surface = Some(surface);
+        *cpu_delivery_surface = Some((surface, memory));
         return Err(FrameRenderError::TargetReadback);
     }
-    *cpu_delivery_surface = Some(surface);
+    *cpu_delivery_surface = Some((surface, memory));
     evidence.timings.delivery_readback_us = Some(elapsed_us(readback_started));
     drop(readback_span);
     evidence.delivery = FrameDelivery::CpuReadback;
@@ -863,6 +1067,10 @@ fn render_prepared_rgba8_with(
 
 #[derive(Debug, Error)]
 pub enum FrameRenderError {
+    #[error(transparent)]
+    Memory(#[from] MemoryError),
+    #[error("frame memory admission was cancelled or a sibling stage failed")]
+    AdmissionStopped,
     #[error(transparent)]
     Engine(#[from] ProductEngineError),
     #[error(transparent)]

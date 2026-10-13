@@ -1,7 +1,7 @@
 import {
   PRODUCT_FRAME_WORKER_PROTOCOL_VERSION,
   PRODUCT_FRAME_TEMPLATE_CACHE_SIZE,
-  applyProductEngineBootstrap,
+  parseProductRenderReceipt,
   assertProductFrameWorkerRequest,
   productFrameWorkerFatalResponse,
   type ProductEngineWire,
@@ -11,9 +11,12 @@ import {
   type ProductFrameWorkerRequest,
   type ProductFrameWorkerResponse,
   type ProductWasmModule,
+  type MotionKernelJob,
 } from "./frame-protocol.ts";
 import { decodePackedAbi, RESOURCE_REQUESTS_ABI } from "../../abi/packed.ts";
 import { supportsScene3dGpu } from "./scene3d-gpu-request.ts";
+import { executeRuntimeCall } from "./runtime-operations.ts";
+import { installKernelWorker, type Scene3dKernelInput } from "./kernel-worker.ts";
 
 interface ProductWorkerScope {
   onmessage: ((event: MessageEvent<unknown>) => void) | null;
@@ -31,6 +34,7 @@ const sentTemplateHashes = new Set<string>();
 let lastReadyAt: number | null = null;
 let lastReleaseMs = 0;
 let gpuScene3d = false;
+const motionDefinitionsSent = new Map<string, number>();
 // Dispatch can still prefetch multiple jobs, but publish each frame immediately. Waiting for
 // eight evaluate/prepare calls delays both resource fulfillment and the first visible frame.
 const RESULT_BATCH_FRAMES = 1;
@@ -42,7 +46,8 @@ interface StartedFrame {
   requestStage: ProductFrameRequestStage;
 }
 
-scope.onmessage = (event) => {
+if (new URL(globalThis.location.href).searchParams.get("valle-kernel") === "1") installKernelWorker();
+else scope.onmessage = (event) => {
   messageChain = messageChain
     .then(() => handleIncomingMessage(event.data))
     .catch((error) => {
@@ -95,6 +100,7 @@ async function handleMessage(
     engine = null;
     renderId = null;
     sentTemplateHashes.clear();
+    motionDefinitionsSent.clear();
     lastReadyAt = null;
     lastReleaseMs = 0;
     const wasm = (await import(
@@ -110,7 +116,14 @@ async function handleMessage(
     };
     const next = new wasm.ProductEngine();
     try {
-      const openedRenderId = applyProductEngineBootstrap(next, bootstrap);
+      const receipt = parseProductRenderReceipt(next.open_fixed_package(bootstrap.fixedPackageManifestJson,
+        bootstrap.timelineJson, bootstrap.resourceManifestJson, bootstrap.verifiedBindingBundleJson));
+      const openedRenderId = receipt.renderId;
+      if (bootstrap.expectedRenderId && bootstrap.expectedRenderId !== openedRenderId) throw new Error("Product worker RenderId drift");
+      const resources = JSON.parse(next.compiled_execution_resources_json(openedRenderId)).map((resource: any) => ({
+        ...resource, bytes: next.compiled_resource_bytes(openedRenderId, resource.kind, resource.contentDigest, resource.abiDigest),
+      }));
+      const snapshot = { receipt, resources, audioProgramJson: next.audio_program_json(openedRenderId) };
       next.set_realtime_geometry?.(gpuScene3d);
       engine = next;
       renderId = openedRenderId;
@@ -119,10 +132,24 @@ async function handleMessage(
         type: "configured",
         id: message.id,
         renderId: openedRenderId,
+        snapshot,
       });
     } catch (error) {
       next.free();
       throw error;
+    }
+    return;
+  }
+
+  if (message.type === "call") {
+    try {
+      if (!engine || renderId !== message.renderId) throw new Error("Product runtime call RenderId drift");
+      const result = executeRuntimeCall(engine, message.method, message.args);
+      scope.postMessage({ protocolVersion: PRODUCT_FRAME_WORKER_PROTOCOL_VERSION, type: "callResult",
+        id: message.id, renderId, result }, ArrayBuffer.isView(result) ? [result.buffer as ArrayBuffer] : []);
+    } catch (error) {
+      scope.postMessage({ protocolVersion: PRODUCT_FRAME_WORKER_PROTOCOL_VERSION, type: "callResult",
+        id: message.id, renderId: message.renderId, error: errorMessage(error) });
     }
     return;
   }
@@ -133,10 +160,31 @@ async function handleMessage(
     offset += RESULT_BATCH_FRAMES
   ) {
     const jobs = message.jobs.slice(offset, offset + RESULT_BATCH_FRAMES);
+    gpuScene3d = jobs[0]?.request.realtime ?? gpuScene3d;
+    engine?.set_realtime_geometry?.(gpuScene3d);
     const started: StartedFrame[] = [];
     for (const [index, job] of jobs.entries()) {
       try {
-        started.push(await startFrame(job.id, job.request, index === 0));
+        if (engine?.motion_kernel_available?.() && job.motionResults === undefined) {
+          if (job.request.renderId !== renderId) throw new Error("Motion capture RenderId drift");
+          const r = job.request;
+          const work = JSON.parse(engine.capture_motion_jobs_preview!(r.renderId, BigInt(r.frame), r.width, r.height, r.transparent)) as MotionKernelJob[];
+          const definitions: Record<string, string> = {};
+          for (const input of work) {
+            if (!motionDefinitionsSent.has(input.definitionId)) definitions[input.definitionId] = engine.motion_kernel_definition!(input.definitionId);
+            const length = definitions[input.definitionId]?.length ?? motionDefinitionsSent.get(input.definitionId)!;
+            motionDefinitionsSent.delete(input.definitionId);
+            motionDefinitionsSent.set(input.definitionId, length);
+          }
+          while (motionDefinitionsSent.size > 4 || [...motionDefinitionsSent.values()].reduce((sum, bytes) => sum + bytes, 0) > 64 * 1024 ** 2) {
+            motionDefinitionsSent.delete(motionDefinitionsSent.keys().next().value!);
+          }
+          if (work.length) {
+            scope.postMessage({ protocolVersion: PRODUCT_FRAME_WORKER_PROTOCOL_VERSION, type: "motionWork", id: job.id, request: r, jobs: work, definitions });
+            continue;
+          }
+        }
+        started.push(await startFrame(job.id, job.request, index === 0, job.motionResults));
       } catch (error) {
         postTaskError(job.id, job.request, error);
       }
@@ -225,6 +273,7 @@ async function startFrame(
   messageId: string,
   request: ProductFrameRequest,
   measureTurnGap: boolean,
+  motionResults?: Uint8Array,
 ): Promise<StartedFrame> {
   const active = engine;
   const activeRenderId = renderId;
@@ -240,7 +289,9 @@ async function startFrame(
       ? 0
       : performance.now() - lastReadyAt;
   const evaluateStarted = performance.now();
-  const ticket = active.evaluate_prepare_preview(
+  const ticket = motionResults !== undefined
+    ? active.evaluate_prepare_motion_preview!(activeRenderId, BigInt(request.frame), request.width, request.height, request.transparent, motionResults)
+    : active.evaluate_prepare_preview(
     activeRenderId,
     BigInt(request.frame),
     request.width,
@@ -252,7 +303,7 @@ async function startFrame(
     const inspectStarted = performance.now();
     const requestPacket = active.resource_requests(ticket);
     const inspectionJson = active.frame_inspection_json(ticket);
-    const gpuPackets: Record<string, Float32Array> = {};
+    const gpuJobs: Record<string, Scene3dKernelInput> = {};
     if (
       gpuScene3d &&
       active.admit_scene3d_gpu_request &&
@@ -274,13 +325,8 @@ async function startFrame(
         >;
         if (!supportsScene3dGpu(value)) continue;
         const content = request.key.content;
-        if (gpuPackets[content]) continue;
-        active.admit_scene3d_gpu_request(
-          content,
-          request.key.interpretation.topology_digest,
-          canonical,
-        );
-        gpuPackets[content] = active.scene3d_gpu_lighting_input(canonical);
+        if (gpuJobs[content]) continue;
+        gpuJobs[content] = { content, topology: request.key.interpretation.topology_digest, canonical, width: value.width, height: value.height };
       }
     }
     const requestInspectMs = performance.now() - inspectStarted;
@@ -296,7 +342,7 @@ async function startFrame(
         generation: request.generation,
         requestPacket,
         inspectionJson,
-        ...(Object.keys(gpuPackets).length ? { gpuScene3d: gpuPackets } : {}),
+        ...(Object.keys(gpuJobs).length ? { gpuScene3dJobs: gpuJobs } : {}),
         ...(request.trace
           ? {
               workerTimeOriginMs: performance.timeOrigin,

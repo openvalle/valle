@@ -473,7 +473,8 @@ fn check_and_raster_pixels_match_expanded_map() {
     for (report, rows) in [(&small, 64), (&large, 4096)] {
         assert_eq!(report["templates"], 1);
         assert_eq!(report["instanceRows"], rows);
-        assert_eq!(report["expressions"], 21);
+        // Shared expressions are interned regardless of the number of instance rows.
+        assert_eq!(report["expressions"], 19);
         assert!(report["evaluatedExpressions"].as_u64().unwrap() > 0);
         assert!(report["timings"]["templateCompile"].as_f64().unwrap() > 0.0);
         assert!(report["timings"]["instanceData"].as_f64().unwrap() > 0.0);
@@ -823,7 +824,7 @@ fn sheet_cells_and_sparse_outputs_equal_independent_frames_with_one_compile() {
             "main.motion.tsx",
             "--backend",
             "raster",
-            "--workers",
+            "--threads",
             "2",
             "--frames",
             "59,0,30,0,59",

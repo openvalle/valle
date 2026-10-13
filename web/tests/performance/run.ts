@@ -11,8 +11,8 @@ import { median, option, ROOT, sha256 } from "../../scripts/motion/common.ts";
 const BASE = import.meta.dir;
 type Case = { id: string; source: string; kind?: "timeline"; group: string; assets: Record<string,string>; rule: PixelRule; repeatRule: PixelRule; regions: Region[] };
 const suite = await Bun.file(path.join(BASE, "suite.json")).json() as {
-  qa: { width: number; height: number; frames: number[]; order: number[]; parallelWorkers: number[];resourceCacheBytes:number };
-  performance: { width: number; height: number; fps: number; durationS: number; repeats: number; workers: number; bitrate: number; profiles:Record<string,{width:number;height:number}>; regressionTolerance:{wallPercent:number;memoryPercent:number}; target: {width:number;height:number;fps:number;rtfMedian:number} };
+  qa: { width: number; height: number; frames: number[]; order: number[]; threadAllowances: number[];resourceCacheBytes:number };
+  performance: { width: number; height: number; fps: number; durationS: number; repeats: number; threads: number; bitrate: number; profiles:Record<string,{width:number;height:number}>; regressionTolerance:{wallPercent:number;memoryPercent:number}; target: {width:number;height:number;fps:number;rtfMedian:number} };
   cases: Case[];
 };
 const args = Bun.argv.slice(2);
@@ -86,7 +86,7 @@ async function native(c: Case, backend: string, argv: string[], folder: string, 
       const frames = argv.includes("--frames") ? option(argv,"--frames").split(",").map(Number) : null;
       const file = path.join(folder,"fixed-job.json");
       await writeFile(file,JSON.stringify({...prepared.config,localAssets:Object.values(c.assets).map(p=>path.join(ROOT,p)),backend,
-        mode:frames?"qa":"bench",frames,width:size[0],height:size[1],workers:Number(option(argv,"--workers","4")),
+        mode:frames?"qa":"bench",frames,width:size[0],height:size[1],threads:Number(option(argv,"--threads","4")),
         bitrate:Number(option(argv,"--bitrate",String(performance.bitrate))),output:option(argv,frames?"--storyboard":"-o")},null,2));
       cmd = [fixedRunner,file];
       scope = "fresh native process: verified frozen Timeline package -> MP4/PNG; host preparation recorded separately";
@@ -255,11 +255,11 @@ async function qaCase(c:Case, backend:string, golden:any) {
     }
   };
   if(backend.startsWith("native")) {
-    for(const workers of suite.qa.parallelWorkers) {
-      const f=path.join(folder,`workers-${workers}`);const sheet=path.join(f,"sheet.png");
-      await native(c,backend,["--frames",order.join(","),"--storyboard",sheet,"--output-size",`${width}x${height}`,"--workers",String(workers)],f,true);
+    for(const threads of suite.qa.threadAllowances) {
+      const f=path.join(folder,`threads-${threads}`);const sheet=path.join(f,"sheet.png");
+      await native(c,backend,["--frames",order.join(","),"--storyboard",sheet,"--output-size",`${width}x${height}`,"--threads",String(threads)],f,true);
       const image=await readPng(sheet);const columns=Math.min(4,order.length);
-      for(const [i,frame]of order.entries())await compare(crop(image,(i%columns)*width,Math.floor(i/columns)*height,width,height),frame,`w${workers}-${i}`);
+      for(const [i,frame]of order.entries())await compare(crop(image,(i%columns)*width,Math.floor(i/columns)*height,width,height),frame,`n${threads}-${i}`);
     }
   } else {
     const r=await browserJob(c,backend,{mode:"qa",width,height,order,resourceCacheBytes:suite.qa.resourceCacheBytes,trace:true},folder);
@@ -289,7 +289,7 @@ async function benchCase(c:Case,backend:string,round:number,trace:boolean) {
   let result:any;
   if(backend.startsWith("native")) {
     const video=path.join(folder,"export.mp4");
-    result=await native(c,backend,["-o",video,"--fps","60","--output-size",`${performance.width}x${performance.height}`,"--workers",String(performance.workers),"--hardware-encode","--bitrate",String(performance.bitrate)],folder,trace);
+    result=await native(c,backend,["-o",video,"--fps","60","--output-size",`${performance.width}x${performance.height}`,"--threads",String(performance.threads),"--hardware-encode","--bitrate",String(performance.bitrate)],folder,trace);
   }else{result=await browserJob(c,backend,{mode:"bench",width:performance.width,height:performance.height,bitrate:performance.bitrate,trace},folder);}
   const video=validateVideo(path.join(folder,"export.mp4"),backend);
   const stages:Record<string,number>={};
@@ -322,7 +322,7 @@ try {
     if (JSON.stringify(golden.qa) !== JSON.stringify(suite.qa)) throw new Error("golden QA settings differ; use a separate reference directory");
     for(const c of cases) {
       const folder=path.join(output,"golden",c.id),sheet=path.join(folder,"sheet.png");
-      await native(c,"native-cpu",["--frames",suite.qa.frames.join(","),"--storyboard",sheet,"--output-size",`${suite.qa.width}x${suite.qa.height}`,"--workers","1"],folder);
+      await native(c,"native-cpu",["--frames",suite.qa.frames.join(","),"--storyboard",sheet,"--output-size",`${suite.qa.width}x${suite.qa.height}`,"--threads","1"],folder);
       await cp(sheet,path.join(goldenDir,`${c.id}.png`));
       golden.cases[c.id]={identity:identity(c),pngSha256:sha256(sheet),rule:c.rule,repeatRule:c.repeatRule,
         generatedAt:new Date().toISOString(),generator:{gitHead:report.identities.gitHead,cli:report.identities.cli,fixedRunner:report.identities.fixedRunner}};

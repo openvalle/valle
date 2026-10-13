@@ -44,6 +44,7 @@ pub type SkiaObjectTable = ExternalObjectTable<SkiaExternalObject>;
 /// a plan, hash or WASM packet.
 #[derive(Clone)]
 pub struct SkiaExternalObject {
+    memory: Option<valle_engine::motion::memory::MemoryLease>,
     key: ResourceKey,
     descriptor: ExternalResourceDesc,
     payload: SkiaObjectPayload,
@@ -83,6 +84,18 @@ impl core::fmt::Debug for SkiaExternalObject {
 }
 
 impl SkiaExternalObject {
+    pub(crate) fn charge_memory(
+        &mut self,
+    ) -> Result<(), valle_engine::motion::memory::MemoryError> {
+        if self.memory.is_none() {
+            self.memory = valle_engine::motion::memory::reserve(
+                valle_engine::motion::memory::MemoryKind::Resource,
+                self.resident_bytes()
+                    .ok_or(valle_engine::motion::memory::MemoryError::Overflow)?,
+            )?;
+        }
+        Ok(())
+    }
     /// Normalize a tightly packed decoded RGBA8 frame into the compositor working domain. The
     /// declared transfer/primaries/alpha are applied exactly once here; crop/orientation/SAR stay
     /// in the Engine placement contract and are not baked into the resource.
@@ -212,6 +225,7 @@ impl SkiaExternalObject {
         let extent = Extent2d::new(width, height).map_err(|_| SkiaObjectError::InvalidExtent)?;
         validate_working_image(&image)?;
         Ok(Self {
+            memory: None,
             key,
             descriptor: ExternalResourceDesc::VisualFrame {
                 extent,
@@ -246,6 +260,7 @@ impl SkiaExternalObject {
             });
         }
         Ok(Self {
+            memory: None,
             key,
             descriptor: ExternalResourceDesc::VisualFrame {
                 extent,
@@ -265,6 +280,7 @@ impl SkiaExternalObject {
             });
         };
         Ok(Self {
+            memory: None,
             key,
             descriptor: ExternalResourceDesc::FontBytes,
             payload: SkiaObjectPayload::FontBytes(bytes.into()),
@@ -303,6 +319,7 @@ impl SkiaExternalObject {
             return Err(SkiaObjectError::EmptyShaderPayload);
         }
         Ok(Self {
+            memory: None,
             key,
             descriptor: ExternalResourceDesc::RuntimeShader,
             payload: SkiaObjectPayload::RuntimeShader(generated_sksl),
@@ -322,6 +339,7 @@ impl SkiaExternalObject {
         }
         validate_working_image(&image)?;
         Ok(Self {
+            memory: None,
             key,
             descriptor: ExternalResourceDesc::Scene3d,
             payload: SkiaObjectPayload::Scene3d(image),
@@ -343,6 +361,7 @@ impl SkiaExternalObject {
             });
         }
         Ok(Self {
+            memory: None,
             key,
             descriptor: ExternalResourceDesc::Scene3d,
             payload: SkiaObjectPayload::Scene3dDof(super::scene3d_dof::Scene3dDofInput::new(
@@ -451,6 +470,7 @@ impl SkiaExternalObject {
             images::raster_from_data(&info, Data::new_copy(&packed), extent.width() as usize * 2)
                 .ok_or(SkiaObjectError::InvalidPixelPayload)?;
         Ok(Self {
+            memory: None,
             key,
             descriptor: ExternalResourceDesc::DataTexture { extent },
             payload: SkiaObjectPayload::DataTexture(image),

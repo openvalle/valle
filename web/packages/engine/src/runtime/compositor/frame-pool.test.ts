@@ -31,6 +31,10 @@ class WrongRenderIdWorker {
       });
       return;
     }
+    if (message.type === "call") {
+      this.emit({ protocolVersion: PRODUCT_FRAME_WORKER_PROTOCOL_VERSION, type: "callResult", id: message.id, renderId: message.renderId, result: message.args[0] });
+      return;
+    }
     const job = message.jobs[0]!;
     this.emit({
       protocolVersion: PRODUCT_FRAME_WORKER_PROTOCOL_VERSION,
@@ -189,7 +193,7 @@ test("bootstrap is versioned only by the enclosing worker protocol", () => {
     verifiedBindingBundleJson: "binding-bundle",
     expectedRenderId: "",
   });
-  expect(PRODUCT_FRAME_WORKER_PROTOCOL_VERSION).toBe(1);
+  expect(PRODUCT_FRAME_WORKER_PROTOCOL_VERSION).toBe(3);
 });
 
 test("bootstrap opens exactly the four fixed-package members", () => {
@@ -238,7 +242,6 @@ test("planner rejects a worker stage from another RenderId", async () => {
   let generation = 0n;
   const pool = new ProductFramePlannerPool({
     workerUrl: "frame-worker.js",
-    size: 1,
     workerFactory: () => worker,
     allocateGeneration: () => {
       generation += 1n;
@@ -274,7 +277,6 @@ test("planner rejects every pending promise after a batch-level worker failure",
   let generation = 0n;
   const pool = new ProductFramePlannerPool({
     workerUrl: "frame-worker.js",
-    size: 1,
     workerFactory: () => worker,
     allocateGeneration: () => {
       generation += 1n;
@@ -328,7 +330,7 @@ function manualTemplateWorker() {
       if (message.type === "configure") {
         queueMicrotask(() => this.emit({ protocolVersion: PRODUCT_FRAME_WORKER_PROTOCOL_VERSION,
           type: "configured", id: message.id, renderId: message.bootstrap.expectedRenderId }));
-      } else batches.push(message);
+      } else if (message.type === "prepareBatch") batches.push(message);
     },
     emit(message: ProductFrameWorkerResponse) {
       this.onmessage?.({ data: message } as MessageEvent<unknown>);
@@ -354,7 +356,7 @@ const SCENE_CONTENT = `sha256:${"a".repeat(64)}`;
 
 test("ready byte pressure keeps imminent frames, accounts GPU preparation and still serves demand", async () => {
   const {worker,batches}=manualTemplateWorker();let generation=0n;
-  const pool=new ProductFramePlannerPool({workerUrl:"frame-worker.js",size:1,maxReadyBytes:32,
+  const pool=new ProductFramePlannerPool({workerUrl:"frame-worker.js",maxReadyBytes:32,
     workerFactory:()=>worker,allocateGeneration:()=>++generation});
   const bootstrap=emptyProductEngineBootstrap("engine.js","engine.wasm","{}","{}","{}","{}");
   bootstrap.expectedRenderId=RENDER_ID;await pool.init(bootstrap);
@@ -382,7 +384,7 @@ test("ready byte pressure keeps imminent frames, accounts GPU preparation and st
 test("a cancelled prefetch still supplies the template needed by the next seek", async () => {
   const { worker, batches } = manualTemplateWorker();
   let generation=0n;
-  const pool=new ProductFramePlannerPool({workerUrl:"frame-worker.js",size:1,
+  const pool=new ProductFramePlannerPool({workerUrl:"frame-worker.js",
     workerFactory:()=>worker, allocateGeneration:()=>++generation});
   const bootstrap=emptyProductEngineBootstrap("engine.js","engine.wasm","{}","{}","{}","{}");
   bootstrap.expectedRenderId=RENDER_ID;
@@ -407,7 +409,7 @@ test("a cancelled prefetch still supplies the template needed by the next seek",
 test("template cache hits stay available while older unused templates are evicted", async () => {
   const { worker, batches } = manualTemplateWorker();
   let generation = 0n;
-  const pool = new ProductFramePlannerPool({ workerUrl: "frame-worker.js", size: 1,
+  const pool = new ProductFramePlannerPool({ workerUrl: "frame-worker.js",
     workerFactory: () => worker, allocateGeneration: () => ++generation });
   const bootstrap = emptyProductEngineBootstrap("engine.js", "engine.wasm", "{}", "{}", "{}", "{}");
   bootstrap.expectedRenderId = RENDER_ID;

@@ -1,8 +1,8 @@
 import type { Canvas, CanvasKit, Image } from "canvaskit-wasm";
 
 export interface SrgbPreviewCpuKernel {
-  transform_srgb_preview_pixels(pixels: Float32Array, opaque: boolean): void;
-  transform_srgb_preview_f16?(pixels: Uint8Array, opaque: boolean): void;
+  transform_srgb_preview_pixels(pixels: Float32Array, opaque: boolean): void | Float32Array | Promise<Float32Array>;
+  transform_srgb_preview_f16?(pixels: Uint8Array, opaque: boolean): void | Uint8Array | Promise<Uint8Array>;
 }
 
 const SCRATCH_ROWS = 64;
@@ -16,14 +16,14 @@ export function srgbPreviewScratchBytes(width: number, height: number, f16 = fal
  * Coverage outputs may opt in only after every source pixel proves full coverage. A rejected
  * probe leaves the destination untouched, preserving SkSL's low-alpha quantization behavior.
  */
-export function drawSrgbPreviewCpu(
+export async function drawSrgbPreviewCpu(
   CanvasKit: CanvasKit,
   canvas: Canvas,
   input: Image,
   kernel: SrgbPreviewCpuKernel,
   opaque: boolean,
   requireFullCoverage = false,
-): boolean {
+): Promise<boolean> {
   const width = input.width(), height = input.height();
   // An explicit destination also avoids CanvasKit 0.42's default RGBA_F32 reader treating
   // its byte length as a float count. The byte view can be written back without another copy.
@@ -63,10 +63,12 @@ export function drawSrgbPreviewCpu(
     for (let y = 0; y < height; y += rows) {
       const count = Math.min(rows, height - y);
       const pixels = readRows(y, count);
-      if (f16) kernel.transform_srgb_preview_f16!(pixels, opaque);
-      else kernel.transform_srgb_preview_pixels(new Float32Array(pixels.buffer, pixels.byteOffset, pixels.byteLength / 4), opaque);
+      const byteLength = pixels.byteLength;
+      const transformed = f16 ? await kernel.transform_srgb_preview_f16!(pixels, opaque)
+        : await kernel.transform_srgb_preview_pixels(new Float32Array(pixels.buffer, pixels.byteOffset, pixels.byteLength / 4), opaque);
       // MallocObj.subarray keeps CanvasKit's direct-memory marker, including short stripes.
-      const bytes = memory.subarray(0, pixels.byteLength) as Uint8Array;
+      const bytes = memory.subarray(0, byteLength) as Uint8Array;
+      if (transformed) bytes.set(new Uint8Array(transformed.buffer, transformed.byteOffset, transformed.byteLength));
       if (!canvas.writePixels(bytes, width, count, 0, y,
         CanvasKit.AlphaType.Premul, colorType, CanvasKit.ColorSpace.SRGB)) {
         throw new Error("cannot write CPU output float pixels");

@@ -42,6 +42,9 @@ await withBuildDirectory(path.join(root, "dist"), async (dist) => {
   ], { cwd: web, stdout: "inherit", stderr: "inherit" });
   if (await tsc.exited !== 0) throw new Error("SDK declaration generation failed");
   await cp(path.join(declarations, "web/packages/engine/src"), types, { recursive: true });
+  // TypeScript resolves authored declarations for the JavaScript GPU kernels, but does not
+  // emit them again. Ship these alongside the generated types so consumers can resolve them.
+  await copyAuthoredDeclarations(path.join(root, "src"), types);
   await cp(path.join(declarations, "crates/valle-timeline/schema"), path.join(types, "schema"), { recursive: true });
   await rm(declarations, { recursive: true });
   await rewriteDeclarationImports(types);
@@ -81,6 +84,16 @@ console.log("built npm SDK under packages/engine/dist (CanvasKit remains an offi
 
 function assertBuild(result: Awaited<ReturnType<typeof Bun.build>>, label: string): void {
   if (!result.success) throw new Error(`${label}: ${result.logs.map((log) => log.message).join("\n")}`);
+}
+
+async function copyAuthoredDeclarations(source: string, destination: string): Promise<void> {
+  for (const entry of await readdir(source, { withFileTypes: true })) {
+    if (entry.isDirectory()) {
+      await copyAuthoredDeclarations(path.join(source, entry.name), path.join(destination, entry.name));
+    } else if (entry.name.endsWith(".d.ts")) {
+      await cp(path.join(source, entry.name), path.join(destination, entry.name));
+    }
+  }
 }
 
 async function rewriteDeclarationImports(dir: string): Promise<void> {

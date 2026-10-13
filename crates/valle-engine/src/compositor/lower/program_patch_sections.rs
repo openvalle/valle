@@ -69,6 +69,21 @@ pub(super) fn encode(base: &[u8], target: &[u8]) -> Option<Vec<u8>> {
             let mut bi = 0;
             let mut ti = 0;
             while bi < b.len() && ti < t.len() {
+                // Static JSON regions are usually much longer than one token. Compare blocks
+                // before invoking the token matcher; COPY still contains only byte-exact data,
+                // and differing tokens retain the existing random-access patch contract.
+                let begin = ti;
+                let base_begin = bi;
+                while bi + 32 <= b.len() && ti + 32 <= t.len() && b[bi..bi + 32] == t[ti..ti + 32] {
+                    bi += 32;
+                    ti += 32;
+                }
+                if ti != begin {
+                    p.copy(b0 + base_begin, ti - begin, &t[begin..ti]);
+                    if bi == b.len() || ti == t.len() {
+                        break;
+                    }
+                }
                 let be = token_end(b, bi);
                 let te = token_end(t, ti);
                 if b[bi..be] == t[ti..te] {

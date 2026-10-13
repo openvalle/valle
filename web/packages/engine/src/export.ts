@@ -68,6 +68,7 @@ export async function exportBrowserVideo(
     const canvas = document.createElement("canvas");
     player = new BrowserValleWebPlayer({
       ...input,
+      runtimePurpose: "export",
       assets: input.assets?.map((asset) => ({ ...asset })),
       canvas,
       pxScale: 1,

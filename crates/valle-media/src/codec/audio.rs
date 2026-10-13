@@ -5,6 +5,13 @@ use anyhow::Result;
 use std::path::Path;
 backend_type!(LibavAudioSource, audio);
 impl LibavAudioSource {
+    pub fn with_pcm_window(self, frames: usize) -> Result<Self> {
+        match self.0 {
+            Inner::V7(inner) => inner.with_pcm_window(frames).map(Into::into),
+            Inner::V8(inner) => inner.with_pcm_window(frames).map(Into::into),
+            Inner::V9(inner) => inner.with_pcm_window(frames).map(Into::into),
+        }
+    }
     pub fn open(path: &Path, out_rate: u32, out_channels: u16) -> Result<Self> {
         match backend::version()? {
             Version::V7 => backend::v7::audio::LibavAudioSource::open(path, out_rate, out_channels)

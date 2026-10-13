@@ -194,6 +194,6 @@ test("whole vector scopes preserve projected gradients and nested alpha across w
     drawProgramNode(CK,executor.builtins,surfaces[1]!.getCanvas(),admitted,root,identity,0,undefined,arena);
     const info={width:128,height:96,colorType:CK.ColorType.RGBA_8888,alphaType:CK.AlphaType.Unpremul,colorSpace:CK.ColorSpace.SRGB};
     const expected=surfaces[0]!.getCanvas().readPixels(0,0,info), actual=surfaces[1]!.getCanvas().readPixels(0,0,info);
-    expect(Buffer.from(actual as Uint8Array).equals(Buffer.from(expected as Uint8Array))).toBe(true);
+    expect(actual).toEqual(expected);
   } finally {surfaces.forEach(s=>s.delete());executor.dispose();}
 });

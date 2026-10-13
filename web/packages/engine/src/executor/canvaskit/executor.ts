@@ -100,8 +100,8 @@ export interface CanvasKitPassTiming {
 
 /** Canonical Rust/Wasm kernels owned by ProductEngine. */
 export interface CanvasKitEngineKernels {
-  transform_srgb_preview_pixels(pixels: Float32Array, opaque: boolean): void;
-  transform_srgb_preview_f16?(pixels: Uint8Array, opaque: boolean): void;
+  transform_srgb_preview_pixels(pixels: Float32Array, opaque: boolean): void | Float32Array | Promise<Float32Array>;
+  transform_srgb_preview_f16?(pixels: Uint8Array, opaque: boolean): void | Uint8Array | Promise<Uint8Array>;
   plan_pyramid_filter?(
     inputWidth: number, inputHeight: number, outputWidth: number, outputHeight: number,
     offsetX: number, offsetY: number, filterJson: string,
@@ -110,12 +110,12 @@ export interface CanvasKitEngineKernels {
     input: Uint8Array, inputWidth: number, inputHeight: number,
     outputWidth: number, outputHeight: number, offsetX: number, offsetY: number,
     threshold: number, knee: number, intensity: number, radius: number,
-  ): Uint8Array;
+  ): Uint8Array | Promise<Uint8Array>;
   apply_glow_f16?(
     input: Uint8Array, inputWidth: number, inputHeight: number,
     outputWidth: number, outputHeight: number, offsetX: number, offsetY: number,
     colorJson: string, intensity: number, radius: number,
-  ): Uint8Array;
+  ): Uint8Array | Promise<Uint8Array>;
   plan_radial_blur?(
     amount: number, inputX: number, inputY: number, inputWidth: number, inputHeight: number,
     outputX: number, outputY: number, outputWidth: number, outputHeight: number,
@@ -124,18 +124,18 @@ export interface CanvasKitEngineKernels {
     input: Uint8Array, inputWidth: number, inputHeight: number,
     outputWidth: number, outputHeight: number, offsetX: number, offsetY: number,
     originX: number, originY: number, centerX: number, centerY: number, amount: number,
-  ): Uint8Array;
+  ): Uint8Array | Promise<Uint8Array>;
   apply_film_grain_f16?(
     input: Uint8Array, inputWidth: number, inputHeight: number,
     outputWidth: number, outputHeight: number, offsetX: number, offsetY: number,
     originX: number, originY: number, seed: number, amount: number, size: number,
-  ): Uint8Array;
+  ): Uint8Array | Promise<Uint8Array>;
   apply_lens_distortion_f16?(
     input: Uint8Array, inputWidth: number, inputHeight: number,
     outputWidth: number, outputHeight: number, offsetX: number, offsetY: number,
     originX: number, originY: number, k1: number, k2: number,
     frameX: number, frameY: number, frameWidth: number, frameHeight: number,
-  ): Uint8Array;
+  ): Uint8Array | Promise<Uint8Array>;
   pack_motion_glass_uniforms(
     programJson: string,
     ownerToDevice: Float64Array,
@@ -397,6 +397,13 @@ export class CanvasKitExecutor {
     }
     this.workingArena.beginFrame();
     return this.workingArena;
+  }
+
+  /** Retire optional frame storage while keeping the context, programs and shader history. */
+  trimWorkingMemory(): void {
+    this.clearRasterLayers();
+    this.workingArena?.delete();
+    this.workingArena = null;
   }
 
   dispose(): void {
@@ -847,7 +854,7 @@ async function executeCanvasKitFrame(
           const scratchBytes = srgbPreviewScratchBytes(extent.width, extent.height,
             typeof executor.engineKernels?.transform_srgb_preview_f16 === "function");
           try {
-            drawOutputTransform(
+            await drawOutputTransform(
               CanvasKit,
               builtins,
               canvas,
@@ -1735,18 +1742,35 @@ async function executeProgramPass(
             outputRoi, filter.kind, recipe);
           return;
         }
+        let readRoi = inputRoi;
+        if (planner && (filter.kind === "bloom" || filter.kind === "glow")) {
+          const recipe = planner.call(engineKernels, inputRoi.width, inputRoi.height,
+            outputRoi.width, outputRoi.height, inputRoi.x - outputRoi.x, inputRoi.y - outputRoi.y,
+            JSON.stringify(filter));
+          // Keep raster coverage intact. Only copy the region used by the F16 kernel across
+          // the CanvasKit/WASM boundary, using the planner's original sampling grid.
+          const region = recipe.length >= 15
+            ? { x: outputRoi.x + recipe[0]!, y: outputRoi.y + recipe[1]!, width: recipe[2]!, height: recipe[3]! }
+            : outputRoi;
+          const x = Math.max(inputRoi.x, region.x), y = Math.max(inputRoi.y, region.y);
+          const width = Math.max(0, Math.min(inputRoi.x + inputRoi.width, region.x + region.width) - x);
+          const height = Math.max(0, Math.min(inputRoi.y + inputRoi.height, region.y + region.height) - y);
+          if (!width || !height) return;
+          readRoi = { x, y, width, height };
+        }
         const info = {
-          width: inputRoi.width,
-          height: inputRoi.height,
+          width: readRoi.width,
+          height: readRoi.height,
           colorType: CanvasKit.ColorType.RGBA_F16,
           alphaType: CanvasKit.AlphaType.Premul,
           colorSpace: CanvasKit.ColorSpace.SRGB,
         };
-        const input = source.image.readPixels(0, 0, info, undefined, inputRoi.width * 8);
+        const input = source.image.readPixels(readRoi.x - inputRoi.x, readRoi.y - inputRoi.y,
+          info, undefined, readRoi.width * 8);
         if (!input || !(input instanceof Uint8Array)) fail("pyramid_read", "working F16 input read failed");
-        const dimensions = [inputRoi.width, inputRoi.height, outputRoi.width, outputRoi.height,
-          inputRoi.x - outputRoi.x, inputRoi.y - outputRoi.y] as const;
-        const output = filter.kind === "lensDistortion" ? (() => {
+        const dimensions = [readRoi.width, readRoi.height, outputRoi.width, outputRoi.height,
+          readRoi.x - outputRoi.x, readRoi.y - outputRoi.y] as const;
+        const output = await (filter.kind === "lensDistortion" ? (() => {
           const kernel = engineKernels?.apply_lens_distortion_f16;
           if (!kernel) fail("lens_distortion_kernel", "working-linear F16 lens distortion kernel is unavailable");
           const frame = programLensFrame(localPlan, kind.input, matrix);
@@ -1769,7 +1793,7 @@ async function executeProgramPass(
             JSON.stringify(record(filter.color, "glow color")),
             finiteNumber(filter.intensity, "glow intensity"),
             finiteNumber(filter.radius, "glow radius"));
-        })();
+        })());
         const image = CanvasKit.MakeImage({ ...info, width: outputRoi.width, height: outputRoi.height },
           output, outputRoi.width * 8);
         if (!image) fail("pyramid_image", "working F16 pyramid output allocation failed");
@@ -4500,14 +4524,14 @@ function admitCanvasKitOutput(plan: Wire): void {
   }
 }
 
-function drawOutputTransform(
+async function drawOutputTransform(
   CanvasKit: CanvasKit,
   builtins: CanvasKitBuiltinRuntime,
   canvas: Canvas,
   input: Image | null,
   operation: Wire,
   cpuKernel: CanvasKitEngineKernels | null,
-): void {
+): Promise<void> {
   if (operation.kind !== "outputTransform") {
     fail("copy_operation", `copy operation '${String(operation.kind)}' is outside the closed set`);
   }
@@ -4528,7 +4552,7 @@ function drawOutputTransform(
     && luminance.referenceWhite === 100 && luminance.peak === 100) {
     // An author-transparent canvas can still produce an opaque frame (background View/video).
     // Prove actual coverage each time; partial coverage keeps the established shader path.
-    if (drawSrgbPreviewCpu(CanvasKit, canvas, input, cpuKernel, spec.alpha === "opaque", spec.alpha !== "opaque")) return;
+    if (await drawSrgbPreviewCpu(CanvasKit, canvas, input, cpuKernel, spec.alpha === "opaque", spec.alpha !== "opaque")) return;
   }
   drawBuiltinImage(CanvasKit, builtins, canvas, "outputTransform", uniforms, [input], "src");
 }

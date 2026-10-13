@@ -54,6 +54,7 @@ pub struct LibavAudioSource {
     flushed: bool,
     /// Maximum buffered sample count for bounded-memory diagnostics.
     buf_high_water: usize,
+    max_buffer_samples: Option<usize>,
 }
 
 /// Forward-only, bounded audio decoder used by offline model tools.
@@ -132,6 +133,7 @@ impl LibavAudioSource {
             draining: false,
             flushed: false,
             buf_high_water: 0,
+            max_buffer_samples: None,
         })
     }
 
@@ -230,10 +232,16 @@ impl LibavAudioSource {
     }
 
     /// Append interleaved samples from a resampled frame.
-    fn push_resampled(&mut self, out: &frame::Audio) {
+    fn push_resampled(&mut self, out: &frame::Audio) -> Result<()> {
         let n = out.samples() * self.out_channels as usize;
         if n == 0 {
-            return;
+            return Ok(());
+        }
+        if self
+            .max_buffer_samples
+            .is_some_and(|limit| n > limit.saturating_sub(self.buf.len()))
+        {
+            anyhow::bail!("audio PCM decode window exceeds its admitted capacity");
         }
         let bytes = &out.data(0)[..n * size_of::<f32>()];
         for c in bytes.chunks_exact(size_of::<f32>()) {
@@ -241,6 +249,7 @@ impl LibavAudioSource {
                 .push_back(f32::from_ne_bytes([c[0], c[1], c[2], c[3]]));
         }
         self.buf_high_water = self.buf_high_water.max(self.buf.len());
+        Ok(())
     }
 
     /// Flush at most one bounded resampler tail frame. `ffmpeg-next` does not allocate the output
@@ -262,7 +271,7 @@ impl LibavAudioSource {
         );
         self.swr.flush(&mut out).context("swr flush")?;
         let produced = out.samples() > 0;
-        self.push_resampled(&out);
+        self.push_resampled(&out)?;
         Ok(produced)
     }
 
@@ -283,9 +292,34 @@ impl LibavAudioSource {
                     self.buf_start = Some((t * self.out_rate as f64).round() as i64);
                 }
                 self.prepare_frame_for_swr(&mut decoded)?;
-                let mut out = frame::Audio::empty();
+                // The wrapper's empty-output fallback allocates only input.samples(). That
+                // steadily accumulates delayed PCM when upsampling (e.g. 44.1 -> 48 kHz),
+                // eventually turning EOF into an unbounded flush. Cover both rate conversion
+                // and the existing filter delay on every packet instead.
+                let delayed = self
+                    .swr
+                    .delay()
+                    .map_or(0, |delay| delay.input.max(0) as u64);
+                let output_samples = delayed
+                    .checked_add(decoded.samples() as u64)
+                    .and_then(|samples| samples.checked_mul(u64::from(self.out_rate)))
+                    .context("resampled audio capacity overflow")?
+                    .div_ceil(u64::from(self.swr_input.rate).max(1));
+                let output_samples = usize::try_from(output_samples)
+                    .context("resampled audio capacity exceeds addressable memory")?;
+                if self
+                    .max_buffer_samples
+                    .is_some_and(|limit| output_samples > limit / usize::from(self.out_channels))
+                {
+                    anyhow::bail!("audio resampler packet exceeds its admitted window");
+                }
+                let mut out = frame::Audio::new(
+                    format::Sample::F32(format::sample::Type::Packed),
+                    output_samples,
+                    ChannelLayout::default(self.out_channels as i32),
+                );
                 self.swr.run(&decoded, &mut out).context("swr run")?;
-                self.push_resampled(&out);
+                self.push_resampled(&out)?;
                 return Ok(true);
             }
             if self.draining {
@@ -368,6 +402,20 @@ impl LibavAudioSource {
             self.buf.drain(..drop_n);
             self.buf_start = Some(bs + (drop_n / ch) as i64); // Advance by the actual number of discarded samples.
         }
+    }
+
+    /// Limit the retained PCM window. Requests and unusually large codec packets fail before
+    /// growing the host-owned ring; codec-internal allocations are a separate contract.
+    pub fn with_pcm_window(mut self, frames: usize) -> Result<Self> {
+        let samples = frames
+            .checked_mul(self.out_channels as usize)
+            .context("PCM window overflow")?;
+        if samples == 0 {
+            anyhow::bail!("PCM window must be positive");
+        }
+        self.buf = std::collections::VecDeque::with_capacity(samples);
+        self.max_buffer_samples = Some(samples);
+        Ok(self)
     }
 
     /// Maximum buffered sample count for diagnostics; catch-up must not accumulate the entire
@@ -481,6 +529,12 @@ impl AudioSource for LibavAudioSource {
         let sample_len = n
             .checked_mul(ch)
             .context("audio sample buffer exceeds addressable memory")?;
+        if self
+            .max_buffer_samples
+            .is_some_and(|limit| sample_len > limit)
+        {
+            anyhow::bail!("audio PCM request exceeds its admitted window");
+        }
         let mut out = vec![0f32; sample_len];
         if n == 0 {
             return Ok(AudioBuffer {
@@ -506,6 +560,7 @@ impl AudioSource for LibavAudioSource {
 
         // Decode until the requested window is covered or EOF is reached. Discard preceding samples
         // during catch-up to keep memory bounded.
+        self.drop_consumed_before(s0);
         while self.buf_end().is_none_or(|be| be < s1) {
             if !self.pull()? {
                 break;

@@ -172,6 +172,7 @@ impl SkiaExecutionProfile {
 pub(crate) struct PlanImage {
     image: Option<Image>,
     roi: valle_engine::prepare::DeviceRect,
+    retention: Option<valle_engine::motion::memory::MemoryLease>,
 }
 
 impl PlanImage {
@@ -179,6 +180,7 @@ impl PlanImage {
         Self {
             image: Some(image),
             roi,
+            retention: None,
         }
     }
 
@@ -186,6 +188,7 @@ impl PlanImage {
         Self {
             image: None,
             roi: valle_engine::prepare::DeviceRect::new(0, 0, 0, 0),
+            retention: None,
         }
     }
 
@@ -202,6 +205,24 @@ impl PlanImage {
 
     pub(crate) fn image(&self) -> Option<&Image> {
         self.image.as_ref()
+    }
+
+    /// Retaining a snapshot can trigger copy-on-write on its original surface. Charge that
+    /// independent storage before caching, and keep the lease on every returned image clone.
+    pub(crate) fn admit_retention(&mut self, bytes: u64) -> bool {
+        if self.retention.is_some() {
+            return true;
+        }
+        match valle_engine::motion::memory::reserve(
+            valle_engine::motion::memory::MemoryKind::Surface,
+            bytes,
+        ) {
+            Ok(lease) => {
+                self.retention = lease;
+                true
+            }
+            Err(_) => false, // Reuse is optional; an otherwise valid frame must still draw.
+        }
     }
 }
 
@@ -642,6 +663,7 @@ struct SurfaceGeneration {
 }
 
 struct SurfaceEntry {
+    _memory: Option<valle_engine::motion::memory::MemoryLease>,
     extent: Extent2d,
     surface: Surface,
     bytes: u64,
@@ -669,6 +691,7 @@ impl core::fmt::Debug for SurfaceEntry {
 /// plan slot; non-overlapping logical allocations therefore reuse the same pixels inside the
 /// frame, while subsequent frames reuse the same backend allocation.
 pub(crate) struct SurfaceArena {
+    pool_byte_limit: u64,
     backend: SurfaceBackend,
     generation: Option<SurfaceGeneration>,
     generation_id: u64,
@@ -716,8 +739,22 @@ impl core::fmt::Debug for SurfaceArena {
 }
 
 impl SurfaceArena {
+    pub(crate) fn set_gpu_resource_cache_limit(&mut self, bytes: usize) {
+        #[cfg(all(target_os = "macos", feature = "native"))]
+        if let SurfaceBackend::Metal { context, .. } = &mut self.backend {
+            // A soft target for live plus purgeable resources; referenced resources cannot
+            // be purged immediately, so this is not a hard limit on driver allocation.
+            context.set_resource_cache_limit(bytes);
+        }
+        #[cfg(not(all(target_os = "macos", feature = "native")))]
+        let _ = bytes;
+    }
+    pub(crate) fn set_pool_byte_limit(&mut self, bytes: u64) {
+        self.pool_byte_limit = bytes;
+    }
     pub(crate) fn new() -> Self {
         Self {
+            pool_byte_limit: MAX_REUSABLE_SURFACE_POOL_BYTES,
             backend: SurfaceBackend::Raster,
             generation: None,
             generation_id: 0,
@@ -783,6 +820,7 @@ impl SurfaceArena {
             );
         }
         Ok(Self {
+            pool_byte_limit: MAX_REUSABLE_SURFACE_POOL_BYTES,
             backend: SurfaceBackend::Metal {
                 context,
                 texture_cache: CoreFoundationHandle(texture_cache),
@@ -1102,9 +1140,14 @@ impl SurfaceArena {
                     self.evict_scratch_until_fits(slot.estimated_bytes(), max_frame_bytes)?,
                 );
                 let info = working_info(bound_extent)?;
+                let memory = valle_engine::motion::memory::reserve(
+                    valle_engine::motion::memory::MemoryKind::Surface,
+                    slot.estimated_bytes(),
+                )?;
                 let surface = self.create_surface(&info)?;
                 let index = self.entries.len();
                 self.entries.push(SurfaceEntry {
+                    _memory: memory,
                     extent: bound_extent,
                     surface,
                     bytes: slot.estimated_bytes(),
@@ -1225,7 +1268,7 @@ impl SurfaceArena {
     }
 
     fn trim_reusable_pool(&mut self, max_frame_bytes: u64) -> u64 {
-        let max_bytes = max_frame_bytes.min(MAX_REUSABLE_SURFACE_POOL_BYTES);
+        let max_bytes = max_frame_bytes.min(self.pool_byte_limit);
         let mut bytes = self
             .scratch_free
             .iter()
@@ -1442,6 +1485,10 @@ impl<'arena> SurfaceFrame<'arena> {
         self.pool_evictions = self.pool_evictions.saturating_add(evictions);
         self.scratch_allocations = self.scratch_allocations.saturating_add(1);
         Ok(SurfaceEntry {
+            _memory: valle_engine::motion::memory::reserve(
+                valle_engine::motion::memory::MemoryKind::Delivery,
+                bytes,
+            )?,
             extent,
             surface: self.arena.create_surface(info)?,
             bytes,
@@ -1641,6 +1688,10 @@ impl<'arena> SurfaceFrame<'arena> {
                 let info = working_info(*extent)?;
                 allocations = allocations.saturating_add(1);
                 SurfaceEntry {
+                    _memory: valle_engine::motion::memory::reserve(
+                        valle_engine::motion::memory::MemoryKind::Surface,
+                        surface_bytes(*extent)?,
+                    )?,
                     extent: *extent,
                     surface: self.arena.create_surface(&info)?,
                     bytes: surface_bytes(*extent)?,
@@ -1886,6 +1937,8 @@ fn surface_bytes_for_rect(rect: valle_engine::prepare::DeviceRect) -> Result<u64
 
 #[derive(Debug, Error)]
 pub enum SurfaceError {
+    #[error(transparent)]
+    Memory(#[from] valle_engine::motion::memory::MemoryError),
     #[error("render extent does not fit the Skia coordinate domain")]
     InvalidExtent,
     #[error("Skia cannot construct Linear Rec.2020 D65")]

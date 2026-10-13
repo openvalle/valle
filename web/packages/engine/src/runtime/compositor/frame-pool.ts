@@ -1,29 +1,28 @@
+import { sharedProductWorker, type ProductWorkerPort } from "./shared-worker.ts";
+import { BrowserRuntimeBudget, sharedBrowserRuntimeBudget, type RuntimePriority } from "../runtime-budget.ts";
 import {
   PRODUCT_FRAME_WORKER_PROTOCOL_VERSION,
   PRODUCT_FRAME_TEMPLATE_CACHE_SIZE,
   assertProductFrameWorkerResponse,
   type ProductEngineBootstrap,
+  type ProductRuntimeMethod,
+  type ProductRuntimeSnapshot,
   type ProductFrameReadyStage,
   type ProductFrameRequest,
   type ProductFrameRequestStage,
   type ProductFrameWorkerRequest,
 } from "./frame-protocol.ts";
 
-// Keep one warm WASM/font package by default. Cached preparation no longer needs several
-// copies of the default fonts; pool callers can request more workers for heavier timelines.
-const DEFAULT_WORKERS = 1;
 const DEFAULT_READY_FRAMES = 64;
 const DEFAULT_READY_BYTES = 96 * 1024 * 1024;
 // A worker runs its dispatched batch synchronously. Keep that batch short so a seek or clock
 // catch-up does not wait behind eight obsolete frames; the ready cache provides the lookahead.
-const WORKER_PIPELINE_DEPTH = 2;
-const WORKER_REFILL_THRESHOLD = 0;
 // Keep a bounded 1.6-second cushion while the main thread consumes already-admitted frames.
 // Planning and GPU execution use independent threads/resources; serial burst alternation leaves
 // both idle for a material part of every playback second.
 const READY_REFILL_THRESHOLD = 48;
 
-interface WorkerLike {
+interface WorkerLike extends ProductWorkerPort {
   onmessage: ((event: MessageEvent<unknown>) => void) | null;
   onerror: ((event: ErrorEvent) => void) | null;
   postMessage(
@@ -83,7 +82,8 @@ interface ControlRequest {
 
 export interface ProductFramePlannerPoolOptions {
   workerUrl: string;
-  size?: number;
+  runtimeBudget?: BrowserRuntimeBudget;
+  priority?: RuntimePriority;
   maxReadyFrames?: number;
   maxReadyBytes?: number;
   workerFactory?: (url: string | URL, options: WorkerOptions) => WorkerLike;
@@ -106,16 +106,17 @@ export interface ProductFramePlannerStats {
 
 export class ProductFramePlannerPool {
   private readonly workerUrl: string;
-  private readonly size: number;
   private readonly maxReadyFrames: number;
   private readonly maxReadyBytes: number;
-  private readonly workerFactory: NonNullable<
-    ProductFramePlannerPoolOptions["workerFactory"]
-  >;
+  private readonly workerFactory: ProductFramePlannerPoolOptions["workerFactory"];
+  private readonly runtimeBudget: BrowserRuntimeBudget;
+  private readonly priority: RuntimePriority;
   private readonly allocateGeneration: () => bigint;
   private readonly slots: WorkerSlot[] = [];
   private readonly tasks = new Map<string, FrameTask>();
   private readonly controls = new Map<string, ControlRequest>();
+  private readonly calls = new Map<string, { resolve: (value: any) => void; reject: (error: Error) => void }>();
+  initialization: ProductRuntimeSnapshot | null = null;
   private readonly templatePackets = new Map<string, Uint8Array>();
   private queue: FrameTask[] = [];
   private epoch = 1;
@@ -139,32 +140,32 @@ export class ProductFramePlannerPool {
 
   constructor({
     workerUrl,
-    size = DEFAULT_WORKERS,
     maxReadyFrames = DEFAULT_READY_FRAMES,
     maxReadyBytes = DEFAULT_READY_BYTES,
-    workerFactory = (url, options) => new Worker(url, options),
+    workerFactory,
+    runtimeBudget = sharedBrowserRuntimeBudget(),
+    priority = "playback",
     allocateGeneration,
   }: ProductFramePlannerPoolOptions) {
     if (!workerUrl) throw new Error("Product frame worker URL is required");
     this.workerUrl = workerUrl;
-    this.size = Math.max(1, Math.min(8, Math.trunc(size)));
+    // One authoritative compiled runtime; CPU allowance controls shared host dispatch, not copies.
     this.maxReadyFrames = positiveInteger(maxReadyFrames, "maxReadyFrames");
     this.maxReadyBytes = positiveInteger(maxReadyBytes, "maxReadyBytes");
     this.workerFactory = workerFactory;
+    this.runtimeBudget = runtimeBudget;
+    this.priority = priority;
     this.allocateGeneration = allocateGeneration;
+    this.runtimeBudget.registerPreparation(this, () => this.trimPreparedFrames());
   }
 
   async init(bootstrap: ProductEngineBootstrap): Promise<void> {
     this.assertUsable();
     if (this.slots.length > 0) return;
-    if (!bootstrap.expectedRenderId) {
-      throw new Error("Product frame planner requires an expected RenderId");
-    }
-    for (let index = 0; index < this.size; index += 1) {
-      const worker = this.workerFactory(this.workerUrl, {
-        type: "module",
-        name: `valle-product-frame-${index}`,
-      });
+    for (let index = 0; index < 1; index += 1) {
+      const worker = this.workerFactory
+        ? this.workerFactory(this.workerUrl, { type: "module", name: `valle-product-frame-${index}` })
+        : sharedProductWorker(this.workerUrl, bootstrap, this.runtimeBudget, this.priority);
       const slot: WorkerSlot = {
         index,
         worker,
@@ -187,17 +188,35 @@ export class ProductFramePlannerPool {
         this.slots.map((slot) => this.configure(slot, bootstrap)),
       );
       for (const openedRenderId of renderIds) {
-        if (openedRenderId !== bootstrap.expectedRenderId) {
+        if (bootstrap.expectedRenderId && openedRenderId !== bootstrap.expectedRenderId) {
           throw new Error(
             `Product frame worker configured RenderId ${openedRenderId}, expected ${bootstrap.expectedRenderId}`,
           );
         }
       }
-      this.renderId = bootstrap.expectedRenderId;
+      this.renderId = renderIds[0]!;
     } catch (error) {
       this.fail(asError(error));
       throw error;
     }
+  }
+
+  call<T>(method: ProductRuntimeMethod, args: unknown[]): Promise<T> {
+    this.assertUsable();
+    if (this.calls.size >= 32) return Promise.reject(new Error("Product runtime call queue is full"));
+    const slot = this.slots[0], renderId = this.renderId;
+    if (!slot || !renderId) throw new Error("Product runtime is not configured");
+    const id = `call-${++this.messageId}`;
+    return new Promise<T>((resolve, reject) => {
+      this.calls.set(id, { resolve, reject });
+      try {
+        const transfer: Transferable[] = [];
+        const packed = copyRuntimeArguments(args, transfer) as unknown[];
+        slot.worker.postMessage({ protocolVersion: PRODUCT_FRAME_WORKER_PROTOCOL_VERSION,
+          type: "call", id, renderId, method, args: packed }, transfer);
+      }
+      catch (error) { this.calls.delete(id); reject(asError(error)); }
+    });
   }
 
   prefetch(
@@ -242,6 +261,10 @@ export class ProductFramePlannerPool {
     }
   }
 
+  trimPreparedFrames(): void { for (const task of [...this.tasks.values()]) if (!task.demanded) this.cancelTask(task, "Prepared frame evicted under memory pressure"); }
+
+  adoptPreparationMemory(key: string): void { for (const slot of this.slots) slot.worker.releasePreparation?.(key); }
+
   release(key: string): void {
     const task = this.tasks.get(key);
     if (!task) return;
@@ -272,6 +295,7 @@ export class ProductFramePlannerPool {
   close(): void {
     if (this.closed) return;
     this.closed = true;
+    this.runtimeBudget.unregisterPreparation(this);
     for (const task of [...this.tasks.values()])
       this.cancelTask(task, "Product frame planner closed");
     for (const control of this.controls.values()) {
@@ -279,6 +303,9 @@ export class ProductFramePlannerPool {
       control.reject(new Error("Product frame planner closed"));
     }
     this.controls.clear();
+    for (const call of this.calls.values()) call.reject(new Error("Product runtime closed"));
+    this.calls.clear();
+    this.initialization = null;
     for (const slot of this.slots) slot.worker.terminate();
     this.slots.length = 0;
     this.renderId = null;
@@ -357,9 +384,12 @@ export class ProductFramePlannerPool {
   private dispatch(): void {
     if (this.closed || this.failure) return;
     for (const slot of this.slots) {
-      if (slot.tasks.size > WORKER_REFILL_THRESHOLD) continue;
+      // A frame can be waiting for a kernel or final assembly without consuming a CPU slot.
+      // Keep enough bounded work across those stages; the shared budget limits actual compute.
+      const inFlightLimit = Math.min(24, this.runtimeBudget.cpuThreads * 6);
+      if (slot.tasks.size >= inFlightLimit) continue;
       const jobs: Array<{ id: string; request: ProductFrameRequest }> = [];
-      while (slot.tasks.size < WORKER_PIPELINE_DEPTH) {
+      while (slot.tasks.size < inFlightLimit) {
         const candidate = this.queue.find(
           (task) => !task.cancelled && this.tasks.get(task.key) === task,
         );
@@ -426,6 +456,19 @@ export class ProductFramePlannerPool {
       return;
     }
     const message = value;
+    if (message.type === "motionWork") {
+      this.fail(new Error("Motion kernel work must be routed through the shared runtime host"));
+      return;
+    }
+    if (message.type === "callResult") {
+      const call = this.calls.get(message.id);
+      if (!call) return;
+      this.calls.delete(message.id);
+      if (message.renderId !== this.renderId) call.reject(new Error("Product runtime result RenderId drift"));
+      else if (message.error) call.reject(new Error(message.error));
+      else call.resolve(message.result);
+      return;
+    }
     if (message.type === "requestsBatch") {
       for (const entry of message.entries) {
         this.onMessage(slot, {
@@ -456,7 +499,10 @@ export class ProductFramePlannerPool {
       if (message.error) control.reject(new Error(message.error));
       else if (!message.renderId) {
         control.reject(new Error("Product frame worker returned no RenderId"));
-      } else control.resolve(message.renderId);
+      } else {
+        if (message.snapshot) this.initialization = message.snapshot;
+        control.resolve(message.renderId);
+      }
       return;
     }
     if (message.type === "fatal") {
@@ -547,7 +593,7 @@ export class ProductFramePlannerPool {
         );
         return;
       }
-      const planPacket = this.templatePackets.get(templateKey);
+      const planPacket = this.templatePackets.get(templateKey) ?? slot.worker.templatePacket?.(templateKey);
       if (!planPacket) {
         this.fail(
           new Error(
@@ -623,6 +669,7 @@ export class ProductFramePlannerPool {
   }
 
   private removeTask(task: FrameTask): void {
+    this.adoptPreparationMemory(task.key);
     if (this.tasks.get(task.key) === task) this.tasks.delete(task.key);
     this.queue = this.queue.filter((queued) => queued !== task);
     if (task.readyBytes > 0) {
@@ -634,6 +681,8 @@ export class ProductFramePlannerPool {
   private fail(error: Error): void {
     if (this.failure || this.closed) return;
     this.failure = error;
+    for (const call of this.calls.values()) call.reject(error);
+    this.calls.clear();
     this.counters.errors += 1;
     for (const control of this.controls.values()) {
       clearTimeout(control.timer);
@@ -657,6 +706,20 @@ export class ProductFramePlannerPool {
     if (this.failure)
       throw new Error(`Product frame planner failed: ${this.failure.message}`);
   }
+}
+
+/** A typed view can point into an entire WASM heap. Transfer a copy of only its visible bytes,
+ * otherwise structured clone duplicates the whole heap for every small output stripe. */
+export function copyRuntimeArguments(value: unknown, transfer: Transferable[]): unknown {
+  if (ArrayBuffer.isView(value)) {
+    const bytes = new Uint8Array(value.buffer, value.byteOffset, value.byteLength).slice();
+    transfer.push(bytes.buffer);
+    return new (value.constructor as { new(buffer: ArrayBuffer): ArrayBufferView })(bytes.buffer);
+  }
+  if (value instanceof ArrayBuffer) { const copy = value.slice(0); transfer.push(copy); return copy; }
+  if (Array.isArray(value)) return value.map(entry => copyRuntimeArguments(entry, transfer));
+  if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, copyRuntimeArguments(entry, transfer)]));
+  return value;
 }
 
 export function planningKey(

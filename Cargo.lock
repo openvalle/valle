@@ -5166,6 +5166,7 @@ dependencies = [
  "ratex-lexer",
  "ratex-parser",
  "ratex-types",
+ "rayon",
  "serde",
  "serde_json",
  "sha2",
