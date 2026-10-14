@@ -60,17 +60,6 @@ const DOWN_TAPS: [(i32, i32, f64); 24] = [
     (0, 3, 1.0),
     (1, 3, 1.0),
 ];
-const TENT: [(i32, i32, f64); 9] = [
-    (-1, -1, 1.0),
-    (0, -1, 2.0),
-    (1, -1, 1.0),
-    (-1, 0, 2.0),
-    (0, 0, 4.0),
-    (1, 0, 2.0),
-    (-1, 1, 1.0),
-    (0, 1, 2.0),
-    (1, 1, 1.0),
-];
 
 /// The bounded F16 pyramid shared by the CPU reference/WASM and Native Skia GPU executors.
 /// Resource 0 is the extracted bright or alpha image; every pass writes one new resource.
@@ -287,49 +276,66 @@ impl<const CHANNELS: usize> Level<CHANNELS> {
         self.pixels[y * self.width + x]
     }
 
-    fn sample(&self, x: Option<usize>, y: Option<usize>) -> [f32; CHANNELS] {
-        match (x, y) {
-            (Some(x), Some(y)) => self.pixels[y * self.width + x],
-            _ => [0.0; CHANNELS],
-        }
-    }
-
-    fn bilinear(&self, x: LinearAxis, y: LinearAxis) -> [f64; CHANNELS] {
-        let weights = [
-            (x.indices[0], y.indices[0], x.weights[0] * y.weights[0]),
-            (x.indices[1], y.indices[0], x.weights[1] * y.weights[0]),
-            (x.indices[0], y.indices[1], x.weights[0] * y.weights[1]),
-            (x.indices[1], y.indices[1], x.weights[1] * y.weights[1]),
-        ];
-        let mut value = [0.0; CHANNELS];
-        for (sx, sy, weight) in weights {
-            for (dst, src) in value.iter_mut().zip(self.sample(sx, sy)) {
-                *dst += f64::from(src) * weight;
+    /// Separable tent sum; the weights total 16 when every tap lies inside the level.
+    fn tent(&self, x: &TentAxis, y: &TentAxis) -> [f64; CHANNELS] {
+        let mut sum = [0.0; CHANNELS];
+        for &(sy, wy) in y.taps() {
+            let row = &self.pixels[sy * self.width..(sy + 1) * self.width];
+            let mut line = [0.0; CHANNELS];
+            for &(sx, wx) in x.taps() {
+                for (acc, value) in line.iter_mut().zip(row[sx]) {
+                    *acc += wx * f64::from(value);
+                }
+            }
+            for (acc, value) in sum.iter_mut().zip(line) {
+                *acc += wy * value;
             }
         }
-        value
+        sum
     }
 }
 
+/// One axis of the 1-2-1 tent: three taps `offset` apart around `center`, each interpolated
+/// linearly between its two neighbouring pixels. Taps that share a pixel are merged and zero
+/// or outside weights dropped, so each source pixel is read once.
 #[derive(Clone, Copy)]
-struct LinearAxis {
-    indices: [Option<usize>; 2],
-    weights: [f64; 2],
+struct TentAxis {
+    len: usize,
+    taps: [(usize, f64); 6],
 }
 
-impl LinearAxis {
-    fn new(position: f64, extent: usize) -> Self {
-        let lower = position.floor() as i32;
-        let fraction = position - f64::from(lower);
-        Self {
-            indices: [sample_index(lower, extent), sample_index(lower + 1, extent)],
-            weights: [1.0 - fraction, fraction],
+impl TentAxis {
+    fn new(center: f64, offset: f64, extent: usize) -> Self {
+        let mut axis = Self {
+            len: 0,
+            taps: [(0, 0.0); 6],
+        };
+        for (tap, weight) in [(-1.0, 1.0), (0.0, 2.0), (1.0, 1.0)] {
+            let position = center + tap * offset;
+            let lower = position.floor();
+            let fraction = position - lower;
+            for (index, share) in [(lower, 1.0 - fraction), (lower + 1.0, fraction)] {
+                if share != 0.0 && index >= 0.0 && index < extent as f64 {
+                    axis.add(index as usize, weight * share);
+                }
+            }
+        }
+        axis
+    }
+
+    fn add(&mut self, index: usize, weight: f64) {
+        match self.taps[..self.len].iter_mut().find(|tap| tap.0 == index) {
+            Some(tap) => tap.1 += weight,
+            None => {
+                self.taps[self.len] = (index, weight);
+                self.len += 1;
+            }
         }
     }
-}
 
-fn sample_index(position: i32, extent: usize) -> Option<usize> {
-    (position >= 0 && position < extent as i32).then_some(position as usize)
+    fn taps(&self) -> &[(usize, f64)] {
+        &self.taps[..self.len]
+    }
 }
 
 // Pyramid passes write independent rows. Keep each pixel's tap and summation order
@@ -830,10 +836,7 @@ fn blur_9<const CHANNELS: usize>(source: &Level<CHANNELS>, spread: f64) -> Level
     // instead of rounding, so the tent stays centred. Each row/column uses the same taps.
     let axes = |extent| {
         (0..extent)
-            .map(|position| {
-                [-1, 0, 1]
-                    .map(|tap| LinearAxis::new(position as f64 + f64::from(tap) * spread, extent))
-            })
+            .map(|position| TentAxis::new(position as f64, spread, extent))
             .collect::<Vec<_>>()
     };
     let columns = axes(source.width);
@@ -843,14 +846,7 @@ fn blur_9<const CHANNELS: usize>(source: &Level<CHANNELS>, spread: f64) -> Level
         for (row_index, row) in rows.chunks_mut(width).enumerate() {
             let y = start_y + row_index;
             for (x, out) in row.iter_mut().enumerate() {
-                let mut sum = [0.0_f64; CHANNELS];
-                for (dx, dy, weight) in TENT {
-                    let sample =
-                        source.bilinear(columns[x][(dx + 1) as usize], lines[y][(dy + 1) as usize]);
-                    for (acc, value) in sum.iter_mut().zip(sample) {
-                        *acc += weight * value;
-                    }
-                }
+                let sum = source.tent(&columns[x], &lines[y]);
                 *out = sum.map(|channel| quantize_half(channel / 16.0));
             }
         }
@@ -870,8 +866,8 @@ struct UpsampleTiles {
 // tap. Occupied tiles retain the reference summation and F16 rounding order.
 fn upsample_tiles<const CHANNELS: usize>(
     source: &Level<CHANNELS>,
-    columns: &[[LinearAxis; 3]],
-    lines: &[[LinearAxis; 3]],
+    columns: &[TentAxis],
+    lines: &[TentAxis],
 ) -> Option<UpsampleTiles> {
     if source.pixels.len() < 16_384 {
         return None;
@@ -891,10 +887,9 @@ fn upsample_tiles<const CHANNELS: usize>(
             }
         }
     }
-    let span = |axes: &[[LinearAxis; 3]]| {
+    let span = |axes: &[TentAxis]| {
         axes.iter()
-            .flat_map(|taps| taps.iter())
-            .flat_map(|axis| axis.indices.into_iter().flatten())
+            .flat_map(|axis| axis.taps().iter().map(|&(index, _)| index))
             .fold(None, |range: Option<(usize, usize)>, index| {
                 Some(range.map_or((index, index), |(lo, hi)| (lo.min(index), hi.max(index))))
             })
@@ -945,9 +940,7 @@ fn upsample_9<const CHANNELS: usize>(
         (0..extent)
             .map(|position| {
                 let center = (position as f64 + 0.5) * source_extent as f64 / extent as f64 - 0.5;
-                [-1, 0, 1].map(|tap| {
-                    LinearAxis::new(center + f64::from(tap) * 0.5 * spread, source_extent)
-                })
+                TentAxis::new(center, 0.5 * spread, source_extent)
             })
             .collect::<Vec<_>>()
     };
@@ -965,14 +958,7 @@ fn upsample_9<const CHANNELS: usize>(
                 }
                 for (offset, out) in tile.iter_mut().enumerate() {
                     let x = tile_x * UPSAMPLE_TILE_WIDTH + offset;
-                    let mut sum = [0.0_f64; CHANNELS];
-                    for (dx, dy, weight) in TENT {
-                        let sample = source
-                            .bilinear(columns[x][(dx + 1) as usize], lines[y][(dy + 1) as usize]);
-                        for (acc, value) in sum.iter_mut().zip(sample) {
-                            *acc += weight * value;
-                        }
-                    }
+                    let sum = source.tent(&columns[x], &lines[y]);
                     *out = sum.map(|channel| quantize_half(channel / 16.0));
                 }
             }
@@ -1085,26 +1071,19 @@ mod tests {
             }
             let (width, height) = (257, 263);
             let result = upsample_9(&source, width, height, spread);
+            let center = |position: usize, extent: usize, source_extent: usize| {
+                (position as f64 + 0.5) * source_extent as f64 / extent as f64 - 0.5
+            };
             let columns = (0..width)
-                .map(|x| {
-                    [-1, 0, 1].map(|tap| {
-                        LinearAxis::new(
-                            (x as f64 + 0.5) * source.width as f64 / width as f64 - 0.5
-                                + f64::from(tap) * 0.5 * spread,
-                            source.width,
-                        )
-                    })
-                })
+                .map(|x| TentAxis::new(center(x, width, source.width), 0.5 * spread, source.width))
                 .collect::<Vec<_>>();
             let lines = (0..height)
                 .map(|y| {
-                    [-1, 0, 1].map(|tap| {
-                        LinearAxis::new(
-                            (y as f64 + 0.5) * source.height as f64 / height as f64 - 0.5
-                                + f64::from(tap) * 0.5 * spread,
-                            source.height,
-                        )
-                    })
+                    TentAxis::new(
+                        center(y, height, source.height),
+                        0.5 * spread,
+                        source.height,
+                    )
                 })
                 .collect::<Vec<_>>();
             let mask = upsample_tiles(&source, &columns, &lines);
@@ -1113,19 +1092,46 @@ mod tests {
             } else if spread < 1.0 {
                 assert!(mask.as_ref().unwrap().active.iter().any(|active| !active));
             }
+            // Nine bilinear taps, each read separately with zero outside the level.
+            let at = |x: f64, y: f64, channel: usize| {
+                let inside = |p: f64, extent: usize| p >= 0.0 && p < extent as f64;
+                if inside(x, source.width) && inside(y, source.height) {
+                    f64::from(source.pixels[y as usize * source.width + x as usize][channel])
+                } else {
+                    0.0
+                }
+            };
+            let per_tap = |cx: f64, cy: f64, channel: usize| {
+                let mut sum = 0.0;
+                for (dy, wy) in [(-1.0, 1.0), (0.0, 2.0), (1.0, 1.0)] {
+                    for (dx, wx) in [(-1.0, 1.0), (0.0, 2.0), (1.0, 1.0)] {
+                        let (px, py) = (cx + dx * 0.5 * spread, cy + dy * 0.5 * spread);
+                        let (x0, y0) = (px.floor(), py.floor());
+                        let (fx, fy) = (px - x0, py - y0);
+                        sum += wx
+                            * wy
+                            * ((1.0 - fy)
+                                * ((1.0 - fx) * at(x0, y0, channel)
+                                    + fx * at(x0 + 1.0, y0, channel))
+                                + fy * ((1.0 - fx) * at(x0, y0 + 1.0, channel)
+                                    + fx * at(x0 + 1.0, y0 + 1.0, channel)));
+                    }
+                }
+                sum
+            };
             for y in 0..height {
                 for x in 0..width {
-                    let cx = (x as f64 + 0.5) * source.width as f64 / width as f64 - 0.5;
-                    let cy = (y as f64 + 0.5) * source.height as f64 / height as f64 - 0.5;
-                    let mut sum = [0.0; CHANNELS];
-                    for (dx, dy, weight) in TENT {
-                        let sample = source.bilinear(
-                            LinearAxis::new(cx + f64::from(dx) * 0.5 * spread, source.width),
-                            LinearAxis::new(cy + f64::from(dy) * 0.5 * spread, source.height),
+                    let sum = source.tent(&columns[x], &lines[y]);
+                    for (channel, folded) in sum.iter().enumerate() {
+                        let reference = per_tap(
+                            center(x, width, source.width),
+                            center(y, height, source.height),
+                            channel,
                         );
-                        for (acc, value) in sum.iter_mut().zip(sample) {
-                            *acc += weight * value;
-                        }
+                        assert!(
+                            (folded - reference).abs() <= 1e-12 * (1.0 + reference.abs()),
+                            "folded tent ({x},{y}), spread={spread}: {folded} vs {reference}"
+                        );
                     }
                     let expected = sum.map(|value| quantize_half(value / 16.0));
                     assert_eq!(
