@@ -33,3 +33,16 @@ test("identical partial-alpha pixels pass an exact comparison", () => {
   const image=frame([255,96,48,128,50,120,200,33]);
   expect(compareFrames(image,image,{rgb:0,alpha:0}).pass).toBe(true);
 });
+
+test("edge allowance accepts shifted edges but not missing features or recoloured areas", () => {
+  const row = (values: number[]) => frame(values.flatMap(v => [v, v, v, 255]));
+  const edge = { ...rule, edge: 1 };
+  const reference = row([16, 16, 255, 16, 16]);
+  const shifted = row([16, 16, 16, 255, 16]);
+  expect(compareFrames(reference, shifted, rule).failedPixels).toBe(2);
+  const accepted = compareFrames(reference, shifted, edge);
+  expect(accepted.pass).toBe(true); expect(accepted.edgePixels).toBe(2);
+  expect(compareFrames(reference, row([16, 16, 16, 16, 16]), edge).failedPixels).toBe(1);
+  expect(compareFrames(row([100, 100, 100]), row([110, 110, 110]), edge).failedPixels).toBe(3);
+  for (const invalid of [-1, 0.5, 3]) expect(() => compareFrames(reference, shifted, { ...rule, edge: invalid })).toThrow();
+});

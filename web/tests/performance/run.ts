@@ -9,9 +9,11 @@ import { compareFrames, crop, type PixelRule, type Region } from "./pixels.ts";
 import { median, option, ROOT, sha256 } from "../../scripts/motion/common.ts";
 
 const BASE = import.meta.dir;
-type Case = { id: string; source: string; kind?: "timeline"; group: string; assets: Record<string,string>; rule: PixelRule; repeatRule: PixelRule; regions: Region[]; order?: boolean };
+type Case = { id: string; source: string; kind?: "timeline"; group: string; assets: Record<string,string>; rule: PixelRule; repeatRule: PixelRule;
+  backendRules?: Record<string,Partial<PixelRule>>; regions: Region[]; order?: boolean };
 const suite = await Bun.file(path.join(BASE, "suite.json")).json() as {
-  qa: { width: number; height: number; frames: number[]; order: number[]; threadAllowances: number[];resourceCacheBytes:number };
+  qa: { width: number; height: number; frames: number[]; order: number[]; threadAllowances: number[];resourceCacheBytes:number;
+    backendRules: Record<string,Partial<PixelRule>> };
   order: { frames: number; stride: number };
   performance: { width: number; height: number; fps: number; durationS: number; repeats: number; threads: number; bitrate: number; profiles:Record<string,{width:number;height:number}>; regressionTolerance:{wallPercent:number;memoryPercent:number}; target: {width:number;height:number;fps:number;rtfMedian:number} };
   cases: Case[];
@@ -50,6 +52,8 @@ if (args.includes("--qa-4k")) {
 }
 const assetArgs = (c: Case) => Object.entries(c.assets).flatMap(([id, file]) => ["--asset", `${id}=${path.join(ROOT,file)}`]);
 const source = (c: Case) => path.join(BASE, c.source);
+/** Cross-backend tolerance: the case rule, then the suite's backend default, then the case's backend entry. */
+const qaRule = (c: Case, backend: string): PixelRule => ({ ...c.rule, ...suite.qa.backendRules[backend], ...c.backendRules?.[backend] });
 const identity = (c: Case) => ({ sourceSha256: sha256(source(c)), assets: Object.fromEntries(Object.entries(c.assets).map(([k,p]) => [k,sha256(path.join(ROOT,p))])) });
 const profile = option(args,"--profile","1080");
 if(!suite.performance.profiles[profile])throw new Error(`unknown performance profile ${profile}`);
@@ -238,14 +242,16 @@ async function qaCase(c:Case, backend:string, golden:any) {
   const references=await readPng(path.join(goldenDir,`${c.id}.png`));
   const {width,height,frames,order}=suite.qa;
   const saved=golden.cases[c.id]; if(JSON.stringify(saved.identity)!==JSON.stringify(identity(c)))throw new Error(`golden source/resource identity changed: ${c.id}`);
-  if(JSON.stringify(saved.rule)!==JSON.stringify(c.rule)||JSON.stringify(saved.repeatRule)!==JSON.stringify(c.repeatRule))throw new Error(`registered pixel tolerance changed: ${c.id}`);
+  if(JSON.stringify(saved.rule)!==JSON.stringify(c.rule)||JSON.stringify(saved.repeatRule)!==JSON.stringify(c.repeatRule)
+    ||JSON.stringify(saved.backendRules??{})!==JSON.stringify(c.backendRules??{}))throw new Error(`registered pixel tolerance changed: ${c.id}`);
+  const rule=qaRule(c,backend);
   if(sha256(path.join(goldenDir,`${c.id}.png`))!==saved.pngSha256)throw new Error(`golden pixels changed: ${c.id}`);
   const rows:any[]=[]; const cold=new Map<number,ReturnType<typeof crop>>();
   const compare=async(actual:ReturnType<typeof crop>,frame:number,label:string)=>{
     const index=frames.indexOf(frame);if(index<0)throw new Error("unexpected frame key");
     const expected=crop(references,index*width,0,width,height);
-    const result=compareFrames(expected,actual,c.rule);
-    const regions=c.regions.map(r=>{const {diff,...m}=compareFrames(expected,actual,c.rule,r);return m;});
+    const result=compareFrames(expected,actual,rule);
+    const regions=c.regions.map(r=>{const {diff,...m}=compareFrames(expected,actual,rule,r);return m;});
     const old=cold.get(frame);const repeat=old?compareFrames(old,actual,c.repeatRule):null;
     if(!old)cold.set(frame,actual);
     rows.push({frame,label,...result,diff:undefined,repeat:repeat?{...repeat,diff:undefined}:null,regions});
@@ -267,8 +273,9 @@ async function qaCase(c:Case, backend:string, golden:any) {
     for(const entry of r.outputs)if(entry.name)await compare(await readPng(path.join(folder,entry.name)),entry.frame,entry.name.replace(/\.png$/, ""));
   }
   const pass=rows.every(r=>r.pass&&(!r.repeat||r.repeat.pass));
-  await writeFile(path.join(folder,"pixels.json"),JSON.stringify({pass,rule:c.rule,repeatRule:c.repeatRule,rows},null,2));
-  report.qa.push({case:c.id,backend,pass,comparisons:rows.length,maxRgb:Math.max(...rows.map(r=>r.rgbMax)),maxAlpha:Math.max(...rows.map(r=>r.alphaMax)),maximumRepeatRgb:Math.max(...rows.map(r=>r.repeat?.rgbMax??0)),
+  await writeFile(path.join(folder,"pixels.json"),JSON.stringify({pass,rule,repeatRule:c.repeatRule,rows},null,2));
+  report.qa.push({case:c.id,backend,pass,rule,comparisons:rows.length,maxRgb:Math.max(...rows.map(r=>r.rgbMax)),maxAlpha:Math.max(...rows.map(r=>r.alphaMax)),
+    maximumEdgePixels:Math.max(...rows.map(r=>r.edgePixels)),maximumRepeatRgb:Math.max(...rows.map(r=>r.repeat?.rgbMax??0)),
     maximumRepeatAlpha:Math.max(...rows.map(r=>r.repeat?.alphaMax??0)),maximumRepeatWhite:Math.max(...rows.map(r=>r.repeat?.whiteMax??0))});
   if(!pass)report.failures.push({case:c.id,backend,kind:"pixels",evidence:path.relative(output,folder)});
   await saveReport();
@@ -374,7 +381,7 @@ try {
       const folder=path.join(output,"golden",c.id),sheet=path.join(folder,"sheet.png");
       await native(c,"native-cpu",["--frames",suite.qa.frames.join(","),"--storyboard",sheet,"--output-size",`${suite.qa.width}x${suite.qa.height}`,"--threads","1"],folder);
       await cp(sheet,path.join(goldenDir,`${c.id}.png`));
-      golden.cases[c.id]={identity:identity(c),pngSha256:sha256(sheet),rule:c.rule,repeatRule:c.repeatRule,
+      golden.cases[c.id]={identity:identity(c),pngSha256:sha256(sheet),rule:c.rule,repeatRule:c.repeatRule,backendRules:c.backendRules??{},
         generatedAt:new Date().toISOString(),generator:{gitHead:report.identities.gitHead,cli:report.identities.cli,fixedRunner:report.identities.fixedRunner}};
     }
     await writeFile(path.join(goldenDir,"manifest.json"),JSON.stringify(golden,null,2)+"\n");

@@ -244,6 +244,8 @@ interface DirectRasterPlan {
   readonly roots: readonly number[];
   readonly layerBounds: ReadonlyMap<number, RectWire>;
   readonly backdrops: ReadonlyMap<number, DirectRasterBackdrop>;
+  /** A layer blurs or drops a shadow, so the device matrix must be scale/translate. */
+  readonly spatialFilters: boolean;
 }
 
 interface DirectRasterBackdrop {
@@ -1147,7 +1149,8 @@ async function executeProgram(
     kind => programLensFrame(localPlan, kind.input, programMatrix(admitted, localPlan, kind.output, device)),
     kind => arena.geometryRenderer?.canCrop(admitted.draw, kind.roots as number[],
       programMatrix(admitted, localPlan, kind.output, device)) ?? false);
-  if (admitted.directRaster) {
+  if (admitted.directRaster && !(admitted.directRaster.spatialFilters
+    && !isScaleTranslateMatrix(programMatrix(admitted, localPlan, localPlan.output, device)))) {
     return executeDirectRasterProgram(
       CanvasKit,
       builtins,
@@ -1338,9 +1341,10 @@ function directRasterPlan(draw: DrawProgramWire, localPlan: Wire): DirectRasterP
   }
   const memo = new Map<string, boolean>();
   const visiting = new Set<number>();
-  const eligible = (id: number, depth: number, insideLayer: boolean): boolean => {
+  let spatialFilters = false;
+  const eligible = (id: number, depth: number, insideLayer: boolean, rotated: boolean): boolean => {
     if (depth > 128 || visiting.has(id)) return false;
-    const memoKey = `${id}:${Number(insideLayer)}`;
+    const memoKey = `${id}:${Number(insideLayer)}:${Number(rotated)}`;
     const cached = memo.get(memoKey);
     if (cached !== undefined) return cached;
     const node = record(requiredIndex(draw.nodes, id, "direct raster node"), "direct raster node");
@@ -1353,9 +1357,15 @@ function directRasterPlan(draw: DrawProgramWire, localPlan: Wire): DirectRasterP
     const filters = array(group.filters, "direct raster group filters");
     const opensLayer = opacity !== 1 || filters.length !== 0;
     const backdrop = group.backdrop == null ? null : backdrops.get(id);
+    const kinds = filters.map(filter => String(record(filter, "direct raster group filter").kind));
+    const spatial = kinds.some(kind => kind === "blur" || kind === "dropShadow");
+    const transformed = rotated || !isScaleTranslateMatrix(numberArray(group.transform, 9, "direct raster group transform"));
     const supported = group.mask == null
       // saveLayer's image-filter crop truncates the wide glow tail; use scheduled ROI passes.
-      && !filters.some(filter => ["glow", "bloom", "radialBlur", "filmGrain", "lensDistortion", "chromaticAberration"].includes(String(record(filter, "direct raster group filter").kind)))
+      && !kinds.some(kind => ["glow", "bloom", "radialBlur", "filmGrain", "lensDistortion", "chromaticAberration"].includes(kind))
+      // Skia filters a blur or drop-shadow layer under a rotated or skewed CTM in scale/translate
+      // space and resamples the result, softening its content; scheduled passes filter in device space.
+      && !(spatial && transformed)
       // Path clips use the scheduled filled-path coverage contract, not clipPath's AA mask.
       && (group.clip == null || record(group.clip, "direct raster clip").kind !== "path")
       && group.shader == null
@@ -1372,12 +1382,14 @@ function directRasterPlan(draw: DrawProgramWire, localPlan: Wire): DirectRasterP
       memo.set(memoKey, false);
       return false;
     }
+    spatialFilters ||= spatial;
     visiting.add(id);
     const children = array(group.children, "direct raster group children");
     const result = children.every((child) => eligible(
       positiveIdOrZero(child, "direct raster child"),
       depth + 1,
       insideLayer || opensLayer,
+      transformed,
     ));
     visiting.delete(id);
     memo.set(memoKey, result);
@@ -1385,9 +1397,9 @@ function directRasterPlan(draw: DrawProgramWire, localPlan: Wire): DirectRasterP
   };
   const roots = draw.roots.map((root) => positiveIdOrZero(root, "direct raster root"));
   const externalBackdropCount = [...backdrops.values()].filter((backdrop) => backdrop.destination !== null).length;
-  return roots.every((root) => eligible(root, 0, false))
+  return roots.every((root) => eligible(root, 0, false, false))
     && externalBackdropCount === destinationUses.length
-    ? { roots, layerBounds, backdrops }
+    ? { roots, layerBounds, backdrops, spatialFilters }
     : null;
 }
 
@@ -1946,6 +1958,10 @@ function isIdentityMatrix(matrix: readonly number[]): boolean {
   return matrix.length === 9 && matrix.every((value, i) => value === IDENTITY_MATRIX[i]);
 }
 
+function isScaleTranslateMatrix(matrix: readonly number[]): boolean {
+  return matrix[1] === 0 && matrix[3] === 0 && matrix[6] === 0 && matrix[7] === 0 && matrix[8] === 1;
+}
+
 export function drawProgramNode(
   CanvasKit: CanvasKit,
   builtins: CanvasKitBuiltinRuntime,
@@ -2206,6 +2222,13 @@ function drawBatchNode(
       else if (shape.kind === "path") canvas.drawPath(batchPath!, paint);
       else fail("wire_shape", "image instances use texture sampling");
     };
+    // Neighbouring instances often share a color; keep each paint's shader until it changes.
+    const fillColor = [NaN, NaN, NaN, NaN, NaN], strokeColor = [NaN, NaN, NaN, NaN, NaN];
+    const setColor = (paint: Paint, last: number[], red: number, green: number, blue: number, alpha: number, opacity: number) => {
+      if (last[0] === red && last[1] === green && last[2] === blue && last[3] === alpha && last[4] === opacity) return;
+      last[0] = red; last[1] = green; last[2] = blue; last[3] = alpha; last[4] = opacity;
+      setWorkingColor(CanvasKit, paint, red, green, blue, alpha, opacity);
+    };
     for (let index = start; index < end; index += 1) {
       const matrixOffset = index * 48;
       const a = view.getFloat64(matrixOffset, true);
@@ -2241,29 +2264,26 @@ function drawBatchNode(
             blue: view.getFloat32(colorOffset + 8, true), alpha,
           }, atlas!.image);
         } else if (alpha > 0 && (pathStyle === null || pathStyle.fill === true)) {
-          fillPaint.setColor(CanvasKit.Color4f(
-            view.getFloat32(colorOffset, true) / alpha,
-            view.getFloat32(colorOffset + 4, true) / alpha,
-            view.getFloat32(colorOffset + 8, true) / alpha,
-            directOpacity ? alpha * opacity : alpha,
-          ));
+          setColor(fillPaint, fillColor,
+            view.getFloat32(colorOffset, true),
+            view.getFloat32(colorOffset + 4, true),
+            view.getFloat32(colorOffset + 8, true),
+            alpha, directOpacity ? opacity : 1);
           drawShape(fillPaint);
         }
         if (strokeWidth > 0 && strokeAlpha > 0) {
           if (strokeRange !== null) {
-            strokePaint.setColor(CanvasKit.Color4f(
-              strokeView.getFloat32(strokeOffset, true) / strokeAlpha,
-              strokeView.getFloat32(strokeOffset + 4, true) / strokeAlpha,
-              strokeView.getFloat32(strokeOffset + 8, true) / strokeAlpha,
-              strokeAlpha,
-            ));
+            setColor(strokePaint, strokeColor,
+              strokeView.getFloat32(strokeOffset, true),
+              strokeView.getFloat32(strokeOffset + 4, true),
+              strokeView.getFloat32(strokeOffset + 8, true),
+              strokeAlpha, 1);
           } else if (alpha > 0) {
-            strokePaint.setColor(CanvasKit.Color4f(
-              view.getFloat32(colorOffset, true) / alpha,
-              view.getFloat32(colorOffset + 4, true) / alpha,
-              view.getFloat32(colorOffset + 8, true) / alpha,
-              alpha,
-            ));
+            setColor(strokePaint, strokeColor,
+              view.getFloat32(colorOffset, true),
+              view.getFloat32(colorOffset + 4, true),
+              view.getFloat32(colorOffset + 8, true),
+              alpha, 1);
           } else {
             fail("wire_shape", "visible stroke requires a visible color");
           }
@@ -2488,11 +2508,11 @@ function drawShadowNode(CanvasKit: CanvasKit, canvas: Canvas, node: Wire): void 
     finiteNumber(node.sigmaY, "shadow sigmaY"),
   );
   const filter = sigma > 0
-    ? CanvasKit.MaskFilter.MakeBlur(CanvasKit.BlurStyle.Normal, sigma, false)
+    ? CanvasKit.MaskFilter.MakeBlur(CanvasKit.BlurStyle.Normal, sigma, true)
     : null;
   try {
     paint.setAntiAlias(true);
-    paint.setColor(linearColor(CanvasKit, record(node.color, "shadow color") as unknown as LinearColorWire));
+    setLinearColor(CanvasKit, paint, record(node.color, "shadow color") as unknown as LinearColorWire);
     if (filter) paint.setMaskFilter(filter);
     if (node.inset === true) {
       canvas.save();
@@ -2933,7 +2953,12 @@ function renderImport(
   if (backdrop?.kind === "color") {
     canvas.save(); canvas.concat(transform);
     const paint = new CanvasKit.Paint();
-    try { paint.setColor(color4(backdrop.workingLinearRec2020Premul)); canvas.drawRect(CanvasKit.XYWHRect(0, 0, 1, 1), paint); }
+    try {
+      const [red, green, blue, alpha] = numberArray(backdrop.workingLinearRec2020Premul, 4, "color") as [number, number, number, number];
+      if (alpha > 0) setWorkingColor(CanvasKit, paint, red, green, blue, alpha);
+      else setWorkingColor(CanvasKit, paint, 0, 0, 0, 0);
+      canvas.drawRect(CanvasKit.XYWHRect(0, 0, 1, 1), paint);
+    }
     finally { paint.delete(); canvas.restore(); }
   } else if (backdrop?.kind === "blur") {
     const sigma = dynamicScalar(dynamic, backdrop.sigmaDevicePx);
@@ -3413,7 +3438,7 @@ export function makePaint(CanvasKit: CanvasKit, raw: unknown): Paint {
   paint.setAntiAlias(true);
   try {
     if (wire.kind === "solid") {
-      paint.setColor(linearColor(CanvasKit, record(wire.value, "solid color") as unknown as LinearColorWire));
+      setLinearColor(CanvasKit, paint, record(wire.value, "solid color") as unknown as LinearColorWire);
       return paint;
     }
     const value = record(wire.value, `${String(wire.kind)} paint`);
@@ -5300,6 +5325,32 @@ function linearColor(CanvasKit: CanvasKit, color: LinearColorWire): Float32Array
   const alpha = finiteNumber(color.alpha, "color alpha");
   if (alpha <= 0) return CanvasKit.Color4f(0, 0, 0, 0);
   return CanvasKit.Color4f(workingF16(color.red) / alpha, workingF16(color.green) / alpha, workingF16(color.blue) / alpha, alpha);
+}
+
+// Native's `set_working_color` uses the same shader.
+const WORKING_COLOR_SKSL = "uniform float4 color; half4 main(float2 xy) { return half4(color); }";
+const workingColorEffects = new WeakMap<CanvasKit, RuntimeEffect>();
+
+/** Paints a premultiplied working color through a float uniform. Ganesh keeps an in-range paint
+ * color as an 8-bit vertex color, and the output transform's Rec.2020 to sRGB matrix amplifies
+ * that rounding to several levels in saturated or dark channels. `opacity` scales the result. */
+function setWorkingColor(CanvasKit: CanvasKit, paint: Paint, red: number, green: number, blue: number, alpha: number, opacity = 1): void {
+  let effect = workingColorEffects.get(CanvasKit);
+  if (!effect) {
+    effect = CanvasKit.RuntimeEffect.Make(WORKING_COLOR_SKSL) ?? fail("shader_compile", "working color shader failed admission");
+    workingColorEffects.set(CanvasKit, effect);
+  }
+  const shader = effect.makeShader([red, green, blue, alpha]);
+  paint.setColor(CanvasKit.WHITE);
+  paint.setAlphaf(opacity);
+  paint.setShader(shader);
+  shader.delete();
+}
+
+function setLinearColor(CanvasKit: CanvasKit, paint: Paint, color: LinearColorWire): void {
+  const alpha = finiteNumber(color.alpha, "color alpha");
+  if (alpha <= 0) setWorkingColor(CanvasKit, paint, 0, 0, 0, 0);
+  else setWorkingColor(CanvasKit, paint, workingF16(color.red), workingF16(color.green), workingF16(color.blue), alpha);
 }
 
 function color4(value: unknown): Float32Array {

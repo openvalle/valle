@@ -23,7 +23,15 @@
       1,
       4
     ],
-    "resourceCacheBytes": 1
+    "resourceCacheBytes": 1,
+    "backendRules": {
+      "native-metal": {
+        "edge": 1
+      },
+      "web-gpu": {
+        "edge": 1
+      }
+    }
   },
   "order": {
     "frames": 90,
@@ -72,6 +80,14 @@
       "repeatRule": {
         "rgb": 0,
         "alpha": 0
+      },
+      "backendRules": {
+        "native-metal": {
+          "rgb": 6
+        },
+        "web-gpu": {
+          "rgb": 6
+        }
       },
       "regions": [
         {
@@ -123,6 +139,11 @@
         "rgb": 0,
         "alpha": 0
       },
+      "backendRules": {
+        "web-cpu": {
+          "edge": 1
+        }
+      },
       "regions": [
         {
           "name": "center",
@@ -146,6 +167,14 @@
       "repeatRule": {
         "rgb": 0,
         "alpha": 0
+      },
+      "backendRules": {
+        "native-metal": {
+          "rgb": 64
+        },
+        "web-gpu": {
+          "rgb": 64
+        }
       },
       "regions": [
         {
@@ -243,6 +272,11 @@
         "rgb": 0,
         "alpha": 0
       },
+      "backendRules": {
+        "web-cpu": {
+          "edge": 1
+        }
+      },
       "regions": [
         {
           "name": "center",
@@ -270,6 +304,11 @@
         "rgb": 0,
         "alpha": 0
       },
+      "backendRules": {
+        "web-cpu": {
+          "rgb": 3
+        }
+      },
       "regions": [
         {
           "name": "center",
@@ -292,6 +331,14 @@
       "repeatRule": {
         "rgb": 0,
         "alpha": 0
+      },
+      "backendRules": {
+        "native-metal": {
+          "rgb": 80
+        },
+        "web-gpu": {
+          "rgb": 80
+        }
       },
       "regions": [
         {
@@ -355,6 +402,62 @@
     {
       "id": "dynamic-text",
       "source": "fixtures/dynamic-text.motion.tsx",
+      "group": "special",
+      "assets": {},
+      "rule": {
+        "rgb": 2,
+        "alpha": 2
+      },
+      "repeatRule": {
+        "rgb": 0,
+        "alpha": 0
+      },
+      "regions": [
+        {
+          "name": "center",
+          "x": 40,
+          "y": 30,
+          "width": 240,
+          "height": 120
+        }
+      ],
+      "order": true
+    },
+    {
+      "id": "cache-shapes",
+      "source": "fixtures/cache-shapes.motion.tsx",
+      "group": "special",
+      "assets": {},
+      "rule": {
+        "rgb": 2,
+        "alpha": 2
+      },
+      "repeatRule": {
+        "rgb": 0,
+        "alpha": 0
+      },
+      "backendRules": {
+        "native-metal": {
+          "rgb": 10
+        },
+        "web-gpu": {
+          "rgb": 10
+        }
+      },
+      "regions": [
+        {
+          "name": "center",
+          "x": 40,
+          "y": 30,
+          "width": 240,
+          "height": 120
+        }
+      ],
+      "order": true
+    },
+    {
+      "id": "flat-colors",
+      "source": "fixtures/flat-colors.motion.tsx",
       "group": "special",
       "assets": {},
       "rule": {

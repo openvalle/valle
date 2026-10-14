@@ -25,7 +25,15 @@
       1,
       4
     ],
-    "resourceCacheBytes": 1
+    "resourceCacheBytes": 1,
+    "backendRules": {
+      "native-metal": {
+        "edge": 1
+      },
+      "web-gpu": {
+        "edge": 1
+      }
+    }
   },
   "cases": {
     "text-alpha": {
@@ -41,6 +49,14 @@
       "repeatRule": {
         "rgb": 0,
         "alpha": 0
+      },
+      "backendRules": {
+        "native-metal": {
+          "rgb": 6
+        },
+        "web-gpu": {
+          "rgb": 6
+        }
       },
       "generatedAt": "2026-10-10T13:55:09.102Z",
       "generator": {
@@ -63,6 +79,7 @@
         "rgb": 0,
         "alpha": 0
       },
+      "backendRules": {},
       "generatedAt": "2026-10-10T13:55:09.244Z",
       "generator": {
         "gitHead": "2531eb312723830b18a3649ac7bf69f40d65a683",
@@ -86,6 +103,11 @@
         "rgb": 0,
         "alpha": 0
       },
+      "backendRules": {
+        "web-cpu": {
+          "edge": 1
+        }
+      },
       "generatedAt": "2026-10-10T13:55:09.292Z",
       "generator": {
         "gitHead": "2531eb312723830b18a3649ac7bf69f40d65a683",
@@ -106,6 +128,14 @@
       "repeatRule": {
         "rgb": 0,
         "alpha": 0
+      },
+      "backendRules": {
+        "native-metal": {
+          "rgb": 64
+        },
+        "web-gpu": {
+          "rgb": 64
+        }
       },
       "generatedAt": "2026-10-10T13:55:09.348Z",
       "generator": {
@@ -128,6 +158,7 @@
         "rgb": 0,
         "alpha": 0
       },
+      "backendRules": {},
       "generatedAt": "2026-10-10T13:55:09.396Z",
       "generator": {
         "gitHead": "2531eb312723830b18a3649ac7bf69f40d65a683",
@@ -149,6 +180,7 @@
         "rgb": 0,
         "alpha": 0
       },
+      "backendRules": {},
       "generatedAt": "2026-10-14T13:49:05.393Z",
       "generator": {
         "gitHead": "172afcf1635feed2229c7ca1949a2e72f357ea4e",
@@ -170,6 +202,7 @@
         "rgb": 0,
         "alpha": 0
       },
+      "backendRules": {},
       "generatedAt": "2026-10-10T13:55:09.503Z",
       "generator": {
         "gitHead": "2531eb312723830b18a3649ac7bf69f40d65a683",
@@ -190,6 +223,11 @@
       "repeatRule": {
         "rgb": 0,
         "alpha": 0
+      },
+      "backendRules": {
+        "web-cpu": {
+          "edge": 1
+        }
       },
       "generatedAt": "2026-10-10T13:55:09.565Z",
       "generator": {
@@ -214,6 +252,11 @@
         "rgb": 0,
         "alpha": 0
       },
+      "backendRules": {
+        "web-cpu": {
+          "rgb": 3
+        }
+      },
       "generatedAt": "2026-10-10T13:55:10.043Z",
       "generator": {
         "gitHead": "2531eb312723830b18a3649ac7bf69f40d65a683",
@@ -235,6 +278,7 @@
         "rgb": 0,
         "alpha": 0
       },
+      "backendRules": {},
       "generatedAt": "2026-10-14T13:49:05.452Z",
       "generator": {
         "gitHead": "172afcf1635feed2229c7ca1949a2e72f357ea4e",
@@ -256,6 +300,7 @@
         "rgb": 0,
         "alpha": 0
       },
+      "backendRules": {},
       "generatedAt": "2026-10-14T13:49:05.515Z",
       "generator": {
         "gitHead": "172afcf1635feed2229c7ca1949a2e72f357ea4e",
@@ -277,11 +322,92 @@
         "rgb": 0,
         "alpha": 0
       },
+      "backendRules": {},
       "generatedAt": "2026-10-14T11:27:35.545Z",
       "generator": {
         "gitHead": "ab1809cd88791a3405858a03537ffe8b8d9500eb",
         "cli": "1b479abd85b960400f7e199032b474a0c5744d7c57408fbc6b6a8355278af6b9",
         "fixedRunner": null
+      }
+    },
+    "echo-circles": {
+      "identity": {
+        "sourceSha256": "fc9f57e0dd287f51e14ace7c4d1388c3971d7e2eba18a181e45cd3db1a76a337",
+        "assets": {}
+      },
+      "pngSha256": "f9bc97076e9e41efeb27f3e8cf865ae75ba11c84b194d50b4aa1e72a98310aea",
+      "rule": {
+        "rgb": 2,
+        "alpha": 2
+      },
+      "repeatRule": {
+        "rgb": 0,
+        "alpha": 0
+      },
+      "backendRules": {
+        "native-metal": {
+          "rgb": 80
+        },
+        "web-gpu": {
+          "rgb": 80
+        }
+      },
+      "generatedAt": "2026-10-14T14:20:25.186Z",
+      "generator": {
+        "gitHead": "53902e1d3282f64843728a3714f3eecb284ab805",
+        "cli": "4c8fb964da3409118d5696ba18cb9d8629a7aaebeb60aa9e5b919e6937c22a72",
+        "fixedRunner": null
+      }
+    },
+    "cache-shapes": {
+      "identity": {
+        "sourceSha256": "c09de1945ca96dd1018dd022d0c96e4d141611838b0aaa8ceabcd5943a9a3b21",
+        "assets": {}
+      },
+      "pngSha256": "dcf63cae080d62dc12143c19a1ff8f263a5d6a48b9a1db30fb9b8a66a356577f",
+      "rule": {
+        "rgb": 2,
+        "alpha": 2
+      },
+      "repeatRule": {
+        "rgb": 0,
+        "alpha": 0
+      },
+      "backendRules": {
+        "native-metal": {
+          "rgb": 10
+        },
+        "web-gpu": {
+          "rgb": 10
+        }
+      },
+      "generatedAt": "2026-10-14T14:20:25.238Z",
+      "generator": {
+        "gitHead": "53902e1d3282f64843728a3714f3eecb284ab805",
+        "cli": "4c8fb964da3409118d5696ba18cb9d8629a7aaebeb60aa9e5b919e6937c22a72",
+        "fixedRunner": null
+      }
+    },
+    "flat-colors": {
+      "identity": {
+        "sourceSha256": "3fd9c3e82e7be183e8004bbd07e339570bfc06ae9eb30bf1b6f68e5c0e417eee",
+        "assets": {}
+      },
+      "pngSha256": "1dde294af82c8102c43f834fead2a5229fac580635aa817c4c9d843ba97cfd4e",
+      "rule": {
+        "rgb": 2,
+        "alpha": 2
+      },
+      "repeatRule": {
+        "rgb": 0,
+        "alpha": 0
+      },
+      "backendRules": {},
+      "generatedAt": "2026-10-14T15:58:40.134Z",
+      "generator": {
+        "gitHead": "53902e1d3282f64843728a3714f3eecb284ab805",
+        "cli": "4c8fb964da3409118d5696ba18cb9d8629a7aaebeb60aa9e5b919e6937c22a72",
+        "fixedRunner": "90c9d8e02baf091e213d9af729a4b1193372fb16e674161e75117053e2319922"
       }
     }
   }
