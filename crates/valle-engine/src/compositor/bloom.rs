@@ -30,20 +30,35 @@ const MAX_PIXELS: usize = 16_777_216;
 // The pyramid averages across scales; this fixed gain restores the visible
 // near-edge energy of the authored glow before the color peak is capped.
 const GLOW_RESPONSE_GAIN: f64 = 12.0;
-const DOWN_TAPS: [(i32, i32, f64); 13] = [
-    (0, 0, 4.0),
-    (-1, 0, 2.0),
-    (1, 0, 2.0),
-    (0, -1, 2.0),
-    (0, 1, 2.0),
+// The 13-tap downsample pattern (centre 4, edges 2, diagonals and the two-pixel axis taps 1),
+// sampled bilinearly about the output pixel's centre, which lies between source pixels 2x and
+// 2x + 1. Folding the bilinear taps gives these source offsets from (2x, 2y). They are symmetric
+// about (0.5, 0.5), so every level stays centred on its input; the weights sum to 80.
+const DOWN_TAPS: [(i32, i32, f64); 24] = [
+    (0, 0, 9.0),
+    (1, 0, 9.0),
+    (0, 1, 9.0),
+    (1, 1, 9.0),
+    (-1, 0, 4.0),
+    (-1, 1, 4.0),
+    (2, 0, 4.0),
+    (2, 1, 4.0),
+    (0, -1, 4.0),
+    (1, -1, 4.0),
+    (0, 2, 4.0),
+    (1, 2, 4.0),
     (-1, -1, 1.0),
-    (1, -1, 1.0),
-    (-1, 1, 1.0),
-    (1, 1, 1.0),
+    (2, -1, 1.0),
+    (-1, 2, 1.0),
+    (2, 2, 1.0),
     (-2, 0, 1.0),
-    (2, 0, 1.0),
+    (-2, 1, 1.0),
+    (3, 0, 1.0),
+    (3, 1, 1.0),
     (0, -2, 1.0),
-    (0, 2, 1.0),
+    (1, -2, 1.0),
+    (0, 3, 1.0),
+    (1, 3, 1.0),
 ];
 const TENT: [(i32, i32, f64); 9] = [
     (-1, -1, 1.0),
@@ -405,7 +420,7 @@ impl PyramidRegion {
             0.0
         } else {
             (2.0 * (scale - 1.0)
-                + spread.round() * scale
+                + spread.ceil() * scale
                 + (0.5 * spread + 1.0) * (2.0 * scale - 2.0))
                 .ceil()
         };
@@ -795,14 +810,14 @@ fn downsample_13<const CHANNELS: usize>(source: &Level<CHANNELS>) -> Level<CHANN
             let y = start_y + row_index;
             for (x, out) in row.iter_mut().enumerate() {
                 let mut sum = [0.0_f64; CHANNELS];
-                let cx = (x * 2 + 1) as i32;
-                let cy = (y * 2 + 1) as i32;
+                let cx = (x * 2) as i32;
+                let cy = (y * 2) as i32;
                 for (dx, dy, weight) in DOWN_TAPS {
                     for (acc, value) in sum.iter_mut().zip(source.at(cx + dx, cy + dy)) {
                         *acc += weight * f64::from(value);
                     }
                 }
-                *out = sum.map(|channel| quantize_half(channel / 20.0));
+                *out = sum.map(|channel| quantize_half(channel / 80.0));
             }
         }
     });
@@ -811,17 +826,13 @@ fn downsample_13<const CHANNELS: usize>(source: &Level<CHANNELS>) -> Level<CHANN
 
 fn blur_9<const CHANNELS: usize>(source: &Level<CHANNELS>, spread: f64) -> Level<CHANNELS> {
     let mut next = Level::empty(source.width, source.height);
-    // Each row/column uses the same taps. Preserve the original round operation,
-    // but perform it once per axis instead of nine times per output pixel.
+    // Taps sit `spread` pixels from the centre on each axis. Fractional offsets interpolate
+    // instead of rounding, so the tent stays centred. Each row/column uses the same taps.
     let axes = |extent| {
         (0..extent)
             .map(|position| {
-                [-1, 0, 1].map(|tap| {
-                    sample_index(
-                        (position as f64 + f64::from(tap) * spread).round() as i32,
-                        extent,
-                    )
-                })
+                [-1, 0, 1]
+                    .map(|tap| LinearAxis::new(position as f64 + f64::from(tap) * spread, extent))
             })
             .collect::<Vec<_>>()
     };
@@ -834,10 +845,10 @@ fn blur_9<const CHANNELS: usize>(source: &Level<CHANNELS>, spread: f64) -> Level
             for (x, out) in row.iter_mut().enumerate() {
                 let mut sum = [0.0_f64; CHANNELS];
                 for (dx, dy, weight) in TENT {
-                    let sx = columns[x][(dx + 1) as usize];
-                    let sy = lines[y][(dy + 1) as usize];
-                    for (acc, value) in sum.iter_mut().zip(source.sample(sx, sy)) {
-                        *acc += weight * f64::from(value);
+                    let sample =
+                        source.bilinear(columns[x][(dx + 1) as usize], lines[y][(dy + 1) as usize]);
+                    for (acc, value) in sum.iter_mut().zip(sample) {
+                        *acc += weight * value;
                     }
                 }
                 *out = sum.map(|channel| quantize_half(channel / 16.0));
@@ -1200,7 +1211,7 @@ mod tests {
                 .map(|byte| format!("{byte:02x}"))
                 .collect::<String>()
         };
-        // Captured from the original three-channel, per-pixel sampling kernel.
+        // Captured from the centred three-channel kernel (24-texel downsample, interpolated blur taps).
         // Odd dimensions, fractional radii, HDR/negative colors and a clipped
         // input pin the tap order, transparent borders and F16 quantization.
         for (radius, glow_hash, bloom_hash) in [
@@ -1211,28 +1222,28 @@ mod tests {
             ),
             (
                 0.5,
-                "2930313f6761f65dc5ac4cf225abc3cccb1ba5435eeccafeac9d8ba10d27f2b7",
-                "5ddc958698726fa0652b6089800ca2b66f71c6a9ddc23b9eb58b0fcb511579d1",
+                "5617093bcd560673340c109a9d9ce082513f61e0ebbe4ad42cf08ebc33bc3df3",
+                "0fb6ef179176a827061baad752140b0f86901cdf3f787598083501ce9e1ae5de",
             ),
             (
                 2.5,
-                "2930313f6761f65dc5ac4cf225abc3cccb1ba5435eeccafeac9d8ba10d27f2b7",
-                "5ddc958698726fa0652b6089800ca2b66f71c6a9ddc23b9eb58b0fcb511579d1",
+                "5617093bcd560673340c109a9d9ce082513f61e0ebbe4ad42cf08ebc33bc3df3",
+                "0fb6ef179176a827061baad752140b0f86901cdf3f787598083501ce9e1ae5de",
             ),
             (
                 8.25,
-                "37d437708a0541eae5f587386d04ecf6345d6654889f833967d27aa2097c4f2e",
-                "3aca5351bbf0489dfd33817667958d51e866752e00908fa61609c298bd0d50e9",
+                "66dfde0d7ce9eebb52f2a02d50e7708fd8ebf07f2c2dd1b24871f6b079cf872d",
+                "a5077efde5a4ddb90cee57e19875bf0977c874d573c78cfc0b10a029925a83ee",
             ),
             (
                 23.5,
-                "b3c5169209c28e8ef56b01fdfa52b5dbd1d0e2148ee567fd42596f757434da08",
-                "3f272f1560b0e41c919dbfe69c422bfd2fe963ce948464d0e8257dd3440397ab",
+                "7222c5beceb4ffe7c4c1eb605657eee0686816a169c24f8192938546772f18de",
+                "c6aaeab3256e15e447fccfc064e80dfa307ef3254bf6ae573eccc4b8944fa98d",
             ),
             (
                 48.0,
-                "373d63ca7450537d3c1181a7a2168f8f2cf6b8da48fa91ccaf883f2af31cfd83",
-                "9fe4cb564f8907f80fb2352977d64c31d2b1ffa24e1447593c01baf69818c1bd",
+                "096f6503e15f581900fec497e2229f128e25e1ba5ebf3215e69232cc71d5d937",
+                "df06bd2d3baa11a77c53dfb72aefc0265346b35cc9e1649adedb9df703bef084",
             ),
         ] {
             let glow = apply_glow_f16(
@@ -1537,6 +1548,41 @@ mod tests {
     }
 
     #[test]
+    fn glow_of_a_grid_aligned_square_stays_centred() {
+        // A 32px input covers whole texels on every level, so the halo must be symmetric.
+        let (size, out) = (32_u32, 160_u32);
+        let input = encode_output(&vec![[1.0; 4]; (size * size) as usize]);
+        for radius in [12.0, 24.0, 48.0] {
+            let pixels = apply_glow_f16(
+                &input,
+                size,
+                size,
+                out,
+                out,
+                [64, 64],
+                GlowParams {
+                    color: [0.0, 1.0, 1.0, 1.0],
+                    intensity: 1.5,
+                    radius,
+                },
+            )
+            .unwrap();
+            let (mut sum, mut sx, mut sy) = (0.0, 0.0, 0.0);
+            for (index, pixel) in pixels.chunks_exact(8).enumerate() {
+                let alpha = f64::from(half_to_f32(u16::from_le_bytes([pixel[6], pixel[7]])));
+                sum += alpha;
+                sx += alpha * ((index % out as usize) as f64 + 0.5);
+                sy += alpha * ((index / out as usize) as f64 + 0.5);
+            }
+            let centroid = [sx / sum - 80.0, sy / sum - 80.0];
+            assert!(
+                centroid.iter().all(|offset| offset.abs() < 0.01),
+                "radius {radius}: centroid offset {centroid:?}"
+            );
+        }
+    }
+
+    #[test]
     fn glow_tints_the_alpha_halo_and_preserves_the_source() {
         let (width, height) = (128_u32, 64_u32);
         let mut source = vec![0_u8; width as usize * height as usize * 8];
@@ -1630,7 +1676,8 @@ mod tests {
             half_to_f32(u16::from_le_bytes([pixels[at], pixels[at + 1]]))
         };
         assert!(sample(&one, 60) > sample(&half, 60));
-        assert!(sample(&wide, 85) > sample(&one, 85));
+        // Equal-energy halos cross near the source; beyond that the wider one stays brighter.
+        assert!(sample(&wide, 108) > sample(&one, 108));
         let energy = |pixels: &[u8]| -> f64 {
             pixels
                 .chunks_exact(8)
