@@ -67,7 +67,7 @@ pub use artifact::{
     font_family_alias,
 };
 pub use batch::{BatchFieldProgress, resolve_geometry_batch};
-pub use canonical::{CanonicalError, canonical_bytes};
+pub use canonical::{CanonicalError, canonical_bytes, canonical_bytes_with_member};
 pub use composition::{
     COMPOSITION_TEMPLATE, Composition, DEFAULT_DPR, MAX_DURATION_FRAMES, ROOT_FONT_SIZE,
 };
@@ -111,9 +111,9 @@ pub use layout::{
     FrameEvaluationStats, GlassLayoutEnvironment, GlassLayoutField, GlassLayoutForeground,
     GlassLayoutFrame, GlassLayoutMaterial, GlassLayoutMotion, GlassLayoutSurface, LAYOUT_ENGINE_ID,
     LayoutError, LayoutOptions, LayoutTree, MotionReview, MotionReviewIssue, MotionTrajectory,
-    MotionTrajectoryPoint, PreparedScene, Scene3DFrameRequest, Scene3DRequest, StyleCache,
-    Viewport, build_tree, layout_box_at_point, layout_boxes, prepare_owned_scene, prepare_scene,
-    review_motion,
+    MotionTrajectoryPoint, PreparedScene, Scene3DFrameRequest, Scene3DRequest, SealedScene3DFrame,
+    StyleCache, Viewport, build_tree, layout_box_at_point, layout_boxes, prepare_owned_scene,
+    prepare_scene, review_motion,
 };
 pub use lock::{
     ArtifactEnvelope, BuildFingerprint, BundledAsset, BundledFont, BundledSource, EnvelopeDigest,

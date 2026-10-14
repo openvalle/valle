@@ -11,6 +11,14 @@ pub fn sqrt(value: f64) -> f64 {
 }
 
 #[inline]
+pub fn sqrt_f32(value: f32) -> f32 {
+    // IEEE 754 square root is correctly rounded on every target, so the platform instruction
+    // returns libm's `sqrtf` bits for every input except NaN payloads; it is several times
+    // faster on wasm32.
+    value.sqrt()
+}
+
+#[inline]
 pub fn cbrt(value: f64) -> f64 {
     libm::cbrt(value)
 }

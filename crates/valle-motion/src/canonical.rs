@@ -22,11 +22,31 @@ impl ser::Error for CanonicalError {
 /// Object keys are byte-sorted, whitespace is absent, floating-point values use their shortest
 /// round-trip form, and both `-0.0` and `0.0` canonicalize to `0.0`.
 pub fn canonical_bytes<T: Serialize>(value: &T) -> Result<Vec<u8>, CanonicalError> {
+    Ok(canonical_bytes_with_member(value, "")?.0)
+}
+
+/// [`canonical_bytes`] plus the byte range of one top-level object member's value. That range
+/// holds exactly the canonical bytes of the member on its own: nested values serialize
+/// independently of their container, so a digest of the slice equals a digest of the member.
+pub fn canonical_bytes_with_member<T: Serialize>(
+    value: &T,
+    member: &str,
+) -> Result<(Vec<u8>, Option<std::ops::Range<usize>>), CanonicalError> {
     value.serialize(FiniteSerializer)?;
     let value = serde_json::to_value(value).map_err(|e| CanonicalError(e.to_string()))?;
-    let mut out = String::new();
-    write_value(&value, &mut out)?;
-    Ok(out.into_bytes())
+    let mut out = Vec::new();
+    let mut span = None;
+    match &value {
+        serde_json::Value::Object(values) if !member.is_empty() => {
+            write_object(values, &mut out, |key, range| {
+                if key == member {
+                    span = Some(range);
+                }
+            })?
+        }
+        value => write_value(value, &mut out)?,
+    }
+    Ok((out, span))
 }
 
 /// `serde_json` intentionally serializes NaN and infinities as `null`. Run a no-allocation walk
@@ -275,16 +295,16 @@ impl ser::SerializeStructVariant for FiniteCompound {
     }
 }
 
-fn write_value(value: &serde_json::Value, out: &mut String) -> Result<(), CanonicalError> {
+fn write_value(value: &serde_json::Value, out: &mut Vec<u8>) -> Result<(), CanonicalError> {
     use serde_json::Value;
     match value {
-        Value::Null => out.push_str("null"),
-        Value::Bool(value) => out.push_str(if *value { "true" } else { "false" }),
+        Value::Null => out.extend_from_slice(b"null"),
+        Value::Bool(value) => out.extend_from_slice(if *value { b"true" } else { b"false" }),
         Value::Number(value) => {
             if let Some(value) = value.as_i64() {
-                out.push_str(&value.to_string());
+                write_display(out, value);
             } else if let Some(value) = value.as_u64() {
-                out.push_str(&value.to_string());
+                write_display(out, value);
             } else {
                 let value = value
                     .as_f64()
@@ -292,44 +312,66 @@ fn write_value(value: &serde_json::Value, out: &mut String) -> Result<(), Canoni
                 if !value.is_finite() {
                     return Err(CanonicalError("non-finite number".into()));
                 }
-                if value == 0.0 {
-                    out.push_str("0.0");
-                } else {
-                    out.push_str(&format!("{value:?}"));
-                }
+                write_f64(value, out);
             }
         }
-        Value::String(value) => {
-            out.push_str(&serde_json::to_string(value).map_err(|e| CanonicalError(e.to_string()))?)
-        }
+        Value::String(value) => write_string(value, out)?,
         Value::Array(values) => {
-            out.push('[');
+            out.push(b'[');
             for (index, value) in values.iter().enumerate() {
                 if index != 0 {
-                    out.push(',');
+                    out.push(b',');
                 }
                 write_value(value, out)?;
             }
-            out.push(']');
+            out.push(b']');
         }
-        Value::Object(values) => {
-            let mut keys: Vec<&String> = values.keys().collect();
-            keys.sort_unstable_by(|left, right| left.as_bytes().cmp(right.as_bytes()));
-            out.push('{');
-            for (index, key) in keys.iter().enumerate() {
-                if index != 0 {
-                    out.push(',');
-                }
-                out.push_str(
-                    &serde_json::to_string(key).map_err(|e| CanonicalError(e.to_string()))?,
-                );
-                out.push(':');
-                write_value(&values[*key], out)?;
-            }
-            out.push('}');
-        }
+        Value::Object(values) => write_object(values, out, |_, _| {})?,
     }
     Ok(())
+}
+
+fn write_object(
+    values: &serde_json::Map<String, serde_json::Value>,
+    out: &mut Vec<u8>,
+    mut member: impl FnMut(&str, std::ops::Range<usize>),
+) -> Result<(), CanonicalError> {
+    let mut keys: Vec<&String> = values.keys().collect();
+    keys.sort_unstable_by(|left, right| left.as_bytes().cmp(right.as_bytes()));
+    out.push(b'{');
+    for (index, key) in keys.iter().enumerate() {
+        if index != 0 {
+            out.push(b',');
+        }
+        write_string(key, out)?;
+        out.push(b':');
+        let start = out.len();
+        write_value(&values[*key], out)?;
+        member(key, start..out.len());
+    }
+    out.push(b'}');
+    Ok(())
+}
+
+fn write_string(value: &str, out: &mut Vec<u8>) -> Result<(), CanonicalError> {
+    serde_json::to_writer(&mut *out, value).map_err(|e| CanonicalError(e.to_string()))
+}
+
+fn write_display(out: &mut Vec<u8>, value: impl core::fmt::Display) {
+    use std::io::Write as _;
+    write!(out, "{value}").expect("writing to a Vec cannot fail");
+}
+
+/// `{:?}` is the canonical float form: the shortest round-trip digits. Among equally short
+/// candidates it keeps the one Rust's formatter chooses, which other shortest-digit algorithms
+/// may not.
+fn write_f64(value: f64, out: &mut Vec<u8>) {
+    if value == 0.0 {
+        out.extend_from_slice(b"0.0");
+    } else {
+        use std::io::Write as _;
+        write!(out, "{value:?}").expect("writing to a Vec cannot fail");
+    }
 }
 
 #[cfg(test)]
@@ -342,6 +384,21 @@ mod tests {
         assert_eq!(
             String::from_utf8(canonical_bytes(&value).unwrap()).unwrap(),
             r#"{"a":[1.0,0.1],"z":0.0}"#
+        );
+    }
+
+    #[test]
+    fn member_range_holds_the_member_canonical_bytes() {
+        let value = serde_json::json!({"z": {"b": [1.5e-7, 2.0], "a": "q\"x"}, "a": 1, "scene": {"y": -0.0, "x": 1e16}});
+        let (bytes, span) = canonical_bytes_with_member(&value, "scene").unwrap();
+        assert_eq!(bytes, canonical_bytes(&value).unwrap());
+        assert_eq!(
+            &bytes[span.unwrap()],
+            canonical_bytes(&value["scene"]).unwrap().as_slice()
+        );
+        assert_eq!(
+            canonical_bytes_with_member(&value, "absent").unwrap().1,
+            None
         );
     }
 

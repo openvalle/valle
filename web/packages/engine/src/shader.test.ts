@@ -250,10 +250,10 @@ test("frozen shaders align Native/CanvasKit sampling and arbitrary-frame results
                 owned.push(image);
                 objects.set(request.handle, { key: request.key, kind: "dataTexture", image });
               } else if (request.expected.kind === "scene3d") {
-                const payload = Uint8Array.from(request.payload.canonical_request as number[]);
-                const needs = JSON.parse(engine.scene3d_resource_needs_json(payload));
+                const sealed = [request.key.content, request.key.interpretation.topology_digest, request.payload.canonical_request as string] as const;
+                const needs = JSON.parse(engine.scene3d_resource_needs_json(...sealed));
                 for (const digest of needs.models) engine.register_scene3d_model(digest,engine.compiled_resource_bytes(renderId,"model3d-bytes",digest));
-                const pixels = engine.render_scene3d_request(request.key.content,request.key.interpretation.topology_digest,payload);
+                const pixels = engine.render_scene3d_request(...sealed);
                 const width = engine.scene3d_frame_width(request.key.content), height = engine.scene3d_frame_height(request.key.content);
                 const image = ck.MakeImage({...info,width,height,colorType:ck.ColorType.RGBA_F16,alphaType:ck.AlphaType.Premul},pixels,width*8)!;
                 owned.push(image);

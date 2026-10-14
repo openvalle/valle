@@ -186,9 +186,10 @@ test("project environments and models survive frozen-package reopen and arbitrar
             const requests = await decodePackedAbi(engine.resource_requests(ticket),RESOURCE_REQUESTS_ABI) as any[];
             const request = requests.find(r=>r.expected.kind==='scene3d')!;
             expect(request).toBeDefined();
-            const payload = Uint8Array.from(request.payload.canonical_request as number[]);
+            const payload = request.payload.canonical_request as string;
+            const sealed = [request.key.content, request.key.interpretation.topology_digest, payload] as const;
             if (animated) {
-              const resolved = JSON.parse(new TextDecoder().decode(payload));
+              const resolved = JSON.parse(payload);
               const seconds=frame/30;
               expect(resolved.scene.camera).toBeUndefined();
               expect(resolved.scene.meshes[0].transform).toBeUndefined();
@@ -212,30 +213,30 @@ test("project environments and models survive frozen-package reopen and arbitrar
               else if (frame===0) expect(resolved.frame.lights[0].color).toEqual([1,0,0,1]);
             }
             if (kind === "dof") {
-              const resolved = JSON.parse(new TextDecoder().decode(payload));
+              const resolved = JSON.parse(payload);
               expect(resolved.frame.camera.depthOfField.focusDistance).toBeCloseTo(3+frame/60,6);
               expect(resolved.frame.camera.depthOfField.maxBlurRadius).toBe(12);
             }
             if (importedAnimation) {
-              const resolved = JSON.parse(new TextDecoder().decode(payload));
+              const resolved = JSON.parse(payload);
               expect(resolved.scene.meshes[0].animationClip).toBe(0);
               expect(resolved.frame.meshes[0].animationTime).toBeCloseTo(frame/30, 6);
             }
             if (material) {
-              const resolved=JSON.parse(new TextDecoder().decode(payload));
+              const resolved=JSON.parse(payload);
               expect(resolved.scene.meshes[0].material.color).toBeUndefined();
               expect(resolved.frame.meshes[0].material.roughness).toBeCloseTo(0.3+frame/30*0.2,6);
               expect(resolved.frame.meshes[0].materialOverrides[0].id).toBe(0);
               expect(resolved.frame.meshes[0].materialOverrides[0].material.emissiveIntensity).toBeCloseTo(0.1+frame/30*0.2,6);
             }
-            const needs = JSON.parse(engine.scene3d_resource_needs_json(payload));
+            const needs = JSON.parse(engine.scene3d_resource_needs_json(...sealed));
             if (procedural) expect(needs.models).toEqual([]);
             for (const digest of needs.models) engine.register_scene3d_model(digest,engine.compiled_resource_bytes(renderId,"model3d-bytes",digest));
             for (const digest of needs.environments) engine.register_scene3d_environment(digest,engine.compiled_resource_bytes(renderId,"environment-bytes",digest));
             if (needs.textures.length) expect(needs.textures.map((t:any)=>t.role)).toEqual(["color","data"]);
             for (const {digest,role} of needs.textures) engine.register_scene3d_texture(digest,textureBytes,role);
-            expect(JSON.parse(engine.scene3d_resource_needs_json(payload))).toEqual({models:[],textures:[],environments:[]});
-            const pixels = engine.render_scene3d_request(request.key.content,request.key.interpretation.topology_digest,payload);
+            expect(JSON.parse(engine.scene3d_resource_needs_json(...sealed))).toEqual({models:[],textures:[],environments:[]});
+            const pixels = engine.render_scene3d_request(...sealed);
             expect(pixels.length).toBe(64*64*8);
             if (importedAnimation) {
               const view = new DataView(pixels.buffer,pixels.byteOffset,pixels.byteLength);

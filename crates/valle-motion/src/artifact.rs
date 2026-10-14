@@ -2281,14 +2281,19 @@ impl SceneArtifact {
                     .iter()
                     .any(|style| crate::style::property_spec(&style.property).reads_destination)
         };
-        self.nodes.iter().any(reads_node)
+        self.any_node(reads_node)
+    }
+
+    /// Whether any authored node, including every instance template node, passes `test`.
+    pub(crate) fn any_node(&self, mut test: impl FnMut(&SceneNode) -> bool) -> bool {
+        self.nodes.iter().any(&mut test)
             || self.instance_groups.iter().any(|group| {
-                if reads_node(&group.template) {
+                if test(&group.template) {
                     return true;
                 }
                 let mut stack = group.template_children.iter().collect::<Vec<_>>();
                 while let Some(child) = stack.pop() {
-                    if reads_node(&child.node) {
+                    if test(&child.node) {
                         return true;
                     }
                     stack.extend(&child.children);

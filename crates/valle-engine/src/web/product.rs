@@ -917,20 +917,26 @@ impl ProductEngine {
     /// Report the immutable model/texture content that the host still needs for one exact
     /// Scene3D resource request. JavaScript supplies frozen bytes, but it never
     /// interprets the scene topology or decides which controls are models versus textures.
-    pub fn scene3d_resource_needs_json(&self, canonical_request: &[u8]) -> Result<String, JsError> {
-        let frame = parse_scene3d_request(canonical_request)?;
+    pub fn scene3d_resource_needs_json(
+        &self,
+        content_digest: &str,
+        topology_digest: &str,
+        canonical_request: &str,
+    ) -> Result<String, JsError> {
+        let sealed = open_scene3d_request(content_digest, topology_digest, canonical_request)?;
+        let frame = sealed.request();
         let mut models = BTreeMap::<ContentDigest, ()>::new();
         let mut textures =
             BTreeMap::<(ContentDigest, valle_motion::scene3d::TextureRole), ()>::new();
         for mesh in &frame.scene.meshes {
             if let Some(control) = &mesh.model_control {
-                let model = scene3d_binding_digest(&frame, control)?;
+                let model = scene3d_binding_digest(frame, control)?;
                 if !self.scene3d_models.contains_key(&model) {
                     models.insert(model, ());
                 }
             }
             for (control, role) in mesh.texture_controls() {
-                let texture = scene3d_binding_digest(&frame, control)?;
+                let texture = scene3d_binding_digest(frame, control)?;
                 if !self.scene3d_textures.contains_key(&(texture, role)) {
                     textures.insert((texture, role), ());
                 }
@@ -941,7 +947,7 @@ impl ProductEngine {
             .pbr
             .environment
             .as_ref()
-            .map(|e| scene3d_binding_digest(&frame, &e.control))
+            .map(|e| scene3d_binding_digest(frame, &e.control))
             .transpose()?;
         serde_json::to_string(&Scene3dResourceNeeds {
             environments: environment
@@ -1012,7 +1018,7 @@ impl ProductEngine {
         &mut self,
         content_digest: &str,
         topology_digest: &str,
-        canonical_request: &[u8],
+        canonical_request: &str,
     ) -> Result<Vec<u8>, JsError> {
         self.render_scene3d_request_impl(content_digest, topology_digest, canonical_request, false)
     }
@@ -1023,34 +1029,32 @@ impl ProductEngine {
         &mut self,
         content_digest: &str,
         topology_digest: &str,
-        canonical_request: &[u8],
+        canonical_request: &str,
     ) -> Result<Vec<u8>, JsError> {
         self.render_scene3d_request_impl(content_digest, topology_digest, canonical_request, true)
     }
 
-    /// Admission stays in Rust even when the browser fulfills pixels on its GPU.
-    pub fn admit_scene3d_gpu_request(
+    pub fn has_scene3d_frame(&self, content_digest: &str) -> bool {
+        ContentDigest::parse(content_digest)
+            .is_ok_and(|digest| self.scene3d_frames.contains_key(&digest))
+    }
+
+    /// Browser delivery owns the returned pixels. Do not retain additional full color/depth/id
+    /// planes after that job; interactive picking can render and inspect one atomic job on demand.
+    pub fn clear_scene3d_frames(&mut self) {
+        self.scene3d_frames.clear();
+    }
+
+    /// Admission stays in Rust even when the browser fulfills pixels on its GPU: one call admits
+    /// the request, prepares its topology once, and returns the lighting input the GPU shades.
+    pub fn scene3d_gpu_lighting_input(
         &mut self,
         content_digest: &str,
         topology_digest: &str,
-        canonical_request: &[u8],
-    ) -> Result<(), JsError> {
-        let frame = parse_scene3d_request(canonical_request)?;
-        let content = ContentDigest::parse(content_digest)
-            .map_err(|error| js_error("scene3d_content_digest", error))?;
-        let topology = ContentDigest::parse(topology_digest)
-            .map_err(|error| js_error("scene3d_topology_digest", error))?;
-        if frame
-            .content_digest()
-            .map_err(|error| js_error("scene3d_request", error))?
-            != content
-            || frame
-                .topology_digest()
-                .map_err(|error| js_error("scene3d_request", error))?
-                != topology
-        {
-            return Err(js_error("scene3d_request", "GPU request identity mismatch"));
-        }
+        canonical_request: &str,
+    ) -> Result<Vec<f32>, JsError> {
+        let sealed = open_scene3d_request(content_digest, topology_digest, canonical_request)?;
+        let frame = sealed.request();
         frame
             .scene
             .validate()
@@ -1068,50 +1072,25 @@ impl ProductEngine {
             &resources,
         )
         .map_err(|error| js_error("scene3d_gpu_admission", error))?;
-        if !self.scene3d_prepared.contains_key(&key) {
-            let prepared = valle_motion::scene3d::prepare_scene(
-                &frame.scene,
-                frame.width,
-                frame.height,
-                &resources,
-            )
-            .map_err(|error| js_error("scene3d_gpu_admission", error))?;
+        let prepared = if let Some(prepared) = self.scene3d_prepared.get(&key) {
+            Arc::clone(prepared)
+        } else {
+            let prepared = Arc::new(
+                valle_motion::scene3d::prepare_scene(
+                    &frame.scene,
+                    frame.width,
+                    frame.height,
+                    &resources,
+                )
+                .map_err(|error| js_error("scene3d_gpu_admission", error))?,
+            );
             if self.scene3d_prepared.len() >= MAX_SCENE3D_PREPARED_CACHE {
                 self.scene3d_prepared.clear();
             }
-            self.scene3d_prepared.insert(key, Arc::new(prepared));
-        }
-        Ok(())
-    }
-
-    pub fn has_scene3d_frame(&self, content_digest: &str) -> bool {
-        ContentDigest::parse(content_digest)
-            .is_ok_and(|digest| self.scene3d_frames.contains_key(&digest))
-    }
-
-    /// Browser delivery owns the returned pixels. Do not retain additional full color/depth/id
-    /// planes after that job; interactive picking can render and inspect one atomic job on demand.
-    pub fn clear_scene3d_frames(&mut self) {
-        self.scene3d_frames.clear();
-    }
-
-    pub fn scene3d_gpu_lighting_input(
-        &self,
-        canonical_request: &[u8],
-    ) -> Result<Vec<f32>, JsError> {
-        let frame = parse_scene3d_request(canonical_request)?;
-        let resources = valle_motion::scene3d::SceneResources::default();
-        let key = valle_motion::scene3d::prepare_cache_key(
-            &frame.scene,
-            frame.width,
-            frame.height,
-            &resources,
-        )
-        .map_err(|error| js_error("scene3d_gpu_vertices", error))?;
-        let prepared = self.scene3d_prepared.get(&key).ok_or_else(|| {
-            js_error("scene3d_gpu_vertices", "GPU request must be admitted first")
-        })?;
-        valle_motion::scene3d::prepare_gpu_lighting_input(prepared, &frame.frame)
+            self.scene3d_prepared.insert(key, Arc::clone(&prepared));
+            prepared
+        };
+        valle_motion::scene3d::prepare_gpu_lighting_input(&prepared, &frame.frame)
             .map_err(|error| js_error("scene3d_gpu_vertices", error))
     }
 
@@ -1119,36 +1098,16 @@ impl ProductEngine {
         &mut self,
         content_digest: &str,
         topology_digest: &str,
-        canonical_request: &[u8],
+        canonical_request: &str,
         defer_dof: bool,
     ) -> Result<Vec<u8>, JsError> {
-        let content_digest = ContentDigest::parse(content_digest)
-            .map_err(|error| js_error("scene3d_content_digest", error))?;
-        let topology_digest = ContentDigest::parse(topology_digest)
-            .map_err(|error| js_error("scene3d_topology_digest", error))?;
-        let frame = parse_scene3d_request(canonical_request)?;
-        if frame
-            .content_digest()
-            .map_err(|error| js_error("scene3d_request", error))?
-            != content_digest
-        {
-            return Err(JsError::new(
-                "[scene3d_request] content digest does not name the canonical request",
-            ));
-        }
-        if frame
-            .topology_digest()
-            .map_err(|error| js_error("scene3d_request", error))?
-            != topology_digest
-        {
-            return Err(JsError::new(
-                "[scene3d_request] topology digest does not name the request scene",
-            ));
-        }
+        let sealed = open_scene3d_request(content_digest, topology_digest, canonical_request)?;
+        let content_digest = sealed.content_digest();
+        let frame = sealed.request();
 
         let mut resources = valle_motion::scene3d::SceneResources::default();
         if let Some(environment) = &frame.scene.pbr.environment {
-            let digest = scene3d_binding_digest(&frame, &environment.control)?;
+            let digest = scene3d_binding_digest(frame, &environment.control)?;
             let asset = self.scene3d_environments.get(&digest).ok_or_else(|| {
                 JsError::new("[scene3d_environment] frozen environment has not been fulfilled")
             })?;
@@ -1159,7 +1118,7 @@ impl ProductEngine {
 
         for mesh in &frame.scene.meshes {
             if let Some(control) = &mesh.model_control {
-                let model_digest = scene3d_binding_digest(&frame, control)?;
+                let model_digest = scene3d_binding_digest(frame, control)?;
                 let model = self.scene3d_models.get(&model_digest).ok_or_else(|| {
                     JsError::new(&format!(
                         "[scene3d_resource] model {} has not been fulfilled",
@@ -1169,7 +1128,7 @@ impl ProductEngine {
                 resources.models.insert(control.clone(), Arc::clone(model));
             }
             for (control, role) in mesh.texture_controls() {
-                let texture_digest = scene3d_binding_digest(&frame, control)?;
+                let texture_digest = scene3d_binding_digest(frame, control)?;
                 let texture = self
                     .scene3d_textures
                     .get(&(texture_digest, role))
@@ -1844,19 +1803,19 @@ fn js_error(code: &str, error: impl std::fmt::Display) -> JsError {
     JsError::new(&format!("[{code}] {error}"))
 }
 
-fn parse_scene3d_request(
-    canonical_request: &[u8],
-) -> Result<valle_motion::Scene3DFrameRequest, JsError> {
-    let frame: valle_motion::Scene3DFrameRequest = serde_json::from_slice(canonical_request)
-        .map_err(|error| js_error("scene3d_request", error))?;
-    if frame
-        .canonical_bytes()
-        .map_err(|error| js_error("scene3d_request", error))?
-        != canonical_request
-    {
-        return Err(JsError::new("[scene3d_request] payload is not canonical"));
-    }
-    Ok(frame)
+/// Open a request sealed by the authoritative engine. Both digests name the exact text, which
+/// proves it is canonical; it is parsed once and never re-serialized.
+fn open_scene3d_request(
+    content_digest: &str,
+    topology_digest: &str,
+    canonical_request: &str,
+) -> Result<valle_motion::SealedScene3DFrame, JsError> {
+    let content = ContentDigest::parse(content_digest)
+        .map_err(|error| js_error("scene3d_content_digest", error))?;
+    let topology = ContentDigest::parse(topology_digest)
+        .map_err(|error| js_error("scene3d_topology_digest", error))?;
+    valle_motion::SealedScene3DFrame::from_canonical(canonical_request, content, topology)
+        .map_err(|error| js_error("scene3d_request", error))
 }
 
 fn scene3d_binding_digest(

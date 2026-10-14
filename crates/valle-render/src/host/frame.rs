@@ -920,14 +920,14 @@ fn frame_working_bytes(
                 else {
                     continue;
                 };
-                let frame: valle_engine::motion::Scene3DFrameRequest =
-                    serde_json::from_slice(canonical_request).map_err(|error| {
-                        FrameRenderError::Fulfillment {
+                // Only the extent matters here; fulfillment verifies and parses the request.
+                let (width, height) =
+                    valle_engine::motion::Scene3DFrameRequest::canonical_extent(canonical_request)
+                        .map_err(|error| FrameRenderError::Fulfillment {
                             handle: request.handle().get(),
                             reason: error.to_string(),
-                        }
-                    })?;
-                u64::from(frame.width) * u64::from(frame.height) * 128
+                        })?;
+                u64::from(width) * u64::from(height) * 128
             }
             _ => 0,
         };

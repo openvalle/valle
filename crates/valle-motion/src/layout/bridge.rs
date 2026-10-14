@@ -487,24 +487,16 @@ pub struct Scene3DFrameRequest {
 }
 
 impl Scene3DFrameRequest {
-    pub fn new(
-        request: &Scene3DRequest,
-        width: u32,
-        height: u32,
-        resource_bindings: std::collections::BTreeMap<String, crate::ContentDigest>,
-    ) -> Result<Self, crate::CanonicalError> {
-        let value = Self {
-            provider_key: request.provider_key.clone(),
-            width,
-            height,
-            resource_bindings,
-            scene: request.scene.clone(),
-            frame: request.frame.clone(),
-        };
-        // Canonicalization also rejects every non-finite number before this request can become a
-        // resource identity. Scene/frame domain validation already ran during layout.
-        value.canonical_bytes()?;
-        Ok(value)
+    /// The raster extent named by request JSON, skipping the scene and frame state.
+    pub fn canonical_extent(text: &str) -> Result<(u32, u32), crate::CanonicalError> {
+        #[derive(serde::Deserialize)]
+        struct Extent {
+            width: u32,
+            height: u32,
+        }
+        let extent: Extent =
+            serde_json::from_str(text).map_err(|error| crate::CanonicalError(error.to_string()))?;
+        Ok((extent.width, extent.height))
     }
 
     pub fn canonical_bytes(&self) -> Result<Vec<u8>, crate::CanonicalError> {
@@ -525,6 +517,134 @@ impl Scene3DFrameRequest {
         hash.update(b"valle-scene3d-topology\0");
         hash.update(crate::canonical_bytes(&self.scene)?);
         Ok(crate::ContentDigest::from_bytes(hash.finalize().into()))
+    }
+}
+
+/// A frame request sealed with its canonical text and both digests, derived together from one
+/// canonical serialization. The topology digest hashes the request's canonical `scene` member,
+/// which is byte-identical to the scene's own canonical form, so both digests equal
+/// [`Scene3DFrameRequest::content_digest`] and [`Scene3DFrameRequest::topology_digest`].
+/// Preparation, request admission and hosts reuse them instead of re-serializing the scene for
+/// every identity check.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SealedScene3DFrame {
+    request: Scene3DFrameRequest,
+    canonical: std::sync::Arc<str>,
+    content: crate::ContentDigest,
+    topology: crate::ContentDigest,
+}
+
+impl SealedScene3DFrame {
+    /// Canonicalization also rejects every non-finite number before this request can become a
+    /// resource identity. Scene/frame domain validation already ran during layout.
+    pub fn new(request: Scene3DFrameRequest) -> Result<Self, crate::CanonicalError> {
+        let (bytes, scene) = crate::canonical_bytes_with_member(&request, "scene")?;
+        let scene =
+            scene.ok_or_else(|| crate::CanonicalError("Scene3D request has no scene".into()))?;
+        let topology = scene3d_digest(b"valle-scene3d-topology\0", &bytes[scene]);
+        let content = scene3d_digest(b"valle-scene3d-frame-request\0", &bytes);
+        let canonical =
+            String::from_utf8(bytes).map_err(|e| crate::CanonicalError(e.to_string()))?;
+        Ok(Self {
+            request,
+            canonical: canonical.into(),
+            content,
+            topology,
+        })
+    }
+
+    /// Admit canonical text sealed by another instance of this engine. The content digest names
+    /// exactly these bytes, which proves they are the canonical form, and the topology digest names
+    /// exactly their `scene` member. Nothing is re-serialized.
+    pub fn from_canonical(
+        canonical: impl Into<std::sync::Arc<str>>,
+        content: crate::ContentDigest,
+        topology: crate::ContentDigest,
+    ) -> Result<Self, crate::CanonicalError> {
+        let canonical: std::sync::Arc<str> = canonical.into();
+        #[derive(serde::Deserialize)]
+        struct SceneMember<'a> {
+            #[serde(borrow)]
+            scene: &'a serde_json::value::RawValue,
+        }
+        let invalid = |error: serde_json::Error| crate::CanonicalError(error.to_string());
+        if scene3d_digest(b"valle-scene3d-frame-request\0", canonical.as_bytes()) != content {
+            return Err(crate::CanonicalError(
+                "content digest does not name the canonical request".into(),
+            ));
+        }
+        let member: SceneMember<'_> = serde_json::from_str(&canonical).map_err(invalid)?;
+        if scene3d_digest(b"valle-scene3d-topology\0", member.scene.get().as_bytes()) != topology {
+            return Err(crate::CanonicalError(
+                "topology digest does not name the request scene".into(),
+            ));
+        }
+        Ok(Self {
+            request: serde_json::from_str(&canonical).map_err(invalid)?,
+            canonical,
+            content,
+            topology,
+        })
+    }
+
+    pub fn request(&self) -> &Scene3DFrameRequest {
+        &self.request
+    }
+
+    /// Canonical JSON text of the complete request: the shared resource payload hosts fulfill.
+    pub fn canonical(&self) -> &std::sync::Arc<str> {
+        &self.canonical
+    }
+
+    pub fn content_digest(&self) -> crate::ContentDigest {
+        self.content
+    }
+
+    pub fn topology_digest(&self) -> crate::ContentDigest {
+        self.topology
+    }
+}
+
+fn scene3d_digest(domain: &[u8], bytes: &[u8]) -> crate::ContentDigest {
+    use sha2::{Digest, Sha256};
+    let mut hash = Sha256::new();
+    hash.update(domain);
+    hash.update(bytes);
+    crate::ContentDigest::from_bytes(hash.finalize().into())
+}
+
+/// Motion kernels and the authoritative worker run the same engine build. The wire keeps the
+/// sealed text and digests, so the receiver parses the request once and never re-serializes it.
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SealedScene3DFrameWire<'a> {
+    #[serde(borrow)]
+    canonical: std::borrow::Cow<'a, str>,
+    content: crate::ContentDigest,
+    topology: crate::ContentDigest,
+}
+
+impl serde::Serialize for SealedScene3DFrame {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        SealedScene3DFrameWire {
+            canonical: std::borrow::Cow::Borrowed(&self.canonical),
+            content: self.content,
+            topology: self.topology,
+        }
+        .serialize(serializer)
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for SealedScene3DFrame {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let wire = SealedScene3DFrameWire::deserialize(deserializer)?;
+        let request = serde_json::from_str(&wire.canonical).map_err(serde::de::Error::custom)?;
+        Ok(Self {
+            request,
+            canonical: wire.canonical.as_ref().into(),
+            content: wire.content,
+            topology: wire.topology,
+        })
     }
 }
 

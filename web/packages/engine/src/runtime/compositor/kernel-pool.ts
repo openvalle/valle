@@ -54,7 +54,9 @@ export class ProductKernelPool {
   private async execute(slot: Slot, job: Work): Promise<void> {
     const signal = AbortSignal.any([job.signal, this.abort.signal]);
     let memory: Lease | undefined, releaseCpu: (() => void) | undefined;
-    let completed = false;
+    // Once posted, the worker may be inside synchronous WASM for this job. Before that, an abort
+    // leaves an idle worker whose definition, font, layout and geometry caches remain valid.
+    let posted = false, healthy = true;
     const isMotion = "kind" in job.input && job.input.kind === "motion";
     try {
       // ROI coverage, output packet, vector growth and shadow scratch. The Rust kernel keeps
@@ -64,32 +66,28 @@ export class ProductKernelPool {
         : job.input.width * job.input.height * 128 + 8 * 1024 ** 2;
       memory = await this.budget.acquireKernel(workingBytes, signal);
       releaseCpu = await this.budget.acquireCpu(job.priority, signal);
+      signal.throwIfAborted();
       const data = await new Promise<Float32Array | Uint8Array>((resolve, reject) => {
-        let posted = false;
-        const stop = () => { done(); slot.worker.terminate(); reject(signal.reason); };
-        const abort = () => {
-          // A seek retires the result immediately, but a running Motion calculation can drain
-          // with its permit still held. Recreating its font/layout caches on every skipped frame
-          // is more expensive than finishing that bounded calculation. Closing the host always
-          // terminates it; no permit is returned while synchronous WASM could still be running.
-          if (posted && isMotion && !this.abort.signal.aborted) { job.reject(signal.reason); return; }
-          stop();
-        };
-        const done = () => { signal.removeEventListener("abort", abort); this.abort.signal.removeEventListener("abort", stop); slot.worker.onmessage = null; slot.worker.onerror = null; };
+        const stop = () => { done(); healthy = false; reject(this.abort.signal.reason); };
+        // A seek retires the result immediately, but a running calculation drains with its
+        // permit and bytes still held. Recreating definition, font, layout or prepared geometry
+        // caches on every skipped frame costs more than finishing that bounded job. Closing the
+        // host always terminates it; no permit is returned while synchronous WASM could still run.
+        const abort = () => { job.reject(job.signal.reason); };
+        const done = () => { job.signal.removeEventListener("abort", abort); this.abort.signal.removeEventListener("abort", stop); slot.worker.onmessage = null; slot.worker.onerror = null; };
+        const fail = (error: Error) => { healthy = false; reject(error); };
         slot.worker.onmessage = event => {
           done(); const reply = event.data as KernelResult;
-          if (reply.version !== version || reply.id !== job.id || (!(isMotion ? reply.motion instanceof Uint8Array : reply.pixels instanceof Float32Array) && !reply.error)) reject(new Error("invalid kernel response"));
-          else if (reply.error) reject(new Error(reply.error));
+          if (reply.version !== version || reply.id !== job.id || (!(isMotion ? reply.motion instanceof Uint8Array : reply.pixels instanceof Float32Array) && !reply.error)) fail(new Error("invalid kernel response"));
+          else if (reply.error) fail(new Error(reply.error));
           else {
-            if (!Number.isFinite(reply.workMs) || reply.workMs! < 0) { reject(new Error("invalid kernel timing")); return; }
-            completed = true;
+            if (!Number.isFinite(reply.workMs) || reply.workMs! < 0) { fail(new Error("invalid kernel timing")); return; }
             this.budget.recordKernelWork(reply.workMs!); resolve(isMotion ? reply.motion! : reply.pixels!);
           }
         };
-        slot.worker.onerror = event => { done(); reject(event.error ?? new Error(event.message)); };
-        signal.addEventListener("abort", abort, { once: true });
+        slot.worker.onerror = event => { done(); fail(event.error ?? new Error(event.message)); };
+        job.signal.addEventListener("abort", abort, { once: true });
         this.abort.signal.addEventListener("abort", stop, { once: true });
-        if (signal.aborted) { abort(); done(); return; }
         const input = isMotion ? { ...job.input, definitionJson: slot.definitionId === (job.input as MotionKernelInput).definitionId ? "" : (job.input as MotionKernelInput).definitionJson } : job.input;
         if (isMotion) slot.definitionId = (job.input as MotionKernelInput).definitionId;
         posted = true;
@@ -101,9 +99,9 @@ export class ProductKernelPool {
       job.resolve({ data, release: memory.release }); memory = undefined;
     } catch (error) {
       job.reject(error);
-      // An interrupted worker may still be in synchronous WASM; terminate it before returning
-      // its CPU permit. A later job creates a fresh stateless kernel context.
-      if (!(completed && isMotion && job.signal.aborted && !this.closed)) {
+      // Replace only a failed worker, or one that may still be running this job when the host
+      // closes. A later job then creates a fresh stateless kernel context.
+      if (this.closed || (posted && !healthy)) {
         slot.worker.terminate(); slot.retire();
         const index = this.slots.indexOf(slot); if (index >= 0) this.slots.splice(index, 1);
       }

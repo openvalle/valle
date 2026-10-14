@@ -24,7 +24,7 @@ use super::{
 
 pub(crate) struct BuiltMotionProgram {
     pub program: DrawProgram,
-    pub scene3d_frames: Vec<valle_motion::Scene3DFrameRequest>,
+    pub scene3d_frames: Vec<valle_motion::SealedScene3DFrame>,
     pub layout_boxes: BTreeMap<String, [f32; 4]>,
 }
 
@@ -1013,7 +1013,7 @@ pub struct FixtureProgram {
     assets: BTreeMap<String, SemanticAsset>,
     fonts: Vec<SemanticFont>,
     structures: BTreeMap<String, SemanticStructure>,
-    scene3d_frames: BTreeMap<ContentDigest, valle_motion::Scene3DFrameRequest>,
+    scene3d_frames: BTreeMap<ContentDigest, valle_motion::SealedScene3DFrame>,
 }
 
 impl FixtureProgram {
@@ -1060,17 +1060,9 @@ impl FixtureProgram {
         &self.program
     }
 
-    pub fn with_scene3d_frame(
-        mut self,
-        frame: valle_motion::Scene3DFrameRequest,
-    ) -> Result<Self, ProgramPrepareError> {
-        let digest = frame
-            .content_digest()
-            .map_err(|error| ProgramPrepareError::Scene3dFrame {
-                reason: error.to_string(),
-            })?;
-        self.scene3d_frames.insert(digest, frame);
-        Ok(self)
+    pub fn with_scene3d_frame(mut self, frame: valle_motion::SealedScene3DFrame) -> Self {
+        self.scene3d_frames.insert(frame.content_digest(), frame);
+        self
     }
 }
 
@@ -1316,16 +1308,7 @@ pub(crate) fn prepare_program(
         validate_scene(scene, frame)?;
         let key = scene.content_hash.as_hex();
         let path = format!("{}.scene3d[{}]", context.semantic_path, key);
-        let handle = requests.scene3d(
-            scene_digest,
-            ContentDigest::from_bytes(scene.topology_hash.into_bytes()),
-            frame
-                .canonical_bytes()
-                .map_err(|error| ProgramPrepareError::Scene3dFrame {
-                    reason: error.to_string(),
-                })?,
-            &path,
-        )?;
+        let handle = requests.scene3d(frame, &path)?;
         bindings
             .scenes
             .push(ProgramStructureBinding { key, handle });
@@ -1388,18 +1371,10 @@ fn validate_shader(
 
 fn validate_scene(
     requirement: &Scene3dKey,
-    frame: &valle_motion::Scene3DFrameRequest,
+    frame: &valle_motion::SealedScene3DFrame,
 ) -> Result<(), ProgramPrepareError> {
-    let content = frame
-        .content_digest()
-        .map_err(|error| ProgramPrepareError::Scene3dFrame {
-            reason: error.to_string(),
-        })?;
-    let topology = frame
-        .topology_digest()
-        .map_err(|error| ProgramPrepareError::Scene3dFrame {
-            reason: error.to_string(),
-        })?;
+    let content = frame.content_digest();
+    let topology = frame.topology_digest();
     let content_digest = ContentDigest::from_bytes(requirement.content_hash.into_bytes());
     let topology_digest_from_requirement =
         ContentDigest::from_bytes(requirement.topology_hash.into_bytes());
@@ -1418,8 +1393,6 @@ pub enum ProgramPrepareError {
     ProgramBudgetExceeded,
     #[error("missing frame-local Scene3D request {content_hash}")]
     MissingScene3dFrame { content_hash: String },
-    #[error("invalid frame-local Scene3D request: {reason}")]
-    Scene3dFrame { reason: String },
     #[error("Motion DrawProgram producer received a non-Motion visual source")]
     NotMotionSource,
     #[error("Motion props are invalid: {reason}")]

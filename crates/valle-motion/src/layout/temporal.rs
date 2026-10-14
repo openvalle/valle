@@ -5,6 +5,22 @@
 use super::dependencies::SceneDependencies;
 use crate::{MotionValue, NodeId, NodeKind, SceneArtifact, StyleValue};
 
+/// Emission reserves display instances for the batches of every built temporal sample tree and
+/// gives paper grain the remainder. Which sample trees are built, and what they contain, can
+/// therefore change the pixels only when a scene has both batches and paper grain.
+pub(super) fn sample_trees_share_batch_budget(artifact: &SceneArtifact) -> bool {
+    artifact.any_node(|node| {
+        matches!(
+            node.kind,
+            NodeKind::GeometryBatch { .. } | NodeKind::InstanceBatch { .. }
+        )
+    }) && artifact.any_node(|node| {
+        node.styles
+            .iter()
+            .any(|style| style.property == "paper-grain")
+    })
+}
+
 pub(super) fn sample_artifact(
     artifact: &SceneArtifact,
     dependencies: &SceneDependencies,
@@ -15,12 +31,22 @@ pub(super) fn sample_artifact(
         .map(|node| node.node)
         .chain(dependencies.auto_blur_nodes().iter().copied())
         .collect();
+    // Emission paints each Shutter/Echo sample from its scope's own stacking context into a
+    // fresh transparent layer, so a backdrop reader inside that scope sees only the same
+    // sample's earlier pixels, all of which the subset keeps. Glass derives its optics from
+    // other nodes. A smaller sample tree can also enlarge the paper-grain remainder (see
+    // `sample_trees_share_batch_budget`); such scenes keep full trees around backdrop readers.
     if targets.is_empty()
-        || artifact.nodes.iter().enumerate().any(|(at, _)| {
-            dependencies
-                .node(NodeId(at as u32))
-                .is_some_and(|facts| facts.reads_backdrop)
-        })
+        || artifact
+            .nodes
+            .iter()
+            .any(|node| matches!(node.kind, NodeKind::Glass(_) | NodeKind::GlassField(_)))
+        || (sample_trees_share_batch_budget(artifact)
+            && artifact.nodes.iter().enumerate().any(|(at, _)| {
+                dependencies
+                    .node(NodeId(at as u32))
+                    .is_some_and(|facts| facts.reads_backdrop)
+            }))
     {
         return None;
     }

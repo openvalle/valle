@@ -509,7 +509,7 @@ fn prepare_endpoint(
             let used: std::collections::BTreeSet<_> = built
                 .scene3d_frames
                 .iter()
-                .flat_map(|frame| frame.resource_bindings.values().copied())
+                .flat_map(|frame| frame.request().resource_bindings.values().copied())
                 .collect();
             for resource in source
                 .motion_resources()
@@ -544,9 +544,7 @@ fn prepare_endpoint(
             }
             let mut fixture = motion::FixtureProgram::new(built.program);
             for frame in built.scene3d_frames {
-                fixture = fixture
-                    .with_scene3d_frame(frame)
-                    .map_err(|error| PrepareError::at(format!("{path}.motion.scene3d"), error))?;
+                fixture = fixture.with_scene3d_frame(frame);
             }
             for (name, asset) in &assets {
                 fixture = fixture

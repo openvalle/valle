@@ -889,8 +889,9 @@ pub fn prepare_gpu_lighting_input(
     // The integer coverage/depth stage is inexpensive and defines exact pixel ownership.
     // Share it with CPU, leaving lighting, transfer functions and all DOF gathers on the GPU.
     let lights = Lights::new(&prepared.scene, frame, prepared.environment.clone());
+    let shadows = prepared.scene.pbr.shadows;
     let mut frame_meshes = Vec::new();
-    let mut shadow_triangles = Vec::new();
+    let mut casters = shadow::ShadowCasters::default();
     let mut commands = Vec::new();
     let mut bounds = [prepared.width, prepared.height, 0, 0];
     for (mesh_index, (mesh, state)) in prepared.meshes.iter().zip(&frame.meshes).enumerate() {
@@ -905,31 +906,42 @@ pub fn prepare_gpu_lighting_input(
             for primitive in &mesh.model.primitives[source.first_primitive as usize
                 ..(source.first_primitive + source.primitive_count) as usize]
             {
-                let mut cache = vec![None; primitive.vertex_count as usize];
+                let material_index = primitive
+                    .material_index
+                    .map_or(mesh.model.materials.len(), |i| i as usize);
+                // Adjacent triangles share each vertex's transform, shadow caster and camera
+                // projection, all pure functions of the vertex.
+                let mut cache: Vec<Option<(u32, ProjectedVertex)>> =
+                    vec![None; primitive.vertex_count as usize];
                 let start = primitive.first_index as usize;
                 for triangle in mesh.model.indices[start..start + primitive.index_count as usize]
                     .chunks_exact(3)
                 {
-                    let world = std::array::from_fn(|corner| {
+                    let corners: [(u32, ProjectedVertex); 3] = std::array::from_fn(|corner| {
                         let index = triangle[corner];
                         *cache[(index - primitive.first_vertex) as usize].get_or_insert_with(|| {
-                            transformed_vertex(
+                            let world = transformed_vertex(
                                 mesh.model.vertices[index as usize],
                                 instance.transform,
                                 transform,
-                            )
+                            );
+                            let caster = if shadows {
+                                casters.push_vertex(world)
+                            } else {
+                                0
+                            };
+                            (caster, camera.project_vertex(world))
                         })
                     });
-                    if prepared.scene.pbr.shadows {
-                        shadow_triangles.push(shadow::ShadowTriangle {
-                            vertices: world,
+                    if shadows {
+                        casters.push_triangle(
+                            corners.map(|(caster, _)| caster),
                             mesh_index,
-                            material_index: primitive
-                                .material_index
-                                .map_or(mesh.model.materials.len(), |i| i as usize),
-                        });
+                            material_index,
+                        );
                     }
-                    project_world_triangle(world, &camera, |mut screen| {
+                    let projected = corners.map(|(_, vertex)| vertex);
+                    project_view_triangle(projected, &camera, |mut screen| {
                         let signed = orient_f32(screen[0], screen[1], screen[2]);
                         if signed.abs() <= 1.0e-8
                             || (signed > 0.0
@@ -948,8 +960,8 @@ pub fn prepare_gpu_lighting_input(
                             }
                         }
                         let fixed = screen.map(|v| FixedPoint {
-                            x: libm::roundf(v.x * SUBPIXEL_SCALE) as i64,
-                            y: libm::roundf(v.y * SUBPIXEL_SCALE) as i64,
+                            x: round_fixed(v.x * SUBPIXEL_SCALE),
+                            y: round_fixed(v.y * SUBPIXEL_SCALE),
                         });
                         if orient_fixed(fixed[0], fixed[1], fixed[2]) <= 0 {
                             return;
@@ -1030,18 +1042,18 @@ pub fn prepare_gpu_lighting_input(
             (fixed[1].x - fixed[0].x) * SUBPIXEL_STEP,
         ];
         for y in y0..=y1 {
-            let mut edge = row_edge;
-            for x in x0..=x1 {
+            let Some((first, last)) = covered_span(row_edge, step_x, top_left, i64::from(x1 - x0))
+            else {
+                for i in 0..3 {
+                    row_edge[i] += step_y[i];
+                }
+                continue;
+            };
+            let mut edge: [i64; 3] = std::array::from_fn(|i| row_edge[i] + first * step_x[i]);
+            for x in x0 + first as u32..=x0 + last as u32 {
                 let current = edge;
                 for i in 0..3 {
                     edge[i] += step_x[i];
-                }
-                if current
-                    .iter()
-                    .zip(top_left)
-                    .any(|(v, owns)| *v < 0 || (*v == 0 && !owns))
-                {
-                    continue;
                 }
                 let bary = [
                     current[0] as f32 * inv_area,
@@ -1076,8 +1088,8 @@ pub fn prepare_gpu_lighting_input(
     output.extend([left as f32, top as f32, width as f32, height as f32]);
     let covered = pixels.iter().filter(|p| p[4] != 0.0).count();
     output.push(covered as f32);
-    let maps = if prepared.scene.pbr.shadows {
-        shadow::render_maps(&lights.directional, &shadow_triangles, &frame_meshes, 1)
+    let maps = if shadows {
+        shadow::render_maps(&lights.directional, &casters, &frame_meshes, 1)
     } else {
         Vec::new()
     };
@@ -1159,7 +1171,8 @@ fn render_scene_impl(
     let mut transforms = Vec::with_capacity(prepared.meshes.len());
     let mut frame_meshes = Vec::with_capacity(prepared.meshes.len());
     let mut commands = Vec::new();
-    let mut shadow_triangles = Vec::new();
+    let shadows = prepared.scene.pbr.shadows;
+    let mut casters = shadow::ShadowCasters::default();
     for (mesh_index, (mesh, state)) in prepared.meshes.iter().zip(&frame.meshes).enumerate() {
         let transform = MeshTransform::new(state.transform);
         transforms.push(transform);
@@ -1220,25 +1233,34 @@ fn render_scene_impl(
                 for triangle in mesh.model.indices[start..start + primitive.index_count as usize]
                     .chunks_exact(3)
                 {
+                    // Cached vertices also share one shadow caster; deformed triangles own theirs.
+                    let mut caster_corners = None;
                     let mut vertices = if let Some(cache) = &mut transformed_vertices {
                         let mut vertices = [WorldVertex {
                             position: V3::new(0.0, 0.0, 0.0),
                             normal: V3::new(0.0, 0.0, 0.0),
                             uv: V2 { x: 0.0, y: 0.0 },
                         }; 3];
+                        let mut corners = [0; 3];
                         for (corner, &index) in triangle.iter().enumerate() {
                             let entry = &mut cache[(index - primitive.first_vertex) as usize];
-                            vertices[corner] = if let Some(vertex) = *entry {
-                                vertex
+                            (vertices[corner], corners[corner]) = if let Some(cached) = *entry {
+                                cached
                             } else {
                                 let vertex = mesh.model.vertices[index as usize];
                                 validate_deformed_position(vertex, instance.transform)?;
                                 let vertex =
                                     transformed_vertex(vertex, instance.transform, transform);
-                                *entry = Some(vertex);
-                                vertex
+                                let caster = if shadows {
+                                    casters.push_vertex(vertex)
+                                } else {
+                                    0
+                                };
+                                *entry = Some((vertex, caster));
+                                (vertex, caster)
                             };
                         }
+                        caster_corners = Some(corners);
                         vertices
                     } else {
                         let mut local = std::array::from_fn(|corner| {
@@ -1282,17 +1304,18 @@ fn render_scene_impl(
                         }
                         local.map(|vertex| transformed_vertex(vertex, node_transform, transform))
                     };
-                    if (instance.skin.is_none() && instance.transform.mirrored)
-                        != transform.mirrored()
-                    {
+                    let mirrored = (instance.skin.is_none() && instance.transform.mirrored)
+                        != transform.mirrored();
+                    if mirrored {
                         vertices.swap(1, 2);
                     }
-                    if prepared.scene.pbr.shadows {
-                        shadow_triangles.push(shadow::ShadowTriangle {
-                            vertices,
-                            mesh_index,
-                            material_index,
-                        });
+                    if shadows {
+                        let mut corners = caster_corners
+                            .unwrap_or_else(|| vertices.map(|vertex| casters.push_vertex(vertex)));
+                        if mirrored && caster_corners.is_some() {
+                            corners.swap(1, 2);
+                        }
+                        casters.push_triangle(corners, mesh_index, material_index);
                     }
                     project_world_triangle(vertices, &camera, |screen| {
                         let min_x = screen
@@ -1340,13 +1363,9 @@ fn render_scene_impl(
         }
     }
     checkpoint("geometry");
-    if prepared.scene.pbr.shadows {
-        lights.shadow_maps = shadow::render_maps(
-            &lights.directional,
-            &shadow_triangles,
-            &frame_meshes,
-            workers,
-        );
+    if shadows {
+        lights.shadow_maps =
+            shadow::render_maps(&lights.directional, &casters, &frame_meshes, workers);
     }
     checkpoint("shadows");
     let column_count = prepared.width.div_ceil(TILE_COLUMNS) as usize;
@@ -1706,7 +1725,8 @@ impl V3 {
     }
 
     fn normalized(self) -> Self {
-        let length = libm::sqrtf(self.dot(self)).max(1.0e-12);
+        // `max` discards a NaN.
+        let length = valle_draw::math::sqrt_f32(self.dot(self)).max(1.0e-12);
         self * (1.0 / length)
     }
 }
@@ -1910,6 +1930,24 @@ impl Camera {
             inv_z,
             normal: vertex.normal,
             uv: vertex.uv,
+        }
+    }
+
+    /// The view-space vertex and, inside all six frustum planes, its screen projection.
+    fn project_vertex(&self, world: WorldVertex) -> ProjectedVertex {
+        let view = self.view(world);
+        let horizontal = self.aspect / self.focal;
+        let vertical = 1.0 / self.focal;
+        let position = view.position;
+        let inside = position.z >= self.near
+            && position.z <= self.far
+            && position.x + position.z * horizontal >= 0.0
+            && position.z * horizontal - position.x >= 0.0
+            && position.y + position.z * vertical >= 0.0
+            && position.z * vertical - position.y >= 0.0;
+        ProjectedVertex {
+            view,
+            screen: inside.then(|| self.project(view)),
         }
     }
 
@@ -2222,26 +2260,35 @@ impl Lights {
 fn project_world_triangle(
     vertices: [WorldVertex; 3],
     camera: &Camera,
+    emit: impl FnMut([ScreenVertex; 3]),
+) {
+    project_view_triangle(
+        vertices.map(|vertex| camera.project_vertex(vertex)),
+        camera,
+        emit,
+    );
+}
+
+/// A vertex's camera-space position and, when inside every frustum plane, its projection.
+/// Pure in the vertex, so indexed meshes compute it once for all adjacent triangles.
+#[derive(Clone, Copy)]
+struct ProjectedVertex {
+    view: ViewVertex,
+    screen: Option<ScreenVertex>,
+}
+
+fn project_view_triangle(
+    vertices: [ProjectedVertex; 3],
+    camera: &Camera,
     mut emit: impl FnMut([ScreenVertex; 3]),
 ) {
-    let view = [
-        camera.view(vertices[0]),
-        camera.view(vertices[1]),
-        camera.view(vertices[2]),
-    ];
-    let horizontal = camera.aspect / camera.focal;
-    let vertical = 1.0 / camera.focal;
-    if view.iter().all(|vertex| {
-        vertex.position.z >= camera.near
-            && vertex.position.z <= camera.far
-            && vertex.position.x + vertex.position.z * horizontal >= 0.0
-            && vertex.position.z * horizontal - vertex.position.x >= 0.0
-            && vertex.position.y + vertex.position.z * vertical >= 0.0
-            && vertex.position.z * vertical - vertex.position.y >= 0.0
-    }) {
-        emit(view.map(|vertex| camera.project(vertex)));
+    if let [Some(a), Some(b), Some(c)] = vertices.map(|vertex| vertex.screen) {
+        emit([a, b, c]);
         return;
     }
+    let view = vertices.map(|vertex| vertex.view);
+    let horizontal = camera.aspect / camera.focal;
+    let vertical = 1.0 / camera.focal;
     // Clip all six view-frustum planes before fixed-point setup. Besides correct near-edge
     // triangles, this bounds screen coordinates and therefore makes i64 edge products safe under
     // the public position/scale budget.
@@ -2344,8 +2391,8 @@ fn raster_projected_triangle(
         .uses_uv()
         .then(|| pbr::Gradients::new(vertices));
     let fixed = vertices.map(|vertex| FixedPoint {
-        x: libm::roundf(vertex.x * SUBPIXEL_SCALE) as i64,
-        y: libm::roundf(vertex.y * SUBPIXEL_SCALE) as i64,
+        x: round_fixed(vertex.x * SUBPIXEL_SCALE),
+        y: round_fixed(vertex.y * SUBPIXEL_SCALE),
     });
     let area = orient_fixed(fixed[0], fixed[1], fixed[2]);
     if area <= 0 {
@@ -2404,22 +2451,22 @@ fn raster_projected_triangle(
         (fixed[1].x - fixed[0].x) * SUBPIXEL_STEP,
     ];
     for y in min_y..=max_y {
-        let mut edge = row_edge;
+        let Some((first, last)) =
+            covered_span(row_edge, edge_step_x, top_left, i64::from(max_x - min_x))
+        else {
+            row_edge[0] += edge_step_y[0];
+            row_edge[1] += edge_step_y[1];
+            row_edge[2] += edge_step_y[2];
+            continue;
+        };
+        let mut edge: [i64; 3] = std::array::from_fn(|i| row_edge[i] + first * edge_step_x[i]);
         let row = (y - output.start_y) as usize;
-        let mut offset = (min_x - output.start_x) as usize;
-        for x in min_x..=max_x {
+        let mut offset = (min_x - output.start_x) as usize + first as usize;
+        for x in min_x + first as u32..=min_x + last as u32 {
             let current_edge = edge;
             edge[0] += edge_step_x[0];
             edge[1] += edge_step_x[1];
             edge[2] += edge_step_x[2];
-            if current_edge
-                .iter()
-                .zip(top_left)
-                .any(|(value, owns_edge)| *value < 0 || (*value == 0 && !owns_edge))
-            {
-                offset += 1;
-                continue;
-            }
             let bary = [
                 current_edge[0] as f32 * inv_area,
                 current_edge[1] as f32 * inv_area,
@@ -2592,6 +2639,14 @@ struct FixedPoint {
     y: i64,
 }
 
+/// Same integer as `libm::roundf(value) as i64`. libm truncates
+/// value + copysign(0.5 - 0.25 * EPSILON, value); the integer cast already truncates.
+#[inline]
+fn round_fixed(value: f32) -> i64 {
+    const BIAS: f32 = 0.5 - 0.25 * f32::EPSILON;
+    (value + BIAS.copysign(value)) as i64
+}
+
 fn orient_fixed(a: FixedPoint, b: FixedPoint, point: FixedPoint) -> i64 {
     (b.x - a.x) * (point.y - a.y) - (b.y - a.y) * (point.x - a.x)
 }
@@ -2604,6 +2659,35 @@ fn is_top_left(a: FixedPoint, b: FixedPoint) -> bool {
     let dx = b.x - a.x;
     let dy = b.y - a.y;
     dy > 0 || (dy == 0 && dx < 0)
+}
+
+/// The pixel offsets `first..=last` within `0..=width` of one row that every edge covers under the
+/// top-left rule, solved exactly from each edge's integer value at offset 0 and its exact
+/// per-pixel step. Pixel `k` passes edge `i` iff `edge[i] + k * step[i] >= 0`, with a zero value
+/// passing only for an owned edge. Rasterizers visit exactly the pixels a per-pixel test accepts,
+/// in the same order, without testing the rest of the bounding box.
+fn covered_span(
+    edge: [i64; 3],
+    step: [i64; 3],
+    top_left: [bool; 3],
+    width: i64,
+) -> Option<(i64, i64)> {
+    let (mut first, mut last) = (0, width);
+    for axis in 0..3 {
+        // Required growth: k * step >= need.
+        let need = i64::from(!top_left[axis]) - edge[axis];
+        let step = step[axis];
+        if step > 0 {
+            if need > 0 {
+                first = first.max((need + step - 1) / step);
+            }
+        } else if need > 0 {
+            return None;
+        } else if step < 0 {
+            last = last.min(-need / -step);
+        }
+    }
+    (first <= last).then_some((first, last))
 }
 
 fn degrees(value: f32) -> f32 {
@@ -2636,6 +2720,41 @@ fn rotate_z(value: V3, sin: f32, cos: f32) -> V3 {
 
 fn rotate_axis(value: V3, axis: V3, sin: f32, cos: f32) -> V3 {
     value * cos + axis.cross(value) * sin + axis * (axis.dot(value) * (1.0 - cos))
+}
+
+#[cfg(test)]
+mod span_tests {
+    use super::covered_span;
+
+    #[test]
+    fn covered_span_matches_the_per_pixel_fill_rule() {
+        let mut state = 0x2545_f491_4f6c_dd1d_u64;
+        let mut next = |range: i64| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            (state % (2 * range as u64 + 1)) as i64 - range
+        };
+        for _ in 0..200_000 {
+            let edge = [next(4000), next(4000), next(4000)];
+            let scale = [1, 16, 256][(next(1) + 1) as usize];
+            let step = [next(40) * scale, next(40) * scale, next(40) * scale];
+            let top_left = [next(1) > 0, next(1) > 0, next(1) > 0];
+            let width = next(48).abs();
+            let covered: Vec<i64> = (0..=width)
+                .filter(|k| {
+                    (0..3).all(|i| {
+                        let value = edge[i] + k * step[i];
+                        value > 0 || (value == 0 && top_left[i])
+                    })
+                })
+                .collect();
+            let expected = covered
+                .first()
+                .map(|first| (*first, *covered.last().unwrap()));
+            assert_eq!(covered_span(edge, step, top_left, width), expected);
+        }
+    }
 }
 
 #[cfg(test)]

@@ -145,7 +145,7 @@ pub(crate) struct MotionKernel {
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Metadata {
-    scene3d_frames: Vec<valle_motion::Scene3DFrameRequest>,
+    scene3d_frames: Vec<valle_motion::SealedScene3DFrame>,
     layout_boxes: BTreeMap<String, [f32; 4]>,
 }
 

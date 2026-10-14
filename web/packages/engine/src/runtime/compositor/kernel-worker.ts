@@ -1,6 +1,6 @@
 import { PRODUCT_FRAME_WORKER_PROTOCOL_VERSION as version, type ProductEngineWire, type ProductWasmModule } from "./frame-protocol.ts";
 
-export interface Scene3dKernelInput { content: string; topology: string; canonical: Uint8Array; width: number; height: number; }
+export interface Scene3dKernelInput { content: string; topology: string; canonical: string; width: number; height: number; }
 export interface MotionKernelInput { kind: "motion"; definitionId: string; definitionJson: string; inputJson: string; compact: boolean; width: number; height: number; }
 export type KernelInput = Scene3dKernelInput | MotionKernelInput;
 export interface KernelMessage { version: number; id: number; wasmModuleUrl: string; wasmUrl: string; input: KernelInput; }
@@ -21,9 +21,9 @@ export function installKernelWorker(): void {
           || typeof input.inputJson !== "string" || typeof input.compact !== "boolean") throw new Error("invalid Motion kernel message");
       } else {
         const input = m.input as Scene3dKernelInput;
-        if (!(input.canonical instanceof Uint8Array) || !/^sha256:[0-9a-f]{64}$/.test(input.content)
+        if (typeof input.canonical !== "string" || !/^sha256:[0-9a-f]{64}$/.test(input.content)
           || !/^sha256:[0-9a-f]{64}$/.test(input.topology)) throw new Error("invalid Scene3D kernel message");
-        const descriptor = JSON.parse(new TextDecoder().decode(input.canonical));
+        const descriptor = JSON.parse(input.canonical);
         if (descriptor.width !== input.width || descriptor.height !== input.height) throw new Error("kernel extent does not match the admitted request");
       }
       const key = JSON.stringify([m.wasmModuleUrl, m.wasmUrl]);
@@ -39,8 +39,7 @@ export function installKernelWorker(): void {
         scope.postMessage({ version, id: m.id, motion: bytes, workMs: performance.now() - started }, [bytes.buffer as ArrayBuffer]);
       } else {
         const input = m.input as Scene3dKernelInput;
-        engine.admit_scene3d_gpu_request!(input.content, input.topology, input.canonical);
-        const pixels = engine.scene3d_gpu_lighting_input!(input.canonical);
+        const pixels = engine.scene3d_gpu_lighting_input!(input.content, input.topology, input.canonical);
         scope.postMessage({ version, id: m.id, pixels, workMs: performance.now() - started }, [pixels.buffer as ArrayBuffer]);
       }
     } catch (error) { scope.postMessage({ version, id: m.id, error: String(error) }); }

@@ -179,6 +179,37 @@ fn shutter_admission_rejects_invalid_samples_and_angle() {
 }
 
 #[test]
+fn shutter_prunes_unrelated_layout_beside_backdrop_readers_and_preserves_pixels() {
+    let background = (0..400).map(|i| format!(r##"<View key="static-{i}" className="absolute" style={{{{left:{},top:{},width:6,height:6,backgroundColor:"#456",mixBlendMode:"{}"}}}}/>"##,i%40*16,i/40*16,if i%2==0 {"multiply"} else {"normal"})).collect::<String>();
+    let source = format!(
+        r##"export const composition={{width:640,height:360,fps:30,duration:2}};
+        export default function SceneMain(ctx) {{return <Scene style={{{{width:640,height:360,backgroundColor:"#203040"}}}}>{background}
+        <Shutter key="shutter" samples={{8}} angle={{180}}><View key="moving" style={{{{position:"absolute",left:ctx.seconds*100,top:80,width:24,height:24,backgroundColor:"white",mixBlendMode:"screen"}}}}/></Shutter></Scene>}}"##
+    );
+    let artifact = compile_motion(&source).unwrap().artifact;
+    let ctx = motion_context_at_frame(20, 60, FrameRate::new(30, 1).unwrap()).unwrap();
+    let props = resolve_props(&artifact.controls, &Default::default()).unwrap();
+    let fonts = Fonts::default();
+    let opts = LayoutOptions {
+        viewport: Viewport::new((640, 360)),
+        fonts: &fonts,
+        styles: None,
+    };
+    let (_, timing) =
+        build_tree_profiled(&prepare_scene(&artifact).unwrap(), &ctx, &props, &opts).unwrap();
+    assert_eq!(timing.temporal_layout_nodes, 3);
+    // The redundant position declaration conservatively disables pruning without changing CSS.
+    let complete = source.replace(
+        "className=\"absolute\" style={{",
+        "className=\"absolute\" style={{position:\"absolute\",",
+    );
+    assert_eq!(
+        program(&source, 20).packed_bytes().unwrap(),
+        program(&complete, 20).packed_bytes().unwrap()
+    );
+}
+
+#[test]
 fn shutter_prunes_unrelated_absolute_layout_and_preserves_pixels_and_bounds_readers() {
     let background = (0..1600).map(|i| format!(r##"<View key="static-{i}" className="absolute" style={{{{left:{},top:{},width:4,height:4,backgroundColor:"#456",opacity:0.5+ctx.progress*0.5}}}}/>"##,i%160*4,i/160*4)).collect::<String>();
     let source = format!(

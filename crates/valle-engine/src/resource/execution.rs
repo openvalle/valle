@@ -416,11 +416,14 @@ pub enum ResourceSample {
 
 /// Pure, bounded fulfillment data that is part of a request identity but never enters a render
 /// plan. Scene3D uses it to carry the complete random-access scene/frame request to Native and Web
-/// hosts without exposing Motion semantics to the mechanical executor.
+/// hosts without exposing Motion semantics to the mechanical executor. The request is its
+/// canonical JSON text, shared rather than copied by every request set that names it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
 pub enum ResourcePayload {
-    Scene3dFrame { canonical_request: Vec<u8> },
+    Scene3dFrame {
+        canonical_request: std::sync::Arc<str>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -804,11 +807,11 @@ mod tests {
     #[test]
     fn scene3d_payload_uses_the_outer_request_set_format() {
         let value = serde_json::to_value(ResourcePayload::Scene3dFrame {
-            canonical_request: vec![1, 2, 3],
+            canonical_request: r#"{"width":1}"#.into(),
         })
         .unwrap();
         assert_eq!(value["kind"], "scene3dFrame");
-        assert_eq!(value["canonical_request"], serde_json::json!([1, 2, 3]));
+        assert_eq!(value["canonical_request"], r#"{"width":1}"#);
         assert!(value.get("contract").is_none());
     }
     #[test]

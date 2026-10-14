@@ -338,18 +338,15 @@ impl RequestAllocator {
 
     pub(crate) fn scene3d(
         &mut self,
-        content: ContentDigest,
-        topology_digest: ContentDigest,
-        canonical_request: Vec<u8>,
+        frame: &valle_motion::SealedScene3DFrame,
         path: &str,
     ) -> Result<ExternalHandleId, RequestError> {
+        let content = frame.content_digest();
         if !self.scene3d_frames.contains(&content) {
-            let frame: valle_motion::Scene3DFrameRequest =
-                serde_json::from_slice(&canonical_request)
-                    .map_err(|_| RequestError::CanonicalIdentity)?;
+            let request = frame.request();
             let pixels = self
                 .scene3d_pixels
-                .saturating_add(u64::from(frame.width) * u64::from(frame.height));
+                .saturating_add(u64::from(request.width) * u64::from(request.height));
             if pixels > valle_motion::scene3d::MAX_TOTAL_FRAME_PIXELS {
                 return Err(RequestError::Scene3dBudget {
                     path: path.into(),
@@ -362,10 +359,17 @@ impl RequestAllocator {
             self.scene3d_frames.insert(content);
         }
         self.allocate_with_payload(
-            ResourceKey::new(content, ResourceInterpretation::Scene3d { topology_digest }),
+            ResourceKey::new(
+                content,
+                ResourceInterpretation::Scene3d {
+                    topology_digest: frame.topology_digest(),
+                },
+            ),
             ResourceSample::Static,
             ExternalResourceDesc::Scene3d,
-            Some(ResourcePayload::Scene3dFrame { canonical_request }),
+            Some(ResourcePayload::Scene3dFrame {
+                canonical_request: std::sync::Arc::clone(frame.canonical()),
+            }),
             path,
         )
     }
@@ -493,53 +497,42 @@ mod tests {
     #[test]
     fn scene3d_frame_budgets_accumulate_distinct_requests_and_deduplicate_assets() {
         use valle_motion::scene3d::*;
-        let frame = |provider: &str| valle_motion::Scene3DFrameRequest {
-            provider_key: provider.into(),
-            width: 3840,
-            height: 2160,
-            resource_bindings: Default::default(),
-            scene: Scene3DSpec {
-                meshes: vec![],
-                lights: vec![],
-                anchors: vec![],
-                pbr: Default::default(),
-            },
-            frame: Frame3DState {
-                exposure: 1.0,
-                environment_intensity: 1.0,
-                environment_rotation_degrees: 0.0,
-                camera: CameraFrameState {
-                    position: Vec3([0.0, 0.0, 5.0]),
-                    target: Vec3([0.0, 0.0, 0.0]),
-                    fov_y_degrees: 45.0,
-                    near: 0.1,
-                    far: 100.0,
-                    depth_of_field: None,
+        let frame = |provider: &str| {
+            valle_motion::SealedScene3DFrame::new(valle_motion::Scene3DFrameRequest {
+                provider_key: provider.into(),
+                width: 3840,
+                height: 2160,
+                resource_bindings: Default::default(),
+                scene: Scene3DSpec {
+                    meshes: vec![],
+                    lights: vec![],
+                    anchors: vec![],
+                    pbr: Default::default(),
                 },
-                meshes: vec![],
-                lights: vec![],
-            },
+                frame: Frame3DState {
+                    exposure: 1.0,
+                    environment_intensity: 1.0,
+                    environment_rotation_degrees: 0.0,
+                    camera: CameraFrameState {
+                        position: Vec3([0.0, 0.0, 5.0]),
+                        target: Vec3([0.0, 0.0, 0.0]),
+                        fov_y_degrees: 45.0,
+                        near: 0.1,
+                        far: 100.0,
+                        depth_of_field: None,
+                    },
+                    meshes: vec![],
+                    lights: vec![],
+                },
+            })
+            .unwrap()
         };
         let mut allocator = RequestAllocator::default();
         for key in ["a", "a", "b"] {
-            let frame = frame(key);
-            allocator
-                .scene3d(
-                    frame.content_digest().unwrap(),
-                    frame.topology_digest().unwrap(),
-                    frame.canonical_bytes().unwrap(),
-                    key,
-                )
-                .unwrap();
+            allocator.scene3d(&frame(key), key).unwrap();
         }
-        let frame = frame("c");
         assert!(matches!(
-            allocator.scene3d(
-                frame.content_digest().unwrap(),
-                frame.topology_digest().unwrap(),
-                frame.canonical_bytes().unwrap(),
-                "c"
-            ),
+            allocator.scene3d(&frame("c"), "c"),
             Err(RequestError::Scene3dBudget {
                 resource: "frame pixels (20 bytes per pixel)",
                 ..

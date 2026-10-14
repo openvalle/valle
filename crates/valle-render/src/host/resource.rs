@@ -9,7 +9,7 @@ use skia_safe::{Data, images};
 use thiserror::Error;
 use valle_engine::{
     motion::{
-        Scene3DFrameRequest,
+        Scene3DFrameRequest, SealedScene3DFrame,
         scene3d::{
             AdmittedModel, MaterialImage, PreparedScene, ScenePrepareCacheKey, SceneResources,
             TextureRole, admit_glb, prepare_cache_key, prepare_scene, render_scene,
@@ -525,41 +525,26 @@ impl NativeResourceProvider {
         let ResourcePayload::Scene3dFrame { canonical_request } = request
             .payload()
             .ok_or(NativeResourceError::MissingScenePayload)?;
-        let frame: Scene3DFrameRequest =
-            serde_json::from_slice(canonical_request).map_err(|error| {
-                NativeResourceError::SceneRequest {
-                    reason: error.to_string(),
-                }
-            })?;
-        if frame.canonical_bytes().map_err(scene_request_error)? != *canonical_request {
-            return Err(NativeResourceError::SceneRequest {
-                reason: "payload is not canonical".into(),
-            });
-        }
-        let content_digest = frame.content_digest().map_err(scene_request_error)?;
-        if content_digest != request.key().content {
-            return Err(NativeResourceError::SceneRequest {
-                reason: "content hash does not match the canonical frame request".into(),
-            });
-        }
         let ResourceInterpretation::Scene3d { topology_digest } = &request.key().interpretation
         else {
             return Err(NativeResourceError::WrongInterpretation {
                 expected: "scene3d",
             });
         };
-        let frame_topology_digest = frame.topology_digest().map_err(scene_request_error)?;
-        if frame_topology_digest != *topology_digest {
-            return Err(NativeResourceError::SceneRequest {
-                reason: "topology hash does not match the static scene".into(),
-            });
-        }
+        // Both request digests must name the exact payload text; that also proves it canonical.
+        let sealed = SealedScene3DFrame::from_canonical(
+            Arc::clone(canonical_request),
+            request.key().content,
+            *topology_digest,
+        )
+        .map_err(scene_request_error)?;
+        let frame = sealed.request();
         let extent = Extent2d::new(frame.width, frame.height).map_err(|error| {
             NativeResourceError::SceneRequest {
                 reason: error.to_string(),
             }
         })?;
-        let resources = self.scene_resources(&frame)?;
+        let resources = self.scene_resources(frame)?;
         let cache_key = prepare_cache_key(&frame.scene, frame.width, frame.height, &resources)
             .map_err(|error| NativeResourceError::ScenePrepare {
                 reason: error.to_string(),
@@ -589,7 +574,7 @@ impl NativeResourceProvider {
             prepare_started.elapsed(),
         )?;
         Ok(Scene3dWork {
-            frame,
+            frame: sealed,
             prepared,
             extent,
             key: request.key().clone(),
@@ -794,7 +779,7 @@ impl NativeResourceProvider {
 
 /// Immutable geometry and frame state leave the shared cache before CPU rasterization begins.
 pub(super) struct Scene3dWork {
-    frame: Scene3DFrameRequest,
+    frame: SealedScene3DFrame,
     prepared: Arc<PreparedScene>,
     extent: Extent2d,
     key: valle_engine::resource::ResourceKey,
@@ -806,12 +791,13 @@ impl Scene3dWork {
         report: &mut Scene3dFrameReport,
     ) -> Result<SkiaExternalObject, NativeResourceError> {
         let Self {
-            frame,
+            frame: sealed,
             prepared,
             extent,
             key,
             defer_dof,
         } = self;
+        let frame = sealed.request();
         let _working = valle_engine::motion::memory::reserve(
             valle_engine::motion::memory::MemoryKind::Temporary,
             u64::from(frame.width) * u64::from(frame.height) * 96,

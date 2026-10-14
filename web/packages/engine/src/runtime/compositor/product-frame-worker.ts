@@ -304,28 +304,18 @@ async function startFrame(
     const requestPacket = active.resource_requests(ticket);
     const inspectionJson = active.frame_inspection_json(ticket);
     const gpuJobs: Record<string, Scene3dKernelInput> = {};
-    if (
-      gpuScene3d &&
-      active.admit_scene3d_gpu_request &&
-      active.scene3d_gpu_lighting_input
-    ) {
+    if (gpuScene3d && active.scene3d_gpu_lighting_input) {
       const requests = (await decodePackedAbi(
         requestPacket,
         RESOURCE_REQUESTS_ABI,
       )) as Record<string, any>[];
       for (const request of requests) {
         if (request.expected.kind !== "scene3d") continue;
-        const canonical = Uint8Array.from(
-          request.payload.canonical_request,
-          Number,
-        );
-        const value = JSON.parse(new TextDecoder().decode(canonical)) as Record<
-          string,
-          any
-        >;
-        if (!supportsScene3dGpu(value)) continue;
         const content = request.key.content;
         if (gpuJobs[content]) continue;
+        const canonical = request.payload.canonical_request as string;
+        const value = JSON.parse(canonical) as Record<string, any>;
+        if (!supportsScene3dGpu(value)) continue;
         gpuJobs[content] = { content, topology: request.key.interpretation.topology_digest, canonical, width: value.width, height: value.height };
       }
     }

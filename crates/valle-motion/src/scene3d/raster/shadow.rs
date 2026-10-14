@@ -1,14 +1,14 @@
 //! Orthographic depth maps for directional lights. Built anew from each random-access frame.
 use super::{
     AlphaMode, FixedPoint, FrameMesh, SUBPIXEL_BITS, SUBPIXEL_SCALE, SUBPIXEL_STEP, V2, V3,
-    WorldVertex, is_top_left, orient_fixed,
+    WorldVertex, covered_span, is_top_left, orient_fixed, round_fixed,
 };
 
 const SHADOW_SIZE: usize = 1024;
 
 pub(super) fn render_maps(
     directions: &[(V3, [f32; 3])],
-    triangles: &[ShadowTriangle],
+    casters: &ShadowCasters,
     meshes: &[FrameMesh<'_>],
     workers: usize,
 ) -> Vec<Option<ShadowMap>> {
@@ -21,7 +21,7 @@ pub(super) fn render_maps(
     if workers <= 1 {
         return directions
             .iter()
-            .map(|(direction, _)| ShadowMap::render(*direction, triangles, meshes))
+            .map(|(direction, _)| ShadowMap::render(*direction, casters, meshes))
             .collect();
     }
     // Lights are independent. Keep each result in its original slot so shadow
@@ -36,22 +36,49 @@ pub(super) fn render_maps(
         for (maps, directions) in chunks {
             scope.spawn(move || {
                 for (map, (direction, _)) in maps.iter_mut().zip(directions) {
-                    *map = ShadowMap::render(*direction, triangles, meshes);
+                    *map = ShadowMap::render(*direction, casters, meshes);
                 }
             });
         }
         for (map, (direction, _)) in caller_maps.iter_mut().zip(caller_directions) {
-            *map = ShadowMap::render(*direction, triangles, meshes);
+            *map = ShadowMap::render(*direction, casters, meshes);
         }
     });
     maps
 }
 
+/// World-space shadow casters. Each transformed vertex is stored once and triangles name their
+/// corners by index, so every map projects and snaps a vertex once instead of once per corner.
+#[derive(Default)]
+pub(super) struct ShadowCasters {
+    positions: Vec<V3>,
+    uvs: Vec<V2>,
+    triangles: Vec<ShadowTriangle>,
+}
+
 #[derive(Clone, Copy)]
-pub(super) struct ShadowTriangle {
-    pub vertices: [WorldVertex; 3],
-    pub mesh_index: usize,
-    pub material_index: usize,
+struct ShadowTriangle {
+    vertices: [u32; 3],
+    mesh_index: usize,
+    material_index: usize,
+}
+
+impl ShadowCasters {
+    pub fn push_vertex(&mut self, vertex: WorldVertex) -> u32 {
+        let index = u32::try_from(self.positions.len())
+            .expect("Scene3D triangle budget bounds shadow caster vertices");
+        self.positions.push(vertex.position);
+        self.uvs.push(vertex.uv);
+        index
+    }
+
+    pub fn push_triangle(&mut self, vertices: [u32; 3], mesh_index: usize, material_index: usize) {
+        self.triangles.push(ShadowTriangle {
+            vertices,
+            mesh_index,
+            material_index,
+        });
+    }
 }
 
 pub(super) struct ShadowMap {
@@ -77,7 +104,7 @@ struct ShadowVertex {
 impl ShadowMap {
     pub fn render(
         direction: V3,
-        triangles: &[ShadowTriangle],
+        casters: &ShadowCasters,
         meshes: &[FrameMesh<'_>],
     ) -> Option<Self> {
         let forward = direction * -1.0;
@@ -88,13 +115,18 @@ impl ShadowMap {
         };
         let right = forward.cross(reference_up).normalized();
         let up = right.cross(forward).normalized();
+        let light = casters
+            .positions
+            .iter()
+            .map(|position| [position.dot(right), position.dot(up), position.dot(forward)])
+            .collect::<Vec<_>>();
         let mut min_x = f32::INFINITY;
         let mut max_x = f32::NEG_INFINITY;
         let mut min_y = f32::INFINITY;
         let mut max_y = f32::NEG_INFINITY;
         let mut min_depth = f32::INFINITY;
         let mut max_depth = f32::NEG_INFINITY;
-        for triangle in triangles {
+        for triangle in &casters.triangles {
             if meshes[triangle.mesh_index].materials[triangle.material_index]
                 .values
                 .alpha_mode
@@ -102,11 +134,8 @@ impl ShadowMap {
             {
                 continue;
             }
-            for vertex in triangle.vertices {
-                let position = vertex.position;
-                let x = position.dot(right);
-                let y = position.dot(up);
-                let depth = position.dot(forward);
+            for index in triangle.vertices {
+                let [x, y, depth] = light[index as usize];
                 min_x = min_x.min(x);
                 max_x = max_x.max(x);
                 min_y = min_y.min(y);
@@ -137,44 +166,54 @@ impl ShadowMap {
             depth_span: (max_depth - min_depth).max(0.001),
             depth: vec![f32::MAX; SHADOW_SIZE * SHADOW_SIZE],
         };
-        for triangle in triangles {
+        let vertices = light
+            .iter()
+            .zip(&casters.uvs)
+            .map(|(&[x, y, depth], &uv)| ShadowVertex {
+                x: (x - map.min_x) * map.scale_x,
+                y: (map.max_y - y) * map.scale_y,
+                depth,
+                uv,
+            })
+            .collect::<Vec<_>>();
+        let fixed = vertices
+            .iter()
+            .map(|vertex| FixedPoint {
+                x: round_fixed(vertex.x * SUBPIXEL_SCALE),
+                y: round_fixed(vertex.y * SUBPIXEL_SCALE),
+            })
+            .collect::<Vec<_>>();
+        for triangle in &casters.triangles {
             let mesh = &meshes[triangle.mesh_index];
             let material = &mesh.materials[triangle.material_index].values;
             if material.alpha_mode != AlphaMode::Blend {
-                map.raster_triangle(triangle.vertices, mesh, material);
+                let corners = triangle.vertices.map(|index| index as usize);
+                map.raster_triangle(
+                    corners.map(|index| vertices[index]),
+                    corners.map(|index| fixed[index]),
+                    mesh,
+                    material,
+                );
             }
         }
         Some(map)
     }
 
-    fn project(&self, vertex: WorldVertex) -> ShadowVertex {
-        let position = vertex.position;
-        ShadowVertex {
-            x: (position.dot(self.right) - self.min_x) * self.scale_x,
-            y: (self.max_y - position.dot(self.up)) * self.scale_y,
-            depth: position.dot(self.forward),
-            uv: vertex.uv,
-        }
-    }
-
     fn raster_triangle(
         &mut self,
-        world: [WorldVertex; 3],
+        mut vertices: [ShadowVertex; 3],
+        mut fixed: [FixedPoint; 3],
         mesh: &FrameMesh<'_>,
         material: &super::ModelMaterial,
     ) {
-        let mut vertices = world.map(|vertex| self.project(vertex));
         let area_f32 = orient(vertices[0], vertices[1], vertices[2]);
         if area_f32.abs() <= 1.0e-8 || (area_f32 > 0.0 && !material.double_sided) {
             return;
         }
         if area_f32 < 0.0 {
             vertices.swap(1, 2);
+            fixed.swap(1, 2);
         }
-        let fixed = vertices.map(|vertex| FixedPoint {
-            x: libm::roundf(vertex.x * SUBPIXEL_SCALE) as i64,
-            y: libm::roundf(vertex.y * SUBPIXEL_SCALE) as i64,
-        });
         let area = orient_fixed(fixed[0], fixed[1], fixed[2]);
         if area <= 0 {
             return;
@@ -232,19 +271,20 @@ impl ShadowMap {
             (fixed[1].x - fixed[0].x) * SUBPIXEL_STEP,
         ];
         for y in min_y..=max_y {
-            let mut edge = row_edge;
-            for x in min_x..=max_x {
+            let Some((first, last)) =
+                covered_span(row_edge, step_x, top_left, (max_x - min_x) as i64)
+            else {
+                for axis in 0..3 {
+                    row_edge[axis] += step_y[axis];
+                }
+                continue;
+            };
+            let mut edge: [i64; 3] = std::array::from_fn(|i| row_edge[i] + first * step_x[i]);
+            for x in min_x + first as usize..=min_x + last as usize {
                 let current = edge;
                 edge[0] += step_x[0];
                 edge[1] += step_x[1];
                 edge[2] += step_x[2];
-                if current
-                    .iter()
-                    .zip(top_left)
-                    .any(|(v, owns)| *v < 0 || (*v == 0 && !owns))
-                {
-                    continue;
-                }
                 let bary = current.map(|v| v as f32 * inv_area);
                 let depth = vertices[0].depth * bary[0]
                     + vertices[1].depth * bary[1]
@@ -294,8 +334,8 @@ impl ShadowMap {
             + self.depth_span * 0.00001)
             .min(self.depth_span * 0.02)
             .max(0.0001);
-        let ix = libm::floorf(x) as i32;
-        let iy = libm::floorf(y) as i32;
+        let ix = x.floor() as i32;
+        let iy = y.floor() as i32;
         pcf(&self.depth, ix, iy, receiver_depth - bias)
     }
 }

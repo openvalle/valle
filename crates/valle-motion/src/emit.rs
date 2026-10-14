@@ -36,7 +36,7 @@ pub struct EmitReport {
     /// Complete frame-local Scene3D requests referenced by typed `Scene3d` program nodes. Hosts
     /// fulfill these like any other content-addressed resource; the executor sees only the bound
     /// raster object.
-    pub scene3d_frames: Vec<crate::Scene3DFrameRequest>,
+    pub scene3d_frames: Vec<crate::SealedScene3DFrame>,
     /// Unsupported features encountered during emission, paired with node keys for caller
     /// diagnostics.
     pub unsupported: Vec<(String, &'static str)>,
@@ -45,7 +45,7 @@ pub struct EmitReport {
 struct EmissionState {
     review_ink: bool,
     recording: ProgramRecording,
-    scene3d_frames: Vec<crate::Scene3DFrameRequest>,
+    scene3d_frames: Vec<crate::SealedScene3DFrame>,
     unsupported: Vec<(String, &'static str)>,
 }
 
@@ -379,8 +379,7 @@ fn emit_with_faces_and_catalog(
     );
     let program = match catalog {
         Some(textures) => {
-            let catalog = EmissionResourceCatalog::new(textures, &out.scene3d_frames)
-                .map_err(|error| EmitError::Program(error.to_string()))?;
+            let catalog = EmissionResourceCatalog::new(textures, &out.scene3d_frames);
             valle_draw::program::compile_recording_with_catalog(viewport, &out.recording, &catalog)
         }
         None => valle_draw::program::compile_recording(viewport, &out.recording),
@@ -433,11 +432,11 @@ struct EmissionResourceCatalog<'a> {
 impl<'a> EmissionResourceCatalog<'a> {
     fn new(
         textures: &'a dyn valle_draw::program::ProgramResourceCatalog,
-        scenes: &[crate::Scene3DFrameRequest],
-    ) -> Result<Self, crate::CanonicalError> {
+        scenes: &[crate::SealedScene3DFrame],
+    ) -> Self {
         let mut scene_keys = BTreeMap::new();
         for scene in scenes {
-            let content_digest = scene.content_digest()?;
+            let content_digest = scene.content_digest();
             let uri = format!("scene3d-frame://{}", content_digest.as_hex());
             scene_keys.insert(
                 uri,
@@ -446,15 +445,15 @@ impl<'a> EmissionResourceCatalog<'a> {
                         *content_digest.as_bytes(),
                     ),
                     topology_hash: valle_draw::requirements::DigestBytes::from_bytes(
-                        *scene.topology_digest()?.as_bytes(),
+                        *scene.topology_digest().as_bytes(),
                     ),
                 },
             );
         }
-        Ok(Self {
+        Self {
             textures,
             scenes: scene_keys,
-        })
+        }
     }
 }
 
@@ -1570,17 +1569,17 @@ impl Emitter<'_> {
                             );
                         }
                     }
-                    let frame = crate::Scene3DFrameRequest::new(
-                        &request,
-                        dst.width.ceil() as u32,
-                        dst.height.ceil() as u32,
+                    let frame = crate::SealedScene3DFrame::new(crate::Scene3DFrameRequest {
+                        provider_key: request.provider_key.clone(),
+                        width: dst.width.ceil() as u32,
+                        height: dst.height.ceil() as u32,
                         resource_bindings,
-                    )
+                        scene: request.scene.clone(),
+                        frame: request.frame.clone(),
+                    })
                     .expect("validated Scene3D layout state is canonically serializable");
-                    let content_digest = frame
-                        .content_digest()
-                        .expect("validated Scene3D frame has a stable digest");
-                    let provider_key = format!("scene3d-frame://{}", content_digest.as_hex());
+                    let provider_key =
+                        format!("scene3d-frame://{}", frame.content_digest().as_hex());
                     self.out.scene3d_frames.push(frame);
                     let texture = self.out.recording.intern_generated_texture(
                         valle_draw::program::recording::GeneratedTextureSource {

@@ -20,12 +20,7 @@ export interface ProductEngineWire {
   quantize_frame_seconds(seconds: number, numerator: number, denominator: number, count: bigint): bigint;
   quantize_sample_seconds(seconds: number, sampleRate: number, count: bigint): bigint;
   set_realtime_geometry?(enabled: boolean): void;
-  admit_scene3d_gpu_request?(
-    content: string,
-    topology: string,
-    request: Uint8Array,
-  ): void;
-  scene3d_gpu_lighting_input?(request: Uint8Array): Float32Array;
+  scene3d_gpu_lighting_input?(content: string, topology: string, request: string): Float32Array;
   transform_srgb_preview_pixels(pixels: Float32Array, opaque: boolean): void;
   transform_srgb_preview_f16?(pixels: Uint8Array, opaque: boolean): void;
   open_fixed_package(
@@ -146,8 +141,8 @@ interface WorkerMessageBase {
 /** The worker exposes explicit resource/kernel operations, never arbitrary property access. */
 export const PRODUCT_RUNTIME_METHODS = [
   "decode_shader_data_texture", "scene3d_resource_needs_json", "register_scene3d_model",
-  "register_scene3d_environment", "register_scene3d_texture", "admit_scene3d_gpu_request",
-  "scene3d_gpu_lighting_input", "render_scene3d_request", "render_scene3d_request_deferred",
+  "register_scene3d_environment", "register_scene3d_texture", "scene3d_gpu_lighting_input",
+  "render_scene3d_request", "render_scene3d_request_deferred",
   "has_scene3d_frame", "scene3d_pick_json", "audio_sources_json", "has_audio_pcm",
   "register_audio_pcm", "mix_audio_pcm", "apply_bloom_f16", "apply_glow_f16",
   "apply_lens_distortion_f16", "apply_radial_blur_f16", "apply_film_grain_f16",
@@ -586,7 +581,7 @@ function assertGpuPreparation(stage: Record<string, unknown>): void {
     for (const [digest, value] of Object.entries(jobs)) {
       const job = requireRecord(value, "Scene3D kernel job");
       requireRenderId(digest, "Scene3D kernel content"); requireRenderId(job.topology, "Scene3D kernel topology");
-      if (job.content !== digest || !(job.canonical instanceof Uint8Array) || job.canonical.byteLength > 8 * 1024 ** 2
+      if (job.content !== digest || typeof job.canonical !== "string" || job.canonical.length > 8 * 1024 ** 2
         || !Number.isSafeInteger(job.width) || Number(job.width) <= 0 || !Number.isSafeInteger(job.height) || Number(job.height) <= 0) throw new TypeError("invalid Scene3D kernel job");
     }
   }

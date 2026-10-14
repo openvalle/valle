@@ -13,7 +13,7 @@ use crate::eval::{
     eval_units_planned,
 };
 use crate::style::gradient_background_source;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -214,6 +214,10 @@ pub struct PreparedScene {
     // membership once rather than searching every scene node for every emitted node.
     positioned_children: Arc<Vec<u8>>,
     has_post_layout_values: bool,
+    /// Emission reserves display instances for the batches of every built temporal sample and
+    /// gives paper grain the remainder. Unpainted samples may be skipped only when the scene has
+    /// no batch or no paper grain, so that remainder cannot change.
+    skip_unpainted_samples: bool,
 }
 
 struct LayoutInstanceRow {
@@ -609,6 +613,7 @@ fn prepare_admitted(
             .any(|name| name == crate::artifact::VIEWPORT_CAPABILITY),
         layout_reusable,
         auto_blur_translations,
+        skip_unpainted_samples: !super::temporal::sample_trees_share_batch_budget(&artifact),
         artifact: Arc::new(artifact),
         stylesheet,
         layout_probes,
@@ -1735,12 +1740,20 @@ pub(super) fn build_tree_inner(
         timings.finish_ms = elapsed(&mut started);
     }
     let (shutters, echoes) = if temporal_samples {
+        let painted = if prepared.skip_unpainted_samples
+            && !prepared.dependencies.temporal_nodes().is_empty()
+        {
+            painted_temporal_scopes(artifact, prepared, &root, &layout, &keys, &render_keys)
+        } else {
+            None
+        };
         let mut at_time = HashMap::new();
         let shutters = resolve_shutter_samples(
             prepared,
             ctx,
             props,
             opts,
+            painted.as_ref(),
             &mut at_time,
             shared.as_deref_mut(),
         )?;
@@ -1749,6 +1762,7 @@ pub(super) fn build_tree_inner(
             ctx,
             props,
             opts,
+            painted.as_ref(),
             &mut at_time,
             shared.as_deref_mut(),
         )?;
@@ -4132,6 +4146,7 @@ fn resolve_shutter_samples(
     ctx: &valle_motion::MotionContext,
     props: &ResolvedProps,
     opts: &LayoutOptions<'_>,
+    painted: Option<&HashSet<String>>,
     at_time: &mut HashMap<valle_timeline::internal::SampleTime, Rc<LayoutTree>>,
     mut shared: Option<&mut RequestValueCache>,
 ) -> Result<HashMap<String, Vec<TemporalSample>>, LayoutError> {
@@ -4167,6 +4182,7 @@ fn resolve_shutter_samples(
             })?;
     let mut out = HashMap::new();
     for (key, phases) in shutters {
+        let paint = painted.is_none_or(|scopes| scopes.contains(key));
         let bad_time = |reason: &str| LayoutError::BadShutter {
             node: key.to_owned(),
             reason: reason.into(),
@@ -4196,6 +4212,9 @@ fn resolve_shutter_samples(
                     }
                 });
             sample.host = ctx.host;
+            if !paint {
+                continue;
+            }
             let tree = if let Some(tree) = at_time.get(&sample.sample) {
                 Rc::clone(tree)
             } else {
@@ -4218,7 +4237,9 @@ fn resolve_shutter_samples(
                 tree,
             });
         }
-        out.insert(key.to_owned(), exposure);
+        if paint {
+            out.insert(key.to_owned(), exposure);
+        }
     }
     Ok(out)
 }
@@ -4230,6 +4251,7 @@ fn resolve_echo_samples(
     ctx: &valle_motion::MotionContext,
     props: &ResolvedProps,
     opts: &LayoutOptions<'_>,
+    painted: Option<&HashSet<String>>,
     at_time: &mut HashMap<valle_timeline::internal::SampleTime, Rc<LayoutTree>>,
     mut shared: Option<&mut RequestValueCache>,
 ) -> Result<HashMap<String, Vec<EchoSample>>, LayoutError> {
@@ -4261,6 +4283,7 @@ fn resolve_echo_samples(
     }
     let mut out = HashMap::new();
     for (key, count, decay, offsets) in echoes {
+        let paint = painted.is_none_or(|scopes| scopes.contains(key));
         let bad_time = |reason: &str| LayoutError::BadEcho {
             node: key.to_owned(),
             reason: reason.into(),
@@ -4289,6 +4312,9 @@ fn resolve_echo_samples(
                     .ok_or_else(|| bad_time("echo sample lies outside the composition"))?
             };
             sample.host = ctx.host;
+            if !paint {
+                continue;
+            }
             let tree = if let Some(tree) = at_time.get(&sample.sample) {
                 Rc::clone(tree)
             } else {
@@ -4314,9 +4340,53 @@ fn resolve_echo_samples(
                 opacity: valle_draw::math::pow(decay, f64::from(lag)) as f32,
             });
         }
-        out.insert(key.to_owned(), trail);
+        if paint {
+            out.insert(key.to_owned(), trail);
+        }
     }
     Ok(out)
+}
+
+/// Shutter and Echo scopes the current frame can paint. Emission reads a scope's samples only
+/// from that scope's own stacking context, and stacking-context construction drops the complete
+/// render subtree of an invisible node. Ignoring Takumi's other pruning rules over-approximates
+/// the painted set. `None` keeps every scope when the render tree and layout do not pair.
+fn painted_temporal_scopes(
+    artifact: &SceneArtifact,
+    prepared: &PreparedScene,
+    root: &RenderNode,
+    layout: &LayoutResults,
+    keys: &HashMap<u64, String>,
+    render_keys: &HashMap<Vec<usize>, String>,
+) -> Option<HashSet<String>> {
+    let scopes: HashSet<&str> = prepared
+        .dependencies
+        .temporal_nodes()
+        .iter()
+        .map(|temporal| artifact.nodes[temporal.node.0 as usize].key.as_str())
+        .collect();
+    let mut painted = HashSet::new();
+    let mut visits = vec![(Vec::new(), takumi_core::geometry::NodeId::ROOT)];
+    while let Some((path, id)) = visits.pop() {
+        let node = root.node_at_path(&path)?;
+        if node.context.style.is_invisible() {
+            continue;
+        }
+        if let Some(key) = keys.get(&u64::from(id)).or_else(|| render_keys.get(&path))
+            && scopes.contains(key.as_str())
+        {
+            painted.insert(key.clone());
+        }
+        if node.children.is_none() {
+            continue;
+        }
+        for child in layout.box_children(id).ok()? {
+            let mut path = path.clone();
+            path.push(child.render_index);
+            visits.push((path, child.node_id));
+        }
+    }
+    Some(painted)
 }
 
 /// Only a scene with stable layout and affine, inline pixel translations can use the chain-rule

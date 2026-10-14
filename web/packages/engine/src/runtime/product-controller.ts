@@ -193,7 +193,11 @@ interface BrowserProductEngineWire extends ProductEngineWire {
   ): Uint8Array;
   register_scene3d_model(digest: string, bytes: Uint8Array): void;
   register_scene3d_environment(digest: string, bytes: Uint8Array): void;
-  scene3d_resource_needs_json(canonicalRequest: Uint8Array): string;
+  scene3d_resource_needs_json(
+    contentDigest: string,
+    topologyDigest: string,
+    canonicalRequest: string,
+  ): string;
   register_scene3d_texture(
     digest: string,
     encodedBytes: Uint8Array,
@@ -202,19 +206,13 @@ interface BrowserProductEngineWire extends ProductEngineWire {
   render_scene3d_request(
     contentDigest: string,
     topologyDigest: string,
-    canonicalRequest: Uint8Array,
+    canonicalRequest: string,
   ): Uint8Array;
   render_scene3d_request_deferred?(
     contentDigest: string,
     topologyDigest: string,
-    canonicalRequest: Uint8Array,
+    canonicalRequest: string,
   ): Uint8Array;
-  admit_scene3d_gpu_request?(
-    contentDigest: string,
-    topologyDigest: string,
-    canonicalRequest: Uint8Array,
-  ): void;
-  scene3d_gpu_lighting_input?(request: Uint8Array): Float32Array;
   has_scene3d_frame?(contentDigest: string): boolean;
   scene3d_frame_width(contentDigest: string): number;
   scene3d_frame_height(contentDigest: string): number;
@@ -303,12 +301,16 @@ interface StagedRenderPackage {
   audioProgram: CompiledAudioProgramWire;
 }
 
+/** One frame-local Scene3D request: its canonical text, topology digest, and that text parsed once. */
+interface Scene3dFrameRequest {
+  canonical: string;
+  topology: string;
+  value: Scene3dGpuRequest;
+}
+
 interface FulfilledFrame {
   objects: Map<number, CanvasKitExternalObject>;
-  scene3dRequests?: Map<
-    string,
-    { canonical: Uint8Array; topology: string; width: number; height: number }
-  >;
+  scene3dRequests?: Map<string, Scene3dFrameRequest>;
   dispose: Array<() => void>;
   videoFrames: number;
   videoTextureFrames: number;
@@ -609,10 +611,7 @@ export class BrowserValleWebPlayer {
   private scene3dGpu: GpuScene3D | null = null;
   private scene3dGpuInit: Promise<GpuScene3D | null> | null = null;
   private gpuCircles: GpuCircles | null = null;
-  private currentScene3dRequests = new Map<
-    string,
-    { canonical: Uint8Array; topology: string; width: number; height: number }
-  >();
+  private currentScene3dRequests = new Map<string, Scene3dFrameRequest>();
   private readonly renderMode: "reference" | "realtime";
   readonly runtimeBudget: BrowserRuntimeBudget;
   private readonly runtimePurpose: "preview" | "export";
@@ -913,24 +912,23 @@ export class BrowserValleWebPlayer {
       const schedule = record(await decodePackedAbi(readyStage.schedulePacket, BOUND_PROGRAM_SCHEDULES_ABI), "working-set schedule");
       const requests = await decodePackedAbi(requestStage.requestPacket, RESOURCE_REQUESTS_ABI);
       if (!Array.isArray(requests)) throw new Error("ResourceRequestSet must decode to an array");
+      const scene3d = scene3dFrameRequests(requests);
       const programBytes = Math.max(0, ...(schedule.programs as Wire[]).map(program => Number(program.estimatedSurfaceBytes)));
       const outer = (schedule.surfaceSlots as Wire[]).reduce((sum, slot) => sum + Number(slot.estimatedBytes), 0);
       let required = outer + programBytes * 5 + width * height * 32 + 8 * 1024 ** 2;
       for (const request of requests as Wire[]) {
-        const expected = request.expected;
-        if (expected.extent) required += Number(expected.extent.width) * Number(expected.extent.height) * 32;
-        if (expected.kind === "scene3d") {
-          const value = JSON.parse(new TextDecoder().decode(packedByteArray(request.payload.canonical_request, "Scene3D request")));
-          required += value.width * value.height * 128;
-        }
+        const extent = request.expected.extent;
+        if (extent) required += Number(extent.width) * Number(extent.height) * 32;
       }
+      const gpuScene3d = this.renderMode === "realtime" && this.gpu && !forceCpu && typeof document !== "undefined";
+      required += scene3dWorkingBytes(scene3d, gpuScene3d ? requestStage.gpuScene3d : undefined);
       // The frame envelope now owns the projected packets, replacing their background leases.
       planner.adoptPreparationMemory(planning.key);
       finishMemory = await this.runtimeBudget.admitFrameAfterKernels(this.memoryOwner, required, this.runtimeAbort.signal);
       const target = this.acquireTarget(width, height, forceCpu);
       const fulfillmentStarted = performance.now();
       const endFulfill = this.trace?.span("resource.fulfill", { frame });
-      fulfilled = await this.fulfillRequests(requestStage.requestPacket, target.gpu, requestStage.gpuScene3d)
+      fulfilled = await this.fulfillRequests(requests, scene3d, target.gpu, requestStage.gpuScene3d)
         .finally(() => endFulfill?.());
       this.trace?.worker(
         "lower",
@@ -1949,47 +1947,17 @@ export class BrowserValleWebPlayer {
   }
 
   private async fulfillRequests(
-    packet: Uint8Array,
+    decoded: readonly PackedValue[],
+    scene3dRequests: Map<string, Scene3dFrameRequest>,
     gpu: boolean,
     projected?: Record<string, Float32Array>,
   ): Promise<FulfilledFrame> {
-    const decoded = await decodePackedAbi(packet, RESOURCE_REQUESTS_ABI);
-    if (!Array.isArray(decoded))
-      throw new Error("ResourceRequestSet must decode to an array");
     this.resourceObjects.beginFrame();
     try {
       const objects = new Map<number, CanvasKitExternalObject>();
-      const scene3dRequests: NonNullable<FulfilledFrame["scene3dRequests"]> =
-        new Map();
       const dispose: Array<() => void> = [];
       const requests = decoded.map((value) => {
         const request = record(value, "resource request") as PackedValue & Wire;
-        if (
-          record(request.expected, "resource expected").kind === "scene3d"
-        ) {
-          const key = record(request.key, "Scene3D key"),
-            payload = record(request.payload, "Scene3D payload");
-          const canonical = packedByteArray(
-            payload.canonical_request,
-            "Scene3D canonical request",
-          );
-          const frame = JSON.parse(
-            new TextDecoder().decode(canonical),
-          ) as Scene3dGpuRequest;
-          scene3dRequests.set(
-            contentDigestWire(key.content, "Scene3D content"),
-            {
-              canonical,
-              topology: contentDigestWire(
-                record(key.interpretation, "Scene3D interpretation")
-                  .topology_digest,
-                "Scene3D topology",
-              ),
-              width: frame.width,
-              height: frame.height,
-            },
-          );
-        }
         return {
           request,
           handle: exactInteger(request.handle, "resource handle"),
@@ -2020,6 +1988,7 @@ export class BrowserValleWebPlayer {
               value: await this.fulfillRequestUncached(
                 group.request,
                 gpu,
+                scene3dRequests,
                 projected,
               ),
             } as const;
@@ -2118,6 +2087,7 @@ export class BrowserValleWebPlayer {
   private async fulfillRequestUncached(
     request: PackedValue & Wire,
     gpu: boolean,
+    scene3dRequests: Map<string, Scene3dFrameRequest>,
     projected?: Record<string, Float32Array>,
   ): Promise<ProducedBrowserResource> {
     const key = record(request.key, "resource key") as PackedValue & Wire;
@@ -2225,27 +2195,13 @@ export class BrowserValleWebPlayer {
       };
     }
     if (expected.kind === "scene3d") {
-      const payload = record(request.payload, "Scene3D request payload");
-      const payloadKeys = Object.keys(payload).sort();
-      if (
-        payload.kind !== "scene3dFrame" ||
-        payloadKeys.length !== 2 ||
-        payloadKeys[0] !== "canonical_request" ||
-        payloadKeys[1] !== "kind"
-      ) {
-        throw new Error("Scene3D request has an invalid payload shape");
-      }
-      const canonicalRequest = packedByteArray(
-        payload.canonical_request,
-        "Scene3D canonical request",
-      );
+      const scene = scene3dRequests.get(contentWire);
+      if (!scene) throw new Error(`Scene3D request ${content} was not admitted`);
+      const { canonical: canonicalRequest, topology, value } = scene;
       // A projected packet has already passed Rust admission on a stateless kernel worker.
       // Supported packets have no external model/texture dependencies.
-      if (!projected?.[contentWire]) await this.ensureScene3dResources(canonicalRequest);
-      const topology = contentDigestWire(
-        interpretation.topology_digest,
-        "Scene3D topology digest",
-      );
+      if (!projected?.[contentWire])
+        await this.ensureScene3dResources(contentWire, topology, canonicalRequest);
       if (
         this.renderMode === "realtime" &&
         gpu &&
@@ -2277,19 +2233,12 @@ export class BrowserValleWebPlayer {
           return renderer;
         });
         const renderer = await this.scene3dGpuInit;
-        const value = JSON.parse(
-          new TextDecoder().decode(canonicalRequest),
-        ) as Scene3dGpuRequest;
         if (renderer?.accepts(value)) {
-          if (!projected?.[contentWire]) await this.runtimeCall<void>("admit_scene3d_gpu_request",
-            contentWire,
-            topology,
-            canonicalRequest,
-          );
-          value.lightingInput =
+          const lightingInput =
             projected?.[contentWire] ??
-            await this.runtimeCall<Float32Array>("scene3d_gpu_lighting_input", canonicalRequest);
-          const image = await renderer.render(value);
+            await this.runtimeCall<Float32Array>("scene3d_gpu_lighting_input",
+              contentWire, topology, canonicalRequest);
+          const image = await renderer.render({ ...value, lightingInput });
           return {
             object: { key, kind: "scene3d", image },
             bytes: pixelBytes(value.width, value.height, 8),
@@ -2327,7 +2276,7 @@ export class BrowserValleWebPlayer {
         topology,
         canonicalRequest,
       );
-      const { width, height } = JSON.parse(new TextDecoder().decode(canonicalRequest)) as { width: number; height: number };
+      const { width, height } = value;
       const bytes = pixelBytes(width, height, 8);
       if (rgba.byteLength !== bytes) {
         throw new Error(`Scene3D ${content} returned an invalid RGBA16F plane`);
@@ -2362,10 +2311,12 @@ export class BrowserValleWebPlayer {
   }
 
   private async ensureScene3dResources(
-    canonicalRequest: Uint8Array,
+    content: string,
+    topology: string,
+    canonicalRequest: string,
   ): Promise<void> {
     const needs = JSON.parse(
-      await this.runtimeCall<string>("scene3d_resource_needs_json", canonicalRequest),
+      await this.runtimeCall<string>("scene3d_resource_needs_json", content, topology, canonicalRequest),
     ) as {
       models: string[];
       textures: { digest: string; role: "color" | "data" }[];
@@ -3282,12 +3233,7 @@ export class BrowserValleWebPlayer {
         continue;
       const gpuRequest = this.currentScene3dRequests.get(placement.contentHash);
       if (!gpuRequest) continue;
-      const frameWidth =
-        gpuRequest?.width ??
-        JSON.parse(new TextDecoder().decode(gpuRequest!.canonical)).width;
-      const frameHeight =
-        gpuRequest?.height ??
-        JSON.parse(new TextDecoder().decode(gpuRequest!.canonical)).height;
+      const { width: frameWidth, height: frameHeight } = gpuRequest.value;
       const pixelX = Math.min(
         frameWidth - 1,
         Math.floor(((local[0] - x) / width) * frameWidth),
@@ -3299,7 +3245,7 @@ export class BrowserValleWebPlayer {
       const memory = await this.runtimeBudget.acquireKernel(frameWidth * frameHeight * 128 + 8 * 1024 ** 2, this.runtimeAbort.signal);
       let pick: { semanticAddress: string; nodeId: number } | null;
       try {
-        await this.ensureScene3dResources(gpuRequest.canonical);
+        await this.ensureScene3dResources(placement.contentHash, gpuRequest.topology, gpuRequest.canonical);
         pick = JSON.parse(await this.runtimeCall<string>("pick_scene3d_request",
           placement.contentHash, gpuRequest.topology, gpuRequest.canonical, pixelX, pixelY));
       } finally { memory.release(); }
@@ -3616,21 +3562,57 @@ function contentDigestHex(value: unknown, label: string): string {
   return contentDigestWire(value, label).slice("sha256:".length);
 }
 
-function packedByteArray(value: unknown, label: string): Uint8Array {
-  if (!Array.isArray(value)) throw new Error(`${label} must be a byte array`);
-  return Uint8Array.from(
-    value.map((item, index) => {
-      const number = typeof item === "bigint" ? Number(item) : item;
-      if (
-        !Number.isInteger(number) ||
-        Number(number) < 0 ||
-        Number(number) > 255
-      ) {
-        throw new Error(`${label}[${index}] is not a byte`);
-      }
-      return Number(number);
-    }),
-  );
+/** Each distinct Scene3D request of one frame, parsed once for admission, fulfillment and picking. */
+function scene3dFrameRequests(requests: readonly PackedValue[]): Map<string, Scene3dFrameRequest> {
+  const scenes = new Map<string, Scene3dFrameRequest>();
+  for (const value of requests) {
+    const request = record(value, "resource request");
+    if (record(request.expected, "resource expected").kind !== "scene3d") continue;
+    const key = record(request.key, "Scene3D key");
+    const content = contentDigestWire(key.content, "Scene3D content");
+    if (scenes.has(content)) continue;
+    const payload = record(request.payload, "Scene3D request payload");
+    const payloadKeys = Object.keys(payload).sort();
+    if (
+      payload.kind !== "scene3dFrame" ||
+      payloadKeys.length !== 2 ||
+      payloadKeys[0] !== "canonical_request" ||
+      payloadKeys[1] !== "kind" ||
+      typeof payload.canonical_request !== "string"
+    ) {
+      throw new Error("Scene3D request has an invalid payload shape");
+    }
+    const canonical = payload.canonical_request;
+    const parsed = JSON.parse(canonical) as Scene3dGpuRequest;
+    if (![parsed.width, parsed.height].every(v => Number.isSafeInteger(v) && v > 0))
+      throw new Error(`Scene3D request ${content} has an invalid extent`);
+    scenes.set(content, {
+      canonical,
+      topology: contentDigestWire(
+        record(key.interpretation, "Scene3D interpretation").topology_digest,
+        "Scene3D topology digest",
+      ),
+      value: parsed,
+    });
+  }
+  return scenes;
+}
+
+/** Frame bytes for Scene3D fulfillment. A projected request owns its adopted lighting packet, the
+ * GPU copy of it and one F16 output image, and all share the renderer's 68 B/px working targets.
+ * Every other request rasterizes through the 128 B/px CPU working set. */
+function scene3dWorkingBytes(
+  scenes: Map<string, Scene3dFrameRequest>,
+  projected?: Record<string, Float32Array>,
+): number {
+  let bytes = 0, shared = 0;
+  for (const [content, { value: { width, height } }] of scenes) {
+    const packet = projected?.[content];
+    if (!packet) { bytes += width * height * 128; continue; }
+    bytes += packet.byteLength * 2 + width * height * 8;
+    shared = Math.max(shared, width * height * 68);
+  }
+  return bytes + shared;
 }
 
 function inverseHomography(matrix: readonly number[]): number[] | null {

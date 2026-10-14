@@ -579,14 +579,15 @@ test("Scene3D keeps canonical ContentDigest wires at every WASM boundary", async
     async ensureScene3dResources() {},
   });
 
+  const canonical = JSON.stringify({ width: 1, height: 1 });
   const produced = await player.fulfillRequestUncached({
     key: {
       content: SCENE_DIGEST,
       interpretation: { kind: "scene3d", topology_digest: TOPOLOGY_DIGEST },
     },
     expected: { kind: "scene3d" },
-    payload: { kind: "scene3dFrame", canonical_request: [...new TextEncoder().encode(JSON.stringify({width:1,height:1}))] },
-  }, false);
+    payload: { kind: "scene3dFrame", canonical_request: canonical },
+  }, false, new Map([[SCENE_DIGEST, { canonical, topology: TOPOLOGY_DIGEST, value: JSON.parse(canonical) }]]));
 
   expect(calls).toEqual([[SCENE_DIGEST, TOPOLOGY_DIGEST]]);
   expect(produced.object.image).toBe(image);

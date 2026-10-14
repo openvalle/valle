@@ -17,7 +17,7 @@ test("stateless kernels run under the shared CPU allowance and release memory af
   globalThis.Worker = MockWorker as unknown as typeof Worker;
   const budget = new BrowserRuntimeBudget({ cpuThreads: 2, memoryBytes: 128 * 1024 ** 2 });
   const pool = new ProductKernelPool("https://localhost/worker.js", { wasmModuleUrl: "engine.js", wasmUrl: "engine.wasm" } as ProductEngineBootstrap, budget);
-  const abort = new AbortController(), input = { content: digest, topology: digest, canonical: new Uint8Array([1]), width: 2, height: 2 };
+  const abort = new AbortController(), input = { content: digest, topology: digest, canonical: "{}", width: 2, height: 2 };
   try {
     const a = pool.run(input, "playback", abort.signal), b = pool.run(input, "playback", abort.signal);
     await Bun.sleep(0);
@@ -29,10 +29,14 @@ test("stateless kernels run under the shared CPU allowance and release memory af
     expect(budget.snapshot().managedBytes).toBe(16); results.forEach(result => result.release());
     const cancelled = pool.run(input, "export", abort.signal).catch(e => e);
     await Bun.sleep(0); abort.abort(); expect((await cancelled).name).toBe("AbortError");
+    // The posted coverage job drains with its permit; its worker and geometry cache survive.
     await Bun.sleep(0);
+    expect(budget.snapshot().activeCpuSlots).toBe(1); expect(workers[0]!.terminated).toBe(false);
+    workers[0]!.reply(); await Bun.sleep(0);
     expect(budget.snapshot().managedBytes).toBe(0); expect(budget.snapshot().activeCpuSlots).toBe(0);
+    expect(workers.some(worker => worker.terminated)).toBe(false);
     expect(budget.snapshot().peakCpuSlots).toBe(2);
-    expect(budget.snapshot().kernelJobs).toBe(2); expect(budget.snapshot().kernelWorkMs).toBe(2);
+    expect(budget.snapshot().kernelJobs).toBe(3); expect(budget.snapshot().kernelWorkMs).toBe(3);
   } finally { pool.close(); globalThis.Worker = Original; }
   expect(budget.snapshot().kernelWorkers).toBe(0);
 });
@@ -71,5 +75,35 @@ test("cancelled Motion work drains with its permit held, reuses definitions, and
     expect(workers[0]!.terminated).toBe(true);
     expect(budget.snapshot().activeCpuSlots).toBe(0);
     expect(budget.snapshot().managedBytes).toBe(0);
+  } finally { pool.close(); globalThis.Worker = Original; }
+});
+
+test("work cancelled before reaching a worker keeps that idle worker and its caches", async () => {
+  const Original = globalThis.Worker, workers: MockWorker[] = [];
+  class MockWorker {
+    onmessage: ((e: any) => void) | null = null; onerror: ((e: any) => void) | null = null;
+    messages: any[] = []; terminated = false;
+    constructor() { workers.push(this); }
+    postMessage(message: any) { this.messages.push(message); }
+    terminate() { this.terminated = true; }
+    reply() { this.onmessage?.({ data: { version, id: this.messages.at(-1).id, pixels: new Float32Array([1]), workMs: 1 } }); }
+  }
+  globalThis.Worker = MockWorker as unknown as typeof Worker;
+  const budget = new BrowserRuntimeBudget({ cpuThreads: 1, memoryBytes: 128 * 1024 ** 2 });
+  const pool = new ProductKernelPool("https://localhost/worker.js", { wasmModuleUrl: "engine.js", wasmUrl: "engine.wasm" } as ProductEngineBootstrap, budget);
+  const input = { content: digest, topology: digest, canonical: "{}", width: 2, height: 2 };
+  try {
+    const first = pool.run(input, "playback", new AbortController().signal);
+    const abort = new AbortController();
+    const skipped = pool.run(input, "playback", abort.signal).catch(error => error);
+    await Bun.sleep(0); abort.abort();
+    workers[0]!.reply(); (await first).release();
+    expect((await skipped).name).toBe("AbortError");
+    const next = pool.run(input, "playback", new AbortController().signal);
+    await Bun.sleep(0);
+    expect(workers.length).toBe(1); expect(workers[0]!.terminated).toBe(false);
+    expect(workers[0]!.messages.length).toBe(2);
+    workers[0]!.reply(); (await next).release();
+    expect(budget.snapshot().managedBytes).toBe(0); expect(budget.snapshot().activeCpuSlots).toBe(0);
   } finally { pool.close(); globalThis.Worker = Original; }
 });
