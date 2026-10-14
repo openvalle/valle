@@ -1,17 +1,16 @@
 const MIB = 1024n * 1024n;
-const DEFAULT_CACHE = 256n * MIB;
 const QUANTUM = 64n * MIB;
+const SCRATCH_HEADROOM = 128n * MIB;
 const WASM_SIZE_MAX = 0xffffffffn;
 
 /**
- * Ganesh's cache includes pinned F16 surfaces and internal scratch resources. Reserve retention
- * headroom when our physical pool approaches the default cache size; otherwise keep a small
- * cache. This is a retention limit, not an allocation or a hard limit on live GPU resources.
+ * Ganesh's cache includes pinned F16 surfaces and internal scratch resources. Retain a fixed
+ * scratch headroom above the pinned surfaces: released working surfaces, layers and atlases stay
+ * reusable within it, and Ganesh purges the least recently used beyond it. This is a retention
+ * limit, not an allocation or a hard limit on live GPU resources.
  */
-export function canvasKitGpuCacheBudget(frameBytes: bigint, residentBytes: bigint): number {
+export function canvasKitGpuCacheBudget(frameBytes: bigint, pinnedBytes: bigint): number {
   const cap = frameBytes < WASM_SIZE_MAX ? frameBytes : WASM_SIZE_MAX;
-  const base = cap < DEFAULT_CACHE ? cap : DEFAULT_CACHE;
-  const needed = residentBytes > base * 3n / 4n
-    ? (residentBytes * 2n + QUANTUM - 1n) / QUANTUM * QUANTUM : base;
+  const needed = (pinnedBytes + SCRATCH_HEADROOM + QUANTUM - 1n) / QUANTUM * QUANTUM;
   return Number(needed < cap ? needed : cap);
 }

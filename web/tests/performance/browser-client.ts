@@ -60,6 +60,25 @@ async function run() {
     }
     return { status: "ok", gpu, outputs, userAgent: navigator.userAgent, trace: trace?.snapshot({ backend: job.gpu ? "web-gpu" : "web-cpu" }) };
   }
+  if (job.mode === "order") {
+    const outputs: unknown[] = [];
+    // Each order starts from a cold player, so only the access order differs between sessions.
+    for (const [order, frames] of Object.entries(job.orders as Record<string, number[]>)) {
+      const player = new BrowserValleWebPlayer(input);
+      try {
+        await player.init();
+        for (const frame of frames) {
+          assertPath(await player.renderFrame(frame, { rasterScale: job.width / 640, transparent: true }));
+          const blob = await new Promise<Blob>((resolve, reject) => canvas.toBlob(b => b ? resolve(b) : reject(new Error("capture failed"))));
+          const name = `${order}-${frame}.png`;
+          await post(name, blob);
+          outputs.push({ name, frame, order });
+        }
+        outputs.push({ session: order, stats: player.stats });
+      } finally { await player.close(); }
+    }
+    return { status: "ok", gpu, outputs, userAgent: navigator.userAgent };
+  }
   const started = performance.now();
   const result = await exportBrowserVideo(input, { width: job.width, height: job.height,
     frameRate: 60, includeAudio: false, videoBitrate: job.bitrate });

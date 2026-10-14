@@ -168,6 +168,9 @@ export interface CanvasKitExecutionProfile {
   readonly canvasKitVersion: string;
 }
 
+/** Surface pool roles: the presented output, outer pass slots, program slots and transients. */
+export type CanvasKitSurfaceKind = "output" | "outer" | "program" | "transient";
+
 export interface CanvasKitExecutionReport {
   readonly profile: CanvasKitExecutionProfile;
   readonly passes: number;
@@ -179,7 +182,16 @@ export interface CanvasKitExecutionReport {
   readonly surfaceAllocatedBytes: bigint;
   readonly surfaceResidentBytes: bigint;
   readonly surfacePeakBytes: bigint;
+  /** The schedule's working-surface peak for this frame, against which `surfacePeakBytes` is measured. */
+  readonly plannedSurfacePeakBytes: bigint;
+  /** Resident bytes by role at the moment of `surfacePeakBytes`. */
+  readonly surfacePeakBytesByKind: Readonly<Record<CanvasKitSurfaceKind, bigint>>;
   readonly surfacePoolEvictions: number;
+  /** Ganesh resource cache after the frame, including pinned surfaces; zero without a GPU context. */
+  readonly gpuCacheUsageBytes: number;
+  readonly gpuCacheLimitBytes: number;
+  /** Circle batch targets held outside the surface pool. */
+  readonly geometryTargetBytes: number;
   readonly programCacheHits: number;
   readonly programCacheMisses: number;
   readonly fontCacheHits: number;
@@ -693,7 +705,8 @@ async function executeCanvasKitFrame(
     if (bytes > maxSurfaceBytes) fail("resource_budget", "data texture exceeds the surface byte budget");
     dataTextureBytes += bytes;
   }
-  if (dataTextureBytes + BigInt(positiveIdOrZero(schedule.estimatedPeakSurfaceBytes, "frame surface bytes")) > maxFrameBytes) {
+  const plannedSurfacePeakBytes = BigInt(positiveIdOrZero(schedule.estimatedPeakSurfaceBytes, "frame surface bytes"));
+  if (dataTextureBytes + plannedSurfacePeakBytes > maxFrameBytes) {
     fail("resource_budget", "data textures and working surfaces exceed the frame byte budget");
   }
   const arena = executor.arena(
@@ -900,6 +913,7 @@ async function executeCanvasKitFrame(
       drawMs: performance.now() - presentStarted, snapshotMs: 0,
     });
     arena.prepareReport();
+    arena.releaseUnused();
     return {
       profile: {
         surfaceBackend: target.directContext ? "canvaskit-gpu" : "canvaskit-cpu",
@@ -915,7 +929,11 @@ async function executeCanvasKitFrame(
       surfaceAllocatedBytes: arena.frameAllocatedBytes,
       surfaceResidentBytes: arena.residentBytes,
       surfacePeakBytes: arena.framePeakBytes,
+      plannedSurfacePeakBytes,
+      surfacePeakBytesByKind: arena.framePeakByKind,
       surfacePoolEvictions: arena.frameEvictions,
+      ...arena.gpuCacheReport(),
+      geometryTargetBytes: arena.geometryRenderer?.stats.allocatedBytes ?? 0,
       ...cacheCounterReport(cacheBefore, executor.cacheSnapshot()),
       packetAdmissionMs,
       programAdmissionMs,
@@ -3597,19 +3615,31 @@ class SurfaceArena {
   private readonly slots = new Map<string, { surface: Surface; width: number; height: number }>();
   private readonly freeTransients = new Map<Surface, { width: number; height: number }>();
   private readonly checkedOutTransients = new Map<Surface, { width: number; height: number }>();
+  private readonly frameTransients = new Set<Surface>();
   private readonly rasterMemory = new Map<Surface, MallocObj>();
   private readonly surfaceBytes = new Map<Surface, bigint>();
   private readonly usedSlotKeys = new Set<string>();
   private outputSurface: Surface | null = null;
   private outputUsed = false;
   private gpuCacheLimit = -1;
+  private readonly surfaceKinds = new Map<Surface, CanvasKitSurfaceKind>();
+  private readonly residentByKind: Record<CanvasKitSurfaceKind, bigint> = { output: 0n, outer: 0n, program: 0n, transient: 0n };
   residentBytes = 0n;
   frameAllocations = 0;
   frameReuses = 0;
   frameAllocatedBytes = 0n;
   framePeakBytes = 0n;
+  /** Resident bytes by surface role at the moment of the frame peak. */
+  framePeakByKind: Record<CanvasKitSurfaceKind, bigint> = { ...this.residentByKind };
   frameEvictions = 0;
   get gpu(): boolean { return this.context !== null; }
+  /** CanvasKit 0.42's public cache getters drop their return values, so read usage through the
+   * bound method; the limit is the one this arena configured. */
+  gpuCacheReport(): { gpuCacheUsageBytes: number; gpuCacheLimitBytes: number } {
+    if (!this.context) return { gpuCacheUsageBytes: 0, gpuCacheLimitBytes: 0 };
+    const bound = this.context as unknown as { _getResourceCacheUsageBytes(): number };
+    return { gpuCacheUsageBytes: Number(bound._getResourceCacheUsageBytes()), gpuCacheLimitBytes: this.gpuCacheLimit };
+  }
   constructor(
     private readonly CanvasKit: CanvasKit,
     private readonly context: GrDirectContext | null,
@@ -3620,7 +3650,9 @@ class SurfaceArena {
   ) { this.configureGpuCache(0n); }
   private configureGpuCache(residentBytes: bigint): void {
     if (!this.context) return;
-    const limit = canvasKitGpuCacheBudget(this.maxFrameBytes, residentBytes);
+    // Circle batch targets are pinned outside this pool.
+    const pinned = residentBytes + BigInt(this.geometryRenderer?.stats.allocatedBytes ?? 0);
+    const limit = canvasKitGpuCacheBudget(this.maxFrameBytes, pinned);
     if (limit === this.gpuCacheLimit) return;
     this.context.setResourceCacheLimitBytes(limit);
     this.gpuCacheLimit = limit;
@@ -3642,11 +3674,13 @@ class SurfaceArena {
     this.pathClipElisions = 0;
     if (this.checkedOutTransients.size !== 0) fail("surface_lifetime", "transient surface escaped the prior frame");
     this.usedSlotKeys.clear();
+    this.frameTransients.clear();
     this.outputUsed = false;
     this.frameAllocations = 0;
     this.frameReuses = 0;
     this.frameAllocatedBytes = 0n;
     this.framePeakBytes = this.residentBytes;
+    this.framePeakByKind = { ...this.residentByKind };
     this.frameEvictions = 0;
     this.configureGpuCache(this.residentBytes);
   }
@@ -3661,6 +3695,24 @@ class SurfaceArena {
       this.checkedOutTransients.clear();
     }
     if (leaked !== 0) fail("surface_lifetime", `${leaked} transient surface(s) escaped frame execution`);
+  }
+  /**
+   * Keep only the working set of the frame that just executed. Ganesh retains a deleted backing as
+   * purgeable scratch within the fixed cache headroom, so a size that returns is reacquired without
+   * a new GPU allocation, while one that does not return stops pinning memory.
+   */
+  releaseUnused(): void {
+    this.releaseCarriedOver();
+    for (const [key, entry] of [...this.slots]) {
+      if (this.usedSlotKeys.has(key)) continue;
+      this.slots.delete(key);
+      this.evictSurface(entry.surface);
+    }
+    if (!this.outputUsed && this.outputSurface) {
+      this.evictSurface(this.outputSurface);
+      this.outputSurface = null;
+    }
+    this.configureGpuCache(this.residentBytes);
   }
   prepareReport(): void {
     if (this.checkedOutTransients.size !== 0) {
@@ -3682,10 +3734,9 @@ class SurfaceArena {
   private keyedSlot(key: string, width: number, height: number): Surface {
     this.usedSlotKeys.add(key);
     const existing = this.slots.get(key);
-    // A physical ROI occupies the top-left of its working surface. A larger allocation therefore
-    // remains a valid backing store when animation makes the next frame's ROI smaller; the exact
-    // logical bounds still travel with the snapshot and are cropped by every consumer.
-    if (existing && existing.width >= width && existing.height >= height) {
+    // Physical extents follow the plan exactly, as on Native GPU. Snapshots cover the whole backing,
+    // so a larger backing left by an earlier frame would let history change what consumers sample.
+    if (existing && existing.width === width && existing.height === height) {
       this.frameReuses += 1;
       return existing.surface;
     }
@@ -3693,28 +3744,40 @@ class SurfaceArena {
       this.slots.delete(key);
       this.evictSurface(existing.surface);
     }
-    const surface = this.create(width, height);
+    const surface = this.create(width, height, key.startsWith("outer:") ? "outer" : "program");
     this.slots.set(key, { surface, width, height });
     return surface;
   }
   output(): Surface {
     this.outputUsed = true;
     if (this.outputSurface) { this.frameReuses += 1; return this.outputSurface; }
-    return this.outputSurface = this.create(this.width, this.height);
+    return this.outputSurface = this.create(this.width, this.height, "output");
   }
   transient(width = this.width, height = this.height): Surface {
-    const reusable = [...this.freeTransients]
-      .filter(([, dimensions]) => dimensions.width >= width && dimensions.height >= height)
-      .sort((left, right) => left[1].width * left[1].height - right[1].width * right[1].height)[0];
-    const surface = reusable ? reusable[0] : this.create(width, height);
-    if (reusable) {
+    let surface: Surface | null = null;
+    for (const [candidate, dimensions] of this.freeTransients) {
+      if (dimensions.width === width && dimensions.height === height) { surface = candidate; break; }
+    }
+    if (surface) {
       this.freeTransients.delete(surface);
       this.frameReuses += 1;
+    } else {
+      // An extent this frame has not seen means the working set moved on. Backings carried over
+      // from the previous frame and not reused yet go back to Ganesh, which keeps them as purgeable
+      // scratch within the cache headroom for any size that comes back.
+      this.releaseCarriedOver();
+      surface = this.create(width, height);
     }
-    // Reusing a larger backing does not shrink it. Keep physical capacity so a later
-    // growing ROI can reuse the same allocation instead of accumulating redundant surfaces.
-    this.checkedOutTransients.set(surface, reusable ? reusable[1] : { width, height });
+    this.checkedOutTransients.set(surface, { width, height });
+    this.frameTransients.add(surface);
     return surface;
+  }
+  private releaseCarriedOver(): void {
+    for (const surface of [...this.freeTransients.keys()]) {
+      if (this.frameTransients.has(surface)) continue;
+      this.freeTransients.delete(surface);
+      this.evictSurface(surface);
+    }
   }
   releaseTransient(surface: Surface): void {
     const dimensions = this.checkedOutTransients.get(surface);
@@ -3734,9 +3797,10 @@ class SurfaceArena {
     this.slots.clear();
     this.freeTransients.clear();
     this.checkedOutTransients.clear();
+    this.frameTransients.clear();
     this.outputSurface = null;
   }
-  private create(width: number, height: number): Surface {
+  private create(width: number, height: number, kind: CanvasKitSurfaceKind = "transient"): Surface {
     const bytes = BigInt(width) * BigInt(height) * 8n;
     if (width <= 0 || height <= 0 || bytes <= 0n || bytes > this.maxSurfaceBytes) {
       fail("surface_budget", `${width}x${height} working surface needs ${bytes} bytes, budget ${this.maxSurfaceBytes}`);
@@ -3767,10 +3831,15 @@ class SurfaceArena {
     if (!surface) fail("surface_allocation", `cannot allocate ${width}x${height} working surface`);
     if (memory) this.rasterMemory.set(surface, memory);
     this.surfaceBytes.set(surface, bytes);
+    this.surfaceKinds.set(surface, kind);
     this.residentBytes += bytes;
+    this.residentByKind[kind] += bytes;
     this.frameAllocations += 1;
     this.frameAllocatedBytes += bytes;
-    this.framePeakBytes = this.residentBytes > this.framePeakBytes ? this.residentBytes : this.framePeakBytes;
+    if (this.residentBytes > this.framePeakBytes) {
+      this.framePeakBytes = this.residentBytes;
+      this.framePeakByKind = { ...this.residentByKind };
+    }
     return surface;
   }
   private ensureCapacity(requiredBytes: bigint): void {
@@ -3813,6 +3882,9 @@ class SurfaceArena {
     }
     this.surfaceBytes.delete(surface);
     this.residentBytes -= bytes;
+    const kind = this.surfaceKinds.get(surface);
+    if (kind) this.residentByKind[kind] -= bytes;
+    this.surfaceKinds.delete(surface);
   }
 }
 
@@ -4063,20 +4135,24 @@ function admitBoundProgramSchedules(
       if (resourceId !== resourceIndex + 1) fail("program_schedule", `program ${id} resource IDs are not canonical`);
       const storage = required(storageByResource, resourceId, "program storage");
       const fullInput = fullInputs.has(resourceId);
-      const expected = storage.kind === "transparent"
+      resourceRois.set(resourceId, storage.kind === "transparent"
         ? emptyRoi()
         : fullInput && !destinationRois.has(resourceId)
           ? projectProgramResource(program, resource, device, extent, true)
           : String(execution.kind.boundsReason) === "conservativeCameraTarget"
           ? { x: 0, y: 0, ...extent }
           : destinationRois.get(resourceId)
-            ?? projectProgramResource(program, resource, device, extent);
+            ?? projectProgramResource(program, resource, device, extent));
+    }
+    restrictCompositesToDemand(array(localPlan.passes, "program local passes"), destinationRois, resourceRois);
+    for (let resourceIndex = 0; resourceIndex < localResources.length; resourceIndex += 1) {
+      const resourceId = resourceIndex + 1;
       const actual = record(boundResources[resourceIndex], "bound program resource");
       if (positiveId(actual.resource, "bound program resource id") !== resourceId
-        || !sameRoi(deviceRoi(record(actual.deviceRoi, "bound program device ROI"), extent, fullInput), expected)) {
+        || !sameRoi(deviceRoi(record(actual.deviceRoi, "bound program device ROI"), extent, fullInputs.has(resourceId)),
+          required(resourceRois, resourceId, "program resource ROI"))) {
         fail("program_schedule", `program ${id} resource ${resourceId} ROI is not the exact plan/binding projection`);
       }
-      resourceRois.set(resourceId, expected);
     }
 
     const slotExtents = new Map<number, { width: number; height: number } | null>();
@@ -4336,6 +4412,52 @@ function deviceRoi(value: Wire, extent: { width: number; height: number }, uncli
     fail("bound_schedule", "empty ROI is not canonical");
   }
   return roi;
+}
+
+const COMPOSITE_PASSES = new Set(["readDestination", "sourceOver", "applyMask", "applyOpacity", "applyTransform", "blend"]);
+
+/**
+ * Mirror Engine's restrict_composites_to_demand. Composites write each output pixel from their
+ * inputs' pixels at the same device position, so a composite output keeps only the union of what
+ * its readers need; a clip reads its input only inside the clip output. Raster, clip and kernel
+ * outputs keep their ROI.
+ */
+function restrictCompositesToDemand(passes: unknown[], destinationRois: ReadonlyMap<number, DeviceRoi>,
+  rois: Map<number, DeviceRoi>): void {
+  // undefined: no reader yet. null: a reader may sample anywhere in the resource.
+  const demand = new Map<number, DeviceRoi | null>();
+  for (const raw of [...passes].reverse()) {
+    const kind = record(record(raw, "program local pass").kind, "program local pass kind");
+    const output = passOutput(kind), composite = COMPOSITE_PASSES.has(String(kind.kind));
+    const needed = demand.get(output);
+    if (composite && !destinationRois.has(output) && needed) {
+      const restricted = intersectRoi(required(rois, output, "program composite ROI"), needed);
+      rois.set(output, restricted.width === 0 || restricted.height === 0 ? emptyRoi() : restricted);
+    }
+    const need = composite || kind.kind === "applyClip" ? required(rois, output, "program reader ROI") : null;
+    for (const input of programPassReads(kind)) {
+      const prior = demand.get(input);
+      demand.set(input, prior === undefined ? need : prior === null || need === null ? null : unionRoi(prior, need));
+    }
+  }
+}
+
+function intersectRoi(left: DeviceRoi, right: DeviceRoi): DeviceRoi {
+  const x = Math.max(left.x, right.x), y = Math.max(left.y, right.y);
+  const width = Math.min(left.x + left.width, right.x + right.width) - x;
+  const height = Math.min(left.y + left.height, right.y + right.height) - y;
+  return width <= 0 || height <= 0 ? emptyRoi() : { x, y, width, height };
+}
+
+function unionRoi(left: DeviceRoi, right: DeviceRoi): DeviceRoi {
+  if (left.width === 0 || left.height === 0) return right;
+  if (right.width === 0 || right.height === 0) return left;
+  const x = Math.min(left.x, right.x), y = Math.min(left.y, right.y);
+  return {
+    x, y,
+    width: Math.max(left.x + left.width, right.x + right.width) - x,
+    height: Math.max(left.y + left.height, right.y + right.height) - y,
+  };
 }
 
 function sameRoi(left: DeviceRoi, right: DeviceRoi): boolean {

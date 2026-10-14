@@ -25,6 +25,10 @@
     ],
     "resourceCacheBytes": 1
   },
+  "order": {
+    "frames": 90,
+    "stride": 7
+  },
   "performance": {
     "width": 1920,
     "height": 1080,
@@ -77,7 +81,8 @@
           "width": 240,
           "height": 120
         }
-      ]
+      ],
+      "order": true
     },
     {
       "id": "geometry",
@@ -100,7 +105,8 @@
           "width": 240,
           "height": 120
         }
-      ]
+      ],
+      "order": true
     },
     {
       "id": "image",
@@ -125,7 +131,8 @@
           "width": 240,
           "height": 120
         }
-      ]
+      ],
+      "order": true
     },
     {
       "id": "particles",
@@ -148,7 +155,8 @@
           "width": 240,
           "height": 120
         }
-      ]
+      ],
+      "order": true
     },
     {
       "id": "mask",
@@ -171,7 +179,8 @@
           "width": 240,
           "height": 120
         }
-      ]
+      ],
+      "order": true
     },
     {
       "id": "bloom",
@@ -194,7 +203,8 @@
           "width": 240,
           "height": 120
         }
-      ]
+      ],
+      "order": true
     },
     {
       "id": "echo",
@@ -217,7 +227,8 @@
           "width": 240,
           "height": 120
         }
-      ]
+      ],
+      "order": true
     },
     {
       "id": "shutter",
@@ -240,7 +251,8 @@
           "width": 240,
           "height": 120
         }
-      ]
+      ],
+      "order": true
     },
     {
       "id": "video",
@@ -289,7 +301,80 @@
           "width": 240,
           "height": 120
         }
-      ]
+      ],
+      "order": true
+    },
+    {
+      "id": "grow-glow",
+      "source": "fixtures/grow-glow.motion.tsx",
+      "group": "special",
+      "assets": {},
+      "rule": {
+        "rgb": 2,
+        "alpha": 2
+      },
+      "repeatRule": {
+        "rgb": 0,
+        "alpha": 0
+      },
+      "regions": [
+        {
+          "name": "center",
+          "x": 40,
+          "y": 30,
+          "width": 240,
+          "height": 120
+        }
+      ],
+      "order": true
+    },
+    {
+      "id": "clip-glow",
+      "source": "fixtures/clip-glow.motion.tsx",
+      "group": "special",
+      "assets": {},
+      "rule": {
+        "rgb": 2,
+        "alpha": 2
+      },
+      "repeatRule": {
+        "rgb": 0,
+        "alpha": 0
+      },
+      "regions": [
+        {
+          "name": "center",
+          "x": 40,
+          "y": 30,
+          "width": 240,
+          "height": 120
+        }
+      ],
+      "order": true
+    },
+    {
+      "id": "dynamic-text",
+      "source": "fixtures/dynamic-text.motion.tsx",
+      "group": "special",
+      "assets": {},
+      "rule": {
+        "rgb": 2,
+        "alpha": 2
+      },
+      "repeatRule": {
+        "rgb": 0,
+        "alpha": 0
+      },
+      "regions": [
+        {
+          "name": "center",
+          "x": 40,
+          "y": 30,
+          "width": 240,
+          "height": 120
+        }
+      ],
+      "order": true
     }
   ]
 }

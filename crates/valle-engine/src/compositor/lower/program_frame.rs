@@ -789,6 +789,7 @@ fn bind_program(
             device_roi,
         });
     }
+    restrict_composites_to_demand(program, &destination_rois, &mut resources)?;
 
     let mut surface_slots = Vec::with_capacity(program.local_schedule().surface_slots().len());
     let mut estimated_surface_bytes = 0_u64;
@@ -1007,6 +1008,91 @@ fn resolve_destination_rois(
         }
     }
     Ok(result)
+}
+
+/// Composites (source-over, blend, opacity, mask, transform copies and destination reads) write
+/// each output pixel from their inputs' pixels at the same device position, so they need no input
+/// pixel outside their own output. A composite output is therefore restricted to the union of
+/// what its readers need; a clip reads its input only inside the clip output. Raster, clip and
+/// kernel outputs keep their ROI: moving or re-clipping a raster target changes Skia's
+/// anti-aliasing, and kernels may sample anywhere in their input. The Web executor mirrors this.
+fn restrict_composites_to_demand(
+    program: &super::PlanProgram,
+    destination_rois: &BTreeMap<ProgramResourceId, DeviceRect>,
+    resources: &mut [BoundProgramResource],
+) -> Result<(), ProgramBindingError> {
+    let composite = |kind: &ProgramPassKind| {
+        matches!(
+            kind,
+            ProgramPassKind::ReadDestination { .. }
+                | ProgramPassKind::SourceOver { .. }
+                | ProgramPassKind::ApplyMask { .. }
+                | ProgramPassKind::ApplyOpacity { .. }
+                | ProgramPassKind::ApplyTransform { .. }
+                | ProgramPassKind::Blend { .. }
+        )
+    };
+    let ids: Vec<_> = resources.iter().map(|bound| bound.resource).collect();
+    let index = |resource: ProgramResourceId| {
+        let at = resource.index();
+        (ids.get(at) == Some(&resource))
+            .then_some(at)
+            .ok_or_else(|| ProgramBindingError::InvalidContract {
+                path: program.semantic_path.clone(),
+                reason: format!("resource {} is not canonical", resource.get()),
+            })
+    };
+    // `None`: no reader yet. `Some(None)`: a reader may sample anywhere in the resource.
+    let mut demand: Vec<Option<Option<DeviceRect>>> = vec![None; resources.len()];
+    // Every reader of a resource follows its writer, so the reverse walk completes a resource's
+    // demand before reaching the pass that writes it.
+    for pass in program.local_plan().passes().iter().rev() {
+        let output = index(pass.kind.output())?;
+        if composite(&pass.kind)
+            && !destination_rois.contains_key(&pass.kind.output())
+            && let Some(Some(needed)) = demand[output]
+        {
+            let restricted = resources[output].device_roi.intersect(needed);
+            resources[output].device_roi = if restricted.is_empty() {
+                DeviceRect::new(0, 0, 0, 0)
+            } else {
+                restricted
+            };
+        }
+        let need = (composite(&pass.kind)
+            || matches!(pass.kind, ProgramPassKind::ApplyClip { .. }))
+        .then_some(resources[output].device_roi);
+        for input in pass.kind.reads() {
+            let slot = &mut demand[index(input)?];
+            *slot = Some(match (*slot, need) {
+                (None, need) => need,
+                (Some(Some(left)), Some(right)) => union_rois(left, right),
+                _ => None,
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Bounding union of two ROIs, ignoring empty ones. `None` (sample anywhere) if it overflows.
+fn union_rois(left: DeviceRect, right: DeviceRect) -> Option<DeviceRect> {
+    if left.is_empty() {
+        return Some(right);
+    }
+    if right.is_empty() {
+        return Some(left);
+    }
+    let x = left.x.min(right.x);
+    let y = left.y.min(right.y);
+    let end = |origin: i32, size: u32| i64::from(origin) + i64::from(size);
+    let width = end(left.x, left.width).max(end(right.x, right.width)) - i64::from(x);
+    let height = end(left.y, left.height).max(end(right.y, right.height)) - i64::from(y);
+    Some(DeviceRect::new(
+        x,
+        y,
+        u32::try_from(width).ok()?,
+        u32::try_from(height).ok()?,
+    ))
 }
 
 fn resource_bounds_in_program(

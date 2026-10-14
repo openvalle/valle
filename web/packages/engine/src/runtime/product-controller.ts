@@ -35,6 +35,7 @@ import {
   CanvasKitExecutor,
   type CanvasKitExecutionProfile,
   type CanvasKitExternalObject,
+  type CanvasKitSurfaceKind,
 } from "../executor/canvaskit/index.ts";
 import type {
   ResourceManifest,
@@ -353,7 +354,12 @@ export interface ProductRenderStats {
   surfaceAllocatedBytes: number;
   surfaceResidentBytes: number;
   surfacePeakBytes: number;
+  plannedSurfacePeakBytes: number;
+  surfacePeakBytesByKind: Record<CanvasKitSurfaceKind, number>;
   surfacePoolEvictions: number;
+  gpuCacheUsageBytes: number;
+  gpuCacheLimitBytes: number;
+  geometryTargetBytes: number;
   templateCacheHit: boolean;
   programCacheHits: number;
   programCacheMisses: number;
@@ -506,7 +512,13 @@ export interface PlayerStats {
   surfaceAllocatedBytes: number;
   maximumSurfaceResidentBytes: number;
   maximumSurfacePeakBytes: number;
+  maximumPlannedSurfacePeakBytes: number;
+  /** Role breakdown of the frame that set `maximumSurfacePeakBytes`. */
+  maximumSurfacePeakBytesByKind: Record<CanvasKitSurfaceKind, number>;
   surfacePoolEvictions: number;
+  maximumGpuCacheUsageBytes: number;
+  maximumGpuCacheLimitBytes: number;
+  maximumGeometryTargetBytes: number;
   templateCacheHits: number;
   templateCacheMisses: number;
   programCacheHits: number;
@@ -1058,7 +1070,20 @@ export class BrowserValleWebPlayer {
           report.surfacePeakBytes,
           "surface peak bytes",
         ),
+        plannedSurfacePeakBytes: exactBigIntNumber(
+          report.plannedSurfacePeakBytes,
+          "planned surface peak bytes",
+        ),
+        surfacePeakBytesByKind: {
+          output: exactBigIntNumber(report.surfacePeakBytesByKind.output, "output peak bytes"),
+          outer: exactBigIntNumber(report.surfacePeakBytesByKind.outer, "outer peak bytes"),
+          program: exactBigIntNumber(report.surfacePeakBytesByKind.program, "program peak bytes"),
+          transient: exactBigIntNumber(report.surfacePeakBytesByKind.transient, "transient peak bytes"),
+        },
         surfacePoolEvictions: report.surfacePoolEvictions,
+        gpuCacheUsageBytes: report.gpuCacheUsageBytes,
+        gpuCacheLimitBytes: report.gpuCacheLimitBytes,
+        geometryTargetBytes: report.geometryTargetBytes,
         templateCacheHit: readyStage.templateCacheHit,
         programCacheHits: report.programCacheHits,
         programCacheMisses: report.programCacheMisses,
@@ -1145,11 +1170,18 @@ export class BrowserValleWebPlayer {
           "surface resident bytes",
         ),
       );
-      this.stats.maximumSurfacePeakBytes = Math.max(
-        this.stats.maximumSurfacePeakBytes,
-        exactBigIntNumber(report.surfacePeakBytes, "surface peak bytes"),
+      if (stats.surfacePeakBytes > this.stats.maximumSurfacePeakBytes) {
+        this.stats.maximumSurfacePeakBytes = stats.surfacePeakBytes;
+        this.stats.maximumSurfacePeakBytesByKind = stats.surfacePeakBytesByKind;
+      }
+      this.stats.maximumPlannedSurfacePeakBytes = Math.max(
+        this.stats.maximumPlannedSurfacePeakBytes,
+        stats.plannedSurfacePeakBytes,
       );
       this.stats.surfacePoolEvictions += report.surfacePoolEvictions;
+      this.stats.maximumGpuCacheUsageBytes = Math.max(this.stats.maximumGpuCacheUsageBytes, report.gpuCacheUsageBytes);
+      this.stats.maximumGpuCacheLimitBytes = Math.max(this.stats.maximumGpuCacheLimitBytes, report.gpuCacheLimitBytes);
+      this.stats.maximumGeometryTargetBytes = Math.max(this.stats.maximumGeometryTargetBytes, report.geometryTargetBytes);
       if (readyStage.templateCacheHit) this.stats.templateCacheHits += 1;
       else this.stats.templateCacheMisses += 1;
       this.stats.programCacheHits += report.programCacheHits;
@@ -3421,7 +3453,12 @@ function emptyPlayerStats(): PlayerStats {
     surfaceAllocatedBytes: 0,
     maximumSurfaceResidentBytes: 0,
     maximumSurfacePeakBytes: 0,
+    maximumPlannedSurfacePeakBytes: 0,
+    maximumSurfacePeakBytesByKind: { output: 0, outer: 0, program: 0, transient: 0 },
     surfacePoolEvictions: 0,
+    maximumGpuCacheUsageBytes: 0,
+    maximumGpuCacheLimitBytes: 0,
+    maximumGeometryTargetBytes: 0,
     templateCacheHits: 0,
     templateCacheMisses: 0,
     programCacheHits: 0,

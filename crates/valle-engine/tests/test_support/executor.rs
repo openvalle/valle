@@ -114,14 +114,18 @@ pub fn fixture(draw: DrawProgram) -> (PreparedFrame, Vec<DynamicBinding>) {
                 sample,
                 &format!("visual[0].destination[{index}].sampleBounds"),
                 DynamicBindingKind::BackdropSampleBounds,
-                DynamicValue::Bounds(DeviceRect::full(32, 32)),
+                DynamicValue::Bounds(projected(valle_draw::requirements::LocalBounds::from_rect(
+                    required.sample_bounds,
+                ))),
             ));
             let output = dynamic.len() as u32 + 1;
             dynamic.push(binding(
                 output,
                 &format!("visual[0].destination[{index}].outputBounds"),
                 DynamicBindingKind::BackdropOutputBounds,
-                DynamicValue::Bounds(DeviceRect::full(32, 32)),
+                DynamicValue::Bounds(projected(valle_draw::requirements::LocalBounds::from_rect(
+                    required.output_bounds,
+                ))),
             ));
             valle_engine::prepare::PreparedDestinationUse {
                 node: required.node,

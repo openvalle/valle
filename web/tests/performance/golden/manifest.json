@@ -21,11 +21,11 @@
       0,
       59
     ],
-    "parallelWorkers": [
+    "threadAllowances": [
       1,
       4
     ],
-    "resourceCacheBytes": 0
+    "resourceCacheBytes": 1
   },
   "cases": {
     "text-alpha": {
@@ -219,6 +219,69 @@
         "gitHead": "2531eb312723830b18a3649ac7bf69f40d65a683",
         "cli": "bec30bf12ad0656ff479b72735543855ba214d28da2e550811de282692f1b68f",
         "fixedRunner": "eb3f565b56f9ea988198e31e0a9a6e380b859a8455d2d2982eddc0b91528f9d5"
+      }
+    },
+    "grow-glow": {
+      "identity": {
+        "sourceSha256": "2427f556243bf581ee1bd5b19334eecb1726802752cd190edb3f3ccbd61b3388",
+        "assets": {}
+      },
+      "pngSha256": "d09edde85be1a7e219acc32ceb5a7adb792f800a27892b4c6f3538ad875d4821",
+      "rule": {
+        "rgb": 2,
+        "alpha": 2
+      },
+      "repeatRule": {
+        "rgb": 0,
+        "alpha": 0
+      },
+      "generatedAt": "2026-10-14T11:27:35.191Z",
+      "generator": {
+        "gitHead": "ab1809cd88791a3405858a03537ffe8b8d9500eb",
+        "cli": "1b479abd85b960400f7e199032b474a0c5744d7c57408fbc6b6a8355278af6b9",
+        "fixedRunner": null
+      }
+    },
+    "clip-glow": {
+      "identity": {
+        "sourceSha256": "ee5ae593d4194a9cb0c500878bba678250f984fa487b1e590f4bf63c9bb16ba1",
+        "assets": {}
+      },
+      "pngSha256": "2194214b421454253a406735686ca3916ded9e74cf654af912ca520826707711",
+      "rule": {
+        "rgb": 2,
+        "alpha": 2
+      },
+      "repeatRule": {
+        "rgb": 0,
+        "alpha": 0
+      },
+      "generatedAt": "2026-10-14T11:27:35.251Z",
+      "generator": {
+        "gitHead": "ab1809cd88791a3405858a03537ffe8b8d9500eb",
+        "cli": "1b479abd85b960400f7e199032b474a0c5744d7c57408fbc6b6a8355278af6b9",
+        "fixedRunner": null
+      }
+    },
+    "dynamic-text": {
+      "identity": {
+        "sourceSha256": "5d00410324b1c371008dd37b75c8afd1aba14f979fd7474d9c9c13bb7c490c98",
+        "assets": {}
+      },
+      "pngSha256": "68490bf2d98825ee55c212f1fd7edc21d093e99f8179123e455f21305799d28e",
+      "rule": {
+        "rgb": 2,
+        "alpha": 2
+      },
+      "repeatRule": {
+        "rgb": 0,
+        "alpha": 0
+      },
+      "generatedAt": "2026-10-14T11:27:35.545Z",
+      "generator": {
+        "gitHead": "ab1809cd88791a3405858a03537ffe8b8d9500eb",
+        "cli": "1b479abd85b960400f7e199032b474a0c5744d7c57408fbc6b6a8355278af6b9",
+        "fixedRunner": null
       }
     }
   }

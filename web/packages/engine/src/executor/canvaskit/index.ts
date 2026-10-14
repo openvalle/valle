@@ -6,6 +6,7 @@ export {
   type CanvasKitExecutionProfile,
   type CanvasKitGlyphCoverageProfile,
   type CanvasKitExecutionReport,
+  type CanvasKitSurfaceKind,
   type CanvasKitExecutionTarget,
   type CanvasKitPassTiming,
   type CanvasKitExternalObject,

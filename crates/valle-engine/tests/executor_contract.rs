@@ -279,6 +279,72 @@ fn program_inspection_includes_local_surfaces_and_backdrop_schedules() {
     execute(program(None, 0, None, true));
 }
 
+/// A clip reads its input only inside the clip, and composites read their inputs only at their
+/// own pixels, so the composites before a clip bind to the clipped region. Raster targets keep
+/// their content ROI: relocating or re-clipping them would change their anti-aliasing. A
+/// destination read stays bound to its sample bounds, so the backdrop before it covers them.
+#[test]
+fn composites_feeding_a_clip_bind_only_the_clipped_region() {
+    use valle_engine::compositor::lower::ProgramPassKind;
+    use valle_engine::prepare::DeviceRect;
+
+    let mut builder = DrawProgramBuilder::new(Rect::new(0.0, 0.0, 32.0, 32.0));
+    let back = rectangle(
+        &mut builder,
+        Rect::new(0.0, 0.0, 32.0, 32.0),
+        LinearColor::new(0.0, 0.0, 1.0, 1.0),
+    );
+    let ink = rectangle(
+        &mut builder,
+        Rect::new(4.0, 4.0, 24.0, 24.0),
+        LinearColor::new(1.0, 0.0, 0.0, 1.0),
+    );
+    let mut multiply = Group::plain(vec![ink]);
+    multiply.internal_blend = BlendMode::Multiply;
+    let multiply = builder.push_node(Node::Group(multiply));
+    let mut strip = Group::plain(vec![back, multiply]);
+    strip.clip = Some(Clip::Rect(Rect::new(0.0, 10.0, 32.0, 4.0)));
+    let root = builder.push_node(Node::Group(strip));
+    builder.add_root(root);
+    let (frame, dynamic) = support::fixture(builder.finish().unwrap());
+    let (plan, bindings) = support::lower(&frame, dynamic);
+    let schedules = plan
+        .bind_program_schedules(&bindings, &support::capabilities())
+        .unwrap();
+    let bound = &schedules.programs()[0];
+    let rois = plan.programs()[0]
+        .local_plan()
+        .passes()
+        .iter()
+        .filter(|pass| !matches!(pass.kind, ProgramPassKind::Clear { .. }))
+        .map(|pass| {
+            let output = bound
+                .resources()
+                .iter()
+                .find(|resource| resource.resource() == pass.kind.output())
+                .unwrap();
+            (pass.semantic_path.as_str(), output.device_roi())
+        })
+        .collect::<Vec<_>>();
+    let strip = DeviceRect::new(0, 10, 32, 4);
+    let ink_strip = DeviceRect::new(4, 10, 24, 4);
+    assert_eq!(
+        rois.iter().map(|(_, roi)| *roi).collect::<Vec<_>>(),
+        [
+            DeviceRect::new(0, 0, 32, 32), // back raster
+            DeviceRect::new(0, 4, 32, 24), // back over transparent: strip ∪ destination read
+            DeviceRect::new(4, 4, 24, 24), // ink raster
+            ink_strip,                     // ink into the isolated multiply group
+            DeviceRect::new(4, 4, 24, 24), // destination read keeps its sample bounds
+            ink_strip,                     // multiply blend
+            strip,                         // strip group result
+            strip,                         // clip
+            strip,                         // program output
+        ],
+        "{rois:?}"
+    );
+}
+
 fn execute_prepared(
     frame: &valle_engine::prepare::PreparedFrame,
     values: Vec<valle_engine::prepare::DynamicBinding>,

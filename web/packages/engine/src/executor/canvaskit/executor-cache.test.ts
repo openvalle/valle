@@ -40,36 +40,90 @@ describe("long-lived CanvasKit executor caches", () => {
       executor.arena(context, 128, 96, 1024n, 4096n).endFrame();
       expect(limits).toEqual([8192, 4096]);
       executor.arena(other, 128, 96, 1024n, 1n << 40n).endFrame();
-      expect(otherLimits).toEqual([256 * 1024 * 1024]);
+      expect(otherLimits).toEqual([128 * 1024 * 1024]);
       executor.arena(null, 128, 96, 1024n, 4096n).endFrame();
       expect(limits).toEqual([8192, 4096]);
     } finally { executor.dispose(); }
   });
 
-  test("transient reuse retains physical capacity when the logical ROI shrinks and grows", async () => {
+  test("working surfaces keep the requested extent and drop carried-over backings a new extent displaces", async () => {
     const ck = await CanvasKitInit({ locateFile: () => wasmPath });
     const executor = new CanvasKitExecutor(ck);
     const budget = 1024n * 1024n;
     try {
-      const arena = executor.arena(null, 128, 96, budget, budget);
-      const backing = arena.transient(64, 48);
-      arena.releaseTransient(backing);
-      for (const [width, height] of [[16,12],[48,32],[32,24],[64,48]]) {
-        const reused = arena.transient(width, height);
-        expect(reused).toBe(backing);
-        expect(reused.width()).toBe(64);
-        expect(reused.height()).toBe(48);
-        arena.releaseTransient(reused);
-      }
-      expect(arena.frameAllocations).toBe(1);
-      expect(arena.frameReuses).toBe(4);
-      expect(arena.residentBytes).toBe(64n * 48n * 8n);
+      const first = executor.arena(null, 128, 96, budget, budget);
+      const large = first.transient(64, 48);
+      first.releaseTransient(large);
+      const small = first.transient(32, 24);
+      expect(small).not.toBe(large);
+      expect([small.width(), small.height()]).toEqual([32, 24]);
+      first.releaseTransient(small);
+      expect(first.transient(64, 48)).toBe(large);
+      first.releaseTransient(large);
+      first.slot(1, 16, 16);
+      first.releaseUnused();
+      first.endFrame();
+      expect(first.count).toBe(3);
+      const second = executor.arena(null, 128, 96, budget, budget);
+      expect(second.transient(32, 24)).toBe(small);
+      second.releaseTransient(small);
+      const grown = second.transient(40, 30);
+      expect(second.frameEvictions).toBe(1);
+      second.releaseTransient(grown);
+      const slot = second.slot(1, 16, 20);
+      expect([slot.width(), slot.height()]).toEqual([16, 20]);
+      second.releaseUnused();
+      second.endFrame();
+      expect(second.count).toBe(3);
+      expect(second.frameEvictions).toBe(2);
+      expect(second.residentBytes).toBe((32n * 24n + 40n * 30n + 16n * 20n) * 8n);
+    } finally { executor.dispose(); }
+  });
+
+  test("a frame releases the pool surfaces it did not use", async () => {
+    const ck = await CanvasKitInit({ locateFile: () => wasmPath });
+    const executor = new CanvasKitExecutor(ck);
+    const budget = 1024n * 1024n;
+    try {
+      const first = executor.arena(null, 128, 96, budget, budget);
+      const kept = first.transient(64, 48), dropped = first.transient(32, 24);
+      first.releaseTransient(kept);
+      first.releaseTransient(dropped);
+      first.slot(1, 16, 16);
+      first.slot(2, 16, 16);
+      first.releaseUnused();
+      first.endFrame();
+      expect(first.count).toBe(4);
+      const second = executor.arena(null, 128, 96, budget, budget);
+      expect(second.transient(64, 48)).toBe(kept);
+      second.releaseTransient(kept);
+      second.slot(1, 16, 16);
+      second.releaseUnused();
+      second.endFrame();
+      expect(second.count).toBe(2);
+      expect(second.frameEvictions).toBe(2);
+      expect(second.residentBytes).toBe((64n * 48n + 16n * 16n) * 8n);
+      // The peak breakdown attributes resident bytes by role and follows evictions.
+      expect(second.framePeakByKind).toEqual({ output: 0n, outer: 2n * 16n * 16n * 8n, program: 0n, transient: (64n * 48n + 32n * 24n) * 8n });
+      const third = executor.arena(null, 128, 96, budget, budget);
+      expect(third.framePeakByKind).toEqual({ output: 0n, outer: 16n * 16n * 8n, program: 0n, transient: 64n * 48n * 8n });
+      third.endFrame();
+    } finally { executor.dispose(); }
+  });
+
+  test("the frame peak attributes resident surfaces to their pool roles", async () => {
+    const ck = await CanvasKitInit({ locateFile: () => wasmPath });
+    const executor = new CanvasKitExecutor(ck);
+    const budget = 1024n * 1024n;
+    try {
+      const arena = executor.arena(null, 32, 16, budget, budget);
+      arena.output();
+      arena.slot(1, 16, 16);
+      arena.programSlot(1, 1, 8, 8);
+      arena.releaseTransient(arena.transient(4, 4));
       arena.endFrame();
-      const next = executor.arena(null, 128, 96, budget, budget);
-      const reused = next.transient(48, 40);
-      expect(reused).toBe(backing);
-      next.releaseTransient(reused);
-      next.endFrame();
+      expect(arena.framePeakByKind).toEqual({ output: 32n * 16n * 8n, outer: 16n * 16n * 8n, program: 8n * 8n * 8n, transient: 4n * 4n * 8n });
+      expect(arena.framePeakBytes).toBe((32n * 16n + 16n * 16n + 8n * 8n + 4n * 4n) * 8n);
     } finally { executor.dispose(); }
   });
 

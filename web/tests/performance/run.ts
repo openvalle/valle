@@ -9,15 +9,16 @@ import { compareFrames, crop, type PixelRule, type Region } from "./pixels.ts";
 import { median, option, ROOT, sha256 } from "../../scripts/motion/common.ts";
 
 const BASE = import.meta.dir;
-type Case = { id: string; source: string; kind?: "timeline"; group: string; assets: Record<string,string>; rule: PixelRule; repeatRule: PixelRule; regions: Region[] };
+type Case = { id: string; source: string; kind?: "timeline"; group: string; assets: Record<string,string>; rule: PixelRule; repeatRule: PixelRule; regions: Region[]; order?: boolean };
 const suite = await Bun.file(path.join(BASE, "suite.json")).json() as {
   qa: { width: number; height: number; frames: number[]; order: number[]; threadAllowances: number[];resourceCacheBytes:number };
+  order: { frames: number; stride: number };
   performance: { width: number; height: number; fps: number; durationS: number; repeats: number; threads: number; bitrate: number; profiles:Record<string,{width:number;height:number}>; regressionTolerance:{wallPercent:number;memoryPercent:number}; target: {width:number;height:number;fps:number;rtfMedian:number} };
   cases: Case[];
 };
 const args = Bun.argv.slice(2);
 if (args.includes("--help")) {
-  console.log("bun web/tests/performance/run.ts --output NEW_DIR [--mode qa|bench|all] [--cases ID,...] [--backends native-cpu,native-metal,web-cpu,web-gpu] [--profile preview|1080] [--target-4k] [--qa-4k --golden-dir DIR] [--browser-timeout-ms 300000] [--cpu-output-f32] [--cli BINARY --fixed-runner BINARY --web-assets-dir DIR] [--compare BASELINE/run.json] [--update-golden]");
+  console.log("bun web/tests/performance/run.ts --output NEW_DIR [--mode qa|order|bench|all] [--cases ID,...] [--backends native-cpu,native-metal,web-cpu,web-gpu] [--profile preview|1080] [--target-4k] [--qa-4k --golden-dir DIR] [--browser-timeout-ms 300000] [--cpu-output-f32] [--cli BINARY --fixed-runner BINARY --web-assets-dir DIR] [--compare BASELINE/run.json] [--update-golden]");
   process.exit(0);
 }
 const output = path.resolve(option(args, "--output"));
@@ -25,7 +26,7 @@ const cli = path.resolve(option(args, "--cli", path.join(ROOT, "target/release/v
 const fixedRunner = path.resolve(option(args, "--fixed-runner", path.join(ROOT, "target/release/examples/performance_fixed_package")));
 const webAssetsDir = path.resolve(option(args, "--web-assets-dir", path.join(ROOT, "web/dist")));
 const mode = option(args, "--mode", "qa");
-if (!["qa","bench","all"].includes(mode)) throw new Error(`invalid mode ${mode}`);
+if (!["qa","order","bench","all"].includes(mode)) throw new Error(`invalid mode ${mode}`);
 const browserTimeoutMs = Number(option(args, "--browser-timeout-ms", "300000"));
 if (!Number.isSafeInteger(browserTimeoutMs) || browserTimeoutMs < 1000 || browserTimeoutMs > 1_800_000) throw new Error("browser timeout must be 1000..1800000 ms");
 const memorySampleLimit = Math.ceil(browserTimeoutMs / 250) + 4;
@@ -54,8 +55,8 @@ const profile = option(args,"--profile","1080");
 if(!suite.performance.profiles[profile])throw new Error(`unknown performance profile ${profile}`);
 const performance = { ...suite.performance, ...suite.performance.profiles[profile], ...(args.includes("--target-4k") ? suite.performance.target : {}) };
 const report: any = { startedAt: new Date().toISOString(), status: "running", host: {platform:os.platform(),arch:os.arch(),cpus:os.cpus().length,cpu:os.cpus()[0]?.model,totalMemory:os.totalmem()},
-  settings: { mode, backends, qa:suite.qa, performance }, identities: { cli:sha256(cli), suite:sha256(path.join(BASE,"suite.json")),
-    cases:Object.fromEntries(cases.map(c => [c.id,identity(c)])) }, qa:[], benchmarks:[], unmeasured:[], failures:[] };
+  settings: { mode, backends, qa:suite.qa, order:suite.order, performance }, identities: { cli:sha256(cli), suite:sha256(path.join(BASE,"suite.json")),
+    cases:Object.fromEntries(cases.map(c => [c.id,identity(c)])) }, qa:[], order:[], benchmarks:[], unmeasured:[], failures:[] };
 report.diagnostics = { browserTimeoutMs, cpuOutputRepresentation: cpuOutputF32 ? "forced-f32" : "product-default" };
 report.unmeasured.push(
   {metric:"GPU device execution time",reason:"CPU submit/completion waits are measured; no device timestamp queries"},
@@ -274,6 +275,55 @@ async function qaCase(c:Case, backend:string, golden:any) {
   console.log(`QA ${backend} ${c.id}: ${pass?"PASS":"FAIL"}`);
 }
 
+/** Render the same frames in playback order and in a strided order from cold sessions. A frame is a
+ * function of its inputs, so any difference from the playback-order capture comes from history. */
+async function orderCase(c:Case, backend:string) {
+  const folder=path.join(output,"order",backend,c.id);
+  const {width,height}=suite.qa,{stride}=suite.order;
+  const frames=Array.from({length:suite.order.frames},(_,i)=>i);
+  const orders:Record<string,{frames:number[];threads:number}>={sequential:{frames,threads:1},
+    strided:{frames:Array.from({length:stride},(_,start)=>frames.filter(f=>f%stride===start)).flat(),threads:1}};
+  if(backend.startsWith("native"))orders["sequential-n4"]={frames,threads:4};
+  const captures=new Map<string,Map<number,ReturnType<typeof crop>>>();
+  let sessions:any[]=[];
+  if(backend.startsWith("native")) {
+    for(const [label,{frames:order,threads}]of Object.entries(orders)) {
+      const f=path.join(folder,label);const sheet=path.join(f,"sheet.png");
+      await native(c,backend,["--frames",order.join(","),"--storyboard",sheet,"--output-size",`${width}x${height}`,"--threads",String(threads)],f);
+      const image=await readPng(sheet);const columns=Math.min(4,order.length);
+      captures.set(label,new Map(order.map((frame,i)=>[frame,crop(image,(i%columns)*width,Math.floor(i/columns)*height,width,height)])));
+    }
+  } else {
+    const r=await browserJob(c,backend,{mode:"order",width,height,orders:Object.fromEntries(Object.entries(orders).map(([label,o])=>[label,o.frames]))},folder);
+    for(const label of Object.keys(orders))captures.set(label,new Map());
+    for(const entry of r.outputs)if(entry.name)captures.get(entry.order)!.set(entry.frame,await readPng(path.join(folder,entry.name)));
+    sessions=r.outputs.filter((entry:any)=>entry.session);
+  }
+  const reference=captures.get("sequential")!,rows:any[]=[];
+  for(const [label,images]of captures) {
+    if(label==="sequential")continue;
+    const results=frames.map(frame=>({frame,...compareFrames(reference.get(frame)!,images.get(frame)!,c.repeatRule)}));
+    const differing=results.filter(r=>!r.pass),worst=[...differing].sort((a,b)=>b.failedPixels-a.failedPixels).slice(0,3);
+    for(const r of worst) {
+      await png(reference.get(r.frame)!,path.join(folder,`${label}-${r.frame}.sequential.png`));
+      await png(images.get(r.frame)!,path.join(folder,`${label}-${r.frame}.actual.png`));
+      await png(r.diff,path.join(folder,`${label}-${r.frame}.diff.png`));
+    }
+    rows.push({order:label,frames:frames.length,differingFrames:differing.length,failedPixels:differing.reduce((sum,r)=>sum+r.failedPixels,0),
+      maxRgb:Math.max(...results.map(r=>r.rgbMax)),maxAlpha:Math.max(...results.map(r=>r.alphaMax)),maxWhite:Math.max(...results.map(r=>r.whiteMax)),
+      worst:worst.map(r=>({frame:r.frame,failedPixels:r.failedPixels,rgbMax:r.rgbMax,alphaMax:r.alphaMax}))});
+  }
+  const memory=Object.fromEntries(sessions.map(s=>[s.session,Object.fromEntries(["physicalSurfaces","maximumSurfaceResidentBytes",
+    "maximumSurfacePeakBytes","maximumSurfacePeakBytesByKind","maximumPlannedSurfacePeakBytes","maximumGpuCacheUsageBytes","maximumGpuCacheLimitBytes",
+    "maximumGeometryTargetBytes"].map(k=>[k,s.stats?.[k]??null]))]));
+  const pass=rows.every(r=>r.differingFrames===0);
+  await writeFile(path.join(folder,"order.json"),JSON.stringify({pass,repeatRule:c.repeatRule,orders,rows,sessions},null,2));
+  report.order.push({case:c.id,backend,pass,rows,memory});
+  if(!pass)report.failures.push({case:c.id,backend,kind:"order",evidence:path.relative(output,folder)});
+  await saveReport();
+  console.log(`ORDER ${backend} ${c.id}: ${pass?"PASS":"FAIL"} ${rows.map(r=>`${r.order} ${r.differingFrames}/${r.frames} max ${r.maxRgb.toFixed(1)}`).join(", ")}`);
+}
+
 function validateVideo(file:string,backend:string) {
   const streams=JSON.parse(runSync(["ffprobe","-v","error","-count_frames","-show_entries","stream=codec_type,codec_name,width,height,avg_frame_rate,nb_read_frames,duration,sample_rate,channels","-of","json",file]).toString()).streams;
   const value=streams.find((s:any)=>s.codec_type==="video");
@@ -329,7 +379,7 @@ try {
     }
     await writeFile(path.join(goldenDir,"manifest.json"),JSON.stringify(golden,null,2)+"\n");
   }
-  if(mode!=="bench") {
+  if(mode==="qa"||mode==="all") {
     const golden=await Bun.file(path.join(goldenDir,"manifest.json")).json();
     if (JSON.stringify(golden.qa) !== JSON.stringify(suite.qa)) throw new Error("golden QA settings differ from requested resolution/order");
     for(const c of cases)for(const backend of backends) {
@@ -338,7 +388,14 @@ try {
       try{await qaCase(c,backend,golden);}catch(error){report.failures.push({case:c.id,backend,error:String(error)});console.log(`QA ${backend} ${c.id}: ERROR ${String(error)}`);await saveReport();}
     }
   }
-  if(mode!=="qa") {
+  if(mode==="order"||mode==="all") {
+    for(const c of cases.filter(c=>c.order))for(const backend of backends) {
+      if(backend==="native-metal"&&process.platform!=="darwin"){report.unmeasured.push({backend,reason:"Metal requires macOS"});continue;}
+      if(backend.startsWith("web")&&!resolveBrowser()){report.unmeasured.push({backend,reason:"Chromium unavailable"});continue;}
+      try{await orderCase(c,backend);}catch(error){report.failures.push({case:c.id,backend,kind:"order",error:String(error)});console.log(`ORDER ${backend} ${c.id}: ERROR ${String(error)}`);await saveReport();}
+    }
+  }
+  if(mode==="bench"||mode==="all") {
     const unavailable = new Map<string,string>();
     if(process.platform!=="darwin")unavailable.set("native-metal","Metal requires macOS");
     if(!resolveBrowser())for(const backend of ["web-cpu","web-gpu"])unavailable.set(backend,"Chromium unavailable");
