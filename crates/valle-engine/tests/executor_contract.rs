@@ -5,7 +5,9 @@ use valle_engine::{
     compositor::{
         ExternalObjectTable,
         graph::build_render_graph,
-        inspect::{FramePerfInspection, FrameStageTimings, PlanInspection, render_graph_dot},
+        inspect::{
+            FrameCost, FramePerfInspection, FrameStageTimings, PlanInspection, render_graph_dot,
+        },
         reference::{ReferenceTarget, execute_reference},
     },
     resource::{Extent2d, ExternalGeneration},
@@ -277,6 +279,64 @@ fn program_inspection_includes_local_surfaces_and_backdrop_schedules() {
         .validate()
         .unwrap();
     execute(program(None, 0, None, true));
+}
+
+/// The authoring cost of a frame counts each pass that writes pixels at its bound ROI, and a
+/// program through its local passes in their own order, under the program's outer path.
+#[test]
+fn frame_cost_counts_the_pixels_every_pass_writes() {
+    use valle_engine::{compositor::lower::ExecutionPassKind, prepare::DeviceRect};
+    let draw = program(
+        Some(Filter::Blur {
+            sigma_x: 2.0,
+            sigma_y: 2.0,
+        }),
+        1,
+        None,
+        false,
+    );
+    let (frame, dynamic) = support::fixture(draw);
+    let (plan, bindings) = support::lower(&frame, dynamic);
+    let schedules = plan
+        .bind_program_schedules(&bindings, &support::capabilities())
+        .unwrap();
+    let cost = FrameCost::of(&plan, &bindings, &schedules);
+    assert_eq!(
+        cost.pixels,
+        cost.passes
+            .iter()
+            .map(|pass| pass.device_roi.pixels())
+            .sum::<u64>()
+    );
+    assert!(cost.passes.iter().all(|pass| !pass.device_roi.is_empty()));
+    assert_eq!(
+        cost.peak_surface_bytes,
+        schedules.estimated_peak_surface_bytes()
+    );
+    assert_eq!(cost.shader_work, schedules.shader_work());
+    let outer = &plan
+        .passes()
+        .iter()
+        .find(|pass| matches!(pass.kind, ExecutionPassKind::RasterProgram { .. }))
+        .unwrap()
+        .semantic_path;
+    assert!(cost.passes.iter().all(|pass| &pass.path != outer));
+    let at = |kind: &str| {
+        cost.passes
+            .iter()
+            .position(|pass| pass.kind == kind)
+            .unwrap_or_else(|| panic!("no {kind} pass in {:#?}", cost.passes))
+    };
+    // The group clips its content, then blurs it.
+    let (raster, clip, blur) = (at("raster"), at("clip"), at("blur"));
+    assert!(raster < clip && clip < blur, "{:#?}", cost.passes);
+    for local in [raster, clip, blur] {
+        assert!(cost.passes[local].path.starts_with(&format!("{outer}.")));
+    }
+    assert!(cost.passes[blur].path.ends_with(".filters[0]"));
+    // The blur writes the clipped 16 x 16 square grown by its 6 px reach.
+    assert_eq!(cost.passes[clip].device_roi, DeviceRect::new(8, 8, 16, 16));
+    assert_eq!(cost.passes[blur].device_roi, DeviceRect::new(2, 2, 28, 28));
 }
 
 /// A clip reads its input only inside the clip, and composites read their inputs only at their

@@ -35,6 +35,8 @@ pub fn run(action: MotionAction) -> Result<std::process::ExitCode> {
             font,
             frame,
             fps,
+            output_size,
+            cost,
             ..
         } => {
             let temp = tempfile::tempdir()?;
@@ -54,9 +56,10 @@ pub fn run(action: MotionAction) -> Result<std::process::ExitCode> {
                 valle_render::executor::skia::SkiaBackendKind::Raster,
                 MotionRenderTuningArgs {
                     fps,
+                    output_size,
                     ..Default::default()
                 },
-                true,
+                Some(MotionCheck { cost }),
             )
         }
         MotionAction::Review {
@@ -107,7 +110,7 @@ pub fn run(action: MotionAction) -> Result<std::process::ExitCode> {
             &bindings,
             backend.into(),
             tuning,
-            false,
+            None,
         ),
         MotionAction::Studio {
             input,
@@ -242,7 +245,7 @@ fn render(
     bindings: &MotionBindingArgs,
     backend: valle_render::executor::skia::SkiaBackendKind,
     tuning: MotionRenderTuningArgs,
-    checking: bool,
+    check: Option<MotionCheck>,
 ) -> Result<std::process::ExitCode> {
     use valle_render::host::{
         NativeProject, NativeRenderOptions, NativeRenderer, NativeResourceCatalog,
@@ -336,7 +339,23 @@ fn render(
             ..NativeRenderOptions::default()
         },
     );
-    if checking {
+    if let Some(check) = check {
+        // Plan every frame before rendering the checked one, so the report lists every frame that
+        // cannot be planned, the checked frame included.
+        let cost = if check.cost {
+            let size = tuning.output_size.unwrap_or(canvas.tuple());
+            let (cost, failures) = frame_costs(&renderer, fps, size)?;
+            if failures != 0 {
+                crate::output::emit(serde_json::json!({"status":"error",
+                    "component":artifact.component, "cost":cost,
+                    "error":{"code":"frame_plan_failed",
+                        "message":format!("{failures} frames cannot be planned; see cost.failures")}}));
+                return Ok(std::process::ExitCode::FAILURE);
+            }
+            Some(cost)
+        } else {
+            None
+        };
         let (summary, _) = plan
             .execute(&renderer)
             .map_err(|error| source_error(error, &prepared.compiled))?;
@@ -365,26 +384,28 @@ fn render(
         .context("checked frame is outside the template")?;
         let evaluation = prepared.scene.frame_evaluation_stats(&motion_context);
         let compilation = observation.trace.metrics();
-        crate::output::emit(
-            serde_json::json!({"status":"ok", "component":artifact.component,
-            "warnings":prepared.compiled.warnings,
-            "nodes":artifact.nodes.len(),
-            "expressions":artifact.exprs.len() + artifact.instance_groups.iter().map(|group| group.exprs.len()).sum::<usize>(),
-            "fullEvaluationExpressions":artifact.exprs.len() + artifact.instance_groups.iter().map(valle_motion::InstanceGroup::frame_expression_evaluations).sum::<usize>(),
-            "frame":checked_frame,
-            "templates":artifact.instance_groups.len(),
-            "instanceRows":artifact.instance_groups.iter().map(valle_motion::InstanceGroup::rows).sum::<usize>(),
-            "evaluatedExpressions":evaluation.evaluated_expressions,
-            "activeNodes":evaluation.active_nodes,
-            "layoutNodes":evaluation.layout_nodes,
-            "compilations": compilation.compilations,
-            "timings": {
-                "compile": compilation.elapsed.as_secs_f64() * 1000.0,
-                "templateCompile": compilation.template_compile.as_secs_f64() * 1000.0,
-                "instanceData": compilation.instance_data.as_secs_f64() * 1000.0,
-                "framePrepare": summary.pipeline.as_ref().map(|pipeline| pipeline.evaluate_prepare_us as f64 / 1000.0),
-            }}),
-        );
+        let mut report = serde_json::json!({"status":"ok", "component":artifact.component,
+        "warnings":prepared.compiled.warnings,
+        "nodes":artifact.nodes.len(),
+        "expressions":artifact.exprs.len() + artifact.instance_groups.iter().map(|group| group.exprs.len()).sum::<usize>(),
+        "fullEvaluationExpressions":artifact.exprs.len() + artifact.instance_groups.iter().map(valle_motion::InstanceGroup::frame_expression_evaluations).sum::<usize>(),
+        "frame":checked_frame,
+        "templates":artifact.instance_groups.len(),
+        "instanceRows":artifact.instance_groups.iter().map(valle_motion::InstanceGroup::rows).sum::<usize>(),
+        "evaluatedExpressions":evaluation.evaluated_expressions,
+        "activeNodes":evaluation.active_nodes,
+        "layoutNodes":evaluation.layout_nodes,
+        "compilations": compilation.compilations,
+        "timings": {
+            "compile": compilation.elapsed.as_secs_f64() * 1000.0,
+            "templateCompile": compilation.template_compile.as_secs_f64() * 1000.0,
+            "instanceData": compilation.instance_data.as_secs_f64() * 1000.0,
+            "framePrepare": summary.pipeline.as_ref().map(|pipeline| pipeline.evaluate_prepare_us as f64 / 1000.0),
+        }});
+        if let Some(cost) = cost {
+            report["cost"] = cost;
+        }
+        crate::output::emit(report);
     } else {
         plan.deliver_and_report(
             &renderer,
@@ -400,6 +421,76 @@ fn render(
         ).map_err(|error| source_error(error,&prepared.compiled))?;
     }
     Ok(std::process::ExitCode::SUCCESS)
+}
+
+/// What `motion check` reports beyond validating its frame.
+#[derive(Clone, Copy)]
+struct MotionCheck {
+    /// Plan every output frame and report its cost.
+    cost: bool,
+}
+
+/// The planned cost of every output frame at `width` x `height`: a row per frame, the five frames
+/// with the most planned pixels with their pixels by pass kind and largest passes, and the frames
+/// that cannot be planned, with their count.
+fn frame_costs(
+    renderer: &valle_render::host::NativeRenderer,
+    fps: FrameRate,
+    (width, height): (u32, u32),
+) -> Result<(serde_json::Value, usize)> {
+    use std::cmp::Reverse;
+    let seconds = |frame: valle_engine::render::FrameKey| {
+        frame.index() as f64 * f64::from(fps.denominator()) / fps.numerator() as f64
+    };
+    let (mut frames, mut planned, mut failures) = (Vec::new(), Vec::new(), Vec::new());
+    for (frame, cost) in renderer.plan_costs()? {
+        match cost {
+            Ok(cost) => {
+                frames.push(
+                    serde_json::json!({"frame":frame.index(), "pixels":cost.pixels,
+                    "peakBytes":cost.peak_surface_bytes}),
+                );
+                planned.push((frame, cost));
+            }
+            Err(error) => failures.push(serde_json::json!({"frame":frame.index(),
+                "seconds":seconds(frame), "error":error.to_string()})),
+        }
+    }
+    planned.sort_by_key(|(frame, cost)| (Reverse(cost.pixels), *frame));
+    let hot = planned
+        .iter_mut()
+        .take(5)
+        .map(|(frame, cost)| {
+            let mut kinds = std::collections::BTreeMap::<&str, (usize, u64)>::new();
+            for pass in &cost.passes {
+                let kind = kinds.entry(pass.kind).or_default();
+                kind.0 += 1;
+                kind.1 += pass.device_roi.pixels();
+            }
+            let mut kinds = kinds.into_iter().collect::<Vec<_>>();
+            kinds.sort_by_key(|(_, (_, pixels))| Reverse(*pixels));
+            let kinds = kinds.into_iter().map(|(kind, (passes, pixels))| {
+                serde_json::json!({"kind":kind, "passes":passes, "pixels":pixels})
+            });
+            cost.passes
+                .sort_by_key(|pass| Reverse(pass.device_roi.pixels()));
+            let passes = cost.passes.iter().take(5).map(|pass| {
+                let roi = pass.device_roi;
+                serde_json::json!({"path":pass.path, "kind":pass.kind,
+                    "roi":[roi.x, roi.y, roi.width, roi.height], "pixels":roi.pixels()})
+            });
+            serde_json::json!({"frame":frame.index(), "seconds":seconds(*frame),
+                "pixels":cost.pixels, "peakBytes":cost.peak_surface_bytes,
+                "shaderOperations":cost.shader_work.operations,
+                "kinds":kinds.collect::<Vec<_>>(), "passes":passes.collect::<Vec<_>>()})
+        })
+        .collect::<Vec<_>>();
+    let count = failures.len();
+    Ok((
+        serde_json::json!({"width":width, "height":height, "frames":frames, "hotFrames":hot,
+            "failures":failures}),
+        count,
+    ))
 }
 
 /// Runtime artifacts intentionally contain no source text. Attach the source

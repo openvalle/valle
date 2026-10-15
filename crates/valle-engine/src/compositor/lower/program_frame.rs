@@ -458,11 +458,34 @@ impl RenderPlanTemplate {
         if shader_work.operations > limits.frame_operations
             || shader_work.samples > limits.frame_samples
         {
+            // Name the pass doing the most of the exceeded work, so authors know what to change.
+            let by_operations = shader_work.operations > limits.frame_operations;
+            let largest = programs
+                .iter()
+                .flat_map(|schedule| {
+                    let outer = self.passes().get(schedule.execution_pass.index());
+                    let local = bindings.programs().get(schedule.program.get() as usize - 1);
+                    schedule.passes.iter().filter_map(move |bound| {
+                        let pass = local?.local_plan().passes().get(bound.pass.index())?;
+                        let mut work = ShaderWork::default();
+                        work.add_pixels(pass.shader_work_per_pixel, bound.device_roi.pixels());
+                        let amount = if by_operations {
+                            work.operations
+                        } else {
+                            work.samples
+                        };
+                        Some((amount, outer?, pass))
+                    })
+                })
+                .max_by_key(|(amount, ..)| *amount)
+                .map(|(_, outer, pass)| format!("{}.{}", outer.semantic_path, pass.semantic_path))
+                .unwrap_or_default();
             return Err(ProgramBindingError::ShaderBudgetExceeded {
                 operations: shader_work.operations,
                 samples: shader_work.samples,
                 max_operations: limits.frame_operations,
                 max_samples: limits.frame_samples,
+                largest,
             });
         }
 
@@ -1487,13 +1510,15 @@ pub enum ProgramBindingError {
     #[error("bound frame requires {required_bytes} surface bytes, exceeding {max_bytes}")]
     FrameBudgetExceeded { required_bytes: u64, max_bytes: u64 },
     #[error(
-        "frame Shader work requires {operations} operations and {samples} samples; limits are {max_operations} operations and {max_samples} samples"
+        "frame Shader work requires {operations} operations and {samples} samples; limits are {max_operations} operations and {max_samples} samples; the largest share is {largest}"
     )]
     ShaderBudgetExceeded {
         operations: u64,
         samples: u64,
         max_operations: u64,
         max_samples: u64,
+        /// The semantic path of the pass doing the most of the exceeded work.
+        largest: String,
     },
     #[error("bound program surface byte estimate overflow")]
     ByteEstimateOverflow,

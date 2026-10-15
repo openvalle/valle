@@ -93,6 +93,10 @@ valle motion render title.motion.tsx --frame 45 -o title.png --json
 valle motion render title.motion.tsx -o title.mp4 --events
 ```
 
+Before a long or high-resolution export, `valle motion check title.motion.tsx --cost
+--output-size 3840x2160 --json` plans every frame without rendering and lists the frames with
+the most planned pixels and their largest passes, so the expensive moments are known first.
+
 `--frame` is zero-based and writes PNG; omitting it writes MP4. `--output-size`
 scales delivery without changing layout. `--backend raster` selects CPU composition,
 while `auto` may select Metal on macOS. Compositor selection and video encoding

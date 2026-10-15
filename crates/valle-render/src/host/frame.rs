@@ -7,6 +7,8 @@ use valle_engine::motion::{
 use super::{RenderTrace, trace::TraceFrame};
 use skia_safe::{Surface, surfaces};
 use thiserror::Error;
+#[cfg(feature = "native")]
+use valle_engine::compositor::inspect::FrameCost;
 use valle_engine::{
     compositor::{
         ExternalBindError, ExternalObjectTable,
@@ -285,22 +287,12 @@ impl<P: ResourceProvider> FrameRunner<P> {
     }
 
     pub fn cpu(render: EngineRender, provider: P) -> Result<Self, FrameRenderError> {
-        let capabilities = cpu_capabilities(
-            Extent2d::new(16_384, 16_384)?,
-            2 * 1024 * 1024 * 1024,
-            4 * 1024 * 1024 * 1024,
-        )?;
-        Self::new(render, provider, capabilities)
+        Self::new(render, provider, delivery_capabilities()?)
     }
 
     #[cfg(all(target_os = "macos", feature = "native"))]
     pub fn metal(render: EngineRender, provider: P) -> Result<Self, FrameRenderError> {
-        let capabilities = cpu_capabilities(
-            Extent2d::new(16_384, 16_384)?,
-            2 * 1024 * 1024 * 1024,
-            4 * 1024 * 1024 * 1024,
-        )?;
-        Self::metal_with_capabilities(render, provider, capabilities)
+        Self::metal_with_capabilities(render, provider, delivery_capabilities()?)
     }
 
     #[cfg(all(target_os = "macos", feature = "native"))]
@@ -868,6 +860,35 @@ fn prepare_frame_with<P: ResourceProvider>(
             total_us: 0,
         },
     })
+}
+
+/// The immutable contract both product backends lower, bind and execute against.
+pub(crate) fn delivery_capabilities() -> Result<BackendCapabilities, FrameRenderError> {
+    Ok(cpu_capabilities(
+        Extent2d::new(16_384, 16_384)?,
+        2 * 1024 * 1024 * 1024,
+        4 * 1024 * 1024 * 1024,
+    )?)
+}
+
+/// Plan one frame as delivery binds it, without fulfilling its resources or executing it.
+#[cfg(feature = "native")]
+pub(crate) fn plan_frame_cost(
+    render: &EngineRender,
+    compiler: &mut FrameCompiler,
+    capabilities: &BackendCapabilities,
+    frame: FrameKey,
+    spec: RenderSpec,
+) -> Result<FrameCost, FrameRenderError> {
+    let (template, bindings) = compiler
+        .evaluate_prepare(render.render_id(), frame, spec)?
+        .lower_constructed(capabilities)?
+        .bind_constructed(ExternalGeneration::new(1)?)?
+        .into_plan();
+    let schedules = template
+        .bind_program_schedules(&bindings, capabilities)
+        .map_err(SkiaExecuteError::from)?;
+    Ok(FrameCost::of(&template, &bindings, &schedules))
 }
 
 fn allocate_generation(next_generation: &mut u64) -> Result<ExternalGeneration, FrameRenderError> {

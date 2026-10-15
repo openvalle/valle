@@ -11,6 +11,7 @@ use std::{
 
 use thiserror::Error;
 use valle_engine::{
+    compositor::inspect::FrameCost,
     frame::{RenderQuality, RenderSpec},
     render::{FrameKey, RenderId},
     resource::{
@@ -25,8 +26,8 @@ use valle_media::codec::{
 use crate::executor::skia::SkiaBackendKind;
 
 use super::{
-    CompiledAudioMixer, FrameSchedule, Mp4Sink, NativeProject, PipelineError, PipelineReport,
-    ProgressCallback, RenderControl, StoryboardSink,
+    CompiledAudioMixer, FrameRenderError, FrameSchedule, Mp4Sink, NativeProject, PipelineError,
+    PipelineReport, ProgressCallback, RenderControl, StoryboardSink,
     delivery::OutputTransaction,
     render_schedule,
     sink::{PngFramesSink, TransparentVideoSink},
@@ -72,6 +73,9 @@ pub struct RenderSummary {
     pub audio_only: bool,
     pub pipeline: Option<PipelineReport>,
 }
+
+/// One frame's planned cost, or the reason the frame cannot be planned.
+pub type PlannedFrameCost = (FrameKey, Result<FrameCost, FrameRenderError>);
 
 pub struct NativeRenderer {
     project: NativeProject,
@@ -136,6 +140,35 @@ impl NativeRenderer {
 
     pub fn project(&self) -> &NativeProject {
         &self.project
+    }
+
+    /// Plan every frame as delivery would, without fulfilling resources or rendering, and
+    /// return each frame's planned cost or the reason it cannot be planned.
+    pub fn plan_costs(&self) -> Result<Vec<PlannedFrameCost>, NativeRenderError> {
+        let frames = FrameSchedule::All.frames(self.project.compiled().canvas())?;
+        let (width, height) = self.output_extent()?;
+        let spec = RenderSpec::new(
+            width,
+            height,
+            RenderQuality::Final,
+            OutputSpec::srgb_preview(self.options.background)?,
+        )?;
+        let capabilities = super::frame::delivery_capabilities().map_err(anyhow::Error::from)?;
+        let render = self.project.render();
+        let mut compiler = render.frame_compiler();
+        Ok(frames
+            .into_iter()
+            .map(|frame| {
+                let cost = super::frame::plan_frame_cost(
+                    render,
+                    &mut compiler,
+                    &capabilities,
+                    frame,
+                    spec,
+                );
+                (frame, cost)
+            })
+            .collect())
     }
 
     pub fn preview_frame(

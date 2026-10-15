@@ -37,6 +37,26 @@ const CONTACT: &str = include_str!(
     "../../valle-compiler/tests/fixtures/motion/composition/contact-warning.motion.tsx"
 );
 
+const COST: &str = r##"export const composition = { width: 64, height: 36, fps: 4, duration: 1 };
+export default function Cost(ctx) {
+  return (
+    <Scene className="relative h-full w-full">
+      <View key="card" className="absolute" style={{ left: 8, top: 8, width: 16 + ctx.localFrame * 8,
+        height: 20, backgroundColor: "#ff8040", filter: "blur(2px)" }} />
+    </Scene>
+  );
+}
+"##;
+
+const COST_TRANSITION: &str = r##"export const composition = { width: 64, height: 36, fps: 4, duration: 1 };
+export default function Blur(ctx) {
+  return <Transition kind="linearBlur" progress={ctx.progress} style={{ width: 64, height: 36 }}>
+    <View style={{ backgroundColor: "#2140ff" }} />
+    <View style={{ backgroundColor: "#ff4a24" }} />
+  </Transition>;
+}
+"##;
+
 fn run(dir: &Path, args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_valle"))
         .current_dir(dir)
@@ -396,6 +416,116 @@ fn check_reports_frame_activation() {
     assert!(
         report["evaluatedExpressions"].as_u64().unwrap() * 5
             < report["fullEvaluationExpressions"].as_u64().unwrap()
+    );
+}
+
+/// `motion check --cost` plans every output frame without rendering it: a row per frame, the
+/// frames with the most planned pixels first with their largest passes, and four times the pixels
+/// when the delivery size doubles.
+#[test]
+fn check_cost_plans_every_frame_and_scales_with_the_output_size() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("cost.motion.tsx"), COST).unwrap();
+    let check = |size: Option<&str>| {
+        let mut args = vec!["motion", "check", "cost.motion.tsx", "--cost", "--json"];
+        if let Some(size) = size {
+            args.extend(["--output-size", size]);
+        }
+        success(run(dir.path(), &args))
+    };
+    let report = check(None);
+    let cost = &report["cost"];
+    assert_eq!(
+        (cost["width"].as_u64(), cost["height"].as_u64()),
+        (Some(64), Some(36))
+    );
+    let frames = cost["frames"].as_array().unwrap();
+    let index = |frame: &Value| frame["frame"].as_u64().unwrap();
+    let pixels = |frame: &Value| frame["pixels"].as_u64().unwrap();
+    assert_eq!(frames.iter().map(index).collect::<Vec<_>>(), [0, 1, 2, 3]);
+    // The card widens every frame, and so does the work its blur plans.
+    assert!(
+        frames
+            .windows(2)
+            .all(|pair| pixels(&pair[0]) < pixels(&pair[1])),
+        "{frames:?}"
+    );
+    assert!(
+        frames
+            .iter()
+            .all(|frame| frame["peakBytes"].as_u64().unwrap() > 0)
+    );
+    let hot = cost["hotFrames"].as_array().unwrap();
+    assert_eq!(hot.iter().map(index).collect::<Vec<_>>(), [3, 2, 1, 0]);
+    assert_eq!(hot[0]["seconds"], 0.75);
+    assert_eq!(pixels(&hot[0]), pixels(&frames[3]));
+    assert!(
+        hot[0]["passes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|pass| pass["kind"] == "blur"
+                && pass["path"].as_str().unwrap().ends_with(".filters[0]")),
+        "{}",
+        hot[0]
+    );
+    let kinds = hot[0]["kinds"].as_array().unwrap();
+    assert_eq!(
+        kinds
+            .iter()
+            .map(|kind| kind["pixels"].as_u64().unwrap())
+            .sum::<u64>(),
+        pixels(&hot[0])
+    );
+    assert!(kinds.iter().any(|kind| kind["kind"] == "blur"), "{kinds:?}");
+    assert_eq!(cost["failures"], json!([]));
+
+    let doubled = check(Some("128x72"));
+    assert_eq!(doubled["cost"]["width"], 128);
+    let (once, twice) = (pixels(&frames[3]), pixels(&doubled["cost"]["frames"][3]));
+    assert!(twice > 3 * once && twice < 5 * once, "{once} -> {twice}");
+}
+
+/// Frames beyond a renderer limit fail the cost check before anything renders, each with its
+/// frame, time and the pass doing the most of the exceeded work.
+#[test]
+fn check_cost_lists_frames_beyond_the_shader_limits() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("blur.motion.tsx"), COST_TRANSITION).unwrap();
+    let small = success(run(
+        dir.path(),
+        &["motion", "check", "blur.motion.tsx", "--cost", "--json"],
+    ));
+    assert_eq!(small["cost"]["failures"], json!([]));
+    // A linear blur samples 72 times per pixel; over a whole 1080p frame that exceeds the frame's
+    // budget of 64 samples per 1080p pixel.
+    let output = run(
+        dir.path(),
+        &[
+            "motion",
+            "check",
+            "blur.motion.tsx",
+            "--cost",
+            "--output-size",
+            "1920x1080",
+            "--json",
+        ],
+    );
+    assert!(!output.status.success());
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["error"]["code"], "frame_plan_failed", "{report}");
+    let failures = report["cost"]["failures"].as_array().unwrap();
+    let last = failures.last().unwrap();
+    assert_eq!(
+        (last["frame"].as_u64(), last["seconds"].as_f64()),
+        (Some(3), Some(0.75))
+    );
+    let error = last["error"].as_str().unwrap();
+    assert!(
+        error.contains("Shader work")
+            && error.contains("the largest share is visual[0].draw.")
+            && error.ends_with(".transition"),
+        "{error}"
     );
 }
 

@@ -46,7 +46,9 @@ pub use pipeline::{
 #[cfg(feature = "native")]
 pub use project::NativeProject;
 #[cfg(feature = "native")]
-pub use render::{NativeRenderError, NativeRenderOptions, NativeRenderer, RenderSummary};
+pub use render::{
+    NativeRenderError, NativeRenderOptions, NativeRenderer, PlannedFrameCost, RenderSummary,
+};
 #[cfg(feature = "native")]
 pub use resource::{
     NativeResourceCacheLimits, NativeResourceCatalog, NativeResourceError, NativeResourceProvider,

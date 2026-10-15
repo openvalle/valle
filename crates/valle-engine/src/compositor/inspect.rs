@@ -13,10 +13,11 @@ use crate::{
             GraphResourceKind, GraphRoi, LogicalPassKind, PassStage, RenderGraph, ResourceAccess,
         },
         lower::{
-            BackendCapabilities, BoundProgramSchedules, ExecutionPassKind, PassInterval,
-            PlanResourceId, PlanResourceKind, ProgramAllocationReason, ProgramPassInterval,
-            ProgramResourceId, ProgramSurfaceSlotId, RenderBindings, RenderPlanTemplate,
-            ResourceAliasReason, SurfaceAllocationReason, SurfaceSlotId,
+            BackendCapabilities, BoundProgramSchedules, ExecutionPassKind, KernelInvocation,
+            PassInterval, PlanResourceId, PlanResourceKind, ProgramAllocationReason,
+            ProgramPassInterval, ProgramPassKind, ProgramResourceId, ProgramStorageKind,
+            ProgramSurfaceSlotId, RenderBindings, RenderPlanTemplate, ResourceAliasReason,
+            SurfaceAllocationReason, SurfaceSlotId,
         },
     },
     frame::RenderSpec,
@@ -437,6 +438,145 @@ impl FramePerfInspection {
             return Err(InspectionError::WrongArtifactContract);
         }
         Ok(())
+    }
+}
+
+/// The planned work of one bound frame, for authors to find expensive frames before rendering:
+/// the pixels each pass writes and the surface bytes the plan holds at its peak. It is
+/// backend-independent; an executor's own scratch, such as filter intermediates, comes on top.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FrameCost {
+    /// Pixels written by every pass that draws, filters or composites: the sum of their device
+    /// ROIs, with each program counted through its local passes.
+    pub pixels: u64,
+    /// The bound schedule's peak of outer and program surface bytes held at once.
+    pub peak_surface_bytes: u64,
+    pub shader_work: valle_draw::requirements::ShaderWork,
+    /// The passes that write pixels, in execution order.
+    pub passes: Vec<PassCost>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PassCost {
+    /// The pass's semantic path; a program-local pass follows its program's outer path.
+    pub path: String,
+    /// What the pass does: `raster`, `composite`, a filter such as `glow`, and so on.
+    pub kind: &'static str,
+    pub device_roi: DeviceRect,
+}
+
+impl FrameCost {
+    pub fn of(
+        template: &RenderPlanTemplate,
+        bindings: &RenderBindings,
+        schedules: &BoundProgramSchedules,
+    ) -> Self {
+        let mut passes = Vec::new();
+        for (pass, bound) in template.passes().iter().zip(schedules.passes()) {
+            let kind = match &pass.kind {
+                ExecutionPassKind::BindBackdropView { .. }
+                | ExecutionPassKind::AliasResource { .. } => continue,
+                ExecutionPassKind::ClearRegion { .. } => "clear",
+                ExecutionPassKind::ImportRegion { .. } => "import",
+                // A program writes its result only through its local passes: count those, not
+                // the outer pass again.
+                ExecutionPassKind::RasterProgram { program, .. }
+                | ExecutionPassKind::RasterCaption { program, .. } => {
+                    let index = program.get() as usize - 1;
+                    let (Some(plan), Some(schedule)) = (
+                        bindings.programs().get(index),
+                        schedules.programs().get(index),
+                    ) else {
+                        continue;
+                    };
+                    for local in schedule.passes() {
+                        if !matches!(
+                            local.storage(),
+                            ProgramStorageKind::Surface { .. } | ProgramStorageKind::Output {}
+                        ) || local.device_roi().is_empty()
+                        {
+                            continue;
+                        }
+                        if let Some(step) = plan.local_plan().passes().get(local.pass().index()) {
+                            passes.push(PassCost {
+                                path: format!("{}.{}", pass.semantic_path, step.semantic_path),
+                                kind: program_pass_kind(&step.kind),
+                                device_roi: local.device_roi(),
+                            });
+                        }
+                    }
+                    continue;
+                }
+                ExecutionPassKind::ResolveRegion { .. } => "resolve",
+                ExecutionPassKind::DispatchKernel { invocation } => match invocation {
+                    KernelInvocation::Group { .. } => "group",
+                    KernelInvocation::Filter { .. } => "effect",
+                    KernelInvocation::Mask { .. } => "mask",
+                    KernelInvocation::Transition { .. } => "transition",
+                    KernelInvocation::AdjustmentEffect { .. } => "adjustment",
+                },
+                ExecutionPassKind::CompositeRegion { .. } => "composite",
+                ExecutionPassKind::CopyConvert { .. } => "convert",
+            };
+            if !bound.device_roi().is_empty() {
+                passes.push(PassCost {
+                    path: pass.semantic_path.clone(),
+                    kind,
+                    device_roi: bound.device_roi(),
+                });
+            }
+        }
+        Self {
+            pixels: passes.iter().fold(0, |sum: u64, pass| {
+                sum.saturating_add(pass.device_roi.pixels())
+            }),
+            peak_surface_bytes: schedules.estimated_peak_surface_bytes(),
+            shader_work: schedules.shader_work(),
+            passes,
+        }
+    }
+}
+
+fn program_pass_kind(kind: &ProgramPassKind) -> &'static str {
+    use valle_draw::program::Filter;
+    match kind {
+        ProgramPassKind::Clear { .. } => "clear",
+        ProgramPassKind::RasterNode { .. } | ProgramPassKind::RasterTree { .. } => "raster",
+        ProgramPassKind::ReadDestination { .. } => "destination",
+        ProgramPassKind::Backdrop { .. } => "backdrop",
+        ProgramPassKind::MotionGlass { .. } => "glass",
+        ProgramPassKind::ApplyMotionGlassForeground { .. } => "glassForeground",
+        ProgramPassKind::SourceOver { .. } => "composite",
+        ProgramPassKind::ApplyClip { .. } => "clip",
+        ProgramPassKind::ApplyMask { .. } => "mask",
+        ProgramPassKind::ApplyOpacity { .. } => "opacity",
+        ProgramPassKind::ApplyTransition { .. } => "transition",
+        ProgramPassKind::ApplyShader { .. } => "shader",
+        ProgramPassKind::ApplyTransform { .. } => "transform",
+        ProgramPassKind::Blend { .. } => "blend",
+        ProgramPassKind::ApplyFilter { filter, .. } => match filter {
+            Filter::Blur { .. } => "blur",
+            Filter::ColorMatrix { .. } => "colorMatrix",
+            Filter::Brightness { .. } => "brightness",
+            Filter::Contrast { .. } => "contrast",
+            Filter::Grayscale { .. } => "grayscale",
+            Filter::HueRotate { .. } => "hueRotate",
+            Filter::Invert { .. } => "invert",
+            Filter::Opacity { .. } => "opacity",
+            Filter::Saturate { .. } => "saturate",
+            Filter::Sepia { .. } => "sepia",
+            Filter::DropShadow { .. } => "dropShadow",
+            Filter::Glow { .. } => "glow",
+            Filter::Bloom { .. } => "bloom",
+            Filter::RadialBlur { .. } => "radialBlur",
+            Filter::FilmGrain { .. } => "filmGrain",
+            Filter::LensDistortion { .. } => "lensDistortion",
+            Filter::ChromaticAberration { .. } => "chromaticAberration",
+            Filter::NoiseDisplacement { .. } => "noiseDisplacement",
+            Filter::VelocityBlur { .. } => "velocityBlur",
+        },
     }
 }
 

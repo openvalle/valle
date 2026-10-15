@@ -713,6 +713,13 @@ pub enum MotionAction {
         /// Output frame rate when the composition has no default.
         #[arg(long)]
         fps: Option<String>,
+        /// Delivery dimensions to check at; scales the composition canvas proportionally.
+        #[arg(long, value_parser = parse_canvas_size)]
+        output_size: Option<(u32, u32)>,
+        /// Plan every output frame without rendering it and report its planned pixels and peak
+        /// surface bytes, breaking the most expensive frames down by pass.
+        #[arg(long)]
+        cost: bool,
     },
     /// Inspect every output frame for motion quality problems such as visible strobing.
     Review {

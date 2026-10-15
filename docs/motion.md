@@ -73,6 +73,20 @@ mask paint sources, composition scopes, background reads, and sample dependence 
 this decision. See [time functions and visibility evaluation](#time-functions-and-visibility-evaluation)
 for recognized time-dependent gates.
 
+`motion check --cost --json` plans every output frame without rendering it and adds `cost`.
+`frames` gives each frame's planned `pixels`, the device pixels its passes write, and
+`peakBytes`, the surface bytes its plan holds at once; renderers add their own scratch, such as
+filter intermediates, on top. `hotFrames` lists the five frames with the most pixels, with their
+`seconds`, `shaderOperations`, their pixels and pass counts by `kinds` (`raster`, `composite`, a
+filter such as `blur` or `glow`, ...) and their five largest `passes`: `kind`, the pass `path` in
+the compiled scene, its device `roi` and `pixels`. The `roi` and `seconds` locate the element in
+the frame. Add `--output-size WxH` to plan at the delivery size. Frames that exceed a renderer
+limit are listed in `failures` with their frame, seconds and error, and the check fails before
+rendering its frame. A frame's Shader and transition work together is limited to 1920 x 1080 x
+1024 operations and 1920 x 1080 x 64 samples whatever the output size, so a full-frame
+`linearBlur` exceeds it at 1080p and the other full-frame transitions at 4K; the error names the
+pass doing the largest share.
+
 `--frame` selects one zero-based frame as PNG. Full exports select the codec from
 the extension: `.mp4` uses H.264; `.mov` defaults to lossless qtrle with straight RGBA.
 Use `--codec prores4444` for a transparent ProRes 4444 `.mov`. PNG and MOV preserve the
