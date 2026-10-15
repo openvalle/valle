@@ -2313,17 +2313,16 @@ impl<'plan, 'surface> ReferenceProgramExecution<'plan, 'surface> {
         Err(self.invalid_schedule())
     }
 
+    /// Resources may extend past the render root, where samplers read their footprint. Pixels
+    /// outside a resource's region are transparent. This executor addresses pixels from the
+    /// root's origin and rejects schedules whose resources start above or left of it.
     fn read_texel(
         &self,
         resource: ProgramResourceId,
         x: i64,
         y: i64,
     ) -> Result<PremulRgba32, ReferenceExecuteError> {
-        if x < 0
-            || y < 0
-            || x >= i64::from(self.output.extent.width())
-            || y >= i64::from(self.output.extent.height())
-        {
+        if x < 0 || y < 0 || x > i64::from(u32::MAX) || y > i64::from(u32::MAX) {
             return Ok(PremulRgba32::TRANSPARENT);
         }
         self.read_pixel(

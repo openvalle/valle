@@ -4125,31 +4125,49 @@ function admitBoundProgramSchedules(
     }
 
     const device = dynamicTransform(dynamic, execution.kind.transform);
-    const fullInputs = new Set<number>();
+    const localResources = array(localPlan.resources, "program local resources");
+    const unclipped = (resourceId: number) => projectProgramResource(program,
+      record(requiredIndex(localResources, resourceId - 1, "program local resource"), "program local resource"),
+      device, extent, true);
+    // Mirror Engine's bind_program: these kernels can sample predecessors outside the final
+    // viewport, so their inputs keep their complete projection. Blurs, drop shadows,
+    // displacements and velocity blurs read their input up to their footprint away from the
+    // pixels they write, including beyond the root. A predecessor needs only what can reach those
+    // pixels: a clip passes on its own region, composites pass on what their output needs, and
+    // other samplers keep their whole input.
+    const root = { x: 0, y: 0, ...extent };
+    const beyondRoot = new Map<number, DeviceRoi>();
+    const need = (resourceId: number, region: DeviceRoi) => {
+      const prior = beyondRoot.get(resourceId);
+      beyondRoot.set(resourceId, prior === undefined ? region : unionRoi(prior, region));
+    };
     for (const raw of [...array(localPlan.passes, "program local passes")].reverse()) {
       const kind = record(record(raw, "program local pass").kind, "program local pass kind");
-      if (kind.kind === "applyShader") fullInputs.add(positiveId(kind.input, "shader input"));
-      // Mirror Engine's bind_program: these kernels can sample predecessors outside the
-      // final viewport. Their full input region is part of the physical storage contract.
-      if (kind.kind === "applyFilter" && ["lensDistortion", "glow", "bloom", "radialBlur", "chromaticAberration"]
-        .includes(record(kind.filter, "program filter").kind)) {
-        fullInputs.add(positiveId(kind.input, "filter input"));
-      }
-      if (kind.kind === "applyTransition") {
-        fullInputs.add(positiveId(kind.from, "transition from"));
-        fullInputs.add(positiveId(kind.to, "transition to"));
-      }
-      if (fullInputs.has(positiveId(kind.output, "program output"))) {
-        for (const field of ["input", "source", "destination", "mask", "from", "to"]) {
-          if (kind[field] != null) fullInputs.add(positiveId(kind[field], `program ${field}`));
+      const output = passOutput(kind), needed = beyondRoot.get(output);
+      const filter = kind.kind === "applyFilter" ? String(record(kind.filter, "program filter").kind) : undefined;
+      if (kind.kind === "applyShader"
+        || ["lensDistortion", "glow", "bloom", "radialBlur", "chromaticAberration"].includes(filter ?? "")) {
+        const input = positiveId(kind.input, "kernel input");
+        need(input, unclipped(input));
+      } else if (["blur", "dropShadow", "noiseDisplacement", "velocityBlur"].includes(filter ?? "")) {
+        const region = needed ?? (String(execution.kind.boundsReason) === "exact"
+          ? intersectRoi(unclipped(output), root)
+          : emptyRoi());
+        if (region.width > 0 && region.height > 0) {
+          const input = positiveId(kind.input, "sampler input");
+          need(input, samplerFootprint(region, unclipped(input), unclipped(output)));
         }
-        if (kind.localInputs != null) for (const input of array(kind.localInputs, "program local inputs")) {
-          fullInputs.add(positiveId(input, "program local input"));
-        }
+      } else if (kind.kind === "applyTransition") {
+        for (const input of programPassReads(kind)) need(input, unclipped(input));
+      } else if (kind.kind === "applyClip") {
+        if (needed) need(positiveId(kind.input, "clip input"), intersectRoi(needed, unclipped(output)));
+      } else if (COMPOSITE_PASSES.has(String(kind.kind))) {
+        if (needed) for (const input of programPassReads(kind)) need(input, needed);
+      } else if (needed) {
+        for (const input of programPassReads(kind)) need(input, unclipped(input));
       }
     }
     const resourceRois = new Map<number, DeviceRoi>();
-    const localResources = array(localPlan.resources, "program local resources");
     const boundResources = array(bound.resources, "bound program resources");
     if (localResources.length !== boundResources.length || storageByResource.size !== localResources.length) {
       fail("program_schedule", `program ${id} resource count mismatch`);
@@ -4159,11 +4177,11 @@ function admitBoundProgramSchedules(
       const resourceId = positiveId(resource.id, "program resource id");
       if (resourceId !== resourceIndex + 1) fail("program_schedule", `program ${id} resource IDs are not canonical`);
       const storage = required(storageByResource, resourceId, "program storage");
-      const fullInput = fullInputs.has(resourceId);
+      const region = beyondRoot.get(resourceId);
       resourceRois.set(resourceId, storage.kind === "transparent"
         ? emptyRoi()
-        : fullInput && !destinationRois.has(resourceId)
-          ? projectProgramResource(program, resource, device, extent, true)
+        : region !== undefined && !destinationRois.has(resourceId)
+          ? intersectRoi(projectProgramResource(program, resource, device, extent, true), unionRoi(region, root))
           : String(execution.kind.boundsReason) === "conservativeCameraTarget"
           ? { x: 0, y: 0, ...extent }
           : destinationRois.get(resourceId)
@@ -4174,7 +4192,7 @@ function admitBoundProgramSchedules(
       const resourceId = resourceIndex + 1;
       const actual = record(boundResources[resourceIndex], "bound program resource");
       if (positiveId(actual.resource, "bound program resource id") !== resourceId
-        || !sameRoi(deviceRoi(record(actual.deviceRoi, "bound program device ROI"), extent, fullInputs.has(resourceId)),
+        || !sameRoi(deviceRoi(record(actual.deviceRoi, "bound program device ROI"), extent, beyondRoot.has(resourceId)),
           required(resourceRois, resourceId, "program resource ROI"))) {
         fail("program_schedule", `program ${id} resource ${resourceId} ROI is not the exact plan/binding projection`);
       }
@@ -4206,7 +4224,7 @@ function admitBoundProgramSchedules(
         if (positiveId(actual.resource, "bound program allocation resource") !== resource
           || String(actual.reason) !== String(allocation.reason)
           || !deepEqual(actual.interval, allocation.interval)
-          || !sameRoi(deviceRoi(record(actual.deviceRoi, "bound program allocation ROI"), extent, fullInputs.has(resource)), roi)) {
+          || !sameRoi(deviceRoi(record(actual.deviceRoi, "bound program allocation ROI"), extent, beyondRoot.has(resource)), roi)) {
           fail("program_schedule", `program ${id} slot ${slotId} allocation ${allocationIndex} diverges`);
         }
         if (slotByResource.has(resource)) {
@@ -4268,7 +4286,7 @@ function admitBoundProgramSchedules(
       const output = passOutput(kind);
       const roi = required(resourceRois, output, "bound program pass ROI");
       const storage = required(storageByResource, output, "bound program pass storage");
-      const actualRoi = deviceRoi(record(actual.deviceRoi, "bound program pass device ROI"), extent, fullInputs.has(output));
+      const actualRoi = deviceRoi(record(actual.deviceRoi, "bound program pass device ROI"), extent, beyondRoot.has(output));
       const actualRetire = array(actual.retireAfter, "bound program pass retireAfter")
         .map((resource) => positiveId(resource, "retired program resource"));
       if (positiveId(actual.pass, "bound program pass id") !== index + 1
@@ -4465,6 +4483,15 @@ function restrictCompositesToDemand(passes: unknown[], destinationRois: Readonly
       demand.set(input, prior === undefined ? need : prior === null || need === null ? null : unionRoi(prior, need));
     }
   }
+}
+
+/** Mirror Engine's sampler_footprint: the input region a sampling filter reads to write `region`. */
+function samplerFootprint(region: DeviceRoi, input: DeviceRoi, output: DeviceRoi): DeviceRoi {
+  const left = region.x - Math.max(0, output.x + output.width - (input.x + input.width)) - 1;
+  const top = region.y - Math.max(0, output.y + output.height - (input.y + input.height)) - 1;
+  const right = region.x + region.width + Math.max(0, input.x - output.x) + 1;
+  const bottom = region.y + region.height + Math.max(0, input.y - output.y) + 1;
+  return { x: left, y: top, width: right - left, height: bottom - top };
 }
 
 function intersectRoi(left: DeviceRoi, right: DeviceRoi): DeviceRoi {

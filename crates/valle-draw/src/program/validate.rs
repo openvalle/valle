@@ -1216,6 +1216,7 @@ impl<'a> Canonicalizer<'a> {
                     children.push(self.visit(child, next_depth)?);
                 }
                 group.children = children;
+                group.filters.retain(|filter| !filter.is_identity());
                 if let Some(Clip::Path { path, .. }) = &mut group.clip {
                     *path = self.remap_path(*path);
                 }

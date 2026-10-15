@@ -254,6 +254,42 @@ mod tests {
     }
 
     #[test]
+    fn canonical_programs_omit_identity_filters() {
+        let mut builder = DrawProgramBuilder::new(Rect::new(0.0, 0.0, 1.0, 1.0));
+        let mut group = Group::plain(Vec::new());
+        group.filters = vec![
+            Filter::RadialBlur {
+                center: [0.5, 0.5],
+                amount: 0.0,
+            },
+            Filter::Blur {
+                sigma_x: 2.0,
+                sigma_y: 0.0,
+            },
+            Filter::LensDistortion { k1: 0.0, k2: 0.0 },
+            Filter::ChromaticAberration { offset: [0.0, 0.0] },
+            Filter::Brightness { amount: 1.0 },
+        ];
+        let root = builder.push_node(Node::Group(group));
+        builder.add_root(root);
+        let program = builder.finish().expect("filtered group");
+        let Some(Node::Group(group)) = program.nodes.first() else {
+            panic!("root group");
+        };
+        assert_eq!(
+            group.filters,
+            [
+                Filter::Blur {
+                    sigma_x: 2.0,
+                    sigma_y: 0.0
+                },
+                Filter::Brightness { amount: 1.0 },
+            ]
+        );
+        assert_eq!(program.validate(), Ok(()));
+    }
+
+    #[test]
     fn drop_shadow_sigma_has_a_closed_public_bound() {
         assert!(drop_shadow_program(MAX_FILTER_SIGMA).is_ok());
         assert!(matches!(

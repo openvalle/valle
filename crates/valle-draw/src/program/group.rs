@@ -179,6 +179,44 @@ pub enum Filter {
     },
 }
 
+impl Filter {
+    /// Whether the filter leaves every pixel unchanged, so canonical programs omit it. Only
+    /// sampling and generated-light filters at zero strength qualify; colour filters may clamp
+    /// extended-range working values even at their neutral setting.
+    pub fn is_identity(&self) -> bool {
+        match self {
+            Self::Blur { sigma_x, sigma_y } => *sigma_x == 0.0 && *sigma_y == 0.0,
+            Self::Glow {
+                color,
+                radius,
+                intensity,
+            } => *radius == 0.0 || *intensity == 0.0 || color.alpha == 0.0,
+            Self::Bloom {
+                radius, intensity, ..
+            } => *radius == 0.0 || *intensity == 0.0,
+            Self::RadialBlur { amount, .. } => *amount == 0.0,
+            Self::FilmGrain { amount, .. } => *amount == 0.0,
+            Self::LensDistortion { k1, k2 } => *k1 == 0.0 && *k2 == 0.0,
+            Self::ChromaticAberration { offset } => offset[0] == 0.0 && offset[1] == 0.0,
+            Self::NoiseDisplacement { scale, .. } => *scale == 0.0,
+            Self::VelocityBlur {
+                velocity,
+                shutter_angle_degrees,
+            } => (velocity[0] == 0.0 && velocity[1] == 0.0) || *shutter_angle_degrees == 0.0,
+            Self::ColorMatrix { .. }
+            | Self::Brightness { .. }
+            | Self::Contrast { .. }
+            | Self::Grayscale { .. }
+            | Self::HueRotate { .. }
+            | Self::Invert { .. }
+            | Self::Opacity { .. }
+            | Self::Saturate { .. }
+            | Self::Sepia { .. }
+            | Self::DropShadow { .. } => false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum MaskMode {

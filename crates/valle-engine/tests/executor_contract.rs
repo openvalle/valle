@@ -345,6 +345,153 @@ fn composites_feeding_a_clip_bind_only_the_clipped_region() {
     );
 }
 
+/// A lens may sample anywhere in its input, so the input keeps its projection beyond the render
+/// root. A clip below the lens bounds what can reach it: content larger than the clip binds only
+/// the clipped region, not its own bounds.
+#[test]
+fn a_clip_below_a_kernel_bounds_the_content_it_binds() {
+    use valle_engine::compositor::lower::ProgramPassKind;
+    use valle_engine::prepare::DeviceRect;
+
+    let mut builder = DrawProgramBuilder::new(Rect::new(0.0, 0.0, 32.0, 32.0));
+    let wide = rectangle(
+        &mut builder,
+        Rect::new(-40.0, -40.0, 112.0, 112.0),
+        LinearColor::new(0.0, 0.0, 1.0, 1.0),
+    );
+    let ink = rectangle(
+        &mut builder,
+        Rect::new(4.0, 4.0, 24.0, 24.0),
+        LinearColor::new(1.0, 0.0, 0.0, 1.0),
+    );
+    // A blend group keeps the window out of a single raster tree, so its clip is its own pass.
+    let mut multiply = Group::plain(vec![ink]);
+    multiply.internal_blend = BlendMode::Multiply;
+    let multiply = builder.push_node(Node::Group(multiply));
+    let mut window = Group::plain(vec![wide, multiply]);
+    window.clip = Some(Clip::Rect(Rect::new(-8.0, -8.0, 48.0, 48.0)));
+    let window = builder.push_node(Node::Group(window));
+    let mut lens = Group::plain(vec![window]);
+    lens.filters
+        .push(Filter::LensDistortion { k1: 0.02, k2: 0.0 });
+    let root = builder.push_node(Node::Group(lens));
+    builder.add_root(root);
+    let (frame, dynamic) = support::fixture(builder.finish().unwrap());
+    let (plan, bindings) = support::lower(&frame, dynamic);
+    let schedules = plan
+        .bind_program_schedules(&bindings, &support::capabilities())
+        .unwrap();
+    let bound = &schedules.programs()[0];
+    let roi = |pass: &valle_engine::compositor::lower::ProgramPass| {
+        bound
+            .resources()
+            .iter()
+            .find(|resource| resource.resource() == pass.kind.output())
+            .unwrap()
+            .device_roi()
+    };
+    let passes = plan.programs()[0].local_plan().passes();
+    let window = DeviceRect::new(-8, -8, 48, 48);
+    for pass in passes {
+        if matches!(pass.kind, ProgramPassKind::ApplyFilter { .. }) {
+            assert_eq!(
+                roi(pass),
+                DeviceRect::new(0, 0, 32, 32),
+                "{}",
+                pass.semantic_path
+            );
+        } else {
+            let bounded = roi(pass).intersect(window) == roi(pass) || roi(pass).is_empty();
+            assert!(bounded, "{} binds {:?}", pass.semantic_path, roi(pass));
+        }
+    }
+    // The wide rectangle binds exactly the window, behind a clip pass of its own.
+    assert!(passes.iter().any(
+        |pass| matches!(pass.kind, ProgramPassKind::RasterNode { .. }) && roi(pass) == window
+    ));
+    assert!(
+        passes
+            .iter()
+            .any(|pass| matches!(pass.kind, ProgramPassKind::ApplyClip { .. }))
+    );
+}
+
+/// Blurs and drop shadows read their input up to their footprint away from the pixels they
+/// write, including beyond the render root. A blurred surface larger than the frame therefore
+/// stays uniform at the frame edge instead of fading into pixels its input never rendered, and
+/// a drop shadow reads beyond the root on the side its shadow comes from.
+#[test]
+fn samplers_read_their_footprint_beyond_the_render_root() {
+    use valle_engine::compositor::lower::ProgramPassKind;
+    use valle_engine::prepare::DeviceRect;
+
+    for (filter, input_roi, output_roi) in [
+        (
+            Filter::Blur {
+                sigma_x: 2.0,
+                sigma_y: 2.0,
+            },
+            // Three sigmas of support and one sampling pixel past the right and bottom edges.
+            DeviceRect::new(8, 8, 31, 31),
+            DeviceRect::new(2, 2, 30, 30),
+        ),
+        (
+            Filter::DropShadow {
+                offset: [-10.0, 0.0],
+                sigma_x: 1.0,
+                sigma_y: 1.0,
+                color: LinearColor::new(0.0, 0.0, 0.0, 0.5),
+            },
+            // The shadow at x comes from x + 10: 13 + 1 pixels past the right edge, 3 + 1 below.
+            DeviceRect::new(8, 8, 38, 28),
+            DeviceRect::new(0, 5, 32, 27),
+        ),
+    ] {
+        let mut builder = DrawProgramBuilder::new(Rect::new(0.0, 0.0, 32.0, 32.0));
+        let wide = rectangle(
+            &mut builder,
+            Rect::new(8.0, 8.0, 64.0, 64.0),
+            LinearColor::new(0.0, 0.0, 1.0, 1.0),
+        );
+        let mut group = Group::plain(vec![wide]);
+        group.filters.push(filter.clone());
+        let root = builder.push_node(Node::Group(group));
+        builder.add_root(root);
+        let draw = builder.finish().unwrap();
+        let (frame, dynamic) = support::fixture(draw.clone());
+        let (plan, bindings) = support::lower(&frame, dynamic);
+        let schedules = plan
+            .bind_program_schedules(&bindings, &support::capabilities())
+            .unwrap();
+        let bound = &schedules.programs()[0];
+        let roi = |resource| {
+            bound
+                .resources()
+                .iter()
+                .find(|bound| bound.resource() == resource)
+                .unwrap()
+                .device_roi()
+        };
+        let passes = plan.programs()[0].local_plan().passes();
+        let Some(ProgramPassKind::ApplyFilter { input, output, .. }) = passes
+            .iter()
+            .map(|pass| &pass.kind)
+            .find(|kind| matches!(kind, ProgramPassKind::ApplyFilter { .. }))
+        else {
+            panic!("{filter:?} has no filter pass");
+        };
+        assert_eq!(roi(*input), input_roi, "{filter:?}");
+        assert_eq!(roi(*output), output_roi, "{filter:?}");
+        if matches!(filter, Filter::Blur { .. }) {
+            let target = execute(draw);
+            let samples = target.frame().unwrap().samples();
+            for edge in [20 * 32 + 31, 31 * 32 + 20, 31 * 32 + 31] {
+                assert_eq!(samples[edge], samples[20 * 32 + 20], "pixel {edge}");
+            }
+        }
+    }
+}
+
 fn execute_prepared(
     frame: &valle_engine::prepare::PreparedFrame,
     values: Vec<valle_engine::prepare::DynamicBinding>,

@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use serde::Serialize;
 use thiserror::Error;
@@ -721,33 +721,102 @@ fn bind_program(
     let destination_rois =
         resolve_destination_rois(program, bounds_reason, transform, root, bindings)?;
 
-    // Shader UVs and lens distortion can address pixels outside the output ROI. Retain
-    // every predecessor's full region, including nested effects, instead of clipping
-    // their pixels to the viewport.
+    // Shader UVs, lens distortion and the pyramid, radial and chromatic kernels can address
+    // pixels outside the output ROI, so their inputs keep their complete projection instead of
+    // being clipped to the viewport. A blur, drop shadow, displacement or velocity blur reads
+    // its input up to its footprint away from the pixels it writes, including pixels beyond the
+    // root, so the pixels it writes inside the root never depend on whether an ancestor reads
+    // it beyond the root. A predecessor needs only what can reach those pixels: a clip passes
+    // on its own region, and composites pass on what their output needs. Other samplers keep
+    // their whole input.
     // The final program output and external destination reads keep their output ROI.
-    let mut full_inputs = BTreeSet::new();
+    let unclipped = |resource: ProgramResourceId| {
+        let resource = program
+            .local_plan()
+            .resources()
+            .get(resource.index())
+            .filter(|candidate| candidate.id == resource)
+            .ok_or_else(|| ProgramBindingError::InvalidContract {
+                path: program.semantic_path.clone(),
+                reason: format!("resource {} is not canonical", resource.get()),
+            })?;
+        Ok::<_, ProgramBindingError>(crate::prepare::bounds::program_bounds_to_device_unclipped(
+            resource_bounds_in_program(resource, &program.semantic_path)?,
+            program.viewport,
+            transform,
+        )?)
+    };
+    let mut beyond_root = BTreeMap::<ProgramResourceId, DeviceRect>::new();
+    let path = &program.semantic_path;
     for pass in program.local_plan().passes().iter().rev() {
-        if let ProgramPassKind::ApplyShader { input, .. } = pass.kind {
-            full_inputs.insert(input);
-        }
-        if let ProgramPassKind::ApplyFilter {
-            input,
-            filter:
-                valle_draw::program::Filter::LensDistortion { .. }
-                | valle_draw::program::Filter::Glow { .. }
-                | valle_draw::program::Filter::Bloom { .. }
-                | valle_draw::program::Filter::RadialBlur { .. }
-                | valle_draw::program::Filter::ChromaticAberration { .. },
-            ..
-        } = pass.kind
-        {
-            full_inputs.insert(input);
-        }
-        if let ProgramPassKind::ApplyTransition { from, to, .. } = pass.kind {
-            full_inputs.extend([from, to]);
-        }
-        if full_inputs.contains(&pass.kind.output()) {
-            full_inputs.extend(pass.kind.reads());
+        let output = pass.kind.output();
+        let needed = beyond_root.get(&output).copied();
+        match &pass.kind {
+            ProgramPassKind::ApplyShader { input, .. }
+            | ProgramPassKind::ApplyFilter {
+                input,
+                filter:
+                    valle_draw::program::Filter::LensDistortion { .. }
+                    | valle_draw::program::Filter::Glow { .. }
+                    | valle_draw::program::Filter::Bloom { .. }
+                    | valle_draw::program::Filter::RadialBlur { .. }
+                    | valle_draw::program::Filter::ChromaticAberration { .. },
+                ..
+            } => need(&mut beyond_root, path, *input, unclipped(*input)?)?,
+            ProgramPassKind::ApplyFilter {
+                input,
+                filter:
+                    valle_draw::program::Filter::Blur { .. }
+                    | valle_draw::program::Filter::DropShadow { .. }
+                    | valle_draw::program::Filter::NoiseDisplacement { .. }
+                    | valle_draw::program::Filter::VelocityBlur { .. },
+                ..
+            } => {
+                let region = match needed {
+                    Some(region) => region,
+                    None if bounds_reason == BoundsReason::Exact => {
+                        unclipped(output)?.intersect(root)
+                    }
+                    None => DeviceRect::new(0, 0, 0, 0),
+                };
+                if !region.is_empty() {
+                    let footprint =
+                        sampler_footprint(region, unclipped(*input)?, unclipped(output)?)
+                            .ok_or_else(|| ProgramBindingError::InvalidContract {
+                                path: path.clone(),
+                                reason: format!("resource {} demand overflows", input.get()),
+                            })?;
+                    need(&mut beyond_root, path, *input, footprint)?;
+                }
+            }
+            ProgramPassKind::ApplyTransition { from, to, .. } => {
+                need(&mut beyond_root, path, *from, unclipped(*from)?)?;
+                need(&mut beyond_root, path, *to, unclipped(*to)?)?;
+            }
+            ProgramPassKind::ApplyClip { input, .. } => {
+                if let Some(region) = needed {
+                    need(
+                        &mut beyond_root,
+                        path,
+                        *input,
+                        region.intersect(unclipped(output)?),
+                    )?;
+                }
+            }
+            kind if is_composite(kind) => {
+                if let Some(region) = needed {
+                    for input in kind.reads() {
+                        need(&mut beyond_root, path, input, region)?;
+                    }
+                }
+            }
+            kind => {
+                if needed.is_some() {
+                    for input in kind.reads() {
+                        need(&mut beyond_root, path, input, unclipped(input)?)?;
+                    }
+                }
+            }
         }
     }
 
@@ -762,13 +831,20 @@ fn bind_program(
             })?;
         let device_roi = if matches!(storage, ProgramStorageKind::Transparent {}) {
             DeviceRect::new(0, 0, 0, 0)
-        } else if full_inputs.contains(&resource.id) && !destination_rois.contains_key(&resource.id)
+        } else if let Some(region) = beyond_root.get(&resource.id)
+            && !destination_rois.contains_key(&resource.id)
         {
-            crate::prepare::bounds::program_bounds_to_device_unclipped(
-                resource_bounds_in_program(resource, &program.semantic_path)?,
-                program.viewport,
-                transform,
-            )?
+            // Demand beyond the root only extends a resource. Inside the root it keeps its
+            // projection, which readers outside the demand above may still need.
+            let roi = match union_rois(*region, root) {
+                Some(region) => unclipped(resource.id)?.intersect(region),
+                None => unclipped(resource.id)?,
+            };
+            if roi.is_empty() {
+                DeviceRect::new(0, 0, 0, 0)
+            } else {
+                roi
+            }
         } else if bounds_reason == BoundsReason::ConservativeCameraTarget {
             root
         } else if let Some(destination) = destination_rois.get(&resource.id) {
@@ -781,7 +857,7 @@ fn bind_program(
                 root,
             )?
         };
-        if !full_inputs.contains(&resource.id) {
+        if !beyond_root.contains_key(&resource.id) {
             validate_rect_in_root(device_roi, root, &program.semantic_path)?;
         }
         resources.push(BoundProgramResource {
@@ -1021,17 +1097,6 @@ fn restrict_composites_to_demand(
     destination_rois: &BTreeMap<ProgramResourceId, DeviceRect>,
     resources: &mut [BoundProgramResource],
 ) -> Result<(), ProgramBindingError> {
-    let composite = |kind: &ProgramPassKind| {
-        matches!(
-            kind,
-            ProgramPassKind::ReadDestination { .. }
-                | ProgramPassKind::SourceOver { .. }
-                | ProgramPassKind::ApplyMask { .. }
-                | ProgramPassKind::ApplyOpacity { .. }
-                | ProgramPassKind::ApplyTransform { .. }
-                | ProgramPassKind::Blend { .. }
-        )
-    };
     let ids: Vec<_> = resources.iter().map(|bound| bound.resource).collect();
     let index = |resource: ProgramResourceId| {
         let at = resource.index();
@@ -1048,7 +1113,7 @@ fn restrict_composites_to_demand(
     // demand before reaching the pass that writes it.
     for pass in program.local_plan().passes().iter().rev() {
         let output = index(pass.kind.output())?;
-        if composite(&pass.kind)
+        if is_composite(&pass.kind)
             && !destination_rois.contains_key(&pass.kind.output())
             && let Some(Some(needed)) = demand[output]
         {
@@ -1059,7 +1124,7 @@ fn restrict_composites_to_demand(
                 restricted
             };
         }
-        let need = (composite(&pass.kind)
+        let need = (is_composite(&pass.kind)
             || matches!(pass.kind, ProgramPassKind::ApplyClip { .. }))
         .then_some(resources[output].device_roi);
         for input in pass.kind.reads() {
@@ -1072,6 +1137,68 @@ fn restrict_composites_to_demand(
         }
     }
     Ok(())
+}
+
+/// Widen the region of `resource` that readers need beyond the render root.
+fn need(
+    regions: &mut BTreeMap<ProgramResourceId, DeviceRect>,
+    path: &str,
+    resource: ProgramResourceId,
+    region: DeviceRect,
+) -> Result<(), ProgramBindingError> {
+    let region = match regions.get(&resource) {
+        Some(prior) => {
+            union_rois(*prior, region).ok_or_else(|| ProgramBindingError::InvalidContract {
+                path: path.to_owned(),
+                reason: format!("resource {} demand overflows", resource.get()),
+            })?
+        }
+        None => region,
+    };
+    regions.insert(resource, region);
+    Ok(())
+}
+
+/// The input region a blur, drop shadow, displacement or velocity blur reads to write `region`.
+/// The filter grows its output bounds by up to its sampling distance on each side, so an output
+/// pixel reads input pixels up to that distance away on the opposite side. One more pixel covers
+/// filtered sampling and the rounding of both projections. `None` if the region overflows.
+fn sampler_footprint(
+    region: DeviceRect,
+    input: DeviceRect,
+    output: DeviceRect,
+) -> Option<DeviceRect> {
+    let edges = |rect: DeviceRect| {
+        let (x, y) = (i64::from(rect.x), i64::from(rect.y));
+        [x, y, x + i64::from(rect.width), y + i64::from(rect.height)]
+    };
+    let [input_left, input_top, input_right, input_bottom] = edges(input);
+    let [output_left, output_top, output_right, output_bottom] = edges(output);
+    let [left, top, right, bottom] = edges(region);
+    let left = left - (output_right - input_right).max(0) - 1;
+    let top = top - (output_bottom - input_bottom).max(0) - 1;
+    let right = right + (input_left - output_left).max(0) + 1;
+    let bottom = bottom + (input_top - output_top).max(0) + 1;
+    Some(DeviceRect::new(
+        i32::try_from(left).ok()?,
+        i32::try_from(top).ok()?,
+        u32::try_from(right - left).ok()?,
+        u32::try_from(bottom - top).ok()?,
+    ))
+}
+
+/// Source-over, blend, opacity, mask, transform copies and destination reads write each output
+/// pixel from their inputs' pixels at the same device position.
+const fn is_composite(kind: &ProgramPassKind) -> bool {
+    matches!(
+        kind,
+        ProgramPassKind::ReadDestination { .. }
+            | ProgramPassKind::SourceOver { .. }
+            | ProgramPassKind::ApplyMask { .. }
+            | ProgramPassKind::ApplyOpacity { .. }
+            | ProgramPassKind::ApplyTransform { .. }
+            | ProgramPassKind::Blend { .. }
+    )
 }
 
 /// Bounding union of two ROIs, ignoring empty ones. `None` (sample anywhere) if it overflows.
