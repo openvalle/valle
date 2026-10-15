@@ -4,12 +4,13 @@ export interface Scene3dKernelInput { content: string; topology: string; canonic
 export interface MotionKernelInput { kind: "motion"; definitionId: string; definitionJson: string; inputJson: string; compact: boolean; width: number; height: number; }
 export type KernelInput = Scene3dKernelInput | MotionKernelInput;
 export interface KernelMessage { version: number; id: number; wasmModuleUrl: string; wasmUrl: string; input: KernelInput; }
-export interface KernelResult { version: number; id: number; pixels?: Float32Array; motion?: Uint8Array; workMs?: number; error?: string; }
+/** `residentBytes` is the worker's WASM heap, which keeps its high-water mark until the worker exits. */
+export interface KernelResult { version: number; id: number; pixels?: Float32Array; motion?: Uint8Array; workMs?: number; residentBytes?: number; error?: string; }
 
 /** Independent scene/geometry memoization; never opens a Timeline or compiles a fixed package. */
 export function installKernelWorker(): void {
   const scope = globalThis as unknown as { onmessage: (event: MessageEvent<KernelMessage>) => void; postMessage(value: KernelResult, transfer?: Transferable[]): void };
-  let engine: ProductEngineWire | undefined, identity = "", chain = Promise.resolve();
+  let engine: ProductEngineWire | undefined, memory: WebAssembly.Memory | undefined, identity = "", chain = Promise.resolve();
   scope.onmessage = event => { chain = chain.then(async () => {
     const m = event.data;
     try {
@@ -30,17 +31,17 @@ export function installKernelWorker(): void {
       if (engine && key !== identity) throw new Error("kernel runtime identity changed");
       if (!engine) {
         const wasm = await import(m.wasmModuleUrl) as ProductWasmModule;
-        await wasm.default(m.wasmUrl); engine = new wasm.ProductEngine(); identity = key;
+        memory = (await wasm.default(m.wasmUrl)).memory; engine = new wasm.ProductEngine(); identity = key;
       }
       const started = performance.now();
       if (motion) {
         const input = m.input as MotionKernelInput;
         const bytes = engine.run_motion_kernel!(input.definitionId, input.definitionJson, input.inputJson, input.compact);
-        scope.postMessage({ version, id: m.id, motion: bytes, workMs: performance.now() - started }, [bytes.buffer as ArrayBuffer]);
+        scope.postMessage({ version, id: m.id, motion: bytes, workMs: performance.now() - started, residentBytes: memory!.buffer.byteLength }, [bytes.buffer as ArrayBuffer]);
       } else {
         const input = m.input as Scene3dKernelInput;
         const pixels = engine.scene3d_gpu_lighting_input!(input.content, input.topology, input.canonical);
-        scope.postMessage({ version, id: m.id, pixels, workMs: performance.now() - started }, [pixels.buffer as ArrayBuffer]);
+        scope.postMessage({ version, id: m.id, pixels, workMs: performance.now() - started, residentBytes: memory!.buffer.byteLength }, [pixels.buffer as ArrayBuffer]);
       }
     } catch (error) { scope.postMessage({ version, id: m.id, error: String(error) }); }
   }); };

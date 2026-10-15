@@ -226,20 +226,15 @@ async function handleMessage(
       }
     }
     if (ready.length === 0) continue;
+    // Per-frame packets share one buffer. A plan packet outlives its frame in the main thread's
+    // template caches, so it keeps the exact buffer the engine returned instead of pinning the
+    // whole batch.
     const chunks: Uint8Array[] = [];
-    const packetIndexes: Array<{
-      plan: number | null;
-      binding: number;
-      schedule: number;
-    }> = [];
+    const packetIndexes: Array<{ binding: number; schedule: number }> = [];
     for (const entry of ready) {
-      const plan =
-        entry.stage.planPacket === null
-          ? null
-          : chunks.push(entry.stage.planPacket) - 1;
       const binding = chunks.push(entry.stage.bindingPacket) - 1;
       const schedule = chunks.push(entry.stage.schedulePacket) - 1;
-      packetIndexes.push({ plan, binding, schedule });
+      packetIndexes.push({ binding, schedule });
     }
     const bundledReady = bundleByteArrays(chunks);
     lastReadyAt = performance.now();
@@ -254,17 +249,20 @@ async function handleMessage(
             id: entry.id,
             stage: {
               ...entry.stage,
-              planPacket:
-                packets.plan === null
-                  ? null
-                  : bundledReady.views[packets.plan]!,
               bindingPacket: bundledReady.views[packets.binding]!,
               schedulePacket: bundledReady.views[packets.schedule]!,
             },
           };
         }),
       },
-      [bundledReady.buffer.buffer],
+      [
+        bundledReady.buffer.buffer,
+        ...ready.flatMap((entry) =>
+          entry.stage.planPacket === null
+            ? []
+            : [entry.stage.planPacket.buffer as ArrayBuffer],
+        ),
+      ],
     );
   }
 }

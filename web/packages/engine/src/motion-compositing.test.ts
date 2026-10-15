@@ -518,8 +518,10 @@ test("Motion composition, easing and color interpolation match analytic pixels o
             try {
               engine.lower_canvas_kit(ticket,64n*1024n*1024n,128n*1024n*1024n);
               engine.bind(ticket,1n);
-              await executor.execute(engine.plan_template_bytes(ticket),engine.binding_bytes(ticket),engine.bound_schedule_bytes(ticket),
-                { generation:1n,objects },{ surface });
+              // The second request keeps every reusable surface in lent bytes; the others evict to the plan.
+              const report = await executor.execute(engine.plan_template_bytes(ticket),engine.binding_bytes(ticket),engine.bound_schedule_bytes(ticket),
+                { generation:1n,objects },{ surface,...request === 1 ? { borrowSurfaceBytes:() => true } : {} });
+              expect(report.surfaceOverflowBytes,`${fixture.name}/${frame} working surfaces beyond the plan`).toBe(0n);
               web = Uint8Array.from(surface.getCanvas().readPixels(0,0,info)!);
             } finally { for (const object of owned) object.delete(); }
           } finally { engine.release_ticket(ticket); }

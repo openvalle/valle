@@ -85,6 +85,30 @@ describe("browser resource cache", () => {
     expect(disposed).not.toContain("large");
   });
 
+  test("a per-frame product stays only while consecutive frames use it", () => {
+    const disposed: string[] = [];
+    const cache = new BrowserResourceCache<string>({ maxEntries: 8, maxBytes: 64 });
+    const frame = (lookups: string[], inserts: Array<[string, boolean]> = []) => {
+      cache.beginFrame();
+      for (const identity of lookups) cache.lookup(identity);
+      for (const [identity, perFrame] of inserts) cache.insert(identity, identity, 4, () => disposed.push(identity), perFrame);
+      const report = cache.finishFrame(lookups.length);
+      cache.releaseFrame();
+      return report;
+    };
+    frame(["scene-1", "image"], [["scene-1", true], ["image", false]]);
+    // A still scene reuses its frame.
+    expect(frame(["scene-1", "image"]).hits).toBe(2);
+    // Once the scene moves, its old frame leaves at the end of the first frame that does not use it.
+    expect(frame(["scene-2", "image"], [["scene-2", true]]).evictions).toBe(1);
+    expect(disposed).toEqual(["scene-1"]);
+    // An image off screen for a frame stays in the LRU.
+    frame(["scene-2"]);
+    expect(disposed).toEqual(["scene-1"]);
+    expect(frame(["image"]).hits).toBe(1);
+    expect(disposed).toEqual(["scene-1", "scene-2"]);
+  });
+
   test("objects borrowed by a frame are bypassed instead of evicted", () => {
     const disposed: string[] = [];
     const cache = new BrowserResourceCache<string>({ maxEntries: 1, maxBytes: 4 });

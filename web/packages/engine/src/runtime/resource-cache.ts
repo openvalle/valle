@@ -22,7 +22,9 @@ interface CacheEntry<T> {
   readonly value: T;
   readonly bytes: number;
   readonly dispose: () => void;
+  readonly perFrame: boolean;
   lastUsed: bigint;
+  lastFrame: number;
   pinned: boolean;
 }
 
@@ -45,12 +47,17 @@ const DEFAULT_LIMITS: BrowserResourceCacheLimits = Object.freeze({
  * the cache only after `insert` returns true; eviction and generation invalidation call exactly one
  * disposer. The key is the complete canonical request identity supplied by
  * `resourceRequestCacheIdentity` plus the cache generation held by this object.
+ *
+ * A per-frame product, such as a Scene3D frame, is reused only while consecutive frames show the
+ * same content. It leaves the cache at the end of the first frame that does not use it instead of
+ * waiting in the LRU until the byte limit evicts it.
  */
 export class BrowserResourceCache<T> {
   private readonly limits: BrowserResourceCacheLimits;
   private readonly entries = new Map<string, CacheEntry<T>>();
   private residentBytes = 0;
   private clock = 0n;
+  private frameIndex = 0;
   private generation = 1;
   private invalidations = 0;
   private reportedInvalidations = 0;
@@ -66,6 +73,7 @@ export class BrowserResourceCache<T> {
   beginFrame(): void {
     if (this.frameActive) throw new Error("resource cache frame lease is already active");
     this.frame = emptyCounters();
+    this.frameIndex += 1;
     this.frameActive = true;
     this.frameFinished = false;
     this.framePins.clear();
@@ -82,6 +90,7 @@ export class BrowserResourceCache<T> {
     this.frame.hits = checkedIncrement(this.frame.hits, "resource cache hit count");
     this.clock += 1n;
     entry.lastUsed = this.clock;
+    entry.lastFrame = this.frameIndex;
     entry.pinned = true;
     this.framePins.add(identity);
     return entry.value;
@@ -96,12 +105,13 @@ export class BrowserResourceCache<T> {
     if (entry) {
       this.clock += 1n;
       entry.lastUsed = this.clock;
+      entry.lastFrame = this.frameIndex;
       entry.pinned = true;
       this.framePins.add(identity);
     }
   }
 
-  insert(identity: string, value: T, bytes: number, dispose: () => void): boolean {
+  insert(identity: string, value: T, bytes: number, dispose: () => void, perFrame = false): boolean {
     this.requireOpenFrame();
     const admittedBytes = nonNegativeSafeInteger(bytes, "resource cache object bytes");
     if (this.entries.has(identity)) {
@@ -126,7 +136,9 @@ export class BrowserResourceCache<T> {
       value,
       bytes: admittedBytes,
       dispose,
+      perFrame,
       lastUsed: this.clock,
+      lastFrame: this.frameIndex,
       pinned: true,
     });
     this.framePins.add(identity);
@@ -140,6 +152,13 @@ export class BrowserResourceCache<T> {
     const expected = nonNegativeSafeInteger(expectedRequests, "resource cache expected requests");
     if (this.frame.requests !== expected || this.frame.hits + this.frame.misses !== expected) {
       throw new Error("resource cache frame evidence is incomplete");
+    }
+    for (const [identity, entry] of this.entries) {
+      if (!entry.perFrame || entry.lastFrame === this.frameIndex || entry.pinned) continue;
+      this.entries.delete(identity);
+      this.residentBytes -= entry.bytes;
+      this.frame.evictions = checkedIncrement(this.frame.evictions, "resource cache eviction count");
+      entry.dispose();
     }
     const generationInvalidations = this.invalidations - this.reportedInvalidations;
     this.reportedInvalidations = this.invalidations;

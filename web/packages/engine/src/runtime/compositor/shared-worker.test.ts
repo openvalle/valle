@@ -85,7 +85,7 @@ test("Motion capture releases the single CPU slot before kernels and resumes the
     expect(physical.length).toBe(2); expect(budget.snapshot().activeCpuSlots).toBe(1);
     const kernel = physical[1]!, work = kernel.messages[0];
     expect(Object.hasOwn(work, "timelineJson")).toBe(false);
-    kernel.reply({ version, id: work.id, motion: new Uint8Array([1, 2]), workMs: 1 });
+    kernel.reply({ version, id: work.id, motion: new Uint8Array([1, 2]), workMs: 1, residentBytes: 1024 });
     await tick();
     const resumed = owner.messages[1].jobs[0];
     expect(resumed.id).toBe(sent.id); expect(resumed.request).toEqual(sent.request);

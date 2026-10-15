@@ -4,16 +4,17 @@ import type { KernelResult, Scene3dKernelInput, MotionKernelInput, KernelInput }
 
 type Lease = { release: () => void; shrink: (bytes: number) => void };
 interface Work { id: number; input: KernelInput; priority: RuntimePriority; signal: AbortSignal; resolve: (value: { data: Float32Array | Uint8Array; release: () => void }) => void; reject: (error: unknown) => void; }
-interface Slot { worker: Worker; retire: () => void; work?: Work; definitionId?: string; }
+interface Slot { worker: Worker; retire: () => void; resident: (bytes: number) => void; work?: Work; definitionId?: string; idle?: ReturnType<typeof setTimeout>; }
 
-/** A shared, lazy pool of independent kernels. Compiled timeline ownership stays in Host. */
+/** A shared, lazy pool of independent kernels. Compiled timeline ownership stays in Host. A worker
+ * that has no work for `idleMs` exits, returning its WASM heap; the budget bounds how many run. */
 export class ProductKernelPool {
   private readonly slots: Slot[] = [];
   private queue: Work[] = [];
   private sequence = 0;
   private closed = false;
   private readonly abort = new AbortController();
-  constructor(private readonly url: string, private readonly bootstrap: ProductEngineBootstrap, private readonly budget: BrowserRuntimeBudget) {}
+  constructor(private readonly url: string, private readonly bootstrap: ProductEngineBootstrap, private readonly budget: BrowserRuntimeBudget, private readonly idleMs = 10_000) {}
   async run(input: Scene3dKernelInput, priority: RuntimePriority, signal: AbortSignal): Promise<{ pixels: Float32Array; release: () => void }> {
     const result = await this.submit(input, priority, signal);
     if (!(result.data instanceof Float32Array)) { result.release(); throw new Error("invalid Scene3D result"); }
@@ -33,7 +34,7 @@ export class ProductKernelPool {
     if (this.closed) return; this.closed = true; this.abort.abort();
     for (const job of this.queue) job.reject(new DOMException("Kernel host closed", "AbortError"));
     this.queue = [];
-    for (const slot of this.slots) { slot.worker.terminate(); slot.retire(); }
+    for (const slot of this.slots) { clearTimeout(slot.idle); slot.worker.terminate(); slot.retire(); }
     this.slots.length = 0;
   }
   private dispatch(): void {
@@ -42,12 +43,13 @@ export class ProductKernelPool {
     this.queue.sort((a, b) => order[a.priority] - order[b.priority] || a.id - b.id);
     while (this.queue.length) {
       let slot = this.slots.find(slot => !slot.work);
-      if (!slot && this.slots.length < Math.min(4, this.budget.cpuThreads)) {
+      if (!slot && this.slots.length < Math.min(4, this.budget.cpuThreads) && this.budget.admitsKernelWorker()) {
         const url = new URL(this.url, globalThis.location?.href ?? import.meta.url); url.searchParams.set("valle-kernel", "1");
         const worker = new Worker(url, { type: "module", name: "valle-cpu-kernel" });
-        slot = { worker, retire: this.budget.retainKernelWorker(worker) }; this.slots.push(slot);
+        slot = { worker, ...this.budget.retainKernelWorker(worker) }; this.slots.push(slot);
       }
       if (!slot) return;
+      clearTimeout(slot.idle); slot.idle = undefined;
       const job = this.queue.shift()!; slot.work = job; void this.execute(slot, job);
     }
   }
@@ -82,7 +84,8 @@ export class ProductKernelPool {
           else if (reply.error) fail(new Error(reply.error));
           else {
             if (!Number.isFinite(reply.workMs) || reply.workMs! < 0) { fail(new Error("invalid kernel timing")); return; }
-            this.budget.recordKernelWork(reply.workMs!); resolve(isMotion ? reply.motion! : reply.pixels!);
+            if (!Number.isSafeInteger(reply.residentBytes) || reply.residentBytes! < 0) { fail(new Error("invalid kernel resident bytes")); return; }
+            this.budget.recordKernelWork(reply.workMs!); slot.resident(reply.residentBytes!); resolve(isMotion ? reply.motion! : reply.pixels!);
           }
         };
         slot.worker.onerror = event => { done(); fail(event.error ?? new Error(event.message)); };
@@ -106,8 +109,21 @@ export class ProductKernelPool {
         const index = this.slots.indexOf(slot); if (index >= 0) this.slots.splice(index, 1);
       }
     } finally {
-      memory?.release(); releaseCpu?.(); slot.work = undefined; this.dispatch();
+      memory?.release(); releaseCpu?.(); slot.work = undefined;
+      if (this.slots.includes(slot)) this.park(slot);
+      this.dispatch();
     }
+  }
+  /** Beyond the budget's share an idle worker exits now, but never the last one. */
+  private park(slot: Slot): void {
+    if (this.slots.length > 1 && !this.budget.kernelWorkersFit()) { this.exit(slot); return; }
+    slot.idle = setTimeout(() => this.exit(slot), this.idleMs);
+  }
+  private exit(slot: Slot): void {
+    clearTimeout(slot.idle); slot.idle = undefined;
+    const index = this.slots.indexOf(slot);
+    if (index < 0 || slot.work) return;
+    this.slots.splice(index, 1); slot.worker.terminate(); slot.retire();
   }
 }
 

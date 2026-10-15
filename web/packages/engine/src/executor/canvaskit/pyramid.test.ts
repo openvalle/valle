@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import type { CanvasKit, Surface } from "canvaskit-wasm";
 import { initSync, ProductEngine } from "../../../generated/web/valle_engine.js";
 import { CanvasKitBuiltinRuntime } from "./builtin-runtime.ts";
-import { drawPyramidFilter, drawPyramidFilterCooperative } from "./pyramid.ts";
+import { drawPyramidFilter, drawPyramidFilterCooperative, pyramidWorkingBytes } from "./pyramid.ts";
 
 initSync({module:await readFile(new URL("../../../generated/web/valle_engine_bg.wasm",import.meta.url))});
 const {default:CanvasKitInit}=await import("canvaskit-wasm") as unknown as {
@@ -175,6 +175,56 @@ test("source-bounded pyramid regions clear the output they leave out", () => {
   } finally {
     input.delete();free(target);
     for(const surface of [...owned.keys()])free(surface);
+    runtime.dispose();engine.free();
+  }
+}, 30_000);
+
+test("the planned pyramid working set is the peak of the backings it checks out", () => {
+  const engine=new ProductEngine(),runtime=new CanvasKitBuiltinRuntime(ck);
+  runtime.admit(["pyramidCoverageDownsample","pyramidThreshold","pyramidDownsample","pyramidBlur",
+    "pyramidUpsample","pyramidUpsampleRows","pyramidUpsampleComposite","pyramidGlowUpsampleComposite"]);
+  const info={width:1,height:1,colorType:ck.ColorType.RGBA_F16,alphaType:ck.AlphaType.Premul,colorSpace:ck.ColorSpace.SRGB};
+  // Only the requested extents matter here, so every backing is a 1x1 stand-in that records the
+  // bytes a real pool would allocate for the request: exact, or rounded up to the 64-pixel class.
+  const held=new Map<Surface,number>();
+  let live=0,peak=0;
+  const checkOut=(bytes:number)=>{
+    const surface=ck.MakeSurface(1,1)!;
+    held.set(surface,bytes);live+=bytes;peak=Math.max(peak,live);return surface;
+  };
+  const pool={gpu:false,transient:(w:number,h:number)=>checkOut(w*h*8),
+    boundedTransient:(w:number,h:number)=>checkOut(Math.ceil(w/64)*64*Math.ceil(h/64)*64*8),
+    releaseTransient(surface:Surface){live-=held.get(surface)!;held.delete(surface);surface.delete();}};
+  const target=ck.MakeSurface(1,1)!;
+  const images:Array<{delete():void}>=[];
+  try {
+    let planned=0;
+    for(const [inputWidth,inputHeight,width,height,offsets] of [
+      [63,45,80,58,[[-8,7],[15,-6]]],[31,23,300,220,[[120,90],[-20,150],[250,-30]]],[700,40,640,360,[[-30,160]]],
+    ] as const){
+      const exact=ck.MakeImage({...info,width:inputWidth,height:inputHeight},new Uint8Array(inputWidth*inputHeight*8),inputWidth*8)!;
+      const wide=ck.MakeImage({...info,width:inputWidth+7,height:inputHeight+5},
+        new Uint8Array((inputWidth+7)*(inputHeight+5)*8),(inputWidth+7)*8)!;
+      images.push(exact,wide);
+      for(const [offsetX,offsetY] of offsets)for(const radius of [0,4,12,48])for(const kind of ["glow","bloom"] as const){
+        const filter=kind==="glow"?{kind,color:{red:1,green:0.4,blue:0.8,alpha:0.9},intensity:1.4,radius}
+          :{kind,threshold:0.3,knee:0.2,intensity:0.8,radius};
+        const recipe=engine.plan_pyramid_filter(inputWidth,inputHeight,width,height,offsetX,offsetY,JSON.stringify(filter));
+        for(const input of [exact,wide]){
+          live=0;peak=0;
+          drawPyramidFilter(ck,runtime,pool,target.getCanvas(),input,
+            {x:offsetX,y:offsetY,width:inputWidth,height:inputHeight},{x:0,y:0,width,height},kind,recipe);
+          expect(live).toBe(0);
+          expect(pyramidWorkingBytes(recipe,{x:0,y:0,width,height},kind,input===wide),
+            `${kind} radius=${radius} ${inputWidth}x${inputHeight} at ${offsetX},${offsetY} into ${width}x${height}`).toBe(peak);
+          if(peak>0)planned++;
+        }
+      }
+    }
+    expect(planned).toBeGreaterThanOrEqual(40);
+  } finally {
+    for(const image of images)image.delete();
+    target.delete();
     runtime.dispose();engine.free();
   }
 }, 30_000);

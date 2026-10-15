@@ -92,7 +92,7 @@ export interface ProductEngineWire {
 }
 
 export interface ProductWasmModule {
-  default(wasmUrl: string): Promise<void>;
+  default(wasmUrl: string): Promise<{ memory: WebAssembly.Memory }>;
   canonicalize_timeline_document(timelineJson: string): string;
   ProductEngine: new () => ProductEngineWire;
 }

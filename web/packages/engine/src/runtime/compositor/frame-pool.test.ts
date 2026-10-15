@@ -400,7 +400,8 @@ test("a cancelled prefetch still supplies the template needed by the next seek",
     const next=pool.prepare({...input,frame:15});
     await Promise.resolve();
     worker.complete(batches[1]!.jobs[0]!,null);
-    expect((await next.ready).planPacket).toEqual(template);
+    // The transferred packet is kept as is, not copied.
+    expect((await next.ready).planPacket).toBe(template);
     expect(pool.snapshot()).toMatchObject({completed:1,cancelled:1,errors:0});
   } finally {pool.close();}
 });

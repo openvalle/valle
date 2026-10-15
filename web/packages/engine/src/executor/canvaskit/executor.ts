@@ -40,7 +40,7 @@ import { RasterPathCache } from "./raster-path-cache.ts";
 import { RasterPaintCache, type FillPaintLease } from "./raster-paint-cache.ts";
 import { RasterTreeCache, type RasterTreeSignature } from "./raster-tree-cache.ts";
 import { canvasKitGpuCacheBudget } from "./gpu-budget.ts";
-import { drawPyramidFilter, drawPyramidFilterCooperative } from "./pyramid.ts";
+import { drawPyramidFilter, drawPyramidFilterCooperative, pyramidWorkingBytes } from "./pyramid.ts";
 import { drawLensDistortion } from "./lens.ts";
 import type { GpuCircles } from "../webgl/circles.js";
 import { cropProgramInputs } from "./filter-roi.ts";
@@ -53,6 +53,7 @@ import {
 
 type Wire = Record<string, any>;
 const IDENTITY_MATRIX = [1, 0, 0, 0, 1, 0, 0, 0, 1];
+const RASTER_LAYER_CACHE_BYTES = 64 * 1024 * 1024;
 
 export interface CanvasKitExternalObject {
   /** Exact ResourceKey from the request fulfilled for this handle. */
@@ -88,6 +89,42 @@ export interface CanvasKitExecutionTarget {
   readonly onProgramAdmissionStageTiming?: (kind: string, milliseconds: number) => void;
   /** Preview may yield between complete local passes; resources remain frame-owned. */
   readonly yieldToPresentation?: () => Promise<void>;
+  /**
+   * Lends bytes beyond the frame's planned envelope: to keep surfaces the frame uses again, which
+   * are evicted instead when it refuses, and for live surfaces beyond the plan, which then fail the
+   * frame. Without a lender the pool evicts, and exceeds the envelope up to `maxFrameBytes` only
+   * for live surfaces.
+   */
+  readonly borrowSurfaceBytes?: (bytes: bigint) => boolean;
+}
+
+/** Planning needs the working-surface backend, not the target or external objects. */
+export interface CanvasKitPlanOptions {
+  /** Working F16 surfaces live on a GPU context; otherwise on CanvasKit's CPU surface factory. */
+  readonly gpu: boolean;
+  readonly geometryRenderer?: GpuCircles | null;
+  /** Same immutable limits admitted by Engine lowering for this frame. */
+  readonly maxSurfaceBytes?: bigint;
+  readonly maxFrameBytes?: bigint;
+  readonly onProgramAdmissionStageTiming?: (kind: string, milliseconds: number) => void;
+}
+
+/**
+ * A frame admitted up to its external objects, with the working memory its execution needs.
+ * A runtime admits both byte counts before it fulfills the frame's resources, then runs it once.
+ */
+export interface CanvasKitFramePlan {
+  /**
+   * Peak bytes of working F16 surfaces: the slots the plan holds live, the transients this
+   * executor adds to a pass, and the output. The frame's live surfaces stay within it; the pool
+   * keeps others beside them only in bytes the budget lends.
+   */
+  readonly surfaceBytes: bigint;
+  /**
+   * Peak bytes of images held beside the surface pool: a GPU surface copied on write while its
+   * snapshot is read, CPU snapshots and kernel buffers, and raster layers the frame may retain.
+   */
+  readonly imageBytes: bigint;
 }
 
 export interface CanvasKitPassTiming {
@@ -186,6 +223,12 @@ export interface CanvasKitExecutionReport {
   readonly plannedSurfacePeakBytes: bigint;
   /** Resident bytes by role at the moment of `surfacePeakBytes`. */
   readonly surfacePeakBytesByKind: Readonly<Record<CanvasKitSurfaceKind, bigint>>;
+  /** The admitted working-surface envelope, `CanvasKitFramePlan.surfaceBytes`. */
+  readonly surfaceEnvelopeBytes: bigint;
+  /** Live working-surface bytes beyond the envelope at their highest point. */
+  readonly surfaceOverflowBytes: bigint;
+  /** The admitted `CanvasKitFramePlan.imageBytes`. */
+  readonly heldImageBytes: bigint;
   readonly surfacePoolEvictions: number;
   /** Ganesh resource cache after the frame, including pinned surfaces; zero without a GPU context. */
   readonly gpuCacheUsageBytes: number;
@@ -228,12 +271,16 @@ export class CanvasKitCompositorError extends Error {
   }
 }
 
-interface AdmittedProgram {
-  readonly pathCache?: RasterPathCache;
-  readonly paintCache?: RasterPaintCache;
+/** A program admitted up to its external objects. */
+interface ProgramStructure {
   readonly plan: Wire;
   readonly draw: DrawProgramWire;
   readonly directRaster: DirectRasterPlan | null;
+}
+
+interface AdmittedProgram extends ProgramStructure {
+  readonly pathCache?: RasterPathCache;
+  readonly paintCache?: RasterPaintCache;
   readonly textures: Map<string, CanvasKitExternalObject>;
   readonly fonts: Map<string, Typeface>;
   readonly shaders: Map<string, RuntimeEffect>;
@@ -264,6 +311,14 @@ interface BoundProgramRuntimeSchedule {
   readonly slotExtents: Map<number, { width: number; height: number } | null>;
   readonly passes: readonly BoundProgramExecutionPass[];
   readonly estimatedSurfaceBytes: bigint;
+}
+
+/** How a program runs in this frame, decided while the frame is planned. */
+interface ProgramRun {
+  /** The bound schedule with its exclusively consumed device-space producers cropped. */
+  readonly bound: BoundProgramRuntimeSchedule;
+  readonly direct: boolean;
+  readonly device: number[];
 }
 
 interface BoundProgramExecutionPass {
@@ -363,7 +418,6 @@ export class CanvasKitExecutor {
   private workingArena: SurfaceArena | null = null;
   private readonly drawPrograms = new Map<string, Promise<DrawProgramWire>>();
   private readonly baselinePrograms = new Map<string, Promise<Uint8Array>>();
-  private readonly baselineFrames = new Map<string, Promise<Uint8Array>>();
   private readonly planTemplates = new Map<
     string,
     { packet: Uint8Array; admitted: Promise<Wire> }
@@ -387,7 +441,38 @@ export class CanvasKitExecutor {
     objectTable: CanvasKitObjectTable,
     target: CanvasKitExecutionTarget,
   ): Promise<CanvasKitExecutionReport> {
-    return executeCanvasKitFrame(this, planPacket, bindingPacket, schedulePacket, objectTable, target);
+    const plan = await this.plan(planPacket, bindingPacket, schedulePacket, {
+      gpu: target.directContext != null,
+      geometryRenderer: target.geometryRenderer,
+      maxSurfaceBytes: target.maxSurfaceBytes,
+      maxFrameBytes: target.maxFrameBytes,
+      onProgramAdmissionStageTiming: target.onProgramAdmissionStageTiming,
+    });
+    return this.run(plan, objectTable, target);
+  }
+
+  /** Admit a frame's packets, programs and schedule, and plan the working memory it needs. */
+  plan(
+    planPacket: ArrayBuffer | ArrayBufferView,
+    bindingPacket: ArrayBuffer | ArrayBufferView,
+    schedulePacket: ArrayBuffer | ArrayBufferView,
+    options: CanvasKitPlanOptions,
+  ): Promise<CanvasKitFramePlan> {
+    return planCanvasKitFrame(this, planPacket, bindingPacket, schedulePacket, options);
+  }
+
+  /** Execute a planned frame once its external objects are fulfilled. A plan runs once. */
+  run(
+    plan: CanvasKitFramePlan,
+    objectTable: CanvasKitObjectTable,
+    target: CanvasKitExecutionTarget,
+  ): Promise<CanvasKitExecutionReport> {
+    return runCanvasKitFrame(this, plan, objectTable, target);
+  }
+
+  /** Working surfaces the pool keeps between frames; the next frame reuses them first. */
+  get workingSurfaceBytes(): bigint {
+    return this.workingArena?.residentBytes ?? 0n;
   }
 
   arena(
@@ -396,6 +481,7 @@ export class CanvasKitExecutor {
     height: number,
     maxSurfaceBytes: bigint,
     maxFrameBytes: bigint,
+    frame: SurfaceFrame = { envelopeBytes: maxFrameBytes, borrow: null, liveness: null },
   ): SurfaceArena {
     if (!this.workingArena?.matches(context, width, height, maxSurfaceBytes, maxFrameBytes)) {
       this.clearRasterLayers();
@@ -409,7 +495,7 @@ export class CanvasKitExecutor {
         maxFrameBytes,
       );
     }
-    this.workingArena.beginFrame();
+    this.workingArena.beginFrame(frame);
     return this.workingArena;
   }
 
@@ -433,7 +519,6 @@ export class CanvasKitExecutor {
     for (const effect of this.runtimeShaders.values()) effect.delete();
     this.drawPrograms.clear();
     this.baselinePrograms.clear();
-    this.baselineFrames.clear();
     this.planTemplates.clear();
     this.typefaces.clear();
     this.runtimeShaders.clear();
@@ -453,30 +538,18 @@ export class CanvasKitExecutor {
     catch (error) { this.drawPrograms.delete(key); throw error; }
   }
 
-  async baselineProgram(key: string, encoded: unknown): Promise<Uint8Array> {
+  async baselineProgram(key: string, packed: Uint8Array): Promise<Uint8Array> {
     const cached = this.baselinePrograms.get(key);
     if (cached) {
       touch(this.baselinePrograms, key, cached);
       return cached;
     }
-    const packed = decodeBase64Bytes(encoded, "program.baselinePacked");
     // Decoding the template-owned baseline once also primes the exact DrawProgram cache when the
     // baseline is itself the requested frame.
     const pending = this.drawProgram(key, packed).then(() => packed);
     this.baselinePrograms.set(key, pending);
     try { return await pending; }
     catch (error) { this.baselinePrograms.delete(key); throw error; }
-  }
-
-  async baselineFrame(key: string, encoded: unknown): Promise<Uint8Array> {
-    const cached = this.baselineFrames.get(key);
-    if (cached) {
-      touch(this.baselineFrames, key, cached);
-      return cached;
-    }
-    const packed = decodeBase64Bytes(encoded, "program.baselineFramePacked");
-    this.baselineFrames.set(key, Promise.resolve(packed));
-    return packed;
   }
 
   async planTemplate(
@@ -493,7 +566,7 @@ export class CanvasKitExecutor {
       return cached.admitted;
     }
     const admitted = decodePackedAbi(packet, RENDER_PLAN_ABI)
-      .then((value) => record(value, "RenderPlanTemplate"));
+      .then((value) => ownBaselines(record(value, "RenderPlanTemplate")));
     const entry = { packet, admitted };
     this.planTemplates.set(key, entry);
     try { return await admitted; }
@@ -553,11 +626,16 @@ export class CanvasKitExecutor {
     return { image: cached.image, owned: false, roi: cached.roi };
   }
 
+  /** Bytes of the raster layers kept for later frames. */
+  get rasterLayerBytes(): number {
+    return this.cacheCounters.rasterBytes;
+  }
+
   retainRasterLayer(key: string, value: ImageValue): boolean {
     if (!value.owned || !value.image) return false;
     const bytes = value.roi.width * value.roi.height * 8;
-    if (bytes > 64 * 1024 * 1024) return false;
-    while (this.rasterLayers.size >= 64 || this.cacheCounters.rasterBytes + bytes > 64 * 1024 * 1024) {
+    if (bytes > RASTER_LAYER_CACHE_BYTES) return false;
+    while (this.rasterLayers.size >= 64 || this.cacheCounters.rasterBytes + bytes > RASTER_LAYER_CACHE_BYTES) {
       const oldest = this.rasterLayers.entries().next().value;
       if (!oldest) break;
       oldest[1].image.delete();
@@ -582,7 +660,6 @@ export class CanvasKitExecutor {
     trimDeleteableCache(this.runtimeShaders, 128);
     trimPlainCache(this.drawPrograms, 256);
     trimPlainCache(this.baselinePrograms, 64);
-    trimPlainCache(this.baselineFrames, 64);
     trimPlainCache(this.planTemplates, 64);
   }
 }
@@ -610,15 +687,40 @@ export async function executeCanvasKitCompositor(
   }
 }
 
-async function executeCanvasKitFrame(
+/** What a frame plan carries to its single run. */
+interface PlannedFrame {
+  readonly executor: CanvasKitExecutor;
+  readonly options: CanvasKitPlanOptions;
+  readonly plan: Wire;
+  readonly bindings: Wire;
+  readonly externalSlots: unknown[];
+  readonly structures: Map<number, ProgramStructure>;
+  readonly runs: Map<number, ProgramRun>;
+  readonly dynamic: Map<number, Wire>;
+  readonly extent: { width: number; height: number };
+  readonly boundSchedule: BoundOuterSchedule;
+  readonly liveness: SurfaceLiveness;
+  readonly maxSurfaceBytes: bigint;
+  readonly maxFrameBytes: bigint;
+  readonly dataTextureBytes: bigint;
+  readonly plannedSurfacePeakBytes: bigint;
+  readonly cacheBefore: ExecutorCacheCounters;
+  readonly packetAdmissionMs: number;
+  readonly programAdmissionMs: number;
+  readonly scheduleAdmissionMs: number;
+  readonly programDiagnostics: ReturnType<typeof inspectProgramDiagnostics>;
+}
+
+const plannedFrames = new WeakMap<CanvasKitFramePlan, PlannedFrame>();
+
+async function planCanvasKitFrame(
   executor: CanvasKitExecutor,
   planPacket: ArrayBuffer | ArrayBufferView,
   bindingPacket: ArrayBuffer | ArrayBufferView,
   schedulePacket: ArrayBuffer | ArrayBufferView,
-  objectTable: CanvasKitObjectTable,
-  target: CanvasKitExecutionTarget,
-): Promise<CanvasKitExecutionReport> {
-  const { CanvasKit, builtins } = executor;
+  options: CanvasKitPlanOptions,
+): Promise<CanvasKitFramePlan> {
+  const { builtins } = executor;
   const packetAdmissionStarted = performance.now();
   executor.trimCaches();
   const cacheBefore = executor.cacheSnapshot();
@@ -631,6 +733,89 @@ async function executeCanvasKitFrame(
   const templateHash = digestString(bindings.templateHash, "bindings.templateHash");
   const plan = await executor.planTemplate(templateHash, planPacket);
   validatePacketTriple(plan, schedule, templateHash);
+  const externalSlots = array(record(plan.bindingLayout, "plan.bindingLayout").externalSlots, "externalSlots");
+
+  const structures = new Map<number, ProgramStructure>();
+  const packetAdmissionMs = performance.now() - packetAdmissionStarted;
+  const programAdmissionStarted = performance.now();
+  const programLayouts = array(plan.programs, "plan.programs");
+  const framePrograms = array(bindings.programs, "bindings.programs");
+  if (framePrograms.length !== programLayouts.length) {
+    fail("program_layout", "frame program count does not match the template layout");
+  }
+  const programContracts: Wire[] = [];
+  for (let index = 0; index < programLayouts.length; index += 1) {
+    const layout = record(programLayouts[index], `plan.programs[${index}]`);
+    const frameProgram = record(framePrograms[index], `bindings.programs[${index}]`);
+    const contract = admitFrameProgramLayout(layout, frameProgram, index);
+    const structure = await admitProgramStructure(executor, contract, options.onProgramAdmissionStageTiming);
+    programContracts.push(structure.plan);
+    const id = positiveId(structure.plan.id, `bindings.programs[${index}].id`);
+    if (structures.has(id)) fail("duplicate_program", `program ${id} is duplicated`);
+    structures.set(id, structure);
+  }
+
+  const programAdmissionMs = performance.now() - programAdmissionStarted;
+  const programDiagnostics = inspectProgramDiagnostics(structures);
+  const scheduleAdmissionStarted = performance.now();
+  admitCanvasKitOutput(plan);
+  const requiredKernels = requiredBuiltinKernels(plan, programContracts);
+  requiredKernels.add("normalizeInput");
+  builtins.admit(requiredKernels);
+
+  const extent = renderExtent(plan);
+  const dynamic = dynamicBindings(bindings);
+  preflightEffectDomains(plan, dynamic, extent);
+  const boundSchedule = admitBoundOuterSchedule(plan, programContracts, schedule, dynamic, extent);
+  const rootBytes = BigInt(extent.width) * BigInt(extent.height) * 8n;
+  const maxSurfaceBytes = options.maxSurfaceBytes ?? maxBigInt(rootBytes, 64n * 1024n * 1024n);
+  const maxFrameBytes = options.maxFrameBytes ?? maxBigInt(maxSurfaceBytes * 16n, 512n * 1024n * 1024n);
+  let dataTextureBytes = 0n;
+  for (const raw of externalSlots) {
+    const expected = record(record(raw, "external slot").expected, "external descriptor");
+    if (expected.kind !== "dataTexture") continue;
+    const size = record(expected.extent, "data texture extent");
+    const bytes = BigInt(positiveId(size.width, "data texture width")) * BigInt(positiveId(size.height, "data texture height")) * 8n;
+    if (bytes > maxSurfaceBytes) fail("resource_budget", "data texture exceeds the surface byte budget");
+    dataTextureBytes += bytes;
+  }
+  const plannedSurfacePeakBytes = BigInt(positiveIdOrZero(schedule.estimatedPeakSurfaceBytes, "frame surface bytes"));
+  if (dataTextureBytes + plannedSurfacePeakBytes > maxFrameBytes) {
+    fail("resource_budget", "data textures and working surfaces exceed the frame byte budget");
+  }
+  const runs = planProgramRuns(executor, plan, structures, boundSchedule, dynamic, options.geometryRenderer ?? null);
+  const working = frameWorkingSet(executor, plan, structures, runs, boundSchedule, dynamic, extent, options.gpu);
+  if (working.surfaceBytes > maxFrameBytes - dataTextureBytes) {
+    fail("resource_budget", `the frame's working surfaces need ${working.surfaceBytes} bytes beside ${dataTextureBytes} bytes of data textures, budget ${maxFrameBytes}`);
+  }
+  const framePlan: CanvasKitFramePlan = Object.freeze({ surfaceBytes: working.surfaceBytes, imageBytes: working.imageBytes });
+  plannedFrames.set(framePlan, {
+    executor, options, plan, bindings, externalSlots, structures, runs, dynamic, extent, boundSchedule,
+    liveness: working.liveness, maxSurfaceBytes, maxFrameBytes, dataTextureBytes, plannedSurfacePeakBytes,
+    cacheBefore, packetAdmissionMs, programAdmissionMs, scheduleAdmissionMs: performance.now() - scheduleAdmissionStarted,
+    programDiagnostics,
+  });
+  return framePlan;
+}
+
+async function runCanvasKitFrame(
+  executor: CanvasKitExecutor,
+  framePlan: CanvasKitFramePlan,
+  objectTable: CanvasKitObjectTable,
+  target: CanvasKitExecutionTarget,
+): Promise<CanvasKitExecutionReport> {
+  const frame = plannedFrames.get(framePlan);
+  if (!frame || frame.executor !== executor) fail("frame_plan", "frame plan already ran or belongs to another executor");
+  plannedFrames.delete(framePlan);
+  const { options, plan, bindings, extent, dynamic, boundSchedule, runs, maxSurfaceBytes, maxFrameBytes, dataTextureBytes } = frame;
+  if ((target.directContext != null) !== options.gpu
+    || (target.geometryRenderer ?? null) !== (options.geometryRenderer ?? null)
+    || target.maxSurfaceBytes !== options.maxSurfaceBytes
+    || target.maxFrameBytes !== options.maxFrameBytes) {
+    fail("frame_plan", "execution target differs from the one the frame was planned for");
+  }
+  const { CanvasKit, builtins } = executor;
+  const bindingStarted = performance.now();
   const generation = exactPositiveInteger(bindings.externalGeneration, "bindings.externalGeneration");
   if (generation !== BigInt(objectTable.generation)) {
     fail("stale_generation", `binding generation ${generation} does not match object table ${objectTable.generation}`);
@@ -638,7 +823,7 @@ async function executeCanvasKitFrame(
 
   const externalIds = array(bindings.externalIds, "bindings.externalIds").map((value, index) =>
     positiveId(value, `bindings.externalIds[${index}]`));
-  const externalSlots = array(record(plan.bindingLayout, "plan.bindingLayout").externalSlots, "externalSlots");
+  const externalSlots = frame.externalSlots;
   if (externalIds.length !== externalSlots.length) fail("binding_layout", "external slot count mismatch");
   const externalBySlot = new Map<number, CanvasKitExternalObject>();
   for (let index = 0; index < externalIds.length; index += 1) {
@@ -661,62 +846,20 @@ async function executeCanvasKitFrame(
     } else if (object.kind === "dataTexture") fail("external_contract", "data texture has a non-data descriptor");
     externalBySlot.set(slotId, object);
   }
-
   const programs = new Map<number, AdmittedProgram>();
-  const packetAdmissionMs = performance.now() - packetAdmissionStarted;
-  const programAdmissionStarted = performance.now();
-  const programLayouts = array(plan.programs, "plan.programs");
-  const framePrograms = array(bindings.programs, "bindings.programs");
-  if (framePrograms.length !== programLayouts.length) {
-    fail("program_layout", "frame program count does not match the template layout");
+  for (const [id, structure] of frame.structures) {
+    programs.set(id, bindProgramResources(executor, structure, externalBySlot, options.onProgramAdmissionStageTiming));
   }
-  const programContracts: Wire[] = [];
-  for (let index = 0; index < programLayouts.length; index += 1) {
-    const layout = record(programLayouts[index], `plan.programs[${index}]`);
-    const frameProgram = record(framePrograms[index], `bindings.programs[${index}]`);
-    const contract = admitFrameProgramLayout(layout, frameProgram, index);
-    const admitted = await admitProgram(executor, contract, externalBySlot, target.onProgramAdmissionStageTiming);
-    programContracts.push(admitted.plan);
-    const id = positiveId(admitted.plan.id, `bindings.programs[${index}].id`);
-    if (programs.has(id)) fail("duplicate_program", `program ${id} is duplicated`);
-    programs.set(id, admitted);
-  }
+  const programAdmissionMs = frame.programAdmissionMs + performance.now() - bindingStarted;
 
-  const programAdmissionMs = performance.now() - programAdmissionStarted;
-  const programDiagnostics = inspectProgramDiagnostics(programs);
-  const scheduleAdmissionStarted = performance.now();
-  admitCanvasKitOutput(plan);
-  const requiredKernels = requiredBuiltinKernels(plan, programContracts);
-  requiredKernels.add("normalizeInput");
-  builtins.admit(requiredKernels);
-
-  const extent = renderExtent(plan);
   preflightTarget(target.surface, extent);
-  const dynamic = dynamicBindings(bindings);
-  preflightEffectDomains(plan, dynamic, extent);
-  const boundSchedule = admitBoundOuterSchedule(plan, programContracts, schedule, dynamic, extent);
-  const rootBytes = BigInt(extent.width) * BigInt(extent.height) * 8n;
-  const maxSurfaceBytes = target.maxSurfaceBytes ?? maxBigInt(rootBytes, 64n * 1024n * 1024n);
-  const maxFrameBytes = target.maxFrameBytes ?? maxBigInt(maxSurfaceBytes * 16n, 512n * 1024n * 1024n);
-  let dataTextureBytes = 0n;
-  for (const raw of externalSlots) {
-    const expected = record(record(raw, "external slot").expected, "external descriptor");
-    if (expected.kind !== "dataTexture") continue;
-    const size = record(expected.extent, "data texture extent");
-    const bytes = BigInt(positiveId(size.width, "data texture width")) * BigInt(positiveId(size.height, "data texture height")) * 8n;
-    if (bytes > maxSurfaceBytes) fail("resource_budget", "data texture exceeds the surface byte budget");
-    dataTextureBytes += bytes;
-  }
-  const plannedSurfacePeakBytes = BigInt(positiveIdOrZero(schedule.estimatedPeakSurfaceBytes, "frame surface bytes"));
-  if (dataTextureBytes + plannedSurfacePeakBytes > maxFrameBytes) {
-    fail("resource_budget", "data textures and working surfaces exceed the frame byte budget");
-  }
   const arena = executor.arena(
     target.directContext ?? null,
     extent.width,
     extent.height,
     maxSurfaceBytes,
     maxFrameBytes - dataTextureBytes,
+    { envelopeBytes: framePlan.surfaceBytes, borrow: target.borrowSurfaceBytes ?? null, liveness: frame.liveness },
   );
   arena.geometryRenderer = target.geometryRenderer ?? null;
   arena.onLocalPassTiming = target.onLocalPassTiming ?? null;
@@ -736,7 +879,13 @@ async function executeCanvasKitFrame(
       externalResourceById.set(positiveId(resource.id, "resource.id"), required(externalBySlot, positiveId(kind.slot, "resource.slot"), "external slot"));
     }
   }
-  const scheduleAdmissionMs = performance.now() - scheduleAdmissionStarted;
+  const runProgram = async (id: number, destinations: ImageValue[], device: number[]): Promise<ImageValue> => {
+    arena.activeProgram = id;
+    try {
+      return await executeProgram(CanvasKit, builtins, arena, executor.engineKernels,
+        required(programs, id, "program"), required(runs, id, "program run"), destinations, device);
+    } finally { arena.activeProgram = 0; }
+  };
 
   let maximumLiveImages = 0;
   let output: Image | null = null;
@@ -748,6 +897,7 @@ async function executeCanvasKitFrame(
       const kind = record(pass.kind, `passes[${index}].kind`);
       const step = boundSchedule.passes[index]!;
       const outputId = step.output;
+      arena.outerPass = index + 1;
       if (kind.kind === "bindBackdropView" || kind.kind === "aliasResource") {
         resources.set(outputId, borrowedValue(resourceValue(resources, kind.input)));
         retireOuterResources(step.retireAfter, resources);
@@ -782,17 +932,14 @@ async function executeCanvasKitFrame(
           renderImport(CanvasKit, builtins, canvas, externalObject(externalResourceById, kind.external), kind, dynamic, externalResourceById);
           break;
         case "rasterProgram": {
-          const program = required(programs, positiveId(kind.program, "RasterProgram.program"), "program");
-          const destinations = array(kind.destinationInputs, "destinationInputs").map((id) =>
-            borrowedValue(resourceValue(resources, id)));
+          const id = positiveId(kind.program, "RasterProgram.program");
+          const program = required(programs, id, "program");
+          const destinations = array(kind.destinationInputs, "destinationInputs").map((input) =>
+            borrowedValue(resourceValue(resources, input)));
           const device = dynamicTransform(dynamic, kind.transform);
           const cacheKey = rasterLayerKey(program, kind, device, outputRoi, plan);
           const cached = cacheKey === null ? null : executor.rasterLayer(cacheKey);
-          const result = cached ?? await executeProgram(
-            CanvasKit, builtins, arena, executor.engineKernels, program,
-            required(boundSchedule.programs, positiveId(kind.program, "RasterProgram.program"), "bound program schedule"),
-            destinations, device, extent,
-          );
+          const result = cached ?? await runProgram(id, destinations, device);
           let retained = false;
           try {
             drawImageValue(CanvasKit, canvas, result, 1, "src");
@@ -803,18 +950,8 @@ async function executeCanvasKitFrame(
           break;
         }
         case "rasterCaption": {
-          const program = required(programs, positiveId(kind.program, "RasterCaption.program"), "program");
-          const result = await executeProgram(
-            CanvasKit,
-            builtins,
-            arena,
-            executor.engineKernels,
-            program,
-            required(boundSchedule.programs, positiveId(kind.program, "RasterCaption.program"), "bound program schedule"),
-            [],
-            dynamicTransform(dynamic, kind.transform),
-            extent,
-          );
+          const result = await runProgram(positiveId(kind.program, "RasterCaption.program"), [],
+            dynamicTransform(dynamic, kind.transform));
           drawImageValue(CanvasKit, canvas, resourceValue(resources, kind.destination), 1, "src");
           drawImageValue(CanvasKit, canvas, result, dynamicScalar(dynamic, kind.opacity), "srcOver");
           if (result.owned) result.image?.delete();
@@ -828,36 +965,42 @@ async function executeCanvasKitFrame(
           canvas.restore();
           break;
         }
-        case "dispatchKernel":
-          {
-            const rootResources = materializeRootResources(CanvasKit, arena, resources, extent);
-            try {
-              executeKernel(CanvasKit, builtins, arena, canvas, record(kind.invocation, "kernel invocation"), rootResources, dynamic, extent);
-            } finally {
-              disposeMaterializedResources(rootResources, resources);
+        case "dispatchKernel": {
+          const invocation = record(kind.invocation, "kernel invocation");
+          const inputs = new Map<number, MaterializedValue>();
+          try {
+            for (const id of kernelInputs(invocation)) {
+              if (!inputs.has(id)) inputs.set(id, materializeRootValue(CanvasKit, arena, resourceValue(resources, id), extent));
             }
+            executeKernel(CanvasKit, builtins, arena, canvas, invocation,
+              new Map([...inputs].map(([id, input]) => [id, input.value])), dynamic, extent);
+          } finally {
+            for (const input of inputs.values()) input.release();
           }
           break;
+        }
         case "compositeRegion": {
           const mode = record(kind.mode, "composite mode");
           const source = resourceValue(resources, kind.layer);
           const backdrop = resourceValue(resources, kind.backdrop);
           if (mode.kind === "blend" && String(mode.mode) !== "normal") {
             const rootSource = materializeRootValue(CanvasKit, arena, source, extent);
-            const rootBackdrop = materializeRootValue(CanvasKit, arena, backdrop, extent);
-            drawCreativeBlend(
-              CanvasKit,
-              builtins,
-              canvas,
-              rootSource.image,
-              rootBackdrop.image,
-              String(mode.mode),
-              "srgb",
-              dynamicScalar(dynamic, kind.opacity),
-              true,
-            );
-            if (rootSource.owned) rootSource.image?.delete();
-            if (rootBackdrop.owned) rootBackdrop.image?.delete();
+            try {
+              const rootBackdrop = materializeRootValue(CanvasKit, arena, backdrop, extent);
+              try {
+                drawCreativeBlend(
+                  CanvasKit,
+                  builtins,
+                  canvas,
+                  rootSource.value.image,
+                  rootBackdrop.value.image,
+                  String(mode.mode),
+                  "srgb",
+                  dynamicScalar(dynamic, kind.opacity),
+                  true,
+                );
+              } finally { rootBackdrop.release(); }
+            } finally { rootSource.release(); }
           } else {
             drawImageValue(CanvasKit, canvas, backdrop, 1, "src");
             drawImageValue(CanvasKit, canvas, source, dynamicScalar(dynamic, kind.opacity), "srcOver");
@@ -873,7 +1016,7 @@ async function executeCanvasKitFrame(
               CanvasKit,
               builtins,
               canvas,
-              input.image,
+              input.value.image,
               record(kind.operation, "copy operation"),
               !target.directContext
                 && outputRoi.x === 0 && outputRoi.y === 0
@@ -884,7 +1027,7 @@ async function executeCanvasKitFrame(
                 ? executor.engineKernels : null,
             );
           } finally {
-            if (input.owned) input.image?.delete();
+            input.release();
           }
           break;
         }
@@ -931,17 +1074,20 @@ async function executeCanvasKitFrame(
       surfaceAllocatedBytes: arena.frameAllocatedBytes,
       surfaceResidentBytes: arena.residentBytes,
       surfacePeakBytes: arena.framePeakBytes,
-      plannedSurfacePeakBytes,
+      plannedSurfacePeakBytes: frame.plannedSurfacePeakBytes,
       surfacePeakBytesByKind: arena.framePeakByKind,
+      surfaceEnvelopeBytes: framePlan.surfaceBytes,
+      surfaceOverflowBytes: arena.frameOverflowBytes,
+      heldImageBytes: framePlan.imageBytes,
       surfacePoolEvictions: arena.frameEvictions,
       ...arena.gpuCacheReport(),
       geometryTargetBytes: arena.geometryRenderer?.stats.allocatedBytes ?? 0,
-      ...cacheCounterReport(cacheBefore, executor.cacheSnapshot()),
-      packetAdmissionMs,
+      ...cacheCounterReport(frame.cacheBefore, executor.cacheSnapshot()),
+      packetAdmissionMs: frame.packetAdmissionMs,
       programAdmissionMs,
-      scheduleAdmissionMs,
+      scheduleAdmissionMs: frame.scheduleAdmissionMs,
       renderMs: performance.now() - renderStarted,
-      ...programDiagnostics,
+      ...frame.programDiagnostics,
       pathClipElisions: arena.pathClipElisions,
       committed: true,
     };
@@ -955,7 +1101,7 @@ async function executeCanvasKitFrame(
 }
 
 function rasterLayerKey(
-  program: AdmittedProgram,
+  program: ProgramStructure,
   pass: Wire,
   device: readonly number[],
   roi: DeviceRoi,
@@ -988,7 +1134,7 @@ function rasterLayerKey(
   ].join("|");
 }
 
-function inspectProgramDiagnostics(programs: ReadonlyMap<number, AdmittedProgram>) {
+function inspectProgramDiagnostics(programs: ReadonlyMap<number, ProgramStructure>) {
   const report = {
     programLocalPasses: 0,
     directRasterPrograms: 0,
@@ -1023,24 +1169,36 @@ function inspectProgramDiagnostics(programs: ReadonlyMap<number, AdmittedProgram
   return report;
 }
 
-async function admitProgram(
+/** A template keeps each program's baselines as bytes. Their base64 text is only transport;
+ * keeping it as well would hold every baseline a second time for the template's lifetime. */
+function ownBaselines(plan: Wire): Wire {
+  for (const [index, value] of array(plan.programs, "plan.programs").entries()) {
+    const layout = record(value, `plan.programs[${index}]`);
+    layout.baselinePacked = decodeBase64Bytes(layout.baselinePacked, "program.baselinePacked");
+    layout.baselineFramePacked = decodeBase64Bytes(layout.baselineFramePacked, "program.baselineFramePacked");
+  }
+  return plan;
+}
+
+function templateBytes(value: unknown, label: string): Uint8Array {
+  if (!(value instanceof Uint8Array)) fail("program_contract", `${label} must be admitted template bytes`);
+  return value;
+}
+
+/** Decode a program and check its packed contract; external objects are bound per run. */
+async function admitProgramStructure(
   executor: CanvasKitExecutor,
   plan: Wire,
-  objects: Map<number, CanvasKitExternalObject>,
   onTiming?: (kind: string, milliseconds: number) => void,
-): Promise<AdmittedProgram> {
-  const { CanvasKit } = executor;
+): Promise<ProgramStructure> {
   let at = onTiming ? performance.now() : 0;
   const measured = (kind: string) => {
     if (!onTiming) return;
     const next = performance.now(); onTiming(kind, next - at); at = next;
   };
-  const baselineFrameHash = digestString(plan.baselineFrameHash, "program.baselineFrameHash");
   const baselineHash = digestString(plan.baselineContentHash, "program.baselineContentHash");
-  const [baselineFrame, baseline] = await Promise.all([
-    executor.baselineFrame(baselineFrameHash, plan.baselineFramePacked),
-    executor.baselineProgram(baselineHash, plan.baselinePacked),
-  ]);
+  const baselineFrame = templateBytes(plan.baselineFramePacked, "program.baselineFramePacked");
+  const baseline = await executor.baselineProgram(baselineHash, templateBytes(plan.baselinePacked, "program.baselinePacked"));
   measured("baseline");
   const framePatch = decodeBase64Bytes(plan.framePatch, "program.framePatch");
   const framePacked = applyDrawProgramPatch(baselineFrame, framePatch);
@@ -1063,8 +1221,21 @@ async function admitProgram(
     fail("program_contract", `program ${String(exactPlan.id)} packed contract mismatch`);
   }
   measured("contract");
-  const resources = record(exactPlan.resources, "program.resources");
-  const requirements = record(exactPlan.requirements, "program.requirements");
+  const directRaster = directRasterPlan(draw, record(exactPlan.localPlan, "program.localPlan"));
+  measured("rasterPlan");
+  return { plan: exactPlan, draw, directRaster };
+}
+
+/** Bind a program's textures, fonts, shaders and scenes to the frame's external objects. */
+function bindProgramResources(
+  executor: CanvasKitExecutor,
+  program: ProgramStructure,
+  objects: Map<number, CanvasKitExternalObject>,
+  onTiming?: (kind: string, milliseconds: number) => void,
+): AdmittedProgram {
+  const started = onTiming ? performance.now() : 0;
+  const resources = record(program.plan.resources, "program.resources");
+  const requirements = record(program.plan.requirements, "program.requirements");
   const textures = admitProgramTextures(
     requirements.externalTextures,
     resources.textures,
@@ -1097,19 +1268,8 @@ async function admitProgram(
     if (object.kind !== "scene3d" || !object.image) fail("scene_contract", "Scene3D slot has no raster image");
     scenes.set(String(binding.key), object);
   }
-  const directRaster = directRasterPlan(draw, record(exactPlan.localPlan, "program.localPlan"));
-  measured("resourcesAndRasterPlan");
-  return {
-    pathCache: executor.paths,
-    paintCache: executor.paints,
-    plan: exactPlan,
-    draw,
-    directRaster,
-    textures,
-    fonts,
-    shaders,
-    scenes,
-  };
+  onTiming?.("resources", performance.now() - started);
+  return { ...program, pathCache: executor.paths, paintCache: executor.paints, textures, fonts, shaders, scenes };
 }
 
 function admitFrameProgramLayout(layout: Wire, program: Wire, index: number): Wire {
@@ -1134,23 +1294,15 @@ async function executeProgram(
   arena: SurfaceArena,
   engineKernels: CanvasKitEngineKernels | null,
   admitted: AdmittedProgram,
-  bound: BoundProgramRuntimeSchedule,
+  run: ProgramRun,
   destinations: ImageValue[],
   device: number[],
-  extent: { width: number; height: number },
 ): Promise<ImageValue> {
   let yieldAt = performance.now();
   const localPlan = record(admitted.plan.localPlan, "program.localPlan");
   arena.treeSignatures = new Map();
-  bound = cropProgramInputs(localPlan, bound, engineKernels?.plan_pyramid_filter?.bind(engineKernels),
-    kind => programFilterInDeviceSpace(record(kind.filter, "program filter"),
-      programMatrix(admitted, localPlan, kind.output, device)),
-    kind => programPassReads(kind),
-    kind => programLensFrame(localPlan, kind.input, programMatrix(admitted, localPlan, kind.output, device)),
-    kind => arena.geometryRenderer?.canCrop(admitted.draw, kind.roots as number[],
-      programMatrix(admitted, localPlan, kind.output, device)) ?? false);
-  if (admitted.directRaster && !(admitted.directRaster.spatialFilters
-    && !isScaleTranslateMatrix(programMatrix(admitted, localPlan, localPlan.output, device)))) {
+  const { bound } = run;
+  if (run.direct) {
     return executeDirectRasterProgram(
       CanvasKit,
       builtins,
@@ -2353,23 +2505,7 @@ function normalizeAtlasImage(
   // snapshot also keeps bilinear sampling from reading a neighboring atlas tile.
   const object = resolveProgramTexture(admitted.textures, record(region.texture, "atlas texture"), "atlas texture");
   const image = object.image!;
-  const regionRect = rect(region.src, "atlas source");
-  const edges = [
-    regionRect.x * image.width(), regionRect.y * image.height(),
-    (regionRect.x + regionRect.width) * image.width(),
-    (regionRect.y + regionRect.height) * image.height(),
-  ];
-  const [left, top, right, bottom] = [
-    Math.max(0, Math.floor(edges[0]!)), Math.max(0, Math.floor(edges[1]!)),
-    Math.min(image.width(), Math.ceil(edges[2]!)), Math.min(image.height(), Math.ceil(edges[3]!)),
-  ];
-  const width = right! - left!, height = bottom! - top!;
-  const source = {
-    x: (edges[0]! - left!) / width,
-    y: (edges[1]! - top!) / height,
-    width: (edges[2]! - edges[0]!) / width,
-    height: (edges[3]! - edges[1]!) / height,
-  };
+  const { left, top, width, height, source } = atlasCrop(rect(region.src, "atlas source"), image.width(), image.height());
   const surface = arena.transient(width, height);
   try {
     const canvas = surface.getCanvas();
@@ -2381,8 +2517,8 @@ function normalizeAtlasImage(
       paint.setShader(shader);
       canvas.save();
       try {
-        canvas.translate(-left!, -top!);
-        canvas.drawRect(CanvasKit.XYWHRect(left!, top!, width, height), paint);
+        canvas.translate(-left, -top);
+        canvas.drawRect(CanvasKit.XYWHRect(left, top, width, height), paint);
       } finally { canvas.restore(); }
     } finally { paint.delete(); shader.delete(); }
     surface.flush();
@@ -3542,7 +3678,7 @@ function tileMode(CanvasKit: CanvasKit, spread: string) {
   fail("gradient", `gradient spread '${spread}' is outside the closed set`);
 }
 
-function programMatrix(admitted: AdmittedProgram, localPlan: Wire, output: unknown, device: number[]): number[] {
+function programMatrix(admitted: ProgramStructure, localPlan: Wire, output: unknown, device: number[]): number[] {
   const id = positiveId(output, "program output resource");
   const resource = array(localPlan.resources, "localPlan.resources").map((value) => record(value, "local resource")).find((value) => value.id === id);
   if (!resource) fail("program_resource", `local resource ${id} is absent`);
@@ -3581,7 +3717,7 @@ function programLensFrame(localPlan: Wire, input: unknown, matrix: number[]): [n
   return [left, top, right - left, bottom - top].map(checkedDeviceFilterValue) as [number, number, number, number];
 }
 
-function programTransformMatrix(admitted: AdmittedProgram, localToProgram: number[], device: number[]): number[] {
+function programTransformMatrix(admitted: ProgramStructure, localToProgram: number[], device: number[]): number[] {
   const viewport = admitted.draw.viewport;
   if (!(viewport.width > 0) || !(viewport.height > 0)) fail("program_viewport", "DrawProgram viewport is empty during execution");
   const normalize = [1 / viewport.width, 0, -viewport.x / viewport.width, 0, 1 / viewport.height, -viewport.y / viewport.height, 0, 0, 1];
@@ -3625,6 +3761,24 @@ export function drawMotionGlassShader(
   }
 }
 
+/** The working-surface envelope of one frame, and where its surfaces are next needed. */
+interface SurfaceFrame {
+  readonly envelopeBytes: bigint;
+  /** Lends bytes beyond the envelope, as `CanvasKitExecutionTarget.borrowSurfaceBytes`. */
+  readonly borrow: ((bytes: bigint) => boolean) | null;
+  /** Without a plan, any slot or output the frame has not used yet may be evicted. */
+  readonly liveness: SurfaceLiveness | null;
+}
+
+interface PooledSlot {
+  readonly surface: Surface;
+  readonly width: number;
+  readonly height: number;
+  /** The program the slot belongs to, or 0 for an outer slot. */
+  readonly program: number;
+  readonly slot: number;
+}
+
 class SurfaceArena {
   trees: RasterTreeCache | null = null;
   treeSignatures = new Map<number, RasterTreeSignature | null>();
@@ -3637,7 +3791,7 @@ class SurfaceArena {
   pathClipElisions = 0;
   geometryRenderer: GpuCircles | null = null;
   yieldToPresentation: (() => Promise<void>) | null = null;
-  private readonly slots = new Map<string, { surface: Surface; width: number; height: number }>();
+  private readonly slots = new Map<string, PooledSlot>();
   private readonly freeTransients = new Map<Surface, { width: number; height: number }>();
   private readonly checkedOutTransients = new Map<Surface, { width: number; height: number }>();
   private readonly frameTransients = new Set<Surface>();
@@ -3659,6 +3813,17 @@ class SurfaceArena {
   /** Resident bytes by surface role at the moment of the frame peak. */
   framePeakByKind: Record<CanvasKitSurfaceKind, bigint> = { ...this.residentByKind };
   frameEvictions = 0;
+  /** Live surface bytes beyond the frame's envelope at their highest point. */
+  frameOverflowBytes = 0n;
+  /** The outer pass being run, and the program running inside it. */
+  outerPass = 0;
+  activeProgram = 0;
+  private liveness: SurfaceLiveness | null = null;
+  /** The frame may hold its envelope or what the pool carried into it, whichever is larger. */
+  private allowance = 0n;
+  private envelope = 0n;
+  private borrowed = 0n;
+  private borrow: ((bytes: bigint) => boolean) | null = null;
   get gpu(): boolean { return this.context !== null; }
   /** CanvasKit 0.42's public cache getters drop their return values, so read usage through the
    * bound method; the limit is the one this arena configured. */
@@ -3697,7 +3862,7 @@ class SurfaceArena {
       && this.maxSurfaceBytes === maxSurfaceBytes
       && this.maxFrameBytes === maxFrameBytes;
   }
-  beginFrame(): void {
+  beginFrame(frame: SurfaceFrame): void {
     this.pathClipElisions = 0;
     if (this.checkedOutTransients.size !== 0) fail("surface_lifetime", "transient surface escaped the prior frame");
     this.usedSlotKeys.clear();
@@ -3709,9 +3874,18 @@ class SurfaceArena {
     this.framePeakBytes = this.residentBytes;
     this.framePeakByKind = { ...this.residentByKind };
     this.frameEvictions = 0;
+    this.frameOverflowBytes = 0n;
+    this.outerPass = 0;
+    this.activeProgram = 0;
+    this.liveness = frame.liveness;
+    this.envelope = frame.envelopeBytes;
+    this.allowance = maxBigInt(frame.envelopeBytes, this.residentBytes);
+    this.borrowed = 0n;
+    this.borrow = frame.borrow;
     this.configureGpuCache(this.residentBytes);
   }
   endFrame(): void {
+    this.borrow = null;
     const leaked = this.checkedOutTransients.size;
     if (leaked !== 0) {
       // Restore the arena before rejecting the frame so one failed draw cannot poison every later
@@ -3753,12 +3927,12 @@ class SurfaceArena {
       + Number(this.outputSurface !== null);
   }
   slot(id: number, width: number, height: number): Surface {
-    return this.keyedSlot(`outer:${id}`, width, height);
+    return this.keyedSlot(`outer:${id}`, width, height, 0, id);
   }
   programSlot(program: number, id: number, width: number, height: number): Surface {
-    return this.keyedSlot(`program:${program}:${id}`, width, height);
+    return this.keyedSlot(`program:${program}:${id}`, width, height, program, id);
   }
-  private keyedSlot(key: string, width: number, height: number): Surface {
+  private keyedSlot(key: string, width: number, height: number, program: number, slot: number): Surface {
     this.usedSlotKeys.add(key);
     const existing = this.slots.get(key);
     // Physical extents follow the plan exactly, as on Native GPU. Snapshots cover the whole backing,
@@ -3771,8 +3945,8 @@ class SurfaceArena {
       this.slots.delete(key);
       this.evictSurface(existing.surface);
     }
-    const surface = this.create(width, height, key.startsWith("outer:") ? "outer" : "program");
-    this.slots.set(key, { surface, width, height });
+    const surface = this.create(width, height, program === 0 ? "outer" : "program");
+    this.slots.set(key, { surface, width, height, program, slot });
     return surface;
   }
   output(): Surface {
@@ -3781,25 +3955,22 @@ class SurfaceArena {
     return this.outputSurface = this.create(this.width, this.height, "output");
   }
   /**
-   * A transient for consumers that read only [0, width) x [0, height): the smallest free bounded
-   * backing that holds the extent, else a new one rounded up to a 64-pixel class. Extents that move
-   * with content, such as each Shutter sample of a spinning glow, then share one working set instead
-   * of allocating per extent. Exact when the rounded backing does not fit the budgets.
+   * A transient for consumers that read only [0, width) x [0, height): a free backing of the
+   * extent's 64-pixel class, else a new one. Extents that move with content, such as each Shutter
+   * sample of a spinning glow, then share a few classes instead of allocating per extent, and the
+   * frame plan holds each checkout at its class. Exact when the class does not fit the budgets.
    */
   boundedTransient(width: number, height: number): Surface {
-    let surface: Surface | null = null, dimensions = { width: 0, height: 0 };
+    const dimensions = { width: Math.ceil(width / 64) * 64, height: Math.ceil(height / 64) * 64 };
+    let surface: Surface | null = null;
     for (const candidate of this.boundedBackings) {
       const free = this.freeTransients.get(candidate);
-      if (free && free.width >= width && free.height >= height
-        && (!surface || free.width * free.height < dimensions.width * dimensions.height)) {
-        surface = candidate; dimensions = free;
-      }
+      if (free && free.width === dimensions.width && free.height === dimensions.height) { surface = candidate; break; }
     }
     if (surface) {
       this.freeTransients.delete(surface);
       this.frameReuses += 1;
     } else {
-      dimensions = { width: Math.ceil(width / 64) * 64, height: Math.ceil(height / 64) * 64 };
       const bytes = BigInt(dimensions.width) * BigInt(dimensions.height) * 8n;
       if (bytes > this.maxSurfaceBytes || this.residentBytes + bytes > this.maxFrameBytes) return this.transient(width, height);
       surface = this.create(dimensions.width, dimensions.height);
@@ -3820,8 +3991,8 @@ class SurfaceArena {
     } else {
       // An extent this frame has not seen means the working set moved on. Backings carried over
       // from the previous frame and not reused yet go back to Ganesh, which keeps them as purgeable
-      // scratch within the cache headroom for any size that comes back. Bounded backings serve any
-      // extent they hold, so they stay until the frame ends without them.
+      // scratch within the cache headroom for any size that comes back. Bounded backings, and
+      // extents the frame's plan still checks out, stay until the frame ends without them.
       this.releaseCarriedOver(true);
       surface = this.create(width, height);
     }
@@ -3829,9 +4000,11 @@ class SurfaceArena {
     this.frameTransients.add(surface);
     return surface;
   }
-  private releaseCarriedOver(keepBounded = false): void {
-    for (const surface of [...this.freeTransients.keys()]) {
-      if (this.frameTransients.has(surface) || keepBounded && this.boundedBackings.has(surface)) continue;
+  private releaseCarriedOver(midFrame = false): void {
+    const planned = midFrame ? this.liveness?.transientExtents : undefined;
+    for (const [surface, { width, height }] of [...this.freeTransients]) {
+      if (this.frameTransients.has(surface) || midFrame && this.boundedBackings.has(surface)
+        || planned?.has(`${width}x${height}`)) continue;
       this.freeTransients.delete(surface);
       this.evictSurface(surface);
     }
@@ -3899,31 +4072,97 @@ class SurfaceArena {
     }
     return surface;
   }
+  /**
+   * Keep the pool inside the frame's allowance. What the frame never uses again goes first: a free
+   * transient of an extent it does not check out, a slot of another extent or of a program that runs
+   * without it, an unwritten output it does not need. Surfaces it uses again stay while the budget
+   * lends their room; otherwise free transients go, carried-over ones first, then the slot or output
+   * needed farthest ahead. Only live surfaces beyond the plan are overflow. Without a lender the pool
+   * may then grow up to `maxFrameBytes`.
+   */
   private ensureCapacity(requiredBytes: bigint): void {
-    while (this.residentBytes + requiredBytes > this.maxFrameBytes) {
-      const free = this.freeTransients.entries().next();
-      if (!free.done) {
-        this.freeTransients.delete(free.value[0]);
-        this.evictSurface(free.value[0]);
-        continue;
-      }
-      const unused = [...this.slots].find(([key]) => !this.usedSlotKeys.has(key));
+    let lends = this.borrow !== null;
+    while (this.residentBytes + requiredBytes > this.allowance + this.borrowed) {
+      const missing = this.residentBytes + requiredBytes - this.allowance - this.borrowed;
+      const unused = this.evictionVictim(false);
       if (unused) {
-        this.slots.delete(unused[0]);
-        this.evictSurface(unused[1].surface);
+        this.evictSurface(unused);
         continue;
       }
-      if (!this.outputUsed && this.outputSurface) {
-        const surface = this.outputSurface;
-        this.outputSurface = null;
-        this.evictSurface(surface);
+      if (lends && this.residentBytes + requiredBytes <= this.maxFrameBytes) {
+        if (this.borrow!(missing)) { this.borrowed += missing; continue; }
+        lends = false;
+      }
+      const needed = this.evictionVictim(true);
+      if (needed) {
+        this.evictSurface(needed);
         continue;
       }
-      fail(
-        "frame_budget",
-        `working surface pool needs ${this.residentBytes + requiredBytes} bytes, budget ${this.maxFrameBytes}`,
-      );
+      if (this.residentBytes + requiredBytes > this.maxFrameBytes) {
+        fail("frame_budget", `working surface pool needs ${this.residentBytes + requiredBytes} bytes, budget ${this.maxFrameBytes}`);
+      }
+      if (this.borrow && !this.borrow(missing)) {
+        fail("frame_budget", `live working surfaces need ${missing} bytes beyond the frame's ${this.allowance}-byte envelope`);
+      }
+      this.borrowed += missing;
     }
+    const overflow = this.liveBytes() + requiredBytes - this.envelope;
+    if (overflow > this.frameOverflowBytes) this.frameOverflowBytes = overflow;
+  }
+  /** Checked-out transients, live slots and the written output. */
+  private liveBytes(): bigint {
+    let bytes = 0n;
+    for (const surface of this.checkedOutTransients.keys()) bytes += this.surfaceBytes.get(surface) ?? 0n;
+    for (const [key, entry] of this.slots) if (this.nextUse(key, entry) === null) bytes += this.surfaceBytes.get(entry.surface) ?? 0n;
+    if (this.outputSurface && this.outputUsed) bytes += this.surfaceBytes.get(this.outputSurface) ?? 0n;
+    return bytes;
+  }
+  /** Remove and return a surface to evict: one the frame never uses again, or with `needed` any. */
+  private evictionVictim(needed: boolean): Surface | null {
+    const planned = this.liveness?.transientExtents;
+    let free: Surface | null = null, unused = false;
+    for (const [surface, { width, height }] of this.freeTransients) {
+      if (planned && !planned.has(`${width}x${height}`)) { free = surface; unused = true; break; }
+      if (!free || this.frameTransients.has(free) && !this.frameTransients.has(surface)) free = surface;
+    }
+    let victim: string | null = null, farthest = -1;
+    for (const [key, entry] of this.slots) {
+      const next = this.nextUse(key, entry);
+      if (next !== null && next > farthest) { victim = key; farthest = next; }
+    }
+    const output = this.outputSurface && !this.outputUsed ? this.liveness?.outputPass ?? Infinity : -1;
+    if (free && (unused || needed && Math.max(farthest, output) !== Infinity)) {
+      this.freeTransients.delete(free);
+      return free;
+    }
+    if (!needed && Math.max(farthest, output) !== Infinity) return null;
+    if (output > farthest) {
+      const surface = this.outputSurface!;
+      this.outputSurface = null;
+      return surface;
+    }
+    if (victim === null) return null;
+    const surface = this.slots.get(victim)!.surface;
+    this.slots.delete(victim);
+    return surface;
+  }
+  /** The outer pass that next needs a pooled slot, or null while the slot is live. */
+  private nextUse(key: string, entry: PooledSlot): number | null {
+    if (!this.liveness) return this.usedSlotKeys.has(key) ? null : Infinity;
+    // A backing of another extent, or of a program this frame runs without it, is never reused.
+    const extent = this.liveness.slotExtents.get(entry.program)?.get(entry.slot);
+    if (!extent || extent.width !== entry.width || extent.height !== entry.height) return Infinity;
+    if (entry.program !== 0) {
+      if (entry.program === this.activeProgram) return null;
+      const pass = this.liveness.programPasses.get(entry.program);
+      return pass === undefined || pass < this.outerPass ? Infinity : pass;
+    }
+    let next = Infinity;
+    for (const [first, last] of this.liveness.slotIntervals.get(entry.slot) ?? []) {
+      if (first <= this.outerPass && this.outerPass <= last) return null;
+      if (first > this.outerPass && first < next) next = first;
+    }
+    return next;
   }
   private evictSurface(surface: Surface): void {
     this.frameEvictions += 1;
@@ -3948,6 +4187,10 @@ class SurfaceArena {
 
 interface BoundOuterSchedule {
   readonly slotExtents: Map<number, { width: number; height: number } | null>;
+  /** Each slot's allocation intervals, as inclusive 1-based pass indices. */
+  readonly slotIntervals: Map<number, Array<readonly [number, number]>>;
+  /** Bytes of the outer slots allocated during each pass, before program surfaces. */
+  readonly outerActiveBytes: readonly bigint[];
   readonly programs: Map<number, BoundProgramRuntimeSchedule>;
   readonly passes: readonly BoundExecutionPass[];
 }
@@ -3991,6 +4234,7 @@ function admitBoundOuterSchedule(
   }
 
   const slotExtents = new Map<number, { width: number; height: number } | null>();
+  const slotIntervals = new Map<number, Array<readonly [number, number]>>();
   const slotByResource = new Map<number, number>();
   const planSlots = array(plan.surfaceSlots, "plan.surfaceSlots");
   const boundSlots = array(schedule.surfaceSlots, "schedule.surfaceSlots");
@@ -4048,6 +4292,7 @@ function admitBoundOuterSchedule(
         fail("bound_schedule", `slot ${id} allocation interval escapes the pass list`);
       }
       for (let pass = first; pass <= last; pass += 1) activeBytes[pass - 1] = (activeBytes[pass - 1] ?? 0n) + bytes;
+      if (bytes !== 0n) slotIntervals.set(id, [...slotIntervals.get(id) ?? [], [first, last]]);
       if (resource !== finalOutput) {
         const retired = retireAfter[last - 1];
         if (!retired) fail("bound_schedule", `slot ${id} allocation ends outside the pass list`);
@@ -4060,6 +4305,7 @@ function admitBoundOuterSchedule(
   if (BigInt(positiveIdOrZero(schedule.outerPeakSurfaceBytes, "outer peak bytes")) !== outerPeak) {
     fail("bound_schedule", "outer peak byte estimate mismatch");
   }
+  const outerActiveBytes = [...activeBytes];
   const boundPrograms = admitBoundProgramSchedules(plan, programs, schedule, dynamic, extent, activeBytes);
   const combinedPeak = activeBytes.reduce((peak, value) => value > peak ? value : peak, 0n);
   if (BigInt(positiveIdOrZero(schedule.estimatedPeakSurfaceBytes, "combined peak bytes")) !== combinedPeak) {
@@ -4089,7 +4335,7 @@ function admitBoundOuterSchedule(
     }
     return { output, deviceRoi: outputRoi, surfaceSlot, retireAfter: actualRetire };
   });
-  return { slotExtents, programs: boundPrograms, passes };
+  return { slotExtents, slotIntervals, outerActiveBytes, programs: boundPrograms, passes };
 }
 
 function admitBoundProgramSchedules(
@@ -4362,6 +4608,333 @@ function admitBoundProgramSchedules(
     fail("shader_budget", "frame Shader work is not the sum of its programs");
   }
   return result;
+}
+
+/** When each pooled surface is next needed in the frame being run. */
+interface SurfaceLiveness {
+  /** Outer slot allocation intervals, as inclusive 1-based outer pass indices. */
+  readonly slotIntervals: ReadonlyMap<number, readonly (readonly [number, number])[]>;
+  /** The extent of each slot the frame allocates, by program, with 0 for the outer slots. */
+  readonly slotExtents: ReadonlyMap<number, ReadonlyMap<number, { width: number; height: number } | null>>;
+  /** The extents of the transients the frame checks out, as `${width}x${height}`. */
+  readonly transientExtents: ReadonlySet<string>;
+  /** The outer pass that runs each program. */
+  readonly programPasses: ReadonlyMap<number, number>;
+  /** The outer pass that writes the output surface. */
+  readonly outputPass: number;
+}
+
+/** A value's device ROI and the extent of the image that holds it. */
+interface HeldValue { readonly roi: DeviceRoi; readonly width: number; readonly height: number }
+
+/** Crop each program's inputs and choose its direct or scheduled execution for this frame. */
+function planProgramRuns(
+  executor: CanvasKitExecutor,
+  plan: Wire,
+  structures: ReadonlyMap<number, ProgramStructure>,
+  schedule: BoundOuterSchedule,
+  dynamic: Map<number, Wire>,
+  geometryRenderer: GpuCircles | null,
+): Map<number, ProgramRun> {
+  const runs = new Map<number, ProgramRun>();
+  const planner = executor.engineKernels?.plan_pyramid_filter?.bind(executor.engineKernels);
+  for (const rawPass of array(plan.passes, "plan.passes")) {
+    const kind = record(record(rawPass, "plan pass").kind, "plan pass kind");
+    if (kind.kind !== "rasterProgram" && kind.kind !== "rasterCaption") continue;
+    const id = positiveId(kind.program, "program execution id");
+    const program = required(structures, id, "program");
+    const localPlan = record(program.plan.localPlan, "program.localPlan");
+    const device = dynamicTransform(dynamic, kind.transform);
+    const bound = cropProgramInputs(localPlan, required(schedule.programs, id, "bound program schedule"), planner,
+      local => programFilterInDeviceSpace(record(local.filter, "program filter"),
+        programMatrix(program, localPlan, local.output, device)),
+      local => programPassReads(local),
+      local => programLensFrame(localPlan, local.input, programMatrix(program, localPlan, local.output, device)),
+      local => geometryRenderer?.canCrop(program.draw, local.roots as number[],
+        programMatrix(program, localPlan, local.output, device)) ?? false);
+    const direct = program.directRaster !== null && !(program.directRaster.spatialFilters
+      && !isScaleTranslateMatrix(programMatrix(program, localPlan, localPlan.output, device)));
+    runs.set(id, { bound, direct, device });
+  }
+  return runs;
+}
+
+/**
+ * Peak bytes of the working surfaces a frame holds at once, and of the images it holds beside
+ * them. Surfaces count each outer slot inside its allocation intervals, the output once written,
+ * a scheduled program's slots while it runs, and each transient a pass checks out at the size the
+ * arena allocates. The arena keeps the live surfaces inside this envelope.
+ */
+function frameWorkingSet(
+  executor: CanvasKitExecutor,
+  plan: Wire,
+  structures: ReadonlyMap<number, ProgramStructure>,
+  runs: ReadonlyMap<number, ProgramRun>,
+  schedule: BoundOuterSchedule,
+  dynamic: Map<number, Wire>,
+  extent: { width: number; height: number },
+  gpu: boolean,
+): { surfaceBytes: bigint; imageBytes: bigint; liveness: SurfaceLiveness } {
+  const root: DeviceRoi = { x: 0, y: 0, ...extent };
+  const rootBytes = roiBytes(root);
+  const externalSlots = array(record(plan.bindingLayout, "plan.bindingLayout").externalSlots, "externalSlots");
+  const live = new Map<number, HeldValue>();
+  const programPasses = new Map<number, number>();
+  const transients = new Set<string>();
+  let outputPass = Infinity, surfaceBytes = 0n, imageBytes = 0n, layerBytes = 0n;
+  // Kernels and creative blends read values at the root extent; other ROIs are copied there.
+  const copies = (ids: readonly number[]) => BigInt(ids.filter(id => {
+    const value = live.get(id);
+    return value !== undefined && !sameRoi(value.roi, root);
+  }).length) * rootBytes;
+  for (const [index, raw] of array(plan.passes, "plan.passes").entries()) {
+    const kind = record(record(raw, "plan pass").kind, "plan pass kind");
+    const step = schedule.passes[index]!;
+    let surfaces = 0n, images = 0n;
+    if (kind.kind === "bindBackdropView" || kind.kind === "aliasResource") {
+      const source = live.get(positiveId(kind.input, "plan resource id"));
+      if (source) live.set(step.output, source);
+    } else if (step.deviceRoi.width !== 0 && step.deviceRoi.height !== 0) {
+      if (step.surfaceSlot === null) outputPass = Math.min(outputPass, index + 1);
+      if (kind.kind === "rasterProgram" || kind.kind === "rasterCaption") {
+        const id = positiveId(kind.program, "program execution id");
+        programPasses.set(id, index + 1);
+        const program = required(structures, id, "program"), run = required(runs, id, "program run");
+        const destinations = kind.kind === "rasterProgram"
+          ? array(kind.destinationInputs, "destinationInputs").map(input => live.get(positiveId(input, "plan resource id")) ?? null)
+          : [];
+        const need = programWorkingSet(executor, program, run, destinations, externalSlots, gpu, transients);
+        surfaces = need.surfaces;
+        images = need.images;
+        if (kind.kind === "rasterProgram" && rasterLayerKey(program, kind, run.device, step.deviceRoi, plan) !== null) {
+          const output = required(run.bound.resourceRois, positiveId(record(program.plan.localPlan, "program.localPlan").output,
+            "program output"), "program output ROI");
+          const bytes = roiBytes(output);
+          if (bytes <= BigInt(RASTER_LAYER_CACHE_BYTES)) layerBytes += bytes;
+        }
+      } else if (kind.kind === "dispatchKernel") {
+        const invocation = record(kind.invocation, "kernel invocation");
+        surfaces = copies([...new Set(kernelInputs(invocation))]) + (invocation.kind === "mask" ? rootBytes : 0n);
+      } else if (kind.kind === "compositeRegion") {
+        const mode = record(kind.mode, "composite mode");
+        if (mode.kind === "blend" && String(mode.mode) !== "normal") {
+          surfaces = copies([positiveId(kind.layer, "plan resource id"), positiveId(kind.backdrop, "plan resource id")]);
+        }
+      } else if (kind.kind === "copyConvert") {
+        surfaces = copies([positiveId(kind.input, "plan resource id")]);
+        // The CPU sRGB transform holds CanvasKit storage and the Engine's WASM copy of the input.
+        if (!gpu && sameRoi(step.deviceRoi, root)) {
+          images = srgbPreviewScratchBytes(extent.width, extent.height,
+            typeof executor.engineKernels?.transform_srgb_preview_f16 === "function") * 2n;
+        }
+      }
+      // Root copies are the only transients outside programs.
+      if (surfaces !== 0n && kind.kind !== "rasterProgram" && kind.kind !== "rasterCaption") {
+        transients.add(`${extent.width}x${extent.height}`);
+      }
+      const slot = step.surfaceSlot === null ? extent : schedule.slotExtents.get(step.surfaceSlot) ?? extent;
+      live.set(step.output, { roi: step.deviceRoi, width: slot.width, height: slot.height });
+    }
+    const held = schedule.outerActiveBytes[index]! + (outputPass <= index + 1 ? rootBytes : 0n);
+    surfaceBytes = maxBigInt(surfaceBytes, held + surfaces);
+    imageBytes = maxBigInt(imageBytes, images);
+    for (const id of step.retireAfter) live.delete(id);
+  }
+  // Raster layers this frame retains keep their snapshots until the cache evicts them.
+  const layerRoom = BigInt(Math.max(0, RASTER_LAYER_CACHE_BYTES - executor.rasterLayerBytes));
+  imageBytes += layerBytes < layerRoom ? layerBytes : layerRoom;
+  // A CPU surface's snapshot copies its pixels, so each live surface may be held twice.
+  if (!gpu) imageBytes += surfaceBytes;
+  const slotExtents = new Map([[0, schedule.slotExtents]]);
+  for (const [id, run] of runs) slotExtents.set(id, run.direct ? new Map() : run.bound.slotExtents);
+  return { surfaceBytes, imageBytes,
+    liveness: { slotIntervals: schedule.slotIntervals, slotExtents, transientExtents: transients, programPasses, outputPass } };
+}
+
+/**
+ * Transient and slot bytes one program holds at the peak of its run, and the image bytes it holds
+ * beside them: a direct raster program's backdrop copy of its surface, CPU kernel buffers and noise.
+ * `transients` collects the extents of the transients it checks out.
+ */
+function programWorkingSet(
+  executor: CanvasKitExecutor,
+  program: ProgramStructure,
+  run: ProgramRun,
+  destinations: readonly (HeldValue | null)[],
+  externalSlots: unknown[],
+  gpu: boolean,
+  transients: Set<string>,
+): { surfaces: bigint; images: bigint } {
+  const localPlan = record(program.plan.localPlan, "program.localPlan");
+  const { bound } = run;
+  const atlas = atlasWorkingBytes(program, externalSlots, transients);
+  if (run.direct) {
+    const output = required(bound.resourceRois, positiveId(localPlan.output, "direct raster output"), "direct raster output ROI");
+    if (output.width === 0 || output.height === 0) return { surfaces: 0n, images: 0n };
+    transients.add(`${output.width}x${output.height}`);
+    const bytes = roiBytes(output);
+    const backdrops = [...program.directRaster!.backdrops.values()].filter(backdrop => backdrop.hasLocalInputs);
+    const combined = backdrops.some(backdrop => backdrop.destination !== null) ? bytes : 0n;
+    // Drawing the backdrop over the local snapshot copies the GPU surface on write.
+    return { surfaces: bytes + maxBigInt(combined, atlas), images: gpu && backdrops.length !== 0 ? bytes : 0n };
+  }
+  let slots = 0n;
+  for (const slot of bound.slotExtents.values()) if (slot) slots += BigInt(slot.width) * BigInt(slot.height) * 8n;
+  const kernels = executor.engineKernels;
+  const values = new Map<number, HeldValue | null>();
+  let peak = 0n, images = 0n;
+  for (const [index, rawPass] of array(localPlan.passes, "localPlan.passes").entries()) {
+    const kind = record(record(rawPass, "program pass").kind, "program pass kind");
+    const step = bound.passes[index];
+    if (!step) fail("program_schedule", `bound program pass ${index + 1} is absent`);
+    const { output, storage, deviceRoi: roi } = step;
+    if (storage.kind === "destination") {
+      values.set(output, destinations[positiveId(storage.destination, "destination") - 1] ?? null);
+      continue;
+    }
+    if (storage.kind === "alias") {
+      values.set(output, values.get(positiveId(storage.source, "program alias source")) ?? null);
+      continue;
+    }
+    if (storage.kind === "transparent" || roi.width === 0 || roi.height === 0) {
+      values.set(output, null);
+      continue;
+    }
+    let need = 0n;
+    if (storage.kind === "output") { need = roiBytes(roi); transients.add(`${roi.width}x${roi.height}`); }
+    if (kind.kind === "rasterNode" || kind.kind === "rasterTree") need += atlas;
+    if (kind.kind === "applyFilter") {
+      const filter = programFilterInDeviceSpace(record(kind.filter, "program filter"),
+        programMatrix(program, localPlan, kind.output, run.device));
+      const input = values.get(positiveId(kind.input, "program input")) ?? null;
+      const pyramid = filter.kind === "glow" || filter.kind === "bloom";
+      if (filter.kind === "radialBlur" && input) {
+        const planner = kernels?.plan_radial_blur;
+        if (!planner) fail("radial_blur_plan", "radial blur pass planner is unavailable");
+        need += radialBlurWorkingBytes(planner.call(kernels, finiteNumber(filter.amount, "radial blur amount"),
+          input.roi.x, input.roi.y, input.roi.width, input.roi.height, roi.x, roi.y, roi.width, roi.height), transients);
+      } else if ((pyramid || filter.kind === "lensDistortion") && input && !(gpu && filter.kind === "lensDistortion")) {
+        const planner = kernels?.plan_pyramid_filter;
+        const recipe = pyramid && planner ? planner.call(kernels, input.roi.width, input.roi.height, roi.width, roi.height,
+          input.roi.x - roi.x, input.roi.y - roi.y, JSON.stringify(filter)) : null;
+        if (gpu && recipe) {
+          need += BigInt(pyramidWorkingBytes(recipe, roi, filter.kind as "glow" | "bloom",
+            input.width !== input.roi.width || input.height !== input.roi.height, transients));
+        } else {
+          // The read and the result each exist in JavaScript and in WASM memory.
+          const read = !recipe ? input.roi : intersectRoi(input.roi, recipe.length >= 15
+            ? { x: roi.x + recipe[0]!, y: roi.y + recipe[1]!, width: recipe[2]!, height: recipe[3]! }
+            : roi);
+          images = maxBigInt(images, (roiBytes(read) + roiBytes(roi)) * 2n);
+        }
+      } else if (filter.kind === "filmGrain") {
+        // The noise lattice exists in JavaScript and as a CanvasKit image.
+        const size = finiteNumber(filter.size, "film grain size");
+        const width = Math.floor((roi.x + roi.width - 1) / size) + 2 - Math.floor(roi.x / size);
+        const height = Math.floor((roi.y + roi.height - 1) / size) + 2 - Math.floor(roi.y / size);
+        images = maxBigInt(images, BigInt(width) * BigInt(height) * 8n);
+      }
+    }
+    const slot = storage.kind === "surface" ? bound.slotExtents.get(positiveId(storage.slot, "program surface slot")) : null;
+    values.set(output, { roi, width: slot?.width ?? roi.width, height: slot?.height ?? roi.height });
+    peak = maxBigInt(peak, need);
+  }
+  return { surfaces: slots + peak, images };
+}
+
+/** Peak bytes of the ping-pong transients `drawRadialBlur` holds for a pass plan, and their extents. */
+function radialBlurWorkingBytes(plan: Float64Array, transients: Set<string>): bigint {
+  let peak = 0n, prior = 0n;
+  // Every pass but the last writes a transient while the previous one is still read.
+  for (let at = 0; at + 5 < plan.length; at += 5) {
+    transients.add(`${plan[at + 2]}x${plan[at + 3]}`);
+    const bytes = BigInt(Math.ceil(plan[at + 2]!)) * BigInt(Math.ceil(plan[at + 3]!)) * 8n;
+    peak = maxBigInt(peak, prior + bytes);
+    prior = bytes;
+  }
+  return peak;
+}
+
+const atlasRegions = new WeakMap<DrawProgramWire, readonly { texture: Wire; src: RectWire }[]>();
+
+/** The largest crop an image batch of the program checks out, from its textures' admitted extents. */
+function atlasWorkingBytes(program: ProgramStructure, externalSlots: unknown[], transients: Set<string>): bigint {
+  let regions = atlasRegions.get(program.draw);
+  if (!regions) {
+    const found: { texture: Wire; src: RectWire }[] = [];
+    for (const raw of program.draw.nodes) {
+      const node = record(raw, "DrawProgram node");
+      if (node.kind !== "instanceBatch") continue;
+      const shape = record(record(node.value, "batch node").shape, "instance shape");
+      if (shape.kind !== "image") continue;
+      const region = record(shape.value, "instance image region");
+      found.push({ texture: record(region.texture, "atlas texture"), src: rect(region.src, "atlas source") });
+    }
+    atlasRegions.set(program.draw, regions = found);
+  }
+  if (regions.length === 0) return 0n;
+  const resources = record(program.plan.resources, "program.resources");
+  const requirements = array(record(program.plan.requirements, "program.requirements").externalTextures, "program texture requirements");
+  const bindings = array(resources.textures, "program textures");
+  const extents = new Map<string, { width: number; height: number }>();
+  for (const [index, raw] of bindings.entries()) {
+    const slot = positiveId(record(raw, "texture binding").slot, "texture slot");
+    const expected = record(record(requiredIndex(externalSlots, slot - 1, "texture slot"), "external slot").expected, "external descriptor");
+    if (expected.extent == null) continue;
+    const size = record(expected.extent, "texture extent");
+    const width = positiveId(size.width, "texture width"), height = positiveId(size.height, "texture height");
+    // Data textures are stored as an Alpha_8 image of 2 x 4 bytes per texel.
+    extents.set(textureIdentity(record(requirements[index], "texture requirement")),
+      expected.kind === "dataTexture" ? { width: width * 2, height: height * 4 } : { width, height });
+  }
+  let peak = 0n;
+  for (const region of regions) {
+    const extent = extents.get(textureIdentity(region.texture));
+    if (!extent) continue;
+    const crop = atlasCrop(region.src, extent.width, extent.height);
+    if (crop.width <= 0 || crop.height <= 0) continue;
+    peak = maxBigInt(peak, BigInt(crop.width) * BigInt(crop.height) * 8n);
+    transients.add(`${crop.width}x${crop.height}`);
+  }
+  return peak;
+}
+
+/** The texels an atlas region crops, and the region's normalized rectangle inside the crop. */
+function atlasCrop(region: RectWire, width: number, height: number): {
+  left: number; top: number; width: number; height: number; source: RectWire;
+} {
+  const edges = [region.x * width, region.y * height, (region.x + region.width) * width, (region.y + region.height) * height];
+  const left = Math.max(0, Math.floor(edges[0]!)), top = Math.max(0, Math.floor(edges[1]!));
+  const right = Math.min(width, Math.ceil(edges[2]!)), bottom = Math.min(height, Math.ceil(edges[3]!));
+  const cropWidth = right - left, cropHeight = bottom - top;
+  return {
+    left, top, width: cropWidth, height: cropHeight,
+    source: {
+      x: (edges[0]! - left) / cropWidth,
+      y: (edges[1]! - top) / cropHeight,
+      width: (edges[2]! - edges[0]!) / cropWidth,
+      height: (edges[3]! - edges[1]!) / cropHeight,
+    },
+  };
+}
+
+/** The outer values a kernel invocation reads. */
+function kernelInputs(invocation: Wire): number[] {
+  switch (invocation.kind) {
+    case "group":
+    case "mask":
+    case "filter":
+    case "adjustmentEffect":
+      return [positiveId(invocation.input, "kernel input")];
+    case "transition":
+      return [invocation.backdrop, invocation.from, invocation.to].map(id => positiveId(id, "transition input"));
+    default:
+      return fail("unsupported_kernel", `kernel '${String(invocation.kind)}' is not closed`);
+  }
+}
+
+function roiBytes(roi: { width: number; height: number }): bigint {
+  return BigInt(roi.width) * BigInt(roi.height) * 8n;
 }
 
 function projectProgramResource(
@@ -5204,47 +5777,41 @@ function drawImageValueWithPaint(
   );
 }
 
+/** A value at the root extent, and the release of the copy that may hold it. */
+interface MaterializedValue {
+  readonly value: ImageValue;
+  release(): void;
+}
+
+/**
+ * `value` at the root extent. A copy keeps its transient checked out until `release`, so no later
+ * draw into a pooled surface copies the pixels that this snapshot still shares.
+ */
 function materializeRootValue(
   CanvasKit: CanvasKit,
   arena: SurfaceArena,
   value: ImageValue,
   extent: { width: number; height: number },
-): ImageValue {
+): MaterializedValue {
   const root: DeviceRoi = { x: 0, y: 0, ...extent };
-  if (value.image === null) return borrowed(null, root);
-  if (sameRoi(value.roi, root)) return borrowedValue(value);
+  if (value.image === null) return { value: borrowed(null, root), release: () => {} };
+  if (sameRoi(value.roi, root)) return { value: borrowedValue(value), release: () => {} };
   const surface = arena.transient();
+  let snapshot: Image;
   try {
     const canvas = surface.getCanvas();
     canvas.clear(CanvasKit.TRANSPARENT);
     drawImageValue(CanvasKit, canvas, value, 1, "src");
     surface.flush();
-    return { image: surface.makeImageSnapshot(), owned: true, roi: root };
-  } finally {
+    snapshot = surface.makeImageSnapshot();
+  } catch (error) {
     arena.releaseTransient(surface);
+    throw error;
   }
-}
-
-function materializeRootResources(
-  CanvasKit: CanvasKit,
-  arena: SurfaceArena,
-  values: Map<number, ImageValue>,
-  extent: { width: number; height: number },
-): Map<number, ImageValue> {
-  return new Map([...values].map(([id, value]) => [
-    id,
-    materializeRootValue(CanvasKit, arena, value, extent),
-  ]));
-}
-
-function disposeMaterializedResources(
-  materialized: Map<number, ImageValue>,
-  originals: Map<number, ImageValue>,
-): void {
-  for (const [id, value] of materialized) {
-    if (value.owned && value.image !== originals.get(id)?.image) value.image?.delete();
-  }
-  materialized.clear();
+  return {
+    value: { image: snapshot, owned: true, roi: root },
+    release: () => { snapshot.delete(); arena.releaseTransient(surface); },
+  };
 }
 
 function drawImage(CanvasKit: CanvasKit, canvas: Canvas, image: Image | null, alpha: number, mode: string): void {

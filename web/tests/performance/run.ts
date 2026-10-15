@@ -321,7 +321,8 @@ async function orderCase(c:Case, backend:string) {
       worst:worst.map(r=>({frame:r.frame,failedPixels:r.failedPixels,rgbMax:r.rgbMax,alphaMax:r.alphaMax}))});
   }
   const memory=Object.fromEntries(sessions.map(s=>[s.session,Object.fromEntries(["physicalSurfaces","maximumSurfaceResidentBytes",
-    "maximumSurfacePeakBytes","maximumSurfacePeakBytesByKind","maximumPlannedSurfacePeakBytes","maximumGpuCacheUsageBytes","maximumGpuCacheLimitBytes",
+    "maximumSurfacePeakBytes","maximumSurfacePeakBytesByKind","maximumPlannedSurfacePeakBytes","maximumSurfaceEnvelopeBytes",
+    "maximumSurfaceOverflowBytes","surfaceOverflowFrames","maximumAdmittedFrameBytes","maximumGpuCacheUsageBytes","maximumGpuCacheLimitBytes",
     "maximumGeometryTargetBytes"].map(k=>[k,s.stats?.[k]??null]))]));
   const pass=rows.every(r=>r.differingFrames===0);
   await writeFile(path.join(folder,"order.json"),JSON.stringify({pass,repeatRule:c.repeatRule,orders,rows,sessions},null,2));

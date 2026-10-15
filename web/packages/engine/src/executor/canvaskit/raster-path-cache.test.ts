@@ -34,3 +34,22 @@ test("unchanged contours share a native path across independently decoded arenas
   cache.dispose();
   expect(deleted).toBe(2);
 });
+
+test("a wire whose entry was evicted resolves to a live native path", () => {
+  let created = 0, deleted = 0;
+  const create = () => { created++; return {delete() {deleted++;}} as unknown as Path; };
+  const a = {verbs: ["moveTo"], points: [[0, 0]] as Array<[number, number]>};
+  const b = {verbs: ["moveTo"], points: [[1, 1]] as Array<[number, number]>};
+  const cache = new RasterPathCache(400);
+  const first = cache.acquire(a, "nonZero", create);
+  expect(cache.acquire({verbs: ["moveTo"], points: [[0, 0]]}, "nonZero", create).path).toBe(first.path);
+  expect(cache.acquire(a, "nonZero", create).path).toBe(first.path);
+  cache.acquire(b, "nonZero", create);
+  expect(deleted).toBe(1);
+  const again = cache.acquire(a, "nonZero", create);
+  expect(again.path).not.toBe(first.path);
+  expect(again.owned).toBe(false);
+  expect([created, deleted]).toEqual([3, 2]);
+  cache.dispose();
+  expect(deleted).toBe(3);
+});

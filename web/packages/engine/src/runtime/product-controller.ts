@@ -27,7 +27,6 @@ import {
 
 import {
   RESOURCE_REQUESTS_ABI,
-  BOUND_PROGRAM_SCHEDULES_ABI,
   decodePackedAbi,
   type PackedValue,
 } from "../abi/packed.ts";
@@ -355,6 +354,12 @@ export interface ProductRenderStats {
   surfaceResidentBytes: number;
   surfacePeakBytes: number;
   plannedSurfacePeakBytes: number;
+  /** Bytes the frame was admitted with, plus what its surfaces borrowed beyond them. */
+  admittedFrameBytes: number;
+  surfaceEnvelopeBytes: number;
+  heldImageBytes: number;
+  /** Live working-surface bytes beyond the envelope at their highest point. */
+  surfaceOverflowBytes: number;
   surfacePeakBytesByKind: Record<CanvasKitSurfaceKind, number>;
   surfacePoolEvictions: number;
   gpuCacheUsageBytes: number;
@@ -513,6 +518,11 @@ export interface PlayerStats {
   maximumSurfaceResidentBytes: number;
   maximumSurfacePeakBytes: number;
   maximumPlannedSurfacePeakBytes: number;
+  maximumAdmittedFrameBytes: number;
+  maximumSurfaceEnvelopeBytes: number;
+  maximumSurfaceOverflowBytes: number;
+  /** Frames whose live surfaces exceeded their planned envelope. */
+  surfaceOverflowFrames: number;
   /** Role breakdown of the frame that set `maximumSurfacePeakBytes`. */
   maximumSurfacePeakBytesByKind: Record<CanvasKitSurfaceKind, number>;
   surfacePoolEvictions: number;
@@ -921,13 +931,26 @@ export class BrowserValleWebPlayer {
       }
       this.stats.requestBytes += requestStage.requestPacket.byteLength;
       const readyStage = await planning.ready;
-      const schedule = record(await decodePackedAbi(readyStage.schedulePacket, BOUND_PROGRAM_SCHEDULES_ABI), "working-set schedule");
       const requests = await decodePackedAbi(requestStage.requestPacket, RESOURCE_REQUESTS_ABI);
       if (!Array.isArray(requests)) throw new Error("ResourceRequestSet must decode to an array");
       const scene3d = scene3dFrameRequests(requests);
-      const programBytes = Math.max(0, ...(schedule.programs as Wire[]).map(program => Number(program.estimatedSurfaceBytes)));
-      const outer = (schedule.surfaceSlots as Wire[]).reduce((sum, slot) => sum + Number(slot.estimatedBytes), 0);
-      let required = outer + programBytes * 5 + width * height * 32 + 8 * 1024 ** 2;
+      // Planning needs the target's backend and geometry renderer, not the frame's resources.
+      const target = this.acquireTarget(width, height, forceCpu);
+      const framePlan = await this.compositor.plan(
+        readyStage.planPacket,
+        readyStage.bindingPacket,
+        readyStage.schedulePacket,
+        {
+          gpu: target.context != null,
+          geometryRenderer: this.gpuCircles,
+          maxSurfaceBytes: planningInput.maxSurfaceBytes,
+          maxFrameBytes: planningInput.maxFrameBytes,
+        },
+      );
+      // The frame reuses the surfaces its pool carries, so they count once, inside its envelope.
+      const pooled = exactBigIntNumber(this.compositor.workingSurfaceBytes, "pooled surface bytes");
+      let required = Math.max(exactBigIntNumber(framePlan.surfaceBytes, "frame surface bytes"), pooled)
+        + exactBigIntNumber(framePlan.imageBytes, "frame image bytes");
       for (const request of requests as Wire[]) {
         const extent = request.expected.extent;
         if (extent) required += Number(extent.width) * Number(extent.height) * 32;
@@ -936,8 +959,8 @@ export class BrowserValleWebPlayer {
       required += scene3dWorkingBytes(scene3d, gpuScene3d ? requestStage.gpuScene3d : undefined);
       // The frame envelope now owns the projected packets, replacing their background leases.
       planner.adoptPreparationMemory(planning.key);
-      finishMemory = await this.runtimeBudget.admitFrameAfterKernels(this.memoryOwner, required, this.runtimeAbort.signal);
-      const target = this.acquireTarget(width, height, forceCpu);
+      finishMemory = await this.runtimeBudget.admitFrameAfterKernels(this.memoryOwner, required, this.runtimeAbort.signal, pooled);
+      let borrowedBytes = 0;
       const fulfillmentStarted = performance.now();
       const endFulfill = this.trace?.span("resource.fulfill", { frame });
       fulfilled = await this.fulfillRequests(requests, scene3d, target.gpu, requestStage.gpuScene3d)
@@ -989,10 +1012,8 @@ export class BrowserValleWebPlayer {
           >()
         : null;
       this.assertActiveRenderId(renderId, readyStage.renderId);
-      const report = await this.compositor.execute(
-        planPacket,
-        bindingPacket,
-        schedulePacket,
+      const report = await this.compositor.run(
+        framePlan,
         { generation, objects: frameResources.objects },
         {
           surface: target.surface,
@@ -1007,6 +1028,11 @@ export class BrowserValleWebPlayer {
           directContext: target.context,
           maxSurfaceBytes: planningInput.maxSurfaceBytes,
           maxFrameBytes: planningInput.maxFrameBytes,
+          borrowSurfaceBytes: (bytes) => {
+            const lent = this.runtimeBudget.borrowFrameBytes(exactBigIntNumber(bytes, "borrowed surface bytes"));
+            if (lent) borrowedBytes += Number(bytes);
+            return lent;
+          },
           onPassTiming: passTimings
             ? (timing) => {
                 const totals = passTimings.get(timing.kind) ?? {
@@ -1074,6 +1100,10 @@ export class BrowserValleWebPlayer {
           report.plannedSurfacePeakBytes,
           "planned surface peak bytes",
         ),
+        admittedFrameBytes: required + borrowedBytes,
+        surfaceEnvelopeBytes: exactBigIntNumber(report.surfaceEnvelopeBytes, "surface envelope bytes"),
+        heldImageBytes: exactBigIntNumber(report.heldImageBytes, "held image bytes"),
+        surfaceOverflowBytes: exactBigIntNumber(report.surfaceOverflowBytes, "surface overflow bytes"),
         surfacePeakBytesByKind: {
           output: exactBigIntNumber(report.surfacePeakBytesByKind.output, "output peak bytes"),
           outer: exactBigIntNumber(report.surfacePeakBytesByKind.outer, "outer peak bytes"),
@@ -1178,6 +1208,10 @@ export class BrowserValleWebPlayer {
         this.stats.maximumPlannedSurfacePeakBytes,
         stats.plannedSurfacePeakBytes,
       );
+      this.stats.maximumAdmittedFrameBytes = Math.max(this.stats.maximumAdmittedFrameBytes, stats.admittedFrameBytes);
+      this.stats.maximumSurfaceEnvelopeBytes = Math.max(this.stats.maximumSurfaceEnvelopeBytes, stats.surfaceEnvelopeBytes);
+      this.stats.maximumSurfaceOverflowBytes = Math.max(this.stats.maximumSurfaceOverflowBytes, stats.surfaceOverflowBytes);
+      if (stats.surfaceOverflowBytes > 0) this.stats.surfaceOverflowFrames += 1;
       this.stats.surfacePoolEvictions += report.surfacePoolEvictions;
       this.stats.maximumGpuCacheUsageBytes = Math.max(this.stats.maximumGpuCacheUsageBytes, report.gpuCacheUsageBytes);
       this.stats.maximumGpuCacheLimitBytes = Math.max(this.stats.maximumGpuCacheLimitBytes, report.gpuCacheLimitBytes);
@@ -2073,6 +2107,7 @@ export class BrowserValleWebPlayer {
               cachedValue,
               owned.bytes,
               owned.dispose,
+              owned.object.kind === "scene3d",
             );
             if (retained) pendingDisposals.delete(owned.dispose);
             else dispose.push(owned.dispose);
@@ -3454,6 +3489,10 @@ function emptyPlayerStats(): PlayerStats {
     maximumSurfaceResidentBytes: 0,
     maximumSurfacePeakBytes: 0,
     maximumPlannedSurfacePeakBytes: 0,
+    maximumAdmittedFrameBytes: 0,
+    maximumSurfaceEnvelopeBytes: 0,
+    maximumSurfaceOverflowBytes: 0,
+    surfaceOverflowFrames: 0,
     maximumSurfacePeakBytesByKind: { output: 0, outer: 0, program: 0, transient: 0 },
     surfacePoolEvictions: 0,
     maximumGpuCacheUsageBytes: 0,

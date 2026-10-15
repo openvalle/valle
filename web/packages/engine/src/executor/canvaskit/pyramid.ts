@@ -32,6 +32,68 @@ export async function drawPyramidFilterCooperative(
   }
 }
 
+/** The part of the output inside the padded region, in region coordinates. Output pixels outside
+ * it are farther than the pyramid support from every source pixel: transparent. */
+function pyramidHalo(recipe: Float64Array, output: Region): Region {
+  const width = recipe[2]!, height = recipe[3]!;
+  const x = Math.max(0, -recipe[0]!), y = Math.max(0, -recipe[1]!);
+  return { x, y, width: Math.min(width, output.width - recipe[0]!) - x, height: Math.min(height, output.height - recipe[1]!) - y };
+}
+
+/** The first coarse row that the halo's horizontal factor holds, and the row after the last. */
+function pyramidHaloRows(recipe: Float64Array, halo: Region, coarseHeight: number): { start: number; end: number } {
+  const scale = coarseHeight / recipe[3]!, tap = 0.5 * recipe[6]!;
+  return {
+    start: Math.max(0, Math.floor((halo.y + 0.5) * scale - 0.5 - tap) - 1),
+    end: Math.min(coarseHeight, Math.floor((halo.y + halo.height - 0.5) * scale - 0.5 + tap) + 3),
+  };
+}
+
+/**
+ * Peak bytes of the transients `pyramidStages` holds at once for `recipe`, each at the 64-pixel
+ * class of a bounded backing, whose extents `classes` collects as `${width}x${height}`.
+ * `copiesInput` is false only when the input image is exactly its ROI.
+ */
+export function pyramidWorkingBytes(
+  recipe: Float64Array, output: Region, kind: "glow" | "bloom", copiesInput: boolean, classes?: Set<string>,
+): number {
+  if (recipe.length === 0) return 0;
+  if (recipe.length < 15 || !recipe.every(Number.isFinite)) throw new Error("Invalid GPU pyramid recipe");
+  const width = recipe[2]!, height = recipe[3]!, halo = pyramidHalo(recipe, output);
+  if (halo.width <= 0 || halo.height <= 0) throw new Error("GPU pyramid region misses its output");
+  const heights = new Map<number, number>(), held = new Map<number, number>();
+  let live = 0, peak = 0;
+  const hold = (id: number, w: number, h: number) => {
+    const classWidth = Math.ceil(w / 64) * 64, classHeight = Math.ceil(h / 64) * 64, bytes = classWidth * classHeight * 8;
+    classes?.add(`${classWidth}x${classHeight}`);
+    heights.set(id, h); held.set(id, bytes);
+    live += bytes; peak = Math.max(peak, live);
+  };
+  if (copiesInput) hold(-1, width, height);
+  const coverageInPlace = kind === "glow";
+  if (!coverageInPlace) hold(0, width, height);
+  let at = 15;
+  for (let pass = 0; pass < recipe[14]!; pass++) {
+    if (at + 8 > recipe.length) throw new Error("Truncated GPU pyramid pass");
+    const [, source, , , id, w, h, retireCount] = recipe.subarray(at, at + 8);
+    at += 8;
+    if (id === recipe[7]!) {
+      const coarse = heights.get(source!);
+      if (coarse === undefined) throw new Error(`GPU pyramid resource ${source} is not live`);
+      const rows = pyramidHaloRows(recipe, halo, coarse);
+      hold(id!, halo.width, rows.end - rows.start);
+    } else hold(id!, w!, h!);
+    if (at + retireCount! > recipe.length) throw new Error("Truncated GPU pyramid retirements");
+    for (let i = 0; i < retireCount!; i++) {
+      const retired = recipe[at++]!;
+      if (retired === 0 && coverageInPlace) continue;
+      live -= held.get(retired) ?? 0;
+      held.delete(retired);
+    }
+  }
+  return peak;
+}
+
 /** Execute Engine's padded pyramid recipe without reading source pixels back to WASM. */
 function* pyramidStages(
   ck: CanvasKit, builtins: CanvasKitBuiltinRuntime, pool: PyramidSurfacePool,
@@ -100,11 +162,8 @@ function* pyramidStages(
     }
     if (recipe.length < 15 || !recipe.every(Number.isFinite)) throw new Error("Invalid GPU pyramid recipe");
     const width = recipe[2]!, height = recipe[3]!;
-    // The part of the output inside the padded region, in region coordinates. Output pixels
-    // outside it are farther than the pyramid support from every source pixel: transparent.
-    const haloX = Math.max(0, -recipe[0]!), haloY = Math.max(0, -recipe[1]!);
-    const haloWidth = Math.min(width, output.width - recipe[0]!) - haloX;
-    const haloHeight = Math.min(height, output.height - recipe[1]!) - haloY;
+    const haloRegion = pyramidHalo(recipe, output);
+    const { x: haloX, y: haloY, width: haloWidth, height: haloHeight } = haloRegion;
     if (haloWidth <= 0 || haloHeight <= 0) throw new Error("GPU pyramid region misses its output");
     // A snapshot of exactly its ROI reads transparent past its edges, like the zero-padded base, so
     // kernels sample it in place. A larger backing holds pixels beyond the ROI and is copied first.
@@ -135,9 +194,9 @@ function* pyramidStages(
         // is separable: this pass applies the horizontal factor to the coarse rows those output
         // pixels read, padded by a row against rounding of the taps; the composite completes it.
         if (operation !== 2 || localWeight !== 0) throw new Error("Invalid GPU pyramid halo pass");
-        const coarse = get(source!), scale = coarse.height / height, tap = 0.5 * recipe[6]!;
-        rowsY = Math.max(0, Math.floor((haloY + 0.5) * scale - 0.5 - tap) - 1);
-        const rowsEnd = Math.min(coarse.height, Math.floor((haloY + haloHeight - 0.5) * scale - 0.5 + tap) + 3);
+        const coarse = get(source!), rows = pyramidHaloRows(recipe, haloRegion, coarse.height);
+        rowsY = rows.start;
+        const rowsEnd = rows.end;
         coarseHeight = coarse.height;
         live.set(id!, emit(haloWidth, rowsEnd - rowsY, target => drawKernel(target, "pyramidUpsampleRows",
           [sourceShader(coarse)], [coarse.width, coarse.height, width, recipe[6]!]), haloX, rowsY));

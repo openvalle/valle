@@ -131,6 +131,11 @@ describe("DrawProgram packed InstanceBatch", () => {
     expect(draw.batchInstances.view.getFloat64(0, true)).toBe(6);
     expect(draw.batchInstances.view.getFloat64(32, true)).toBe(4);
     expect(draw.batchInstances.view.getFloat32(64, true)).toBe(1);
+    // The tables own their rows, empty ones included: a cached program keeps no packed bytes.
+    for (const table of [draw.batchInstances, draw.strokeColors, draw.dashOffsets]) {
+      expect(table.bytes.buffer).not.toBe(bytes.buffer);
+      expect(table.bytes.buffer.byteLength).toBe(table.bytes.byteLength);
+    }
     expect(applyDrawProgramPatch(bytes, identityPatch(bytes))).toEqual(bytes);
   });
 

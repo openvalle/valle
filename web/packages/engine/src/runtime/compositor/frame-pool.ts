@@ -568,13 +568,11 @@ export class ProductFramePlannerPool {
       return;
     }
     // Mirror each worker's bounded LRU, including cancelled frames. Keep a packet while any
-    // worker can still reference it without transferring it again.
+    // worker can still reference it without transferring it again. The worker transfers each
+    // plan packet in its own buffer, and a shared host passes on the same packet it keeps.
     const transferredPlan = message.stage.planPacket;
     const templateKey = `${message.stage.renderId}:${message.stage.templateHash}`;
-    if (transferredPlan) {
-      const admittedPlan = transferredPlan.slice();
-      this.templatePackets.set(templateKey, admittedPlan);
-    }
+    if (transferredPlan) this.templatePackets.set(templateKey, transferredPlan);
     slot.templateHashes.delete(templateKey);
     slot.templateHashes.add(templateKey);
     if (slot.templateHashes.size > PRODUCT_FRAME_TEMPLATE_CACHE_SIZE) {

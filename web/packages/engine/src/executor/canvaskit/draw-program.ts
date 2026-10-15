@@ -182,7 +182,9 @@ export async function decodeDrawProgram(input: ArrayBuffer | ArrayBufferView, ca
       if (length !== count * rowBytes) {
         fail(`InstanceBatch section ${kind} has ${length} bytes for ${count} instances`);
       }
-      const batchBytes = bytes.subarray(offset, end);
+      // Own the rows. A view, even an empty one, would keep the whole packed program alive in the
+      // program cache after its JSON and path sections are decoded.
+      const batchBytes = bytes.slice(offset, end);
       value = { bytes: batchBytes, view: dataView(batchBytes), count } satisfies BatchInstanceTableWire;
     } else if (kind === 3) {
       try { value = (cache ?? new PathArenaCache(0)).decode(bytes.subarray(offset, end), count); }
@@ -360,22 +362,29 @@ function validateInstanceBatches(nodes: TaggedWire[], table: BatchInstanceTableW
   if (colorsConsumed !== strokeColors.count) fail("InstanceBatch stroke color table has unreferenced values");
   if (offsetsConsumed !== dashOffsets.count) fail("InstanceBatch dash offset table has unreferenced values");
 
+  // Rows are checked in place: a frame can carry thousands of instances.
+  const view = table.view;
   for (let index = 0; index < table.count; index += 1) {
-    const transform = Array.from({ length: 6 }, (_, slot) => table.view.getFloat64(index * 48 + slot * 8, DRAW_LITTLE_ENDIAN));
+    const matrix = index * 48;
+    const a = view.getFloat64(matrix, DRAW_LITTLE_ENDIAN), b = view.getFloat64(matrix + 8, DRAW_LITTLE_ENDIAN);
+    const c = view.getFloat64(matrix + 16, DRAW_LITTLE_ENDIAN), d = view.getFloat64(matrix + 24, DRAW_LITTLE_ENDIAN);
+    const e = view.getFloat64(matrix + 32, DRAW_LITTLE_ENDIAN), f = view.getFloat64(matrix + 40, DRAW_LITTLE_ENDIAN);
     const colorOffset = table.count * 48 + index * 16;
-    const red = table.view.getFloat32(colorOffset, DRAW_LITTLE_ENDIAN);
-    const green = table.view.getFloat32(colorOffset + 4, DRAW_LITTLE_ENDIAN);
-    const blue = table.view.getFloat32(colorOffset + 8, DRAW_LITTLE_ENDIAN);
-    const alpha = table.view.getFloat32(colorOffset + 12, DRAW_LITTLE_ENDIAN);
-    const opacity = table.view.getFloat32(table.count * 64 + index * 4, DRAW_LITTLE_ENDIAN);
-    const stroke = table.view.getFloat32(table.count * 68 + index * 4, DRAW_LITTLE_ENDIAN);
-    if (![...transform, red, green, blue, alpha, opacity, stroke].every(Number.isFinite)) {
+    const red = view.getFloat32(colorOffset, DRAW_LITTLE_ENDIAN);
+    const green = view.getFloat32(colorOffset + 4, DRAW_LITTLE_ENDIAN);
+    const blue = view.getFloat32(colorOffset + 8, DRAW_LITTLE_ENDIAN);
+    const alpha = view.getFloat32(colorOffset + 12, DRAW_LITTLE_ENDIAN);
+    const opacity = view.getFloat32(table.count * 64 + index * 4, DRAW_LITTLE_ENDIAN);
+    const stroke = view.getFloat32(table.count * 68 + index * 4, DRAW_LITTLE_ENDIAN);
+    if (!(Number.isFinite(a) && Number.isFinite(b) && Number.isFinite(c) && Number.isFinite(d)
+      && Number.isFinite(e) && Number.isFinite(f) && Number.isFinite(red) && Number.isFinite(green)
+      && Number.isFinite(blue) && Number.isFinite(alpha) && Number.isFinite(opacity) && Number.isFinite(stroke))) {
       fail(`InstanceBatch instance ${index} contains a non-finite value`);
     }
-    if (transform.some((value) => Math.abs(value) > 16_777_216)) {
+    if (Math.max(Math.abs(a), Math.abs(b), Math.abs(c), Math.abs(d), Math.abs(e), Math.abs(f)) > 16_777_216) {
       fail(`InstanceBatch instance ${index} exceeds the coordinate limit`);
     }
-    const determinant = transform[0]! * transform[3]! - transform[1]! * transform[2]!;
+    const determinant = a * d - b * c;
     if (!Number.isFinite(determinant) || determinant === 0 || !Number.isFinite(1 / determinant)) {
       fail(`InstanceBatch instance ${index} has a singular transform`);
     }
@@ -388,11 +397,15 @@ function validateInstanceBatches(nodes: TaggedWire[], table: BatchInstanceTableW
   }
   for (let index = 0; index < strokeColors.count; index += 1) {
     const offset = index * 16;
-    const channels = Array.from({ length: 4 }, (_, slot) => strokeColors.view.getFloat32(offset + slot * 4, DRAW_LITTLE_ENDIAN));
-    if (!channels.every(Number.isFinite) || channels[3]! < 0 || channels[3]! > 1) {
+    const red = strokeColors.view.getFloat32(offset, DRAW_LITTLE_ENDIAN);
+    const green = strokeColors.view.getFloat32(offset + 4, DRAW_LITTLE_ENDIAN);
+    const blue = strokeColors.view.getFloat32(offset + 8, DRAW_LITTLE_ENDIAN);
+    const alpha = strokeColors.view.getFloat32(offset + 12, DRAW_LITTLE_ENDIAN);
+    if (!(Number.isFinite(red) && Number.isFinite(green) && Number.isFinite(blue) && Number.isFinite(alpha))
+      || alpha < 0 || alpha > 1) {
       fail(`InstanceBatch stroke color ${index} is invalid`);
     }
-    if (channels[3] === 0 && channels.slice(0, 3).some((value) => value !== 0)) {
+    if (alpha === 0 && (red !== 0 || green !== 0 || blue !== 0)) {
       fail(`InstanceBatch stroke color ${index} has RGB under transparent premultiplied alpha`);
     }
   }

@@ -39,6 +39,32 @@ test("shared memory evicts completed storage before admitting the next frame and
   expect(budget.snapshot().managedBytes).toBe(0);
 });
 
+test("a frame counts the storage it reuses once and borrows only what fits beside the rest", () => {
+  const budget = new BrowserRuntimeBudget({ cpuThreads: 1, memoryBytes: 100 });
+  const owner = {}, other = {};
+  let trims = 0;
+  budget.register(owner, () => trims++); budget.register(other, () => trims++);
+  budget.admitFrame(owner, 60)(50);
+  budget.admitFrame(other, 10)(20);
+  // The owner's 50 retained bytes are surfaces this frame reuses: 70 + 20 fit, 70 + 50 + 20 do not.
+  const finish = budget.admitFrame(owner, 70, 50);
+  expect(trims).toBe(0);
+  expect(budget.snapshot().managedBytes).toBe(90);
+  expect(budget.borrowFrameBytes(10)).toBe(true);
+  expect(budget.borrowFrameBytes(1)).toBe(false);
+  expect(trims).toBe(0);
+  expect(budget.snapshot().managedBytes).toBe(100);
+  finish(60);
+  expect(budget.snapshot().managedBytes).toBe(80);
+  expect(() => budget.borrowFrameBytes(1)).toThrow("admitted frame");
+  // Without the reuse the same frame drops completed storage first.
+  budget.admitFrame(owner, 70)(0);
+  expect(trims).toBe(2);
+  expect(() => budget.admitFrame(owner, 10, 11)).toThrow("absorbed");
+  expect(budget.snapshot().peakManagedBytes).toBeLessThanOrEqual(100);
+  budget.unregister(owner); budget.unregister(other);
+});
+
 test("preview and export default to the same budget and different configurations stay explicit", () => {
   expect(sharedBrowserRuntimeBudget(2, 200)).toBe(sharedBrowserRuntimeBudget(2, 200));
   expect(sharedBrowserRuntimeBudget(1, 200)).not.toBe(sharedBrowserRuntimeBudget(2, 200));
@@ -92,6 +118,38 @@ test("background kernels share byte admission, shrink to packets, and yield to a
   const cancelled = budget.acquireKernel(20, abort.signal).catch(e => e);
   abort.abort(); expect((await cancelled).name).toBe("AbortError");
   first.release(); finish(0); budget.unregister(owner);
+  expect(budget.snapshot().managedBytes).toBe(0);
+  expect(budget.snapshot().peakManagedBytes).toBeLessThanOrEqual(100);
+});
+
+test("held kernel results never stall the next job: it borrows the idle host, prepared frames yield, then it fails", async () => {
+  const budget = new BrowserRuntimeBudget({ cpuThreads: 2, memoryBytes: 100 });
+  const prepared: Array<() => void> = [];
+  budget.registerPreparation({}, () => { for (const release of prepared.splice(0)) release(); });
+  // A prepared frame holds a finished job's result; with nothing running the next job may pass the half share.
+  const first = await budget.acquireKernel(40); first.shrink(30); prepared.push(first.release);
+  const second = await budget.acquireKernel(40);
+  // While a job runs, the share holds.
+  let third: Awaited<ReturnType<BrowserRuntimeBudget["acquireKernel"]>> | undefined;
+  const waiting = budget.acquireKernel(20).then(lease => third = lease);
+  await Bun.sleep(0); expect(third).toBeUndefined();
+  second.shrink(20); prepared.push(second.release);
+  await waiting; third!.shrink(10);
+  // 60 held: a 60-byte job fits once the prepared frames give their results up.
+  const fourth = await budget.acquireKernel(60);
+  expect(budget.snapshot().kernelWorkingBytes).toBe(70);
+  fourth.shrink(60);
+  // Nothing in flight can make room for more.
+  await expect(budget.acquireKernel(40)).rejects.toThrow("does not fit beside 70 bytes");
+  // A frame in flight returns its bytes, so the job waits for it instead.
+  fourth.release();
+  const owner = {}; budget.register(owner, () => {});
+  const finish = budget.admitFrame(owner, 50);
+  let fifth = false;
+  const late = budget.acquireKernel(45).then(lease => { fifth = true; return lease; });
+  await Bun.sleep(0); expect(fifth).toBe(false);
+  finish(0);
+  (await late).release(); third!.release(); budget.unregister(owner);
   expect(budget.snapshot().managedBytes).toBe(0);
   expect(budget.snapshot().peakManagedBytes).toBeLessThanOrEqual(100);
 });
