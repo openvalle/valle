@@ -1,57 +1,161 @@
-//! Conservative artifact-wide font selection. Dynamic text retains coverage;
-//! static text only needs the requested families plus faces that cover missing characters.
+//! Conservative artifact-wide font selection. Text whose characters are bounded at packaging time
+//! only needs the requested families plus faces that cover missing characters; unbounded text
+//! retains coverage.
 use std::collections::BTreeSet;
 use valle_motion::{
-    Expr, ExprId, InstanceColumnValues, InstanceGroup, MotionValue, NodeKind, SceneArtifact,
-    StyleValue, TemplatePart, TextValue,
+    ControlType, ControlsSchema, Expr, ExprId, InstanceColumnValues, InstanceGroup, MotionValue,
+    NodeKind, SceneArtifact, StyleValue, TemplatePart, TextValue,
 };
 
-/// Static template parts and string columns bound every possible character without shaping each row.
-fn append_instance_text(
-    group: &InstanceGroup,
-    id: ExprId,
-    text: &mut String,
-    depth: usize,
-) -> bool {
-    fn append_bounded(text: &mut String, value: &str) -> bool {
-        if text.len().saturating_add(value.len()) > 1_048_576 {
+/// The characters a set of text values can produce, bounded to 1 MiB.
+#[derive(Default)]
+struct TextBound {
+    text: String,
+    ascii: bool,
+}
+
+impl TextBound {
+    fn push(&mut self, value: &str) -> bool {
+        if self.text.len().saturating_add(value.len()) > 1_048_576 {
             return false;
         }
-        text.push_str(value);
+        self.text.push_str(value);
         true
     }
+    /// Non-string values print as ASCII tokens (`css_token`, number formatting).
+    fn ascii(&mut self) -> bool {
+        if !self.ascii {
+            self.ascii = true;
+            self.text.extend((0x20u8..0x7f).map(char::from));
+        }
+        true
+    }
+    fn value(&mut self, value: &MotionValue) -> bool {
+        match value {
+            MotionValue::Str(value) | MotionValue::Enum(value) => self.push(value),
+            _ => self.ascii(),
+        }
+    }
+}
+
+/// Every character a text expression can produce: string constants and columns, template text,
+/// both branches of a select, interpolation stops and the choices of a prop control. A free string
+/// prop has no bound at packaging time.
+fn append_expr_text(
+    controls: &ControlsSchema,
+    exprs: &[Expr],
+    group: Option<&InstanceGroup>,
+    id: ExprId,
+    bound: &mut TextBound,
+    depth: usize,
+) -> bool {
     if depth > 64 {
         return false;
     }
-    match group.exprs.get(id.0 as usize) {
-        Some(Expr::Const {
-            value: MotionValue::Str(value),
-        }) => append_bounded(text, value),
-        Some(Expr::InstanceField { column, .. }) => {
-            let Some(InstanceColumnValues::Strings(values)) = group
-                .columns
-                .get(*column as usize)
-                .map(|column| &column.values)
-            else {
+    let child = |id: &ExprId, bound: &mut TextBound| {
+        append_expr_text(controls, exprs, group, *id, bound, depth + 1)
+    };
+    let Some(expr) = exprs.get(id.0 as usize) else {
+        return false;
+    };
+    match expr {
+        Expr::Const { value } => bound.value(value),
+        Expr::InstanceField { column, .. } => {
+            let Some(column) = group.and_then(|group| group.columns.get(*column as usize)) else {
                 return false;
             };
-            for value in values {
-                if !append_bounded(text, value) {
-                    return false;
+            match &column.values {
+                InstanceColumnValues::Strings(values) => {
+                    values.iter().all(|value| bound.push(value))
                 }
+                InstanceColumnValues::Other(values) => {
+                    values.iter().all(|value| bound.value(value))
+                }
+                InstanceColumnValues::Numbers(_)
+                | InstanceColumnValues::Points(_)
+                | InstanceColumnValues::Colors(_)
+                | InstanceColumnValues::Rects(_)
+                | InstanceColumnValues::Bools(_)
+                | InstanceColumnValues::Formula { .. } => bound.ascii(),
             }
-            true
         }
-        Some(Expr::Template { parts }) => parts.iter().all(|part| match part {
-            TemplatePart::Text { value } => append_bounded(text, value),
-            TemplatePart::Expr { expr } => append_instance_text(group, *expr, text, depth + 1),
+        Expr::Template { parts } => parts.iter().all(|part| match part {
+            TemplatePart::Text { value } => bound.push(value),
+            TemplatePart::Expr { expr } => child(expr, bound),
         }),
-        _ => false,
+        Expr::Select {
+            when_true,
+            when_false,
+            ..
+        } => child(when_true, bound) && child(when_false, bound),
+        Expr::Interpolate { stops, .. } => stops.iter().all(|stop| bound.value(&stop.output)),
+        Expr::Prop { name } => match controls.props.get(name).map(|prop| &prop.control) {
+            Some(ControlType::Select { values }) => values.iter().all(|value| bound.push(value)),
+            Some(ControlType::String) | None => false,
+            Some(
+                ControlType::Number { .. }
+                | ControlType::Bool
+                | ControlType::Color
+                | ControlType::Length
+                | ControlType::Angle
+                | ControlType::Point
+                | ControlType::Rect,
+            ) => bound.ascii(),
+        },
+        Expr::InstanceIndex
+        | Expr::InstanceCount
+        | Expr::Context { .. }
+        | Expr::RangeSelector { .. }
+        | Expr::MakePoint { .. }
+        | Expr::MakeRect { .. }
+        | Expr::PathLine { .. }
+        | Expr::PathTemplate { .. }
+        | Expr::PathCubic { .. }
+        | Expr::PathArc { .. }
+        | Expr::PathArea { .. }
+        | Expr::PathSector { .. }
+        | Expr::PathAreaBand { .. }
+        | Expr::PathOffset { .. }
+        | Expr::PathResample { .. }
+        | Expr::PathReverse { .. }
+        | Expr::PathRoundCorners { .. }
+        | Expr::PathZigzag { .. }
+        | Expr::PathNoiseDisplace { .. }
+        | Expr::PathPuckerBloat { .. }
+        | Expr::PathTwist { .. }
+        | Expr::PathSimplify { .. }
+        | Expr::PathStrokeToPath { .. }
+        | Expr::PathMorph { .. }
+        | Expr::PathCompatibleMorph { .. }
+        | Expr::PathCompatibleMorphSequence { .. }
+        | Expr::PathPointAt { .. }
+        | Expr::PathTangentAt { .. }
+        | Expr::PathAngleAt { .. }
+        | Expr::PathLength { .. }
+        | Expr::PathTrajectory { .. }
+        | Expr::GeometryField { .. }
+        | Expr::ToLength2 { .. }
+        | Expr::Add { .. }
+        | Expr::Sub { .. }
+        | Expr::Mul { .. }
+        | Expr::Div { .. }
+        | Expr::Neg { .. }
+        | Expr::Compare { .. }
+        | Expr::MathUnary { .. }
+        | Expr::MathBinary { .. }
+        | Expr::Noise1D { .. }
+        | Expr::Noise2D { .. }
+        | Expr::FormatNumber { .. }
+        | Expr::SimulationSample { .. }
+        | Expr::AudioSample { .. }
+        | Expr::Spring { .. }
+        | Expr::NodeBounds { .. }
+        | Expr::Project3D { .. } => bound.ascii(),
     }
 }
 
 pub(super) fn selected_default_fonts(artifact: &SceneArtifact) -> Vec<std::sync::Arc<[u8]>> {
-    let mut text = String::new();
+    let mut text = TextBound::default();
     let mut dynamic_text = false;
     let mut has_text = false;
     let mut families = String::from("sans-serif");
@@ -76,10 +180,15 @@ pub(super) fn selected_default_fonts(artifact: &SceneArtifact) -> Vec<std::sync:
         if let NodeKind::Text { text: value, .. } = &node.kind {
             has_text = true;
             match value {
-                TextValue::Static { value } => text.push_str(value),
+                TextValue::Static { value } => {
+                    if !text.push(value) {
+                        dynamic_text = true;
+                    }
+                }
                 TextValue::Expr { expr } => {
-                    if !group.is_some_and(|group| append_instance_text(group, *expr, &mut text, 0))
-                    {
+                    let exprs =
+                        group.map_or(artifact.exprs.as_slice(), |group| group.exprs.as_slice());
+                    if !append_expr_text(&artifact.controls, exprs, group, *expr, &mut text, 0) {
                         dynamic_text = true;
                     }
                 }
@@ -137,7 +246,7 @@ pub(super) fn selected_default_fonts(artifact: &SceneArtifact) -> Vec<std::sync:
         return Vec::new();
     }
     let defaults = valle_motion::default_motion_fonts();
-    // Unknown strings can introduce any script, including emoji and CJK, at a later frame.
+    // Unbounded strings can introduce any script, including emoji and CJK, at a later frame.
     if dynamic_text || unknown_family {
         return super::motion::shared_default_fonts().to_vec();
     }
@@ -177,6 +286,7 @@ pub(super) fn selected_default_fonts(artifact: &SceneArtifact) -> Vec<std::sync:
     }
     let emoji_index = font_index("Noto-COLRv1.ttf");
     let emoji = ttf_parser::Face::parse(defaults[emoji_index], 0).expect("bundled emoji");
+    let text = text.text;
     if text.chars().any(|ch| {
         !ch.is_ascii()
             && emoji
@@ -376,7 +486,17 @@ mod tests {
         let dynamic = select(
             "export default function T(ctx){return <Text>{ctx.seconds > 0.5 ? '中文' : 'Hello'}</Text>}",
         );
-        assert_eq!(dynamic.len(), defaults.len());
+        assert!(dynamic.len() < defaults.len());
+        assert!(
+            dynamic
+                .iter()
+                .any(|font| font.as_ref() == bundled_font("NotoSansCJKsc-Variable.otf"))
+        );
+        assert!(
+            !dynamic
+                .iter()
+                .any(|font| font.as_ref() == bundled_font("Noto-COLRv1.ttf"))
+        );
         let dynamic_weight = select(
             "export default function T(ctx){return <Text style={{fontWeight:ctx.seconds > 0.5 ? 700 : 400}}>Hello</Text>}",
         );
@@ -397,5 +517,33 @@ mod tests {
                 dynamic_weight
             );
         }
+    }
+
+    /// Non-string values print as ASCII, so counters, formatted numbers and finite choices need
+    /// only the requested families; a free string prop can carry any script at a later frame.
+    #[test]
+    fn bounded_dynamic_text_selects_only_the_requested_families() {
+        let defaults = valle_motion::default_motion_fonts();
+        assert_eq!(
+            select(
+                "export default function T(ctx){return <Text style={{fontFamily:'monospace'}}>{`CH ${padNumber(ctx.localFrame,{width:2})} ${formatNumber(ctx.seconds,{decimals:1})}`}</Text>}"
+            ),
+            ["NotoSans-Variable.ttf", "NotoSansMono-Regular.ttf"]
+                .map(|name| std::sync::Arc::<[u8]>::from(bundled_font(name)))
+                .to_vec()
+        );
+        let choice = select(
+            "export const controls={props:{mode:select({default:'晴',values:['晴','雨']}),count:number({default:3})}}; export default function T(ctx,props){return <Text>{`${props.mode} ${props.count}`}</Text>}",
+        );
+        assert!(choice.len() < defaults.len());
+        assert!(
+            choice
+                .iter()
+                .any(|font| font.as_ref() == bundled_font("NotoSansCJKsc-Variable.otf"))
+        );
+        let free = select(
+            "export const controls={props:{title:string({default:'Hello'})}}; export default function T(ctx,props){return <Text>{props.title}</Text>}",
+        );
+        assert_eq!(free.len(), defaults.len());
     }
 }
