@@ -24,6 +24,7 @@ mod target;
 
 pub(crate) use cache::SkiaCacheLimits;
 pub(crate) use output::rgba8_target_info;
+pub(crate) use pass::planned_frame_bytes;
 pub use pass::{
     AdmittedSkiaFrame, SkiaExecuteError, SkiaExecutionReport, SkiaExecutor, SkiaSurfaceReport,
     admit_skia_frame, execute_skia,

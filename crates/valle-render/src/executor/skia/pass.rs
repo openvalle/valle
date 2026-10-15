@@ -27,8 +27,8 @@ use super::{
     import::render_import,
     output::{prefers_cached_output, stage_output_into, stage_sdr_output_into, validate_target},
     surface::{
-        PlanImage, SurfaceAllocationScope, SurfaceArena, SurfaceError, SurfaceFrame,
-        SurfaceFrameReport, working_info,
+        PlanImage, SkiaBackendKind, SurfaceAllocationScope, SurfaceArena, SurfaceError,
+        SurfaceFrame, SurfaceFrameReport, working_info,
     },
 };
 
@@ -1125,6 +1125,173 @@ fn preflight_executor_surface_budget(
         .into());
     }
     Ok(())
+}
+
+/// Bytes one frame can charge to its admission credit while `backend` executes it.
+///
+/// Every outer slot stays allocated for the whole frame. A pass also checks out scratch
+/// surfaces (program slots and helpers, kernel and import scratch), copies inputs into
+/// full-frame images, and a software F16 filter reserves its CPU working set; the largest pass
+/// sets the peak. On GPU backends each 3D layer may first apply its depth of field in two
+/// scratch surfaces and keep the result for the frame. Scratch a pass returns waits in the
+/// reusable pool still charged to this frame while later passes run; the pool keeps at most
+/// `pool_bytes`. Caches, and surfaces pooled by earlier frames, are charged to the shared
+/// budget instead.
+pub(crate) fn planned_frame_bytes(
+    template: &RenderPlanTemplate,
+    bindings: &RenderBindings,
+    schedules: &BoundProgramSchedules,
+    backend: SkiaBackendKind,
+    pool_bytes: u64,
+    scene3d: &[Extent2d],
+) -> Result<u64, SkiaExecuteError> {
+    let add = |a: u64, b: u64| a.checked_add(b).ok_or(SurfaceError::ByteOverflow);
+    let full = surface_bytes(render_extent(template)?)?;
+    let mut outer = 0;
+    for slot in schedules.surface_slots() {
+        outer = add(outer, slot.estimated_bytes())?;
+    }
+    let mut returned = 0_u64;
+    let mut peak = 0_u64;
+    let mut run = |checked_out: u64, working: u64| -> Result<(), SurfaceError> {
+        peak = peak.max(add(add(returned.min(pool_bytes), checked_out)?, working)?);
+        returned = add(returned, checked_out)?;
+        Ok(())
+    };
+    if backend != SkiaBackendKind::Raster {
+        for extent in scene3d {
+            let bytes = surface_bytes(*extent)?;
+            outer = add(outer, bytes)?;
+            run(2 * bytes, 0)?;
+        }
+    }
+    for pass in template.passes() {
+        // Scratch surfaces the pass checks out, the full-frame copies of its inputs (each made
+        // in its own scratch surface) and a software filter's working set.
+        let (scratch, copies, working) = match &pass.kind {
+            ExecutionPassKind::ImportRegion {
+                source_pipeline,
+                placement,
+                ..
+            } if source_pipeline.chroma_key.is_some()
+                || matches!(
+                    placement.backdrop,
+                    Some(valle_engine::prepare::PreparedExternalBackdrop::Blur { .. })
+                ) =>
+            {
+                (2 * full, 0, 0)
+            }
+            ExecutionPassKind::DispatchKernel { invocation } => match invocation {
+                KernelInvocation::Mask { mask, .. } => (
+                    (1 + u64::from(mask.feather_sigma_device_px() > 0.0)) * full,
+                    full,
+                    0,
+                ),
+                KernelInvocation::Transition { .. } => (3 * full, 3 * full, 0),
+                KernelInvocation::Filter { .. } | KernelInvocation::AdjustmentEffect { .. } => {
+                    (0, full, 0)
+                }
+                _ => (0, 0, 0),
+            },
+            ExecutionPassKind::CompositeRegion {
+                mode: CompositeMode::Blend { mode },
+                ..
+            } if *mode != valle_draw::program::BlendMode::Normal => (0, 2 * full, 0),
+            ExecutionPassKind::RasterProgram {
+                program,
+                destination_inputs,
+                transform,
+                ..
+            } => {
+                let destinations = destination_inputs
+                    .iter()
+                    .map(|input| {
+                        schedules
+                            .resources()
+                            .iter()
+                            .find(|resource| resource.resource() == *input)
+                            .map(|resource| resource.device_roi())
+                            .ok_or(SkiaExecuteError::Program(format!(
+                                "destination resource {} is not bound",
+                                input.get()
+                            )))
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                let (scratch, working) = program_working_bytes(
+                    bindings,
+                    schedules,
+                    pass.id,
+                    *program,
+                    dynamic_transform(bindings, *transform)?,
+                    &destinations,
+                    None,
+                    backend,
+                )?;
+                (scratch, 0, working)
+            }
+            ExecutionPassKind::RasterCaption {
+                program, transform, ..
+            } => {
+                let (scratch, working) = program_working_bytes(
+                    bindings,
+                    schedules,
+                    pass.id,
+                    *program,
+                    dynamic_transform(bindings, *transform)?,
+                    &[],
+                    Some(render_extent(template)?),
+                    backend,
+                )?;
+                (scratch, 0, working)
+            }
+            _ => (0, 0, 0),
+        };
+        run(add(scratch, copies)?, working)?;
+    }
+    Ok(add(outer, peak.max(returned.min(pool_bytes)))?)
+}
+
+/// Scratch surfaces one program checks out and the largest software F16 filter working set it
+/// reserves meanwhile.
+#[allow(clippy::too_many_arguments)]
+fn program_working_bytes(
+    bindings: &RenderBindings,
+    schedules: &BoundProgramSchedules,
+    pass: ExecutionPassId,
+    program: ProgramId,
+    transform: DeviceTransform,
+    destinations: &[DeviceRect],
+    terminal: Option<Extent2d>,
+    backend: SkiaBackendKind,
+) -> Result<(u64, u64), SkiaExecuteError> {
+    let plan = plan_program(bindings, program)?;
+    let schedule = program_schedule(schedules, program, pass)?;
+    let mut extents = schedule
+        .surface_slots()
+        .iter()
+        .filter_map(|slot| slot.extent())
+        .collect::<Vec<_>>();
+    extents.extend(program_helper_extent(plan, schedule)?);
+    extents.extend(terminal);
+    // Raster ROI copies round their capacity up to 32-pixel steps (`scratch_program`).
+    let step = if backend == SkiaBackendKind::Raster && program_uses_roi_copies(plan) {
+        32
+    } else {
+        1
+    };
+    let mut scratch = 0_u64;
+    for extent in extents {
+        let [width, height] =
+            [extent.width(), extent.height()].map(|n| u64::from(n.div_ceil(step) * step));
+        scratch = width
+            .checked_mul(height)
+            .and_then(|pixels| pixels.checked_mul(8))
+            .and_then(|bytes| bytes.checked_add(scratch))
+            .ok_or(SurfaceError::ByteOverflow)?;
+    }
+    let cpu =
+        super::draw::program_f16_filter_bytes(plan, schedule, transform, destinations, backend)?;
+    Ok((scratch, cpu))
 }
 
 fn surface_bytes(extent: Extent2d) -> Result<u64, SurfaceError> {

@@ -195,7 +195,7 @@ impl SmallOpacityCache {
 
     pub(crate) fn insert_page(&mut self, image: Image, entries: Vec<(ContentDigest, SkRect)>) {
         let bytes = image.width() as usize * image.height() as usize * 8;
-        let Ok(memory) = valle_engine::motion::memory::reserve(
+        let Ok(memory) = valle_engine::motion::memory::reserve_retained(
             valle_engine::motion::memory::MemoryKind::Surface,
             bytes as u64,
         ) else {

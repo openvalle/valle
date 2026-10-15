@@ -5208,6 +5208,7 @@ dependencies = [
  "fs2",
  "hex",
  "libc",
+ "objc2",
  "objc2-metal",
  "png",
  "reqwest",

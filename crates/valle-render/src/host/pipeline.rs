@@ -64,7 +64,7 @@ impl RenderControl {
     ) -> Result<super::frame::FrameExecutionStage, PipelineError> {
         let budget = self.budget.as_ref().expect("resolved host budget");
         let limits = budget.owner_limits(self.residency_owners, spec)?;
-        let capabilities = self.stage_capabilities(spec)?;
+        let capabilities = self.stage_capabilities()?;
         Ok(super::frame::FrameExecutionStage::for_backend(
             backend,
             capabilities,
@@ -73,23 +73,16 @@ impl RenderControl {
         )?)
     }
 
+    /// A frame's surfaces never exceed the whole budget; whether they fit beside other storage
+    /// is admission's decision, which may evict optional retention to make room.
     fn stage_capabilities(
         &self,
-        spec: RenderSpec,
     ) -> Result<valle_engine::compositor::lower::BackendCapabilities, PipelineError> {
-        let limits = self
-            .budget
-            .as_ref()
-            .unwrap()
-            .owner_limits(self.residency_owners, spec)?;
+        let budget = self.budget.as_ref().unwrap().memory_bytes();
         let capabilities = crate::executor::skia::cpu_capabilities(
             valle_engine::resource::Extent2d::new(16_384, 16_384).unwrap(),
-            limits.map_or(2 * 1024 * 1024 * 1024, |l| {
-                l.frame_surfaces.min(2 * 1024 * 1024 * 1024)
-            }),
-            limits.map_or(4 * 1024 * 1024 * 1024, |l| {
-                l.frame_surfaces.min(4 * 1024 * 1024 * 1024)
-            }),
+            budget.map_or(2 * 1024 * 1024 * 1024, |b| b.min(2 * 1024 * 1024 * 1024)),
+            budget.map_or(4 * 1024 * 1024 * 1024, |b| b.min(4 * 1024 * 1024 * 1024)),
         )
         .map_err(FrameRenderError::from)?;
         Ok(capabilities)
@@ -117,7 +110,7 @@ impl RenderControl {
             project.render().clone(),
             provider,
             backend,
-            self.stage_capabilities(spec)?,
+            self.stage_capabilities()?,
         )?
         .share_resources(backend)?;
         preparer.set_cpu_budget(budget.cpu.clone());
@@ -266,32 +259,25 @@ pub fn render_schedule(
     if budget.cpu.is_current() {
         return Err(super::NativeBudgetError::ReentrantSession.into());
     }
-    let mut workers =
+    let workers =
         budget.frame_parallelism(budget.threads().min(4).min(frames.len()).max(1), spec)?;
     let shared = sink.shared_frame_pool().is_some();
-    let mut contexts = if shared { 3 } else { 1 };
-    loop {
-        let owners = super::budget::ResidencyOwners {
-            providers: 1,
-            executors: if shared {
-                contexts
-            } else if backend == SkiaBackendKind::Raster {
-                workers
-            } else {
-                1
-            },
-            gpu: backend != SkiaBackendKind::Raster,
-        };
-        match budget.owner_limits(owners, spec) {
-            Ok(_) => {
-                resolved.residency_owners = owners;
-                break;
-            }
-            Err(_) if contexts > 1 => contexts -= 1,
-            Err(_) if workers > 1 => workers -= 1,
-            Err(error) => return Err(error.into()),
-        }
-    }
+    let contexts = if shared { 3 } else { 1 };
+    let owners = super::budget::ResidencyOwners {
+        providers: 1,
+        executors: if shared {
+            contexts
+        } else if backend == SkiaBackendKind::Raster {
+            workers
+        } else {
+            1
+        },
+        gpu: backend != SkiaBackendKind::Raster,
+    };
+    let pool_bytes = budget
+        .owner_limits(owners, spec)?
+        .map_or(0, |limits| limits.caches.surface_pool);
+    resolved.residency_owners = owners;
     resolved.maximum_gpu_contexts = contexts;
     resolved.admission = if budget.memory_bytes().is_some() {
         let delivery_bytes = (0..frames.len())
@@ -303,6 +289,8 @@ pub fn render_schedule(
                 budget.memory.clone(),
                 resolved.cancelled.clone(),
                 resolved.deadline,
+                backend,
+                pool_bytes,
             )
             .with_delivery_bytes(delivery_bytes),
         ))

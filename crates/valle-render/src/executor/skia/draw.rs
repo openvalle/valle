@@ -1460,24 +1460,7 @@ impl ProgramRuntime {
         local_to_program: valle_draw::program::Transform2d,
         device: DeviceTransform,
     ) -> Result<[f64; 9], DrawError> {
-        let viewport = self.program.viewport();
-        if viewport.is_empty() {
-            return Err(DrawError::Internal(
-                "DrawProgram viewport is empty during execution".into(),
-            ));
-        }
-        let normalize = [
-            1.0 / viewport.width,
-            0.0,
-            -viewport.x / viewport.width,
-            0.0,
-            1.0 / viewport.height,
-            -viewport.y / viewport.height,
-            0.0,
-            0.0,
-            1.0,
-        ];
-        Ok(mul3(device.matrix(), mul3(normalize, local_to_program.0)))
+        program_local_to_device(self.program.viewport(), local_to_program, device)
     }
 
     fn paint(&self, id: PaintId) -> Result<SkPaint, DrawError> {
@@ -2561,6 +2544,114 @@ fn uses_gpu_f16_filter(filter: &Filter, backend: SkiaBackendKind) -> bool {
         }
 }
 
+/// The input pixels a software F16 filter copies and the pixels it works on for one bound
+/// pass: the padded pyramid region for bloom and glow, otherwise the output ROI.
+struct F16FilterWork {
+    source: IRect,
+    working_pixels: u64,
+}
+
+impl F16FilterWork {
+    /// `None` when no input pixel can reach the output, which is then transparent.
+    fn new(
+        filter: &Filter,
+        input: DeviceRect,
+        output: DeviceRect,
+    ) -> Result<Option<Self>, DrawError> {
+        let mut work = Self {
+            source: IRect::from_wh(input.width as i32, input.height as i32),
+            working_pixels: output.pixels(),
+        };
+        let pyramid_radius = match filter {
+            Filter::Glow { radius, .. } => Some((*radius, *radius * 2.0)),
+            Filter::Bloom { radius, .. } => Some((*radius, *radius)),
+            _ => None,
+        };
+        if let Some((radius, spread)) = pyramid_radius {
+            let region = valle_engine::compositor::bloom::PyramidRegion::new(
+                [input.width, input.height],
+                [output.width, output.height],
+                [input.x - output.x, input.y - output.y],
+                radius,
+                spread,
+            )
+            .map_err(|error| DrawError::Surface(error.to_string()))?;
+            work.working_pixels = u64::from(region.size[0]) * u64::from(region.size[1]);
+            // Preserve the raster image and its coverage; read only pixels the padded pyramid
+            // uses. The region is aligned to this image's original 32-pixel grid.
+            let window = IRect::from_xywh(
+                -region.input_offset[0],
+                -region.input_offset[1],
+                region.size[0] as i32,
+                region.size[1] as i32,
+            );
+            let Some(cropped) = IRect::intersect(&work.source, &window) else {
+                return Ok(None);
+            };
+            work.source = cropped;
+        }
+        Ok(Some(work))
+    }
+
+    /// Bytes charged while the filter runs: its f32 working planes and the F16 input copy.
+    fn reserved_bytes(&self) -> u64 {
+        self.working_pixels * 72
+            + u64::from(self.source.width().unsigned_abs())
+                * u64::from(self.source.height().unsigned_abs())
+                * 8
+    }
+}
+
+/// The largest software F16 filter working set one program charges on `backend`: what
+/// `apply_f16_filter_program_into` reserves for each of its bound filter passes.
+pub(crate) fn program_f16_filter_bytes(
+    plan: &PlanProgram,
+    schedule: &BoundProgramSchedule,
+    transform: DeviceTransform,
+    destinations: &[DeviceRect],
+    backend: SkiaBackendKind,
+) -> Result<u64, DrawError> {
+    // The ROI each local resource has as an image when a later pass reads it.
+    let mut rois = BTreeMap::<ProgramResourceId, DeviceRect>::new();
+    let mut peak = 0;
+    for (pass, step) in plan.local_plan().passes().iter().zip(schedule.passes()) {
+        let roi = match step.storage() {
+            ProgramStorageKind::Transparent {} => None,
+            ProgramStorageKind::Destination { destination } => {
+                destinations.get(destination.get() as usize - 1).copied()
+            }
+            ProgramStorageKind::Alias { source } => rois.get(&source).copied(),
+            ProgramStorageKind::Surface { .. } | ProgramStorageKind::Output {} => {
+                Some(step.device_roi()).filter(|roi| !roi.is_empty())
+            }
+        };
+        if let (Some(output), ProgramPassKind::ApplyFilter { input, filter, .. }) =
+            (roi, &pass.kind)
+            && uses_cpu_f16_filter(filter)
+            && !uses_gpu_f16_filter(filter, backend)
+            && let Some(input) = rois.get(input)
+        {
+            let local_to_program = plan
+                .local_plan()
+                .resources()
+                .get(step.output().get() as usize - 1)
+                .filter(|resource| resource.id == step.output())
+                .ok_or(DrawError::MissingProgramResource(step.output().get()))?
+                .local_to_program;
+            let local_to_device =
+                program_local_to_device(plan.viewport, local_to_program, transform)?;
+            let filter = program_filter_in_device_space(filter, local_to_device)?;
+            if let Some(work) = F16FilterWork::new(&filter, *input, output)? {
+                peak = peak.max(work.reserved_bytes());
+            }
+        }
+        if let Some(roi) = roi {
+            rois.insert(step.output(), roi);
+        }
+    }
+    Ok(peak)
+}
+
 fn apply_f16_filter_program_into(
     surface: &mut Surface,
     input: &ProgramImage,
@@ -2569,37 +2660,11 @@ fn apply_f16_filter_program_into(
     filter: &Filter,
     lens_frame: Option<[f32; 4]>,
 ) -> Result<(), DrawError> {
-    let mut working_pixels = u64::from(output_roi.width) * u64::from(output_roi.height);
-    let mut source_roi = IRect::from_wh(input.roi.width as i32, input.roi.height as i32);
-    let offset = [input.roi.x - output_roi.x, input.roi.y - output_roi.y];
-    let pyramid_radius = match filter {
-        Filter::Glow { radius, .. } => Some((*radius, *radius * 2.0)),
-        Filter::Bloom { radius, .. } => Some((*radius, *radius)),
-        _ => None,
+    let Some(work) = F16FilterWork::new(filter, input.roi, output_roi)? else {
+        return clear_surface(surface);
     };
-    if let Some((radius, spread)) = pyramid_radius {
-        let region = valle_engine::compositor::bloom::PyramidRegion::new(
-            [input.roi.width, input.roi.height],
-            [output_roi.width, output_roi.height],
-            offset,
-            radius,
-            spread,
-        )
-        .map_err(|error| DrawError::Surface(error.to_string()))?;
-        working_pixels = u64::from(region.size[0]) * u64::from(region.size[1]);
-        // Preserve the raster image and its coverage; read only pixels the padded pyramid uses.
-        // The region is aligned to this image's original 32-pixel grid.
-        let window = IRect::from_xywh(
-            -region.input_offset[0],
-            -region.input_offset[1],
-            region.size[0] as i32,
-            region.size[1] as i32,
-        );
-        let Some(cropped) = IRect::intersect(&source_roi, &window) else {
-            return clear_surface(surface);
-        };
-        source_roi = cropped;
-    }
+    let source_roi = work.source;
+    let offset = [input.roi.x - output_roi.x, input.roi.y - output_roi.y];
     let width = source_roi.width() as usize;
     let height = source_roi.height() as usize;
     let info = ImageInfo::new(
@@ -2610,7 +2675,7 @@ fn apply_f16_filter_program_into(
     );
     let _working = valle_engine::motion::memory::reserve(
         valle_engine::motion::memory::MemoryKind::Temporary,
-        working_pixels * 72 + (width * height * 8) as u64,
+        work.reserved_bytes(),
     )
     .map_err(|error| DrawError::Surface(error.to_string()))?;
     let mut bytes = vec![0_u8; width * height * 8];
@@ -3732,6 +3797,32 @@ fn sk_matrix(matrix: [f64; 9]) -> Matrix {
         matrix[7] as f32,
         matrix[8] as f32,
     )
+}
+
+/// Local resource coordinates to device pixels: the program viewport normalized to the unit
+/// square, then the bound device transform.
+fn program_local_to_device(
+    viewport: Rect,
+    local_to_program: Transform2d,
+    device: DeviceTransform,
+) -> Result<[f64; 9], DrawError> {
+    if viewport.is_empty() {
+        return Err(DrawError::Internal(
+            "DrawProgram viewport is empty during execution".into(),
+        ));
+    }
+    let normalize = [
+        1.0 / viewport.width,
+        0.0,
+        -viewport.x / viewport.width,
+        0.0,
+        1.0 / viewport.height,
+        -viewport.y / viewport.height,
+        0.0,
+        0.0,
+        1.0,
+    ];
+    Ok(mul3(device.matrix(), mul3(normalize, local_to_program.0)))
 }
 
 fn mul3(left: [f64; 9], right: [f64; 9]) -> [f64; 9] {

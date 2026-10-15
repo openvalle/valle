@@ -228,8 +228,11 @@ pub(super) fn render(
         }
         abort.store(true, Ordering::Release);
         drop(jobs_tx);
-        drop(output_rx);
-        result
+        // A failed stage aborts its peers, and their closed job queue can stop ordered delivery
+        // before it reads the failure. Report the stage's error, not the closed queue.
+        let mut error = result.err();
+        drain_workers(std::slice::from_ref(&output_rx), &mut error);
+        error.map_or(Ok(()), Err)
     });
     result?;
     control.check()?;

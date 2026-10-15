@@ -51,6 +51,13 @@ pub trait ResourceProvider {
 
     fn fulfill(&mut self, request: &ResourceRequest) -> Result<SkiaExternalObject, Self::Error>;
 
+    /// Bytes fulfilling `request` keeps from its source when the descriptor states no extent (a
+    /// font or runtime shader). Admission reserves them even for a cached object, which pressure
+    /// can evict before this frame fulfils it.
+    fn source_resident_bytes(&self, _request: &ResourceRequest) -> u64 {
+        0
+    }
+
     fn finish_frame(&mut self, fulfilled_requests: &[ResourceRequest]) -> ResourceFrameReport {
         ResourceFrameReport::uncached(fulfilled_requests)
     }
@@ -578,7 +585,7 @@ impl FrameExecutionStage {
         let trace = prepared.trace.clone();
         let acquire_span = trace.as_ref().map(|t| t.span("delivery.surface_acquire"));
         let output = spec.output();
-        let mut shared = self.executor.acquire_shared_frame(pool, output)?;
+        let mut shared = drained(|| self.executor.acquire_shared_frame(pool, output))?;
         drop(acquire_span);
         let surface = shared.surface_mut().map_err(SkiaExecuteError::from)?;
         let mut target = SkiaTarget::direct_gpu(surface, output)?;
@@ -593,7 +600,7 @@ impl FrameExecutionStage {
         })?;
         drop(target);
         let submit_span = trace.as_ref().map(|t| t.span("execute.submit"));
-        let submitted = self.executor.submit_shared_frame(shared)?;
+        let submitted = drained(|| self.executor.submit_shared_frame(shared))?;
         drop(submit_span);
         evidence.timings.total_us = elapsed_us(started);
         Ok(SubmittedSharedFrame {
@@ -615,7 +622,7 @@ impl FrameExecutionStage {
             .as_ref()
             .map(|t| t.span("execute.gpu_completion_wait"));
         let wait_started = Instant::now();
-        let frame = self.executor.finish_shared_frame(submitted.submitted)?;
+        let frame = drained(|| self.executor.finish_shared_frame(submitted.submitted))?;
         let wait_us = elapsed_us(wait_started);
         drop(wait_span);
         let mut evidence = submitted.evidence;
@@ -683,11 +690,25 @@ impl FramePreparationStage<super::shared_resource::SharedResourceProvider> {
     }
 }
 
+/// Runs one frame stage under the CPU allowance, in its own autorelease pool.
 fn budgeted<R>(budget: Option<&CpuBudget>, work: impl FnOnce() -> R) -> R {
-    match budget {
+    drained(|| match budget {
         Some(budget) => budget.run(work),
         None => work(),
-    }
+    })
+}
+
+/// Metal hands back autoreleased objects (command encoders, blit contexts, transfer buffers), and
+/// pipeline threads have no autorelease pool, so those objects lived until their thread exited: at
+/// 4K, CPU readback grew GPU memory with every frame. Each frame stage drains its own pool.
+#[cfg(all(target_os = "macos", feature = "native"))]
+fn drained<R>(work: impl FnOnce() -> R) -> R {
+    objc2::rc::autoreleasepool(|_| work())
+}
+
+#[cfg(not(all(target_os = "macos", feature = "native")))]
+fn drained<R>(work: impl FnOnce() -> R) -> R {
+    work()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -741,7 +762,9 @@ fn prepare_frame_with<P: ResourceProvider>(
                 &bindings,
                 capabilities,
                 requests.requests(),
+                &*provider,
                 spec,
+                admission,
             )?;
             let bytes = super::admission::checked_add(bytes, delivery_memory_bytes)?;
             let execution_bytes =
@@ -899,42 +922,33 @@ fn allocate_generation(next_generation: &mut u64) -> Result<ExternalGeneration, 
     ExternalGeneration::new(value).map_err(Into::into)
 }
 
-// Admission is a conservative envelope derived from this frame's bound dimensions, not from
-// the output canvas alone. Leases below track owned storage and conservative scratch claims;
+// Admission covers what this frame can charge to its credit: fulfillment's resources, then the
+// executor's planned peak and delivery. Leases track owned storage and declared scratch claims;
 // they are neither allocator instrumentation nor a measurement of whole-process memory.
-// The envelope includes simultaneous F16 inputs, f32 filter pyramids, 3D buffers and delivery.
-fn frame_working_bytes(
+#[allow(clippy::too_many_arguments)]
+fn frame_working_bytes<P: ResourceProvider>(
     template: &RenderPlanTemplate,
     bindings: &RenderBindings,
     caps: &BackendCapabilities,
     requests: &[ResourceRequest],
+    provider: &P,
     spec: RenderSpec,
+    admission: &super::admission::FrameAdmission,
 ) -> Result<(u64, u64), FrameRenderError> {
     use super::admission::checked_add;
     use valle_engine::resource::{ExternalResourceDesc, ResourcePayload};
     let schedules = template
         .bind_program_schedules(bindings, caps)
         .map_err(SkiaExecuteError::from)?;
-    let outer = schedules
-        .surface_slots()
-        .iter()
-        .try_fold(0, |n, slot| checked_add(n, slot.estimated_bytes()))?;
-    let program = schedules
-        .programs()
-        .iter()
-        .map(|p| p.estimated_surface_bytes())
-        .max()
-        .unwrap_or(0);
-    let canvas = u64::from(spec.width()) * u64::from(spec.height());
-    let mut bytes = checked_add(outer, program.saturating_mul(5))?;
-    bytes = checked_add(bytes, canvas.saturating_mul(32))?;
-    let execution_bytes = checked_add(bytes, 8 * 1024 * 1024)?;
-    bytes = execution_bytes;
+    let mut resources = 0_u64;
+    let mut scene3d_working = 0_u64;
+    let mut scene3d = Vec::new();
     for request in requests {
-        let resource = match request.expected() {
+        match request.expected() {
             ExternalResourceDesc::VisualFrame { extent, .. }
             | ExternalResourceDesc::DataTexture { extent } => {
-                u64::from(extent.width()) * u64::from(extent.height()) * 32
+                let bytes = u64::from(extent.width()) * u64::from(extent.height()) * 32;
+                resources = checked_add(resources, bytes)?;
             }
             ExternalResourceDesc::Scene3d => {
                 let Some(ResourcePayload::Scene3dFrame { canonical_request }) = request.payload()
@@ -948,13 +962,28 @@ fn frame_working_bytes(
                             handle: request.handle().get(),
                             reason: error.to_string(),
                         })?;
-                u64::from(width) * u64::from(height) * 128
+                let pixels = u64::from(width) * u64::from(height);
+                // Layers rasterize one at a time, each releasing its working set before the next
+                // starts; every result (colour, plus depth for deferred depth of field) stays.
+                resources = checked_add(resources, pixels * 12)?;
+                scene3d_working = scene3d_working.max(pixels * 96);
+                scene3d.push(Extent2d::new(width, height)?);
             }
-            _ => 0,
-        };
-        bytes = checked_add(bytes, resource)?;
+            _ => resources = checked_add(resources, provider.source_resident_bytes(request))?,
+        }
     }
-    // Bounded plan/geometry bookkeeping, independently of retained pixel caches.
+    let execution_bytes = crate::executor::skia::planned_frame_bytes(
+        template,
+        bindings,
+        &schedules,
+        admission.backend(),
+        admission.pool_bytes(),
+        &scene3d,
+    )?;
+    // The RGBA readback and the delivery surfaces an executor keeps (CPU target, Metal output).
+    let output = u64::from(spec.width()) * u64::from(spec.height()) * 4;
+    let execution_bytes = checked_add(execution_bytes, output * 3)?;
+    let bytes = checked_add(checked_add(execution_bytes, resources)?, scene3d_working)?;
     Ok((bytes, execution_bytes))
 }
 

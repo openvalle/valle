@@ -303,6 +303,12 @@ pub fn reserve(kind: MemoryKind, bytes: u64) -> Result<Option<MemoryLease>, Memo
     if let Some(credit) = CURRENT_CREDIT.with(|current| current.borrow().clone()) {
         return credit.0.split(kind, bytes).map(Some);
     }
+    reserve_retained(kind, bytes)
+}
+
+/// Charge optional retained storage (a cache entry) to the shared budget. A running frame's
+/// credit covers only that frame's planned working set, so a cache insert never spends it.
+pub fn reserve_retained(kind: MemoryKind, bytes: u64) -> Result<Option<MemoryLease>, MemoryError> {
     crate::cpu::memory_budget()
         .map(|budget| budget.reserve(kind, bytes))
         .transpose()
@@ -370,6 +376,24 @@ mod tests {
         let next = budget.wait_credit(32, || Ok::<_, MemoryError>(())).unwrap();
         drop(image);
         drop(next);
+        assert_eq!(budget.report().used_bytes, 0);
+    }
+
+    #[test]
+    fn retained_storage_bypasses_the_running_frame_credit() {
+        let budget = MemoryBudget::new(Some(64));
+        let cpu = crate::cpu::CpuBudget::new_with_memory(1, Some(budget.clone())).unwrap();
+        let credit = budget.wait_credit(48, || Ok::<_, MemoryError>(())).unwrap();
+        let cached = cpu.run(|| credit.run(|| reserve_retained(MemoryKind::Surface, 16)));
+        let cached = cached.unwrap().unwrap();
+        assert_eq!(budget.report().used_bytes, 64);
+        // The frame still owns its whole credit; the cache could not take a byte of it.
+        let scratch = credit.run(|| reserve(MemoryKind::Temporary, 48)).unwrap();
+        assert!(
+            cpu.run(|| reserve_retained(MemoryKind::Surface, 1))
+                .is_err()
+        );
+        drop((scratch, cached, credit));
         assert_eq!(budget.report().used_bytes, 0);
     }
 

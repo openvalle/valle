@@ -89,6 +89,10 @@ impl ResourceProvider for SharedResourceProvider {
         Ok(object)
     }
 
+    fn source_resident_bytes(&self, request: &ResourceRequest) -> u64 {
+        self.lock().source_resident_bytes(request)
+    }
+
     fn finish_frame(&mut self, requests: &[ResourceRequest]) -> ResourceFrameReport {
         self.lock().retain_media(requests);
         self.report

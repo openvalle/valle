@@ -213,7 +213,7 @@ impl PlanImage {
         if self.retention.is_some() {
             return true;
         }
-        match valle_engine::motion::memory::reserve(
+        match valle_engine::motion::memory::reserve_retained(
             valle_engine::motion::memory::MemoryKind::Surface,
             bytes,
         ) {

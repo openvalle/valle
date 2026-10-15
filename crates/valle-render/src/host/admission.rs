@@ -6,6 +6,8 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 use std::time::{Duration, Instant};
+
+use crate::executor::skia::SkiaBackendKind;
 use valle_engine::motion::{
     cpu,
     memory::{MemoryBudget, MemoryCredit, MemoryError},
@@ -19,13 +21,19 @@ pub(crate) struct FrameAdmission {
     cancelled: Arc<AtomicBool>,
     deadline: Option<Instant>,
     delivery_bytes: Vec<u64>,
+    backend: SkiaBackendKind,
+    pool_bytes: u64,
 }
 
 impl FrameAdmission {
+    /// Frames are sized for the executors that run them: their backend and the reusable
+    /// surface pool each keeps.
     pub(crate) fn new(
         memory: MemoryBudget,
         cancelled: Arc<AtomicBool>,
         deadline: Option<Instant>,
+        backend: SkiaBackendKind,
+        pool_bytes: u64,
     ) -> Self {
         Self {
             memory,
@@ -35,7 +43,17 @@ impl FrameAdmission {
             cancelled,
             deadline,
             delivery_bytes: Vec::new(),
+            backend,
+            pool_bytes,
         }
+    }
+
+    pub(crate) const fn backend(&self) -> SkiaBackendKind {
+        self.backend
+    }
+
+    pub(crate) const fn pool_bytes(&self) -> u64 {
+        self.pool_bytes
     }
 
     pub(crate) fn with_delivery_bytes(mut self, bytes: Vec<u64>) -> Self {
@@ -138,7 +156,13 @@ mod tests {
     fn idle_non_evictable_storage_fails_instead_of_waiting_forever() {
         let memory = MemoryBudget::new(Some(100));
         let retained = memory.reserve(MemoryKind::Media, 60).unwrap();
-        let admission = FrameAdmission::new(memory.clone(), Arc::new(AtomicBool::new(false)), None);
+        let admission = FrameAdmission::new(
+            memory.clone(),
+            Arc::new(AtomicBool::new(false)),
+            None,
+            SkiaBackendKind::Raster,
+            0,
+        );
         let error = admission.admit(0, 60, || {}).unwrap_err();
         assert!(matches!(
             error,
@@ -156,7 +180,13 @@ mod tests {
     fn memory_pressure_evicts_completed_storage_before_admitting() {
         let memory = MemoryBudget::new(Some(100));
         let mut retained = Some(memory.reserve(MemoryKind::Resource, 60).unwrap());
-        let admission = FrameAdmission::new(memory.clone(), Arc::new(AtomicBool::new(false)), None);
+        let admission = FrameAdmission::new(
+            memory.clone(),
+            Arc::new(AtomicBool::new(false)),
+            None,
+            SkiaBackendKind::Raster,
+            0,
+        );
         let credit = admission
             .admit(0, 60, || {
                 retained.take();

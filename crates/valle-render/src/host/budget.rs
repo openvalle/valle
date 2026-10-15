@@ -36,7 +36,6 @@ pub struct NativeBudgetReport {
 pub(crate) struct OwnerMemoryLimits {
     pub(crate) executor_capacity: u64,
     pub(crate) resource_cache: u64,
-    pub(crate) frame_surfaces: u64,
     pub(crate) caches: SkiaCacheLimits,
 }
 
@@ -121,11 +120,6 @@ impl NativeRenderBudget {
         let delivery = rgba_bytes(spec)?
             .checked_mul(3)
             .ok_or(NativeBudgetError::Overflow)?;
-        let gpu_retention = if owners.gpu {
-            (capacity / 8).min(512 * 1024 * 1024)
-        } else {
-            0
-        };
         let programs = (capacity / 32).min(32 * 1024 * 1024);
         let caches = SkiaCacheLimits {
             // GrResourceCache charges live budgeted surfaces as well as purgeable resources.
@@ -142,32 +136,11 @@ impl NativeRenderBudget {
             opacity_layers: usize::try_from((capacity / 32).min(32 * 1024 * 1024)).unwrap(),
             surface_pool: (capacity / 16).min(128 * 1024 * 1024),
         };
-        let retained = gpu_retention
-            + caches.programs as u64
-            + caches.raster_layers as u64
-            + caches.opacity_layers as u64
-            + caches.surface_pool;
-        let minimum_surfaces = rgba_bytes(spec)?
-            .checked_mul(4)
-            .ok_or(NativeBudgetError::Overflow)?;
-        // Frame working storage borrows the common allowance. Cache retention still has
-        // owner-local ceilings, but a large frame is not rejected just because N executors exist.
-        let frame_surfaces = bytes
-            .saturating_sub(resource_cache * providers)
-            .saturating_sub(retained)
-            .saturating_sub(delivery);
-        if frame_surfaces < minimum_surfaces || resource_cache == 0 {
-            return Err(NativeBudgetError::FrameDoesNotFit {
-                required: minimum_surfaces
-                    .saturating_add(retained)
-                    .saturating_add(delivery),
-                available: capacity,
-            });
-        }
+        // Cache retention has owner-local ceilings; frames borrow the whole allowance through
+        // admission, which evicts optional retention under pressure.
         Ok(Some(OwnerMemoryLimits {
             executor_capacity: capacity,
             resource_cache,
-            frame_surfaces,
             caches,
         }))
     }
@@ -263,7 +236,6 @@ mod tests {
                             + limits.caches.surface_pool
                             + limits.caches.programs as u64;
                         assert!(retention <= limits.executor_capacity);
-                        assert!(limits.frame_surfaces <= bytes);
                         assert!(
                             limits.executor_capacity * executors as u64
                                 + limits.resource_cache * providers as u64
@@ -296,7 +268,6 @@ mod tests {
         let one = limits(1);
         let eight = limits(8);
         assert_eq!(one.executor_capacity, eight.executor_capacity);
-        assert_eq!(one.frame_surfaces, eight.frame_surfaces);
         assert_eq!(one.resource_cache, eight.resource_cache * 8);
     }
 

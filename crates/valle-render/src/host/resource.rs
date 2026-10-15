@@ -865,6 +865,31 @@ impl ResourceProvider for NativeResourceProvider {
         self.cache_fulfilled(request, object)
     }
 
+    fn source_resident_bytes(&self, request: &ResourceRequest) -> u64 {
+        let digest = request.key().content;
+        match (request.expected(), &request.key().interpretation) {
+            (ExternalResourceDesc::FontBytes, _) => match self.bytes.get(&digest) {
+                Some(bytes) => bytes.len() as u64,
+                None => match self.catalog.source(&digest) {
+                    Some(NativeResourceSource::Bytes(bytes)) => bytes.len() as u64,
+                    // An unreadable font fails in fulfilment instead.
+                    Some(NativeResourceSource::File(path)) => {
+                        std::fs::metadata(path).map_or(0, |file| file.len())
+                    }
+                    None => 0,
+                },
+            },
+            (
+                ExternalResourceDesc::RuntimeShader,
+                ResourceInterpretation::RuntimeShader { abi_digest, .. },
+            ) => self
+                .runtime_shaders
+                .get(&(digest, *abi_digest))
+                .map_or(0, |bytes| bytes.len() as u64),
+            _ => 0,
+        }
+    }
+
     fn finish_frame(&mut self, fulfilled_requests: &[ResourceRequest]) -> ResourceFrameReport {
         self.retain_media(fulfilled_requests);
         self.frame_report()

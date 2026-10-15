@@ -57,6 +57,14 @@ export default function Blur(ctx) {
 }
 "##;
 
+const BUDGET_TEXT: &str = r##"export const composition = { width: 64, height: 36, fps: 4, duration: 1 };
+export default function Title() {
+  return <Scene className="relative h-full w-full" style={{ backgroundColor: "#101010" }}>
+    <Text className="absolute" style={{ left: 4, top: 4, fontSize: 20, color: "#ffffff" }}>VALLE</Text>
+  </Scene>;
+}
+"##;
+
 fn run(dir: &Path, args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_valle"))
         .current_dir(dir)
@@ -484,6 +492,74 @@ fn check_cost_plans_every_frame_and_scales_with_the_output_size() {
     assert_eq!(doubled["cost"]["width"], 128);
     let (once, twice) = (pixels(&frames[3]), pixels(&doubled["cost"]["frames"][3]));
     assert!(twice > 3 * once && twice < 5 * once, "{once} -> {twice}");
+}
+
+#[test]
+fn budgeted_frames_reserve_the_font_they_load() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("title.motion.tsx"), BUDGET_TEXT).unwrap();
+    // The first frame loads a font larger than all of this scene's pixels into its admission.
+    for (output, budget) in [("plain", None), ("budgeted", Some("64MiB"))] {
+        let pattern = format!("{output}/%05d.png");
+        let mut args = vec![
+            "motion",
+            "render",
+            "title.motion.tsx",
+            "--backend",
+            "raster",
+            "--frames",
+            "0,1,2,3",
+            "-o",
+            pattern.as_str(),
+            "--json",
+        ];
+        if let Some(budget) = budget {
+            args.extend(["--memory-budget", budget]);
+        }
+        success(run(dir.path(), &args));
+    }
+    for frame in 0..4 {
+        let name = format!("{frame:05}.png");
+        assert_eq!(
+            png(&dir.path().join("plain").join(&name)),
+            png(&dir.path().join("budgeted").join(&name))
+        );
+    }
+}
+
+#[test]
+fn a_budget_only_needs_to_hold_the_frame_plans() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("cost.motion.tsx"), COST).unwrap();
+    // 96 MiB holds each of these 1080p frames, though not beside every cache at its ceiling.
+    for (output, budget) in [("plain", None), ("budgeted", Some("96MiB"))] {
+        let pattern = format!("{output}/%05d.png");
+        let mut args = vec![
+            "motion",
+            "render",
+            "cost.motion.tsx",
+            "--backend",
+            "raster",
+            "--frames",
+            "0,1,2,3",
+            "--output-size",
+            "1920x1080",
+            "-o",
+            pattern.as_str(),
+            "--json",
+        ];
+        if let Some(budget) = budget {
+            args.extend(["--memory-budget", budget]);
+        }
+        success(run(dir.path(), &args));
+    }
+    for frame in 0..4 {
+        let name = format!("{frame:05}.png");
+        assert_eq!(
+            png(&dir.path().join("plain").join(&name)),
+            png(&dir.path().join("budgeted").join(&name))
+        );
+    }
 }
 
 /// Frames beyond a renderer limit fail the cost check before anything renders, each with its
