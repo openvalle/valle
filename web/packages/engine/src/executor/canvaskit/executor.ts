@@ -1514,7 +1514,8 @@ function directRasterPlan(draw: DrawProgramWire, localPlan: Wire): DirectRasterP
     const transformed = rotated || !isScaleTranslateMatrix(numberArray(group.transform, 9, "direct raster group transform"));
     const supported = group.mask == null
       // saveLayer's image-filter crop truncates the wide glow tail; use scheduled ROI passes.
-      && !kinds.some(kind => ["glow", "bloom", "radialBlur", "filmGrain", "lensDistortion", "chromaticAberration"].includes(kind))
+      // Noise displacement runs the kernel Native shares, which only a scheduled pass draws.
+      && !kinds.some(kind => ["glow", "bloom", "radialBlur", "filmGrain", "lensDistortion", "chromaticAberration", "noiseDisplacement"].includes(kind))
       // Skia filters a blur or drop-shadow layer under a rotated or skewed CTM in scale/translate
       // space and resamples the result, softening its content; scheduled passes filter in device space.
       && !(spatial && transformed)
@@ -1870,6 +1871,10 @@ async function executeProgramPass(
     case "applyFilter": {
       const matrix = programMatrix(admitted, localPlan, kind.output, device);
       const filter = programFilterInDeviceSpace(record(kind.filter, "program filter"), matrix);
+      if (filter.kind === "noiseDisplacement") {
+        drawNoiseDisplacement(CanvasKit, builtins, canvas, programValue(values, kind.input), filter, matrix);
+        return;
+      }
       if (filter.kind === "chromaticAberration") {
         const input = programValue(values, kind.input);
         if (!input.image) return;
@@ -3286,12 +3291,7 @@ function drawProgramImageFilter(CanvasKit: CanvasKit, filter: Wire, input: Image
     fail("unsupported_filter", "chromatic aberration requires a scheduled shader pass");
   }
   if (filter.kind === "noiseDisplacement") {
-    const frequency = pair(filter.frequency, "noise frequency");
-    const octaves = positiveIdOrZero(filter.octaves, "noise octaves");
-    const seed = positiveIdOrZero(filter.seed, "noise seed");
-    const noise = filter.turbulence === true
-      ? CanvasKit.Shader.MakeTurbulence(frequency[0], frequency[1], octaves, seed, 0, 0)
-      : CanvasKit.Shader.MakeFractalNoise(frequency[0], frequency[1], octaves, seed, 0, 0);
+    const noise = noiseShader(CanvasKit, filter);
     const displacement = CanvasKit.ImageFilter.MakeShader(noise);
     noise.delete();
     try {
@@ -3338,6 +3338,52 @@ function drawProgramImageFilter(CanvasKit: CanvasKit, filter: Wire, input: Image
   fail("unsupported_filter", `DrawProgram filter '${String(filter.kind)}' has no CanvasKit kernel`);
 }
 
+function noiseShader(CanvasKit: CanvasKit, filter: Record<string, unknown>): Shader {
+  const frequency = pair(filter.frequency, "noise frequency");
+  const octaves = positiveIdOrZero(filter.octaves, "noise octaves");
+  const seed = positiveIdOrZero(filter.seed, "noise seed");
+  return filter.turbulence === true
+    ? CanvasKit.Shader.MakeTurbulence(frequency[0], frequency[1], octaves, seed, 0, 0)
+    : CanvasKit.Shader.MakeFractalNoise(frequency[0], frequency[1], octaves, seed, 0, 0);
+}
+
+/**
+ * Displace a scheduled pass input, drawn in device pixels, by the kernel Native shares: the noise
+ * lattice and its vectors stay in the DrawProgram group's local units, and only the input's ROI
+ * is sampled. A degenerate transform leaves the input undisplaced.
+ */
+export function drawNoiseDisplacement(
+  CanvasKit: CanvasKit,
+  builtins: CanvasKitBuiltinRuntime,
+  canvas: Canvas,
+  input: ImageValue,
+  filter: Record<string, unknown>,
+  localToDevice: readonly number[],
+): void {
+  if (!input.image || input.roi.width === 0 || input.roi.height === 0) return;
+  const [a, b, c, d, e, f] = affineDeviceTransform(localToDevice, "noise displacement")
+    .map(checkedDeviceFilterValue) as [number, number, number, number, number, number];
+  const determinant = a * e - b * d;
+  const [ia, ib, id, ie] = [e / determinant, -b / determinant, -d / determinant, a / determinant];
+  const { x, y, width, height } = input.roi;
+  const uniforms = [ia, ib, id, ie, -(ia * c + ib * f), -(id * c + ie * f), a, b, d, e,
+    finiteNumber(filter.scale, "noise displacement scale"), x, y, x + width, y + height];
+  if (determinant === 0 || uniforms.some(value => !Number.isFinite(value) || Math.abs(value) > 3.4028234663852886e38)) {
+    drawImageValue(CanvasKit, canvas, input, 1, "src");
+    return;
+  }
+  const source = input.image.makeShaderOptions(CanvasKit.TileMode.Decal, CanvasKit.TileMode.Decal,
+    CanvasKit.FilterMode.Nearest, CanvasKit.MipmapMode.None, [1, 0, x, 0, 1, y, 0, 0, 1]);
+  if (!source) fail("noise_displacement_shader", "noise displacement input shader allocation failed");
+  let noise: Shader | null = null;
+  let shader: Shader | null = null;
+  try {
+    noise = noiseShader(CanvasKit, filter);
+    shader = builtins.shader("noiseDisplacement", uniforms, [source, noise]);
+    drawShader(CanvasKit, canvas, shader, "src");
+  } finally { shader?.delete(); noise?.delete(); source.delete(); }
+}
+
 /**
  * Map program-local Blur/DropShadow parameters into a materialized device-space pass.
  * Direct-raster groups keep the local CTM active and do not call this helper. The scheduled
@@ -3350,7 +3396,7 @@ export function programFilterInDeviceSpace(
   rawLocalToDevice: readonly number[],
 ): Record<string, unknown> {
   const filter = record(rawFilter, "program filter");
-  if (filter.kind !== "blur" && filter.kind !== "dropShadow" && filter.kind !== "glow" && filter.kind !== "bloom" && filter.kind !== "radialBlur" && filter.kind !== "filmGrain" && filter.kind !== "chromaticAberration") return filter;
+  if (filter.kind !== "blur" && filter.kind !== "dropShadow" && filter.kind !== "glow" && filter.kind !== "bloom" && filter.kind !== "radialBlur" && filter.kind !== "filmGrain" && filter.kind !== "chromaticAberration" && filter.kind !== "velocityBlur") return filter;
   const matrix = numberArray(rawLocalToDevice, 9, "program filter local-to-device matrix");
   if (filter.kind === "filmGrain") {
     const size = finiteNumber(filter.size, "film grain size");
@@ -3374,15 +3420,12 @@ export function programFilterInDeviceSpace(
     };
   }
   if (filter.kind === "chromaticAberration") {
-    if (matrix.some(value => !Number.isFinite(value)) || Math.abs(matrix[6]!) > 1e-12
-      || Math.abs(matrix[7]!) > 1e-12 || Math.abs(matrix[8]! - 1) > 1e-12) {
-      fail("unsupported_filter", "chromatic aberration needs an affine device transform");
-    }
-    const offset = pair(filter.offset, "chromatic aberration offset");
-    return { ...filter, offset: [
-      checkedDeviceFilterValue(matrix[0]! * offset[0] + matrix[1]! * offset[1]),
-      checkedDeviceFilterValue(matrix[3]! * offset[0] + matrix[4]! * offset[1]),
-    ] };
+    return { ...filter, offset: programVectorInDeviceSpace(
+      pair(filter.offset, "chromatic aberration offset"), matrix, "chromatic aberration") };
+  }
+  if (filter.kind === "velocityBlur") {
+    return { ...filter, velocity: programVectorInDeviceSpace(
+      pair(filter.velocity, "velocity blur vector"), matrix, "velocity blur") };
   }
   if (filter.kind === "glow" || filter.kind === "bloom") {
     const radius = finiteNumber(filter.radius, `${filter.kind} radius`);
@@ -3406,6 +3449,23 @@ export function programFilterInDeviceSpace(
     sigmaX: sigma[0],
     sigmaY: sigma[1],
   };
+}
+
+/** The 2 x 3 part of a local-to-device transform that has no projective row. */
+function affineDeviceTransform(matrix: readonly number[], what: string): [number, number, number, number, number, number] {
+  if (matrix.length !== 9 || matrix.some(value => !Number.isFinite(value)) || Math.abs(matrix[6]!) > 1e-12
+    || Math.abs(matrix[7]!) > 1e-12 || Math.abs(matrix[8]! - 1) > 1e-12) {
+    fail("unsupported_filter", `${what} needs an affine device transform`);
+  }
+  return [matrix[0]!, matrix[1]!, matrix[2]!, matrix[3]!, matrix[4]!, matrix[5]!];
+}
+
+function programVectorInDeviceSpace(vector: [number, number], matrix: readonly number[], what: string): [number, number] {
+  const [a, b, , d, e] = affineDeviceTransform(matrix, what);
+  return [
+    checkedDeviceFilterValue(a * vector[0] + b * vector[1]),
+    checkedDeviceFilterValue(d * vector[0] + e * vector[1]),
+  ];
 }
 
 function programGaussianInDeviceSpace(sigma: [number, number], matrix: number[]): [number, number] {
@@ -5278,6 +5338,7 @@ function requiredBuiltinKernels(plan: Wire, programs: Wire[]): Set<BuiltinKernel
       if (kind.kind === "applyFilter") {
         const filter = record(kind.filter, "program filter").kind;
         if (filter === "chromaticAberration" || filter === "filmGrain" || filter === "radialBlur" || filter === "lensDistortion") kernels.add(filter);
+        if (filter === "noiseDisplacement") kernels.add("noiseDisplacement");
         if (filter === "glow" || filter === "bloom") {
           for (const kernel of ["pyramidDownsample", "pyramidBlur", "pyramidUpsample", "pyramidUpsampleRows",
             filter === "glow" ? "pyramidCoverageDownsample" : "pyramidThreshold",

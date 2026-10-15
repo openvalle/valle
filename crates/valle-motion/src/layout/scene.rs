@@ -1182,6 +1182,7 @@ pub(super) fn build_tree_inner(
     let mut masks = HashMap::new();
     let mut videos = HashMap::new();
     let mut advanced_filters = HashMap::new();
+    let mut screen_velocity_blurs = std::collections::HashSet::new();
     let mut backdrop_advanced_filters = HashMap::new();
     let mut transitions = HashMap::new();
     let mut shaders = HashMap::new();
@@ -1212,8 +1213,18 @@ pub(super) fn build_tree_inner(
                 blend_spaces.insert(node.key.clone(), space);
             }
         }
-        let mut filters =
-            resolve_advanced_filters(node, &values, at, auto_velocities.get(&node.key).copied())?;
+        let auto_velocity = auto_velocities.get(&node.key).copied();
+        let mut filters = resolve_advanced_filters(node, &values, at, auto_velocity)?;
+        if auto_velocity.is_some()
+            && filters.iter().any(|filter| {
+                matches!(
+                    filter,
+                    valle_draw::program::recording::FilterOp::VelocityBlur { .. }
+                )
+            })
+        {
+            screen_velocity_blurs.insert(node.key.clone());
+        }
         if let Some(mut filter) = css_filters.remove(&node.key) {
             if let valle_draw::program::recording::FilterOp::FilmGrain { seed, .. } = &mut filter {
                 let frame = match resolved_style(node, &values, at, "motion-filter-frame")? {
@@ -1808,6 +1819,7 @@ pub(super) fn build_tree_inner(
         masks: Rc::new(masks),
         videos: Rc::new(videos),
         advanced_filters: Rc::new(advanced_filters),
+        screen_velocity_blurs: Rc::new(screen_velocity_blurs),
         backdrop_advanced_filters: Rc::new(backdrop_advanced_filters),
         transitions: Rc::new(transitions),
         shutters: Rc::new(shutters),

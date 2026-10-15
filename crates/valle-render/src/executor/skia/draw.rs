@@ -2394,6 +2394,16 @@ fn apply_filter_program_into(
     output_roi: DeviceRect,
     lens_frame: Option<[f32; 4]>,
 ) -> Result<(), DrawError> {
+    if let Filter::NoiseDisplacement { .. } = filter {
+        return apply_noise_displacement_program_into(
+            surface,
+            input,
+            filter,
+            local_to_device,
+            target_origin,
+            output_roi,
+        );
+    }
     let filter = program_filter_in_device_space(filter, local_to_device)?;
     if surface.canvas().peek_pixels().is_none() {
         let source_roi = IRect::from_xywh(0, 0, input.roi.width as i32, input.roi.height as i32);
@@ -2842,6 +2852,55 @@ fn apply_f16_filter_program_into(
     Ok(())
 }
 
+/// Noise displacement keeps its noise lattice and displacement vectors in the filtered group's
+/// local units, whatever the transform to device pixels.
+fn apply_noise_displacement_program_into(
+    surface: &mut Surface,
+    input: &ProgramImage,
+    filter: &Filter,
+    local_to_device: [f64; 9],
+    target_origin: [i32; 2],
+    output_roi: DeviceRect,
+) -> Result<(), DrawError> {
+    let [a, b, c, d, e, f] = affine_device_transform(local_to_device, "noise displacement")?;
+    let [x, y] = target_origin.map(f64::from);
+    let local_to_canvas = [a, b, c - x, d, e, f - y];
+    if local_to_canvas
+        .iter()
+        .any(|value| !value.is_finite() || value.abs() > f64::from(f32::MAX))
+    {
+        return Err(DrawError::Unsupported(
+            "noise displacement exceeds the device numeric domain".into(),
+        ));
+    }
+    let size = |value: u32, what: &str| {
+        i32::try_from(value).map_err(|_| DrawError::Internal(format!("filter ROI {what} overflow")))
+    };
+    clear_surface(surface)?;
+    super::effect::draw_noise_displacement(
+        surface.canvas(),
+        &input.image,
+        IRect::from_xywh(
+            0,
+            0,
+            size(input.roi.width, "width")?,
+            size(input.roi.height, "height")?,
+        ),
+        [
+            input.roi.x - target_origin[0],
+            input.roi.y - target_origin[1],
+        ],
+        IRect::from_xywh(
+            output_roi.x - target_origin[0],
+            output_roi.y - target_origin[1],
+            size(output_roi.width, "width")?,
+            size(output_roi.height, "height")?,
+        ),
+        filter,
+        local_to_canvas,
+    )
+}
+
 fn apply_filter_chain_program_into(
     surface: &mut Surface,
     input: &ProgramImage,
@@ -2857,6 +2916,7 @@ fn apply_filter_chain_program_into(
             input.roi.x - target_origin[0],
             input.roi.y - target_origin[1],
         ],
+        target_origin,
         filters,
     )
 }
@@ -2989,30 +3049,52 @@ fn program_filter_in_device_space(
                 size: checked_device_filter_value(((x + y) * 0.5).max(1.0))?,
             })
         }
-        Filter::ChromaticAberration { offset } => {
-            let [a, b, _, d, e, _, g, h, i] = local_to_device;
-            if local_to_device.iter().any(|value| !value.is_finite())
-                || g.abs() > 1.0e-12
-                || h.abs() > 1.0e-12
-                || (i - 1.0).abs() > 1.0e-12
-            {
-                return Err(DrawError::Unsupported(
-                    "chromatic aberration needs an affine device transform".into(),
-                ));
-            }
-            Ok(Filter::ChromaticAberration {
-                offset: [
-                    checked_device_filter_value(
-                        a * f64::from(offset[0]) + b * f64::from(offset[1]),
-                    )?,
-                    checked_device_filter_value(
-                        d * f64::from(offset[0]) + e * f64::from(offset[1]),
-                    )?,
-                ],
-            })
-        }
+        Filter::ChromaticAberration { offset } => Ok(Filter::ChromaticAberration {
+            offset: program_vector_in_device_space(
+                *offset,
+                local_to_device,
+                "chromatic aberration",
+            )?,
+        }),
+        Filter::VelocityBlur {
+            velocity,
+            shutter_angle_degrees,
+        } => Ok(Filter::VelocityBlur {
+            velocity: program_vector_in_device_space(*velocity, local_to_device, "velocity blur")?,
+            shutter_angle_degrees: *shutter_angle_degrees,
+        }),
+        // Its noise lattice stays local too; `apply_noise_displacement_program_into` draws it.
+        Filter::NoiseDisplacement { .. } => Ok(filter.clone()),
         _ => Ok(filter.clone()),
     }
+}
+
+/// The 2 x 3 part of a local-to-device transform that has no projective row.
+fn affine_device_transform(local_to_device: [f64; 9], what: &str) -> Result<[f64; 6], DrawError> {
+    let [a, b, c, d, e, f, g, h, i] = local_to_device;
+    if local_to_device.iter().any(|value| !value.is_finite())
+        || g.abs() > 1.0e-12
+        || h.abs() > 1.0e-12
+        || (i - 1.0).abs() > 1.0e-12
+    {
+        return Err(DrawError::Unsupported(format!(
+            "{what} needs an affine device transform"
+        )));
+    }
+    Ok([a, b, c, d, e, f])
+}
+
+fn program_vector_in_device_space(
+    vector: [f32; 2],
+    local_to_device: [f64; 9],
+    what: &str,
+) -> Result<[f32; 2], DrawError> {
+    let [a, b, _, d, e, _] = affine_device_transform(local_to_device, what)?;
+    let [x, y] = vector.map(f64::from);
+    Ok([
+        checked_device_filter_value(a * x + b * y)?,
+        checked_device_filter_value(d * x + e * y)?,
+    ])
 }
 
 fn program_gaussian_in_device_space(
@@ -4311,6 +4393,213 @@ mod tests {
     }
 
     #[test]
+    fn noise_displacement_samples_device_space_at_any_target_origin() {
+        let info = ImageInfo::new(
+            (96, 64),
+            ColorType::RGBAF16,
+            AlphaType::Premul,
+            Some(working_color_space().unwrap()),
+        );
+        let mut source = skia_safe::surfaces::raster(&info, None, None).unwrap();
+        source.canvas().clear(Color4f::new(0.1, 0.2, 0.3, 1.0));
+        let mut paint = SkPaint::default();
+        paint.set_color4f(Color4f::new(0.9, 0.7, 0.2, 1.0), None);
+        for x in (0..96).step_by(8) {
+            source
+                .canvas()
+                .draw_rect(SkRect::from_xywh(x as f32, 0.0, 4.0, 64.0), &paint);
+        }
+        let input = ProgramImage {
+            image: source.image_snapshot(),
+            roi: DeviceRect::new(40, 30, 96, 64),
+        };
+        let filter = Filter::NoiseDisplacement {
+            frequency: [0.05, 0.07],
+            octaves: 2,
+            seed: 3,
+            scale: 12.0,
+            turbulence: false,
+        };
+        // Both targets cover device pixels 52..124 x 42..82; only the planner's origin differs.
+        let read_info = info.with_dimensions((72, 40));
+        let render = |origin: [i32; 2], size: (i32, i32)| {
+            let mut target =
+                skia_safe::surfaces::raster(&info.with_dimensions(size), None, None).unwrap();
+            apply_filter_chain_program_into(&mut target, &input, &[filter.clone()], origin)
+                .unwrap();
+            let mut pixels = vec![0_u8; 72 * 40 * 8];
+            let at = (52 - origin[0], 42 - origin[1]);
+            assert!(target.read_pixels(&read_info, &mut pixels, 72 * 8, at));
+            pixels
+        };
+        let exact = render([52, 42], (72, 40));
+        assert!(exact.iter().any(|byte| *byte != 0));
+        assert_eq!(render([28, 18], (120, 88)), exact);
+    }
+
+    #[test]
+    fn program_noise_displacement_keeps_its_noise_and_vectors_in_local_units() {
+        let (width, height) = (96, 64);
+        let working = working_color_space().unwrap();
+        // A smooth ramp: a sample one pixel from the expected one stays within the tolerance,
+        // while noise or vectors in other units land several pixels away. It fills the top left
+        // of a larger pooled slot whose spare pixels are opaque magenta.
+        let ramp = |x: i32, y: i32| {
+            [
+                (x as f32 + 0.5) / width as f32,
+                (y as f32 + 0.5) / height as f32,
+                0.25,
+                1.0,
+            ]
+        };
+        let slot = (width + 24, height + 16);
+        let bytes = (0..slot.1)
+            .flat_map(|y| {
+                (0..slot.0).flat_map(move |x| {
+                    if x < width && y < height {
+                        ramp(x, y)
+                    } else {
+                        [1.0, 0.0, 1.0, 1.0]
+                    }
+                })
+            })
+            .flat_map(f32::to_ne_bytes)
+            .collect::<Vec<_>>();
+        let input = ProgramImage {
+            image: images::raster_from_data(
+                &ImageInfo::new(
+                    slot,
+                    ColorType::RGBAF32,
+                    AlphaType::Premul,
+                    Some(working.clone()),
+                ),
+                Data::new_copy(&bytes),
+                slot.0 as usize * 16,
+            )
+            .unwrap(),
+            roi: DeviceRect::new(40, 30, 96, 64),
+        };
+        let (frequency, octaves, seed, scale) = ([0.05_f32, 0.07], 2_u8, 3_u32, 24.0_f32);
+        let filter = Filter::NoiseDisplacement {
+            frequency,
+            octaves,
+            seed,
+            scale,
+            turbulence: false,
+        };
+        let floats = |surface: &mut Surface,
+                      size: (i32, i32),
+                      alpha: AlphaType,
+                      space: Option<skia_safe::ColorSpace>| {
+            let info = ImageInfo::new(size, ColorType::RGBAF32, alpha, space);
+            let mut bytes = vec![0_u8; size.0 as usize * size.1 as usize * 16];
+            assert!(surface.read_pixels(&info, &mut bytes, size.0 as usize * 16, (0, 0)));
+            let (values, _) = bytes.as_chunks::<4>();
+            values
+                .iter()
+                .map(|value| f32::from_ne_bytes(*value))
+                .collect::<Vec<_>>()
+        };
+        // Device pixels 0..160 x 0..120 hold both targets below.
+        let device = (160, 120);
+        for local_to_device in [
+            [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
+            [2.0, 0.0, 61.0, 0.0, 2.0, 37.0, 0.0, 0.0, 1.0],
+            [2.0, 0.0, 61.0, 0.0, 0.75, 37.0, 0.0, 0.0, 1.0],
+            [-1.5, 0.0, 130.0, 0.0, 1.5, 37.0, 0.0, 0.0, 1.0],
+            [1.3, -0.75, 61.0, 0.75, 1.3, 37.0, 0.0, 0.0, 1.0],
+        ] {
+            let [a, b, c, d, e, f, ..] = local_to_device;
+            // The noise drawn in the group's local space, read at device pixel centres.
+            let mut noise = skia_safe::surfaces::raster(
+                &ImageInfo::new(device, ColorType::RGBAF32, AlphaType::Premul, None),
+                None,
+                None,
+            )
+            .unwrap();
+            noise.canvas().concat(&Matrix::new_all(
+                a as f32, b as f32, c as f32, d as f32, e as f32, f as f32, 0.0, 0.0, 1.0,
+            ));
+            let mut paint = SkPaint::default();
+            paint.set_shader(
+                skia_safe::shaders::fractal_noise(
+                    (frequency[0], frequency[1]),
+                    usize::from(octaves),
+                    seed as f32,
+                    None,
+                )
+                .unwrap(),
+            );
+            noise.canvas().draw_paint(&paint);
+            let noise = floats(&mut noise, device, AlphaType::Unpremul, None);
+            let (mut compared, mut outside) = (0, 0);
+            // The planner may start a target anywhere; the same device pixels come out.
+            for (origin, size) in [([28, 18], (120, 88)), ([52, 42], (72, 40))] {
+                let info = ImageInfo::new(
+                    size,
+                    ColorType::RGBAF16,
+                    AlphaType::Premul,
+                    Some(working.clone()),
+                );
+                let mut target = skia_safe::surfaces::raster(&info, None, None).unwrap();
+                apply_noise_displacement_program_into(
+                    &mut target,
+                    &input,
+                    &filter,
+                    local_to_device,
+                    origin,
+                    DeviceRect::new(origin[0], origin[1], size.0 as u32, size.1 as u32),
+                )
+                .unwrap();
+                let actual = floats(&mut target, size, AlphaType::Premul, Some(working.clone()));
+                for y in 0..size.1 {
+                    for x in 0..size.0 {
+                        let [px, py] = [x + origin[0], y + origin[1]];
+                        let at = (py * device.0 + px) as usize * 4;
+                        // `scale * (channel - 0.5)` local units, mapped into device pixels.
+                        let [dx, dy] = [noise[at], noise[at + 1]].map(|value| {
+                            (f64::from(value.clamp(0.0, 1.0)) - 0.5) * f64::from(scale)
+                        });
+                        let sample = [
+                            (f64::from(px) + 0.5 + a * dx + b * dy).floor() as i32 - 40,
+                            (f64::from(py) + 0.5 + d * dx + e * dy).floor() as i32 - 30,
+                        ];
+                        let pixel = &actual[(y * size.0 + x) as usize * 4..][..4];
+                        if (2..width - 2).contains(&sample[0])
+                            && (2..height - 2).contains(&sample[1])
+                        {
+                            let expected = ramp(sample[0], sample[1]);
+                            assert!(
+                                pixel
+                                    .iter()
+                                    .zip(expected)
+                                    .all(|(value, expected)| (value - expected).abs() <= 0.02),
+                                "{local_to_device:?} from {origin:?} at {px},{py}: {pixel:?} \
+                                 against {expected:?}"
+                            );
+                            compared += 1;
+                        } else if !(-2..width + 2).contains(&sample[0])
+                            || !(-2..height + 2).contains(&sample[1])
+                        {
+                            // Beyond the input, including the slot's spare pixels.
+                            assert!(
+                                pixel.iter().all(|value| value.abs() <= 1.0e-3),
+                                "{local_to_device:?} from {origin:?} at {px},{py}: {pixel:?} \
+                                 outside the input"
+                            );
+                            outside += 1;
+                        }
+                    }
+                }
+            }
+            assert!(
+                compared > 1000 && outside > 100,
+                "{local_to_device:?}: {compared} compared, {outside} outside"
+            );
+        }
+    }
+
+    #[test]
     fn instance_round_rect_affine_and_stroke_change_raster() {
         use valle_draw::program::{Affine2d, DrawProgramBuilder, InstanceColumns, LinearColor};
 
@@ -5045,6 +5334,20 @@ mod tests {
                 color,
             }
         );
+        assert_eq!(
+            program_filter_in_device_space(
+                &Filter::VelocityBlur {
+                    velocity: [2.0, 1.0],
+                    shutter_angle_degrees: 180.0,
+                },
+                [0.0, -2.0, 8.0, 2.0, 0.0, 9.0, 0.0, 0.0, 1.0],
+            )
+            .unwrap(),
+            Filter::VelocityBlur {
+                velocity: [-2.0, 4.0],
+                shutter_angle_degrees: 180.0,
+            }
+        );
 
         assert_eq!(
             program_filter_in_device_space(
@@ -5086,14 +5389,30 @@ mod tests {
             sigma_x: 5.0,
             sigma_y: 5.0,
         };
-        for matrix in [
+        let matrices = [
             [1.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
             [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.01, 0.0, 1.0],
             [1.0, 0.0, 1.0e12, 0.0, 1.0, 1.0e12, 1.0e-6, 0.0, 1.0],
             [f64::MAX, 0.0, 0.0, 0.0, f64::MAX, 0.0, 0.0, 0.0, 1.0],
-        ] {
+        ];
+        for matrix in matrices {
             assert!(matches!(
                 program_filter_in_device_space(&blur, matrix),
+                Err(DrawError::Unsupported(_))
+            ));
+        }
+        // A shear keeps a one-dimensional velocity blur exact; the other transforms still fail.
+        let velocity = |velocity| Filter::VelocityBlur {
+            velocity,
+            shutter_angle_degrees: 180.0,
+        };
+        assert_eq!(
+            program_filter_in_device_space(&velocity([2.0, 1.0]), matrices[0]).unwrap(),
+            velocity([3.0, 1.0])
+        );
+        for matrix in &matrices[1..] {
+            assert!(matches!(
+                program_filter_in_device_space(&velocity([2.0, 1.0]), *matrix),
                 Err(DrawError::Unsupported(_))
             ));
         }

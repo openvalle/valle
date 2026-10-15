@@ -873,17 +873,22 @@ fn draw_filter(
         input,
         IRect::from_size(input.dimensions()),
         [0, 0],
+        [0, 0],
         std::slice::from_ref(filter),
     )
 }
 
 /// Shared filter dispatch for effects, DrawProgram filters and backdrop chains.
-/// Coordinates are device pixels; the source subset excludes unused pooled-surface pixels.
+/// `origin` places the source subset on the canvas, which excludes unused pooled-surface pixels.
+/// `device` is the device position of canvas pixel (0, 0): effects and backdrop chains evaluate
+/// generated inputs such as displacement noise in device pixels, wherever a pass target happens
+/// to start. DrawProgram noise displacement keeps local units through `draw_noise_displacement`.
 pub(super) fn draw_filters(
     canvas: &skia_safe::Canvas,
     input: &Image,
     source: IRect,
     origin: [i32; 2],
+    device: [i32; 2],
     filters: &[Filter],
 ) -> Result<(), DrawError> {
     if source.is_empty() {
@@ -932,27 +937,30 @@ pub(super) fn draw_filters(
             let mut surface = skia_safe::surfaces::raster(&info, None, None)
                 .ok_or_else(|| DrawError::Surface("filter chain allocation failed".into()))?;
             surface.canvas().clear(Color4f::new(0.0, 0.0, 0.0, 0.0));
+            // The intermediate's pixel (0, 0) lands at the advanced position on this canvas.
+            position[0] += bounds.left;
+            position[1] += bounds.top;
             draw_filters(
                 surface.canvas(),
                 &image,
                 subset,
                 [-bounds.left, -bounds.top],
+                [device[0] + position[0], device[1] + position[1]],
                 std::slice::from_ref(filter),
             )?;
             image = surface.image_snapshot();
             subset = IRect::from_size(image.dimensions());
-            position[0] += bounds.left;
-            position[1] += bounds.top;
         }
         return draw_filters(
             canvas,
             &image,
             subset,
             position,
+            device,
             &filters[filters.len() - 1..],
         );
     }
-    draw_skia_filters(canvas, input, source, origin, filters)
+    draw_skia_filters(canvas, input, source, origin, device, filters)
 }
 
 fn draw_skia_filters(
@@ -960,11 +968,12 @@ fn draw_skia_filters(
     input: &Image,
     source: IRect,
     origin: [i32; 2],
+    device: [i32; 2],
     filters: &[Filter],
 ) -> Result<(), DrawError> {
     let mut chain = None;
     for filter in filters {
-        let Some(filter) = image_filter(filter)? else {
+        let Some(filter) = image_filter_at(filter, device)? else {
             continue;
         };
         chain = Some(match chain {
@@ -992,6 +1001,11 @@ fn draw_skia_filters(
 }
 
 pub(crate) fn image_filter(filter: &Filter) -> Result<Option<ImageFilter>, DrawError> {
+    image_filter_at(filter, [0, 0])
+}
+
+/// `device` is the device position of the filtered canvas's pixel (0, 0).
+fn image_filter_at(filter: &Filter, device: [i32; 2]) -> Result<Option<ImageFilter>, DrawError> {
     let result = match filter {
         Filter::Blur { sigma_x, sigma_y } => {
             if *sigma_x == 0.0 && *sigma_y == 0.0 {
@@ -1103,22 +1117,8 @@ pub(crate) fn image_filter(filter: &Filter) -> Result<Option<ImageFilter>, DrawE
             scale,
             turbulence,
         } => {
-            let noise = if *turbulence {
-                shaders::turbulence(
-                    (frequency[0], frequency[1]),
-                    usize::from(*octaves),
-                    *seed as f32,
-                    None,
-                )
-            } else {
-                shaders::fractal_noise(
-                    (frequency[0], frequency[1]),
-                    usize::from(*octaves),
-                    *seed as f32,
-                    None,
-                )
-            }
-            .ok_or_else(|| DrawError::Unsupported("noise displacement shader".into()))?;
+            let noise = perlin_noise(*frequency, *octaves, *seed, *turbulence)?
+                .with_local_matrix(&Matrix::translate((-device[0] as f32, -device[1] as f32)));
             let displacement = image_filters::shader(noise, None)
                 .ok_or_else(|| DrawError::Unsupported("noise displacement input".into()))?;
             image_filters::displacement_map(
@@ -1173,6 +1173,134 @@ pub(crate) fn image_filter(filter: &Filter) -> Result<Option<ImageFilter>, DrawE
     result
         .map(Some)
         .ok_or_else(|| DrawError::Unsupported(format!("Skia filter {filter:?}")))
+}
+
+fn perlin_noise(
+    frequency: [f32; 2],
+    octaves: u8,
+    seed: u32,
+    turbulence: bool,
+) -> Result<Shader, DrawError> {
+    if turbulence {
+        shaders::turbulence(
+            (frequency[0], frequency[1]),
+            usize::from(octaves),
+            seed as f32,
+            None,
+        )
+    } else {
+        shaders::fractal_noise(
+            (frequency[0], frequency[1]),
+            usize::from(octaves),
+            seed as f32,
+            None,
+        )
+    }
+    .ok_or_else(|| DrawError::Unsupported("noise displacement shader".into()))
+}
+
+/// Displace the `source` subset of `input`, placed at canvas `origin`, by Perlin noise in a
+/// DrawProgram group's local units and write `bounds`. `local_to_canvas` places the noise lattice
+/// and carries the displacement vectors into canvas pixels. The shared kernel reads the noise
+/// channels as they are: Skia's displacement map reads its untagged noise image as sRGB and
+/// converts it into the linear working space, which CanvasKit's sRGB-tagged surfaces never do. A
+/// degenerate transform leaves the input undisplaced.
+pub(super) fn draw_noise_displacement(
+    canvas: &skia_safe::Canvas,
+    input: &Image,
+    source: IRect,
+    origin: [i32; 2],
+    bounds: IRect,
+    filter: &Filter,
+    local_to_canvas: [f64; 6],
+) -> Result<(), DrawError> {
+    let Filter::NoiseDisplacement {
+        frequency,
+        octaves,
+        seed,
+        scale,
+        turbulence,
+    } = filter
+    else {
+        return Err(DrawError::Internal(
+            "noise displacement needs a noise displacement filter".into(),
+        ));
+    };
+    let [a, b, c, d, e, f] = local_to_canvas;
+    let determinant = a * e - b * d;
+    let [ia, ib, id, ie] = [e, -b, -d, a].map(|value| value / determinant);
+    let [left, top] = [origin[0], origin[1]].map(f64::from);
+    let uniforms = [
+        ia,
+        ib,
+        id,
+        ie,
+        -(ia * c + ib * f),
+        -(id * c + ie * f),
+        a,
+        b,
+        d,
+        e,
+        f64::from(*scale),
+        left,
+        top,
+        left + f64::from(source.width()),
+        top + f64::from(source.height()),
+    ];
+    let mut paint = Paint::default();
+    paint.set_blend_mode(BlendMode::Src);
+    if determinant == 0.0
+        || uniforms
+            .iter()
+            .any(|value| !value.is_finite() || value.abs() > f64::from(f32::MAX))
+    {
+        let destination = IRect::from_xywh(origin[0], origin[1], source.width(), source.height());
+        canvas.draw_image_rect(
+            input,
+            Some((&source.into(), skia_safe::canvas::SrcRectConstraint::Strict)),
+            SkRect::from(destination),
+            &paint,
+        );
+        return Ok(());
+    }
+    thread_local! {
+        static KERNEL: std::cell::RefCell<Option<RuntimeEffect>> = const { std::cell::RefCell::new(None) };
+    }
+    let effect = KERNEL.with(|cell| -> Result<_, DrawError> {
+        let mut effect = cell.borrow_mut();
+        if effect.is_none() {
+            *effect = Some(compile(
+                include_str!("../../../../valle-draw/assets/shaders/noisedisplacement.sksl"),
+                "noise-displacement",
+            )?);
+        }
+        Ok(effect.as_ref().unwrap().clone())
+    })?;
+    let image = input
+        .to_shader(
+            (TileMode::Decal, TileMode::Decal),
+            SamplingOptions::default(),
+            &Matrix::translate((
+                (origin[0] - source.left) as f32,
+                (origin[1] - source.top) as f32,
+            )),
+        )
+        .ok_or_else(|| DrawError::Unsupported("noise displacement input".into()))?;
+    let noise = perlin_noise(*frequency, *octaves, *seed, *turbulence)?;
+    let bytes = uniforms
+        .iter()
+        .flat_map(|value| (*value as f32).to_ne_bytes())
+        .collect::<Vec<_>>();
+    let shader = effect
+        .make_shader(
+            Data::new_copy(&bytes),
+            &[ChildPtr::Shader(image), ChildPtr::Shader(noise)],
+            None,
+        )
+        .ok_or_else(|| DrawError::Unsupported("noise displacement kernel".into()))?;
+    paint.set_shader(shader);
+    canvas.draw_irect(bounds, &paint);
+    Ok(())
 }
 
 /// Keep working-linear premultiplied color in float uniforms. Ganesh can otherwise
@@ -1426,8 +1554,9 @@ mod tests {
                             false,
                         );
                     }
-                    draw_filters(actual.canvas(), &input, source, origin, filters).unwrap();
-                    draw_skia_filters(expected.canvas(), &input, source, origin, filters).unwrap();
+                    draw_filters(actual.canvas(), &input, source, origin, [0, 0], filters).unwrap();
+                    draw_skia_filters(expected.canvas(), &input, source, origin, [0, 0], filters)
+                        .unwrap();
                     let mut a = vec![0.0_f32; 40 * 36 * 4];
                     let mut b = a.clone();
                     assert!(actual.image_snapshot().read_pixels(

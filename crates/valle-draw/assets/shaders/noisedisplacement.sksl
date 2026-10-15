@@ -1,0 +1,27 @@
+// Displaces `image` by Perlin `noise` evaluated in the filtered group's local space: by
+// `scale * (red - 0.5, green - 0.5)` local units, mapped into canvas pixels. The noise channels
+// are read as they are, so every backend displaces alike.
+uniform shader image;
+uniform shader noise;
+// Rows of the canvas-to-local linear map and the local point at canvas (0, 0), then rows of the
+// local-to-canvas linear map.
+uniform float4 toLocal;
+uniform float2 localOrigin;
+uniform float4 toCanvas;
+uniform float scale;
+// The image's valid pixels in canvas coordinates: left, top, right, bottom.
+uniform float4 bounds;
+
+half4 main(float2 p) {
+    float2 local = float2(dot(toLocal.xy, p), dot(toLocal.zw, p)) + localOrigin;
+    half4 value = saturate(unpremul(noise.eval(local)));
+    float2 vector = scale * (float2(value.rg) - 0.5);
+    float2 offset = float2(dot(toCanvas.xy, vector), dot(toCanvas.zw, vector));
+    // Skia's displacement map samples the nearest pixel; sampling its centre keeps that choice
+    // the same on every backend.
+    float2 sample = floor(p + offset) + 0.5;
+    if (sample.x < bounds.x || sample.y < bounds.y || sample.x > bounds.z || sample.y > bounds.w) {
+        return half4(0);
+    }
+    return image.eval(sample);
+}

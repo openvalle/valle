@@ -1162,7 +1162,12 @@ impl Emitter<'_> {
             && let Some(filters) = self.tree.advanced_filters.get(key)
             && !filters.is_empty()
         {
-            let filters = self.out.recording.intern_filters(filters);
+            let filters = if self.tree.screen_velocity_blurs.contains(key) {
+                let local = local_velocity_blurs(filters, np.transform);
+                self.out.recording.intern_filters(&local)
+            } else {
+                self.out.recording.intern_filters(filters)
+            };
             self.push(RecordCmd::BeginFilter {
                 filters,
                 bounds: None,
@@ -3807,6 +3812,33 @@ fn push_rrect<S: valle_draw::PathSink>(
     } else {
         p.elliptical_rrect(rect, radii)
     }
+}
+
+/// Auto motion blur measures velocity in screen pixels per frame, while the filter applies it in
+/// the node's local units: carry it back through the node's linear transform, which `begin_node`
+/// has already found invertible.
+fn local_velocity_blurs(
+    filters: &[valle_draw::program::recording::FilterOp],
+    transform: TAffine,
+) -> Vec<valle_draw::program::recording::FilterOp> {
+    use valle_draw::program::recording::FilterOp;
+    let [a, b, c, d] = [transform.a, transform.b, transform.c, transform.d].map(f64::from);
+    let determinant = a * d - b * c;
+    filters
+        .iter()
+        .map(|filter| match *filter {
+            FilterOp::VelocityBlur {
+                velocity_x,
+                velocity_y,
+                shutter_angle,
+            } => FilterOp::VelocityBlur {
+                velocity_x: (d * velocity_x - c * velocity_y) / determinant,
+                velocity_y: (a * velocity_y - b * velocity_x) / determinant,
+                shutter_angle,
+            },
+            other => other,
+        })
+        .collect()
 }
 
 /// Convert Takumi affine components to the recording's matching six-element f64 representation.

@@ -3,6 +3,7 @@ import type { CanvasKit, RuntimeEffect, Shader } from "canvaskit-wasm";
 import radialBlurSource from "../../../../../../crates/valle-draw/assets/shaders/radialblur.sksl" with { type: "text" };
 import filmGrainSource from "../../../../../../crates/valle-draw/assets/shaders/filmgrain.sksl" with { type: "text" };
 import lensDistortionSource from "../../../../../../crates/valle-draw/assets/shaders/lensdistortion.sksl" with { type: "text" };
+import noiseDisplacementSource from "../../../../../../crates/valle-draw/assets/shaders/noisedisplacement.sksl" with { type: "text" };
 import scene3dDofSource from "../../../../../../crates/valle-draw/assets/shaders/scene3ddof.sksl" with { type: "text" };
 import chromaticAberrationSource from "../../../../../../crates/valle-draw/assets/shaders/chromaticaberration.sksl" with { type: "text" };
 import chromaKeySource from "../../../../../../crates/valle-draw/assets/shaders/chromakey.sksl" with { type: "text" };
@@ -59,6 +60,7 @@ const BUILTIN_SOURCES = Object.freeze({
   chromaKey: chromaKeySource,
   filmGrain: filmGrainSource,
   lensDistortion: lensDistortionSource,
+  noiseDisplacement: noiseDisplacementSource,
   scene3dDof,
   radialBlur: radialBlurSource,
   chromaticAberration: chromaticAberrationSource,

@@ -1,6 +1,17 @@
 import { describe, expect, test } from "bun:test";
+import type { Canvas, CanvasKit } from "canvaskit-wasm";
 
-import { programFilterInDeviceSpace } from "./executor.ts";
+import { CanvasKitBuiltinRuntime } from "./builtin-runtime.ts";
+import { drawNoiseDisplacement, programFilterInDeviceSpace } from "./executor.ts";
+
+type CanvasKitInitializer = (options: {
+  locateFile(file: string): string;
+}) => Promise<CanvasKit>;
+
+const { default: CanvasKitInit } = await import("canvaskit-wasm") as unknown as {
+  default: CanvasKitInitializer;
+};
+const wasmPath = Bun.resolveSync("canvaskit-wasm/bin/canvaskit.wasm", import.meta.dir);
 
 describe("scheduled DrawProgram filter space", () => {
   test("maps caption similarity transforms into device pixels", () => {
@@ -34,6 +45,21 @@ describe("scheduled DrawProgram filter space", () => {
     )).toEqual({ kind: "blur", sigmaX: 10, sigmaY: 15 });
   });
 
+  test("maps velocity blur vectors through any affine transform", () => {
+    const velocity = (vector: number[]) => ({ kind: "velocityBlur", velocity: vector, shutterAngleDegrees: 180 });
+    expect(programFilterInDeviceSpace(velocity([2, 1]), [0, -2, 8, 2, 0, 9, 0, 0, 1]))
+      .toEqual(velocity([-2, 4]));
+    // A shear keeps a one-dimensional blur exact.
+    expect(programFilterInDeviceSpace(velocity([2, 1]), [1, 1, 0, 0, 1, 0, 0, 0, 1]))
+      .toEqual(velocity([3, 1]));
+    for (const matrix of [
+      [1, 0, 0, 0, 1, 0, 0.01, 0, 1],
+      [Number.MAX_VALUE, 0, 0, 0, Number.MAX_VALUE, 0, 0, 0, 1],
+    ]) {
+      expect(() => programFilterInDeviceSpace(velocity([2, 1]), matrix)).toThrow();
+    }
+  });
+
   test("rejects transform classes the scheduled axis-aligned kernel cannot represent", () => {
     const blur = { kind: "blur", sigmaX: 5, sigmaY: 5 };
     for (const matrix of [
@@ -45,4 +71,95 @@ describe("scheduled DrawProgram filter space", () => {
       expect(() => programFilterInDeviceSpace(blur, matrix)).toThrow();
     }
   });
+});
+
+test("scheduled noise displacement keeps its noise and vectors in local units", async () => {
+  const ck = await CanvasKitInit({ locateFile: () => wasmPath });
+  const builtins = new CanvasKitBuiltinRuntime(ck);
+  const [width, height] = [96, 64];
+  const roi = { x: 40, y: 30, width, height };
+  // A smooth ramp: a sample one pixel from the expected one stays within the tolerance, while
+  // noise or vectors in other units land several pixels away. It fills the top left of a larger
+  // pooled slot whose spare pixels are opaque magenta.
+  const ramp = (x: number, y: number) => [(x + 0.5) / width, (y + 0.5) / height, 0.25, 1];
+  const slot = [width + 24, height + 16] as const;
+  const pixels = new Float32Array(slot[0] * slot[1] * 4);
+  for (let y = 0; y < slot[1]; y++) {
+    for (let x = 0; x < slot[0]; x++) {
+      pixels.set(x < width && y < height ? ramp(x, y) : [1, 0, 1, 1], (y * slot[0] + x) * 4);
+    }
+  }
+  const info = (w: number, h: number, alphaType = ck.AlphaType.Premul) =>
+    ({ width: w, height: h, colorType: ck.ColorType.RGBA_F32, alphaType, colorSpace: ck.ColorSpace.SRGB });
+  const input = ck.MakeImage(info(...slot), new Uint8Array(pixels.buffer), slot[0] * 16)!;
+  const [frequency, octaves, seed, scale] = [[0.05, 0.07] as const, 2, 3, 24];
+  const filter = { kind: "noiseDisplacement", frequency, octaves, seed, scale, turbulence: false };
+  // A scheduled pass draws in device pixels on a canvas translated to its target origin.
+  const render = (origin: readonly [number, number], size: readonly [number, number],
+    draw: (canvas: Canvas) => void, alphaType = ck.AlphaType.Premul) => {
+    const memory = ck.Malloc(Uint8Array, size[0] * size[1] * 16);
+    const surface = ck.MakeRasterDirectSurface(info(...size), memory, size[0] * 16)!;
+    try {
+      const canvas = surface.getCanvas();
+      canvas.clear(ck.TRANSPARENT);
+      canvas.translate(-origin[0], -origin[1]);
+      draw(canvas);
+      return canvas.readPixels(0, 0, info(...size, alphaType)) as Float32Array;
+    } finally { surface.delete(); ck.Free(memory); }
+  };
+  // Device pixels 0..160 x 0..120 hold both targets below.
+  const device = [160, 120] as const;
+  try {
+    for (const matrix of [
+      [1, 0, 0, 0, 1, 0, 0, 0, 1],
+      [2, 0, 61, 0, 2, 37, 0, 0, 1],
+      [2, 0, 61, 0, 0.75, 37, 0, 0, 1],
+      [-1.5, 0, 130, 0, 1.5, 37, 0, 0, 1],
+      [1.3, -0.75, 61, 0.75, 1.3, 37, 0, 0, 1],
+    ]) {
+      // The noise drawn in the group's local space, read at device pixel centres.
+      const noise = render([0, 0], device, canvas => {
+        canvas.concat(matrix);
+        const shader = ck.Shader.MakeFractalNoise(frequency[0], frequency[1], octaves, seed, 0, 0);
+        const paint = new ck.Paint();
+        try { paint.setShader(shader); canvas.drawPaint(paint); } finally { paint.delete(); shader.delete(); }
+      }, ck.AlphaType.Unpremul);
+      const [a, b, , d, e] = matrix as [number, number, number, number, number];
+      let [compared, outside] = [0, 0];
+      // The planner may start a target anywhere; the same device pixels come out.
+      for (const [origin, size] of [[[28, 18], [120, 88]], [[52, 42], [72, 40]]] as const) {
+        const actual = render(origin, size, canvas =>
+          drawNoiseDisplacement(ck, builtins, canvas, { image: input, owned: false, roi }, filter, matrix));
+        for (let y = 0; y < size[1]; y++) {
+          for (let x = 0; x < size[0]; x++) {
+            const [px, py] = [x + origin[0], y + origin[1]];
+            const at = (py * device[0] + px) * 4;
+            // `scale * (channel - 0.5)` local units, mapped into device pixels.
+            const [dx, dy] = [noise[at]!, noise[at + 1]!]
+              .map(value => (Math.min(1, Math.max(0, value)) - 0.5) * scale) as [number, number];
+            const sample = [
+              Math.floor(px + 0.5 + a * dx + b * dy) - roi.x,
+              Math.floor(py + 0.5 + d * dx + e * dy) - roi.y,
+            ] as const;
+            const pixel = Array.from(actual.subarray((y * size[0] + x) * 4, (y * size[0] + x) * 4 + 4));
+            if (sample[0] >= 2 && sample[0] < width - 2 && sample[1] >= 2 && sample[1] < height - 2) {
+              const expected = ramp(...sample);
+              if (!expected.every((value, channel) => Math.abs(pixel[channel]! - value) <= 0.02)) {
+                throw new Error(`${matrix} from ${origin} at ${px},${py}: ${pixel} against ${expected}`);
+              }
+              compared++;
+            } else if (sample[0] < -2 || sample[0] >= width + 2 || sample[1] < -2 || sample[1] >= height + 2) {
+              // Beyond the input, including the slot's spare pixels.
+              if (!pixel.every(value => Math.abs(value) <= 1e-3)) {
+                throw new Error(`${matrix} from ${origin} at ${px},${py}: ${pixel} outside the input`);
+              }
+              outside++;
+            }
+          }
+        }
+      }
+      expect(compared).toBeGreaterThan(1000);
+      expect(outside).toBeGreaterThan(100);
+    }
+  } finally { input.delete(); builtins.dispose(); }
 });

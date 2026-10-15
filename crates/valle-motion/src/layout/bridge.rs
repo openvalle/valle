@@ -313,6 +313,9 @@ pub struct LayoutTree {
     /// Scene key to node-local advanced filters resolved for this frame.
     pub(crate) advanced_filters:
         Rc<std::collections::HashMap<String, Vec<valle_draw::program::recording::FilterOp>>>,
+    /// Scene keys whose advanced velocity blur comes from auto motion blur, measured in screen
+    /// pixels per frame. Emission carries it into the node's local units.
+    pub(crate) screen_velocity_blurs: Rc<std::collections::HashSet<String>>,
     /// Scene key → advanced filters applied only to the pixels behind the node.
     pub(crate) backdrop_advanced_filters:
         Rc<std::collections::HashMap<String, Vec<valle_draw::program::recording::FilterOp>>>,

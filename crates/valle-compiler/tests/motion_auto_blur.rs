@@ -164,8 +164,10 @@ export default function Affine(ctx) {
         "affine translation should avoid neighbor layouts"
     );
     let measured = velocity(&affine_program).expect("combined parent and child translation");
-    assert!((measured[0] - 1.0).abs() < 0.05, "{measured:?}");
-    assert!(measured[1].abs() < 0.05, "{measured:?}");
+    // One screen pixel per frame along x, carried into the bar's local units under the parent's
+    // 90 degree rotation.
+    assert!(measured[0].abs() < 0.05, "{measured:?}");
+    assert!((measured[1] + 1.0).abs() < 0.05, "{measured:?}");
 
     // Enabling geometry reuse for blur must preserve the complete program on random seeks.
     let artifact = compile_motion(source).unwrap().artifact;

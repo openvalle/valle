@@ -1826,20 +1826,28 @@ uses `ctx.progress` as authored in the refactor acceptance scene.
 a node and its descendants. `style.backdropDisplacement` uses the same constructor
 to distort the backdrop. Seed is a static integer in `[0, 2^32−1]`; options are
 `octaves` (1–4) and `mode` (`fractal` or `turbulence`). Frequency is a point,
-scale a number; both may use admitted animation expressions.
+scale a number; both may use admitted animation expressions. Like other filter
+lengths they are in the node's own units: the noise field is anchored to the node
+and moves, scales and rotates with it, so the result does not depend on the output
+size or on where the node is on screen. `backdropDisplacement` distorts the pixels
+behind the node in output pixels.
 
 `style.motionBlur: "auto"` derives directional blur from the element's final
 screen position. It samples the scene half a frame before and after the requested
 output time, so layout changes, ancestor transforms, and camera movement also
-contribute. The built-in shutter angle is 180°. At a temporal cut or when the
-element is stationary, no blur filter is emitted. The result is determined by
-the requested time, including for out-of-order frame requests.
+contribute. The measured screen velocity is carried into the element's own units,
+so the blur keeps its length relative to the frame at any output size. The
+built-in shutter angle is 180°. At a temporal cut or when the element is
+stationary, no blur filter is emitted. The result is determined by the requested
+time, including for out-of-order frame requests.
 
 `style.motionBlur: motionBlur(velocityPoint, shutterAngle?)` supplies explicit
-velocity in pixels/frame. Its shutter angle defaults to 180°. Both forms use a
-spatial directional blur based on the element's anchor velocity. Rotation and
-scaling can give different velocities to different pixels, so they require
-shutter sampling for a faithful result.
+velocity in the element's own units per frame: composition pixels per frame when
+neither the element nor its ancestors rotate or scale, and otherwise turned and
+stretched by that transform like other filter lengths. Its shutter angle defaults
+to 180°. Both forms use a spatial directional blur based on the element's anchor
+velocity. Rotation and scaling can give different velocities to different pixels,
+so they require shutter sampling for a faithful result.
 
 Use `springVelocity` for an exact spring derivative. For an arbitrary pure position
 helper `position(t)`, a centered one-frame displacement is
