@@ -1,0 +1,30 @@
+
+uniform shader base;
+uniform shader rows;
+uniform float2 rowHeights;
+uniform float spread;
+uniform float intensity;
+// pyramidcomposite.sksl over the halo's final upsample, completed here from its horizontal
+// factor (pyramidupsamplerows.sksl): rowHeights are the coarse and the output heights.
+float3 row(float x, float y) {
+    if (y < 0.0 || y >= rowHeights.x) return float3(0.0);
+    return float3(rows.eval(float2(x, y) + 0.5).rgb);
+}
+float3 linear(float x, float y) {
+    float top = floor(y);
+    float fraction = y - top;
+    return row(x, top) * (1.0 - fraction) + row(x, top + 1.0) * fraction;
+}
+half4 main(float2 xy) {
+    float2 pixel = floor(xy);
+    float center = (pixel.y + 0.5) * rowHeights.x / rowHeights.y - 0.5;
+    float tap = 0.5 * spread;
+    float3 bloom = linear(pixel.x, center - tap);
+    bloom += linear(pixel.x, center) * 2.0;
+    bloom += linear(pixel.x, center + tap);
+    bloom /= 4.0;
+    float4 source = float4(base.eval(xy));
+    float3 color = clamp(source.rgb + intensity * bloom, -65504.0, 65504.0);
+    float alpha = max(source.a, min(max(max(bloom.r, bloom.g), bloom.b), 1.0));
+    return half4(color, alpha);
+}

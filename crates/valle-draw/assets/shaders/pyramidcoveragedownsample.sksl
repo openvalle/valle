@@ -1,0 +1,38 @@
+uniform shader source;
+uniform float2 sourceSize;
+// The glow's first level is the source alpha (pyramidcoverage.sksl). Reading that alpha here with
+// the taps of pyramiddownsample.sksl folds the full-size coverage pass into the first downsample.
+float3 at(float2 xy) {
+    if (any(lessThan(xy, float2(0.0))) || any(greaterThanEqual(xy, sourceSize))) return float3(0.0);
+    return float3(float(source.eval(xy + 0.5).a));
+}
+// The 13-tap pattern sampled bilinearly about the output centre, folded into source texels.
+// Offsets are relative to (2x, 2y) and symmetric about (0.5, 0.5); weights sum to 80.
+half4 main(float2 xy) {
+    float2 base = floor(xy) * 2.0;
+    float3 sum = at(base) * 9.0;
+    sum += at(base + float2( 1.0,  0.0)) * 9.0;
+    sum += at(base + float2( 0.0,  1.0)) * 9.0;
+    sum += at(base + float2( 1.0,  1.0)) * 9.0;
+    sum += at(base + float2(-1.0,  0.0)) * 4.0;
+    sum += at(base + float2(-1.0,  1.0)) * 4.0;
+    sum += at(base + float2( 2.0,  0.0)) * 4.0;
+    sum += at(base + float2( 2.0,  1.0)) * 4.0;
+    sum += at(base + float2( 0.0, -1.0)) * 4.0;
+    sum += at(base + float2( 1.0, -1.0)) * 4.0;
+    sum += at(base + float2( 0.0,  2.0)) * 4.0;
+    sum += at(base + float2( 1.0,  2.0)) * 4.0;
+    sum += at(base + float2(-1.0, -1.0));
+    sum += at(base + float2( 2.0, -1.0));
+    sum += at(base + float2(-1.0,  2.0));
+    sum += at(base + float2( 2.0,  2.0));
+    sum += at(base + float2(-2.0,  0.0));
+    sum += at(base + float2(-2.0,  1.0));
+    sum += at(base + float2( 3.0,  0.0));
+    sum += at(base + float2( 3.0,  1.0));
+    sum += at(base + float2( 0.0, -2.0));
+    sum += at(base + float2( 1.0, -2.0));
+    sum += at(base + float2( 0.0,  3.0));
+    sum += at(base + float2( 1.0,  3.0));
+    return half4(sum / 80.0, 1.0);
+}

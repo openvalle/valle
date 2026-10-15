@@ -3641,6 +3641,8 @@ class SurfaceArena {
   private readonly freeTransients = new Map<Surface, { width: number; height: number }>();
   private readonly checkedOutTransients = new Map<Surface, { width: number; height: number }>();
   private readonly frameTransients = new Set<Surface>();
+  /** Backings of `boundedTransient`, whose consumers read only the leading extent they asked for. */
+  private readonly boundedBackings = new Set<Surface>();
   private readonly rasterMemory = new Map<Surface, MallocObj>();
   private readonly surfaceBytes = new Map<Surface, bigint>();
   private readonly usedSlotKeys = new Set<string>();
@@ -3778,6 +3780,35 @@ class SurfaceArena {
     if (this.outputSurface) { this.frameReuses += 1; return this.outputSurface; }
     return this.outputSurface = this.create(this.width, this.height, "output");
   }
+  /**
+   * A transient for consumers that read only [0, width) x [0, height): the smallest free bounded
+   * backing that holds the extent, else a new one rounded up to a 64-pixel class. Extents that move
+   * with content, such as each Shutter sample of a spinning glow, then share one working set instead
+   * of allocating per extent. Exact when the rounded backing does not fit the budgets.
+   */
+  boundedTransient(width: number, height: number): Surface {
+    let surface: Surface | null = null, dimensions = { width: 0, height: 0 };
+    for (const candidate of this.boundedBackings) {
+      const free = this.freeTransients.get(candidate);
+      if (free && free.width >= width && free.height >= height
+        && (!surface || free.width * free.height < dimensions.width * dimensions.height)) {
+        surface = candidate; dimensions = free;
+      }
+    }
+    if (surface) {
+      this.freeTransients.delete(surface);
+      this.frameReuses += 1;
+    } else {
+      dimensions = { width: Math.ceil(width / 64) * 64, height: Math.ceil(height / 64) * 64 };
+      const bytes = BigInt(dimensions.width) * BigInt(dimensions.height) * 8n;
+      if (bytes > this.maxSurfaceBytes || this.residentBytes + bytes > this.maxFrameBytes) return this.transient(width, height);
+      surface = this.create(dimensions.width, dimensions.height);
+      this.boundedBackings.add(surface);
+    }
+    this.checkedOutTransients.set(surface, dimensions);
+    this.frameTransients.add(surface);
+    return surface;
+  }
   transient(width = this.width, height = this.height): Surface {
     let surface: Surface | null = null;
     for (const [candidate, dimensions] of this.freeTransients) {
@@ -3789,17 +3820,18 @@ class SurfaceArena {
     } else {
       // An extent this frame has not seen means the working set moved on. Backings carried over
       // from the previous frame and not reused yet go back to Ganesh, which keeps them as purgeable
-      // scratch within the cache headroom for any size that comes back.
-      this.releaseCarriedOver();
+      // scratch within the cache headroom for any size that comes back. Bounded backings serve any
+      // extent they hold, so they stay until the frame ends without them.
+      this.releaseCarriedOver(true);
       surface = this.create(width, height);
     }
     this.checkedOutTransients.set(surface, { width, height });
     this.frameTransients.add(surface);
     return surface;
   }
-  private releaseCarriedOver(): void {
+  private releaseCarriedOver(keepBounded = false): void {
     for (const surface of [...this.freeTransients.keys()]) {
-      if (this.frameTransients.has(surface)) continue;
+      if (this.frameTransients.has(surface) || keepBounded && this.boundedBackings.has(surface)) continue;
       this.freeTransients.delete(surface);
       this.evictSurface(surface);
     }
@@ -3906,6 +3938,7 @@ class SurfaceArena {
       this.rasterMemory.delete(surface);
     }
     this.surfaceBytes.delete(surface);
+    this.boundedBackings.delete(surface);
     this.residentBytes -= bytes;
     const kind = this.surfaceKinds.get(surface);
     if (kind) this.residentByKind[kind] -= bytes;
@@ -4562,7 +4595,7 @@ async function drawRadialBlur(
         } else {
           nextSurface = arena.transient(roi.width, roi.height);
           drawShader(CanvasKit, nextSurface.getCanvas(), shader, "src");
-          nextSurface.flush();
+          if (!arena.gpu || !arena.deferGpuFlush) nextSurface.flush();
         }
       } finally { shader?.delete(); source.delete(); }
       if (currentSurface) {
@@ -4673,9 +4706,9 @@ function requiredBuiltinKernels(plan: Wire, programs: Wire[]): Set<BuiltinKernel
         const filter = record(kind.filter, "program filter").kind;
         if (filter === "chromaticAberration" || filter === "filmGrain" || filter === "radialBlur" || filter === "lensDistortion") kernels.add(filter);
         if (filter === "glow" || filter === "bloom") {
-          for (const kernel of ["pyramidDownsample", "pyramidBlur", "pyramidUpsample",
-            filter === "glow" ? "pyramidCoverage" : "pyramidThreshold",
-            filter === "glow" ? "pyramidGlowComposite" : "pyramidComposite"] as BuiltinKernel[]) kernels.add(kernel);
+          for (const kernel of ["pyramidDownsample", "pyramidBlur", "pyramidUpsample", "pyramidUpsampleRows",
+            filter === "glow" ? "pyramidCoverageDownsample" : "pyramidThreshold",
+            filter === "glow" ? "pyramidGlowUpsampleComposite" : "pyramidUpsampleComposite"] as BuiltinKernel[]) kernels.add(kernel);
         }
       }
       if (kind.kind === "applyMask" && String(kind.mode).startsWith("luminance")) kernels.add("maskCoverage");

@@ -1,0 +1,25 @@
+
+uniform shader coarse;
+uniform float2 coarseSize;
+uniform float outputWidth;
+uniform float spread;
+// The tent of bilinear taps in pyramidupsample.sksl is separable. This pass applies its
+// horizontal factor to every coarse row at output columns; the composite applies the vertical one.
+float3 at(float2 xy) {
+    if (any(lessThan(xy, float2(0.0))) || any(greaterThanEqual(xy, coarseSize))) return float3(0.0);
+    return float3(coarse.eval(xy + 0.5).rgb);
+}
+float3 linear(float x, float row) {
+    float base = floor(x);
+    float fraction = x - base;
+    return at(float2(base, row)) * (1.0 - fraction) + at(float2(base + 1.0, row)) * fraction;
+}
+half4 main(float2 xy) {
+    float2 pixel = floor(xy);
+    float center = (pixel.x + 0.5) * coarseSize.x / outputWidth - 0.5;
+    float tap = 0.5 * spread;
+    float3 sum = linear(center - tap, pixel.y);
+    sum += linear(center, pixel.y) * 2.0;
+    sum += linear(center + tap, pixel.y);
+    return half4(sum / 4.0, 1.0);
+}

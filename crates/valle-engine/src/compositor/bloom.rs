@@ -402,9 +402,10 @@ fn fill_rows<const CHANNELS: usize>(
     fill(0, &mut next.pixels);
 }
 
-/// Working region includes the offscreen input that can affect the visible output.
+/// Working region: the input that can affect the visible output, padded by the complete support.
 /// Align every level to the input's origin and a 32-pixel grid so cropping cannot
-/// shift the pyramid taps. The complete support margin also covers every fine level.
+/// shift the pyramid taps. The complete support margin also covers every fine level, so
+/// output pixels outside the region are transparent and need no pyramid work.
 #[derive(Debug, Clone, Copy)]
 pub struct PyramidRegion {
     pub origin: [i32; 2],
@@ -458,14 +459,18 @@ impl PyramidRegion {
         };
         for axis in 0..2 {
             let source = i64::from(offset[axis]);
+            let source_end = source + i64::from(input[axis]);
             let visible_end = i64::from(output[axis]);
-            // Contributions farther than the complete pyramid support cannot
-            // reach the output. Keep a second zero-filled support margin around
-            // their intersection, including when the source is wholly offscreen.
-            let relevant_start = source.max(-margin).min(0);
-            let relevant_end = (source + i64::from(input[axis]))
-                .min(visible_end + margin)
-                .max(visible_end);
+            // Contributions farther than the complete pyramid support cannot reach the output,
+            // and the halo is exactly zero farther than that support from every source pixel.
+            // Keep a second zero-filled support margin around the source that can contribute.
+            // When none can, the halo is zero everywhere; keep a region around the output.
+            let (mut relevant_start, mut relevant_end) =
+                (source.max(-margin), source_end.min(visible_end + margin));
+            if relevant_start >= relevant_end {
+                relevant_start = relevant_start.min(0);
+                relevant_end = relevant_end.max(visible_end);
+            }
             let start = source + (relevant_start - margin - source).div_euclid(32) * 32;
             let end = relevant_end + margin;
             let size = ((end - start + 31) / 32) * 32;
@@ -674,23 +679,30 @@ fn apply_glow_region_f16(
     Ok(base)
 }
 
-/// PyramidRegion always contains the output. Encode that window directly, avoiding a padded
-/// F16 allocation followed by decoding into another full-size f32 image just to crop it.
+/// Encode the output window of the region directly, avoiding a padded F16 allocation followed
+/// by decoding into another full-size f32 image just to crop it. Output pixels outside the
+/// region are farther than the pyramid support from every source pixel and stay transparent.
 fn encode_region(pixels: &[[f32; 4]], region: PyramidRegion, output: [u32; 2]) -> Vec<u8> {
-    let left = (-i64::from(region.origin[0])) as usize;
-    let top = (-i64::from(region.origin[1])) as usize;
     let (width, height) = (output[0] as usize, output[1] as usize);
-    debug_assert!(left + width <= region.size[0] as usize);
-    debug_assert!(top + height <= region.size[1] as usize);
-    let mut bytes = Vec::with_capacity(width * height * 8);
-    for row in pixels
-        .chunks_exact(region.size[0] as usize)
-        .skip(top)
-        .take(height)
-    {
-        for pixel in &row[left..left + width] {
-            for &channel in pixel {
-                bytes.extend_from_slice(&f32_to_half(channel).to_le_bytes());
+    let region_width = region.size[0] as usize;
+    let span = |origin: i32, size: u32, extent: usize| {
+        let start = i64::from(origin).clamp(0, extent as i64);
+        let end = (i64::from(origin) + i64::from(size)).clamp(start, extent as i64);
+        (start as usize, end as usize)
+    };
+    let (left, right) = span(region.origin[0], region.size[0], width);
+    let (top, bottom) = span(region.origin[1], region.size[1], height);
+    let mut bytes = vec![0_u8; width * height * 8];
+    for y in top..bottom {
+        let row = (y as i64 - i64::from(region.origin[1])) as usize * region_width;
+        let column = (left as i64 - i64::from(region.origin[0])) as usize;
+        let encoded = &mut bytes[(y * width + left) * 8..(y * width + right) * 8];
+        for (pixel, target) in pixels[row + column..row + column + right - left]
+            .iter()
+            .zip(encoded.chunks_exact_mut(8))
+        {
+            for (&channel, bytes) in pixel.iter().zip(target.chunks_exact_mut(2)) {
+                bytes.copy_from_slice(&f32_to_half(channel).to_le_bytes());
             }
         }
     }
@@ -1512,6 +1524,118 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn source_bounded_regions_keep_the_output_bytes() {
+        // The previous region always spanned the whole output plus the support margin.
+        let output_region =
+            |input: [u32; 2], output: [u32; 2], offset: [i32; 2], radius, spread| {
+                let margin = i64::from(PyramidRegion::support_margin(radius, spread).unwrap());
+                let mut region = PyramidRegion {
+                    origin: [0; 2],
+                    size: [0; 2],
+                    input_offset: [0; 2],
+                };
+                for axis in 0..2 {
+                    let source = i64::from(offset[axis]);
+                    let visible_end = i64::from(output[axis]);
+                    let relevant_start = source.max(-margin).min(0);
+                    let relevant_end = (source + i64::from(input[axis]))
+                        .min(visible_end + margin)
+                        .max(visible_end);
+                    let start = source + (relevant_start - margin - source).div_euclid(32) * 32;
+                    region.origin[axis] = start as i32;
+                    region.size[axis] = (((relevant_end + margin - start + 31) / 32) * 32) as u32;
+                    region.input_offset[axis] = (source - start) as i32;
+                }
+                region
+            };
+        let (width, height) = (61_u32, 47_u32);
+        let input = encode_output(
+            &(0..width * height)
+                .map(|index| {
+                    let (x, y) = (index % width, index / width);
+                    let alpha = if (x + 2 * y) % 7 == 0 {
+                        0.0
+                    } else {
+                        ((x * y) % 13) as f32 / 12.0
+                    };
+                    [alpha * 1.25, alpha * 0.5, alpha * 0.75, alpha]
+                })
+                .collect::<Vec<_>>(),
+        );
+        let output = [300, 220];
+        let mut shrunk = 0;
+        for offset in [[120, 90], [-20, 150], [250, -30], [0, 0], [400, 90]] {
+            for radius in [4.0, 12.0, 48.0] {
+                for glow in [true, false] {
+                    let spread = radius * if glow { 2.0 } else { 1.0 };
+                    let before = output_region([width, height], output, offset, radius, spread);
+                    let after = PyramidRegion::new([width, height], output, offset, radius, spread)
+                        .unwrap();
+                    let area = |region: PyramidRegion| region.size[0] * region.size[1];
+                    assert!(
+                        area(after) <= area(before),
+                        "offset={offset:?}, radius={radius}"
+                    );
+                    shrunk += usize::from(area(after) < area(before));
+                    let reference = if glow {
+                        let params = GlowParams {
+                            color: [0.9, 0.3, 0.6, 0.85],
+                            intensity: 1.2,
+                            radius,
+                        };
+                        let pixels = apply_glow_region_f16(
+                            &input,
+                            width,
+                            height,
+                            before.size[0],
+                            before.size[1],
+                            before.input_offset,
+                            params,
+                        )
+                        .unwrap();
+                        (
+                            encode_region(&pixels, before, output),
+                            apply_glow_f16(
+                                &input, width, height, output[0], output[1], offset, params,
+                            )
+                            .unwrap(),
+                        )
+                    } else {
+                        let params = BloomParams {
+                            threshold: 0.3,
+                            knee: 0.2,
+                            intensity: 0.9,
+                            radius,
+                        };
+                        let pixels = apply_bloom_region_f16(
+                            &input,
+                            width,
+                            height,
+                            before.size[0],
+                            before.size[1],
+                            before.input_offset,
+                            params,
+                        )
+                        .unwrap();
+                        (
+                            encode_region(&pixels, before, output),
+                            apply_bloom_f16(
+                                &input, width, height, output[0], output[1], offset, params,
+                            )
+                            .unwrap(),
+                        )
+                    };
+                    assert!(
+                        reference.0 == reference.1,
+                        "glow={glow}, offset={offset:?}, radius={radius}"
+                    );
+                }
+            }
+        }
+        assert!(shrunk >= 12, "only {shrunk} regions shrank");
     }
 
     #[test]

@@ -17,12 +17,13 @@ import dreamyZoomSource from "../../../../../../crates/valle-draw/assets/shaders
 import transitionInputSource from "../../../../../../crates/valle-draw/assets/shaders/transitioninput.sksl" with { type: "text" };
 import workingF16Source from "../../../../../../crates/valle-draw/assets/shaders/workingf16.sksl" with { type: "text" };
 import pyramidThreshold from "../../../../../../crates/valle-draw/assets/shaders/pyramidthreshold.sksl" with { type: "text" };
-import pyramidCoverage from "../../../../../../crates/valle-draw/assets/shaders/pyramidcoverage.sksl" with { type: "text" };
 import pyramidDownsample from "../../../../../../crates/valle-draw/assets/shaders/pyramiddownsample.sksl" with { type: "text" };
+import pyramidCoverageDownsample from "../../../../../../crates/valle-draw/assets/shaders/pyramidcoveragedownsample.sksl" with { type: "text" };
 import pyramidBlur from "../../../../../../crates/valle-draw/assets/shaders/pyramidblur.sksl" with { type: "text" };
 import pyramidUpsample from "../../../../../../crates/valle-draw/assets/shaders/pyramidupsample.sksl" with { type: "text" };
-import pyramidComposite from "../../../../../../crates/valle-draw/assets/shaders/pyramidcomposite.sksl" with { type: "text" };
-import pyramidGlowComposite from "../../../../../../crates/valle-draw/assets/shaders/pyramidglowcomposite.sksl" with { type: "text" };
+import pyramidUpsampleRows from "../../../../../../crates/valle-draw/assets/shaders/pyramidupsamplerows.sksl" with { type: "text" };
+import pyramidUpsampleComposite from "../../../../../../crates/valle-draw/assets/shaders/pyramidupsamplecomposite.sksl" with { type: "text" };
+import pyramidGlowUpsampleComposite from "../../../../../../crates/valle-draw/assets/shaders/pyramidglowupsamplecomposite.sksl" with { type: "text" };
 import fadeSource from "../../../../../../crates/valle-draw/assets/shaders/fade.sksl" with { type: "text" };
 import flyEyeSource from "../../../../../../crates/valle-draw/assets/shaders/flyeye.sksl" with { type: "text" };
 import linearBlurSource from "../../../../../../crates/valle-draw/assets/shaders/linearblur.sksl" with { type: "text" };
@@ -73,12 +74,13 @@ const BUILTIN_SOURCES = Object.freeze({
   transitionInput: transitionInputSource,
   workingF16: workingF16Source,
   pyramidThreshold,
-  pyramidCoverage,
   pyramidDownsample,
+  pyramidCoverageDownsample,
   pyramidBlur,
   pyramidUpsample,
-  pyramidComposite,
-  pyramidGlowComposite,
+  pyramidUpsampleRows,
+  pyramidUpsampleComposite,
+  pyramidGlowUpsampleComposite,
   flyEye: flyEyeSource,
   linearBlur: linearBlurSource,
   mosaic: mosaicSource,
