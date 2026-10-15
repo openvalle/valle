@@ -82,9 +82,9 @@ filter such as `blur` or `glow`, ...) and their five largest `passes`: `kind`, t
 the compiled scene, its device `roi` and `pixels`. The `roi` and `seconds` locate the element in
 the frame. Add `--output-size WxH` to plan at the delivery size. Frames that exceed a renderer
 limit are listed in `failures` with their frame, seconds and error, and the check fails before
-rendering its frame. A frame's Shader and transition work together is limited to 1920 x 1080 x
-1024 operations and 1920 x 1080 x 64 samples whatever the output size, so a full-frame
-`linearBlur` exceeds it at 1080p and the other full-frame transitions at 4K; the error names the
+rendering its frame. A frame's Shader work averages at most 1024 operations and 64 samples per
+output pixel, counted over at least 1920 x 1080 pixels, so a frame within it at 1080p stays
+within it at any output size. Built-in transitions do not count toward it. The error names the
 pass doing the largest share.
 
 `--frame` selects one zero-based frame as PNG. Full exports select the codec from

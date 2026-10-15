@@ -454,12 +454,12 @@ impl RenderPlanTemplate {
         for program in &programs {
             shader_work.add_pixels(program.shader_work, 1);
         }
-        let limits = valle_motion::shader::SHADER_LIMITS;
-        if shader_work.operations > limits.frame_operations
-            || shader_work.samples > limits.frame_samples
-        {
+        let spec = self.render_spec();
+        let limits = valle_motion::shader::SHADER_LIMITS
+            .frame_work(u64::from(spec.width()) * u64::from(spec.height()));
+        if shader_work.operations > limits.operations || shader_work.samples > limits.samples {
             // Name the pass doing the most of the exceeded work, so authors know what to change.
-            let by_operations = shader_work.operations > limits.frame_operations;
+            let by_operations = shader_work.operations > limits.operations;
             let largest = programs
                 .iter()
                 .flat_map(|schedule| {
@@ -483,8 +483,8 @@ impl RenderPlanTemplate {
             return Err(ProgramBindingError::ShaderBudgetExceeded {
                 operations: shader_work.operations,
                 samples: shader_work.samples,
-                max_operations: limits.frame_operations,
-                max_samples: limits.frame_samples,
+                max_operations: limits.operations,
+                max_samples: limits.samples,
                 largest,
             });
         }

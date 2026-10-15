@@ -57,6 +57,14 @@ export default function Blur(ctx) {
 }
 "##;
 
+const COST_SHADER: &str = r##"export const controls = { assets: { effect: asset({ kind: "shader" }) } };
+export const composition = { width: 64, height: 36, fps: 4, duration: 1 };
+export default function Work(ctx) {
+  const size = { width: ctx.viewport.width, height: ctx.viewport.height };
+  return <Scene style={size}><ShaderLayer source="asset://effect" style={size}>NESTED</ShaderLayer></Scene>;
+}
+"##;
+
 const BUDGET_TEXT: &str = r##"export const composition = { width: 64, height: 36, fps: 4, duration: 1 };
 export default function Title() {
   return <Scene className="relative h-full w-full" style={{ backgroundColor: "#101010" }}>
@@ -567,42 +575,107 @@ fn a_budget_only_needs_to_hold_the_frame_plans() {
 #[test]
 fn check_cost_lists_frames_beyond_the_shader_limits() {
     let dir = tempfile::tempdir().unwrap();
+    let check = |source: &str, size: &str| {
+        run(
+            dir.path(),
+            &[
+                "motion",
+                "check",
+                source,
+                "--asset",
+                "effect=effect.shader.json",
+                "--cost",
+                "--output-size",
+                size,
+                "--json",
+            ],
+        )
+    };
+    // Built-in transitions are bounded by construction and never count toward the Shader budget,
+    // even when a 72-sample linear blur covers a whole 4K frame.
     std::fs::write(dir.path().join("blur.motion.tsx"), COST_TRANSITION).unwrap();
-    let small = success(run(
-        dir.path(),
-        &["motion", "check", "blur.motion.tsx", "--cost", "--json"],
-    ));
-    assert_eq!(small["cost"]["failures"], json!([]));
-    // A linear blur samples 72 times per pixel; over a whole 1080p frame that exceeds the frame's
-    // budget of 64 samples per 1080p pixel.
-    let output = run(
-        dir.path(),
-        &[
-            "motion",
-            "check",
-            "blur.motion.tsx",
-            "--cost",
-            "--output-size",
-            "1920x1080",
-            "--json",
-        ],
-    );
-    assert!(!output.status.success());
-    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(report["error"]["code"], "frame_plan_failed", "{report}");
-    let failures = report["cost"]["failures"].as_array().unwrap();
-    let last = failures.last().unwrap();
+    for size in ["1920x1080", "3840x2160"] {
+        let report = success(run(
+            dir.path(),
+            &[
+                "motion",
+                "check",
+                "blur.motion.tsx",
+                "--cost",
+                "--output-size",
+                size,
+                "--json",
+            ],
+        ));
+        assert_eq!(report["cost"]["failures"], json!([]), "{size}");
+    }
+
+    std::fs::write(
+        dir.path().join("effect.shader.json"),
+        json!({
+            "name": "workload", "entry": "effect.vsksl", "inputs": [], "uniforms": [],
+            "output": {"colorSpace": "linear-srgb", "alphaMode": "straight", "allowTransparent": true},
+            "budget": "local"
+        })
+        .to_string(),
+    )
+    .unwrap();
+    // The budget is an average per output pixel, so a full-frame layer within it at 1080p stays
+    // within it at 4K.
+    std::fs::write(
+        dir.path().join("effect.vsksl"),
+        "float4 valle_main(float2 uv) { float4 value = float4(uv, 0.0, 1.0); \
+         for (int i = 0; i < 32; ++i) { value = value * 0.999 + float4(0.0001); } return value; }",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.path().join("work.motion.tsx"),
+        COST_SHADER.replace("NESTED", ""),
+    )
+    .unwrap();
+    for size in ["1920x1080", "3840x2160"] {
+        let report = success(check("work.motion.tsx", size));
+        assert_eq!(report["cost"]["failures"], json!([]), "{size}");
+    }
+
+    // A layer sampling its content 64 times inside another that does too averages 128 samples per
+    // pixel, twice the budget, at any output size from 1080p up.
+    std::fs::write(
+        dir.path().join("effect.vsksl"),
+        "float4 valle_main(float2 uv) { float4 sum = float4(0.0); \
+         for (int i = 0; i < 64; ++i) { sum += sampleContent(uv) / 64.0; } return sum; }",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.path().join("nested.motion.tsx"),
+        COST_SHADER.replace(
+            "NESTED",
+            r#"<ShaderLayer source="asset://effect" style={size} />"#,
+        ),
+    )
+    .unwrap();
     assert_eq!(
-        (last["frame"].as_u64(), last["seconds"].as_f64()),
-        (Some(3), Some(0.75))
+        success(check("nested.motion.tsx", "64x36"))["cost"]["failures"],
+        json!([])
     );
-    let error = last["error"].as_str().unwrap();
-    assert!(
-        error.contains("Shader work")
-            && error.contains("the largest share is visual[0].draw.")
-            && error.ends_with(".transition"),
-        "{error}"
-    );
+    for size in ["1920x1080", "3840x2160"] {
+        let output = check("nested.motion.tsx", size);
+        assert!(!output.status.success(), "{size}");
+        let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(report["error"]["code"], "frame_plan_failed", "{report}");
+        let failures = report["cost"]["failures"].as_array().unwrap();
+        assert_eq!(failures.len(), 4, "{size}: {report}");
+        let last = failures.last().unwrap();
+        assert_eq!(
+            (last["frame"].as_u64(), last["seconds"].as_f64()),
+            (Some(3), Some(0.75))
+        );
+        let error = last["error"].as_str().unwrap();
+        assert!(
+            error.contains("Shader work") && error.contains("the largest share is visual[0]."),
+            "{error}"
+        );
+    }
 }
 
 #[test]

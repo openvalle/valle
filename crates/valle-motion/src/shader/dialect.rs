@@ -17,8 +17,26 @@ pub struct ShaderLimits {
     pub operations_per_pixel: usize,
     pub samples_per_pixel: usize,
     pub calls_per_pixel: usize,
-    pub frame_operations: u64,
-    pub frame_samples: u64,
+    /// A frame's Shader work averages at most this per output pixel, over at least the area of
+    /// the largest Shader layer, so a frame within budget at 1920 x 1080 stays within it at any
+    /// output size. Built-in transitions are bounded by construction and are not counted.
+    pub frame_operations_per_pixel: u64,
+    pub frame_samples_per_pixel: u64,
+}
+
+impl ShaderLimits {
+    /// Shader work one frame of `output_pixels` may do.
+    pub const fn frame_work(&self, output_pixels: u64) -> valle_draw::requirements::ShaderWork {
+        let pixels = if output_pixels > super::MAX_LAYER_PIXELS {
+            output_pixels
+        } else {
+            super::MAX_LAYER_PIXELS
+        };
+        valle_draw::requirements::ShaderWork {
+            operations: pixels.saturating_mul(self.frame_operations_per_pixel),
+            samples: pixels.saturating_mul(self.frame_samples_per_pixel),
+        }
+    }
 }
 
 pub const SHADER_LIMITS: ShaderLimits = ShaderLimits {
@@ -31,8 +49,8 @@ pub const SHADER_LIMITS: ShaderLimits = ShaderLimits {
     operations_per_pixel: 4096,
     samples_per_pixel: 64,
     calls_per_pixel: 256,
-    frame_operations: super::MAX_LAYER_PIXELS * 1024,
-    frame_samples: super::MAX_LAYER_PIXELS * 64,
+    frame_operations_per_pixel: 1024,
+    frame_samples_per_pixel: 64,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

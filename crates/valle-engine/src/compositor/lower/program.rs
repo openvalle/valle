@@ -1052,7 +1052,6 @@ impl<'a> Compiler<'a> {
         let id = ProgramPassId::from_index(self.passes.len())?;
         let shader_work_per_pixel = match &kind {
             ProgramPassKind::ApplyShader { shader, .. } => shader.shader.work_per_pixel,
-            ProgramPassKind::ApplyTransition { transition, .. } => transition.kind.work_per_pixel(),
             ProgramPassKind::RasterNode { node, .. } => {
                 match &self.program.nodes()[node.raw() as usize] {
                     Node::RuntimeShader(shader) => shader.shader.work_per_pixel,
@@ -1347,7 +1346,8 @@ mod tests {
                 }
                 ProgramPassKind::ApplyTransition { from, to, .. } => {
                     assert_ne!(from, to);
-                    assert_eq!(pass.shader_work_per_pixel.samples, 72);
+                    // Built-in transitions are bounded by construction, outside the Shader budget.
+                    assert_eq!(pass.shader_work_per_pixel, Default::default());
                     transitions += 1;
                 }
                 _ => {}

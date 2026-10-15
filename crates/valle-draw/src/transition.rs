@@ -38,19 +38,6 @@ impl TransitionKind {
         Self::Perlin,
     ];
 
-    /// Conservative static bounds including child normalization and bilinear texture reads.
-    pub const fn work_per_pixel(self) -> crate::requirements::ShaderWork {
-        let samples = match self {
-            Self::LinearBlur => 72,
-            Self::FlyEye => 4,
-            _ => 2,
-        };
-        crate::requirements::ShaderWork {
-            operations: 256 + samples * 32,
-            samples,
-        }
-    }
-
     pub const fn source(self) -> &'static str {
         match self {
             Self::Fade => include_str!("../assets/shaders/fade.sksl"),
