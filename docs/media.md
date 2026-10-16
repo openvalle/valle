@@ -175,8 +175,8 @@ MP4 processing normalizes color metadata to BT.709 limited range and does not
 preserve alpha. Audio is decoded and re-encoded; it is not a lossless packet copy,
 and secondary audio streams are not copied. A source without audio stays silent.
 These MP4 operations currently use software H.264 encoding, requiring FFmpeg's
-`libx264` encoder. They do not expose Motion's `--workers`, `--crf`, `--preset`
-or `--hardware-encode` options. Read the run report's output summaries and warnings
+`libx264` encoder. They do not expose Motion's `--threads`, `--encode-threads`,
+`--hardware-encode`, `--bitrate` or `--codec` options. Read the run report's output summaries and warnings
 when the exact encoding matters.
 
 ## Transcribe: speech to text

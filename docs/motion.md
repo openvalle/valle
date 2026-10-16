@@ -2662,19 +2662,20 @@ row nodes. Exact-arc `Circle` templates remain capped at 10,000. Prefer explicit
 large repeated geometry.
 
 For export controls, `--backend raster` selects CPU composition, `metal` requires
-Metal and `auto` chooses an available backend. `--workers` accepts 1–8; defaults
-are at most two for Raster and one for Metal. `--hardware-encode` is independent
+Metal and `auto` chooses an available backend. `--threads` is the total CPU
+allowance (every available thread by default) and `--memory-budget` bounds the
+managed working memory; at most four frames are prepared at once, fewer when either
+allows less. `--hardware-encode` is independent
 of the compositor and fails if the requested hardware encoder is unavailable.
-On macOS, Metal with hardware encoding honors `--workers` through independent
-CPU frame preparers feeding one persistent Metal executor. Prepared frames are
+On macOS, Metal with hardware encoding prepares frames on independent CPU
+preparers feeding one ordered Metal execution thread. Prepared frames are
 consumed in delivery order and written directly into encoder-owned shared GPU
 surfaces, with no CPU output readback. Each preparer holds at most one preparing
 or waiting frame; execution retains up to three more frames. Cancellation or a
 delivery failure drains the preparers and completes pending GPU work before
-releasing its surfaces. PNG and CPU-delivery paths also honor the requested frame
-worker count. Scene3D's internal CPU raster workers are separate and use up to
-eight available threads per frame renderer, so increasing frame workers can also
-increase CPU contention and memory use.
+releasing its surfaces. PNG and CPU-delivery paths use the same frame concurrency.
+Scene3D's CPU raster tiles, CPU glow and bloom pyramids and a software encoder draw
+from the same `--threads` allowance and never add threads beyond it.
 `--ffmpeg-log-level info` adds encoder diagnostics on stderr; `--events` adds
 machine-readable progress on stdout. See [CLI output](cli.md#output-contract-for-scripts-and-agents).
 

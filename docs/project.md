@@ -212,8 +212,10 @@ the document's duration. `--frame` requires PNG; full video delivery requires MP
 Output paths must be new files.
 
 Dimensions, frame rate, duration and background come from the Timeline. Project
-render uses Native Raster and does not expose Motion's `--backend`, `--size`,
-`--duration`, `--workers` or encoder-tuning options. MP4 requires an opaque canvas
+render uses Native Raster with every available CPU thread and no memory budget. It
+does not expose `--threads` or `--memory-budget`, nor Motion's `--backend`,
+`--output-size`, `--host-duration` or encoder-tuning options; `--codec hevc`
+selects hardware HEVC for `.mp4`. MP4 requires an opaque canvas
 background and compatible FFmpeg libraries/encoders; decoding footage also needs
 FFmpeg. A self-contained solid-color PNG render needs no model or FFmpeg library.
 

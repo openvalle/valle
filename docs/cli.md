@@ -155,8 +155,13 @@ declared asset controls with repeated `--asset name=path`, prepared data with
 Use `--props props.json` for constant prop values. `check` accepts the same bindings and fonts, and validates
 one Native Raster frame (`--frame 0` by default).
 
-`--workers 1..8` controls frame concurrency for all Motion outputs. H.264 delivery
-also accepts `--encode-threads N` or `--hardware-encode`; `--bitrate` requires
+`--threads N` is a render's total CPU allowance, including nested raster kernels and
+a software encoder; it defaults to every available thread. `--memory-budget`, such as
+`2GiB`, bounds Native working memory: each frame is admitted against it, and a frame
+that cannot fit fails instead of rendering. At most four frames are prepared at once,
+fewer when either limit allows less. Timeline render accepts the same two options.
+H.264 delivery also accepts `--encode-threads N` (the software encoder's share of
+`--threads`, a quarter by default) or `--hardware-encode`; `--bitrate` requires
 a hardware encoder (`--hardware-encode` or `--codec hevc`). These encoder controls are rejected for PNG and transparent MOV. `--backend auto`
 selects an available Metal device on macOS and otherwise Raster; `--backend raster`
 explicitly selects CPU composition. See `valle motion render --help` for constraints.
