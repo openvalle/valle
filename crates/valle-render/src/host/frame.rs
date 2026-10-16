@@ -26,13 +26,13 @@ use valle_media::frame::RgbaFrame;
 #[cfg(all(target_os = "macos", feature = "native"))]
 use valle_media::{SharedVideoFrame, SharedVideoFramePool};
 
-#[cfg(all(target_os = "macos", feature = "native"))]
-use crate::executor::skia::SubmittedSharedMetalFrame;
 use crate::executor::skia::{
     SkiaBackendKind, SkiaExecuteError, SkiaExecutionProfile, SkiaExecutionReport, SkiaExecutor,
     SkiaExternalObject, SkiaObjectTable, SkiaTarget, SkiaTargetError, cpu_capabilities,
     rgba8_target_info,
 };
+#[cfg(all(target_os = "macos", feature = "native"))]
+use crate::executor::skia::{SubmittedSharedMetalFrame, draw_shared_raster_frame};
 
 /// A complete generation-local fulfillment result. The vector form makes ownership and duplicate
 /// handle detection explicit when it is sealed into an object table.
@@ -179,6 +179,8 @@ pub enum FrameDelivery {
     CpuReadback,
     /// An encoder-owned platform surface was rendered and submitted without CPU readback.
     SharedGpu,
+    /// Raster wrote an encoder-owned platform surface in place through a CPU mapping.
+    SharedCpu,
 }
 
 /// Wall-clock evidence for the actual product stages. Fulfillment and lower intentionally overlap;
@@ -628,6 +630,43 @@ impl FrameExecutionStage {
         let mut evidence = submitted.evidence;
         evidence.timings.gpu_completion_wait_us = Some(wait_us);
         evidence.timings.total_us = elapsed_us(submitted.started);
+        Ok((frame, evidence))
+    }
+
+    /// Write one Raster frame straight into an encoder-owned VideoToolbox surface. The output
+    /// commit lands in the surface's CPU mapping, so there is no readback, and the encoder rather
+    /// than the CPU converts it to YUV.
+    #[cfg(all(target_os = "macos", feature = "native"))]
+    pub(crate) fn render_prepared_shared_raster(
+        &mut self,
+        prepared: PreparedFrame,
+        spec: RenderSpec,
+        pool: &SharedVideoFramePool,
+    ) -> Result<(SharedVideoFrame, FrameEvidence), FrameRenderError> {
+        if pool.dimensions() != (spec.width(), spec.height()) {
+            return Err(FrameRenderError::SharedFrameExtent {
+                expected_width: spec.width(),
+                expected_height: spec.height(),
+                actual_width: pool.dimensions().0,
+                actual_height: pool.dimensions().1,
+            });
+        }
+        let started = prepared.started;
+        let extent = Extent2d::new(spec.width(), spec.height())?;
+        let info = rgba8_target_info(spec.output(), extent)
+            .map_err(|error| FrameRenderError::TargetFormat(error.to_string()))?
+            .with_color_type(skia_safe::ColorType::BGRA8888);
+        let budget = self.cpu_budget.clone();
+        let executor = &mut self.executor;
+        let (frame, rendered) = budgeted(budget.as_ref(), || {
+            draw_shared_raster_frame(pool, &info, |surface| {
+                let mut target = SkiaTarget::new(surface, spec.output())?;
+                execute_prepared_with(executor, prepared, &mut target, FrameDelivery::SharedCpu)
+            })
+        })
+        .map_err(SkiaExecuteError::from)?;
+        let mut evidence = rendered?;
+        evidence.timings.total_us = elapsed_us(started);
         Ok((frame, evidence))
     }
 

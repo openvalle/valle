@@ -77,12 +77,14 @@ pub(super) fn render(
     progress: Option<&ProgressCallback>,
     backend: SkiaBackendKind,
     concurrency: usize,
+    shared: Option<SharedVideoFramePool>,
 ) -> Result<PipelineReport, PipelineError> {
     let window = concurrency.min(frames.len()).max(1);
     let first = control.preparation_stage(project, backend, spec)?;
     let preparers = (0..window).map(|_| first.fork()).collect::<Vec<_>>();
     drop(first);
     let abort = AtomicBool::new(false);
+    let shared = shared.as_ref();
     let mut metrics = PipelineAccumulator::for_render_id(project.render_id());
     let mut delivered = 0;
     let result = std::thread::scope(|scope| {
@@ -139,15 +141,29 @@ pub(super) fn render(
                                 None => reserve(),
                             })
                             .map_err(FrameRenderError::from)?;
-                        let (pixels, evidence) = executor.render_prepared_rgba8(packet, spec)?;
+                        let (pixels, evidence) = match shared {
+                            #[cfg(target_os = "macos")]
+                            Some(pool) => {
+                                let (frame, evidence) =
+                                    executor.render_prepared_shared_raster(packet, spec, pool)?;
+                                (CompletedPixels::Shared(frame), evidence)
+                            }
+                            #[cfg(not(target_os = "macos"))]
+                            Some(_) => return Err(PipelineError::SharedGpuUnavailable),
+                            None => {
+                                let (pixels, evidence) =
+                                    executor.render_prepared_rgba8(packet, spec)?;
+                                (CompletedPixels::Rgba(pixels), evidence)
+                            }
+                        };
                         if let Some(credit) = &memory {
                             credit.limit_remaining(delivery_memory_bytes);
                         }
                         send(
                             &output,
                             Ok(CompletedFrame {
-                                _memory: memory,
-                                _delivery_memory: delivery_memory,
+                                memory,
+                                delivery_memory,
                                 sequence,
                                 key,
                                 pixels,
@@ -191,22 +207,36 @@ pub(super) fn render(
                         }
                     }
                 }
-                let frame = pending.remove(&sequence).unwrap();
-                metrics.add(&frame.evidence)?;
-                let mut push = || {
-                    sink.push(DeliveredFrame {
+                let CompletedFrame {
+                    memory,
+                    delivery_memory,
+                    key,
+                    pixels,
+                    evidence,
+                    ..
+                } = pending.remove(&sequence).unwrap();
+                metrics.add(&evidence)?;
+                let push = || match pixels {
+                    CompletedPixels::Rgba(pixels) => sink.push(DeliveredFrame {
                         sequence,
-                        key: frame.key,
-                        pixels: &frame.pixels,
-                        evidence: &frame.evidence,
-                    })
+                        key,
+                        pixels: &pixels,
+                        evidence: &evidence,
+                    }),
+                    CompletedPixels::Shared(frame) => sink.push_shared(DeliveredSharedFrame {
+                        sequence,
+                        key,
+                        frame,
+                        evidence: &evidence,
+                    }),
                 };
-                match &frame._memory {
+                match &memory {
                     Some(credit) => credit.run(push),
                     None => push(),
                 }
                 .map_err(|e| PipelineError::Sink(e.to_string()))?;
-                drop(frame);
+                drop(memory);
+                drop(delivery_memory);
                 delivered += 1;
                 if let Some(progress) = progress {
                     progress(delivered, frames.len());

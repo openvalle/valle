@@ -29,12 +29,12 @@ pub use pass::{
     AdmittedSkiaFrame, SkiaExecuteError, SkiaExecutionReport, SkiaExecutor, SkiaSurfaceReport,
     admit_skia_frame, execute_skia,
 };
-#[cfg(all(target_os = "macos", feature = "native"))]
-pub(crate) use surface::SubmittedSharedMetalFrame;
 pub use surface::{
     GlyphCoverageProfile, GlyphEdgingKind, GlyphHintingKind, GlyphLibraryKind, GlyphRasterizerKind,
     SkiaBackendKind, SkiaExecutionProfile,
 };
+#[cfg(all(target_os = "macos", feature = "native"))]
+pub(crate) use surface::{SubmittedSharedMetalFrame, draw_shared_raster_frame};
 pub use target::{
     SkiaExternalObject, SkiaObjectError, SkiaObjectTable, SkiaTarget, SkiaTargetError,
 };

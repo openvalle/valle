@@ -2673,7 +2673,10 @@ consumed in delivery order and written directly into encoder-owned shared GPU
 surfaces, with no CPU output readback. Each preparer holds at most one preparing
 or waiting frame; execution retains up to three more frames. Cancellation or a
 delivery failure drains the preparers and completes pending GPU work before
-releasing its surfaces. PNG and CPU-delivery paths use the same frame concurrency.
+releasing its surfaces. Raster with hardware encoding writes each frame into the
+same encoder-owned surfaces through a CPU mapping, so on either backend
+VideoToolbox, not the CPU, converts frames to YUV. PNG and CPU-delivery paths use
+the same frame concurrency.
 Scene3D's CPU raster tiles, CPU glow and bloom pyramids and a software encoder draw
 from the same `--threads` allowance and never add threads beyond it.
 `--ffmpeg-log-level info` adds encoder diagnostics on stderr; `--events` adds

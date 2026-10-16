@@ -451,7 +451,7 @@ impl NativeRenderer {
             self.options.bitrate,
             hardware,
             self.encoder_threads(hardware)?,
-            selected_video_transport(hardware, self.options.backend),
+            selected_video_transport(hardware),
         )?;
         let mut sink = Mp4Sink::new(
             muxer,
@@ -524,7 +524,7 @@ impl NativeRenderer {
             self.options.bitrate,
             self.options.hardware_encode,
             self.encoder_threads(self.options.hardware_encode)?,
-            selected_video_transport(self.options.hardware_encode, self.options.backend),
+            selected_video_transport(self.options.hardware_encode),
         )?;
         let mut sink = Mp4Sink::new(
             muxer,
@@ -636,20 +636,14 @@ fn require_video_extent(width: u32, height: u32) -> Result<(), NativeRenderError
     Ok(())
 }
 
-fn selected_video_transport(
-    hardware_encode: bool,
-    backend: SkiaBackendKind,
-) -> VideoFrameTransport {
-    if !hardware_encode {
-        return VideoFrameTransport::Cpu;
+/// A macOS hardware encoder hands out BGRA surfaces that either backend fills in place: Metal
+/// renders into them and Raster writes them through a CPU mapping. VideoToolbox converts to YUV.
+fn selected_video_transport(hardware_encode: bool) -> VideoFrameTransport {
+    if hardware_encode && cfg!(target_os = "macos") {
+        VideoFrameTransport::SharedGpu
+    } else {
+        VideoFrameTransport::Cpu
     }
-    #[cfg(target_os = "macos")]
-    if backend == SkiaBackendKind::Metal {
-        return VideoFrameTransport::SharedGpu;
-    }
-    #[cfg(not(target_os = "macos"))]
-    let _ = backend;
-    VideoFrameTransport::Cpu
 }
 
 fn storyboard_extent(width: u32, height: u32) -> [u32; 2] {

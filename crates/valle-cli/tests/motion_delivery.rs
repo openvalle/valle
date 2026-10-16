@@ -1310,12 +1310,12 @@ fn hevc_mp4_is_tagged_hvc1_for_motion_and_timeline() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(
         dir.path().join("scene.motion.tsx"),
-        "export const composition = { width: 320, height: 180, fps: 30, duration: 0.5 }; export default function Test(){return <Scene style={{backgroundColor:'#2060c0'}} />;}",
+        "export const composition = { width: 320, height: 180, fps: 30, duration: 0.5 }; export default function Test(){return <Scene><View style={{position:'absolute',left:0,top:0,width:320,height:180,backgroundColor:'#0000ff'}} /></Scene>;}",
     )
     .unwrap();
     let timeline = json!({
         "canvas": {"width": 320, "height": 180, "fps": 30},
-        "tracks": {"visual":[{"clips":[{"kind":"solid", "color":"#c06020", "start":0, "duration":0.5}]}]}
+        "tracks": {"visual":[{"clips":[{"kind":"solid", "color":"#ff0000", "start":0, "duration":0.5}]}]}
     });
     std::fs::write(dir.path().join("timeline.json"), timeline.to_string()).unwrap();
     let motion = success(run(
@@ -1346,13 +1346,26 @@ fn hevc_mp4_is_tagged_hvc1_for_motion_and_timeline() {
             "hevc",
         ],
     ));
-    for (report, file) in [(motion, "motion.mp4"), (timeline, "timeline.mp4")] {
+    for (report, file, color) in [
+        (motion, "motion.mp4", [0, 0, 255]),
+        (timeline, "timeline.mp4", [255, 0, 0]),
+    ] {
         assert_eq!(report["delivery"]["codec"], "hevc", "{report}");
         let bytes = std::fs::read(dir.path().join(file)).unwrap();
         let has = |tag: &[u8]| bytes.windows(4).any(|w| w == tag);
         assert!(has(b"hvc1") && has(b"hvcC") && !has(b"hev1"), "{file}");
         let decoded = decode_rgba_frames(&dir.path().join(file), None).unwrap();
         assert_eq!(decoded.len(), 15, "{file}");
+        // Codes 0 and 255 read the same under sRGB and the BT.709 transfer of MP4 delivery, so a
+        // flat primary survives the encoder's conversion to BT.709 YUV within a few codes.
+        let center = &decoded[7].data[(90 * 320 + 160) * 4..][..3];
+        assert!(
+            center
+                .iter()
+                .zip(color)
+                .all(|(&code, expected)| code.abs_diff(expected) <= 4),
+            "{file}: {center:?}"
+        );
     }
 }
 

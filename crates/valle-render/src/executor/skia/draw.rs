@@ -6,7 +6,7 @@ use skia_safe::{
     PaintJoin, PaintStyle, Path as SkPath, PathBuilder, PathEffect, PathFillType, Point as SkPoint,
     RRect, RSXform, Rect as SkRect, RuntimeEffect, SamplingOptions, Shader, Surface,
     TextBlobBuilder, TileMode, Typeface, canvas::PointMode, color_filters, gradient,
-    image::CachingHint, images, runtime_effect::ChildPtr,
+    image::CachingHint, images, runtime_effect::ChildPtr, surface::ContentChangeMode,
 };
 use thiserror::Error;
 use valle_draw::{
@@ -1012,16 +1012,68 @@ impl ProgramRuntime {
         let mut matrix = Matrix::translate((-target_origin[0] as f32, -target_origin[1] as f32));
         matrix.pre_concat(&self.device_matrix(plan, output, transform)?);
         let atlas = self.small_opacity_atlas(surface, node_ids, matrix)?;
+        let erased = match node_ids.first() {
+            Some(first) => self.erase_with_covering_rect(surface, *first, matrix)?,
+            None => false,
+        };
         let canvas = surface.canvas();
-        canvas.clear(Color4f::new(0.0, 0.0, 0.0, 0.0));
+        if !erased {
+            canvas.clear(Color4f::new(0.0, 0.0, 0.0, 0.0));
+        }
         canvas.save();
         canvas.translate((-target_origin[0] as f32, -target_origin[1] as f32));
         canvas.concat(&self.device_matrix(plan, output, transform)?);
-        for node_id in node_ids {
+        for node_id in &node_ids[usize::from(erased)..] {
             self.raster_node_with_atlas(canvas, *node_id, atlas.as_ref())?;
         }
         canvas.restore();
         Ok(())
+    }
+
+    /// Replaces the clear and the first node when that node is an opaque solid rectangle covering
+    /// the whole clip under `matrix`: on Raster, its working-color shader then stores the color
+    /// plus zero in every pixel of the cleared clip, which only turns a negative zero positive.
+    fn erase_with_covering_rect(
+        &self,
+        surface: &mut Surface,
+        node_id: valle_draw::program::NodeId,
+        matrix: Matrix,
+    ) -> Result<bool, DrawError> {
+        let Some(Node::Path(node)) = self.program.nodes().get(node_id.raw() as usize) else {
+            return Ok(false);
+        };
+        let color = match node
+            .fill
+            .and_then(|fill| self.program.paints().get(fill.raw() as usize))
+        {
+            Some(Paint::Solid(color)) if node.stroke.is_none() && color.alpha == 1.0 => *color,
+            _ => return Ok(false),
+        };
+        let data = self
+            .program
+            .paths()
+            .get(node.path.raw() as usize)
+            .ok_or(DrawError::MissingPath(node.path.raw()))?;
+        let Some((rect, ..)) = path(data, node.fill_rule)?.is_rect() else {
+            return Ok(false);
+        };
+        let canvas = surface.canvas();
+        let matrix = Matrix::concat(&canvas.local_to_device_as_3x3(), &matrix);
+        let Some(clip) = canvas.device_clip_bounds() else {
+            return Ok(false);
+        };
+        let (device, _) = matrix.map_rect(rect);
+        if !matrix.is_scale_translate()
+            || !canvas.is_clip_rect()
+            || device.left > clip.left as f32
+            || device.top > clip.top as f32
+            || device.right < clip.right as f32
+            || device.bottom < clip.bottom as f32
+        {
+            return Ok(false);
+        }
+        let color = [color.red + 0.0, color.green + 0.0, color.blue + 0.0, 1.0];
+        Ok(erase_raster(surface, color, Some(clip)))
     }
 
     fn small_opacity_atlas(
@@ -2118,6 +2170,39 @@ fn clear_surface(surface: &mut Surface) -> Result<(), DrawError> {
     Ok(())
 }
 
+/// Skia memsets only a constant paint, and a constant paint color takes a round trip through
+/// sRGB that is not exact, so the working-color shader fills Raster pixel by pixel. Erasing an
+/// untagged view of the pixels skips color conversion and stores the same half floats; the
+/// premultiply in `erase` is exact only for opaque and fully transparent colors. `region` limits
+/// the erase to part of the surface.
+pub(crate) fn erase_raster(surface: &mut Surface, color: [f32; 4], region: Option<IRect>) -> bool {
+    if !color.iter().all(|value| value.is_finite()) || !(color[3] == 1.0 || color == [0.0; 4]) {
+        return false;
+    }
+    if surface.peek_pixels().is_none_or(|pixels| {
+        pixels.color_type() != ColorType::RGBAF16 || pixels.alpha_type() != AlphaType::Premul
+    }) {
+        return false;
+    }
+    // As for a Src draw: pixels a snapshot still shares are replaced before they are written,
+    // by a copy unless the whole surface is written.
+    let whole =
+        region.is_none_or(|region| region == IRect::from_wh(surface.width(), surface.height()));
+    surface.notify_content_will_change(if whole {
+        ContentChangeMode::Discard
+    } else {
+        ContentChangeMode::Retain
+    });
+    let Some(mut pixels) = surface.peek_pixels() else {
+        return false;
+    };
+    pixels.set_color_space(None);
+    pixels.erase_4f(
+        Color4f::new(color[0], color[1], color[2], color[3]),
+        region.as_ref(),
+    )
+}
+
 fn program_target_mut<'a>(
     surfaces: &'a mut ScratchSurfaces<'_, '_>,
     target: ProgramTerminal,
@@ -2343,23 +2428,29 @@ fn apply_mask_into(
     mode: MaskMode,
     target_origin: [i32; 2],
 ) -> Result<(), DrawError> {
-    clear_surface(surface)?;
-    let Some(input) = input else {
-        return Ok(());
+    let Some(input) = input.filter(|_| mask.is_some() || mode.is_inverted()) else {
+        return clear_surface(surface);
     };
-    if mask.is_none() && !mode.is_inverted() {
-        return Ok(());
+    if !covers_target(surface, input, target_origin) {
+        clear_surface(surface)?;
     }
     draw_program_image_with_mode(surface, input, target_origin, SkBlendMode::Src, 1.0);
     let Some(mask) = mask else {
         return Ok(());
     };
-    let mut paint = SkPaint::default();
-    paint.set_blend_mode(if mode.is_inverted() {
+    let blend = if mode.is_inverted() {
         SkBlendMode::DstOut
     } else {
         SkBlendMode::DstIn
-    });
+    };
+    // Drawn as an image, an alpha mask that covers the target is blended pixel for pixel as its
+    // shader is, but read in rows rather than gathered.
+    if !mode.is_luminance() && blends_like_its_shader(surface, mask, target_origin) {
+        draw_program_image_with_mode(surface, mask, target_origin, blend, 1.0);
+        return Ok(());
+    }
+    let mut paint = SkPaint::default();
+    paint.set_blend_mode(blend);
     let local = Matrix::translate((
         (mask.roi.x - target_origin[0]) as f32,
         (mask.roi.y - target_origin[1]) as f32,
@@ -2383,6 +2474,25 @@ fn apply_mask_into(
     paint.set_shader(shader);
     surface.canvas().draw_paint(&paint);
     Ok(())
+}
+
+/// Whether drawing `image` unscaled on this Raster canvas reads, in every pixel the canvas can
+/// write, the floats its decal image shader samples there: the image covers the whole clip at
+/// full coverage and Skia converts neither its colors nor its alpha.
+fn blends_like_its_shader(
+    surface: &mut Surface,
+    image: &ProgramImage,
+    target_origin: [i32; 2],
+) -> bool {
+    let info = surface.image_info();
+    let pixels = &image.image;
+    surface.canvas().peek_pixels().is_some()
+        && surface.canvas().is_clip_rect()
+        && covers_target(surface, image, target_origin)
+        && pixels.color_type() == ColorType::RGBAF16
+        && pixels.alpha_type() == AlphaType::Premul
+        && pixels.color_space().is_some()
+        && pixels.color_space() == info.color_space()
 }
 
 fn apply_filter_program_into(
@@ -5415,6 +5525,286 @@ mod tests {
                 program_filter_in_device_space(&velocity([2.0, 1.0]), *matrix),
                 Err(DrawError::Unsupported(_))
             ));
+        }
+    }
+
+    #[test]
+    fn covering_opaque_rect_erases_the_bytes_of_a_clear_and_its_draw() {
+        use valle_draw::program::{DrawProgramBuilder, LinearColor, PathNode};
+        let mut builder = DrawProgramBuilder::new(Rect::new(0.0, 0.0, 32.0, 32.0));
+        let path = |builder: &mut DrawProgramBuilder, points: Vec<[f64; 2]>| {
+            let mut verbs = vec![PathVerb::MoveTo];
+            verbs.resize(points.len(), PathVerb::LineTo);
+            verbs.push(PathVerb::Close);
+            builder.push_path(PathData { verbs, points })
+        };
+        let square = path(
+            &mut builder,
+            vec![[0.0, 0.0], [16.0, 0.0], [16.0, 16.0], [0.0, 16.0]],
+        );
+        let triangle = path(&mut builder, vec![[-8.0, -8.0], [64.0, -8.0], [-8.0, 64.0]]);
+        // A negative zero, a half-float subnormal and channels outside [0, 1] are stored like the
+        // shader stores them over transparent pixels.
+        for (shape, color) in [
+            (square, LinearColor::new(0.25, -0.0, 1.5, 1.0)),
+            (square, LinearColor::new(3e-5, -0.75, 0.0, 1.0)),
+            (square, LinearColor::new(1.0, 1.0, 1.0, 1.0)),
+            (square, LinearColor::new(0.25, 0.25, 0.25, 0.5)),
+            (triangle, LinearColor::new(1.0, 0.0, 0.0, 1.0)),
+        ] {
+            let paint = builder.push_paint(Paint::Solid(color));
+            let node = builder.push_node(Node::Path(PathNode {
+                path: shape,
+                fill_rule: FillRule::NonZero,
+                fill: Some(paint),
+                stroke: None,
+            }));
+            builder.add_root(node);
+        }
+        let runtime = ProgramRuntime {
+            program: Arc::new(builder.finish().unwrap()),
+            textures: BTreeMap::new(),
+            fonts: BTreeMap::new(),
+            shaders: BTreeMap::new(),
+            scenes: BTreeMap::new(),
+            glass: None,
+            blend: None,
+            mask_coverage: None,
+            opacity_layers: Default::default(),
+        };
+        let nodes = runtime.program.roots().to_vec();
+        let info = ImageInfo::new(
+            (32, 32),
+            ColorType::RGBAF16,
+            AlphaType::Premul,
+            Some(working_color_space().unwrap()),
+        );
+        let painted = || {
+            let mut surface = raster_surface(&info).unwrap();
+            surface.canvas().clear(Color4f::new(0.3, 0.6, 0.9, 1.0));
+            let mut paint = SkPaint::default();
+            paint.set_anti_alias(true);
+            paint.set_color4f(Color4f::new(0.8, 0.1, 0.2, 0.5), None);
+            surface.canvas().draw_circle((12.0, 14.0), 9.5, &paint);
+            surface
+        };
+        let pixels =
+            |surface: &mut Surface| surface.peek_pixels().unwrap().bytes().unwrap().to_vec();
+        let clip = IRect::from_ltrb(4, 6, 20, 24);
+        // The square overhangs the clip, or its edges lie exactly on the clip's, as a full-frame
+        // background's lie on the frame's.
+        for covering in [
+            Matrix::scale_translate((2.0, 2.0), (-2.0, -2.0)),
+            Matrix::scale_translate((1.0, 1.125), (4.0, 6.0)),
+        ] {
+            for (index, node) in nodes.iter().enumerate() {
+                let mut expected = painted();
+                let canvas = expected.canvas();
+                canvas.save();
+                canvas.clip_irect(clip, ClipOp::Intersect);
+                canvas.clear(Color4f::new(0.0, 0.0, 0.0, 0.0));
+                canvas.concat(&covering);
+                runtime.raster_node(canvas, *node).unwrap();
+                canvas.restore();
+                let mut actual = painted();
+                let before = pixels(&mut actual);
+                let snapshot = actual.image_snapshot();
+                actual.canvas().save();
+                actual.canvas().clip_irect(clip, ClipOp::Intersect);
+                let erased = runtime
+                    .erase_with_covering_rect(&mut actual, *node, covering)
+                    .unwrap();
+                actual.canvas().restore();
+                // Translucent colors and other shapes keep their draw.
+                assert_eq!(erased, index < 3, "node {index}");
+                if erased {
+                    assert_eq!(pixels(&mut actual), pixels(&mut expected), "node {index}");
+                } else {
+                    assert_eq!(pixels(&mut actual), before, "node {index}");
+                }
+                // The snapshot taken before keeps its pixels.
+                assert_eq!(
+                    snapshot.peek_pixels().unwrap().bytes().unwrap(),
+                    &before[..]
+                );
+            }
+        }
+        // A rectangle that leaves part of the clip, or one turned off the pixel grid, is drawn.
+        for matrix in [
+            Matrix::scale_translate((1.0, 1.0), (0.0, 0.0)),
+            Matrix::rotate_deg(45.0),
+        ] {
+            let mut surface = painted();
+            surface.canvas().clip_irect(clip, ClipOp::Intersect);
+            assert!(
+                !runtime
+                    .erase_with_covering_rect(&mut surface, nodes[0], matrix)
+                    .unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn raster_mask_keeps_the_bytes_of_its_clear_copy_and_shader_blend() {
+        use skia_safe::ColorSpace;
+        let space = working_color_space().unwrap();
+        let info = |width: i32, height: i32, space: &ColorSpace| {
+            ImageInfo::new(
+                (width, height),
+                ColorType::RGBAF16,
+                AlphaType::Premul,
+                Some(space.clone()),
+            )
+        };
+        // Finite half floats of every kind, including negative zeros and subnormals.
+        let mut state = 0x2545_f491_u32;
+        let mut halves = |info: &ImageInfo| {
+            (0..info.width() * info.height() * 4)
+                .flat_map(|_| {
+                    state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                    let mut half = (state >> 16) as u16;
+                    if half & 0x7c00 == 0x7c00 {
+                        half &= !0x4000;
+                    }
+                    half.to_ne_bytes()
+                })
+                .collect::<Vec<_>>()
+        };
+        let mut image = |width: i32, height: i32, space: &ColorSpace| {
+            let info = info(width, height, space);
+            let bytes = halves(&info);
+            images::raster_from_data(&info, Data::new_copy(&bytes), info.min_row_bytes()).unwrap()
+        };
+        // Program images are snapshots of slots larger than their ROIs.
+        let input = ProgramImage {
+            image: image(32, 24, &space),
+            roi: DeviceRect {
+                x: 2,
+                y: 3,
+                width: 20,
+                height: 15,
+            },
+        };
+        let mask = ProgramImage {
+            image: image(24, 16, &space),
+            roi: DeviceRect {
+                x: 3,
+                y: 4,
+                width: 16,
+                height: 12,
+            },
+        };
+        let target = image(24, 20, &space);
+        let origin = [5, 4];
+        let effect = RuntimeEffect::make_for_shader(
+            include_str!("../../../../valle-draw/assets/shaders/maskcoverage.sksl"),
+            None,
+        )
+        .unwrap();
+        let painted = |clip: IRect| {
+            let mut surface = raster_surface(target.image_info()).unwrap();
+            let mut copy = SkPaint::default();
+            copy.set_blend_mode(SkBlendMode::Src);
+            surface.canvas().draw_image(&target, (0, 0), Some(&copy));
+            surface.canvas().clip_irect(clip, ClipOp::Intersect);
+            surface
+        };
+        let pixels =
+            |surface: &mut Surface| surface.peek_pixels().unwrap().bytes().unwrap().to_vec();
+        // The input and the mask cover the first clip, only the input the second, neither the
+        // whole target.
+        let clips = [
+            IRect::from_ltrb(0, 1, 12, 11),
+            IRect::from_ltrb(0, 1, 16, 13),
+            IRect::from_wh(24, 20),
+        ];
+        for (index, clip) in clips.into_iter().enumerate() {
+            assert_eq!(
+                blends_like_its_shader(&mut painted(clip), &mask, origin),
+                index == 0
+            );
+        }
+        let mut surface = painted(clips[0]);
+        surface.canvas().translate((1.0, 0.0));
+        assert!(!blends_like_its_shader(&mut surface, &mask, origin));
+        let other = ProgramImage {
+            image: image(24, 16, &ColorSpace::new_srgb_linear()),
+            roi: mask.roi,
+        };
+        assert!(!blends_like_its_shader(
+            &mut painted(clips[0]),
+            &other,
+            origin
+        ));
+        for clip in clips {
+            for mode in [
+                MaskMode::Alpha,
+                MaskMode::Luminance,
+                MaskMode::AlphaInverted,
+                MaskMode::LuminanceInverted,
+            ] {
+                for (input, mask) in [
+                    (Some(&input), Some(&mask)),
+                    (Some(&input), None),
+                    (None, Some(&mask)),
+                ] {
+                    let mut expected = painted(clip);
+                    clear_surface(&mut expected).unwrap();
+                    if let Some(input) = input
+                        && (mask.is_some() || mode.is_inverted())
+                    {
+                        draw_program_image_with_mode(
+                            &mut expected,
+                            input,
+                            origin,
+                            SkBlendMode::Src,
+                            1.0,
+                        );
+                        if let Some(mask) = mask {
+                            let local = Matrix::translate((
+                                (mask.roi.x - origin[0]) as f32,
+                                (mask.roi.y - origin[1]) as f32,
+                            ));
+                            let shader = mask
+                                .image
+                                .to_shader(
+                                    (TileMode::Decal, TileMode::Decal),
+                                    SamplingOptions::default(),
+                                    Some(&local),
+                                )
+                                .unwrap();
+                            let shader = if mode.is_luminance() {
+                                effect
+                                    .make_shader(
+                                        Data::new_empty(),
+                                        &[ChildPtr::Shader(shader)],
+                                        None,
+                                    )
+                                    .unwrap()
+                            } else {
+                                shader
+                            };
+                            let mut paint = SkPaint::default();
+                            paint.set_blend_mode(if mode.is_inverted() {
+                                SkBlendMode::DstOut
+                            } else {
+                                SkBlendMode::DstIn
+                            });
+                            paint.set_shader(shader);
+                            expected.canvas().draw_paint(&paint);
+                        }
+                    }
+                    let mut actual = painted(clip);
+                    apply_mask_into(&mut actual, Some(&effect), input, mask, mode, origin).unwrap();
+                    assert_eq!(
+                        pixels(&mut actual),
+                        pixels(&mut expected),
+                        "{clip:?} {mode:?} input {} mask {}",
+                        input.is_some(),
+                        mask.is_some()
+                    );
+                }
+            }
         }
     }
 }

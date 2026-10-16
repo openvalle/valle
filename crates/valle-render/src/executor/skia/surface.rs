@@ -347,6 +347,68 @@ unsafe extern "C" {
         pixel_buffer: *mut core::ffi::c_void,
         plane_index: usize,
     ) -> usize;
+    fn CVPixelBufferLockBaseAddress(pixel_buffer: *mut core::ffi::c_void, flags: u64) -> i32;
+    fn CVPixelBufferUnlockBaseAddress(pixel_buffer: *mut core::ffi::c_void, flags: u64) -> i32;
+    fn CVPixelBufferGetBaseAddress(pixel_buffer: *mut core::ffi::c_void) -> *mut core::ffi::c_void;
+    fn CVPixelBufferGetBytesPerRow(pixel_buffer: *mut core::ffi::c_void) -> usize;
+}
+
+/// Acquires an encoder-owned VideoToolbox frame and runs `draw` on a Raster surface over its BGRA
+/// pixels, which stay locked for CPU writes until `draw` returns. VideoToolbox converts BGRA to
+/// YUV as it encodes, so Raster delivery needs neither a readback nor a CPU colour conversion.
+#[cfg(all(target_os = "macos", feature = "native"))]
+pub(crate) fn draw_shared_raster_frame<R>(
+    pool: &SharedVideoFramePool,
+    info: &ImageInfo,
+    draw: impl FnOnce(&mut Surface) -> R,
+) -> Result<(SharedVideoFrame, R), SurfaceError> {
+    struct Locked(*mut core::ffi::c_void);
+    impl Drop for Locked {
+        fn drop(&mut self) {
+            unsafe { CVPixelBufferUnlockBaseAddress(self.0, 0) };
+        }
+    }
+
+    let frame = pool
+        .acquire()
+        .map_err(|error| SurfaceError::SharedFrame(error.to_string()))?;
+    let SharedVideoFrameHandle::VideoToolbox(pixel_buffer) = frame.handle() else {
+        return Err(SurfaceError::SharedFrame(
+            "Raster shared target requires a VideoToolbox frame".into(),
+        ));
+    };
+    let (width, height) = frame.dimensions();
+    if pixel_buffer.is_null()
+        || unsafe { CVPixelBufferGetPixelFormatType(pixel_buffer) } != CV_PIXEL_FORMAT_BGRA
+        || info.color_type() != ColorType::BGRA8888
+        || (info.width(), info.height()) != (width as i32, height as i32)
+    {
+        return Err(SurfaceError::SharedFrame(
+            "Raster shared target must match the frame's BGRA extent".into(),
+        ));
+    }
+    if unsafe { CVPixelBufferLockBaseAddress(pixel_buffer, 0) } != 0 {
+        return Err(SurfaceError::SharedFrame(
+            "cannot lock the VideoToolbox frame for CPU writes".into(),
+        ));
+    }
+    let locked = Locked(pixel_buffer);
+    let base = unsafe { CVPixelBufferGetBaseAddress(pixel_buffer) }.cast::<u8>();
+    let row_bytes = unsafe { CVPixelBufferGetBytesPerRow(pixel_buffer) };
+    if base.is_null() || row_bytes < info.min_row_bytes() {
+        return Err(SurfaceError::SharedFrame(
+            "VideoToolbox frame has no CPU mapping".into(),
+        ));
+    }
+    // SAFETY: the lock maps `row_bytes` × `height` bytes, and the surface over them is dropped
+    // before the lock is released.
+    let pixels = unsafe { std::slice::from_raw_parts_mut(base, row_bytes * height as usize) };
+    let mut surface =
+        surfaces::wrap_pixels(info, pixels, row_bytes, None).ok_or(SurfaceError::Allocation)?;
+    let result = draw(&mut surface);
+    drop(surface);
+    drop(locked);
+    Ok((frame, result))
 }
 
 #[cfg(all(target_os = "macos", feature = "native"))]
@@ -1505,6 +1567,33 @@ impl<'arena> SurfaceFrame<'arena> {
             .get(&slot)
             .ok_or(SurfaceError::MissingSlot { slot: slot.get() })?;
         Ok(&mut self.arena.entries[index].surface)
+    }
+
+    /// Exchanges the Raster surfaces behind two slots for the rest of the frame when their
+    /// extents match, so a pass may draw over a dying input's pixels and leave its output in its
+    /// own slot. Returns whether the surfaces were exchanged.
+    pub(crate) fn swap_raster_slots(
+        &mut self,
+        first: SurfaceSlotId,
+        second: SurfaceSlotId,
+    ) -> Result<bool, SurfaceError> {
+        let first_index = *self
+            .assignments
+            .get(&first)
+            .ok_or(SurfaceError::MissingSlot { slot: first.get() })?;
+        let second_index = *self
+            .assignments
+            .get(&second)
+            .ok_or(SurfaceError::MissingSlot { slot: second.get() })?;
+        if !matches!(self.arena.backend, SurfaceBackend::Raster)
+            || first_index == second_index
+            || self.arena.entries[first_index].extent != self.arena.entries[second_index].extent
+        {
+            return Ok(false);
+        }
+        self.assignments.insert(first, second_index);
+        self.assignments.insert(second, first_index);
+        Ok(true)
     }
 
     pub(crate) fn snapshot(

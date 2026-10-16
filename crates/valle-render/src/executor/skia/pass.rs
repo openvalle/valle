@@ -6,10 +6,10 @@ use valle_engine::{
     compositor::{
         BoundExternalObjects, ExternalBindError, bind_external_objects,
         lower::{
-            BackendCapabilities, BoundProgramSchedule, BoundProgramSchedules, CompositeMode,
-            CopyOperation, ExecutionPassId, ExecutionPassKind, KernelInvocation, PlanProgram,
-            PlanResourceId, PlanResourceKind, ProgramBindingError, ProgramPassKind, RenderBindings,
-            RenderPlanTemplate, SurfaceSlotId,
+            BackendCapabilities, BoundExecutionPass, BoundProgramSchedule, BoundProgramSchedules,
+            CompositeMode, CopyOperation, ExecutionPassId, ExecutionPassKind, KernelInvocation,
+            PlanProgram, PlanResourceId, PlanResourceKind, ProgramBindingError, ProgramPassKind,
+            RenderBindings, RenderPlanTemplate, SurfaceSlotId,
         },
     },
     prepare::{
@@ -22,7 +22,7 @@ use super::{
     SkiaExternalObject, SkiaObjectTable, SkiaTarget,
     blend::BlendRuntime,
     cache::{BackendCacheCounters, BackendCaches, RasterLayerCache, RasterLayerKey},
-    draw::{DrawError, ProgramRuntime, ProgramTerminal},
+    draw::{DrawError, ProgramRuntime, ProgramTerminal, erase_raster},
     effect::{EffectCacheCounters, EffectRuntime, apply_prepared_mask, set_working_color},
     import::render_import,
     output::{prefers_cached_output, stage_output_into, stage_sdr_output_into, validate_target},
@@ -760,60 +760,110 @@ impl AdmittedSkiaFrame<'_> {
                     mode,
                     ..
                 } => {
-                    let source = surface(&surfaces, *layer)?;
-                    let destination = surface(&surfaces, *backdrop)?;
                     let opacity = dynamic_scalar(self.bindings, *opacity)?;
-                    match mode {
+                    let normal = matches!(
+                        mode,
                         CompositeMode::SourceOver {}
-                        | CompositeMode::Blend {
-                            mode: valle_draw::program::BlendMode::Normal,
-                        } => (
+                            | CompositeMode::Blend {
+                                mode: valle_draw::program::BlendMode::Normal,
+                            }
+                    );
+                    if normal
+                        && let Some(backdrop_slot) = in_place_backdrop(
+                            self.template,
+                            bound_pass,
+                            &surfaces,
+                            *backdrop,
+                            *layer,
+                            output_roi,
+                        )
+                        && surface_frame.swap_raster_slots(
+                            backdrop_slot,
+                            required_output_slot(output, output_slot)?,
+                        )?
+                    {
+                        // The backdrop dies here, so Raster draws the layer over its pixels
+                        // instead of over a copy of them; the two surfaces trade slots so the
+                        // result is in the planned one. Dropping the backdrop's image first keeps
+                        // the pixels unshared, which spares a copy-on-write.
+                        surfaces.remove(backdrop);
+                        let source = surface(&surfaces, *layer)?;
+                        (
                             render_plan_surface(
                                 &mut surface_frame,
                                 required_output_slot(output, output_slot)?,
                                 output_roi,
                                 |target| {
-                                    draw_composite(
+                                    draw_plan_image(
                                         target,
                                         source,
-                                        destination,
                                         output_roi,
                                         BlendMode::SrcOver,
                                         opacity,
-                                    )
+                                    );
+                                    Ok(())
                                 },
                             )?,
                             true,
-                        ),
-                        CompositeMode::Blend { mode } => {
-                            let blend = self.blend.as_ref().ok_or_else(|| {
-                                SkiaExecuteError::Program(
-                                    "creative blend kernel was not admitted".into(),
-                                )
-                            })?;
-                            let source =
-                                materialize_root_image(&mut surface_frame, source, extent)?;
-                            let destination =
-                                materialize_root_image(&mut surface_frame, destination, extent)?;
-                            (
+                        )
+                    } else {
+                        let source = surface(&surfaces, *layer)?;
+                        let destination = surface(&surfaces, *backdrop)?;
+                        match mode {
+                            CompositeMode::SourceOver {}
+                            | CompositeMode::Blend {
+                                mode: valle_draw::program::BlendMode::Normal,
+                            } => (
                                 render_plan_surface(
                                     &mut surface_frame,
                                     required_output_slot(output, output_slot)?,
                                     output_roi,
                                     |target| {
-                                        blend.composite_into(
+                                        draw_composite(
                                             target,
-                                            &source,
-                                            &destination,
-                                            *mode,
-                                            valle_draw::program::BlendSpace::Srgb,
+                                            source,
+                                            destination,
+                                            output_roi,
+                                            BlendMode::SrcOver,
                                             opacity,
-                                        )?;
-                                        Ok(())
+                                        )
                                     },
                                 )?,
                                 true,
-                            )
+                            ),
+                            CompositeMode::Blend { mode } => {
+                                let blend = self.blend.as_ref().ok_or_else(|| {
+                                    SkiaExecuteError::Program(
+                                        "creative blend kernel was not admitted".into(),
+                                    )
+                                })?;
+                                let source =
+                                    materialize_root_image(&mut surface_frame, source, extent)?;
+                                let destination = materialize_root_image(
+                                    &mut surface_frame,
+                                    destination,
+                                    extent,
+                                )?;
+                                (
+                                    render_plan_surface(
+                                        &mut surface_frame,
+                                        required_output_slot(output, output_slot)?,
+                                        output_roi,
+                                        |target| {
+                                            blend.composite_into(
+                                                target,
+                                                &source,
+                                                &destination,
+                                                *mode,
+                                                valle_draw::program::BlendSpace::Srgb,
+                                                opacity,
+                                            )?;
+                                            Ok(())
+                                        },
+                                    )?,
+                                    true,
+                                )
+                            }
                         }
                     }
                 }
@@ -946,6 +996,36 @@ fn materialize_plan_surface(
         PlanResourceKind::External { .. } => Err(SkiaExecuteError::InvalidPassOutput {
             resource: resource.get(),
         }),
+    }
+}
+
+/// The planned slot of a composite backdrop that can take the layer in place: no later pass
+/// reads it and its image covers exactly the output region. A surface resource's image is its
+/// slot's pixels from the origin: each pass draws its output there or copies a reused image
+/// there, and no other pass writes the slot while the resource is live.
+fn in_place_backdrop(
+    template: &RenderPlanTemplate,
+    pass: &BoundExecutionPass,
+    surfaces: &BTreeMap<PlanResourceId, PlanImage>,
+    backdrop: PlanResourceId,
+    layer: PlanResourceId,
+    output_roi: DeviceRect,
+) -> Option<SurfaceSlotId> {
+    if backdrop == layer || !pass.retire_after().contains(&backdrop) {
+        return None;
+    }
+    let image = surfaces.get(&backdrop)?;
+    if image.image().is_none() || image.roi() != output_roi {
+        return None;
+    }
+    match template
+        .resources()
+        .get(backdrop.get() as usize - 1)
+        .filter(|candidate| candidate.id == backdrop)?
+        .kind
+    {
+        PlanResourceKind::Surface { slot } => Some(slot),
+        _ => None,
     }
 }
 
@@ -1584,6 +1664,9 @@ fn backdrop_bounds(
 }
 
 fn draw_solid(surface: &mut Surface, color: [f32; 4]) -> Result<(), SkiaExecuteError> {
+    if erase_raster(surface, color, None) {
+        return Ok(());
+    }
     let mut paint = Paint::default();
     paint.set_blend_mode(BlendMode::Src);
     set_working_color(
@@ -1653,7 +1736,13 @@ fn draw_composite(
     mode: BlendMode,
     opacity: f32,
 ) -> Result<(), SkiaExecuteError> {
-    surface.canvas().clear(Color4f::new(0.0, 0.0, 0.0, 0.0));
+    // A backdrop covering the target rewrites every pixel under Src, so on Raster the clear is
+    // a redundant full write. GPU targets keep it: it can become the render pass's load action.
+    let covered =
+        destination.image().is_some() && destination.roi().intersect(target_roi) == target_roi;
+    if !covered || surface.direct_context().is_some() {
+        surface.canvas().clear(Color4f::new(0.0, 0.0, 0.0, 0.0));
+    }
     draw_plan_image(surface, destination, target_roi, BlendMode::Src, 1.0);
     draw_plan_image(surface, source, target_roi, mode, opacity);
     Ok(())
@@ -1793,5 +1882,65 @@ pub enum SkiaExecuteError {
 impl From<DrawError> for SkiaExecuteError {
     fn from(value: DrawError) -> Self {
         Self::Program(value.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use valle_draw::program::LinearColor;
+
+    use super::*;
+    use crate::executor::skia::surface::raster_surface;
+
+    fn pixels(surface: &mut Surface) -> Vec<u8> {
+        surface.peek_pixels().unwrap().bytes().unwrap().to_vec()
+    }
+
+    #[test]
+    fn raster_erase_stores_the_bytes_of_the_working_color_shader() {
+        let info = working_info(Extent2d::new(7, 3).unwrap()).unwrap();
+        // Extended-range, negative and half-float subnormal channels convert like in-range ones.
+        for color in [
+            [0.0, 0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+            [1.0, 1.0, 1.0, 1.0],
+            [0.214_041_14, 0.033_104_766, 0.006_048_833, 1.0],
+            [1.0 / 3.0, 2.0 / 3.0, 0.1, 1.0],
+            [1.7, -0.25, 1e-6, 1.0],
+        ] {
+            let mut shaded = raster_surface(&info).unwrap();
+            let mut paint = Paint::default();
+            paint.set_blend_mode(BlendMode::Src);
+            set_working_color(
+                &mut paint,
+                LinearColor {
+                    red: color[0],
+                    green: color[1],
+                    blue: color[2],
+                    alpha: color[3],
+                },
+            )
+            .unwrap();
+            shaded.canvas().draw_paint(&paint);
+            let mut erased = raster_surface(&info).unwrap();
+            assert!(erase_raster(&mut erased, color, None));
+            assert_eq!(pixels(&mut erased), pixels(&mut shaded), "{color:?}");
+        }
+        let mut surface = raster_surface(&info).unwrap();
+        assert!(!erase_raster(&mut surface, [0.25, 0.25, 0.25, 0.5], None));
+        assert!(!erase_raster(&mut surface, [f32::NAN, 0.0, 0.0, 1.0], None));
+    }
+
+    #[test]
+    fn raster_erase_leaves_a_shared_snapshot_intact() {
+        let info = working_info(Extent2d::new(4, 4).unwrap()).unwrap();
+        let mut surface = raster_surface(&info).unwrap();
+        assert!(erase_raster(&mut surface, [1.0, 0.0, 0.0, 1.0], None));
+        let red = pixels(&mut surface);
+        let snapshot = surface.image_snapshot();
+        assert!(erase_raster(&mut surface, [0.0, 0.0, 1.0, 1.0], None));
+        assert_ne!(pixels(&mut surface), red);
+        let kept = snapshot.peek_pixels().unwrap().bytes().unwrap().to_vec();
+        assert_eq!(kept, red);
     }
 }

@@ -19,10 +19,8 @@ use valle_engine::{
     render::{FrameKey, RenderId},
     resource::ContentDigest,
 };
-#[cfg(target_os = "macos")]
-use valle_media::SharedVideoFramePool;
+use valle_media::{SharedVideoFrame, SharedVideoFramePool};
 
-#[cfg(target_os = "macos")]
 use super::DeliveredSharedFrame;
 #[cfg(target_os = "macos")]
 use super::gpu_schedule::{AdaptiveQueues, QueueSample, metal_memory};
@@ -261,11 +259,12 @@ pub fn render_schedule(
     }
     let workers =
         budget.frame_parallelism(budget.threads().min(4).min(frames.len()).max(1), spec)?;
-    let shared = sink.shared_frame_pool().is_some();
-    let contexts = if shared { 3 } else { 1 };
+    // Raster writes an encoder's shared frames on its usual pipeline; only GPU backends stage them.
+    let shared_gpu = backend != SkiaBackendKind::Raster && sink.shared_frame_pool().is_some();
+    let contexts = if shared_gpu { 3 } else { 1 };
     let owners = super::budget::ResidencyOwners {
         providers: 1,
-        executors: if shared {
+        executors: if shared_gpu {
             contexts
         } else if backend == SkiaBackendKind::Raster {
             workers
@@ -315,22 +314,23 @@ pub fn render_schedule(
             "covered":"shared frame reservations, resource images, working and retained surfaces, conservative CPU filter/3D scratch and decoded media windows",
             "notCharged":"immutable compiled inputs, bounded plan/topology metadata, driver and codec implementation allocations; managed claims are not process RSS"}));
     }
-    let result = if let Some(pool) = sink.shared_frame_pool() {
-        #[cfg(target_os = "macos")]
-        {
-            render_shared_staged(
-                project, frames, spec, sink, control, progress, backend, pool, workers,
-            )
+    let result = match sink.shared_frame_pool() {
+        Some(pool) if shared_gpu => {
+            #[cfg(target_os = "macos")]
+            {
+                render_shared_staged(
+                    project, frames, spec, sink, control, progress, backend, pool, workers,
+                )
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                let _ = pool;
+                Err(PipelineError::SharedGpuUnavailable)
+            }
         }
-        #[cfg(not(target_os = "macos"))]
-        {
-            let _ = pool;
-            Err(PipelineError::SharedGpuUnavailable)
-        }
-    } else {
-        tasks::render(
-            project, frames, spec, sink, control, progress, backend, workers,
-        )
+        pool => tasks::render(
+            project, frames, spec, sink, control, progress, backend, workers, pool,
+        ),
     };
     if let Some(admission) = &control.admission {
         admission.stop();
@@ -690,12 +690,18 @@ fn deliver_shared_head(
 }
 
 struct CompletedFrame {
-    _memory: Option<valle_engine::motion::memory::MemoryCredit>,
-    _delivery_memory: Option<valle_engine::motion::memory::MemoryLease>,
+    memory: Option<valle_engine::motion::memory::MemoryCredit>,
+    delivery_memory: Option<valle_engine::motion::memory::MemoryLease>,
     sequence: usize,
     key: FrameKey,
-    pixels: valle_media::frame::RgbaFrame,
+    pixels: CompletedPixels,
     evidence: super::FrameEvidence,
+}
+
+enum CompletedPixels {
+    Rgba(valle_media::frame::RgbaFrame),
+    /// An encoder-owned surface that Raster wrote in place.
+    Shared(SharedVideoFrame),
 }
 
 #[derive(Default)]
@@ -983,6 +989,14 @@ impl PipelineAccumulator {
                         .gpu_completion_wait_us
                         .ok_or(PipelineError::MissingDeliveryEvidence)?,
                 )?;
+            }
+            FrameDelivery::SharedCpu => {
+                if timings.delivery_readback_us.is_some()
+                    || evidence.delivery_readback_bytes != 0
+                    || timings.gpu_completion_wait_us.is_some()
+                {
+                    return Err(PipelineError::InvalidDeliveryEvidence);
+                }
             }
             FrameDelivery::Surface => return Err(PipelineError::InvalidDeliveryEvidence),
         }

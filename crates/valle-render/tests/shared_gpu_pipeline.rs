@@ -120,6 +120,7 @@ unsafe extern "C" {
 
 struct InspectSink {
     muxer: Muxer,
+    delivery: FrameDelivery,
     pixels: Vec<Vec<u8>>,
     keys: Vec<i64>,
     fail_at: Option<usize>,
@@ -140,6 +141,7 @@ impl InspectSink {
                 VideoFrameTransport::SharedGpu,
             )
             .unwrap(),
+            delivery: FrameDelivery::SharedGpu,
             pixels: Vec::new(),
             keys: Vec::new(),
             fail_at: None,
@@ -163,10 +165,13 @@ impl FrameSink for InspectSink {
         }
         assert_eq!(delivered.sequence, self.keys.len());
         assert_eq!(delivered.evidence.frame, delivered.key.index());
-        assert_eq!(delivered.evidence.delivery, FrameDelivery::SharedGpu);
+        assert_eq!(delivered.evidence.delivery, self.delivery);
         assert_eq!(delivered.evidence.delivery_readback_bytes, 0);
         assert_eq!(delivered.evidence.timings.delivery_readback_us, None);
-        assert!(delivered.evidence.timings.gpu_completion_wait_us.is_some());
+        assert_eq!(
+            delivered.evidence.timings.gpu_completion_wait_us.is_some(),
+            self.delivery == FrameDelivery::SharedGpu
+        );
         assert_eq!(delivered.evidence.scene3d.requests, 1);
         let SharedVideoFrameHandle::VideoToolbox(buffer) = delivered.frame.handle() else {
             panic!("expected VideoToolbox frame")
@@ -237,6 +242,68 @@ fn parallel_shared_delivery_preserves_seek_order_exact_pixels_and_no_readback() 
         } else {
             baseline = Some(sink.pixels);
         }
+    }
+}
+
+#[test]
+#[ignore = "requires real VideoToolbox"]
+fn raster_shared_delivery_writes_the_readback_pixels_in_place() {
+    struct Readback(Vec<Vec<u8>>);
+    impl FrameSink for Readback {
+        fn push(&mut self, frame: DeliveredFrame<'_>) -> anyhow::Result<()> {
+            self.0.push(frame.pixels.data.clone());
+            Ok(())
+        }
+        fn finish(&mut self) -> anyhow::Result<()> {
+            Ok(())
+        }
+    }
+    let project = project();
+    let dir = tempfile::tempdir().unwrap();
+    let indices = [0, 7, 20, 59, 12, 45, 7, 1, 30, 2];
+    let frames = indices.map(FrameKey::new);
+    let mut readback = Readback(Vec::new());
+    render_schedule(
+        &project,
+        &frames,
+        spec(),
+        &mut readback,
+        &RenderControl::default(),
+        None,
+        SkiaBackendKind::Raster,
+    )
+    .unwrap();
+    // The encoder's surfaces are BGRA; the same codes must land there, swizzled.
+    let expected = readback
+        .0
+        .iter()
+        .map(|rgba| {
+            rgba.as_chunks::<4>()
+                .0
+                .iter()
+                .flat_map(|&[red, green, blue, alpha]| [blue, green, red, alpha])
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    for workers in [1, 4] {
+        let mut sink = InspectSink::new(&dir.path().join(format!("raster-{workers}.mp4")));
+        sink.delivery = FrameDelivery::SharedCpu;
+        let report = render_schedule(
+            &project,
+            &frames,
+            spec(),
+            &mut sink,
+            &RenderControl::default()
+                .with_budget(valle_render::host::NativeRenderBudget::new(workers, None).unwrap()),
+            None,
+            SkiaBackendKind::Raster,
+        )
+        .unwrap();
+        assert_eq!(report.delivery, Some(FrameDelivery::SharedCpu));
+        assert_eq!(report.delivery_readback_bytes, 0);
+        assert!(sink.finished);
+        assert_eq!(sink.keys, indices);
+        assert_eq!(sink.pixels, expected, "workers={workers}");
     }
 }
 

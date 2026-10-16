@@ -1013,7 +1013,8 @@ pub(crate) fn quantize_half(value: f64) -> f32 {
     half_to_f32(f32_to_half(value))
 }
 
-pub(crate) fn half_to_f32(bits: u16) -> f32 {
+/// Widen binary16 to f32. Every half value, subnormals included, is exact in f32.
+pub fn half_to_f32(bits: u16) -> f32 {
     let sign = u32::from(bits & 0x8000) << 16;
     let exponent = u32::from((bits >> 10) & 0x1f);
     let fraction = u32::from(bits & 0x03ff);
