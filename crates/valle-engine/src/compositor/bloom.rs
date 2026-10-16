@@ -276,7 +276,9 @@ impl<const CHANNELS: usize> Level<CHANNELS> {
         self.pixels[y * self.width + x]
     }
 
-    /// Separable tent sum; the weights total 16 when every tap lies inside the level.
+    /// Separable tent sum of one pixel; the weights total 16 when every tap lies inside the
+    /// level. `tent_9` forms the same sums a band of rows at a time.
+    #[cfg(test)]
     fn tent(&self, x: &TentAxis, y: &TentAxis) -> [f64; CHANNELS] {
         let mut sum = [0.0; CHANNELS];
         for &(sy, wy) in y.taps() {
@@ -338,6 +340,125 @@ impl TentAxis {
     }
 }
 
+/// The lowest and highest source index that any of `axes` reads.
+fn tap_span(axes: &[TentAxis]) -> Option<(usize, usize)> {
+    axes.iter()
+        .flat_map(|axis| axis.taps().iter().map(|&(index, _)| index))
+        .fold(None, |range: Option<(usize, usize)>, index| {
+            Some(range.map_or((index, index), |(lo, hi)| (lo.min(index), hi.max(index))))
+        })
+}
+
+/// Half-open columns and rows of a level.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct Area {
+    columns: [usize; 2],
+    rows: [usize; 2],
+}
+
+impl Area {
+    #[cfg(test)]
+    const fn full(width: usize, height: usize) -> Self {
+        Self {
+            columns: [0, width],
+            rows: [0, height],
+        }
+    }
+
+    const fn is_empty(self) -> bool {
+        self.columns[0] >= self.columns[1] || self.rows[0] >= self.rows[1]
+    }
+
+    fn union(self, other: Self) -> Self {
+        if self.is_empty() {
+            return other;
+        }
+        if other.is_empty() {
+            return self;
+        }
+        Self {
+            columns: [
+                self.columns[0].min(other.columns[0]),
+                self.columns[1].max(other.columns[1]),
+            ],
+            rows: [
+                self.rows[0].min(other.rows[0]),
+                self.rows[1].max(other.rows[1]),
+            ],
+        }
+    }
+}
+
+/// The source pixels the 13-tap downsample of `area` reads: offsets -2..=3 around (2x, 2y).
+fn downsample_support(area: Area, [width, height]: [usize; 2]) -> Area {
+    if area.is_empty() {
+        return Area::default();
+    }
+    let span = |[start, end]: [usize; 2], extent: usize| {
+        [(2 * start).saturating_sub(2), (2 * end + 2).min(extent)]
+    };
+    Area {
+        columns: span(area.columns, width),
+        rows: span(area.rows, height),
+    }
+}
+
+/// The tent taps of every output column and row of a blur or upsample pass.
+#[derive(Default)]
+struct TentAxes {
+    columns: Vec<TentAxis>,
+    lines: Vec<TentAxis>,
+}
+
+impl TentAxes {
+    /// Taps sit `spread` pixels from the centre on each axis. Fractional offsets interpolate
+    /// instead of rounding, so the tent stays centred. Each row/column uses the same taps.
+    fn blur([width, height]: [usize; 2], spread: f64) -> Self {
+        let axes = |extent| {
+            (0..extent)
+                .map(|position| TentAxis::new(position as f64, spread, extent))
+                .collect()
+        };
+        Self {
+            columns: axes(width),
+            lines: axes(height),
+        }
+    }
+
+    /// Output pixel centres mapped onto the coarser source, with taps half the spread apart.
+    fn upsample(
+        [width, height]: [usize; 2],
+        [source_width, source_height]: [usize; 2],
+        spread: f64,
+    ) -> Self {
+        let axes = |extent, source_extent| {
+            (0..extent)
+                .map(|position| {
+                    let center =
+                        (position as f64 + 0.5) * source_extent as f64 / extent as f64 - 0.5;
+                    TentAxis::new(center, 0.5 * spread, source_extent)
+                })
+                .collect()
+        };
+        Self {
+            columns: axes(width, source_width),
+            lines: axes(height, source_height),
+        }
+    }
+
+    /// The source pixels the taps of `area` read.
+    fn support(&self, area: Area) -> Area {
+        if area.is_empty() {
+            return Area::default();
+        }
+        let span = |axes: &[TentAxis]| tap_span(axes).map_or([0, 0], |(lo, hi)| [lo, hi + 1]);
+        Area {
+            columns: span(&self.columns[area.columns[0]..area.columns[1]]),
+            rows: span(&self.lines[area.rows[0]..area.rows[1]]),
+        }
+    }
+}
+
 // Pyramid passes write independent rows. Keep each pixel's tap and summation order
 // unchanged so native workers and the single-threaded Web build produce the same F16 bytes.
 #[cfg(not(target_family = "wasm"))]
@@ -357,22 +478,44 @@ static PYRAMID_WORKERS: std::sync::LazyLock<Option<rayon::ThreadPool>> =
             .flatten()
     });
 
+/// Fills rows `top..bottom` of `next` as [`fill_image_rows`] does; `fill` receives the level
+/// index of its first row.
 fn fill_rows<const CHANNELS: usize>(
     next: &mut Level<CHANNELS>,
+    [top, bottom]: [usize; 2],
     fill: impl Fn(usize, &mut [[f32; CHANNELS]]) + Sync,
 ) {
+    let width = next.width;
+    fill_image_rows(
+        &mut next.pixels[top * width..bottom * width],
+        width,
+        |first, rows| fill(top + first, rows),
+    );
+}
+
+/// Fills a row-major image whose rows are independent, splitting a large image across admitted
+/// CPU helpers. `fill` receives the index of its first row and whole rows (a trailing partial
+/// row stays with the last ones); every pixel keeps its own arithmetic, so the bytes do not
+/// depend on how the rows were split.
+pub fn fill_image_rows<T: Send>(
+    pixels: &mut [T],
+    width: usize,
+    fill: impl Fn(usize, &mut [T]) + Sync,
+) {
+    #[cfg(target_family = "wasm")]
+    let _ = width;
     #[cfg(not(target_family = "wasm"))]
     {
-        let width = next.width;
-        if valle_motion::cpu::is_budgeted() {
-            let requested = if next.height >= 128 && next.pixels.len() >= 65_536 {
-                8
-            } else {
-                1
-            };
-            valle_motion::cpu::parallel_scope(requested, |scope, count| {
-                let rows_per_job = next.height.div_ceil(count).max(16);
-                let mut chunks = next.pixels.chunks_mut(rows_per_job * width).enumerate();
+        let height = if width == 0 {
+            0
+        } else {
+            pixels.len().div_ceil(width)
+        };
+        let large = height >= 128 && pixels.len() >= 65_536;
+        if height > 0 && valle_motion::cpu::is_budgeted() {
+            valle_motion::cpu::parallel_scope(if large { 8 } else { 1 }, |scope, count| {
+                let rows_per_job = height.div_ceil(count).max(16);
+                let mut chunks = pixels.chunks_mut(rows_per_job * width).enumerate();
                 let (_, caller_rows) = chunks.next().unwrap();
                 for (index, rows) in chunks {
                     let fill = &fill;
@@ -384,14 +527,11 @@ fn fill_rows<const CHANNELS: usize>(
         }
         // All frame workers share one bounded pool instead of spawning another
         // machine-sized set of OS threads for every stage of every frame.
-        if next.height >= 128
-            && next.pixels.len() >= 65_536
-            && let Some(pool) = &*PYRAMID_WORKERS
-        {
+        if large && let Some(pool) = &*PYRAMID_WORKERS {
             let workers = pool.current_num_threads();
-            let rows_per_worker = next.height.div_ceil(workers).max(16);
+            let rows_per_worker = height.div_ceil(workers).max(16);
             pool.scope(|scope| {
-                for (index, chunk) in next.pixels.chunks_mut(rows_per_worker * width).enumerate() {
+                for (index, chunk) in pixels.chunks_mut(rows_per_worker * width).enumerate() {
                     let fill = &fill;
                     scope.spawn(move |_| fill(index * rows_per_worker, chunk));
                 }
@@ -399,7 +539,7 @@ fn fill_rows<const CHANNELS: usize>(
             return;
         }
     }
-    fill(0, &mut next.pixels);
+    fill(0, pixels);
 }
 
 /// Working region: the input that can affect the visible output, padded by the complete support.
@@ -435,6 +575,19 @@ impl PyramidRegion {
             return Err(BloomError::InvalidImage);
         }
         Ok(margin as u32)
+    }
+
+    /// The output pixels of the region, in region pixels. `encode_region` reads only these.
+    fn window(&self, output: [u32; 2]) -> Area {
+        let span = |origin: i32, size: u32, extent: u32| {
+            let start = (-i64::from(origin)).clamp(0, i64::from(size));
+            let end = (i64::from(extent) - i64::from(origin)).clamp(start, i64::from(size));
+            [start as usize, end as usize]
+        };
+        Area {
+            columns: span(self.origin[0], self.size[0], output[0]),
+            rows: span(self.origin[1], self.size[1], output[1]),
+        }
     }
 
     pub fn new(
@@ -508,6 +661,7 @@ pub fn apply_bloom_f16(
         region.size[0],
         region.size[1],
         region.input_offset,
+        region.window([output_width, output_height]),
         params,
     )?;
     Ok(encode_region(
@@ -540,6 +694,7 @@ pub fn apply_glow_f16(
         region.size[0],
         region.size[1],
         region.input_offset,
+        region.window([output_width, output_height]),
         params,
     )?;
     Ok(encode_region(
@@ -550,6 +705,8 @@ pub fn apply_glow_f16(
 }
 
 /// Source ROI is placed at `offset` inside the output ROI. All dimensions are device pixels.
+/// Only the pixels of `window` are finished; the others keep the source.
+#[allow(clippy::too_many_arguments)]
 fn apply_bloom_region_f16(
     input: &[u8],
     input_width: u32,
@@ -557,6 +714,7 @@ fn apply_bloom_region_f16(
     output_width: u32,
     output_height: u32,
     offset: [i32; 2],
+    window: Area,
     params: BloomParams,
 ) -> Result<Vec<[f32; 4]>, BloomError> {
     if !params.threshold.is_finite()
@@ -582,46 +740,59 @@ fn apply_bloom_region_f16(
         return Ok(base);
     }
 
-    let mut bright = Level::<3>::empty(output_width as usize, output_height as usize);
-    for (dst, pixel) in bright.pixels.iter_mut().zip(&base) {
-        let alpha = f64::from(pixel[3]);
-        if alpha <= 0.0 {
-            continue;
+    let width = output_width as usize;
+    let threshold = f64::from(params.threshold);
+    let knee = f64::from(params.knee);
+    let bloom = pyramid_halo(
+        [width, output_height as usize],
+        params.radius,
+        params.radius,
+        window,
+        |index| {
+            let pixel = base[index];
+            let alpha = f64::from(pixel[3]);
+            if alpha <= 0.0 {
+                return [0.0; 3];
+            }
+            let luminance = (0.2627 * f64::from(pixel[0])
+                + 0.6780 * f64::from(pixel[1])
+                + 0.0593 * f64::from(pixel[2]))
+                / alpha;
+            let weight = if knee == 0.0 {
+                f64::from(luminance >= threshold)
+            } else {
+                let t = ((luminance - threshold + knee) / (2.0 * knee)).clamp(0.0, 1.0);
+                t * t * (3.0 - 2.0 * t)
+            };
+            let [red, green, blue, _] = quantize_halves([
+                f64::from(pixel[0]) * weight,
+                f64::from(pixel[1]) * weight,
+                f64::from(pixel[2]) * weight,
+                0.0,
+            ]);
+            [red, green, blue]
+        },
+    )?;
+    fill_window(&mut base, width, window, |index, source| {
+        let halo = &bloom.pixels[index];
+        // A positive-zero halo leaves a positive-zero pixel unchanged.
+        if is_positive_zero(halo) && is_positive_zero(source) {
+            return;
         }
-        let luminance = (0.2627 * f64::from(pixel[0])
-            + 0.6780 * f64::from(pixel[1])
-            + 0.0593 * f64::from(pixel[2]))
-            / alpha;
-        let threshold = f64::from(params.threshold);
-        let knee = f64::from(params.knee);
-        let weight = if knee == 0.0 {
-            f64::from(luminance >= threshold)
-        } else {
-            let t = ((luminance - threshold + knee) / (2.0 * knee)).clamp(0.0, 1.0);
-            t * t * (3.0 - 2.0 * t)
+        let channel = |channel: usize| {
+            (f64::from(source[channel]) + f64::from(params.intensity) * f64::from(halo[channel]))
+                .clamp(-65504.0, 65504.0)
         };
-        for (channel, source) in dst.iter_mut().zip(pixel) {
-            *channel = quantize_half(f64::from(*source) * weight);
-        }
-    }
-
-    let bloom = pyramid_halo(bright, params.radius, params.radius)?;
-    for (source, halo) in base.iter_mut().zip(bloom.pixels) {
-        for channel in 0..3 {
-            source[channel] = quantize_half(
-                (f64::from(source[channel])
-                    + f64::from(params.intensity) * f64::from(halo[channel]))
-                .clamp(-65504.0, 65504.0),
-            );
-        }
-        let halo_alpha = halo.into_iter().fold(0.0_f32, f32::max).min(1.0);
-        source[3] = source[3].max(halo_alpha);
-    }
+        let [red, green, blue, _] = quantize_halves([channel(0), channel(1), channel(2), 0.0]);
+        let halo_alpha = halo.iter().copied().fold(0.0_f32, f32::max).min(1.0);
+        *source = [red, green, blue, source[3].max(halo_alpha)];
+    });
     Ok(base)
 }
 
 /// Alpha-contour glow uses the same reduced-resolution pyramid, then tints the
-/// halo and places the original subtree over it.
+/// halo and places the original subtree over it. Only the pixels of `window` are finished.
+#[allow(clippy::too_many_arguments)]
 fn apply_glow_region_f16(
     input: &[u8],
     input_width: u32,
@@ -629,6 +800,7 @@ fn apply_glow_region_f16(
     output_width: u32,
     output_height: u32,
     offset: [i32; 2],
+    window: Area,
     params: GlowParams,
 ) -> Result<Vec<[f32; 4]>, BloomError> {
     if !params.intensity.is_finite()
@@ -651,15 +823,23 @@ fn apply_glow_region_f16(
     if params.radius == 0.0 || params.intensity == 0.0 || params.color[3] == 0.0 {
         return Ok(base);
     }
-    let mut coverage = Level::<1>::empty(output_width as usize, output_height as usize);
-    for (target, source) in coverage.pixels.iter_mut().zip(&base) {
-        *target = [source[3]];
-    }
+    let width = output_width as usize;
     // Keep the level count tied to the authored radius while widening each tent
     // tap to approximate a Gaussian sigma without adding a global coarse tail.
-    let halo = pyramid_halo(coverage, params.radius, params.radius * 2.0)?;
+    let halo = pyramid_halo(
+        [width, output_height as usize],
+        params.radius,
+        params.radius * 2.0,
+        window,
+        |index| [base[index][3]],
+    )?;
     let peak_color = params.color[..3].iter().copied().fold(0.0_f32, f32::max);
-    for (source, sample) in base.iter_mut().zip(halo.pixels) {
+    fill_window(&mut base, width, window, |index, source| {
+        let sample = &halo.pixels[index];
+        // A positive-zero halo leaves a positive-zero pixel unchanged.
+        if is_positive_zero(sample) && is_positive_zero(source) {
+            return;
+        }
         let gain = f64::from(sample[0]) * f64::from(params.intensity) * GLOW_RESPONSE_GAIN;
         let color_gain = if peak_color > 0.0 {
             gain.min(1.0 / f64::from(peak_color))
@@ -668,15 +848,47 @@ fn apply_glow_region_f16(
         };
         let source_alpha = f64::from(source[3]);
         let halo_alpha = (gain * f64::from(params.color[3])).min(1.0);
-        for (channel, color) in source[..3].iter_mut().zip(params.color) {
-            *channel = quantize_half(
-                (f64::from(*channel) + color_gain * f64::from(color) * (1.0 - source_alpha))
-                    .clamp(-65504.0, 65504.0),
-            );
-        }
-        source[3] = quantize_half(source_alpha + halo_alpha * (1.0 - source_alpha));
-    }
+        let channel = |channel: usize| {
+            (f64::from(source[channel])
+                + color_gain * f64::from(params.color[channel]) * (1.0 - source_alpha))
+                .clamp(-65504.0, 65504.0)
+        };
+        *source = quantize_halves([
+            channel(0),
+            channel(1),
+            channel(2),
+            source_alpha + halo_alpha * (1.0 - source_alpha),
+        ]);
+    });
     Ok(base)
+}
+
+/// Applies `composite` to every pixel of `window` in a region `width` pixels wide, passing the
+/// pixel's index in the region.
+fn fill_window(
+    pixels: &mut [[f32; 4]],
+    width: usize,
+    window: Area,
+    composite: impl Fn(usize, &mut [f32; 4]) + Sync,
+) {
+    let [left, right] = window.columns;
+    let [top, bottom] = window.rows;
+    fill_image_rows(
+        &mut pixels[top * width..bottom * width],
+        width,
+        |first, rows| {
+            for (index, row) in rows.chunks_exact_mut(width).enumerate() {
+                let start = (top + first + index) * width;
+                for (x, pixel) in (left..right).zip(&mut row[left..right]) {
+                    composite(start + x, pixel);
+                }
+            }
+        },
+    );
+}
+
+fn is_positive_zero<const CHANNELS: usize>(pixel: &[f32; CHANNELS]) -> bool {
+    pixel.iter().all(|channel| channel.to_bits() == 0)
 }
 
 /// Encode the output window of the region directly, avoiding a padded F16 allocation followed
@@ -692,20 +904,20 @@ fn encode_region(pixels: &[[f32; 4]], region: PyramidRegion, output: [u32; 2]) -
     };
     let (left, right) = span(region.origin[0], region.size[0], width);
     let (top, bottom) = span(region.origin[1], region.size[1], height);
+    let column = (left as i64 - i64::from(region.origin[0])) as usize;
     let mut bytes = vec![0_u8; width * height * 8];
-    for y in top..bottom {
-        let row = (y as i64 - i64::from(region.origin[1])) as usize * region_width;
-        let column = (left as i64 - i64::from(region.origin[0])) as usize;
-        let encoded = &mut bytes[(y * width + left) * 8..(y * width + right) * 8];
-        for (pixel, target) in pixels[row + column..row + column + right - left]
-            .iter()
-            .zip(encoded.chunks_exact_mut(8))
-        {
-            for (&channel, bytes) in pixel.iter().zip(target.chunks_exact_mut(2)) {
-                bytes.copy_from_slice(&f32_to_half(channel).to_le_bytes());
+    fill_image_rows(&mut bytes, width * 8, |first, rows| {
+        for (index, encoded) in rows.chunks_exact_mut(width * 8).enumerate() {
+            let y = first + index;
+            if (top..bottom).contains(&y) {
+                let row = (y as i64 - i64::from(region.origin[1])) as usize * region_width;
+                encode_pixels(
+                    &pixels[row + column..row + column + right - left],
+                    &mut encoded[left * 8..right * 8],
+                );
             }
         }
-    }
+    });
     bytes
 }
 
@@ -723,67 +935,154 @@ pub(crate) fn read_base(
         return Err(BloomError::InvalidImage);
     }
     let iw = input_width as usize;
+    let ih = input_height as usize;
     let ow = output_width as usize;
     let oh = output_height as usize;
-    let mut base = vec![[0.0_f32; 4]; output_count];
-    for (index, pixel) in input.chunks_exact(8).enumerate() {
-        let x = index % iw;
-        let y = index / iw;
-        let dx = x as i64 + i64::from(offset[0]);
-        let dy = y as i64 + i64::from(offset[1]);
-        let mut channels = [0.0; 4];
-        for (channel, bytes) in channels.iter_mut().zip(pixel.chunks_exact(2)) {
-            *channel = half_to_f32(u16::from_le_bytes([bytes[0], bytes[1]]));
-            if !channel.is_finite() {
-                return Err(BloomError::InvalidImage);
+    let row_bytes = iw * 8;
+    // Decodes one input row into its output row, if it has one. Every input pixel must be
+    // finite, including those placed outside the output.
+    let decode_row = |row: &[u8], mut target: Option<&mut [[f32; 4]]>| {
+        for (x, pixel) in row.as_chunks::<8>().0.iter().enumerate() {
+            let Some(channels) = decode_pixel(pixel) else {
+                return false;
+            };
+            let dx = x as i64 + i64::from(offset[0]);
+            if let Some(target) = target.as_deref_mut()
+                && dx >= 0
+                && dx < ow as i64
+            {
+                target[dx as usize] = channels;
             }
         }
-        if dx >= 0 && dx < ow as i64 && dy >= 0 && dy < oh as i64 {
-            base[dy as usize * ow + dx as usize] = channels;
+        true
+    };
+    let mut base = vec![[0.0_f32; 4]; output_count];
+    let invalid = std::sync::atomic::AtomicBool::new(false);
+    fill_image_rows(&mut base, ow, |first, rows| {
+        for (index, target) in rows.chunks_exact_mut(ow).enumerate() {
+            let y = (first + index) as i64 - i64::from(offset[1]);
+            if (0..ih as i64).contains(&y) {
+                let start = y as usize * row_bytes;
+                if !decode_row(&input[start..start + row_bytes], Some(target)) {
+                    invalid.store(true, std::sync::atomic::Ordering::Relaxed);
+                    return;
+                }
+            }
         }
+    });
+    let placed = (-i64::from(offset[1])).clamp(0, ih as i64) as usize
+        ..(oh as i64 - i64::from(offset[1])).clamp(0, ih as i64) as usize;
+    if invalid.into_inner()
+        || input
+            .chunks_exact(row_bytes)
+            .enumerate()
+            .any(|(y, row)| !placed.contains(&y) && !decode_row(row, None))
+    {
+        return Err(BloomError::InvalidImage);
     }
     Ok(base)
 }
 
+/// Runs the pyramid on the level-0 image whose pixel at each index `extract` returns. Only
+/// the pixels that `window` of the output depends on are computed: walking the passes backwards,
+/// each one needs the pixels its taps read from its inputs. Every other pixel stays zero, and
+/// no computed pixel reads it.
 fn pyramid_halo<const CHANNELS: usize>(
-    bright: Level<CHANNELS>,
+    [width, height]: [usize; 2],
     depth_radius: f32,
     spread_radius: f32,
+    window: Area,
+    extract: impl Fn(usize) -> [f32; CHANNELS] + Sync,
 ) -> Result<Level<CHANNELS>, BloomError> {
     let graph = PyramidGraph::new(
-        u32::try_from(bright.width).map_err(|_| BloomError::InvalidImage)?,
-        u32::try_from(bright.height).map_err(|_| BloomError::InvalidImage)?,
+        u32::try_from(width).map_err(|_| BloomError::InvalidImage)?,
+        u32::try_from(height).map_err(|_| BloomError::InvalidImage)?,
         depth_radius,
         spread_radius,
     )?;
-    let mut images = vec![None; graph.resource_count()];
-    images[0] = Some(bright);
+    let mut sizes = vec![[width, height]; graph.resource_count()];
     for pass in graph.passes() {
+        sizes[pass.output()] = [pass.width() as usize, pass.height() as usize];
+    }
+    let axes = graph
+        .passes()
+        .iter()
+        .map(|pass| match pass.kind() {
+            PyramidPassKind::Downsample { .. } => TentAxes::default(),
+            PyramidPassKind::Blur { input } => TentAxes::blur(sizes[input], graph.spread()),
+            PyramidPassKind::Upsample { coarse, .. } => {
+                TentAxes::upsample(sizes[pass.output()], sizes[coarse], graph.spread())
+            }
+        })
+        .collect::<Vec<_>>();
+    let mut areas = vec![Area::default(); graph.resource_count()];
+    areas[graph.output()] = window;
+    for (pass, axes) in graph.passes().iter().zip(&axes).rev() {
+        let area = areas[pass.output()];
+        let mut read = |resource: usize, support: Area| {
+            areas[resource] = areas[resource].union(support);
+        };
+        match pass.kind() {
+            PyramidPassKind::Downsample { input } => {
+                read(input, downsample_support(area, sizes[input]));
+            }
+            PyramidPassKind::Blur { input } => read(input, axes.support(area)),
+            PyramidPassKind::Upsample { coarse, fine, .. } => {
+                read(coarse, axes.support(area));
+                if let Some(fine) = fine {
+                    read(fine, area);
+                }
+            }
+        }
+    }
+    let mut base = Level::empty(width, height);
+    let [left, right] = areas[0].columns;
+    fill_rows(&mut base, areas[0].rows, |first, rows| {
+        for (index, row) in rows.chunks_mut(width).enumerate() {
+            let start = (first + index) * width;
+            for (x, pixel) in (left..right).zip(&mut row[left..right]) {
+                *pixel = extract(start + x);
+            }
+        }
+    });
+    let mut images = vec![None; graph.resource_count()];
+    images[0] = Some(base);
+    for (pass, axes) in graph.passes().iter().zip(&axes) {
+        let area = areas[pass.output()];
         let source = |id: usize| images[id].as_ref().expect("pyramid input is live");
         let image = match pass.kind() {
-            PyramidPassKind::Downsample { input } => downsample_13(source(input)),
-            PyramidPassKind::Blur { input } => blur_9(source(input), graph.spread()),
+            PyramidPassKind::Downsample { input } => downsample_13(source(input), area),
+            PyramidPassKind::Blur { input } => tent_9(source(input), sizes[input], axes, area),
             PyramidPassKind::Upsample {
                 coarse,
                 fine,
                 local_weight,
             } => {
-                let mut up = upsample_9(
-                    source(coarse),
-                    pass.width() as usize,
-                    pass.height() as usize,
-                    graph.spread(),
-                );
+                let mut up = tent_9(source(coarse), sizes[pass.output()], axes, area);
                 if let Some(fine) = fine {
-                    let local = source(fine);
-                    for (far, local) in up.pixels.iter_mut().zip(&local.pixels) {
-                        for channel in 0..CHANNELS {
-                            far[channel] = quantize_half(
-                                local_weight * f64::from(local[channel])
-                                    + (1.0 - local_weight) * f64::from(far[channel]),
-                            );
+                    let fine = source(fine);
+                    let [left, right] = area.columns;
+                    fill_rows(&mut up, area.rows, |first, rows| {
+                        let mix = |local: f32, far: f32| {
+                            local_weight * f64::from(local) + (1.0 - local_weight) * f64::from(far)
+                        };
+                        for (index, row) in rows.chunks_mut(fine.width).enumerate() {
+                            let start = (first + index) * fine.width;
+                            let (far, far_tail) =
+                                row[left..right].as_flattened_mut().as_chunks_mut();
+                            let (local, local_tail) = fine.pixels[start + left..start + right]
+                                .as_flattened()
+                                .as_chunks::<4>();
+                            for (far, local) in far.iter_mut().zip(local) {
+                                *far = quantize_halves(std::array::from_fn(|channel| {
+                                    mix(local[channel], far[channel])
+                                }));
+                            }
+                            for (far, local) in far_tail.iter_mut().zip(local_tail) {
+                                *far = quantize_half(mix(*local, *far));
+                            }
                         }
-                    }
+                    });
                 }
                 up
             }
@@ -820,112 +1119,93 @@ pub(crate) fn pixel_count(width: u32, height: u32) -> Result<usize, BloomError> 
     Ok(count)
 }
 
-fn downsample_13<const CHANNELS: usize>(source: &Level<CHANNELS>) -> Level<CHANNELS> {
-    let mut next = Level::empty(source.width.div_ceil(2), source.height.div_ceil(2));
-    let width = next.width;
-    fill_rows(&mut next, |start_y, rows| {
-        for (row_index, row) in rows.chunks_mut(width).enumerate() {
-            let y = start_y + row_index;
-            for (x, out) in row.iter_mut().enumerate() {
-                let mut sum = [0.0_f64; CHANNELS];
-                let cx = (x * 2) as i32;
-                let cy = (y * 2) as i32;
-                for (dx, dy, weight) in DOWN_TAPS {
-                    for (acc, value) in sum.iter_mut().zip(source.at(cx + dx, cy + dy)) {
-                        *acc += weight * f64::from(value);
-                    }
-                }
-                *out = sum.map(|channel| quantize_half(channel / 80.0));
-            }
-        }
-    });
-    next
-}
+const TILE_WIDTH: usize = 8;
+const TILE_HEIGHT: usize = 4;
 
-fn blur_9<const CHANNELS: usize>(source: &Level<CHANNELS>, spread: f64) -> Level<CHANNELS> {
-    let mut next = Level::empty(source.width, source.height);
-    // Taps sit `spread` pixels from the centre on each axis. Fractional offsets interpolate
-    // instead of rounding, so the tent stays centred. Each row/column uses the same taps.
-    let axes = |extent| {
-        (0..extent)
-            .map(|position| TentAxis::new(position as f64, spread, extent))
-            .collect::<Vec<_>>()
-    };
-    let columns = axes(source.width);
-    let lines = axes(source.height);
-    let width = next.width;
-    fill_rows(&mut next, |start_y, rows| {
-        for (row_index, row) in rows.chunks_mut(width).enumerate() {
-            let y = start_y + row_index;
-            for (x, out) in row.iter_mut().enumerate() {
-                let sum = source.tent(&columns[x], &lines[y]);
-                *out = sum.map(|channel| quantize_half(channel / 16.0));
-            }
-        }
-    });
-    next
-}
-
-const UPSAMPLE_TILE_WIDTH: usize = 8;
-const UPSAMPLE_TILE_HEIGHT: usize = 4;
-
-struct UpsampleTiles {
+/// Output tiles of `TILE_WIDTH` x `TILE_HEIGHT` pixels that read a nonzero source pixel. The
+/// others read only zeros, whose every sum is +0.0, so they keep the zero they start with.
+struct ActiveTiles {
     columns: usize,
     active: Vec<bool>,
 }
 
-// The entire support must be zero, including bilinear neighbours and every tent
-// tap. Occupied tiles retain the reference summation and F16 rounding order.
-fn upsample_tiles<const CHANNELS: usize>(
+impl ActiveTiles {
+    fn active(&self, tile_x: usize, tile_y: usize) -> bool {
+        self.active[tile_y * self.columns + tile_x]
+    }
+}
+
+/// The widest run of columns a pass computes at once. Helpers size their row buffers by the
+/// run; the allocator keeps memory per thread and size class, so buffers as wide as a level
+/// added up across helpers.
+const RUN_COLUMNS: usize = 64;
+
+/// Appends the `columns` of a tile to `runs`, extending the last run if it ends where the tile
+/// starts and stays within `RUN_COLUMNS`.
+fn push_run(runs: &mut Vec<[usize; 2]>, columns: [usize; 2]) {
+    match runs.last_mut() {
+        Some(run) if run[1] == columns[0] && columns[1] - run[0] <= RUN_COLUMNS => {
+            run[1] = columns[1];
+        }
+        _ => runs.push(columns),
+    }
+}
+
+/// `columns[i]` and `rows[j]` bound the source pixels that tile column `i` and tile row `j` read.
+/// Only `support` is examined: the computed pixels read nothing else, so a tile whose examined
+/// pixels are zero computes zeros. Small or mostly occupied sources compute every tile and
+/// return `None`.
+fn active_tiles<const CHANNELS: usize>(
     source: &Level<CHANNELS>,
-    columns: &[TentAxis],
-    lines: &[TentAxis],
-) -> Option<UpsampleTiles> {
+    support: Area,
+    columns: &[Option<(usize, usize)>],
+    rows: &[Option<(usize, usize)>],
+) -> Option<ActiveTiles> {
     if source.pixels.len() < 16_384 {
         return None;
     }
     let stride = source.width.div_ceil(64);
     let mut occupied = vec![0_u64; stride * source.height];
+    let [left, right] = support.columns;
+    let [top, bottom] = support.rows;
+    let half = (right - left) * (bottom - top) / 2;
     let mut count = 0;
-    for (y, row) in source.pixels.chunks(source.width).enumerate() {
-        for (x, pixel) in row.iter().enumerate() {
-            if pixel.iter().any(|channel| *channel != 0.0) {
-                occupied[y * stride + x / 64] |= 1_u64 << (x % 64);
-                count += 1;
-                // Avoid building output tiles for dense images.
-                if count > source.pixels.len() / 2 {
-                    return None;
-                }
+    for y in top..bottom {
+        let row = &source.pixels[y * source.width..(y + 1) * source.width];
+        for word in left / 64..right.div_ceil(64) {
+            let pixels = &row[64 * word..(64 * word + 64).min(source.width)];
+            // Most words of a sparse level are empty; signed zeros count as empty.
+            let any = pixels
+                .as_flattened()
+                .iter()
+                .fold(0, |any, channel| any | channel.to_bits() << 1);
+            if any == 0 {
+                continue;
             }
+            let mut bits = 0;
+            for (bit, pixel) in pixels.iter().enumerate() {
+                bits |= u64::from(pixel.iter().any(|channel| *channel != 0.0)) << bit;
+            }
+            occupied[y * stride + word] = bits;
+            count += bits.count_ones() as usize;
+        }
+        // Avoid building output tiles for dense images.
+        if count > half {
+            return None;
         }
     }
-    let span = |axes: &[TentAxis]| {
-        axes.iter()
-            .flat_map(|axis| axis.taps().iter().map(|&(index, _)| index))
-            .fold(None, |range: Option<(usize, usize)>, index| {
-                Some(range.map_or((index, index), |(lo, hi)| (lo.min(index), hi.max(index))))
-            })
-    };
-    let xs = columns
-        .chunks(UPSAMPLE_TILE_WIDTH)
-        .map(span)
-        .collect::<Vec<_>>();
-    let ys = lines
-        .chunks(UPSAMPLE_TILE_HEIGHT)
-        .map(span)
-        .collect::<Vec<_>>();
-    let mut active = vec![false; xs.len() * ys.len()];
-    for (tile_y, yrange) in ys.into_iter().enumerate() {
-        let Some((top, bottom)) = yrange else {
+    let mut active = vec![false; columns.len() * rows.len()];
+    for (tile_y, yrange) in rows.iter().enumerate() {
+        let Some((top, bottom)) = *yrange else {
             continue;
         };
-        for (tile_x, xrange) in xs.iter().copied().enumerate() {
-            let Some((left, right)) = xrange else {
+        for (tile_x, xrange) in columns.iter().enumerate() {
+            let Some((left, right)) = *xrange else {
                 continue;
             };
             let first_word = left / 64;
             let last_word = right / 64;
-            active[tile_y * xs.len() + tile_x] = (top..=bottom).any(|y| {
+            active[tile_y * columns.len() + tile_x] = (top..=bottom).any(|y| {
                 (first_word..=last_word).any(|word| {
                     let start = if word == first_word { left % 64 } else { 0 };
                     let end = if word == last_word { right % 64 } else { 63 };
@@ -935,43 +1215,158 @@ fn upsample_tiles<const CHANNELS: usize>(
             });
         }
     }
-    Some(UpsampleTiles {
-        columns: xs.len(),
+    Some(ActiveTiles {
+        columns: columns.len(),
         active,
     })
 }
 
-fn upsample_9<const CHANNELS: usize>(
+// The entire support must be zero, including bilinear neighbours and every tent
+// tap. Occupied tiles retain the reference summation and F16 rounding order.
+fn tent_tiles<const CHANNELS: usize>(
     source: &Level<CHANNELS>,
-    width: usize,
-    height: usize,
-    spread: f64,
-) -> Level<CHANNELS> {
-    let mut next = Level::empty(width, height);
-    let axes = |extent, source_extent| {
-        (0..extent)
-            .map(|position| {
-                let center = (position as f64 + 0.5) * source_extent as f64 / extent as f64 - 0.5;
-                TentAxis::new(center, 0.5 * spread, source_extent)
+    support: Area,
+    columns: &[TentAxis],
+    lines: &[TentAxis],
+) -> Option<ActiveTiles> {
+    active_tiles(
+        source,
+        support,
+        &columns.chunks(TILE_WIDTH).map(tap_span).collect::<Vec<_>>(),
+        &lines.chunks(TILE_HEIGHT).map(tap_span).collect::<Vec<_>>(),
+    )
+}
+
+/// The tiles of the downsample of `source`: each reads offsets -2..=3 around twice its pixels.
+fn downsample_tiles<const CHANNELS: usize>(
+    source: &Level<CHANNELS>,
+    support: Area,
+) -> Option<ActiveTiles> {
+    let spans = |size: usize, extent: usize| {
+        (0..extent.div_ceil(2).div_ceil(size))
+            .map(|tile| {
+                Some((
+                    (2 * tile * size).saturating_sub(2),
+                    (2 * (tile + 1) * size + 1).min(extent - 1),
+                ))
             })
             .collect::<Vec<_>>()
     };
-    let columns = axes(width, source.width);
-    let lines = axes(height, source.height);
-    let tiles = upsample_tiles(source, &columns, &lines);
-    fill_rows(&mut next, |start_y, rows| {
-        for (row_index, row) in rows.chunks_mut(width).enumerate() {
-            let y = start_y + row_index;
-            for (tile_x, tile) in row.chunks_mut(UPSAMPLE_TILE_WIDTH).enumerate() {
-                if tiles.as_ref().is_some_and(|tiles| {
-                    !tiles.active[(y / UPSAMPLE_TILE_HEIGHT) * tiles.columns + tile_x]
-                }) {
+    active_tiles(
+        source,
+        support,
+        &spans(TILE_WIDTH, source.width),
+        &spans(TILE_HEIGHT, source.height),
+    )
+}
+
+/// The 13-tap downsample of one pixel from its taps at `DOWN_TAPS` offsets.
+fn downsample_pixel<const CHANNELS: usize>(
+    tap: impl Fn(i32, i32) -> [f32; CHANNELS],
+) -> [f32; CHANNELS] {
+    let mut sum = [0.0_f64; CHANNELS];
+    for &(dx, dy, weight) in &DOWN_TAPS {
+        for (acc, value) in sum.iter_mut().zip(tap(dx, dy)) {
+            *acc += weight * f64::from(value);
+        }
+    }
+    sum.map(|channel| quantize_half(channel / 80.0))
+}
+
+/// The even and odd source pixels, widened, of the six rows a span of interior pixels reads.
+#[derive(Default)]
+struct DownsampleRows<const CHANNELS: usize> {
+    even: Vec<[f64; CHANNELS]>,
+    odd: Vec<[f64; CHANNELS]>,
+    sums: Vec<[f64; CHANNELS]>,
+}
+
+/// Downsamples `columns` of row `y`, whose taps all lie inside the source, one tap at a time
+/// across the span. Each pixel still adds its taps in `DOWN_TAPS` order.
+fn downsample_inner<const CHANNELS: usize>(
+    source: &Level<CHANNELS>,
+    y: usize,
+    columns: std::ops::Range<usize>,
+    out: &mut [[f32; CHANNELS]],
+    rows: &mut DownsampleRows<CHANNELS>,
+) {
+    // Pixel x reads source columns 2x - 2..=2x + 3: even and odd columns x - 1..=x + 1.
+    let span = columns.len() + 2;
+    rows.even.clear();
+    rows.even.resize(6 * span, [0.0; CHANNELS]);
+    rows.odd.clear();
+    rows.odd.resize(6 * span, [0.0; CHANNELS]);
+    for line in 0..6 {
+        let row = &source.pixels[(2 * y + line - 2) * source.width..][..source.width];
+        let (pairs, _) = row[2 * (columns.start - 1)..2 * (columns.end + 1)].as_chunks::<2>();
+        let even = &mut rows.even[line * span..(line + 1) * span];
+        let odd = &mut rows.odd[line * span..(line + 1) * span];
+        for ((pair, even), odd) in pairs.iter().zip(even).zip(odd) {
+            *even = pair[0].map(f64::from);
+            *odd = pair[1].map(f64::from);
+        }
+    }
+    rows.sums.clear();
+    rows.sums.resize(columns.len(), [0.0; CHANNELS]);
+    for &(dx, dy, weight) in &DOWN_TAPS {
+        let parity = if dx % 2 == 0 { &rows.even } else { &rows.odd };
+        let start = (dy + 2) as usize * span + (dx.div_euclid(2) + 1) as usize;
+        let values = parity[start..start + columns.len()].as_flattened();
+        for (sum, value) in rows.sums.as_flattened_mut().iter_mut().zip(values) {
+            *sum += weight * value;
+        }
+    }
+    quantize_into(out.as_flattened_mut(), rows.sums.as_flattened(), 80.0);
+}
+
+fn downsample_13<const CHANNELS: usize>(source: &Level<CHANNELS>, area: Area) -> Level<CHANNELS> {
+    let mut next = Level::empty(source.width.div_ceil(2), source.height.div_ceil(2));
+    if area.is_empty() {
+        return next;
+    }
+    let tiles = downsample_tiles(
+        source,
+        downsample_support(area, [source.width, source.height]),
+    );
+    let width = next.width;
+    let [left, right] = area.columns;
+    // Pixels whose taps all lie inside the source.
+    let inner_columns = 1..source.width.saturating_sub(2) / 2;
+    let inner_rows = 1..source.height.saturating_sub(2) / 2;
+    fill_rows(&mut next, area.rows, |first, rows| {
+        let mut runs: Vec<[usize; 2]> = Vec::new();
+        let mut buffers = DownsampleRows::default();
+        for (index, row) in rows.chunks_mut(width).enumerate() {
+            let y = first + index;
+            runs.clear();
+            for tile_x in left / TILE_WIDTH..right.div_ceil(TILE_WIDTH) {
+                if tiles
+                    .as_ref()
+                    .is_some_and(|tiles| !tiles.active(tile_x, y / TILE_HEIGHT))
+                {
                     continue;
                 }
-                for (offset, out) in tile.iter_mut().enumerate() {
-                    let x = tile_x * UPSAMPLE_TILE_WIDTH + offset;
-                    let sum = source.tent(&columns[x], &lines[y]);
-                    *out = sum.map(|channel| quantize_half(channel / 16.0));
+                push_run(
+                    &mut runs,
+                    [
+                        (tile_x * TILE_WIDTH).max(left),
+                        ((tile_x + 1) * TILE_WIDTH).min(right),
+                    ],
+                );
+            }
+            for &[start, end] in &runs {
+                let inner = if inner_rows.contains(&y) {
+                    let inner_start = start.max(inner_columns.start).min(end);
+                    inner_start..end.min(inner_columns.end).max(inner_start)
+                } else {
+                    start..start
+                };
+                for x in (start..inner.start).chain(inner.end..end) {
+                    let (cx, cy) = ((2 * x) as i32, (2 * y) as i32);
+                    row[x] = downsample_pixel(|dx, dy| source.at(cx + dx, cy + dy));
+                }
+                if !inner.is_empty() {
+                    downsample_inner(source, y, inner.clone(), &mut row[inner], &mut buffers);
                 }
             }
         }
@@ -979,19 +1374,248 @@ fn upsample_9<const CHANNELS: usize>(
     next
 }
 
+/// Output rows that share the horizontal sums of the source rows they read.
+const TENT_BAND: usize = 16;
+
+/// The 1-2-1 tent of `area` of a `width` x `height` level from `source`, divided by its full
+/// weight of 16. Each band of rows forms the horizontal sum of every source row it reads once,
+/// then weights those sums for each of its rows. Every sum keeps the tap order of
+/// `Level::tent`, and tiles whose whole support is zero are skipped, so no sample changes.
+fn tent_9<const CHANNELS: usize>(
+    source: &Level<CHANNELS>,
+    [width, height]: [usize; 2],
+    axes: &TentAxes,
+    area: Area,
+) -> Level<CHANNELS> {
+    let mut next = Level::empty(width, height);
+    if area.is_empty() {
+        return next;
+    }
+    let tiles = tent_tiles(source, axes.support(area), &axes.columns, &axes.lines);
+    let [left, right] = area.columns;
+    fill_rows(&mut next, area.rows, |first, rows| {
+        let end = first + rows.len() / width;
+        let mut runs: Vec<[usize; 2]> = Vec::new();
+        let mut lines = Vec::new();
+        let mut sums = Vec::new();
+        for start in (first..end).step_by(TENT_BAND) {
+            let band = start..(start + TENT_BAND).min(end);
+            let Some((top, bottom)) = tap_span(&axes.lines[band.clone()]) else {
+                continue;
+            };
+            // Columns with an active tile in the band, joined into runs.
+            runs.clear();
+            for tile_x in left / TILE_WIDTH..right.div_ceil(TILE_WIDTH) {
+                let active = tiles.as_ref().is_none_or(|tiles| {
+                    (band.start / TILE_HEIGHT..=(band.end - 1) / TILE_HEIGHT)
+                        .any(|tile_y| tiles.active(tile_x, tile_y))
+                });
+                if !active {
+                    continue;
+                }
+                push_run(
+                    &mut runs,
+                    [
+                        (tile_x * TILE_WIDTH).max(left),
+                        ((tile_x + 1) * TILE_WIDTH).min(right),
+                    ],
+                );
+            }
+            for &[run_left, run_right] in &runs {
+                let len = run_right - run_left;
+                lines.clear();
+                lines.resize((bottom + 1 - top) * len, [0.0_f64; CHANNELS]);
+                for (row, line) in source
+                    .pixels
+                    .chunks_exact(source.width)
+                    .skip(top)
+                    .zip(lines.chunks_exact_mut(len))
+                {
+                    for (axis, sum) in axes.columns[run_left..run_right].iter().zip(line) {
+                        for &(sx, wx) in axis.taps() {
+                            for (acc, value) in sum.iter_mut().zip(row[sx]) {
+                                *acc += wx * f64::from(value);
+                            }
+                        }
+                    }
+                }
+                for y in band.clone() {
+                    sums.clear();
+                    sums.resize(len, [0.0_f64; CHANNELS]);
+                    for &(sy, wy) in axes.lines[y].taps() {
+                        let line = &lines[(sy - top) * len..(sy - top + 1) * len];
+                        for (acc, value) in
+                            sums.as_flattened_mut().iter_mut().zip(line.as_flattened())
+                        {
+                            *acc += wy * value;
+                        }
+                    }
+                    let row = &mut rows[(y - first) * width..(y - first + 1) * width];
+                    quantize_into(
+                        row[run_left..run_right].as_flattened_mut(),
+                        sums.as_flattened(),
+                        16.0,
+                    );
+                }
+            }
+        }
+    });
+    next
+}
+
+#[cfg(test)]
+fn upsample_9<const CHANNELS: usize>(
+    source: &Level<CHANNELS>,
+    width: usize,
+    height: usize,
+    spread: f64,
+) -> Level<CHANNELS> {
+    let axes = TentAxes::upsample([width, height], [source.width, source.height], spread);
+    tent_9(source, [width, height], &axes, Area::full(width, height))
+}
+
 pub(crate) fn encode_output(pixels: &[[f32; 4]]) -> Vec<u8> {
-    let mut bytes = Vec::with_capacity(pixels.len() * 8);
-    for pixel in pixels {
-        for channel in pixel {
-            bytes.extend_from_slice(&f32_to_half(*channel).to_le_bytes());
+    // The pixels need not form rows of a known width; encode them in fixed spans instead.
+    const SPAN: usize = 1024;
+    let mut bytes = vec![0_u8; pixels.len() * 8];
+    fill_image_rows(&mut bytes, SPAN * 8, |first, spans| {
+        encode_pixels(&pixels[first * SPAN..], spans);
+    });
+    bytes
+}
+
+/// Encodes leading `pixels` into every 8-byte slot of `bytes` as little-endian F16.
+fn encode_pixels(pixels: &[[f32; 4]], bytes: &mut [u8]) {
+    for (pixel, target) in pixels.iter().zip(bytes.as_chunks_mut::<8>().0) {
+        #[cfg(all(target_arch = "aarch64", target_endian = "little"))]
+        {
+            if neon::encode(pixel, target) {
+                continue;
+            }
+        }
+        for (&channel, bytes) in pixel.iter().zip(target.as_chunks_mut::<2>().0) {
+            *bytes = f32_to_half(channel).to_le_bytes();
         }
     }
-    bytes
+}
+
+/// Widens a pixel of four little-endian halves, or returns `None` if a channel is not finite.
+#[inline(always)]
+fn decode_pixel(bytes: &[u8; 8]) -> Option<[f32; 4]> {
+    #[cfg(all(target_arch = "aarch64", target_endian = "little"))]
+    {
+        neon::decode(bytes)
+    }
+    #[cfg(not(all(target_arch = "aarch64", target_endian = "little")))]
+    {
+        let mut channels = [0.0; 4];
+        for (channel, bytes) in channels.iter_mut().zip(bytes.as_chunks::<2>().0) {
+            *channel = half_to_f32(u16::from_le_bytes(*bytes));
+            if !channel.is_finite() {
+                return None;
+            }
+        }
+        Some(channels)
+    }
+}
+
+/// The aarch64 baseline converts between f32 and binary16 in hardware. Both directions round to
+/// nearest even, so every value that is not NaN gets the bits `f32_to_half` and `half_to_f32`
+/// give it; NaNs keep the portable path, because the hardware keeps their payloads.
+#[cfg(all(target_arch = "aarch64", target_endian = "little"))]
+mod neon {
+    use std::arch::aarch64::*;
+
+    /// Rounds `value`, which is not NaN, to binary16 and back.
+    #[inline(always)]
+    pub(super) fn round(value: f32) -> f32 {
+        // SAFETY: NEON is part of the aarch64 baseline.
+        unsafe { vgetq_lane_f32::<0>(vcvt_f32_f16(vcvt_f16_f32(vdupq_n_f32(value)))) }
+    }
+
+    #[inline(always)]
+    pub(super) fn decode(bytes: &[u8; 8]) -> Option<[f32; 4]> {
+        // SAFETY: NEON is part of the aarch64 baseline; the load reads the eight bytes and the
+        // store writes the four floats of `pixel`.
+        unsafe {
+            let wide = vcvt_f32_f16(vreinterpret_f16_u16(vreinterpret_u16_u8(vld1_u8(
+                bytes.as_ptr(),
+            ))));
+            if vminvq_u32(vcltq_f32(vabsq_f32(wide), vdupq_n_f32(f32::INFINITY))) != u32::MAX {
+                return None;
+            }
+            let mut pixel = [0.0; 4];
+            vst1q_f32(pixel.as_mut_ptr(), wide);
+            Some(pixel)
+        }
+    }
+
+    /// Rounds four values to binary16 and back, or returns `None` if one is NaN.
+    #[inline(always)]
+    pub(super) fn round4(values: [f32; 4]) -> Option<[f32; 4]> {
+        // SAFETY: NEON is part of the aarch64 baseline; the load reads the four floats of
+        // `values` and the store writes the four floats of `rounded`.
+        unsafe {
+            let wide = vld1q_f32(values.as_ptr());
+            if vminvq_u32(vceqq_f32(wide, wide)) != u32::MAX {
+                return None;
+            }
+            let mut rounded = [0.0; 4];
+            vst1q_f32(rounded.as_mut_ptr(), vcvt_f32_f16(vcvt_f16_f32(wide)));
+            Some(rounded)
+        }
+    }
+
+    /// Writes four little-endian halves, or returns `false` if a channel is NaN.
+    #[inline(always)]
+    pub(super) fn encode(pixel: &[f32; 4], bytes: &mut [u8; 8]) -> bool {
+        // SAFETY: NEON is part of the aarch64 baseline; the load reads the four floats of
+        // `pixel` and the store writes the eight bytes.
+        unsafe {
+            let wide = vld1q_f32(pixel.as_ptr());
+            if vminvq_u32(vceqq_f32(wide, wide)) != u32::MAX {
+                return false;
+            }
+            let halves = vreinterpret_u16_f16(vcvt_f16_f32(wide));
+            vst1_u8(bytes.as_mut_ptr(), vreinterpret_u8_u16(halves));
+            true
+        }
+    }
+}
+
+/// [`quantize_half`] of four values.
+#[inline]
+fn quantize_halves(values: [f64; 4]) -> [f32; 4] {
+    #[cfg(all(target_arch = "aarch64", target_endian = "little"))]
+    {
+        if let Some(rounded) = neon::round4(values.map(|value| value as f32)) {
+            return rounded;
+        }
+    }
+    values.map(quantize_half)
+}
+
+/// Writes `quantize_half(sum / divisor)` of every sum.
+fn quantize_into(out: &mut [f32], sums: &[f64], divisor: f64) {
+    let (out, out_tail) = out.as_chunks_mut::<4>();
+    let (sums, sums_tail) = sums.as_chunks::<4>();
+    for (out, sum) in out.iter_mut().zip(sums) {
+        *out = quantize_halves(sum.map(|sum| sum / divisor));
+    }
+    for (out, sum) in out_tail.iter_mut().zip(sums_tail) {
+        *out = quantize_half(sum / divisor);
+    }
 }
 
 #[inline]
 pub(crate) fn quantize_half(value: f64) -> f32 {
     let value = value as f32;
+    #[cfg(all(target_arch = "aarch64", target_endian = "little"))]
+    {
+        if !value.is_nan() {
+            return neon::round(value);
+        }
+    }
     let bits = value.to_bits();
     let magnitude = bits & 0x7fff_ffff;
     // Values through the halfway point below the smallest half subnormal round to
@@ -1099,7 +1723,12 @@ mod tests {
                     )
                 })
                 .collect::<Vec<_>>();
-            let mask = upsample_tiles(&source, &columns, &lines);
+            let mask = tent_tiles(
+                &source,
+                Area::full(source.width, source.height),
+                &columns,
+                &lines,
+            );
             if dense {
                 assert!(mask.is_none());
             } else if spread < 1.0 {
@@ -1164,6 +1793,116 @@ mod tests {
     }
 
     #[test]
+    fn pyramid_passes_match_per_pixel_sums_in_every_area() {
+        fn check<const CHANNELS: usize>(dense: bool) {
+            let (width, height) = (181, 133);
+            let mut source = Level::<CHANNELS>::empty(width, height);
+            for (index, pixel) in source.pixels.iter_mut().enumerate() {
+                let (x, y) = (index % width, index / width);
+                for (channel, value) in pixel.iter_mut().enumerate() {
+                    if dense || ((x / 23 + y / 17) % 4 == 0 && (x + y) % 3 != 0) {
+                        *value =
+                            quantize_half(((x * 7 + y * 13 + channel * 5) % 31) as f64 / 8.0 - 1.5);
+                    } else if index % 11 == 0 {
+                        *value = -0.0;
+                    }
+                }
+            }
+            // Edges inside tiles, single pixels, borders, the whole level and nothing.
+            let areas = |w: usize, h: usize| {
+                [
+                    Area::full(w, h),
+                    Area {
+                        columns: [3, w / 2 + 5],
+                        rows: [5, h / 3 + 2],
+                    },
+                    Area {
+                        columns: [w - 1, w],
+                        rows: [0, 1],
+                    },
+                    Area {
+                        columns: [w / 3, w - 2],
+                        rows: [h - 7, h],
+                    },
+                    Area::default(),
+                ]
+            };
+            let check_level = |result: &Level<CHANNELS>,
+                               area: Area,
+                               expected: &dyn Fn(usize, usize) -> [f32; CHANNELS],
+                               label: &str| {
+                for y in 0..result.height {
+                    for x in 0..result.width {
+                        let inside = (area.columns[0]..area.columns[1]).contains(&x)
+                            && (area.rows[0]..area.rows[1]).contains(&y);
+                        let wanted = if inside {
+                            expected(x, y)
+                        } else {
+                            [0.0; CHANNELS]
+                        };
+                        assert_eq!(
+                            result.pixels[y * result.width + x].map(f32::to_bits),
+                            wanted.map(f32::to_bits),
+                            "{label} ({x},{y}), area={area:?}, dense={dense}"
+                        );
+                    }
+                }
+            };
+            let down = |x: usize, y: usize| {
+                let (cx, cy) = ((2 * x) as i32, (2 * y) as i32);
+                let mut sum = [0.0_f64; CHANNELS];
+                for (dx, dy, weight) in DOWN_TAPS {
+                    for (acc, value) in sum.iter_mut().zip(source.at(cx + dx, cy + dy)) {
+                        *acc += weight * f64::from(value);
+                    }
+                }
+                sum.map(|channel| quantize_half(channel / 80.0))
+            };
+            let tiles = downsample_tiles(&source, Area::full(width, height));
+            assert_eq!(
+                tiles.is_some_and(|tiles| tiles.active.iter().any(|active| !active)),
+                !dense
+            );
+            for area in areas(width.div_ceil(2), height.div_ceil(2)) {
+                check_level(&downsample_13(&source, area), area, &down, "downsample");
+            }
+            for spread in [0.125, 0.999, 2.625] {
+                let upsampled = [2 * width - 1, 2 * height];
+                for (size, axes) in [
+                    ([width, height], TentAxes::blur([width, height], spread)),
+                    (
+                        upsampled,
+                        TentAxes::upsample(upsampled, [width, height], spread),
+                    ),
+                ] {
+                    let tent = |x: usize, y: usize| {
+                        source
+                            .tent(&axes.columns[x], &axes.lines[y])
+                            .map(|channel| quantize_half(channel / 16.0))
+                    };
+                    if !dense && spread < 1.0 {
+                        let tiles = tent_tiles(
+                            &source,
+                            Area::full(width, height),
+                            &axes.columns,
+                            &axes.lines,
+                        )
+                        .unwrap();
+                        assert!(tiles.active.iter().any(|active| !active));
+                    }
+                    for area in areas(size[0], size[1]) {
+                        check_level(&tent_9(&source, size, &axes, area), area, &tent, "tent");
+                    }
+                }
+            }
+        }
+        check::<1>(false);
+        check::<1>(true);
+        check::<3>(false);
+        check::<3>(true);
+    }
+
+    #[test]
     fn half_quantization_fast_path_preserves_reference_rounding() {
         let check = |value: f64| {
             assert_eq!(
@@ -1171,6 +1910,12 @@ mod tests {
                 half_to_f32(f32_to_half(value as f32)).to_bits(),
                 "input {value:?} ({:016x})",
                 value.to_bits(),
+            );
+            let lanes = [value, -value, 0.25, value * 0.5];
+            assert_eq!(
+                quantize_halves(lanes).map(f32::to_bits),
+                lanes.map(|lane| quantize_half(lane).to_bits()),
+                "lanes {lanes:?}"
             );
         };
         // Check every finite half value and both sides of every rounding midpoint,
@@ -1594,6 +2339,7 @@ mod tests {
                             before.size[0],
                             before.size[1],
                             before.input_offset,
+                            Area::full(before.size[0] as usize, before.size[1] as usize),
                             params,
                         )
                         .unwrap();
@@ -1618,6 +2364,7 @@ mod tests {
                             before.size[0],
                             before.size[1],
                             before.input_offset,
+                            Area::full(before.size[0] as usize, before.size[1] as usize),
                             params,
                         )
                         .unwrap();
@@ -1676,6 +2423,87 @@ mod tests {
             }
             assert_eq!(f32_to_half(half_to_f32(bits)), bits, "{bits:#06x}");
         }
+    }
+
+    #[test]
+    fn half_pixels_convert_like_each_channel() {
+        // Every half in every channel decodes to its value; an infinite or NaN channel rejects
+        // the pixel.
+        for bits in 0_u16..=u16::MAX {
+            let value = half_to_f32(bits);
+            for channel in 0..4 {
+                let mut halves = [0x3c00_u16; 4];
+                halves[channel] = bits;
+                let bytes = std::array::from_fn(|index| halves[index / 2].to_le_bytes()[index % 2]);
+                let mut expected = [1.0_f32; 4];
+                expected[channel] = value;
+                assert_eq!(
+                    decode_pixel(&bytes).map(|pixel| pixel.map(f32::to_bits)),
+                    value.is_finite().then_some(expected.map(f32::to_bits)),
+                    "{bits:#06x} in channel {channel}"
+                );
+            }
+        }
+        // Encoding matches `f32_to_half` for each channel, NaNs of every payload included.
+        let mut state = 0x1234_5678_u32;
+        let mut pixels = (0..1 << 16)
+            .map(|_| {
+                std::array::from_fn(|_| {
+                    state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                    f32::from_bits(state)
+                })
+            })
+            .collect::<Vec<[f32; 4]>>();
+        pixels.extend([
+            [f32::NAN, -f32::NAN, f32::from_bits(0x7f80_0001), 1.0],
+            [f32::INFINITY, f32::NEG_INFINITY, 65520.0, -0.0],
+            [
+                65519.0,
+                2.0_f32.powi(-25),
+                -(2.0_f32.powi(-24) * 1.5),
+                1e-40,
+            ],
+        ]);
+        let mut bytes = vec![0; pixels.len() * 8];
+        encode_pixels(&pixels, &mut bytes);
+        for (pixel, encoded) in pixels.iter().zip(bytes.as_chunks::<8>().0) {
+            let expected: [u8; 8] =
+                std::array::from_fn(|index| f32_to_half(pixel[index / 2]).to_le_bytes()[index % 2]);
+            assert_eq!(*encoded, expected, "{:08x?}", pixel.map(f32::to_bits));
+        }
+    }
+
+    /// Run after changing the conversions, libm or the target.
+    #[test]
+    #[ignore = "exhaustive F32 domain; run with --release --ignored"]
+    fn every_f32_quantizes_and_encodes_like_the_reference() {
+        std::thread::scope(|scope| {
+            for block in 0..64_u32 {
+                scope.spawn(move || {
+                    let mut bytes = [0_u8; 8];
+                    for bits in block << 26..=(block << 26 | 0x03ff_ffff) {
+                        let value = f32::from_bits(bits);
+                        let half = f32_to_half(value);
+                        let rounded = half_to_f32(half).to_bits();
+                        assert_eq!(
+                            quantize_half(f64::from(value)).to_bits(),
+                            rounded,
+                            "{bits:#010x}"
+                        );
+                        assert_eq!(
+                            quantize_halves([f64::from(value), 1.5, -0.0, f64::from(value)])
+                                .map(f32::to_bits),
+                            [rounded, 1.5_f32.to_bits(), (-0.0_f32).to_bits(), rounded],
+                            "{bits:#010x}"
+                        );
+                        encode_pixels(&[[value; 4]], &mut bytes);
+                        let expected: [u8; 8] =
+                            std::array::from_fn(|index| half.to_le_bytes()[index % 2]);
+                        assert_eq!(bytes, expected, "{bits:#010x}");
+                    }
+                });
+            }
+        });
     }
 
     #[test]

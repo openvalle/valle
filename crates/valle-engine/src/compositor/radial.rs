@@ -1,6 +1,8 @@
 //! Deterministic radial blur over premultiplied working-linear RGBA16F pixels.
 
-use super::bloom::{BloomError, encode_output, pixel_count, quantize_half, read_base};
+use super::bloom::{
+    BloomError, encode_output, fill_image_rows, pixel_count, quantize_half, read_base,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RadialBlurParams {
@@ -54,62 +56,66 @@ pub fn apply_radial_blur_f16(
     let mut size = [input_width, input_height];
     for (index, pass) in plan.iter().enumerate() {
         let mut output = vec![[0.0; 4]; pixel_count(pass.size[0], pass.size[1])?];
-        for y in 0..pass.size[1] as usize {
-            for x in 0..pass.size[0] as usize {
-                let ax = i64::from(pass.origin[0]) + x as i64;
-                let ay = i64::from(pass.origin[1]) + y as i64;
-                let sx = (ax - i64::from(origin[0])) as f64;
-                let sy = (ay - i64::from(origin[1])) as f64;
-                let dx = ax as f64 + 0.5 - f64::from(params.center[0]);
-                let dy = ay as f64 + 0.5 - f64::from(params.center[1]);
-                let distance = dx.hypot(dy);
-                let reach = f64::from(pass.fraction) * f64::from(params.amount).min(distance * 0.5);
-                let center = source_at(
+        let pixel_at = |ax: i64, ay: i64| -> [f32; 4] {
+            let sx = (ax - i64::from(origin[0])) as f64;
+            let sy = (ay - i64::from(origin[1])) as f64;
+            let dx = ax as f64 + 0.5 - f64::from(params.center[0]);
+            let dy = ay as f64 + 0.5 - f64::from(params.center[1]);
+            let distance = dx.hypot(dy);
+            let reach = f64::from(pass.fraction) * f64::from(params.amount).min(distance * 0.5);
+            if index + 1 == plan.len() && f64::from(params.amount).min(distance * 0.5) <= 8.0 {
+                return exact_pixel(
+                    &original,
+                    input_width as usize,
+                    input_height as usize,
+                    (ax - i64::from(input_origin[0])) as f64,
+                    (ay - i64::from(input_origin[1])) as f64,
+                    dx,
+                    dy,
+                    distance,
+                    params.amount,
+                );
+            }
+            let center = source_at(
+                &source,
+                size[0] as usize,
+                size[1] as usize,
+                sx as i64,
+                sy as i64,
+            );
+            if reach <= 0.0 || distance < 1e-12 {
+                center
+            } else {
+                let tx = dx / distance * reach;
+                let ty = dy / distance * reach;
+                let before = bilinear_decal(
                     &source,
                     size[0] as usize,
                     size[1] as usize,
-                    sx as i64,
-                    sy as i64,
+                    sx - tx,
+                    sy - ty,
                 );
-                let pixel = if index + 1 == plan.len()
-                    && f64::from(params.amount).min(distance * 0.5) <= 8.0
-                {
-                    exact_pixel(
-                        &original,
-                        input_width as usize,
-                        input_height as usize,
-                        (ax - i64::from(input_origin[0])) as f64,
-                        (ay - i64::from(input_origin[1])) as f64,
-                        dx,
-                        dy,
-                        params.amount,
-                    )
-                } else if reach <= 0.0 || distance < 1e-12 {
-                    center
-                } else {
-                    let tx = dx / distance * reach;
-                    let ty = dy / distance * reach;
-                    let before = bilinear_decal(
-                        &source,
-                        size[0] as usize,
-                        size[1] as usize,
-                        sx - tx,
-                        sy - ty,
-                    );
-                    let after = bilinear_decal(
-                        &source,
-                        size[0] as usize,
-                        size[1] as usize,
-                        sx + tx,
-                        sy + ty,
-                    );
-                    std::array::from_fn(|c| {
-                        quantize_half((before[c] + after[c]) * 0.25 + f64::from(center[c]) * 0.5)
-                    })
-                };
-                output[y * pass.size[0] as usize + x] = pixel;
+                let after = bilinear_decal(
+                    &source,
+                    size[0] as usize,
+                    size[1] as usize,
+                    sx + tx,
+                    sy + ty,
+                );
+                std::array::from_fn(|c| {
+                    quantize_half((before[c] + after[c]) * 0.25 + f64::from(center[c]) * 0.5)
+                })
             }
-        }
+        };
+        let width = pass.size[0] as usize;
+        fill_image_rows(&mut output, width, |first, rows| {
+            for (row, pixels) in rows.chunks_mut(width).enumerate() {
+                let ay = i64::from(pass.origin[1]) + (first + row) as i64;
+                for (x, pixel) in pixels.iter_mut().enumerate() {
+                    *pixel = pixel_at(i64::from(pass.origin[0]) + x as i64, ay);
+                }
+            }
+        });
         source = std::borrow::Cow::Owned(output);
         origin = pass.origin;
         size = pass.size;
@@ -235,9 +241,9 @@ fn exact_pixel(
     sy: f64,
     dx: f64,
     dy: f64,
+    distance: f64,
     amount: f32,
 ) -> [f32; 4] {
-    let distance = dx.hypot(dy);
     if distance < 1e-12 || amount == 0.0 {
         return source_at(source, width, height, sx as i64, sy as i64);
     }
@@ -269,6 +275,7 @@ fn source_at(pixels: &[[f32; 4]], width: usize, height: usize, x: i64, y: i64) -
     }
 }
 
+#[inline(always)]
 pub(crate) fn bilinear_decal(
     pixels: &[[f32; 4]],
     width: usize,
@@ -280,13 +287,28 @@ pub(crate) fn bilinear_decal(
     let y0 = y.floor() as i64;
     let fx = x - x0 as f64;
     let fy = y - y0 as f64;
-    let mut result = [0.0_f64; 4];
-    for (sx, sy, weight) in [
+    let taps = [
         (x0, y0, (1.0 - fx) * (1.0 - fy)),
         (x0 + 1, y0, fx * (1.0 - fy)),
         (x0, y0 + 1, (1.0 - fx) * fy),
         (x0 + 1, y0 + 1, fx * fy),
-    ] {
+    ];
+    let mut result = [0.0_f64; 4];
+    // Inside the image all four taps exist; read them from two adjacent rows, in the same order.
+    if x0 >= 0 && x0 < width as i64 - 1 && y0 >= 0 && y0 < height as i64 - 1 {
+        let top = y0 as usize * width + x0 as usize;
+        let rows = &pixels[top..top + width + 2];
+        for (pixel, (_, _, weight)) in [rows[0], rows[1], rows[width], rows[width + 1]]
+            .into_iter()
+            .zip(taps)
+        {
+            for (channel, value) in result.iter_mut().zip(pixel) {
+                *channel += weight * f64::from(value);
+            }
+        }
+        return result;
+    }
+    for (sx, sy, weight) in taps {
         if sx >= 0 && sx < width as i64 && sy >= 0 && sy < height as i64 {
             for (channel, value) in result
                 .iter_mut()

@@ -2,7 +2,10 @@ use skia_safe::{
     AlphaType, ColorType, Image, ImageInfo, RuntimeEffect, Surface, image::CachingHint,
 };
 use valle_draw::program::{BlendMode as DrawBlend, BlendSpace};
-use valle_engine::compositor::reference::{ReferenceBlendMode, blend_rgb};
+use valle_engine::compositor::{
+    bloom::fill_image_rows,
+    reference::{ReferenceBlendMode, blend_rgb},
+};
 
 use super::{draw::DrawError, effect::render_runtime_into, surface::working_color_space};
 
@@ -114,68 +117,88 @@ fn raster_blend_into(
         {
             return Err(internal("blend input readback failed"));
         }
-        // Solid layers and flat regions repeat inputs, so each side remembers its last conversion.
-        // The per-pixel helpers are forced inline; called out of line, this loop spilled its
-        // pixel state around every call.
-        let mut source_memo = ConversionMemo::default();
-        let mut backdrop_memo = ConversionMemo::default();
-        for (out, backdrop) in pixels.chunks_exact_mut(16).zip(backdrop.chunks_exact(16)) {
-            let raw = read_rgba(out);
-            let source = [
-                raw[0] * opacity,
-                raw[1] * opacity,
-                raw[2] * opacity,
-                raw[3] * opacity,
-            ];
-            let backdrop = read_rgba(backdrop);
-            let source_alpha = source[3];
-            let result = if source_alpha == 0.0 {
-                if composite { backdrop } else { source }
-            } else if mode == DrawBlend::Plus {
-                let alpha = if backdrop[3] == 1.0 {
-                    source_alpha
-                } else {
-                    (source_alpha / (1.0 - backdrop[3])).min(1.0)
-                };
-                let keep = if composite { 0.0 } else { 1.0 - alpha };
-                [
-                    (source[0] + backdrop[0]).clamp(0.0, 1.0) - backdrop[0] * keep,
-                    (source[1] + backdrop[1]).clamp(0.0, 1.0) - backdrop[1] * keep,
-                    (source[2] + backdrop[2]).clamp(0.0, 1.0) - backdrop[2] * keep,
-                    if composite {
-                        (source_alpha + backdrop[3]).min(1.0)
+        // Rows are independent. Solid layers and flat regions repeat inputs, so each side of
+        // each row span remembers its last conversion. The per-pixel helpers are forced inline;
+        // called out of line, this loop spilled its pixel state around every call.
+        let failure = std::sync::Mutex::new(None::<(usize, String)>);
+        let backdrop = &*backdrop;
+        fill_image_rows(pixels.as_mut_slice(), row_bytes, |first, rows| {
+            let mut source_memo = ConversionMemo::default();
+            let mut backdrop_memo = ConversionMemo::default();
+            for (index, (out, backdrop)) in rows
+                .chunks_exact_mut(16)
+                .zip(backdrop[first * row_bytes..].chunks_exact(16))
+                .enumerate()
+            {
+                let raw = read_rgba(out);
+                let source = [
+                    raw[0] * opacity,
+                    raw[1] * opacity,
+                    raw[2] * opacity,
+                    raw[3] * opacity,
+                ];
+                let backdrop = read_rgba(backdrop);
+                let source_alpha = source[3];
+                let result = if source_alpha == 0.0 {
+                    if composite { backdrop } else { source }
+                } else if mode == DrawBlend::Plus {
+                    let alpha = if backdrop[3] == 1.0 {
+                        source_alpha
                     } else {
-                        alpha
-                    },
-                ]
-            } else {
-                let backdrop_alpha = backdrop[3];
-                let source_rgb = source_memo.to_blend(tables, source, space);
-                let backdrop_rgb = if backdrop_alpha > 0.0 {
-                    backdrop_memo.to_blend(tables, backdrop, space)
-                } else {
-                    [0.0; 3]
-                };
-                let blended = blend_rgb(backdrop_rgb, source_rgb, reference_mode)
-                    .map_err(|error| internal(&format!("creative blend: {error}")))?;
-                let working = blend_to_working(
-                    tables,
-                    space,
+                        (source_alpha / (1.0 - backdrop[3])).min(1.0)
+                    };
+                    let keep = if composite { 0.0 } else { 1.0 - alpha };
                     [
-                        (1.0 - backdrop_alpha) * source_rgb[0] + backdrop_alpha * blended[0],
-                        (1.0 - backdrop_alpha) * source_rgb[1] + backdrop_alpha * blended[1],
-                        (1.0 - backdrop_alpha) * source_rgb[2] + backdrop_alpha * blended[2],
-                    ],
-                );
-                let keep = if composite { 1.0 - source_alpha } else { 0.0 };
-                [
-                    working[0] * source_alpha + backdrop[0] * keep,
-                    working[1] * source_alpha + backdrop[1] * keep,
-                    working[2] * source_alpha + backdrop[2] * keep,
-                    source_alpha + backdrop[3] * keep,
-                ]
-            };
-            write_rgba(out, result);
+                        (source[0] + backdrop[0]).clamp(0.0, 1.0) - backdrop[0] * keep,
+                        (source[1] + backdrop[1]).clamp(0.0, 1.0) - backdrop[1] * keep,
+                        (source[2] + backdrop[2]).clamp(0.0, 1.0) - backdrop[2] * keep,
+                        if composite {
+                            (source_alpha + backdrop[3]).min(1.0)
+                        } else {
+                            alpha
+                        },
+                    ]
+                } else {
+                    let backdrop_alpha = backdrop[3];
+                    let source_rgb = source_memo.to_blend(tables, source, space);
+                    let backdrop_rgb = if backdrop_alpha > 0.0 {
+                        backdrop_memo.to_blend(tables, backdrop, space)
+                    } else {
+                        [0.0; 3]
+                    };
+                    let blended = match blend_rgb(backdrop_rgb, source_rgb, reference_mode) {
+                        Ok(blended) => blended,
+                        Err(error) => {
+                            let mut failure = failure.lock().unwrap_or_else(|e| e.into_inner());
+                            let index = first * width + index;
+                            if failure.as_ref().is_none_or(|(at, _)| index < *at) {
+                                *failure = Some((index, format!("creative blend: {error}")));
+                            }
+                            return;
+                        }
+                    };
+                    let working = blend_to_working(
+                        tables,
+                        space,
+                        [
+                            (1.0 - backdrop_alpha) * source_rgb[0] + backdrop_alpha * blended[0],
+                            (1.0 - backdrop_alpha) * source_rgb[1] + backdrop_alpha * blended[1],
+                            (1.0 - backdrop_alpha) * source_rgb[2] + backdrop_alpha * blended[2],
+                        ],
+                    );
+                    let keep = if composite { 1.0 - source_alpha } else { 0.0 };
+                    [
+                        working[0] * source_alpha + backdrop[0] * keep,
+                        working[1] * source_alpha + backdrop[1] * keep,
+                        working[2] * source_alpha + backdrop[2] * keep,
+                        source_alpha + backdrop[3] * keep,
+                    ]
+                };
+                write_rgba(out, result);
+            }
+        });
+        if let Some((_, message)) = failure.into_inner().unwrap_or_else(|e| e.into_inner()) {
+            return Err(internal(&message));
         }
         if !output
             .canvas()

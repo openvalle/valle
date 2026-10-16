@@ -1,7 +1,7 @@
 //! Bounded lens distortion over premultiplied working-linear RGBA16F pixels.
 
 use super::{
-    bloom::{BloomError, encode_output, pixel_count, quantize_half, read_base},
+    bloom::{BloomError, encode_output, fill_image_rows, pixel_count, quantize_half, read_base},
     radial::bilinear_decal,
 };
 
@@ -63,33 +63,37 @@ pub fn apply_lens_distortion_f16(
     let radius_squared = (frame_width * frame_width + frame_height * frame_height) * 0.25;
     let input_origin_x = i64::from(output_origin[0]) + i64::from(input_offset[0]);
     let input_origin_y = i64::from(output_origin[1]) + i64::from(input_offset[1]);
-    for y in 0..output_height as usize {
-        for x in 0..output_width as usize {
-            let device_x = f64::from(output_origin[0]) + x as f64 + 0.5;
-            let device_y = f64::from(output_origin[1]) + y as f64 + 0.5;
-            if device_x < left
-                || device_x >= left + frame_width
-                || device_y < top
-                || device_y >= top + frame_height
-            {
-                continue;
+    let width = output_width as usize;
+    fill_image_rows(&mut output, width, |first, rows| {
+        for (row, pixels) in rows.chunks_mut(width).enumerate() {
+            let y = first + row;
+            for (x, pixel) in pixels.iter_mut().enumerate() {
+                let device_x = f64::from(output_origin[0]) + x as f64 + 0.5;
+                let device_y = f64::from(output_origin[1]) + y as f64 + 0.5;
+                if device_x < left
+                    || device_x >= left + frame_width
+                    || device_y < top
+                    || device_y >= top + frame_height
+                {
+                    continue;
+                }
+                let dx = device_x - cx;
+                let dy = device_y - cy;
+                let r2 = ((dx * dx + dy * dy) / radius_squared).min(1.0);
+                let scale = 1.0 + f64::from(params.k1) * r2 + f64::from(params.k2) * r2 * r2;
+                let sample_x = cx + dx * scale - input_origin_x as f64 - 0.5;
+                let sample_y = cy + dy * scale - input_origin_y as f64 - 0.5;
+                *pixel = bilinear_decal(
+                    &source,
+                    input_width as usize,
+                    input_height as usize,
+                    sample_x,
+                    sample_y,
+                )
+                .map(quantize_half);
             }
-            let dx = device_x - cx;
-            let dy = device_y - cy;
-            let r2 = ((dx * dx + dy * dy) / radius_squared).min(1.0);
-            let scale = 1.0 + f64::from(params.k1) * r2 + f64::from(params.k2) * r2 * r2;
-            let sample_x = cx + dx * scale - input_origin_x as f64 - 0.5;
-            let sample_y = cy + dy * scale - input_origin_y as f64 - 0.5;
-            output[y * output_width as usize + x] = bilinear_decal(
-                &source,
-                input_width as usize,
-                input_height as usize,
-                sample_x,
-                sample_y,
-            )
-            .map(quantize_half);
         }
-    }
+    });
     Ok(encode_output(&output))
 }
 

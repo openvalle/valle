@@ -1,6 +1,6 @@
 //! Stable monochrome film grain on premultiplied working-linear RGBA16F pixels.
 
-use super::bloom::{BloomError, encode_output, quantize_half, read_base};
+use super::bloom::{BloomError, encode_output, fill_image_rows, quantize_half, read_base};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FilmGrainParams {
@@ -40,47 +40,57 @@ pub fn apply_film_grain_f16(
         return Ok(encode_output(&pixels));
     }
     let width = output_width as usize;
-    // This exact one-entry memo is local to the invocation. Uniform spans share their
-    // straight display conversion, while alpha and signed-zero bits remain part of the key.
-    let mut previous_key = None;
-    let mut previous_encoded = [0.0; 3];
-    for (row_index, row) in pixels.chunks_exact_mut(width).enumerate() {
-        let y = i64::from(output_origin[1]) + row_index as i64;
-        let mut lattice = LatticeRow::new(y, params.seed, f64::from(params.size));
-        for (column, pixel) in row.iter_mut().enumerate() {
-            let alpha = pixel[3];
-            if alpha == 0.0 {
-                continue;
-            }
-            let x = i64::from(output_origin[0]) + column as i64;
-            let noise = lattice.at(x);
-            // Construct symmetric noise in display encoding, where perceived gray
-            // levels are reviewed. Limiting amplitude to both endpoint margins keeps
-            // the distribution symmetric without clipping (including at amount=1).
-            let key = pixel.map(f32::to_bits);
-            let mut encoded = if previous_key == Some(key) {
-                previous_encoded
-            } else {
-                let encoded = super::reference::working_to_extended_srgb([
-                    pixel[0] / alpha,
-                    pixel[1] / alpha,
-                    pixel[2] / alpha,
-                ])
-                .map_err(|_| BloomError::InvalidParameters)?;
-                previous_key = Some(key);
-                previous_encoded = encoded;
-                encoded
-            };
-            for channel in &mut encoded {
-                let margin = channel.min(1.0 - *channel).max(0.0);
-                *channel += (noise * f64::from(params.amount) * f64::from(margin)) as f32;
-            }
-            let working = super::reference::extended_srgb_to_working(encoded)
-                .map_err(|_| BloomError::InvalidParameters)?;
-            for (channel, value) in pixel[..3].iter_mut().zip(working) {
-                *channel = quantize_half(f64::from(value * alpha));
+    let invalid = std::sync::atomic::AtomicBool::new(false);
+    fill_image_rows(&mut pixels, width, |first, rows| {
+        // This exact one-entry memo is local to the rows. Uniform spans share their straight
+        // display conversion, while alpha and signed-zero bits remain part of the key.
+        let mut previous_key = None;
+        let mut previous_encoded = [0.0; 3];
+        for (row_index, row) in rows.chunks_exact_mut(width).enumerate() {
+            let y = i64::from(output_origin[1]) + (first + row_index) as i64;
+            let mut lattice = LatticeRow::new(y, params.seed, f64::from(params.size));
+            for (column, pixel) in row.iter_mut().enumerate() {
+                let alpha = pixel[3];
+                if alpha == 0.0 {
+                    continue;
+                }
+                let x = i64::from(output_origin[0]) + column as i64;
+                let noise = lattice.at(x);
+                // Construct symmetric noise in display encoding, where perceived gray
+                // levels are reviewed. Limiting amplitude to both endpoint margins keeps
+                // the distribution symmetric without clipping (including at amount=1).
+                let key = pixel.map(f32::to_bits);
+                let mut encoded = if previous_key == Some(key) {
+                    previous_encoded
+                } else {
+                    let Ok(encoded) = super::reference::working_to_extended_srgb([
+                        pixel[0] / alpha,
+                        pixel[1] / alpha,
+                        pixel[2] / alpha,
+                    ]) else {
+                        invalid.store(true, std::sync::atomic::Ordering::Relaxed);
+                        return;
+                    };
+                    previous_key = Some(key);
+                    previous_encoded = encoded;
+                    encoded
+                };
+                for channel in &mut encoded {
+                    let margin = channel.min(1.0 - *channel).max(0.0);
+                    *channel += (noise * f64::from(params.amount) * f64::from(margin)) as f32;
+                }
+                let Ok(working) = super::reference::extended_srgb_to_working(encoded) else {
+                    invalid.store(true, std::sync::atomic::Ordering::Relaxed);
+                    return;
+                };
+                for (channel, value) in pixel[..3].iter_mut().zip(working) {
+                    *channel = quantize_half(f64::from(value * alpha));
+                }
             }
         }
+    });
+    if invalid.into_inner() {
+        return Err(BloomError::InvalidParameters);
     }
     Ok(encode_output(&pixels))
 }

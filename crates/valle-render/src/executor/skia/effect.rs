@@ -1,9 +1,9 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use skia_safe::{
-    BlendMode, ClipOp, Color4f, ColorChannel, Data, IRect, Image, ImageFilter, ImageInfo, Matrix,
-    Paint, Rect as SkRect, RuntimeEffect, SamplingOptions, Shader, Surface, TileMode,
-    color_filters, image_filters, runtime_effect::ChildPtr, shaders,
+    Bitmap, BlendMode, ClipOp, Color4f, ColorChannel, Data, FilterMode, IRect, Image, ImageFilter,
+    ImageInfo, Matrix, Paint, Rect as SkRect, RuntimeEffect, SamplingOptions, Shader, Surface,
+    TileMode, color_filters, image_filters, runtime_effect::ChildPtr, shaders,
 };
 use valle_draw::program::{Filter, LinearColor};
 use valle_engine::{
@@ -1000,6 +1000,28 @@ fn draw_skia_filters(
     Ok(())
 }
 
+fn chromatic_aberration_effect() -> Result<RuntimeEffect, DrawError> {
+    thread_local! {
+        static CHROMATIC: std::cell::RefCell<Option<RuntimeEffect>> = const { std::cell::RefCell::new(None) };
+    }
+    CHROMATIC.with(|cell| {
+        let mut effect = cell.borrow_mut();
+        if effect.is_none() {
+            *effect = Some(
+                RuntimeEffect::make_for_shader(
+                    include_str!("../../../../valle-draw/assets/shaders/chromaticaberration.sksl"),
+                    None,
+                )
+                .map_err(|message| DrawError::ShaderCompile {
+                    uri: "builtin://chromatic-aberration".into(),
+                    message,
+                })?,
+            );
+        }
+        Ok(effect.as_ref().unwrap().clone())
+    })
+}
+
 pub(crate) fn image_filter(filter: &Filter) -> Result<Option<ImageFilter>, DrawError> {
     image_filter_at(filter, [0, 0])
 }
@@ -1072,43 +1094,23 @@ fn image_filter_at(filter: &Filter, device: [i32; 2]) -> Result<Option<ImageFilt
             ));
         }
         Filter::ChromaticAberration { offset } => {
-            thread_local! {
-                static CHROMATIC: std::cell::RefCell<Option<RuntimeEffect>> = const { std::cell::RefCell::new(None) };
-            }
-            CHROMATIC.with(|cell| -> Result<_, DrawError> {
-                let mut effect = cell.borrow_mut();
-                if effect.is_none() {
-                    *effect = Some(
-                        RuntimeEffect::make_for_shader(
-                            include_str!(
-                                "../../../../valle-draw/assets/shaders/chromaticaberration.sksl"
-                            ),
-                            None,
-                        )
-                        .map_err(|message| DrawError::ShaderCompile {
-                            uri: "builtin://chromatic-aberration".into(),
-                            message,
-                        })?,
-                    );
-                }
-                let mut builder = skia_safe::runtime_effect::RuntimeShaderBuilder::new(
-                    effect.as_ref().unwrap().clone(),
-                );
-                builder
-                    .set_uniform_float("offset", offset)
-                    .map_err(|error| {
-                        DrawError::Unsupported(format!("chromatic aberration uniform: {error:?}"))
-                    })?;
-                image_filters::runtime_shader_with_options(
-                    &builder,
-                    offset[0].abs().max(offset[1].abs()) * 0.5,
-                    "image",
-                    None,
-                    false,
-                )
-                .ok_or_else(|| DrawError::Unsupported("chromatic aberration shader filter".into()))
-                .map(Some)
-            })?
+            let mut builder = skia_safe::runtime_effect::RuntimeShaderBuilder::new(
+                chromatic_aberration_effect()?,
+            );
+            builder
+                .set_uniform_float("offset", offset)
+                .map_err(|error| {
+                    DrawError::Unsupported(format!("chromatic aberration uniform: {error:?}"))
+                })?;
+            image_filters::runtime_shader_with_options(
+                &builder,
+                offset[0].abs().max(offset[1].abs()) * 0.5,
+                "image",
+                None,
+                false,
+            )
+            .ok_or_else(|| DrawError::Unsupported("chromatic aberration shader filter".into()))
+            .map(Some)?
         }
         Filter::NoiseDisplacement {
             frequency,
@@ -1206,7 +1208,7 @@ fn perlin_noise(
 /// converts it into the linear working space, which CanvasKit's sRGB-tagged surfaces never do. A
 /// degenerate transform leaves the input undisplaced.
 pub(super) fn draw_noise_displacement(
-    canvas: &skia_safe::Canvas,
+    surface: &mut Surface,
     input: &Image,
     source: IRect,
     origin: [i32; 2],
@@ -1255,7 +1257,7 @@ pub(super) fn draw_noise_displacement(
             .any(|value| !value.is_finite() || value.abs() > f64::from(f32::MAX))
     {
         let destination = IRect::from_xywh(origin[0], origin[1], source.width(), source.height());
-        canvas.draw_image_rect(
+        surface.canvas().draw_image_rect(
             input,
             Some((&source.into(), skia_safe::canvas::SrcRectConstraint::Strict)),
             SkRect::from(destination),
@@ -1299,8 +1301,86 @@ pub(super) fn draw_noise_displacement(
         )
         .ok_or_else(|| DrawError::Unsupported("noise displacement kernel".into()))?;
     paint.set_shader(shader);
-    canvas.draw_irect(bounds, &paint);
-    Ok(())
+    super::draw::draw_irect_by_rows(surface, bounds, &paint)
+}
+
+/// Chromatic aberration of the `source` subset of `input`, placed at canvas `origin`, as Skia's
+/// runtime image filter computes it on Raster, but drawn straight onto the canvas so that its rows
+/// can be split: the shader over the clip under the Src blend, sampling the input bilinearly with
+/// the image the filter samples and the tiling it picks for the pixels it reaches. Returns
+/// `false`, drawing nothing, where the filter's own draw stays.
+pub(super) fn draw_chromatic_aberration(
+    surface: &mut Surface,
+    input: &Image,
+    source: IRect,
+    origin: [i32; 2],
+    offset: [f32; 2],
+) -> Result<bool, DrawError> {
+    let radius = offset[0].abs().max(offset[1].abs()) * 0.5;
+    let (Some(clip), Some(pixels)) = (super::draw::rows_clip(surface), input.peek_pixels()) else {
+        return Ok(false);
+    };
+    if !(0.0..65_536.0).contains(&radius)
+        || source.is_empty()
+        || source.left != 0
+        || source.top != 0
+        || source.right > pixels.width()
+        || source.bottom > pixels.height()
+    {
+        return Ok(false);
+    }
+    // The filter places the input with an integer translation and samples it up to `radius`
+    // pixels beyond the clip.
+    let placed = IRect::from_xywh(origin[0], origin[1], source.width(), source.height());
+    let reach = radius.ceil() as i32;
+    let sampled = clip.with_outset((reach, reach));
+    if !IRect::intersects(&placed, &sampled) {
+        return Ok(false);
+    }
+    // It clamps where the input covers every sample and decals otherwise. Past a right or bottom
+    // edge inside a larger backing it samples only the subset's pixels.
+    let covered = IRect::intersect(&placed, &sampled) == Some(sampled);
+    let subset = (sampled.right > placed.right && source.width() != pixels.width())
+        || (sampled.bottom > placed.bottom && source.height() != pixels.height());
+    let tile = if covered {
+        TileMode::Clamp
+    } else {
+        TileMode::Decal
+    };
+    let mut bitmap = Bitmap::new();
+    // SAFETY: `input` keeps these pixels alive and unchanged while this function draws, and the
+    // shaders that read them through `bitmap` are dropped before it returns.
+    if !unsafe { bitmap.install_pixels(pixels.info(), pixels.writable_addr(), pixels.row_bytes()) }
+    {
+        return Ok(false);
+    }
+    bitmap.set_immutable();
+    if subset {
+        let mut view = Bitmap::new();
+        if !bitmap.extract_subset(&mut view, source) {
+            return Ok(false);
+        }
+        bitmap = view;
+    }
+    let image = bitmap
+        .to_shader(
+            (tile, tile),
+            SamplingOptions::from(FilterMode::Linear),
+            &Matrix::translate((origin[0] as f32, origin[1] as f32)),
+        )
+        .ok_or_else(|| DrawError::Unsupported("chromatic aberration input".into()))?;
+    let uniforms = offset
+        .iter()
+        .flat_map(|value| value.to_ne_bytes())
+        .collect::<Vec<_>>();
+    let shader = chromatic_aberration_effect()?
+        .make_shader(Data::new_copy(&uniforms), &[ChildPtr::Shader(image)], None)
+        .ok_or_else(|| DrawError::Unsupported("chromatic aberration shader".into()))?;
+    let mut paint = Paint::default();
+    paint.set_blend_mode(BlendMode::Src);
+    paint.set_shader(shader);
+    super::draw::draw_irect_by_rows(surface, clip, &paint)?;
+    Ok(true)
 }
 
 /// Keep working-linear premultiplied color in float uniforms. Ganesh can otherwise

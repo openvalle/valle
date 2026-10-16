@@ -21,6 +21,7 @@ use valle_draw::{
 };
 use valle_engine::compositor::{
     BoundExternalObjects, ExternalObject,
+    bloom::fill_image_rows,
     lower::{
         BoundProgramSchedule, ExternalSlotId, PlanProgram, PlanResourceId, ProgramPassKind,
         ProgramResourceId, ProgramStorageKind, SurfaceSlotId,
@@ -2203,6 +2204,84 @@ pub(crate) fn erase_raster(surface: &mut Surface, color: [f32; 4], region: Optio
     )
 }
 
+/// The clip of `surface` when a draw on it can be split into rows: a Raster device Skia does not
+/// tile, without a layer or a transform, clipped to a rect of whole pixels, which Skia keeps as a
+/// hard-edged region.
+pub(crate) fn rows_clip(surface: &mut Surface) -> Option<IRect> {
+    // Skia draws on devices wider or taller than this in tiles.
+    const UNTILED: i32 = 8191;
+    if surface.width() > UNTILED || surface.height() > UNTILED {
+        return None;
+    }
+    let canvas = surface.canvas();
+    let root = canvas.peek_pixels()?.addr();
+    let top = canvas.access_top_layer_pixels()?.pixels.as_ptr();
+    (root == top.cast() && canvas.is_clip_rect() && canvas.local_to_device_as_3x3().is_identity())
+        .then(|| canvas.device_clip_bounds())
+        .flatten()
+}
+
+/// Draws `rect` with a `paint` whose result at a pixel depends only on that pixel, such as a
+/// shader under the Src blend. Where `rows_clip` allows, the rows are split across idle CPU
+/// helpers. Each draws whole rows through a canvas over its own pixels, translated by a whole
+/// number of rows so the shader sees the coordinates it sees on the whole surface, and the rect
+/// is whole pixels and not anti-aliased, so the bytes do not depend on the split. Anti-aliased
+/// geometry would not keep them: Skia clips its edges to the canvas before computing their
+/// coverage.
+pub(crate) fn draw_irect_by_rows(
+    surface: &mut Surface,
+    rect: IRect,
+    paint: &SkPaint,
+) -> Result<(), DrawError> {
+    let Some(clip) = rows_clip(surface) else {
+        surface.canvas().draw_irect(rect, paint);
+        return Ok(());
+    };
+    let Some(rect) = IRect::intersect(&rect, &clip) else {
+        return Ok(());
+    };
+    // As for a draw: pixels a snapshot still shares are replaced before they are written, by a
+    // copy unless a Src draw writes the whole surface.
+    let whole = paint.as_blend_mode() == Some(SkBlendMode::Src)
+        && rect == IRect::from_wh(surface.width(), surface.height());
+    surface.notify_content_will_change(if whole {
+        ContentChangeMode::Discard
+    } else {
+        ContentChangeMode::Retain
+    });
+    let mut pixels = surface
+        .peek_pixels()
+        .ok_or_else(|| DrawError::Surface("Raster surface has no pixels".into()))?;
+    let info = pixels.info().clone();
+    let row_bytes = pixels.row_bytes();
+    let bytes = pixels
+        .bytes_mut()
+        .ok_or_else(|| DrawError::Surface("Raster surface pixels are not writable".into()))?;
+    let span = rect.top as usize * row_bytes..(rect.bottom as usize * row_bytes).min(bytes.len());
+    let failed = std::sync::atomic::AtomicBool::new(false);
+    fill_image_rows(&mut bytes[span], row_bytes, |first, rows| {
+        let top = rect.top + first as i32;
+        let height = rows.len().div_ceil(row_bytes) as i32;
+        let info = info.with_dimensions((info.width(), height));
+        let Some(canvas) = skia_safe::Canvas::from_raster_direct(&info, rows, row_bytes, None)
+        else {
+            failed.store(true, std::sync::atomic::Ordering::Relaxed);
+            return;
+        };
+        canvas.translate((0.0, -(top as f32)));
+        canvas.draw_irect(
+            IRect::from_ltrb(rect.left, top, rect.right, top + height),
+            paint,
+        );
+    });
+    if failed.into_inner() {
+        return Err(DrawError::Surface(
+            "cannot draw over the rows of a Raster surface".into(),
+        ));
+    }
+    Ok(())
+}
+
 fn program_target_mut<'a>(
     surfaces: &'a mut ScratchSurfaces<'_, '_>,
     target: ProgramTerminal,
@@ -2631,6 +2710,20 @@ fn apply_filter_program_into(
             lens_frame,
         );
     }
+    if let Filter::ChromaticAberration { offset } = filter
+        && super::effect::draw_chromatic_aberration(
+            surface,
+            &input.image,
+            IRect::from_xywh(0, 0, input.roi.width as i32, input.roi.height as i32),
+            [
+                input.roi.x - target_origin[0],
+                input.roi.y - target_origin[1],
+            ],
+            offset,
+        )?
+    {
+        return Ok(());
+    }
     apply_filter_chain_program_into(surface, input, std::slice::from_ref(&filter), target_origin)
 }
 
@@ -2988,7 +3081,7 @@ fn apply_noise_displacement_program_into(
     };
     clear_surface(surface)?;
     super::effect::draw_noise_displacement(
-        surface.canvas(),
+        surface,
         &input.image,
         IRect::from_xywh(
             0,
@@ -4499,6 +4592,190 @@ mod tests {
                 actual, expected,
                 "slot capacity or origin changed {filter:?}"
             );
+        }
+    }
+
+    #[test]
+    fn drawing_a_rect_by_rows_keeps_the_bytes_of_one_draw() {
+        // Tall enough for the rows to be split across helpers. As in noise displacement, rotated
+        // noise moves where the shader samples a child image.
+        let info = ImageInfo::new(
+            (203, 300),
+            ColorType::RGBAF16,
+            AlphaType::Premul,
+            Some(working_color_space().unwrap()),
+        );
+        let read = |surface: &mut Surface| {
+            let mut bytes = vec![0_u8; 203 * 300 * 8];
+            assert!(surface.read_pixels(&info, &mut bytes, 203 * 8, (0, 0)));
+            bytes
+        };
+        let mut source = skia_safe::surfaces::raster(&info, None, None).unwrap();
+        source.canvas().clear(Color4f::new(0.1, 0.2, 0.3, 1.0));
+        let mut stripes = SkPaint::default();
+        stripes.set_color4f(Color4f::new(0.9, 0.7, 0.2, 1.0), None);
+        for x in (0..203).step_by(7) {
+            source
+                .canvas()
+                .draw_rect(SkRect::from_xywh(x as f32, 0.0, 3.0, 300.0), &stripes);
+        }
+        let effect = RuntimeEffect::make_for_shader(
+            "uniform shader image;
+             uniform shader noise;
+             half4 main(float2 p) {
+                 half4 n = noise.eval(p);
+                 return image.eval(floor(p + 24.0 * (float2(n.rg) - 0.5)) + 0.5);
+             }",
+            None,
+        )
+        .unwrap();
+        let noise = skia_safe::shaders::fractal_noise((0.03, 0.05), 3, 7.0, None)
+            .unwrap()
+            .with_local_matrix(&Matrix::rotate_deg(17.0));
+        let image = source
+            .image_snapshot()
+            .to_shader(
+                (TileMode::Decal, TileMode::Decal),
+                SamplingOptions::default(),
+                None,
+            )
+            .unwrap();
+        let mut paint = SkPaint::default();
+        paint.set_blend_mode(SkBlendMode::Src);
+        paint.set_shader(
+            effect
+                .make_shader(
+                    Data::new_empty(),
+                    &[ChildPtr::Shader(image), ChildPtr::Shader(noise)],
+                    None,
+                )
+                .unwrap(),
+        );
+        // Program passes draw under a clip to their ROI. A snapshot taken before the draw keeps
+        // its pixels, also when the draw writes the whole surface.
+        for rect in [IRect::from_ltrb(3, 5, 199, 297), IRect::from_wh(203, 300)] {
+            for clip in [None, Some(IRect::from_ltrb(11, 2, 180, 263))] {
+                let draw = |by_rows: bool| {
+                    let mut target = skia_safe::surfaces::raster(&info, None, None).unwrap();
+                    target.canvas().clear(Color4f::new(0.5, 0.5, 0.5, 1.0));
+                    let gray = read(&mut target);
+                    let held = target.image_snapshot();
+                    if let Some(clip) = clip {
+                        target.canvas().clip_irect(clip, ClipOp::Intersect);
+                    }
+                    if by_rows {
+                        draw_irect_by_rows(&mut target, rect, &paint).unwrap();
+                    } else {
+                        target.canvas().draw_irect(rect, &paint);
+                    }
+                    let mut kept = vec![0_u8; 203 * 300 * 8];
+                    let hint = CachingHint::Disallow;
+                    assert!(held.read_pixels(&info, &mut kept, 203 * 8, (0, 0), hint));
+                    assert_eq!(kept, gray, "rect {rect:?} clip {clip:?}");
+                    read(&mut target)
+                };
+                let one_draw = draw(false);
+                assert!(one_draw.iter().any(|byte| *byte != 0));
+                assert_eq!(draw(true), one_draw, "rect {rect:?} clip {clip:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn chromatic_aberration_drawn_by_rows_keeps_the_bytes_of_its_image_filter() {
+        let info = |width, height| {
+            ImageInfo::new(
+                (width, height),
+                ColorType::RGBAF16,
+                AlphaType::Premul,
+                Some(working_color_space().unwrap()),
+            )
+        };
+        let read = |surface: &mut Surface| {
+            let mut bytes = vec![0_u8; 203 * 300 * 8];
+            assert!(surface.read_pixels(&info(203, 300), &mut bytes, 203 * 8, (0, 0)));
+            bytes
+        };
+        // Pooled backings hold other pixels past a program image's subset.
+        let backing = |width: i32, height: i32| {
+            let mut surface =
+                skia_safe::surfaces::raster(&info(width, height), None, None).unwrap();
+            surface.canvas().clear(Color4f::new(0.2, 0.1, 0.4, 0.8));
+            let mut paint = SkPaint::default();
+            paint.set_color4f(Color4f::new(0.9, 0.6, 0.1, 0.7), None);
+            for x in (0..width).step_by(5) {
+                let column = SkRect::from_xywh(x as f32, 0.0, 2.0, height as f32);
+                surface.canvas().draw_rect(column, &paint);
+            }
+            paint.set_color4f(Color4f::new(0.1, 0.8, 0.5, 1.0), None);
+            for y in (0..height).step_by(9) {
+                let row = SkRect::from_xywh(0.0, y as f32, width as f32, 4.0);
+                surface.canvas().draw_rect(row, &paint);
+            }
+            surface.image_snapshot()
+        };
+        // Backing size, subset size and placement: the input covering what the filter samples,
+        // or not, in an exact backing or inside a larger one, past every edge or only past the
+        // top and left edges.
+        for (pixels, size, origin) in [
+            ((203, 300), (203, 300), [0, 0]),
+            ((260, 360), (243, 340), [-20, -20]),
+            ((220, 320), (150, 200), [30, 40]),
+            ((150, 200), (150, 200), [30, 40]),
+            ((260, 360), (243, 340), [5, 5]),
+        ] {
+            let image = backing(pixels.0, pixels.1);
+            let source = IRect::from_wh(size.0, size.1);
+            for offset in [
+                [0.0, 0.0],
+                [6.0, 0.0],
+                [3.7, -1.3],
+                [-12.25, 8.5],
+                [0.3, 17.9],
+                [41.0, 3.0],
+            ] {
+                for clip in [None, Some(IRect::from_ltrb(4, 9, 190, 270))] {
+                    let draw = |direct: bool| {
+                        let mut target =
+                            skia_safe::surfaces::raster(&info(203, 300), None, None).unwrap();
+                        target.canvas().clear(Color4f::new(0.5, 0.5, 0.5, 1.0));
+                        if let Some(clip) = clip {
+                            target.canvas().clip_irect(clip, ClipOp::Intersect);
+                        }
+                        if direct {
+                            assert!(
+                                super::super::effect::draw_chromatic_aberration(
+                                    &mut target,
+                                    &image,
+                                    source,
+                                    origin,
+                                    offset,
+                                )
+                                .unwrap()
+                            );
+                        } else {
+                            // As a program pass draws it through Skia's image filter.
+                            clear_surface(&mut target).unwrap();
+                            let filter = Filter::ChromaticAberration { offset };
+                            draw_filters(
+                                target.canvas(),
+                                &image,
+                                source,
+                                origin,
+                                [0, 0],
+                                &[filter],
+                            )
+                            .unwrap();
+                        }
+                        read(&mut target)
+                    };
+                    assert_eq!(
+                        draw(true),
+                        draw(false),
+                        "{pixels:?} {size:?} at {origin:?}, offset {offset:?}, clip {clip:?}"
+                    );
+                }
+            }
         }
     }
 
