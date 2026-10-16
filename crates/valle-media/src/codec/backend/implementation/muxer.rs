@@ -103,6 +103,10 @@ pub struct Muxer {
     video_transport: VideoFrameTransport,
     shared_frame_pool: Option<SharedVideoFramePool>,
     encoder_timings: Option<crate::perf::EncoderTimings>,
+    /// The CPU RGBA path's staging frame and a YUV frame the encoder has released, reused by the
+    /// next conversion.
+    rgba_staging: Option<frame::Video>,
+    spare_yuv: Option<frame::Video>,
 }
 
 impl Muxer {
@@ -591,6 +595,8 @@ impl Muxer {
             video_transport,
             shared_frame_pool,
             encoder_timings: crate::perf::EncoderTimings::from_env(),
+            rgba_staging: None,
+            spare_yuv: None,
         })
     }
 
@@ -696,7 +702,8 @@ impl Muxer {
             ));
         }
         let yuv = self.convert_rgba(frame)?;
-        self.submit_yuv(yuv)?; // fallback path is not pooled; returned frame is dropped
+        let submitted = self.submit_yuv(yuv)?;
+        self.recycle_yuv(submitted);
         Ok(())
     }
 
@@ -724,7 +731,8 @@ impl Muxer {
             ));
         }
         let yuv = self.convert_rgba(frame)?;
-        self.submit_yuv_at_pts(yuv, pts, duration_ticks)?;
+        let submitted = self.submit_yuv_at_pts(yuv, pts, duration_ticks)?;
+        self.recycle_yuv(submitted);
         Ok(())
     }
 
@@ -744,15 +752,31 @@ impl Muxer {
             ));
         }
         let row = self.width as usize * 4;
+        let (width, height) = (self.width, self.height);
         crate::perf::time_enc_convert(|| -> Result<frame::Video> {
-            // Allocate a fresh frame in the fallback conversion path; worker conversion supports
-            // recycling separately.
-            let mut rgba_f = frame::Video::new(format::Pixel::RGBA, self.width, self.height);
-            fill_plane0(&mut rgba_f, &frame.data, row, self.height);
-            let mut yuv = frame::Video::new(format::Pixel::YUV420P, self.width, self.height);
-            self.sws.run(&rgba_f, &mut yuv)?;
+            // As in `RgbaToYuv`, both frames are written in full, so reused buffers give the
+            // same output as fresh ones.
+            let staging = self
+                .rgba_staging
+                .get_or_insert_with(|| frame::Video::new(format::Pixel::RGBA, width, height));
+            fill_plane0(staging, &frame.data, row, height);
+            let mut yuv = self
+                .spare_yuv
+                .take()
+                .unwrap_or_else(|| frame::Video::new(format::Pixel::YUV420P, width, height));
+            self.sws.run(staging, &mut yuv)?;
             Ok(yuv)
         })
+    }
+
+    /// Keep a submitted CPU-path frame for the next conversion once the encoder has released all
+    /// of its plane references; asynchronous hardware may retain them.
+    fn recycle_yuv(&mut self, yuv: frame::Video) {
+        // SAFETY: This only queries buffer reference counts; the mutable pointer matches the C
+        // signature without mutating the frame.
+        if unsafe { ff::ffi::av_frame_is_writable(yuv.as_ptr() as *mut _) != 0 } {
+            self.spare_yuv = Some(yuv);
+        }
     }
 
     /// Encode worker-converted YUV produced with matching RgbaToYuv parameters. Return the buffer

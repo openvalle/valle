@@ -1,5 +1,5 @@
 use skia_safe::{
-    AlphaType, ColorType, Image, ImageInfo, RuntimeEffect, Surface, image::CachingHint,
+    AlphaType, ColorType, IRect, Image, ImageInfo, RuntimeEffect, Surface, image::CachingHint,
 };
 use valle_draw::program::{BlendMode as DrawBlend, BlendSpace};
 use valle_engine::compositor::{
@@ -14,6 +14,13 @@ const BLEND_SOURCE: &str = include_str!("../../../../valle-draw/assets/shaders/c
 #[derive(Debug)]
 pub(crate) struct BlendRuntime {
     effect: RuntimeEffect,
+}
+
+/// A blend operand: the top-left `rect.size()` pixels of `image`, placed at `rect` in output
+/// coordinates.
+pub(crate) struct Placed<'a> {
+    pub(crate) image: &'a Image,
+    pub(crate) rect: IRect,
 }
 
 impl BlendRuntime {
@@ -44,6 +51,37 @@ impl BlendRuntime {
             &[source, destination],
             &[draw_code(mode), 1.0, 0.0, space_code(space)],
         )
+    }
+
+    /// `effective_source_into` with operands that would first be drawn under the Src blend into
+    /// transparent images the size of `output`. On Raster their half floats are read in place
+    /// instead, where the drawn images would hold the same values. Returns `false` where only
+    /// the drawn images can take the blend.
+    pub(crate) fn effective_placed_into(
+        &self,
+        output: &mut Surface,
+        source: Placed<'_>,
+        destination: Placed<'_>,
+        mode: DrawBlend,
+        space: BlendSpace,
+    ) -> Result<bool, DrawError> {
+        let target = output.image_info();
+        let stored = |operand: &Placed<'_>| {
+            let image = operand.image.image_info();
+            image.color_type() == ColorType::RGBAF16
+                && image.alpha_type() == AlphaType::Premul
+                && image.color_space() == target.color_space()
+                && operand.rect.width() <= image.width()
+                && operand.rect.height() <= image.height()
+        };
+        if target.color_type() != ColorType::RGBAF16
+            || target.alpha_type() != AlphaType::Premul
+            || !stored(&source)
+            || !stored(&destination)
+        {
+            return Ok(false);
+        }
+        raster_blend_placed_into(output, source, destination, mode, space, 1.0, false)
     }
 
     pub(crate) fn composite_into(
@@ -83,11 +121,40 @@ fn raster_blend_into(
     composite: bool,
 ) -> Result<bool, DrawError> {
     let extent = output.image_info().dimensions();
+    if source.dimensions() != extent || destination.dimensions() != extent {
+        return Ok(false);
+    }
+    let rect = IRect::from_size(extent);
+    raster_blend_placed_into(
+        output,
+        Placed {
+            image: source,
+            rect,
+        },
+        Placed {
+            image: destination,
+            rect,
+        },
+        mode,
+        space,
+        opacity,
+        composite,
+    )
+}
+
+fn raster_blend_placed_into(
+    output: &mut Surface,
+    source: Placed<'_>,
+    destination: Placed<'_>,
+    mode: DrawBlend,
+    space: BlendSpace,
+    opacity: f32,
+    composite: bool,
+) -> Result<bool, DrawError> {
+    let extent = output.image_info().dimensions();
     if output.peek_pixels().is_none()
-        || source.is_texture_backed()
-        || destination.is_texture_backed()
-        || source.dimensions() != extent
-        || destination.dimensions() != extent
+        || source.image.is_texture_backed()
+        || destination.image.is_texture_backed()
         || !(0.0..=1.0).contains(&opacity)
     {
         return Ok(false);
@@ -111,9 +178,8 @@ fn raster_blend_into(
     BLEND_SCRATCH.with_borrow_mut(|(pixels, backdrop)| {
         pixels.resize(byte_count, 0);
         backdrop.resize(byte_count, 0);
-        // Both reads overwrite every byte, so capacity reused from a previous frame is never read.
-        if !source.read_pixels(&info, pixels, row_bytes, (0, 0), CachingHint::Disallow)
-            || !destination.read_pixels(&info, backdrop, row_bytes, (0, 0), CachingHint::Disallow)
+        if !read_placed(&source, &info, pixels, row_bytes)
+            || !read_placed(&destination, &info, backdrop, row_bytes)
         {
             return Err(internal("blend input readback failed"));
         }
@@ -208,6 +274,37 @@ fn raster_blend_into(
         }
         Ok(true)
     })
+}
+
+/// Reads `operand` into F32 `pixels` the size of `info`, transparent outside its rect.
+fn read_placed(
+    operand: &Placed<'_>,
+    info: &ImageInfo,
+    pixels: &mut [u8],
+    row_bytes: usize,
+) -> bool {
+    let extent = IRect::from_size(info.dimensions());
+    if operand.rect == extent {
+        // The read overwrites every byte, so capacity reused from a previous frame is never read.
+        return operand
+            .image
+            .read_pixels(info, pixels, row_bytes, (0, 0), CachingHint::Disallow);
+    }
+    pixels.fill(0);
+    let Some(visible) = IRect::intersect(&operand.rect, &extent) else {
+        return true;
+    };
+    let start = visible.top as usize * row_bytes + visible.left as usize * 16;
+    operand.image.read_pixels(
+        &info.with_dimensions(visible.size()),
+        &mut pixels[start..],
+        row_bytes,
+        (
+            visible.left - operand.rect.left,
+            visible.top - operand.rect.top,
+        ),
+        CachingHint::Disallow,
+    )
 }
 
 thread_local! {
@@ -632,6 +729,113 @@ mod tests {
                     assert!(close(native, expected, 0.004), "{context}");
                     assert!(close(kernel, expected, 0.004), "{context}");
                     assert!(close(native, kernel, 0.008), "{context}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn placed_operands_keep_the_bytes_of_drawn_operands() {
+        let info = working_info(Extent2d::new(37, 29).unwrap()).unwrap();
+        let runtime = BlendRuntime::admit().unwrap();
+        // Larger than the output, as slot snapshots are, with opaque, partial and clear pixels.
+        let operand = |colors: [Color4f; 3]| {
+            let mut surface =
+                raster_surface(&working_info(Extent2d::new(41, 33).unwrap()).unwrap()).unwrap();
+            surface.canvas().clear(colors[0]);
+            for (index, color) in colors[1..].iter().enumerate() {
+                let mut paint = Paint::new(*color, None);
+                paint.set_blend_mode(BlendMode::Src);
+                let at = 4.0 + 9.0 * index as f32;
+                surface
+                    .canvas()
+                    .draw_rect(skia_safe::Rect::from_xywh(at, at / 2.0, 19.0, 13.0), &paint);
+            }
+            surface.image_snapshot()
+        };
+        let source_image = operand([
+            Color4f::new(0.8, 0.3, 0.1, 1.0),
+            Color4f::new(0.2, 0.6, 0.9, 0.5),
+            Color4f::new(0.0, 0.0, 0.0, 0.0),
+        ]);
+        let destination_image = operand([
+            Color4f::new(0.1, 0.5, 0.3, 0.7),
+            Color4f::new(0.9, 0.9, 0.2, 1.0),
+            Color4f::new(0.4, 0.1, 0.6, 0.25),
+        ]);
+        // As `blend_source_into` aligns operands: drawn under Src into transparent images.
+        let drawn = |placed: &Placed<'_>| {
+            let mut surface = raster_surface(&info).unwrap();
+            surface.canvas().clear(Color4f::new(0.0, 0.0, 0.0, 0.0));
+            if !placed.rect.is_empty() {
+                let mut paint = Paint::default();
+                paint.set_blend_mode(BlendMode::Src);
+                surface.canvas().draw_image_rect_with_sampling_options(
+                    placed.image,
+                    Some((
+                        &skia_safe::Rect::from_xywh(
+                            0.0,
+                            0.0,
+                            placed.rect.width() as f32,
+                            placed.rect.height() as f32,
+                        ),
+                        skia_safe::canvas::SrcRectConstraint::Strict,
+                    )),
+                    skia_safe::Rect::from(placed.rect),
+                    skia_safe::SamplingOptions::default(),
+                    &paint,
+                );
+            }
+            surface.image_snapshot()
+        };
+        let bytes = |surface: &mut Surface| {
+            let mut bytes = vec![0_u8; 37 * 29 * 8];
+            assert!(surface.read_pixels(&info, &mut bytes, 37 * 8, (0, 0)));
+            bytes
+        };
+        let rects = [
+            IRect::from_xywh(0, 0, 37, 29),
+            IRect::from_xywh(5, 3, 20, 17),
+            IRect::from_xywh(-6, -4, 30, 25),
+            IRect::from_xywh(20, 15, 21, 30),
+            IRect::from_xywh(3, 2, 0, 0),
+            IRect::from_xywh(50, 1, 10, 10),
+        ];
+        for mode in [DrawBlend::Multiply, DrawBlend::Plus, DrawBlend::Hue] {
+            for space in [BlendSpace::Srgb, BlendSpace::Linear] {
+                for (source_rect, destination_rect) in rects
+                    .into_iter()
+                    .flat_map(|source| [rects[0], rects[2], rects[3]].map(|dest| (source, dest)))
+                {
+                    let source = Placed {
+                        image: &source_image,
+                        rect: source_rect,
+                    };
+                    let destination = Placed {
+                        image: &destination_image,
+                        rect: destination_rect,
+                    };
+                    let mut expected = raster_surface(&info).unwrap();
+                    runtime
+                        .effective_source_into(
+                            &mut expected,
+                            &drawn(&source),
+                            &drawn(&destination),
+                            mode,
+                            space,
+                        )
+                        .unwrap();
+                    let mut actual = raster_surface(&info).unwrap();
+                    assert!(
+                        runtime
+                            .effective_placed_into(&mut actual, source, destination, mode, space)
+                            .unwrap()
+                    );
+                    assert_eq!(
+                        bytes(&mut actual),
+                        bytes(&mut expected),
+                        "{mode:?}/{space:?} source {source_rect:?} destination {destination_rect:?}"
+                    );
                 }
             }
         }

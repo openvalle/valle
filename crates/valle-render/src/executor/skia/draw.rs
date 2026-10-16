@@ -947,6 +947,26 @@ impl ProgramRuntime {
         // Local program resources are cropped independently. A blend samples both operands in
         // output coordinates, so align their ROI origins before handing images to the kernel.
         // Passing the raw slot snapshots would treat each ROI's top-left as the same pixel.
+        fn placed(operand: &ProgramImage, origin: [i32; 2]) -> super::blend::Placed<'_> {
+            super::blend::Placed {
+                image: &operand.image,
+                rect: IRect::from_xywh(
+                    operand.roi.x - origin[0],
+                    operand.roi.y - origin[1],
+                    operand.roi.width as i32,
+                    operand.roi.height as i32,
+                ),
+            }
+        }
+        if blend.effective_placed_into(
+            target,
+            placed(source, target_origin),
+            placed(destination, target_origin),
+            mode,
+            space,
+        )? {
+            return Ok(());
+        }
         let info = target.image_info();
         let mut source_surface = target
             .new_surface(&info)
@@ -3028,24 +3048,27 @@ fn apply_f16_filter_program_into(
     }
     let upload_started = std::time::Instant::now();
     let raster_info = info.with_dimensions((output_info.width(), output_info.height()));
-    let image = images::raster_from_data(
-        &raster_info,
-        Data::new_copy(&output),
-        output_info.width() as usize * 8,
-    )
-    .ok_or_else(|| DrawError::Surface("shared F16 output allocation failed".into()))?;
-    clear_surface(surface)?;
-    let mut paint = SkPaint::default();
-    paint.set_blend_mode(SkBlendMode::Src);
-    surface.canvas().draw_image_with_sampling_options(
-        &image,
-        (
-            (output_roi.x - target_origin[0]) as f32,
-            (output_roi.y - target_origin[1]) as f32,
-        ),
-        SamplingOptions::default(),
-        Some(&paint),
-    );
+    let origin = [
+        output_roi.x - target_origin[0],
+        output_roi.y - target_origin[1],
+    ];
+    if !write_raster_output(surface, &raster_info, &output, origin)? {
+        let image = images::raster_from_data(
+            &raster_info,
+            Data::new_copy(&output),
+            output_info.width() as usize * 8,
+        )
+        .ok_or_else(|| DrawError::Surface("shared F16 output allocation failed".into()))?;
+        clear_surface(surface)?;
+        let mut paint = SkPaint::default();
+        paint.set_blend_mode(SkBlendMode::Src);
+        surface.canvas().draw_image_with_sampling_options(
+            &image,
+            (origin[0] as f32, origin[1] as f32),
+            SamplingOptions::default(),
+            Some(&paint),
+        );
+    }
     if std::env::var_os("VALLE_TRACE_F16_STAGES").is_some() {
         eprintln!(
             "[valle f16] cpu-to-gpu-submit {:.3}ms",
@@ -3053,6 +3076,50 @@ fn apply_f16_filter_program_into(
         );
     }
     Ok(())
+}
+
+/// Clearing a target and drawing `pixels` at `origin` under the Src blend stores the pixels
+/// unchanged when the color spaces match. On Raster, write them in place instead, without
+/// first copying them into Skia data. Returns `false` for GPU targets, other color spaces, and
+/// canvases `rows_clip` declines.
+fn write_raster_output(
+    surface: &mut Surface,
+    info: &ImageInfo,
+    pixels: &[u8],
+    origin: [i32; 2],
+) -> Result<bool, DrawError> {
+    let target = surface.image_info();
+    if target.color_type() != info.color_type()
+        || target.alpha_type() != info.alpha_type()
+        || target.color_space() != info.color_space()
+    {
+        return Ok(false);
+    }
+    let Some(clip) = rows_clip(surface) else {
+        return Ok(false);
+    };
+    let rect = IRect::from_xywh(origin[0], origin[1], info.width(), info.height());
+    let visible = IRect::intersect(&rect, &clip);
+    // Where the pixels cover the clip, they replace every pixel the clear would.
+    if visible != Some(clip) {
+        clear_surface(surface)?;
+    }
+    let Some(visible) = visible else {
+        return Ok(true);
+    };
+    // Like the draw, the write leaves the pixels outside the clip as they are.
+    let row_bytes = info.min_row_bytes();
+    let start = (visible.top - rect.top) as usize * row_bytes
+        + (visible.left - rect.left) as usize * info.bytes_per_pixel();
+    if !surface.canvas().write_pixels(
+        &info.with_dimensions(visible.size()),
+        &pixels[start..],
+        row_bytes,
+        (visible.left, visible.top),
+    ) {
+        return Err(DrawError::Surface("raster output write failed".into()));
+    }
+    Ok(true)
 }
 
 /// Noise displacement keeps its noise lattice and displacement vectors in the filtered group's
@@ -4677,6 +4744,82 @@ mod tests {
                 let one_draw = draw(false);
                 assert!(one_draw.iter().any(|byte| *byte != 0));
                 assert_eq!(draw(true), one_draw, "rect {rect:?} clip {clip:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn writing_an_output_in_place_keeps_the_bytes_of_its_draw() {
+        let info = ImageInfo::new(
+            (61, 47),
+            ColorType::RGBAF16,
+            AlphaType::Premul,
+            Some(working_color_space().unwrap()),
+        );
+        let read = |surface: &mut Surface| {
+            let mut bytes = vec![0_u8; 61 * 47 * 8];
+            assert!(surface.read_pixels(&info, &mut bytes, 61 * 8, (0, 0)));
+            bytes
+        };
+        // Finite half floats of either sign, subnormals included.
+        let (width, height) = (29, 23);
+        let output = (0..width * height * 4)
+            .flat_map(|index: u32| {
+                let bits = (index.wrapping_mul(2_654_435_761) >> 7) % 0x7c00;
+                let sign = if index.is_multiple_of(3) { 0x8000 } else { 0 };
+                (bits as u16 | sign).to_ne_bytes()
+            })
+            .collect::<Vec<_>>();
+        let output_info = info.with_dimensions((width as i32, height as i32));
+        // Program passes write under a clip to their ROI, which the output may cover exactly. A
+        // snapshot taken before the write keeps its pixels.
+        for origin in [[5, 7], [-4, -3], [40, 30], [11, 2], [70, 9]] {
+            for clip in [
+                None,
+                Some(IRect::from_xywh(11, 2, 29, 23)),
+                Some(IRect::from_ltrb(8, 4, 50, 40)),
+            ] {
+                let render = |in_place: bool| {
+                    let mut target = skia_safe::surfaces::raster(&info, None, None).unwrap();
+                    target.canvas().clear(Color4f::new(0.5, 0.25, 0.75, 1.0));
+                    let before = read(&mut target);
+                    let held = target.image_snapshot();
+                    if let Some(clip) = clip {
+                        target.canvas().clip_irect(clip, ClipOp::Intersect);
+                    }
+                    if in_place {
+                        assert!(
+                            write_raster_output(&mut target, &output_info, &output, origin)
+                                .unwrap()
+                        );
+                    } else {
+                        let image = images::raster_from_data(
+                            &output_info,
+                            Data::new_copy(&output),
+                            width as usize * 8,
+                        )
+                        .unwrap();
+                        clear_surface(&mut target).unwrap();
+                        let mut paint = SkPaint::default();
+                        paint.set_blend_mode(SkBlendMode::Src);
+                        target.canvas().draw_image_with_sampling_options(
+                            &image,
+                            (origin[0] as f32, origin[1] as f32),
+                            SamplingOptions::default(),
+                            Some(&paint),
+                        );
+                    }
+                    let mut kept = vec![0_u8; 61 * 47 * 8];
+                    let hint = CachingHint::Disallow;
+                    assert!(held.read_pixels(&info, &mut kept, 61 * 8, (0, 0), hint));
+                    assert_eq!(kept, before, "origin {origin:?} clip {clip:?}");
+                    read(&mut target)
+                };
+                assert_eq!(
+                    render(true),
+                    render(false),
+                    "origin {origin:?} clip {clip:?}"
+                );
             }
         }
     }
