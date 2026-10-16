@@ -627,7 +627,7 @@ pub struct RenderOutputArgs {
     /// Contact sheet PNG. Without --frames, select up to 12 evenly spaced frames.
     #[arg(long, value_name = "PATH", conflicts_with = "codec")]
     pub storyboard: Option<PathBuf>,
-    /// Video codec: h264 for .mp4; qtrle (default) or prores4444 for .mov.
+    /// Video codec: h264 (default) or hevc for .mp4; qtrle (default) or prores4444 for .mov.
     #[arg(long, value_enum)]
     pub codec: Option<RenderVideoCodec>,
 }
@@ -635,6 +635,8 @@ pub struct RenderOutputArgs {
 #[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RenderVideoCodec {
     H264,
+    /// The platform hardware HEVC encoder at speed priority, tagged hvc1; no software fallback.
+    Hevc,
     Qtrle,
     Prores4444,
 }
@@ -672,8 +674,9 @@ pub struct MotionRenderTuningArgs {
     /// Require hardware H.264 encoding. Fails if unavailable; no software fallback.
     #[arg(long, conflicts_with_all = ["frame", "frames", "storyboard"])]
     pub hardware_encode: bool,
-    /// Hardware encoder target bitrate in bits/second. Defaults to a resolution-based estimate.
-    #[arg(long, requires = "hardware_encode", conflicts_with_all = ["frame", "frames", "storyboard"], value_parser = clap::value_parser!(u32).range(1..))]
+    /// Hardware encoder target bitrate in bits/second, with --hardware-encode or --codec hevc.
+    /// Defaults to a resolution-based estimate.
+    #[arg(long, conflicts_with_all = ["frame", "frames", "storyboard"], value_parser = clap::value_parser!(u32).range(1..))]
     pub bitrate: Option<u32>,
     /// Software H.264 CPU share; defaults to one quarter of --threads, leaving rendering capacity.
     #[arg(long, conflicts_with_all = ["hardware_encode", "frame", "frames", "storyboard"], value_parser = clap::value_parser!(u16).range(1..))]

@@ -1263,7 +1263,10 @@ fn video_codec_and_selection_mismatches_fail_before_reading_source() {
         vec!["-o", "bad.mov", "--codec", "h264"],
         vec!["-o", "bad.mp4", "--codec", "qtrle"],
         vec!["-o", "bad.mp4", "--codec", "prores4444"],
+        vec!["-o", "bad.mov", "--codec", "hevc"],
         vec!["-o", "bad.mov", "--hardware-encode"],
+        vec!["-o", "bad.mp4", "--bitrate", "1000000"],
+        vec!["-o", "bad.mp4", "--codec", "hevc", "--encode-threads", "2"],
         vec!["-o", "bad.png"],
         vec!["-o", "%d-%d.png"],
         vec!["-o", "bad.mp4", "--frames", "0,1"],
@@ -1281,6 +1284,75 @@ fn video_codec_and_selection_mismatches_fail_before_reading_source() {
                 .contains("cannot read Motion")
         );
         assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+    }
+}
+
+#[test]
+fn hevc_mp4_is_tagged_hvc1_for_motion_and_timeline() {
+    use valle_media::codec::{Mp4VideoCodec, Muxer, VideoFrameTransport};
+    // Skip where the platform cannot open a hardware HEVC encoder.
+    let probe = tempfile::tempdir().unwrap();
+    if let Err(error) = Muxer::open_ext_rational_with_transport(
+        &probe.path().join("probe.mp4"),
+        320,
+        180,
+        30,
+        1,
+        Mp4VideoCodec::Hevc,
+        None,
+        true,
+        None,
+        VideoFrameTransport::Cpu,
+    ) {
+        eprintln!("skip HEVC delivery test: {error}");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("scene.motion.tsx"),
+        "export const composition = { width: 320, height: 180, fps: 30, duration: 0.5 }; export default function Test(){return <Scene style={{backgroundColor:'#2060c0'}} />;}",
+    )
+    .unwrap();
+    let timeline = json!({
+        "canvas": {"width": 320, "height": 180, "fps": 30},
+        "tracks": {"visual":[{"clips":[{"kind":"solid", "color":"#c06020", "start":0, "duration":0.5}]}]}
+    });
+    std::fs::write(dir.path().join("timeline.json"), timeline.to_string()).unwrap();
+    let motion = success(run(
+        dir.path(),
+        &[
+            "--json",
+            "motion",
+            "render",
+            "scene.motion.tsx",
+            "-o",
+            "motion.mp4",
+            "--codec",
+            "hevc",
+            "--bitrate",
+            "2000000",
+        ],
+    ));
+    let timeline = success(run(
+        dir.path(),
+        &[
+            "--json",
+            "timeline",
+            "render",
+            "timeline.json",
+            "-o",
+            "timeline.mp4",
+            "--codec",
+            "hevc",
+        ],
+    ));
+    for (report, file) in [(motion, "motion.mp4"), (timeline, "timeline.mp4")] {
+        assert_eq!(report["delivery"]["codec"], "hevc", "{report}");
+        let bytes = std::fs::read(dir.path().join(file)).unwrap();
+        let has = |tag: &[u8]| bytes.windows(4).any(|w| w == tag);
+        assert!(has(b"hvc1") && has(b"hvcC") && !has(b"hev1"), "{file}");
+        let decoded = decode_rgba_frames(&dir.path().join(file), None).unwrap();
+        assert_eq!(decoded.len(), 15, "{file}");
     }
 }
 

@@ -1,6 +1,6 @@
-//! In-process H.264 MP4 muxing with optional AAC audio. Preserve the requested audio topology and
-//! add all streams before writing the header. Use YUV420P with square pixels, set hardware bitrate
-//! through the codec API, and let the encoder choose GOP picture types.
+//! In-process H.264 or HEVC MP4 muxing with optional AAC audio. Preserve the requested audio
+//! topology and add all streams before writing the header. Use YUV420P with square pixels, set
+//! hardware bitrate through the codec API, and let the encoder choose GOP picture types.
 
 use std::{collections::VecDeque, path::Path};
 
@@ -15,9 +15,12 @@ use super::ffi::{
     set_sws_colorspace, tag_bt709_limited, write_mp4_header,
 };
 use super::shared_frame::{SharedVideoFrame, SharedVideoFramePool, VideoFrameTransport};
+use crate::codec::muxer::Mp4VideoCodec;
 
 /// Platform hardware H.264 encoder name.
 const HW_H264_ENCODER: &str = "h264_videotoolbox";
+/// Platform hardware HEVC encoder name.
+const HW_HEVC_ENCODER: &str = "hevc_videotoolbox";
 
 /// Probe hardware availability by opening a real minimal encoder context. Auto mode may fall back
 /// to software; an explicit hardware request still fails if unavailable.
@@ -159,6 +162,7 @@ impl Muxer {
             height,
             fps.max(1),
             1,
+            Mp4VideoCodec::H264,
             bitrate,
             hw,
             encode_threads,
@@ -175,17 +179,19 @@ impl Muxer {
         height: u32,
         fps_num: u32,
         fps_den: u32,
+        codec: Mp4VideoCodec,
         bitrate: Option<usize>,
         hw: bool,
         encode_threads: Option<usize>,
         video_transport: VideoFrameTransport,
     ) -> Result<Self> {
-        Self::open_media_rational_with_transport(
+        Self::open_cfr(
             path,
             width,
             height,
             fps_num,
             fps_den,
+            codec,
             true,
             bitrate,
             hw,
@@ -210,6 +216,35 @@ impl Muxer {
         encode_threads: Option<usize>,
         video_transport: VideoFrameTransport,
     ) -> Result<Self> {
+        Self::open_cfr(
+            path,
+            width,
+            height,
+            fps_num,
+            fps_den,
+            Mp4VideoCodec::H264,
+            include_audio,
+            bitrate,
+            hw,
+            encode_threads,
+            video_transport,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn open_cfr(
+        path: &Path,
+        width: u32,
+        height: u32,
+        fps_num: u32,
+        fps_den: u32,
+        codec: Mp4VideoCodec,
+        include_audio: bool,
+        bitrate: Option<usize>,
+        hw: bool,
+        encode_threads: Option<usize>,
+        video_transport: VideoFrameTransport,
+    ) -> Result<Self> {
         let v_enc_tb = Rational(fps_den as i32, fps_num as i32);
         Self::open_configured(
             path,
@@ -220,6 +255,7 @@ impl Muxer {
             fps_den,
             false,
             1,
+            codec,
             include_audio,
             bitrate,
             hw,
@@ -307,6 +343,7 @@ impl Muxer {
             nominal_fps_den,
             true,
             nominal_frame_ticks,
+            Mp4VideoCodec::H264,
             include_audio,
             bitrate,
             hw,
@@ -325,6 +362,7 @@ impl Muxer {
         fps_den: u32,
         timestamped_video: bool,
         nominal_frame_ticks: i64,
+        codec: Mp4VideoCodec,
         include_audio: bool,
         bitrate: Option<usize>,
         hw: bool,
@@ -345,15 +383,23 @@ impl Muxer {
         let frames_per_second = f64::from(fps_num) / f64::from(fps_den);
         let a_enc_tb = Rational(1, AUDIO_SAMPLE_RATE as i32);
 
-        // H.264 encoder selection.
-        let vcodec = if hw {
-            encoder::find_by_name(HW_H264_ENCODER).ok_or_else(|| {
+        // Encoder selection. HEVC is hardware only.
+        let hardware = |name: &str| {
+            encoder::find_by_name(name).ok_or_else(|| {
                 anyhow!(
-                    "HW encoder '{HW_H264_ENCODER}' unavailable on this platform; software fallback is disabled"
+                    "HW encoder '{name}' unavailable on this platform; software fallback is disabled"
                 )
-            })?
-        } else {
-            software_h264_encoder()?
+            })
+        };
+        let vcodec = match (codec, hw) {
+            (Mp4VideoCodec::H264, true) => hardware(HW_H264_ENCODER)?,
+            (Mp4VideoCodec::H264, false) => software_h264_encoder()?,
+            (Mp4VideoCodec::Hevc, true) => hardware(HW_HEVC_ENCODER)?,
+            (Mp4VideoCodec::Hevc, false) => {
+                return Err(anyhow!(
+                    "HEVC is encoded by the platform hardware encoder only; there is no software HEVC encoder"
+                ));
+            }
         };
         let mut octx = format::output(&path).with_context(|| format!("open {}", path.display()))?;
         let global_header = octx.format().flags().contains(format::Flags::GLOBAL_HEADER);
@@ -420,6 +466,11 @@ impl Muxer {
             bitrate
         };
         let mut vopts = Dictionary::new();
+        if codec == Mp4VideoCodec::Hevc {
+            // Default VideoToolbox HEVC is no faster than H.264 at 4K60; speed priority is the
+            // reason to choose it.
+            vopts.set("prio_speed", "1");
+        }
         if let Some(b) = effective_bitrate {
             vb.set_bit_rate(b); // Use the bitrate setter required by the hardware encoder.
         } else {
@@ -462,6 +513,14 @@ impl Muxer {
             let mut vost = octx.add_stream(vcodec)?;
             let v_sidx = vost.index();
             vost.set_parameters(&venc);
+            if codec == Mp4VideoCodec::Hevc {
+                // QuickTime and Apple devices play HEVC only under `hvc1`, which keeps the
+                // parameter sets in the sample description; the MP4 muxer would write `hev1`.
+                // SAFETY: the stream belongs to `octx` and its header is not written yet.
+                unsafe {
+                    (*(*vost.as_mut_ptr()).codecpar).codec_tag = u32::from_le_bytes(*b"hvc1");
+                }
+            }
             vost.set_time_base(v_enc_tb);
             let frame_rate = Rational(
                 i32::try_from(fps_num).context("video FPS numerator exceeds FFmpeg range")?,

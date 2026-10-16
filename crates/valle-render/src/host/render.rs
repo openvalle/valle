@@ -20,7 +20,8 @@ use valle_engine::{
     },
 };
 use valle_media::codec::{
-    AudioMuxer, Muxer, TransparentVideoCodec, TransparentVideoMuxer, VideoFrameTransport,
+    AudioMuxer, Mp4VideoCodec, Muxer, TransparentVideoCodec, TransparentVideoMuxer,
+    VideoFrameTransport,
 };
 
 use crate::executor::skia::SkiaBackendKind;
@@ -111,8 +112,9 @@ impl NativeRenderer {
 
     fn reserve_codec(
         &self,
+        hardware: bool,
     ) -> Result<Option<valle_engine::motion::cpu::CodecReservation>, NativeRenderError> {
-        if self.options.hardware_encode {
+        if hardware {
             return Ok(None);
         }
         let slots = self.encoder_slots()?;
@@ -130,8 +132,8 @@ impl NativeRenderer {
         }
     }
 
-    fn encoder_threads(&self) -> Result<Option<usize>, NativeRenderError> {
-        if self.options.hardware_encode {
+    fn encoder_threads(&self, hardware: bool) -> Result<Option<usize>, NativeRenderError> {
+        if hardware {
             Ok(None)
         } else {
             Ok(Some(self.encoder_slots()?))
@@ -365,7 +367,7 @@ impl NativeRenderer {
         let fps = canvas.frame_rate();
         let fps_num =
             u32::try_from(fps.numerator()).map_err(|_| NativeRenderError::InvalidFrameRate)?;
-        let _codec = self.reserve_codec()?;
+        let _codec = self.reserve_codec(false)?;
         let muxer = TransparentVideoMuxer::open_with_codec_and_threads(
             transaction.temporary(0),
             width,
@@ -400,6 +402,15 @@ impl NativeRenderer {
     }
 
     pub fn export_mp4(&self, output: &Path) -> Result<RenderSummary, NativeRenderError> {
+        self.export_mp4_with_codec(output, Mp4VideoCodec::H264)
+    }
+
+    /// MP4 with the given video codec. HEVC always uses the platform hardware encoder.
+    pub fn export_mp4_with_codec(
+        &self,
+        output: &Path,
+        codec: Mp4VideoCodec,
+    ) -> Result<RenderSummary, NativeRenderError> {
         let (width, height) = self.output_extent()?;
         if !self.project.has_visual_material() {
             return self.export_audio_only(output);
@@ -428,17 +439,19 @@ impl NativeRenderer {
         let fps = canvas.frame_rate();
         let fps_num =
             u32::try_from(fps.numerator()).map_err(|_| NativeRenderError::InvalidFrameRate)?;
-        let _codec = self.reserve_codec()?;
+        let hardware = self.options.hardware_encode || codec == Mp4VideoCodec::Hevc;
+        let _codec = self.reserve_codec(hardware)?;
         let muxer = Muxer::open_ext_rational_with_transport(
             &temporary,
             width,
             height,
             fps_num,
             fps.denominator(),
+            codec,
             self.options.bitrate,
-            self.options.hardware_encode,
-            self.encoder_threads()?,
-            selected_video_transport(self.options.hardware_encode, self.options.backend),
+            hardware,
+            self.encoder_threads(hardware)?,
+            selected_video_transport(hardware, self.options.backend),
         )?;
         let mut sink = Mp4Sink::new(
             muxer,
@@ -500,16 +513,17 @@ impl NativeRenderer {
         let fps = self.project.compiled().canvas().frame_rate();
         let fps_num =
             u32::try_from(fps.numerator()).map_err(|_| NativeRenderError::InvalidFrameRate)?;
-        let _codec = self.reserve_codec()?;
+        let _codec = self.reserve_codec(self.options.hardware_encode)?;
         let muxer = Muxer::open_ext_rational_with_transport(
             &temporary,
             width,
             height,
             fps_num,
             fps.denominator(),
+            Mp4VideoCodec::H264,
             self.options.bitrate,
             self.options.hardware_encode,
-            self.encoder_threads()?,
+            self.encoder_threads(self.options.hardware_encode)?,
             selected_video_transport(self.options.hardware_encode, self.options.backend),
         )?;
         let mut sink = Mp4Sink::new(

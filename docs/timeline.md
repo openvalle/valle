@@ -51,8 +51,9 @@ valle timeline render cuts.timeline.json -o cuts.mp4 --events
 
 Frame indices are zero-based. Frame 44 belongs to the blue clip; frame 45 belongs
 to the teal clip. The output has 90 video frames. Output paths must be new files.
-`--frame` requires PNG. Full exports accept H.264 `.mp4`, transparent qtrle or
-ProRes 4444 `.mov`, or a PNG sequence such as `-o 'frames/%05d.png'`. `.mov`
+`--frame` requires PNG. Full exports accept H.264 `.mp4` (hardware HEVC with
+`--codec hevc`), transparent qtrle or ProRes 4444 `.mov`, or a PNG sequence such as
+`-o 'frames/%05d.png'`. `.mov`
 defaults to lossless qtrle; use `--codec prores4444` for ProRes. `--frames 0,30,59`
 selects exact keys for a sequence or `--storyboard sheet.png`; a sheet does not
 require `-o`. All frames share preparation, and JSON reports include actual Motion

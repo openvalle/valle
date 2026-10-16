@@ -8,6 +8,7 @@ use valle_engine::{
     render::FrameKey,
     resource::{ContentDigest, OutputBackground},
 };
+use valle_media::codec::Mp4VideoCodec;
 use valle_render::{
     executor::skia::SkiaBackendKind,
     host::{
@@ -93,7 +94,12 @@ fn main() -> Result<()> {
             Some((output, u32::try_from(frames.len().min(4))?)),
         )?
     } else {
-        renderer.export_mp4(output)?
+        let codec = match job["codec"].as_str().unwrap_or("h264") {
+            "h264" => Mp4VideoCodec::H264,
+            "hevc" => Mp4VideoCodec::Hevc,
+            value => return Err(anyhow!("invalid codec {value}")),
+        };
+        renderer.export_mp4_with_codec(output, codec)?
     };
     let memory = budget.memory_report();
     let result = json!({"delivery": {"backend": if string("backend")? == "native-metal" {"metal"} else {"raster"}, "budget": {

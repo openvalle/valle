@@ -289,6 +289,54 @@ fn hw_muxer_roundtrip_if_available() {
 }
 
 #[test]
+fn hevc_is_hardware_only_and_tagged_hvc1() {
+    use valle_media::codec::{Mp4VideoCodec, Muxer, VideoFrameTransport, probe_av};
+    let temp = tempfile::tempdir().expect("temp dir");
+    let open = |path: &std::path::Path, hardware: bool| {
+        Muxer::open_ext_rational_with_transport(
+            path,
+            320,
+            180,
+            30,
+            1,
+            Mp4VideoCodec::Hevc,
+            None,
+            hardware,
+            None,
+            VideoFrameTransport::Cpu,
+        )
+    };
+    // No platform offers a software HEVC path, and the refusal leaves no file behind.
+    let software = temp.path().join("software.mp4");
+    let error = open(&software, false)
+        .err()
+        .expect("software HEVC is refused");
+    assert!(error.to_string().contains("hardware"), "{error}");
+    assert!(!software.exists());
+    let out = temp.path().join("hevc.mp4");
+    let mut mux = match open(&out, true) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("skip hw HEVC test: {e}");
+            return;
+        }
+    };
+    let mut f = valle_media::frame::RgbaFrame::new(320, 180);
+    f.fill([30, 120, 200, 255]);
+    for _ in 0..15 {
+        mux.encode_video(&f).expect("HEVC encode video");
+    }
+    mux.finish().expect("HEVC finish");
+    let p = probe_av(&out).expect("probe");
+    assert_eq!(p.video.map(|(w, h, _)| (w, h)), Some((320, 180)));
+    assert!(p.audio.is_some(), "HEVC keeps the always-AAC invariant");
+    // The sample entry is hvc1, with its parameter sets in hvcC, never hev1.
+    let bytes = std::fs::read(&out).expect("mp4 exists");
+    let has = |tag: &[u8]| bytes.windows(4).any(|w| w == tag);
+    assert!(has(b"hvc1") && has(b"hvcC") && !has(b"hev1"));
+}
+
+#[test]
 fn audio_muxer_emits_single_aac_stream() {
     // Audio-only output contains one AAC stream, no video stream, and the expected sample duration.
     use valle_media::codec::{AudioMuxer, probe_av};

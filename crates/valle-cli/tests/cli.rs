@@ -1369,7 +1369,6 @@ fn motion_render_rejects_invalid_delivery_options() {
         vec!["--encode-threads", "0"],
         vec!["--hardware-encode", "--frame", "0"],
         vec!["--hardware-encode", "--encode-threads", "2"],
-        vec!["--bitrate", "1000000"],
         vec!["--hardware-encode", "--bitrate", "0"],
         vec!["--output-size", "0x1080"],
     ] {

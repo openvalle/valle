@@ -7,6 +7,17 @@ use crate::{
 };
 use anyhow::Result;
 use std::path::Path;
+
+/// Video codec of an MP4 delivery.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Mp4VideoCodec {
+    /// libx264 in software, or the platform hardware encoder.
+    #[default]
+    H264,
+    /// The platform hardware encoder at speed priority, tagged `hvc1`. There is no software path.
+    Hevc,
+}
+
 backend_type!(Muxer, muxer);
 impl Muxer {
     pub fn open(
@@ -124,6 +135,7 @@ impl Muxer {
         height: u32,
         fps_num: u32,
         fps_den: u32,
+        codec: Mp4VideoCodec,
         bitrate: Option<usize>,
         hw: bool,
         encode_threads: Option<usize>,
@@ -136,6 +148,7 @@ impl Muxer {
                 height,
                 fps_num,
                 fps_den,
+                codec,
                 bitrate,
                 hw,
                 encode_threads,
@@ -148,6 +161,7 @@ impl Muxer {
                 height,
                 fps_num,
                 fps_den,
+                codec,
                 bitrate,
                 hw,
                 encode_threads,
@@ -160,6 +174,7 @@ impl Muxer {
                 height,
                 fps_num,
                 fps_den,
+                codec,
                 bitrate,
                 hw,
                 encode_threads,

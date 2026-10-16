@@ -116,8 +116,10 @@ For audio-driven Motion, declare an audio asset and bind it with `--asset beat=b
 logarithmic bands and 1–120 analysis frames per second, and limits each table to 16,384 frames.
 
 `--frame` selects a zero-based frame and requires a `.png` output. Full exports
-accept H.264 `.mp4`, transparent qtrle or ProRes 4444 `.mov`, or a PNG filename pattern such as
-`-o 'frames/%05d.png'`. `.mov` defaults to lossless qtrle; use `--codec prores4444`
+accept H.264 or HEVC `.mp4`, transparent qtrle or ProRes 4444 `.mov`, or a PNG filename pattern such as
+`-o 'frames/%05d.png'`. `.mp4` defaults to H.264; `--codec hevc` encodes with the platform
+hardware HEVC encoder at speed priority and tags the stream `hvc1` for Apple players, and fails
+instead of falling back when that encoder is unavailable. `.mov` defaults to lossless qtrle; use `--codec prores4444`
 for ProRes 4444. PNG and MOV retain alpha; Motion MP4 uses a black output background.
 Transparent MOV currently delivers video only; a Timeline with audio is rejected
 instead of silently dropping its audio.
@@ -155,7 +157,7 @@ one Native Raster frame (`--frame 0` by default).
 
 `--workers 1..8` controls frame concurrency for all Motion outputs. H.264 delivery
 also accepts `--encode-threads N` or `--hardware-encode`; `--bitrate` requires
-hardware encoding. These encoder controls are rejected for PNG and transparent MOV. `--backend auto`
+a hardware encoder (`--hardware-encode` or `--codec hevc`). These encoder controls are rejected for PNG and transparent MOV. `--backend auto`
 selects an available Metal device on macOS and otherwise Raster; `--backend raster`
 explicitly selects CPU composition. See `valle motion render --help` for constraints.
 

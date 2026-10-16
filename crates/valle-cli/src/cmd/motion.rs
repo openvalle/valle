@@ -256,10 +256,24 @@ fn render(
     }
     let frame = output.frame;
     let plan = DeliveryPlan::new(output)?;
-    if plan.codec != Some(RenderVideoCodec::H264)
+    let mp4 = matches!(
+        plan.codec,
+        Some(RenderVideoCodec::H264 | RenderVideoCodec::Hevc)
+    );
+    if !mp4
         && (tuning.hardware_encode || tuning.bitrate.is_some() || tuning.encode_threads.is_some())
     {
-        bail!("H.264 encoder options require .mp4 output");
+        bail!("encoder options require .mp4 output");
+    }
+    // HEVC is always encoded in hardware.
+    let hevc = plan.codec == Some(RenderVideoCodec::Hevc);
+    if hevc && tuning.encode_threads.is_some() {
+        bail!("--encode-threads sets the software H.264 encoder; HEVC is encoded in hardware");
+    }
+    if tuning.bitrate.is_some() && !(tuning.hardware_encode || hevc) {
+        bail!(
+            "--bitrate sets a hardware encoder's rate; add --hardware-encode or use --codec hevc"
+        );
     }
     let observation = DeliveryObservation::new()?;
     let explicit_fonts = read_font_files(font_paths)?;
@@ -318,7 +332,7 @@ fn render(
         project,
         NativeRenderOptions {
             backend,
-            background: if plan.codec == Some(RenderVideoCodec::H264) {
+            background: if mp4 {
                 valle_engine::resource::OutputBackground::opaque_srgb([0, 0, 0])
             } else {
                 valle_engine::resource::OutputBackground::Transparent

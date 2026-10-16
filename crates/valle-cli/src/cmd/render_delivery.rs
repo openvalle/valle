@@ -9,7 +9,7 @@ use std::{
 };
 use valle_compiler::motion::CompilationTrace;
 use valle_engine::{fixed_package::OpenedFixedPackage, render::FrameKey};
-use valle_media::codec::TransparentVideoCodec;
+use valle_media::codec::{Mp4VideoCodec, TransparentVideoCodec};
 use valle_render::host::{NativeRenderer, RenderSummary};
 
 pub(super) struct DeliveryObservation {
@@ -107,14 +107,16 @@ impl DeliveryPlan {
                 });
                 if !matches!(
                     (extension.as_deref(), codec),
-                    (Some("mp4"), Some(RenderVideoCodec::H264))
-                        | (
-                            Some("mov"),
-                            Some(RenderVideoCodec::Qtrle | RenderVideoCodec::Prores4444)
-                        )
+                    (
+                        Some("mp4"),
+                        Some(RenderVideoCodec::H264 | RenderVideoCodec::Hevc)
+                    ) | (
+                        Some("mov"),
+                        Some(RenderVideoCodec::Qtrle | RenderVideoCodec::Prores4444)
+                    )
                 ) {
                     bail!(
-                        "--codec must match the output extension: h264 uses .mp4; qtrle and prores4444 use .mov"
+                        "--codec must match the output extension: h264 and hevc use .mp4; qtrle and prores4444 use .mov"
                     );
                 }
                 super::fixed_render::require_new_output(output)?;
@@ -188,6 +190,9 @@ impl DeliveryPlan {
         if let Some(codec) = self.codec {
             let summary = match codec {
                 RenderVideoCodec::H264 => renderer.export_mp4(self.output())?,
+                RenderVideoCodec::Hevc => {
+                    renderer.export_mp4_with_codec(self.output(), Mp4VideoCodec::Hevc)?
+                }
                 RenderVideoCodec::Qtrle => renderer.export_transparent_mov(self.output())?,
                 RenderVideoCodec::Prores4444 => renderer.export_transparent_mov_with_codec(
                     self.output(),
@@ -199,6 +204,7 @@ impl DeliveryPlan {
             } else {
                 match codec {
                     RenderVideoCodec::H264 => "h264",
+                    RenderVideoCodec::Hevc => "hevc",
                     RenderVideoCodec::Qtrle => "qtrle",
                     RenderVideoCodec::Prores4444 => "prores4444",
                 }

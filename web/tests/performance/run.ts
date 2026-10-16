@@ -20,7 +20,7 @@ const suite = await Bun.file(path.join(BASE, "suite.json")).json() as {
 };
 const args = Bun.argv.slice(2);
 if (args.includes("--help")) {
-  console.log("bun web/tests/performance/run.ts --output NEW_DIR [--mode qa|order|bench|all] [--cases ID,...] [--backends native-cpu,native-metal,web-cpu,web-gpu] [--profile preview|1080] [--target-4k] [--qa-4k --golden-dir DIR] [--browser-timeout-ms 300000] [--cpu-output-f32] [--cli BINARY --fixed-runner BINARY --web-assets-dir DIR] [--compare BASELINE/run.json] [--update-golden]");
+  console.log("bun web/tests/performance/run.ts --output NEW_DIR [--mode qa|order|bench|all] [--cases ID,...] [--backends native-cpu,native-metal,web-cpu,web-gpu] [--profile preview|1080] [--target-4k] [--qa-4k --golden-dir DIR] [--browser-timeout-ms 300000] [--cpu-output-f32] [--codec h264|hevc] [--cli BINARY --fixed-runner BINARY --web-assets-dir DIR] [--compare BASELINE/run.json] [--update-golden]");
   process.exit(0);
 }
 const output = path.resolve(option(args, "--output"));
@@ -34,6 +34,9 @@ if (!Number.isSafeInteger(browserTimeoutMs) || browserTimeoutMs < 1000 || browse
 const memorySampleLimit = Math.ceil(browserTimeoutMs / 250) + 4;
 // Diagnostic control: exercise the retained F32 API without changing product artifacts.
 const cpuOutputF32 = args.includes("--cpu-output-f32");
+// Native MP4 codec for benchmarks; browser exports stay H.264.
+const nativeCodec = option(args, "--codec", "h264");
+if (!["h264","hevc"].includes(nativeCodec)) throw new Error(`invalid codec ${nativeCodec}`);
 const selected = option(args, "--cases", suite.cases.map(c => c.id).join(",")).split(",");
 const cases = selected.map(id => { const c = suite.cases.find(c => c.id === id); if (!c) throw new Error(`unknown case ${id}`); return c; });
 const backends = option(args, "--backends", "native-cpu,native-metal,web-cpu,web-gpu").split(",");
@@ -59,7 +62,7 @@ const profile = option(args,"--profile","1080");
 if(!suite.performance.profiles[profile])throw new Error(`unknown performance profile ${profile}`);
 const performance = { ...suite.performance, ...suite.performance.profiles[profile], ...(args.includes("--target-4k") ? suite.performance.target : {}) };
 const report: any = { startedAt: new Date().toISOString(), status: "running", host: {platform:os.platform(),arch:os.arch(),cpus:os.cpus().length,cpu:os.cpus()[0]?.model,totalMemory:os.totalmem()},
-  settings: { mode, backends, qa:suite.qa, order:suite.order, performance }, identities: { cli:sha256(cli), suite:sha256(path.join(BASE,"suite.json")),
+  settings: { mode, backends, nativeCodec, qa:suite.qa, order:suite.order, performance }, identities: { cli:sha256(cli), suite:sha256(path.join(BASE,"suite.json")),
     cases:Object.fromEntries(cases.map(c => [c.id,identity(c)])) }, qa:[], order:[], benchmarks:[], unmeasured:[], failures:[] };
 report.diagnostics = { browserTimeoutMs, cpuOutputRepresentation: cpuOutputF32 ? "forced-f32" : "product-default" };
 report.unmeasured.push(
@@ -92,7 +95,7 @@ async function native(c: Case, backend: string, argv: string[], folder: string, 
       const file = path.join(folder,"fixed-job.json");
       await writeFile(file,JSON.stringify({...prepared.config,localAssets:Object.values(c.assets).map(p=>path.join(ROOT,p)),backend,
         mode:frames?"qa":"bench",frames,width:size[0],height:size[1],threads:Number(option(argv,"--threads","4")),
-        bitrate:Number(option(argv,"--bitrate",String(performance.bitrate))),output:option(argv,frames?"--storyboard":"-o")},null,2));
+        bitrate:Number(option(argv,"--bitrate",String(performance.bitrate))),codec:nativeCodec,output:option(argv,frames?"--storyboard":"-o")},null,2));
       cmd = [fixedRunner,file];
       scope = "fresh native process: verified frozen Timeline package -> MP4/PNG; host preparation recorded separately";
     } finally { prepared.host.kill(); await prepared.host.exited; }
@@ -333,9 +336,10 @@ async function orderCase(c:Case, backend:string) {
 }
 
 function validateVideo(file:string,backend:string) {
-  const streams=JSON.parse(runSync(["ffprobe","-v","error","-count_frames","-show_entries","stream=codec_type,codec_name,width,height,avg_frame_rate,nb_read_frames,duration,sample_rate,channels","-of","json",file]).toString()).streams;
+  const streams=JSON.parse(runSync(["ffprobe","-v","error","-count_frames","-show_entries","stream=codec_type,codec_name,codec_tag_string,width,height,avg_frame_rate,nb_read_frames,duration,sample_rate,channels","-of","json",file]).toString()).streams;
   const value=streams.find((s:any)=>s.codec_type==="video");
-  if(value.codec_name!=="h264"||value.width!==performance.width||value.height!==performance.height||Number(value.nb_read_frames)!==600||value.avg_frame_rate!=="60/1"||Math.abs(Number(value.duration)-10)>1/60)throw new Error(`video metadata drift: ${file} ${JSON.stringify(value)}`);
+  const codec=backend.startsWith("native")?nativeCodec:"h264";
+  if(value.codec_name!==codec||(codec==="hevc"&&value.codec_tag_string!=="hvc1")||value.width!==performance.width||value.height!==performance.height||Number(value.nb_read_frames)!==600||value.avg_frame_rate!=="60/1"||Math.abs(Number(value.duration)-10)>1/60)throw new Error(`video metadata drift: ${file} ${JSON.stringify(value)}`);
   const audio=streams.filter((s:any)=>s.codec_type==="audio");
   if(backend.startsWith("native") ? audio.length!==1||audio[0].codec_name!=="aac"||audio[0].sample_rate!=="48000"||audio[0].channels!==2 : audio.length!==0)throw new Error(`audio policy drift: ${file} ${JSON.stringify(audio)}`);
   runSync(["ffmpeg","-v","error","-xerror","-i",file,"-f","null","-"]);
@@ -347,7 +351,7 @@ async function benchCase(c:Case,backend:string,round:number,trace:boolean) {
   let result:any;
   if(backend.startsWith("native")) {
     const video=path.join(folder,"export.mp4");
-    result=await native(c,backend,["-o",video,"--fps","60","--output-size",`${performance.width}x${performance.height}`,"--threads",String(performance.threads),"--hardware-encode","--bitrate",String(performance.bitrate)],folder,trace);
+    result=await native(c,backend,["-o",video,"--fps","60","--output-size",`${performance.width}x${performance.height}`,"--threads",String(performance.threads),"--hardware-encode","--bitrate",String(performance.bitrate),...(nativeCodec==="hevc"?["--codec","hevc"]:[])],folder,trace);
   }else{result=await browserJob(c,backend,{mode:"bench",width:performance.width,height:performance.height,bitrate:performance.bitrate,trace},folder);}
   const video=validateVideo(path.join(folder,"export.mp4"),backend);
   const stages:Record<string,number>={};
@@ -429,7 +433,8 @@ try {
         targetMet:m.runs===performance.repeats?m.rtf>=suite.performance.target.rtfMedian:null}))};
     if(args.includes("--compare")) {
       const baseline = await Bun.file(path.resolve(option(args,"--compare"))).json();
-      if(JSON.stringify(baseline.host)!==JSON.stringify(report.host) || JSON.stringify(baseline.settings.performance)!==JSON.stringify(report.settings.performance))throw new Error("baseline hardware/settings differ");
+      if(JSON.stringify(baseline.host)!==JSON.stringify(report.host) || JSON.stringify(baseline.settings.performance)!==JSON.stringify(report.settings.performance)
+        || (baseline.settings.nativeCodec ?? "h264")!==nativeCodec)throw new Error("baseline hardware/settings differ");
       for(const c of cases)if(JSON.stringify(baseline.identities.cases[c.id])!==JSON.stringify(report.identities.cases[c.id]))throw new Error(`baseline fixture differs: ${c.id}`);
       const comparisons:any[] = [];
       for(const current of report.medians) {

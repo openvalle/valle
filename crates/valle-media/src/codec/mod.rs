@@ -60,7 +60,7 @@ pub use flac::{
     FLAC_BITS_PER_SAMPLE, FLAC_QUANTIZATION_POLICY, FlacPcm24Writer, validate_flac_pcm24,
 };
 #[cfg(feature = "libav")]
-pub use muxer::{AudioMuxer, Muxer, RgbaToYuv, YuvFrame, hw_h264_available};
+pub use muxer::{AudioMuxer, Mp4VideoCodec, Muxer, RgbaToYuv, YuvFrame, hw_h264_available};
 
 mod time_base;
 pub use time_base::TimeBase;

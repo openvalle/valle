@@ -88,7 +88,8 @@ within it at any output size. Built-in transitions do not count toward it. The e
 pass doing the largest share.
 
 `--frame` selects one zero-based frame as PNG. Full exports select the codec from
-the extension: `.mp4` uses H.264; `.mov` defaults to lossless qtrle with straight RGBA.
+the extension: `.mp4` uses H.264, or hardware HEVC with `--codec hevc`; `.mov` defaults to
+lossless qtrle with straight RGBA.
 Use `--codec prores4444` for a transparent ProRes 4444 `.mov`. PNG and MOV preserve the
 scene's alpha; MP4 composites the scene over black. Transparent MOV delivers video
 only; Timeline audio must be exported separately or delivered with MP4.
