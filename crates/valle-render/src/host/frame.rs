@@ -990,23 +990,16 @@ fn frame_working_bytes<P: ResourceProvider>(
                 resources = checked_add(resources, bytes)?;
             }
             ExternalResourceDesc::Scene3d => {
-                let Some(ResourcePayload::Scene3dFrame { canonical_request }) = request.payload()
-                else {
+                let Some(ResourcePayload::Scene3dFrame(frame)) = request.payload() else {
                     continue;
                 };
-                // Only the extent matters here; fulfillment verifies and parses the request.
-                let (width, height) =
-                    valle_engine::motion::Scene3DFrameRequest::canonical_extent(canonical_request)
-                        .map_err(|error| FrameRenderError::Fulfillment {
-                            handle: request.handle().get(),
-                            reason: error.to_string(),
-                        })?;
-                let pixels = u64::from(width) * u64::from(height);
+                let frame = frame.request();
+                let pixels = u64::from(frame.width) * u64::from(frame.height);
                 // Layers rasterize one at a time, each releasing its working set before the next
                 // starts; every result (colour, plus depth for deferred depth of field) stays.
                 resources = checked_add(resources, pixels * 12)?;
                 scene3d_working = scene3d_working.max(pixels * 96);
-                scene3d.push(Extent2d::new(width, height)?);
+                scene3d.push(Extent2d::new(frame.width, frame.height)?);
             }
             _ => resources = checked_add(resources, provider.source_resident_bytes(request))?,
         }

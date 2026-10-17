@@ -712,11 +712,7 @@ impl Admission<'_> {
                     ResourceInterpretation::Scene3d { topology_digest }
                         if *topology_digest == required_topology
                 )
-                || !matches!(
-                    request.payload(),
-                    Some(ResourcePayload::Scene3dFrame { canonical_request })
-                        if !canonical_request.is_empty()
-                )
+                || !matches!(request.payload(), Some(ResourcePayload::Scene3dFrame(_)))
             {
                 return Err(invalid(path, "Scene3D binding identity is inconsistent"));
             }

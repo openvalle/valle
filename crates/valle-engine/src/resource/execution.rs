@@ -416,11 +416,17 @@ pub enum ResourceSample {
 
 /// Pure, bounded fulfillment data that is part of a request identity but never enters a render
 /// plan. Scene3D uses it to carry the complete random-access scene/frame request to Native and Web
-/// hosts without exposing Motion semantics to the mechanical executor. The request is its
-/// canonical JSON text, shared rather than copied by every request set that names it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
+/// hosts without exposing Motion semantics to the mechanical executor. The request is sealed and
+/// shared rather than copied by every request set that names it, so a host in this process uses
+/// the parsed request as it is. The wire carries its canonical JSON text.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResourcePayload {
+    Scene3dFrame(valle_motion::SealedScene3DFrame),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
+enum ResourcePayloadWire {
     Scene3dFrame {
         canonical_request: std::sync::Arc<str>,
     },
@@ -436,8 +442,9 @@ pub struct ResourceRequest {
     payload: Option<ResourcePayload>,
 }
 
-/// Exact canonical identity for a host-cached object. It excludes only the frame-local external
-/// handle and remains opaque so hosts cannot accidentally build a weaker key from selected fields.
+/// Exact canonical identity for a host-cached object. It excludes the frame-local external handle
+/// and the payload, which the key names, and remains opaque so hosts cannot accidentally build a
+/// weaker key from selected fields.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ResourceCacheIdentity(Vec<u8>);
 
@@ -458,7 +465,7 @@ impl ResourceRequest {
         expected: ExternalResourceDesc,
         payload: Option<ResourcePayload>,
     ) -> Result<Self, ResourceContractError> {
-        if !request_shape_matches(&key.interpretation, sample, &expected, payload.as_ref()) {
+        if !request_shape_matches(&key, sample, &expected, payload.as_ref()) {
             return Err(ResourceContractError::RequestTypeMismatch);
         }
         Ok(Self {
@@ -505,11 +512,12 @@ impl ResourceRequest {
 
     /// Stable host-cache identity. The frame-local handle is deliberately excluded: two prepared
     /// frames may assign different handles to the same immutable content/sample/interpretation,
-    /// while any semantic or delivery-contract difference must produce a different identity.
+    /// while any semantic or delivery-contract difference must produce a different identity. The
+    /// payload adds nothing: a Scene3D key's digests name its sealed request, and no other key
+    /// takes a payload.
     pub fn cache_identity(&self) -> Result<ResourceCacheIdentity, ResourceContractError> {
-        let bytes =
-            crate::canonical::bytes(&(&self.key, self.sample, &self.expected, &self.payload))
-                .map_err(|_| ResourceContractError::CanonicalCacheIdentity)?;
+        let bytes = crate::canonical::bytes(&(&self.key, self.sample, &self.expected))
+            .map_err(|_| ResourceContractError::CanonicalCacheIdentity)?;
         Ok(ResourceCacheIdentity(bytes))
     }
 }
@@ -521,19 +529,38 @@ struct ResourceRequestWire {
     key: ResourceKey,
     sample: ResourceSample,
     expected: ExternalResourceDesc,
-    payload: Option<ResourcePayload>,
+    payload: Option<ResourcePayloadWire>,
 }
 
 impl TryFrom<ResourceRequestWire> for ResourceRequest {
     type Error = ResourceContractError;
 
     fn try_from(value: ResourceRequestWire) -> Result<Self, Self::Error> {
+        let payload = match value.payload {
+            None => None,
+            // Text from another instance: both digests of the key must name it.
+            Some(ResourcePayloadWire::Scene3dFrame { canonical_request }) => {
+                let ResourceInterpretation::Scene3d { topology_digest } = &value.key.interpretation
+                else {
+                    return Err(ResourceContractError::RequestTypeMismatch);
+                };
+                let frame = valle_motion::SealedScene3DFrame::from_canonical(
+                    canonical_request,
+                    value.key.content,
+                    *topology_digest,
+                )
+                .map_err(|error| ResourceContractError::Scene3dPayload {
+                    reason: error.to_string(),
+                })?;
+                Some(ResourcePayload::Scene3dFrame(frame))
+            }
+        };
         Self::new_with_payload(
             value.handle,
             value.key,
             value.sample,
             value.expected,
-            value.payload,
+            payload,
         )
     }
 }
@@ -545,7 +572,12 @@ impl From<ResourceRequest> for ResourceRequestWire {
             key: value.key,
             sample: value.sample,
             expected: value.expected,
-            payload: value.payload,
+            payload: value.payload.map(|payload| {
+                let ResourcePayload::Scene3dFrame(frame) = payload;
+                ResourcePayloadWire::Scene3dFrame {
+                    canonical_request: std::sync::Arc::clone(frame.canonical()),
+                }
+            }),
         }
     }
 }
@@ -622,12 +654,12 @@ impl From<ResourceRequestSet> for Vec<ResourceRequest> {
 }
 
 fn request_shape_matches(
-    interpretation: &ResourceInterpretation,
+    key: &ResourceKey,
     sample: ResourceSample,
     expected: &ExternalResourceDesc,
     payload: Option<&ResourcePayload>,
 ) -> bool {
-    match (interpretation, sample, expected, payload) {
+    match (&key.interpretation, sample, expected, payload) {
         (
             ResourceInterpretation::DataTexture {},
             ResourceSample::Static,
@@ -654,11 +686,11 @@ fn request_shape_matches(
             None,
         ) => true,
         (
-            ResourceInterpretation::Scene3d { .. },
+            ResourceInterpretation::Scene3d { topology_digest },
             ResourceSample::Static,
             ExternalResourceDesc::Scene3d,
-            Some(ResourcePayload::Scene3dFrame { canonical_request }),
-        ) => !canonical_request.is_empty(),
+            Some(ResourcePayload::Scene3dFrame(frame)),
+        ) => frame.content_digest() == key.content && frame.topology_digest() == *topology_digest,
         (
             ResourceInterpretation::AudioPcm {
                 sample_rate,
@@ -692,6 +724,8 @@ pub enum ResourceContractError {
     RequestTypeMismatch,
     #[error("resource request cache identity could not be canonicalized")]
     CanonicalCacheIdentity,
+    #[error("Scene3D payload is not the canonical request its key names: {reason}")]
+    Scene3dPayload { reason: String },
     #[error("external handle {handle:?} is assigned to conflicting resource requests")]
     ConflictingHandle { handle: ExternalHandleId },
 }
@@ -804,16 +838,130 @@ mod tests {
         assert!(serde_json::from_str::<LogicalTextureDesc>(json).is_err());
     }
 
+    fn scene3d_frame(camera_x: f32) -> valle_motion::SealedScene3DFrame {
+        use valle_motion::scene3d::*;
+        valle_motion::SealedScene3DFrame::new(valle_motion::Scene3DFrameRequest {
+            provider_key: "scene".into(),
+            width: 64,
+            height: 32,
+            resource_bindings: Default::default(),
+            scene: Scene3DSpec {
+                meshes: vec![],
+                lights: vec![],
+                anchors: vec![],
+                pbr: Default::default(),
+            },
+            frame: Frame3DState {
+                exposure: 1.0,
+                environment_intensity: 1.0,
+                environment_rotation_degrees: 0.0,
+                camera: CameraFrameState {
+                    position: Vec3([camera_x, 0.0, 5.0]),
+                    target: Vec3([0.0, 0.0, 0.0]),
+                    fov_y_degrees: 45.0,
+                    near: 0.1,
+                    far: 100.0,
+                    depth_of_field: None,
+                },
+                meshes: vec![],
+                lights: vec![],
+            },
+        })
+        .unwrap()
+    }
+
+    fn scene3d_request(
+        handle: u32,
+        content: ContentDigest,
+        topology: ContentDigest,
+        frame: &valle_motion::SealedScene3DFrame,
+    ) -> Result<ResourceRequest, ResourceContractError> {
+        ResourceRequest::new_with_payload(
+            ExternalHandleId::new(handle).unwrap(),
+            ResourceKey::new(
+                content,
+                ResourceInterpretation::Scene3d {
+                    topology_digest: topology,
+                },
+            ),
+            ResourceSample::Static,
+            ExternalResourceDesc::Scene3d,
+            Some(ResourcePayload::Scene3dFrame(frame.clone())),
+        )
+    }
+
     #[test]
     fn scene3d_payload_uses_the_outer_request_set_format() {
-        let value = serde_json::to_value(ResourcePayload::Scene3dFrame {
-            canonical_request: r#"{"width":1}"#.into(),
-        })
-        .unwrap();
-        assert_eq!(value["kind"], "scene3dFrame");
-        assert_eq!(value["canonical_request"], r#"{"width":1}"#);
-        assert!(value.get("contract").is_none());
+        let frame = scene3d_frame(1.0);
+        let request =
+            scene3d_request(1, frame.content_digest(), frame.topology_digest(), &frame).unwrap();
+        let value = serde_json::to_value(&request).unwrap();
+        assert_eq!(value["payload"]["kind"], "scene3dFrame");
+        assert_eq!(
+            value["payload"]["canonical_request"],
+            frame.canonical().as_ref()
+        );
+        assert!(value["payload"].get("contract").is_none());
+        assert_eq!(
+            serde_json::from_value::<ResourceRequest>(value).unwrap(),
+            request
+        );
     }
+
+    #[test]
+    fn scene3d_requests_take_only_the_sealed_frame_their_key_names() {
+        let frame = scene3d_frame(1.0);
+        let other = scene3d_frame(2.0);
+        assert_eq!(frame.topology_digest(), other.topology_digest());
+        for (content, topology) in [
+            (other.content_digest(), frame.topology_digest()),
+            (frame.content_digest(), digest('b')),
+        ] {
+            assert_eq!(
+                scene3d_request(1, content, topology, &frame),
+                Err(ResourceContractError::RequestTypeMismatch)
+            );
+        }
+        // Text from another instance must be the text both digests name.
+        let request =
+            scene3d_request(1, frame.content_digest(), frame.topology_digest(), &frame).unwrap();
+        let mut value = serde_json::to_value(&request).unwrap();
+        value["payload"]["canonical_request"] = other.canonical().as_ref().into();
+        assert!(matches!(
+            serde_json::from_value::<ResourceRequest>(value),
+            Err(error) if error.to_string().contains("content digest")
+        ));
+    }
+
+    #[test]
+    fn scene3d_requests_sealed_from_either_zero_are_one_request() {
+        let negative = scene3d_frame(-0.0);
+        let positive = scene3d_frame(0.0);
+        assert_eq!(negative.canonical(), positive.canonical());
+        assert!(
+            negative.request().frame.camera.position.0[0].is_sign_positive(),
+            "the sealed request is the one parsed from the canonical text"
+        );
+        let request = |handle, frame: &valle_motion::SealedScene3DFrame| {
+            scene3d_request(
+                handle,
+                frame.content_digest(),
+                frame.topology_digest(),
+                frame,
+            )
+            .unwrap()
+        };
+        assert_eq!(request(1, &negative), request(1, &positive));
+        assert_eq!(
+            request(1, &negative).cache_identity().unwrap(),
+            request(2, &positive).cache_identity().unwrap()
+        );
+        assert_ne!(
+            request(1, &negative).cache_identity().unwrap(),
+            request(1, &scene3d_frame(1.0)).cache_identity().unwrap()
+        );
+    }
+
     #[test]
     fn data_texture_requests_are_static_bounded_and_distinct_from_color() {
         let visual = request(1, PixelOrientation::Identity);

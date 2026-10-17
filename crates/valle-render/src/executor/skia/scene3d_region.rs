@@ -23,12 +23,17 @@ impl Region {
     pub fn rgba(pixels: &[u16], width: usize) -> Option<Self> {
         let mut bounds: Option<Self> = None;
         for (y, row) in pixels.chunks_exact(width * 4).enumerate() {
-            let mut covered = row
-                .chunks_exact(4)
-                .enumerate()
-                .filter(|(_, p)| p.iter().any(|&channel| channel != 0));
-            if let Some((first, _)) = covered.next() {
-                let last = covered.next_back().map_or(first, |(x, _)| x);
+            // Rows outside the layer's content are all zero; one OR over the row vectorizes.
+            if row.iter().fold(0, |any, &channel| any | channel) != 0 {
+                let row = row.as_chunks::<4>().0;
+                let first = row
+                    .iter()
+                    .position(|pixel| *pixel != [0; 4])
+                    .expect("a nonzero row has a nonzero pixel");
+                let last = row
+                    .iter()
+                    .rposition(|pixel| *pixel != [0; 4])
+                    .expect("a nonzero row has a nonzero pixel");
                 bounds = Some(match bounds {
                     Some(b) => Self {
                         x0: b.x0.min(first),
@@ -207,6 +212,52 @@ mod tests {
         depth.fill(0.0);
         assert!(color_copy.as_bytes().iter().any(|&v| v != 0));
         assert!(depth_copy.as_bytes().iter().any(|&v| v != 0));
+    }
+
+    #[test]
+    fn nonzero_bounds_match_a_pixel_by_pixel_scan() {
+        let reference = |pixels: &[u16], width: usize| {
+            let mut bounds: Option<Region> = None;
+            for (y, row) in pixels.chunks_exact(width * 4).enumerate() {
+                for (x, pixel) in row.as_chunks::<4>().0.iter().enumerate() {
+                    if pixel.iter().any(|&channel| channel != 0) {
+                        bounds = Some(bounds.map_or(
+                            Region {
+                                x0: x,
+                                y0: y,
+                                x1: x + 1,
+                                y1: y + 1,
+                            },
+                            |b| Region {
+                                x0: b.x0.min(x),
+                                x1: b.x1.max(x + 1),
+                                y1: y + 1,
+                                ..b
+                            },
+                        ));
+                    }
+                }
+            }
+            bounds
+        };
+        let mut state = 0x2545_f491_4f6c_dd1d_u64;
+        let mut next = |range: usize| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            (state % range as u64) as usize
+        };
+        for (width, height) in [(1, 1), (7, 5), (33, 9), (256, 3)] {
+            for _ in 0..500 {
+                // A few single nonzero bits, any channel and any bit, including the sign of -0.
+                let mut pixels = vec![0_u16; width * height * 4];
+                for _ in 0..next(4) {
+                    let channel = next(pixels.len());
+                    pixels[channel] = 1 << next(16);
+                }
+                assert_eq!(Region::rgba(&pixels, width), reference(&pixels, width));
+            }
+        }
     }
 
     #[test]

@@ -164,12 +164,23 @@ pub(super) fn apply(frame: &mut RasterFrame, camera: &CameraFrameState, workers:
             width * height
         );
     }
+    let reach = Reach::new(
+        frame,
+        [min_x, max_x],
+        [min_y, max_y],
+        [source_x0, source_x1],
+        [source_y0, source_y1],
+        sample_margin,
+    );
     let depth = frame.depth.as_slice();
     let stride = width * 4;
     let render_rows = |first_y: usize, rows: &mut [u16]| {
         for (row, pixels) in rows.chunks_exact_mut(stride).enumerate() {
             let y = first_y + row;
             for x in min_x..=max_x {
+                if !reach.covered(x, y) {
+                    continue;
+                }
                 let index = y * width + x;
                 let center_depth = effective_depth(depth[index], camera.far);
                 let radius = coc(dof, center_depth);
@@ -245,6 +256,79 @@ pub(super) fn apply(frame: &mut RasterFrame, camera: &CameraFrameState, workers:
             render_rows(min_y, caller_rows);
         }
     });
+}
+
+/// The output pixels whose gathers can reach a pixel that is not all zero bits. Both gathers read
+/// only pixels within `margin` of the one they write, and a zero pixel decodes to transparent and
+/// adds nothing. A pixel whose reach, itself included, is all zero would gather transparent and
+/// write zero bits over its zero bits, so it is left as it is.
+struct Reach {
+    x0: usize,
+    y0: usize,
+    columns: usize,
+    covered: Vec<bool>,
+}
+
+impl Reach {
+    fn new(
+        frame: &RasterFrame,
+        [min_x, max_x]: [usize; 2],
+        [min_y, max_y]: [usize; 2],
+        [source_x0, source_x1]: [usize; 2],
+        [source_y0, source_y1]: [usize; 2],
+        margin: usize,
+    ) -> Self {
+        let width = frame.width as usize;
+        let columns = max_x - min_x + 1;
+        // Rows of the source: whether a nonzero pixel lies within `margin` columns of each
+        // output column, from running counts along the row.
+        let mut near = vec![false; (source_y1 - source_y0) * columns];
+        let mut counts = vec![0_u32; source_x1 - source_x0 + 1];
+        for (y, near) in (source_y0..source_y1).zip(near.chunks_exact_mut(columns)) {
+            let row =
+                &frame.premul_rgba16f[(y * width + source_x0) * 4..(y * width + source_x1) * 4];
+            for (at, pixel) in row.as_chunks::<4>().0.iter().enumerate() {
+                counts[at + 1] = counts[at] + u32::from(*pixel != [0; 4]);
+            }
+            for (x, near) in (min_x..=max_x).zip(near) {
+                let first = x.saturating_sub(margin).max(source_x0) - source_x0;
+                let last = (x + margin + 1).min(source_x1) - source_x0;
+                *near = counts[last] > counts[first];
+            }
+        }
+        // Then whether such a row lies within `margin` rows, by running counts down the columns.
+        let mut counts = vec![0_u32; (source_y1 - source_y0 + 1) * columns];
+        for (at, near) in near.chunks_exact(columns).enumerate() {
+            let (above, below) = counts.split_at_mut((at + 1) * columns);
+            for ((count, &before), &near) in below[..columns]
+                .iter_mut()
+                .zip(&above[at * columns..])
+                .zip(near)
+            {
+                *count = before + u32::from(near);
+            }
+        }
+        let mut covered = vec![false; (max_y - min_y + 1) * columns];
+        for (y, covered) in (min_y..=max_y).zip(covered.chunks_exact_mut(columns)) {
+            let first = y.saturating_sub(margin).max(source_y0) - source_y0;
+            let last = (y + margin + 1).min(source_y1) - source_y0;
+            let first = &counts[first * columns..][..columns];
+            let last = &counts[last * columns..][..columns];
+            for ((covered, first), last) in covered.iter_mut().zip(first).zip(last) {
+                *covered = last > first;
+            }
+        }
+        Self {
+            x0: min_x,
+            y0: min_y,
+            columns,
+            covered,
+        }
+    }
+
+    fn covered(&self, x: usize, y: usize) -> bool {
+        self.covered[(y - self.y0) * self.columns + x - self.x0]
+    }
 }
 
 fn effective_depth(depth: f32, far: f32) -> f32 {
@@ -542,6 +626,44 @@ mod tests {
             let mut actual = source.clone();
             apply(&mut actual, &camera, workers);
             assert_eq!(actual, expected, "workers={workers}");
+        }
+    }
+
+    /// Islands of a few pixels, far apart, so most of the blurred area reaches only transparent
+    /// pixels; a transparent pixel away from them keeps color bits.
+    fn islands(width: u32, height: u32) -> RasterFrame {
+        let mut frame = fixture(width, height, true);
+        for y in 0..height {
+            for x in 0..width {
+                if x % 23 > 2 || y % 19 > 2 {
+                    let at = (y * width + x) as usize;
+                    frame.premul_rgba16f[at * 4..at * 4 + 4].fill(0);
+                    frame.depth[at] = CLEAR_DEPTH;
+                }
+            }
+        }
+        let at = (11 * width + 12) as usize;
+        frame.premul_rgba16f[at * 4..at * 4 + 3].copy_from_slice(&[0x3c00, 0x3800, 0x3400]);
+        frame
+    }
+
+    #[test]
+    fn dof_leaves_pixels_that_reach_only_zero_pixels_and_matches_original() {
+        let source = islands(97, 61);
+        for radius in [0.4, 0.75, 1.0, 1.5, 3.0, 6.0, 12.5, 16.0] {
+            for focus in [2.0, 4.5, 8.0] {
+                let camera = camera(focus, radius);
+                let mut expected = source.clone();
+                reference::apply(&mut expected, &camera);
+                for workers in [1, 4] {
+                    let mut actual = source.clone();
+                    apply(&mut actual, &camera, workers);
+                    assert_eq!(
+                        actual, expected,
+                        "radius={radius} focus={focus} workers={workers}"
+                    );
+                }
+            }
         }
     }
 }

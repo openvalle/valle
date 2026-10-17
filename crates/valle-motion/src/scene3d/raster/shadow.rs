@@ -1,7 +1,7 @@
 //! Orthographic depth maps for directional lights. Built anew from each random-access frame.
 use super::{
     AlphaMode, FixedPoint, FrameMesh, SUBPIXEL_BITS, SUBPIXEL_SCALE, SUBPIXEL_STEP, V2, V3,
-    WorldVertex, covered_span, is_top_left, orient_fixed, round_fixed,
+    WorldVertex, center_range, covered_span, is_top_left, orient_fixed, round_fixed,
 };
 
 const SHADOW_SIZE: usize = 1024;
@@ -218,33 +218,16 @@ impl ShadowMap {
         if area <= 0 {
             return;
         }
-        let min_x = vertices
-            .iter()
-            .map(|v| v.x)
-            .fold(f32::INFINITY, f32::min)
-            .floor()
-            .max(0.0) as usize;
-        let max_x = vertices
-            .iter()
-            .map(|v| v.x)
-            .fold(f32::NEG_INFINITY, f32::max)
-            .ceil()
-            .min(SHADOW_SIZE as f32 - 1.0) as usize;
-        let min_y = vertices
-            .iter()
-            .map(|v| v.y)
-            .fold(f32::INFINITY, f32::min)
-            .floor()
-            .max(0.0) as usize;
-        let max_y = vertices
-            .iter()
-            .map(|v| v.y)
-            .fold(f32::NEG_INFINITY, f32::max)
-            .ceil()
-            .min(SHADOW_SIZE as f32 - 1.0) as usize;
-        if min_x > max_x || min_y > max_y {
+        // Only texels whose centers lie within the snapped corners can be covered.
+        let Some((min_x, max_x)) = center_range(fixed.map(|point| point.x), SHADOW_SIZE as u32)
+        else {
             return;
-        }
+        };
+        let Some((min_y, max_y)) = center_range(fixed.map(|point| point.y), SHADOW_SIZE as u32)
+        else {
+            return;
+        };
+        let [min_x, max_x, min_y, max_y] = [min_x, max_x, min_y, max_y].map(|value| value as usize);
         let top_left = [
             is_top_left(fixed[1], fixed[2]),
             is_top_left(fixed[2], fixed[0]),
@@ -255,7 +238,7 @@ impl ShadowMap {
             x: ((min_x as i64) << SUBPIXEL_BITS) + (SUBPIXEL_STEP / 2),
             y: ((min_y as i64) << SUBPIXEL_BITS) + (SUBPIXEL_STEP / 2),
         };
-        let mut row_edge = [
+        let corner_edge = [
             orient_fixed(fixed[1], fixed[2], first),
             orient_fixed(fixed[2], fixed[0], first),
             orient_fixed(fixed[0], fixed[1], first),
@@ -270,28 +253,19 @@ impl ShadowMap {
             (fixed[0].x - fixed[2].x) * SUBPIXEL_STEP,
             (fixed[1].x - fixed[0].x) * SUBPIXEL_STEP,
         ];
-        for y in min_y..=max_y {
-            let Some((first, last)) =
-                covered_span(row_edge, step_x, top_left, (max_x - min_x) as i64)
-            else {
-                for axis in 0..3 {
-                    row_edge[axis] += step_y[axis];
-                }
-                continue;
-            };
-            let mut edge: [i64; 3] = std::array::from_fn(|i| row_edge[i] + first * step_x[i]);
-            for x in min_x + first as usize..=min_x + last as usize {
-                let current = edge;
-                edge[0] += step_x[0];
-                edge[1] += step_x[1];
-                edge[2] += step_x[2];
-                let bary = current.map(|v| v as f32 * inv_area);
+        let bounds = [min_x, max_x, min_y, max_y];
+        covered_texels(
+            bounds,
+            corner_edge,
+            [step_x, step_y],
+            top_left,
+            |index, edge| {
+                let bary = edge.map(|v| v as f32 * inv_area);
                 let depth = vertices[0].depth * bary[0]
                     + vertices[1].depth * bary[1]
                     + vertices[2].depth * bary[2];
-                let index = y * SHADOW_SIZE + x;
                 if depth >= self.depth[index] {
-                    continue;
+                    return;
                 }
                 if material.alpha_mode == AlphaMode::Mask {
                     let uv = V2 {
@@ -307,15 +281,12 @@ impl ShadowMap {
                             mesh.mesh.images[binding.image].sample(binding, [uv.x, uv.y], 0.0)[3]
                         });
                     if alpha < material.alpha_cutoff.unwrap_or(0.5) {
-                        continue;
+                        return;
                     }
                 }
                 self.depth[index] = depth;
-            }
-            for axis in 0..3 {
-                row_edge[axis] += step_y[axis];
-            }
-        }
+            },
+        );
     }
 
     pub fn visibility(&self, position: V3, normal: V3) -> f32 {
@@ -337,6 +308,48 @@ impl ShadowMap {
         let ix = x.floor() as i32;
         let iy = y.floor() as i32;
         pcf(&self.depth, ix, iy, receiver_depth - bias)
+    }
+}
+
+/// Calls `visit` once for every texel of the inclusive `[min_x, max_x, min_y, max_y]` bounds that
+/// all three edges cover under the top-left rule, with the texel's index and edge values.
+/// `corner_edge` holds the edge values at the first texel and `steps` their exact changes per
+/// texel along x and y. A triangle tests each texel once and the test of a texel depends only on
+/// its own edge values and stored depth, so the order is free: the bounds are walked in lines along
+/// their longer side, and a tall triangle takes a few long columns instead of many rows that cover
+/// one texel each.
+fn covered_texels(
+    [min_x, max_x, min_y, max_y]: [usize; 4],
+    corner_edge: [i64; 3],
+    [step_x, step_y]: [[i64; 3]; 2],
+    top_left: [bool; 3],
+    mut visit: impl FnMut(usize, [i64; 3]),
+) {
+    let (lines, length, line_step, texel_step, line_stride, texel_stride) =
+        if max_y - min_y > max_x - min_x {
+            (max_x - min_x, max_y - min_y, step_x, step_y, 1, SHADOW_SIZE)
+        } else {
+            (max_y - min_y, max_x - min_x, step_y, step_x, SHADOW_SIZE, 1)
+        };
+    let mut line_edge = corner_edge;
+    let mut line_start = min_y * SHADOW_SIZE + min_x;
+    for _ in 0..=lines {
+        if let Some((first, last)) = covered_span(line_edge, texel_step, top_left, length as i64) {
+            let mut edge: [i64; 3] =
+                std::array::from_fn(|axis| line_edge[axis] + first * texel_step[axis]);
+            let mut index = line_start + first as usize * texel_stride;
+            for _ in first..=last {
+                visit(index, edge);
+                edge[0] += texel_step[0];
+                edge[1] += texel_step[1];
+                edge[2] += texel_step[2];
+                index += texel_stride;
+            }
+        }
+        for axis in 0..3 {
+            line_edge[axis] += line_step[axis];
+        }
+        line_start += line_stride;
     }
 }
 
@@ -379,6 +392,76 @@ fn orient(a: ShadowVertex, b: ShadowVertex, c: ShadowVertex) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn covered_texels_visit_each_texel_the_per_texel_fill_rule_covers_once() {
+        let mut state = 0x9e37_79b9_7f4a_7c15_u64;
+        let mut next = |range: i64| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            (state % (2 * range as u64 + 1)) as i64 - range
+        };
+        for _ in 0..20_000 {
+            // Corners in a small window of the map, in 1/256 texel units. Snapping them to half or
+            // whole texels makes axis-aligned edges and edges through texel centers.
+            let snap = [1, 128, 256][(next(1) + 1) as usize];
+            let mut corner = || FixedPoint {
+                x: (600 << SUBPIXEL_BITS) + next(24 << SUBPIXEL_BITS) / snap * snap,
+                y: (600 << SUBPIXEL_BITS) + next(24 << SUBPIXEL_BITS) / snap * snap,
+            };
+            let fixed = [corner(), corner(), corner()];
+            let min_x = (fixed.iter().map(|p| p.x).min().unwrap() >> SUBPIXEL_BITS) as usize;
+            let max_x = ((fixed.iter().map(|p| p.x).max().unwrap() >> SUBPIXEL_BITS) + 1) as usize;
+            let min_y = (fixed.iter().map(|p| p.y).min().unwrap() >> SUBPIXEL_BITS) as usize;
+            let max_y = ((fixed.iter().map(|p| p.y).max().unwrap() >> SUBPIXEL_BITS) + 1) as usize;
+            let top_left = [
+                is_top_left(fixed[1], fixed[2]),
+                is_top_left(fixed[2], fixed[0]),
+                is_top_left(fixed[0], fixed[1]),
+            ];
+            let center = |x: usize, y: usize| FixedPoint {
+                x: ((x as i64) << SUBPIXEL_BITS) + SUBPIXEL_STEP / 2,
+                y: ((y as i64) << SUBPIXEL_BITS) + SUBPIXEL_STEP / 2,
+            };
+            let edges = |point| {
+                [
+                    orient_fixed(fixed[1], fixed[2], point),
+                    orient_fixed(fixed[2], fixed[0], point),
+                    orient_fixed(fixed[0], fixed[1], point),
+                ]
+            };
+            let mut expected = Vec::new();
+            for y in min_y..=max_y {
+                for x in min_x..=max_x {
+                    let edge = edges(center(x, y));
+                    if (0..3).all(|i| edge[i] > 0 || (edge[i] == 0 && top_left[i])) {
+                        expected.push((y * SHADOW_SIZE + x, edge));
+                    }
+                }
+            }
+            let step_x = [
+                -(fixed[2].y - fixed[1].y) * SUBPIXEL_STEP,
+                -(fixed[0].y - fixed[2].y) * SUBPIXEL_STEP,
+                -(fixed[1].y - fixed[0].y) * SUBPIXEL_STEP,
+            ];
+            let step_y = [
+                (fixed[2].x - fixed[1].x) * SUBPIXEL_STEP,
+                (fixed[0].x - fixed[2].x) * SUBPIXEL_STEP,
+                (fixed[1].x - fixed[0].x) * SUBPIXEL_STEP,
+            ];
+            let mut visited = Vec::new();
+            covered_texels(
+                [min_x, max_x, min_y, max_y],
+                edges(center(min_x, min_y)),
+                [step_x, step_y],
+                top_left,
+                |index, edge| visited.push((index, edge)),
+            );
+            visited.sort();
+            assert_eq!(visited, expected);
+        }
+    }
 
     #[test]
     fn pcf_matches_reference_at_edges_and_interior() {

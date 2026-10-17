@@ -522,22 +522,11 @@ impl NativeResourceProvider {
         request: &ResourceRequest,
     ) -> Result<Scene3dWork, NativeResourceError> {
         let prepare_started = Instant::now();
-        let ResourcePayload::Scene3dFrame { canonical_request } = request
+        // The request's digests name this sealed frame, so its parsed request is used as is.
+        let ResourcePayload::Scene3dFrame(sealed) = request
             .payload()
             .ok_or(NativeResourceError::MissingScenePayload)?;
-        let ResourceInterpretation::Scene3d { topology_digest } = &request.key().interpretation
-        else {
-            return Err(NativeResourceError::WrongInterpretation {
-                expected: "scene3d",
-            });
-        };
-        // Both request digests must name the exact payload text; that also proves it canonical.
-        let sealed = SealedScene3DFrame::from_canonical(
-            Arc::clone(canonical_request),
-            request.key().content,
-            *topology_digest,
-        )
-        .map_err(scene_request_error)?;
+        let sealed = sealed.clone();
         let frame = sealed.request();
         let extent = Extent2d::new(frame.width, frame.height).map_err(|error| {
             NativeResourceError::SceneRequest {
@@ -956,12 +945,6 @@ fn binding_digest(
                 reason: format!("control {control:?} has no content binding"),
             })?;
     Ok(*digest)
-}
-
-fn scene_request_error(error: impl ToString) -> NativeResourceError {
-    NativeResourceError::SceneRequest {
-        reason: error.to_string(),
-    }
 }
 
 fn source_path(source: &NativeResourceSource) -> Result<PathBuf, NativeResourceError> {

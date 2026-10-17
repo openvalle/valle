@@ -67,14 +67,92 @@ struct FrameMesh<'a> {
 #[derive(Clone, Copy)]
 struct RasterCommand {
     world: [WorldVertex; 3],
-    screen: [ScreenVertex; 3],
+    coverage: Coverage,
     mesh_index: usize,
     material_index: usize,
     node_id: u32,
+}
+
+/// A projected triangle as every tile and pass walks it: front-facing corner order, snapped
+/// corners, and the inclusive pixel bounds whose centers lie within the snapped corners. A pixel
+/// passes all three edge tests only inside the snapped triangle, so no pixel outside these bounds
+/// is covered and only tiles that meet them see the triangle.
+#[derive(Clone, Copy)]
+struct Coverage {
+    vertices: [ScreenVertex; 3],
+    fixed: [FixedPoint; 3],
+    top_left: [bool; 3],
+    inv_area: f32,
     min_x: u32,
     max_x: u32,
     min_y: u32,
     max_y: u32,
+}
+
+impl Coverage {
+    /// None for a triangle no pixel would take: degenerate, back-facing and single-sided, without
+    /// a positive snapped area, or without a pixel center within the snapped corners.
+    fn new(
+        mut vertices: [ScreenVertex; 3],
+        double_sided: bool,
+        width: u32,
+        height: u32,
+    ) -> Option<Self> {
+        let signed_area = orient_f32(vertices[0], vertices[1], vertices[2]);
+        // glTF front faces are CCW in +Y-up NDC, therefore negative after mapping to screen +Y down.
+        if signed_area.abs() <= 1.0e-8 {
+            return None;
+        }
+        if signed_area > 0.0 {
+            if !double_sided {
+                return None;
+            }
+            for vertex in &mut vertices {
+                vertex.normal = vertex.normal * -1.0;
+            }
+        } else {
+            vertices.swap(1, 2);
+        }
+        let fixed = vertices.map(|vertex| FixedPoint {
+            x: round_fixed(vertex.x * SUBPIXEL_SCALE),
+            y: round_fixed(vertex.y * SUBPIXEL_SCALE),
+        });
+        let area = orient_fixed(fixed[0], fixed[1], fixed[2]);
+        if area <= 0 {
+            return None;
+        }
+        let (min_x, max_x) = center_range(fixed.map(|point| point.x), width)?;
+        let (min_y, max_y) = center_range(fixed.map(|point| point.y), height)?;
+        Some(Self {
+            vertices,
+            fixed,
+            top_left: [
+                is_top_left(fixed[1], fixed[2]),
+                is_top_left(fixed[2], fixed[0]),
+                is_top_left(fixed[0], fixed[1]),
+            ],
+            inv_area: 1.0 / area as f32,
+            min_x,
+            max_x,
+            min_y,
+            max_y,
+        })
+    }
+}
+
+/// The pixels `first..=last` of `0..size` along one axis whose centers lie within the snapped
+/// corner coordinates.
+fn center_range(corners: [i64; 3], size: u32) -> Option<(u32, u32)> {
+    let half = SUBPIXEL_STEP / 2;
+    let min = corners[0].min(corners[1]).min(corners[2]);
+    let max = corners[0].max(corners[1]).max(corners[2]);
+    let first = (min - half + SUBPIXEL_STEP - 1)
+        .div_euclid(SUBPIXEL_STEP)
+        .max(0);
+    let last = (max - half)
+        .div_euclid(SUBPIXEL_STEP)
+        .min(i64::from(size) - 1);
+    (first <= last).then_some((first as u32, last as u32))
 }
 
 /// Each tile borrows disjoint row segments from all four output planes.
@@ -1171,6 +1249,7 @@ fn render_scene_impl(
     let mut transforms = Vec::with_capacity(prepared.meshes.len());
     let mut frame_meshes = Vec::with_capacity(prepared.meshes.len());
     let mut commands = Vec::new();
+    let mut tile_references = 0u64;
     let shadows = prepared.scene.pbr.shadows;
     let mut casters = shadow::ShadowCasters::default();
     for (mesh_index, (mesh, state)) in prepared.meshes.iter().zip(&frame.meshes).enumerate() {
@@ -1223,6 +1302,9 @@ fn render_scene_impl(
                 let material_index = primitive
                     .material_index
                     .map_or(mesh.model.materials.len(), |i| i as usize);
+                let double_sided = frame_meshes[mesh_index].materials[material_index]
+                    .values
+                    .double_sided;
                 let start = primitive.first_index as usize;
                 // Static indexed primitives reuse the exact same transformed vertex in
                 // adjacent triangles. Keep the cache local to this instance/primitive/frame;
@@ -1345,17 +1427,22 @@ fn render_scene_impl(
                             .min(prepared.height as f32 - 1.0)
                             as u32;
                         if min_x <= max_x && min_y <= max_y {
-                            commands.push(RasterCommand {
-                                world: vertices,
-                                screen,
-                                mesh_index,
-                                material_index,
-                                node_id: instance.node,
-                                min_x,
-                                max_x,
-                                min_y,
-                                max_y,
-                            });
+                            // The work budget counts every tile the projected bounds touch.
+                            tile_references = tile_references.saturating_add(
+                                u64::from(max_y / TILE_ROWS - min_y / TILE_ROWS + 1)
+                                    * u64::from(max_x / TILE_COLUMNS - min_x / TILE_COLUMNS + 1),
+                            );
+                            if let Some(coverage) =
+                                Coverage::new(screen, double_sided, prepared.width, prepared.height)
+                            {
+                                commands.push(RasterCommand {
+                                    world: vertices,
+                                    coverage,
+                                    mesh_index,
+                                    material_index,
+                                    node_id: instance.node,
+                                });
+                            }
                         }
                     });
                 }
@@ -1370,26 +1457,19 @@ fn render_scene_impl(
     checkpoint("shadows");
     let column_count = prepared.width.div_ceil(TILE_COLUMNS) as usize;
     let row_count = prepared.height.div_ceil(TILE_ROWS) as usize;
-    let mut bins = vec![Vec::new(); row_count * column_count];
-    let mut tile_references = 0u64;
-    for (index, command) in commands.iter().enumerate() {
-        let first_row = command.min_y / TILE_ROWS;
-        let last_row = command.max_y / TILE_ROWS;
-        let first_column = command.min_x / TILE_COLUMNS;
-        let last_column = command.max_x / TILE_COLUMNS;
-        tile_references = tile_references.saturating_add(
-            u64::from(last_row - first_row + 1) * u64::from(last_column - first_column + 1),
+    if tile_references > MAX_TILE_REFERENCES {
+        let mut errors = ContractErrors::default();
+        errors.push(
+            "/budget/tileReferences",
+            "projected triangle coverage exceeds the tile work budget",
         );
-        if tile_references > MAX_TILE_REFERENCES {
-            let mut errors = ContractErrors::default();
-            errors.push(
-                "/budget/tileReferences",
-                "projected triangle coverage exceeds the tile work budget",
-            );
-            return Err(errors);
-        }
-        for row in first_row..=last_row {
-            for column in first_column..=last_column {
+        return Err(errors);
+    }
+    let mut bins = vec![Vec::new(); row_count * column_count];
+    for (index, command) in commands.iter().enumerate() {
+        let coverage = &command.coverage;
+        for row in coverage.min_y / TILE_ROWS..=coverage.max_y / TILE_ROWS {
+            for column in coverage.min_x / TILE_COLUMNS..=coverage.max_x / TILE_COLUMNS {
                 bins[row as usize * column_count + column as usize].push(index);
             }
         }
@@ -1403,16 +1483,28 @@ fn render_scene_impl(
     .min(tiles.len());
     let pixel_rays = PixelRays::new(&camera);
     checkpoint("binning");
-    crate::cpu::parallel_scope(worker_count, |scope, worker_count| {
-        let mut worker_jobs = (0..worker_count).map(|_| Vec::new()).collect::<Vec<_>>();
-        for (index, (tile, command_indices)) in tiles.into_iter().zip(bins).enumerate() {
-            worker_jobs[index % worker_count].push(TileJob {
-                tile,
-                commands: command_indices,
-            });
-        }
-        if worker_count == 1 {
-            for job in worker_jobs.pop().expect("validated layer has one tile") {
+    {
+        // Tiles are independent, so workers take the next one as they finish. Dealing them out
+        // in turn left the work where the geometry is: a 1920-pixel layer has eight tile
+        // columns, so eight workers each took one column.
+        let jobs = std::sync::Mutex::new(
+            tiles
+                .into_iter()
+                .zip(bins)
+                .map(|(tile, commands)| TileJob { tile, commands })
+                .collect::<Vec<_>>()
+                .into_iter(),
+        );
+        let render_tiles = || {
+            let mut winners = Winners::default();
+            loop {
+                let Some(job) = jobs
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .next()
+                else {
+                    break;
+                };
                 render_tile(
                     job,
                     &commands,
@@ -1421,43 +1513,17 @@ fn render_scene_impl(
                     &pixel_rays,
                     &lights,
                     environment_background,
+                    &mut winners,
                 );
             }
-        } else {
-            let caller_jobs = worker_jobs.pop().unwrap();
-            for jobs in worker_jobs {
-                let commands = &commands;
-                let frame_meshes = &frame_meshes;
-                let camera = &camera;
-                let pixel_rays = &pixel_rays;
-                let lights = &lights;
-                scope.spawn(move || {
-                    for job in jobs {
-                        render_tile(
-                            job,
-                            commands,
-                            frame_meshes,
-                            camera,
-                            pixel_rays,
-                            lights,
-                            environment_background,
-                        );
-                    }
-                });
+        };
+        crate::cpu::parallel_scope(worker_count, |scope, worker_count| {
+            for _ in 1..worker_count {
+                scope.spawn(render_tiles);
             }
-            for job in caller_jobs {
-                render_tile(
-                    job,
-                    &commands,
-                    &frame_meshes,
-                    &camera,
-                    &pixel_rays,
-                    &lights,
-                    environment_background,
-                );
-            }
-        }
-    });
+            render_tiles();
+        });
+    }
     checkpoint("raster");
     if apply_depth_of_field {
         dof::apply(&mut output, &frame.camera, workers);
@@ -1540,6 +1606,7 @@ fn raster_tiles(output: &mut RasterFrame) -> Vec<RasterTile<'_>> {
     tiles
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_tile(
     job: TileJob<'_>,
     commands: &[RasterCommand],
@@ -1548,6 +1615,7 @@ fn render_tile(
     pixel_rays: &PixelRays,
     lights: &Lights,
     environment_background: bool,
+    winners: &mut Winners,
 ) {
     let mut tile = job.tile;
     for row in &mut tile.color {
@@ -1584,7 +1652,10 @@ fn render_tile(
             }
         }
     }
-    for &index in &job.commands {
+    let columns = (tile.end_x - tile.start_x) as usize;
+    let rows = (tile.end_y - tile.start_y) as usize;
+    winners.reset(columns * rows, job.commands.len());
+    for (position, &index) in job.commands.iter().enumerate() {
         let command = &commands[index];
         let frame_mesh = &frame_meshes[command.mesh_index];
         let material = &frame_mesh.materials[command.material_index];
@@ -1593,7 +1664,7 @@ fn render_tile(
         }
         let shading = pbr::Triangle::new(material.kind, &material.values, command.world);
         raster_projected_triangle(
-            command.screen,
+            &command.coverage,
             frame_mesh.mesh,
             &shading,
             command.node_id,
@@ -1601,7 +1672,33 @@ fn render_tile(
             pixel_rays,
             lights,
             &mut tile,
-            None,
+            Fragments::Opaque {
+                winners,
+                command: position as u32,
+            },
+        );
+    }
+    for (position, &index) in job.commands.iter().enumerate() {
+        if winners.owned[position] == 0 {
+            continue;
+        }
+        let command = &commands[index];
+        let frame_mesh = &frame_meshes[command.mesh_index];
+        let material = &frame_mesh.materials[command.material_index];
+        let shading = pbr::Triangle::new(material.kind, &material.values, command.world);
+        raster_projected_triangle(
+            &command.coverage,
+            frame_mesh.mesh,
+            &shading,
+            command.node_id,
+            camera,
+            pixel_rays,
+            lights,
+            &mut tile,
+            Fragments::Owned {
+                winners,
+                command: position as u32,
+            },
         );
     }
     if job.commands.iter().any(|&index| {
@@ -1611,8 +1708,6 @@ fn render_tile(
             .alpha_mode
             == AlphaMode::Blend
     }) {
-        let columns = (tile.end_x - tile.start_x) as usize;
-        let rows = (tile.end_y - tile.start_y) as usize;
         let mut oit = vec![OitPixel::empty(); columns * rows];
         for &index in &job.commands {
             let command = &commands[index];
@@ -1623,7 +1718,7 @@ fn render_tile(
             }
             let shading = pbr::Triangle::new(material.kind, &material.values, command.world);
             raster_projected_triangle(
-                command.screen,
+                &command.coverage,
                 frame_mesh.mesh,
                 &shading,
                 command.node_id,
@@ -1631,7 +1726,7 @@ fn render_tile(
                 pixel_rays,
                 lights,
                 &mut tile,
-                Some(&mut oit),
+                Fragments::Transparent(&mut oit),
             );
         }
         for row in 0..rows {
@@ -2357,9 +2452,62 @@ fn interpolate_view(a: ViewVertex, b: ViewVertex, t: f32) -> ViewVertex {
     }
 }
 
+/// Opaque fragments are shaded only where they are still visible after every opaque command of a
+/// tile was tested. Shading discards a fragment only below an alpha cutoff, so a fragment of a
+/// material without one always writes: depth, ids and the last fragment to pass at each pixel
+/// follow from the depth tests alone, and that fragment is then shaded from the same inputs.
+/// Fragments that can be discarded are shaded when they pass, since their coverage decides whether
+/// they write. Each raster worker keeps one for all the tiles it renders.
+#[derive(Default)]
+struct Winners {
+    /// The job command whose fragment last passed the depth test at each pixel and is not shaded
+    /// yet, or `NO_OWNER`.
+    owners: Vec<u32>,
+    /// How many pixels each job command owns.
+    owned: Vec<u32>,
+}
+
+const NO_OWNER: u32 = u32::MAX;
+
+impl Winners {
+    fn reset(&mut self, pixels: usize, commands: usize) {
+        self.owners.clear();
+        self.owners.resize(pixels, NO_OWNER);
+        self.owned.clear();
+        self.owned.resize(commands, 0);
+    }
+
+    fn claim(&mut self, pixel: usize, command: u32) {
+        self.release(pixel);
+        self.owners[pixel] = command;
+        self.owned[command as usize] += 1;
+    }
+
+    fn release(&mut self, pixel: usize) {
+        let owner = std::mem::replace(&mut self.owners[pixel], NO_OWNER);
+        if owner != NO_OWNER {
+            self.owned[owner as usize] -= 1;
+        }
+    }
+}
+
+/// What a triangle does with the fragments it covers.
+enum Fragments<'a> {
+    /// Test depth and write the visibility planes. A fragment that shading may discard is shaded
+    /// and written now; the others are left to `Owned`.
+    Opaque {
+        winners: &'a mut Winners,
+        command: u32,
+    },
+    /// Shade and write the pixels the command owns after every opaque command was tested.
+    Owned { winners: &'a Winners, command: u32 },
+    /// Accumulate the fragments in front of the opaque depth.
+    Transparent(&'a mut [OitPixel]),
+}
+
 #[allow(clippy::too_many_arguments)]
 fn raster_projected_triangle(
-    mut vertices: [ScreenVertex; 3],
+    coverage: &Coverage,
     mesh: &PreparedMesh,
     shading: &pbr::Triangle<'_>,
     node_id: u32,
@@ -2367,70 +2515,28 @@ fn raster_projected_triangle(
     pixel_rays: &PixelRays,
     lights: &Lights,
     output: &mut RasterTile<'_>,
-    mut oit: Option<&mut [OitPixel]>,
+    mut fragments: Fragments<'_>,
 ) {
     let tile_columns = (output.end_x - output.start_x) as usize;
-    let transparent = oit.is_some();
-    let signed_area = orient_f32(vertices[0], vertices[1], vertices[2]);
-    // glTF front faces are CCW in +Y-up NDC, therefore negative after mapping to screen +Y down.
-    if signed_area.abs() <= 1.0e-8 {
+    let deferred = shading.material.alpha_cutoff.is_none();
+    let Coverage {
+        vertices,
+        fixed,
+        top_left,
+        inv_area,
+        ..
+    } = *coverage;
+    let min_x = coverage.min_x.max(output.start_x);
+    let max_x = coverage.max_x.min(output.end_x - 1);
+    let min_y = coverage.min_y.max(output.start_y);
+    let max_y = coverage.max_y.min(output.end_y - 1);
+    if min_x > max_x || min_y > max_y {
         return;
-    }
-    if signed_area > 0.0 {
-        if !shading.material.double_sided {
-            return;
-        }
-        for vertex in &mut vertices {
-            vertex.normal = vertex.normal * -1.0;
-        }
-    } else {
-        vertices.swap(1, 2);
     }
     let gradients = shading
         .material
         .uses_uv()
         .then(|| pbr::Gradients::new(vertices));
-    let fixed = vertices.map(|vertex| FixedPoint {
-        x: round_fixed(vertex.x * SUBPIXEL_SCALE),
-        y: round_fixed(vertex.y * SUBPIXEL_SCALE),
-    });
-    let area = orient_fixed(fixed[0], fixed[1], fixed[2]);
-    if area <= 0 {
-        return;
-    }
-    let min_x = vertices
-        .iter()
-        .map(|vertex| vertex.x)
-        .fold(f32::INFINITY, f32::min)
-        .floor()
-        .max(output.start_x as f32) as u32;
-    let max_x = vertices
-        .iter()
-        .map(|vertex| vertex.x)
-        .fold(f32::NEG_INFINITY, f32::max)
-        .ceil()
-        .min(output.end_x as f32 - 1.0) as u32;
-    let min_y = vertices
-        .iter()
-        .map(|vertex| vertex.y)
-        .fold(f32::INFINITY, f32::min)
-        .floor()
-        .max(output.start_y as f32) as u32;
-    let max_y = vertices
-        .iter()
-        .map(|vertex| vertex.y)
-        .fold(f32::NEG_INFINITY, f32::max)
-        .ceil()
-        .min(output.end_y as f32 - 1.0) as u32;
-    if min_x > max_x || min_y > max_y {
-        return;
-    }
-    let top_left = [
-        is_top_left(fixed[1], fixed[2]),
-        is_top_left(fixed[2], fixed[0]),
-        is_top_left(fixed[0], fixed[1]),
-    ];
-    let inv_area = 1.0 / area as f32;
     let first_sample = FixedPoint {
         x: (i64::from(min_x) << SUBPIXEL_BITS) + (1 << (SUBPIXEL_BITS - 1)),
         y: (i64::from(min_y) << SUBPIXEL_BITS) + (1 << (SUBPIXEL_BITS - 1)),
@@ -2467,6 +2573,13 @@ fn raster_projected_triangle(
             edge[0] += edge_step_x[0];
             edge[1] += edge_step_x[1];
             edge[2] += edge_step_x[2];
+            let pixel = row * tile_columns + offset;
+            if let Fragments::Owned { winners, command } = &fragments
+                && winners.owners[pixel] != *command
+            {
+                offset += 1;
+                continue;
+            }
             let bary = [
                 current_edge[0] as f32 * inv_area,
                 current_edge[1] as f32 * inv_area,
@@ -2482,13 +2595,27 @@ fn raster_projected_triangle(
             let view_z = 1.0 / perspective_sum;
             let depth = view_z;
             let previous = output.depth[row][offset];
-            if (transparent && depth >= previous)
-                || (!transparent
-                    && (depth > previous
+            let hidden = match fragments {
+                Fragments::Opaque { .. } => {
+                    depth > previous
                         || (depth == previous
                             && output.object_ids[row][offset] != 0
-                            && mesh.object_id >= output.object_ids[row][offset])))
+                            && mesh.object_id >= output.object_ids[row][offset])
+                }
+                Fragments::Owned { .. } => false,
+                Fragments::Transparent(_) => depth >= previous,
+            };
+            if hidden {
+                offset += 1;
+                continue;
+            }
+            if let Fragments::Opaque { winners, command } = &mut fragments
+                && deferred
             {
+                output.depth[row][offset] = depth;
+                output.object_ids[row][offset] = mesh.object_id;
+                output.node_ids[row][offset] = node_id;
+                winners.claim(pixel, *command);
                 offset += 1;
                 continue;
             }
@@ -2519,18 +2646,11 @@ fn raster_projected_triangle(
                 offset += 1;
                 continue;
             };
-            if let Some(accumulation) = oit.as_deref_mut() {
+            if let Fragments::Transparent(accumulation) = &mut fragments {
                 let display = display_linear(radiance, lights.pbr.tone_mapping, lights.exposure);
-                accumulation[row * tile_columns + offset].add(
-                    display,
-                    alpha,
-                    depth,
-                    mesh.object_id,
-                    node_id,
-                );
+                accumulation[pixel].add(display, alpha, depth, mesh.object_id, node_id);
             } else {
-                let pixel = &mut output.color[row][offset * 4..offset * 4 + 4];
-                pixel.copy_from_slice(&output_color(
+                output.color[row][offset * 4..offset * 4 + 4].copy_from_slice(&output_color(
                     radiance,
                     1.0,
                     lights.pbr.tone_mapping,
@@ -2538,9 +2658,12 @@ fn raster_projected_triangle(
                 ));
                 // Masked fragments never write any visibility plane, so objects behind holes can
                 // still draw and be picked regardless of submission order.
-                output.depth[row][offset] = depth;
-                output.object_ids[row][offset] = mesh.object_id;
-                output.node_ids[row][offset] = node_id;
+                if let Fragments::Opaque { winners, .. } = &mut fragments {
+                    output.depth[row][offset] = depth;
+                    output.object_ids[row][offset] = mesh.object_id;
+                    output.node_ids[row][offset] = node_id;
+                    winners.release(pixel);
+                }
             }
             offset += 1;
         }
@@ -2724,7 +2847,75 @@ fn rotate_axis(value: V3, axis: V3, sin: f32, cos: f32) -> V3 {
 
 #[cfg(test)]
 mod span_tests {
-    use super::covered_span;
+    use super::{
+        FixedPoint, SUBPIXEL_BITS, SUBPIXEL_STEP, center_range, covered_span, is_top_left,
+        orient_fixed,
+    };
+
+    #[test]
+    fn center_ranges_hold_every_pixel_the_fill_rule_covers() {
+        let mut state = 0x9e37_79b9_7f4a_7c15_u64;
+        let mut next = |range: i64| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            (state % (2 * range as u64 + 1)) as i64 - range
+        };
+        let (width, height) = (40, 30);
+        let mut empty = 0;
+        for _ in 0..20_000 {
+            // Corners in 1/256 pixel units around a small layer and past its edges. Snapping them
+            // to half or whole pixels puts corners and edges on pixel centers.
+            let snap = [1, 128, 256][(next(1) + 1) as usize];
+            let spread = if next(1) > 0 { 24 } else { 2 };
+            let mut corner = || FixedPoint {
+                x: (20 << SUBPIXEL_BITS) + next(spread << SUBPIXEL_BITS) / snap * snap,
+                y: (15 << SUBPIXEL_BITS) + next(spread << SUBPIXEL_BITS) / snap * snap,
+            };
+            let mut fixed = [corner(), corner(), corner()];
+            let area = orient_fixed(fixed[0], fixed[1], fixed[2]);
+            if area == 0 {
+                continue;
+            }
+            if area < 0 {
+                fixed.swap(1, 2);
+            }
+            let top_left = [
+                is_top_left(fixed[1], fixed[2]),
+                is_top_left(fixed[2], fixed[0]),
+                is_top_left(fixed[0], fixed[1]),
+            ];
+            let covered = (0..height)
+                .flat_map(|y| (0..width).map(move |x| (x, y)))
+                .filter(|&(x, y)| {
+                    let center = FixedPoint {
+                        x: (i64::from(x) << SUBPIXEL_BITS) + SUBPIXEL_STEP / 2,
+                        y: (i64::from(y) << SUBPIXEL_BITS) + SUBPIXEL_STEP / 2,
+                    };
+                    let edge = [
+                        orient_fixed(fixed[1], fixed[2], center),
+                        orient_fixed(fixed[2], fixed[0], center),
+                        orient_fixed(fixed[0], fixed[1], center),
+                    ];
+                    (0..3).all(|i| edge[i] > 0 || (edge[i] == 0 && top_left[i]))
+                })
+                .collect::<Vec<_>>();
+            match (
+                center_range(fixed.map(|point| point.x), width),
+                center_range(fixed.map(|point| point.y), height),
+            ) {
+                (Some(columns), Some(rows)) => assert!(covered.iter().all(|&(x, y)| {
+                    (columns.0..=columns.1).contains(&x) && (rows.0..=rows.1).contains(&y)
+                })),
+                _ => {
+                    assert!(covered.is_empty());
+                    empty += 1;
+                }
+            }
+        }
+        // Small triangles between pixel centers are the case the bounds exist for.
+        assert!(empty > 100, "{empty} triangles without a pixel center");
+    }
 
     #[test]
     fn covered_span_matches_the_per_pixel_fill_rule() {

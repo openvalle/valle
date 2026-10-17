@@ -2029,6 +2029,257 @@ fn depth_of_field_preserves_focus_softens_far_edges_and_spreads_near_silhouettes
 }
 
 #[test]
+fn raster_tiles_keep_the_bits_of_one_worker_with_shadows_and_depth_of_field() {
+    // A shadowed tube in a layer large enough that its tiles, and the depth-of-field blur, split
+    // across workers.
+    let path = PathData::new(
+        vec![
+            PathVerb::Move,
+            PathVerb::Line,
+            PathVerb::Line,
+            PathVerb::Line,
+        ],
+        vec![
+            Point::new(-1.2, -0.8),
+            Point::new(1.1, 0.9),
+            Point::new(-0.4, 1.0),
+            Point::new(0.9, -1.0),
+        ],
+    )
+    .unwrap();
+    let mut scene = pbr_scene();
+    scene.meshes[0].model_control = None;
+    scene.meshes[0].geometry = Some(ProceduralGeometry::Tube {
+        path,
+        radius: 0.3,
+        sides: 24,
+    });
+    scene.meshes[0].material.kind = Some(MaterialKind::Lambert);
+    scene.lights = vec![
+        LightKind::Ambient,
+        LightKind::Directional,
+        LightKind::Directional,
+    ];
+    let unshadowed = prepare_scene(&scene, 640, 480, &SceneResources::default()).unwrap();
+    scene.pbr.shadows = true;
+    let prepared = prepare_scene(&scene, 640, 480, &SceneResources::default()).unwrap();
+    let mut frame = pbr_frame();
+    let directional = |direction, intensity| LightFrameState::Directional {
+        color: Color4([1.0; 4]),
+        direction,
+        intensity,
+    };
+    frame.lights = vec![
+        LightFrameState::Ambient {
+            color: Color4([1.0; 4]),
+            intensity: 0.2,
+        },
+        directional(Vec3::new(1.0, 0.4, 1.0), 0.8),
+        directional(Vec3::new(-0.6, 1.0, 0.7), 0.6),
+    ];
+    frame.meshes[0].transform.rotation_degrees = Vec3::new(25.0, 35.0, 10.0);
+    let sharp = render_scene_with_workers(&prepared, &frame, 1).unwrap();
+    assert_ne!(
+        sharp.premul_rgba16f,
+        render_scene_with_workers(&unshadowed, &frame, 1)
+            .unwrap()
+            .premul_rgba16f,
+        "the tube must shadow itself"
+    );
+    frame.camera.depth_of_field = Some(DepthOfFieldState {
+        focus_distance: 4.0,
+        max_blur_radius: 6.0,
+    });
+    let blurred = render_scene_with_workers(&prepared, &frame, 1).unwrap();
+    assert_ne!(blurred.premul_rgba16f, sharp.premul_rgba16f);
+    for (expected, depth_of_field) in [(&sharp, None), (&blurred, frame.camera.depth_of_field)] {
+        frame.camera.depth_of_field = depth_of_field;
+        for workers in [2, 3, 8] {
+            let parallel = render_scene_with_workers(&prepared, &frame, workers).unwrap();
+            assert_frame_bits_eq(&parallel, expected);
+        }
+    }
+}
+
+#[test]
+fn opaque_shading_after_the_depth_tests_keeps_the_bits_of_shading_each_fragment_as_it_passes() {
+    use valle_motion::scene3d::AlphaMode;
+
+    // Opaque fragments are shaded once the depth tests of their tile are done, and only where they
+    // are still visible. A mask whose cutoff no coverage falls below shades each fragment as it
+    // passes instead. Self-overlapping shadowed geometry, masks that write and that discard between
+    // opaque meshes, and a blended layer over them must leave every plane the same.
+    let tube = PathData::new(
+        vec![
+            PathVerb::Move,
+            PathVerb::Line,
+            PathVerb::Line,
+            PathVerb::Line,
+        ],
+        vec![
+            Point::new(-1.2, -0.8),
+            Point::new(1.1, 0.9),
+            Point::new(-0.4, 1.0),
+            Point::new(0.9, -1.0),
+        ],
+    )
+    .unwrap();
+    let lathe = PathData::new(
+        vec![PathVerb::Move, PathVerb::Line, PathVerb::Line],
+        vec![
+            Point::new(0.45, 0.9),
+            Point::new(0.7, 0.0),
+            Point::new(0.45, -0.9),
+        ],
+    )
+    .unwrap();
+    let mask = |alpha| {
+        material_glb(
+            json!({
+                "alphaMode":"MASK","alphaCutoff":0.5,"doubleSided":true,
+                "pbrMetallicRoughness":{"baseColorFactor":[1,0.6,0.2,1],"baseColorTexture":{"index":0}}
+            }),
+            &[[255, 255, 255, alpha]],
+        )
+    };
+    let glass = material_glb(
+        json!({"alphaMode":"BLEND","doubleSided":true,"pbrMetallicRoughness":{"baseColorFactor":[0.2,0.4,1,0.5]}}),
+        &[],
+    );
+    let resources = SceneResources {
+        environments: BTreeMap::new(),
+        models: [
+            ("passModel", mask(255)),
+            ("holeModel", mask(0)),
+            ("glassModel", glass),
+        ]
+        .into_iter()
+        .map(|(control, bytes)| (control.into(), Arc::new(admit_glb(&bytes).unwrap())))
+        .collect(),
+        textures: BTreeMap::new(),
+    };
+    let mesh = |key: &str, model: Option<&str>, geometry, kind| MeshSpec {
+        key: key.into(),
+        model_control: model.map(Into::into),
+        geometry,
+        material: MaterialSpec {
+            kind,
+            double_sided: Some(true),
+            ..MaterialSpec::default()
+        },
+        material_overrides: Vec::new(),
+        animation_clip: None,
+        node_ids: Vec::new(),
+    };
+    let mut scene = pbr_scene();
+    scene.pbr.shadows = true;
+    scene.anchors.clear();
+    scene.lights = vec![
+        LightKind::Ambient,
+        LightKind::Directional,
+        LightKind::Directional,
+    ];
+    scene.meshes = vec![
+        mesh(
+            "tube",
+            None,
+            Some(ProceduralGeometry::Tube {
+                path: tube,
+                radius: 0.3,
+                sides: 24,
+            }),
+            None,
+        ),
+        mesh("pass", Some("passModel"), None, Some(MaterialKind::Lambert)),
+        mesh(
+            "lathe",
+            None,
+            Some(ProceduralGeometry::Lathe {
+                path: lathe,
+                segments: 32,
+            }),
+            Some(MaterialKind::Lambert),
+        ),
+        mesh("hole", Some("holeModel"), None, None),
+        mesh("glass", Some("glassModel"), None, Some(MaterialKind::Unlit)),
+    ];
+    let mut frame = pbr_frame();
+    let placed = |key: &str, translation: [f32; 3]| MeshFrameState {
+        key: key.into(),
+        material: MaterialFrameState::default(),
+        material_overrides: Vec::new(),
+        animation_time: None,
+        transform: Transform3D {
+            translation: Vec3::new(translation[0], translation[1], translation[2]),
+            ..Transform3D::default()
+        },
+        nodes: Vec::new(),
+    };
+    frame.meshes = vec![
+        placed("tube", [0.0, 0.0, 0.0]),
+        placed("pass", [0.2, 0.1, 0.3]),
+        placed("lathe", [0.5, -0.2, -0.4]),
+        placed("hole", [-0.2, 0.0, 0.8]),
+        placed("glass", [-0.3, 0.2, 1.0]),
+    ];
+    let directional = |direction, intensity| LightFrameState::Directional {
+        color: Color4([1.0; 4]),
+        direction,
+        intensity,
+    };
+    frame.lights = vec![
+        LightFrameState::Ambient {
+            color: Color4([1.0; 4]),
+            intensity: 0.2,
+        },
+        directional(Vec3::new(1.0, 0.4, 1.0), 0.8),
+        directional(Vec3::new(-0.6, 1.0, 0.7), 0.6),
+    ];
+    let (mut reference_scene, mut reference_frame) = (scene.clone(), frame.clone());
+    for key in ["tube", "lathe"] {
+        let mesh = reference_scene
+            .meshes
+            .iter_mut()
+            .find(|mesh| mesh.key == key);
+        mesh.unwrap().material.alpha_mode = Some(AlphaMode::Mask);
+        let state = reference_frame
+            .meshes
+            .iter_mut()
+            .find(|state| state.key == key);
+        state.unwrap().material.alpha_cutoff = Some(0.0);
+    }
+    let prepared = prepare_scene(&scene, 320, 200, &resources).unwrap();
+    let reference = prepare_scene(&reference_scene, 320, 200, &resources).unwrap();
+    for rotations in [
+        [[25.0, 35.0, 10.0], [0.0, 30.0, 0.0], [0.0, 0.0, 0.0]],
+        [[-40.0, 120.0, 5.0], [10.0, -50.0, 20.0], [20.0, 60.0, 0.0]],
+        [[70.0, -60.0, 30.0], [0.0, 160.0, 0.0], [-30.0, 10.0, 15.0]],
+    ] {
+        for state in [&mut frame, &mut reference_frame] {
+            for (mesh, [x, y, z]) in state.meshes.iter_mut().zip(rotations) {
+                mesh.transform.rotation_degrees = Vec3::new(x, y, z);
+            }
+        }
+        let deferred = render_scene_with_workers(&prepared, &frame, 1).unwrap();
+        for id in [1, 2, 3, 5] {
+            assert!(
+                deferred.object_ids.contains(&id),
+                "mesh {id} is not visible"
+            );
+        }
+        assert!(!deferred.object_ids.contains(&4), "the hole must discard");
+        for workers in [1, 3] {
+            let expected =
+                render_scene_with_workers(&reference, &reference_frame, workers).unwrap();
+            assert_frame_bits_eq(
+                &render_scene_with_workers(&prepared, &frame, workers).unwrap(),
+                &expected,
+            );
+        }
+    }
+}
+
+#[test]
 fn directional_shadow_map_catches_offscreen_casters_and_tracks_light_direction() {
     let face = |positions| Triangle {
         positions,

@@ -367,9 +367,7 @@ impl RequestAllocator {
             ),
             ResourceSample::Static,
             ExternalResourceDesc::Scene3d,
-            Some(ResourcePayload::Scene3dFrame {
-                canonical_request: std::sync::Arc::clone(frame.canonical()),
-            }),
+            Some(ResourcePayload::Scene3dFrame(frame.clone())),
             path,
         )
     }
@@ -415,7 +413,8 @@ impl RequestAllocator {
         payload: Option<ResourcePayload>,
         path: &str,
     ) -> Result<ExternalHandleId, RequestError> {
-        let identity = canonical::bytes(&(&key, sample, &expected, &payload))
+        // As in `ResourceRequest::cache_identity`, the key names the payload.
+        let identity = canonical::bytes(&(&key, sample, &expected))
             .map_err(|_| RequestError::CanonicalIdentity)?;
         if let Some(index) = self.by_identity.get(&identity).copied() {
             let resource = &mut self.resources[index];
