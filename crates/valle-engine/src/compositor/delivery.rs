@@ -9,6 +9,7 @@ use crate::resource::OutputSpec;
 pub use super::reference::{
     OutputMathError as DeliveryError, OutputStorage as DeliveryStorage,
     ReferenceOutputSample as DeliverySample, gamut_map as map_output_gamut,
+    luminance_weights as output_luminance_weights,
 };
 
 /// Transforms one Linear Rec.2020 premultiplied working pixel through the complete OutputSpec.

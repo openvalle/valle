@@ -314,12 +314,17 @@ fn rec2020_luminance(rgb: [f32; 3]) -> f32 {
     0.2627 * rgb[0] + 0.6780 * rgb[1] + 0.0593 * rgb[2]
 }
 
-fn target_luminance(rgb: [f32; 3], primaries: ColorPrimaries) -> f32 {
-    let weights = match primaries {
+/// The weights of linear RGB in `primaries`' luminance, which chroma compression keeps.
+pub const fn luminance_weights(primaries: ColorPrimaries) -> [f32; 3] {
+    match primaries {
         ColorPrimaries::Rec709 => [0.212_639, 0.715_169, 0.072_192],
         ColorPrimaries::DisplayP3 => [0.228_975, 0.691_739, 0.079_287],
         ColorPrimaries::Rec2020 => [0.2627, 0.6780, 0.0593],
-    };
+    }
+}
+
+fn target_luminance(rgb: [f32; 3], primaries: ColorPrimaries) -> f32 {
+    let weights = luminance_weights(primaries);
     weights[0] * rgb[0] + weights[1] * rgb[1] + weights[2] * rgb[2]
 }
 

@@ -9,6 +9,7 @@ mod bloom_gpu;
 mod blur;
 mod cache;
 mod chromatic;
+mod color_matrix;
 mod draw;
 mod effect;
 mod film_gpu;

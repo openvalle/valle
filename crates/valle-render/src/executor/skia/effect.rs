@@ -899,9 +899,31 @@ pub(super) fn draw_filters(
     {
         return Ok(());
     }
-    // Materialize finite CPU chains only when they contain a fast spatial filter. GPU,
-    // wide-kernel and coordinate-dependent effects retain Skia's composed implementation.
-    let fast_chain = filters.len() > 1
+    if fast_chain(canvas, input, filters) {
+        let (image, subset, position) = materialize_filters(
+            input.clone(),
+            source,
+            origin,
+            device,
+            &filters[..filters.len() - 1],
+        )?;
+        return draw_filters(
+            canvas,
+            &image,
+            subset,
+            position,
+            device,
+            &filters[filters.len() - 1..],
+        );
+    }
+    draw_skia_filters(canvas, input, source, origin, device, filters)
+}
+
+/// Whether `draw_filters` materializes each filter but the last into its own image. It does so
+/// for finite CPU chains only when they contain a fast spatial filter. GPU, wide-kernel and
+/// coordinate-dependent effects retain Skia's composed implementation.
+fn fast_chain(canvas: &skia_safe::Canvas, input: &Image, filters: &[Filter]) -> bool {
+    filters.len() > 1
         && super::blur::is_raster_float(canvas, input)
         && filters.iter().any(super::blur::supports)
         && filters.iter().all(|filter| match filter {
@@ -916,51 +938,102 @@ pub(super) fn draw_filters(
             | Filter::LensDistortion { .. }
             | Filter::ChromaticAberration { .. } => false,
             _ => true,
-        });
-    if fast_chain {
-        let mut image = input.clone();
-        let mut subset = source;
-        let mut position = origin;
-        for filter in &filters[..filters.len() - 1] {
-            let Some(effect) = image_filter(filter)? else {
-                continue;
-            };
-            // Keep the full intermediate support: clipping to the final panel here loses
-            // pixels that a later blur or offset shadow can bring back into view.
-            let bounds = effect.filter_bounds(
-                IRect::from_size(subset.size()),
-                &Matrix::new_identity(),
-                skia_safe::image_filter::MapDirection::Forward,
-                None,
-            );
-            let info = image.image_info().with_dimensions(bounds.size());
-            let mut surface = skia_safe::surfaces::raster(&info, None, None)
-                .ok_or_else(|| DrawError::Surface("filter chain allocation failed".into()))?;
-            surface.canvas().clear(Color4f::new(0.0, 0.0, 0.0, 0.0));
-            // The intermediate's pixel (0, 0) lands at the advanced position on this canvas.
-            position[0] += bounds.left;
-            position[1] += bounds.top;
-            draw_filters(
-                surface.canvas(),
-                &image,
-                subset,
-                [-bounds.left, -bounds.top],
-                [device[0] + position[0], device[1] + position[1]],
-                std::slice::from_ref(filter),
-            )?;
-            image = surface.image_snapshot();
-            subset = IRect::from_size(image.dimensions());
-        }
-        return draw_filters(
-            canvas,
+        })
+}
+
+/// A fast chain's `filters` drawn one at a time into their own images, from the `subset` of
+/// `image` placed at canvas `position`: the last image, its subset and where its pixel (0, 0)
+/// lands on the canvas.
+pub(super) fn materialize_filters(
+    mut image: Image,
+    mut subset: IRect,
+    mut position: [i32; 2],
+    device: [i32; 2],
+    filters: &[Filter],
+) -> Result<(Image, IRect, [i32; 2]), DrawError> {
+    for filter in filters {
+        let Some(effect) = image_filter(filter)? else {
+            continue;
+        };
+        // Keep the full intermediate support: clipping to the final panel here loses
+        // pixels that a later blur or offset shadow can bring back into view.
+        let bounds = effect.filter_bounds(
+            IRect::from_size(subset.size()),
+            &Matrix::new_identity(),
+            skia_safe::image_filter::MapDirection::Forward,
+            None,
+        );
+        let info = image.image_info().with_dimensions(bounds.size());
+        let mut surface = skia_safe::surfaces::raster(&info, None, None)
+            .ok_or_else(|| DrawError::Surface("filter chain allocation failed".into()))?;
+        surface.canvas().clear(Color4f::new(0.0, 0.0, 0.0, 0.0));
+        // The intermediate's pixel (0, 0) lands at the advanced position on this canvas.
+        position[0] += bounds.left;
+        position[1] += bounds.top;
+        draw_filters(
+            surface.canvas(),
             &image,
             subset,
-            position,
-            device,
-            &filters[filters.len() - 1..],
-        );
+            [-bounds.left, -bounds.top],
+            [device[0] + position[0], device[1] + position[1]],
+            std::slice::from_ref(filter),
+        )?;
+        image = surface.image_snapshot();
+        subset = IRect::from_size(image.dimensions());
     }
-    draw_skia_filters(canvas, input, source, origin, device, filters)
+    Ok((image, subset, position))
+}
+
+/// [`draw_filters`] onto `surface`. Where the chain ends in color matrices that keep transparent
+/// black, their pixels may be computed directly instead, from the filters before them
+/// materialized as `draw_filters` materializes them: in a fast chain each matrix reads the half
+/// floats of the image the one before it was drawn into, and a chain that Skia composes into one
+/// draw keeps full precision.
+pub(super) fn draw_filters_into(
+    surface: &mut Surface,
+    input: &Image,
+    source: IRect,
+    origin: [i32; 2],
+    device: [i32; 2],
+    filters: &[Filter],
+) -> Result<(), DrawError> {
+    let matrices = filters
+        .iter()
+        .rev()
+        .map_while(|filter| color_matrix(filter).filter(|matrix| matrix[19] == 0.0))
+        .collect::<Vec<_>>();
+    let first = filters.len() - matrices.len();
+    let fast = fast_chain(surface.canvas(), input, filters);
+    if matrices.is_empty() || (first == 0) == fast || source.is_empty() {
+        return draw_filters(surface.canvas(), input, source, origin, device, filters);
+    }
+    let matrices = matrices.into_iter().rev().collect::<Vec<_>>();
+    let (image, subset, position) =
+        materialize_filters(input.clone(), source, origin, device, &filters[..first])?;
+    if let Some(pixels) = image.peek_pixels()
+        && super::color_matrix::draw(surface, &pixels, subset, position, &matrices, fast)?
+    {
+        return Ok(());
+    }
+    if !fast {
+        return draw_filters(surface.canvas(), input, source, origin, device, filters);
+    }
+    // The rest of the fast chain, as `draw_filters` continues it.
+    let (image, subset, position) = materialize_filters(
+        image,
+        subset,
+        position,
+        device,
+        &filters[first..filters.len() - 1],
+    )?;
+    draw_filters(
+        surface.canvas(),
+        &image,
+        subset,
+        position,
+        device,
+        &filters[filters.len() - 1..],
+    )
 }
 
 fn draw_skia_filters(
@@ -1035,26 +1108,15 @@ fn image_filter_at(filter: &Filter, device: [i32; 2]) -> Result<Option<ImageFilt
             }
             image_filters::blur((*sigma_x, *sigma_y), TileMode::Decal, None, None)
         }
-        Filter::ColorMatrix { matrix } => matrix_filter(matrix.as_ref()),
-        Filter::Brightness { amount } => matrix_filter(&diagonal(*amount, *amount, *amount, 0.0)),
-        Filter::Contrast { amount } => {
-            matrix_filter(&diagonal(*amount, *amount, *amount, 0.5 - 0.5 * *amount))
-        }
-        Filter::Grayscale { amount } => matrix_filter(&grayscale(*amount)),
-        Filter::HueRotate { degrees } => matrix_filter(&hue_rotate(*degrees)),
-        Filter::Invert { amount } => matrix_filter(&diagonal(
-            1.0 - 2.0 * *amount,
-            1.0 - 2.0 * *amount,
-            1.0 - 2.0 * *amount,
-            *amount,
-        )),
-        Filter::Opacity { amount } => {
-            let mut matrix = diagonal(1.0, 1.0, 1.0, 0.0);
-            matrix[18] = *amount;
-            matrix_filter(&matrix)
-        }
-        Filter::Saturate { amount } => matrix_filter(&saturate(*amount)),
-        Filter::Sepia { amount } => matrix_filter(&sepia(*amount)),
+        Filter::ColorMatrix { .. }
+        | Filter::Brightness { .. }
+        | Filter::Contrast { .. }
+        | Filter::Grayscale { .. }
+        | Filter::HueRotate { .. }
+        | Filter::Invert { .. }
+        | Filter::Opacity { .. }
+        | Filter::Saturate { .. }
+        | Filter::Sepia { .. } => color_matrix(filter).and_then(|matrix| matrix_filter(&matrix)),
         Filter::DropShadow {
             offset,
             sigma_x,
@@ -1510,6 +1572,31 @@ pub(crate) fn straight_color(color: LinearColor) -> Color4f {
             color.alpha,
         )
     }
+}
+
+/// The row-major matrix of a filter that Skia draws as a color matrix.
+pub(super) fn color_matrix(filter: &Filter) -> Option<[f32; 20]> {
+    Some(match filter {
+        Filter::ColorMatrix { matrix } => **matrix,
+        Filter::Brightness { amount } => diagonal(*amount, *amount, *amount, 0.0),
+        Filter::Contrast { amount } => diagonal(*amount, *amount, *amount, 0.5 - 0.5 * *amount),
+        Filter::Grayscale { amount } => grayscale(*amount),
+        Filter::HueRotate { degrees } => hue_rotate(*degrees),
+        Filter::Invert { amount } => diagonal(
+            1.0 - 2.0 * *amount,
+            1.0 - 2.0 * *amount,
+            1.0 - 2.0 * *amount,
+            *amount,
+        ),
+        Filter::Opacity { amount } => {
+            let mut matrix = diagonal(1.0, 1.0, 1.0, 0.0);
+            matrix[18] = *amount;
+            matrix
+        }
+        Filter::Saturate { amount } => saturate(*amount),
+        Filter::Sepia { amount } => sepia(*amount),
+        _ => return None,
+    })
 }
 
 fn matrix_filter(matrix: &[f32; 20]) -> Option<ImageFilter> {

@@ -7,7 +7,8 @@ use valle_engine::compositor::bloom::half_to_f32;
 use valle_engine::{
     compositor::delivery::{DeliveryStorage, transform_working_pixel},
     resource::{
-        ColorPrimaries, Dither, OutputAlphaMode, OutputBitDepth, OutputSpec, TransferFunction,
+        ColorPrimaries, Dither, GamutMap, OutputAlphaMode, OutputBitDepth, OutputSpec,
+        TransferFunction,
     },
 };
 
@@ -378,21 +379,18 @@ pub(crate) fn stage_sdr_output_into(
     // read_pixels overwrites every sample, so stale contents from a prior frame are never read.
     let samples = &mut staging.working;
     // Loop invariants, queried once rather than per pixel.
-    let maximum = f32::from(spec.reference_white().get()) / 100.0;
-    let curve = transfer_lut(spec.target().transfer);
-    let primaries = spec.target().primaries;
-    let gamut_map = spec.gamut_map();
-    let alpha_mode = spec.alpha();
-    let swap_red_blue = target_info.color_type() == ColorType::BGRA8888;
+    let codes = SdrCodes::new(spec, target_info.color_type());
     let row_bytes = target_info.min_row_bytes();
     let pixels = &mut staging.pixels;
     // The stripes below rewrite every pixel, so only a change of size needs new storage.
     pixels.resize(pixel_count * 4, 0);
     // Continuous-tone frames still repeat neighbors in flat regions; an identical input reuses
     // the previous pixel's already validated codes.
+    #[cfg(not(all(target_arch = "aarch64", target_endian = "little")))]
     let mut previous: Option<([u32; 4], [u8; 4])> = None;
     // Gradients repeat a color down a column rather than along a row, so a small exact-key cache
     // catches what the previous-pixel check misses. Keys are the input bits, so hits are exact.
+    #[cfg(not(all(target_arch = "aarch64", target_endian = "little")))]
     let mut cache = vec![None::<([u32; 4], [u8; 4])>; SDR_CACHE_SLOTS];
     for top in (0..height).step_by(OUTPUT_STRIPE_ROWS) {
         let rows = OUTPUT_STRIPE_ROWS.min(height - top);
@@ -408,6 +406,51 @@ pub(crate) fn stage_sdr_output_into(
         }
         let (stripe_samples, _) = samples.as_chunks::<4>();
         let (stripe_output, _) = pixels[top * width * 4..(top + rows) * width * 4].as_chunks_mut();
+        // Four pixels at a time compute what one does, lane by lane; a group that leaves the
+        // common path, and the stripe's last pixels, go one by one and fail where a scan would.
+        // Flat regions repeat the previous pixel and gradients across a row repeat the row
+        // above, so a group with exactly their inputs reuses their already validated codes.
+        #[cfg(all(target_arch = "aarch64", target_endian = "little"))]
+        {
+            let same = |pixel: &[f32; 4], other: &[f32; 4]| {
+                pixel.map(f32::to_bits) == other.map(f32::to_bits)
+            };
+            let (groups, samples_tail) = stripe_samples.as_chunks::<4>();
+            for (index, group) in groups.iter().enumerate() {
+                let first = index * 4;
+                if first > 0
+                    && group
+                        .iter()
+                        .all(|pixel| same(pixel, &stripe_samples[first - 1]))
+                {
+                    let previous = stripe_output[first - 1];
+                    stripe_output[first..][..4].fill(previous);
+                    continue;
+                }
+                if first >= width
+                    && group
+                        .iter()
+                        .zip(&stripe_samples[first - width..])
+                        .all(|(pixel, above)| same(pixel, above))
+                {
+                    stripe_output.copy_within(first - width..first - width + 4, first);
+                    continue;
+                }
+                let output = &mut stripe_output[first..][..4];
+                if let Some(four) = codes.four(group) {
+                    output.copy_from_slice(&four);
+                    continue;
+                }
+                for (pixel, output) in group.iter().zip(output) {
+                    *output = codes.pixel(*pixel)?;
+                }
+            }
+            let tail = groups.len() * 4;
+            for (pixel, output) in samples_tail.iter().zip(&mut stripe_output[tail..]) {
+                *output = codes.pixel(*pixel)?;
+            }
+        }
+        #[cfg(not(all(target_arch = "aarch64", target_endian = "little")))]
         for (pixel, output) in stripe_samples.iter().zip(stripe_output) {
             let key = pixel.map(f32::to_bits);
             if let Some((prior, codes)) = previous
@@ -428,36 +471,218 @@ pub(crate) fn stage_sdr_output_into(
                 previous = Some((key, codes));
                 continue;
             }
-            let pixel = canonical_rgba(*pixel)?;
-            if alpha_mode == OutputAlphaMode::Opaque && pixel[3] != 1.0 {
-                return Err(DrawError::Surface("opaque output has transparency".into()));
-            }
-            let mapped = valle_engine::compositor::delivery::map_output_gamut(
-                [pixel[0], pixel[1], pixel[2]],
-                primaries,
-                maximum,
-                gamut_map,
-            )
-            .map_err(|error| DrawError::Surface(error.to_string()))?;
-            let coverage = if alpha_mode == OutputAlphaMode::PremultipliedCoverage {
-                pixel[3]
-            } else {
-                1.0
-            };
-            let code = |value: f32| round_code(transfer_code(value / maximum, curve) * coverage);
-            let (red, blue) = if swap_red_blue { (2, 0) } else { (0, 2) };
-            let codes = [
-                code(mapped[red]),
-                code(mapped[1]),
-                code(mapped[blue]),
-                round_code(pixel[3] * 255.0),
-            ];
-            *output = codes;
-            previous = Some((key, codes));
-            cache[slot] = Some((key, codes));
+            let pixel_codes = codes.pixel(*pixel)?;
+            *output = pixel_codes;
+            previous = Some((key, pixel_codes));
+            cache[slot] = Some((key, pixel_codes));
         }
     }
     Ok(Some(row_bytes))
+}
+
+/// How the SDR path turns a pixel of its float readback, unpremultiplied in linear output
+/// primaries, into 8-bit codes.
+struct SdrCodes {
+    maximum: f32,
+    curve: Option<&'static [f32]>,
+    primaries: ColorPrimaries,
+    gamut_map: GamutMap,
+    alpha_mode: OutputAlphaMode,
+    swap_red_blue: bool,
+}
+
+impl SdrCodes {
+    fn new(spec: OutputSpec, color_type: ColorType) -> Self {
+        Self {
+            maximum: f32::from(spec.reference_white().get()) / 100.0,
+            curve: transfer_lut(spec.target().transfer),
+            primaries: spec.target().primaries,
+            gamut_map: spec.gamut_map(),
+            alpha_mode: spec.alpha(),
+            swap_red_blue: color_type == ColorType::BGRA8888,
+        }
+    }
+
+    /// The codes of `pixel`, or why the output cannot hold it.
+    fn pixel(&self, pixel: [f32; 4]) -> Result<[u8; 4], DrawError> {
+        let pixel = canonical_rgba(pixel)?;
+        if self.alpha_mode == OutputAlphaMode::Opaque && pixel[3] != 1.0 {
+            return Err(DrawError::Surface("opaque output has transparency".into()));
+        }
+        let mapped = valle_engine::compositor::delivery::map_output_gamut(
+            [pixel[0], pixel[1], pixel[2]],
+            self.primaries,
+            self.maximum,
+            self.gamut_map,
+        )
+        .map_err(|error| DrawError::Surface(error.to_string()))?;
+        let coverage = if self.alpha_mode == OutputAlphaMode::PremultipliedCoverage {
+            pixel[3]
+        } else {
+            1.0
+        };
+        let code =
+            |value: f32| round_code(transfer_code(value / self.maximum, self.curve) * coverage);
+        let (red, blue) = if self.swap_red_blue { (2, 0) } else { (0, 2) };
+        Ok([
+            code(mapped[red]),
+            code(mapped[1]),
+            code(mapped[blue]),
+            round_code(pixel[3] * 255.0),
+        ])
+    }
+
+    /// The codes of four pixels, lane by lane the operations of [`SdrCodes::pixel`], or `None`
+    /// where one of them leaves its common path: a channel that is not finite, alpha outside
+    /// [0, 1] or transparency in opaque output, or a peak the gamut map rejects.
+    #[cfg(all(target_arch = "aarch64", target_endian = "little"))]
+    #[inline(always)]
+    fn four(&self, pixels: &[[f32; 4]; 4]) -> Option<[[u8; 4]; 4]> {
+        use std::arch::aarch64::*;
+        if !(self.maximum > 0.0 && self.maximum.is_finite()) {
+            return None;
+        }
+        // SAFETY: NEON is part of the aarch64 baseline; the loads read the sixteen channels of the
+        // four pixels and two adjacent entries of the curve, and the store writes sixteen codes.
+        unsafe {
+            let float32x4x4_t(red, green, blue, alpha) = vld4q_f32(pixels.as_ptr().cast::<f32>());
+            let zero = vdupq_n_f32(0.0);
+            let one = vdupq_n_f32(1.0);
+            let all = |mask: uint32x4_t| vminvq_u32(mask) != 0;
+            // `canonical_rgba`: every channel finite, then alpha within an epsilon of 0 clears the
+            // pixel and within one of 1 becomes 1, and must then lie in [0, 1].
+            let infinity = vdupq_n_f32(f32::INFINITY);
+            let finite = |value: float32x4_t| vcltq_f32(vabsq_f32(value), infinity);
+            if !all(vandq_u32(
+                vandq_u32(finite(red), finite(green)),
+                vandq_u32(finite(blue), finite(alpha)),
+            )) {
+                return None;
+            }
+            let epsilon = vdupq_n_f32(f32::EPSILON);
+            let clear = vcleq_f32(vabsq_f32(alpha), epsilon);
+            let alpha = vbslq_f32(
+                vcleq_f32(vabsq_f32(vsubq_f32(alpha, one)), epsilon),
+                one,
+                alpha,
+            );
+            let keep = |value: float32x4_t| vbslq_f32(clear, zero, value);
+            let (red, green, blue, alpha) = (keep(red), keep(green), keep(blue), keep(alpha));
+            if !all(vandq_u32(vcleq_f32(zero, alpha), vcleq_f32(alpha, one)))
+                || (self.alpha_mode == OutputAlphaMode::Opaque && !all(vceqq_f32(alpha, one)))
+            {
+                return None;
+            }
+            // `map_output_gamut`. The clamps keep a negative zero, as `f32::clamp` does.
+            let maximum = vdupq_n_f32(self.maximum);
+            let clamp = |value: float32x4_t| {
+                let value = vbslq_f32(vcltq_f32(value, zero), zero, value);
+                vbslq_f32(vcgtq_f32(value, maximum), maximum, value)
+            };
+            let (red, green, blue) = match self.gamut_map {
+                GamutMap::Clip => (clamp(red), clamp(green), clamp(blue)),
+                GamutMap::ChromaCompress => {
+                    let inside = |value: float32x4_t| {
+                        vandq_u32(vcleq_f32(zero, value), vcleq_f32(value, maximum))
+                    };
+                    let unchanged = vandq_u32(vandq_u32(inside(red), inside(green)), inside(blue));
+                    if all(unchanged) {
+                        (red, green, blue)
+                    } else {
+                        let [r, g, b] =
+                            valle_engine::compositor::delivery::output_luminance_weights(
+                                self.primaries,
+                            );
+                        let luminance = clamp(vaddq_f32(
+                            vaddq_f32(vmulq_n_f32(red, r), vmulq_n_f32(green, g)),
+                            vmulq_n_f32(blue, b),
+                        ));
+                        let narrow = |scale: float32x4_t, channel: float32x4_t| {
+                            let delta = vsubq_f32(channel, luminance);
+                            let above =
+                                vminnmq_f32(scale, vdivq_f32(vsubq_f32(maximum, luminance), delta));
+                            let below = vminnmq_f32(scale, vdivq_f32(luminance, vnegq_f32(delta)));
+                            vbslq_f32(
+                                vcgtq_f32(delta, zero),
+                                above,
+                                vbslq_f32(vcltq_f32(delta, zero), below, scale),
+                            )
+                        };
+                        let scale = narrow(narrow(narrow(one, red), green), blue);
+                        let compress = |channel: float32x4_t| {
+                            let compressed = vaddq_f32(
+                                luminance,
+                                vmulq_f32(vsubq_f32(channel, luminance), scale),
+                            );
+                            vbslq_f32(unchanged, channel, clamp(compressed))
+                        };
+                        (compress(red), compress(green), compress(blue))
+                    }
+                }
+            };
+            // `round_code` of `transfer_code` scaled by the coverage. Dividing by a peak of exactly
+            // one, the default 100-nit white, and scaling by a coverage of one return the value.
+            let unit = self.maximum == 1.0;
+            let coverage =
+                (self.alpha_mode == OutputAlphaMode::PremultipliedCoverage).then_some(alpha);
+            let round = |value: float32x4_t| {
+                let truncated = vcvtq_u32_f32(value);
+                let up = vcgeq_f32(vsubq_f32(value, vcvtq_f32_u32(truncated)), vdupq_n_f32(0.5));
+                vminq_u32(vsubq_u32(truncated, up), vdupq_n_u32(255))
+            };
+            let code = |value: float32x4_t| {
+                let value = if unit {
+                    value
+                } else {
+                    vdivq_f32(value, maximum)
+                };
+                let encoded = match self.curve {
+                    None => vmulq_n_f32(value, 255.0),
+                    Some(curve) => {
+                        let position = vmulq_n_f32(value, 4096.0);
+                        let index = vminq_u32(vcvtq_u32_f32(position), vdupq_n_u32(4095));
+                        // Each lane's entry and the next one, gathered in pairs.
+                        let pair = |index: u32| vld1_f32(curve[index as usize..][..2].as_ptr());
+                        let front = vcombine_f32(
+                            pair(vgetq_lane_u32::<0>(index)),
+                            pair(vgetq_lane_u32::<1>(index)),
+                        );
+                        let back = vcombine_f32(
+                            pair(vgetq_lane_u32::<2>(index)),
+                            pair(vgetq_lane_u32::<3>(index)),
+                        );
+                        let (low, high) = (vuzp1q_f32(front, back), vuzp2q_f32(front, back));
+                        vaddq_f32(
+                            low,
+                            vmulq_f32(
+                                vsubq_f32(high, low),
+                                vsubq_f32(position, vcvtq_f32_u32(index)),
+                            ),
+                        )
+                    }
+                };
+                round(match coverage {
+                    Some(alpha) => vmulq_f32(encoded, alpha),
+                    None => encoded,
+                })
+            };
+            let (first, third) = if self.swap_red_blue {
+                (blue, red)
+            } else {
+                (red, blue)
+            };
+            let word = vorrq_u32(
+                vorrq_u32(code(first), vshlq_n_u32::<8>(code(green))),
+                vorrq_u32(
+                    vshlq_n_u32::<16>(code(third)),
+                    vshlq_n_u32::<24>(round(vmulq_n_f32(alpha, 255.0))),
+                ),
+            );
+            let mut codes = [[0_u8; 4]; 4];
+            vst1q_u8(codes.as_mut_ptr().cast::<u8>(), vreinterpretq_u8_u32(word));
+            Some(codes)
+        }
+    }
 }
 
 const SDR_CACHE_BITS: u32 = 12;
@@ -825,6 +1050,278 @@ mod tests {
                         }
                     }
                 }
+            }
+        }
+    }
+
+    fn sdr_spec(
+        primaries: ColorPrimaries,
+        transfer: TransferFunction,
+        alpha: OutputAlphaMode,
+        gamut: GamutMap,
+        white: u16,
+    ) -> OutputSpec {
+        use valle_engine::resource::LuminanceNits;
+        let nits = LuminanceNits::new(white).unwrap();
+        OutputSpec::new(
+            OutputColorEncoding {
+                primaries,
+                transfer,
+            },
+            alpha,
+            if alpha == OutputAlphaMode::Opaque {
+                OutputBackground::opaque_srgb([0, 0, 0])
+            } else {
+                OutputBackground::Transparent
+            },
+            ToneMap::None,
+            gamut,
+            Dither::None,
+            OutputBitDepth::Eight,
+            SignalLuminance::new(nits, nits).unwrap(),
+        )
+        .unwrap()
+    }
+
+    #[cfg(all(target_arch = "aarch64", target_endian = "little"))]
+    #[test]
+    fn sdr_codes_of_four_pixels_match_one_at_a_time() {
+        // Channels inside and past [0, peak], signed zeros, a subnormal, values on the curve's
+        // knots, near its joins and on a halfway code; alpha that clears, snaps to one, lies
+        // inside or outside [0, 1]; channels that are not finite.
+        let channels = [
+            0.0,
+            -0.0,
+            1.0e-40,
+            0.25,
+            0.5,
+            1.0,
+            1.5,
+            2.03,
+            3.0,
+            -0.2,
+            -1.0e-3,
+            0.999_999,
+            1.0 / 4096.0,
+            0.003_130_8,
+            0.018,
+            127.5 / 255.0,
+            60.0,
+        ];
+        let alphas = [
+            1.0,
+            1.0 - f32::EPSILON / 2.0,
+            1.0 + f32::EPSILON,
+            0.0,
+            1.0e-8,
+            f32::EPSILON,
+            0.5,
+            0.25,
+            0.75,
+            1.0 - 2.0 * f32::EPSILON,
+        ];
+        let broken = [
+            [f32::NAN, 0.5, 0.5, 1.0],
+            [0.5, f32::INFINITY, 0.5, 1.0],
+            [0.5, 0.5, f32::NEG_INFINITY, 0.5],
+            [0.5, 0.5, 0.5, f32::NAN],
+            [0.5, 0.5, 0.5, 1.5],
+            [0.5, 0.5, 0.5, -0.1],
+        ];
+        let mut state = 0x9e37_79b9_u32;
+        let mut next = move |count: usize| {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            state as usize % count
+        };
+        let mut groups = 0;
+        let mut four = 0;
+        for primaries in [
+            ColorPrimaries::Rec709,
+            ColorPrimaries::DisplayP3,
+            ColorPrimaries::Rec2020,
+        ] {
+            for transfer in [
+                TransferFunction::Linear,
+                TransferFunction::Srgb,
+                TransferFunction::Rec709,
+            ] {
+                for alpha in [
+                    OutputAlphaMode::Opaque,
+                    OutputAlphaMode::StraightCoverage,
+                    OutputAlphaMode::PremultipliedCoverage,
+                ] {
+                    for gamut in [GamutMap::Clip, GamutMap::ChromaCompress] {
+                        for white in [100, 203] {
+                            for color_type in [ColorType::RGBA8888, ColorType::BGRA8888] {
+                                let spec = sdr_spec(primaries, transfer, alpha, gamut, white);
+                                let codes = SdrCodes::new(spec, color_type);
+                                // Opaque output keeps only alpha that becomes one.
+                                let kept = if alpha == OutputAlphaMode::Opaque {
+                                    3
+                                } else {
+                                    alphas.len()
+                                };
+                                for _ in 0..512 {
+                                    let group: [[f32; 4]; 4] = std::array::from_fn(|_| {
+                                        if next(16) == 0 {
+                                            broken[next(broken.len())]
+                                        } else {
+                                            [
+                                                channels[next(channels.len())],
+                                                channels[next(channels.len())],
+                                                channels[next(channels.len())],
+                                                alphas[next(kept)],
+                                            ]
+                                        }
+                                    });
+                                    let one_at_a_time = group.map(|pixel| codes.pixel(pixel).ok());
+                                    let expected = one_at_a_time
+                                        .iter()
+                                        .all(Option::is_some)
+                                        .then(|| one_at_a_time.map(Option::unwrap));
+                                    assert_eq!(
+                                        codes.four(&group),
+                                        expected,
+                                        "{spec:?} {color_type:?} {group:?}"
+                                    );
+                                    groups += 1;
+                                    four += usize::from(expected.is_some());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // Most groups take the four-pixel path.
+        assert!(four * 2 > groups, "{four} of {groups}");
+    }
+
+    #[test]
+    fn sdr_output_stages_the_codes_of_each_pixel_of_its_readback() {
+        // A width that is not a multiple of four, so that groups straddle rows and the stripe
+        // ends in a partial group.
+        let (width, height) = (203, 37);
+        let frame = |broken: Option<(usize, [f32; 4])>| {
+            let mut samples = (0..width * height)
+                .map(|i| {
+                    // Pixels that differ from their neighbors, then runs of equal pixels along
+                    // each row, then rows that repeat the one above.
+                    let i = match i / width {
+                        0..12 => i,
+                        12..24 => i / 7 * 7,
+                        _ => 24 * width + i % width,
+                    };
+                    let a = [1.0, 0.5, 0.0, 0.75][i % 4 / 3 + i / width % 2 * 2];
+                    [
+                        ((i % 41) as f32 / 20.0 - 0.4) * a,
+                        (i % 23) as f32 / 15.0 * a,
+                        ((i / width) as f32 / 14.0 - 0.2) * a,
+                        a,
+                    ]
+                })
+                .collect::<Vec<_>>();
+            if let Some((index, pixel)) = broken {
+                samples[index] = pixel;
+            }
+            let bytes = samples
+                .iter()
+                .flatten()
+                .flat_map(|value| value.to_ne_bytes())
+                .collect::<Vec<_>>();
+            let info = ImageInfo::new(
+                (width as i32, height as i32),
+                ColorType::RGBAF32,
+                AlphaType::Premul,
+                Some(working_color_space().unwrap()),
+            );
+            images::raster_from_data(&info, Data::new_copy(&bytes), width * 16).unwrap()
+        };
+        for (alpha, gamut, transfer, white) in [
+            (
+                OutputAlphaMode::StraightCoverage,
+                GamutMap::ChromaCompress,
+                TransferFunction::Srgb,
+                100,
+            ),
+            (
+                OutputAlphaMode::PremultipliedCoverage,
+                GamutMap::Clip,
+                TransferFunction::Rec709,
+                203,
+            ),
+            (
+                OutputAlphaMode::StraightCoverage,
+                GamutMap::ChromaCompress,
+                TransferFunction::Linear,
+                203,
+            ),
+        ] {
+            let spec = sdr_spec(ColorPrimaries::DisplayP3, transfer, alpha, gamut, white);
+            let target = rgba8_target_info(
+                spec,
+                valle_engine::resource::Extent2d::new(width as u32, height as u32).unwrap(),
+            )
+            .unwrap();
+            let codes = SdrCodes::new(spec, target.color_type());
+            // The float readback the staging converts, read in one piece.
+            let readback = |image: &Image| {
+                let linear = ColorSpace::new_cicp(
+                    named_primaries::CicpId::SMPTE_EG_432_1,
+                    named_transfer_fn::CicpId::Linear,
+                )
+                .unwrap();
+                let info = ImageInfo::new(
+                    image.dimensions(),
+                    ColorType::RGBAF32,
+                    AlphaType::Unpremul,
+                    Some(linear),
+                );
+                let mut samples = vec![0.0_f32; width * height * 4];
+                assert!(image.read_pixels(
+                    &info,
+                    samples.as_mut_slice(),
+                    width * 16,
+                    (0, 0),
+                    CachingHint::Disallow,
+                ));
+                samples
+            };
+            let image = frame(None);
+            let expected = readback(&image)
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .flat_map(|pixel| codes.pixel(*pixel).unwrap())
+                .collect::<Vec<_>>();
+            let mut staging = OutputStaging::default();
+            assert_eq!(
+                stage_sdr_output_into(&image, spec, &target, &mut staging).unwrap(),
+                Some(target.min_row_bytes())
+            );
+            assert!(staging.pixels() == expected, "{spec:?}");
+            // A failing pixel among differing neighbors, inside a run, in a row that otherwise
+            // repeats the one above, and in the stripe's last partial group.
+            for index in [
+                5 * width + 9,
+                15 * width + 15,
+                30 * width + 101,
+                width * height - 2,
+            ] {
+                let image = frame(Some((index, [0.5, f32::NAN, 0.5, 1.0])));
+                let expected = readback(&image)
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .find_map(|pixel| codes.pixel(*pixel).err())
+                    .unwrap()
+                    .to_string();
+                let actual = stage_sdr_output_into(&image, spec, &target, &mut staging)
+                    .unwrap_err()
+                    .to_string();
+                assert_eq!(actual, expected);
             }
         }
     }

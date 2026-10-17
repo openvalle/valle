@@ -36,7 +36,7 @@ use super::{
     SkiaExternalObject,
     blend::BlendRuntime,
     cache::{BackendCaches, SmallOpacityCache},
-    effect::{draw_filters, set_working_color, straight_color},
+    effect::{draw_filters_into, set_working_color, straight_color},
     glass::{
         admit_motion_glass_shader, render_motion_glass_foreground_into, render_motion_glass_into,
     },
@@ -3196,8 +3196,8 @@ fn apply_filter_chain_program_into(
     target_origin: [i32; 2],
 ) -> Result<(), DrawError> {
     clear_surface(surface)?;
-    draw_filters(
-        surface.canvas(),
+    draw_filters_into(
+        surface,
         &input.image,
         IRect::from_xywh(0, 0, input.roi.width as i32, input.roi.height as i32),
         [
@@ -4299,7 +4299,7 @@ impl From<SurfaceError> for DrawError {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{super::effect::draw_filters, *};
 
     #[cfg(all(feature = "native", target_os = "macos"))]
     #[test]
@@ -5044,6 +5044,173 @@ mod tests {
             }
         }
         assert_eq!(modes, [true; 2], "both tilings");
+    }
+
+    #[test]
+    fn color_matrices_computed_per_pixel_keep_the_bytes_of_their_filters() {
+        use super::super::{color_matrix, effect};
+        let info = ImageInfo::new(
+            (203, 300),
+            ColorType::RGBAF16,
+            AlphaType::Premul,
+            Some(working_color_space().unwrap()),
+        );
+        // Backing size, subset size and placement: covering the target or not, in an exact
+        // backing or inside a larger one, past every edge, only past the top and left edges or
+        // beside the clip.
+        let placements = [
+            ((203, 300), (203, 300), [0, 0]),
+            ((260, 360), (243, 340), [-20, -20]),
+            ((220, 320), (150, 200), [30, 40]),
+            ((150, 200), (150, 199), [30, 40]),
+            ((260, 360), (243, 340), [5, 5]),
+            ((60, 50), (57, 50), [191, 3]),
+        ];
+        let blur = |sigma_x, sigma_y| Filter::Blur { sigma_x, sigma_y };
+        let matrix = |last: f32| Filter::ColorMatrix {
+            matrix: Box::new([
+                0.9, 0.2, -0.1, 0.05, 0.02, -0.3, 1.1, 0.4, 0.0, -0.05, 0.1, -0.2, 0.8, 0.3, 0.1,
+                0.2, 0.1, -0.4, 0.9, last,
+            ]),
+        };
+        // Color matrices alone, which Skia composes into one draw, and after a blur, which
+        // draws each into its own image: the holo backdrop's, glitch's, an alpha from color and
+        // every kind of matrix the filters make.
+        let chains = [
+            vec![Filter::Brightness { amount: 1.35 }],
+            vec![
+                Filter::HueRotate { degrees: 47.0 },
+                Filter::Saturate { amount: 1.6 },
+                Filter::Brightness { amount: 1.1 },
+            ],
+            vec![
+                blur(0.6, 0.0),
+                Filter::HueRotate { degrees: 47.0 },
+                Filter::Saturate { amount: 1.6 },
+                Filter::Brightness { amount: 1.1 },
+            ],
+            vec![blur(0.0, 0.7), Filter::Opacity { amount: 0.55 }],
+            vec![matrix(0.0)],
+            vec![matrix(-0.0), Filter::Invert { amount: 1.0 }],
+            vec![
+                Filter::Contrast { amount: 1.4 },
+                Filter::Invert { amount: 0.3 },
+                Filter::Sepia { amount: 0.5 },
+                Filter::Grayscale { amount: 0.2 },
+            ],
+            vec![
+                Filter::Brightness { amount: 0.8 },
+                blur(0.5, 0.4),
+                Filter::Contrast { amount: 1.4 },
+                matrix(0.0),
+            ],
+        ];
+        for (pixels, size, origin) in placements {
+            let image = varied_halves(pixels.0, pixels.1);
+            let source = IRect::from_wh(size.0, size.1);
+            for filters in &chains {
+                for clip in [None, Some(IRect::from_ltrb(4, 9, 190, 270))] {
+                    // Skia's draw, the chain's draw onto a surface and the kernel alone.
+                    let draw = |path: usize| {
+                        let mut target = skia_safe::surfaces::raster(&info, None, None).unwrap();
+                        target.canvas().clear(Color4f::new(0.5, 0.5, 0.5, 1.0));
+                        if let Some(clip) = clip {
+                            target.canvas().clip_irect(clip, ClipOp::Intersect);
+                        }
+                        match path {
+                            0 => draw_filters(
+                                target.canvas(),
+                                &image,
+                                source,
+                                origin,
+                                [0, 0],
+                                filters,
+                            )
+                            .unwrap(),
+                            1 => effect::draw_filters_into(
+                                &mut target,
+                                &image,
+                                source,
+                                origin,
+                                [0, 0],
+                                filters,
+                            )
+                            .unwrap(),
+                            _ => {
+                                let first = filters
+                                    .iter()
+                                    .rposition(|filter| effect::color_matrix(filter).is_none())
+                                    .map_or(0, |index| index + 1);
+                                let matrices = filters[first..]
+                                    .iter()
+                                    .map(|filter| effect::color_matrix(filter).unwrap())
+                                    .collect::<Vec<_>>();
+                                let (image, subset, position) = effect::materialize_filters(
+                                    image.clone(),
+                                    source,
+                                    origin,
+                                    [0, 0],
+                                    &filters[..first],
+                                )
+                                .unwrap();
+                                let drawn = color_matrix::draw(
+                                    &mut target,
+                                    &image.peek_pixels().unwrap(),
+                                    subset,
+                                    position,
+                                    &matrices,
+                                    first > 0,
+                                )
+                                .unwrap();
+                                // Skia draws nothing for a placement outside the clip.
+                                let placed = IRect::from_xywh(
+                                    position[0],
+                                    position[1],
+                                    subset.width(),
+                                    subset.height(),
+                                );
+                                let visible = IRect::intersects(
+                                    &placed,
+                                    &clip.unwrap_or(IRect::from_wh(203, 300)),
+                                );
+                                assert_eq!(
+                                    drawn,
+                                    visible
+                                        && cfg!(all(
+                                            target_arch = "aarch64",
+                                            target_endian = "little"
+                                        ))
+                                );
+                                if !drawn {
+                                    return None;
+                                }
+                            }
+                        }
+                        let mut bytes = vec![0_u8; 203 * 300 * 8];
+                        assert!(target.read_pixels(&info, &mut bytes, 203 * 8, (0, 0)));
+                        Some(bytes)
+                    };
+                    let skia = draw(0).unwrap();
+                    for (path, bytes) in [(1, draw(1)), (2, draw(2))] {
+                        let Some(bytes) = bytes else {
+                            continue;
+                        };
+                        let differing = bytes
+                            .as_chunks::<8>()
+                            .0
+                            .iter()
+                            .zip(skia.as_chunks::<8>().0)
+                            .filter(|(a, b)| a != b)
+                            .count();
+                        assert!(
+                            differing == 0,
+                            "{differing} pixels differ on path {path}: {filters:?}, {pixels:?} \
+                             {size:?} at {origin:?}, clip {clip:?}"
+                        );
+                    }
+                }
+            }
+        }
     }
 
     /// A working-format half-float image whose pixels are of every kind a kernel meets:
