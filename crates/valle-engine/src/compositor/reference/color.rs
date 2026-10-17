@@ -147,10 +147,77 @@ pub fn working_to_extended_srgb(rgb: [f32; 3]) -> Result<[f32; 3], ColorMathErro
     Ok(linear_srgb.map(|channel| encode_transfer(channel, TransferFunction::Srgb)))
 }
 
+/// [`working_to_extended_srgb`] of every value, in place, with the powers of the transfer taken
+/// for a run of channels at a time as in [`extended_srgb_to_working_each`]. On an error the values
+/// are left partly converted.
+pub(crate) fn working_to_extended_srgb_each(values: &mut [[f32; 3]]) -> Result<(), ColorMathError> {
+    for value in values.iter_mut() {
+        *value = working_to_primaries(*value, ColorPrimaries::Rec709)?;
+    }
+    let reference_white = f32::from(SignalLuminance::SDR_100.reference_white().get());
+    let mut powers = [0.0; 48];
+    for channels in values.as_flattened_mut().chunks_mut(powers.len()) {
+        let powers = &mut powers[..channels.len()];
+        for (power, channel) in powers.iter_mut().zip(channels.iter()) {
+            let magnitude = (*channel * WORKING_REFERENCE_WHITE_NITS / reference_white).abs();
+            // Channels on the linear part of the curve discard their power, so they take that of
+            // 1.0, which needs no table: their own magnitude may be zero or subnormal, which would
+            // go to libm.
+            *power = if magnitude <= SRGB_ENCODE_THRESHOLD {
+                1.0
+            } else {
+                magnitude
+            };
+        }
+        super::gamma::powf_each(powers, 1.0 / 2.4);
+        for (channel, power) in channels.iter_mut().zip(powers.iter()) {
+            let relative = *channel * WORKING_REFERENCE_WHITE_NITS / reference_white;
+            let magnitude = relative.abs();
+            let encoded = if magnitude <= SRGB_ENCODE_THRESHOLD {
+                srgb_encode_linear(magnitude)
+            } else {
+                srgb_encode_curve(*power)
+            };
+            *channel = relative.signum() * encoded;
+        }
+    }
+    Ok(())
+}
+
 /// Convert straight extended-sRGB encoded RGB back to straight Linear Rec.2020 working RGB.
 pub fn extended_srgb_to_working(rgb: [f32; 3]) -> Result<[f32; 3], ColorMathError> {
     let linear_srgb = rgb.map(|channel| decode_transfer(channel, TransferFunction::Srgb));
     primaries_to_working(linear_srgb, ColorPrimaries::Rec709)
+}
+
+/// [`extended_srgb_to_working`] of every value, in place. The powers of the transfer are taken
+/// for a run of channels at a time, so independent channels overlap; each channel still goes
+/// through the same operations. On an error the values are left partly converted.
+pub(crate) fn extended_srgb_to_working_each(values: &mut [[f32; 3]]) -> Result<(), ColorMathError> {
+    let relative_scale =
+        f32::from(SignalLuminance::SDR_100.reference_white().get()) / WORKING_REFERENCE_WHITE_NITS;
+    let mut powers = [0.0; 48];
+    for channels in values.as_flattened_mut().chunks_mut(powers.len()) {
+        let powers = &mut powers[..channels.len()];
+        for (power, channel) in powers.iter_mut().zip(channels.iter()) {
+            *power = srgb_decode_base(channel.abs());
+        }
+        // Channels on the linear part of the curve discard theirs.
+        super::gamma::powf_each(powers, 2.4);
+        for (channel, power) in channels.iter_mut().zip(powers.iter()) {
+            let magnitude = channel.abs();
+            let decoded = if magnitude <= SRGB_DECODE_THRESHOLD {
+                srgb_decode_linear(magnitude)
+            } else {
+                *power
+            };
+            *channel = channel.signum() * decoded * relative_scale;
+        }
+    }
+    for value in values {
+        *value = primaries_to_working(*value, ColorPrimaries::Rec709)?;
+    }
+    Ok(())
 }
 
 pub(crate) fn primaries_to_working(
@@ -211,9 +278,9 @@ pub(crate) fn decode_input_transfer(
         TransferFunction::Srgb => {
             signed_curve(
                 value,
-                0.04045,
-                |magnitude| magnitude / 12.92,
-                |magnitude| powf((magnitude + 0.055) / 1.055, 2.4),
+                SRGB_DECODE_THRESHOLD,
+                srgb_decode_linear,
+                |magnitude| powf(srgb_decode_base(magnitude), 2.4),
             ) * relative_scale
         }
         TransferFunction::Rec709 => {
@@ -268,9 +335,9 @@ pub(crate) fn encode_output_transfer(
         TransferFunction::Linear => relative,
         TransferFunction::Srgb => signed_curve(
             relative,
-            0.003_130_8,
-            |magnitude| magnitude * 12.92,
-            |magnitude| 1.055 * powf(magnitude, 1.0 / 2.4) - 0.055,
+            SRGB_ENCODE_THRESHOLD,
+            srgb_encode_linear,
+            |magnitude| srgb_encode_curve(powf(magnitude, 1.0 / 2.4)),
         ),
         TransferFunction::Rec709 => signed_curve(
             relative,
@@ -350,6 +417,28 @@ fn decode_yuv_codes(
         ],
     };
     validate_rgb(rgb)
+}
+
+// The sRGB encoding curve is linear up to this magnitude and `srgb_encode_curve` of a power above.
+const SRGB_ENCODE_THRESHOLD: f32 = 0.003_130_8;
+
+fn srgb_encode_linear(magnitude: f32) -> f32 {
+    magnitude * 12.92
+}
+
+fn srgb_encode_curve(power: f32) -> f32 {
+    1.055 * power - 0.055
+}
+
+// The sRGB decoding curve is linear up to this magnitude and a power of `srgb_decode_base` above.
+const SRGB_DECODE_THRESHOLD: f32 = 0.04045;
+
+fn srgb_decode_linear(magnitude: f32) -> f32 {
+    magnitude / 12.92
+}
+
+fn srgb_decode_base(magnitude: f32) -> f32 {
+    (magnitude + 0.055) / 1.055
 }
 
 fn signed_curve(
@@ -763,6 +852,140 @@ mod tests {
         let output = extended_srgb_to_working(encoded).unwrap();
         for (actual, expected) in output.into_iter().zip(input) {
             assert!((actual - expected).abs() < 2e-5, "{actual} != {expected}");
+        }
+    }
+
+    #[test]
+    fn srgb_to_working_of_many_values_keeps_the_bits_of_one_at_a_time() {
+        let mut state = 0x2545_f491_u32;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            state
+        };
+        let specials = [
+            0.0_f32,
+            -0.0,
+            1.0e-40,
+            -1.0e-40,
+            f32::MIN_POSITIVE,
+            SRGB_DECODE_THRESHOLD,
+            SRGB_DECODE_THRESHOLD.next_up(),
+            SRGB_DECODE_THRESHOLD.next_down(),
+            -SRGB_DECODE_THRESHOLD,
+            1.0,
+            -1.0,
+            1.0_f32.next_down(),
+            1.0_f32.next_up(),
+            65_504.0,
+            -3.0e5,
+        ];
+        let mut finite = Vec::new();
+        let mut failing = Vec::new();
+        for _ in 0..60_001 {
+            let pixel: [f32; 3] = std::array::from_fn(|_| {
+                let bits = next();
+                let unit = (bits >> 8) as f32 / 16_777_216.0 - 0.5;
+                match bits % 4 {
+                    0 => specials[(bits >> 8) as usize % specials.len()],
+                    1 => unit * 0.2,
+                    2 => unit * 3.0,
+                    // Any bits, so infinities, NaNs and overflowing powers too.
+                    _ => f32::from_bits(next()),
+                }
+            });
+            match extended_srgb_to_working(pixel) {
+                Ok(expected) => finite.push((pixel, expected)),
+                Err(_) => failing.push(pixel),
+            }
+        }
+        let mut values = finite.iter().map(|(pixel, _)| *pixel).collect::<Vec<_>>();
+        extended_srgb_to_working_each(&mut values).unwrap();
+        for (value, (pixel, expected)) in values.iter().zip(&finite) {
+            assert_eq!(
+                value.map(f32::to_bits),
+                expected.map(f32::to_bits),
+                "{pixel:?}"
+            );
+        }
+        assert!(failing.len() > 1000);
+        for (index, pixel) in failing.iter().enumerate() {
+            let mut values = finite[..40]
+                .iter()
+                .map(|(pixel, _)| *pixel)
+                .collect::<Vec<_>>();
+            values.insert(index % 41, *pixel);
+            assert!(
+                extended_srgb_to_working_each(&mut values).is_err(),
+                "{pixel:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn working_to_srgb_of_many_values_keeps_the_bits_of_one_at_a_time() {
+        let mut state = 0x7a3c_e1d5_u32;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            state
+        };
+        let specials = [
+            0.0_f32,
+            -0.0,
+            1.0e-40,
+            -1.0e-40,
+            f32::MIN_POSITIVE,
+            SRGB_ENCODE_THRESHOLD,
+            SRGB_ENCODE_THRESHOLD.next_up(),
+            SRGB_ENCODE_THRESHOLD.next_down(),
+            -SRGB_ENCODE_THRESHOLD,
+            1.0,
+            -1.0,
+            65_504.0,
+            -3.0e5,
+        ];
+        let mut finite = Vec::new();
+        let mut failing = Vec::new();
+        for _ in 0..60_001 {
+            let pixel: [f32; 3] = std::array::from_fn(|_| {
+                let bits = next();
+                let unit = (bits >> 8) as f32 / 16_777_216.0 - 0.5;
+                match bits % 4 {
+                    0 => specials[(bits >> 8) as usize % specials.len()],
+                    1 => unit * 0.02,
+                    2 => unit * 3.0,
+                    // Any bits, so infinities, NaNs and overflowing matrix products too.
+                    _ => f32::from_bits(next()),
+                }
+            });
+            match working_to_extended_srgb(pixel) {
+                Ok(expected) => finite.push((pixel, expected)),
+                Err(_) => failing.push(pixel),
+            }
+        }
+        let mut values = finite.iter().map(|(pixel, _)| *pixel).collect::<Vec<_>>();
+        working_to_extended_srgb_each(&mut values).unwrap();
+        for (value, (pixel, expected)) in values.iter().zip(&finite) {
+            assert_eq!(
+                value.map(f32::to_bits),
+                expected.map(f32::to_bits),
+                "{pixel:?}"
+            );
+        }
+        assert!(failing.len() > 100);
+        for (index, pixel) in failing.iter().enumerate() {
+            let mut values = finite[..40]
+                .iter()
+                .map(|(pixel, _)| *pixel)
+                .collect::<Vec<_>>();
+            values.insert(index % 41, *pixel);
+            assert!(
+                working_to_extended_srgb_each(&mut values).is_err(),
+                "{pixel:?}"
+            );
         }
     }
 

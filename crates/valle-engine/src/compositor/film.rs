@@ -42,50 +42,23 @@ pub fn apply_film_grain_f16(
     let width = output_width as usize;
     let invalid = std::sync::atomic::AtomicBool::new(false);
     fill_image_rows(&mut pixels, width, |first, rows| {
-        // This exact one-entry memo is local to the rows. Uniform spans share their straight
-        // display conversion, while alpha and signed-zero bits remain part of the key.
-        let mut previous_key = None;
-        let mut previous_encoded = [0.0; 3];
+        let mut grained = Grained::new(params.amount);
         for (row_index, row) in rows.chunks_exact_mut(width).enumerate() {
             let y = i64::from(output_origin[1]) + (first + row_index) as i64;
             let mut lattice = LatticeRow::new(y, params.seed, f64::from(params.size));
-            for (column, pixel) in row.iter_mut().enumerate() {
-                let alpha = pixel[3];
-                if alpha == 0.0 {
+            for column in 0..width {
+                if row[column][3] == 0.0 {
                     continue;
                 }
-                let x = i64::from(output_origin[0]) + column as i64;
-                let noise = lattice.at(x);
-                // Construct symmetric noise in display encoding, where perceived gray
-                // levels are reviewed. Limiting amplitude to both endpoint margins keeps
-                // the distribution symmetric without clipping (including at amount=1).
-                let key = pixel.map(f32::to_bits);
-                let mut encoded = if previous_key == Some(key) {
-                    previous_encoded
-                } else {
-                    let Ok(encoded) = super::reference::working_to_extended_srgb([
-                        pixel[0] / alpha,
-                        pixel[1] / alpha,
-                        pixel[2] / alpha,
-                    ]) else {
-                        invalid.store(true, std::sync::atomic::Ordering::Relaxed);
-                        return;
-                    };
-                    previous_key = Some(key);
-                    previous_encoded = encoded;
-                    encoded
-                };
-                for channel in &mut encoded {
-                    let margin = channel.min(1.0 - *channel).max(0.0);
-                    *channel += (noise * f64::from(params.amount) * f64::from(margin)) as f32;
-                }
-                let Ok(working) = super::reference::extended_srgb_to_working(encoded) else {
+                let noise = lattice.at(i64::from(output_origin[0]) + column as i64);
+                if grained.push(column, row[column], noise) && grained.apply(row).is_err() {
                     invalid.store(true, std::sync::atomic::Ordering::Relaxed);
                     return;
-                };
-                for (channel, value) in pixel[..3].iter_mut().zip(working) {
-                    *channel = quantize_half(f64::from(value * alpha));
                 }
+            }
+            if grained.apply(row).is_err() {
+                invalid.store(true, std::sync::atomic::Ordering::Relaxed);
+                return;
             }
         }
     });
@@ -93,6 +66,98 @@ pub fn apply_film_grain_f16(
         return Err(BloomError::InvalidParameters);
     }
     Ok(encode_output(&pixels))
+}
+
+/// Up to 64 pixels of one row on their way through the grain. Their straight colors are encoded
+/// together, the grain is added in display encoding, and the results are decoded together.
+struct Grained {
+    amount: f64,
+    columns: [usize; 64],
+    noise: [f64; 64],
+    /// For each pixel, how many colors `fresh` held once it was pushed. The last of them is its
+    /// color's encoding; with none, the memo's is.
+    fresh_before: [u8; 64],
+    fresh: [[f32; 3]; 64],
+    grained: [[f32; 3]; 64],
+    len: usize,
+    fresh_len: usize,
+    // This exact one-entry memo is local to the rows. Uniform spans share their straight
+    // display conversion, while alpha and signed-zero bits remain part of the key.
+    memo_key: Option<[u32; 4]>,
+    memo_encoded: [f32; 3],
+}
+
+impl Grained {
+    fn new(amount: f32) -> Self {
+        Self {
+            amount: f64::from(amount),
+            columns: [0; 64],
+            noise: [0.0; 64],
+            fresh_before: [0; 64],
+            fresh: [[0.0; 3]; 64],
+            grained: [[0.0; 3]; 64],
+            len: 0,
+            fresh_len: 0,
+            memo_key: None,
+            memo_encoded: [0.0; 3],
+        }
+    }
+
+    /// Adds the pixel at `column` with its noise and returns whether no more fit.
+    fn push(&mut self, column: usize, pixel: [f32; 4], noise: f64) -> bool {
+        let key = pixel.map(f32::to_bits);
+        if self.memo_key != Some(key) {
+            let alpha = pixel[3];
+            self.fresh[self.fresh_len] = [pixel[0] / alpha, pixel[1] / alpha, pixel[2] / alpha];
+            self.fresh_len += 1;
+            self.memo_key = Some(key);
+        }
+        self.columns[self.len] = column;
+        self.noise[self.len] = noise;
+        self.fresh_before[self.len] = self.fresh_len as u8;
+        self.len += 1;
+        self.len == self.columns.len()
+    }
+
+    /// Grains the pixels and stores them in `row`, premultiplied by their alpha again.
+    fn apply(&mut self, row: &mut [[f32; 4]]) -> Result<(), super::reference::ColorMathError> {
+        let len = std::mem::take(&mut self.len);
+        let fresh = &mut self.fresh[..std::mem::take(&mut self.fresh_len)];
+        super::reference::working_to_extended_srgb_each(fresh)?;
+        for ((grained, noise), fresh_before) in self
+            .grained
+            .iter_mut()
+            .zip(&self.noise)
+            .zip(&self.fresh_before)
+            .take(len)
+        {
+            let mut encoded = match fresh_before {
+                0 => self.memo_encoded,
+                count => fresh[usize::from(*count) - 1],
+            };
+            // Construct symmetric noise in display encoding, where perceived gray
+            // levels are reviewed. Limiting amplitude to both endpoint margins keeps
+            // the distribution symmetric without clipping (including at amount=1).
+            for channel in &mut encoded {
+                let margin = channel.min(1.0 - *channel).max(0.0);
+                *channel += (noise * self.amount * f64::from(margin)) as f32;
+            }
+            *grained = encoded;
+        }
+        if let Some(last) = fresh.last() {
+            self.memo_encoded = *last;
+        }
+        let grained = &mut self.grained[..len];
+        super::reference::extended_srgb_to_working_each(grained)?;
+        for (&column, working) in self.columns.iter().zip(grained.iter()) {
+            let pixel = &mut row[column];
+            let alpha = pixel[3];
+            for (channel, value) in pixel[..3].iter_mut().zip(working) {
+                *channel = quantize_half(f64::from(value * alpha));
+            }
+        }
+        Ok(())
+    }
 }
 
 struct LatticeRow {
@@ -184,13 +249,21 @@ mod tests {
     // Keep the pre-optimization scalar traversal as the byte-level reference.
     fn scalar_film(
         input: &[u8],
+        input_size: [u32; 2],
         output_size: [u32; 2],
         input_offset: [i32; 2],
         output_origin: [i32; 2],
         params: FilmGrainParams,
     ) -> Vec<u8> {
-        let mut pixels =
-            read_base(input, 17, 11, output_size[0], output_size[1], input_offset).unwrap();
+        let mut pixels = read_base(
+            input,
+            input_size[0],
+            input_size[1],
+            output_size[0],
+            output_size[1],
+            input_offset,
+        )
+        .unwrap();
         if params.amount == 0.0 {
             return encode_output(&pixels);
         }
@@ -280,10 +353,72 @@ mod tests {
                                 params
                             )
                             .unwrap(),
-                            scalar_film(&input, output_size, offset, origin, params),
+                            scalar_film(&input, [17, 11], output_size, offset, origin, params),
                             "seed={seed} size={size} amount={amount} origin={origin:?} offset={offset:?}"
                         );
                     }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn grain_matches_scalar_f16_over_random_premultiplied_pixels() {
+        let mut state = 0x9e37_79b9_u32;
+        let mut unit = move || {
+            state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            (state >> 8) as f32 / 16_777_216.0
+        };
+        // Rows of 150 pixels fill whole batches of grained pixels and leave a partial one. Runs
+        // of equal pixels, some transparent, carry the memo across batches and rows.
+        for _ in 0..8 {
+            let mut input = Vec::new();
+            while input.len() < 150 * 7 * 8 {
+                let alpha = match (unit() * 5.0) as u32 {
+                    0 => 1.0,
+                    1 => unit() * 1.0e-3,
+                    2 => 0.0,
+                    _ => unit(),
+                };
+                // Dark channels (on the linear part of the sRGB curve), the usual range, HDR
+                // and negative ones.
+                let straight: [f32; 3] = std::array::from_fn(|_| match (unit() * 4.0) as u32 {
+                    0 => unit() * 0.005,
+                    1 => unit(),
+                    2 => unit() * 8.0,
+                    _ => -unit() * 0.3,
+                });
+                let pixel = [
+                    straight[0] * alpha,
+                    straight[1] * alpha,
+                    straight[2] * alpha,
+                    alpha,
+                ]
+                .map(f32_to_half);
+                for _ in 0..[1, 1, 2, 7, 70][(unit() * 5.0) as usize] {
+                    input.extend(pixel.iter().flat_map(|c| c.to_le_bytes()));
+                }
+            }
+            input.truncate(150 * 7 * 8);
+            for (seed, amount, size) in [(7, 0.16, 2.0), (3, 1.0, 1.0), (11, 0.4, 1.5)] {
+                let params = FilmGrainParams { seed, amount, size };
+                for (output_size, offset, origin) in
+                    [([150, 7], [0, 0], [0, 0]), ([170, 9], [17, 1], [-5, 9])]
+                {
+                    assert_eq!(
+                        apply_film_grain_f16(
+                            &input,
+                            150,
+                            7,
+                            output_size[0],
+                            output_size[1],
+                            offset,
+                            origin,
+                            params
+                        )
+                        .unwrap(),
+                        scalar_film(&input, [150, 7], output_size, offset, origin, params),
+                    );
                 }
             }
         }
