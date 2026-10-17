@@ -3,9 +3,9 @@ use std::{collections::BTreeMap, sync::Arc};
 use skia_safe::{
     AlphaType, BlendMode as SkBlendMode, ClipOp, Color, Color4f, ColorType, CubicResampler, Data,
     FilterMode, Font, IRect, Image, ImageInfo, Matrix, MipmapMode, Paint as SkPaint, PaintCap,
-    PaintJoin, PaintStyle, Path as SkPath, PathBuilder, PathEffect, PathFillType, Point as SkPoint,
-    RRect, RSXform, Rect as SkRect, RuntimeEffect, SamplingOptions, Shader, Surface,
-    TextBlobBuilder, TileMode, Typeface, canvas::PointMode, color_filters, gradient,
+    PaintJoin, PaintStyle, Path as SkPath, PathBuilder, PathEffect, PathFillType, Pixmap,
+    Point as SkPoint, RRect, RSXform, Rect as SkRect, RuntimeEffect, SamplingOptions, Shader,
+    Surface, TextBlobBuilder, TileMode, Typeface, canvas::PointMode, color_filters, gradient,
     image::CachingHint, images, runtime_effect::ChildPtr, surface::ContentChangeMode,
 };
 use thiserror::Error;
@@ -36,10 +36,12 @@ use super::{
     SkiaExternalObject,
     blend::BlendRuntime,
     cache::{BackendCaches, SmallOpacityCache},
+    clip_coverage,
     effect::{draw_filters_into, set_working_color, straight_color},
     glass::{
         admit_motion_glass_shader, render_motion_glass_foreground_into, render_motion_glass_into,
     },
+    gradient_fill,
     surface::{
         PlanImage, ScratchSurfaces, SkiaBackendKind, SurfaceError, raster_surface,
         working_color_space,
@@ -1386,14 +1388,20 @@ impl ProgramRuntime {
                 if let Some(fill) = node.fill {
                     let mut paint = self.paint(fill)?;
                     paint.set_style(PaintStyle::Fill);
-                    let solid = matches!(
-                        self.program.paints().get(fill.raw() as usize),
-                        Some(Paint::Solid(_))
-                    );
-                    if !solid
-                        || node.stroke.is_some()
-                        || !draw_rounded_path_with_shared_coverage(canvas, data, &path, &paint)?
-                    {
+                    let drawn = match self.program.paints().get(fill.raw() as usize) {
+                        Some(Paint::Solid(color)) => {
+                            fill_opaque_rect_inside(canvas, data, &path, &paint, *color)
+                                || (node.stroke.is_none()
+                                    && draw_rounded_path_with_shared_coverage(
+                                        canvas, data, &path, &paint,
+                                    )?)
+                        }
+                        Some(gradient) => {
+                            gradient_fill::fill_rect_inside(canvas, data, &path, &paint, gradient)
+                        }
+                        None => false,
+                    };
+                    if !drawn {
                         canvas.draw_path(&path, &paint);
                     }
                 }
@@ -1480,7 +1488,11 @@ impl ProgramRuntime {
                     .children
                     .iter()
                     .try_for_each(|child| self.raster_node_with_atlas(canvas, *child, atlas));
-                if let Some(outline) = path_coverage {
+                // A rectangle on whole pixels covers the pixels inside it fully and no others,
+                // and that coverage can multiply the layer in place.
+                if let Some(outline) = path_coverage
+                    && !clip_coverage::apply_whole_pixel_rect(canvas, &outline)
+                {
                     // Use filled-path coverage, exactly as an opaque alpha mask does. Skia's
                     // clipPath rasterizer otherwise disagrees at a few antialiased edge pixels.
                     let mut restore = SkPaint::default();
@@ -1537,139 +1549,12 @@ impl ProgramRuntime {
     }
 
     fn paint(&self, id: PaintId) -> Result<SkPaint, DrawError> {
-        let paint = self
-            .program
-            .paints()
-            .get(id.raw() as usize)
-            .ok_or(DrawError::MissingPaint(id.raw()))?;
-        let mut result = SkPaint::default();
-        result.set_anti_alias(true);
-        match paint {
-            Paint::Solid(color) => {
-                set_working_color(&mut result, *color)?;
-            }
-            Paint::LinearGradient {
-                start,
-                end,
-                stops,
-                spread,
-            } => {
-                let (colors, positions) = gradient_parts(stops);
-                let colors = gradient::Colors::new(
-                    &colors,
-                    Some(&positions),
-                    tile_mode(*spread),
-                    Some(
-                        working_color_space()
-                            .map_err(|error| DrawError::Surface(error.to_string()))?,
-                    ),
-                );
-                let gradient = gradient::Gradient::new(colors, gradient_interpolation());
-                let shader = gradient::shaders::linear_gradient(
-                    (
-                        SkPoint::new(start[0] as f32, start[1] as f32),
-                        SkPoint::new(end[0] as f32, end[1] as f32),
-                    ),
-                    &gradient,
-                    None,
-                )
-                .ok_or_else(|| DrawError::Unsupported("linear gradient".into()))?;
-                result.set_shader(shader);
-            }
-            Paint::RadialGradient {
-                center,
-                radii,
-                stops,
-                spread,
-            } => {
-                let (colors, positions) = gradient_parts(stops);
-                let colors = gradient::Colors::new(
-                    &colors,
-                    Some(&positions),
-                    tile_mode(*spread),
-                    Some(
-                        working_color_space()
-                            .map_err(|error| DrawError::Surface(error.to_string()))?,
-                    ),
-                );
-                let gradient = gradient::Gradient::new(colors, gradient_interpolation());
-                let radius = radii[0].max(radii[1]) as f32;
-                let mut matrix = Matrix::new_identity();
-                matrix.pre_scale(
-                    (radii[0] as f32 / radius, radii[1] as f32 / radius),
-                    Some(SkPoint::new(center[0] as f32, center[1] as f32)),
-                );
-                let shader = gradient::shaders::radial_gradient(
-                    (SkPoint::new(center[0] as f32, center[1] as f32), radius),
-                    &gradient,
-                    Some(&matrix),
-                )
-                .ok_or_else(|| DrawError::Unsupported("radial gradient".into()))?;
-                result.set_shader(shader);
-            }
-            Paint::TwoCircleGradient {
-                start,
-                start_radius,
-                end,
-                end_radius,
-                stops,
-                spread,
-            } => {
-                let (colors, positions) = gradient_parts(stops);
-                let colors = gradient::Colors::new(
-                    &colors,
-                    Some(&positions),
-                    tile_mode(*spread),
-                    Some(working_color_space().map_err(|e| DrawError::Surface(e.to_string()))?),
-                );
-                let gradient = gradient::Gradient::new(colors, gradient_interpolation());
-                let shader = gradient::shaders::two_point_conical_gradient(
-                    (
-                        SkPoint::new(start[0] as f32, start[1] as f32),
-                        *start_radius as f32,
-                    ),
-                    (
-                        SkPoint::new(end[0] as f32, end[1] as f32),
-                        *end_radius as f32,
-                    ),
-                    &gradient,
-                    None,
-                )
-                .ok_or_else(|| DrawError::Unsupported("two-circle gradient".into()))?;
-                result.set_shader(shader);
-            }
-            Paint::ConicGradient {
-                center,
-                start_angle_degrees,
-                sweep_angle_degrees,
-                stops,
-                spread,
-            } => {
-                let (colors, positions) = gradient_parts(stops);
-                let colors = gradient::Colors::new(
-                    &colors,
-                    Some(&positions),
-                    tile_mode(*spread),
-                    Some(
-                        working_color_space()
-                            .map_err(|error| DrawError::Surface(error.to_string()))?,
-                    ),
-                );
-                let gradient = gradient::Gradient::new(colors, gradient_interpolation());
-                let shader = gradient::shaders::sweep_gradient(
-                    SkPoint::new(center[0] as f32, center[1] as f32),
-                    (
-                        *start_angle_degrees as f32,
-                        (*start_angle_degrees + *sweep_angle_degrees) as f32,
-                    ),
-                    &gradient,
-                    None,
-                )
-                .ok_or_else(|| DrawError::Unsupported("conic gradient".into()))?;
-                result.set_shader(shader);
-            }
-        }
-        Ok(result)
+        program_paint(
+            self.program
+                .paints()
+                .get(id.raw() as usize)
+                .ok_or(DrawError::MissingPaint(id.raw()))?,
+        )
     }
 
     fn stroke(&self, stroke: &PathStroke) -> Result<SkPaint, DrawError> {
@@ -2222,6 +2107,148 @@ pub(crate) fn erase_raster(surface: &mut Surface, color: [f32; 4], region: Optio
         Color4f::new(color[0], color[1], color[2], color[3]),
         region.as_ref(),
     )
+}
+
+/// Fills an opaque solid rectangle on Raster by storing its color in the pixels it covers fully
+/// and drawing only the rest. Where the rectangle covers a pixel fully, the working-color shader
+/// stores the color plus zero times the destination: the color itself, as long as the
+/// destination is finite and no channel of the color is a negative zero. Skia draws the rest
+/// under a clip that leaves out the stored pixels but keeps the clip's bounds. It clips the
+/// rectangle's edges to those bounds and takes a pixel's coverage from the edges alone, so every
+/// pixel it still draws keeps its bytes. Returns false, having drawn nothing, when the fill does
+/// not qualify.
+fn fill_opaque_rect_inside(
+    canvas: &skia_safe::Canvas,
+    data: &PathData,
+    path: &SkPath,
+    paint: &SkPaint,
+    color: LinearColor,
+) -> bool {
+    use PathVerb::{Close, LineTo, MoveTo};
+    // Skia draws on devices wider or taller than this in tiles.
+    const UNTILED: i32 = 8191;
+    // Within this distance of the origin a float's step stays far below a pixel.
+    const REACH: f32 = 1_048_576.0;
+    // Smaller fills cost more in the clip and the extra pass than they save.
+    const MIN_PIXELS: i64 = 16_384;
+    if color.alpha != 1.0
+        || [color.red, color.green, color.blue]
+            .iter()
+            .any(|channel| !channel.is_finite() || channel.to_bits() == (-0.0_f32).to_bits())
+        // Four corners give the rectangle one edge on each side, so Skia covers every row
+        // between its edges fully.
+        || data.verbs.as_slice() != [MoveTo, LineTo, LineTo, LineTo, Close]
+        || data.points.len() != 4
+    {
+        return false;
+    }
+    let Some((rect, ..)) = path.is_rect() else {
+        return false;
+    };
+    let matrix = canvas.local_to_device_as_3x3();
+    let Some(clip) = canvas.device_clip_bounds() else {
+        return false;
+    };
+    let device = matrix.map_rect(rect).0;
+    let qualifies = |canvas: &skia_safe::Canvas| {
+        canvas.access_top_layer_pixels().is_some_and(|layer| {
+            layer.info.color_type() == ColorType::RGBAF16
+                && layer.info.alpha_type() == AlphaType::Premul
+                && layer.info.width() <= UNTILED
+                && layer.info.height() <= UNTILED
+        })
+    };
+    if !matrix.is_scale_translate()
+        || !canvas.is_clip_rect()
+        || ![device.left, device.top, device.right, device.bottom]
+            .iter()
+            .all(|edge| edge.abs() < REACH)
+        || !qualifies(canvas)
+    {
+        return false;
+    }
+    // A pixel one pixel inside the edges is covered fully, whatever rounding the edges take on
+    // their way to Skia's fixed point.
+    let Some(mut inside) = IRect::intersect(
+        &IRect::from_ltrb(
+            device.left.ceil() as i32 + 1,
+            device.top.ceil() as i32 + 1,
+            device.right.floor() as i32 - 1,
+            device.bottom.floor() as i32 - 1,
+        ),
+        &clip,
+    ) else {
+        return false;
+    };
+    // Leave Skia a pixel of the clip on each side, so the clip it draws under keeps its bounds.
+    if inside.left <= clip.left && inside.right >= clip.right {
+        inside.top = inside.top.max(clip.top + 1);
+        inside.bottom = inside.bottom.min(clip.bottom - 1);
+    } else if inside.top <= clip.top && inside.bottom >= clip.bottom {
+        inside.left = inside.left.max(clip.left + 1);
+        inside.right = inside.right.min(clip.right - 1);
+    }
+    if inside.is_empty() || i64::from(inside.width()) * i64::from(inside.height()) < MIN_PIXELS {
+        return false;
+    }
+    // Erasing an untagged half-float pixel stores the color as the shader's store does.
+    let mut pattern = [0_u8; 8];
+    if !Pixmap::new(
+        &ImageInfo::new((1, 1), ColorType::RGBAF16, AlphaType::Premul, None),
+        &mut pattern,
+        8,
+    )
+    .is_some_and(|mut pixel| {
+        pixel.erase_4f(Color4f::new(color.red, color.green, color.blue, 1.0), None)
+    }) {
+        return false;
+    }
+    // As before Skia's own draw, pixels a snapshot still shares are copied before they change.
+    // SAFETY: the surface handle is dropped here, while the canvas it owns is borrowed.
+    if let Some(mut surface) = unsafe { canvas.surface() } {
+        surface.notify_content_will_change(ContentChangeMode::Retain);
+    }
+    let Some(layer) = canvas.access_top_layer_pixels() else {
+        return false;
+    };
+    // Store the color while the destination stays finite. Over an infinity or a NaN the shader's
+    // sum is not the color, so Skia draws the rows from the first such one on.
+    let left = (inside.left - layer.origin.x) as usize * 8;
+    let width = inside.width() as usize * 8;
+    let mut stored = inside;
+    stored.bottom = stored.top;
+    for y in inside.top..inside.bottom {
+        let start = (y - layer.origin.y) as usize * layer.row_bytes + left;
+        let row = layer.pixels[start..start + width].as_chunks_mut::<8>().0;
+        if !halves_are_finite(row) {
+            break;
+        }
+        row.fill(pattern);
+        stored.bottom = y + 1;
+    }
+    let matrix = canvas.local_to_device();
+    canvas.save();
+    if !stored.is_empty() {
+        canvas.reset_matrix();
+        canvas.clip_irect(stored, ClipOp::Difference);
+        canvas.set_matrix(&matrix);
+    }
+    canvas.draw_path(path, paint);
+    canvas.restore();
+    true
+}
+
+/// Whether every channel of these half-float pixels is finite.
+fn halves_are_finite(pixels: &[[u8; 8]]) -> bool {
+    // Adding one exponent step to a channel's exponent bits carries into its sign bit only when
+    // they are all set, as in an infinity or a NaN.
+    const EXPONENTS: u64 = 0x7c00_7c00_7c00_7c00;
+    const STEP: u64 = 0x0400_0400_0400_0400;
+    const SIGNS: u64 = 0x8000_8000_8000_8000;
+    pixels.iter().fold(0, |carried, pixel| {
+        carried | ((u64::from_ne_bytes(*pixel) & EXPONENTS) + STEP)
+    }) & SIGNS
+        == 0
 }
 
 /// The clip of `surface` when a draw on it can be split into rows: a Raster device Skia does not
@@ -3563,7 +3590,116 @@ fn draw_rounded_path_with_shared_coverage(
     Ok(true)
 }
 
-fn gradient_parts(stops: &[valle_draw::program::GradientStop]) -> (Vec<Color4f>, Vec<f32>) {
+/// The Skia paint of a program paint: anti-aliased, with its color or gradient shader in the
+/// working space.
+pub(super) fn program_paint(paint: &Paint) -> Result<SkPaint, DrawError> {
+    let mut result = SkPaint::default();
+    result.set_anti_alias(true);
+    match paint {
+        Paint::Solid(color) => {
+            set_working_color(&mut result, *color)?;
+        }
+        Paint::LinearGradient {
+            start,
+            end,
+            stops,
+            spread,
+        } => {
+            let (colors, positions) = gradient_parts(stops);
+            let colors = gradient::Colors::new(
+                &colors,
+                Some(&positions),
+                tile_mode(*spread),
+                Some(working_color_space().map_err(|error| DrawError::Surface(error.to_string()))?),
+            );
+            let gradient = gradient::Gradient::new(colors, gradient_interpolation());
+            let shader = gradient::shaders::linear_gradient(
+                gradient_fill::linear_points(*start, *end),
+                &gradient,
+                None,
+            )
+            .ok_or_else(|| DrawError::Unsupported("linear gradient".into()))?;
+            result.set_shader(shader);
+        }
+        Paint::RadialGradient {
+            center,
+            radii,
+            stops,
+            spread,
+        } => {
+            let (colors, positions) = gradient_parts(stops);
+            let colors = gradient::Colors::new(
+                &colors,
+                Some(&positions),
+                tile_mode(*spread),
+                Some(working_color_space().map_err(|error| DrawError::Surface(error.to_string()))?),
+            );
+            let gradient = gradient::Gradient::new(colors, gradient_interpolation());
+            let (center, radius, matrix) = gradient_fill::radial_geometry(*center, *radii);
+            let shader =
+                gradient::shaders::radial_gradient((center, radius), &gradient, Some(&matrix))
+                    .ok_or_else(|| DrawError::Unsupported("radial gradient".into()))?;
+            result.set_shader(shader);
+        }
+        Paint::TwoCircleGradient {
+            start,
+            start_radius,
+            end,
+            end_radius,
+            stops,
+            spread,
+        } => {
+            let (colors, positions) = gradient_parts(stops);
+            let colors = gradient::Colors::new(
+                &colors,
+                Some(&positions),
+                tile_mode(*spread),
+                Some(working_color_space().map_err(|e| DrawError::Surface(e.to_string()))?),
+            );
+            let gradient = gradient::Gradient::new(colors, gradient_interpolation());
+            let shader = gradient::shaders::two_point_conical_gradient(
+                (
+                    SkPoint::new(start[0] as f32, start[1] as f32),
+                    *start_radius as f32,
+                ),
+                (
+                    SkPoint::new(end[0] as f32, end[1] as f32),
+                    *end_radius as f32,
+                ),
+                &gradient,
+                None,
+            )
+            .ok_or_else(|| DrawError::Unsupported("two-circle gradient".into()))?;
+            result.set_shader(shader);
+        }
+        Paint::ConicGradient {
+            center,
+            start_angle_degrees,
+            sweep_angle_degrees,
+            stops,
+            spread,
+        } => {
+            let (colors, positions) = gradient_parts(stops);
+            let colors = gradient::Colors::new(
+                &colors,
+                Some(&positions),
+                tile_mode(*spread),
+                Some(working_color_space().map_err(|error| DrawError::Surface(error.to_string()))?),
+            );
+            let gradient = gradient::Gradient::new(colors, gradient_interpolation());
+            let (center, angles) =
+                gradient_fill::conic_geometry(*center, *start_angle_degrees, *sweep_angle_degrees);
+            let shader = gradient::shaders::sweep_gradient(center, angles, &gradient, None)
+                .ok_or_else(|| DrawError::Unsupported("conic gradient".into()))?;
+            result.set_shader(shader);
+        }
+    }
+    Ok(result)
+}
+
+pub(super) fn gradient_parts(
+    stops: &[valle_draw::program::GradientStop],
+) -> (Vec<Color4f>, Vec<f32>) {
     let colors = stops
         .iter()
         .map(|stop| straight_color(stop.color))
@@ -4147,7 +4283,7 @@ fn sampling(mode: SamplingMode) -> SamplingOptions {
     }
 }
 
-fn tile_mode(mode: SpreadMode) -> TileMode {
+pub(super) fn tile_mode(mode: SpreadMode) -> TileMode {
     match mode {
         SpreadMode::Pad => TileMode::Clamp,
         SpreadMode::Repeat => TileMode::Repeat,
@@ -6604,6 +6740,919 @@ mod tests {
                     .unwrap()
             );
         }
+    }
+
+    #[test]
+    fn gradient_rect_fills_computed_inside_keep_the_bytes_of_their_draw() {
+        use valle_draw::program::GradientStop;
+        const WIDTH: i32 = 320;
+        const HEIGHT: i32 = 240;
+        let info = ImageInfo::new(
+            (WIDTH, HEIGHT),
+            ColorType::RGBAF16,
+            AlphaType::Premul,
+            Some(working_color_space().unwrap()),
+        );
+        // Half floats of every kind under the translucent gradients, infinities and NaNs among
+        // them.
+        let background = varied_halves(WIDTH, HEIGHT);
+        let stop = |offset: f32, [red, green, blue, alpha]: [f32; 4]| GradientStop {
+            offset,
+            color: LinearColor::new(red * alpha, green * alpha, blue * alpha, alpha),
+        };
+        // Smooth colors at uneven positions, as lowered interpolations give them.
+        let ramp = |count: usize, alpha: f32| {
+            (0..count)
+                .map(|index| {
+                    let t = index as f32 / (count - 1) as f32;
+                    stop(
+                        t.powf(1.3),
+                        [
+                            0.5 + 0.5 * (7.0 * t).sin(),
+                            0.5 + 0.5 * (5.0 * t + 1.0).cos(),
+                            1.2 * t,
+                            alpha,
+                        ],
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        // Hard stops at both ends and inside.
+        let hard = |alpha: f32| {
+            vec![
+                stop(0.0, [1.0, 0.0, 0.0, 1.0]),
+                stop(0.0, [0.0, 1.0, 0.0, alpha]),
+                stop(0.3, [0.0, 0.0, 1.0, alpha]),
+                stop(0.3, [1.0, 1.0, 0.0, 1.0]),
+                stop(0.7, [0.0, 1.0, 1.0, alpha]),
+                stop(1.0, [1.0, 0.0, 1.0, 1.0]),
+                stop(1.0, [0.2, 0.4, 0.6, alpha]),
+            ]
+        };
+        let linear = |start, end, stops, spread| Paint::LinearGradient {
+            start,
+            end,
+            stops,
+            spread,
+        };
+        let conic = |center, start_angle_degrees, sweep_angle_degrees, stops, spread| {
+            Paint::ConicGradient {
+                center,
+                start_angle_degrees,
+                sweep_angle_degrees,
+                stops,
+                spread,
+            }
+        };
+        let gradients = [
+            // Two stops, evenly spaced stops and uneven ones, past their ends.
+            linear(
+                [20.0, 10.0],
+                [200.0, 150.0],
+                vec![
+                    stop(0.0, [1.5, 0.2, 0.0, 1.0]),
+                    stop(1.0, [0.0, 0.3, 1.0, 1.0]),
+                ],
+                SpreadMode::Pad,
+            ),
+            linear(
+                [30.0, 30.0],
+                [90.0, 60.0],
+                vec![
+                    stop(0.0, [1.0, 1.0, 1.0, 0.0]),
+                    stop(0.5, [1.0, 1.0, 1.0, 0.28]),
+                    stop(1.0, [0.48, 0.3, 1.0, 0.18]),
+                ],
+                SpreadMode::Repeat,
+            ),
+            linear([200.0, 20.0], [40.0, 170.0], ramp(37, 1.0), SpreadMode::Pad),
+            linear([10.0, 90.0], [230.0, 90.0], hard(1.0), SpreadMode::Pad),
+            linear([60.0, 20.0], [110.0, 40.0], hard(0.6), SpreadMode::Reflect),
+            // Stops short of both ends, with channels outside [0, 1].
+            linear(
+                [0.0, 0.0],
+                [240.0, 180.0],
+                vec![
+                    stop(0.2, [0.9, 0.1, 0.3, 0.5]),
+                    stop(0.6, [-0.1, 2.0, 0.5, 0.8]),
+                    stop(0.9, [0.3, 0.3, 0.3, 0.4]),
+                ],
+                SpreadMode::Pad,
+            ),
+            // An ellipse and a circle.
+            Paint::RadialGradient {
+                center: [120.0, 90.0],
+                radii: [70.0, 40.0],
+                stops: ramp(23, 0.8),
+                spread: SpreadMode::Repeat,
+            },
+            Paint::RadialGradient {
+                center: [100.0, 80.0],
+                radii: [90.0, 90.0],
+                stops: vec![
+                    stop(0.0, [1.0, 1.0, 1.0, 0.36]),
+                    stop(1.0, [1.0, 1.0, 1.0, 0.0]),
+                ],
+                spread: SpreadMode::Pad,
+            },
+            // A whole turn of many stops, as the holo background has, part of a turn reflected,
+            // a turn from -90 degrees repeated and a turn about a pixel's center.
+            conic([110.0, 95.0], 0.0, 360.0, ramp(400, 1.0), SpreadMode::Pad),
+            conic(
+                [130.0, 80.0],
+                30.0,
+                200.0,
+                ramp(17, 0.7),
+                SpreadMode::Reflect,
+            ),
+            conic(
+                [90.0, 100.0],
+                -90.0,
+                360.0,
+                ramp(9, 1.0),
+                SpreadMode::Repeat,
+            ),
+            conic([120.5, 90.5], 0.0, 360.0, hard(0.9), SpreadMode::Pad),
+            // Skia draws a color for a degenerate gradient and other stages for two circles.
+            linear([50.0, 50.0], [50.0, 50.0], ramp(5, 1.0), SpreadMode::Pad),
+            Paint::TwoCircleGradient {
+                start: [80.0, 80.0],
+                start_radius: 10.0,
+                end: [150.0, 100.0],
+                end_radius: 90.0,
+                stops: ramp(5, 1.0),
+                spread: SpreadMode::Pad,
+            },
+        ];
+        // Inside the surface, past its edges, on them, across it and turning inside it.
+        let rects = [
+            [10.5, 8.25, 300.75, 230.5],
+            [-60.0, -45.0, 380.0, 285.0],
+            [0.0, 0.0, 320.0, 240.0],
+            [-60.0, 50.5, 380.0, 190.25],
+            [60.5, 50.25, 260.75, 190.5],
+        ];
+        let matrices = [
+            Matrix::new_identity(),
+            Matrix::translate((0.3, -0.7)),
+            Matrix::scale_translate((1.25, 0.8), (-10.0, 5.0)),
+            Matrix::rotate_deg_pivot(23.0, (160.0, 120.0)),
+            Matrix::rotate_deg_pivot(45.0, (160.0, 120.0)),
+            Matrix::new_all(1.1, 0.3, -20.0, -0.15, 0.9, 12.0, 0.0, 0.0, 1.0),
+            Matrix::scale_translate((-1.0, 1.0), (320.0, 0.0)),
+        ];
+        let clip = IRect::from_ltrb(7, 5, 300, 228);
+        // On the surface itself, on a layer pushed before the clip and the transform, on two of
+        // them, on one pushed after the transform, and on one pushed after the clip. The last
+        // two start at the clip's corner when there is a clip.
+        #[derive(Clone, Copy, Debug, PartialEq)]
+        enum Target {
+            Surface,
+            Layer,
+            Layers,
+            LayerAfterTransform,
+            LayerAfterClip,
+        }
+        let targets = [
+            Target::Surface,
+            Target::Layer,
+            Target::Layers,
+            Target::LayerAfterTransform,
+            Target::LayerAfterClip,
+        ];
+        let (mut cases, mut computed, mut on) = (0, [0; 14], [[0; 2]; 5]);
+        for (index, gradient) in gradients.iter().enumerate() {
+            let paint = program_paint(gradient).unwrap();
+            for [left, top, right, bottom] in rects {
+                let data = PathData {
+                    verbs: vec![
+                        PathVerb::MoveTo,
+                        PathVerb::LineTo,
+                        PathVerb::LineTo,
+                        PathVerb::LineTo,
+                        PathVerb::Close,
+                    ],
+                    points: vec![[left, top], [right, top], [right, bottom], [left, bottom]],
+                };
+                let path = path(&data, FillRule::NonZero).unwrap();
+                for matrix in &matrices {
+                    for (target, clipped) in targets
+                        .iter()
+                        .flat_map(|&target| [(target, false), (target, true)])
+                    {
+                        let draw = |direct: bool| {
+                            let mut surface = raster_surface(&info).unwrap();
+                            let mut copy = SkPaint::default();
+                            copy.set_blend_mode(SkBlendMode::Src);
+                            surface
+                                .canvas()
+                                .draw_image(&background, (0, 0), Some(&copy));
+                            let before = surface.peek_pixels().unwrap().bytes().unwrap().to_vec();
+                            let snapshot = surface.image_snapshot();
+                            let canvas = surface.canvas();
+                            let count = canvas.save();
+                            let layer = skia_safe::canvas::SaveLayerRec::default();
+                            for _ in 0..match target {
+                                Target::Layer => 1,
+                                Target::Layers => 2,
+                                _ => 0,
+                            } {
+                                canvas.save_layer(&layer);
+                            }
+                            if clipped {
+                                canvas.clip_irect(clip, ClipOp::Intersect);
+                            }
+                            if target == Target::LayerAfterClip {
+                                canvas.save_layer(&layer);
+                            }
+                            canvas.concat(matrix);
+                            if target == Target::LayerAfterTransform {
+                                canvas.save_layer(&layer);
+                            }
+                            let computed = direct
+                                && gradient_fill::fill_rect_inside(
+                                    canvas, &data, &path, &paint, gradient,
+                                );
+                            if !computed {
+                                canvas.draw_path(&path, &paint);
+                            }
+                            canvas.restore_to_count(count);
+                            // The snapshot taken before keeps its pixels.
+                            assert_eq!(
+                                snapshot.peek_pixels().unwrap().bytes().unwrap(),
+                                &before[..]
+                            );
+                            let after = surface.peek_pixels().unwrap().bytes().unwrap().to_vec();
+                            (after, computed)
+                        };
+                        let (expected, _) = draw(false);
+                        let (actual, direct) = draw(true);
+                        assert!(
+                            actual == expected,
+                            "gradient {index} rect {:?} matrix {matrix:?} {target:?} clipped \
+                             {clipped}",
+                            [left, top, right, bottom]
+                        );
+                        cases += 1;
+                        computed[index] += usize::from(direct);
+                        on[target as usize][usize::from(clipped)] += usize::from(direct);
+                    }
+                }
+            }
+        }
+        // On aarch64 the kernel computes the insides of most fills, of some of each gradient
+        // Skia draws with these stages and on each target.
+        assert_eq!(computed[12..], [0, 0]);
+        if cfg!(all(target_arch = "aarch64", target_endian = "little")) {
+            for (&target, counts) in targets.iter().zip(on) {
+                for (clipped, count) in [false, true].into_iter().zip(counts) {
+                    assert!(count > 0, "{target:?} clipped {clipped}");
+                }
+            }
+            let total = computed.iter().sum::<usize>();
+            assert!(total * 2 > cases, "{total} of {cases}");
+            assert!(
+                computed[..12].iter().all(|&count| count > 0),
+                "{computed:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn gradient_rect_fills_computed_against_the_clip_keep_the_bytes_of_their_draw() {
+        use valle_draw::program::GradientStop;
+        const WIDTH: i32 = 320;
+        const HEIGHT: i32 = 240;
+        let info = ImageInfo::new(
+            (WIDTH, HEIGHT),
+            ColorType::RGBAF16,
+            AlphaType::Premul,
+            Some(working_color_space().unwrap()),
+        );
+        let background = varied_halves(WIDTH, HEIGHT);
+        let stop = |offset: f32, [red, green, blue, alpha]: [f32; 4]| GradientStop {
+            offset,
+            color: LinearColor::new(red * alpha, green * alpha, blue * alpha, alpha),
+        };
+        let ramp = |count: usize, alpha: f32| {
+            (0..count)
+                .map(|index| {
+                    let t = index as f32 / (count - 1) as f32;
+                    stop(
+                        t.powf(1.3),
+                        [
+                            0.5 + 0.5 * (7.0 * t).sin(),
+                            0.5 + 0.5 * (5.0 * t + 1.0).cos(),
+                            1.2 * t,
+                            alpha,
+                        ],
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        // Two opaque stops past their ends, many opaque ones about a center and translucent ones.
+        let gradients = [
+            Paint::LinearGradient {
+                start: [20.0, 10.0],
+                end: [200.0, 150.0],
+                stops: vec![
+                    stop(0.0, [1.5, 0.2, 0.0, 1.0]),
+                    stop(1.0, [0.0, 0.3, 1.0, 1.0]),
+                ],
+                spread: SpreadMode::Pad,
+            },
+            Paint::ConicGradient {
+                center: [110.0, 95.0],
+                start_angle_degrees: 0.0,
+                sweep_angle_degrees: 360.0,
+                stops: ramp(37, 1.0),
+                spread: SpreadMode::Pad,
+            },
+            Paint::RadialGradient {
+                center: [120.0, 90.0],
+                radii: [70.0, 40.0],
+                stops: ramp(9, 0.8),
+                spread: SpreadMode::Repeat,
+            },
+        ];
+        let clip = IRect::from_ltrb(7, 5, 300, 228);
+        // Left and right sides past the clip's, on them, a hair past them, a hair inside them,
+        // and inside them on a fraction of a pixel and on a whole one. A side on the clip's
+        // against one inside keeps Skia's draw.
+        let lefts = [-60.0, 7.0, 6.999, 7.01, 7.5, 8.0];
+        let rights = [380.0, 300.0, 300.001, 299.99, 299.5, 299.0];
+        let declined = |left: f64, right: f64| {
+            (left == 7.0 && right < 300.0) || (right == 300.0 && left > 7.0)
+        };
+        // Top and bottom sides past the clip's and inside them.
+        let rows = [[-45.0, 285.0], [50.5, 190.25]];
+        let matrices = [
+            Matrix::new_identity(),
+            // A shift by a fraction of a pixel, as the glitch scene's slices take, and a mirror
+            // that takes the clip onto itself.
+            Matrix::translate((13.85, 2.5)),
+            Matrix::scale_translate((-1.0, 1.0), (307.0, 0.0)),
+            // A skew by a hair, as the kaleido scene's melt leaves in its transform (Skia snaps
+            // turns this small to none), and a turn by a hundredth of a degree.
+            Matrix::new_all(
+                1.0,
+                2.384_185_8e-7,
+                0.0,
+                -2.384_185_8e-7,
+                1.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0,
+            ),
+            Matrix::rotate_deg_pivot(-0.01, (160.0, 120.0)),
+        ];
+        // On the surface itself, on a layer at the clip's corner pushed before the transform,
+        // and on two layers pushed after it under clips to regions, which the transform leaves
+        // as they are, the inner one at the clip's corner.
+        #[derive(Clone, Copy, Debug, PartialEq)]
+        enum Target {
+            Surface,
+            Layer,
+            Layers,
+        }
+        let targets = [Target::Surface, Target::Layer, Target::Layers];
+        let outer = skia_safe::Region::from_rect(IRect::from_ltrb(3, 2, 310, 236));
+        let inner = skia_safe::Region::from_rect(clip);
+        let mut computed = Vec::new();
+        for (index, gradient) in gradients.iter().enumerate() {
+            let paint = program_paint(gradient).unwrap();
+            for (left, right, [top, bottom]) in lefts
+                .into_iter()
+                .flat_map(|left| rights.map(|right| (left, right)))
+                .flat_map(|(left, right)| rows.map(|row| (left, right, row)))
+            {
+                let data = PathData {
+                    verbs: vec![
+                        PathVerb::MoveTo,
+                        PathVerb::LineTo,
+                        PathVerb::LineTo,
+                        PathVerb::LineTo,
+                        PathVerb::Close,
+                    ],
+                    points: vec![[left, top], [right, top], [right, bottom], [left, bottom]],
+                };
+                let path = path(&data, FillRule::NonZero).unwrap();
+                for (which, matrix) in matrices.iter().enumerate() {
+                    for target in targets {
+                        let draw = |direct: bool| {
+                            let mut surface = raster_surface(&info).unwrap();
+                            let mut copy = SkPaint::default();
+                            copy.set_blend_mode(SkBlendMode::Src);
+                            surface
+                                .canvas()
+                                .draw_image(&background, (0, 0), Some(&copy));
+                            let canvas = surface.canvas();
+                            let count = canvas.save();
+                            let layer = skia_safe::canvas::SaveLayerRec::default();
+                            if target == Target::Layers {
+                                canvas.concat(matrix);
+                                canvas.clip_region(&outer, ClipOp::Intersect);
+                                canvas.save_layer(&layer);
+                                canvas.clip_region(&inner, ClipOp::Intersect);
+                                canvas.save_layer(&layer);
+                            } else {
+                                canvas.clip_irect(clip, ClipOp::Intersect);
+                                if target == Target::Layer {
+                                    canvas.save_layer(&layer);
+                                }
+                                canvas.concat(matrix);
+                            }
+                            let computed = direct
+                                && gradient_fill::fill_rect_inside(
+                                    canvas, &data, &path, &paint, gradient,
+                                );
+                            if !computed {
+                                canvas.draw_path(&path, &paint);
+                            }
+                            canvas.restore_to_count(count);
+                            let after = surface.peek_pixels().unwrap().bytes().unwrap().to_vec();
+                            (after, computed)
+                        };
+                        let (expected, _) = draw(false);
+                        let (actual, direct) = draw(true);
+                        assert!(
+                            actual == expected,
+                            "gradient {index} rect {:?} matrix {matrix:?} {target:?}",
+                            [left, top, right, bottom]
+                        );
+                        if direct {
+                            computed.push((index, left, right, top, which, target));
+                        }
+                    }
+                }
+            }
+        }
+        if cfg!(all(target_arch = "aarch64", target_endian = "little")) {
+            let hit = |index: usize, left: f64, right: f64, top: f64, which: usize, target| {
+                computed.contains(&(index, left, right, top, which, target))
+            };
+            for (index, left, right, [top, _]) in (0..2).flat_map(|index| {
+                lefts.into_iter().flat_map(move |left| {
+                    rights
+                        .into_iter()
+                        .flat_map(move |right| rows.map(|row| (index, left, right, row)))
+                })
+            }) {
+                for target in targets {
+                    // Upright opaque fills with their sides past the clip's, on them or inside
+                    // them, as the transform leaves them or mirrors them, and shifted.
+                    for which in [0, 2] {
+                        assert!(
+                            hit(index, left, right, top, which, target) || declined(left, right),
+                            "gradient {index} sides {left} {right} {top} matrix {which} {target:?}"
+                        );
+                    }
+                    assert!(
+                        hit(index, left, right, top, 1, target),
+                        "gradient {index} sides {left} {right} {top} shifted {target:?}"
+                    );
+                }
+                // Turned ones with their left and right edges wholly past the clip's sides.
+                let past = |which: usize| match which {
+                    3 => [-60.0, 6.999].contains(&left) && [380.0, 300.001].contains(&right),
+                    _ => left == -60.0 && right == 380.0,
+                };
+                for which in [3, 4] {
+                    assert!(
+                        hit(index, left, right, top, which, Target::Surface) || !past(which),
+                        "gradient {index} sides {left} {right} {top} matrix {which}"
+                    );
+                }
+                // Skewed ones with their top and bottom sides past the clip's, and their left and
+                // right ones past the clip's or inside them by a margin, which Skia's fixed point
+                // keeps upright.
+                if top == rows[0][0] && left != 7.0 && right != 300.0 {
+                    for target in targets {
+                        assert!(
+                            hit(index, left, right, top, 3, target),
+                            "gradient {index} sides {left} {right} skewed {target:?}"
+                        );
+                    }
+                }
+            }
+            for target in targets {
+                assert!(
+                    computed.iter().any(|case| case.0 == 2 && case.5 == target),
+                    "{target:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn gradient_rect_fills_skewed_by_a_hair_keep_the_bytes_of_their_draw() {
+        use valle_draw::program::GradientStop;
+        const WIDTH: i32 = 128;
+        const HEIGHT: i32 = 1100;
+        let info = ImageInfo::new(
+            (WIDTH, HEIGHT),
+            ColorType::RGBAF16,
+            AlphaType::Premul,
+            Some(working_color_space().unwrap()),
+        );
+        let background = varied_halves(WIDTH, HEIGHT);
+        let stop = |offset: f32, [red, green, blue]: [f32; 3]| GradientStop {
+            offset,
+            color: LinearColor::new(red, green, blue, 1.0),
+        };
+        let gradient = Paint::LinearGradient {
+            start: [10.0, 30.0],
+            end: [110.0, 1050.0],
+            stops: vec![stop(0.0, [1.5, 0.2, 0.0]), stop(1.0, [0.0, 0.3, 1.0])],
+            spread: SpreadMode::Pad,
+        };
+        let paint = program_paint(&gradient).unwrap();
+        let clip = IRect::from_ltrb(4, 3, 121, 1095);
+        // Left and right sides past the clip's, and inside them on a fraction of a pixel and on a
+        // whole one, where a 256th of a pixel starts.
+        let lefts = [-30.0, 20.3, 21.0];
+        let rights = [150.0, 100.7, 101.0];
+        // Top and bottom sides past the clip's, and a top one inside it.
+        let rows = [[-20.0, 1130.0], [10.0, 1130.0]];
+        // Skews that move the left and right sides by about 2, -2.5, 5.5, -6.5 and 9.5 256ths of
+        // a pixel over the clip's 1092 rows, and a mirror of the clip onto itself with the second.
+        // Skia's fixed point keeps edges that step by 0, -1 or 1 64ths over them upright, as
+        // their slopes in 16.16 round to 0, but not ones that step by -2 or 2.
+        let skew = |step: f32| step / 256.0 / 1092.0;
+        let matrices = [2.0, -2.5, 5.5, -6.5, 9.5]
+            .map(|step| Matrix::new_all(1.0, skew(step), 0.0, -skew(step), 1.0, 0.0, 0.0, 0.0, 1.0))
+            .into_iter()
+            .chain([Matrix::new_all(
+                -1.0,
+                skew(-2.5),
+                125.0,
+                0.0,
+                1.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0,
+            )])
+            .collect::<Vec<_>>();
+        let upright = [true, true, true, false, false, true];
+        // On the surface itself, on a layer at the clip's corner pushed before the transform,
+        // and on two layers pushed after it under clips to regions, the inner one at the clip's
+        // corner.
+        #[derive(Clone, Copy, Debug, PartialEq)]
+        enum Target {
+            Surface,
+            Layer,
+            Layers,
+        }
+        let outer = skia_safe::Region::from_rect(IRect::from_ltrb(2, 1, 125, 1098));
+        let inner = skia_safe::Region::from_rect(clip);
+        for (left, right, [top, bottom]) in lefts
+            .into_iter()
+            .flat_map(|left| rights.map(|right| (left, right)))
+            .flat_map(|(left, right)| rows.map(|row| (left, right, row)))
+        {
+            let data = PathData {
+                verbs: vec![
+                    PathVerb::MoveTo,
+                    PathVerb::LineTo,
+                    PathVerb::LineTo,
+                    PathVerb::LineTo,
+                    PathVerb::Close,
+                ],
+                points: vec![[left, top], [right, top], [right, bottom], [left, bottom]],
+            };
+            let path = path(&data, FillRule::NonZero).unwrap();
+            for (which, matrix) in matrices.iter().enumerate() {
+                for target in [Target::Surface, Target::Layer, Target::Layers] {
+                    let draw = |direct: bool| {
+                        let mut surface = raster_surface(&info).unwrap();
+                        let mut copy = SkPaint::default();
+                        copy.set_blend_mode(SkBlendMode::Src);
+                        surface
+                            .canvas()
+                            .draw_image(&background, (0, 0), Some(&copy));
+                        let canvas = surface.canvas();
+                        let count = canvas.save();
+                        let layer = skia_safe::canvas::SaveLayerRec::default();
+                        if target == Target::Layers {
+                            canvas.concat(matrix);
+                            canvas.clip_region(&outer, ClipOp::Intersect);
+                            canvas.save_layer(&layer);
+                            canvas.clip_region(&inner, ClipOp::Intersect);
+                            canvas.save_layer(&layer);
+                        } else {
+                            canvas.clip_irect(clip, ClipOp::Intersect);
+                            if target == Target::Layer {
+                                canvas.save_layer(&layer);
+                            }
+                            canvas.concat(matrix);
+                        }
+                        let computed = direct
+                            && gradient_fill::fill_rect_inside(
+                                canvas, &data, &path, &paint, &gradient,
+                            );
+                        if !computed {
+                            canvas.draw_path(&path, &paint);
+                        }
+                        canvas.restore_to_count(count);
+                        let after = surface.peek_pixels().unwrap().bytes().unwrap().to_vec();
+                        (after, computed)
+                    };
+                    let (expected, _) = draw(false);
+                    let (actual, direct) = draw(true);
+                    let rect = [left, top, right, bottom];
+                    assert!(
+                        actual == expected,
+                        "rect {rect:?} matrix {which} {target:?}"
+                    );
+                    // Sides past the clip's leave its rows to the fill under any skew; others need
+                    // the top and bottom sides past the clip's too, and edges Skia keeps upright.
+                    if cfg!(all(target_arch = "aarch64", target_endian = "little")) {
+                        let past = left == lefts[0] && right == rights[0];
+                        assert_eq!(
+                            direct,
+                            past || (top == rows[0][0] && upright[which]),
+                            "rect {rect:?} matrix {which} {target:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn clip_rects_on_whole_pixels_keep_the_bytes_of_their_coverage_layer() {
+        const WIDTH: i32 = 96;
+        const HEIGHT: i32 = 72;
+        let info = ImageInfo::new(
+            (WIDTH, HEIGHT),
+            ColorType::RGBAF16,
+            AlphaType::Premul,
+            Some(working_color_space().unwrap()),
+        );
+        let background = varied_halves(WIDTH, HEIGHT);
+        // Halves of every pattern for the clipped layer, NaNs and infinities among them.
+        let mut state = 0x2545_f491_u32;
+        let halves = (0..WIDTH * HEIGHT * 4)
+            .flat_map(|_| {
+                state ^= state << 13;
+                state ^= state >> 17;
+                state ^= state << 5;
+                ((state >> 16) as u16).to_le_bytes()
+            })
+            .collect::<Vec<_>>();
+        let matrices = [
+            Matrix::new_identity(),
+            Matrix::translate((0.75, 0.0)),
+            Matrix::scale((2.0, 2.0)),
+            Matrix::new_all(-1.0, 0.0, 90.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0),
+            Matrix::scale((1.25, 1.0)),
+            Matrix::new_all(0.0, -1.0, 80.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0),
+            Matrix::new_all(1.0, 2.4e-7, 0.0, -2.4e-7, 1.0, 0.0, 0.0, 0.0, 1.0),
+        ];
+        // Rectangles, and the transforms that put their sides on whole pixels: inside the
+        // layer, with sides a translation moves onto whole pixels, partly outside it and wholly
+        // outside it.
+        let cases: [([f64; 4], &[usize]); 4] = [
+            ([10.0, 8.0, 60.0, 40.0], &[0, 2, 3]),
+            ([10.25, 8.0, 60.25, 40.0], &[1]),
+            ([-20.0, -10.0, 200.0, 30.0], &[0, 2, 3, 4]),
+            ([100.0, 80.0, 120.0, 90.0], &[0, 2, 3, 4]),
+        ];
+        // The clipped layer over the surface, over the surface under a clip to a region, and
+        // over a layer under a clip to another region.
+        #[derive(Clone, Copy, Debug, PartialEq)]
+        enum Target {
+            Surface,
+            Clipped,
+            Layer,
+        }
+        let outer = skia_safe::Region::from_rect(IRect::from_ltrb(2, 1, 93, 70));
+        let inner = skia_safe::Region::from_rect(IRect::from_ltrb(5, 3, 90, 68));
+        for ([left, top, right, bottom], whole) in cases {
+            let data = PathData {
+                verbs: vec![
+                    PathVerb::MoveTo,
+                    PathVerb::LineTo,
+                    PathVerb::LineTo,
+                    PathVerb::LineTo,
+                    PathVerb::Close,
+                ],
+                points: vec![[left, top], [right, top], [right, bottom], [left, bottom]],
+            };
+            let outline = path(&data, FillRule::NonZero).unwrap();
+            for (which, matrix) in matrices.iter().enumerate() {
+                for target in [Target::Surface, Target::Clipped, Target::Layer] {
+                    let draw = |direct: bool| {
+                        let mut surface = raster_surface(&info).unwrap();
+                        let mut copy = SkPaint::default();
+                        copy.set_blend_mode(SkBlendMode::Src);
+                        surface
+                            .canvas()
+                            .draw_image(&background, (0, 0), Some(&copy));
+                        let canvas = surface.canvas();
+                        let count = canvas.save();
+                        let layer = skia_safe::canvas::SaveLayerRec::default();
+                        if target == Target::Layer {
+                            canvas.clip_region(&outer, ClipOp::Intersect);
+                            canvas.save_layer(&layer);
+                        }
+                        if target != Target::Surface {
+                            canvas.clip_region(&inner, ClipOp::Intersect);
+                        }
+                        canvas.concat(matrix);
+                        canvas.save_layer(&layer);
+                        let clipped = canvas.access_top_layer_pixels().unwrap();
+                        for y in 0..clipped.info.height() as usize {
+                            let row = &mut clipped.pixels[y * clipped.row_bytes..];
+                            let width = clipped.info.width() as usize * 8;
+                            let from = y * WIDTH as usize * 8;
+                            row[..width].copy_from_slice(&halves[from..from + width]);
+                        }
+                        let computed =
+                            direct && clip_coverage::apply_whole_pixel_rect(canvas, &outline);
+                        if !computed {
+                            let mut restore = SkPaint::default();
+                            restore.set_blend_mode(SkBlendMode::DstIn);
+                            canvas.save_layer(
+                                &skia_safe::canvas::SaveLayerRec::default().paint(&restore),
+                            );
+                            let mut coverage = SkPaint::default();
+                            coverage.set_anti_alias(true).set_color(Color::WHITE);
+                            canvas.draw_path(&outline, &coverage);
+                            canvas.restore();
+                        }
+                        let clipped = canvas.access_top_layer_pixels().unwrap();
+                        let covered = clipped.pixels.to_vec();
+                        canvas.restore_to_count(count);
+                        let after = surface.peek_pixels().unwrap().bytes().unwrap().to_vec();
+                        (covered, after, computed)
+                    };
+                    let (covered, expected, _) = draw(false);
+                    let (actual_covered, actual, direct) = draw(true);
+                    let rect = [left, top, right, bottom];
+                    assert!(
+                        actual_covered == covered && actual == expected,
+                        "rect {rect:?} matrix {which} {target:?}"
+                    );
+                    if cfg!(all(target_arch = "aarch64", target_endian = "little")) {
+                        assert_eq!(
+                            direct,
+                            whole.contains(&which),
+                            "rect {rect:?} matrix {which} {target:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn opaque_rect_fills_stored_inside_keep_the_bytes_of_their_draw() {
+        const WIDTH: i32 = 300;
+        const HEIGHT: i32 = 200;
+        let info = ImageInfo::new(
+            (WIDTH, HEIGHT),
+            ColorType::RGBAF16,
+            AlphaType::Premul,
+            Some(working_color_space().unwrap()),
+        );
+        // Finite half floats of every kind, including negative zeros, subnormals and channels
+        // outside [0, 1].
+        let mut state = 0x9e37_79b9_u32;
+        let mut halves = || {
+            (0..WIDTH * HEIGHT * 4)
+                .flat_map(|_| {
+                    state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                    let mut half = (state >> 16) as u16;
+                    if half & 0x7c00 == 0x7c00 {
+                        half &= !0x4000;
+                    }
+                    half.to_ne_bytes()
+                })
+                .collect::<Vec<_>>()
+        };
+        let background = halves();
+        let layer_content =
+            images::raster_from_data(&info, Data::new_copy(&halves()), info.min_row_bytes())
+                .unwrap();
+        // An infinity and a NaN, in rows the larger rectangles cover.
+        let mut nonfinite = background.clone();
+        for (x, y, half) in [(150, 120, 0x7c00_u16), (40, 150, 0xfe01)] {
+            let at = ((y * WIDTH + x) * 4 + 1) as usize * 2;
+            nonfinite[at..at + 2].copy_from_slice(&half.to_ne_bytes());
+        }
+        let rects = [
+            // Inside the clip, on whole pixels, over its edges and around it.
+            [20.3, 15.7, 270.6, 180.2],
+            [10.0, 10.0, 290.0, 190.0],
+            [-37.3, -5.5, 250.25, 170.75],
+            [40.5, 30.125, 500.0, 400.0],
+            [-10.0, -10.0, 400.0, 300.0],
+            // As tall as the surface, as a shifted full-frame background is, or as wide.
+            [17.37, 0.0, 317.37, 200.0],
+            [-5.0, 50.5, 320.0, 120.25],
+            // On the clip's edges.
+            [12.0, 9.0, 288.0, 191.0],
+        ];
+        let matrices = [
+            Matrix::new_identity(),
+            Matrix::translate((0.4, -0.3)),
+            Matrix::scale_translate((1.5, 0.75), (-20.0, 10.0)),
+            Matrix::scale_translate((-1.0, 1.0), (300.0, 0.0)),
+        ];
+        let colors = [
+            LinearColor::new(0.25, 0.5, 1.5, 1.0),
+            LinearColor::new(3e-5, 0.0, 0.75, 1.0),
+            LinearColor::new(-0.125, 2.0, 0.0625, 1.0),
+            // A negative zero and a translucent color keep their draw.
+            LinearColor::new(0.25, -0.0, 0.5, 1.0),
+            LinearColor::new(0.25, 0.5, 0.75, 0.5),
+        ];
+        let clip = IRect::from_ltrb(12, 9, 288, 191);
+        let layer = SkRect::from_ltrb(7.0, 5.0, 295.0, 196.0);
+        let (mut cases, mut stored_cases) = (0, 0);
+        for [left, top, right, bottom] in rects {
+            let data = PathData {
+                verbs: vec![
+                    PathVerb::MoveTo,
+                    PathVerb::LineTo,
+                    PathVerb::LineTo,
+                    PathVerb::LineTo,
+                    PathVerb::Close,
+                ],
+                points: vec![[left, top], [right, top], [right, bottom], [left, bottom]],
+            };
+            let path = path(&data, FillRule::NonZero).unwrap();
+            for matrix in &matrices {
+                for (index, color) in colors.iter().enumerate() {
+                    let mut paint = SkPaint::default();
+                    paint.set_anti_alias(true);
+                    set_working_color(&mut paint, *color).unwrap();
+                    // Clipped or not, in an opaque or a translucent layer or not, over finite
+                    // pixels or over an infinity and a NaN.
+                    for (clipped, layered, opacity, finite) in [
+                        (false, false, 1.0, true),
+                        (true, false, 1.0, true),
+                        (true, true, 1.0, true),
+                        (false, true, 0.5, true),
+                        (true, false, 1.0, false),
+                    ] {
+                        let draw = |direct: bool| {
+                            let mut surface = raster_surface(&info).unwrap();
+                            let bytes = if finite { &background } else { &nonfinite };
+                            assert!(surface.canvas().write_pixels(
+                                &info,
+                                bytes,
+                                info.min_row_bytes(),
+                                (0, 0)
+                            ));
+                            let before = surface.peek_pixels().unwrap().bytes().unwrap().to_vec();
+                            let snapshot = surface.image_snapshot();
+                            let canvas = surface.canvas();
+                            let count = canvas.save();
+                            if clipped {
+                                canvas.clip_irect(clip, ClipOp::Intersect);
+                            }
+                            if layered {
+                                canvas.save_layer_alpha_f(layer, opacity);
+                                let mut copy = SkPaint::default();
+                                copy.set_blend_mode(SkBlendMode::Src);
+                                canvas.draw_image(&layer_content, (0, 0), Some(&copy));
+                            }
+                            canvas.concat(matrix);
+                            let stored = direct
+                                && fill_opaque_rect_inside(canvas, &data, &path, &paint, *color);
+                            if !stored {
+                                canvas.draw_path(&path, &paint);
+                            }
+                            canvas.restore_to_count(count);
+                            // The snapshot taken before keeps its pixels.
+                            assert_eq!(
+                                snapshot.peek_pixels().unwrap().bytes().unwrap(),
+                                &before[..]
+                            );
+                            let after = surface.peek_pixels().unwrap().bytes().unwrap().to_vec();
+                            (after, stored)
+                        };
+                        let (expected, _) = draw(false);
+                        let (actual, stored) = draw(true);
+                        assert!(
+                            actual == expected,
+                            "rect {:?} matrix {matrix:?} color {index} clipped {clipped} \
+                             layered {layered} finite {finite}",
+                            [left, top, right, bottom]
+                        );
+                        assert!(!stored || index < 3, "color {index}");
+                        cases += 1;
+                        stored_cases += usize::from(stored);
+                    }
+                }
+            }
+        }
+        // Most fills of an opaque color without a negative zero store their inside.
+        assert!(stored_cases * 2 > cases, "{stored_cases} of {cases}");
     }
 
     #[test]
