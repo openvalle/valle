@@ -2744,6 +2744,24 @@ fn apply_filter_program_into(
     {
         return Ok(());
     }
+    if let Filter::VelocityBlur {
+        velocity,
+        shutter_angle_degrees,
+    } = filter
+        && super::velocity::draw(
+            surface,
+            &input.image,
+            IRect::from_xywh(0, 0, input.roi.width as i32, input.roi.height as i32),
+            [
+                input.roi.x - target_origin[0],
+                input.roi.y - target_origin[1],
+            ],
+            velocity,
+            shutter_angle_degrees,
+        )?
+    {
+        return Ok(());
+    }
     apply_filter_chain_program_into(surface, input, std::slice::from_ref(&filter), target_origin)
 }
 
@@ -4918,6 +4936,363 @@ mod tests {
                         "{pixels:?} {size:?} at {origin:?}, offset {offset:?}, clip {clip:?}"
                     );
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn chromatic_aberration_computed_per_pixel_keeps_the_bytes_of_its_kernel() {
+        use super::super::{chromatic, effect};
+        let info = ImageInfo::new(
+            (203, 300),
+            ColorType::RGBAF16,
+            AlphaType::Premul,
+            Some(working_color_space().unwrap()),
+        );
+        // Backing size, subset size and placement: the input covering what the kernel samples,
+        // so that it clamps, or not, so that it decals, in an exact backing or inside a larger
+        // one, past every edge or only past the top and left edges.
+        let placements = [
+            ((203, 300), (203, 300), [0, 0]),
+            ((260, 360), (243, 340), [-20, -20]),
+            ((220, 320), (150, 200), [30, 40]),
+            ((150, 200), (150, 200), [30, 40]),
+            ((260, 360), (243, 340), [5, 5]),
+        ];
+        // No offset, whole and fractional pixels along x as the filter's CSS form makes them, a
+        // subnormal and a negative zero, and both axes, negative and past the input.
+        let offsets = [
+            [0.0, 0.0],
+            [6.0, 0.0],
+            [3.7, 0.0],
+            [49.3, 0.0],
+            [1.0e-45, 0.0],
+            [-0.0, 0.0],
+            [3.7, -1.3],
+            [-12.25, 8.5],
+            [0.3, 17.9],
+            [41.0, 3.0],
+            [255.9, -0.6],
+        ];
+        let mut modes = [false; 2];
+        for (pixels, size, origin) in placements {
+            let image = varied_halves(pixels.0, pixels.1);
+            let source = IRect::from_wh(size.0, size.1);
+            for offset in offsets {
+                for clip in [None, Some(IRect::from_ltrb(4, 9, 190, 270))] {
+                    let mut sampled = None;
+                    let mut draw = |fused: bool| {
+                        let mut target = skia_safe::surfaces::raster(&info, None, None).unwrap();
+                        target.canvas().clear(Color4f::new(0.5, 0.5, 0.5, 1.0));
+                        if let Some(clip) = clip {
+                            target.canvas().clip_irect(clip, ClipOp::Intersect);
+                        }
+                        let sampling = effect::chromatic_aberration_sampling(
+                            &mut target,
+                            &image,
+                            source,
+                            origin,
+                            offset,
+                        )
+                        .unwrap();
+                        sampled = Some(sampling);
+                        let drawn = fused
+                            && chromatic::draw(
+                                &mut target,
+                                &image.peek_pixels().unwrap(),
+                                sampling,
+                                origin,
+                                offset,
+                            )
+                            .unwrap();
+                        assert_eq!(
+                            drawn,
+                            fused && cfg!(all(target_arch = "aarch64", target_endian = "little"))
+                        );
+                        if !drawn {
+                            assert!(
+                                effect::draw_chromatic_aberration_kernel(
+                                    &mut target,
+                                    &image,
+                                    sampling,
+                                    origin,
+                                    offset,
+                                )
+                                .unwrap()
+                            );
+                        }
+                        let mut bytes = vec![0_u8; 203 * 300 * 8];
+                        assert!(target.read_pixels(&info, &mut bytes, 203 * 8, (0, 0)));
+                        bytes
+                    };
+                    let (fused, kernel) = (draw(true), draw(false));
+                    let sampling = sampled.unwrap();
+                    modes[usize::from(sampling.clamp)] = true;
+                    let differing = fused
+                        .as_chunks::<8>()
+                        .0
+                        .iter()
+                        .zip(kernel.as_chunks::<8>().0)
+                        .filter(|(a, b)| a != b)
+                        .count();
+                    assert!(
+                        differing == 0,
+                        "{differing} pixels differ: offset {offset:?}, {pixels:?} {size:?} at \
+                         {origin:?}, clip {clip:?}, {sampling:?}"
+                    );
+                }
+            }
+        }
+        assert_eq!(modes, [true; 2], "both tilings");
+    }
+
+    /// A working-format half-float image whose pixels are of every kind a kernel meets:
+    /// premultiplied colors, transparent pixels with and without color, channels past one and
+    /// past alpha, negative alpha, negative, signed-zero and subnormal channels, an infinity and
+    /// NaN.
+    fn varied_halves(width: i32, height: i32) -> Image {
+        use valle_engine::compositor::bloom::f32_to_half;
+        let mut state = 0x9e37_79b9_u32;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            state
+        };
+        let mut bytes = Vec::new();
+        for _ in 0..width * height {
+            let mut unit = || (next() >> 8) as f32 / 16_777_216.0;
+            let alpha = unit();
+            let pixel = match (unit() * 64.0) as u32 {
+                0..=39 => [unit() * alpha, unit() * alpha, unit() * alpha, alpha],
+                40..=47 => [0.0; 4],
+                48..=51 => [unit(), unit(), unit(), 1.0],
+                52 | 53 => [unit(), 0.5, 0.25, 0.0],
+                54 | 55 => [unit() * 6.0, alpha * 2.0, unit() * 3.0, alpha],
+                56 | 57 => [-unit(), 6.0e-8, -0.0, alpha],
+                58 | 59 => [alpha, alpha * 0.5, 0.0, -alpha],
+                60 => [3.0e-5 * alpha, 0.0, 0.0, 6.0e-8],
+                61 => [f32::INFINITY, alpha, 0.0, alpha],
+                62 => [alpha, f32::NAN, alpha, alpha],
+                _ => [0.0, 0.0, alpha, f32::INFINITY],
+            };
+            for channel in pixel {
+                bytes.extend_from_slice(&f32_to_half(channel).to_le_bytes());
+            }
+        }
+        images::raster_from_data(
+            &ImageInfo::new(
+                (width, height),
+                ColorType::RGBAF16,
+                AlphaType::Premul,
+                Some(working_color_space().unwrap()),
+            ),
+            Data::new_copy(&bytes),
+            width as usize * 8,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn velocity_blur_computed_per_pixel_keeps_the_bytes_of_its_image_filter() {
+        let info = |width, height| {
+            ImageInfo::new(
+                (width, height),
+                ColorType::RGBAF16,
+                AlphaType::Premul,
+                Some(working_color_space().unwrap()),
+            )
+        };
+        let read = |surface: &mut Surface| {
+            let mut bytes = vec![0_u8; 203 * 300 * 8];
+            assert!(surface.read_pixels(&info(203, 300), &mut bytes, 203 * 8, (0, 0)));
+            bytes
+        };
+        let backing = varied_halves;
+        // Backing size, subset size and placement: the input covering the target or not, in an
+        // exact backing or inside a larger one.
+        for (pixels, size, origin) in [
+            ((203, 300), (203, 300), [0, 0]),
+            ((260, 360), (243, 340), [-20, -20]),
+            ((220, 320), (150, 200), [30, 40]),
+            ((150, 200), (150, 200), [30, 40]),
+            ((260, 360), (243, 340), [5, 5]),
+        ] {
+            let image = backing(pixels.0, pixels.1);
+            let source = IRect::from_wh(size.0, size.1);
+            // Velocity and shutter: fractional and whole-pixel offsets, offsets within a
+            // thousandth of whole pixels, every copy within one pixel, and copies past the clip.
+            for (velocity, shutter) in [
+                ([13.0, 0.0], 180.0),
+                ([-7.3, 2.9], 360.0),
+                ([0.0, 21.7], 180.0),
+                ([16.0, 0.0], 180.0),
+                ([8.002, -0.001], 180.0),
+                ([0.6, 0.0], 90.0),
+                ([300.0, -40.0], 720.0),
+            ] {
+                for clip in [None, Some(IRect::from_ltrb(4, 9, 190, 270))] {
+                    let draw = |fused: bool| {
+                        let mut target =
+                            skia_safe::surfaces::raster(&info(203, 300), None, None).unwrap();
+                        target.canvas().clear(Color4f::new(0.5, 0.5, 0.5, 1.0));
+                        if let Some(clip) = clip {
+                            target.canvas().clip_irect(clip, ClipOp::Intersect);
+                        }
+                        let drawn = fused
+                            && super::super::velocity::draw(
+                                &mut target,
+                                &image,
+                                source,
+                                origin,
+                                velocity,
+                                shutter,
+                            )
+                            .unwrap();
+                        assert_eq!(
+                            drawn,
+                            fused && cfg!(all(target_arch = "aarch64", target_endian = "little")),
+                            "{size:?} at {origin:?}, velocity {velocity:?}, clip {clip:?}"
+                        );
+                        if !drawn {
+                            // As a program pass draws it through Skia's image filter.
+                            clear_surface(&mut target).unwrap();
+                            let filter = Filter::VelocityBlur {
+                                velocity,
+                                shutter_angle_degrees: shutter,
+                            };
+                            draw_filters(
+                                target.canvas(),
+                                &image,
+                                source,
+                                origin,
+                                [0, 0],
+                                &[filter],
+                            )
+                            .unwrap();
+                        }
+                        read(&mut target)
+                    };
+                    assert!(
+                        draw(true) == draw(false),
+                        "{pixels:?} {size:?} at {origin:?}, velocity {velocity:?} at \
+                         {shutter} degrees, clip {clip:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn noise_displacement_computed_per_pixel_keeps_the_bytes_of_its_kernel() {
+        use super::super::{effect, noise::Noise};
+        let info = ImageInfo::new(
+            (203, 300),
+            ColorType::RGBAF16,
+            AlphaType::Premul,
+            Some(working_color_space().unwrap()),
+        );
+        // Backing size, subset and placement: the input covering the target or not, in an exact
+        // backing or inside a larger one, from its corner or not.
+        let placements = [
+            ((203, 300), IRect::from_wh(203, 300), [0, 0]),
+            ((260, 360), IRect::from_wh(243, 340), [-20, -20]),
+            ((220, 320), IRect::from_wh(150, 200), [30, 40]),
+            ((220, 320), IRect::from_ltrb(7, 5, 157, 205), [30, 40]),
+            ((150, 200), IRect::from_wh(150, 200), [30, 40]),
+        ];
+        // Local to canvas: identity, scaled, anisotropic, mirrored, rotated and shrunk, with
+        // fractional translations.
+        let transforms = [
+            [1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+            [2.0, 0.0, 61.5, 0.0, 2.0, 37.25],
+            [2.0, 0.0, 61.0, 0.0, 0.75, 37.0],
+            [-1.5, 0.0, 130.0, 0.0, 1.5, 37.0],
+            [1.3, -0.75, 61.0, 0.75, 1.3, 37.0],
+            [0.25, 0.0, -3.0, 0.0, 0.4, 5.0],
+        ];
+        // Fractal and turbulent noise from a constant to many octaves per pixel, seeds at and
+        // past the generator's range, and scales from none to past the input.
+        let noises = [
+            ([0.05, 0.07], 2, 3, 24.0, false),
+            ([0.0017, 0.0024], 2, 11, 74.0, false),
+            ([0.0016, 0.021], 2, 5, 40.0, true),
+            ([0.31, 0.9], 5, 0, 7.5, true),
+            ([0.0, 0.12], 1, u32::MAX, 300.0, false),
+            ([2.7, 3.1], 9, 1_234_567, -15.0, false),
+            ([0.02, 0.02], 3, 7, 0.0, true),
+        ];
+        let mut case = 0;
+        for transform in transforms {
+            for (frequency, octaves, seed, scale, turbulence) in noises {
+                let (pixels, source, origin) = placements[case % placements.len()];
+                let clip = (case % 2 == 1).then(|| IRect::from_ltrb(4, 9, 190, 270));
+                let bounds = if case % 3 == 0 {
+                    IRect::from_ltrb(-10, 3, 230, 296)
+                } else {
+                    IRect::from_wh(203, 300)
+                };
+                case += 1;
+                let image = varied_halves(pixels.0, pixels.1);
+                let uniforms =
+                    effect::noise_displacement_uniforms(source, origin, scale, transform).unwrap();
+                let noise = Noise {
+                    frequency,
+                    octaves,
+                    seed,
+                    turbulence,
+                };
+                let draw = |fused: bool| {
+                    let mut target = skia_safe::surfaces::raster(&info, None, None).unwrap();
+                    target.canvas().clear(Color4f::new(0.5, 0.5, 0.5, 1.0));
+                    if let Some(clip) = clip {
+                        target.canvas().clip_irect(clip, ClipOp::Intersect);
+                    }
+                    let drawn = fused
+                        && super::super::noise::draw(
+                            &mut target,
+                            &image,
+                            source,
+                            origin,
+                            bounds,
+                            &uniforms,
+                            noise,
+                        )
+                        .unwrap();
+                    assert_eq!(
+                        drawn,
+                        fused && cfg!(all(target_arch = "aarch64", target_endian = "little")),
+                        "{noise:?}"
+                    );
+                    if !drawn {
+                        effect::draw_noise_displacement_kernel(
+                            &mut target,
+                            &image,
+                            source,
+                            origin,
+                            bounds,
+                            &uniforms,
+                            noise,
+                        )
+                        .unwrap();
+                    }
+                    let mut bytes = vec![0_u8; 203 * 300 * 8];
+                    assert!(target.read_pixels(&info, &mut bytes, 203 * 8, (0, 0)));
+                    bytes
+                };
+                let (fused, kernel) = (draw(true), draw(false));
+                let differing = fused
+                    .as_chunks::<8>()
+                    .0
+                    .iter()
+                    .zip(kernel.as_chunks::<8>().0)
+                    .filter(|(a, b)| a != b)
+                    .count();
+                assert!(
+                    differing == 0,
+                    "{differing} pixels differ: {noise:?}, scale {scale}, {transform:?}, \
+                     {pixels:?} {source:?} at {origin:?}, clip {clip:?}, bounds {bounds:?}"
+                );
             }
         }
     }

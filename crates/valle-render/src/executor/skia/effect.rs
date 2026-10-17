@@ -1135,26 +1135,15 @@ fn image_filter_at(filter: &Filter, device: [i32; 2]) -> Result<Option<ImageFilt
             velocity,
             shutter_angle_degrees,
         } => {
-            let shutter = (*shutter_angle_degrees / 360.0).clamp(0.0, 1.0);
-            if velocity[0].abs().max(velocity[1].abs()) * shutter <= 1.0e-6 {
+            let Some(offsets) = super::velocity::offsets(*velocity, *shutter_angle_degrees) else {
                 return Ok(None);
-            }
+            };
             // Nine uniformly weighted shutter positions use the same public Skia primitives on
             // native and CanvasKit. Their Gaussian blur kernels differ at the tails across Skia
             // builds, while translated samples have stable coverage on both backends.
-            const SAMPLES: usize = 9;
-            let weight = 1.0 / SAMPLES as f32;
-            let alpha = color_filters::matrix_row_major(
-                &[
-                    1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0,
-                    0.0, 0.0, weight, 0.0,
-                ],
-                None,
-            );
+            let alpha = color_filters::matrix_row_major(&super::velocity::weight(), None);
             let mut sum = None;
-            for index in 0..SAMPLES {
-                let phase = index as f32 / (SAMPLES - 1) as f32 - 0.5;
-                let offset = (velocity[0] * shutter * phase, velocity[1] * shutter * phase);
+            for offset in offsets {
                 let shifted = image_filters::matrix_transform(
                     &Matrix::translate(offset),
                     SamplingOptions::default(),
@@ -1206,7 +1195,8 @@ fn perlin_noise(
 /// and carries the displacement vectors into canvas pixels. The shared kernel reads the noise
 /// channels as they are: Skia's displacement map reads its untagged noise image as sRGB and
 /// converts it into the linear working space, which CanvasKit's sRGB-tagged surfaces never do. A
-/// degenerate transform leaves the input undisplaced.
+/// degenerate transform leaves the input undisplaced. On aarch64 Raster, `noise::draw` computes
+/// the kernel's bytes pixel by pixel.
 pub(super) fn draw_noise_displacement(
     surface: &mut Surface,
     input: &Image,
@@ -1228,6 +1218,39 @@ pub(super) fn draw_noise_displacement(
             "noise displacement needs a noise displacement filter".into(),
         ));
     };
+    let noise = super::noise::Noise {
+        frequency: *frequency,
+        octaves: *octaves,
+        seed: *seed,
+        turbulence: *turbulence,
+    };
+    let Some(uniforms) = noise_displacement_uniforms(source, origin, *scale, local_to_canvas)
+    else {
+        let mut paint = Paint::default();
+        paint.set_blend_mode(BlendMode::Src);
+        let destination = IRect::from_xywh(origin[0], origin[1], source.width(), source.height());
+        surface.canvas().draw_image_rect(
+            input,
+            Some((&source.into(), skia_safe::canvas::SrcRectConstraint::Strict)),
+            SkRect::from(destination),
+            &paint,
+        );
+        return Ok(());
+    };
+    if super::noise::draw(surface, input, source, origin, bounds, &uniforms, noise)? {
+        return Ok(());
+    }
+    draw_noise_displacement_kernel(surface, input, source, origin, bounds, &uniforms, noise)
+}
+
+/// The uniforms of the noise displacement kernel, or `None` where the transform is degenerate or
+/// a uniform leaves f32.
+pub(super) fn noise_displacement_uniforms(
+    source: IRect,
+    origin: [i32; 2],
+    scale: f32,
+    local_to_canvas: [f64; 6],
+) -> Option<[f32; 15]> {
     let [a, b, c, d, e, f] = local_to_canvas;
     let determinant = a * e - b * d;
     let [ia, ib, id, ie] = [e, -b, -d, a].map(|value| value / determinant);
@@ -1243,28 +1266,29 @@ pub(super) fn draw_noise_displacement(
         b,
         d,
         e,
-        f64::from(*scale),
+        f64::from(scale),
         left,
         top,
         left + f64::from(source.width()),
         top + f64::from(source.height()),
     ];
-    let mut paint = Paint::default();
-    paint.set_blend_mode(BlendMode::Src);
-    if determinant == 0.0
-        || uniforms
+    (determinant != 0.0
+        && uniforms
             .iter()
-            .any(|value| !value.is_finite() || value.abs() > f64::from(f32::MAX))
-    {
-        let destination = IRect::from_xywh(origin[0], origin[1], source.width(), source.height());
-        surface.canvas().draw_image_rect(
-            input,
-            Some((&source.into(), skia_safe::canvas::SrcRectConstraint::Strict)),
-            SkRect::from(destination),
-            &paint,
-        );
-        return Ok(());
-    }
+            .all(|value| value.is_finite() && value.abs() <= f64::from(f32::MAX)))
+    .then(|| uniforms.map(|value| value as f32))
+}
+
+/// The noise displacement kernel with `uniforms` over `bounds`, drawn through Skia.
+pub(super) fn draw_noise_displacement_kernel(
+    surface: &mut Surface,
+    input: &Image,
+    source: IRect,
+    origin: [i32; 2],
+    bounds: IRect,
+    uniforms: &[f32; 15],
+    noise: super::noise::Noise,
+) -> Result<(), DrawError> {
     thread_local! {
         static KERNEL: std::cell::RefCell<Option<RuntimeEffect>> = const { std::cell::RefCell::new(None) };
     }
@@ -1288,10 +1312,10 @@ pub(super) fn draw_noise_displacement(
             )),
         )
         .ok_or_else(|| DrawError::Unsupported("noise displacement input".into()))?;
-    let noise = perlin_noise(*frequency, *octaves, *seed, *turbulence)?;
+    let noise = perlin_noise(noise.frequency, noise.octaves, noise.seed, noise.turbulence)?;
     let bytes = uniforms
         .iter()
-        .flat_map(|value| (*value as f32).to_ne_bytes())
+        .flat_map(|value| value.to_ne_bytes())
         .collect::<Vec<_>>();
     let shader = effect
         .make_shader(
@@ -1300,6 +1324,8 @@ pub(super) fn draw_noise_displacement(
             None,
         )
         .ok_or_else(|| DrawError::Unsupported("noise displacement kernel".into()))?;
+    let mut paint = Paint::default();
+    paint.set_blend_mode(BlendMode::Src);
     paint.set_shader(shader);
     super::draw::draw_irect_by_rows(surface, bounds, &paint)
 }
@@ -1307,8 +1333,9 @@ pub(super) fn draw_noise_displacement(
 /// Chromatic aberration of the `source` subset of `input`, placed at canvas `origin`, as Skia's
 /// runtime image filter computes it on Raster, but drawn straight onto the canvas so that its rows
 /// can be split: the shader over the clip under the Src blend, sampling the input bilinearly with
-/// the image the filter samples and the tiling it picks for the pixels it reaches. Returns
-/// `false`, drawing nothing, where the filter's own draw stays.
+/// the image the filter samples and the tiling it picks for the pixels it reaches. On aarch64,
+/// `chromatic::draw` computes the shader's bytes pixel by pixel. Returns `false`, drawing nothing,
+/// where the filter's own draw stays.
 pub(super) fn draw_chromatic_aberration(
     surface: &mut Surface,
     input: &Image,
@@ -1316,9 +1343,31 @@ pub(super) fn draw_chromatic_aberration(
     origin: [i32; 2],
     offset: [f32; 2],
 ) -> Result<bool, DrawError> {
+    let Some(sampling) = chromatic_aberration_sampling(surface, input, source, origin, offset)
+    else {
+        return Ok(false);
+    };
+    let pixels = input
+        .peek_pixels()
+        .ok_or_else(|| DrawError::Surface("Raster image has no pixels".into()))?;
+    if super::chromatic::draw(surface, &pixels, sampling, origin, offset)? {
+        return Ok(true);
+    }
+    draw_chromatic_aberration_kernel(surface, input, sampling, origin, offset)
+}
+
+/// How the chromatic aberration filter samples the `source` subset of `input`, placed at canvas
+/// `origin`, for the canvas clip, or `None` where its own draw stays.
+pub(super) fn chromatic_aberration_sampling(
+    surface: &mut Surface,
+    input: &Image,
+    source: IRect,
+    origin: [i32; 2],
+    offset: [f32; 2],
+) -> Option<super::chromatic::Sampling> {
     let radius = offset[0].abs().max(offset[1].abs()) * 0.5;
     let (Some(clip), Some(pixels)) = (super::draw::rows_clip(surface), input.peek_pixels()) else {
-        return Ok(false);
+        return None;
     };
     if !(0.0..65_536.0).contains(&radius)
         || source.is_empty()
@@ -1327,7 +1376,7 @@ pub(super) fn draw_chromatic_aberration(
         || source.right > pixels.width()
         || source.bottom > pixels.height()
     {
-        return Ok(false);
+        return None;
     }
     // The filter places the input with an integer translation and samples it up to `radius`
     // pixels beyond the clip.
@@ -1335,17 +1384,37 @@ pub(super) fn draw_chromatic_aberration(
     let reach = radius.ceil() as i32;
     let sampled = clip.with_outset((reach, reach));
     if !IRect::intersects(&placed, &sampled) {
-        return Ok(false);
+        return None;
     }
     // It clamps where the input covers every sample and decals otherwise. Past a right or bottom
     // edge inside a larger backing it samples only the subset's pixels.
     let covered = IRect::intersect(&placed, &sampled) == Some(sampled);
     let subset = (sampled.right > placed.right && source.width() != pixels.width())
         || (sampled.bottom > placed.bottom && source.height() != pixels.height());
-    let tile = if covered {
-        TileMode::Clamp
+    let size = if subset {
+        [source.width(), source.height()]
     } else {
-        TileMode::Decal
+        [pixels.width(), pixels.height()]
+    };
+    Some(super::chromatic::Sampling {
+        clip,
+        size,
+        clamp: covered,
+    })
+}
+
+/// The chromatic aberration kernel with `offset` as `sampling` reads `input`, placed at canvas
+/// `origin`, drawn through Skia. Returns `false`, drawing nothing, where the filter's own draw
+/// stays.
+pub(super) fn draw_chromatic_aberration_kernel(
+    surface: &mut Surface,
+    input: &Image,
+    sampling: super::chromatic::Sampling,
+    origin: [i32; 2],
+    offset: [f32; 2],
+) -> Result<bool, DrawError> {
+    let Some(pixels) = input.peek_pixels() else {
+        return Ok(false);
     };
     let mut bitmap = Bitmap::new();
     // SAFETY: `input` keeps these pixels alive and unchanged while this function draws, and the
@@ -1355,13 +1424,21 @@ pub(super) fn draw_chromatic_aberration(
         return Ok(false);
     }
     bitmap.set_immutable();
-    if subset {
+    if sampling.size != [pixels.width(), pixels.height()] {
         let mut view = Bitmap::new();
-        if !bitmap.extract_subset(&mut view, source) {
+        if !bitmap.extract_subset(
+            &mut view,
+            IRect::from_wh(sampling.size[0], sampling.size[1]),
+        ) {
             return Ok(false);
         }
         bitmap = view;
     }
+    let tile = if sampling.clamp {
+        TileMode::Clamp
+    } else {
+        TileMode::Decal
+    };
     let image = bitmap
         .to_shader(
             (tile, tile),
@@ -1379,7 +1456,7 @@ pub(super) fn draw_chromatic_aberration(
     let mut paint = Paint::default();
     paint.set_blend_mode(BlendMode::Src);
     paint.set_shader(shader);
-    super::draw::draw_irect_by_rows(surface, clip, &paint)?;
+    super::draw::draw_irect_by_rows(surface, sampling.clip, &paint)?;
     Ok(true)
 }
 
