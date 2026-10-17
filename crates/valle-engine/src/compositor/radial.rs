@@ -1,7 +1,7 @@
 //! Deterministic radial blur over premultiplied working-linear RGBA16F pixels.
 
 use super::bloom::{
-    BloomError, encode_output, fill_image_rows, pixel_count, quantize_half, read_base,
+    BloomError, encode_output, fill_image_rows, pixel_count, quantize_halves, read_base,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -52,18 +52,23 @@ pub fn apply_radial_blur_f16(
         output_origin,
         [output_width, output_height],
     )?;
+    let unmoved = Unmoved::new(params, plan.len(), [input_width, input_height]);
     let mut origin = input_origin;
     let mut size = [input_width, input_height];
+    // Every pass writes each of its pixels, so the two buffers alternate without clearing.
+    let mut spare = Vec::new();
     for (index, pass) in plan.iter().enumerate() {
-        let mut output = vec![[0.0; 4]; pixel_count(pass.size[0], pass.size[1])?];
+        let mut output = std::mem::take(&mut spare);
+        output.resize(pixel_count(pass.size[0], pass.size[1])?, [0.0; 4]);
         let pixel_at = |ax: i64, ay: i64| -> [f32; 4] {
             let sx = (ax - i64::from(origin[0])) as f64;
             let sy = (ay - i64::from(origin[1])) as f64;
             let dx = ax as f64 + 0.5 - f64::from(params.center[0]);
             let dy = ay as f64 + 0.5 - f64::from(params.center[1]);
             let distance = dx.hypot(dy);
-            let reach = f64::from(pass.fraction) * f64::from(params.amount).min(distance * 0.5);
-            if index + 1 == plan.len() && f64::from(params.amount).min(distance * 0.5) <= 8.0 {
+            let limited = f64::from(params.amount).min(distance * 0.5);
+            let reach = f64::from(pass.fraction) * limited;
+            if index + 1 == plan.len() && limited <= 8.0 {
                 return exact_pixel(
                     &original,
                     input_width as usize,
@@ -88,38 +93,43 @@ pub fn apply_radial_blur_f16(
             } else {
                 let tx = dx / distance * reach;
                 let ty = dy / distance * reach;
-                let before = bilinear_decal(
+                let [before, after] = bilinear_pair(
                     &source,
                     size[0] as usize,
                     size[1] as usize,
-                    sx - tx,
-                    sy - ty,
+                    [sx - tx, sx + tx],
+                    [sy - ty, sy + ty],
                 );
-                let after = bilinear_decal(
-                    &source,
-                    size[0] as usize,
-                    size[1] as usize,
-                    sx + tx,
-                    sy + ty,
-                );
-                std::array::from_fn(|c| {
-                    quantize_half((before[c] + after[c]) * 0.25 + f64::from(center[c]) * 0.5)
-                })
+                quantize_halves(std::array::from_fn(|c| {
+                    (before[c] + after[c]) * 0.25 + f64::from(center[c]) * 0.5
+                }))
             }
         };
         let width = pass.size[0] as usize;
         fill_image_rows(&mut output, width, |first, rows| {
             for (row, pixels) in rows.chunks_mut(width).enumerate() {
                 let ay = i64::from(pass.origin[1]) + (first + row) as i64;
+                let unmoved_row = unmoved.as_ref().and_then(|unmoved| {
+                    unmoved.row(&original, [input_width, input_height], input_origin, ay)
+                });
                 for (x, pixel) in pixels.iter_mut().enumerate() {
-                    *pixel = pixel_at(i64::from(pass.origin[0]) + x as i64, ay);
+                    let ax = i64::from(pass.origin[0]) + x as i64;
+                    *pixel = match unmoved_row.as_ref().and_then(|row| row.keep(ax)) {
+                        Some(kept) => kept,
+                        None => pixel_at(ax, ay),
+                    };
                 }
             }
         });
-        source = std::borrow::Cow::Owned(output);
+        if let std::borrow::Cow::Owned(previous) =
+            std::mem::replace(&mut source, std::borrow::Cow::Owned(output))
+        {
+            spare = previous;
+        }
         origin = pass.origin;
         size = pass.size;
     }
+    drop(spare);
     Ok(encode_output(&source))
 }
 
@@ -249,22 +259,320 @@ fn exact_pixel(
     }
     let reach = f64::from(amount).min(distance * 0.5);
     let steps = reach.ceil().max(1.0) as i32;
-    let mut sum = [0.0; 4];
-    for tap in -steps..=steps {
-        let weight = f64::from(steps + 1 - tap.abs());
-        let travel = f64::from(tap) * reach / f64::from(steps);
-        let sample = bilinear_decal(
+    if steps == 1 {
+        // The loop below with one step, whose travel is `reach` itself rather than divided by
+        // one: taps -1 and 1 travel it in opposite directions, and negating a travel negates its
+        // products exactly, so the two are sampled together.
+        let travel = [dx / distance * reach, dy / distance * reach];
+        let [before, after] = bilinear_pair(
             source,
             width,
             height,
-            sx + dx / distance * travel,
-            sy + dy / distance * travel,
+            [sx - travel[0], sx + travel[0]],
+            [sy - travel[1], sy + travel[1]],
         );
+        let pixel = source_at(source, width, height, sx as i64, sy as i64);
+        // Weights 1, 2 and 1, then the quarter of their square.
+        return quantize_halves(std::array::from_fn(|c| {
+            (0.0 + before[c] * 1.0 + (0.0 + f64::from(pixel[c])) * 2.0 + after[c] * 1.0) * 0.25
+        }));
+    }
+    let mut sum = [0.0; 4];
+    for tap in -steps..=steps {
+        let weight = f64::from(steps + 1 - tap.abs());
+        let sample = if tap == 0 {
+            // The middle tap lands on the pixel itself: bilinear weights 1, 0, 0, 0 over
+            // finite pixels give the pixel, with a negative zero made positive.
+            let pixel = source_at(source, width, height, sx as i64, sy as i64);
+            std::array::from_fn(|c| 0.0 + f64::from(pixel[c]))
+        } else {
+            let travel = f64::from(tap) * reach / f64::from(steps);
+            bilinear_decal(
+                source,
+                width,
+                height,
+                sx + dx / distance * travel,
+                sy + dy / distance * travel,
+            )
+        };
         for c in 0..4 {
             sum[c] += sample[c] * weight;
         }
     }
-    sum.map(|v| quantize_half(v / f64::from((steps + 1) * (steps + 1))))
+    let divisor = f64::from((steps + 1) * (steps + 1));
+    if (steps + 1).count_ones() == 1 {
+        // Dividing by a power of two rounds like multiplying by its exact reciprocal.
+        let scale = divisor.recip();
+        for v in &mut sum {
+            *v *= scale;
+        }
+    } else {
+        for v in &mut sum {
+            *v /= divisor;
+        }
+    }
+    quantize_halves(sum)
+}
+
+/// The pixels that a blur of one pass under a quarter pixel leaves as they are.
+///
+/// Such a blur takes the `steps == 1` branch of [`exact_pixel`] at every pixel `p` but beside the
+/// center. Its two taps lean at most `s` toward a neighboring column and row, `s` being the amount
+/// plus the rounding of the pixel's coordinate with the travel added, so away from the input's
+/// border they read `p`'s 3×3 neighborhood and give its eight neighbors at most `2s` of their
+/// weight. With `D` bounding how far a neighbor's channel lies from `p`'s, each tap lies within
+/// `2s·D` of `p`, plus `8·2^-53·(|p| + D)` for the rounding of the weights and the sums; weighing
+/// the taps 1, 2 and 1 halves that and adds `2·2^-53·|p|`, and rounding to f32 adds `2^-24` of the
+/// result. The f32 thus lies within `slope·D + 2^-22·|p|` of `p`. Below half the gap between `p`
+/// and the half beside it on either side, which is at least `2^-12` of the power of two at or
+/// below `|p|` and `2^-25` among half subnormals, it rounds back to `p`. A zero is kept only
+/// beside neighbors that are not negative, whose blur cannot round to −0; a −0 is kept as +0, as
+/// the blur's sums leave it.
+#[derive(Debug, Clone, Copy)]
+struct Unmoved {
+    /// `1.25·amount + 2^-52·(size + 2)`, which covers `s + 4·2^-53` with room for the rounding of
+    /// the travel's direction and of the test's own arithmetic.
+    slope: f32,
+    /// The column and row of the center, beside which `exact_pixel` may copy a pixel as it is
+    /// rather than blur it.
+    center: [i64; 2],
+}
+
+impl Unmoved {
+    fn new(params: RadialBlurParams, passes: usize, input_size: [u32; 2]) -> Option<Self> {
+        (passes == 1 && params.amount > 0.0 && params.amount < 0.25).then(|| Self {
+            slope: (1.25 * f64::from(params.amount)
+                + (f64::from(input_size[0].max(input_size[1])) + 2.0) * f64::EPSILON)
+                as f32,
+            center: params.center.map(|value| f64::from(value).floor() as i64),
+        })
+    }
+
+    /// The three input rows around device row `y`, if they lie inside the input.
+    fn row<'a>(
+        &self,
+        pixels: &'a [[f32; 4]],
+        [width, height]: [u32; 2],
+        origin: [i32; 2],
+        y: i64,
+    ) -> Option<UnmovedRow<'a>> {
+        let row = y - i64::from(origin[1]);
+        if row < 1 || row + 1 >= i64::from(height) || width < 3 {
+            return None;
+        }
+        let width = width as usize;
+        let top = (row as usize - 1) * width;
+        let rows = &pixels[top..top + 3 * width];
+        Some(UnmovedRow {
+            rows: [&rows[..width], &rows[width..2 * width], &rows[2 * width..]],
+            left: i64::from(origin[0]),
+            slope: self.slope,
+            center: (y.abs_diff(self.center[1]) <= 1).then_some(self.center[0]),
+        })
+    }
+}
+
+struct UnmovedRow<'a> {
+    rows: [&'a [[f32; 4]]; 3],
+    /// The device column of the rows' first pixel.
+    left: i64,
+    slope: f32,
+    /// The center's column, on rows beside the center's.
+    center: Option<i64>,
+}
+
+impl UnmovedRow<'_> {
+    /// The blurred pixel at device column `x`, if the blur leaves it as it is.
+    #[inline(always)]
+    fn keep(&self, x: i64) -> Option<[f32; 4]> {
+        let column = x - self.left;
+        if column < 1
+            || column + 1 >= self.rows[1].len() as i64
+            || self.center.is_some_and(|center| x.abs_diff(center) <= 1)
+        {
+            return None;
+        }
+        #[cfg(all(target_arch = "aarch64", target_endian = "little"))]
+        {
+            neon::keep(self.rows, column as usize, self.slope)
+        }
+        #[cfg(not(all(target_arch = "aarch64", target_endian = "little")))]
+        {
+            keep(self.rows, column as usize, self.slope)
+        }
+    }
+}
+
+/// `p + 0.0` for the pixel `p` at `x` of the middle row if [`Unmoved`] bounds its blur within
+/// half a gap of it, given the `slope` of the bound.
+#[cfg(any(test, not(all(target_arch = "aarch64", target_endian = "little"))))]
+fn keep(rows: [&[[f32; 4]]; 3], x: usize, slope: f32) -> Option<[f32; 4]> {
+    let pixel = rows[1][x];
+    let mut kept = true;
+    for (channel, value) in pixel.into_iter().enumerate() {
+        let (mut high, mut low) = (value, value);
+        for row in rows {
+            for neighbor in &row[x - 1..=x + 1] {
+                high = high.max(neighbor[channel]);
+                low = low.min(neighbor[channel]);
+            }
+        }
+        let bound = (high - value).max(value - low) * slope + value.abs() * (1.0 / 4_194_304.0);
+        let gap = if value == 0.0 && low < 0.0 {
+            0.0
+        } else {
+            (f32::from_bits(value.to_bits() & 0x7f80_0000) * (1.0 / 4096.0)).max(1.0 / 33_554_432.0)
+        };
+        kept &= bound < gap;
+    }
+    kept.then(|| pixel.map(|value| value + 0.0))
+}
+
+/// [`bilinear_decal`] at two points.
+#[inline(always)]
+fn bilinear_pair(
+    pixels: &[[f32; 4]],
+    width: usize,
+    height: usize,
+    x: [f64; 2],
+    y: [f64; 2],
+) -> [[f64; 4]; 2] {
+    #[cfg(all(target_arch = "aarch64", target_endian = "little"))]
+    if let Some(samples) = neon::bilinear_pair(pixels, width, height, x, y) {
+        return samples;
+    }
+    [
+        bilinear_decal(pixels, width, height, x[0], y[0]),
+        bilinear_decal(pixels, width, height, x[1], y[1]),
+    ]
+}
+
+#[cfg(all(target_arch = "aarch64", target_endian = "little"))]
+mod neon {
+    use std::arch::aarch64::*;
+
+    /// [`super::bilinear_decal`] at two points whose taps all lie inside the image, lane by lane
+    /// its operations, or `None` where a tap of either lies outside.
+    #[inline(always)]
+    pub(super) fn bilinear_pair(
+        pixels: &[[f32; 4]],
+        width: usize,
+        height: usize,
+        x: [f64; 2],
+        y: [f64; 2],
+    ) -> Option<[[f64; 4]; 2]> {
+        // SAFETY: NEON is part of the aarch64 baseline; the loads read the two coordinates and
+        // pixels of `pixels`, and the stores write the channels of the two samples.
+        unsafe {
+            let (x, y) = (vld1q_f64(x.as_ptr()), vld1q_f64(y.as_ptr()));
+            // `floor() as i64` saturates as the rounding conversion does.
+            let (x0, y0) = (vcvtmq_s64_f64(x), vcvtmq_s64_f64(y));
+            let inside = vandq_u64(
+                vandq_u64(vcgezq_s64(x0), vcltq_s64(x0, vdupq_n_s64(width as i64 - 1))),
+                vandq_u64(
+                    vcgezq_s64(y0),
+                    vcltq_s64(y0, vdupq_n_s64(height as i64 - 1)),
+                ),
+            );
+            if vminvq_u32(vreinterpretq_u32_u64(inside)) == 0 {
+                return None;
+            }
+            let fx = vsubq_f64(x, vcvtq_f64_s64(x0));
+            let fy = vsubq_f64(y, vcvtq_f64_s64(y0));
+            let one = vdupq_n_f64(1.0);
+            let (gx, gy) = (vsubq_f64(one, fx), vsubq_f64(one, fy));
+            let weights = [
+                vmulq_f64(gx, gy),
+                vmulq_f64(fx, gy),
+                vmulq_f64(gx, fy),
+                vmulq_f64(fx, fy),
+            ];
+            Some([
+                sample::<0>(pixels, width, x0, y0, &weights),
+                sample::<1>(pixels, width, x0, y0, &weights),
+            ])
+        }
+    }
+
+    /// The sample of lane `LANE`, whose four taps lie inside the image.
+    #[inline(always)]
+    fn sample<const LANE: i32>(
+        pixels: &[[f32; 4]],
+        width: usize,
+        x0: int64x2_t,
+        y0: int64x2_t,
+        weights: &[float64x2_t; 4],
+    ) -> [f64; 4] {
+        // SAFETY: NEON is part of the aarch64 baseline; the loads read pixels of `pixels` and the
+        // stores write the four channels of `sample`.
+        unsafe {
+            let top =
+                vgetq_lane_s64::<LANE>(y0) as usize * width + vgetq_lane_s64::<LANE>(x0) as usize;
+            let rows = &pixels[top..top + width + 2];
+            let (mut low, mut high) = (vdupq_n_f64(0.0), vdupq_n_f64(0.0));
+            for (pixel, weight) in [rows[0], rows[1], rows[width], rows[width + 1]]
+                .iter()
+                .zip(weights)
+            {
+                let value = vld1q_f32(pixel.as_ptr());
+                low = vaddq_f64(
+                    low,
+                    vmulq_laneq_f64::<LANE>(vcvt_f64_f32(vget_low_f32(value)), *weight),
+                );
+                high = vaddq_f64(
+                    high,
+                    vmulq_laneq_f64::<LANE>(vcvt_high_f64_f32(value), *weight),
+                );
+            }
+            let mut sample = [0.0; 4];
+            vst1q_f64(sample.as_mut_ptr(), low);
+            vst1q_f64(sample[2..].as_mut_ptr(), high);
+            sample
+        }
+    }
+
+    /// [`super::keep`], lane by lane its operations.
+    #[inline(always)]
+    pub(super) fn keep(rows: [&[[f32; 4]]; 3], x: usize, slope: f32) -> Option<[f32; 4]> {
+        // SAFETY: NEON is part of the aarch64 baseline; the loads read pixels of `rows` and the
+        // store writes the four channels of `kept`.
+        unsafe {
+            let pixel = vld1q_f32(rows[1][x].as_ptr());
+            let (mut high, mut low) = (pixel, pixel);
+            for row in rows {
+                for neighbor in &row[x - 1..=x + 1] {
+                    let neighbor = vld1q_f32(neighbor.as_ptr());
+                    high = vmaxq_f32(high, neighbor);
+                    low = vminq_f32(low, neighbor);
+                }
+            }
+            let bound = vaddq_f32(
+                vmulq_n_f32(
+                    vmaxq_f32(vsubq_f32(high, pixel), vsubq_f32(pixel, low)),
+                    slope,
+                ),
+                vmulq_n_f32(vabsq_f32(pixel), 1.0 / 4_194_304.0),
+            );
+            let unit = vreinterpretq_f32_u32(vandq_u32(
+                vreinterpretq_u32_f32(pixel),
+                vdupq_n_u32(0x7f80_0000),
+            ));
+            let gap = vmaxq_f32(
+                vmulq_n_f32(unit, 1.0 / 4096.0),
+                vdupq_n_f32(1.0 / 33_554_432.0),
+            );
+            let gap = vreinterpretq_f32_u32(vbicq_u32(
+                vreinterpretq_u32_f32(gap),
+                vandq_u32(vceqzq_f32(pixel), vcltzq_f32(low)),
+            ));
+            if vminvq_u32(vcltq_f32(bound, gap)) != u32::MAX {
+                return None;
+            }
+            let mut kept = [0.0; 4];
+            vst1q_f32(kept.as_mut_ptr(), vaddq_f32(pixel, vdupq_n_f32(0.0)));
+            Some(kept)
+        }
+    }
 }
 
 fn source_at(pixels: &[[f32; 4]], width: usize, height: usize, x: i64, y: i64) -> [f32; 4] {
@@ -537,5 +845,344 @@ mod scale_regressions {
                 assert!(passes.len() <= 10);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod reference_bits {
+    use super::*;
+    use crate::compositor::bloom::{f32_to_half, half_to_f32, quantize_half};
+
+    // The blur before its middle-tap, division and buffer shortcuts, kept as the byte reference.
+    fn reference_blur(
+        input: &[u8],
+        input_size: [u32; 2],
+        output_size: [u32; 2],
+        input_offset: [i32; 2],
+        output_origin: [i32; 2],
+        params: RadialBlurParams,
+    ) -> Vec<u8> {
+        let [input_width, input_height] = input_size;
+        let original = read_base(
+            input,
+            input_width,
+            input_height,
+            input_width,
+            input_height,
+            [0, 0],
+        )
+        .unwrap();
+        let mut source = original.clone();
+        let input_origin = [
+            output_origin[0] + input_offset[0],
+            output_origin[1] + input_offset[1],
+        ];
+        let plan = radial_blur_plan(
+            params.amount,
+            input_origin,
+            input_size,
+            output_origin,
+            output_size,
+        )
+        .unwrap();
+        let mut origin = input_origin;
+        let mut size = input_size;
+        for (index, pass) in plan.iter().enumerate() {
+            let mut output = vec![[0.0; 4]; pixel_count(pass.size[0], pass.size[1]).unwrap()];
+            for (i, pixel) in output.iter_mut().enumerate() {
+                let ax = i64::from(pass.origin[0]) + (i % pass.size[0] as usize) as i64;
+                let ay = i64::from(pass.origin[1]) + (i / pass.size[0] as usize) as i64;
+                let sx = (ax - i64::from(origin[0])) as f64;
+                let sy = (ay - i64::from(origin[1])) as f64;
+                let dx = ax as f64 + 0.5 - f64::from(params.center[0]);
+                let dy = ay as f64 + 0.5 - f64::from(params.center[1]);
+                let distance = dx.hypot(dy);
+                let reach = f64::from(pass.fraction) * f64::from(params.amount).min(distance * 0.5);
+                *pixel = if index + 1 == plan.len()
+                    && f64::from(params.amount).min(distance * 0.5) <= 8.0
+                {
+                    reference_exact_pixel(
+                        &original,
+                        input_width as usize,
+                        input_height as usize,
+                        (ax - i64::from(input_origin[0])) as f64,
+                        (ay - i64::from(input_origin[1])) as f64,
+                        dx,
+                        dy,
+                        distance,
+                        params.amount,
+                    )
+                } else {
+                    let (w, h) = (size[0] as usize, size[1] as usize);
+                    let center = source_at(&source, w, h, sx as i64, sy as i64);
+                    if reach <= 0.0 || distance < 1e-12 {
+                        center
+                    } else {
+                        let tx = dx / distance * reach;
+                        let ty = dy / distance * reach;
+                        let before = bilinear_decal(&source, w, h, sx - tx, sy - ty);
+                        let after = bilinear_decal(&source, w, h, sx + tx, sy + ty);
+                        std::array::from_fn(|c| {
+                            quantize_half(
+                                (before[c] + after[c]) * 0.25 + f64::from(center[c]) * 0.5,
+                            )
+                        })
+                    }
+                };
+            }
+            source = output;
+            origin = pass.origin;
+            size = pass.size;
+        }
+        encode_output(&source)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn reference_exact_pixel(
+        source: &[[f32; 4]],
+        width: usize,
+        height: usize,
+        sx: f64,
+        sy: f64,
+        dx: f64,
+        dy: f64,
+        distance: f64,
+        amount: f32,
+    ) -> [f32; 4] {
+        if distance < 1e-12 || amount == 0.0 {
+            return source_at(source, width, height, sx as i64, sy as i64);
+        }
+        let reach = f64::from(amount).min(distance * 0.5);
+        let steps = reach.ceil().max(1.0) as i32;
+        let mut sum = [0.0; 4];
+        for tap in -steps..=steps {
+            let weight = f64::from(steps + 1 - tap.abs());
+            let travel = f64::from(tap) * reach / f64::from(steps);
+            let sample = bilinear_decal(
+                source,
+                width,
+                height,
+                sx + dx / distance * travel,
+                sy + dy / distance * travel,
+            );
+            for c in 0..4 {
+                sum[c] += sample[c] * weight;
+            }
+        }
+        sum.map(|v| quantize_half(v / f64::from((steps + 1) * (steps + 1))))
+    }
+
+    #[test]
+    fn shortcuts_keep_every_output_bit() {
+        let mut state = 0x9e37_79b9_7f4a_7c15_u64;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        let (width, height) = (61_u32, 37_u32);
+        // Smooth ramps, hard edges, signed zeros, negative and large channels.
+        let palette = [
+            0.0, -0.0, 1.0, 0.5, 0.25, 1.0e-4, -0.125, 3.0, 60_000.0, 6.0e-8,
+        ];
+        let input = (0..width * height)
+            .flat_map(|index| {
+                let ramp = (index % width) as f32 / width as f32;
+                let pick = next();
+                (0..4)
+                    .map(|channel| match (pick >> (channel * 8)) % 4 {
+                        0 => ramp,
+                        1 => palette[((pick >> (32 + channel * 4)) % 10) as usize],
+                        _ => ramp * (channel + 1) as f32 * 0.3,
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .flat_map(|channel| f32_to_half(channel).to_le_bytes())
+            .collect::<Vec<_>>();
+        let amounts = [
+            1.0e-12, 3.0e-7, 1.0e-5, 0.01, 0.4, 0.75, 1.0, 1.0001, 2.5, 3.0, 4.0, 7.0, 7.9, 8.0,
+            8.5, 21.0, 67.0,
+        ];
+        let centers = [[30.5, 18.5], [30.0, 18.0], [0.25, 36.75], [-20.0, 70.0]];
+        let crops = [
+            ([width, height], [0, 0], [0, 0]),
+            ([23, 17], [-9, -5], [9, 5]),
+            ([70, 45], [4, 3], [-4, -3]),
+        ];
+        for amount in amounts {
+            for center in centers {
+                for (output_size, input_offset, output_origin) in crops {
+                    let params = RadialBlurParams { center, amount };
+                    let actual = apply_radial_blur_f16(
+                        &input,
+                        width,
+                        height,
+                        output_size[0],
+                        output_size[1],
+                        input_offset,
+                        output_origin,
+                        params,
+                    )
+                    .unwrap();
+                    let expected = reference_blur(
+                        &input,
+                        [width, height],
+                        output_size,
+                        input_offset,
+                        output_origin,
+                        params,
+                    );
+                    assert!(
+                        actual == expected,
+                        "amount {amount} center {center:?} crop {output_size:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Channels of every sign and binade beside neighbors from a hair to many binades away: the
+    /// middle pixel of every 3×3 tile holds powers of two, zeros of either sign or other halves,
+    /// and most of the tile's other channels lie 2^m from them for m from -30 to 8, so that for
+    /// every amount some pixels lie just inside the bound of [`Unmoved`] and some just outside.
+    fn rounding_edges(width: u32, height: u32) -> Vec<f32> {
+        let mut state = 0x2545_f491_4f6c_dd1d_u64;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        let mut centers = vec![0.0_f32; (width * height * 4) as usize];
+        for value in &mut centers {
+            let pick = next();
+            let sign = if pick & 1 == 0 { 1.0 } else { -1.0 };
+            *value = match (pick >> 1) % 5 {
+                0 => 0.0 * sign,
+                1 | 2 => sign * 2.0_f32.powi(((pick >> 8) % 31) as i32 - 24),
+                _ => sign * half_to_f32(((pick >> 8) % 0x7c00) as u16),
+            };
+        }
+        let mut channels = Vec::with_capacity(centers.len());
+        for y in 0..height as usize {
+            for x in 0..width as usize {
+                let middle = x % 3 == 1 && y % 3 == 1;
+                let center = (y / 3 * 3 + 1).min(height as usize - 1) * width as usize
+                    + (x / 3 * 3 + 1).min(width as usize - 1);
+                for value in centers[center * 4..center * 4 + 4].iter().copied() {
+                    let pick = next();
+                    let step = 2.0_f32.powi(((pick >> 2) % 39) as i32 - 30)
+                        * (1.0 + ((pick >> 16) % 1024) as f32 / 1024.0);
+                    let neighbor = half_to_f32(f32_to_half(if pick & (1 << 40) == 0 {
+                        value + step
+                    } else {
+                        value - step
+                    }));
+                    channels.push(if middle || pick % 4 == 0 || !neighbor.is_finite() {
+                        value
+                    } else {
+                        neighbor
+                    });
+                }
+            }
+        }
+        channels
+    }
+
+    #[test]
+    fn blurs_under_a_quarter_pixel_keep_pixels_only_where_they_round_back() {
+        let (width, height) = (61_u32, 40_u32);
+        let channels = rounding_edges(width, height);
+        let input = channels
+            .iter()
+            .flat_map(|&channel| f32_to_half(channel).to_le_bytes())
+            .collect::<Vec<_>>();
+        let original = read_base(&input, width, height, width, height, [0, 0]).unwrap();
+        let amounts = [
+            1.0e-14, 1.0e-12, 1.0e-10, 3.0e-9, 1.0e-8, 3.0e-8, 1.0e-7, 3.0e-7, 1.0e-6, 3.0e-6,
+            1.0e-5, 3.0e-5, 1.0e-4, 3.0e-4, 1.0e-3, 3.0e-3, 0.01, 0.03, 0.1, 0.2, 0.2499,
+        ];
+        // At pixel corners and centers inside, and far off along an axis and a diagonal.
+        let centers = [
+            [30.0, 20.0],
+            [12.5, 31.5],
+            [-4000.0, 20.25],
+            [-900.0, -700.0],
+        ];
+        let crops = [
+            ([width, height], [0, 0], [0, 0]),
+            ([29, 21], [-11, -7], [11, 7]),
+        ];
+        let mut kept = 0;
+        for amount in amounts {
+            for center in centers {
+                let params = RadialBlurParams { center, amount };
+                let unmoved = Unmoved::new(params, 1, [width, height]).unwrap();
+                kept += (0..i64::from(height))
+                    .filter_map(|y| unmoved.row(&original, [width, height], [0, 0], y))
+                    .map(|row| {
+                        (0..i64::from(width))
+                            .filter(|&x| row.keep(x).is_some())
+                            .count()
+                    })
+                    .sum::<usize>();
+                for (output_size, input_offset, output_origin) in crops {
+                    let actual = apply_radial_blur_f16(
+                        &input,
+                        width,
+                        height,
+                        output_size[0],
+                        output_size[1],
+                        input_offset,
+                        output_origin,
+                        params,
+                    )
+                    .unwrap();
+                    let expected = reference_blur(
+                        &input,
+                        [width, height],
+                        output_size,
+                        input_offset,
+                        output_origin,
+                        params,
+                    );
+                    assert!(
+                        actual == expected,
+                        "amount {amount} center {center:?} crop {output_size:?}"
+                    );
+                }
+            }
+        }
+        let interior = (amounts.len() * centers.len()) as u32 * (width - 2) * (height - 2);
+        assert!(
+            kept as u32 * 10 > interior && (kept as u32) < interior,
+            "kept {kept} of {interior}"
+        );
+    }
+
+    #[cfg(all(target_arch = "aarch64", target_endian = "little"))]
+    #[test]
+    fn unmoved_pixels_are_the_same_lane_by_lane() {
+        let (width, height) = (61_u32, 40_u32);
+        let channels = rounding_edges(width, height);
+        let pixels = channels.as_chunks::<4>().0;
+        let mut kept = 0;
+        for slope in [1.0e-14, 3.0e-9, 1.0e-6, 2.0e-4, 0.01, 0.3] {
+            for y in 1..height as usize - 1 {
+                let rows = [y - 1, y, y + 1]
+                    .map(|row| &pixels[row * width as usize..(row + 1) * width as usize]);
+                for x in 1..width as usize - 1 {
+                    let lanes = neon::keep(rows, x, slope);
+                    assert_eq!(
+                        lanes.map(|pixel| pixel.map(f32::to_bits)),
+                        keep(rows, x, slope).map(|pixel| pixel.map(f32::to_bits)),
+                        "slope {slope} at {x},{y}"
+                    );
+                    kept += usize::from(lanes.is_some());
+                }
+            }
+        }
+        assert!(kept > 0);
     }
 }

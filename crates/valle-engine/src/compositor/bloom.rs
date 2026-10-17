@@ -1585,7 +1585,7 @@ mod neon {
 
 /// [`quantize_half`] of four values.
 #[inline]
-fn quantize_halves(values: [f64; 4]) -> [f32; 4] {
+pub(crate) fn quantize_halves(values: [f64; 4]) -> [f32; 4] {
     #[cfg(all(target_arch = "aarch64", target_endian = "little"))]
     {
         if let Some(rounded) = neon::round4(values.map(|value| value as f32)) {
