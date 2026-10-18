@@ -1,10 +1,16 @@
 //! Noise displacement on Raster: `draw_noise_displacement` fills a rect with the shared runtime
 //! kernel over Skia's Perlin noise; on aarch64, `draw` computes the kernel's bytes pixel by pixel
-//! instead of through its raster pipeline program.
+//! instead of through its raster pipeline program, and `NoiseFields` keeps the noise it computes
+//! for the draws of later frames.
+
+use std::sync::Mutex;
 
 use skia_safe::{IRect, Image, Surface};
 
 use super::draw::DrawError;
+
+#[cfg(all(target_arch = "aarch64", target_endian = "little"))]
+pub(crate) use fused::NoiseFields;
 
 /// The Perlin noise the kernel reads, as Skia's noise shader is made from it.
 #[derive(Debug, Clone, Copy)]
@@ -16,9 +22,11 @@ pub(super) struct Noise {
 }
 
 /// The kernel with `uniforms` over `rect`, reading the `source` subset of `input` placed at canvas
-/// `origin`, as its draw under the Src blend writes it. Returns `false`, drawing nothing, where
-/// the kernel's own draw stays.
+/// `origin`, as its draw under the Src blend writes it. The noise of its pixels comes from
+/// `fields`, or goes there for later draws, where they keep it. Returns `false`, drawing nothing,
+/// where the kernel's own draw stays.
 #[cfg(all(target_arch = "aarch64", target_endian = "little"))]
+#[allow(clippy::too_many_arguments)]
 pub(super) fn draw(
     surface: &mut Surface,
     input: &Image,
@@ -27,13 +35,17 @@ pub(super) fn draw(
     rect: IRect,
     uniforms: &[f32; 15],
     noise: Noise,
+    fields: Option<&Mutex<NoiseFields>>,
 ) -> Result<bool, DrawError> {
-    fused::draw(surface, input, source, origin, rect, uniforms, noise)
+    fused::draw(
+        surface, input, source, origin, rect, uniforms, noise, fields,
+    )
 }
 
 /// The kernel repeats the instructions of Skia's raster pipeline on aarch64; elsewhere the
 /// kernel's own draw stays.
 #[cfg(not(all(target_arch = "aarch64", target_endian = "little")))]
+#[allow(clippy::too_many_arguments)]
 pub(super) fn draw(
     _surface: &mut Surface,
     _input: &Image,
@@ -42,18 +54,43 @@ pub(super) fn draw(
     _rect: IRect,
     _uniforms: &[f32; 15],
     _noise: Noise,
+    _fields: Option<&Mutex<NoiseFields>>,
 ) -> Result<bool, DrawError> {
     Ok(false)
 }
 
+/// Elsewhere the kernel's own draw computes the noise, and nothing keeps it.
+#[cfg(not(all(target_arch = "aarch64", target_endian = "little")))]
+#[derive(Debug, Default)]
+pub(crate) struct NoiseFields;
+
+#[cfg(not(all(target_arch = "aarch64", target_endian = "little")))]
+impl NoiseFields {
+    pub(crate) fn set_byte_limit(&mut self, _bytes: usize) {}
+
+    pub(crate) fn clear(&mut self) {}
+
+    #[cfg(test)]
+    pub(crate) fn rects(&self) -> Vec<IRect> {
+        Vec::new()
+    }
+}
+
 #[cfg(all(target_arch = "aarch64", target_endian = "little"))]
 mod fused {
-    use std::arch::aarch64::*;
+    use std::{
+        arch::aarch64::*,
+        collections::VecDeque,
+        sync::{Arc, Mutex},
+    };
 
     use skia_safe::{
         AlphaType, ColorType, IRect, Image, ImageInfo, Surface, surface::ContentChangeMode,
     };
-    use valle_engine::compositor::bloom::fill_image_rows;
+    use valle_engine::{
+        compositor::bloom::fill_image_rows,
+        motion::memory::{MemoryKind, MemoryLease, reserve_retained},
+    };
 
     use super::{
         super::draw::{DrawError, rows_clip},
@@ -66,6 +103,195 @@ mod fused {
     /// The noise channels the kernel reads: red and green displace, alpha unpremultiplies them.
     const CHANNELS: [usize; 3] = [0, 1, 3];
 
+    /// The bytes of the fields one executor keeps, unless its budget sets them.
+    const FIELD_BYTES: usize = 64 * 1024 * 1024;
+
+    /// The keys of draws that kept no field, remembered so that a second draw keeps one.
+    const SEEN_KEYS: usize = 64;
+
+    /// The noise of earlier draws, kept for later draws that place the same noise on the same
+    /// pixels: per pixel, the unpremultiplied red and green of the noise, clamped to [0, 1], from
+    /// which the kernel computes the displacement. A key keeps its field from its second draw on,
+    /// so that noise moving every frame never takes the bytes. Fields hold exactly what a draw
+    /// computes, so clearing them changes no pixel.
+    pub(crate) struct NoiseFields {
+        /// The least recently used first.
+        fields: VecDeque<Arc<Field>>,
+        /// The oldest first.
+        seen: VecDeque<FieldKey>,
+        bytes: usize,
+        byte_limit: usize,
+    }
+
+    impl Default for NoiseFields {
+        fn default() -> Self {
+            Self {
+                fields: VecDeque::new(),
+                seen: VecDeque::new(),
+                bytes: 0,
+                byte_limit: FIELD_BYTES,
+            }
+        }
+    }
+
+    impl std::fmt::Debug for NoiseFields {
+        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter
+                .debug_struct("NoiseFields")
+                .field("entries", &self.fields.len())
+                .field("bytes", &self.bytes)
+                .finish()
+        }
+    }
+
+    impl NoiseFields {
+        pub(crate) fn set_byte_limit(&mut self, bytes: usize) {
+            self.clear();
+            self.byte_limit = bytes;
+        }
+
+        pub(crate) fn clear(&mut self) {
+            self.fields.clear();
+            self.seen.clear();
+            self.bytes = 0;
+        }
+
+        /// The rects of the kept fields, the least recently used first.
+        #[cfg(test)]
+        pub(crate) fn rects(&self) -> Vec<IRect> {
+            self.fields.iter().map(|field| field.rect).collect()
+        }
+
+        /// The field of `key` that covers `rect`, now the most recently used.
+        fn find(&mut self, key: &FieldKey, rect: IRect) -> Option<Arc<Field>> {
+            let index = self
+                .fields
+                .iter()
+                .position(|field| field.key == *key && covers(field.rect, rect))?;
+            let field = self.fields.remove(index)?;
+            self.fields.push_back(Arc::clone(&field));
+            Some(field)
+        }
+
+        /// The rect of the field of `key`, where one is kept.
+        fn rect_of(&self, key: &FieldKey) -> Option<IRect> {
+            self.fields
+                .iter()
+                .find(|field| field.key == *key)
+                .map(|field| field.rect)
+        }
+
+        /// Whether `key` was drawn before, remembering it.
+        fn repeated(&mut self, key: FieldKey) -> bool {
+            if self.seen.contains(&key) {
+                return true;
+            }
+            if self.seen.len() == SEEN_KEYS {
+                self.seen.pop_front();
+            }
+            self.seen.push_back(key);
+            false
+        }
+
+        /// Keeps `field` in place of any other of its key, retiring the least recently used
+        /// fields beyond the byte limit.
+        fn insert(&mut self, field: Arc<Field>) {
+            let bytes = &mut self.bytes;
+            self.fields.retain(|kept| {
+                let other = kept.key != field.key;
+                if !other {
+                    *bytes -= kept.bytes();
+                }
+                other
+            });
+            self.bytes += field.bytes();
+            self.fields.push_back(field);
+            while self.bytes > self.byte_limit
+                && let Some(retired) = self.fields.pop_front()
+            {
+                self.bytes -= retired.bytes();
+            }
+        }
+    }
+
+    /// What the noise at a pixel depends on: the map of the target's pixels into local units, as
+    /// the bits of `to_local` and `local_origin`, and the noise.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    struct FieldKey {
+        placement: [u32; 6],
+        frequency: [u32; 2],
+        octaves: u8,
+        seed: u32,
+        turbulence: bool,
+    }
+
+    impl FieldKey {
+        /// The key of the noise a draw with `uniforms` reads over `rect`, and the offset from the
+        /// target's pixels to the pixels of the fields of that key. Where `to_local` is an
+        /// identity and `local_origin` whole, the local point of a pixel is its column or row
+        /// plus one half, plus the origin, all exact, whatever the target: the noise of a pixel
+        /// is that of its column and row offset by the origin. Those offset pixels hold the
+        /// fields of such noise, under an identity and no origin.
+        fn new(uniforms: &[f32; 15], noise: Noise, rect: IRect) -> (Self, [i32; 2]) {
+            // The pixels and the origin stay within 2^20, and so every sum with a half is exact.
+            const LIMIT: i32 = 1 << 20;
+            let whole = |value: f32| value.fract() == 0.0 && value.abs() <= LIMIT as f32;
+            let [to_local @ .., x, y] = <[f32; 6]>::try_from(&uniforms[..6]).unwrap();
+            let (placement, shift) = if to_local == [1.0, 0.0, 0.0, 1.0]
+                && whole(x)
+                && whole(y)
+                && rect.right <= LIMIT
+                && rect.bottom <= LIMIT
+            {
+                ([1.0, 0.0, 0.0, 1.0, 0.0, 0.0], [x as i32, y as i32])
+            } else {
+                (
+                    [to_local[0], to_local[1], to_local[2], to_local[3], x, y],
+                    [0, 0],
+                )
+            };
+            let key = Self {
+                placement: placement.map(f32::to_bits),
+                frequency: noise.frequency.map(f32::to_bits),
+                octaves: noise.octaves,
+                seed: noise.seed,
+                turbulence: noise.turbulence,
+            };
+            (key, shift)
+        }
+    }
+
+    /// The noise of the pixels of `rect`, row by row: each pixel's red, then its green. Room for
+    /// three more pixels follows, so that the last pixel loads as the first of a vector.
+    struct Field {
+        key: FieldKey,
+        rect: IRect,
+        units: Vec<f32>,
+        _memory: Option<MemoryLease>,
+    }
+
+    impl Field {
+        fn bytes(&self) -> usize {
+            self.units.len() * 4
+        }
+
+        /// The noise from pixel (`x`, `y`) of the field to its end.
+        fn from(&self, x: i32, y: i32) -> &[f32] {
+            let width = self.rect.width() as usize;
+            let pixel = (y - self.rect.top) as usize * width + (x - self.rect.left) as usize;
+            &self.units[pixel * 2..]
+        }
+    }
+
+    /// Whether `outer` holds every pixel of `inner`.
+    fn covers(outer: IRect, inner: IRect) -> bool {
+        outer.left <= inner.left
+            && outer.top <= inner.top
+            && outer.right >= inner.right
+            && outer.bottom >= inner.bottom
+    }
+
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn draw(
         surface: &mut Surface,
         input: &Image,
@@ -74,6 +300,7 @@ mod fused {
         rect: IRect,
         uniforms: &[f32; 15],
         noise: Noise,
+        fields: Option<&Mutex<NoiseFields>>,
     ) -> Result<bool, DrawError> {
         // Skia makes no noise shader for these frequencies, and a constant one for no octaves.
         if !(noise.frequency[0] >= 0.0 && noise.frequency[1] >= 0.0) || noise.octaves == 0 {
@@ -121,6 +348,16 @@ mod fused {
             octaves: noise.octaves,
             turbulence: noise.turbulence,
         };
+        let (key, shift) = FieldKey::new(uniforms, noise, rect);
+        let field = fields.and_then(|fields| {
+            field(
+                fields,
+                key,
+                rect.with_offset((shift[0], shift[1])),
+                shift,
+                &kernel,
+            )
+        });
         // As for a Src draw: pixels a snapshot still shares are replaced before they are written,
         // by a copy unless the rect is the whole surface.
         let whole = rect == IRect::from_wh(surface.width(), surface.height());
@@ -142,10 +379,66 @@ mod fused {
         fill_image_rows(&mut bytes[span], row_bytes, |first, rows| {
             for (index, row) in rows.chunks_mut(row_bytes).enumerate() {
                 let y = rect.top + (first + index) as i32;
-                kernel.row(y, rect.left, &mut row[columns.clone()]);
+                let out = &mut row[columns.clone()];
+                match &field {
+                    Some(field) => {
+                        let units = field.from(rect.left + shift[0], y + shift[1]);
+                        kernel.row_over(units, y, rect.left, out);
+                    }
+                    None => kernel.row(y, rect.left, out),
+                }
             }
         });
         Ok(true)
+    }
+
+    /// The field of `key` that holds `wanted`, in the pixels of the fields of `key`, which are
+    /// the target's offset by `shift`: one `fields` keeps, or else one computed now and kept
+    /// there, where `key` was drawn before and the field fits. A kept field of `key` that misses
+    /// some of those pixels grows to hold them.
+    fn field(
+        fields: &Mutex<NoiseFields>,
+        key: FieldKey,
+        wanted: IRect,
+        shift: [i32; 2],
+        kernel: &Kernel,
+    ) -> Option<Arc<Field>> {
+        let floats = |rect: IRect| (rect.width() as usize * rect.height() as usize + LANES - 1) * 2;
+        let rect = {
+            let mut fields = fields.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(field) = fields.find(&key, wanted) {
+                return Some(field);
+            }
+            let rect = match fields.rect_of(&key) {
+                Some(kept) => IRect::join(&kept, &wanted),
+                None if fields.repeated(key) => wanted,
+                None => return None,
+            };
+            [rect, wanted]
+                .into_iter()
+                .find(|rect| floats(*rect) * 4 <= fields.byte_limit)?
+        };
+        let memory = reserve_retained(MemoryKind::Resource, (floats(rect) * 4) as u64).ok()?;
+        let width = rect.width() as usize * 2;
+        let mut units = vec![0.0; floats(rect)];
+        let rows = rect.height() as usize * width;
+        fill_image_rows(&mut units[..rows], width, |first, rows| {
+            for (index, row) in rows.chunks_mut(width).enumerate() {
+                let y = rect.top + (first + index) as i32;
+                kernel.units_row(y - shift[1], rect.left - shift[0], row);
+            }
+        });
+        let field = Arc::new(Field {
+            key,
+            rect,
+            units,
+            _memory: memory,
+        });
+        fields
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(Arc::clone(&field));
+        Some(field)
     }
 
     /// The input's half-float pixels.
@@ -174,41 +467,48 @@ mod fused {
     impl Kernel<'_> {
         /// Writes the kernel's pixels of canvas row `y` from column `left` into `out`.
         fn row(&self, y: i32, left: i32, out: &mut [u8]) {
-            // SAFETY: NEON is part of the aarch64 baseline; the load reads the four floats.
-            let (iota, py) = unsafe {
-                // The pipeline seeds each lane with its pixel's center.
-                (
-                    vld1q_f32([0.5, 1.5, 2.5, 3.5].as_ptr()),
-                    vdupq_n_f32(y as f32 + 0.5),
-                )
-            };
+            let py = center(y);
             for (block, out) in out.chunks_mut(LANES * 8).enumerate() {
-                let column = (left as usize + block * LANES) as f32;
-                // SAFETY: NEON is part of the aarch64 baseline.
-                let px = unsafe { vaddq_f32(vdupq_n_f32(column), iota) };
-                let pixels = self.pixels(px, py);
-                for (bytes, pixel) in out.as_chunks_mut::<8>().0.iter_mut().zip(&pixels) {
-                    *bytes = pixel.to_le_bytes();
-                }
+                let px = centers(left + (block * LANES) as i32);
+                store(self.displaced(px, py, self.units(px, py)), out);
             }
         }
 
-        /// The kernel's `main` at the four points (`px`, `py`), as its raster pipeline program
-        /// computes it: fused multiply-adds for each `dot`, and every other operation as written.
-        /// Returns the four half-float pixels.
+        /// Writes the noise of canvas row `y` from column `left` into `out`: each pixel's red,
+        /// then its green.
+        fn units_row(&self, y: i32, left: i32, out: &mut [f32]) {
+            let py = center(y);
+            for (block, out) in out.chunks_mut(LANES * 2).enumerate() {
+                let [red, green] = self.units(centers(left + (block * LANES) as i32), py);
+                let mut units = [0.0; LANES * 2];
+                // SAFETY: NEON is part of the aarch64 baseline; the store writes the eight floats.
+                unsafe { vst2q_f32(units.as_mut_ptr(), float32x4x2_t(red, green)) };
+                out.copy_from_slice(&units[..out.len()]);
+            }
+        }
+
+        /// Writes the kernel's pixels of canvas row `y` from column `left` into `out`, with the
+        /// noise of those pixels in `units`, as `units_row` writes it, followed by the noise of at
+        /// least three more pixels.
+        fn row_over(&self, units: &[f32], y: i32, left: i32, out: &mut [u8]) {
+            let py = center(y);
+            for (block, out) in out.chunks_mut(LANES * 8).enumerate() {
+                let px = centers(left + (block * LANES) as i32);
+                let units = &units[block * LANES * 2..][..LANES * 2];
+                // SAFETY: NEON is part of the aarch64 baseline; the load reads the eight floats.
+                let float32x4x2_t(red, green) = unsafe { vld2q_f32(units.as_ptr()) };
+                store(self.displaced(px, py, [red, green]), out);
+            }
+        }
+
+        /// The red and green of the noise at the four points (`px`, `py`) as the kernel reads
+        /// them, `saturate(unpremul(noise))`, as its raster pipeline program computes them:
+        /// fused multiply-adds for each `dot`, and every other operation as written.
         #[inline(always)]
-        fn pixels(&self, px: float32x4_t, py: float32x4_t) -> [u64; LANES] {
-            // SAFETY: NEON is part of the aarch64 baseline; the stores write the four lanes of
-            // each array, and each pixel read stays inside the input, whose indices are clamped
-            // to its pixels.
+        fn units(&self, px: float32x4_t, py: float32x4_t) -> [float32x4_t; 2] {
+            // SAFETY: NEON is part of the aarch64 baseline.
             unsafe {
                 let splat = |value: f32| vdupq_n_f32(value);
-                let zero = splat(0.0);
-                let one = splat(1.0);
-                let half = splat(0.5);
-                let dot = |row: &[f32], x: float32x4_t, y: float32x4_t| {
-                    vfmaq_f32(vmulq_f32(splat(row[1]), y), splat(row[0]), x)
-                };
                 let local_x = vaddq_f32(
                     dot(&self.to_local[0..2], px, py),
                     splat(self.local_origin[0]),
@@ -218,14 +518,37 @@ mod fused {
                     splat(self.local_origin[1]),
                 );
                 let [red, green, alpha] = self.noise(local_x, local_y);
-                // `saturate(unpremul(noise))`: color over `max(alpha, 0.0001)`, clamped to [0, 1].
+                // Color over `max(alpha, 0.0001)`, clamped to [0, 1].
                 let divisor = vmaxq_f32(alpha, splat(0.0001));
                 let unit = |channel: float32x4_t| {
-                    vminq_f32(vmaxq_f32(vdivq_f32(channel, divisor), zero), one)
+                    vminq_f32(
+                        vmaxq_f32(vdivq_f32(channel, divisor), splat(0.0)),
+                        splat(1.0),
+                    )
                 };
+                [unit(red), unit(green)]
+            }
+        }
+
+        /// The rest of the kernel's `main` at the four points (`px`, `py`), from the red and
+        /// green of the noise there, `units`. Returns the four half-float pixels.
+        #[inline(always)]
+        fn displaced(
+            &self,
+            px: float32x4_t,
+            py: float32x4_t,
+            [red, green]: [float32x4_t; 2],
+        ) -> [u64; LANES] {
+            // SAFETY: NEON is part of the aarch64 baseline; the stores write the four lanes of
+            // each array, and each pixel read stays inside the input, whose indices are clamped
+            // to its pixels.
+            unsafe {
+                let splat = |value: f32| vdupq_n_f32(value);
+                let zero = splat(0.0);
+                let half = splat(0.5);
                 let scale = splat(self.scale);
-                let vector_x = vmulq_f32(scale, vsubq_f32(unit(red), half));
-                let vector_y = vmulq_f32(scale, vsubq_f32(unit(green), half));
+                let vector_x = vmulq_f32(scale, vsubq_f32(red, half));
+                let vector_y = vmulq_f32(scale, vsubq_f32(green, half));
                 let offset_x = dot(&self.to_canvas[0..2], vector_x, vector_y);
                 let offset_y = dot(&self.to_canvas[2..4], vector_x, vector_y);
                 let sample_x = vaddq_f32(vrndmq_f32(vaddq_f32(px, offset_x)), half);
@@ -519,6 +842,41 @@ mod fused {
                 };
                 [axis(0), axis(1)]
             }
+        }
+    }
+
+    /// The center of each pixel of row `y`, as the pipeline seeds every lane with it.
+    #[inline(always)]
+    fn center(y: i32) -> float32x4_t {
+        // SAFETY: NEON is part of the aarch64 baseline.
+        unsafe { vdupq_n_f32(y as f32 + 0.5) }
+    }
+
+    /// The centers of the four pixels from `column`, as the pipeline seeds its lanes with them.
+    #[inline(always)]
+    fn centers(column: i32) -> float32x4_t {
+        // SAFETY: NEON is part of the aarch64 baseline; the load reads the four floats.
+        unsafe {
+            vaddq_f32(
+                vdupq_n_f32(column as f32),
+                vld1q_f32([0.5, 1.5, 2.5, 3.5].as_ptr()),
+            )
+        }
+    }
+
+    /// The kernel's `dot` of a row of a matrix with (`x`, `y`): a product, then a fused
+    /// multiply-add.
+    #[inline(always)]
+    fn dot(row: &[f32], x: float32x4_t, y: float32x4_t) -> float32x4_t {
+        // SAFETY: NEON is part of the aarch64 baseline.
+        unsafe { vfmaq_f32(vmulq_f32(vdupq_n_f32(row[1]), y), vdupq_n_f32(row[0]), x) }
+    }
+
+    /// Writes the pixels of `pixels` that `out` has room for.
+    #[inline(always)]
+    fn store(pixels: [u64; LANES], out: &mut [u8]) {
+        for (bytes, pixel) in out.as_chunks_mut::<8>().0.iter_mut().zip(&pixels) {
+            *bytes = pixel.to_le_bytes();
         }
     }
 

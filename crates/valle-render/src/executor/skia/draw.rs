@@ -42,6 +42,7 @@ use super::{
         admit_motion_glass_shader, render_motion_glass_foreground_into, render_motion_glass_into,
     },
     gradient_fill,
+    noise::NoiseFields,
     surface::{
         PlanImage, ScratchSurfaces, SkiaBackendKind, SurfaceError, raster_surface,
         working_color_space,
@@ -107,6 +108,7 @@ pub(crate) struct ProgramRuntime {
     blend: Option<BlendRuntime>,
     mask_coverage: Option<RuntimeEffect>,
     opacity_layers: Arc<std::sync::Mutex<SmallOpacityCache>>,
+    noise_fields: Arc<std::sync::Mutex<NoiseFields>>,
 }
 
 #[derive(Debug, Clone)]
@@ -359,6 +361,7 @@ impl ProgramRuntime {
         }
         Ok(Self {
             opacity_layers: Arc::clone(&caches.opacity_layers),
+            noise_fields: Arc::clone(&caches.noise_fields),
             mask_coverage,
             program,
             textures,
@@ -846,6 +849,7 @@ impl ProgramRuntime {
                         target_origin,
                         output_roi,
                         lens_frame,
+                        Some(self.noise_fields.as_ref()),
                     )
                 } else {
                     clear_surface(target)
@@ -2621,6 +2625,7 @@ fn blends_like_its_shader(
         && pixels.color_space() == info.color_space()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn apply_filter_program_into(
     surface: &mut Surface,
     input: &ProgramImage,
@@ -2629,6 +2634,7 @@ fn apply_filter_program_into(
     target_origin: [i32; 2],
     output_roi: DeviceRect,
     lens_frame: Option<[f32; 4]>,
+    noise_fields: Option<&std::sync::Mutex<NoiseFields>>,
 ) -> Result<(), DrawError> {
     if let Filter::NoiseDisplacement { .. } = filter {
         return apply_noise_displacement_program_into(
@@ -2638,6 +2644,7 @@ fn apply_filter_program_into(
             local_to_device,
             target_origin,
             output_roi,
+            noise_fields,
         );
     }
     let filter = program_filter_in_device_space(filter, local_to_device)?;
@@ -3168,7 +3175,7 @@ fn write_raster_output(
 }
 
 /// Noise displacement keeps its noise lattice and displacement vectors in the filtered group's
-/// local units, whatever the transform to device pixels.
+/// local units, whatever the transform to device pixels. `fields` keep the noise for later frames.
 fn apply_noise_displacement_program_into(
     surface: &mut Surface,
     input: &ProgramImage,
@@ -3176,6 +3183,7 @@ fn apply_noise_displacement_program_into(
     local_to_device: [f64; 9],
     target_origin: [i32; 2],
     output_roi: DeviceRect,
+    fields: Option<&std::sync::Mutex<NoiseFields>>,
 ) -> Result<(), DrawError> {
     let [a, b, c, d, e, f] = affine_device_transform(local_to_device, "noise displacement")?;
     let [x, y] = target_origin.map(f64::from);
@@ -3213,6 +3221,7 @@ fn apply_noise_displacement_program_into(
         ),
         filter,
         local_to_canvas,
+        fields,
     )
 }
 
@@ -4548,6 +4557,7 @@ mod tests {
                 blend: None,
                 mask_coverage: None,
                 opacity_layers: Arc::clone(&cache),
+                noise_fields: Default::default(),
             };
             let cases = if position_scale == 1.0 {
                 vec![
@@ -5560,6 +5570,7 @@ mod tests {
                             bounds,
                             &uniforms,
                             noise,
+                            None,
                         )
                         .unwrap();
                     assert_eq!(
@@ -5597,6 +5608,238 @@ mod tests {
                      {pixels:?} {source:?} at {origin:?}, clip {clip:?}, bounds {bounds:?}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn noise_displacement_kept_fields_keep_the_bytes_of_its_draws() {
+        use super::super::{
+            effect,
+            noise::{Noise, NoiseFields},
+        };
+        let (width, height) = (140, 100);
+        let info = ImageInfo::new(
+            (width, height),
+            ColorType::RGBAF16,
+            AlphaType::Premul,
+            Some(working_color_space().unwrap()),
+        );
+        let image = varied_halves(260, 200);
+        let source = IRect::from_wh(260, 200);
+        let noise = |turbulence| Noise {
+            frequency: [0.05, 0.07],
+            octaves: 2,
+            seed: 3,
+            turbulence,
+        };
+        // Local to device: whole translations, whose noise keeps one field whatever the target's
+        // origin; a fractional one; and a rotated, scaled one.
+        let whole = [1.0, 0.0, 30.0, 0.0, 1.0, 20.0];
+        let fractional = [1.0, 0.0, 30.25, 0.0, 1.0, 20.0];
+        let rotated = [1.3, -0.75, 61.0, 0.75, 1.3, 37.0];
+        // Each draw: local to device, turbulence, the target's origin, the device pixels drawn,
+        // an optional clip in the target, and the rects of the fields kept after it.
+        type Kept = &'static [(i32, i32, i32, i32)];
+        type Draw = ([f64; 6], bool, [i32; 2], IRect, Option<IRect>, Kept);
+        let first: Kept = &[(-20, -14, 76, 50)];
+        let grown: Kept = &[(-30, -20, 90, 60)];
+        let two: Kept = &[(-30, -20, 90, 60), (5, 5, 77, 53)];
+        let three: Kept = &[(-30, -20, 90, 60), (0, 0, 96, 64), (5, 5, 77, 53)];
+        let draws: [Draw; 14] = [
+            // Seen once, then kept, then read through targets at other origins and other rows
+            // and columns, then grown, then read to its last pixel.
+            (
+                whole,
+                false,
+                [0, 0],
+                IRect::from_ltrb(10, 6, 106, 70),
+                None,
+                &[],
+            ),
+            (
+                whole,
+                false,
+                [4, 2],
+                IRect::from_ltrb(10, 6, 106, 70),
+                None,
+                first,
+            ),
+            (
+                whole,
+                false,
+                [-6, 5],
+                IRect::from_ltrb(20, 10, 90, 60),
+                None,
+                first,
+            ),
+            (
+                whole,
+                false,
+                [0, 0],
+                IRect::from_ltrb(0, 0, 120, 80),
+                None,
+                grown,
+            ),
+            (
+                whole,
+                false,
+                [3, 3],
+                IRect::from_ltrb(1, 1, 119, 79),
+                None,
+                grown,
+            ),
+            (
+                whole,
+                false,
+                [0, 0],
+                IRect::from_ltrb(0, 0, 120, 80),
+                Some(IRect::from_ltrb(59, 50, 120, 80)),
+                grown,
+            ),
+            // Other noise, seen once.
+            (
+                whole,
+                true,
+                [0, 0],
+                IRect::from_ltrb(10, 6, 106, 70),
+                None,
+                grown,
+            ),
+            // Fractional placements keep their fields in the target's pixels.
+            (
+                fractional,
+                false,
+                [0, 0],
+                IRect::from_ltrb(5, 5, 77, 53),
+                None,
+                grown,
+            ),
+            (
+                fractional,
+                false,
+                [0, 0],
+                IRect::from_ltrb(5, 5, 77, 53),
+                None,
+                two,
+            ),
+            (
+                fractional,
+                false,
+                [0, 0],
+                IRect::from_ltrb(5, 5, 77, 53),
+                Some(IRect::from_ltrb(9, 7, 70, 50)),
+                two,
+            ),
+            (
+                fractional,
+                false,
+                [2, 0],
+                IRect::from_ltrb(5, 5, 77, 53),
+                None,
+                two,
+            ),
+            (
+                rotated,
+                false,
+                [0, 0],
+                IRect::from_ltrb(0, 0, 96, 64),
+                None,
+                two,
+            ),
+            (
+                rotated,
+                false,
+                [0, 0],
+                IRect::from_ltrb(0, 0, 96, 64),
+                None,
+                three,
+            ),
+            (
+                rotated,
+                false,
+                [0, 0],
+                IRect::from_ltrb(0, 0, 96, 64),
+                Some(IRect::from_ltrb(10, 10, 50, 40)),
+                three,
+            ),
+        ];
+        let kept = std::sync::Mutex::new(NoiseFields::default());
+        // Fields that never fit.
+        let tight = std::sync::Mutex::new(NoiseFields::default());
+        tight.lock().unwrap().set_byte_limit(64);
+        let rects = |fields: &std::sync::Mutex<NoiseFields>| {
+            let mut rects = fields
+                .lock()
+                .unwrap()
+                .rects()
+                .iter()
+                .map(|rect| (rect.left, rect.top, rect.right, rect.bottom))
+                .collect::<Vec<_>>();
+            rects.sort_unstable();
+            rects
+        };
+        let fused = cfg!(all(target_arch = "aarch64", target_endian = "little"));
+        for (step, (transform, turbulence, target, pixels, clip, expected)) in
+            draws.into_iter().enumerate()
+        {
+            let [a, b, c, d, e, f] = transform;
+            let local_to_canvas = [
+                a,
+                b,
+                c - f64::from(target[0]),
+                d,
+                e,
+                f - f64::from(target[1]),
+            ];
+            // The input lies at device (-20, -10).
+            let origin = [-20 - target[0], -10 - target[1]];
+            let bounds = pixels.with_offset((-target[0], -target[1]));
+            let uniforms =
+                effect::noise_displacement_uniforms(source, origin, 24.0, local_to_canvas).unwrap();
+            let draw = |fields: Option<&std::sync::Mutex<NoiseFields>>| {
+                let mut surface = skia_safe::surfaces::raster(&info, None, None).unwrap();
+                surface.canvas().clear(Color4f::new(0.5, 0.5, 0.5, 1.0));
+                if let Some(clip) = clip {
+                    surface.canvas().clip_irect(clip, ClipOp::Intersect);
+                }
+                let drawn = super::super::noise::draw(
+                    &mut surface,
+                    &image,
+                    source,
+                    origin,
+                    bounds,
+                    &uniforms,
+                    noise(turbulence),
+                    fields,
+                )
+                .unwrap();
+                assert_eq!(drawn, fused);
+                if !drawn {
+                    effect::draw_noise_displacement_kernel(
+                        &mut surface,
+                        &image,
+                        source,
+                        origin,
+                        bounds,
+                        &uniforms,
+                        noise(turbulence),
+                    )
+                    .unwrap();
+                }
+                let mut bytes = vec![0_u8; (width * height * 8) as usize];
+                assert!(surface.read_pixels(&info, &mut bytes, width as usize * 8, (0, 0)));
+                bytes
+            };
+            let direct = draw(None);
+            assert!(draw(Some(&kept)) == direct, "step {step}");
+            assert!(
+                draw(Some(&tight)) == direct,
+                "step {step}, fields that never fit"
+            );
+            if fused {
+                assert_eq!(rects(&kept), expected, "step {step}");
+            }
+            assert!(rects(&tight).is_empty());
         }
     }
 
@@ -5757,6 +6000,7 @@ mod tests {
                     local_to_device,
                     origin,
                     DeviceRect::new(origin[0], origin[1], size.0 as u32, size.1 as u32),
+                    None,
                 )
                 .unwrap();
                 let actual = floats(&mut target, size, AlphaType::Premul, Some(working.clone()));
@@ -5919,6 +6163,7 @@ mod tests {
                 blend: None,
                 mask_coverage: None,
                 opacity_layers: Default::default(),
+                noise_fields: Default::default(),
             };
             surface.canvas().clear(Color4f::new(0.0, 0.0, 0.0, 0.0));
             for root in runtime.program.roots() {
@@ -5972,6 +6217,7 @@ mod tests {
             blend: None,
             mask_coverage: None,
             opacity_layers: Default::default(),
+            noise_fields: Default::default(),
         };
         let info = ImageInfo::new(
             (1920, 1080),
@@ -6049,6 +6295,7 @@ mod tests {
             blend: None,
             mask_coverage: None,
             opacity_layers: Default::default(),
+            noise_fields: Default::default(),
         };
         let info = ImageInfo::new(
             (32, 32),
@@ -6134,6 +6381,7 @@ mod tests {
             blend: None,
             mask_coverage: None,
             opacity_layers: Default::default(),
+            noise_fields: Default::default(),
         };
         let info = ImageInfo::new(
             (32, 32),
@@ -6242,6 +6490,7 @@ mod tests {
                     blend: None,
                     mask_coverage: None,
                     opacity_layers: Default::default(),
+                    noise_fields: Default::default(),
                 };
                 let root = runtime.program.roots()[0];
                 let Node::Group(group) = &runtime.program.nodes()[root.raw() as usize] else {
@@ -6669,6 +6918,7 @@ mod tests {
             blend: None,
             mask_coverage: None,
             opacity_layers: Default::default(),
+            noise_fields: Default::default(),
         };
         let nodes = runtime.program.roots().to_vec();
         let info = ImageInfo::new(

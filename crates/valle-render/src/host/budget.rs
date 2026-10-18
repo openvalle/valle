@@ -134,6 +134,7 @@ impl NativeRenderBudget {
             programs: usize::try_from(programs).unwrap(),
             raster_layers: usize::try_from((capacity / 16).min(64 * 1024 * 1024)).unwrap(),
             opacity_layers: usize::try_from((capacity / 32).min(32 * 1024 * 1024)).unwrap(),
+            noise_fields: usize::try_from((capacity / 16).min(64 * 1024 * 1024)).unwrap(),
             surface_pool: (capacity / 16).min(128 * 1024 * 1024),
         };
         // Cache retention has owner-local ceilings; frames borrow the whole allowance through
@@ -233,6 +234,7 @@ mod tests {
                     if let Ok(Some(limits)) = budget.owner_limits(owners, spec()) {
                         let retention = limits.caches.raster_layers as u64
                             + limits.caches.opacity_layers as u64
+                            + limits.caches.noise_fields as u64
                             + limits.caches.surface_pool
                             + limits.caches.programs as u64;
                         assert!(retention <= limits.executor_capacity);

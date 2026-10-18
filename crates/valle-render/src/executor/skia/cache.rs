@@ -13,7 +13,7 @@ use valle_engine::{
     resource::{ContentDigest, ResourceKey},
 };
 
-use super::{SkiaExternalObject, draw::DrawError, surface::PlanImage};
+use super::{SkiaExternalObject, draw::DrawError, noise::NoiseFields, surface::PlanImage};
 
 const PROGRAM_CACHE_LIMIT: usize = 256;
 const PROGRAM_CACHE_BYTES: usize = 32 * 1024 * 1024;
@@ -31,6 +31,7 @@ pub(crate) struct SkiaCacheLimits {
     pub(crate) programs: usize,
     pub(crate) raster_layers: usize,
     pub(crate) opacity_layers: usize,
+    pub(crate) noise_fields: usize,
     pub(crate) surface_pool: u64,
 }
 
@@ -357,6 +358,7 @@ pub(crate) struct BackendCaches {
     counters: BackendCacheCounters,
     font_manager: FontMgr,
     pub(crate) opacity_layers: Arc<std::sync::Mutex<SmallOpacityCache>>,
+    pub(crate) noise_fields: Arc<std::sync::Mutex<NoiseFields>>,
 }
 
 impl BackendCaches {
@@ -368,6 +370,10 @@ impl BackendCaches {
             .unwrap_or_else(|e| e.into_inner());
         opacity.clear();
         opacity.byte_limit = limits.opacity_layers;
+        self.noise_fields
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .set_byte_limit(limits.noise_fields);
     }
     pub(crate) fn new() -> Self {
         Self {
@@ -377,6 +383,7 @@ impl BackendCaches {
             counters: BackendCacheCounters::default(),
             font_manager: FontMgr::default(),
             opacity_layers: Default::default(),
+            noise_fields: Default::default(),
         }
     }
 

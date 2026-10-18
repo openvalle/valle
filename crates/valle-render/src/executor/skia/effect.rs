@@ -1258,7 +1258,8 @@ fn perlin_noise(
 /// channels as they are: Skia's displacement map reads its untagged noise image as sRGB and
 /// converts it into the linear working space, which CanvasKit's sRGB-tagged surfaces never do. A
 /// degenerate transform leaves the input undisplaced. On aarch64 Raster, `noise::draw` computes
-/// the kernel's bytes pixel by pixel.
+/// the kernel's bytes pixel by pixel, with the noise `fields` keep.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn draw_noise_displacement(
     surface: &mut Surface,
     input: &Image,
@@ -1267,6 +1268,7 @@ pub(super) fn draw_noise_displacement(
     bounds: IRect,
     filter: &Filter,
     local_to_canvas: [f64; 6],
+    fields: Option<&std::sync::Mutex<super::noise::NoiseFields>>,
 ) -> Result<(), DrawError> {
     let Filter::NoiseDisplacement {
         frequency,
@@ -1299,7 +1301,9 @@ pub(super) fn draw_noise_displacement(
         );
         return Ok(());
     };
-    if super::noise::draw(surface, input, source, origin, bounds, &uniforms, noise)? {
+    if super::noise::draw(
+        surface, input, source, origin, bounds, &uniforms, noise, fields,
+    )? {
         return Ok(());
     }
     draw_noise_displacement_kernel(surface, input, source, origin, bounds, &uniforms, noise)

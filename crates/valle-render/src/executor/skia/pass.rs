@@ -98,6 +98,11 @@ impl SkiaExecutor {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clear();
+        self.caches
+            .noise_fields
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
         self.surfaces.invalidate();
     }
 
