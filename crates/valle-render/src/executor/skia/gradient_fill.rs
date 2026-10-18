@@ -931,12 +931,24 @@ mod fused {
             let (xabs, yabs) = (vabsq_f32(x), vabsq_f32(y));
             let slope = vdivq_f32(vminq_f32(xabs, yabs), vmaxq_f32(xabs, yabs));
             let s = vmulq_f32(slope, slope);
-            let phi = vaddq_f32(
-                vdupq_n_f32(0.02476102),
-                vmulq_f32(s, vdupq_n_f32(-0.0070547382)),
-            );
-            let phi = vaddq_f32(vdupq_n_f32(-0.05185397), vmulq_f32(s, phi));
-            let phi = vaddq_f32(vdupq_n_f32(0.15912117), vmulq_f32(s, phi));
+            // Skia disables contraction with -ffp-contract=off outside Windows. Its Windows
+            // /fp:precise build contracts this polynomial's multiply-add expressions into FMA.
+            // Match that rounding before the ramp magnifies it into a stored F16 difference.
+            #[cfg(target_os = "windows")]
+            let phi = {
+                let phi = vfmaq_f32(vdupq_n_f32(0.02476102), s, vdupq_n_f32(-0.0070547382));
+                let phi = vfmaq_f32(vdupq_n_f32(-0.05185397), s, phi);
+                vfmaq_f32(vdupq_n_f32(0.15912117), s, phi)
+            };
+            #[cfg(not(target_os = "windows"))]
+            let phi = {
+                let phi = vaddq_f32(
+                    vdupq_n_f32(0.02476102),
+                    vmulq_f32(s, vdupq_n_f32(-0.0070547382)),
+                );
+                let phi = vaddq_f32(vdupq_n_f32(-0.05185397), vmulq_f32(s, phi));
+                vaddq_f32(vdupq_n_f32(0.15912117), vmulq_f32(s, phi))
+            };
             let phi = vmulq_f32(slope, phi);
             let phi = vbslq_f32(
                 vcltq_f32(xabs, yabs),
