@@ -151,7 +151,6 @@ fn raster_blend_placed_into(
     opacity: f32,
     composite: bool,
 ) -> Result<bool, DrawError> {
-    let extent = output.image_info().dimensions();
     if output.peek_pixels().is_none()
         || source.image.is_texture_backed()
         || destination.image.is_texture_backed()
@@ -159,108 +158,65 @@ fn raster_blend_placed_into(
     {
         return Ok(false);
     }
-    let width = usize::try_from(extent.width).map_err(|_| internal("negative blend width"))?;
-    let height = usize::try_from(extent.height).map_err(|_| internal("negative blend height"))?;
+    let info = ImageInfo::new(
+        output.image_info().dimensions(),
+        ColorType::RGBAF32,
+        AlphaType::Premul,
+        Some(working_color_space().map_err(|error| internal(&error.to_string()))?),
+    );
+    let blend = PixelBlend {
+        mode,
+        reference: ReferenceBlendMode::from(mode),
+        space,
+        opacity,
+        composite,
+    };
+    let tables = transfer_tables();
+    #[cfg(all(target_arch = "aarch64", target_endian = "little"))]
+    if fused::blend_halves(output, &source, &destination, blend, tables, &info)? {
+        return Ok(true);
+    }
+    blend_floats(output, &source, &destination, blend, tables, &info)?;
+    Ok(true)
+}
+
+/// The blend of `source` over `destination` into `output`, through copies of the operands in
+/// the F32 pixels of `info`.
+fn blend_floats(
+    output: &mut Surface,
+    source: &Placed<'_>,
+    destination: &Placed<'_>,
+    blend: PixelBlend,
+    tables: &TransferTables,
+    info: &ImageInfo,
+) -> Result<(), DrawError> {
+    let width = usize::try_from(info.width()).map_err(|_| internal("negative blend width"))?;
+    let height = usize::try_from(info.height()).map_err(|_| internal("negative blend height"))?;
     let row_bytes = width
         .checked_mul(16)
         .ok_or_else(|| internal("blend row is too large"))?;
     let byte_count = row_bytes
         .checked_mul(height)
         .ok_or_else(|| internal("blend image is too large"))?;
-    let info = ImageInfo::new(
-        extent,
-        ColorType::RGBAF32,
-        AlphaType::Premul,
-        Some(working_color_space().map_err(|error| internal(&error.to_string()))?),
-    );
-    let reference_mode = ReferenceBlendMode::from(mode);
-    let tables = transfer_tables();
     BLEND_SCRATCH.with_borrow_mut(|(pixels, backdrop)| {
         pixels.resize(byte_count, 0);
         backdrop.resize(byte_count, 0);
-        if !read_placed(&source, &info, pixels, row_bytes)
-            || !read_placed(&destination, &info, backdrop, row_bytes)
+        if !read_placed(source, info, pixels, row_bytes)
+            || !read_placed(destination, info, backdrop, row_bytes)
         {
             return Err(internal("blend input readback failed"));
         }
-        // Rows are independent. Solid layers and flat regions repeat inputs, so each side of
-        // each row span remembers its last conversion. The per-pixel helpers are forced inline;
-        // called out of line, this loop spilled its pixel state around every call.
+        // Rows are independent; the earliest failing pixel of all row spans is reported.
         let failure = std::sync::Mutex::new(None::<(usize, String)>);
         let backdrop = &*backdrop;
         fill_image_rows(pixels.as_mut_slice(), row_bytes, |first, rows| {
-            let mut source_memo = ConversionMemo::default();
-            let mut backdrop_memo = ConversionMemo::default();
-            for (index, (out, backdrop)) in rows
-                .chunks_exact_mut(16)
-                .zip(backdrop[first * row_bytes..].chunks_exact(16))
-                .enumerate()
-            {
-                let raw = read_rgba(out);
-                let source = [
-                    raw[0] * opacity,
-                    raw[1] * opacity,
-                    raw[2] * opacity,
-                    raw[3] * opacity,
-                ];
-                let backdrop = read_rgba(backdrop);
-                let source_alpha = source[3];
-                let result = if source_alpha == 0.0 {
-                    if composite { backdrop } else { source }
-                } else if mode == DrawBlend::Plus {
-                    let alpha = if backdrop[3] == 1.0 {
-                        source_alpha
-                    } else {
-                        (source_alpha / (1.0 - backdrop[3])).min(1.0)
-                    };
-                    let keep = if composite { 0.0 } else { 1.0 - alpha };
-                    [
-                        (source[0] + backdrop[0]).clamp(0.0, 1.0) - backdrop[0] * keep,
-                        (source[1] + backdrop[1]).clamp(0.0, 1.0) - backdrop[1] * keep,
-                        (source[2] + backdrop[2]).clamp(0.0, 1.0) - backdrop[2] * keep,
-                        if composite {
-                            (source_alpha + backdrop[3]).min(1.0)
-                        } else {
-                            alpha
-                        },
-                    ]
-                } else {
-                    let backdrop_alpha = backdrop[3];
-                    let source_rgb = source_memo.to_blend(tables, source, space);
-                    let backdrop_rgb = if backdrop_alpha > 0.0 {
-                        backdrop_memo.to_blend(tables, backdrop, space)
-                    } else {
-                        [0.0; 3]
-                    };
-                    let blended = match blend_rgb(backdrop_rgb, source_rgb, reference_mode) {
-                        Ok(blended) => blended,
-                        Err(error) => {
-                            let mut failure = failure.lock().unwrap_or_else(|e| e.into_inner());
-                            let index = first * width + index;
-                            if failure.as_ref().is_none_or(|(at, _)| index < *at) {
-                                *failure = Some((index, format!("creative blend: {error}")));
-                            }
-                            return;
-                        }
-                    };
-                    let working = blend_to_working(
-                        tables,
-                        space,
-                        [
-                            (1.0 - backdrop_alpha) * source_rgb[0] + backdrop_alpha * blended[0],
-                            (1.0 - backdrop_alpha) * source_rgb[1] + backdrop_alpha * blended[1],
-                            (1.0 - backdrop_alpha) * source_rgb[2] + backdrop_alpha * blended[2],
-                        ],
-                    );
-                    let keep = if composite { 1.0 - source_alpha } else { 0.0 };
-                    [
-                        working[0] * source_alpha + backdrop[0] * keep,
-                        working[1] * source_alpha + backdrop[1] * keep,
-                        working[2] * source_alpha + backdrop[2] * keep,
-                        source_alpha + backdrop[3] * keep,
-                    ]
-                };
-                write_rgba(out, result);
+            let backdrop = &backdrop[first * row_bytes..][..rows.len()];
+            if let Err((index, message)) = blend_rows(tables, blend, rows, backdrop) {
+                let index = first * width + index;
+                let mut failure = failure.lock().unwrap_or_else(|e| e.into_inner());
+                if failure.as_ref().is_none_or(|(at, _)| index < *at) {
+                    *failure = Some((index, message));
+                }
             }
         });
         if let Some((_, message)) = failure.into_inner().unwrap_or_else(|e| e.into_inner()) {
@@ -268,12 +224,121 @@ fn raster_blend_placed_into(
         }
         if !output
             .canvas()
-            .write_pixels(&info, pixels, row_bytes, (0, 0))
+            .write_pixels(info, pixels, row_bytes, (0, 0))
         {
             return Err(internal("blend output write failed"));
         }
-        Ok(true)
+        Ok(())
     })
+}
+
+/// What a creative blend does to every pixel.
+#[derive(Clone, Copy)]
+struct PixelBlend {
+    mode: DrawBlend,
+    reference: ReferenceBlendMode,
+    space: BlendSpace,
+    opacity: f32,
+    composite: bool,
+}
+
+/// Blends the F32 RGBA source pixels in `out` with the `backdrop` pixels of the same span, in
+/// place. `Err` holds the index of the first pixel that fails and the reason.
+#[cfg(not(all(target_arch = "aarch64", target_endian = "little")))]
+fn blend_rows(
+    tables: &TransferTables,
+    blend: PixelBlend,
+    out: &mut [u8],
+    backdrop: &[u8],
+) -> Result<(), (usize, String)> {
+    blend_pixels(tables, blend, out, backdrop)
+}
+
+#[cfg(all(target_arch = "aarch64", target_endian = "little"))]
+use fused::blend_rows;
+
+/// [`blend_rows`] one pixel at a time. Solid layers and flat regions repeat inputs, so each side
+/// remembers its last conversion. The per-pixel helpers are forced inline; called out of line,
+/// this loop spilled its pixel state around every call.
+#[inline(always)]
+fn blend_pixels(
+    tables: &TransferTables,
+    blend: PixelBlend,
+    out: &mut [u8],
+    backdrop: &[u8],
+) -> Result<(), (usize, String)> {
+    let PixelBlend {
+        mode,
+        reference,
+        space,
+        opacity,
+        composite,
+    } = blend;
+    let mut source_memo = ConversionMemo::default();
+    let mut backdrop_memo = ConversionMemo::default();
+    for (index, (out, backdrop)) in out
+        .chunks_exact_mut(16)
+        .zip(backdrop.chunks_exact(16))
+        .enumerate()
+    {
+        let raw = read_rgba(out);
+        let source = [
+            raw[0] * opacity,
+            raw[1] * opacity,
+            raw[2] * opacity,
+            raw[3] * opacity,
+        ];
+        let backdrop = read_rgba(backdrop);
+        let source_alpha = source[3];
+        let result = if source_alpha == 0.0 {
+            if composite { backdrop } else { source }
+        } else if mode == DrawBlend::Plus {
+            let alpha = if backdrop[3] == 1.0 {
+                source_alpha
+            } else {
+                (source_alpha / (1.0 - backdrop[3])).min(1.0)
+            };
+            let keep = if composite { 0.0 } else { 1.0 - alpha };
+            [
+                (source[0] + backdrop[0]).clamp(0.0, 1.0) - backdrop[0] * keep,
+                (source[1] + backdrop[1]).clamp(0.0, 1.0) - backdrop[1] * keep,
+                (source[2] + backdrop[2]).clamp(0.0, 1.0) - backdrop[2] * keep,
+                if composite {
+                    (source_alpha + backdrop[3]).min(1.0)
+                } else {
+                    alpha
+                },
+            ]
+        } else {
+            let backdrop_alpha = backdrop[3];
+            let source_rgb = source_memo.to_blend(tables, source, space);
+            let backdrop_rgb = if backdrop_alpha > 0.0 {
+                backdrop_memo.to_blend(tables, backdrop, space)
+            } else {
+                [0.0; 3]
+            };
+            let blended = blend_rgb(backdrop_rgb, source_rgb, reference)
+                .map_err(|error| (index, format!("creative blend: {error}")))?;
+            let working = blend_to_working(
+                tables,
+                space,
+                [
+                    (1.0 - backdrop_alpha) * source_rgb[0] + backdrop_alpha * blended[0],
+                    (1.0 - backdrop_alpha) * source_rgb[1] + backdrop_alpha * blended[1],
+                    (1.0 - backdrop_alpha) * source_rgb[2] + backdrop_alpha * blended[2],
+                ],
+            );
+            let keep = if composite { 1.0 - source_alpha } else { 0.0 };
+            [
+                working[0] * source_alpha + backdrop[0] * keep,
+                working[1] * source_alpha + backdrop[1] * keep,
+                working[2] * source_alpha + backdrop[2] * keep,
+                source_alpha + backdrop[3] * keep,
+            ]
+        };
+        write_rgba(out, result);
+    }
+    Ok(())
 }
 
 /// Reads `operand` into F32 `pixels` the size of `info`, transparent outside its rect.
@@ -516,6 +581,737 @@ fn decode_with(tables: &TransferTables, value: f32) -> f32 {
         srgb_decode_exact(f64::from(magnitude)) as f32
     };
     decoded.copysign(value)
+}
+
+/// On aarch64, Multiply and Screen blend four pixels at a time. Every lane takes the operations
+/// of [`blend_pixels`] in their order, without fused multiply-adds, so the bytes do not change.
+#[cfg(all(target_arch = "aarch64", target_endian = "little"))]
+mod fused {
+    use std::{arch::aarch64::*, sync::Mutex};
+
+    use skia_safe::{
+        AlphaType, ColorType, IRect, ImageInfo, Pixmap, Surface, surface::ContentChangeMode,
+    };
+    use valle_draw::program::{BlendMode as DrawBlend, BlendSpace};
+    use valle_engine::compositor::bloom::fill_image_rows;
+
+    use super::{
+        DrawError, LINEAR_SRGB_TO_WORKING, PixelBlend, Placed, TRANSFER_TABLE_LIMIT,
+        TRANSFER_TABLE_RESOLUTION, TRANSFER_TABLE_STEPS, TransferTables, WORKING_TO_LINEAR_SRGB,
+        blend_pixels, internal,
+    };
+
+    /// Pixels per vector.
+    const LANES: usize = 4;
+    /// Bytes of four F32 RGBA pixels.
+    const GROUP: usize = LANES * 16;
+    /// Bytes of four F16 RGBA pixels.
+    const HALF_GROUP: usize = LANES * 8;
+
+    /// Whether the mode of `blend` takes four pixels at a time.
+    fn fused(blend: PixelBlend) -> bool {
+        matches!(blend.mode, DrawBlend::Multiply | DrawBlend::Screen)
+    }
+
+    /// [`blend_pixels`] four pixels at a time, where the mode allows it.
+    pub(super) fn blend_rows(
+        tables: &TransferTables,
+        blend: PixelBlend,
+        out: &mut [u8],
+        backdrop: &[u8],
+    ) -> Result<(), (usize, String)> {
+        if !fused(blend)
+            || !out.as_ptr().cast::<f32>().is_aligned()
+            || !backdrop.as_ptr().cast::<f32>().is_aligned()
+        {
+            return blend_pixels(tables, blend, out, backdrop);
+        }
+        let mut memos = Memos::default();
+        let (groups, _) = out.as_chunks_mut::<GROUP>();
+        let count = groups.len();
+        for (index, (out, backdrop)) in groups
+            .iter_mut()
+            .zip(backdrop.as_chunks::<GROUP>().0)
+            .enumerate()
+        {
+            // SAFETY: the groups hold four pixels of four floats, aligned for floats.
+            let pixels = unsafe { (load(out), load(backdrop)) };
+            match blend_four(tables, blend, pixels.0, pixels.1, &mut memos) {
+                // SAFETY: as above.
+                Some(result) => unsafe { store(out, result) },
+                None => one_by_one(tables, blend, out, backdrop)
+                    .map_err(|(pixel, message)| (index * LANES + pixel, message))?,
+            }
+        }
+        let tail = count * GROUP;
+        one_by_one(tables, blend, &mut out[tail..], &backdrop[tail..])
+            .map_err(|(pixel, message)| (count * LANES + pixel, message))
+    }
+
+    /// The blend of every pixel of `output`, reading the half floats of the operands and writing
+    /// those of `output` in place, with the conversions that read them into the F32 pixels of
+    /// `info` and write them back. Takes raster operands whose rects cover `output` and whose
+    /// images, like `output`, hold F16 premultiplied pixels in the color space of `info`. Returns
+    /// `false` where the blend goes through F32 copies.
+    pub(super) fn blend_halves(
+        output: &mut Surface,
+        source: &Placed<'_>,
+        destination: &Placed<'_>,
+        blend: PixelBlend,
+        tables: &TransferTables,
+        info: &ImageInfo,
+    ) -> Result<bool, DrawError> {
+        if !fused(blend) || !half(&output.image_info(), info) {
+            return Ok(false);
+        }
+        let (Some(source_pixels), Some(backdrop_pixels)) =
+            (source.image.peek_pixels(), destination.image.peek_pixels())
+        else {
+            return Ok(false);
+        };
+        let (Some(source_rows), Some(backdrop_rows)) = (
+            Rows::new(&source_pixels, source.rect, info),
+            Rows::new(&backdrop_pixels, destination.rect, info),
+        ) else {
+            return Ok(false);
+        };
+        let width = info.width() as usize;
+        // As for a write of every pixel: pixels a snapshot still shares are replaced, not copied.
+        output.notify_content_will_change(ContentChangeMode::Discard);
+        let mut pixels = output
+            .peek_pixels()
+            .ok_or_else(|| internal("blend output has no pixels"))?;
+        let row_bytes = pixels.row_bytes();
+        let bytes = pixels
+            .bytes_mut()
+            .ok_or_else(|| internal("blend output pixels are not writable"))?;
+        // The F32 copies write every pixel again.
+        if !bytes.as_ptr().cast::<u16>().is_aligned() || !row_bytes.is_multiple_of(8) {
+            return Ok(false);
+        }
+        // Rows are independent; the earliest failing pixel of all row spans is reported.
+        let failure = Mutex::new(None::<(usize, String)>);
+        fill_image_rows(bytes, row_bytes, |first, rows| {
+            let mut memos = Memos::default();
+            for (index, row) in rows.chunks_mut(row_bytes).enumerate() {
+                let y = first + index;
+                let source = source_rows.row(y, width);
+                let backdrop = backdrop_rows.row(y, width);
+                if let Err((x, message)) = half_row(
+                    tables,
+                    blend,
+                    &mut row[..width * 8],
+                    source,
+                    backdrop,
+                    &mut memos,
+                ) {
+                    let index = y * width + x;
+                    let mut failure = failure.lock().unwrap_or_else(|e| e.into_inner());
+                    if failure.as_ref().is_none_or(|(at, _)| index < *at) {
+                        *failure = Some((index, message));
+                    }
+                    return;
+                }
+            }
+        });
+        if let Some((_, message)) = failure.into_inner().unwrap_or_else(|e| e.into_inner()) {
+            return Err(internal(&message));
+        }
+        Ok(true)
+    }
+
+    /// Whether `stored` holds F16 premultiplied pixels in the color space of `info`.
+    fn half(stored: &ImageInfo, info: &ImageInfo) -> bool {
+        stored.color_type() == ColorType::RGBAF16
+            && stored.alpha_type() == AlphaType::Premul
+            && stored.color_space() == info.color_space()
+    }
+
+    /// The half floats of an operand at the output's pixels, row by row.
+    struct Rows<'a> {
+        /// From the operand's pixel at the output's top-left corner.
+        bytes: &'a [u8],
+        row_bytes: usize,
+    }
+
+    impl<'a> Rows<'a> {
+        /// The rows of an operand placed at `rect`, where its rect covers the output of `info`
+        /// and `pixels` hold its pixels as `half` takes them.
+        fn new(pixels: &Pixmap<'a>, rect: IRect, info: &ImageInfo) -> Option<Self> {
+            let stored = pixels.info();
+            let row_bytes = pixels.row_bytes();
+            let bytes = pixels.bytes()?;
+            let covers = rect.left <= 0
+                && rect.top <= 0
+                && rect.right >= info.width()
+                && rect.bottom >= info.height()
+                && rect.width() <= stored.width()
+                && rect.height() <= stored.height();
+            // The reads load the halves of four pixels together.
+            (covers
+                && half(stored, info)
+                && bytes.as_ptr().cast::<u16>().is_aligned()
+                && row_bytes.is_multiple_of(8))
+            .then(|| Self {
+                bytes: &bytes[rect.top.unsigned_abs() as usize * row_bytes
+                    + rect.left.unsigned_abs() as usize * 8..],
+                row_bytes,
+            })
+        }
+
+        /// The `width` pixels of output row `y`.
+        fn row(&self, y: usize, width: usize) -> &'a [u8] {
+            &self.bytes[y * self.row_bytes..][..width * 8]
+        }
+    }
+
+    /// One row of [`blend_halves`]: the halves of `source` over those of `backdrop` into `out`.
+    fn half_row(
+        tables: &TransferTables,
+        blend: PixelBlend,
+        out: &mut [u8],
+        source: &[u8],
+        backdrop: &[u8],
+        memos: &mut Memos,
+    ) -> Result<(), (usize, String)> {
+        let (groups, tail) = out.as_chunks_mut::<HALF_GROUP>();
+        let (sources, source_tail) = source.as_chunks::<HALF_GROUP>();
+        let (backdrops, backdrop_tail) = backdrop.as_chunks::<HALF_GROUP>();
+        let count = groups.len();
+        for (index, ((out, source), backdrop)) in
+            groups.iter_mut().zip(sources).zip(backdrops).enumerate()
+        {
+            // SAFETY: the groups hold four pixels of four halves, aligned for the halves by the
+            // alignment of the rows.
+            unsafe {
+                half_group(
+                    tables,
+                    blend,
+                    out.as_mut_ptr().cast(),
+                    source.as_ptr().cast(),
+                    backdrop.as_ptr().cast(),
+                    memos,
+                )
+            }
+            .map_err(|(pixel, message)| (index * LANES + pixel, message))?;
+        }
+        if tail.is_empty() {
+            return Ok(());
+        }
+        // The last pixels go with transparent ones, which the blend copies.
+        let padded = |bytes: &[u8]| {
+            let mut halves = [0_u16; LANES * 4];
+            for (half, bytes) in halves.iter_mut().zip(bytes.as_chunks::<2>().0) {
+                *half = u16::from_le_bytes(*bytes);
+            }
+            halves
+        };
+        let (source, backdrop) = (padded(source_tail), padded(backdrop_tail));
+        let mut halves = [0_u16; LANES * 4];
+        // SAFETY: the buffers hold four pixels of four halves.
+        unsafe {
+            half_group(
+                tables,
+                blend,
+                halves.as_mut_ptr(),
+                source.as_ptr(),
+                backdrop.as_ptr(),
+                memos,
+            )
+        }
+        .map_err(|(pixel, message)| (count * LANES + pixel, message))?;
+        for (bytes, half) in tail.as_chunks_mut::<2>().0.iter_mut().zip(&halves) {
+            *bytes = half.to_le_bytes();
+        }
+        Ok(())
+    }
+
+    /// Blends the four pixels of halves at `source` over the four at `backdrop` into `out`.
+    ///
+    /// # Safety
+    ///
+    /// Each pointer points to sixteen halves.
+    #[inline(always)]
+    unsafe fn half_group(
+        tables: &TransferTables,
+        blend: PixelBlend,
+        out: *mut u16,
+        source: *const u16,
+        backdrop: *const u16,
+        memos: &mut Memos,
+    ) -> Result<(), (usize, String)> {
+        // SAFETY: NEON is part of the aarch64 baseline; the caller provides the halves.
+        unsafe {
+            let widen = |value: uint16x4_t| vcvt_f32_f16(vreinterpret_f16_u16(value));
+            let pixels = |halves: uint16x4x4_t| {
+                [
+                    widen(halves.0),
+                    widen(halves.1),
+                    widen(halves.2),
+                    widen(halves.3),
+                ]
+            };
+            let raw = pixels(vld4_u16(source));
+            let under = pixels(vld4_u16(backdrop));
+            let result = match blend_four(tables, blend, raw, under, memos) {
+                Some(result) => result,
+                None => {
+                    let (mut floats, mut backdrop) = (Floats::default(), Floats::default());
+                    store(&mut floats.0, raw);
+                    store(&mut backdrop.0, under);
+                    one_by_one(tables, blend, &mut floats.0, &backdrop.0)?;
+                    load(&floats.0)
+                }
+            };
+            let narrow = |value: float32x4_t| vreinterpret_u16_f16(vcvt_f16_f32(value));
+            vst4_u16(
+                out,
+                uint16x4x4_t(
+                    narrow(result[0]),
+                    narrow(result[1]),
+                    narrow(result[2]),
+                    narrow(result[3]),
+                ),
+            );
+            Ok(())
+        }
+    }
+
+    /// Four F32 RGBA pixels, aligned for floats.
+    #[repr(align(16))]
+    struct Floats([u8; GROUP]);
+
+    impl Default for Floats {
+        fn default() -> Self {
+            Self([0; GROUP])
+        }
+    }
+
+    /// The four F32 pixels at `bytes`, by channel.
+    ///
+    /// # Safety
+    ///
+    /// `bytes` is aligned for floats.
+    #[inline(always)]
+    unsafe fn load(bytes: &[u8; GROUP]) -> [float32x4_t; 4] {
+        // SAFETY: NEON is part of the aarch64 baseline; the caller aligns the floats.
+        unsafe {
+            let pixels = vld4q_f32(bytes.as_ptr().cast());
+            [pixels.0, pixels.1, pixels.2, pixels.3]
+        }
+    }
+
+    /// Stores four F32 pixels, by channel, at `bytes`.
+    ///
+    /// # Safety
+    ///
+    /// `bytes` is aligned for floats.
+    #[inline(always)]
+    unsafe fn store(bytes: &mut [u8; GROUP], pixels: [float32x4_t; 4]) {
+        // SAFETY: NEON is part of the aarch64 baseline; the caller aligns the floats.
+        unsafe {
+            vst4q_f32(
+                bytes.as_mut_ptr().cast(),
+                float32x4x4_t(pixels[0], pixels[1], pixels[2], pixels[3]),
+            );
+        }
+    }
+
+    /// [`blend_pixels`] out of line, for the few pixels the groups leave.
+    #[cold]
+    #[inline(never)]
+    fn one_by_one(
+        tables: &TransferTables,
+        blend: PixelBlend,
+        out: &mut [u8],
+        backdrop: &[u8],
+    ) -> Result<(), (usize, String)> {
+        blend_pixels(tables, blend, out, backdrop)
+    }
+
+    /// The blend of four pixels, by channel, from `raw` source pixels before the opacity and
+    /// `backdrop` pixels. `None` where a pixel the blend computes needs the one-pixel path: a
+    /// value that is not finite, which the blend reports, or a magnitude beyond the transfer
+    /// tables.
+    #[inline(always)]
+    fn blend_four(
+        tables: &TransferTables,
+        blend: PixelBlend,
+        raw: [float32x4_t; 4],
+        backdrop: [float32x4_t; 4],
+        memos: &mut Memos,
+    ) -> Option<[float32x4_t; 4]> {
+        // SAFETY: NEON is part of the aarch64 baseline.
+        unsafe {
+            let opacity = vdupq_n_f32(blend.opacity);
+            let source = [
+                vmulq_f32(raw[0], opacity),
+                vmulq_f32(raw[1], opacity),
+                vmulq_f32(raw[2], opacity),
+                vmulq_f32(raw[3], opacity),
+            ];
+            let zero = vdupq_n_f32(0.0);
+            let one = vdupq_n_f32(1.0);
+            let source_alpha = source[3];
+            let backdrop_alpha = backdrop[3];
+            // A transparent source is copied, or the backdrop when compositing.
+            let copied = if blend.composite { backdrop } else { source };
+            let blended = vmvnq_u32(vceqq_f32(source_alpha, zero));
+            if vmaxvq_u32(blended) == 0 {
+                return Some(copied);
+            }
+            // A group of one source pixel over one backdrop pixel blends as the last one did.
+            let keys = (uniform(&source), uniform(&backdrop));
+            let pair = keys.0.zip(keys.1);
+            if let (Some(pair), Some(last)) = (pair, memos.result)
+                && pair == last.pixels
+            {
+                return Some([
+                    vdupq_n_f32(last.result[0]),
+                    vdupq_n_f32(last.result[1]),
+                    vdupq_n_f32(last.result[2]),
+                    vdupq_n_f32(last.result[3]),
+                ]);
+            }
+            let present = vcgtq_f32(backdrop_alpha, zero);
+            let source_rgb = memos
+                .source
+                .convert(tables, &source, keys.0, blend.space, blended)?;
+            let backdrop_rgb = memos.backdrop.convert(
+                tables,
+                &backdrop,
+                keys.1,
+                blend.space,
+                vandq_u32(blended, present),
+            )?;
+            let backdrop_rgb = [
+                vbslq_f32(present, backdrop_rgb[0], zero),
+                vbslq_f32(present, backdrop_rgb[1], zero),
+                vbslq_f32(present, backdrop_rgb[2], zero),
+            ];
+            let mixed = if blend.mode == DrawBlend::Multiply {
+                [
+                    vmulq_f32(backdrop_rgb[0], source_rgb[0]),
+                    vmulq_f32(backdrop_rgb[1], source_rgb[1]),
+                    vmulq_f32(backdrop_rgb[2], source_rgb[2]),
+                ]
+            } else {
+                let screen =
+                    |b: float32x4_t, s: float32x4_t| vsubq_f32(vaddq_f32(b, s), vmulq_f32(b, s));
+                [
+                    screen(backdrop_rgb[0], source_rgb[0]),
+                    screen(backdrop_rgb[1], source_rgb[1]),
+                    screen(backdrop_rgb[2], source_rgb[2]),
+                ]
+            };
+            // `blend_rgb` fails where its operands or its result are not finite. The tables bound
+            // the operands of sRGB blends, whose products and sums stay finite.
+            if blend.space == BlendSpace::Linear {
+                let mut failing = vdupq_n_u32(0);
+                for rgb in [&source_rgb, &backdrop_rgb, &mixed] {
+                    for value in rgb {
+                        let finite = vcltq_f32(vabsq_f32(*value), vdupq_n_f32(f32::INFINITY));
+                        failing = vorrq_u32(failing, vbicq_u32(blended, finite));
+                    }
+                }
+                if vmaxvq_u32(failing) != 0 {
+                    return None;
+                }
+            }
+            let over = |s: float32x4_t, b: float32x4_t| {
+                vaddq_f32(
+                    vmulq_f32(vsubq_f32(one, backdrop_alpha), s),
+                    vmulq_f32(backdrop_alpha, b),
+                )
+            };
+            let working = to_working(
+                tables,
+                blend.space,
+                [
+                    over(source_rgb[0], mixed[0]),
+                    over(source_rgb[1], mixed[1]),
+                    over(source_rgb[2], mixed[2]),
+                ],
+                blended,
+            )?;
+            let keep = if blend.composite {
+                vsubq_f32(one, source_alpha)
+            } else {
+                zero
+            };
+            let channel = |working: float32x4_t, backdrop: float32x4_t, copied: float32x4_t| {
+                vbslq_f32(
+                    blended,
+                    vaddq_f32(vmulq_f32(working, source_alpha), vmulq_f32(backdrop, keep)),
+                    copied,
+                )
+            };
+            let result = [
+                channel(working[0], backdrop[0], copied[0]),
+                channel(working[1], backdrop[1], copied[1]),
+                channel(working[2], backdrop[2], copied[2]),
+                vbslq_f32(
+                    blended,
+                    vaddq_f32(source_alpha, vmulq_f32(backdrop[3], keep)),
+                    copied[3],
+                ),
+            ];
+            // Every lane of such a group holds the same pixel.
+            if let Some(pixels) = pair {
+                memos.result = Some(Repeated {
+                    pixels,
+                    result: [
+                        vgetq_lane_f32::<0>(result[0]),
+                        vgetq_lane_f32::<0>(result[1]),
+                        vgetq_lane_f32::<0>(result[2]),
+                        vgetq_lane_f32::<0>(result[3]),
+                    ],
+                });
+            }
+            Some(result)
+        }
+    }
+
+    /// What the groups of a row span remember: the conversions of each side, as the one-pixel
+    /// memos keep them, and the last group of one pixel over one pixel with its result.
+    #[derive(Default)]
+    struct Memos {
+        source: Memo,
+        backdrop: Memo,
+        result: Option<Repeated>,
+    }
+
+    /// A group of one source pixel over one backdrop pixel, by bits, and the pixel it blends to.
+    #[derive(Clone, Copy)]
+    struct Repeated {
+        pixels: ([u32; 4], [u32; 4]),
+        result: [f32; 4],
+    }
+
+    /// The last group of one pixel and its conversion, as `ConversionMemo` keeps them.
+    #[derive(Default)]
+    struct Memo {
+        key: Option<[u32; 4]>,
+        value: [f32; 3],
+    }
+
+    impl Memo {
+        /// `ConversionMemo::to_blend` of each lane of `pixel`, whose lanes hold the one pixel
+        /// `key` where it is known, or `None` where a lane in `needed` has a magnitude beyond the
+        /// transfer tables.
+        #[inline(always)]
+        fn convert(
+            &mut self,
+            tables: &TransferTables,
+            pixel: &[float32x4_t; 4],
+            key: Option<[u32; 4]>,
+            space: BlendSpace,
+            needed: uint32x4_t,
+        ) -> Option<[float32x4_t; 3]> {
+            // SAFETY: NEON is part of the aarch64 baseline.
+            unsafe {
+                if key.is_some() && key == self.key {
+                    return Some([
+                        vdupq_n_f32(self.value[0]),
+                        vdupq_n_f32(self.value[1]),
+                        vdupq_n_f32(self.value[2]),
+                    ]);
+                }
+                let alpha = pixel[3];
+                let linear = multiply(
+                    &WORKING_TO_LINEAR_SRGB,
+                    [
+                        vdivq_f32(pixel[0], alpha),
+                        vdivq_f32(pixel[1], alpha),
+                        vdivq_f32(pixel[2], alpha),
+                    ],
+                );
+                let (rgb, beyond) = if space == BlendSpace::Linear {
+                    (linear, vdupq_n_u32(0))
+                } else {
+                    let (r, beyond_r) = encode(&tables.encode, linear[0]);
+                    let (g, beyond_g) = encode(&tables.encode, linear[1]);
+                    let (b, beyond_b) = encode(&tables.encode, linear[2]);
+                    let beyond = vorrq_u32(vorrq_u32(beyond_r, beyond_g), beyond_b);
+                    ([r, g, b], beyond)
+                };
+                if vmaxvq_u32(vandq_u32(beyond, needed)) != 0 {
+                    return None;
+                }
+                // A lane beyond the tables holds no conversion, needed or not.
+                if key.is_some() && vmaxvq_u32(beyond) == 0 {
+                    self.key = key;
+                    self.value = [
+                        vgetq_lane_f32::<0>(rgb[0]),
+                        vgetq_lane_f32::<0>(rgb[1]),
+                        vgetq_lane_f32::<0>(rgb[2]),
+                    ];
+                }
+                Some(rgb)
+            }
+        }
+    }
+
+    /// The bits of the one pixel every lane of `pixel` holds, if they hold one.
+    #[inline(always)]
+    fn uniform(pixel: &[float32x4_t; 4]) -> Option<[u32; 4]> {
+        // SAFETY: NEON is part of the aarch64 baseline.
+        unsafe {
+            let bits = [
+                vreinterpretq_u32_f32(pixel[0]),
+                vreinterpretq_u32_f32(pixel[1]),
+                vreinterpretq_u32_f32(pixel[2]),
+                vreinterpretq_u32_f32(pixel[3]),
+            ];
+            let same = |value: uint32x4_t| vceqq_u32(value, vdupq_laneq_u32::<0>(value));
+            let all = vandq_u32(
+                vandq_u32(same(bits[0]), same(bits[1])),
+                vandq_u32(same(bits[2]), same(bits[3])),
+            );
+            (vminvq_u32(all) == u32::MAX).then(|| {
+                [
+                    vgetq_lane_u32::<0>(bits[0]),
+                    vgetq_lane_u32::<0>(bits[1]),
+                    vgetq_lane_u32::<0>(bits[2]),
+                    vgetq_lane_u32::<0>(bits[3]),
+                ]
+            })
+        }
+    }
+
+    /// `blend_to_working` of each lane, or `None` where a lane in `needed` has a magnitude
+    /// beyond the transfer tables.
+    #[inline(always)]
+    fn to_working(
+        tables: &TransferTables,
+        space: BlendSpace,
+        rgb: [float32x4_t; 3],
+        needed: uint32x4_t,
+    ) -> Option<[float32x4_t; 3]> {
+        // SAFETY: NEON is part of the aarch64 baseline.
+        unsafe {
+            let rgb = if space == BlendSpace::Linear {
+                rgb
+            } else {
+                let (r, beyond_r) = decode(&tables.decode, rgb[0]);
+                let (g, beyond_g) = decode(&tables.decode, rgb[1]);
+                let (b, beyond_b) = decode(&tables.decode, rgb[2]);
+                let beyond = vorrq_u32(vorrq_u32(beyond_r, beyond_g), beyond_b);
+                if vmaxvq_u32(vandq_u32(beyond, needed)) != 0 {
+                    return None;
+                }
+                [r, g, b]
+            };
+            Some(multiply(&LINEAR_SRGB_TO_WORKING, rgb))
+        }
+    }
+
+    /// `multiply` of each lane: products and sums in f64, in its order, rounded once.
+    #[inline(always)]
+    fn multiply(matrix: &[[f64; 3]; 3], rgb: [float32x4_t; 3]) -> [float32x4_t; 3] {
+        // SAFETY: NEON is part of the aarch64 baseline.
+        unsafe {
+            let low = [
+                vcvt_f64_f32(vget_low_f32(rgb[0])),
+                vcvt_f64_f32(vget_low_f32(rgb[1])),
+                vcvt_f64_f32(vget_low_f32(rgb[2])),
+            ];
+            let high = [
+                vcvt_high_f64_f32(rgb[0]),
+                vcvt_high_f64_f32(rgb[1]),
+                vcvt_high_f64_f32(rgb[2]),
+            ];
+            let row = |m: &[f64; 3]| {
+                let sum = |c: &[float64x2_t; 3]| {
+                    vaddq_f64(
+                        vaddq_f64(
+                            vmulq_f64(vdupq_n_f64(m[0]), c[0]),
+                            vmulq_f64(vdupq_n_f64(m[1]), c[1]),
+                        ),
+                        vmulq_f64(vdupq_n_f64(m[2]), c[2]),
+                    )
+                };
+                vcvt_high_f32_f64(vcvt_f32_f64(sum(&low)), sum(&high))
+            };
+            [row(&matrix[0]), row(&matrix[1]), row(&matrix[2])]
+        }
+    }
+
+    /// `encode_with` of each lane, and the lanes past the table, which take the exact curve.
+    #[inline(always)]
+    fn encode(table: &[f32], value: float32x4_t) -> (float32x4_t, uint32x4_t) {
+        // SAFETY: NEON is part of the aarch64 baseline.
+        unsafe {
+            let magnitude = vabsq_f32(value);
+            let (looked_up, beyond) = lookup(table, magnitude);
+            let encoded = vbslq_f32(
+                vcleq_f32(magnitude, vdupq_n_f32(0.003_130_8)),
+                vmulq_f32(magnitude, vdupq_n_f32(12.92)),
+                looked_up,
+            );
+            (copysign(encoded, value), beyond)
+        }
+    }
+
+    /// `decode_with` of each lane, and the lanes past the table, which take the exact curve.
+    #[inline(always)]
+    fn decode(table: &[f32], value: float32x4_t) -> (float32x4_t, uint32x4_t) {
+        // SAFETY: NEON is part of the aarch64 baseline.
+        unsafe {
+            let magnitude = vabsq_f32(value);
+            let (looked_up, beyond) = lookup(table, magnitude);
+            let decoded = vbslq_f32(
+                vcleq_f32(magnitude, vdupq_n_f32(0.040_45)),
+                vdivq_f32(magnitude, vdupq_n_f32(12.92)),
+                looked_up,
+            );
+            (copysign(decoded, value), beyond)
+        }
+    }
+
+    /// `lookup` of each lane, and the lanes past the table's limit (NaN included), where the
+    /// interpolation means nothing.
+    #[inline(always)]
+    fn lookup(table: &[f32], magnitude: float32x4_t) -> (float32x4_t, uint32x4_t) {
+        debug_assert_eq!(table.len(), TRANSFER_TABLE_STEPS + 1);
+        // SAFETY: NEON is part of the aarch64 baseline. An index is at most
+        // `TRANSFER_TABLE_STEPS - 1`, and the tables hold `TRANSFER_TABLE_STEPS + 1` entries.
+        unsafe {
+            let position = vmulq_f32(magnitude, vdupq_n_f32(TRANSFER_TABLE_RESOLUTION as f32));
+            // Saturating like `as usize`, NaN to zero.
+            let index = vminq_u32(
+                vcvtq_u32_f32(position),
+                vdupq_n_u32((TRANSFER_TABLE_STEPS - 1) as u32),
+            );
+            let pair = |lane: u32| vld1_f32(table.as_ptr().add(lane as usize));
+            let low = vcombine_f32(
+                pair(vgetq_lane_u32::<0>(index)),
+                pair(vgetq_lane_u32::<1>(index)),
+            );
+            let high = vcombine_f32(
+                pair(vgetq_lane_u32::<2>(index)),
+                pair(vgetq_lane_u32::<3>(index)),
+            );
+            let start = vuzp1q_f32(low, high);
+            let end = vuzp2q_f32(low, high);
+            let value = vaddq_f32(
+                start,
+                vmulq_f32(
+                    vsubq_f32(end, start),
+                    vsubq_f32(position, vcvtq_f32_u32(index)),
+                ),
+            );
+            let inside = vcleq_f32(magnitude, vdupq_n_f32(TRANSFER_TABLE_LIMIT));
+            (value, vmvnq_u32(inside))
+        }
+    }
+
+    /// `magnitude` with the sign of `sign`, as `f32::copysign`.
+    #[inline(always)]
+    fn copysign(magnitude: float32x4_t, sign: float32x4_t) -> float32x4_t {
+        // SAFETY: NEON is part of the aarch64 baseline.
+        unsafe { vbslq_f32(vdupq_n_u32(0x8000_0000), sign, magnitude) }
+    }
 }
 
 fn internal(message: &str) -> DrawError {
@@ -915,6 +1711,248 @@ mod tests {
                 )
                 .unwrap();
                 assert!(actual.approx_eq(expected, 0.004), "{mode:?} pixel {index}");
+            }
+        }
+    }
+
+    /// Operand bytes for the four-pixel blends: premultiplied colors with every kind of alpha (NaN
+    /// only with `nan`), grays at the edges of the transfer curves, which the matrices keep gray,
+    /// colors past the tables, and runs of one pixel: each pixel repeats the last one with
+    /// probability `repeat`.
+    #[cfg(all(target_arch = "aarch64", target_endian = "little"))]
+    fn operands(count: usize, repeat: f32, nan: bool, state: &mut u64) -> Vec<u8> {
+        let mut unit = || {
+            *state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            (*state >> 40) as f32 / (1 << 24) as f32
+        };
+        let mut pixel = [0.0_f32; 4];
+        let mut bytes = Vec::with_capacity(count * 16);
+        for index in 0..count {
+            if index == 0 || unit() >= repeat {
+                let alpha = match (unit() * 8.0) as u32 {
+                    0 => 0.0,
+                    1 => -0.0,
+                    2 => 1e-3,
+                    3 => -0.25,
+                    4 if nan => f32::NAN,
+                    4 | 5 => 1.0,
+                    _ => unit(),
+                };
+                let kind = unit();
+                let rgb = if kind < 0.2 {
+                    let edge = [0.003_130_8_f32, 0.040_45, 1.0, 2.0][(unit() * 4.0) as usize];
+                    [edge * (1.0 + (unit() - 0.5) * 4e-6); 3]
+                } else if kind < 0.3 {
+                    [1.5 + 2.0 * unit(), 1.5 + 2.0 * unit(), unit()]
+                } else {
+                    [unit() * 1.4 - 0.2, unit() * 1.4 - 0.2, unit() * 1.4 - 0.2]
+                };
+                pixel = [rgb[0] * alpha, rgb[1] * alpha, rgb[2] * alpha, alpha];
+            }
+            bytes.extend(pixel.iter().flat_map(|channel| channel.to_ne_bytes()));
+        }
+        bytes
+    }
+
+    #[cfg(all(target_arch = "aarch64", target_endian = "little"))]
+    #[test]
+    fn four_pixel_blends_keep_the_bytes_and_failures_of_one_pixel_blends() {
+        let tables = transfer_tables();
+        // Groups of four pixels, then a tail of three.
+        let count = 4 * 1024 + 3;
+        let compare = |blend: PixelBlend, source: &[u8], backdrop: &[u8]| {
+            let mut fused_out = source.to_vec();
+            let mut one_out = source.to_vec();
+            assert!(fused_out.as_ptr().cast::<f32>().is_aligned());
+            assert!(backdrop.as_ptr().cast::<f32>().is_aligned());
+            let fused_result = fused::blend_rows(tables, blend, &mut fused_out, backdrop);
+            let one_result = blend_pixels(tables, blend, &mut one_out, backdrop);
+            let what = format!(
+                "{:?} {:?} composite {} opacity {}",
+                blend.mode, blend.space, blend.composite, blend.opacity
+            );
+            assert_eq!(fused_result, one_result, "{what}");
+            let differing = fused_out
+                .as_chunks::<16>()
+                .0
+                .iter()
+                .zip(one_out.as_chunks::<16>().0)
+                .position(|(fused, one)| fused != one);
+            assert_eq!(differing, None, "{what}");
+            one_result
+        };
+        let mut state = 0x5eed_u64;
+        for round in 0..3 {
+            let source = operands(count, 0.6, false, &mut state);
+            let backdrop = operands(count, 0.9, true, &mut state);
+            for mode in [DrawBlend::Multiply, DrawBlend::Screen, DrawBlend::Overlay] {
+                for space in [BlendSpace::Srgb, BlendSpace::Linear] {
+                    for (composite, opacity) in
+                        [(false, 1.0), (true, 1.0), (false, 0.7), (true, 0.7)]
+                    {
+                        let blend = PixelBlend {
+                            mode,
+                            reference: mode.into(),
+                            space,
+                            opacity,
+                            composite,
+                        };
+                        assert_eq!(compare(blend, &source, &backdrop), Ok(()));
+                        if round > 0 {
+                            continue;
+                        }
+                        // Both report the first pixel they cannot blend, in a group or the tail.
+                        let failing = [
+                            ([f32::INFINITY, 0.5, 0.5, 1.0], None),
+                            ([0.5, 0.5, 0.5, f32::NAN], None),
+                            ([0.3, 0.3, 0.3, 1.0], Some([0.5, f32::NAN, 0.5, 1.0])),
+                        ];
+                        for at in [0, 6, count - 2] {
+                            for (source_pixel, backdrop_pixel) in failing {
+                                let mut source = source.clone();
+                                let mut backdrop = backdrop.clone();
+                                write_rgba(&mut source[at * 16..][..16], source_pixel);
+                                if let Some(pixel) = backdrop_pixel {
+                                    write_rgba(&mut backdrop[at * 16..][..16], pixel);
+                                }
+                                let result = compare(blend, &source, &backdrop);
+                                assert!(matches!(result, Err((index, _)) if index == at));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[cfg(all(target_arch = "aarch64", target_endian = "little"))]
+    #[test]
+    fn half_blends_keep_the_bytes_and_failures_of_float_blends() {
+        let tables = transfer_tables();
+        let working = working_color_space().unwrap();
+        let mut state = 0xb1e2d_u64;
+        // Rows with a tail of one pixel; the larger output spreads its rows over workers.
+        for (width, height) in [(37, 9), (203, 170)] {
+            let info = ImageInfo::new(
+                (width, height),
+                ColorType::RGBAF32,
+                AlphaType::Premul,
+                Some(working.clone()),
+            );
+            let output_info =
+                working_info(Extent2d::new(width as u32, height as u32).unwrap()).unwrap();
+            // Operands larger than the output, in halves.
+            let (operand_width, operand_height) = (width + 3, height + 2);
+            let halves = |floats: &[u8]| {
+                let float_info = info.with_dimensions((operand_width, operand_height));
+                let image = skia_safe::images::raster_from_data(
+                    &float_info,
+                    skia_safe::Data::new_copy(floats),
+                    operand_width as usize * 16,
+                )
+                .unwrap();
+                let half_info = output_info.with_dimensions((operand_width, operand_height));
+                let mut bytes = vec![0_u8; (operand_width * operand_height) as usize * 8];
+                assert!(image.read_pixels(
+                    &half_info,
+                    &mut bytes,
+                    operand_width as usize * 8,
+                    (0, 0),
+                    CachingHint::Disallow,
+                ));
+                skia_safe::images::raster_from_data(
+                    &half_info,
+                    skia_safe::Data::new_copy(&bytes),
+                    operand_width as usize * 8,
+                )
+                .unwrap()
+            };
+            let count = (operand_width * operand_height) as usize;
+            let source_floats = operands(count, 0.6, false, &mut state);
+            let source = halves(&source_floats);
+            let backdrop = halves(&operands(count, 0.9, true, &mut state));
+            let mut failing = source_floats.clone();
+            write_rgba(
+                &mut failing[(operand_width as usize * 5 + 7) * 16..][..16],
+                [f32::INFINITY, 0.5, 0.5, 1.0],
+            );
+            let failing = halves(&failing);
+            let bytes =
+                |surface: &mut Surface| surface.peek_pixels().unwrap().bytes().unwrap().to_vec();
+            for (rect, covers) in [
+                (IRect::from_wh(width, height), true),
+                (
+                    IRect::from_xywh(-2, -1, operand_width, operand_height),
+                    true,
+                ),
+                (IRect::from_xywh(1, 0, width, height), false),
+            ] {
+                let placed = |image| Placed { image, rect };
+                for mode in [DrawBlend::Multiply, DrawBlend::Screen, DrawBlend::Overlay] {
+                    for space in [BlendSpace::Srgb, BlendSpace::Linear] {
+                        for (composite, opacity) in [(false, 1.0), (true, 0.7)] {
+                            let blend = PixelBlend {
+                                mode,
+                                reference: mode.into(),
+                                space,
+                                opacity,
+                                composite,
+                            };
+                            let what = format!("{mode:?} {space:?} {composite} {opacity} {rect:?}");
+                            let mut halves_out = raster_surface(&output_info).unwrap();
+                            let took = fused::blend_halves(
+                                &mut halves_out,
+                                &placed(&source),
+                                &placed(&backdrop),
+                                blend,
+                                tables,
+                                &info,
+                            )
+                            .unwrap();
+                            assert_eq!(took, covers && mode != DrawBlend::Overlay, "{what}");
+                            if !took {
+                                continue;
+                            }
+                            let mut floats_out = raster_surface(&output_info).unwrap();
+                            blend_floats(
+                                &mut floats_out,
+                                &placed(&source),
+                                &placed(&backdrop),
+                                blend,
+                                tables,
+                                &info,
+                            )
+                            .unwrap();
+                            assert!(bytes(&mut halves_out) == bytes(&mut floats_out), "{what}");
+                            // Both report a pixel the blend cannot take.
+                            let halves_error = fused::blend_halves(
+                                &mut halves_out,
+                                &placed(&failing),
+                                &placed(&backdrop),
+                                blend,
+                                tables,
+                                &info,
+                            )
+                            .unwrap_err();
+                            let floats_error = blend_floats(
+                                &mut floats_out,
+                                &placed(&failing),
+                                &placed(&backdrop),
+                                blend,
+                                tables,
+                                &info,
+                            )
+                            .unwrap_err();
+                            assert_eq!(
+                                format!("{halves_error:?}"),
+                                format!("{floats_error:?}"),
+                                "{what}"
+                            );
+                        }
+                    }
+                }
             }
         }
     }
