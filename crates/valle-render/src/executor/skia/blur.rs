@@ -196,10 +196,9 @@ fn convolve(
     convolve_blocked(source, width, height, channels, x, y)
 }
 
-// The portable x86-64 build targets SSE2, where each multiply-add costs a 128-bit load/store pair.
-// The same loops compiled for 256-bit AVX vectors run up to twice as fast. Products and sums
-// stay separate single-precision operations (no FMA contraction), so results are
-// bit-identical at every vector width.
+// The portable x86-64 build targets SSE2. The same loops compiled for 256-bit AVX vectors run
+// up to twice as fast. Products and sums stay separate single-precision operations (no FMA
+// contraction), so results are bit-identical at every vector width.
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx")]
 unsafe fn convolve_avx(
@@ -213,10 +212,9 @@ unsafe fn convolve_avx(
     convolve_blocked(source, width, height, channels, x, y)
 }
 
-// Both passes walk column blocks so every tap reuses a cache-resident span instead of
-// streaming whole rows once per tap. Each output element still receives its products in
-// the same order (ascending tap horizontally, ascending input row vertically), so blocking
-// does not change results either.
+// Each output element receives its products in the same order as a per-tap loop over whole
+// rows (ascending tap horizontally, ascending input row vertically), onto zero, so the blocking
+// below does not change results.
 #[inline(always)]
 fn convolve_blocked(
     source: &[f32],
@@ -237,45 +235,114 @@ fn convolve_blocked(
     {
         constant_horizontal_spans(input, output, channels, x, &mut work);
         for span in &work {
-            for start in (span.start..span.end).step_by(HORIZONTAL_BLOCK) {
-                let end = (start + HORIZONTAL_BLOCK).min(span.end);
-                for (tap, weight) in x.iter().enumerate() {
-                    let offset = tap * channels;
-                    let from = start.max(offset);
-                    let to = end.min(offset + input_stride);
-                    if from < to {
-                        accumulate(
-                            &mut output[from..to],
-                            &input[from - offset..to - offset],
-                            *weight,
-                        );
-                    }
-                }
+            horizontal_span(input, output, span.clone(), channels, x);
+        }
+    }
+    let output_height = height + y.len() - 1;
+    let mut output = vec![0.0; stride * output_height];
+    let mut constant_rows = vec![false; output_height];
+    fill_constant_vertical_rows(&horizontal, &mut output, stride, y, &mut constant_rows);
+    // An output row reads y.len() input rows. Size strips so those spans stay in L1 for the
+    // next output row, which reads all but one of them again.
+    let strip = (VERTICAL_STRIP / y.len()).next_multiple_of(LANES);
+    for start in (0..stride).step_by(strip) {
+        let end = (start + strip).min(stride);
+        for (row, output) in output.chunks_exact_mut(stride).enumerate() {
+            if !constant_rows[row] {
+                vertical_span(&horizontal, &mut output[start..end], row, start, stride, y);
             }
         }
     }
-    let mut output = vec![0.0; stride * (height + y.len() - 1)];
-    let mut constant_rows = vec![false; height + y.len() - 1];
-    fill_constant_vertical_rows(&horizontal, &mut output, stride, y, &mut constant_rows);
-    // One input row feeds y.len() output rows; size blocks so those spans stay in L2.
-    let block = (VERTICAL_WINDOW / y.len()).next_multiple_of(8).max(64);
-    for start in (0..stride).step_by(block) {
-        let end = (start + block).min(stride);
-        for (row, input) in horizontal.chunks_exact(stride).enumerate() {
-            for (tap, weight) in y.iter().enumerate() {
-                if constant_rows[row + tap] {
-                    continue;
-                }
-                let base = (row + tap) * stride;
+    output
+}
+
+/// The outputs in `span` of a horizontal-pass row. Outputs whose taps all land inside the input
+/// sum a block at a time in registers; the rest add each tap's products in turn.
+#[inline(always)]
+fn horizontal_span(
+    input: &[f32],
+    output: &mut [f32],
+    span: std::ops::Range<usize>,
+    channels: usize,
+    weights: &[f32],
+) {
+    let inner = ((weights.len() - 1) * channels).clamp(span.start, span.end);
+    let blocks = inner + (input.len().clamp(inner, span.end) - inner) / LANES * LANES;
+    taps_onto(input, output, span.start..inner, channels, weights);
+    for start in (inner..blocks).step_by(LANES) {
+        let mut sum = [0.0_f32; LANES];
+        for (tap, weight) in weights.iter().enumerate() {
+            let from = start - tap * channels;
+            for (sum, input) in sum.iter_mut().zip(&input[from..from + LANES]) {
+                *sum += *input * weight;
+            }
+        }
+        output[start..start + LANES].copy_from_slice(&sum);
+    }
+    taps_onto(input, output, blocks..span.end, channels, weights);
+}
+
+/// Adds each tap's products in turn to the outputs in `range` of a horizontal-pass row, a
+/// cache-resident block at a time.
+#[inline(always)]
+fn taps_onto(
+    input: &[f32],
+    output: &mut [f32],
+    range: std::ops::Range<usize>,
+    channels: usize,
+    weights: &[f32],
+) {
+    for start in range.clone().step_by(HORIZONTAL_BLOCK) {
+        let end = (start + HORIZONTAL_BLOCK).min(range.end);
+        for (tap, weight) in weights.iter().enumerate() {
+            let offset = tap * channels;
+            let from = start.max(offset);
+            let to = end.min(offset + input.len());
+            if from < to {
                 accumulate(
-                    &mut output[base + start..base + end],
-                    &input[start..end],
+                    &mut output[from..to],
+                    &input[from - offset..to - offset],
                     *weight,
                 );
             }
         }
     }
-    output
+}
+
+/// The vertical-pass outputs of row `row` from column `start`, a block at a time in registers.
+#[inline(always)]
+fn vertical_span(
+    horizontal: &[f32],
+    output: &mut [f32],
+    row: usize,
+    start: usize,
+    stride: usize,
+    weights: &[f32],
+) {
+    let height = horizontal.len() / stride;
+    let inputs = (row + 1).saturating_sub(weights.len())..(row + 1).min(height);
+    let (blocks, rest) = output.as_chunks_mut::<LANES>();
+    for (index, block) in blocks.iter_mut().enumerate() {
+        let column = start + index * LANES;
+        let mut sum = [0.0_f32; LANES];
+        for input in inputs.clone() {
+            let weight = weights[row - input];
+            let from = input * stride + column;
+            for (sum, input) in sum.iter_mut().zip(&horizontal[from..from + LANES]) {
+                *sum += *input * weight;
+            }
+        }
+        *block = sum;
+    }
+    let column = start + blocks.len() * LANES;
+    for input in inputs {
+        let from = input * stride + column;
+        accumulate(
+            rest,
+            &horizontal[from..from + rest.len()],
+            weights[row - input],
+        );
+    }
 }
 
 /// A full-support window inside a constant pixel span has the same ordered sum at every pixel.
@@ -392,8 +459,11 @@ fn float_bits(values: &[f32]) -> &[u32] {
 
 /// Horizontal-pass output block in floats: the block plus its input span fit in L1.
 const HORIZONTAL_BLOCK: usize = 2048;
-/// Floats across all output rows touched by one vertical-pass block (256 KiB).
-const VERTICAL_WINDOW: usize = 64 * 1024;
+/// Floats across all input rows one vertical-pass strip reads (64 KiB).
+const VERTICAL_STRIP: usize = 16 * 1024;
+/// Output floats summed together in registers: enough independent sums to hide the latency
+/// of each addition.
+const LANES: usize = 32;
 
 #[inline(always)]
 fn accumulate(output: &mut [f32], input: &[f32], weight: f32) {
