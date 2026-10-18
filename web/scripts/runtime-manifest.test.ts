@@ -29,7 +29,8 @@ describe("root runtime manifest closure", () => {
     const files = await Array.fromAsync(new Bun.Glob("**/dfg-*.rg16f").scan({ cwd: dist }));
     expect(files.length).toBeGreaterThan(0);
     for (const file of files) {
-      const asset = manifest.assets.find((asset) => asset.path === file);
+      const assetPath = file.replaceAll(path.sep, "/");
+      const asset = manifest.assets.find((asset) => asset.path === assetPath);
       expect(asset?.owner).toBe("engine");
       expect(asset?.role).toBe("lookup");
       expect(asset?.license).toBe("MIT");
