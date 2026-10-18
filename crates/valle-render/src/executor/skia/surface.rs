@@ -1896,13 +1896,15 @@ impl ScratchSurfaces<'_, '_> {
     ///
     /// Program slots are shared by resources of different sizes, so a slot surface can be many
     /// times larger than the ROI a pass renders. Clearing all of it for every pass dominated
-    /// frames with many small filtered layers. Instead, pixels outside `bounds` are cleared
-    /// only where an earlier pass may have painted, which leaves them transparent exactly as a
-    /// full clear did.
+    /// frames with many small filtered layers. Instead, with `clear_outside`, pixels outside
+    /// `bounds` are cleared only where an earlier pass may have painted, which leaves them
+    /// transparent exactly as a full clear did. A result that nothing reads outside `bounds`
+    /// leaves those pixels as earlier passes drew them, still counted as painted.
     pub(crate) fn bounded_surface_mut(
         &mut self,
         index: usize,
         bounds: IRect,
+        clear_outside: bool,
     ) -> Result<(&mut Surface, usize), SurfaceError> {
         let entry = self
             .entries
@@ -1910,14 +1912,18 @@ impl ScratchSurfaces<'_, '_> {
             .ok_or(SurfaceError::MissingScratchSurface { index })?;
         let painted = &mut self.painted[index];
         let canvas = entry.surface.canvas();
-        if !painted.is_empty() && !covers(bounds, *painted) {
-            canvas.save();
-            canvas.clip_irect(*painted, skia_safe::ClipOp::Intersect);
-            canvas.clip_irect(bounds, skia_safe::ClipOp::Difference);
-            canvas.clear(skia_safe::Color4f::new(0.0, 0.0, 0.0, 0.0));
-            canvas.restore();
+        if clear_outside {
+            if !painted.is_empty() && !covers(bounds, *painted) {
+                canvas.save();
+                canvas.clip_irect(*painted, skia_safe::ClipOp::Intersect);
+                canvas.clip_irect(bounds, skia_safe::ClipOp::Difference);
+                canvas.clear(skia_safe::Color4f::new(0.0, 0.0, 0.0, 0.0));
+                canvas.restore();
+            }
+            *painted = bounds;
+        } else {
+            *painted = IRect::join(painted, &bounds);
         }
-        *painted = bounds;
         let count = canvas.save();
         canvas.clip_irect(bounds, skia_safe::ClipOp::Intersect);
         Ok((&mut entry.surface, count))
@@ -2227,7 +2233,7 @@ mod capacity_tests {
             .canvas()
             .clear(skia_safe::Color::RED);
         let first = IRect::from_xywh(0, 0, 30, 20);
-        let (surface, count) = scratch.bounded_surface_mut(0, first).unwrap();
+        let (surface, count) = scratch.bounded_surface_mut(0, first, true).unwrap();
         surface.canvas().clear(skia_safe::Color::TRANSPARENT);
         draw_disc(surface.canvas());
         surface
@@ -2266,7 +2272,7 @@ mod capacity_tests {
 
         // A later, disjoint ROI leaves nothing from earlier passes outside it.
         let second = IRect::from_xywh(50, 30, 20, 20);
-        let (surface, count) = scratch.bounded_surface_mut(0, second).unwrap();
+        let (surface, count) = scratch.bounded_surface_mut(0, second, true).unwrap();
         surface
             .canvas()
             .draw_rect(skia_safe::Rect::from_xywh(0.0, 0.0, 96.0, 64.0), &fill);
@@ -2280,6 +2286,69 @@ mod capacity_tests {
                 assert_eq!(pixel[3], expected, "pixel at {x},{y}");
             }
         }
+    }
+
+    #[test]
+    fn bounded_scratch_passes_keep_outside_pixels_until_a_pass_must_clear_them() {
+        let mut arena = SurfaceArena::new();
+        let mut frame = test_frame(&mut arena, 64 * 1024 * 1024);
+        let extent = Extent2d::new(96, 64).unwrap();
+        let mut scratch = frame.scratch(&[extent]).unwrap();
+        let everything = IRect::from_wh(96, 64);
+        scratch
+            .surface_mut(0)
+            .unwrap()
+            .canvas()
+            .clear(skia_safe::Color::RED);
+        // Each pass fills its ROI with its own alpha and returns the whole surface.
+        let fill = |surface: &mut Surface, alpha: f32| {
+            surface
+                .canvas()
+                .clear(skia_safe::Color4f::new(0.0, 0.0, 0.0, alpha));
+        };
+        let mut pass = |bounds: IRect, clear_outside: bool, alpha: f32| {
+            let (surface, count) = scratch
+                .bounded_surface_mut(0, bounds, clear_outside)
+                .unwrap();
+            fill(surface, alpha);
+            surface.canvas().restore_to_count(count);
+            read_working(surface, everything)
+        };
+        let check = |pixels: &[f32], filled: &[(IRect, f32)]| {
+            let filled = filled
+                .iter()
+                .map(|&(bounds, alpha)| {
+                    let mut alone = arena_surface(1, 1);
+                    fill(&mut alone, alpha);
+                    (bounds, read_working(&mut alone, IRect::from_wh(1, 1)))
+                })
+                .collect::<Vec<_>>();
+            for y in 0..64 {
+                for x in 0..96 {
+                    let pixel = &pixels[((y * 96 + x) * 4) as usize..][..4];
+                    let expected = filled
+                        .iter()
+                        .find(|(bounds, _)| covers_pixel(*bounds, x, y))
+                        .map_or(&[0.0; 4][..], |(_, value)| value.as_slice());
+                    assert_eq!(pixel, expected, "pixel at {x},{y}");
+                }
+            }
+        };
+        let first = IRect::from_xywh(0, 0, 30, 20);
+        check(&pass(first, true, 0.25), &[(first, 0.25)]);
+
+        // Results that nothing reads outside their ROI leave what earlier passes drew there.
+        let second = IRect::from_xywh(50, 30, 20, 20);
+        let third = IRect::from_xywh(70, 0, 26, 10);
+        pass(second, false, 0.5);
+        check(
+            &pass(third, false, 0.75),
+            &[(first, 0.25), (second, 0.5), (third, 0.75)],
+        );
+
+        // A result read outside its ROI clears everything the passes before it left.
+        let fourth = IRect::from_xywh(10, 40, 20, 20);
+        check(&pass(fourth, true, 1.0), &[(fourth, 1.0)]);
     }
 
     fn arena_surface(width: u32, height: u32) -> Surface {

@@ -1,4 +1,7 @@
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 
 use skia_safe::{
     AlphaType, BlendMode as SkBlendMode, ClipOp, Color, Color4f, ColorType, CubicResampler, Data,
@@ -436,6 +439,7 @@ impl ProgramRuntime {
             .enumerate()
             .map(|(index, slot)| (slot.id(), index))
             .collect::<BTreeMap<_, _>>();
+        let read_outside = read_outside_roi(plan, schedule);
         let mut resources = BTreeMap::<ProgramResourceId, Option<ProgramImage>>::new();
         let terminal_origin = match terminal {
             ProgramTerminal::Plan { roi, .. } => {
@@ -491,6 +495,7 @@ impl ProgramRuntime {
                             info,
                             [roi.x, roi.y],
                             roi,
+                            read_outside.contains(&output),
                         )?;
                         Some(ProgramImage { image, roi })
                     }
@@ -511,6 +516,8 @@ impl ProgramRuntime {
                         info,
                         terminal_origin,
                         roi,
+                        // A scratch terminal is read as a whole root image.
+                        true,
                     )?;
                     Some(ProgramImage {
                         image,
@@ -579,6 +586,7 @@ impl ProgramRuntime {
         info: &ImageInfo,
         target_origin: [i32; 2],
         output_roi: DeviceRect,
+        clear_outside: bool,
     ) -> Result<Image, DrawError> {
         if let ProgramPassKind::Backdrop {
             input,
@@ -649,7 +657,7 @@ impl ProgramRuntime {
                     i32::try_from(output_roi.height)
                         .map_err(|_| DrawError::Internal("program ROI height overflow".into()))?,
                 );
-                let (target, count) = surfaces.bounded_surface_mut(index, bounds)?;
+                let (target, count) = surfaces.bounded_surface_mut(index, bounds, clear_outside)?;
                 (target, Some(count))
             }
             _ => (program_target_mut(surfaces, target_location)?, None),
@@ -2073,6 +2081,52 @@ fn draws_within_roi(pass: &ProgramPassKind) -> bool {
             | ProgramPassKind::ApplyOpacity { .. }
             | ProgramPassKind::ApplyTransform { .. }
     )
+}
+
+/// The local results whose slot pixels outside their ROI a pass of `plan` may read, so that
+/// those pixels must stay transparent. Masks, transition and shader inputs and Motion Glass
+/// backdrops are sampled through shaders of their whole slot image. Every other input is read
+/// only inside its ROI, by a strict copy of it or by a kernel bounded to it. Reading an alias
+/// reads the result it forwards.
+fn read_outside_roi(
+    plan: &PlanProgram,
+    schedule: &BoundProgramSchedule,
+) -> BTreeSet<ProgramResourceId> {
+    let mut read = BTreeSet::new();
+    for pass in plan.local_plan().passes() {
+        match &pass.kind {
+            ProgramPassKind::ApplyMask { mask, .. } => {
+                read.insert(*mask);
+            }
+            ProgramPassKind::ApplyTransition { from, to, .. } => {
+                read.extend([*from, *to]);
+            }
+            ProgramPassKind::ApplyShader { input, .. }
+            | ProgramPassKind::MotionGlass { input, .. }
+            | ProgramPassKind::ApplyMotionGlassForeground { input, .. } => {
+                read.insert(*input);
+            }
+            ProgramPassKind::Clear { .. }
+            | ProgramPassKind::RasterNode { .. }
+            | ProgramPassKind::RasterTree { .. }
+            | ProgramPassKind::ReadDestination { .. }
+            | ProgramPassKind::Backdrop { .. }
+            | ProgramPassKind::SourceOver { .. }
+            | ProgramPassKind::ApplyClip { .. }
+            | ProgramPassKind::ApplyFilter { .. }
+            | ProgramPassKind::ApplyOpacity { .. }
+            | ProgramPassKind::ApplyTransform { .. }
+            | ProgramPassKind::Blend { .. } => {}
+        }
+    }
+    for step in schedule.passes() {
+        if let ProgramStorageKind::Alias { source } = step.storage()
+            && read.contains(&step.output())
+        {
+            read.insert(source);
+        }
+    }
+    read
 }
 
 fn clear_surface(surface: &mut Surface) -> Result<(), DrawError> {
