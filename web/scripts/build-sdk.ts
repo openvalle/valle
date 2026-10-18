@@ -42,8 +42,8 @@ await withBuildDirectory(path.join(root, "dist"), async (dist) => {
   ], { cwd: web, stdout: "inherit", stderr: "inherit" });
   if (await tsc.exited !== 0) throw new Error("SDK declaration generation failed");
   await cp(path.join(declarations, "web/packages/engine/src"), types, { recursive: true });
-  // TypeScript resolves authored declarations for the JavaScript GPU kernels, but does not
-  // emit them again. Ship these alongside the generated types so consumers can resolve them.
+  // TypeScript does not re-emit authored declarations such as asset module declarations.
+  // Ship these alongside the generated types so consumers can resolve them.
   await copyAuthoredDeclarations(path.join(root, "src"), types);
   await cp(path.join(declarations, "crates/valle-timeline/schema"), path.join(types, "schema"), { recursive: true });
   await rm(declarations, { recursive: true });

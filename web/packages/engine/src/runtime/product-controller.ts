@@ -13,8 +13,8 @@ import { createScene3dGpu } from "../executor/webgl/scene3d-factory.ts";
 import type {
   GpuScene3D,
   Scene3dGpuRequest,
-} from "../executor/webgl/scene3d.js";
-import { GpuCircles } from "../executor/webgl/circles.js";
+} from "../executor/webgl/scene3d.ts";
+import { GpuCircles } from "../executor/webgl/circles.ts";
 import {
   resetCanvasKitContext,
   untrackGpuState,

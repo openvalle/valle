@@ -15,6 +15,7 @@ import {
 } from "./frame-protocol.ts";
 import { decodePackedAbi, RESOURCE_REQUESTS_ABI } from "../../abi/packed.ts";
 import { supportsScene3dGpu } from "./scene3d-gpu-request.ts";
+import type { Scene3dGpuRequest } from "../../executor/webgl/scene3d.ts";
 import { executeRuntimeCall } from "./runtime-operations.ts";
 import { installKernelWorker, type Scene3dKernelInput } from "./kernel-worker.ts";
 
@@ -312,7 +313,7 @@ async function startFrame(
         const content = request.key.content;
         if (gpuJobs[content]) continue;
         const canonical = request.payload.canonical_request as string;
-        const value = JSON.parse(canonical) as Record<string, any>;
+        const value = JSON.parse(canonical) as Scene3dGpuRequest;
         if (!supportsScene3dGpu(value)) continue;
         gpuJobs[content] = { content, topology: request.key.interpretation.topology_digest, canonical, width: value.width, height: value.height };
       }

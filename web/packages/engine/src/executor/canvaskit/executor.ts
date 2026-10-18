@@ -42,7 +42,7 @@ import { RasterTreeCache, type RasterTreeSignature } from "./raster-tree-cache.t
 import { canvasKitGpuCacheBudget } from "./gpu-budget.ts";
 import { drawPyramidFilter, drawPyramidFilterCooperative, pyramidWorkingBytes } from "./pyramid.ts";
 import { drawLensDistortion } from "./lens.ts";
-import type { GpuCircles } from "../webgl/circles.js";
+import type { CircleBatch, GpuCircles } from "../webgl/circles.ts";
 import { cropProgramInputs } from "./filter-roi.ts";
 import {
   CanvasKitBuiltinRuntime,
@@ -1694,7 +1694,7 @@ function drawProgramTree(
         depth + 1,
       );
     };
-    if (arena.geometryRenderer) arena.geometryRenderer.drawChildren(CanvasKit,canvas,admitted.draw,children,IDENTITY_MATRIX,fallback);
+    if (arena.geometryRenderer) arena.geometryRenderer.drawChildren(CanvasKit,canvas,admitted.draw,children as number[],IDENTITY_MATRIX,fallback);
     else children.forEach(fallback);
   } finally {
     if (layer) canvas.restore();
@@ -1797,7 +1797,7 @@ async function executeProgramPass(
             positiveIdOrZero(root, "RasterTree.root"), matrix, 0, bounds, arena, objects, outputRoi);
         };
         const roots = array(kind.roots, "RasterTree.roots");
-        if (arena.geometryRenderer) arena.geometryRenderer.drawChildren(CanvasKit,canvas,admitted.draw,roots,matrix,fallback);
+        if (arena.geometryRenderer) arena.geometryRenderer.drawChildren(CanvasKit,canvas,admitted.draw,roots as number[],matrix,fallback);
         else roots.forEach(fallback);
       } finally { objects.delete(); }
       return;
@@ -2217,7 +2217,7 @@ export function drawProgramNode(
             positiveIdOrZero(child, "RasterTree child"), IDENTITY_MATRIX, depth + 1, boundsCache, arena, objects, targetRoi);
           if (arena?.trees) drawCachedChildren(CanvasKit, builtins, canvas, admitted, children,
             depth, boundsCache, arena, objects!, targetRoi, fallback);
-          else if (arena?.geometryRenderer) arena.geometryRenderer.drawChildren(CanvasKit,canvas,admitted.draw,children,IDENTITY_MATRIX,fallback);
+          else if (arena?.geometryRenderer) arena.geometryRenderer.drawChildren(CanvasKit,canvas,admitted.draw,children as number[],IDENTITY_MATRIX,fallback);
           else children.forEach(fallback);
         } finally {
           if (clipped && pathClip) {
@@ -2248,7 +2248,7 @@ function drawCachedChildren(CanvasKit: CanvasKit, builtins: CanvasKitBuiltinRunt
   objects: RasterDrawObjects, targetRoi: DeviceRoi | undefined, fallback: (child: unknown) => void): void {
   const cache = arena.trees!;
   const original = (part: unknown[]) => {
-    if (arena.geometryRenderer) arena.geometryRenderer.drawChildren(CanvasKit, canvas, admitted.draw, part, IDENTITY_MATRIX, fallback);
+    if (arena.geometryRenderer) arena.geometryRenderer.drawChildren(CanvasKit, canvas, admitted.draw, part as number[], IDENTITY_MATRIX, fallback);
     else part.forEach(fallback);
   };
   if (children.length < 3) { original(children); return; }
@@ -2317,7 +2317,7 @@ function drawBatchNode(
   arena?: SurfaceArena,
 ): void {
   const program = admitted.draw;
-  if (arena?.geometryRenderer?.batch(CanvasKit, canvas, program, node)) return;
+  if (arena?.geometryRenderer?.batch(CanvasKit, canvas, program, node as CircleBatch)) return;
   const shape = record(node.shape, "instance shape");
   const imageRegion = shape.kind === "image" ? record(shape.value, "instance image region") : null;
   const imageNode = imageRegion === null ? null : {

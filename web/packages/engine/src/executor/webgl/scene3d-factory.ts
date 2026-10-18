@@ -1,6 +1,6 @@
 import type { CanvasKit, GrDirectContext, Surface } from "canvaskit-wasm";
 import dfgUrl from "../../../../../../crates/valle-motion/src/scene3d/raster/assets/dfg.rg16f" with { type: "file" };
-import { GpuScene3D } from "./scene3d.js";
+import { GpuScene3D } from "./scene3d.ts";
 import { resetCanvasKitContext } from "./gpu-state.ts";
 
 export async function createScene3dGpu(

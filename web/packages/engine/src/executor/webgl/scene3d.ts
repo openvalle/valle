@@ -1,7 +1,115 @@
+import type { CanvasKit, Image, Surface } from "canvaskit-wasm";
 import { decodeScene3dLightingInput } from "./scene3d-input.ts";
 import { supportsScene3dGpu } from "../../runtime/compositor/scene3d-gpu-request.ts";
-import { preserveState } from "./gpu-state.ts";
-import { norm, linear } from "./scene3d-math.js";
+import { preserveState, type CanvasKitGpuHost } from "./gpu-state.ts";
+import { norm, linear } from "./scene3d-math.ts";
+
+export type Scene3dGpuHost = CanvasKitGpuHost;
+
+type Vec3 = readonly [number, number, number];
+type Color4 = readonly [number, number, number, number];
+
+interface Scene3dMaterialFrame {
+  color?: Color4;
+  metallic?: number;
+  roughness?: number;
+  emissive?: Color4;
+  emissiveIntensity?: number;
+}
+
+type Scene3dLight =
+  | { type: "ambient"; color: Color4; intensity: number }
+  | { type: "directional"; color: Color4; intensity: number; direction: Vec3 }
+  | { type: "hemisphere"; skyColor: Color4; groundColor: Color4;
+      intensity: number; direction: Vec3 };
+
+interface Scene3dMeshSpec {
+  geometry?: unknown;
+  modelControl?: string;
+  nodeIds?: readonly number[];
+  animationClip?: number;
+  materialOverrides?: readonly unknown[];
+  material: {
+    kind?: "unlit" | "lambert" | "pbr";
+    alphaMode?: "opaque" | "mask" | "blend";
+    textures?: Readonly<Record<string, unknown>>;
+  };
+}
+
+interface Scene3dMeshFrame {
+  material: Scene3dMaterialFrame;
+  transform: { scale: Vec3 };
+  nodes?: readonly unknown[];
+  materialOverrides?: readonly unknown[];
+}
+
+/** Admitted canonical fields consumed by GPU eligibility and execution. */
+export interface Scene3dGpuRequest {
+  width: number;
+  height: number;
+  scene: {
+    meshes: readonly Scene3dMeshSpec[];
+    pbr?: { environment?: unknown; toneMapping?: "none" | "aces"; shadows?: boolean };
+  };
+  frame: {
+    meshes: readonly Scene3dMeshFrame[];
+    lights: readonly Scene3dLight[];
+    exposure: number;
+    camera: {
+      far: number;
+      depthOfField?: { focusDistance: number; maxBlurRadius: number } | null;
+    };
+  };
+  lightingInput?: Float32Array;
+}
+
+interface Scene3dProgram {
+  p: WebGLProgram;
+  locations: Map<string, WebGLUniformLocation | null>;
+}
+
+interface Scene3dTargets {
+  width: number;
+  height: number;
+  color: WebGLTexture;
+  depth: WebGLTexture;
+  decoded: WebGLTexture;
+  fbo: WebGLFramebuffer | null;
+  decodeFbo: WebGLFramebuffer | null;
+  textures: WebGLTexture[];
+  fbos: (WebGLFramebuffer | null)[];
+  bytes: number;
+}
+
+interface Scene3dRays {
+  width: number;
+  height: number;
+  columns: WebGLTexture;
+  rows: WebGLTexture;
+}
+
+interface Scene3dVisibility {
+  normal: WebGLTexture;
+  ids: WebGLTexture;
+  shadow: WebGLTexture;
+  fbo: WebGLFramebuffer | null;
+  capacityWidth: number;
+  capacityHeight: number;
+  bytes: number;
+  x?: number;
+  y?: number;
+  w?: number;
+  h?: number;
+}
+
+interface Scene3dStats {
+  renders: number;
+  prepareMs: number;
+  recordMs: number;
+  allocatedBytes: number;
+  fallbacks: number;
+  visibilityAllocations: number;
+}
 
 // GPU fulfillment of admitted Scene3D requests. Semantic animation and geometry admission
 // remain in Engine. All output snapshots use CanvasKit F16 ownership and copy-on-write.
@@ -91,7 +199,26 @@ void main(){
 }`;
 
 export class GpuScene3D {
-  constructor(host, dfgBytes) {
+  declare private readonly host: Scene3dGpuHost;
+  declare private readonly CK: CanvasKit;
+  declare private readonly gl: WebGL2RenderingContext;
+  declare private readonly pbr: Scene3dProgram;
+  declare private readonly metadata: Scene3dProgram;
+  declare private readonly dof: Scene3dProgram;
+  declare private readonly decode: Scene3dProgram;
+  declare private readonly metadataVao: WebGLVertexArrayObject | null;
+  declare private readonly metadataBuffer: WebGLBuffer | null;
+  declare private readonly vao: WebGLVertexArrayObject | null;
+  declare private readonly dfg: WebGLTexture;
+  declare private active: Scene3dProgram;
+  declare private target: Scene3dTargets | undefined;
+  declare private output: Surface | null | undefined;
+  declare private rays: Scene3dRays | undefined;
+  declare private visibility: Scene3dVisibility | undefined;
+  declare private closed: boolean | undefined;
+  declare readonly stats: Scene3dStats;
+
+  constructor(host: Scene3dGpuHost, dfgBytes: ArrayBuffer) {
     this.host = host;
     this.CK = host.CanvasKit;
     this.gl = host.gl;
@@ -145,70 +272,78 @@ export class GpuScene3D {
     restore();
     host.resetContext();
   }
-  accepts(r) {
+  accepts(r: Scene3dGpuRequest): boolean {
     return supportsScene3dGpu(r);
   }
-  program(vs, fs) {
+  private program(vs: string, fs: string): Scene3dProgram {
     const gl = this.gl,
-      p = gl.createProgram();
+      p = gl.createProgram()!;
     for (const [type, src] of [
       [gl.VERTEX_SHADER, vs],
       [gl.FRAGMENT_SHADER, fs],
-    ]) {
-      const s = gl.createShader(type);
+    ] as const) {
+      const s = gl.createShader(type)!;
       gl.shaderSource(s, src);
       gl.compileShader(s);
       if (!gl.getShaderParameter(s, gl.COMPILE_STATUS))
-        throw new Error(gl.getShaderInfoLog(s));
+        throw new Error(gl.getShaderInfoLog(s)!);
       gl.attachShader(p, s);
       gl.deleteShader(s);
     }
     gl.linkProgram(p);
     if (!gl.getProgramParameter(p, gl.LINK_STATUS))
-      throw new Error(gl.getProgramInfoLog(p));
+      throw new Error(gl.getProgramInfoLog(p)!);
     return { p, locations: new Map() };
   }
-  use(program) {
+  private use(program: Scene3dProgram): void {
     this.active = program;
     this.gl.useProgram(program.p);
   }
-  loc(name) {
+  private loc(name: string): WebGLUniformLocation | null {
     const p = this.active;
     if (!p.locations.has(name))
       p.locations.set(name, this.gl.getUniformLocation(p.p, name));
-    return p.locations.get(name);
+    return p.locations.get(name)!;
   }
-  f(name, v) {
+  private f(name: string, v: number): void {
     this.gl.uniform1f(this.loc(name), v);
   }
-  i(name, v) {
+  private i(name: string, v: number): void {
     this.gl.uniform1i(this.loc(name), v);
   }
-  v2(name, v) {
+  private v2(name: string, v: Float32List): void {
     this.gl.uniform2fv(this.loc(name), v);
   }
-  v3(name, v) {
+  private v3(name: string, v: Float32List): void {
     this.gl.uniform3fv(this.loc(name), v);
   }
-  v4(name, v) {
+  private v4(name: string, v: Float32List): void {
     this.gl.uniform4fv(this.loc(name), v);
   }
-  m4(name, v) {
+  private m4(name: string, v: Float32List): void {
     this.gl.uniformMatrix4fv(this.loc(name), false, v);
   }
-  m3(name, v) {
+  private m3(name: string, v: Float32List): void {
     this.gl.uniformMatrix3fv(this.loc(name), false, v);
   }
-  tex(name, texture, unit = 0) {
+  private tex(name: string, texture: WebGLTexture, unit = 0): void {
     const gl = this.gl;
     gl.activeTexture(gl.TEXTURE0 + unit);
     gl.bindTexture(gl.TEXTURE_2D, texture);
     gl.bindSampler(unit, null);
     this.i(name, unit);
   }
-  texture(w, h, internal, format, type, data = null, filter = false) {
+  private texture(
+    w: number,
+    h: number,
+    internal: number,
+    format: number,
+    type: number,
+    data: ArrayBufferView | null = null,
+    filter = false,
+  ): WebGLTexture {
     const gl = this.gl,
-      t = gl.createTexture();
+      t = gl.createTexture()!;
     gl.bindTexture(gl.TEXTURE_2D, t);
     gl.texImage2D(gl.TEXTURE_2D, 0, internal, w, h, 0, format, type, data);
     gl.texParameteri(
@@ -225,7 +360,7 @@ export class GpuScene3D {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
     return t;
   }
-  targets(width, height) {
+  private targets(width: number, height: number): void {
     const gl = this.gl;
     if (
       this.target &&
@@ -237,7 +372,7 @@ export class GpuScene3D {
     if (this.target) {
       for (const t of this.target.textures) gl.deleteTexture(t);
       for (const f of this.target.fbos) gl.deleteFramebuffer(f);
-      this.output.delete();
+      this.output!.delete();
       this.stats.allocatedBytes -= this.target.bytes;
     }
     const color = this.texture(
@@ -262,7 +397,7 @@ export class GpuScene3D {
       [color, gl.COLOR_ATTACHMENT0],
       [depth, gl.COLOR_ATTACHMENT1],
       [zbuffer, gl.DEPTH_ATTACHMENT],
-    ])
+    ] as const)
       gl.framebufferTexture2D(gl.FRAMEBUFFER, attachment, gl.TEXTURE_2D, t, 0);
     gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1]);
     if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE)
@@ -301,7 +436,7 @@ export class GpuScene3D {
     };
     this.stats.allocatedBytes += bytes;
   }
-  async render(request) {
+  async render(request: Scene3dGpuRequest): Promise<Image> {
     if (this.closed) throw new Error("GPU Scene3D renderer is closed");
     const gl = this.gl,
       CK = this.CK,
@@ -311,8 +446,8 @@ export class GpuScene3D {
     // CanvasKit owns the output texture, generation changes and COW snapshots. Each returned image
     // has immutable frame identity even while later requests reuse this one working surface.
     this.targets(width, height);
-    this.output.getCanvas().clear(CK.TRANSPARENT);
-    this.output.flush();
+    this.output!.getCanvas().clear(CK.TRANSPARENT);
+    this.output!.flush();
     const outputFbo = gl.getParameter(gl.DRAW_FRAMEBUFFER_BINDING);
     if (!outputFbo) throw new Error("F16 scene attachment unavailable");
     const restore = preserveState(gl);
@@ -393,7 +528,7 @@ export class GpuScene3D {
         gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
         for (const [texture, attachment] of [
           [normal, gl.COLOR_ATTACHMENT0], [ids, gl.COLOR_ATTACHMENT1], [shadow, gl.COLOR_ATTACHMENT2],
-        ]) gl.framebufferTexture2D(gl.FRAMEBUFFER, attachment, gl.TEXTURE_2D, texture, 0);
+        ] as const) gl.framebufferTexture2D(gl.FRAMEBUFFER, attachment, gl.TEXTURE_2D, texture, 0);
         gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1, gl.COLOR_ATTACHMENT2]);
         if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE)
           throw new Error("Visibility framebuffer incomplete");
@@ -433,7 +568,7 @@ export class GpuScene3D {
       gl.cullFace(gl.BACK);
       gl.frontFace(gl.CCW);
 
-      gl.bindFramebuffer(gl.FRAMEBUFFER, this.target.fbo);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, this.target!.fbo);
       gl.viewport(0, 0, width, height);
       gl.clearBufferfv(gl.COLOR, 0, [0, 0, 0, 0]);
       gl.clearBufferfv(gl.COLOR, 1, [frame.camera.far, 0, 0, 0]);
@@ -445,10 +580,10 @@ export class GpuScene3D {
       this.f("depthScale", input.depthScale);
       this.tex("rayColumns", this.rays.columns, 3);
       this.tex("rayRows", this.rays.rows, 4);
-      this.tex("normalDepth", this.visibility.normal, 5);
-      this.tex("objectIds", this.visibility.ids, 6);
-      this.tex("shadowVisibility", this.visibility.shadow, 7);
-      this.v2("inputOrigin", [this.visibility.x, this.visibility.y]);
+      this.tex("normalDepth", this.visibility!.normal, 5);
+      this.tex("objectIds", this.visibility!.ids, 6);
+      this.tex("shadowVisibility", this.visibility!.shadow, 7);
+      this.v2("inputOrigin", [this.visibility!.x!, this.visibility!.y!]);
       this.f("exposure", frame.exposure);
       this.i("acesEnabled", request.scene.pbr?.toneMapping === "aces" ? 1 : 0);
       const ambient = [0, 0, 0],
@@ -528,10 +663,10 @@ export class GpuScene3D {
           y0 = Math.max(0, visible[1] - m),
           x1 = Math.min(width, visible[2] + m),
           y1 = Math.min(height, visible[3] + m);
-        gl.bindFramebuffer(gl.FRAMEBUFFER, this.target.decodeFbo);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, this.target!.decodeFbo);
         gl.scissor(x0, y0, x1 - x0, y1 - y0);
         this.use(this.decode);
-        this.tex("source", this.target.color);
+        this.tex("source", this.target!.color);
         gl.drawArrays(gl.TRIANGLES, 0, 3);
       }
       gl.bindFramebuffer(gl.FRAMEBUFFER, outputFbo);
@@ -543,9 +678,9 @@ export class GpuScene3D {
         Math.max(0, visible[3] - visible[1]),
       );
       this.use(this.dof);
-      this.tex("source", this.target.decoded);
-      this.tex("rawSource", this.target.color, 2);
-      this.tex("depths", this.target.depth, 1);
+      this.tex("source", this.target!.decoded);
+      this.tex("rawSource", this.target!.color, 2);
+      this.tex("depths", this.target!.depth, 1);
       this.v2("size", [width, height]);
       this.v4("visibleBounds", [
         visible[0],
@@ -567,12 +702,12 @@ export class GpuScene3D {
       restore();
       this.host.resetContext();
     }
-    const image = this.output.makeImageSnapshot();
+    const image = this.output!.makeImageSnapshot();
     this.stats.renders++;
     this.stats.recordMs += performance.now() - started;
     return image;
   }
-  dispose() {
+  dispose(): void {
     if (this.closed) return;
     this.closed = true;
     const gl = this.gl;

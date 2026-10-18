@@ -1,6 +1,78 @@
 // Copyright 2012 Google LLC. Coverage rules adapted from Skia (BSD-3-Clause).
 // See crates/valle-draw/licenses/Skia-BSD.txt.
-import { preserveState } from "./gpu-state.ts";
+import type { Canvas, CanvasKit, Image, Surface } from "canvaskit-wasm";
+import type { DrawProgramWire, LinearColorWire } from "../canvaskit/draw-program.ts";
+import { preserveState, type CanvasKitGpuHost } from "./gpu-state.ts";
+
+interface CircleGroup {
+  clip?: unknown;
+  mask?: unknown;
+  backdrop?: unknown;
+  shader?: unknown;
+  transition?: unknown;
+  glass?: unknown;
+  glassForeground?: unknown;
+  filters: readonly unknown[];
+  internalBlend: string;
+  children: readonly number[];
+  transform: readonly number[];
+  opacity: number;
+}
+
+interface CirclePath {
+  stroke?: unknown;
+  fill?: number | null;
+  path: number;
+}
+
+export interface CircleBatch {
+  shape: { kind: string; value?: unknown };
+  instances: { start: number; count: number };
+  pathStyle?: { fill?: boolean } | null;
+}
+
+interface CircleRow extends Array<number> {
+  cubic?: boolean;
+}
+
+interface CircleSlot {
+  width: number;
+  height: number;
+  surface?: Surface;
+  image: Image | null;
+  fbo?: WebGLFramebuffer | null;
+}
+
+interface CircleOptions {
+  f16?: boolean;
+  roi?: boolean;
+  nativeInstances?: boolean;
+  pool?: boolean;
+}
+
+interface CircleStats {
+  precision: "F16" | "RGBA8";
+  roi: boolean;
+  batches: number;
+  circles: number;
+  allocatedBytes: number;
+  extractionMs: number;
+  recordMs: number;
+  instanceCircles?: number;
+  clearFlushMs?: number;
+  stateReadMs?: number;
+  glDrawMs?: number;
+  stateRestoreMs?: number;
+  snapshotMs?: number;
+  compositeMs?: number;
+}
+
+type TimingStage = "clearFlushMs" | "stateReadMs" | "glDrawMs"
+  | "stateRestoreMs" | "snapshotMs" | "compositeMs";
+type CircleHost = CanvasKitGpuHost & {
+  /** Required only for the RGBA8 external-texture path (f16: false). */
+  surface?: Surface;
+};
 // Real-time GPU geometry consumes admitted DrawPrograms; CPU/reference mode keeps Skia paths.
 // It replaces eligible contiguous circle runs, retaining surrounding CanvasKit effects/layers.
 const vertex = `#version 300 es
@@ -72,7 +144,7 @@ void main(){
   result=value;
 }`;
 
-function halfRound(value) {
+function halfRound(value: number): number {
   if (value === 0) return 0;
   const step = 2 ** Math.max(-24, Math.floor(Math.log2(Math.abs(value))) - 10);
   const v = value / step,
@@ -82,7 +154,7 @@ function halfRound(value) {
     (floor + Number(rest > 0.5 || (rest === 0.5 && floor % 2 !== 0))) * step
   );
 }
-function multiply(a, b) {
+function multiply(a: readonly number[], b: readonly number[]): number[] {
   return a.map(
     (_, i) =>
       a[Math.floor(i / 3) * 3] * b[i % 3] +
@@ -90,7 +162,7 @@ function multiply(a, b) {
       a[Math.floor(i / 3) * 3 + 2] * b[6 + (i % 3)],
   );
 }
-function simpleGroup(g) {
+function simpleGroup(g: CircleGroup): boolean {
   return (
     !g.clip &&
     !g.mask &&
@@ -104,12 +176,18 @@ function simpleGroup(g) {
   );
 }
 
-function leaf(draw, id, matrix, opacity = 1, depth = 0) {
+function leaf(
+  draw: DrawProgramWire,
+  id: number,
+  matrix: readonly number[],
+  opacity = 1,
+  depth = 0,
+): CircleRow | null {
   if (depth > 12) return null;
   const tagged = draw.nodes[id];
   if (!tagged) return null;
-  const value = tagged.value;
   if (tagged.kind === "group") {
+    const value = tagged.value as CircleGroup;
     if (
       !simpleGroup(value) ||
       value.children.length !== 1 ||
@@ -124,6 +202,7 @@ function leaf(draw, id, matrix, opacity = 1, depth = 0) {
       depth + 1,
     );
   }
+  const value = tagged.value as CirclePath;
   if (tagged.kind !== "path" || value.stroke || value.fill == null) return null;
   const paint = draw.paints[value.fill],
     path = draw.paths[value.path];
@@ -174,8 +253,8 @@ function leaf(draw, id, matrix, opacity = 1, depth = 0) {
     )
   )
     return null;
-  const c = paint.value;
-  const row = [
+  const c = paint.value as LinearColorWire;
+  const row: CircleRow = [
     matrix[0] * cx + matrix[2],
     matrix[4] * cy + matrix[5],
     Math.abs(matrix[0] * rx),
@@ -191,9 +270,28 @@ function leaf(draw, id, matrix, opacity = 1, depth = 0) {
 }
 
 export class GpuCircles {
+  declare private readonly host: CircleHost;
+  declare private readonly CK: CanvasKit;
+  declare private readonly gl: WebGL2RenderingContext;
+  declare private readonly f16: boolean;
+  declare private readonly roi: boolean;
+  declare private readonly nativeInstances: boolean;
+  declare private readonly pool: boolean;
+  declare private readonly program: WebGLProgram;
+  declare private readonly vao: WebGLVertexArrayObject | null;
+  declare private readonly buffer: WebGLBuffer | null;
+  declare private readonly extent: WebGLUniformLocation | null;
+  declare private readonly origin: WebGLUniformLocation | null;
+  declare private readonly bottomLeft: WebGLUniformLocation | null;
+  declare private readonly cubicPath: WebGLUniformLocation | null;
+  declare private slots: CircleSlot[];
+  declare private cursor: number;
+  declare private closed: boolean | undefined;
+  declare readonly stats: CircleStats;
+
   constructor(
-    host,
-    { f16 = true, roi = true, nativeInstances = true, pool = true } = {},
+    host: CircleHost,
+    { f16 = true, roi = true, nativeInstances = true, pool = true }: CircleOptions = {},
   ) {
     this.host = host;
     this.CK = host.CanvasKit;
@@ -205,22 +303,22 @@ export class GpuCircles {
     if (!this.gl) throw new Error("WebGL2 GPU target unavailable");
     const gl = this.gl;
     const restore = preserveState(gl);
-    const shader = (type, source) => {
-      const s = gl.createShader(type);
+    const shader = (type: number, source: string): WebGLShader => {
+      const s = gl.createShader(type)!;
       gl.shaderSource(s, source);
       gl.compileShader(s);
       if (!gl.getShaderParameter(s, gl.COMPILE_STATUS))
-        throw new Error(gl.getShaderInfoLog(s));
+        throw new Error(gl.getShaderInfoLog(s)!);
       return s;
     };
-    this.program = gl.createProgram();
+    this.program = gl.createProgram()!;
     const vs = shader(gl.VERTEX_SHADER, vertex),
       fs = shader(gl.FRAGMENT_SHADER, fragment);
     gl.attachShader(this.program, vs);
     gl.attachShader(this.program, fs);
     gl.linkProgram(this.program);
     if (!gl.getProgramParameter(this.program, gl.LINK_STATUS))
-      throw new Error(gl.getProgramInfoLog(this.program));
+      throw new Error(gl.getProgramInfoLog(this.program)!);
     gl.deleteShader(vs);
     gl.deleteShader(fs);
     this.vao = gl.createVertexArray();
@@ -254,20 +352,24 @@ export class GpuCircles {
     restore();
     host.resetContext();
   }
-  time(stage, start) {
+  private time(stage: TimingStage, start: number): void {
     this.stats[stage] = (this.stats[stage] ?? 0) + performance.now() - start;
   }
-  beginFrame() {
+  beginFrame(): void {
     this.cursor = 0;
   }
-  endFrame() {
+  endFrame(): void {
     for (const slot of this.slots.splice(this.cursor)) {
       slot.image?.delete();
       slot.surface?.delete();
       this.stats.allocatedBytes -= slot.width * slot.height * 8;
     }
   }
-  canCrop(draw, roots, matrix = [1, 0, 0, 0, 1, 0, 0, 0, 1]) {
+  canCrop(
+    draw: DrawProgramWire,
+    roots: readonly number[],
+    matrix: readonly number[] = [1, 0, 0, 0, 1, 0, 0, 0, 1],
+  ): boolean {
     const unit = [
       [1, 0],
       [1, 0.5522847498307936],
@@ -283,12 +385,14 @@ export class GpuCircles {
       [1, -0.5522847498307936],
       [1, 0],
     ];
-    const walk = (id, total, depth = 0) => {
+    const walk = (id: number, total: readonly number[], depth = 0): boolean => {
       if (depth > 12) return false;
-      const n = draw.nodes[id],
-        v = n?.value;
-      if (n?.kind === "group")
+      const n = draw.nodes[id];
+      if (n?.kind === "group") {
+        const v = n.value as CircleGroup;
         return simpleGroup(v) && v.children.every((id) => walk(id, multiply(total, v.transform), depth + 1));
+      }
+      const v = n?.value as CircleBatch;
       if (
         n?.kind !== "instanceBatch" ||
         v.instances.count < 64 ||
@@ -297,7 +401,7 @@ export class GpuCircles {
         return false;
       if (v.pathStyle && v.pathStyle.fill !== true) return false;
       if (v.shape.kind === "path") {
-        const path = draw.paths[v.shape.value];
+        const path = draw.paths[v.shape.value as number];
         if (!(path?.points.length === 13 &&
           path.verbs.join(",") === "moveTo,cubicTo,cubicTo,cubicTo,cubicTo" &&
           path.points.every((p, i) => p.every((v, j) => Math.abs(v - unit[i][j]) < 1e-12)))) return false;
@@ -323,7 +427,13 @@ export class GpuCircles {
       Array.isArray(roots) && roots.length > 0 && roots.every((id) => walk(id, matrix))
     );
   }
-  draw(CK, canvas, draw, roots, matrix) {
+  draw(
+    CK: CanvasKit,
+    canvas: Canvas,
+    draw: DrawProgramWire,
+    roots: readonly number[],
+    matrix: readonly number[],
+  ): boolean {
     if (roots.length < 64) return false;
     const started = performance.now(),
       total = multiply(canvas.getTotalMatrix(), matrix),
@@ -344,7 +454,14 @@ export class GpuCircles {
       rows.filter((row) => row[7] > 0 && row[8] > 0),
     );
   }
-  drawChildren(CK, canvas, draw, roots, matrix, fallback) {
+  drawChildren(
+    CK: CanvasKit,
+    canvas: Canvas,
+    draw: DrawProgramWire,
+    roots: readonly number[],
+    matrix: readonly number[],
+    fallback: (node: number) => void,
+  ): void {
     const total = multiply(canvas.getTotalMatrix(), matrix);
     let i = 0;
     while (i < roots.length) {
@@ -371,7 +488,7 @@ export class GpuCircles {
       i += count;
     }
   }
-  batch(CK, canvas, draw, node) {
+  batch(CK: CanvasKit, canvas: Canvas, draw: DrawProgramWire, node: CircleBatch): boolean {
     const pathBatch = node.shape.kind === "path";
     if (!pathBatch && !this.nativeInstances) return false;
     if (
@@ -381,7 +498,7 @@ export class GpuCircles {
     )
       return false;
     if (pathBatch) {
-      const path = draw.paths[node.shape.value],
+      const path = draw.paths[node.shape.value as number],
         k = 0.5522847498307936;
       const unit = [
         [1, 0],
@@ -448,8 +565,8 @@ export class GpuCircles {
         alpha = view.getFloat32(color + 12, true),
         opacity = view.getFloat32(n * 64 + i * 4, true);
       if (alpha <= 0 || opacity <= 0) continue;
-      const quantize = pathBatch ? halfRound : (v) => v;
-      const row = [
+      const quantize = pathBatch ? halfRound : (v: number) => v;
+      const row: CircleRow = [
         total[0] * e + total[1] * f + total[2],
         total[3] * e + total[4] * f + total[5],
         rx,
@@ -469,7 +586,7 @@ export class GpuCircles {
       (this.stats.instanceCircles ?? 0) + rows.length;
     return this.drawRows(CK, canvas, rows);
   }
-  drawRows(CK, canvas, rows) {
+  private drawRows(CK: CanvasKit, canvas: Canvas, rows: CircleRow[]): boolean {
     let [x0, y0, x1, y1] = canvas.getDeviceClipBounds();
     if (this.roi) {
       let left = Infinity,
@@ -498,7 +615,7 @@ export class GpuCircles {
     const data = new Float32Array(rows.flat());
     const gl = this.gl,
       recordStarted = performance.now();
-    let slot = this.slots[this.cursor++];
+    let slot: CircleSlot | null | undefined = this.slots[this.cursor++];
     if (this.pool) {
       width =
         slot && slot.width >= width ? slot.width : Math.ceil(width / 128) * 128;
@@ -519,7 +636,7 @@ export class GpuCircles {
     if (slot && (slot.width !== width || slot.height !== height)) {
       slot.image?.delete();
       if (slot.surface) slot.surface.delete();
-      else gl.deleteFramebuffer(slot.fbo);
+      else gl.deleteFramebuffer(slot.fbo!);
       this.stats.allocatedBytes -=
         slot.width * slot.height * (this.f16 ? 8 : 4);
       slot = null;
@@ -545,8 +662,8 @@ export class GpuCircles {
       // Let CanvasKit manage F16 allocation, image identity and copy-on-write. Rendering into its
       // flushed attachment avoids the external-texture API's hardcoded RGBA8 backend format.
       const clearStarted = performance.now();
-      slot.surface.getCanvas().clear(CK.TRANSPARENT);
-      slot.surface.flush();
+      slot.surface!.getCanvas().clear(CK.TRANSPARENT);
+      slot.surface!.flush();
       this.time("clearFlushMs", clearStarted);
       slot.fbo = gl.getParameter(gl.DRAW_FRAMEBUFFER_BINDING);
       if (!slot.fbo)
@@ -560,7 +677,7 @@ export class GpuCircles {
       this.time("stateReadMs", stateStarted);
     }
     if (!slot) {
-      const texture = gl.createTexture();
+      const texture = gl.createTexture()!;
       gl.bindTexture(gl.TEXTURE_2D, texture);
       gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA8, width, height);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
@@ -578,7 +695,7 @@ export class GpuCircles {
       );
       if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE)
         throw new Error("batch framebuffer incomplete");
-      const image = this.host.surface.makeImageFromTexture(texture, {
+      const image = this.host.surface!.makeImageFromTexture(texture, {
         width,
         height,
         colorType: CK.ColorType.RGBA_8888,
@@ -591,7 +708,7 @@ export class GpuCircles {
       this.stats.allocatedBytes += width * height * 4;
     }
     const drawStarted = performance.now();
-    gl.bindFramebuffer(gl.FRAMEBUFFER, slot.fbo);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, slot.fbo!);
     gl.viewport(0, 0, width, height);
     gl.disable(gl.SCISSOR_TEST);
     gl.disable(gl.DEPTH_TEST);
@@ -618,7 +735,7 @@ export class GpuCircles {
     this.host.resetContext();
     this.time("stateRestoreMs", restoreStarted);
     const snapshotStarted = performance.now();
-    if (this.f16) slot.image = slot.surface.makeImageSnapshot();
+    if (this.f16) slot.image = slot.surface!.makeImageSnapshot();
     this.time("snapshotMs", snapshotStarted);
     const compositeStarted = performance.now();
     const current = canvas.getTotalMatrix(),
@@ -626,7 +743,7 @@ export class GpuCircles {
     if (!inverse) throw new Error("noninvertible batch canvas transform");
     canvas.save();
     canvas.concat(inverse);
-    canvas.drawImage(slot.image, x0, y0);
+    canvas.drawImage(slot.image!, x0, y0);
     canvas.restore();
     this.time("compositeMs", compositeStarted);
     this.stats.batches++;
@@ -634,7 +751,7 @@ export class GpuCircles {
     this.stats.recordMs += performance.now() - recordStarted;
     return true;
   }
-  dispose() {
+  dispose(): void {
     if (this.closed) return;
     this.closed = true;
     const gl = this.gl;
@@ -644,7 +761,7 @@ export class GpuCircles {
     for (const slot of this.slots) {
       slot.image?.delete();
       if (slot.surface) slot.surface.delete();
-      else gl.deleteFramebuffer(slot.fbo);
+      else gl.deleteFramebuffer(slot.fbo!);
     }
     gl.deleteBuffer(this.buffer);
     gl.deleteVertexArray(this.vao);
