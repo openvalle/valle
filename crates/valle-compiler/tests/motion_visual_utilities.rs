@@ -479,7 +479,8 @@ fn finite_effect_choices_seek_without_state_and_mark_destination_reads() {
         .unwrap()
         .artifact;
     assert!(!foreground.reads_destination());
-    assert!(!prepare_scene(&foreground).unwrap().can_reuse_layout());
+    // A fixed filter keeps its containing block, so the layout stays reusable.
+    assert!(prepare_scene(&foreground).unwrap().can_reuse_layout());
     assert!(
         prepare_scene(
             &compile_motion(&scene("className=\"translate-x-4\"", ""))

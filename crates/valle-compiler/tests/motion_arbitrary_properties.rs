@@ -173,11 +173,12 @@ fn finite_arbitrary_property_choices_seek_directly_and_control_geometry_reuse() 
         snapshots(&choice, &[60, 0, 29, 30, 89, 60, 0]),
         snapshots(&direct, &[60, 0, 29, 30, 89, 60, 0])
     );
+    // Fixed filter and transform presence keeps the containing block, so boxes stay reusable.
     for (classes, reusable) in [
         ("[width:120px] [scale:1]", true),
-        ("[filter:blur(0px)]", false),
-        ("[transform:translateX(0px)]", false),
-        ("[backdrop-filter:blur(2px)]", false),
+        ("[filter:blur(0px)]", true),
+        ("[transform:translateX(0px)]", true),
+        ("[backdrop-filter:blur(2px)]", true),
     ] {
         let artifact = compile_motion(&source(&class_attr(classes)))
             .unwrap()
