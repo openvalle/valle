@@ -33,11 +33,12 @@ pub(super) fn apply_radial_blur_into(
         ));
     }
     let dimensions = target.image_info().dimensions();
+    // The plan admits the source pixels the passes read; the rest of a larger source is resident
+    // and never sampled.
     if source_size[0] <= 0
         || source_size[1] <= 0
         || source_size[0] > source.width()
         || source_size[1] > source.height()
-        || i64::from(source_size[0]) * i64::from(source_size[1]) > 16_777_216
         || dimensions.width <= 0
         || dimensions.height <= 0
         || i64::from(dimensions.width) * i64::from(dimensions.height) > 16_777_216

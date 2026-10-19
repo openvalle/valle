@@ -2,6 +2,7 @@
 
 use super::bloom::{
     BloomError, encode_output, fill_image_rows, pixel_count, quantize_halves, read_base,
+    source_pixel_count,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -28,15 +29,6 @@ pub fn apply_radial_blur_f16(
     {
         return Err(BloomError::InvalidParameters);
     }
-    let original = read_base(
-        input,
-        input_width,
-        input_height,
-        input_width,
-        input_height,
-        [0, 0],
-    )?;
-    let mut source = std::borrow::Cow::Borrowed(original.as_slice());
     let input_origin = [
         output_origin[0]
             .checked_add(input_offset[0])
@@ -45,16 +37,51 @@ pub fn apply_radial_blur_f16(
             .checked_add(input_offset[1])
             .ok_or(BloomError::InvalidParameters)?,
     ];
+    let input_size = [input_width, input_height];
+    // Decode only the input the passes read: the rest of a larger input never reaches the output.
+    let Some((used_origin, used_size)) = radial_blur_input(
+        params.amount,
+        input_origin,
+        input_size,
+        output_origin,
+        [output_width, output_height],
+    )?
+    else {
+        // No input pixel reaches the output, which stays transparent. Every input pixel is still
+        // checked, as when some do.
+        read_base(input, input_width, input_height, 1, 1, [0, 0])?;
+        return Ok(vec![0; pixel_count(output_width, output_height)? * 8]);
+    };
+    let original = read_base(
+        input,
+        input_width,
+        input_height,
+        used_size[0],
+        used_size[1],
+        [
+            input_origin[0] - used_origin[0],
+            input_origin[1] - used_origin[1],
+        ],
+    )?;
+    // Taps keep the coordinates of the whole input, so decoding only a part of it cannot change
+    // their rounding. Shifting them by whole pixels onto that part is exact.
+    let shift = [
+        i64::from(used_origin[0]) - i64::from(input_origin[0]),
+        i64::from(used_origin[1]) - i64::from(input_origin[1]),
+    ];
+    let mut source = std::borrow::Cow::Borrowed(original.as_slice());
     let plan = radial_blur_plan(
         params.amount,
         input_origin,
-        [input_width, input_height],
+        input_size,
         output_origin,
         [output_width, output_height],
     )?;
-    let unmoved = Unmoved::new(params, plan.len(), [input_width, input_height]);
+    let unmoved = Unmoved::new(params, plan.len(), input_size);
     let mut origin = input_origin;
-    let mut size = [input_width, input_height];
+    let mut size = used_size;
+    // From `origin` to the first pixel of `source`.
+    let mut offset = shift;
     // Every pass writes each of its pixels, so the two buffers alternate without clearing.
     let mut spare = Vec::new();
     for (index, pass) in plan.iter().enumerate() {
@@ -71,8 +98,9 @@ pub fn apply_radial_blur_f16(
             if index + 1 == plan.len() && limited <= 8.0 {
                 return exact_pixel(
                     &original,
-                    input_width as usize,
-                    input_height as usize,
+                    used_size[0] as usize,
+                    used_size[1] as usize,
+                    shift,
                     (ax - i64::from(input_origin[0])) as f64,
                     (ay - i64::from(input_origin[1])) as f64,
                     dx,
@@ -85,20 +113,21 @@ pub fn apply_radial_blur_f16(
                 &source,
                 size[0] as usize,
                 size[1] as usize,
-                sx as i64,
-                sy as i64,
+                sx as i64 - offset[0],
+                sy as i64 - offset[1],
             );
             if reach <= 0.0 || distance < 1e-12 {
                 center
             } else {
                 let tx = dx / distance * reach;
                 let ty = dy / distance * reach;
+                let [ox, oy] = offset.map(|offset| offset as f64);
                 let [before, after] = bilinear_pair(
                     &source,
                     size[0] as usize,
                     size[1] as usize,
-                    [sx - tx, sx + tx],
-                    [sy - ty, sy + ty],
+                    [sx - tx - ox, sx + tx - ox],
+                    [sy - ty - oy, sy + ty - oy],
                 );
                 quantize_halves(std::array::from_fn(|c| {
                     (before[c] + after[c]) * 0.25 + f64::from(center[c]) * 0.5
@@ -109,9 +138,9 @@ pub fn apply_radial_blur_f16(
         fill_image_rows(&mut output, width, |first, rows| {
             for (row, pixels) in rows.chunks_mut(width).enumerate() {
                 let ay = i64::from(pass.origin[1]) + (first + row) as i64;
-                let unmoved_row = unmoved.as_ref().and_then(|unmoved| {
-                    unmoved.row(&original, [input_width, input_height], input_origin, ay)
-                });
+                let unmoved_row = unmoved
+                    .as_ref()
+                    .and_then(|unmoved| unmoved.row(&original, used_size, used_origin, ay));
                 for (x, pixel) in pixels.iter_mut().enumerate() {
                     let ax = i64::from(pass.origin[0]) + x as i64;
                     *pixel = match unmoved_row.as_ref().and_then(|row| row.keep(ax)) {
@@ -128,6 +157,7 @@ pub fn apply_radial_blur_f16(
         }
         origin = pass.origin;
         size = pass.size;
+        offset = [0, 0];
     }
     drop(spare);
     Ok(encode_output(&source))
@@ -151,29 +181,15 @@ pub fn radial_blur_plan(
     output_origin: [i32; 2],
     output_size: [u32; 2],
 ) -> Result<Vec<RadialBlurPass>, BloomError> {
-    if !amount.is_finite() || amount < 0.0 {
-        return Err(BloomError::InvalidParameters);
+    // Only the input the passes read is admitted, however far a larger input extends.
+    if let Some((_, used)) =
+        radial_blur_input(amount, input_origin, input_size, output_origin, output_size)?
+    {
+        pixel_count(used[0], used[1])?;
     }
-    pixel_count(input_size[0], input_size[1])?;
     pixel_count(output_size[0], output_size[1])?;
-    let mut count = 1_u32;
-    let mut denominator = 1.0_f64;
-    while denominator < f64::from(amount) {
-        denominator = denominator * 2.0 + 1.0;
-        count += 1;
-    }
-    if amount <= 8.0 {
-        count = 1;
-        denominator = 1.0;
-    }
-    let mut step = 1.0;
-    let fractions = (0..count)
-        .map(|_| {
-            let f = (step / denominator) as f32;
-            step *= 2.0;
-            f
-        })
-        .collect::<Vec<_>>();
+    let (fractions, pads) = radial_blur_steps(amount);
+    let count = fractions.len();
     let rect = |origin: [i32; 2], size: [u32; 2]| {
         [
             i64::from(origin[0]),
@@ -190,10 +206,6 @@ pub fn radial_blur_plan(
             r[3].saturating_add(pad),
         ]
     };
-    let pads = fractions
-        .iter()
-        .map(|f| ((f64::from(amount) * f64::from(*f)).ceil() as i64).saturating_add(1))
-        .collect::<Vec<_>>();
     let mut support = rect(input_origin, input_size);
     let supports = pads
         .iter()
@@ -203,9 +215,9 @@ pub fn radial_blur_plan(
         })
         .collect::<Vec<_>>();
     let mut needed = rect(output_origin, output_size);
-    let mut passes = Vec::with_capacity(count as usize);
-    for i in (0..count as usize).rev() {
-        let bounds = if i + 1 == count as usize {
+    let mut passes = Vec::with_capacity(count);
+    for i in (0..count).rev() {
+        let bounds = if i + 1 == count {
             needed
         } else {
             let s = supports[i];
@@ -240,13 +252,78 @@ pub fn radial_blur_plan(
     Ok(passes)
 }
 
+/// The input pixels a radial blur of `amount` reads to write `output`: those within the passes'
+/// combined reach of it, as an origin and a size. `None` when no input pixel is that close.
+pub fn radial_blur_input(
+    amount: f32,
+    input_origin: [i32; 2],
+    input_size: [u32; 2],
+    output_origin: [i32; 2],
+    output_size: [u32; 2],
+) -> Result<Option<([i32; 2], [u32; 2])>, BloomError> {
+    if !amount.is_finite() || amount < 0.0 {
+        return Err(BloomError::InvalidParameters);
+    }
+    source_pixel_count(input_size[0], input_size[1])?;
+    let reach = radial_blur_steps(amount)
+        .1
+        .into_iter()
+        .fold(0_i64, i64::saturating_add);
+    let mut origin = [0; 2];
+    let mut size = [0; 2];
+    for axis in 0..2 {
+        let input = i64::from(input_origin[axis]);
+        let output = i64::from(output_origin[axis]);
+        let start = input.max(output.saturating_sub(reach));
+        let end = (input + i64::from(input_size[axis]))
+            .min((output + i64::from(output_size[axis])).saturating_add(reach));
+        if start >= end {
+            return Ok(None);
+        }
+        origin[axis] = i32::try_from(start).map_err(|_| BloomError::InvalidParameters)?;
+        size[axis] = u32::try_from(end - start).map_err(|_| BloomError::InvalidParameters)?;
+    }
+    Ok(Some((origin, size)))
+}
+
+/// The fraction of the amount each pass travels, and how far each pass reads beyond the pixels
+/// it writes, in whole pixels.
+fn radial_blur_steps(amount: f32) -> (Vec<f32>, Vec<i64>) {
+    let mut count = 1_u32;
+    let mut denominator = 1.0_f64;
+    while denominator < f64::from(amount) {
+        denominator = denominator * 2.0 + 1.0;
+        count += 1;
+    }
+    if amount <= 8.0 {
+        count = 1;
+        denominator = 1.0;
+    }
+    let mut step = 1.0;
+    let fractions = (0..count)
+        .map(|_| {
+            let f = (step / denominator) as f32;
+            step *= 2.0;
+            f
+        })
+        .collect::<Vec<_>>();
+    let pads = fractions
+        .iter()
+        .map(|f| ((f64::from(amount) * f64::from(*f)).ceil() as i64).saturating_add(1))
+        .collect();
+    (fractions, pads)
+}
+
 // A small central neighborhood uses the original source directly. This avoids
 // accumulating bilinear interpolation diffusion at the radial singularity;
 // the number of taps here is bounded independently of output scale and amount.
+//
+// `sx` and `sy` count from the whole input's origin; `source` holds its pixels from `shift` on.
 fn exact_pixel(
     source: &[[f32; 4]],
     width: usize,
     height: usize,
+    shift: [i64; 2],
     sx: f64,
     sy: f64,
     dx: f64,
@@ -254,8 +331,18 @@ fn exact_pixel(
     distance: f64,
     amount: f32,
 ) -> [f32; 4] {
+    let pixel_at = || {
+        source_at(
+            source,
+            width,
+            height,
+            sx as i64 - shift[0],
+            sy as i64 - shift[1],
+        )
+    };
+    let [ox, oy] = shift.map(|shift| shift as f64);
     if distance < 1e-12 || amount == 0.0 {
-        return source_at(source, width, height, sx as i64, sy as i64);
+        return pixel_at();
     }
     let reach = f64::from(amount).min(distance * 0.5);
     let steps = reach.ceil().max(1.0) as i32;
@@ -268,10 +355,10 @@ fn exact_pixel(
             source,
             width,
             height,
-            [sx - travel[0], sx + travel[0]],
-            [sy - travel[1], sy + travel[1]],
+            [sx - travel[0] - ox, sx + travel[0] - ox],
+            [sy - travel[1] - oy, sy + travel[1] - oy],
         );
-        let pixel = source_at(source, width, height, sx as i64, sy as i64);
+        let pixel = pixel_at();
         // Weights 1, 2 and 1, then the quarter of their square.
         return quantize_halves(std::array::from_fn(|c| {
             (0.0 + before[c] * 1.0 + (0.0 + f64::from(pixel[c])) * 2.0 + after[c] * 1.0) * 0.25
@@ -283,7 +370,7 @@ fn exact_pixel(
         let sample = if tap == 0 {
             // The middle tap lands on the pixel itself: bilinear weights 1, 0, 0, 0 over
             // finite pixels give the pixel, with a negative zero made positive.
-            let pixel = source_at(source, width, height, sx as i64, sy as i64);
+            let pixel = pixel_at();
             std::array::from_fn(|c| 0.0 + f64::from(pixel[c]))
         } else {
             let travel = f64::from(tap) * reach / f64::from(steps);
@@ -291,8 +378,8 @@ fn exact_pixel(
                 source,
                 width,
                 height,
-                sx + dx / distance * travel,
-                sy + dy / distance * travel,
+                sx + dx / distance * travel - ox,
+                sy + dy / distance * travel - oy,
             )
         };
         for c in 0..4 {
@@ -731,6 +818,51 @@ mod tests {
         let glow_at = (8 * 16) * 8;
         assert!(half_to_f32(u16::from_le_bytes([cropped[glow_at], cropped[glow_at + 1]])) > 0.0);
     }
+
+    #[test]
+    fn large_inputs_are_admitted_by_the_pixels_the_passes_read() {
+        // A 3600-pixel square turned 45 degrees behind a 1920x1080 output: about 26M pixels.
+        let (origin, size) = ([-1586, -2006], [5092, 5092]);
+        let reach = radial_blur_steps(32.0).1.iter().sum::<i64>() as i32;
+        let used = radial_blur_input(32.0, origin, size, [0, 0], [1920, 1080])
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            used,
+            (
+                [-reach, -reach],
+                [1920 + 2 * reach as u32, 1080 + 2 * reach as u32]
+            )
+        );
+        // The used part has the same passes as the whole input.
+        let whole = radial_blur_plan(32.0, origin, size, [0, 0], [1920, 1080]).unwrap();
+        let part = radial_blur_plan(32.0, used.0, used.1, [0, 0], [1920, 1080]).unwrap();
+        assert_eq!(whole.len(), part.len());
+        for (whole, part) in whole.iter().zip(&part) {
+            assert_eq!(
+                (whole.origin, whole.size, whole.fraction),
+                (part.origin, part.size, part.fraction)
+            );
+        }
+        assert!(
+            radial_blur_input(32.0, [1920 + reach, 0], [64, 64], [0, 0], [1920, 1080])
+                .unwrap()
+                .is_none()
+        );
+        // An input beyond the reach leaves the output transparent, and is still checked whole.
+        let params = RadialBlurParams {
+            center: [8.0, 8.0],
+            amount: 32.0,
+        };
+        let blur = |input: &[u8]| {
+            apply_radial_blur_f16(input, 8, 8, 16, 16, [16 + reach, 0], [0, 0], params)
+        };
+        let mut far = vec![0_u8; 8 * 8 * 8];
+        far[..2].copy_from_slice(&f32_to_half(1.0).to_le_bytes());
+        assert_eq!(blur(&far).unwrap(), vec![0; 16 * 16 * 8]);
+        far[..2].copy_from_slice(&0x7e00_u16.to_le_bytes());
+        assert!(matches!(blur(&far), Err(BloomError::InvalidImage)));
+    }
 }
 
 #[cfg(test)]
@@ -1009,6 +1141,8 @@ mod reference_bits {
             ([width, height], [0, 0], [0, 0]),
             ([23, 17], [-9, -5], [9, 5]),
             ([70, 45], [4, 3], [-4, -3]),
+            // Far enough from the input's left and top that the passes read only a part of it.
+            ([23, 17], [-30, -18], [30, 18]),
         ];
         for amount in amounts {
             for center in centers {

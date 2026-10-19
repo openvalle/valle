@@ -276,6 +276,67 @@ export default function Grow(ctx) {
     );
 }
 
+/// A glow under a zoomed camera and a radial blur over a layer larger than the output render:
+/// their kernels plan only the pixels the output reads, far fewer than their inputs hold.
+#[test]
+fn zoomed_glows_and_radial_blurs_of_large_layers_render() {
+    let temp = tempfile::tempdir().unwrap();
+    let dir = temp.path();
+    // The card fills the output and the glow's support; a margin around all of it would
+    // need about 25M working pixels.
+    std::fs::write(
+        dir.join("glow.motion.tsx"),
+        r##"export const composition = { width: 640, height: 360, fps: 30, duration: 1 };
+export default function ZoomedGlow() {
+  return <Scene className="relative h-full w-full" style={{ backgroundColor: "#0f172a" }}>
+    <View key="camera" className="absolute" style={{ left: 0, top: 0, width: 640, height: 360,
+      scale: 3, transformOrigin: "50% 50%" }}>
+      <View key="card" className="absolute" style={{ left: -180, top: -270, width: 1000,
+        height: 900, borderRadius: 40, backgroundColor: "#22d3ee", filter: "glow(128px 1 #a78bfa)" }} />
+    </View>
+  </Scene>;
+}
+"##,
+    )
+    .unwrap();
+    // The blurred layer holds about 17.6M pixels; the blur reads a few beyond the output.
+    std::fs::write(
+        dir.join("radial.motion.tsx"),
+        r##"export const composition = { width: 640, height: 360, fps: 30, duration: 1 };
+export default function WideRadialBlur() {
+  return <Scene className="relative h-full w-full" style={{ backgroundColor: "#0f172a" }}>
+    <View key="blurred" className="absolute" style={{ left: 0, top: 0, width: 640, height: 360,
+      filter: "radial-blur(320px 180px 24px)" }}>
+      <View key="wide" className="absolute" style={{ left: -1780, top: -1920, width: 4200,
+        height: 4200, backgroundColor: "#f43f5e" }} />
+    </View>
+  </Scene>;
+}
+"##,
+    )
+    .unwrap();
+    for (scene, color) in [("glow", [0x22, 0xd3, 0xee]), ("radial", [0xf4, 0x3f, 0x5e])] {
+        for backend in [&["--backend", "raster"][..], &[]] {
+            let output = format!("{scene}-{}.png", backend.len());
+            let input = format!("{scene}.motion.tsx");
+            let args = [
+                &["motion", "render", input.as_str(), "--frame", "0", "-o"][..],
+                &[output.as_str()],
+                backend,
+            ];
+            success(run(dir, &args.concat()));
+            let center = pixel(dir, &output, 320, 180);
+            assert!(
+                center
+                    .iter()
+                    .zip(color)
+                    .all(|(&actual, expected)| actual.abs_diff(expected) <= 2),
+                "{scene} {backend:?}: {center:?}"
+            );
+        }
+    }
+}
+
 #[test]
 fn model3d_assets_render_from_motion_and_timeline() {
     let temp = tempfile::tempdir().unwrap();

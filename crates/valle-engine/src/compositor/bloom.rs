@@ -21,6 +21,9 @@ pub struct GlowParams {
 pub enum BloomError {
     #[error("bloom dimensions or F16 payload are invalid")]
     InvalidImage,
+    /// A working image of a filter would hold more pixels than one may.
+    #[error("filter working image too large: {pixels} > {max} pixels", max = MAX_PIXELS)]
+    TooLarge { pixels: usize },
     #[error("bloom parameters are outside their admitted ranges")]
     InvalidParameters,
 }
@@ -542,8 +545,8 @@ pub fn fill_image_rows<T: Send>(
     fill(0, pixels);
 }
 
-/// Working region: the input that can affect the visible output, padded by the complete support.
-/// Align every level to the input's origin and a 32-pixel grid so cropping cannot
+/// Working region: the input that can affect the visible output, padded by the complete support
+/// as far as the output reads. Align every level to the input's origin and a 32-pixel grid so cropping cannot
 /// shift the pyramid taps. The complete support margin also covers every fine level, so
 /// output pixels outside the region are transparent and need no pyramid work.
 #[derive(Debug, Clone, Copy)]
@@ -616,7 +619,8 @@ impl PyramidRegion {
             let visible_end = i64::from(output[axis]);
             // Contributions farther than the complete pyramid support cannot reach the output,
             // and the halo is exactly zero farther than that support from every source pixel.
-            // Keep a second zero-filled support margin around the source that can contribute.
+            // Keep a second zero-filled support margin around the source that can contribute,
+            // but no farther than the support beyond the output: no output pixel reads past it.
             // When none can, the halo is zero everywhere; keep a region around the output.
             let (mut relevant_start, mut relevant_end) =
                 (source.max(-margin), source_end.min(visible_end + margin));
@@ -624,8 +628,9 @@ impl PyramidRegion {
                 relevant_start = relevant_start.min(0);
                 relevant_end = relevant_end.max(visible_end);
             }
-            let start = source + (relevant_start - margin - source).div_euclid(32) * 32;
-            let end = relevant_end + margin;
+            let start = (relevant_start - margin).max(-margin);
+            let end = (relevant_end + margin).min(visible_end + margin);
+            let start = source + (start - source).div_euclid(32) * 32;
             let size = ((end - start + 31) / 32) * 32;
             result.origin[axis] = start.try_into().map_err(|_| BloomError::InvalidImage)?;
             result.size[axis] = size.try_into().map_err(|_| BloomError::InvalidImage)?;
@@ -1101,7 +1106,7 @@ fn pyramid_halo<const CHANNELS: usize>(
         .expect("pyramid output is live"))
 }
 
-fn source_pixel_count(width: u32, height: u32) -> Result<usize, BloomError> {
+pub(crate) fn source_pixel_count(width: u32, height: u32) -> Result<usize, BloomError> {
     let count = (width as usize)
         .checked_mul(height as usize)
         .ok_or(BloomError::InvalidImage)?;
@@ -1114,7 +1119,7 @@ fn source_pixel_count(width: u32, height: u32) -> Result<usize, BloomError> {
 pub(crate) fn pixel_count(width: u32, height: u32) -> Result<usize, BloomError> {
     let count = source_pixel_count(width, height)?;
     if count > MAX_PIXELS {
-        return Err(BloomError::InvalidImage);
+        return Err(BloomError::TooLarge { pixels: count });
     }
     Ok(count)
 }
@@ -2384,6 +2389,134 @@ mod tests {
             }
         }
         assert!(shrunk >= 12, "only {shrunk} regions shrank");
+    }
+
+    #[test]
+    fn regions_end_one_support_beyond_the_output() {
+        // The previous region kept a second support margin around the whole relevant source.
+        let source_region =
+            |input: [u32; 2], output: [u32; 2], offset: [i32; 2], radius, spread| {
+                let margin = i64::from(PyramidRegion::support_margin(radius, spread).unwrap());
+                let mut region = PyramidRegion {
+                    origin: [0; 2],
+                    size: [0; 2],
+                    input_offset: [0; 2],
+                };
+                for axis in 0..2 {
+                    let source = i64::from(offset[axis]);
+                    let relevant_start = source.max(-margin);
+                    let relevant_end =
+                        (source + i64::from(input[axis])).min(i64::from(output[axis]) + margin);
+                    let start = source + (relevant_start - margin - source).div_euclid(32) * 32;
+                    region.origin[axis] = start as i32;
+                    region.size[axis] = (((relevant_end + margin - start + 31) / 32) * 32) as u32;
+                    region.input_offset[axis] = (source - start) as i32;
+                }
+                region
+            };
+        let area = |region: PyramidRegion| region.size[0] as usize * region.size[1] as usize;
+        // Glows of a 1920x1080 camera zoomed 4.5x and 7.9x, whose sources cover the output and
+        // its support: around the whole source, their regions exceeded MAX_PIXELS.
+        for (input, offset, radius) in [
+            ([5401, 3600], [-1740, -1260], 216.0),
+            ([9460, 6308], [-3770, -2614], 378.4),
+        ] {
+            let output = [1920, 1080];
+            assert!(area(source_region(input, output, offset, radius, radius * 2.0)) > MAX_PIXELS);
+            let region = PyramidRegion::new(input, output, offset, radius, radius * 2.0).unwrap();
+            let margin = PyramidRegion::support_margin(radius, radius * 2.0).unwrap();
+            for axis in 0..2 {
+                assert!(
+                    region.size[axis] < output[axis] + 2 * margin + 64,
+                    "radius={radius}"
+                );
+            }
+        }
+
+        let (width, height) = (400_u32, 300_u32);
+        let input = encode_output(
+            &(0..width * height)
+                .map(|index| {
+                    let alpha = (index % 17) as f32 / 16.0;
+                    [alpha * 1.5, alpha * 0.25, alpha * -0.125, alpha]
+                })
+                .collect::<Vec<_>>(),
+        );
+        let output = [120, 80];
+        let mut shrunk = 0;
+        // The source covers the output and twice the support on every side, then on one side.
+        for offset in [[-140, -110], [-140, 30], [60, -110]] {
+            for radius in [4.0, 12.0] {
+                for glow in [true, false] {
+                    let spread = radius * if glow { 2.0 } else { 1.0 };
+                    let before = source_region([width, height], output, offset, radius, spread);
+                    let after = PyramidRegion::new([width, height], output, offset, radius, spread)
+                        .unwrap();
+                    assert!(
+                        area(after) <= area(before),
+                        "glow={glow}, offset={offset:?}, radius={radius}"
+                    );
+                    shrunk += usize::from(area(after) < area(before));
+                    let full = Area::full(before.size[0] as usize, before.size[1] as usize);
+                    let (reference, bytes) = if glow {
+                        let params = GlowParams {
+                            color: [0.9, 0.3, 0.6, 0.85],
+                            intensity: 1.2,
+                            radius,
+                        };
+                        let pixels = apply_glow_region_f16(
+                            &input,
+                            width,
+                            height,
+                            before.size[0],
+                            before.size[1],
+                            before.input_offset,
+                            full,
+                            params,
+                        )
+                        .unwrap();
+                        (
+                            encode_region(&pixels, before, output),
+                            apply_glow_f16(
+                                &input, width, height, output[0], output[1], offset, params,
+                            )
+                            .unwrap(),
+                        )
+                    } else {
+                        let params = BloomParams {
+                            threshold: 0.3,
+                            knee: 0.2,
+                            intensity: 0.9,
+                            radius,
+                        };
+                        let pixels = apply_bloom_region_f16(
+                            &input,
+                            width,
+                            height,
+                            before.size[0],
+                            before.size[1],
+                            before.input_offset,
+                            full,
+                            params,
+                        )
+                        .unwrap();
+                        (
+                            encode_region(&pixels, before, output),
+                            apply_bloom_f16(
+                                &input, width, height, output[0], output[1], offset, params,
+                            )
+                            .unwrap(),
+                        )
+                    };
+                    assert!(
+                        reference == bytes,
+                        "glow={glow}, offset={offset:?}, radius={radius}"
+                    );
+                }
+            }
+        }
+        // At the smallest radius, rounding to the 32-pixel grid can absorb the cut.
+        assert!(shrunk >= 10, "only {shrunk} regions shrank");
     }
 
     #[test]
