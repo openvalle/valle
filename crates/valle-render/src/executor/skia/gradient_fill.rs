@@ -26,12 +26,17 @@ pub(super) fn radial_geometry(center: [f64; 2], radii: [f64; 2]) -> (Point, f32,
     (center, radius, matrix)
 }
 
-/// The center and the start and end angles of a conic gradient's sweep shader.
-pub(super) fn conic_geometry(center: [f64; 2], start: f64, sweep: f64) -> (Point, (f32, f32)) {
-    (
-        Point::new(center[0] as f32, center[1] as f32),
-        (start as f32, (start + sweep) as f32),
-    )
+/// The center, the start and end angles and the local matrix of a conic gradient's sweep shader.
+/// Skia measures sweep angles in [0, 360) from the positive x axis, so the start angle rotates
+/// the shader: as a sweep start it would clamp the part of the turn before it to an end color.
+pub(super) fn conic_geometry(
+    center: [f64; 2],
+    start: f64,
+    sweep: f64,
+) -> (Point, (f32, f32), Matrix) {
+    let center = Point::new(center[0] as f32, center[1] as f32);
+    let local = Matrix::rotate_deg_pivot(start as f32, center);
+    (center, (0.0, sweep as f32), local)
 }
 
 /// Draws `path` with `paint`, which fills it with the shader of `gradient`, as Skia's draw of it
@@ -720,9 +725,9 @@ mod fused {
                     stops,
                     spread,
                 } => {
-                    let (center, (start, end)) =
+                    let (center, (start, end), local) =
                         super::conic_geometry(*center, *start_angle_degrees, *sweep_angle_degrees);
-                    if !start.is_finite()
+                    if !start_angle_degrees.is_finite()
                         || !end.is_finite()
                         || start > end
                         || (start - end).abs() <= DEGENERATE
@@ -740,7 +745,7 @@ mod fused {
                         stops,
                         spread,
                         to_unit,
-                        identity,
+                        local,
                         Kind::Sweep(angles),
                         whole_turn,
                     )

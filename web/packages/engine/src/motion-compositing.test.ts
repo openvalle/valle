@@ -471,7 +471,12 @@ test("Motion composition, easing and color interpolation match analytic pixels o
     { name:"gradient-hard", body:gradient("linear-gradient(90deg in oklab, red 0% 50%, blue 50% 100%)"), probes:[[31,32,255,0,0],[32,32,0,0,255]] },
     { name:"gradient-alpha", body:gradient("linear-gradient(90deg in oklab, #ff000000, blue)"), probes:[[32,32,0,0,189]] },
     { name:"gradient-radial", body:gradient("radial-gradient(circle in oklab, red, blue)"), probes:[] },
-    { name:"gradient-conic", body:gradient("conic-gradient(from 45deg in oklab, red, blue)"), probes:[] },
+    // The seam lies on the start angle, where the ends of the ramp meet. 45deg would put it through
+    // pixel centres, where any rounding difference picks the other end.
+    { name:"gradient-conic", body:gradient("conic-gradient(from 40deg in oklab, red, blue)"), probes:[] },
+    // The turn before the start angle continues the ramp instead of clamping to an end color.
+    { name:"gradient-conic-start", body:gradient("conic-gradient(from 90deg in srgb, red, blue)"),
+      probes:[[48,16,31,0,224],[48,48,223,0,32],[16,48,161,0,94],[16,16,96,0,159]] },
     { name:"gradient-repeat", body:gradient("repeating-linear-gradient(90deg in oklab, red 0px, blue 16px)"), probes:[] },
     ...["shorter", "longer", "increasing", "decreasing"].map(hue=>({ name:`gradient-oklch-${hue}`, body:gradient(`linear-gradient(90deg in oklch ${hue} hue, red, blue)`), probes:[] })),
   );

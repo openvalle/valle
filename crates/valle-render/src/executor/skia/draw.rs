@@ -3750,9 +3750,9 @@ pub(super) fn program_paint(paint: &Paint) -> Result<SkPaint, DrawError> {
                 Some(working_color_space().map_err(|error| DrawError::Surface(error.to_string()))?),
             );
             let gradient = gradient::Gradient::new(colors, gradient_interpolation());
-            let (center, angles) =
+            let (center, angles, local) =
                 gradient_fill::conic_geometry(*center, *start_angle_degrees, *sweep_angle_degrees);
-            let shader = gradient::shaders::sweep_gradient(center, angles, &gradient, None)
+            let shader = gradient::shaders::sweep_gradient(center, angles, &gradient, Some(&local))
                 .ok_or_else(|| DrawError::Unsupported("conic gradient".into()))?;
             result.set_shader(shader);
         }

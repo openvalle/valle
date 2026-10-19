@@ -3678,16 +3678,18 @@ export function makePaint(CanvasKit: CanvasKit, raw: unknown): Paint {
     } else if (wire.kind === "conicGradient") {
       const center = pair(value.center, "conic gradient center");
       const start = finiteNumber(value.startAngleDegrees, "conic gradient start angle");
+      // Skia measures sweep angles in [0, 360) from the positive x axis, so the start angle
+      // rotates the shader: as a sweep start it would clamp the turn before it to an end color.
       shader = CanvasKit.Shader.MakeSweepGradient(
         center[0],
         center[1],
         colors,
         positions,
         mode,
-        null,
+        CanvasKit.Matrix.rotated((start * Math.PI) / 180, center[0], center[1]),
         1,
-        start,
-        start + finiteNumber(value.sweepAngleDegrees, "conic gradient sweep angle"),
+        0,
+        finiteNumber(value.sweepAngleDegrees, "conic gradient sweep angle"),
         CanvasKit.ColorSpace.SRGB,
       );
     } else {
