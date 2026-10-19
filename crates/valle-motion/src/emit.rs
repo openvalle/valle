@@ -63,6 +63,11 @@ pub enum EmitError {
         reason: String,
     },
     Program(String),
+    /// The emitted program exceeds a render budget at its group `node`.
+    NodeBudget {
+        node: u32,
+        reason: String,
+    },
 }
 
 impl core::fmt::Display for EmitError {
@@ -74,6 +79,9 @@ impl core::fmt::Display for EmitError {
                 write!(f, "node `{node}`: {reason}")
             }
             EmitError::Program(reason) => write!(f, "DrawProgram emission failed: {reason}"),
+            EmitError::NodeBudget { node, reason } => {
+                write!(f, "DrawProgram node[{node}]: {reason}")
+            }
         }
     }
 }
@@ -384,7 +392,15 @@ fn emit_with_faces_and_catalog(
         }
         None => valle_draw::program::compile_recording(viewport, &out.recording),
     }
-    .map_err(|error| EmitError::Program(error.to_string()))?;
+    .map_err(|error| match error {
+        valle_draw::program::ProgramRecordingError::Program(
+            valle_draw::program::DrawProgramError::IntermediateBudgetExceeded { node, .. },
+        ) => EmitError::NodeBudget {
+            node: node.raw(),
+            reason: error.to_string(),
+        },
+        error => EmitError::Program(error.to_string()),
+    })?;
     Ok(EmitReport {
         program,
         scene3d_frames: out.scene3d_frames,

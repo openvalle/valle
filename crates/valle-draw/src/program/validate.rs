@@ -69,6 +69,13 @@ pub enum DrawProgramError {
         actual: usize,
         limit: usize,
     },
+    /// The subtree of group `node` needs more local intermediate pixels than one surface holds.
+    #[error("local intermediate pixels budget exceeded: {actual} > {limit}")]
+    IntermediateBudgetExceeded {
+        node: NodeId,
+        actual: usize,
+        limit: usize,
+    },
     #[error("invalid value at {location}: {reason}")]
     InvalidValue { location: String, reason: String },
     #[error("conflicting {kind} descriptor for identity {key}")]
@@ -1886,8 +1893,8 @@ fn derive_node_geometry(
                     .max(bounds_pixels(result.output_bounds)?);
             }
             if result.max_intermediate_pixels > MAX_LOCAL_INTERMEDIATE_PIXELS {
-                return Err(DrawProgramError::BudgetExceeded {
-                    kind: "local intermediate pixels".into(),
+                return Err(DrawProgramError::IntermediateBudgetExceeded {
+                    node: id,
                     actual: usize::try_from(result.max_intermediate_pixels).unwrap_or(usize::MAX),
                     limit: usize::try_from(MAX_LOCAL_INTERMEDIATE_PIXELS).unwrap_or(usize::MAX),
                 });

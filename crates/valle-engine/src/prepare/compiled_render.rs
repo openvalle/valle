@@ -505,7 +505,13 @@ fn prepare_endpoint(
                         model_resources: &model_resources,
                     },
                 )
-                .map_err(|error| PrepareError::at(format!("{path}.motion"), error))?;
+                .map_err(|error| match error {
+                    // Name the over-budget group the way Shader budget errors name their pass.
+                    motion::ProgramPrepareError::MotionBudget { node, .. } => {
+                        PrepareError::over_budget(format!("{path}.draw.node[{node}]"), error)
+                    }
+                    error => PrepareError::at(format!("{path}.motion"), error),
+                })?;
             let used: std::collections::BTreeSet<_> = built
                 .scene3d_frames
                 .iter()

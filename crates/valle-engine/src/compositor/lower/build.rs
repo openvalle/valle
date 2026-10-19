@@ -1419,3 +1419,23 @@ pub enum LowerError {
     #[error("dynamic binding {id:?} has conflicting logical owners")]
     ConflictingDynamicBinding { id: DynamicBindingId },
 }
+
+impl LowerError {
+    /// Whether a valid plan exceeds a backend extent or surface budget.
+    pub const fn exceeds_budget(&self) -> bool {
+        matches!(
+            self,
+            Self::ExtentExceeded { .. }
+                | Self::SurfaceBudgetExceeded { .. }
+                | Self::FrameBudgetExceeded { .. }
+        )
+    }
+
+    /// The semantic path of the resource that failed, when the error names one.
+    pub fn path(&self) -> Option<&str> {
+        match self {
+            Self::ExtentExceeded { path, .. } => Some(path.as_str()),
+            _ => None,
+        }
+    }
+}

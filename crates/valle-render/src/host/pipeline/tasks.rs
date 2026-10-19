@@ -6,10 +6,44 @@ use crossbeam_channel::{Receiver, RecvTimeoutError, SendTimeoutError, Sender};
 use std::{
     collections::BTreeMap,
     panic::{AssertUnwindSafe, catch_unwind},
+    sync::atomic::AtomicUsize,
     time::Duration,
 };
 
 const CHECK_INTERVAL: Duration = Duration::from_millis(10);
+
+/// A frame's outcome. Failed frames are delivered in frame order like completed ones, so the
+/// render reports the earliest failed frame, as rendering one frame at a time would.
+enum Outcome {
+    Completed(CompletedFrame),
+    Failed(usize, PipelineError),
+}
+
+impl Outcome {
+    fn sequence(&self) -> usize {
+        match self {
+            Self::Completed(frame) => frame.sequence,
+            Self::Failed(sequence, _) => *sequence,
+        }
+    }
+}
+
+/// Deliver a frame's own failure in order and skip the frames after it. Any other error stops
+/// the render at once.
+fn frame_failed(
+    error: PipelineError,
+    sequence: usize,
+    failed: &AtomicUsize,
+    output: &Sender<Result<Outcome, PipelineError>>,
+    abort: &AtomicBool,
+    control: &RenderControl,
+) -> Result<(), PipelineError> {
+    if !matches!(error, PipelineError::AtFrame { .. }) {
+        return Err(error);
+    }
+    failed.fetch_min(sequence, Ordering::AcqRel);
+    send(output, Ok(Outcome::Failed(sequence, error)), abort, control)
+}
 
 fn receive<T>(
     rx: &Receiver<T>,
@@ -51,7 +85,7 @@ fn send<T>(
 
 fn actor(
     abort: &AtomicBool,
-    output: &Sender<Result<CompletedFrame, PipelineError>>,
+    output: &Sender<Result<Outcome, PipelineError>>,
     control: &RenderControl,
     work: impl FnOnce() -> Result<(), PipelineError>,
 ) {
@@ -84,6 +118,8 @@ pub(super) fn render(
     let preparers = (0..window).map(|_| first.fork()).collect::<Vec<_>>();
     drop(first);
     let abort = AtomicBool::new(false);
+    // The earliest failed frame; later frames need no work.
+    let failed = AtomicUsize::new(usize::MAX);
     let shared = shared.as_ref();
     let mut metrics = PipelineAccumulator::for_render_id(project.render_id());
     let mut delivered = 0;
@@ -95,12 +131,24 @@ pub(super) fn render(
             let jobs = jobs_rx.clone();
             let prepared = prepared_tx.clone();
             let output = output_tx.clone();
-            let abort = &abort;
+            let (abort, failed) = (&abort, &failed);
             scope.spawn(move || {
                 actor(abort, &output, control, || {
                     while let Some((sequence, key)) = receive(&jobs, abort, control, || {})? {
-                        let packet = preparer.prepare_frame_for_sequence(sequence, key, spec)?;
-                        send(&prepared, (sequence, key, packet), abort, control)?;
+                        if sequence > failed.load(Ordering::Acquire) {
+                            continue;
+                        }
+                        match preparer.prepare_frame_for_sequence(sequence, key, spec) {
+                            Ok(packet) => send(&prepared, (sequence, key, packet), abort, control)?,
+                            Err(error) => frame_failed(
+                                PipelineError::at_frame(project, key, spec, error),
+                                sequence,
+                                failed,
+                                &output,
+                                abort,
+                                control,
+                            )?,
+                        }
                     }
                     Ok(())
                 })
@@ -116,7 +164,7 @@ pub(super) fn render(
         for _ in 0..execution_slots {
             let prepared = prepared_rx.clone();
             let output = output_tx.clone();
-            let abort = &abort;
+            let (abort, failed) = (&abort, &failed);
             scope.spawn(move || {
                 actor(abort, &output, control, || {
                     let mut executor = control.execution_stage(project, backend, spec)?;
@@ -127,6 +175,12 @@ pub(super) fn render(
                             }
                         })?
                     {
+                        if sequence > failed.load(Ordering::Acquire) {
+                            continue;
+                        }
+                        let at_frame = |error: FrameRenderError| {
+                            PipelineError::at_frame(project, key, spec, error)
+                        };
                         let memory = packet.memory_credit.clone();
                         let delivery_memory_bytes = packet.delivery_memory_bytes;
                         let reserve = || {
@@ -135,25 +189,36 @@ pub(super) fn render(
                                 u64::from(spec.width()) * u64::from(spec.height()) * 4,
                             )
                         };
-                        let delivery_memory = control
-                            .compute(|| match &memory {
-                                Some(credit) => credit.run(reserve),
-                                None => reserve(),
-                            })
-                            .map_err(FrameRenderError::from)?;
-                        let (pixels, evidence) = match shared {
-                            #[cfg(target_os = "macos")]
-                            Some(pool) => {
-                                let (frame, evidence) =
-                                    executor.render_prepared_shared_raster(packet, spec, pool)?;
-                                (CompletedPixels::Shared(frame), evidence)
+                        let delivery_memory = match control.compute(|| match &memory {
+                            Some(credit) => credit.run(reserve),
+                            None => reserve(),
+                        }) {
+                            Ok(lease) => lease,
+                            Err(error) => {
+                                let error = at_frame(error.into());
+                                frame_failed(error, sequence, failed, &output, abort, control)?;
+                                continue;
                             }
+                        };
+                        let rendered = match shared {
+                            #[cfg(target_os = "macos")]
+                            Some(pool) => executor
+                                .render_prepared_shared_raster(packet, spec, pool)
+                                .map(|(frame, evidence)| {
+                                    (CompletedPixels::Shared(frame), evidence)
+                                }),
                             #[cfg(not(target_os = "macos"))]
                             Some(_) => return Err(PipelineError::SharedGpuUnavailable),
-                            None => {
-                                let (pixels, evidence) =
-                                    executor.render_prepared_rgba8(packet, spec)?;
-                                (CompletedPixels::Rgba(pixels), evidence)
+                            None => executor.render_prepared_rgba8(packet, spec).map(
+                                |(pixels, evidence)| (CompletedPixels::Rgba(pixels), evidence),
+                            ),
+                        };
+                        let (pixels, evidence) = match rendered {
+                            Ok(rendered) => rendered,
+                            Err(error) => {
+                                let error = at_frame(error);
+                                frame_failed(error, sequence, failed, &output, abort, control)?;
+                                continue;
                             }
                         };
                         if let Some(credit) = &memory {
@@ -161,14 +226,14 @@ pub(super) fn render(
                         }
                         send(
                             &output,
-                            Ok(CompletedFrame {
+                            Ok(Outcome::Completed(CompletedFrame {
                                 memory,
                                 delivery_memory,
                                 sequence,
                                 key,
                                 pixels,
                                 evidence,
-                            }),
+                            })),
                             abort,
                             control,
                         )?;
@@ -193,9 +258,9 @@ pub(super) fn render(
                 while !pending.contains_key(&sequence) {
                     control.check()?;
                     match output_rx.recv_timeout(CHECK_INTERVAL) {
-                        Ok(Ok(frame)) => {
-                            if frame.sequence < sequence
-                                || pending.insert(frame.sequence, frame).is_some()
+                        Ok(Ok(outcome)) => {
+                            if outcome.sequence() < sequence
+                                || pending.insert(outcome.sequence(), outcome).is_some()
                             {
                                 return Err(PipelineError::IncompleteEvidence);
                             }
@@ -214,7 +279,10 @@ pub(super) fn render(
                     pixels,
                     evidence,
                     ..
-                } = pending.remove(&sequence).unwrap();
+                } = match pending.remove(&sequence).unwrap() {
+                    Outcome::Completed(frame) => frame,
+                    Outcome::Failed(_, error) => return Err(error),
+                };
                 metrics.add(&evidence)?;
                 let push = || match pixels {
                     CompletedPixels::Rgba(pixels) => sink.push(DeliveredFrame {

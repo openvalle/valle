@@ -539,6 +539,29 @@ pub enum ProductEngineError {
     PlanCachePoisoned,
 }
 
+impl ProductEngineError {
+    /// Whether the frame exceeds a render budget at this output size. These are the failures
+    /// `motion check --cost` lists for every frame before rendering.
+    pub fn exceeds_budget(&self) -> bool {
+        match self {
+            Self::Prepare(error) => error.over_budget,
+            Self::Lower(error) => error.exceeds_budget(),
+            Self::ProgramBinding(error) => error.exceeds_budget(),
+            _ => false,
+        }
+    }
+
+    /// The semantic path of the visual, node or pass that failed, when the error names one.
+    pub fn path(&self) -> Option<&str> {
+        match self {
+            Self::Prepare(error) => Some(error.path.as_str()),
+            Self::Lower(error) => error.path(),
+            Self::ProgramBinding(error) => error.path(),
+            _ => None,
+        }
+    }
+}
+
 const MAX_PLAN_TEMPLATE_CACHE: usize = 64;
 const MAX_PLAN_TEMPLATE_CACHE_BYTES: u64 = 128 * 1024 * 1024;
 

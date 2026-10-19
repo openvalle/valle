@@ -81,8 +81,9 @@ filter intermediates, on top. `hotFrames` lists the five frames with the most pi
 filter such as `blur` or `glow`, ...) and their five largest `passes`: `kind`, the pass `path` in
 the compiled scene, its device `roi` and `pixels`. The `roi` and `seconds` locate the element in
 the frame. Add `--output-size WxH` to plan at the delivery size. Frames that exceed a renderer
-limit are listed in `failures` with their frame, seconds and error, and the check fails before
-rendering its frame. A frame's Shader work averages at most 1024 operations and 64 samples per
+limit are listed in `failures` with their frame, seconds, error and the `path` the error names,
+and the check fails before rendering its frame. A render reports the first such frame with the
+code `frame_budget_exceeded`. A frame's Shader work averages at most 1024 operations and 64 samples per
 output pixel, counted over at least 1920 x 1080 pixels, so a frame within it at 1080p stays
 within it at any output size. Built-in transitions do not count toward it. The error names the
 pass doing the largest share.

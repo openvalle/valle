@@ -170,6 +170,112 @@ export default function T(ctx){return <Scene style={{width:64,height:64}}><Scene
     );
 }
 
+/// A render that fails partway names the earliest failed frame, its time and node at any frame
+/// concurrency, and points to the cost check. Motion, Timeline and project renders share this.
+#[test]
+fn over_budget_renders_name_the_first_failed_frame_and_node() {
+    let temp = tempfile::tempdir().unwrap();
+    let dir = temp.path();
+    // From frame 30 the blurred card needs more local intermediate pixels than a surface holds.
+    std::fs::write(
+        dir.join("grow.motion.tsx"),
+        r##"export const composition = { width: 64, height: 36, fps: 30, duration: 2 };
+export default function Grow(ctx) {
+  const size = interpolate(ctx.localFrame, [29, 30], [16, 20000]);
+  return <Scene className="relative h-full w-full">
+    <View key="card" className="absolute" style={{ left: 8, top: 8, width: size, height: size,
+      backgroundColor: "#ff8040", filter: "blur(2px)" }} />
+  </Scene>;
+}
+"##,
+    )
+    .unwrap();
+    put(
+        dir,
+        "grow.json",
+        json!({"canvas":{"width":64,"height":36,"fps":30},
+        "resources":{"motion":"grow.motion.tsx"},
+        "tracks":{"visual":[{"clips":[{"kind":"motion","component":"motion","start":0,"duration":2}]}]}}),
+    );
+    success(run(
+        dir,
+        &["project", "create", "grow", "--timeline", "grow.json"],
+    ));
+
+    let cost = run(dir, &["motion", "check", "grow.motion.tsx", "--cost"]);
+    assert!(!cost.status.success());
+    let cost: Value = serde_json::from_slice(&cost.stdout).unwrap();
+    let failures = cost["cost"]["failures"].as_array().unwrap();
+    assert_eq!(failures.len(), 30, "{cost}");
+    let first = &failures[0];
+    assert_eq!(
+        (first["frame"].as_i64(), first["seconds"].as_f64()),
+        (Some(30), Some(1.0))
+    );
+    let path = first["path"].as_str().unwrap().to_owned();
+    assert!(path.starts_with("visual[0].draw.node["), "{cost}");
+
+    let message = format!("frame 30 (1.000 s): {path}: local intermediate pixels budget exceeded");
+    let hint = "run valle motion check --cost --output-size 64x36 to find every such frame before exporting";
+    for (index, args) in [
+        vec![
+            "motion",
+            "render",
+            "grow.motion.tsx",
+            "--backend",
+            "raster",
+            "--threads",
+            "1",
+        ],
+        vec![
+            "motion",
+            "render",
+            "grow.motion.tsx",
+            "--backend",
+            "raster",
+            "--threads",
+            "4",
+        ],
+        vec!["motion", "render", "grow.motion.tsx"],
+        vec!["timeline", "render", "grow.json"],
+        vec!["project", "render", "grow"],
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let output = format!("out-{index}.mp4");
+        let result = run(dir, &[args.as_slice(), &["-o", &output]].concat());
+        assert!(!result.status.success(), "{args:?}");
+        let report: Value = serde_json::from_slice(&result.stdout).unwrap();
+        let error = &report["error"];
+        assert_eq!(error["code"], "frame_budget_exceeded", "{args:?}: {report}");
+        assert_eq!(
+            (error["frame"].as_i64(), error["seconds"].as_f64()),
+            (Some(30), Some(1.0)),
+            "{args:?}: {report}"
+        );
+        assert_eq!(error["path"], path.as_str(), "{args:?}: {report}");
+        assert!(
+            error["message"].as_str().unwrap().starts_with(&message),
+            "{args:?}: {report}"
+        );
+        assert_eq!(error["hint"], hint, "{args:?}: {report}");
+        assert!(!dir.join(&output).exists(), "{args:?}");
+    }
+    let human = Command::new(env!("CARGO_BIN_EXE_valle"))
+        .current_dir(dir)
+        .env("VALLE_HOME", dir.join("home"))
+        .args(["motion", "render", "grow.motion.tsx", "-o", "human.mp4"])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&human.stderr);
+    assert!(
+        stderr.contains(&format!("error: {message}"))
+            && stderr.contains(&format!("\n  hint: {hint}\n")),
+        "{stderr}"
+    );
+}
+
 #[test]
 fn model3d_assets_render_from_motion_and_timeline() {
     let temp = tempfile::tempdir().unwrap();

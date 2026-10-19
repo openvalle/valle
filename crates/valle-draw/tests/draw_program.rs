@@ -419,8 +419,8 @@ fn viewport_and_intermediate_area_are_admission_contracts() {
     oversized.add_root(root);
     assert!(matches!(
         oversized.finish(),
-        Err(DrawProgramError::BudgetExceeded { kind, actual, limit })
-            if kind == "local intermediate pixels" && actual > limit
+        Err(DrawProgramError::IntermediateBudgetExceeded { node, actual, limit })
+            if node == root && actual > limit
     ));
 }
 

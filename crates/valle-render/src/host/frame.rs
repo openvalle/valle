@@ -1204,6 +1204,27 @@ pub enum FrameRenderError {
     },
 }
 
+impl FrameRenderError {
+    /// Whether the frame exceeds a render budget at this output size. These are the failures
+    /// `motion check --cost` lists for every frame before rendering.
+    pub fn exceeds_budget(&self) -> bool {
+        match self {
+            Self::Engine(error) => error.exceeds_budget(),
+            Self::Executor(SkiaExecuteError::ProgramBinding(error)) => error.exceeds_budget(),
+            _ => false,
+        }
+    }
+
+    /// The semantic path of the visual, node or pass that failed, when the error names one.
+    pub fn path(&self) -> Option<&str> {
+        match self {
+            Self::Engine(error) => error.path(),
+            Self::Executor(SkiaExecuteError::ProgramBinding(error)) => error.path(),
+            _ => None,
+        }
+    }
+}
+
 fn elapsed_us(started: Instant) -> u64 {
     u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX)
 }

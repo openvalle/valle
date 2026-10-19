@@ -406,9 +406,23 @@ fn render_shared_staged(
                             }
                             control.check()?;
                             let key = frames[sequence];
-                            let prepared = control.compute(|| {
-                                preparer.prepare_frame_for_sequence(sequence, key, spec)
-                            })?;
+                            let prepared = control
+                                .compute(|| {
+                                    preparer.prepare_frame_for_sequence(sequence, key, spec)
+                                })
+                                .map_err(|error| {
+                                    PipelineError::at_frame(project, key, spec, error)
+                                });
+                            let prepared = match prepared {
+                                Ok(prepared) => prepared,
+                                // Peers keep preparing the frames before this one, and delivery
+                                // reports this failure once it reaches this frame.
+                                Err(error @ PipelineError::AtFrame { .. }) => {
+                                    let _ = sender.send(Err(error));
+                                    break;
+                                }
+                                Err(error) => return Err(error),
+                            };
                             let _send_span = control.trace.as_ref().map(|t| {
                                 t.span(
                                     "prepare.backpressure",
@@ -447,7 +461,7 @@ fn render_shared_staged(
                         Ok(packet) => break packet?,
                         Err(crossbeam_channel::RecvTimeoutError::Disconnected) => return Err(PipelineError::IncompleteEvidence),
                         Err(crossbeam_channel::RecvTimeoutError::Timeout) if !pending.is_empty() => {
-                            deliver_shared_head(&mut executors, &mut pending, sink, &mut metrics,
+                            deliver_shared_head(project, spec, &mut executors, &mut pending, sink, &mut metrics,
                                 &mut delivered, frames.len(), progress)?;
                         },
                         Err(crossbeam_channel::RecvTimeoutError::Timeout) => {},
@@ -470,6 +484,8 @@ fn render_shared_staged(
                     while !pending.is_empty() {
                         control.check()?;
                         deliver_shared_head(
+                            project,
+                            spec,
                             &mut executors,
                             &mut pending,
                             sink,
@@ -491,8 +507,9 @@ fn render_shared_staged(
                 }
                 let owner = sequence % active_queues;
                 let submit_started = Instant::now();
-                let submitted =
-                    executors[owner].render_prepared_shared_frame(prepared, spec, &pool)?;
+                let submitted = executors[owner]
+                    .render_prepared_shared_frame(prepared, spec, &pool)
+                    .map_err(|error| PipelineError::at_frame(project, key, spec, error))?;
                 let submit_us = submit_started
                     .elapsed()
                     .as_micros()
@@ -515,6 +532,8 @@ fn render_shared_staged(
                 }
                 if pending.len() == MAXIMUM_PENDING_FRAMES {
                     let mut sample = deliver_shared_head(
+                        project,
+                        spec,
                         &mut executors,
                         &mut pending,
                         sink,
@@ -537,6 +556,8 @@ fn render_shared_staged(
                         while !pending.is_empty() {
                             control.check()?;
                             deliver_shared_head(
+                                project,
+                                spec,
                                 &mut executors,
                                 &mut pending,
                                 sink,
@@ -581,6 +602,8 @@ fn render_shared_staged(
             while !pending.is_empty() {
                 control.check()?;
                 deliver_shared_head(
+                    project,
+                    spec,
                     &mut executors,
                     &mut pending,
                     sink,
@@ -625,6 +648,8 @@ fn render_shared_staged(
 #[cfg(target_os = "macos")]
 #[allow(clippy::too_many_arguments)]
 fn deliver_shared_head(
+    project: &NativeProject,
+    spec: RenderSpec,
     executors: &mut [super::frame::FrameExecutionStage],
     pending: &mut VecDeque<PendingSharedFrame>,
     sink: &mut dyn FrameSink,
@@ -648,7 +673,9 @@ fn deliver_shared_head(
         });
     }
     let memory = submitted.memory_credit.clone();
-    let (frame, evidence) = executors[executor].finish_shared_frame(submitted)?;
+    let (frame, evidence) = executors[executor]
+        .finish_shared_frame(submitted)
+        .map_err(|error| PipelineError::at_frame(project, key, spec, error))?;
     metrics.add(&evidence)?;
     let sink_started = Instant::now();
     let push = || {
@@ -1135,6 +1162,17 @@ pub enum PipelineError {
     Budget(#[from] super::NativeBudgetError),
     #[error(transparent)]
     Frame(#[from] FrameRenderError),
+    /// A frame failed. A render reports its earliest failed frame, as rendering one frame at a
+    /// time would.
+    #[error("frame {frame} ({seconds:.3} s): {error}")]
+    AtFrame {
+        frame: i64,
+        seconds: f64,
+        /// The output size the frame failed at, which its budgets depend on.
+        width: u32,
+        height: u32,
+        error: FrameRenderError,
+    },
     #[error("render cancelled")]
     Cancelled,
     #[error("render deadline exceeded")]
@@ -1159,6 +1197,29 @@ pub enum PipelineError {
     IncompleteEvidence,
     #[error("raster workers produced frame {actual} while ordered delivery expected {expected}")]
     OutOfOrder { expected: usize, actual: usize },
+}
+
+impl PipelineError {
+    /// Attribute a stage error to the frame it failed on. Stopped admission follows another
+    /// failure or a cancellation, so it is not this frame's failure.
+    fn at_frame(
+        project: &NativeProject,
+        key: FrameKey,
+        spec: RenderSpec,
+        error: FrameRenderError,
+    ) -> Self {
+        if matches!(error, FrameRenderError::AdmissionStopped) {
+            return Self::Frame(error);
+        }
+        let rate = project.compiled().canvas().frame_rate();
+        Self::AtFrame {
+            frame: key.index(),
+            seconds: key.index() as f64 * f64::from(rate.denominator()) / rate.numerator() as f64,
+            width: spec.width(),
+            height: spec.height(),
+            error,
+        }
+    }
 }
 
 /// Drain all producers before joining, retaining the real error if an aborted peer closed first.

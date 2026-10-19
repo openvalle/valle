@@ -489,7 +489,7 @@ impl<'a> PrepareState<'a> {
                 bounds::prepare_mask(mask, self.frame.camera.as_ref(), self.frame.canvas_mapping)
             })
             .transpose()
-            .map_err(|error| PrepareError::at(format!("{path}.mask"), error))?;
+            .map_err(|error| PrepareError::bounds(format!("{path}.mask"), error))?;
         let (device_transform, prepared_bounds) =
             bounds::layer_geometry(bounds::LayerGeometryInput {
                 transform: &clip.transform,
@@ -503,7 +503,7 @@ impl<'a> PrepareState<'a> {
                 ],
                 geometry,
             })
-            .map_err(|error| PrepareError::at(path, error))?;
+            .map_err(|error| PrepareError::bounds(path, error))?;
         if prepared_bounds.reason == BoundsReason::ConservativeCameraTarget {
             self.diagnostics.push(Diagnostic {
                 severity: DiagnosticSeverity::Warning,
@@ -587,7 +587,7 @@ impl<'a> PrepareState<'a> {
                 bounds::prepare_mask(mask, self.frame.camera.as_ref(), self.frame.canvas_mapping)
             })
             .transpose()
-            .map_err(|error| PrepareError::at(format!("{path}.mask"), error))?;
+            .map_err(|error| PrepareError::bounds(format!("{path}.mask"), error))?;
         let (device_transform, prepared_bounds) =
             bounds::layer_geometry(bounds::LayerGeometryInput {
                 transform: &clip.transform,
@@ -601,7 +601,7 @@ impl<'a> PrepareState<'a> {
                 ],
                 geometry,
             })
-            .map_err(|error| PrepareError::at(path, error))?;
+            .map_err(|error| PrepareError::bounds(path, error))?;
         let dynamic = self.layer_bindings(
             path,
             device_transform,
@@ -689,7 +689,7 @@ impl<'a> PrepareState<'a> {
                 ],
                 geometry,
             })
-            .map_err(|error| PrepareError::at(path, error))?;
+            .map_err(|error| PrepareError::bounds(path, error))?;
         let dynamic = self.layer_bindings(path, device_transform, prepared_bounds.output, 1.0)?;
         self.geometry.push(FrameGeometry {
             semantic_path: path.to_owned(),
@@ -782,7 +782,7 @@ impl<'a> PrepareState<'a> {
                     transform,
                     root,
                 )
-                .map_err(|error| PrepareError::at(&use_path, error))?
+                .map_err(|error| PrepareError::bounds(&use_path, error))?
             };
             let sample_bounds = self
                 .dynamic
@@ -888,6 +888,8 @@ fn union_local_bounds(
 pub struct PrepareError {
     pub path: String,
     pub reason: String,
+    /// The visual exceeds a render budget at this output size.
+    pub over_budget: bool,
 }
 
 impl PrepareError {
@@ -895,6 +897,21 @@ impl PrepareError {
         Self {
             path: path.into(),
             reason: reason.to_string(),
+            over_budget: false,
+        }
+    }
+
+    pub(crate) fn over_budget(path: impl Into<String>, reason: impl std::fmt::Display) -> Self {
+        Self {
+            over_budget: true,
+            ..Self::at(path, reason)
+        }
+    }
+
+    fn bounds(path: impl Into<String>, error: BoundsError) -> Self {
+        Self {
+            over_budget: error.exceeds_budget(),
+            ..Self::at(path, error)
         }
     }
 }

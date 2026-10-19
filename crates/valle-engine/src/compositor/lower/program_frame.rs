@@ -1523,3 +1523,25 @@ pub enum ProgramBindingError {
     #[error("bound program surface byte estimate overflow")]
     ByteEstimateOverflow,
 }
+
+impl ProgramBindingError {
+    /// Whether a valid frame exceeds a bounds, surface or Shader budget.
+    pub const fn exceeds_budget(&self) -> bool {
+        match self {
+            Self::Bounds(error) => error.exceeds_budget(),
+            Self::SurfaceBudgetExceeded { .. }
+            | Self::PlanSurfaceBudgetExceeded { .. }
+            | Self::FrameBudgetExceeded { .. }
+            | Self::ShaderBudgetExceeded { .. } => true,
+            _ => false,
+        }
+    }
+
+    /// The semantic path of the pass that failed, when the error names one.
+    pub fn path(&self) -> Option<&str> {
+        match self {
+            Self::ShaderBudgetExceeded { largest, .. } => Some(largest.as_str()),
+            _ => None,
+        }
+    }
+}

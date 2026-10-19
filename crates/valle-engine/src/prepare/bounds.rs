@@ -1047,6 +1047,16 @@ pub enum BoundsError {
     InvalidPreparedMask,
 }
 
+impl BoundsError {
+    /// Whether valid bounds exceed a device budget at this output size.
+    pub const fn exceeds_budget(&self) -> bool {
+        matches!(
+            self,
+            Self::BudgetExceeded | Self::IntermediateBudgetExceeded { .. }
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

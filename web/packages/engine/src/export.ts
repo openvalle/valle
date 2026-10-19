@@ -124,10 +124,18 @@ export async function exportBrowserVideo(
       }
     };
     const executionBackends = new Set<string>();
+    const [rateNumerator, rateDenominator] = info.frameRate.split("/").map(Number);
     for (let frame = 0; frame < plan.frameCount; frame++) {
       checkCancelled();
       const sourceFrame = plan.sourceFrame(frame);
-      const result = await player.renderFrame(sourceFrame, { rasterScale: plan.rasterScale });
+      const result = await player.renderFrame(sourceFrame, { rasterScale: plan.rasterScale }).catch((error: unknown) => {
+        checkCancelled();
+        if (error instanceof DOMException && error.name === "AbortError") throw error;
+        // Name the failed frame and its time, as Native exports do.
+        const seconds = (sourceFrame * rateDenominator!) / rateNumerator!;
+        const message = error instanceof Error ? error.message : String(error);
+        throw new Error(`frame ${sourceFrame} (${seconds.toFixed(3)} s): ${message}`, { cause: error });
+      });
       executionBackends.add(result.executionProfile.surfaceBackend);
       if (result.frame.renderId !== info.renderId || result.frame.index !== sourceFrame) {
         throw new Error("Export frame does not match the frozen render package.");

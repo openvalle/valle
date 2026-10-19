@@ -384,7 +384,11 @@ The transport is shared; result payloads retain domain-specific information:
 
 Always check the process exit code. A JSON object or the arrival of `report` alone
 does not mean success. Argument errors use `error.code: "invalid_arguments"`;
-uncategorized command errors use `command_failed`. A media operation without
+uncategorized command errors use `command_failed`. A render that fails on a frame reports
+the earliest failed frame: its message starts with `frame N (S s):`, and the error adds
+`frame`, `seconds` and, when the error names one, the scene `path`. A frame that exceeds a
+render budget at the output size uses `frame_budget_exceeded` with a `hint` to run
+`motion check --cost --output-size WxH`, which lists every such frame. A media operation without
 loadable FFmpeg libraries uses `ffmpeg_unavailable`; its message ends with a
 platform install hint (see [Runtime notes](#runtime-notes)). Motion compile failures use
 `motion_compile_failed` and include `error.diagnostics` with messages, codes,

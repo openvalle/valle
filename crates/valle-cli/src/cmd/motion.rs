@@ -466,8 +466,14 @@ fn frame_costs(
                 );
                 planned.push((frame, cost));
             }
-            Err(error) => failures.push(serde_json::json!({"frame":frame.index(),
-                "seconds":seconds(frame), "error":error.to_string()})),
+            Err(error) => {
+                let mut failure = serde_json::json!({"frame":frame.index(),
+                    "seconds":seconds(frame), "error":error.to_string()});
+                if let Some(path) = error.path() {
+                    failure["path"] = path.into();
+                }
+                failures.push(failure);
+            }
         }
     }
     planned.sort_by_key(|(frame, cost)| (Reverse(cost.pixels), *frame));
@@ -548,11 +554,30 @@ fn source_error(
                 .map(|m| (&m.source_path, &m.span))
         });
     if let Some((path, span)) = location {
-        anyhow!("{message} ({path}:{}:{})", span.line, span.column)
+        anyhow::Error::new(SourceLocated {
+            message: format!("{message} ({path}:{}:{})", span.line, span.column),
+            error,
+        })
     } else {
         error
     }
 }
+
+/// An error message with its source location. It keeps the original error, from which the
+/// command takes its error code and failed frame.
+#[derive(Debug)]
+pub(crate) struct SourceLocated {
+    message: String,
+    pub(crate) error: anyhow::Error,
+}
+
+impl std::fmt::Display for SourceLocated {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for SourceLocated {}
 
 #[derive(Clone)]
 struct StudioRequest {

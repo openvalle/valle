@@ -325,8 +325,13 @@ pub(super) fn build_motion_program(
             &catalog,
         ),
     }
-    .map_err(|error| ProgramPrepareError::MotionEmit {
-        reason: error.to_string(),
+    .map_err(|error| match error {
+        valle_motion::EmitError::NodeBudget { node, reason } => {
+            ProgramPrepareError::MotionBudget { node, reason }
+        }
+        error => ProgramPrepareError::MotionEmit {
+            reason: error.to_string(),
+        },
     })?;
     if !report.unsupported.is_empty() {
         return Err(ProgramPrepareError::UnsupportedMotionPaint {
@@ -1405,6 +1410,9 @@ pub enum ProgramPrepareError {
     MotionGlass { reason: String },
     #[error("Motion DrawProgram emission failed: {reason}")]
     MotionEmit { reason: String },
+    /// The emitted DrawProgram exceeds a render budget at its group `node`.
+    #[error("{reason}")]
+    MotionBudget { node: u32, reason: String },
     #[error("Motion paint output contains unsupported features: {features:?}")]
     UnsupportedMotionPaint { features: Vec<String> },
     #[error("DrawProgram external texture {key:?} has no frozen semantic binding")]

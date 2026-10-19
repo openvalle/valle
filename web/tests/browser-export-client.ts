@@ -295,6 +295,15 @@ try {
     assert(error instanceof Error && error.message.includes("even canvas"), "odd dimensions did not produce the expected capability error");
   }
   report.push({ fixture: "odd-dimensions", status: "pass" }); show();
+  try {
+    await exportBrowserVideo(await input("over-budget"));
+    throw new Error("over-budget export unexpectedly succeeded");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    assert(message.startsWith("frame 30 (1.000 s): ") && message.includes("visual[0].draw.node[")
+      && message.includes("local intermediate pixels budget exceeded"), `over-budget export did not name its first failed frame and node: ${message}`);
+  }
+  report.push({ fixture: "over-budget", status: "pass" }); show();
   document.title = "PASS · Browser export checks";
 } catch (error) {
   report.push({ status: "fail", message: error instanceof Error ? error.stack : String(error) }); show();

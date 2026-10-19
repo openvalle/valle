@@ -1463,15 +1463,54 @@ pub fn run() -> std::process::ExitCode {
     match dispatch(cli.cmd) {
         Ok(code) => code,
         Err(e) => {
-            let code = if ffmpeg_unavailable(&e) {
+            let mut code = if ffmpeg_unavailable(&e) {
                 "ffmpeg_unavailable"
             } else {
                 "command_failed"
             };
-            output::error_with_code(code, &format!("{e:#}"));
+            let (mut fields, mut hint) = (serde_json::Map::new(), None);
+            if let Some(valle_render::host::PipelineError::AtFrame {
+                frame,
+                seconds,
+                width,
+                height,
+                error,
+            }) = failed_frame(&e)
+            {
+                fields.insert("frame".into(), (*frame).into());
+                fields.insert("seconds".into(), (*seconds).into());
+                if let Some(path) = error.path() {
+                    fields.insert("path".into(), path.into());
+                }
+                if error.exceeds_budget() {
+                    code = "frame_budget_exceeded";
+                    hint = Some(format!(
+                        "run valle motion check --cost --output-size {width}x{height} to find every such frame before exporting"
+                    ));
+                }
+            }
+            output::error_with_details(code, &format!("{e:#}"), fields, hint.as_deref());
             std::process::ExitCode::FAILURE
         }
     }
+}
+
+/// The frame a Native render failed on, wherever the render error sits in the chain.
+fn failed_frame(error: &anyhow::Error) -> Option<&valle_render::host::PipelineError> {
+    use valle_render::host::{NativeRenderError, PipelineError};
+    error.chain().find_map(|cause| {
+        // A transparent render error forwards Display and source(), hiding its wrapped error.
+        let pipeline = match cause.downcast_ref::<NativeRenderError>() {
+            Some(NativeRenderError::Pipeline(pipeline)) => Some(pipeline),
+            _ => cause.downcast_ref::<PipelineError>(),
+        };
+        match pipeline {
+            Some(failed @ PipelineError::AtFrame { .. }) => Some(failed),
+            _ => cause
+                .downcast_ref::<cmd::motion::SourceLocated>()
+                .and_then(|located| failed_frame(&located.error)),
+        }
+    })
 }
 
 /// Whether a command failed because no compatible FFmpeg installation could be loaded.

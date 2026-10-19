@@ -20,6 +20,12 @@ export default function SceneClip(ctx,props){return <Scene style={{width:640,hei
   <View key="box" style={{position:"absolute",left:30+ctx.progress*450,top:140,width:props.size,height:props.size,backgroundColor:"#67e8f9",borderRadius:12}}/>
   <View style={{position:"absolute",left:30,top:300,width:580*ctx.progress,height:8,backgroundColor:"#ffffff"}}/>
 </Scene>;}`;
+// From frame 30 the blurred card needs more local intermediate pixels than a surface holds.
+const overBudgetSource = `export const composition={width:640,height:360,fps:30,duration:3};
+export default function Grow(ctx){const size=interpolate(ctx.localFrame,[29,30],[16,20000]);
+return <Scene style={{width:640,height:360,backgroundColor:"#102030"}}>
+  <View key="card" style={{position:"absolute",left:8,top:8,width:size,height:size,backgroundColor:"#ff8040",filter:"blur(2px)"}}/>
+</Scene>;}`;
 
 function tone() {
   const rate = 48_000, samples = rate * 3;
@@ -46,7 +52,7 @@ const runtimeAssets = { engine: { glue: "/runtime/engine/valle_engine.js", wasm:
   workers: { productFrame: "/runtime/workers/product-frame.js" } };
 
 function fixture(name: string, videoBytes?: Uint8Array) {
-  const motion = name === "motion";
+  const motion = name === "motion" || name === "over-budget";
   const fractional = name === "fractional";
   const hasAudio = name === "av" || name === "short-av" || name === "video-av";
   const isVideo = name === "video" || name === "video-av";
@@ -71,7 +77,8 @@ function fixture(name: string, videoBytes?: Uint8Array) {
         { kind: "solid", color: "#20c060", start: duration / 3, duration: duration / 3 },
         { kind: "solid", color: "#3070e0", start: duration * 2 / 3, duration: duration / 3 }] }],
       ...(hasAudio ? { audio: [{ clips: [{ src: "tone", start: 0, duration, gain: 0.5 }] }] } : {}) } };
-  const compiled = motion ? compileMotionJsxWithWasm({ compile_motion_jsx }, source) : null;
+  const compiled = motion
+    ? compileMotionJsxWithWasm({ compile_motion_jsx }, name === "over-budget" ? overBudgetSource : source) : null;
   const prepared = preparePreviewPackageWithWasm({ prepare_preview_package }, { authorTimeline: author,
     motionInstances: compiled ? [{ clipPath: "/tracks/visual/0/clips/0", artifact: compiled.artifact,
       artifactDigest: compiled.artifactDigest, fonts: [] }] : [], resourceInputs: resources });
@@ -83,7 +90,7 @@ function fixture(name: string, videoBytes?: Uint8Array) {
   return { author, prepared, render, assets, compiled, resourceInputs: resources,
     input: { ...render, assets, runtimeAssets, assetBaseUrl: "/fixtures/" } };
 }
-const fixtures = new Map(["motion", "av", "short-av", "fractional", "long", "odd"].map((name) => [name, fixture(name)]));
+const fixtures = new Map(["motion", "av", "short-av", "fractional", "long", "odd", "over-budget"].map((name) => [name, fixture(name)]));
 const selected = process.env.VALLE_BROWSER_EXPORT_FIXTURE ?? "av";
 if (selected === "video" || selected === "video-av") {
   fixtures.set(selected, fixture(selected, new Uint8Array(await Bun.file(path.join(evidence, "av.mp4")).arrayBuffer())));
