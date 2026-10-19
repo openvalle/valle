@@ -1945,6 +1945,40 @@ export default function Scene(ctx) {
     }
 
     #[test]
+    fn motion_backdrop_read_is_clipped_to_corner_radii_and_nothing_else() {
+        let program = motion_program(
+            r##"
+export default function Scene(ctx) {
+  return <Scene className="relative" style={{width:100,height:40}}>
+    <View key="round" className="absolute" style={{left:0,top:0,width:40,height:40,borderRadius:20,
+      boxShadow:"0 0 6px #000000",backdropFilter:"blur(2px)",backgroundColor:"#ffffff80"}} />
+    <View key="square" className="absolute" style={{left:50,top:0,width:40,height:40,
+      backdropFilter:"blur(2px)"}} />
+  </Scene>;
+}
+"##,
+            (100, 40),
+        );
+        let mut rounded = 0;
+        for (group, parent, read) in backdrop_reads(&program) {
+            // Each read is an empty group, so a corner clip around it leaves the shadow and the
+            // content of its node alone.
+            assert!(group.children.is_empty());
+            assert_eq!(read.bounds, Rect::new(0.0, 0.0, 40.0, 40.0));
+            if let Some(clip) = &parent.clip {
+                let Clip::RoundRect(rrect) = clip else {
+                    panic!("backdrop read under {clip:?}");
+                };
+                assert_eq!(parent.children.len(), 1);
+                assert_eq!(rrect.rect, read.bounds);
+                assert_eq!(rrect.radii, [[20.0, 20.0]; 4]);
+                rounded += 1;
+            }
+        }
+        assert_eq!(rounded, 1);
+    }
+
+    #[test]
     fn blend_space_changes_program_identity_and_destination_semantics() {
         use valle_draw::program::BlendSpace;
         let build = |space| {

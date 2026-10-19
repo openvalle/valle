@@ -1071,8 +1071,11 @@ impl Emitter<'_> {
             layout.size.height.into(),
         );
 
-        // Apply backdrop filters before this node paints. Record explicit sampling bounds so
-        // backends do not infer different full-canvas regions.
+        let radii = radii_of(&node.context, layout.size.width, layout.size.height);
+
+        // Paint the filtered backdrop before this node paints, clipped to the border box and its
+        // corner radii. It is an empty group so the corner clip leaves shadows and overflow alone.
+        // Record explicit sampling bounds so backends do not infer different full-canvas regions.
         let backdrop_advanced = self
             .tree
             .keys
@@ -1084,11 +1087,23 @@ impl Emitter<'_> {
                 ops.extend_from_slice(advanced);
             }
             let filters = self.out.recording.intern_filters(&ops);
+            let rounded = radii.iter().any(radius_is_visible);
+            if rounded {
+                self.push(RecordCmd::BeginClipRoundRect {
+                    rrect: RoundRect {
+                        rect: border_box,
+                        radii,
+                    },
+                });
+            }
             self.push(RecordCmd::BeginBackdropFilter {
                 filters,
                 bounds: Some(border_box),
             });
-            depth += 1;
+            self.push(RecordCmd::End);
+            if rounded {
+                self.push(RecordCmd::End);
+            }
         }
 
         // Apply opacity and blending to the composited group rather than each leaf.
@@ -1270,8 +1285,6 @@ impl Emitter<'_> {
             });
             depth += 1;
         }
-
-        let radii = radii_of(&node.context, layout.size.width, layout.size.height);
 
         let is_glass_shell = self
             .node_key(np)

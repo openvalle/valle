@@ -14,13 +14,14 @@ const root = resolve(import.meta.dir, "../../../../");
 const cli = process.env.VALLE_TEST_CLI ?? join(root, "target/debug/valle");
 const backend = process.env.VALLE_TEST_NATIVE_BACKEND ?? "raster";
 // Ganesh covers edges differently from Raster, so Metal parity adds the edge allowance QA registers
-// for native-metal (web/tests/performance/suite.json). Thin or dashed strokes, glyphs, particle dots and
-// tiny transformed stars still differ beyond one edge pixel in a few pixels; these rules are the
-// smallest measured passing values with a little headroom, shared by expanded variants.
+// for native-metal (web/tests/performance/suite.json). Thin or dashed strokes, glyphs, particle dots,
+// tiny transformed stars and rounded clip edges still differ beyond one edge pixel in a few pixels;
+// these rules are the smallest measured passing values with a little headroom, shared by expanded
+// variants.
 const metalRuleGroups: Array<[Partial<PixelRule>, string[]]> = [
-  [{ edge: 2 }, ["allow-self-intersection", "instances-path-rotation", "instances-path-scale-rotation",
-    "instances-path-scale-rotation-skew", "instances-path-skew", "instances-path-stroke-miter",
-    "multiline-path-text", "particle-forces-none"]],
+  [{ edge: 2 }, ["allow-self-intersection", "backdrop-radius", "instances-path-rotation",
+    "instances-path-scale-rotation", "instances-path-scale-rotation-skew", "instances-path-skew",
+    "instances-path-stroke-miter", "multiline-path-text", "particle-forces-none"]],
   [{ rgb: 4, edge: 2 }, ["instances-circle-varied"]],
   [{ rgb: 4 }, ["range-selector"]],
   [{ rgb: 6, edge: 2 }, ["instances-path-stroke-colors"]],
@@ -130,6 +131,8 @@ test("Motion composition, easing and color interpolation match analytic pixels o
     { name:"gradient", body:mask(circle('radialGradient(point(32,32),16,[gradientStop(0,"#fff"),gradientStop(1,"#ffffff00")])')), probes:[[2,2,0,0,0]] },
     // Circle lowers to this full arc too: compare mask/clip coverage with identical geometry.
     { name:"clip", body:`<Clip path={arc(point(32,32),16,0,TAU)} style={{width:64,height:64}}>${view("#fff")}</Clip>`, probes:[[32,32,255,255,255],[2,2,0,0,0]] },
+    // The filtered backdrop follows the corner radii; the corners keep the unfiltered backdrop.
+    { name:"backdrop-radius", body:view("#ff0000")+view("transparent", ',borderRadius:32,backdropFilter:"invert(1)"'), probes:[[2,2,255,0,0],[32,32,0,255,255]] },
   ];
   const images = new Map<string, Uint8Array>();
   const frameImages = new Map<string, { web: Uint8Array; native: Uint8Array }>();
