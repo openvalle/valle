@@ -1456,6 +1456,7 @@ impl<'s> Compiler<'s> {
         let mut path_fill_source = None;
         let mut path_stroke_source = None;
         let mut style_names = BTreeSet::new();
+        let mut path_transform = None;
         for attribute in &element.opening_element.attributes {
             let JSXAttributeItem::Attribute(attribute) = attribute else {
                 return None;
@@ -1577,17 +1578,25 @@ impl<'s> Compiler<'s> {
                             return None;
                         }
                         style_names.insert(name.to_owned());
-                        if name == "transform"
+                        if name == "transform" && is_path {
+                            path_transform = Some(match peel_expr(&property.value) {
+                                Expression::TemplateLiteral(template) => {
+                                    path_instance_transform_template(template)?
+                                }
+                                // Read again with the other static styles; this only notes
+                                // which functions the list holds.
+                                Expression::StringLiteral(value) => {
+                                    valle_motion::artifact::path_instance_transform(&value.value)
+                                        .unwrap_or_default()
+                                }
+                                _ => return None,
+                            });
+                        } else if name == "transform"
                             && !matches!(peel_expr(&property.value), Expression::TemplateLiteral(template)
                                 if template.quasis.len() == 2
                                     && template.expressions.len() == 1
-                                    && template.quasis[0].value.raw == (if is_path { "skewX(" } else { "rotate(" })
+                                    && template.quasis[0].value.raw == "rotate("
                                     && template.quasis[1].value.raw == "deg)")
-                            && !(is_path
-                                && matches!(
-                                    peel_expr(&property.value),
-                                    Expression::StringLiteral(_)
-                                ))
                         {
                             return None;
                         }
@@ -1663,6 +1672,13 @@ impl<'s> Compiler<'s> {
         }
         if is_path && has_path_stroke_width && !has_path_stroke {
             *fallback_reason = Some("Path strokeWidth needs a stroke".into());
+            return None;
+        }
+        if let Some(transform) = path_transform
+            && (transform.rotate.is_some() && style_names.contains("rotate")
+                || transform.scale.is_some() && style_names.contains("scale"))
+        {
+            *fallback_reason = Some("Path transform repeats its rotate or scale property".into());
             return None;
         }
         if items.is_empty()
@@ -1909,7 +1925,10 @@ impl<'s> Compiler<'s> {
                         matches!(value, MotionValue::Color(_) | MotionValue::Str(_))
                     }
                     "transform" if is_path => matches!(value, MotionValue::Str(value)
-                        if valle_motion::artifact::path_instance_skew_x(value).is_some()),
+                        if valle_motion::artifact::path_instance_transform(value)
+                            .is_some_and(|transform| transform
+                                .scale
+                                .is_none_or(|scale| scale.x != 0.0 && scale.y != 0.0))),
                     "transform" => matches!(value, MotionValue::Str(_)),
                     "rotate" => match value {
                         MotionValue::Angle(angle) => (angle.as_degrees() as f32).is_finite(),
@@ -2619,6 +2638,35 @@ impl<'s> Compiler<'s> {
         }
         result
     }
+}
+
+/// The functions of a Path instance `transform` written as a template literal, when each
+/// substitution is a whole argument: every row's text then reads as this text does with each
+/// substitution as `1`.
+fn path_instance_transform_template(
+    template: &oxc::ast::ast::TemplateLiteral<'_>,
+) -> Option<valle_motion::artifact::PathInstanceTransform> {
+    let mut text = String::new();
+    for (index, quasi) in template.quasis.iter().enumerate() {
+        let quasi = quasi.value.cooked.as_ref()?.as_str();
+        if index > 0 {
+            let after = quasi.trim_start();
+            let after = ["deg", "rad", "turn"]
+                .into_iter()
+                .find_map(|unit| after.strip_prefix(unit))
+                .unwrap_or(after)
+                .trim_start();
+            if !after.starts_with([')', ',']) {
+                return None;
+            }
+            text.push('1');
+        }
+        if index + 1 < template.quasis.len() && !quasi.trim_end().ends_with(['(', ',']) {
+            return None;
+        }
+        text.push_str(quasi);
+    }
+    valle_motion::artifact::path_instance_transform(&text)
 }
 
 fn pending_instance_children_supported(

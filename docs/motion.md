@@ -2066,8 +2066,11 @@ time, item fields, the callback index, and `ctx.instance.index` / `ctx.instance.
 draw as one rectangle batch. A full solid `Circle` with no stroke also shares one template;
 its center, radius, fill and optional opacity can vary by row. Each circle still draws its exact
 authored arc. A `Path` can share one static nonempty geometry and solid fill with pixel `translate`,
-optional numeric `opacity`, and optional `rotate` angle, numeric/point `scale`, or a single
-`skewX(...deg)` in `style.transform` when `transformOrigin: point(0, 0)` is explicit.
+optional numeric `opacity`, and, when `transformOrigin: point(0, 0)` is explicit, an optional
+`rotate` angle, numeric/point `scale`, and `style.transform` list of `rotate(...)`, `scale(...)`
+and `skewX(...deg)`, each at most once and in that order. The list holds `rotate()` or `scale()`
+only when the matching property is not set, and each `${...}` of a template literal must be a
+whole argument, as in `` `rotate(${angle}deg) scale(${size})` ``.
 Translation, fill, opacity, rotation, scale and horizontal skew can vary by row and frame;
 it draws as one path batch. The batch accepts fill-only, stroke-only, and separately colored
 solid fill/stroke. Positive `strokeWidth` and `strokeDashoffset` may vary by row and frame;

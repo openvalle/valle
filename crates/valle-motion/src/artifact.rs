@@ -1951,18 +1951,72 @@ fn layout_instance_descendant_style_supported(
     }
 }
 
-/// Read the single CSS skewX(deg) operation supported by a shared Path instance.
-pub fn path_instance_skew_x(transform: &str) -> Option<f32> {
-    let degrees = transform
-        .trim()
-        .strip_prefix("skewX(")?
-        .strip_suffix(')')?
-        .trim()
-        .strip_suffix("deg")?
-        .trim()
-        .parse::<f32>()
-        .ok()?;
-    degrees.is_finite().then_some(degrees)
+/// The `transform` of a shared Path instance: `rotate()`, `scale()` and `skewX()`, each at most
+/// once and in this order. After the `rotate` and `scale` properties, CSS composes the list as the
+/// path batch composes its rotation, scale and skew, so the list takes the place of whichever of
+/// those properties are not set.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct PathInstanceTransform {
+    /// The angle of `rotate()`.
+    pub rotate: Option<crate::value::Angle>,
+    /// The factors of `scale()`; one factor scales both axes.
+    pub scale: Option<Point>,
+    /// The degrees of `skewX()`, or zero.
+    pub skew_x: f32,
+}
+
+/// Read the `transform` of a shared Path instance, as [`PathInstanceTransform`] describes it.
+pub fn path_instance_transform(transform: &str) -> Option<PathInstanceTransform> {
+    const FUNCTIONS: [&str; 3] = ["rotate", "scale", "skewX"];
+    let mut parsed = PathInstanceTransform::default();
+    let mut rest = transform.trim();
+    let mut next = 0;
+    if rest.is_empty() {
+        return None;
+    }
+    while !rest.is_empty() {
+        let (name, tail) = rest.split_once('(')?;
+        let (arguments, tail) = tail.split_once(')')?;
+        let index = next
+            + FUNCTIONS[next..]
+                .iter()
+                .position(|function| *function == name)?;
+        next = index + 1;
+        match index {
+            0 => {
+                parsed.rotate = Some(
+                    crate::value::Angle::parse(arguments)
+                        .filter(|angle| (angle.as_degrees() as f32).is_finite())?,
+                );
+            }
+            1 => {
+                let mut factors = arguments.split(',').map(|factor| {
+                    factor
+                        .trim()
+                        .parse::<f64>()
+                        .ok()
+                        .filter(|factor| (*factor as f32).is_finite())
+                });
+                let x = factors.next()??;
+                let y = factors.next().unwrap_or(Some(x))?;
+                if factors.next().is_some() {
+                    return None;
+                }
+                parsed.scale = Some(Point::new(x, y));
+            }
+            _ => {
+                parsed.skew_x = arguments
+                    .trim()
+                    .strip_suffix("deg")?
+                    .trim()
+                    .parse::<f32>()
+                    .ok()
+                    .filter(|degrees| degrees.is_finite())?;
+            }
+        }
+        rest = tail.trim_start();
+    }
+    Some(parsed)
 }
 
 impl InstanceGroup {
@@ -2937,7 +2991,16 @@ impl SceneArtifact {
                         ),
                         ("transform", StyleValue::Static { value }) => {
                             !matches!(value, MotionValue::Str(value)
-                                if path_instance_skew_x(value).is_some())
+                                if path_instance_transform(value).is_some_and(|transform| {
+                                    transform
+                                        .scale
+                                        .is_none_or(|scale| scale.x != 0.0 && scale.y != 0.0)
+                                        && !group.template.styles.iter().any(|style| {
+                                            style.property == "rotate" && transform.rotate.is_some()
+                                                || style.property == "scale"
+                                                    && transform.scale.is_some()
+                                        })
+                                }))
                         }
                         ("transform", StyleValue::Expr { expr }) => {
                             types.get(expr.0 as usize).copied().flatten() != Some(ExprType::String)

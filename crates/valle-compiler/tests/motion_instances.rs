@@ -1462,8 +1462,61 @@ fn static_path_template_skews_each_row_around_explicit_zero_origin() {
         .find(|style| style.property == "transform")
         .unwrap()
         .value = StyleValue::Static {
-        value: valle_motion::MotionValue::Str("rotate(15deg)".into()),
+        value: valle_motion::MotionValue::Str("scale(2) rotate(15deg)".into()),
     };
+    assert!(invalid.validate().is_err());
+}
+
+#[test]
+fn static_path_template_folds_rotate_and_scale_of_its_transform_list() {
+    let row = |transform: &str| {
+        path_grid(8).replace(
+            "translate: point(dot.x + ctx.seconds * 3, dot.y)",
+            &format!(
+                "translate: point(dot.x + ctx.seconds * 3, dot.y), transform: {transform}, transformOrigin: point(0, 0)"
+            ),
+        )
+    };
+    let groups = |source: &str| {
+        let artifact = compile_motion(source).unwrap().artifact;
+        artifact.validate().unwrap();
+        artifact.instance_groups.len()
+    };
+    for supported in [
+        row("`rotate(${dot.delay * 90}deg)`"),
+        row("`scale(${0.5 + dot.delay}, ${1.5 - dot.delay})`"),
+        row("`rotate(${dot.delay * 90}deg) scale(${0.5 + dot.delay}) skewX(${dot.delay * 20}deg)`"),
+        row("\"rotate(0.25turn) scale(1.5)\""),
+        row("`scale(${0.5 + dot.delay})`").replace(
+            "transformOrigin: point(0, 0)",
+            "transformOrigin: point(0, 0), rotate: `${dot.delay * 90}deg`",
+        ),
+    ] {
+        assert_eq!(groups(&supported), 1, "{supported}");
+    }
+    for unsupported in [
+        // Out of order, a second rotation, a substitution inside an argument, a singular scale.
+        row("`scale(${0.5 + dot.delay}) rotate(${dot.delay * 90}deg)`"),
+        row("`rotate(${dot.delay * 90}deg)`").replace(
+            "transformOrigin: point(0, 0)",
+            "transformOrigin: point(0, 0), rotate: `${dot.delay * 90}deg`",
+        ),
+        row("`rotate(-${dot.delay * 90}deg)`"),
+        row("\"scale(0)\""),
+        row("\"rotate(30deg) translate(4px, 0px)\""),
+    ] {
+        assert_eq!(groups(&unsupported), 0, "{unsupported}");
+    }
+    let mut invalid = compile_motion(&row("\"rotate(15deg)\"")).unwrap().artifact;
+    invalid.instance_groups[0]
+        .template
+        .styles
+        .push(valle_motion::StyleBinding {
+            property: "rotate".into(),
+            value: StyleValue::Static {
+                value: valle_motion::MotionValue::Str("15deg".into()),
+            },
+        });
     assert!(invalid.validate().is_err());
 }
 
@@ -1500,6 +1553,10 @@ fn static_path_scale_rotation_matrices_match_expanded_paths() {
         "scale: point(0.6 - dot.delay, 0.7 + ctx.progress * 0.2)",
         "scale: dot.delay === 0.5 ? 0 : 1",
     );
+    let listed = path_grid(8).replace(
+        "translate: point(dot.x + ctx.seconds * 3, dot.y)",
+        "translate: point(dot.x + ctx.seconds * 3, dot.y), transform: `rotate(${dot.delay * 180 + ctx.seconds * 30 - 40}deg) scale(${0.6 - dot.delay}, ${0.7 + ctx.progress * 0.2}) skewX(${dot.delay * 40 + ctx.seconds * 10 - 20}deg)`, transformOrigin: point(0, 0), opacity: 0.4 + dot.delay * 0.4 + ctx.progress * 0.1",
+    );
     let skew_only = path_grid(8).replace(
         "translate: point(dot.x + ctx.seconds * 3, dot.y)",
         "translate: point(dot.x + ctx.seconds * 3, dot.y), transform: `skewX(${dot.delay * 40 + ctx.seconds * 10 - 20}deg)`, transformOrigin: point(0, 0)",
@@ -1514,7 +1571,13 @@ fn static_path_scale_rotation_matrices_match_expanded_paths() {
         fonts: &fonts,
         styles: None,
     };
-    for (source, expected_paths) in [(source, 65), (zero_row, 64), (skew_only, 65), (stroked, 65)] {
+    for (source, expected_paths) in [
+        (source, 65),
+        (zero_row, 64),
+        (listed, 65),
+        (skew_only, 65),
+        (stroked, 65),
+    ] {
         let compact = compile_motion(&source).unwrap().artifact;
         let expanded = compile_motion(&source.replace("<Path ", "<path "))
             .unwrap()

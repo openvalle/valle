@@ -3242,34 +3242,47 @@ fn resolve_instance_batch(
                 } else {
                     None
                 };
-                let rotation = match resolved_style(&group.template, values, at, "rotate")? {
-                    Some(MotionValue::Angle(angle)) => angle.as_degrees(),
-                    Some(MotionValue::Str(value)) => valle_motion::value::Angle::parse(value)
-                        .map(valle_motion::value::Angle::as_degrees)
-                        .ok_or_else(|| invalid("rotate"))?,
-                    None => 0.0,
+                // The transform list stands in for whichever of the rotate and scale
+                // properties are not set.
+                let transform = match resolved_style(&group.template, values, at, "transform")? {
+                    Some(MotionValue::Str(value)) => {
+                        valle_motion::artifact::path_instance_transform(value)
+                            .ok_or_else(|| invalid("transform"))?
+                    }
+                    None => Default::default(),
+                    _ => return Err(invalid("transform")),
+                };
+                let rotation = match (
+                    resolved_style(&group.template, values, at, "rotate")?,
+                    transform.rotate,
+                ) {
+                    (Some(MotionValue::Angle(angle)), None) => angle.as_degrees(),
+                    (Some(MotionValue::Str(value)), None) => {
+                        valle_motion::value::Angle::parse(value)
+                            .map(valle_motion::value::Angle::as_degrees)
+                            .ok_or_else(|| invalid("rotate"))?
+                    }
+                    (None, angle) => angle.map_or(0.0, valle_motion::value::Angle::as_degrees),
                     _ => return Err(invalid("rotate")),
                 };
                 if !rotation.is_finite() || !(rotation as f32).is_finite() {
                     return Err(invalid("rotate"));
                 }
-                let scale = match resolved_style(&group.template, values, at, "scale")? {
-                    Some(MotionValue::Number(value)) => valle_draw::Point::new(*value, *value),
-                    Some(MotionValue::Point(point)) => *point,
-                    None => valle_draw::Point::new(1.0, 1.0),
+                let scale = match (
+                    resolved_style(&group.template, values, at, "scale")?,
+                    transform.scale,
+                ) {
+                    (Some(MotionValue::Number(value)), None) => {
+                        valle_draw::Point::new(*value, *value)
+                    }
+                    (Some(MotionValue::Point(point)), None) => *point,
+                    (None, scale) => scale.unwrap_or(valle_draw::Point::new(1.0, 1.0)),
                     _ => return Err(invalid("scale")),
                 };
                 if !(scale.x as f32).is_finite() || !(scale.y as f32).is_finite() {
                     return Err(invalid("scale"));
                 }
-                let skew_x = match resolved_style(&group.template, values, at, "transform")? {
-                    Some(MotionValue::Str(value)) => {
-                        valle_motion::artifact::path_instance_skew_x(value)
-                            .ok_or_else(|| invalid("transform"))?
-                    }
-                    None => 0.0,
-                    _ => return Err(invalid("transform")),
-                };
+                let skew_x = transform.skew_x;
                 // CSS treats a singular scale as invisible. It can arise at an intermediate
                 // frame even when the authored end points are nonzero.
                 if (scale.x as f32) == 0.0 || (scale.y as f32) == 0.0 {
