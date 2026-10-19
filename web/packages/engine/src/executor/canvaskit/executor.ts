@@ -1511,12 +1511,15 @@ function directRasterPlan(draw: DrawProgramWire, localPlan: Wire): DirectRasterP
     const opensLayer = opacity !== 1 || filters.length !== 0;
     const backdrop = group.backdrop == null ? null : backdrops.get(id);
     const kinds = filters.map(filter => String(record(filter, "direct raster group filter").kind));
+    const backdropKinds = group.backdrop == null ? [] : array(record(group.backdrop, "direct raster backdrop").filters,
+      "direct raster backdrop filters").map(filter => String(record(filter, "direct raster backdrop filter").kind));
     const spatial = kinds.some(kind => kind === "blur" || kind === "dropShadow");
     const transformed = rotated || !isScaleTranslateMatrix(numberArray(group.transform, 9, "direct raster group transform"));
     const supported = group.mask == null
       // saveLayer's image-filter crop truncates the wide glow tail; use scheduled ROI passes.
       // Noise displacement runs the kernel Native shares, which only a scheduled pass draws.
       && !kinds.some(kind => ["glow", "bloom", "radialBlur", "filmGrain", "lensDistortion", "chromaticAberration", "noiseDisplacement"].includes(kind))
+      && !backdropKinds.includes("noiseDisplacement")
       // Skia filters a blur or drop-shadow layer under a rotated or skewed CTM in scale/translate
       // space and resamples the result, softening its content; scheduled passes filter in device space.
       && !(spatial && transformed)
@@ -1814,13 +1817,23 @@ async function executeProgramPass(
       return;
     }
     case "backdrop": {
-      const bounds = rect(kind.bounds, "program backdrop bounds");
+      // The bounds are in the owner's local units, while the backdrop and the canvas are in device
+      // pixels: the filters read the backdrop around the bounds, which then clip what they produce.
+      const clip = { kind: "rect", value: rect(kind.bounds, "program backdrop bounds") };
+      const matrix = programMatrix(admitted, localPlan, kind.output, device);
       const input = programValue(values, kind.input);
+      const filters = array(kind.filters, "backdrop filters");
+      const last = filters.length === 0 ? null : record(filters[filters.length - 1], "backdrop filter");
       canvas.save();
-      canvas.clipRect(skRect(CanvasKit, bounds), CanvasKit.ClipOp.Intersect, true);
-      drawImageValue(CanvasKit, canvas, input, 1, "src");
-      canvas.restore();
-      applyFiltersAsLayerValue(CanvasKit, canvas, input, array(kind.filters, "backdrop filters"), bounds);
+      try {
+        applyClip(CanvasKit, canvas, admitted.draw, clip, matrix);
+        drawImageValue(CanvasKit, canvas, input, 1, "src");
+        if (last?.kind === "noiseDisplacement") {
+          drawDisplacedBackdrop(CanvasKit, builtins, engineKernels, arena, canvas, input, filters.slice(0, -1), last, outputRoi);
+        } else {
+          applyFiltersAsLayerValue(CanvasKit, canvas, input, filters, null);
+        }
+      } finally { canvas.restore(); }
       return;
     }
     case "motionGlass": {
@@ -3295,18 +3308,7 @@ function drawProgramImageFilter(CanvasKit: CanvasKit, filter: Wire, input: Image
     fail("unsupported_filter", "chromatic aberration requires a scheduled shader pass");
   }
   if (filter.kind === "noiseDisplacement") {
-    const noise = noiseShader(CanvasKit, filter);
-    const displacement = CanvasKit.ImageFilter.MakeShader(noise);
-    noise.delete();
-    try {
-      return CanvasKit.ImageFilter.MakeDisplacementMap(
-        CanvasKit.ColorChannel.Red,
-        CanvasKit.ColorChannel.Green,
-        finiteNumber(filter.scale, "noise displacement scale"),
-        displacement,
-        input,
-      );
-    } finally { displacement.delete(); }
+    fail("unsupported_filter", "noise displacement requires its kernel");
   }
   if (filter.kind === "velocityBlur") {
     const velocity = pair(filter.velocity, "velocity blur vector");
@@ -3342,21 +3344,58 @@ function drawProgramImageFilter(CanvasKit: CanvasKit, filter: Wire, input: Image
   fail("unsupported_filter", `DrawProgram filter '${String(filter.kind)}' has no CanvasKit kernel`);
 }
 
-function noiseShader(CanvasKit: CanvasKit, filter: Record<string, unknown>): Shader {
-  const frequency = pair(filter.frequency, "noise frequency");
-  const octaves = positiveIdOrZero(filter.octaves, "noise octaves");
-  const seed = positiveIdOrZero(filter.seed, "noise seed");
-  return filter.turbulence === true
-    ? CanvasKit.Shader.MakeTurbulence(frequency[0], frequency[1], octaves, seed, 0, 0)
-    : CanvasKit.Shader.MakeFractalNoise(frequency[0], frequency[1], octaves, seed, 0, 0);
+/**
+ * A backdrop chain that ends in noise displacement, drawn over `outputRoi` under the canvas clip:
+ * the kernel Native shares displaces by noise and vectors in device pixels, reading what the
+ * filters before it produce within its reach of `outputRoi`.
+ */
+function drawDisplacedBackdrop(
+  CanvasKit: CanvasKit,
+  builtins: CanvasKitBuiltinRuntime,
+  engineKernels: CanvasKitEngineKernels | null,
+  arena: SurfaceArena,
+  canvas: Canvas,
+  input: ImageValue,
+  filters: unknown[],
+  displacement: Record<string, unknown>,
+  outputRoi: DeviceRoi,
+): void {
+  const tables = engineKernels?.perlin_noise_tables;
+  if (!tables) fail("noise_displacement_tables", "noise displacement tables are unavailable");
+  const noise = tables.call(engineKernels, positiveIdOrZero(displacement.seed, "noise seed"));
+  let source = input;
+  let surface: Surface | null = null;
+  try {
+    if (filters.length > 0 && input.image) {
+      // A pixel reads its nearest sample at most half the scale away on each axis.
+      const reach = Math.ceil(Math.abs(finiteNumber(displacement.scale, "noise displacement scale")) * 0.5) + 1;
+      const roi = { x: outputRoi.x - reach, y: outputRoi.y - reach,
+        width: outputRoi.width + 2 * reach, height: outputRoi.height + 2 * reach };
+      surface = arena.transient(roi.width, roi.height);
+      const layer = surface.getCanvas();
+      layer.clear(CanvasKit.TRANSPARENT);
+      layer.save();
+      try {
+        layer.translate(-roi.x, -roi.y);
+        applyFiltersAsLayerValue(CanvasKit, layer, input, filters, null);
+      } finally { layer.restore(); }
+      if (!arena.gpu || !arena.deferGpuFlush) surface.flush();
+      source = { image: surface.makeImageSnapshot([0, 0, roi.width, roi.height]), roi, owned: true };
+    }
+    drawNoiseDisplacement(CanvasKit, builtins, canvas, source, displacement, IDENTITY_MATRIX, noise);
+  } finally {
+    if (source !== input) source.image?.delete();
+    if (surface) arena.releaseTransient(surface);
+  }
 }
 
 /**
  * Displace a scheduled pass input, drawn in device pixels, by the kernel Native shares: the noise
- * lattice and its vectors stay in the DrawProgram group's local units, and only the input's ROI
- * is sampled. The kernel computes Skia's noise in float from `tables`, the engine's Perlin tables
- * for the filter's seed: CanvasKit's own noise differs left of and above the lattice's origin. A
- * degenerate transform leaves the input undisplaced.
+ * lattice and its vectors are in the units `localToDevice` maps to device pixels, a DrawProgram
+ * group's local units or device pixels themselves, and only the input's ROI is sampled. The
+ * kernel computes Skia's noise in float from `tables`, the engine's Perlin tables for the filter's
+ * seed: CanvasKit's own noise differs left of and above the lattice's origin. A degenerate
+ * transform leaves the input undisplaced.
  */
 export function drawNoiseDisplacement(
   CanvasKit: CanvasKit,

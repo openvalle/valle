@@ -1,10 +1,9 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use skia_safe::{
-    AlphaType, Bitmap, BlendMode, ClipOp, Color4f, ColorChannel, ColorType, Data, FilterMode,
-    IRect, Image, ImageFilter, ImageInfo, Matrix, Paint, Rect as SkRect, RuntimeEffect,
-    SamplingOptions, Shader, Surface, TileMode, color_filters, image_filters, images,
-    runtime_effect::ChildPtr, shaders,
+    AlphaType, Bitmap, BlendMode, ClipOp, Color4f, ColorType, Data, FilterMode, IRect, Image,
+    ImageFilter, ImageInfo, Matrix, Paint, Rect as SkRect, RuntimeEffect, SamplingOptions, Shader,
+    Surface, TileMode, color_filters, image_filters, images, runtime_effect::ChildPtr, shaders,
 };
 use valle_draw::program::{Filter, LinearColor};
 use valle_engine::{
@@ -877,22 +876,19 @@ fn draw_filter(
         input,
         IRect::from_size(input.dimensions()),
         [0, 0],
-        [0, 0],
         std::slice::from_ref(filter),
     )
 }
 
 /// Shared filter dispatch for effects, DrawProgram filters and backdrop chains.
 /// `origin` places the source subset on the canvas, which excludes unused pooled-surface pixels.
-/// `device` is the device position of canvas pixel (0, 0): effects and backdrop chains evaluate
-/// generated inputs such as displacement noise in device pixels, wherever a pass target happens
-/// to start. DrawProgram noise displacement keeps local units through `draw_noise_displacement`.
+/// Noise displacement goes through its kernel instead: `draw_noise_displacement` in a DrawProgram
+/// group's local units, and `draw_displaced_filters_into` in device pixels at the end of a chain.
 pub(super) fn draw_filters(
     canvas: &skia_safe::Canvas,
     input: &Image,
     source: IRect,
     origin: [i32; 2],
-    device: [i32; 2],
     filters: &[Filter],
 ) -> Result<(), DrawError> {
     if source.is_empty() {
@@ -904,23 +900,17 @@ pub(super) fn draw_filters(
         return Ok(());
     }
     if fast_chain(canvas, input, filters) {
-        let (image, subset, position) = materialize_filters(
-            input.clone(),
-            source,
-            origin,
-            device,
-            &filters[..filters.len() - 1],
-        )?;
+        let (image, subset, position) =
+            materialize_filters(input.clone(), source, origin, &filters[..filters.len() - 1])?;
         return draw_filters(
             canvas,
             &image,
             subset,
             position,
-            device,
             &filters[filters.len() - 1..],
         );
     }
-    draw_skia_filters(canvas, input, source, origin, device, filters)
+    draw_skia_filters(canvas, input, source, origin, filters)
 }
 
 /// Whether `draw_filters` materializes each filter but the last into its own image. It does so
@@ -952,7 +942,6 @@ pub(super) fn materialize_filters(
     mut image: Image,
     mut subset: IRect,
     mut position: [i32; 2],
-    device: [i32; 2],
     filters: &[Filter],
 ) -> Result<(Image, IRect, [i32; 2]), DrawError> {
     for filter in filters {
@@ -979,7 +968,6 @@ pub(super) fn materialize_filters(
             &image,
             subset,
             [-bounds.left, -bounds.top],
-            [device[0] + position[0], device[1] + position[1]],
             std::slice::from_ref(filter),
         )?;
         image = surface.image_snapshot();
@@ -998,7 +986,6 @@ pub(super) fn draw_filters_into(
     input: &Image,
     source: IRect,
     origin: [i32; 2],
-    device: [i32; 2],
     filters: &[Filter],
 ) -> Result<(), DrawError> {
     let matrices = filters
@@ -1009,34 +996,119 @@ pub(super) fn draw_filters_into(
     let first = filters.len() - matrices.len();
     let fast = fast_chain(surface.canvas(), input, filters);
     if matrices.is_empty() || (first == 0) == fast || source.is_empty() {
-        return draw_filters(surface.canvas(), input, source, origin, device, filters);
+        return draw_filters(surface.canvas(), input, source, origin, filters);
     }
     let matrices = matrices.into_iter().rev().collect::<Vec<_>>();
     let (image, subset, position) =
-        materialize_filters(input.clone(), source, origin, device, &filters[..first])?;
+        materialize_filters(input.clone(), source, origin, &filters[..first])?;
     if let Some(pixels) = image.peek_pixels()
         && super::color_matrix::draw(surface, &pixels, subset, position, &matrices, fast)?
     {
         return Ok(());
     }
     if !fast {
-        return draw_filters(surface.canvas(), input, source, origin, device, filters);
+        return draw_filters(surface.canvas(), input, source, origin, filters);
     }
     // The rest of the fast chain, as `draw_filters` continues it.
-    let (image, subset, position) = materialize_filters(
-        image,
-        subset,
-        position,
-        device,
-        &filters[first..filters.len() - 1],
-    )?;
+    let (image, subset, position) =
+        materialize_filters(image, subset, position, &filters[first..filters.len() - 1])?;
     draw_filters(
         surface.canvas(),
         &image,
         subset,
         position,
-        device,
         &filters[filters.len() - 1..],
+    )
+}
+
+/// [`draw_filters_into`] for a chain that ends in noise displacement, written over `bounds`, where
+/// `device` is the device position of canvas pixel (0, 0). The kernel displaces by noise and
+/// vectors in device pixels, reading what the filters before it produce within its reach of
+/// `bounds`, drawn into an image as `draw_filters_into` draws them.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn draw_displaced_filters_into(
+    surface: &mut Surface,
+    input: &Image,
+    source: IRect,
+    origin: [i32; 2],
+    device: [i32; 2],
+    bounds: IRect,
+    filters: &[Filter],
+    fields: Option<&std::sync::Mutex<super::noise::NoiseFields>>,
+) -> Result<(), DrawError> {
+    let Some((displacement @ Filter::NoiseDisplacement { scale, .. }, filters)) =
+        filters.split_last()
+    else {
+        return Err(DrawError::Internal(
+            "a displaced filter chain must end in noise displacement".into(),
+        ));
+    };
+    let device_to_canvas = [
+        1.0,
+        0.0,
+        -f64::from(device[0]),
+        0.0,
+        1.0,
+        -f64::from(device[1]),
+    ];
+    if filters.is_empty() {
+        return draw_noise_displacement(
+            surface,
+            input,
+            source,
+            origin,
+            bounds,
+            displacement,
+            device_to_canvas,
+            fields,
+        );
+    }
+    let mut chain = None;
+    for filter in filters {
+        let Some(filter) = image_filter(filter)? else {
+            continue;
+        };
+        chain = Some(match chain {
+            Some(inner) => image_filters::compose(filter, inner)
+                .ok_or_else(|| DrawError::Unsupported("composed image filter".into()))?,
+            None => filter,
+        });
+    }
+    let placed = IRect::from_xywh(origin[0], origin[1], source.width(), source.height());
+    let produced = chain.map_or(placed, |chain| {
+        chain.filter_bounds(
+            placed,
+            &Matrix::new_identity(),
+            skia_safe::image_filter::MapDirection::Forward,
+            None,
+        )
+    });
+    // A pixel reads its nearest sample at most half the scale away on each axis.
+    let reach = (scale.abs() * 0.5).ceil() as i32 + 1;
+    let Some(region) = IRect::intersect(&produced, &bounds.with_outset((reach, reach))) else {
+        return Ok(());
+    };
+    let info = input.image_info().with_dimensions(region.size());
+    let mut layer = surface
+        .new_surface(&info)
+        .ok_or_else(|| DrawError::Surface("noise displacement input allocation failed".into()))?;
+    layer.canvas().clear(Color4f::new(0.0, 0.0, 0.0, 0.0));
+    draw_filters_into(
+        &mut layer,
+        input,
+        source,
+        [origin[0] - region.left, origin[1] - region.top],
+        filters,
+    )?;
+    draw_noise_displacement(
+        surface,
+        &layer.image_snapshot(),
+        IRect::from_size(region.size()),
+        [region.left, region.top],
+        bounds,
+        displacement,
+        device_to_canvas,
+        fields,
     )
 }
 
@@ -1045,12 +1117,11 @@ fn draw_skia_filters(
     input: &Image,
     source: IRect,
     origin: [i32; 2],
-    device: [i32; 2],
     filters: &[Filter],
 ) -> Result<(), DrawError> {
     let mut chain = None;
     for filter in filters {
-        let Some(filter) = image_filter_at(filter, device)? else {
+        let Some(filter) = image_filter(filter)? else {
             continue;
         };
         chain = Some(match chain {
@@ -1100,11 +1171,6 @@ fn chromatic_aberration_effect() -> Result<RuntimeEffect, DrawError> {
 }
 
 pub(crate) fn image_filter(filter: &Filter) -> Result<Option<ImageFilter>, DrawError> {
-    image_filter_at(filter, [0, 0])
-}
-
-/// `device` is the device position of the filtered canvas's pixel (0, 0).
-fn image_filter_at(filter: &Filter, device: [i32; 2]) -> Result<Option<ImageFilter>, DrawError> {
     let result = match filter {
         Filter::Blur { sigma_x, sigma_y } => {
             if *sigma_x == 0.0 && *sigma_y == 0.0 {
@@ -1178,24 +1244,10 @@ fn image_filter_at(filter: &Filter, device: [i32; 2]) -> Result<Option<ImageFilt
             .ok_or_else(|| DrawError::Unsupported("chromatic aberration shader filter".into()))
             .map(Some)?
         }
-        Filter::NoiseDisplacement {
-            frequency,
-            octaves,
-            seed,
-            scale,
-            turbulence,
-        } => {
-            let noise = perlin_noise(*frequency, *octaves, *seed, *turbulence)?
-                .with_local_matrix(&Matrix::translate((-device[0] as f32, -device[1] as f32)));
-            let displacement = image_filters::shader(noise, None)
-                .ok_or_else(|| DrawError::Unsupported("noise displacement input".into()))?;
-            image_filters::displacement_map(
-                (ColorChannel::R, ColorChannel::G),
-                *scale,
-                displacement,
-                None,
-                None,
-            )
+        Filter::NoiseDisplacement { .. } => {
+            return Err(DrawError::Unsupported(
+                "noise displacement requires its kernel".into(),
+            ));
         }
         Filter::VelocityBlur {
             velocity,
@@ -1870,9 +1922,8 @@ mod tests {
                             false,
                         );
                     }
-                    draw_filters(actual.canvas(), &input, source, origin, [0, 0], filters).unwrap();
-                    draw_skia_filters(expected.canvas(), &input, source, origin, [0, 0], filters)
-                        .unwrap();
+                    draw_filters(actual.canvas(), &input, source, origin, filters).unwrap();
+                    draw_skia_filters(expected.canvas(), &input, source, origin, filters).unwrap();
                     let mut a = vec![0.0_f32; 40 * 36 * 4];
                     let mut b = a.clone();
                     assert!(actual.image_snapshot().read_pixels(

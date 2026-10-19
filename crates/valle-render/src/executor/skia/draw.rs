@@ -596,25 +596,36 @@ impl ProgramRuntime {
         } = pass
             && !filters.is_empty()
         {
+            // The chain filters the backdrop the planner sampled around the bounds for its
+            // footprint, and then the bounds clip what it produces, as CanvasKit draws it.
             let helper_index = helper_index.ok_or(DrawError::MissingProgramHelper)?;
-            let input = resource(resources, *input)?;
-            {
-                let helper = surfaces.surface_mut(helper_index)?;
-                clip_image_into(
-                    helper,
-                    input,
-                    &Clip::Rect(*bounds),
-                    self.device_matrix(plan, output, transform)?,
-                    self.program.paths(),
-                    [output_roi.x, output_roi.y],
-                )?;
-            }
-            let clipped = ProgramImage {
-                image: surfaces.surface_mut(helper_index)?.image_snapshot(),
-                roi: output_roi,
+            let filtered = match resource(resources, *input)? {
+                Some(input) => {
+                    let helper = surfaces.surface_mut(helper_index)?;
+                    apply_backdrop_filters_into(
+                        helper,
+                        input,
+                        filters,
+                        [output_roi.x, output_roi.y],
+                        output_roi,
+                        Some(self.noise_fields.as_ref()),
+                    )?;
+                    Some(ProgramImage {
+                        image: helper.image_snapshot(),
+                        roi: output_roi,
+                    })
+                }
+                None => None,
             };
             let target = program_target_mut(surfaces, target_location)?;
-            apply_filter_chain_program_into(target, &clipped, filters, target_origin)?;
+            clip_image_into(
+                target,
+                filtered.as_ref(),
+                &Clip::Rect(*bounds),
+                self.device_matrix(plan, output, transform)?,
+                self.program.paths(),
+                target_origin,
+            )?;
             return snapshot_program_target(target, target_location, output_roi);
         }
 
@@ -3294,8 +3305,50 @@ fn apply_filter_chain_program_into(
             input.roi.x - target_origin[0],
             input.roi.y - target_origin[1],
         ],
-        target_origin,
         filters,
+    )
+}
+
+/// A backdrop chain over `input`. One that ends in noise displacement displaces by noise and
+/// vectors in device pixels over `output_roi`, through the kernel DrawProgram displacement
+/// shares. `fields` keep the noise for later frames.
+fn apply_backdrop_filters_into(
+    surface: &mut Surface,
+    input: &ProgramImage,
+    filters: &[Filter],
+    target_origin: [i32; 2],
+    output_roi: DeviceRect,
+    fields: Option<&std::sync::Mutex<NoiseFields>>,
+) -> Result<(), DrawError> {
+    if !matches!(filters.last(), Some(Filter::NoiseDisplacement { .. })) {
+        return apply_filter_chain_program_into(surface, input, filters, target_origin);
+    }
+    let size = |value: u32, what: &str| {
+        i32::try_from(value).map_err(|_| DrawError::Internal(format!("filter ROI {what} overflow")))
+    };
+    clear_surface(surface)?;
+    super::effect::draw_displaced_filters_into(
+        surface,
+        &input.image,
+        IRect::from_xywh(
+            0,
+            0,
+            size(input.roi.width, "width")?,
+            size(input.roi.height, "height")?,
+        ),
+        [
+            input.roi.x - target_origin[0],
+            input.roi.y - target_origin[1],
+        ],
+        target_origin,
+        IRect::from_xywh(
+            output_roi.x - target_origin[0],
+            output_roi.y - target_origin[1],
+            size(output_roi.width, "width")?,
+            size(output_roi.height, "height")?,
+        ),
+        filters,
+        fields,
     )
 }
 
@@ -5118,15 +5171,8 @@ mod tests {
                             // As a program pass draws it through Skia's image filter.
                             clear_surface(&mut target).unwrap();
                             let filter = Filter::ChromaticAberration { offset };
-                            draw_filters(
-                                target.canvas(),
-                                &image,
-                                source,
-                                origin,
-                                [0, 0],
-                                &[filter],
-                            )
-                            .unwrap();
+                            draw_filters(target.canvas(), &image, source, origin, &[filter])
+                                .unwrap();
                         }
                         read(&mut target)
                     };
@@ -5318,21 +5364,13 @@ mod tests {
                             target.canvas().clip_irect(clip, ClipOp::Intersect);
                         }
                         match path {
-                            0 => draw_filters(
-                                target.canvas(),
-                                &image,
-                                source,
-                                origin,
-                                [0, 0],
-                                filters,
-                            )
-                            .unwrap(),
+                            0 => draw_filters(target.canvas(), &image, source, origin, filters)
+                                .unwrap(),
                             1 => effect::draw_filters_into(
                                 &mut target,
                                 &image,
                                 source,
                                 origin,
-                                [0, 0],
                                 filters,
                             )
                             .unwrap(),
@@ -5349,7 +5387,6 @@ mod tests {
                                     image.clone(),
                                     source,
                                     origin,
-                                    [0, 0],
                                     &filters[..first],
                                 )
                                 .unwrap();
@@ -5528,15 +5565,8 @@ mod tests {
                                 velocity,
                                 shutter_angle_degrees: shutter,
                             };
-                            draw_filters(
-                                target.canvas(),
-                                &image,
-                                source,
-                                origin,
-                                [0, 0],
-                                &[filter],
-                            )
-                            .unwrap();
+                            draw_filters(target.canvas(), &image, source, origin, &[filter])
+                                .unwrap();
                         }
                         read(&mut target)
                     };
@@ -5991,8 +6021,15 @@ mod tests {
         let render = |origin: [i32; 2], size: (i32, i32)| {
             let mut target =
                 skia_safe::surfaces::raster(&info.with_dimensions(size), None, None).unwrap();
-            apply_filter_chain_program_into(&mut target, &input, &[filter.clone()], origin)
-                .unwrap();
+            apply_backdrop_filters_into(
+                &mut target,
+                &input,
+                &[filter.clone()],
+                origin,
+                DeviceRect::new(origin[0], origin[1], size.0 as u32, size.1 as u32),
+                None,
+            )
+            .unwrap();
             let mut pixels = vec![0_u8; 72 * 40 * 8];
             let at = (52 - origin[0], 42 - origin[1]);
             assert!(target.read_pixels(&read_info, &mut pixels, 72 * 8, at));

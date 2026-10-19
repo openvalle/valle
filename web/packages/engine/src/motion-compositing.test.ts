@@ -19,9 +19,9 @@ const backend = process.env.VALLE_TEST_NATIVE_BACKEND ?? "raster";
 // these rules are the smallest measured passing values with a little headroom, shared by expanded
 // variants.
 const metalRuleGroups: Array<[Partial<PixelRule>, string[]]> = [
-  [{ edge: 2 }, ["allow-self-intersection", "backdrop-radius", "instances-path-rotation",
-    "instances-path-scale-rotation", "instances-path-scale-rotation-skew", "instances-path-skew",
-    "instances-path-stroke-miter", "multiline-path-text", "particle-forces-none"]],
+  [{ edge: 2 }, ["allow-self-intersection", "backdrop-blur-edge", "backdrop-radius",
+    "instances-path-rotation", "instances-path-scale-rotation", "instances-path-scale-rotation-skew",
+    "instances-path-skew", "instances-path-stroke-miter", "multiline-path-text", "particle-forces-none"]],
   [{ rgb: 4, edge: 2 }, ["instances-circle-varied"]],
   [{ rgb: 4 }, ["range-selector"]],
   [{ rgb: 6, edge: 2 }, ["instances-path-stroke-colors"]],
@@ -63,6 +63,12 @@ test("Motion composition, easing and color interpolation match analytic pixels o
   const spawn = (args: string[]) => Bun.spawn([cli, "--json", ...args], {
     cwd:dir, env:{ ...process.env, VALLE_HOME:join(dir,"home") }, stdout:"pipe", stderr:"pipe",
   });
+  // Hard stripes of solid rects: a sample one pixel from the expected one changes its color, so
+  // only the same noise and vectors on both ends pass.
+  const stripes = (key: string, width: number, height: number) =>
+    `<View key="${key}-base" className="absolute" style={{left:0,top:0,width:${width},height:${height},backgroundColor:"#2ec4ff"}}/>`
+    + Array.from({ length: Math.ceil(width / 7) }, (_, i) =>
+      `<View key="${key}-${i}" className="absolute" style={{left:${i * 7},top:0,width:3,height:${height},backgroundColor:"#ff3d7f"}}/>`).join("");
   const cases: Case[] = [
     { name:"regression-captured-map", source:`export const composition={width:64,height:64,fps:30,duration:2};
       const rows=[{id:"a",x:0},{id:"b",x:16},{id:"c",x:32}];
@@ -74,6 +80,33 @@ test("Motion composition, easing and color interpolation match analytic pixels o
         backgroundColor:"#ffffff80",filter:\`chromatic-aberration(\${ctx.seconds}px)\`}}/></Scene>}`, body:"",
       probes:[[32,32,255,255,255,128]], frames:[0,30,0] },
     { name:"noise-displacement", source:noiseDisplacementSource, body:"", width:160, height:96, frames:[0,30,0], probes:[] },
+    // One panel moves inside the frame and one crosses its left edge, where the pass target is
+    // clipped: neither the noise nor its vectors may follow where a target starts.
+    { name:"noise-displacement-stripes", source:`export const composition={width:160,height:96,fps:30,duration:2};
+      export default function Main(ctx){const drift=ctx.localFrame*0.5;return <Scene className="relative h-full w-full" style={{backgroundColor:"#e2e8f0"}}>
+        <View key="inner" className="absolute" style={{left:60+drift,top:8,width:84,height:80,overflow:"hidden",
+          displacement:displacement(7,point(0.071,0.057),14,{octaves:2})}}>${stripes("inner",84,80)}</View>
+        <View key="edge" className="absolute" style={{left:-20,top:10,width:70,height:76,overflow:"hidden",
+          displacement:displacement(19,point(0.043,0.089),11,{octaves:1,mode:"turbulence"})}}>
+          <View key="edge-content" className="absolute" style={{left:-10+drift,top:0,width:91,height:76}}>${stripes("edge",91,76)}</View></View>
+      </Scene>}`, body:"", width:160, height:96, frames:[0,30,0], probes:[] },
+    // Backdrop displacement in output pixels, alone and after a backdrop blur.
+    { name:"backdrop-displacement", source:`export const composition={width:160,height:96,fps:30,duration:2};
+      export default function Main(ctx){return <Scene className="relative h-full w-full" style={{backgroundColor:"#e2e8f0"}}>
+        <View key="backdrop" className="absolute" style={{left:0,top:0,width:160,height:96}}>${stripes("backdrop",160,96)}</View>
+        <View key="lens" className="absolute" style={{left:16,top:14,width:56,height:68,
+          backdropDisplacement:displacement(7,point(0.071,0.057),12+ctx.progress*8,{octaves:2})}}/>
+        <View key="frosted" className="absolute" style={{left:88,top:14,width:56,height:68,backdropFilter:"blur(2px)",
+          backdropDisplacement:displacement(19,point(0.043,0.089),10,{mode:"turbulence"})}}/>
+      </Scene>}`, body:"", width:160, height:96, frames:[0,30,0], probes:[] },
+    // A backdrop blur mixes in what lies just outside the node, across its edges and its corner radii.
+    { name:"backdrop-blur-edge", source:`export const composition={width:96,height:64,fps:30,duration:2};
+      export default function Main(ctx){return <Scene className="relative h-full w-full" style={{backgroundColor:"#e2e8f0"}}>
+        <View key="backdrop" className="absolute" style={{left:0,top:0,width:96,height:64}}>${stripes("backdrop",96,64)}</View>
+        <View key="bar-top" className="absolute" style={{left:0,top:8,width:96,height:4,backgroundColor:"#16a34a"}}/>
+        <View key="bar-bottom" className="absolute" style={{left:0,top:47,width:96,height:4,backgroundColor:"#16a34a"}}/>
+        <View key="frosted" className="absolute" style={{left:12,top:10,width:44,height:39,borderRadius:10,backdropFilter:\`blur(\${2+ctx.progress*2}px)\`}}/>
+      </Scene>}`, body:"", width:96, height:64, frames:[0,30,0], probes:[] },
     { name:"regression-grain-black-white", body:`<View style={{width:64,height:64,filter:"film-grain(7 0.5 1px)"}}>
       ${view("black",",width:32")}${view("white",",left:32,width:32")}</View>`, probes:[[16,32,0,0,0],[48,32,255,255,255]] },
     { name:"batch-rotation", body:`<GeometryBatch geometry="rect" positions={[point(8,16),point(40,16)]}

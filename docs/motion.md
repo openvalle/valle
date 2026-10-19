@@ -1066,7 +1066,10 @@ Supported CSS filter functions are `blur`, `brightness`, `contrast`, `grayscale`
 `hue-rotate`, `invert`, `opacity`, `saturate`, `sepia`, `drop-shadow`.
 They work in `filter` and `backdropFilter` through Motion's filter lowering.
 Filters compose in written order. `filter` affects the node and descendants;
-`backdropFilter` samples already-painted content behind the node.
+`backdropFilter` samples already-painted content behind the node. It reads that
+content beyond the node's border box as far as the filters reach, so a blur next
+to an edge mixes in what lies just outside it, and the border box and its corner
+radii then clip the result.
 
 `filter: "chromatic-aberration(6px)"` is also available as a standalone
 node filter. It shifts red and blue by 3 px in opposite directions while green
@@ -1832,7 +1835,9 @@ scale a number; both may use admitted animation expressions. Like other filter
 lengths they are in the node's own units: the noise field is anchored to the node
 and moves, scales and rotates with it, so the result does not depend on the output
 size or on where the node is on screen. `backdropDisplacement` distorts the pixels
-behind the node in output pixels.
+behind the node in output pixels, after any `backdropFilter`. Like the filters, it
+reads beyond the border box as far as its scale reaches, and the border box clips
+the result.
 
 `style.motionBlur: "auto"` derives directional blur from the element's final
 screen position. It samples the scene half a frame before and after the requested
