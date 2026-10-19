@@ -731,7 +731,7 @@ pub enum NodeKind {
         aria_label: Option<String>,
     },
     /// Independent or field-member refractive surface. Admitted in production (G4.7);
-    /// consumed through the engine kernel route (sample_tracks → typed execution program →
+    /// consumed through the engine kernel route (layout → typed execution program →
     /// F32/F16 reference → Native Skia / WASM kernel); product layout/emit fail-closes
     /// instead of silently dropping it.
     Glass(crate::glass::GlassNode),
@@ -1259,11 +1259,6 @@ impl SceneNode {
                     &field.material.tint,
                     &mut refs,
                 );
-                number(
-                    "/kind/motion/intensity".into(),
-                    &field.motion.intensity,
-                    &mut refs,
-                );
                 point(
                     "/kind/environment/light/direction".into(),
                     &field.environment.light.direction,
@@ -1282,16 +1277,6 @@ impl SceneNode {
             }
             NodeKind::Glass(glass) => {
                 number("/kind/presence".into(), &glass.presence, &mut refs);
-                number(
-                    "/kind/motion/intensity".into(),
-                    &glass.motion.intensity,
-                    &mut refs,
-                );
-                number(
-                    "/kind/foreground/protection".into(),
-                    &glass.foreground.protection,
-                    &mut refs,
-                );
                 if let Some(material) = &glass.material {
                     number(
                         "/kind/material/clarity".into(),
@@ -1300,15 +1285,6 @@ impl SceneNode {
                     );
                     number("/kind/material/depth".into(), &material.depth, &mut refs);
                     color("/kind/material/tint".into(), &material.tint, &mut refs);
-                }
-                if let Some(PointValue::Expr { expr }) = &glass.motion.drive.translation {
-                    refs.push(("/kind/motion/drive/translation".into(), *expr));
-                }
-                if let Some(value) = &glass.motion.drive.pressure {
-                    number("/kind/motion/drive/pressure".into(), value, &mut refs);
-                }
-                if let Some(value) = &glass.motion.drive.twist {
-                    number("/kind/motion/drive/twist".into(), value, &mut refs);
                 }
                 match &glass.shape {
                     crate::glass::GlassShapeBinding::ContinuousRect { radius } => {

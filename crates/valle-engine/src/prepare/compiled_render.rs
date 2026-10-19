@@ -499,8 +499,6 @@ fn prepare_endpoint(
                         faces: state.motion_faces,
                         fonts,
                         program_to_device,
-                        clip_id: &clip.clip_id,
-                        render_seed: render_seed(render),
                         assets: &assets,
                         model_resources: &model_resources,
                     },
@@ -726,15 +724,6 @@ fn resource_content_digest(
     _path: &str,
 ) -> Result<ContentDigest, PrepareError> {
     Ok(*resource.digest())
-}
-
-fn render_seed(render: &CompiledRender) -> u32 {
-    const DOMAIN: &[u8] = b"valle.render-seed/1\0";
-    let mut preimage = [0_u8; DOMAIN.len() + 32];
-    preimage[..DOMAIN.len()].copy_from_slice(DOMAIN);
-    preimage[DOMAIN.len()..].copy_from_slice(render.render_id().as_bytes());
-    let digest = valle_timeline::internal::hash::sha256(&preimage);
-    u32::from_be_bytes([digest[0], digest[1], digest[2], digest[3]])
 }
 
 #[cfg(feature = "text")]

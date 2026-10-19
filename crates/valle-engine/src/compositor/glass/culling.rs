@@ -72,7 +72,7 @@ mod tests {
     use crate::compositor::glass::render::field_sample;
     use valle_draw::program::glass::{
         BackdropUse, GlassOwnerKind, MOTION_GLASS_KERNEL_ID, PackedGlassField, PackedGlassMaterial,
-        PackedGlassMotion, PackedGlassSurface, motion_glass_kernel_digest, schema_digest,
+        PackedGlassSurface, motion_glass_kernel_digest, schema_digest,
     };
 
     fn field_program() -> MotionGlassProgram {
@@ -83,12 +83,7 @@ mod tests {
             local_to_owner: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
             radius: 32.0,
             presence: 1.0,
-            response: PackedGlassMotion::ZERO,
             path_points: vec![],
-            foreground_tone: valle_draw::program::glass::PackedGlassForegroundTone::None,
-            foreground_protection: 0.0,
-            foreground_bounds: None,
-            foreground_luma: None,
         };
         MotionGlassProgram {
             owner_kind: GlassOwnerKind::Field,
@@ -108,7 +103,6 @@ mod tests {
                 tint_linear: [0.3, 0.5, 0.9, 0.2],
                 specular_strength: 0.5,
                 shadow_strength: 0.1,
-                foreground_gain: 0.7,
                 light: valle_draw::program::PackedGlassLight::DEFAULT,
             },
             backdrop: BackdropUse {

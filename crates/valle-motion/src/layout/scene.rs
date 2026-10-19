@@ -34,9 +34,8 @@ use valle_motion::{
 use super::activation::{ActivationPlan, InstanceRangeGate, InstanceRowSelection};
 use super::dependencies::{SceneDependencies, TemporalSampling};
 use crate::layout::bridge::{
-    EchoSample, GlassLayoutEnvironment, GlassLayoutField, GlassLayoutForeground, GlassLayoutFrame,
-    GlassLayoutMaterial, GlassLayoutMotion, GlassLayoutSurface, LayoutOptions, LayoutTree,
-    ResolvedUnit, TemporalSample, parse_style,
+    EchoSample, GlassLayoutEnvironment, GlassLayoutField, GlassLayoutFrame, GlassLayoutMaterial,
+    GlassLayoutSurface, LayoutOptions, LayoutTree, ResolvedUnit, TemporalSample, parse_style,
 };
 
 /// Fail-closed failures from Scene Artifact evaluation or layout construction.
@@ -1744,7 +1743,6 @@ pub(super) fn build_tree_inner(
         &keys,
         &boxes,
         &css_3d_planes,
-        &layout_instances,
     )?;
 
     if let Some(timings) = timings.as_deref_mut() {
@@ -1842,7 +1840,6 @@ fn resolve_glass_layout(
     keys: &HashMap<u64, String>,
     boxes: &BTreeMap<String, valle_draw::Rect>,
     css_3d_planes: &HashMap<String, crate::layout::bridge::Css3dPlane>,
-    layout_instances: &LayoutInstanceRows,
 ) -> Result<GlassLayoutFrame, LayoutError> {
     if !artifact
         .nodes
@@ -1919,31 +1916,6 @@ fn resolve_glass_layout(
             tint: color_value(&material.tint, values, at)?,
         })
     };
-    let resolve_drive =
-        |drive: &crate::glass::GlassDriveBinding, at: usize| -> Result<[f64; 4], LayoutError> {
-            let translation = drive
-                .translation
-                .as_ref()
-                .map(|value| point_value(value, values, at, "glass drive translation"))
-                .transpose()?
-                .unwrap_or_else(|| valle_draw::Point::new(0.0, 0.0));
-            Ok([
-                translation.x,
-                translation.y,
-                drive
-                    .pressure
-                    .as_ref()
-                    .map(|value| number_value(value, values, at, "glass drive pressure"))
-                    .transpose()?
-                    .unwrap_or(0.0),
-                drive
-                    .twist
-                    .as_ref()
-                    .map(|value| number_value(value, values, at, "glass drive twist"))
-                    .transpose()?
-                    .unwrap_or(0.0),
-            ])
-        };
     let resolve_environment = |environment: &crate::glass::GlassEnvironmentBinding,
                                at: usize|
      -> Result<GlassLayoutEnvironment, LayoutError> {
@@ -1981,17 +1953,6 @@ fn resolve_glass_layout(
             owner_to_viewport: owner_matrix_for(at),
             material: resolve_material(&field.material, at)?,
             environment: resolve_environment(&field.environment, at)?,
-            motion: GlassLayoutMotion {
-                character: field.motion.character,
-                settle_seconds: field.motion.settle,
-                intensity: number_value(
-                    &field.motion.intensity,
-                    values,
-                    at,
-                    "glass field intensity",
-                )?,
-                drive: resolve_drive(&field.motion.drive, at)?,
-            },
             merge_distance: field.merge.distance,
             member_surface_ids: Vec::new(),
         });
@@ -2106,66 +2067,10 @@ fn resolve_glass_layout(
         let field_id = membership[at]
             .as_ref()
             .map(|field| field.as_str().to_owned());
-        let member_intensity = number_value(
-            &glass.motion.intensity,
-            values,
-            at,
-            "glass member intensity",
-        )?;
-        let member_drive = resolve_drive(&glass.motion.drive, at)?;
-        let (character, settle_seconds, intensity, drive) = match field_id
-            .as_ref()
-            .and_then(|field| field_by_id.get(field))
-        {
-            Some(field) => {
-                let normalization = crate::glass::DEFAULT_INTENSITY.max(f64::EPSILON);
-                (
-                    field.motion.character,
-                    field.motion.settle_seconds,
-                    (field.motion.intensity * member_intensity / normalization).clamp(0.0, 1.0),
-                    std::array::from_fn(|index| field.motion.drive[index] + member_drive[index]),
-                )
-            }
-            None => (
-                glass
-                    .motion
-                    .character
-                    .unwrap_or(crate::glass::GlassCharacter::DEFAULT),
-                glass
-                    .motion
-                    .settle
-                    .unwrap_or(crate::glass::DEFAULT_SETTLE_SECONDS),
-                member_intensity,
-                member_drive,
-            ),
-        };
         let owner_to_viewport = field_id
             .as_ref()
             .and_then(|field| field_by_id.get(field))
             .map_or_else(|| affine_matrix(transform), |field| field.owner_to_viewport);
-        let foreground_bounds =
-            foreground_protection_bounds(artifact, at, boxes, &transforms, owner_to_viewport);
-        let foreground_protection = number_value(
-            &glass.foreground.protection,
-            values,
-            at,
-            "glass foreground protection",
-        )?;
-        let foreground_luma = if glass.foreground.tone == crate::glass::GlassForegroundTone::Auto
-            && foreground_protection > 0.0
-            && foreground_bounds.is_some()
-        {
-            Some(
-                foreground_auto_luma(artifact, at, values, boxes, layout_instances)?.ok_or_else(|| {
-                    LayoutError::BadPaint {
-                        node: node.key.clone(),
-                        reason: "auto Glass foreground has pixels without a resolvable color descriptor; use tone light, dark, or none".into(),
-                    }
-                })?,
-            )
-        } else {
-            None
-        };
         frame.surfaces.push(GlassLayoutSurface {
             node_key: node.key.clone(),
             surface_id: glass.surface_id.as_str().to_owned(),
@@ -2187,12 +2092,6 @@ fn resolve_glass_layout(
             } else {
                 number_value(&glass.presence, values, at, "glass presence")?
             },
-            motion: GlassLayoutMotion {
-                character,
-                settle_seconds,
-                intensity,
-                drive,
-            },
             material: glass
                 .material
                 .as_ref()
@@ -2203,12 +2102,6 @@ fn resolve_glass_layout(
                 .as_ref()
                 .map(|environment| resolve_environment(environment, at))
                 .transpose()?,
-            foreground: GlassLayoutForeground {
-                tone: glass.foreground.tone,
-                protection: foreground_protection,
-                bounds: foreground_bounds,
-                luma: foreground_luma,
-            },
         });
     }
     frame
@@ -2267,296 +2160,6 @@ fn affine_matrix(transform: TAffine) -> [f64; 9] {
         0.0,
         1.0,
     ]
-}
-
-fn foreground_protection_bounds(
-    artifact: &SceneArtifact,
-    glass_at: usize,
-    boxes: &BTreeMap<String, valle_draw::Rect>,
-    transforms: &HashMap<String, TAffine>,
-    owner_to_viewport: [f64; 9],
-) -> Option<valle_draw::Rect> {
-    let viewport_to_owner = inverse_matrix3(owner_to_viewport)?;
-    let children = artifact.nodes.get(glass_at)?.children;
-    let mut stack = artifact.node_children[children.start as usize..children.end as usize]
-        .iter()
-        .map(|id| id.0 as usize)
-        .collect::<Vec<_>>();
-    let mut bounds: Option<valle_draw::Rect> = None;
-    while let Some(at) = stack.pop() {
-        let node = artifact.nodes.get(at)?;
-        let paint_keys = if let NodeKind::InstanceLayout { group } = node.kind {
-            let group = artifact.instance_groups.get(group as usize)?;
-            let mut templates = vec![&group.template];
-            let mut children = group.template_children.iter().collect::<Vec<_>>();
-            while let Some(child) = children.pop() {
-                templates.push(&child.node);
-                children.extend(&child.children);
-            }
-            templates
-                .into_iter()
-                .filter(|template| foreground_node_paints(template))
-                .flat_map(|template| {
-                    (0..group.rows()).filter_map(move |row| group.key_for_node(row, &template.key))
-                })
-                .collect()
-        } else if foreground_node_paints(node) {
-            vec![node.key.clone()]
-        } else {
-            Vec::new()
-        };
-        for key in paint_keys {
-            let Some(layout) = boxes.get(&key) else {
-                continue;
-            };
-            let viewport_points = if let Some(transform) = transforms.get(&key) {
-                let matrix = affine_matrix(*transform);
-                [
-                    project_matrix3(matrix, [0.0, 0.0])?,
-                    project_matrix3(matrix, [layout.width, 0.0])?,
-                    project_matrix3(matrix, [layout.width, layout.height])?,
-                    project_matrix3(matrix, [0.0, layout.height])?,
-                ]
-            } else {
-                [
-                    [layout.left(), layout.top()],
-                    [layout.right(), layout.top()],
-                    [layout.right(), layout.bottom()],
-                    [layout.left(), layout.bottom()],
-                ]
-            };
-            let owner_points = viewport_points
-                .map(|point| project_matrix3(viewport_to_owner, point))
-                .into_iter()
-                .collect::<Option<Vec<_>>>()?;
-            let left = owner_points
-                .iter()
-                .map(|point| point[0])
-                .fold(f64::INFINITY, f64::min);
-            let top = owner_points
-                .iter()
-                .map(|point| point[1])
-                .fold(f64::INFINITY, f64::min);
-            let right = owner_points
-                .iter()
-                .map(|point| point[0])
-                .fold(f64::NEG_INFINITY, f64::max);
-            let bottom = owner_points
-                .iter()
-                .map(|point| point[1])
-                .fold(f64::NEG_INFINITY, f64::max);
-            let node_bounds = valle_draw::Rect::from_edges(left, top, right, bottom);
-            if !node_bounds.is_empty() {
-                bounds = Some(bounds.map_or(node_bounds, |current| {
-                    valle_draw::Rect::from_edges(
-                        current.left().min(node_bounds.left()),
-                        current.top().min(node_bounds.top()),
-                        current.right().max(node_bounds.right()),
-                        current.bottom().max(node_bounds.bottom()),
-                    )
-                }));
-            }
-        }
-        if !matches!(node.kind, NodeKind::Glass(_)) {
-            let children = node.children;
-            stack.extend(
-                artifact.node_children[children.start as usize..children.end as usize]
-                    .iter()
-                    .map(|id| id.0 as usize),
-            );
-        }
-    }
-    bounds
-}
-
-fn foreground_node_paints(node: &crate::SceneNode) -> bool {
-    let paints_style = node.styles.iter().any(|style| {
-        matches!(
-            style.property.as_str(),
-            "background" | "border" | "box-shadow" | "outline"
-        ) || style.property.starts_with("background-")
-            || style.property.starts_with("border-")
-    });
-    paints_style
-        || matches!(
-            node.kind,
-            NodeKind::Text { .. }
-                | NodeKind::Path { .. }
-                | NodeKind::GeometryBatch { .. }
-                | NodeKind::InstanceBatch { .. }
-                | NodeKind::Image { .. }
-                | NodeKind::Transition { .. }
-                | NodeKind::ShaderLayer { .. }
-                | NodeKind::Scene3D { .. }
-                | NodeKind::Video { .. }
-                | NodeKind::MathFormula { .. }
-                | NodeKind::Glass(_)
-        )
-}
-
-fn foreground_auto_luma(
-    artifact: &SceneArtifact,
-    glass_at: usize,
-    values: &[MotionValue],
-    boxes: &BTreeMap<String, valle_draw::Rect>,
-    layout_instances: &LayoutInstanceRows,
-) -> Result<Option<f32>, LayoutError> {
-    let children = artifact.nodes[glass_at].children;
-    let mut stack = artifact.node_children[children.start as usize..children.end as usize]
-        .iter()
-        .map(|id| id.0 as usize)
-        .collect::<Vec<_>>();
-    let mut weighted_luma = 0.0_f64;
-    let mut total_weight = 0.0_f64;
-    while let Some(at) = stack.pop() {
-        let node = artifact.nodes.get(at).ok_or(LayoutError::BadNode { at })?;
-        if let NodeKind::InstanceLayout { group } = node.kind
-            && let Some(rows) = layout_instances.get(&group)
-        {
-            for row in rows {
-                visit_layout_instance_node(row, &mut |node| {
-                    for color in [node.background_color, node.text_color]
-                        .into_iter()
-                        .flatten()
-                    {
-                        let color = color.to_srgb8();
-                        let area = boxes
-                            .get(&node.key)
-                            .map_or(1.0, |bounds| (bounds.width * bounds.height).max(1.0));
-                        let weight = area * f64::from(color.a) / 255.0;
-                        weighted_luma += weight * color.relative_luminance();
-                        total_weight += weight;
-                    }
-                });
-            }
-        }
-        let colors = foreground_node_colors(node, values, at)?;
-        if !colors.is_empty() {
-            let area = boxes
-                .get(&node.key)
-                .map_or(1.0, |bounds| (bounds.width * bounds.height).max(1.0));
-            let color_weight = area / colors.len() as f64;
-            for color in colors {
-                let alpha = f64::from(color.a) / 255.0;
-                let weight = color_weight * alpha;
-                weighted_luma += weight * color.relative_luminance();
-                total_weight += weight;
-            }
-        }
-        if !matches!(node.kind, NodeKind::Glass(_)) {
-            let children = node.children;
-            stack.extend(
-                artifact.node_children[children.start as usize..children.end as usize]
-                    .iter()
-                    .map(|id| id.0 as usize),
-            );
-        }
-    }
-    Ok((total_weight > 0.0).then(|| (weighted_luma / total_weight).clamp(0.0, 1.0) as f32))
-}
-
-fn foreground_node_colors(
-    node: &crate::SceneNode,
-    values: &[MotionValue],
-    at: usize,
-) -> Result<Vec<valle_draw::Rgba>, LayoutError> {
-    let mut colors = Vec::new();
-    for style in &node.styles {
-        let property = style.property.as_str();
-        if property != "color"
-            && property != "background-color"
-            && property != "border-color"
-            && !(property.starts_with("border-") && property.ends_with("-color"))
-        {
-            continue;
-        }
-        let resolved = match &style.value {
-            StyleValue::Static { value } => value,
-            StyleValue::Expr { expr } => value(values, *expr, at)?,
-        };
-        if let MotionValue::Color(color) = resolved {
-            colors.push(color.to_srgb8());
-        }
-    }
-    match &node.kind {
-        NodeKind::Text { .. } | NodeKind::MathFormula { .. } if colors.is_empty() => {
-            colors.push(valle_draw::Rgba::rgb(0, 0, 0));
-        }
-        NodeKind::Path { fill, stroke, .. } => {
-            if let Some(fill) = fill {
-                colors.extend(foreground_paint_colors(fill, values, at, &node.key)?);
-            }
-            if let Some(stroke) = stroke {
-                colors.extend(foreground_paint_colors(
-                    &stroke.paint,
-                    values,
-                    at,
-                    &node.key,
-                )?);
-            }
-        }
-        NodeKind::GeometryBatch { batch } => {
-            colors.extend(batch.fills.iter().map(|color| color.to_srgb8()));
-            if let Some(field) = &batch.fill_field {
-                colors.extend(field.to.iter().map(|color| color.to_srgb8()));
-            }
-        }
-        _ => {}
-    }
-    Ok(colors)
-}
-
-fn foreground_paint_colors(
-    paint: &PaintValue,
-    values: &[MotionValue],
-    at: usize,
-    node: &str,
-) -> Result<Vec<valle_draw::Rgba>, LayoutError> {
-    let paint = paint_value(paint, values, at, node)?;
-    Ok(match paint {
-        crate::layout::bridge::ResolvedPaint::Solid(color) => vec![color.to_srgb8()],
-        crate::layout::bridge::ResolvedPaint::Linear { stops, .. }
-        | crate::layout::bridge::ResolvedPaint::Radial { stops, .. }
-        | crate::layout::bridge::ResolvedPaint::Conic { stops, .. } => stops
-            .into_iter()
-            .map(|(_, color)| color.to_srgb8())
-            .collect(),
-    })
-}
-
-fn project_matrix3(matrix: [f64; 9], point: [f64; 2]) -> Option<[f64; 2]> {
-    let w = matrix[6] * point[0] + matrix[7] * point[1] + matrix[8];
-    if !w.is_finite() || w.abs() <= 1.0e-12 {
-        return None;
-    }
-    let projected = [
-        (matrix[0] * point[0] + matrix[1] * point[1] + matrix[2]) / w,
-        (matrix[3] * point[0] + matrix[4] * point[1] + matrix[5]) / w,
-    ];
-    projected
-        .iter()
-        .all(|value| value.is_finite())
-        .then_some(projected)
-}
-
-fn inverse_matrix3(value: [f64; 9]) -> Option<[f64; 9]> {
-    let [a, b, c, d, e, f, g, h, i] = value;
-    let cofactors = [
-        e * i - f * h,
-        c * h - b * i,
-        b * f - c * e,
-        f * g - d * i,
-        a * i - c * g,
-        c * d - a * f,
-        d * h - e * g,
-        b * g - a * h,
-        a * e - b * d,
-    ];
-    let determinant = a * cofactors[0] + b * cofactors[3] + c * cofactors[6];
-    if !determinant.is_finite() || determinant.abs() <= 1.0e-15 {
-        return None;
-    }
-    Some(cofactors.map(|value| value / determinant))
 }
 
 fn resolve_scene3d_requests(

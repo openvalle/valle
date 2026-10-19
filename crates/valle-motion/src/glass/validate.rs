@@ -1,23 +1,17 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use crate::NodeKind;
-use crate::artifact::{
-    ColorValue, NumberValue, PointValue, SceneArtifact, StyleValue, ValidationError,
-};
-use crate::expr::ExprId;
-use crate::glass::continuity::{TemporalContinuity, infer_continuity};
+use crate::artifact::{ColorValue, NumberValue, PointValue, SceneArtifact, ValidationError};
 use crate::glass::ids::GlassFieldId;
 use crate::glass::intent::{
-    GlassCharacter, GlassEnvironmentBinding, GlassFieldNode, GlassForegroundTone, GlassNode,
-    GlassShapeBinding, GlassSurfaceMotionBinding, MERGE_MAX_DISTANCE, MERGE_MIN_DISTANCE,
-    SETTLE_MAX_SECONDS, SETTLE_MIN_SECONDS,
+    GlassEnvironmentBinding, GlassFieldNode, GlassNode, GlassShapeBinding, MERGE_MAX_DISTANCE,
+    MERGE_MIN_DISTANCE,
 };
 
 /// Schema checks for Glass nodes. Production [`SceneArtifact::validate`] calls this after proving
 /// that the artifact declares `motion-glass` if and only if it contains Glass topology.
 pub fn validate_glass_schema(artifact: &SceneArtifact) -> Result<(), Vec<ValidationError>> {
     let mut errors = Vec::new();
-    let continuity = infer_continuity(&artifact.exprs);
     let mut surfaces = BTreeMap::<String, usize>::new();
     let mut fields = BTreeMap::<String, usize>::new();
     let (field_of_node, tree_is_valid) = checked_field_membership(artifact);
@@ -30,15 +24,9 @@ pub fn validate_glass_schema(artifact: &SceneArtifact) -> Result<(), Vec<Validat
 
     for (at, node) in artifact.nodes.iter().enumerate() {
         match &node.kind {
-            NodeKind::Glass(glass) => validate_glass_node(
-                artifact,
-                at,
-                glass,
-                &continuity,
-                &field_of_node,
-                &mut surfaces,
-                &mut errors,
-            ),
+            NodeKind::Glass(glass) => {
+                validate_glass_node(at, glass, &field_of_node, &mut surfaces, &mut errors)
+            }
             NodeKind::GlassField(field) => validate_field_node(at, field, &mut fields, &mut errors),
             _ => {}
         }
@@ -234,10 +222,8 @@ fn reject_paint(
 }
 
 fn validate_glass_node(
-    artifact: &SceneArtifact,
     at: usize,
     glass: &GlassNode,
-    continuity: &[TemporalContinuity],
     field_of_node: &[Option<GlassFieldId>],
     surfaces: &mut BTreeMap<String, usize>,
     errors: &mut Vec<ValidationError>,
@@ -297,15 +283,6 @@ fn validate_glass_node(
                 ),
             ));
         }
-        if glass.motion.character.is_some() || glass.motion.settle.is_some() {
-            errors.push(ValidationError::new(
-                format!("{path}/kind/motion"),
-                format!(
-                    "Glass '{}' cannot override field character or settle",
-                    glass.surface_id.as_str()
-                ),
-            ));
-        }
         if glass.environment.is_some() {
             errors.push(ValidationError::new(
                 format!("{path}/kind/environment"),
@@ -329,40 +306,10 @@ fn validate_glass_node(
     if let Some(environment) = &glass.environment {
         validate_environment(environment, &format!("{path}/kind/environment"), errors);
     }
-    if let Some(settle) = glass.motion.settle {
-        reject_settle(settle, format!("{path}/kind/motion/settle"), errors);
-    }
     reject_unit(
         "presence",
         &glass.presence,
         &format!("{path}/kind/presence"),
-        errors,
-    );
-    if glass.foreground.tone == GlassForegroundTone::Auto
-        && !matches!(
-            glass.foreground.protection,
-            NumberValue::Static { value: 0.0 }
-        )
-        && subtree_has_unknown_foreground(artifact, at)
-    {
-        errors.push(ValidationError::new(
-            format!("{path}/kind/foreground/tone"),
-            format!(
-                "Glass '{}' has image, video, Scene3D, or custom-shader foreground content; tone=auto with protection>0 requires an explicit light/dark/none hint",
-                glass.surface_id.as_str()
-            ),
-        ));
-    }
-    reject_unit(
-        "intensity",
-        &glass.motion.intensity,
-        &format!("{path}/kind/motion/intensity"),
-        errors,
-    );
-    reject_unit(
-        "protection",
-        &glass.foreground.protection,
-        &format!("{path}/kind/foreground/protection"),
         errors,
     );
     if let Some(material) = &glass.material {
@@ -391,49 +338,6 @@ fn validate_glass_node(
         GlassShapeBinding::Path { .. } | GlassShapeBinding::Capsule | GlassShapeBinding::Circle => {
         }
     }
-    reject_discrete_track_bindings(artifact, at, glass, continuity, errors);
-}
-
-fn subtree_has_unknown_foreground(artifact: &SceneArtifact, glass_at: usize) -> bool {
-    let Some(_) = artifact.nodes.get(glass_at) else {
-        return true;
-    };
-    let mut visited = vec![false; artifact.nodes.len()];
-    visited[glass_at] = true;
-    let Some(children) = node_children(artifact, glass_at) else {
-        return true;
-    };
-    let mut stack: Vec<usize> = children
-        .iter()
-        .rev()
-        .map(|child| child.0 as usize)
-        .collect();
-    while let Some(at) = stack.pop() {
-        let Some(node) = artifact.nodes.get(at) else {
-            return true;
-        };
-        if visited[at] {
-            // A repeated node is either a cycle or a multiple-parent DAG. Both are invalid scene
-            // topology, so the foreground classifier must fail closed instead of accepting it.
-            return true;
-        }
-        visited[at] = true;
-        if matches!(
-            node.kind,
-            NodeKind::Image { .. }
-                | NodeKind::Video { .. }
-                | NodeKind::Transition { .. }
-                | NodeKind::ShaderLayer { .. }
-                | NodeKind::Scene3D { .. }
-        ) {
-            return true;
-        }
-        let Some(children) = node_children(artifact, at) else {
-            return true;
-        };
-        stack.extend(children.iter().rev().map(|child| child.0 as usize));
-    }
-    false
 }
 
 fn validate_field_node(
@@ -450,11 +354,6 @@ fn validate_field_node(
             format!("GlassField id '{id}' appears twice (also /nodes/{previous})"),
         ));
     }
-    reject_settle(
-        field.motion.settle,
-        format!("{path}/kind/motion/settle"),
-        errors,
-    );
     if !(MERGE_MIN_DISTANCE..=MERGE_MAX_DISTANCE).contains(&field.merge.distance)
         || !field.merge.distance.is_finite()
     {
@@ -499,15 +398,6 @@ fn validate_environment(
     );
 }
 
-fn reject_settle(settle: f64, path: String, errors: &mut Vec<ValidationError>) {
-    if !settle.is_finite() || !(SETTLE_MIN_SECONDS..=SETTLE_MAX_SECONDS).contains(&settle) {
-        errors.push(ValidationError::new(
-            path,
-            format!("settle must be a static finite value in {SETTLE_MIN_SECONDS}..={SETTLE_MAX_SECONDS} seconds"),
-        ));
-    }
-}
-
 fn reject_unit(name: &str, value: &NumberValue, path: &str, errors: &mut Vec<ValidationError>) {
     if let NumberValue::Static { value } = value
         && (!value.is_finite() || !(0.0..=1.0).contains(value))
@@ -532,103 +422,6 @@ fn reject_non_negative(value: &NumberValue, path: &str, errors: &mut Vec<Validat
 
 fn reject_color(value: &ColorValue, path: &str, errors: &mut Vec<ValidationError>) {
     let _ = (value, path, errors);
-}
-
-fn reject_discrete_track_bindings(
-    artifact: &SceneArtifact,
-    at: usize,
-    glass: &GlassNode,
-    continuity: &[TemporalContinuity],
-    errors: &mut Vec<ValidationError>,
-) {
-    let mut roots = Vec::new();
-    push_number(&mut roots, &glass.presence);
-    push_number(&mut roots, &glass.motion.intensity);
-    push_drive(
-        &mut roots,
-        &glass.motion.drive.translation,
-        &glass.motion.drive.pressure,
-        &glass.motion.drive.twist,
-    );
-    if let Some(material) = &glass.material {
-        push_number(&mut roots, &material.clarity);
-        push_number(&mut roots, &material.depth);
-    }
-    if let Some(environment) = &glass.environment {
-        if let PointValue::Expr { expr } = &environment.light.direction {
-            roots.push(*expr);
-        }
-        push_number(&mut roots, &environment.light.elevation);
-        push_number(&mut roots, &environment.light.intensity);
-    }
-    match &glass.shape {
-        GlassShapeBinding::ContinuousRect { radius } => push_number(&mut roots, radius),
-        GlassShapeBinding::Path {
-            path,
-            reveal_origin,
-        } => {
-            if let crate::artifact::PathValue::Expr { expr, .. } = path {
-                roots.push(*expr);
-            }
-            if let Some(PointValue::Expr { expr }) = reveal_origin {
-                roots.push(*expr);
-            }
-        }
-        _ => {}
-    }
-    for style in &artifact.nodes[at].styles {
-        if matches!(
-            style.property.as_str(),
-            "left" | "top" | "width" | "height" | "transform" | "translate" | "rotate" | "scale"
-        ) && let StyleValue::Expr { expr } = &style.value
-        {
-            roots.push(*expr);
-        }
-    }
-    for expr in roots {
-        let Some(class) = continuity.get(expr.0 as usize) else {
-            continue;
-        };
-        if !class.is_track_legal() {
-            errors.push(ValidationError::new(
-                format!("/nodes/{at}/kind"),
-                format!(
-                    "Glass '{}' track binding depends on a discrete or unknown-time expression",
-                    glass.surface_id.as_str()
-                ),
-            ));
-            break;
-        }
-    }
-}
-
-fn push_number(out: &mut Vec<ExprId>, value: &NumberValue) {
-    if let NumberValue::Expr { expr } = value {
-        out.push(*expr);
-    }
-}
-
-fn push_number_set(out: &mut BTreeSet<ExprId>, value: &NumberValue) {
-    if let NumberValue::Expr { expr } = value {
-        out.insert(*expr);
-    }
-}
-
-fn push_drive(
-    out: &mut Vec<ExprId>,
-    translation: &Option<PointValue>,
-    pressure: &Option<NumberValue>,
-    twist: &Option<NumberValue>,
-) {
-    if let Some(PointValue::Expr { expr }) = translation {
-        out.push(*expr);
-    }
-    if let Some(value) = pressure {
-        push_number(out, value);
-    }
-    if let Some(value) = twist {
-        push_number(out, value);
-    }
 }
 
 /// Walk structural wrappers to assign each Glass shell its nearest enclosing field. Descending
@@ -693,72 +486,6 @@ fn node_children(artifact: &SceneArtifact, node_at: usize) -> Option<&[crate::No
         .flatten()
 }
 
-pub fn glass_track_expr_roots(artifact: &SceneArtifact, node_index: usize) -> BTreeSet<ExprId> {
-    let mut roots = BTreeSet::new();
-    let Some(node) = artifact.nodes.get(node_index) else {
-        return roots;
-    };
-    let NodeKind::Glass(glass) = &node.kind else {
-        return roots;
-    };
-    push_number_set(&mut roots, &glass.presence);
-    push_number_set(&mut roots, &glass.motion.intensity);
-    push_number_set(&mut roots, &glass.foreground.protection);
-    if let Some(material) = &glass.material {
-        push_number_set(&mut roots, &material.clarity);
-        push_number_set(&mut roots, &material.depth);
-    }
-    if let Some(environment) = &glass.environment {
-        if let PointValue::Expr { expr } = &environment.light.direction {
-            roots.insert(*expr);
-        }
-        push_number_set(&mut roots, &environment.light.elevation);
-        push_number_set(&mut roots, &environment.light.intensity);
-    }
-    if let Some(value) = glass.motion.drive.pressure.as_ref() {
-        push_number_set(&mut roots, value);
-    }
-    if let Some(value) = glass.motion.drive.twist.as_ref() {
-        push_number_set(&mut roots, value);
-    }
-    if let Some(PointValue::Expr { expr }) = glass.motion.drive.translation.as_ref() {
-        roots.insert(*expr);
-    }
-    if let GlassShapeBinding::ContinuousRect { radius } = &glass.shape {
-        push_number_set(&mut roots, radius);
-    }
-    let mut cursor = Some(node_index);
-    let mut visited = vec![false; artifact.nodes.len()];
-    while let Some(index) = cursor {
-        let Some(node) = artifact.nodes.get(index) else {
-            break;
-        };
-        if visited[index] {
-            break;
-        }
-        visited[index] = true;
-        for style in &node.styles {
-            if matches!(
-                style.property.as_str(),
-                "left"
-                    | "top"
-                    | "width"
-                    | "height"
-                    | "transform"
-                    | "translate"
-                    | "rotate"
-                    | "scale"
-                    | "opacity"
-            ) && let StyleValue::Expr { expr } = &style.value
-            {
-                roots.insert(*expr);
-            }
-        }
-        cursor = parent_index(artifact, index);
-    }
-    roots
-}
-
 fn parent_index(artifact: &SceneArtifact, child: usize) -> Option<usize> {
     for (at, node) in artifact.nodes.iter().enumerate() {
         let start = node.children.start as usize;
@@ -775,23 +502,6 @@ fn parent_index(artifact: &SceneArtifact, child: usize) -> Option<usize> {
     None
 }
 
-pub fn reachable_exprs(artifact: &SceneArtifact, roots: &BTreeSet<ExprId>) -> BTreeSet<ExprId> {
-    let mut seen = BTreeSet::new();
-    let mut stack: Vec<ExprId> = roots.iter().copied().collect();
-    while let Some(id) = stack.pop() {
-        if !seen.insert(id) {
-            continue;
-        }
-        if let Some(expr) = artifact.exprs.get(id.0 as usize) {
-            stack.extend(expr.children());
-        }
-    }
-    seen
-}
-
-#[allow(dead_code)]
-fn _character_is_static(_character: GlassCharacter, _motion: &GlassSurfaceMotionBinding) {}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -802,9 +512,8 @@ mod tests {
     use crate::controls::ControlsSchema;
     use crate::glass::ids::{GlassFieldId, GlassSurfaceId};
     use crate::glass::intent::{
-        GlassEnvironmentBinding, GlassFieldMotionBinding, GlassFieldNode, GlassForegroundIntent,
-        GlassMaterialBinding, GlassMergeIntent, GlassNode, GlassShapeBinding,
-        GlassSurfaceMotionBinding,
+        GlassEnvironmentBinding, GlassFieldNode, GlassMaterialBinding, GlassMergeIntent, GlassNode,
+        GlassShapeBinding,
     };
     use crate::value::MotionValue;
     use crate::{NodeId, NodeKind};
@@ -827,7 +536,6 @@ mod tests {
         let field = GlassFieldNode {
             field_id: field_id.clone(),
             material: GlassMaterialBinding::defaults(),
-            motion: GlassFieldMotionBinding::defaults(),
             merge: GlassMergeIntent::defaults(),
             environment: GlassEnvironmentBinding::defaults(),
         };
@@ -837,9 +545,7 @@ mod tests {
             shape: GlassShapeBinding::Circle,
             material: None,
             environment: None,
-            motion: GlassSurfaceMotionBinding::field_member_defaults(),
             presence: NumberValue::Static { value: 1.0 },
-            foreground: GlassForegroundIntent::defaults(),
         };
         SceneArtifact {
             role: valle_timeline::MotionRole::Clip,
@@ -922,7 +628,6 @@ mod tests {
                 .any(|error| error.message.contains("non-cyclic child links")),
             "{errors:?}"
         );
-        assert!(subtree_has_unknown_foreground(&cyclic, 3));
 
         let mut out_of_bounds = field_artifact(vec![], vec![]);
         out_of_bounds.node_children[2] = NodeId(99);
@@ -1026,7 +731,6 @@ mod tests {
         artifact.nodes[2].kind = NodeKind::GlassField(GlassFieldNode {
             field_id: nested.clone(),
             material: GlassMaterialBinding::defaults(),
-            motion: GlassFieldMotionBinding::defaults(),
             merge: GlassMergeIntent::defaults(),
             environment: GlassEnvironmentBinding::defaults(),
         });

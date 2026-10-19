@@ -531,13 +531,6 @@ impl<'s> Compiler<'s> {
                             "a GlassField member inherits environment and cannot override it",
                         );
                     }
-                    if glass.motion.character.is_some() || glass.motion.settle.is_some() {
-                        self.illegal(
-                            DiagCode::GrammarForbidden,
-                            node.span,
-                            "a GlassField member inherits motion.character/settle; only intensity and drive may be overridden",
-                        );
-                    }
                     glass.field_id = Some(field_id.clone());
                 }
                 None => {
@@ -548,14 +541,6 @@ impl<'s> Compiler<'s> {
                     glass
                         .environment
                         .get_or_insert_with(valle_motion::glass::GlassEnvironmentBinding::defaults);
-                    glass
-                        .motion
-                        .character
-                        .get_or_insert(valle_motion::glass::GlassCharacter::DEFAULT);
-                    glass
-                        .motion
-                        .settle
-                        .get_or_insert(valle_motion::glass::DEFAULT_SETTLE_SECONDS);
                 }
             }
         }

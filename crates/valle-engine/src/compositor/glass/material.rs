@@ -33,7 +33,6 @@ pub struct ResolvedGlassMaterialBase {
     pub tint_linear: [f32; 4],
     pub specular_strength: f64,
     pub shadow_strength: f64,
-    pub foreground_gain: f64,
 }
 
 fn thickness_for_radius(radius: f64, depth: f64) -> f64 {
@@ -57,16 +56,15 @@ pub fn resolve_material_base(
     depth: f64,
     tint: [f32; 4],
     presence: f64,
-    protection: f64,
 ) -> Result<ResolvedGlassMaterialBase, &'static str> {
-    if ![clarity, depth, presence, protection]
+    if ![clarity, depth, presence]
         .into_iter()
         .all(|value| value.is_finite() && (0.0..=1.0).contains(&value))
         || !tint
             .into_iter()
             .all(|value| value.is_finite() && (0.0..=1.0).contains(&value))
     {
-        return Err("clarity, depth, tint, presence, and protection must be finite in 0..=1");
+        return Err("clarity, depth, tint, and presence must be finite in 0..=1");
     }
 
     let presence_m = materialization(presence);
@@ -92,7 +90,6 @@ pub fn resolve_material_base(
         tint_linear,
         specular_strength,
         shadow_strength,
-        foreground_gain: (0.2 + 0.8 * protection) * presence_m,
     })
 }
 
@@ -107,7 +104,6 @@ pub fn pack_material_base(resolved: &ResolvedGlassMaterialBase) -> PackedGlassMa
         tint_linear: resolved.tint_linear,
         specular_strength: resolved.specular_strength as f32,
         shadow_strength: resolved.shadow_strength as f32,
-        foreground_gain: resolved.foreground_gain as f32,
         light: PackedGlassLight::DEFAULT,
     }
 }
@@ -120,13 +116,12 @@ pub fn resolve_material_base_with_geometry(
     depth: f64,
     tint: [f32; 4],
     presence: f64,
-    protection: f64,
     device_radius: f64,
 ) -> Result<ResolvedGlassMaterialBase, &'static str> {
     if !device_radius.is_finite() || device_radius <= 0.0 {
         return Err("device radius must be finite and positive");
     }
-    let mut resolved = resolve_material_base(clarity, depth, tint, presence, protection)?;
+    let mut resolved = resolve_material_base(clarity, depth, tint, presence)?;
     resolved.bevel_width = bevel_width_for_radius(device_radius, depth) * materialization(presence);
     resolved.thickness = thickness_for_radius(device_radius, depth) * materialization(presence);
     Ok(resolved)
@@ -141,7 +136,7 @@ mod tests {
         for clarity in [0.0, 0.5, 1.0] {
             for depth in [0.0, 0.5, 1.0] {
                 let resolved =
-                    resolve_material_base(clarity, depth, [0.1, 0.2, 0.3, 0.5], 1.0, 0.65).unwrap();
+                    resolve_material_base(clarity, depth, [0.1, 0.2, 0.3, 0.5], 1.0).unwrap();
                 assert!(resolved.refractive_index - resolved.dispersion >= 1.0);
                 assert!(resolved.refractive_index + resolved.dispersion <= 1.6);
             }
@@ -150,28 +145,25 @@ mod tests {
 
     #[test]
     fn presence_zero_is_an_exact_dormant_material() {
-        let resolved = resolve_material_base(0.82, 0.52, [0.2, 0.3, 0.4, 0.5], 0.0, 0.65).unwrap();
+        let resolved = resolve_material_base(0.82, 0.52, [0.2, 0.3, 0.4, 0.5], 0.0).unwrap();
         assert_eq!(resolved.thickness, 0.0);
         assert_eq!(resolved.bevel_width, 0.0);
         assert_eq!(resolved.refractive_index, 1.0);
         assert_eq!(resolved.dispersion, 0.0);
         assert_eq!(resolved.tint_linear[3], 0.0);
         assert_eq!(resolved.specular_strength, 0.0);
-        assert_eq!(resolved.foreground_gain, 0.0);
     }
 
     #[test]
     fn zero_alpha_tint_cannot_create_color_energy() {
-        let resolved = resolve_material_base(0.82, 0.52, [1.0, 1.0, 1.0, 0.0], 1.0, 0.65).unwrap();
+        let resolved = resolve_material_base(0.82, 0.52, [1.0, 1.0, 1.0, 0.0], 1.0).unwrap();
         assert_eq!(resolved.tint_linear[3], 0.0);
     }
 
     #[test]
     fn geometry_sets_a_monotone_profile_width() {
-        let small =
-            resolve_material_base_with_geometry(0.82, 0.52, [0.0; 4], 1.0, 0.65, 12.0).unwrap();
-        let large =
-            resolve_material_base_with_geometry(0.82, 0.52, [0.0; 4], 1.0, 0.65, 80.0).unwrap();
+        let small = resolve_material_base_with_geometry(0.82, 0.52, [0.0; 4], 1.0, 12.0).unwrap();
+        let large = resolve_material_base_with_geometry(0.82, 0.52, [0.0; 4], 1.0, 80.0).unwrap();
         assert!(small.thickness > 0.0);
         assert!(small.bevel_width > 0.0);
         assert!(large.thickness > small.thickness);
@@ -182,10 +174,8 @@ mod tests {
 
     #[test]
     fn material_lengths_scale_linearly_from_720p_to_4k() {
-        let at_720 =
-            resolve_material_base_with_geometry(0.68, 0.72, [0.0; 4], 1.0, 0.96, 48.0).unwrap();
-        let at_4k =
-            resolve_material_base_with_geometry(0.68, 0.72, [0.0; 4], 1.0, 0.96, 144.0).unwrap();
+        let at_720 = resolve_material_base_with_geometry(0.68, 0.72, [0.0; 4], 1.0, 48.0).unwrap();
+        let at_4k = resolve_material_base_with_geometry(0.68, 0.72, [0.0; 4], 1.0, 144.0).unwrap();
         assert!((at_4k.bevel_width - at_720.bevel_width * 3.0).abs() < 1.0e-12);
         assert!((at_4k.thickness - at_720.thickness * 3.0).abs() < 1.0e-12);
         assert!(

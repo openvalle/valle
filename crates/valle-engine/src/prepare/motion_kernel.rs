@@ -304,8 +304,6 @@ export default function Card(ctx, props) {
             viewport: Extent2d::new(320, 180).unwrap(),
             source_clip: Some(Rect::new(0.0, 0.0, 320.0, 180.0)),
             program_to_device: DeviceTransform::from_affine([1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
-            clip_id: "clip:card".into(),
-            render_seed: 7,
             assets: BTreeMap::new(),
             model_resources: BTreeMap::new(),
         };

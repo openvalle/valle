@@ -105,15 +105,15 @@ pub use geometry::{
 };
 pub use glass::{
     GlassFieldId, GlassSurfaceId, MOTION_GLASS_CAPABILITY, MOTION_GLASS_SCHEMA_ID,
-    TemporalContinuity, sample_tracks, validate_glass_schema,
+    validate_glass_schema,
 };
 pub use layout::{
-    FrameEvaluationStats, GlassLayoutEnvironment, GlassLayoutField, GlassLayoutForeground,
-    GlassLayoutFrame, GlassLayoutMaterial, GlassLayoutMotion, GlassLayoutSurface, LAYOUT_ENGINE_ID,
-    LayoutError, LayoutOptions, LayoutTree, MotionReview, MotionReviewIssue, MotionTrajectory,
-    MotionTrajectoryPoint, PreparedScene, Scene3DFrameRequest, Scene3DRequest, SealedScene3DFrame,
-    StyleCache, Viewport, build_tree, layout_box_at_point, layout_boxes, prepare_owned_scene,
-    prepare_scene, review_motion,
+    FrameEvaluationStats, GlassLayoutEnvironment, GlassLayoutField, GlassLayoutFrame,
+    GlassLayoutMaterial, GlassLayoutSurface, LAYOUT_ENGINE_ID, LayoutError, LayoutOptions,
+    LayoutTree, MotionReview, MotionReviewIssue, MotionTrajectory, MotionTrajectoryPoint,
+    PreparedScene, Scene3DFrameRequest, Scene3DRequest, SealedScene3DFrame, StyleCache, Viewport,
+    build_tree, layout_box_at_point, layout_boxes, prepare_owned_scene, prepare_scene,
+    review_motion,
 };
 pub use lock::{
     ArtifactEnvelope, BuildFingerprint, BundledAsset, BundledFont, BundledSource, EnvelopeDigest,

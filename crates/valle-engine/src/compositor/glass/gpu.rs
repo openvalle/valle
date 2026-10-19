@@ -8,7 +8,7 @@ use thiserror::Error;
 use valle_draw::Rect;
 use valle_draw::program::glass::{
     GlassOwnerKind, MAX_GLASS_MEMBERS, MAX_GLASS_PATH_POINTS, MotionGlassForegroundProgram,
-    MotionGlassProgram, PackedGlassForegroundTone, PackedGlassShapeKind,
+    MotionGlassProgram, PackedGlassShapeKind,
 };
 
 use super::bounds::{MotionGlassBoundsError, validate_motion_glass_backdrop_bounds};
@@ -16,7 +16,7 @@ use super::bounds::{MotionGlassBoundsError, validate_motion_glass_backdrop_bound
 pub const MOTION_GLASS_GPU_SURFACES: usize = 8;
 pub const MOTION_GLASS_GPU_PATH_POINTS: usize = 24;
 const GLOBAL_VECTORS: usize = 9;
-const SURFACE_VECTOR_GROUPS: usize = 10;
+const SURFACE_VECTOR_GROUPS: usize = 5;
 const PATH_PAIR_VECTORS: usize = MOTION_GLASS_GPU_SURFACES * MOTION_GLASS_GPU_PATH_POINTS / 2;
 pub const MOTION_GLASS_GPU_UNIFORM_FLOATS: usize =
     (GLOBAL_VECTORS + MOTION_GLASS_GPU_SURFACES * SURFACE_VECTOR_GROUPS + PATH_PAIR_VECTORS) * 4;
@@ -66,15 +66,7 @@ pub fn pack_motion_glass_gpu_uniforms(
     push4(
         &mut uniforms,
         [
-            if program.surfaces.iter().any(|surface| {
-                surface.foreground_protection > 0.0
-                    && surface.foreground_bounds.is_some()
-                    && surface.foreground_tone != PackedGlassForegroundTone::None
-            }) {
-                1.0
-            } else {
-                0.0
-            },
+            0.0,
             program.material.light.direction[0],
             program.material.light.direction[1],
             program.material.light.intensity,
@@ -105,7 +97,7 @@ pub fn pack_motion_glass_gpu_uniforms(
             program.material.dispersion,
             program.material.specular_strength,
             program.material.shadow_strength,
-            program.material.foreground_gain,
+            0.0,
         ],
     );
     push4(
@@ -120,30 +112,6 @@ pub fn pack_motion_glass_gpu_uniforms(
             local_to_owner: surface.local_to_owner,
             radius: surface.radius,
             presence: surface.presence,
-            motion0: [
-                surface.response.translation[0],
-                surface.response.translation[1],
-                surface.response.acceleration[0],
-                surface.response.acceleration[1],
-            ],
-            motion1: [
-                surface.response.angular,
-                surface.response.scale[0],
-                surface.response.scale[1],
-                surface.response.shear,
-            ],
-            motion2: [
-                surface.response.area,
-                surface.response.pressure,
-                surface.response.twist,
-                surface.path_points.len() as f32,
-            ],
-            foreground_bounds: surface.foreground_bounds,
-            foreground_meta: foreground_meta(
-                surface.foreground_tone,
-                surface.foreground_protection,
-                surface.foreground_luma,
-            ),
             path_points: &surface.path_points,
         }),
         owner_to_device,
@@ -178,11 +146,6 @@ pub fn pack_motion_glass_foreground_gpu_uniforms(
             local_to_owner: foreground.local_to_owner,
             radius: foreground.radius,
             presence: foreground.presence,
-            motion0: [0.0; 4],
-            motion1: [0.0; 4],
-            motion2: [0.0, 0.0, 0.0, foreground.path_points.len() as f32],
-            foreground_bounds: None,
-            foreground_meta: [0.0; 4],
             path_points: &foreground.path_points,
         }),
         owner_to_device,
@@ -197,11 +160,6 @@ struct SurfaceUniformSource<'a> {
     local_to_owner: [f32; 9],
     radius: f32,
     presence: f32,
-    motion0: [f32; 4],
-    motion1: [f32; 4],
-    motion2: [f32; 4],
-    foreground_bounds: Option<Rect>,
-    foreground_meta: [f32; 4],
     path_points: &'a [[f32; 2]],
 }
 
@@ -246,7 +204,7 @@ fn push_surface_arrays<'a>(
                     source.shape as u8 as f32,
                     source.radius,
                     source.presence,
-                    0.0,
+                    source.path_points.len() as f32,
                 ]
             }),
         );
@@ -260,36 +218,6 @@ fn push_surface_arrays<'a>(
             };
             push4(uniforms, value);
         }
-    }
-    for source in padded_sources {
-        push4(uniforms, source.map_or([0.0; 4], |source| source.motion0));
-    }
-    for source in padded_sources {
-        push4(uniforms, source.map_or([0.0; 4], |source| source.motion1));
-    }
-    for source in padded_sources {
-        push4(uniforms, source.map_or([0.0; 4], |source| source.motion2));
-    }
-    for source in padded_sources {
-        push4(
-            uniforms,
-            source
-                .and_then(|source| source.foreground_bounds)
-                .map_or([0.0; 4], |bounds| {
-                    [
-                        bounds.x as f32,
-                        bounds.y as f32,
-                        bounds.width as f32,
-                        bounds.height as f32,
-                    ]
-                }),
-        );
-    }
-    for source in padded_sources {
-        push4(
-            uniforms,
-            source.map_or([0.0; 4], |source| source.foreground_meta),
-        );
     }
     for source in padded_sources {
         for pair in 0..MOTION_GLASS_GPU_PATH_POINTS / 2 {
@@ -312,33 +240,10 @@ fn push_surface_arrays<'a>(
     Ok(())
 }
 
-fn foreground_meta(
-    tone: PackedGlassForegroundTone,
-    protection: f32,
-    luma: Option<f32>,
-) -> [f32; 4] {
-    let tone_bias = match tone {
-        PackedGlassForegroundTone::Light => 1.0,
-        PackedGlassForegroundTone::Dark => -1.0,
-        PackedGlassForegroundTone::Auto => luma.map_or(0.0, |value| value * 2.0 - 1.0),
-        PackedGlassForegroundTone::None => 0.0,
-    };
-    [
-        protection,
-        tone_bias,
-        if protection > 0.0 && tone != PackedGlassForegroundTone::None {
-            1.0
-        } else {
-            0.0
-        },
-        0.0,
-    ]
-}
-
 /// Re-derives the conservative output and sampling footprint at the executor boundary.
 ///
 /// `MotionGlassProgram::validate` can prove structural owner-space containment without knowing
-/// the draw transform. Device-pixel shadow and optical margins require that transform, so the
+/// the draw transform. Device-pixel antialiasing and optical margins require that transform, so the
 /// canonical packer is the first shared Native/Web boundary that can reject a program whose
 /// bounds would clip visible output or sample outside the admitted backdrop ROI.
 fn validate_backdrop_bounds(
@@ -483,8 +388,8 @@ mod tests {
     use crate::compositor::glass::bounds::resolve_motion_glass_backdrop_bounds;
     use valle_draw::program::BackdropScope;
     use valle_draw::program::glass::{
-        BackdropUse, MOTION_GLASS_KERNEL_ID, PackedGlassMaterial, PackedGlassMotion,
-        PackedGlassSurface, motion_glass_kernel_digest, schema_digest,
+        BackdropUse, MOTION_GLASS_KERNEL_ID, PackedGlassMaterial, PackedGlassSurface,
+        motion_glass_kernel_digest, schema_digest,
     };
 
     fn program() -> MotionGlassProgram {
@@ -498,12 +403,7 @@ mod tests {
                 local_to_owner: [40.0, 0.0, 10.0, 0.0, 40.0, 5.0, 0.0, 0.0, 1.0],
                 radius: 0.5,
                 presence: 1.0,
-                response: PackedGlassMotion::ZERO,
                 path_points: vec![],
-                foreground_tone: PackedGlassForegroundTone::None,
-                foreground_protection: 0.0,
-                foreground_bounds: None,
-                foreground_luma: None,
             }],
             field: None,
             material: PackedGlassMaterial {
@@ -515,7 +415,6 @@ mod tests {
                 tint_linear: [0.2, 0.3, 0.8, 0.2],
                 specular_strength: 0.5,
                 shadow_strength: 0.1,
-                foreground_gain: 0.0,
                 light: valle_draw::program::PackedGlassLight::DEFAULT,
             },
             backdrop: BackdropUse {
@@ -567,23 +466,10 @@ mod tests {
             pack_motion_glass_gpu_uniforms(&program, [2.0, 0.0, 0.0, 0.0, 0.5, 0.0, 0.0, 0.0, 1.0])
                 .unwrap();
         assert_eq!(uniforms[3], 24.0);
-        assert_eq!(uniforms[4], 0.0, "no foreground protection is active");
     }
 
     #[test]
-    fn foreground_protection_activity_is_packed_as_a_global_fast_path() {
-        let mut program = program();
-        program.surfaces[0].foreground_tone = PackedGlassForegroundTone::Light;
-        program.surfaces[0].foreground_protection = 0.5;
-        program.surfaces[0].foreground_bounds = Some(Rect::new(20.0, 15.0, 10.0, 5.0));
-        let uniforms =
-            pack_motion_glass_gpu_uniforms(&program, [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0])
-                .unwrap();
-        assert_eq!(uniforms[4], 1.0);
-    }
-
-    #[test]
-    fn independent_bounds_must_cover_shadow_and_optical_sampling() {
+    fn independent_bounds_must_cover_the_antialiased_edge_and_optical_sampling() {
         let mut clipped_output = program();
         clipped_output.backdrop.output_bounds = Rect::new(10.0, 5.0, 40.0, 40.0);
         assert_eq!(

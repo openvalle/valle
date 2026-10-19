@@ -29,8 +29,8 @@ pub use compile::{
 pub use glass::{
     MOTION_GLASS_KERNEL_DIGEST_HEX, MOTION_GLASS_KERNEL_ID, MOTION_GLASS_KERNEL_MANIFEST,
     MOTION_GLASS_SCHEMA_DIGEST_HEX, MOTION_GLASS_SCHEMA_ID, MOTION_GLASS_SCHEMA_MANIFEST,
-    MotionGlassError, MotionGlassForegroundProgram, MotionGlassProgram, PackedGlassForegroundTone,
-    PackedGlassLight, PackedGlassShapeKind, schema_digest,
+    MotionGlassError, MotionGlassForegroundProgram, MotionGlassProgram, PackedGlassLight,
+    PackedGlassShapeKind, schema_digest,
 };
 pub use group::{
     BackdropRead, BackdropScope, BlendMode, BlendSpace, Clip, FILTER_GAUSSIAN_SUPPORT_SIGMAS,

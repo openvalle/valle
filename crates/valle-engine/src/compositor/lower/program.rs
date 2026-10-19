@@ -1269,8 +1269,8 @@ mod tests {
         PathNode, PathVerb,
         glass::{
             BackdropUse, GlassOwnerKind, MOTION_GLASS_KERNEL_ID, MotionGlassForegroundProgram,
-            PackedGlassField, PackedGlassForegroundTone, PackedGlassMaterial, PackedGlassMotion,
-            PackedGlassShapeKind, PackedGlassSurface, motion_glass_kernel_digest, schema_digest,
+            PackedGlassField, PackedGlassMaterial, PackedGlassShapeKind, PackedGlassSurface,
+            motion_glass_kernel_digest, schema_digest,
         },
     };
 
@@ -1368,12 +1368,7 @@ mod tests {
                 local_to_owner: [30.0, 0.0, 20.0, 0.0, 20.0, 10.0, 0.0, 0.0, 1.0],
                 radius: 0.2,
                 presence: 1.0,
-                response: PackedGlassMotion::ZERO,
                 path_points: Vec::new(),
-                foreground_tone: PackedGlassForegroundTone::None,
-                foreground_protection: 0.0,
-                foreground_bounds: None,
-                foreground_luma: None,
             }],
             field: Some(PackedGlassField {
                 field_id: "pair".into(),
@@ -1389,7 +1384,6 @@ mod tests {
                 tint_linear: [0.2, 0.3, 0.8, 0.2],
                 specular_strength: 0.45,
                 shadow_strength: 0.1,
-                foreground_gain: 0.0,
                 light: valle_draw::program::PackedGlassLight::DEFAULT,
             },
             backdrop: BackdropUse {

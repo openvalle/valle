@@ -42,7 +42,7 @@ import wipeLeftSource from "../../../../../../crates/valle-draw/assets/shaders/w
 import wipeRightSource from "../../../../../../crates/valle-draw/assets/shaders/wiperight.sksl" with { type: "text" };
 
 export type BuiltinKernel = keyof typeof BUILTIN_SOURCES;
-export const MOTION_GLASS_UNIFORM_FLOATS = 740;
+export const MOTION_GLASS_UNIFORM_FLOATS = 580;
 
 // CanvasKit exposes image shaders rather than raw image shaders. Transport depth bytes in
 // Alpha8, where neither color management nor premultiplication can alter the numeric ABI.
@@ -150,9 +150,9 @@ export class CanvasKitBuiltinRuntime {
     if (!effect) throw new Error(`built-in CanvasKit kernel '${kernel}' failed admission: ${detail}`);
     if (kernel === "motionGlass"
       && (effect.getUniformFloatCount() !== MOTION_GLASS_UNIFORM_FLOATS
-        || effect.getUniformCount() !== 20
+        || effect.getUniformCount() !== 15
         || effect.getUniformName(0) !== "header0"
-        || effect.getUniformName(19) !== "pathPointPairs")) {
+        || effect.getUniformName(14) !== "pathPointPairs")) {
       effect.delete();
       throw new Error("built-in CanvasKit Motion Glass uniform ABI drifted");
     }

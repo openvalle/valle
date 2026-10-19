@@ -16,13 +16,13 @@ use crate::{Rect, math};
 
 pub const MOTION_GLASS_SCHEMA_ID: &str = "motion-glass-schema";
 pub const MOTION_GLASS_KERNEL_ID: &str = "motion-glass-kernel";
-pub const MOTION_GLASS_SCHEMA_MANIFEST: &str = "deny-unknown-fields+owner-kind-id+strict-owner-scope-identity+sorted-surfaces+shape-rect-local-to-owner-radius-presence+resolved-current-signed-response+simple-path+field-members-merge-1-128+physical-material-bevel-width-thickness-ior-roughness-dispersion-tint-fresnel-shadow+resolved-screen-light+conservative-backdrop-scope-bounds+surface-foreground-neighborhood-bounds-luma+foreground-exact-owner-geometry+foreground-owner-space-execution+kernel-schema-digests";
-pub const MOTION_GLASS_KERNEL_MANIFEST: &str = "shared-sksl+materialization+distance-preserving-c2-potential+signed-current-response+spatial-owner-metric-field+critical-point-classification+continuous-density-shadow+presence-distance+analytic-projective-sdf+singularity-safe-projective-sampling+resolution-covariant-optical-lengths+independent-bevel-and-optical-depth+full-short-axis-height-field+motion-perturbed-surface-normals+snell-edge-calibrated-monotone-rgb-refraction+five-tap-roughness-diffusion+alpha-gated-tint+schlick-fresnel+dual-lobe-resolved-3d-light+subtle-contact-shadow+layout-bounds-inert-material+real-foreground-mask+rgba32f-linear-rec2020-premul";
+pub const MOTION_GLASS_SCHEMA_MANIFEST: &str = "deny-unknown-fields+owner-kind-id+strict-owner-scope-identity+sorted-surfaces+shape-rect-local-to-owner-radius-presence+simple-path+field-members-merge-1-128+physical-material-bevel-width-thickness-ior-roughness-dispersion-tint-fresnel-shadow+resolved-screen-light+conservative-backdrop-scope-bounds+foreground-exact-owner-geometry+foreground-owner-space-execution+kernel-schema-digests";
+pub const MOTION_GLASS_KERNEL_MANIFEST: &str = "shared-sksl+materialization+distance-preserving-c2-potential+spatial-owner-metric-field+critical-point-classification+presence-distance+analytic-projective-sdf+singularity-safe-projective-sampling+resolution-covariant-optical-lengths+independent-bevel-and-optical-depth+full-short-axis-height-field+snell-edge-calibrated-monotone-rgb-refraction+five-tap-roughness-diffusion+alpha-gated-tint+schlick-fresnel+dual-lobe-resolved-3d-light+subtle-contact-shadow+layout-bounds-inert-material+real-foreground-mask+rgba32f-linear-rec2020-premul";
 pub const MOTION_GLASS_SCHEMA_DIGEST_HEX: &str =
-    "d2dfd775199401be92df9f26e50719b8939ce3ecc4214d0df2f2d534bf0cfc07";
+    "f4502d92c6882ec2cf66b0e25271ee66610230a76d5b67d06a68c6ad69b8383a";
 pub const MOTION_GLASS_SCHEMA_DIGEST: [u8; 32] = [
-    0xd2, 0xdf, 0xd7, 0x75, 0x19, 0x94, 0x01, 0xbe, 0x92, 0xdf, 0x9f, 0x26, 0xe5, 0x07, 0x19, 0xb8,
-    0x93, 0x9c, 0xe3, 0xec, 0xc4, 0x21, 0x4d, 0x0d, 0xf2, 0xf2, 0xd5, 0x34, 0xbf, 0x0c, 0xfc, 0x07,
+    0xf4, 0x50, 0x2d, 0x92, 0xc6, 0x88, 0x2e, 0xc2, 0xcf, 0x66, 0xb0, 0xe2, 0x52, 0x71, 0xee, 0x66,
+    0x61, 0x02, 0x30, 0xa7, 0x6d, 0x5b, 0x67, 0xd0, 0x6a, 0x68, 0xc6, 0xad, 0x69, 0xb8, 0x38, 0x3a,
 ];
 pub const MAX_GLASS_SURFACES: usize = 8;
 pub const MAX_GLASS_MEMBERS: usize = 8;
@@ -34,40 +34,24 @@ pub const MOTION_GLASS_SKSL: &str = include_str!("../../assets/shaders/motiongla
 /// Independent Glass captures the destination at its painter position.
 pub const BACKDROP_SCOPE_CURRENT: BackdropScope = BackdropScope::Current;
 
-/// Resolved foreground tones (packed). Auto uses the foreground subtree's measured luminance.
-pub const FOREGROUND_TONE_AUTO: u8 = 1;
-pub const FOREGROUND_TONE_LIGHT: u8 = 2;
-pub const FOREGROUND_TONE_DARK: u8 = 3;
-pub const FOREGROUND_TONE_NONE: u8 = 4;
-
 // ---- G1.6 shared kernel manifest (single source of truth for the kernel digest) ----
 //
-// These constants mirror `benchmarks/glass/reference.toml` and `response.toml`. They are the
-// frozen semantic contract that Native and Web kernel bundles must satisfy: changing any value
-// changes the kernel digest and therefore every capability/program that carries it.
+// These constants are the frozen semantic contract that Native and Web kernel bundles must
+// satisfy: changing any value changes the kernel digest and therefore every capability/program
+// that carries it.
 
 pub const KERNEL_MATERIALIZATION: &str = "M(p)=p^3*(10-15p+6p^2)";
 pub const KERNEL_POTENTIAL_ID: &str = "distance-c2-w";
 pub const KERNEL_EPSILON: f64 = 1.0e-6;
 pub const KERNEL_NARROW_BAND: f64 = 4.0;
-pub const KERNEL_DERIVATIVE_STEP_SECONDS: f64 = 1.0 / 240.0;
-pub const KERNEL_SETTLE_MIN_SECONDS: f64 = 0.08;
-pub const KERNEL_SETTLE_MAX_SECONDS: f64 = 1.20;
 pub const KERNEL_REFERENCE_PIXEL: &str = "rgba32f-linear-rec2020-premul";
-/// `(character, a, b, elastic)` Beta-density coefficients per packed character.
-pub const KERNEL_RESPONSE_MANIFEST: [(PackedGlassCharacter, i32, i32, bool); 4] = [
-    (PackedGlassCharacter::Responsive, 3, 6, false),
-    (PackedGlassCharacter::Fluid, 3, 4, false),
-    (PackedGlassCharacter::Viscous, 5, 3, false),
-    (PackedGlassCharacter::Elastic, 3, 3, true),
-];
 
 /// Frozen kernel digest hex; verified by `kernel_digest_is_frozen`.
 pub const MOTION_GLASS_KERNEL_DIGEST_HEX: &str =
-    "94188d0c70b1bdc386871012f4b1a316dfe52672942cebacec2701f4e391122a";
+    "18ee5b82e8edd32200b1a056785bcc900f8a2c5c050b3fcb543fbd157c9782c5";
 pub const MOTION_GLASS_KERNEL_DIGEST: [u8; 32] = [
-    0x94, 0x18, 0x8d, 0x0c, 0x70, 0xb1, 0xbd, 0xc3, 0x86, 0x87, 0x10, 0x12, 0xf4, 0xb1, 0xa3, 0x16,
-    0xdf, 0xe5, 0x26, 0x72, 0x94, 0x2c, 0xeb, 0xac, 0xec, 0x27, 0x01, 0xf4, 0xe3, 0x91, 0x12, 0x2a,
+    0x18, 0xee, 0x5b, 0x82, 0xe8, 0xed, 0xd3, 0x22, 0x00, 0xb1, 0xa0, 0x56, 0x78, 0x5b, 0xcc, 0x90,
+    0x0f, 0x8a, 0x2c, 0x5c, 0x05, 0x0b, 0x3f, 0xcb, 0x54, 0x3f, 0xbd, 0x15, 0x7c, 0x97, 0x82, 0xc5,
 ];
 
 fn valid_glass_transform(matrix: [f32; 9]) -> bool {
@@ -99,19 +83,6 @@ fn transform_has_no_horizon(matrix: [f32; 9], rect: Rect) -> bool {
                 && value.abs() > KERNEL_EPSILON
                 && value.is_sign_positive() == first.is_sign_positive()
         })
-}
-
-fn valid_optional_rect(rect: Option<Rect>) -> bool {
-    rect.is_none_or(|rect| {
-        !rect.is_empty()
-            && [rect.left(), rect.top(), rect.right(), rect.bottom()]
-                .into_iter()
-                .all(f64::is_finite)
-    })
-}
-
-fn valid_optional_unit(value: Option<f32>) -> bool {
-    value.is_none_or(|value| value.is_finite() && (0.0..=1.0).contains(&value))
 }
 
 fn valid_shape_geometry(
@@ -284,24 +255,6 @@ pub enum PackedGlassShapeKind {
     Path = 4,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PackedGlassCharacter {
-    Responsive = 1,
-    Fluid = 2,
-    Viscous = 3,
-    Elastic = 4,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
-#[serde(rename_all = "camelCase")]
-pub enum PackedGlassForegroundTone {
-    Auto,
-    Light,
-    Dark,
-    None,
-}
-
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[cfg_attr(feature = "ts", ts(rename_all = "camelCase"))]
@@ -311,31 +264,18 @@ pub struct PackedGlassSurface {
     pub shape: PackedGlassShapeKind,
     pub rect: Rect,
     /// Homography from `rect`/`path_points` coordinates into the material owner's local space.
-    /// Kinematic response remains device-qualified; geometry is not baked to device pixels, so
-    /// ordinary DrawProgram ancestor transforms apply exactly once.
+    /// Geometry is not baked to device pixels, so ordinary DrawProgram ancestor transforms apply
+    /// exactly once.
     pub local_to_owner: [f32; 9],
     pub radius: f32,
     pub presence: f32,
-    /// Current signed causal response, resolved during prepare. Field programs keep one response
-    /// per member so the kernel can mix motion spatially instead of collapsing the complete field
-    /// to a global max. Temporal integration samples never enter the executor ABI.
-    pub response: PackedGlassMotion,
     /// G4.1 closed-polygon path points (device pixels); empty for analytic shapes. `Path`
     /// requires at least three points; analytic shapes must leave it empty.
     pub path_points: Vec<[f32; 2]>,
-    /// Foreground protection metadata only. Pixels remain ordinary DrawProgram children; this
-    /// owner-local neighborhood continuously modulates optics without becoming a fake primitive.
-    pub foreground_tone: PackedGlassForegroundTone,
-    pub foreground_protection: f32,
-    pub foreground_bounds: Option<Rect>,
-    /// Coverage-weighted child luminance for `Auto`; explicit tone hints leave this absent.
-    pub foreground_luma: Option<f32>,
 }
 
-/// Compact geometry program for one real foreground subtree. Protection/tone stay authoritative
-/// on the material surface; duplicating them here would inflate every marker and create a second
-/// value that can drift. The subtree remains ordinary DrawProgram content and this program only
-/// clips it after the shared material pass.
+/// Compact geometry program for one real foreground subtree. The subtree remains ordinary
+/// DrawProgram content and this program only clips it after the shared material pass.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -430,7 +370,6 @@ pub struct PackedGlassMaterial {
     pub tint_linear: [f32; 4],
     pub specular_strength: f32,
     pub shadow_strength: f32,
-    pub foreground_gain: f32,
     pub light: PackedGlassLight,
 }
 
@@ -450,54 +389,6 @@ impl PackedGlassLight {
         elevation: 0.55,
         intensity: 0.65,
     };
-}
-
-/// Signed current response channels. Keeping the channels orthogonal is essential:
-/// opposite translations must produce opposite drag, acceleration must remain distinguishable
-/// from velocity, and an elastic kernel must be allowed to cross zero.
-#[derive(Debug, Clone, Copy, PartialEq, Default, serde::Serialize, serde::Deserialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct PackedGlassMotion {
-    pub translation: [f32; 2],
-    pub acceleration: [f32; 2],
-    pub angular: f32,
-    pub scale: [f32; 2],
-    pub shear: f32,
-    pub area: f32,
-    pub pressure: f32,
-    pub twist: f32,
-}
-
-impl PackedGlassMotion {
-    pub const ZERO: Self = Self {
-        translation: [0.0; 2],
-        acceleration: [0.0; 2],
-        angular: 0.0,
-        scale: [0.0; 2],
-        shear: 0.0,
-        area: 0.0,
-        pressure: 0.0,
-        twist: 0.0,
-    };
-
-    pub fn is_finite(self) -> bool {
-        [
-            self.translation[0],
-            self.translation[1],
-            self.acceleration[0],
-            self.acceleration[1],
-            self.angular,
-            self.scale[0],
-            self.scale[1],
-            self.shear,
-            self.area,
-            self.pressure,
-            self.twist,
-        ]
-        .into_iter()
-        .all(f32::is_finite)
-    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -565,28 +456,8 @@ impl MotionGlassProgram {
                 )
                 || !valid_glass_transform(surface.local_to_owner)
                 || !transform_has_no_horizon(surface.local_to_owner, surface.rect)
-                || !surface.foreground_protection.is_finite()
-                || !(0.0..=1.0).contains(&surface.foreground_protection)
-                || !valid_optional_rect(surface.foreground_bounds)
-                || !valid_optional_unit(surface.foreground_luma)
             {
                 return Err(MotionGlassError::Invalid("surface fields must be finite"));
-            }
-            if !surface.response.is_finite() {
-                return Err(MotionGlassError::Invalid("surface response"));
-            }
-            if (surface.foreground_tone == PackedGlassForegroundTone::None
-                && surface.foreground_protection != 0.0)
-                || (surface.foreground_protection == 0.0
-                    && (surface.foreground_bounds.is_some() || surface.foreground_luma.is_some()))
-                || (surface.foreground_protection > 0.0
-                    && (surface.foreground_bounds.is_none()
-                        || (surface.foreground_tone == PackedGlassForegroundTone::Auto
-                            && surface.foreground_luma.is_none())))
-                || (surface.foreground_tone != PackedGlassForegroundTone::Auto
-                    && surface.foreground_luma.is_some())
-            {
-                return Err(MotionGlassError::Invalid("foreground metadata"));
             }
         }
         if let Some(field) = &self.field {
@@ -652,7 +523,6 @@ impl MotionGlassProgram {
             material.dispersion,
             material.specular_strength,
             material.shadow_strength,
-            material.foreground_gain,
             material.light.direction[0],
             material.light.direction[1],
             material.light.elevation,
@@ -675,7 +545,6 @@ impl MotionGlassProgram {
             || material.refractive_index + material.dispersion > 1.6
             || !(0.0..=1.0).contains(&material.specular_strength)
             || !(0.0..=0.5).contains(&material.shadow_strength)
-            || !(0.0..=1.0).contains(&material.foreground_gain)
             || !(0.999..=1.001).contains(&light_length)
             || !(0.0..=1.0).contains(&material.light.elevation)
             || !(0.0..=1.0).contains(&material.light.intensity)
@@ -756,14 +625,8 @@ fn computed_motion_glass_kernel_digest() -> [u8; 32] {
     hasher.update(MOTION_GLASS_KERNEL_ID.as_bytes());
     hasher.update(KERNEL_MATERIALIZATION.as_bytes());
     hasher.update(KERNEL_POTENTIAL_ID.as_bytes());
-    for (character, a, b, elastic) in KERNEL_RESPONSE_MANIFEST {
-        hasher.update([character as u8, a as u8, b as u8, u8::from(elastic)]);
-    }
     hasher.update(KERNEL_EPSILON.to_le_bytes());
     hasher.update(KERNEL_NARROW_BAND.to_le_bytes());
-    hasher.update(KERNEL_DERIVATIVE_STEP_SECONDS.to_le_bytes());
-    hasher.update(KERNEL_SETTLE_MIN_SECONDS.to_le_bytes());
-    hasher.update(KERNEL_SETTLE_MAX_SECONDS.to_le_bytes());
     hasher.update(KERNEL_REFERENCE_PIXEL.as_bytes());
     hasher.update(MOTION_GLASS_KERNEL_MANIFEST.as_bytes());
     hasher.update(MOTION_GLASS_SKSL.as_bytes());
@@ -937,19 +800,14 @@ impl<'de> serde::Deserialize<'de> for MotionGlassProgram {
 impl serde::Serialize for PackedGlassSurface {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeStruct;
-        let mut state = serializer.serialize_struct("PackedGlassSurface", 12)?;
+        let mut state = serializer.serialize_struct("PackedGlassSurface", 7)?;
         state.serialize_field("surfaceId", &self.surface_id)?;
         state.serialize_field("shape", &(self.shape as u8))?;
         state.serialize_field("rect", &self.rect)?;
         state.serialize_field("localToOwner", &self.local_to_owner)?;
         state.serialize_field("radius", &self.radius)?;
         state.serialize_field("presence", &self.presence)?;
-        state.serialize_field("response", &self.response)?;
         state.serialize_field("pathPoints", &self.path_points)?;
-        state.serialize_field("foregroundTone", &self.foreground_tone)?;
-        state.serialize_field("foregroundProtection", &self.foreground_protection)?;
-        state.serialize_field("foregroundBounds", &self.foreground_bounds)?;
-        state.serialize_field("foregroundLuma", &self.foreground_luma)?;
         state.end()
     }
 }
@@ -965,12 +823,7 @@ impl<'de> serde::Deserialize<'de> for PackedGlassSurface {
             local_to_owner: [f32; 9],
             radius: f32,
             presence: f32,
-            response: PackedGlassMotion,
             path_points: Vec<[f32; 2]>,
-            foreground_tone: PackedGlassForegroundTone,
-            foreground_protection: f32,
-            foreground_bounds: Option<Rect>,
-            foreground_luma: Option<f32>,
         }
         let wire = Wire::deserialize(deserializer)?;
         Ok(Self {
@@ -986,12 +839,7 @@ impl<'de> serde::Deserialize<'de> for PackedGlassSurface {
             local_to_owner: wire.local_to_owner,
             radius: wire.radius,
             presence: wire.presence,
-            response: wire.response,
             path_points: wire.path_points,
-            foreground_tone: wire.foreground_tone,
-            foreground_protection: wire.foreground_protection,
-            foreground_bounds: wire.foreground_bounds,
-            foreground_luma: wire.foreground_luma,
         })
     }
 }
@@ -1036,7 +884,6 @@ impl serde::Serialize for PackedGlassMaterial {
             "tintLinear": self.tint_linear,
             "specularStrength": self.specular_strength,
             "shadowStrength": self.shadow_strength,
-            "foregroundGain": self.foreground_gain,
             "light": self.light,
         })
         .serialize(serializer)
@@ -1056,7 +903,6 @@ impl<'de> serde::Deserialize<'de> for PackedGlassMaterial {
             tint_linear: [f32; 4],
             specular_strength: f32,
             shadow_strength: f32,
-            foreground_gain: f32,
             light: PackedGlassLight,
         }
         let wire = Wire::deserialize(deserializer)?;
@@ -1069,7 +915,6 @@ impl<'de> serde::Deserialize<'de> for PackedGlassMaterial {
             tint_linear: wire.tint_linear,
             specular_strength: wire.specular_strength,
             shadow_strength: wire.shadow_strength,
-            foreground_gain: wire.foreground_gain,
             light: wire.light,
         })
     }
@@ -1126,12 +971,7 @@ mod tests {
                 local_to_owner: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
                 radius: 40.0,
                 presence: 1.0,
-                response: PackedGlassMotion::ZERO,
                 path_points: vec![],
-                foreground_tone: PackedGlassForegroundTone::Auto,
-                foreground_protection: 0.65,
-                foreground_bounds: Some(Rect::new(25.0, 35.0, 40.0, 20.0)),
-                foreground_luma: Some(0.85),
             }],
             field: None,
             material: PackedGlassMaterial {
@@ -1143,7 +983,6 @@ mod tests {
                 tint_linear: [0.0; 4],
                 specular_strength: 0.5,
                 shadow_strength: 0.1,
-                foreground_gain: 0.7,
                 light: PackedGlassLight::DEFAULT,
             },
             backdrop: BackdropUse {

@@ -116,9 +116,7 @@ fn glass_authoring_types_are_generated_for_tooling() {
         "fieldId: GlassFieldId | null",
         "shape: GlassShapeBinding",
         "material: GlassMaterialBinding | null",
-        "motion: GlassSurfaceMotionBinding",
         "presence: NumberValue",
-        "foreground: GlassForegroundIntent",
     ] {
         assert!(node.contains(field), "{node}");
     }

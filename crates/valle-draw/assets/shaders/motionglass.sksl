@@ -9,7 +9,7 @@ uniform shader content;
 // header0 = mode (0 material, 1 foreground), owner kind (1 independent, 2 field), surface count,
 // merge distance in owner-space units (converted through the local projective metric per pixel).
 uniform float4 header0;
-// header2 = foreground-protection active bit, resolved screen light direction.xy, light intensity.
+// header2 = reserved, resolved screen light direction.xy, light intensity.
 uniform float4 header2;
 // device -> owner rows for the projective field metric.
 uniform float4 ownerInverse0;
@@ -20,27 +20,18 @@ uniform float4 ownerInverse2;
 uniform float4 material0;
 // straight linear tint rgba; alpha is the sole tint-energy authority.
 uniform float4 materialTint;
-// IOR dispersion, specular strength, shadow strength, foreground gain.
+// IOR dispersion, specular strength, shadow strength, reserved.
 uniform float4 material1;
 // light elevation, reserved, reserved, reserved.
 uniform float4 material2;
 
 // Fixed product ABI: at most eight members and twenty-four polygon points per member.
 uniform float4 surfaceRect[8];
-// shape code, radius, presence, reserved.
+// shape code, radius, presence, path point count.
 uniform float4 surfaceMeta[8];
 uniform float4 surfaceInverse0[8];
 uniform float4 surfaceInverse1[8];
 uniform float4 surfaceInverse2[8];
-// translation.xy, acceleration.xy
-uniform float4 surfaceMotion0[8];
-// angular, scale.x, scale.y, shear
-uniform float4 surfaceMotion1[8];
-// area, pressure, twist, path point count
-uniform float4 surfaceMotion2[8];
-uniform float4 foregroundBounds[8];
-// protection, tone bias, active, reserved
-uniform float4 foregroundMeta[8];
 // Two float2 points per vector; 12 vectors per surface.
 uniform float4 pathPointPairs[96];
 
@@ -103,27 +94,6 @@ float4 inverse2At(int index) {
     return select8(index, surfaceInverse2[0], surfaceInverse2[1], surfaceInverse2[2], surfaceInverse2[3],
                    surfaceInverse2[4], surfaceInverse2[5], surfaceInverse2[6], surfaceInverse2[7]);
 }
-float4 motion0At(int index) {
-    return select8(index, surfaceMotion0[0], surfaceMotion0[1], surfaceMotion0[2], surfaceMotion0[3],
-                   surfaceMotion0[4], surfaceMotion0[5], surfaceMotion0[6], surfaceMotion0[7]);
-}
-float4 motion1At(int index) {
-    return select8(index, surfaceMotion1[0], surfaceMotion1[1], surfaceMotion1[2], surfaceMotion1[3],
-                   surfaceMotion1[4], surfaceMotion1[5], surfaceMotion1[6], surfaceMotion1[7]);
-}
-float4 motion2At(int index) {
-    return select8(index, surfaceMotion2[0], surfaceMotion2[1], surfaceMotion2[2], surfaceMotion2[3],
-                   surfaceMotion2[4], surfaceMotion2[5], surfaceMotion2[6], surfaceMotion2[7]);
-}
-float4 foregroundBoundsAt(int index) {
-    return select8(index, foregroundBounds[0], foregroundBounds[1], foregroundBounds[2], foregroundBounds[3],
-                   foregroundBounds[4], foregroundBounds[5], foregroundBounds[6], foregroundBounds[7]);
-}
-float4 foregroundMetaAt(int index) {
-    return select8(index, foregroundMeta[0], foregroundMeta[1], foregroundMeta[2], foregroundMeta[3],
-                   foregroundMeta[4], foregroundMeta[5], foregroundMeta[6], foregroundMeta[7]);
-}
-
 float4 pathPairAt(int surface, int pair) {
     if (surface == 0) return select12(pair, pathPointPairs[0], pathPointPairs[1], pathPointPairs[2], pathPointPairs[3], pathPointPairs[4], pathPointPairs[5], pathPointPairs[6], pathPointPairs[7], pathPointPairs[8], pathPointPairs[9], pathPointPairs[10], pathPointPairs[11]);
     if (surface == 1) return select12(pair, pathPointPairs[12], pathPointPairs[13], pathPointPairs[14], pathPointPairs[15], pathPointPairs[16], pathPointPairs[17], pathPointPairs[18], pathPointPairs[19], pathPointPairs[20], pathPointPairs[21], pathPointPairs[22], pathPointPairs[23]);
@@ -193,7 +163,7 @@ float4 localShapeSample(int surface, float2 point) {
         }
         return float4(distance, max(r, 0.001), normal);
     }
-    int count = int(motion2At(surface).w + 0.5);
+    int count = int(meta.w + 0.5);
     float minimumDistance = 1.0e20;
     float2 closestDelta = float2(0.0);
     float2 closestEdge = float2(1.0, 0.0);
@@ -334,24 +304,10 @@ float fieldDensity(float2 point) {
     return density;
 }
 
-// Resolve the center density and its motion numerator in one member traversal, then evaluate only
-// the four density neighbors needed by the gradient. The previous split fieldShape/fieldNormal/
-// fieldMotion path traversed the same members ten times per pixel (and each path member walks up
-// to 24 segments); this path needs five traversals and preserves the exact normalized mixture.
-// shape = density, pseudo distance, height, coverage. Motion is encoded as translation/
-// acceleration, angular/scale/shear, and area/pressure/twist/strain.
-void fieldSample(
-    float2 point,
-    out float4 shape,
-    out float2 normal,
-    out float4 motion0,
-    out float4 motion1,
-    out float4 motion2
-) {
-    motion0 = float4(0.0);
-    motion1 = float4(0.0);
-    motion2 = float4(0.0);
-    float weightedTranslationSq = 0.0;
+// Resolve the center density and its active member count in one member traversal, then evaluate
+// only the four density neighbors needed by the gradient: five traversals per pixel (and each path
+// member walks up to 24 segments). shape = density, pseudo distance, height, coverage.
+void fieldSample(float2 point, out float4 shape, out float2 normal) {
     float density = 0.0;
     int active = 0;
     int count = int(header0.z + 0.5);
@@ -371,23 +327,12 @@ void fieldSample(
         if (rho <= 0.0) continue;
         density += rho;
         active += 1;
-        float4 memberMotion0 = motion0At(surface);
-        motion0 += memberMotion0 * rho;
-        motion1 += motion1At(surface) * rho;
-        motion2.xyz += motion2At(surface).xyz * rho;
-        weightedTranslationSq += rho * dot(memberMotion0.xy, memberMotion0.xy);
     }
     if (density <= 0.0) {
         shape = float4(0.0, 1.0e20, 0.0, 0.0);
         normal = float2(0.0);
         return;
     }
-    motion0 /= density;
-    motion1 /= density;
-    motion2.xyz /= density;
-    weightedTranslationSq /= density;
-    float meanSq = dot(motion0.xy, motion0.xy);
-    motion2.w = active > 1 ? sqrt(max(weightedTranslationSq - meanSq, 0.0)) : 0.0;
 
     float dx = fieldDensity(point + float2(0.5, 0.0)) - fieldDensity(point - float2(0.5, 0.0));
     float dy = fieldDensity(point + float2(0.0, 0.5)) - fieldDensity(point - float2(0.0, 0.5));
@@ -398,9 +343,6 @@ void fieldSample(
     if (ownerPerDevice <= 1.0e-12) {
         shape = float4(0.0, 1.0e20, 0.0, 0.0);
         normal = float2(0.0);
-        motion0 = float4(0.0);
-        motion1 = float4(0.0);
-        motion2 = float4(0.0);
         return;
     }
     float mergeDevice = merge / ownerPerDevice;
@@ -450,15 +392,7 @@ float2 clampDelta(float2 value, float bevelWidth) {
     return magnitude > limit && limit > 0.0 ? value * (limit / magnitude) : value;
 }
 
-half4 opticalPixel(
-    float2 point,
-    float signedDistance,
-    float2 normal,
-    float coverage,
-    float4 motion0,
-    float4 motion1,
-    float4 motion2
-) {
+half4 opticalPixel(float2 point, float signedDistance, float2 normal, float coverage) {
     float bevelWidth = material0.x;
     float thickness = material0.y;
     float interior = clamp(-signedDistance / max(bevelWidth, 1.0e-6), 0.0, 1.0);
@@ -469,28 +403,15 @@ half4 opticalPixel(
     float edgeCurve = pow(remaining, 1.35);
     float viewFacing = sqrt(max(1.0 - edgeCurve * edgeCurve, 0.0));
     float3 surfaceNormal = float3(normal * edgeCurve, viewFacing);
-    float2 tangent = float2(-normal.y, normal.x);
-    float normalAcceleration = dot(motion0.zw, normal);
-    float anisotropicScale = motion1.y * abs(normal.x) + motion1.z * abs(normal.y);
-    float normalDelta = (-normalAcceleration * 0.0000015 + anisotropicScale * 0.035
-        + motion2.x * 0.016 + motion2.y * 0.022 + motion2.w * 0.00015) * thickness;
-    float tangentDelta = (motion1.x * 0.025 + motion2.z * 0.018) * thickness;
-    float shearDelta = motion1.w * thickness * 0.02;
-    float motionEnvelope = 0.22 + 0.78 * edgeCurve;
-    float2 deformationDelta = normal * normalDelta + tangent * tangentDelta
-        + float2(normal.y, normal.x) * shearDelta;
+    // A material with thickness takes the normal's height from its slope, which keeps a unit
+    // normal where the boundary normal degenerates to zero.
     if (thickness > 0.000000001) {
-        float2 dynamicSlope = surfaceNormal.xy
-            + deformationDelta / thickness * motionEnvelope * 1.6;
-        float slopeLength = length(dynamicSlope);
-        if (slopeLength > 1.0) dynamicSlope /= slopeLength;
-        float dynamicLength = length(dynamicSlope);
-        surfaceNormal = float3(
-            dynamicSlope,
-            sqrt(max(1.0 - dynamicLength * dynamicLength, 0.0))
-        );
+        float2 slope = surfaceNormal.xy;
+        float slopeLength = length(slope);
+        if (slopeLength > 1.0) slope /= slopeLength;
+        float unitSlopeLength = length(slope);
+        surfaceNormal = float3(slope, sqrt(max(1.0 - unitSlopeLength * unitSlopeLength, 0.0)));
     }
-    float2 motionDelta = -motion0.xy * 0.00075 * thickness * motionEnvelope;
 
     float greenIor = material0.z;
     float dispersion = material1.x;
@@ -507,23 +428,18 @@ half4 opticalPixel(
     float2 redDelta = float2(0.0);
     float2 greenDelta = float2(0.0);
     float2 blueDelta = float2(0.0);
-    bool hasOpticalOffset = length(surfaceNormal.xy) > 0.000000001
-        || length(motionDelta) > 0.000000001;
+    bool hasOpticalOffset = length(surfaceNormal.xy) > 0.000000001;
     if (hasOpticalOffset) {
-        greenDelta = clampDelta(
-            refractedOffset(surfaceNormal, greenIor, opticalPath) + motionDelta,
-            bevelWidth
-        );
+        greenDelta = clampDelta(refractedOffset(surfaceNormal, greenIor, opticalPath), bevelWidth);
         redDelta = greenDelta;
         blueDelta = greenDelta;
         if (dispersion > 0.000000001) {
             redDelta = clampDelta(
-                refractedOffset(surfaceNormal, max(greenIor - dispersion, 1.0), opticalPath)
-                    + motionDelta,
+                refractedOffset(surfaceNormal, max(greenIor - dispersion, 1.0), opticalPath),
                 bevelWidth
             );
             blueDelta = clampDelta(
-                refractedOffset(surfaceNormal, greenIor + dispersion, opticalPath) + motionDelta,
+                refractedOffset(surfaceNormal, greenIor + dispersion, opticalPath),
                 bevelWidth
             );
         }
@@ -617,9 +533,6 @@ half4 main(float2 point) {
     float signedDistance;
     float coverage;
     float2 normal;
-    float4 motion0;
-    float4 motion1;
-    float4 motion2;
     if (header0.y < 1.5) {
         float4 sample = shapeSample(0, point);
         float presence = materialize(surfaceMeta[0].z);
@@ -627,26 +540,19 @@ half4 main(float2 point) {
         signedDistance = effectiveDistance;
         coverage = materialize(clamp(0.5 - effectiveDistance, 0.0, 1.0));
         normal = sample.zw;
-        motion0 = surfaceMotion0[0];
-        motion1 = surfaceMotion1[0];
-        motion2 = float4(surfaceMotion2[0].xyz, 0.0);
         half4 material = half4(0.0);
         if (coverage > 0.0) {
-            material = opticalPixel(
-                point, signedDistance, normal, coverage, motion0, motion1, motion2
-            );
+            material = opticalPixel(point, signedDistance, normal, coverage);
         }
         return material;
     } else {
         float4 field;
-        fieldSample(point, field, normal, motion0, motion1, motion2);
+        fieldSample(point, field, normal);
         signedDistance = field.y;
         coverage = field.w;
         half4 material = half4(0.0);
         if (coverage > 0.0) {
-            material = opticalPixel(
-                point, signedDistance, normal, coverage, motion0, motion1, motion2
-            );
+            material = opticalPixel(point, signedDistance, normal, coverage);
         }
         return material;
     }

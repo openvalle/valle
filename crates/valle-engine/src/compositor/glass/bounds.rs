@@ -1,20 +1,20 @@
 //! Authoritative Motion Glass output and backdrop-sampling bounds.
 //!
-//! Shape geometry is stored in owner space, while shadow and optical sampling margins are device
-//! pixels. This module is the single place that crosses those spaces. Prepare writes the result
+//! Shape geometry is stored in owner space, while antialiasing and optical sampling margins are
+//! device pixels. This module is the single place that crosses those spaces. Prepare writes the result
 //! into the typed program; Native/Web admission independently re-derives it before execution.
 
 use thiserror::Error;
 use valle_draw::Rect;
 use valle_draw::program::glass::MotionGlassProgram;
 
-use super::pack::{glass_independent_output_margin, motion_glass_sample_margin};
+use super::pack::{GLASS_INDEPENDENT_OUTPUT_MARGIN, motion_glass_sample_margin};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct MotionGlassBackdropBounds {
-    /// Geometry plus Field support, before device-space independent shadow expansion.
+    /// Geometry plus Field support, before the device-space independent antialiasing outset.
     pub field_support_owner: Rect,
-    /// Conservative owner-space bounds for every visible material/shadow pixel.
+    /// Conservative owner-space bounds for every visible material pixel.
     pub output_owner: Rect,
     /// Conservative owner-space bounds for every backdrop texture sample.
     pub sample_owner: Rect,
@@ -83,23 +83,13 @@ pub fn resolve_motion_glass_backdrop_bounds(
     let mut output_device = transformed_rect_bounds(field_support_owner, owner_to_device)
         .ok_or(MotionGlassBoundsError::InvalidOwnerTransform)?;
     if program.field.is_none() {
-        output_device = outset_rect(
-            output_device,
-            glass_independent_output_margin(&program.material),
-        );
+        output_device = outset_rect(output_device, GLASS_INDEPENDENT_OUTPUT_MARGIN);
     }
     let projected_output_owner = transformed_rect_bounds(output_device, device_to_owner)
         .ok_or(MotionGlassBoundsError::InvalidOwnerTransform)?;
     let output_owner = union_rect(field_support_owner, projected_output_owner);
 
-    let sample_device = outset_rect(
-        output_device,
-        motion_glass_sample_margin(
-            &program.material,
-            &program.surfaces,
-            program.field.is_some(),
-        ),
-    );
+    let sample_device = outset_rect(output_device, motion_glass_sample_margin(&program.material));
     let projected_sample_owner = transformed_rect_bounds(sample_device, device_to_owner)
         .ok_or(MotionGlassBoundsError::InvalidOwnerTransform)?;
     let sample_owner = union_rect(output_owner, projected_sample_owner);

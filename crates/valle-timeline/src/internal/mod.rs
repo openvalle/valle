@@ -30,6 +30,4 @@ pub use content_digest::{ContentDigest, InvalidContentDigest};
 pub use document::*;
 pub use identity::*;
 pub use resource_manifest::{ResourceManifest, ResourceManifestError, decode_resource_manifest};
-pub use time::{
-    DiscontinuityIndex, FrameKey, MotionInstanceId, SampleTime, TimeMapSegment, TrackEpoch,
-};
+pub use time::{FrameKey, SampleTime};

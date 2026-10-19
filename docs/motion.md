@@ -1959,11 +1959,8 @@ separate effect from CSS `backdropFilter: "blur(...)"`.
 | --- | --- |
 | `shape` | `{ kind: "circle" }`, `{ kind: "capsule" }`, `{ kind: "continuousRect", radius }`, or admitted closed polygon path shape |
 | `material` | `clarity`, `depth`, `tint`; normalized material controls and a color |
-| `motion` | `character: responsive/fluid/viscous/elastic`, `intensity`, `settle` in seconds, optional `drive` |
-| `motion.drive` | `translation: point(...)`, `pressure`, `twist` |
 | `presence` | Number 0–1, default 1 |
 | `environment` | `light: { direction: point(...), elevation, intensity, space: "world" or "screen" }` |
-| `foreground` | `tone: auto/light/dark/none`, normalized `protection` |
 | `GlassField merge` | `{ distance: number }`, static, default 24; members retain separate surface IDs |
 
 Save as `glass.motion.tsx`:
@@ -1984,13 +1981,11 @@ export default function GlassCard(ctx) {
 }
 ```
 
-For bindings that affect the material's motion history, use continuous
-`ctx.seconds`/`ctx.progress`; discrete `localFrame` is restricted
-there. The engine owns causal material sampling. Avoid using a frame counter as a
-replacement for this time contract. Surface IDs remain stable across frames.
+Each frame's Glass depends only on that frame, so its bindings may use any time
+value, `localFrame` included. Surface IDs remain stable across frames.
 
-`motion check` prepares the Glass material through the same temporal preparation
-path as native rendering. Check representative frames as well as the opening frame.
+`motion check` prepares the Glass material through the same path as native
+rendering. Check representative frames as well as the opening frame.
 
 ## Data visualization and repeated geometry
 

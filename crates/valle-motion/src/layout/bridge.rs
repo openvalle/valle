@@ -16,29 +16,11 @@ pub struct GlassLayoutMaterial {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct GlassLayoutMotion {
-    pub character: crate::glass::GlassCharacter,
-    pub settle_seconds: f64,
-    pub intensity: f64,
-    pub drive: [f64; 4],
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct GlassLayoutEnvironment {
     pub light_direction: [f64; 2],
     pub light_elevation: f64,
     pub light_intensity: f64,
     pub light_space: crate::glass::GlassLightSpace,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct GlassLayoutForeground {
-    pub tone: crate::glass::GlassForegroundTone,
-    pub protection: f64,
-    /// Conservative owner-local coverage of real foreground descendants. `None` means the
-    /// subtree produces no foreground pixels at this sample.
-    pub bounds: Option<valle_draw::Rect>,
-    pub luma: Option<f32>,
 }
 
 /// One fully evaluated Glass shell after layout. `viewport_matrix` maps the normalized local box
@@ -57,10 +39,8 @@ pub struct GlassLayoutSurface {
     pub radius: f32,
     pub path_points: Vec<[f32; 2]>,
     pub presence: f64,
-    pub motion: GlassLayoutMotion,
     pub material: Option<GlassLayoutMaterial>,
     pub environment: Option<GlassLayoutEnvironment>,
-    pub foreground: GlassLayoutForeground,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -70,13 +50,12 @@ pub struct GlassLayoutField {
     pub owner_to_viewport: [f64; 9],
     pub material: GlassLayoutMaterial,
     pub environment: GlassLayoutEnvironment,
-    pub motion: GlassLayoutMotion,
     pub merge_distance: f64,
     pub member_surface_ids: Vec<String>,
 }
 
-/// Layout/evaluation sidecar. Packed programs are installed by Engine only after it has sampled
-/// the causal history; the Motion emitter consumes them without interpreting optics.
+/// Layout/evaluation sidecar. Packed programs are installed by Engine after it has qualified the
+/// surfaces in device space; the Motion emitter consumes them without interpreting optics.
 #[derive(Debug, Clone, Default)]
 pub struct GlassLayoutFrame {
     pub surfaces: Vec<GlassLayoutSurface>,

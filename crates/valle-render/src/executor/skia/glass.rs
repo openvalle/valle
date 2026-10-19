@@ -133,9 +133,8 @@ mod tests {
     use valle_draw::program::BackdropScope;
     use valle_draw::program::glass::{
         BackdropUse, GlassOwnerKind, MOTION_GLASS_KERNEL_ID, MotionGlassForegroundProgram,
-        MotionGlassProgram, PackedGlassField, PackedGlassForegroundTone, PackedGlassMaterial,
-        PackedGlassMotion, PackedGlassShapeKind, PackedGlassSurface, motion_glass_kernel_digest,
-        schema_digest,
+        MotionGlassProgram, PackedGlassField, PackedGlassMaterial, PackedGlassShapeKind,
+        PackedGlassSurface, motion_glass_kernel_digest, schema_digest,
     };
     use valle_engine::compositor::glass::{
         apply_glass_foreground_transformed, render_field_contribution_transformed,
@@ -156,7 +155,6 @@ mod tests {
             tint_linear: [0.18, 0.42, 0.78, 0.24],
             specular_strength: 0.55,
             shadow_strength: 0.12,
-            foreground_gain: 0.8,
             light: valle_draw::program::PackedGlassLight {
                 direction: [0.6, -0.8],
                 elevation: 0.4,
@@ -176,12 +174,7 @@ mod tests {
                 local_to_owner: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
                 radius: 32.0,
                 presence: 1.0,
-                response: PackedGlassMotion::ZERO,
                 path_points: vec![],
-                foreground_tone: PackedGlassForegroundTone::None,
-                foreground_protection: 0.0,
-                foreground_bounds: None,
-                foreground_luma: None,
             }],
             field: None,
             material: material(),
@@ -198,16 +191,7 @@ mod tests {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn field_surface(
-        id: &str,
-        rect: Rect,
-        response: PackedGlassMotion,
-        tone: PackedGlassForegroundTone,
-        protection: f32,
-        foreground_bounds: Rect,
-        foreground_luma: Option<f32>,
-    ) -> PackedGlassSurface {
+    fn field_surface(id: &str, rect: Rect) -> PackedGlassSurface {
         PackedGlassSurface {
             surface_id: id.into(),
             shape: PackedGlassShapeKind::Circle,
@@ -215,12 +199,7 @@ mod tests {
             local_to_owner: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
             radius: rect.width as f32 * 0.5,
             presence: 0.92,
-            response,
             path_points: vec![],
-            foreground_tone: tone,
-            foreground_protection: protection,
-            foreground_bounds: Some(foreground_bounds),
-            foreground_luma,
         }
     }
 
@@ -229,42 +208,8 @@ mod tests {
             owner_kind: GlassOwnerKind::Field,
             owner_id: "pair".into(),
             surfaces: vec![
-                field_surface(
-                    "left",
-                    Rect::new(24.0, 30.0, 40.0, 40.0),
-                    PackedGlassMotion {
-                        translation: [18.0, -7.0],
-                        acceleration: [120.0, -80.0],
-                        angular: 0.2,
-                        scale: [0.1, -0.05],
-                        shear: 0.08,
-                        area: 0.12,
-                        pressure: 0.18,
-                        twist: -0.1,
-                    },
-                    PackedGlassForegroundTone::Light,
-                    0.65,
-                    Rect::new(35.0, 46.0, 17.0, 9.0),
-                    None,
-                ),
-                field_surface(
-                    "right",
-                    Rect::new(66.0, 34.0, 40.0, 40.0),
-                    PackedGlassMotion {
-                        translation: [-11.0, 9.0],
-                        acceleration: [-45.0, 70.0],
-                        angular: -0.14,
-                        scale: [-0.04, 0.09],
-                        shear: -0.05,
-                        area: -0.08,
-                        pressure: 0.11,
-                        twist: 0.16,
-                    },
-                    PackedGlassForegroundTone::Auto,
-                    0.5,
-                    Rect::new(77.0, 49.0, 17.0, 10.0),
-                    Some(0.25),
-                ),
+                field_surface("left", Rect::new(24.0, 30.0, 40.0, 40.0)),
+                field_surface("right", Rect::new(66.0, 34.0, 40.0, 40.0)),
             ],
             field: Some(PackedGlassField {
                 field_id: "pair".into(),
@@ -293,16 +238,6 @@ mod tests {
             local_to_owner: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
             radius: 0.0,
             presence: 0.84,
-            response: PackedGlassMotion {
-                translation: [13.0, -5.0],
-                acceleration: [90.0, -55.0],
-                angular: 0.16,
-                scale: [0.08, -0.04],
-                shear: 0.06,
-                area: 0.10,
-                pressure: 0.14,
-                twist: -0.08,
-            },
             path_points: vec![
                 [34.0, 20.0],
                 [79.0, 17.0],
@@ -310,10 +245,6 @@ mod tests {
                 [72.0, 86.0],
                 [29.0, 72.0],
             ],
-            foreground_tone: PackedGlassForegroundTone::None,
-            foreground_protection: 0.0,
-            foreground_bounds: None,
-            foreground_luma: None,
         };
         program.backdrop.output_bounds = program.surfaces[0].rect;
         program

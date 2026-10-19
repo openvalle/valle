@@ -1,10 +1,10 @@
 //! G1.5 canonical RGBA32F raster for an independent Motion Glass surface.
 //!
 //! Executes the typed Glass program against a working-color premultiplied backdrop: analytic
-//! shape/height/normal, bounded refraction, diffusion with detail preservation, tint, edge and
-//! shadow, materialization coverage, and the packed current response as a bounded refraction
-//! bias. Output is a transparent local contribution (premul) that the compositor source-overs
-//! once; the raster never writes back to the backdrop and never reads a previous frame.
+//! shape/height/normal, bounded refraction, diffusion with detail preservation, tint, edge
+//! absorption and reflection, and materialization coverage. Output is a transparent local
+//! contribution (premul) that the compositor source-overs once; the raster never writes back to
+//! the backdrop and never reads a previous frame.
 //!
 //! This is the F32 reference against which the G1.6 Native/Web kernels are compared; it is not
 //! a production fast path.
@@ -12,8 +12,8 @@
 use thiserror::Error;
 use valle_draw::Rect;
 use valle_draw::program::glass::{
-    GlassOwnerKind, MotionGlassForegroundProgram, MotionGlassProgram, PackedGlassMotion,
-    PackedGlassShapeKind, verify_kernel,
+    GlassOwnerKind, MotionGlassForegroundProgram, MotionGlassProgram, PackedGlassShapeKind,
+    verify_kernel,
 };
 
 use crate::compositor::glass::material::{
@@ -65,7 +65,7 @@ pub fn render_glass_contribution(
 }
 
 /// Transform-aware reference path used by DrawProgram. Geometry stays in the material owner's
-/// local space while response and optical sampling are device-qualified.
+/// local space while optical sampling is device-qualified.
 pub fn render_glass_contribution_transformed(
     program: &MotionGlassProgram,
     owner_to_device: [f64; 9],
@@ -369,8 +369,6 @@ fn pixel_contribution(
                 signed_distance: effective_sdf,
                 normal: shape.normal,
                 coverage,
-                motion: surface.surface.response,
-                strain: 0.0,
                 device_point: p,
             },
         )?
@@ -442,8 +440,6 @@ pub fn render_field_contribution_transformed(
                         signed_distance: sample.signed_distance,
                         normal: sample.normal,
                         coverage: sample.coverage,
-                        motion: sample.motion,
-                        strain: sample.strain,
                         device_point: p,
                     },
                 )?
@@ -462,8 +458,6 @@ pub(crate) struct FieldSample {
     pub signed_distance: f64,
     pub coverage: f64,
     pub normal: [f64; 2],
-    pub motion: PackedGlassMotion,
-    pub strain: f64,
 }
 
 /// Field shape sample. Presence shrinks each member's signed distance before it contributes;
@@ -494,8 +488,7 @@ fn field_sample_prepared(
     p: [f64; 2],
     merge: f64,
 ) -> Option<FieldSample> {
-    let (density, motion, strain, active) =
-        field_density_motion_at(surfaces, device_to_owner, p, merge);
+    let (density, active) = field_density_active_at(surfaces, device_to_owner, p, merge);
     if density <= 0.0 {
         return None;
     }
@@ -534,8 +527,6 @@ fn field_sample_prepared(
         signed_distance: pseudo_distance,
         coverage,
         normal,
-        motion,
-        strain,
     })
 }
 
@@ -572,18 +563,17 @@ fn field_density_at(
     density
 }
 
-fn field_density_motion_at(
+/// The field density at `p` and the number of members that contribute to it.
+fn field_density_active_at(
     surfaces: &[PreparedTransformedSurface<'_>],
     device_to_owner: [f64; 9],
     p: [f64; 2],
     merge: f64,
-) -> (f64, PackedGlassMotion, f64, usize) {
+) -> (f64, usize) {
     let Some(owner_metric) = OwnerMetric::new(device_to_owner, p) else {
-        return (0.0, PackedGlassMotion::ZERO, 0.0, 0);
+        return (0.0, 0);
     };
     let mut density = 0.0;
-    let mut mixed = PackedGlassMotion::ZERO;
-    let mut weighted_translation_sq = 0.0;
     let mut active = 0usize;
     for surface in surfaces {
         let presence = materialization(f64::from(surface.surface.presence));
@@ -609,49 +599,11 @@ fn field_density_motion_at(
         }
         density += rho;
         active += 1;
-        let motion = surface.surface.response;
-        add_motion_scaled(&mut mixed, motion, rho as f32);
-        let tx = f64::from(motion.translation[0]);
-        let ty = f64::from(motion.translation[1]);
-        weighted_translation_sq += rho * (tx * tx + ty * ty);
     }
     if density <= 0.0 {
-        return (0.0, PackedGlassMotion::ZERO, 0.0, 0);
+        return (0.0, 0);
     }
-    scale_motion(&mut mixed, (1.0 / density) as f32);
-    weighted_translation_sq /= density;
-    let mean_sq = f64::from(mixed.translation[0]).powi(2) + f64::from(mixed.translation[1]).powi(2);
-    let strain = if active > 1 {
-        (weighted_translation_sq - mean_sq).max(0.0).sqrt()
-    } else {
-        0.0
-    };
-    (density, mixed, strain, active)
-}
-
-fn add_motion_scaled(target: &mut PackedGlassMotion, value: PackedGlassMotion, weight: f32) {
-    target.translation[0] += value.translation[0] * weight;
-    target.translation[1] += value.translation[1] * weight;
-    target.acceleration[0] += value.acceleration[0] * weight;
-    target.acceleration[1] += value.acceleration[1] * weight;
-    target.angular += value.angular * weight;
-    target.scale[0] += value.scale[0] * weight;
-    target.scale[1] += value.scale[1] * weight;
-    target.shear += value.shear * weight;
-    target.area += value.area * weight;
-    target.pressure += value.pressure * weight;
-    target.twist += value.twist * weight;
-}
-
-fn scale_motion(target: &mut PackedGlassMotion, scale: f32) {
-    target.translation = target.translation.map(|value| value * scale);
-    target.acceleration = target.acceleration.map(|value| value * scale);
-    target.angular *= scale;
-    target.scale = target.scale.map(|value| value * scale);
-    target.shear *= scale;
-    target.area *= scale;
-    target.pressure *= scale;
-    target.twist *= scale;
+    (density, active)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -659,22 +611,18 @@ struct OpticalPixelInput {
     signed_distance: f64,
     normal: [f64; 2],
     coverage: f64,
-    motion: PackedGlassMotion,
-    strain: f64,
     device_point: [f64; 2],
 }
 
 #[derive(Debug, Clone, Copy)]
 struct LensSurface {
     normal: [f64; 3],
-    edge_curve: f64,
 }
 
 fn lens_surface(signed_distance: f64, boundary_normal: [f64; 2], bevel_width: f64) -> LensSurface {
     if bevel_width <= 1.0e-9 {
         return LensSurface {
             normal: [0.0, 0.0, 1.0],
-            edge_curve: 0.0,
         };
     }
     let interior = (-signed_distance / bevel_width).clamp(0.0, 1.0);
@@ -690,7 +638,6 @@ fn lens_surface(signed_distance: f64, boundary_normal: [f64; 2], bevel_width: f6
             boundary_normal[1] * edge_curve,
             view_facing,
         ],
-        edge_curve,
     }
 }
 
@@ -779,52 +726,28 @@ fn optical_pixel(
         signed_distance,
         normal,
         coverage,
-        motion,
-        strain,
         device_point: p,
     } = input;
     let bevel_width = f64::from(program.material.bevel_width);
     let thickness = f64::from(program.material.thickness);
     let mut surface = lens_surface(signed_distance, normal, bevel_width);
-    let tangent = [-normal[1], normal[0]];
-    let normal_acceleration = f64::from(motion.acceleration[0]) * normal[0]
-        + f64::from(motion.acceleration[1]) * normal[1];
-    let anisotropic_scale =
-        f64::from(motion.scale[0]) * normal[0].abs() + f64::from(motion.scale[1]) * normal[1].abs();
-    let normal_delta = (-normal_acceleration * 0.000_001_5
-        + anisotropic_scale * 0.035
-        + f64::from(motion.area) * 0.016
-        + f64::from(motion.pressure) * 0.022
-        + strain * 0.000_15)
-        * thickness;
-    let tangent_delta =
-        (f64::from(motion.angular) * 0.025 + f64::from(motion.twist) * 0.018) * thickness;
-    let shear_delta = f64::from(motion.shear) * thickness * 0.02;
-    let motion_envelope = 0.22 + 0.78 * surface.edge_curve;
-    let deformation_delta = [
-        normal[0] * normal_delta + tangent[0] * tangent_delta + normal[1] * shear_delta,
-        normal[1] * normal_delta + tangent[1] * tangent_delta + normal[0] * shear_delta,
-    ];
+    // A material with thickness takes the normal's height from its slope, which keeps a unit
+    // normal where the boundary normal degenerates to zero.
     if thickness > 1.0e-9 {
-        let mut dynamic_slope = [
-            surface.normal[0] + deformation_delta[0] / thickness * motion_envelope * 1.6,
-            surface.normal[1] + deformation_delta[1] / thickness * motion_envelope * 1.6,
-        ];
-        let slope_length = dynamic_slope[0].hypot(dynamic_slope[1]);
+        let mut slope = [surface.normal[0], surface.normal[1]];
+        let slope_length = slope[0].hypot(slope[1]);
         if slope_length > 1.0 {
-            dynamic_slope = dynamic_slope.map(|value| value / slope_length);
+            slope = slope.map(|value| value / slope_length);
         }
-        let dynamic_length = dynamic_slope[0].hypot(dynamic_slope[1]);
+        let unit_slope_length = slope[0].hypot(slope[1]);
         surface.normal = [
-            dynamic_slope[0],
-            dynamic_slope[1],
-            (1.0 - dynamic_length * dynamic_length).max(0.0).sqrt(),
+            slope[0],
+            slope[1],
+            (1.0 - unit_slope_length * unit_slope_length)
+                .max(0.0)
+                .sqrt(),
         ];
     }
-    let motion_delta = [
-        -f64::from(motion.translation[0]) * 0.000_75 * thickness * motion_envelope,
-        -f64::from(motion.translation[1]) * 0.000_75 * thickness * motion_envelope,
-    ];
     let ior = f64::from(program.material.refractive_index);
     let dispersion = f64::from(program.material.dispersion);
     let optical_thickness = fold_safe_optical_thickness(thickness, bevel_width, ior + dispersion);
@@ -832,14 +755,12 @@ fn optical_pixel(
     // Modulating path length with the same profile created a second extremum in the sampling map.
     let optical_path = optical_thickness * OPTICAL_PATH_THICKNESS_FACTOR;
     let offset_for = |channel_ior: f64| {
-        let optical = snell_offset(surface, channel_ior, optical_path);
         clamp_displacement(
-            [optical[0] + motion_delta[0], optical[1] + motion_delta[1]],
+            snell_offset(surface, channel_ior, optical_path),
             bevel_width,
         )
     };
-    let has_optical_offset = surface.normal[0].hypot(surface.normal[1]) > 1.0e-9
-        || motion_delta[0].hypot(motion_delta[1]) > 1.0e-9;
+    let has_optical_offset = surface.normal[0].hypot(surface.normal[1]) > 1.0e-9;
     let (red_offset, green_offset, blue_offset) = if !has_optical_offset {
         ([0.0; 2], [0.0; 2], [0.0; 2])
     } else if dispersion <= 1.0e-9 {
@@ -1391,8 +1312,8 @@ mod tests {
     use super::*;
     use crate::resource::Extent2d;
     use valle_draw::program::glass::{
-        BackdropUse, MOTION_GLASS_KERNEL_ID, PackedGlassMaterial, PackedGlassMotion,
-        PackedGlassSurface, motion_glass_kernel_digest, schema_digest,
+        BackdropUse, MOTION_GLASS_KERNEL_ID, PackedGlassMaterial, PackedGlassSurface,
+        motion_glass_kernel_digest, schema_digest,
     };
 
     fn checker_backdrop(extent: Extent2d) -> ReferenceImage {
@@ -1425,11 +1346,7 @@ mod tests {
         program.backdrop.sample_bounds = bounds.sample_owner;
     }
 
-    fn program(presence: f32, response_tap: f32) -> MotionGlassProgram {
-        let response_tap = PackedGlassMotion {
-            translation: [response_tap, 0.0],
-            ..PackedGlassMotion::ZERO
-        };
+    fn program(presence: f32) -> MotionGlassProgram {
         let mut program = MotionGlassProgram {
             owner_kind: GlassOwnerKind::Independent,
             owner_id: "hero-lens".into(),
@@ -1440,12 +1357,7 @@ mod tests {
                 local_to_owner: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
                 radius: 32.0,
                 presence,
-                response: response_tap,
                 path_points: vec![],
-                foreground_tone: valle_draw::program::glass::PackedGlassForegroundTone::None,
-                foreground_protection: 0.0,
-                foreground_bounds: None,
-                foreground_luma: None,
             }],
             field: None,
             material: PackedGlassMaterial {
@@ -1457,7 +1369,6 @@ mod tests {
                 tint_linear: [0.3, 0.5, 0.9, 0.2],
                 specular_strength: 0.5,
                 shadow_strength: 0.1,
-                foreground_gain: 0.7,
                 light: valle_draw::program::PackedGlassLight::DEFAULT,
             },
             backdrop: BackdropUse {
@@ -1480,14 +1391,14 @@ mod tests {
     #[test]
     fn presence_zero_yields_no_contribution() {
         let backdrop = checker_backdrop(extent());
-        let contribution = render_glass_contribution(&program(0.0, 0.0), &backdrop).unwrap();
+        let contribution = render_glass_contribution(&program(0.0), &backdrop).unwrap();
         assert_eq!(contribution, ReferenceImage::transparent(extent()).unwrap());
     }
 
     #[test]
     fn rest_circle_covers_and_tints_inside() {
         let backdrop = checker_backdrop(extent());
-        let contribution = render_glass_contribution(&program(1.0, 0.0), &backdrop).unwrap();
+        let contribution = render_glass_contribution(&program(1.0), &backdrop).unwrap();
         // Center of the circle: full coverage, tinted.
         let center = contribution.pixel(64, 64).unwrap();
         assert!(center.alpha() > 0.99);
@@ -1501,7 +1412,7 @@ mod tests {
     #[test]
     fn independent_coverage_is_not_the_lens_height_profile() {
         let backdrop = checker_backdrop(extent());
-        let contribution = render_glass_contribution(&program(1.0, 0.0), &backdrop).unwrap();
+        let contribution = render_glass_contribution(&program(1.0), &backdrop).unwrap();
         // This sample is well inside the one-pixel edge but only about one quarter of the radius
         // into the height profile. The old coverage=height coupling made it mostly transparent.
         assert!(contribution.pixel(88, 64).unwrap().alpha() > 0.99);
@@ -1532,12 +1443,13 @@ mod tests {
         let just_inside = lens_surface(-width - epsilon, [1.0, 0.0], width);
         let join = lens_surface(-width, [1.0, 0.0], width);
         let just_outside = lens_surface(-width + epsilon, [1.0, 0.0], width);
-        assert_eq!(just_inside.edge_curve, 0.0);
-        assert_eq!(join.edge_curve, 0.0);
+        // Along a unit boundary normal, the normal's slope is the edge curve itself.
+        assert_eq!(just_inside.normal[0], 0.0);
+        assert_eq!(join.normal[0], 0.0);
         assert!(
-            just_outside.edge_curve < 1.0e-6,
+            just_outside.normal[0] < 1.0e-6,
             "{}",
-            just_outside.edge_curve
+            just_outside.normal[0]
         );
     }
 
@@ -1601,7 +1513,7 @@ mod tests {
     #[test]
     fn zero_alpha_tint_rgb_is_exactly_dormant() {
         let backdrop = checker_backdrop(extent());
-        let mut white = program(1.0, 0.0);
+        let mut white = program(1.0);
         white.material.tint_linear = [1.0, 1.0, 1.0, 0.0];
         let mut black = white.clone();
         black.material.tint_linear = [0.0, 0.0, 0.0, 0.0];
@@ -1631,7 +1543,7 @@ mod tests {
     #[test]
     fn resolved_light_direction_controls_the_surface_highlight() {
         let backdrop = solid_backdrop(extent(), 0.2);
-        let mut toward = program(1.0, 0.0);
+        let mut toward = program(1.0);
         toward.material.tint_linear[3] = 0.0;
         toward.material.refractive_index = 1.0;
         toward.material.roughness = 0.0;
@@ -1664,7 +1576,7 @@ mod tests {
     #[test]
     fn ior_dispersion_executes_distinct_rgb_refraction() {
         let backdrop = checker_backdrop(extent());
-        let mut none = program(1.0, 0.0);
+        let mut none = program(1.0);
         none.material.dispersion = 0.0;
         let mut dispersed = none.clone();
         dispersed.material.dispersion = 0.04;
@@ -1676,32 +1588,8 @@ mod tests {
     }
 
     #[test]
-    fn foreground_layout_metadata_cannot_repaint_the_glass_material() {
-        let backdrop = checker_backdrop(extent());
-        let baseline = program(1.0, 0.0);
-        let baseline_image = render_glass_contribution(&baseline, &backdrop).unwrap();
-
-        let mut protected = baseline;
-        let surface = &mut protected.surfaces[0];
-        surface.foreground_tone = valle_draw::program::glass::PackedGlassForegroundTone::Light;
-        surface.foreground_protection = 1.0;
-        surface.foreground_bounds = Some(Rect::new(40.0, 54.0, 48.0, 20.0));
-        protected.validate().unwrap();
-        let protected_image = render_glass_contribution(&protected, &backdrop).unwrap();
-
-        assert_eq!(
-            protected_image, baseline_image,
-            "a layout rectangle is not glyph coverage and must never paint a band into glass"
-        );
-    }
-
-    #[test]
     fn foreground_pass_masks_real_pixels_instead_of_synthesizing_content() {
-        let mut owner = program(1.0, 0.0);
-        let surface = &mut owner.surfaces[0];
-        surface.foreground_tone = valle_draw::program::glass::PackedGlassForegroundTone::Light;
-        surface.foreground_protection = 0.65;
-        surface.foreground_bounds = Some(Rect::new(48.0, 60.0, 32.0, 8.0));
+        let owner = program(1.0);
         let foreground = MotionGlassForegroundProgram::from_owner(&owner, "hero-lens").unwrap();
         let ordinary_pixels = ReferenceImage::solid(
             extent(),
@@ -1721,7 +1609,7 @@ mod tests {
     #[test]
     fn contribution_is_premultiplied() {
         let backdrop = checker_backdrop(extent());
-        let contribution = render_glass_contribution(&program(1.0, 0.0), &backdrop).unwrap();
+        let contribution = render_glass_contribution(&program(1.0), &backdrop).unwrap();
         for y in 0..extent().height() {
             for x in 0..extent().width() {
                 let pixel = contribution.pixel(x, y).unwrap();
@@ -1735,20 +1623,9 @@ mod tests {
     }
 
     #[test]
-    fn response_changes_optics_deterministically() {
-        let backdrop = checker_backdrop(extent());
-        let rest = render_glass_contribution(&program(1.0, 0.0), &backdrop).unwrap();
-        let moving = render_glass_contribution(&program(1.0, 250.0), &backdrop).unwrap();
-        assert_ne!(rest, moving);
-        // Deterministic: same input twice is exact.
-        let again = render_glass_contribution(&program(1.0, 250.0), &backdrop).unwrap();
-        assert_eq!(moving, again);
-    }
-
-    #[test]
     fn field_program_fails_closed() {
         let backdrop = checker_backdrop(extent());
-        let mut program = program(1.0, 0.0);
+        let mut program = program(1.0);
         program.owner_kind = GlassOwnerKind::Field;
         assert!(matches!(
             render_glass_contribution(&program, &backdrop),
@@ -1759,7 +1636,7 @@ mod tests {
     #[test]
     fn foreign_kernel_fails_closed_before_pixel_work() {
         let backdrop = checker_backdrop(extent());
-        let mut program = program(1.0, 0.0);
+        let mut program = program(1.0);
         program.kernel_id = "third-party-kernel".into();
         assert!(matches!(
             render_glass_contribution(&program, &backdrop),
@@ -1770,7 +1647,7 @@ mod tests {
     #[test]
     fn reference_rejects_bounds_that_clip_visible_output() {
         let backdrop = checker_backdrop(extent());
-        let mut program = program(1.0, 0.0);
+        let mut program = program(1.0);
         program.backdrop.output_bounds = program.surfaces[0].rect;
         assert!(matches!(
             render_glass_contribution(&program, &backdrop),
@@ -1781,7 +1658,7 @@ mod tests {
     #[test]
     fn composite_is_source_over() {
         let backdrop = checker_backdrop(extent());
-        let contribution = render_glass_contribution(&program(1.0, 0.0), &backdrop).unwrap();
+        let contribution = render_glass_contribution(&program(1.0), &backdrop).unwrap();
         let composite = composite_glass_contribution(&contribution, &backdrop).unwrap();
         // At the circle center, alpha stays 1 and color changed from the backdrop.
         let before = backdrop.pixel(64, 64).unwrap();
@@ -1795,7 +1672,7 @@ mod tests {
         // G1.7 wrapper contract: opacity=0 on the Glass contribution leaves the backdrop
         // pixel-identical; the wrapper never touches the backdrop itself.
         let backdrop = checker_backdrop(extent());
-        let contribution = render_glass_contribution(&program(1.0, 0.0), &backdrop).unwrap();
+        let contribution = render_glass_contribution(&program(1.0), &backdrop).unwrap();
         let faded = contribution.scale_coverage(0.0).unwrap();
         let composite = composite_glass_contribution(&faded, &backdrop).unwrap();
         assert_eq!(composite, backdrop);
@@ -1806,7 +1683,7 @@ mod tests {
         // G1.7 wrapper contract: a mask that does not intersect the Glass leaves the backdrop
         // pixel-identical.
         let backdrop = checker_backdrop(extent());
-        let contribution = render_glass_contribution(&program(1.0, 0.0), &backdrop).unwrap();
+        let contribution = render_glass_contribution(&program(1.0), &backdrop).unwrap();
         let masked = apply_rect_mask(&contribution, Rect::new(0.0, 0.0, 16.0, 16.0), 2.0);
         let composite = composite_glass_contribution(&masked, &backdrop).unwrap();
         assert_eq!(composite, backdrop);
@@ -1834,7 +1711,7 @@ mod tests {
         }
         let dark = patch(&checker_backdrop(extent), [0.9, 0.1, 0.1]);
         let bright = patch(&checker_backdrop(extent), [0.1, 0.9, 0.1]);
-        let program = program(1.0, 0.0);
+        let program = program(1.0);
         let first = composite_glass_contribution(
             &render_glass_contribution(&program, &dark).unwrap(),
             &dark,
@@ -1863,12 +1740,7 @@ mod tests {
             local_to_owner: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
             radius: 32.0,
             presence: 1.0,
-            response: PackedGlassMotion::ZERO,
             path_points: vec![],
-            foreground_tone: valle_draw::program::glass::PackedGlassForegroundTone::None,
-            foreground_protection: 0.0,
-            foreground_bounds: None,
-            foreground_luma: None,
         };
         let merge = f64::from(merge_distance);
         let output = Rect::from_edges(
@@ -1904,7 +1776,6 @@ mod tests {
                 tint_linear: [0.3, 0.5, 0.9, 0.2],
                 specular_strength: 0.5,
                 shadow_strength: 0.1,
-                foreground_gain: 0.7,
                 light: valle_draw::program::PackedGlassLight::DEFAULT,
             },
             backdrop: BackdropUse {
@@ -2007,7 +1878,7 @@ mod tests {
     fn independent_program_rejected_by_field_raster() {
         let backdrop = checker_backdrop(extent());
         assert!(matches!(
-            render_field_contribution(&program(1.0, 0.0), &backdrop),
+            render_field_contribution(&program(1.0), &backdrop),
             Err(GlassRenderError::NotField)
         ));
     }
@@ -2077,7 +1948,7 @@ mod tests {
         let extent = extent();
         let dark = solid_backdrop(extent, 0.05);
         let bright = solid_backdrop(extent, 0.90);
-        let program = program(1.0, 0.0);
+        let program = program(1.0);
         let dark_glass = render_glass_contribution(&program, &dark).unwrap();
         let bright_glass = render_glass_contribution(&program, &bright).unwrap();
         let dark_center = dark_glass.pixel(64, 64).unwrap();
@@ -2096,7 +1967,7 @@ mod tests {
         // the Glass pixels or the backdrop outside the band — the glass output is identical
         // with and without the caption band.
         let backdrop = checker_backdrop(extent());
-        let program = program(1.0, 0.0);
+        let program = program(1.0);
         let composite = composite_glass_contribution(
             &render_glass_contribution(&program, &backdrop).unwrap(),
             &backdrop,
@@ -2130,7 +2001,7 @@ mod tests {
     fn capsule_renders_stadium_geometry() {
         // G4.1: a capsule with radius >= half the smaller dimension is a stadium — the flat
         // side exists along the middle and the bounding-box corners stay outside.
-        let mut program = program(1.0, 0.0);
+        let mut program = program(1.0);
         program.surfaces[0].shape = PackedGlassShapeKind::Capsule;
         program.surfaces[0].rect = Rect::new(24.0, 40.0, 80.0, 48.0);
         program.surfaces[0].radius = 24.0;
@@ -2149,7 +2020,7 @@ mod tests {
         // G4.3 Native CPU F16 kernel: RGBA16F transport must stay inside the frozen
         // F16_REFERENCE_TOLERANCE against the RGBA32F reference.
         let backdrop = checker_backdrop(extent());
-        let program = program(1.0, 0.0);
+        let program = program(1.0);
         let reference = render_glass_contribution(&program, &backdrop).unwrap();
         let f16 = render_glass_contribution_f16(&program, &backdrop).unwrap();
         for y in 0..extent().height() {
@@ -2172,7 +2043,7 @@ mod tests {
     #[test]
     fn path_polygon_renders_closed_shape() {
         // G4.1 closed polygon: interior covered, outside corner outside the material.
-        let mut program = program(1.0, 0.0);
+        let mut program = program(1.0);
         program.surfaces[0].shape = PackedGlassShapeKind::Path;
         program.surfaces[0].rect = Rect::new(40.0, 40.0, 80.0, 80.0);
         program.surfaces[0].radius = 0.0;
