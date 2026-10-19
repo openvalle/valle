@@ -6142,36 +6142,9 @@ fn declarations(
         });
     }
     for style in &node.styles {
-        // Author `--*` is rejected at admission; skip it here so it never enters the cascade.
-        if style.property.starts_with("--")
-            || style.property == "motion-filter-frame"
-            || style.property.starts_with("motion-displacement-")
-            || style.property.starts_with("motion-velocity-blur-")
-            || style.property == "motion-chromatic-aberration-offset"
-            || style.property.starts_with("motion-glow-")
-            || style.property.starts_with("motion-bloom-")
-            || style.property.starts_with("motion-radial-blur-")
-            || style.property.starts_with("motion-film-grain-")
-            || style.property.starts_with("motion-lens-distortion-")
-            || style.property.starts_with("motion-transform-3d-")
-            || style.property.starts_with("motion-perspective-origin-")
-        {
-            continue;
-        }
-        if matches!(
-            style.property.as_str(),
-            "motion-path-anchor"
-                | "mix-blend-space"
-                | "motion-inline-image"
-                | "motion-path-angle-offset"
-                | "rotate-x"
-                | "rotate-y"
-                | "perspective"
-                | "transform-style"
-                | "backface-visibility"
-                | "paper-grain"
-                | "contact-shadow"
-        ) {
+        // Author `--*` is rejected at admission, and Motion consumes its own bindings before CSS
+        // layout; skip both here so they never enter the cascade.
+        if style.property.starts_with("--") || crate::style::is_motion_property(&style.property) {
             continue;
         }
         let value = match &style.value {

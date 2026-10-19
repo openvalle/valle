@@ -1866,6 +1866,84 @@ export default function Scene(ctx) {
         }
     }
 
+    /// The DrawProgram Motion emits for `source` at frame 0.
+    fn motion_program(source: &str, viewport: (u32, u32)) -> DrawProgram {
+        use valle_compiler::motion::compile_motion;
+        use valle_motion::{
+            Fonts, LayoutOptions, Viewport, build_tree, default_font_naming, emit,
+            motion_context_at_frame, prepare_scene, resolve_props,
+        };
+        use valle_timeline::FrameRate;
+
+        let artifact = compile_motion(source).unwrap().artifact;
+        let prepared = prepare_scene(&artifact).unwrap();
+        let props = resolve_props(&artifact.controls, &Default::default()).unwrap();
+        let fonts = Fonts::default();
+        let context = motion_context_at_frame(0, 30, FrameRate::new(30, 1).unwrap()).unwrap();
+        let tree = build_tree(
+            &prepared,
+            &context,
+            &props,
+            &LayoutOptions {
+                viewport: Viewport::new(viewport),
+                fonts: &fonts,
+                styles: None,
+            },
+        )
+        .unwrap();
+        emit(&tree, &default_font_naming).unwrap().program
+    }
+
+    /// Each backdrop read of `program`, with the group that owns it and that group's parent.
+    fn backdrop_reads(program: &DrawProgram) -> Vec<(&Group, &Group, &BackdropRead)> {
+        let groups = program
+            .nodes()
+            .iter()
+            .enumerate()
+            .filter_map(|(at, node)| match node {
+                Node::Group(group) => Some((at, group)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        groups
+            .iter()
+            .filter_map(|(at, group)| {
+                let read = group.backdrop.as_ref()?;
+                let (_, parent) = groups.iter().find(|(_, parent)| {
+                    parent
+                        .children
+                        .iter()
+                        .any(|child| child.raw() as usize == *at)
+                })?;
+                Some((*group, *parent, read))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn motion_backdrop_displacement_lays_out_into_a_backdrop_read() {
+        let program = motion_program(
+            r##"
+export default function Scene(ctx) {
+  return <Scene className="relative" style={{width:100,height:40}}>
+    <View key="lens" className="absolute" style={{left:50,top:0,width:40,height:40,
+      backdropDisplacement:displacement(17,point(0.01,0.02),4)}} />
+  </Scene>;
+}
+"##,
+            (100, 40),
+        );
+        let reads = backdrop_reads(&program);
+        assert_eq!(reads.len(), 1);
+        let (_, _, read) = reads[0];
+        assert_eq!(read.bounds, Rect::new(0.0, 0.0, 40.0, 40.0));
+        assert!(
+            matches!(read.filters.as_slice(), [Filter::NoiseDisplacement { .. }]),
+            "{:?}",
+            read.filters
+        );
+    }
+
     #[test]
     fn blend_space_changes_program_identity_and_destination_semantics() {
         use valle_draw::program::BlendSpace;
