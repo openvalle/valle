@@ -1007,7 +1007,12 @@ fn studio_state_json(request: &StudioRequest, generation: u64) -> Result<String>
 }
 
 fn studio_native_state_json(request: &StudioRequest, generation: u64) -> Result<String> {
-    let module_graph = load_motion_module_graph(&request.input)?;
+    // A source that does not parse or resolve its imports opens like one that does not compile.
+    let module_graph =
+        match valle_compiler::motion::MotionModuleGraph::from_entry_path(&request.input) {
+            Ok(graph) => graph,
+            Err(diagnostics) => return studio_diagnostics_json(request, generation, &diagnostics),
+        };
     let mut assets = load_assets(&request.asset_specs)?;
     let shaders = shader_registry(&assets)?;
     let resources = assets
@@ -1031,15 +1036,7 @@ fn studio_native_state_json(request: &StudioRequest, generation: u64) -> Result<
         None,
     )? {
         Ok(compiled) => compiled,
-        Err(diagnostics) => {
-            return Ok(serde_json::to_string(&serde_json::json!({
-                "status": "error",
-                "protocolVersion": crate::webruntime::PROTOCOL_VERSION,
-                "generation": generation,
-                "input": request.input,
-                "diagnostics": diagnostics,
-            }))?);
-        }
+        Err(diagnostics) => return studio_diagnostics_json(request, generation, &diagnostics),
     };
     if let Err(error) = ensure_rendered_assets_are_bound(&compiled.artifact, &assets) {
         return studio_runtime_error_json(request, generation, "motion-resource-unbound", &error);
@@ -1199,6 +1196,20 @@ fn studio_native_state_json(request: &StudioRequest, generation: u64) -> Result<
         // Use the shared runtime asset map.
         "runtimeBaseUrl": "/",
         "runtimeAssets": crate::webruntime::runtime_assets_json(),
+    }))?)
+}
+
+fn studio_diagnostics_json(
+    request: &StudioRequest,
+    generation: u64,
+    diagnostics: &[valle_compiler::motion::CompilerDiagnostic],
+) -> Result<String> {
+    Ok(serde_json::to_string(&serde_json::json!({
+        "status": "error",
+        "protocolVersion": crate::webruntime::PROTOCOL_VERSION,
+        "generation": generation,
+        "input": request.input,
+        "diagnostics": diagnostics,
     }))?)
 }
 
@@ -2117,22 +2128,29 @@ mod contract_tests {
                 .get(image_digest)
                 .is_some()
         );
-        std::fs::write(
-            &input,
-            "export default function Broken(){return <Scene><Unsupported/></Scene>;}",
-        )
-        .unwrap();
-        let error: serde_json::Value =
-            serde_json::from_str(&studio_native_state_json(&request, 8).unwrap()).unwrap();
-        assert_eq!(error["status"], "error");
-        assert!(!error["diagnostics"].as_array().unwrap().is_empty());
-        std::fs::write(&input, "export default function Broken(){return <Scene>").unwrap();
-        assert!(
-            studio_native_state_json(&request, 9)
-                .unwrap_err()
-                .to_string()
-                .contains("module graph")
-        );
+        // A source that does not compile, and one that does not parse, keep the author inputs
+        // the browser compiler needs to report the error and recover from an edit.
+        for (generation, source) in [
+            (
+                8,
+                "export default function Broken(){return <Scene><Unsupported/></Scene>;}",
+            ),
+            (9, "export default function Broken(){return <Scene>"),
+        ] {
+            std::fs::write(&input, source).unwrap();
+            let error: serde_json::Value =
+                serde_json::from_str(&studio_state_json(&request, generation).unwrap()).unwrap();
+            assert_eq!(error["status"], "error", "{source}");
+            assert_eq!(error["generation"], generation);
+            assert!(
+                !error["diagnostics"].as_array().unwrap().is_empty(),
+                "{source}"
+            );
+            assert_eq!(
+                error["authorInputs"]["extraFonts"],
+                json!(["/motion-fonts/0"])
+            );
+        }
     }
 
     #[test]

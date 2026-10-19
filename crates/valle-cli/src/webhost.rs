@@ -112,27 +112,25 @@ fn project_snapshot_json(project: &ProjectStudioCtx) -> Result<String> {
     .to_string())
 }
 
-fn project_boot(project: &ProjectStudioCtx, config_json: &str) -> Result<String> {
-    let config = serde_json::from_str::<serde_json::Value>(config_json).unwrap_or_default();
-    let runtime_assets = config
-        .get("runtimeAssets")
-        .unwrap_or(&serde_json::Value::Null);
-    let mut asset_urls = serde_json::Map::new();
-    for (name, pointer) in [
-        ("engineGlue", "/engine/glue"),
-        ("engineWasm", "/engine/wasm"),
-        ("canvasKitGlue", "/canvasKit/glue"),
-        ("canvasKitWasm", "/canvasKit/wasm"),
-        ("productFrameWorker", "/workers/productFrame"),
-        ("studioCompileWorker", "/workers/studioCompile"),
-    ] {
-        if let Some(value) = runtime_assets
-            .pointer(pointer)
-            .and_then(serde_json::Value::as_str)
-        {
-            asset_urls.insert(name.to_owned(), serde_json::Value::String(value.to_owned()));
-        }
-    }
+/// The runtime files Studio boots from. They belong to the host, whose verified build must use
+/// these canonical paths, and not to one generation of the preview: a source that does not compile
+/// still boots the compile Worker that reports why.
+fn studio_runtime_asset_urls() -> serde_json::Value {
+    use crate::webruntime::{
+        CANVASKIT_GLUE_PATH, CANVASKIT_WASM_PATH, ENGINE_GLUE_PATH, ENGINE_WASM_PATH,
+        PRODUCT_FRAME_WORKER_PATH, STUDIO_COMPILE_WORKER_PATH,
+    };
+    serde_json::json!({
+        "engineGlue": ENGINE_GLUE_PATH,
+        "engineWasm": ENGINE_WASM_PATH,
+        "canvasKitGlue": CANVASKIT_GLUE_PATH,
+        "canvasKitWasm": CANVASKIT_WASM_PATH,
+        "productFrameWorker": PRODUCT_FRAME_WORKER_PATH,
+        "studioCompileWorker": STUDIO_COMPILE_WORKER_PATH,
+    })
+}
+
+fn project_boot(project: &ProjectStudioCtx) -> Result<String> {
     Ok(serde_json::json!({
         "protocolVersion": crate::webruntime::PROTOCOL_VERSION,
         "session": {
@@ -149,7 +147,7 @@ fn project_boot(project: &ProjectStudioCtx, config_json: &str) -> Result<String>
         },
         "runtime": {
             "assetBaseUrl": "/assets/",
-            "assetUrls": asset_urls,
+            "assetUrls": studio_runtime_asset_urls(),
             "fontUrls": studio_runtime_font_urls(),
         },
     })
@@ -195,32 +193,13 @@ fn studio_boot_from_config(config_json: &str, motion_token: Option<&str>) -> Res
         anyhow::bail!("Studio boot is unavailable for this host");
     };
 
-    let runtime_assets = config
-        .get("runtimeAssets")
-        .unwrap_or(&serde_json::Value::Null);
-    let mut asset_urls = serde_json::Map::new();
-    for (name, pointer) in [
-        ("engineGlue", "/engine/glue"),
-        ("engineWasm", "/engine/wasm"),
-        ("canvasKitGlue", "/canvasKit/glue"),
-        ("canvasKitWasm", "/canvasKit/wasm"),
-        ("productFrameWorker", "/workers/productFrame"),
-        ("studioCompileWorker", "/workers/studioCompile"),
-    ] {
-        if let Some(value) = runtime_assets
-            .pointer(pointer)
-            .and_then(|value| value.as_str())
-        {
-            asset_urls.insert(name.to_owned(), serde_json::Value::String(value.to_owned()));
-        }
-    }
     let asset_base_url = config
         .get("assetBaseUrl")
         .and_then(|value| value.as_str())
         .unwrap_or(&default_asset_base);
     let runtime = serde_json::json!({
         "assetBaseUrl": asset_base_url,
-        "assetUrls": asset_urls,
+        "assetUrls": studio_runtime_asset_urls(),
         "fontUrls": studio_runtime_font_urls(),
     });
 
@@ -568,9 +547,7 @@ fn handle_connection(stream: TcpStream, state: &Arc<StudioHost>) -> Result<()> {
             .map(|guard| guard.clone())
             .unwrap_or_default();
         let boot = match &state.project {
-            Some(project) if request_matches_project(&raw_path, project) => {
-                project_boot(project, &config)
-            }
+            Some(project) if request_matches_project(&raw_path, project) => project_boot(project),
             Some(_) => Err(anyhow::anyhow!(
                 "Project Studio request does not match the bound project"
             )),
@@ -2073,11 +2050,14 @@ mod tests {
 
     #[test]
     fn studio_boot_marks_motion_file_without_frontend_guessing() {
+        // A generation whose source does not compile carries no runtime files of its own; the
+        // boot still names the host's, so the browser compiler starts and reports the error.
         let boot = studio_boot_from_config(
             r#"{
+              "status": "error",
               "generation": 4,
               "input": "card.motion.tsx",
-              "runtimeAssets": {"engine": {"wasm": "engine.wasm"}}
+              "diagnostics": []
             }"#,
             Some("motion-token"),
         )
@@ -2088,7 +2068,14 @@ mod tests {
         assert_eq!(boot["capabilities"]["editMotionProps"], true);
         assert_eq!(boot["capabilities"]["writeMotionSource"], true);
         assert_eq!(boot["session"]["token"], "motion-token");
-        assert_eq!(boot["runtime"]["assetUrls"]["engineWasm"], "engine.wasm");
+        assert_eq!(
+            boot["runtime"]["assetUrls"]["engineWasm"],
+            crate::webruntime::ENGINE_WASM_PATH
+        );
+        assert_eq!(
+            boot["runtime"]["assetUrls"]["studioCompileWorker"],
+            crate::webruntime::STUDIO_COMPILE_WORKER_PATH
+        );
     }
 
     /// Verify library authentication and the command allowlist.

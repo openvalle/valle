@@ -123,6 +123,7 @@ async function run(
   args: string[],
   edit?: { from: string; to: string },
   hot = false,
+  repair?: string,
 ) {
   const evidence = await mkdtemp(join(dir, "run-"));
   const server = Bun.spawn(
@@ -288,8 +289,26 @@ async function run(
     await cdp("Page.navigate", { url: `http://127.0.0.1:${port}/studio` });
     const state = () =>
       evaluate(
-        `(()=>{const app=document.querySelector('valle-studio-app');return {state:app?.shellState,source:document.querySelector('#sourceText')?.value,status:document.querySelector('#sourceStatus')?.textContent,previewStatusClass:document.querySelector('#previewStatus')?.className,compiles:performance.getEntriesByName('valle-studio-compile').length,text:document.body?.innerText??""};})()`,
+        `(()=>{const app=document.querySelector('valle-studio-app');return {state:app?.shellState,source:document.querySelector('#sourceText')?.value,status:document.querySelector('#sourceStatus')?.textContent,previewStatusClass:document.querySelector('#previewStatus')?.className,compiles:performance.getEntriesByName('valle-studio-compile').length,text:document.body?.innerText??"",error:document.querySelector('#errtext')?.textContent??""};})()`,
       );
+    const editSource = async (text: string) =>
+      evaluate(
+        `(()=>{const field=document.querySelector('#sourceText');field.value=${JSON.stringify(text)};field.dispatchEvent(new Event('input',{bubbles:true}));})()`,
+      );
+    if (repair !== undefined) {
+      // The browser compiler starts for a source that does not compile, shows why, and an
+      // edit that fixes the source brings the preview up.
+      const failed = await poll(
+        state,
+        (s) => s.state?.previewStatus === "error" && !!s.source && !!s.error,
+        "first compile error",
+      );
+      assert(
+        !/compile Worker is absent|assetUrls\.\w+ is required/.test(`${failed.text}\n${failed.error}`),
+        `Studio must boot its compiler: ${failed.error}`,
+      );
+      await editSource(repair);
+    }
     await poll(
       state,
       (s) => s.state?.previewStatus === "ready" && !!s.source,
@@ -316,10 +335,6 @@ async function run(
     const before = await state();
     const original = String(before.source);
     const first = await screenshot("before");
-    const editSource = async (text: string) =>
-      evaluate(
-        `(()=>{const field=document.querySelector('#sourceText');field.value=${JSON.stringify(text)};field.dispatchEvent(new Event('input',{bubbles:true}));})()`,
-      );
     const changed = edit
       ? original.replace(edit.from, edit.to)
       : original + "\n// Browser compilation acceptance\n";
@@ -436,6 +451,18 @@ try {
       ["components/brand-poster.tsx", []],
     ] as const)
       await run(join(modules, name), [...args]);
+  } else if (mode === "broken") {
+    // One source fails to compile and one fails to parse; both open with their error.
+    for (const [name, from, to] of [
+      ["compile", '<View key="box"', '<Missing key="box"'],
+      ["syntax", "export default function Main(ctx,props){", "export default function Main(ctx,props){("],
+    ] as const) {
+      const valid = source.replace(/AUDIO_CONTROL|AUDIO_ANALYSIS|AUDIO_HEIGHT/g, "");
+      const input = join(dir, `${name}.motion.tsx`);
+      assert(valid.includes(from), `broken source ${name}`);
+      await writeFile(input, valid.replace(from, to));
+      await run(input, [], { from: "default:40", to: "default:80" }, false, valid);
+    }
   } else {
     const audio = mode === "audio";
     const input = join(dir, "scene.motion.tsx");

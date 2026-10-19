@@ -48,6 +48,10 @@ fn motion_studio_invalid_source_recovers_the_same_pixels() {
     studio("hot");
 }
 #[test]
+fn motion_studio_opens_a_source_whose_first_compile_fails() {
+    studio("broken");
+}
+#[test]
 fn module_scenes_compile_in_the_real_studio_browser() {
     studio("modules");
 }
