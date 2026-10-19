@@ -58,6 +58,7 @@ test("Motion composition, easing and color interpolation match analytic pixels o
   const dir = await mkdtemp(join(tmpdir(), "valle-compositing-"));
   const atlasBytes = await readFile(join(root, "crates/valle-compiler/tests/fixtures/motion/composition/atlas-sprites.png"));
   const atlasSource = await readFile(join(root, "crates/valle-compiler/tests/fixtures/motion/composition/atlas-geometry-batch.motion.tsx"), "utf8");
+  const noiseDisplacementSource = await readFile(join(root, "crates/valle-compiler/tests/fixtures/motion/composition/noise-displacement.motion.tsx"), "utf8");
   await writeFile(join(dir, "atlas-sprites.png"), atlasBytes);
   const spawn = (args: string[]) => Bun.spawn([cli, "--json", ...args], {
     cwd:dir, env:{ ...process.env, VALLE_HOME:join(dir,"home") }, stdout:"pipe", stderr:"pipe",
@@ -72,6 +73,7 @@ test("Motion composition, easing and color interpolation match analytic pixels o
       export default function Main(ctx){return <Scene style={{width:64,height:64}}><View style={{width:64,height:64,
         backgroundColor:"#ffffff80",filter:\`chromatic-aberration(\${ctx.seconds}px)\`}}/></Scene>}`, body:"",
       probes:[[32,32,255,255,255,128]], frames:[0,30,0] },
+    { name:"noise-displacement", source:noiseDisplacementSource, body:"", width:160, height:96, frames:[0,30,0], probes:[] },
     { name:"regression-grain-black-white", body:`<View style={{width:64,height:64,filter:"film-grain(7 0.5 1px)"}}>
       ${view("black",",width:32")}${view("white",",left:32,width:32")}</View>`, probes:[[16,32,0,0,0],[48,32,255,255,255]] },
     { name:"batch-rotation", body:`<GeometryBatch geometry="rect" positions={[point(8,16),point(40,16)]}
@@ -528,6 +530,7 @@ test("Motion composition, easing and color interpolation match analytic pixels o
           plan_radial_blur:engine.plan_radial_blur.bind(engine),
           apply_film_grain_f16:engine.apply_film_grain_f16.bind(engine),
           apply_lens_distortion_f16:engine.apply_lens_distortion_f16.bind(engine),
+          perlin_noise_tables:engine.perlin_noise_tables.bind(engine),
           pack_motion_glass_uniforms:engine.pack_motion_glass_uniforms.bind(engine),
           pack_motion_glass_foreground_uniforms:engine.pack_motion_glass_foreground_uniforms.bind(engine),
         });

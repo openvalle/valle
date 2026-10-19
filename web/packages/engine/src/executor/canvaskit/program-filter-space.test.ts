@@ -1,8 +1,15 @@
 import { describe, expect, test } from "bun:test";
+import { readFile } from "node:fs/promises";
 import type { Canvas, CanvasKit } from "canvaskit-wasm";
 
+import noiseDisplacementSource from "../../../../../../crates/valle-draw/assets/shaders/noisedisplacement.sksl" with { type: "text" };
+import { initSync, ProductEngine } from "../../../generated/web/valle_engine.js";
 import { CanvasKitBuiltinRuntime } from "./builtin-runtime.ts";
 import { drawNoiseDisplacement, programFilterInDeviceSpace } from "./executor.ts";
+
+initSync({
+  module: await readFile(new URL("../../../generated/web/valle_engine_bg.wasm", import.meta.url)),
+});
 
 type CanvasKitInitializer = (options: {
   locateFile(file: string): string;
@@ -94,6 +101,14 @@ test("scheduled noise displacement keeps its noise and vectors in local units", 
   const input = ck.MakeImage(info(...slot), new Uint8Array(pixels.buffer), slot[0] * 16)!;
   const [frequency, octaves, seed, scale] = [[0.05, 0.07] as const, 2, 3, 24];
   const filter = { kind: "noiseDisplacement", frequency, octaves, seed, scale, turbulence: false };
+  const tables = new ProductEngine().perlin_noise_tables(seed);
+  // The kernel's own noise, alone: CanvasKit's noise shader differs from Skia's left of and above
+  // the lattice's origin.
+  const noiseEffect = ck.RuntimeEffect.Make(
+    noiseDisplacementSource.slice(0, noiseDisplacementSource.indexOf("half4 main("))
+      + "half4 main(float2 p) { float3 c = noise(p); return half4(half(c.x), half(c.y), 0.0, half(c.z)); }")!;
+  const lattice = ck.MakeImage({ width: 256, height: 5, colorType: ck.ColorType.RGBA_8888,
+    alphaType: ck.AlphaType.Opaque, colorSpace: ck.ColorSpace.SRGB }, tables, 256 * 4)!;
   // A scheduled pass draws in device pixels on a canvas translated to its target origin.
   const render = (origin: readonly [number, number], size: readonly [number, number],
     draw: (canvas: Canvas) => void, alphaType = ck.AlphaType.Premul) => {
@@ -120,16 +135,24 @@ test("scheduled noise displacement keeps its noise and vectors in local units", 
       // The noise drawn in the group's local space, read at device pixel centres.
       const noise = render([0, 0], device, canvas => {
         canvas.concat(matrix);
-        const shader = ck.Shader.MakeFractalNoise(frequency[0], frequency[1], octaves, seed, 0, 0);
+        const image = ck.Shader.MakeColor(ck.TRANSPARENT, ck.ColorSpace.SRGB);
+        const child = lattice.makeShaderOptions(ck.TileMode.Clamp, ck.TileMode.Clamp, ck.FilterMode.Nearest,
+          ck.MipmapMode.None);
+        const uniforms = new Float32Array(19);
+        uniforms.set([frequency[0], frequency[1], octaves, 0], 15);
+        const shader = noiseEffect.makeShaderWithChildren(uniforms, [image, child]);
         const paint = new ck.Paint();
-        try { paint.setShader(shader); canvas.drawPaint(paint); } finally { paint.delete(); shader.delete(); }
+        try { paint.setShader(shader); canvas.drawPaint(paint); } finally {
+          paint.delete(); shader.delete(); child.delete(); image.delete();
+        }
       }, ck.AlphaType.Unpremul);
       const [a, b, , d, e] = matrix as [number, number, number, number, number];
       let [compared, outside] = [0, 0];
       // The planner may start a target anywhere; the same device pixels come out.
       for (const [origin, size] of [[[28, 18], [120, 88]], [[52, 42], [72, 40]]] as const) {
         const actual = render(origin, size, canvas =>
-          drawNoiseDisplacement(ck, builtins, canvas, { image: input, owned: false, roi }, filter, matrix));
+          drawNoiseDisplacement(ck, builtins, canvas, { image: input, owned: false, roi }, filter, matrix,
+            tables));
         for (let y = 0; y < size[1]; y++) {
           for (let x = 0; x < size[0]; x++) {
             const [px, py] = [x + origin[0], y + origin[1]];
@@ -161,5 +184,5 @@ test("scheduled noise displacement keeps its noise and vectors in local units", 
       expect(compared).toBeGreaterThan(1000);
       expect(outside).toBeGreaterThan(100);
     }
-  } finally { input.delete(); builtins.dispose(); }
+  } finally { lattice.delete(); noiseEffect.delete(); input.delete(); builtins.dispose(); }
 });

@@ -173,6 +173,7 @@ export interface CanvasKitEngineKernels {
     originX: number, originY: number, k1: number, k2: number,
     frameX: number, frameY: number, frameWidth: number, frameHeight: number,
   ): Uint8Array | Promise<Uint8Array>;
+  perlin_noise_tables?(seed: number): Uint8Array;
   pack_motion_glass_uniforms(
     programJson: string,
     ownerToDevice: Float64Array,
@@ -1872,7 +1873,10 @@ async function executeProgramPass(
       const matrix = programMatrix(admitted, localPlan, kind.output, device);
       const filter = programFilterInDeviceSpace(record(kind.filter, "program filter"), matrix);
       if (filter.kind === "noiseDisplacement") {
-        drawNoiseDisplacement(CanvasKit, builtins, canvas, programValue(values, kind.input), filter, matrix);
+        const tables = engineKernels?.perlin_noise_tables;
+        if (!tables) fail("noise_displacement_tables", "noise displacement tables are unavailable");
+        drawNoiseDisplacement(CanvasKit, builtins, canvas, programValue(values, kind.input), filter, matrix,
+          tables.call(engineKernels, positiveIdOrZero(filter.seed, "noise seed")));
         return;
       }
       if (filter.kind === "chromaticAberration") {
@@ -3350,7 +3354,9 @@ function noiseShader(CanvasKit: CanvasKit, filter: Record<string, unknown>): Sha
 /**
  * Displace a scheduled pass input, drawn in device pixels, by the kernel Native shares: the noise
  * lattice and its vectors stay in the DrawProgram group's local units, and only the input's ROI
- * is sampled. A degenerate transform leaves the input undisplaced.
+ * is sampled. The kernel computes Skia's noise in float from `tables`, the engine's Perlin tables
+ * for the filter's seed: CanvasKit's own noise differs left of and above the lattice's origin. A
+ * degenerate transform leaves the input undisplaced.
  */
 export function drawNoiseDisplacement(
   CanvasKit: CanvasKit,
@@ -3359,6 +3365,7 @@ export function drawNoiseDisplacement(
   input: ImageValue,
   filter: Record<string, unknown>,
   localToDevice: readonly number[],
+  tables: Uint8Array,
 ): void {
   if (!input.image || input.roi.width === 0 || input.roi.height === 0) return;
   const [a, b, c, d, e, f] = affineDeviceTransform(localToDevice, "noise displacement")
@@ -3372,16 +3379,26 @@ export function drawNoiseDisplacement(
     drawImageValue(CanvasKit, canvas, input, 1, "src");
     return;
   }
+  const frequency = pair(filter.frequency, "noise frequency");
+  const octaves = positiveIdOrZero(filter.octaves, "noise octaves");
   const source = input.image.makeShaderOptions(CanvasKit.TileMode.Decal, CanvasKit.TileMode.Decal,
     CanvasKit.FilterMode.Nearest, CanvasKit.MipmapMode.None, [1, 0, x, 0, 1, y, 0, 0, 1]);
   if (!source) fail("noise_displacement_shader", "noise displacement input shader allocation failed");
+  let lattice: Image | null = null;
   let noise: Shader | null = null;
   let shader: Shader | null = null;
   try {
-    noise = noiseShader(CanvasKit, filter);
-    shader = builtins.shader("noiseDisplacement", uniforms, [source, noise]);
+    // The tables' bytes as they are: the image and CanvasKit's surfaces are both sRGB.
+    lattice = CanvasKit.MakeImage({ width: 256, height: 5, colorType: CanvasKit.ColorType.RGBA_8888,
+      alphaType: CanvasKit.AlphaType.Opaque, colorSpace: CanvasKit.ColorSpace.SRGB }, tables, 256 * 4);
+    if (!lattice) fail("noise_displacement_tables", "noise displacement tables image allocation failed");
+    noise = lattice.makeShaderOptions(CanvasKit.TileMode.Clamp, CanvasKit.TileMode.Clamp,
+      CanvasKit.FilterMode.Nearest, CanvasKit.MipmapMode.None);
+    if (!noise) fail("noise_displacement_tables", "noise displacement tables shader allocation failed");
+    shader = builtins.shader("noiseDisplacement",
+      [...uniforms, frequency[0], frequency[1], octaves, filter.turbulence === true ? 1 : 0], [source, noise]);
     drawShader(CanvasKit, canvas, shader, "src");
-  } finally { shader?.delete(); noise?.delete(); source.delete(); }
+  } finally { shader?.delete(); noise?.delete(); lattice?.delete(); source.delete(); }
 }
 
 /**

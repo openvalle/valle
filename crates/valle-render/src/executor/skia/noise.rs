@@ -683,7 +683,7 @@ mod fused {
         }
     }
 
-    /// Skia's Perlin noise tables for a seed, as `SkPerlinNoiseShader::PaintingData` builds them.
+    /// Skia's Perlin noise tables for a seed, with each gradient as the stage reads it.
     struct Lattice {
         selector: [u8; 256],
         /// For each lattice point, the x components of its gradients in the four channels, then
@@ -693,54 +693,17 @@ mod fused {
 
     impl Lattice {
         fn new(seed: f32) -> Self {
-            const MAXIMUM: i32 = i32::MAX;
-            // `SkScalarTruncToInt` saturates to the ints a float holds, then truncates.
-            let limit = 2_147_483_520.0_f32;
-            let seed = if seed < limit { seed } else { limit };
-            let mut state = (if seed > -limit { seed } else { -limit }) as i32;
-            if state <= 0 {
-                state = -(state % (MAXIMUM - 1)) + 1;
-            }
-            if state > MAXIMUM - 1 {
-                state = MAXIMUM - 1;
-            }
-            // The Park-Miller generator of the SVG turbulence reference, by Schrage's method.
-            let mut random = move || {
-                let next = 16_807 * (state % 127_773) - 2_836 * (state / 127_773);
-                state = if next <= 0 { next + MAXIMUM } else { next };
-                state
-            };
-            let mut selector = [0_u8; 256];
-            let mut noise = [[[0_u16; 2]; 256]; 4];
-            for channel in &mut noise {
-                for (point, sample) in channel.iter_mut().enumerate() {
-                    selector[point] = point as u8;
-                    let x = (random() % 512) as u16;
-                    let y = (random() % 512) as u16;
-                    *sample = [x, y];
-                }
-            }
-            for point in (1..256).rev() {
-                let swapped = selector[point];
-                let other = (random() % 256) as usize;
-                selector[point] = selector[other];
-                selector[other] = swapped;
-            }
+            let tables = valle_engine::compositor::perlin::PerlinTables::new(seed);
             let mut gradients = [[[0.0; 4]; 2]; 256];
-            for (channel, samples) in noise.iter().enumerate() {
-                for (point, gradient) in gradients.iter_mut().enumerate() {
-                    let sample = samples[usize::from(selector[point])];
-                    let [x, y] = normalize(
-                        sample.map(|value| (i32::from(value) - 256) as f32 * (1.0 / 256.0)),
-                    );
-                    for (axis, value) in [x, y].into_iter().enumerate() {
-                        let stored = round_to_int((value + 1.0) * 32_767.5) as u16;
-                        gradient[axis][channel] = f32::from(stored).mul_add(2.0 / 65_535.0, -1.0);
+            for (gradient, samples) in gradients.iter_mut().zip(&tables.samples) {
+                for (channel, sample) in samples.iter().enumerate() {
+                    for (axis, stored) in sample.iter().enumerate() {
+                        gradient[axis][channel] = f32::from(*stored).mul_add(2.0 / 65_535.0, -1.0);
                     }
                 }
             }
             Self {
-                selector,
+                selector: tables.selector,
                 gradients,
             }
         }
@@ -906,28 +869,5 @@ mod fused {
                 vcombine_f32(vget_high_f32(low.1), vget_high_f32(high.1)),
             ]
         }
-    }
-
-    /// `SkPoint::normalize`: the length in double precision, each coordinate scaled in double
-    /// precision and rounded back, and the zero vector where that is not finite or vanishes.
-    fn normalize([x, y]: [f32; 2]) -> [f32; 2] {
-        let (wide_x, wide_y) = (f64::from(x), f64::from(y));
-        let scale = 1.0 / (wide_x * wide_x + wide_y * wide_y).sqrt();
-        let scaled = [(wide_x * scale) as f32, (wide_y * scale) as f32];
-        if !scaled.iter().all(|value| value.is_finite()) || scaled == [0.0, 0.0] {
-            return [0.0, 0.0];
-        }
-        scaled
-    }
-
-    /// `SkScalarRoundToInt`: the floor of the value plus one half in double precision, as a
-    /// float, saturated to the ints a float holds.
-    fn round_to_int(value: f32) -> i32 {
-        let limit = 2_147_483_520.0_f32;
-        let rounded = (f64::from(value) + 0.5).floor() as f32;
-        if rounded.is_nan() {
-            return limit as i32;
-        }
-        rounded.clamp(-limit, limit) as i32
     }
 }

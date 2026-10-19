@@ -18,5 +18,6 @@ pub mod glass;
 pub mod graph;
 pub mod lens;
 pub mod lower;
+pub mod perlin;
 pub mod radial;
 pub mod reference;

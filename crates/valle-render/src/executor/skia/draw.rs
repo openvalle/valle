@@ -5666,6 +5666,67 @@ mod tests {
     }
 
     #[test]
+    fn noise_displacement_kernel_computes_the_noise_of_skias_raster_pipeline() {
+        use super::super::{effect, noise::Noise};
+        let info = ImageInfo::new(
+            (150, 110),
+            ColorType::RGBAF16,
+            AlphaType::Premul,
+            Some(working_color_space().unwrap()),
+        );
+        let image = varied_halves(180, 140);
+        let (source, origin) = (IRect::from_ltrb(5, 7, 175, 137), [-10, -12]);
+        let bounds = IRect::from_wh(150, 110);
+        // Local to canvas: identity, scaled, rotated, and far from the lattice's origin on either
+        // side of it.
+        let transforms = [
+            [1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+            [2.0, 0.0, 61.5, 0.0, 0.75, 37.25],
+            [1.3, -0.75, 61.0, 0.75, 1.3, 37.0],
+            [0.5, 0.0, -9_000.25, 0.0, 0.5, 7_000.75],
+            [0.8, 0.6, 30_000.0, -0.6, 0.8, -20_000.5],
+        ];
+        // Fractal and turbulent noise from one to eight octaves, with seeds at and past the
+        // generator's range.
+        let noises = [
+            ([0.05, 0.07], 2, 3, false),
+            ([0.0016, 0.021], 1, 5, true),
+            ([0.31, 0.9], 5, 0, true),
+            ([0.0, 0.12], 3, u32::MAX, false),
+            ([0.013, 0.029], 8, 1_234_567, false),
+            ([0.11, 0.07], 4, 4_000_000, true),
+        ];
+        for transform in transforms {
+            for (frequency, octaves, seed, turbulence) in noises {
+                let uniforms =
+                    effect::noise_displacement_uniforms(source, origin, 30.0, transform).unwrap();
+                let noise = Noise {
+                    frequency,
+                    octaves,
+                    seed,
+                    turbulence,
+                };
+                let draw = |computed| {
+                    let mut paint = SkPaint::default();
+                    paint.set_blend_mode(SkBlendMode::Src);
+                    paint.set_shader(
+                        effect::noise_displacement_shader(
+                            &image, source, origin, &uniforms, noise, computed,
+                        )
+                        .unwrap(),
+                    );
+                    let mut surface = skia_safe::surfaces::raster(&info, None, None).unwrap();
+                    surface.canvas().draw_irect(bounds, &paint);
+                    let mut bytes = vec![0_u8; 150 * 110 * 8];
+                    assert!(surface.read_pixels(&info, &mut bytes, 150 * 8, (0, 0)));
+                    bytes
+                };
+                assert!(draw(true) == draw(false), "{noise:?}, {transform:?}");
+            }
+        }
+    }
+
+    #[test]
     fn noise_displacement_kept_fields_keep_the_bytes_of_its_draws() {
         use super::super::{
             effect,

@@ -1,15 +1,19 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use skia_safe::{
-    Bitmap, BlendMode, ClipOp, Color4f, ColorChannel, Data, FilterMode, IRect, Image, ImageFilter,
-    ImageInfo, Matrix, Paint, Rect as SkRect, RuntimeEffect, SamplingOptions, Shader, Surface,
-    TileMode, color_filters, image_filters, runtime_effect::ChildPtr, shaders,
+    AlphaType, Bitmap, BlendMode, ClipOp, Color4f, ColorChannel, ColorType, Data, FilterMode,
+    IRect, Image, ImageFilter, ImageInfo, Matrix, Paint, Rect as SkRect, RuntimeEffect,
+    SamplingOptions, Shader, Surface, TileMode, color_filters, image_filters, images,
+    runtime_effect::ChildPtr, shaders,
 };
 use valle_draw::program::{Filter, LinearColor};
 use valle_engine::{
-    compositor::lower::{
-        CopyOperation, ExecutionPassKind, KernelInvocation, PlanEffect, RenderBindings,
-        RenderPlanTemplate, SurfaceSlotId,
+    compositor::{
+        lower::{
+            CopyOperation, ExecutionPassKind, KernelInvocation, PlanEffect, RenderBindings,
+            RenderPlanTemplate, SurfaceSlotId,
+        },
+        perlin::{PERLIN_IMAGE_SIZE, PerlinTables},
     },
     prepare::{
         DeviceRect, DeviceTransform, DynamicBindingId, DynamicBindingKind, DynamicValue,
@@ -1345,7 +1349,10 @@ pub(super) fn noise_displacement_uniforms(
     .then(|| uniforms.map(|value| value as f32))
 }
 
-/// The noise displacement kernel with `uniforms` over `bounds`, drawn through Skia.
+/// The noise displacement kernel with `uniforms` over `bounds`, drawn through Skia. GPU targets
+/// compute the noise in the kernel, as Ganesh's own noise effect computes in half, which Metal
+/// evaluates in 16 bits; Raster reads Skia's noise shader, whose stage computes the same noise
+/// faster.
 pub(super) fn draw_noise_displacement_kernel(
     surface: &mut Surface,
     input: &Image,
@@ -1355,16 +1362,46 @@ pub(super) fn draw_noise_displacement_kernel(
     uniforms: &[f32; 15],
     noise: super::noise::Noise,
 ) -> Result<(), DrawError> {
+    let computed = surface.direct_context().is_some();
+    let mut paint = Paint::default();
+    paint.set_blend_mode(BlendMode::Src);
+    paint.set_shader(noise_displacement_shader(
+        input, source, origin, uniforms, noise, computed,
+    )?);
+    super::draw::draw_irect_by_rows(surface, bounds, &paint)
+}
+
+/// The noise displacement kernel with `uniforms`, reading the `source` subset of `input` placed
+/// at canvas `origin`: computing Skia's noise in float from its tables where `computed`, and
+/// otherwise over Skia's noise shader.
+pub(super) fn noise_displacement_shader(
+    input: &Image,
+    source: IRect,
+    origin: [i32; 2],
+    uniforms: &[f32; 15],
+    noise: super::noise::Noise,
+    computed: bool,
+) -> Result<Shader, DrawError> {
     thread_local! {
-        static KERNEL: std::cell::RefCell<Option<RuntimeEffect>> = const { std::cell::RefCell::new(None) };
+        static KERNELS: std::cell::RefCell<[Option<RuntimeEffect>; 2]> = const { std::cell::RefCell::new([None, None]) };
     }
-    let effect = KERNEL.with(|cell| -> Result<_, DrawError> {
-        let mut effect = cell.borrow_mut();
+    let effect = KERNELS.with(|cell| -> Result<_, DrawError> {
+        let mut kernels = cell.borrow_mut();
+        let effect = &mut kernels[usize::from(computed)];
         if effect.is_none() {
-            *effect = Some(compile(
-                include_str!("../../../../valle-draw/assets/shaders/noisedisplacement.sksl"),
-                "noise-displacement",
-            )?);
+            *effect = Some(if computed {
+                compile(
+                    include_str!("../../../../valle-draw/assets/shaders/noisedisplacement.sksl"),
+                    "noise-displacement",
+                )?
+            } else {
+                compile(
+                    include_str!(
+                        "../../../../valle-draw/assets/shaders/noisedisplacementraster.sksl"
+                    ),
+                    "noise-displacement-raster",
+                )?
+            });
         }
         Ok(effect.as_ref().unwrap().clone())
     })?;
@@ -1378,22 +1415,53 @@ pub(super) fn draw_noise_displacement_kernel(
             )),
         )
         .ok_or_else(|| DrawError::Unsupported("noise displacement input".into()))?;
-    let noise = perlin_noise(noise.frequency, noise.octaves, noise.seed, noise.turbulence)?;
-    let bytes = uniforms
+    let mut values = uniforms.to_vec();
+    let noise = if computed {
+        values.extend([
+            noise.frequency[0],
+            noise.frequency[1],
+            f32::from(noise.octaves),
+            f32::from(u8::from(noise.turbulence)),
+        ]);
+        perlin_tables(noise.seed)?
+    } else {
+        perlin_noise(noise.frequency, noise.octaves, noise.seed, noise.turbulence)?
+    };
+    let bytes = values
         .iter()
         .flat_map(|value| value.to_ne_bytes())
         .collect::<Vec<_>>();
-    let shader = effect
+    effect
         .make_shader(
             Data::new_copy(&bytes),
             &[ChildPtr::Shader(image), ChildPtr::Shader(noise)],
             None,
         )
-        .ok_or_else(|| DrawError::Unsupported("noise displacement kernel".into()))?;
-    let mut paint = Paint::default();
-    paint.set_blend_mode(BlendMode::Src);
-    paint.set_shader(shader);
-    super::draw::draw_irect_by_rows(surface, bounds, &paint)
+        .ok_or_else(|| DrawError::Unsupported("noise displacement kernel".into()))
+}
+
+/// Skia's Perlin noise tables for `seed`, as the noise displacement kernel reads them.
+fn perlin_tables(seed: u32) -> Result<Shader, DrawError> {
+    let [width, height] = PERLIN_IMAGE_SIZE;
+    // The tables' bytes as they are, whatever the target's color space.
+    images::raster_from_data(
+        &ImageInfo::new(
+            (width as i32, height as i32),
+            ColorType::RGBA8888,
+            AlphaType::Opaque,
+            None,
+        ),
+        Data::new_copy(&PerlinTables::new(seed as f32).image()),
+        width as usize * 4,
+    )
+    .and_then(|tables| {
+        tables.to_raw_shader(
+            (TileMode::Clamp, TileMode::Clamp),
+            SamplingOptions::default(),
+            &Matrix::new_identity(),
+        )
+    })
+    .ok_or_else(|| DrawError::Unsupported("noise displacement tables".into()))
 }
 
 /// Chromatic aberration of the `source` subset of `input`, placed at canvas `origin`, as Skia's

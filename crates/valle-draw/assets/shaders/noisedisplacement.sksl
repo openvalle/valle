@@ -1,8 +1,16 @@
-// Displaces `image` by Perlin `noise` evaluated in the filtered group's local space: by
-// `scale * (red - 0.5, green - 0.5)` local units, mapped into canvas pixels. The noise channels
-// are read as they are, so every backend displaces alike.
+// Displaces `image` by Perlin noise evaluated in the filtered group's local space: by
+// `scale * (red - 0.5, green - 0.5)` local units, mapped into canvas pixels. The noise is Skia's
+// fractal noise or turbulence, computed here in float as Skia's Raster stage computes it, so that
+// every backend computes it alike: Ganesh's own noise effect computes in half, which Metal
+// evaluates in 16 bits, and CanvasKit's Skia computes another noise left of and above the
+// lattice's origin. Each `dot` below is a product and then a fused multiply-add, as the stage's
+// multiply-adds are.
 uniform shader image;
-uniform shader noise;
+// Skia's tables for the noise's seed, one lattice point per column, in the red, green and blue
+// bytes of opaque pixels. Rows 0 to 3 hold the point's gradients in the red, green and alpha of the
+// noise: for each, the x and then the y sample, high byte first. Row 4 holds the point's lattice
+// selector in red.
+uniform shader tables;
 // Rows of the canvas-to-local linear map and the local point at canvas (0, 0), then rows of the
 // local-to-canvas linear map.
 uniform float4 toLocal;
@@ -11,11 +19,90 @@ uniform float4 toCanvas;
 uniform float scale;
 // The image's valid pixels in canvas coordinates: left, top, right, bottom.
 uniform float4 bounds;
+uniform float2 frequency;
+// The number of octaves, 1 to 8, and 1 for turbulence or 0 for fractal noise.
+uniform float octaves;
+uniform float turbulence;
+
+// Maps a stored gradient sample onto [-1, 1].
+const float sampleUnit = 2.0 / 65535.0;
+
+float3 bytesAt(float column, float row) {
+    return floor(float3(tables.eval(float2(column + 0.5, row + 0.5)).rgb) * 255.0 + 0.5);
+}
+
+float2 gradient(float2 samples) {
+    return float2(dot(float2(samples.x, -1.0), float2(sampleUnit, 1.0)),
+                  dot(float2(samples.y, -1.0), float2(sampleUnit, 1.0)));
+}
+
+// The gradients of lattice point `point` in red, green and alpha, each dotted with `fraction`.
+float3 dots(float point, float2 fraction) {
+    float3 t0 = bytesAt(point, 0.0);
+    float3 t1 = bytesAt(point, 1.0);
+    float3 t2 = bytesAt(point, 2.0);
+    float3 t3 = bytesAt(point, 3.0);
+    float2 red = float2(t0.x * 256.0 + t0.y, t0.z * 256.0 + t1.x);
+    float2 green = float2(t1.y * 256.0 + t1.z, t2.x * 256.0 + t2.y);
+    float2 alpha = float2(t2.z * 256.0 + t3.x, t3.y * 256.0 + t3.z);
+    return float3(dot(gradient(red), fraction), dot(gradient(green), fraction),
+                  dot(gradient(alpha), fraction));
+}
+
+float interpolate(float from, float to, float t) {
+    return dot(float2(to - from, from), float2(t, 1.0));
+}
+
+float3 interpolate3(float3 from, float3 to, float t) {
+    return float3(interpolate(from.x, to.x, t), interpolate(from.y, to.y, t),
+                  interpolate(from.z, to.z, t));
+}
+
+// The premultiplied red and green and the alpha of the noise at `p`.
+float3 noise(float2 p) {
+    float2 point = (p + 0.5) * frequency;
+    float3 sum = float3(0.0);
+    float ratio = 1.0;
+    for (int octave = 0; octave < 8; ++octave) {
+        if (float(octave) >= octaves) {
+            break;
+        }
+        float2 low = floor(point);
+        float2 fraction = point - low;
+        float2 high = low + 1.0;
+        float latticeX = bytesAt(mod(low.x, 256.0), 4.0).x;
+        float latticeY = bytesAt(mod(high.x, 256.0), 4.0).x;
+        float4 corners = mod(float4(latticeX + low.y, latticeY + low.y, latticeX + high.y,
+                                    latticeY + high.y), 256.0);
+        float2 smoothed = fraction * fraction * (3.0 - 2.0 * fraction);
+        float2 fraction1 = fraction - 1.0;
+        float3 a = interpolate3(dots(corners.x, fraction),
+                                dots(corners.y, float2(fraction1.x, fraction.y)), smoothed.x);
+        float3 b = interpolate3(dots(corners.z, float2(fraction.x, fraction1.y)),
+                                dots(corners.w, fraction1), smoothed.x);
+        float3 color = interpolate3(a, b, smoothed.y);
+        if (turbulence > 0.5) {
+            color = abs(color);
+        }
+        sum = float3(dot(float2(color.x, sum.x), float2(ratio, 1.0)),
+                     dot(float2(color.y, sum.y), float2(ratio, 1.0)),
+                     dot(float2(color.z, sum.z), float2(ratio, 1.0)));
+        point = point * 2.0;
+        ratio *= 0.5;
+    }
+    if (turbulence < 0.5) {
+        sum = float3(dot(float2(sum.x, 0.5), float2(0.5, 1.0)),
+                     dot(float2(sum.y, 0.5), float2(0.5, 1.0)),
+                     dot(float2(sum.z, 0.5), float2(0.5, 1.0)));
+    }
+    return float3(saturate(sum.x) * sum.z, saturate(sum.y) * sum.z, saturate(sum.z));
+}
 
 half4 main(float2 p) {
     float2 local = float2(dot(toLocal.xy, p), dot(toLocal.zw, p)) + localOrigin;
-    half4 value = saturate(unpremul(noise.eval(local)));
-    float2 vector = scale * (float2(value.rg) - 0.5);
+    float3 color = noise(local);
+    float2 value = saturate(color.xy / max(color.z, 0.0001));
+    float2 vector = scale * (value - 0.5);
     float2 offset = float2(dot(toCanvas.xy, vector), dot(toCanvas.zw, vector));
     // Skia's displacement map samples the nearest pixel; sampling its centre keeps that choice
     // the same on every backend.

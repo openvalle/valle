@@ -501,6 +501,12 @@ impl ProductEngine {
         .map_err(|error| js_error("film_grain", error))
     }
 
+    /// Skia's Perlin noise tables for a noise displacement seed, as the shared kernel reads them:
+    /// the opaque RGBA8 pixels of a `compositor::perlin::PERLIN_IMAGE_SIZE` image.
+    pub fn perlin_noise_tables(&self, seed: u32) -> Vec<u8> {
+        crate::compositor::perlin::PerlinTables::new(seed as f32).image()
+    }
+
     /// Distort a fixed device-space source frame without changing its output bounds.
     pub fn apply_lens_distortion_f16(
         &self,
