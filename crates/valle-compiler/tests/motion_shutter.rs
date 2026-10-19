@@ -247,3 +247,46 @@ fn shutter_prunes_unrelated_absolute_layout_and_preserves_pixels_and_bounds_read
         build_tree_profiled(&prepare_scene(&artifact).unwrap(), &ctx, &props, &opts).unwrap();
     assert_eq!(timing.temporal_layout_nodes, 4);
 }
+
+#[test]
+fn shutter_prunes_absolute_branches_with_other_classes_and_preserves_pixels() {
+    // A flow layout inside an absolute container with ordinary classes stays out of the samples.
+    let cells = (0..400).map(|i| format!(r##"<View key="cell-{i}" style={{{{width:6,height:6,margin:1,backgroundColor:"#456"}}}}/>"##)).collect::<String>();
+    let source = format!(
+        r##"export const composition={{width:640,height:360,fps:30,duration:2}};
+        export default function SceneMain(ctx) {{return <Scene style={{{{width:640,height:360,backgroundColor:"#203040"}}}}>
+        <View key="panel" className="absolute inset-0 flex flex-wrap" style={{{{padding:4}}}}>{cells}</View>
+        <Shutter key="shutter" samples={{8}} angle={{180}}><View key="moving" style={{{{position:"absolute",left:ctx.seconds*100,top:80,width:24,height:24,backgroundColor:"white"}}}}/></Shutter></Scene>}}"##
+    );
+    let sampled_nodes = |source: &str| {
+        let artifact = compile_motion(source).unwrap().artifact;
+        let ctx = motion_context_at_frame(20, 60, FrameRate::new(30, 1).unwrap()).unwrap();
+        let props = resolve_props(&artifact.controls, &Default::default()).unwrap();
+        let fonts = Fonts::default();
+        let opts = LayoutOptions {
+            viewport: Viewport::new((640, 360)),
+            fonts: &fonts,
+            styles: None,
+        };
+        build_tree_profiled(&prepare_scene(&artifact).unwrap(), &ctx, &props, &opts)
+            .unwrap()
+            .1
+            .temporal_layout_nodes
+    };
+    assert_eq!(sampled_nodes(&source), 3);
+    // A redundant position declaration keeps the panel without changing CSS, and so does a class
+    // that could put it back in the flow.
+    let kept = source.replace(
+        "style={{padding:4}}",
+        "style={{position:\"absolute\",padding:4}}",
+    );
+    assert_eq!(sampled_nodes(&kept), 404);
+    assert_eq!(
+        sampled_nodes(&source.replace("absolute inset-0", "absolute relative inset-0")),
+        404
+    );
+    assert_eq!(
+        program(&source, 20).packed_bytes().unwrap(),
+        program(&kept, 20).packed_bytes().unwrap()
+    );
+}

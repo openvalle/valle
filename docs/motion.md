@@ -414,8 +414,9 @@ or encoder will succeed.
 `valle motion review scene.motion.tsx --json` checks the full output duration for
 screen-position strobing after layout and transforms. It reports a `strobe` issue when a
 visible painted node moves over a quarter of its extent along the travel direction per frame for at least three consecutive frame
-intervals without motion blur. It also reports `text_readability` when visible text is
-shown for less than 0.3 seconds plus 0.3 seconds per word or 0.225 seconds per CJK character, `text_out_of_frame` for text
+intervals without motion blur; the rows of one `.map` or batch share one issue. It also reports `text_readability` when visible text is
+shown for less than 0.3 seconds plus 0.3 seconds per word or 0.225 seconds per CJK character (as
+information when the text is still on screen at the last frame), `text_out_of_frame` for text
 outside the canvas, and `text_overlap` for overlapping glyph ink bounds. Informational
 `motion_while_reading` and `simultaneous_main_actions` hints identify competing prominent
 motion over consecutive frames. `linear_motion` flags a prominent subject whose long move has
@@ -1887,6 +1888,11 @@ to 360°. A frame may request at most 128 samples across Shutter and Echo nodes.
 Shutter wrapper fills its parent and takes no authored styles, classes, or
 visibility. Put those properties on a surrounding `View`. Nesting Shutter or
 Echo within either temporal sampling effect is currently rejected.
+
+Each Shutter or Echo sample lays out the scene again at its own time. It skips
+absolutely positioned branches that hold nothing the samples need, but it lays
+out the in-flow siblings of the sampled node and of each of its ancestors, so
+keep a large flow layout inside an absolutely positioned container.
 
 ### Echo trails
 

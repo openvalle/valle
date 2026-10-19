@@ -82,6 +82,31 @@ fn review_reports_continuous_strobing_and_accepts_two_controls() {
 }
 
 #[test]
+fn review_merges_the_strobes_of_an_expanded_map_under_its_element() {
+    let dir = tempfile::tempdir().unwrap();
+    // A template key expands the map into one node per row.
+    let source = r##"export const composition = { width: 640, height: 360, fps: 30, duration: 2 };
+const ROWS = Array.from({ length: 4 }, (_, i) => ({ id: `runner${i}`, i }));
+export default function Main(ctx) {
+  return <Scene style={{ width: 640, height: 360 }}>{ROWS.map((row) =>
+    <View key={`${row.id}`} className="absolute" style={{ left: 20 + ctx.localFrame * 12,
+      top: 20 + row.i * 40, width: 10, height: 10, backgroundColor: "#ffffff" }} />)}</Scene>;
+}
+"##;
+    let (ok, report) = run(dir.path(), source, &[]);
+    assert!(ok, "{report}");
+    let strobes = report["issues"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|issue| issue["code"] == "strobe")
+        .collect::<Vec<_>>();
+    assert_eq!(strobes.len(), 1, "{report}");
+    assert_eq!(strobes[0]["node"], "strobe.motion.tsx:5:5", "{report}");
+    assert_eq!(strobes[0]["affectedRows"], 4, "{report}");
+}
+
+#[test]
 fn review_flags_sustained_linear_motion_but_not_eased_motion_or_a_sliver() {
     let dir = tempfile::tempdir().unwrap();
     let source = r##"

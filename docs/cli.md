@@ -81,9 +81,14 @@ extent along the travel direction per frame for
 at least three consecutive frame intervals without an active motion blur filter. A single
 discontinuous jump is excluded from this sustained-motion rule. The report includes the frame
 range and peak displacement. Content whose square-root area times opacity is below 4 px is ignored.
-Batch strobe warnings are grouped, with `affectedRows` and up to three `exampleKeys`. A `text_readability` warning names a text node that stays visible
+Strobe warnings of rows that one element draws combine into one warning with `affectedRows` and
+up to three `exampleKeys`. The rows of a batch or an instance group are named after their host
+node, and copies of one source element, such as the rows of an expanded `.map` or the nodes of a
+component used twice, after the element's `path:line:column`. A `text_readability` warning names a text node that stays visible
 for less than 0.3 seconds plus 0.3 seconds per word or 0.225 seconds per CJK character. It reports the visible frame range,
-duration, word count and recommended duration; hidden or fully offscreen text is excluded.
+duration, word count and recommended duration; hidden or fully offscreen text is excluded. Text
+still visible at the last frame is reported with severity `info` instead, because what follows
+the composition decides how long it stays readable.
 `text_out_of_frame` reports visible text ink extending beyond the canvas, and `text_overlap`
 reports two visible text ink bounds intersecting by more than 1 px in both directions. Consecutive
 frames are combined into one issue. The informational `motion_while_reading` hint reports a

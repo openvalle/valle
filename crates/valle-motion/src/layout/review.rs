@@ -129,11 +129,23 @@ fn emit_run(node: &str, run: FastRun, issues: &mut Vec<MotionReviewIssue>) {
     });
 }
 
-fn merge_batch_strobes(issues: &mut Vec<MotionReviewIssue>, groups: &BTreeMap<String, String>) {
+/// Strobes of rows that one element draws merge into one issue: the rows of a batch or an
+/// instance group under their host, and copies of a source element, such as the rows of an
+/// expanded `.map`, under the element.
+fn merge_row_strobes(
+    issues: &mut Vec<MotionReviewIssue>,
+    hosts: &BTreeMap<String, String>,
+    elements: &BTreeMap<String, String>,
+) {
     let mut grouped = BTreeMap::<String, (MotionReviewIssue, BTreeSet<String>)>::new();
     let mut output = Vec::new();
     for issue in issues.drain(..) {
-        let Some(group) = groups.get(&issue.node).filter(|_| issue.code == "strobe") else {
+        let host = hosts.get(&issue.node);
+        let Some(group) = host
+            .map(|host| elements.get(host).unwrap_or(host))
+            .or_else(|| elements.get(&issue.node))
+            .filter(|_| issue.code == "strobe")
+        else {
             output.push(issue);
             continue;
         };
@@ -154,7 +166,7 @@ fn merge_batch_strobes(issues: &mut Vec<MotionReviewIssue>, groups: &BTreeMap<St
         issue.node = group;
         issue.affected_rows = Some(rows.len());
         issue.example_keys = rows.into_iter().take(3).collect();
-        issue.message = "Visible rows in this batch move fast relative to their size; review the example rows or add motion blur.";
+        issue.message = "Visible rows drawn by this element move fast relative to their size; review the example rows or add motion blur.";
         output.push(issue);
     }
     *issues = output;
@@ -198,7 +210,15 @@ fn reading_seconds(text: &str) -> f64 {
         + READING_SECONDS_PER_CJK_CHARACTER * f64::from(cjk)
 }
 
-fn emit_text_run(node: &str, run: TextRun, fps: FrameRate, issues: &mut Vec<MotionReviewIssue>) {
+/// `at_end` marks text still on screen at the last frame. What follows the composition decides
+/// how long it stays readable, so the shortfall is information rather than a warning.
+fn emit_text_run(
+    node: &str,
+    run: TextRun,
+    fps: FrameRate,
+    at_end: bool,
+    issues: &mut Vec<MotionReviewIssue>,
+) {
     let visible_seconds =
         f64::from(run.end_frame - run.start_frame + 1) / crate::frame_rate_as_f64(fps);
     let recommended_seconds = run.recommended_seconds;
@@ -209,7 +229,7 @@ fn emit_text_run(node: &str, run: TextRun, fps: FrameRate, issues: &mut Vec<Moti
         affected_rows: None,
         example_keys: Vec::new(),
         code: "text_readability",
-        severity: "warning",
+        severity: if at_end { "info" } else { "warning" },
         node: node.to_owned(),
         other_node: None,
         start_frame: run.start_frame,
@@ -219,7 +239,11 @@ fn emit_text_run(node: &str, run: TextRun, fps: FrameRate, issues: &mut Vec<Moti
         visible_seconds: Some(visible_seconds),
         recommended_seconds: Some(recommended_seconds),
         word_count: Some(run.word_count),
-        message: "Text is visible for less than the reading estimate (0.3 seconds plus 0.3 seconds per word or 0.225 seconds per CJK character); keep it on screen longer.",
+        message: if at_end {
+            "Text is still on screen at the last frame but has been visible for less than the reading estimate; if nothing that keeps it readable follows the composition, keep it on screen longer."
+        } else {
+            "Text is visible for less than the reading estimate (0.3 seconds plus 0.3 seconds per word or 0.225 seconds per CJK character); keep it on screen longer."
+        },
     });
 }
 
@@ -501,6 +525,17 @@ fn numeric_text_signature(text: &str) -> String {
     result
 }
 
+/// The template root and its descendants, each of which every row instantiates.
+fn instance_templates(group: &crate::InstanceGroup) -> Vec<&crate::SceneNode> {
+    let mut templates = vec![&group.template];
+    let mut children = group.template_children.iter().collect::<Vec<_>>();
+    while let Some(child) = children.pop() {
+        templates.push(&child.node);
+        children.extend(&child.children);
+    }
+    templates
+}
+
 fn painted_nodes(prepared: &PreparedScene) -> BTreeSet<String> {
     let artifact = prepared.artifact();
     let intrinsic = |node: &crate::SceneNode| {
@@ -523,13 +558,10 @@ fn painted_nodes(prepared: &PreparedScene) -> BTreeSet<String> {
         .map(|node| node.key.clone())
         .collect();
     for group in &artifact.instance_groups {
-        let mut templates = vec![&group.template];
-        let mut children = group.template_children.iter().collect::<Vec<_>>();
-        while let Some(child) = children.pop() {
-            templates.push(&child.node);
-            children.extend(&child.children);
-        }
-        for template in templates.into_iter().filter(|node| intrinsic(node)) {
+        for template in instance_templates(group)
+            .into_iter()
+            .filter(|node| intrinsic(node))
+        {
             for row in 0..group.rows() {
                 if let Some(key) = group.key_for_node(row, &template.key) {
                     keys.insert(key);
@@ -542,7 +574,10 @@ fn painted_nodes(prepared: &PreparedScene) -> BTreeSet<String> {
 
 /// Inspect every output frame using the same post-layout anchors and resolved blur filters as
 /// rendering. The caller can impose an explicit frame budget; every admitted
-/// frame is inspected, without silently skipping long compositions.
+/// frame is inspected, without silently skipping long compositions. `source_elements` names the
+/// source element of nodes that share one, such as the rows of an expanded `.map`, whose strobes
+/// then merge under it.
+#[allow(clippy::too_many_arguments)]
 pub fn review_motion(
     prepared: &PreparedScene,
     props: &ResolvedProps,
@@ -552,6 +587,7 @@ pub fn review_motion(
     host_duration: valle_timeline::RationalTime,
     max_frames: u32,
     include_trajectories: bool,
+    source_elements: &BTreeMap<String, String>,
 ) -> Result<MotionReview, String> {
     if duration_frames == 0 || max_frames < 2 || duration_frames > max_frames {
         return Err(format!(
@@ -568,23 +604,12 @@ pub fn review_motion(
         .map(|node| node.key.clone())
         .collect::<BTreeSet<_>>();
     for group in &prepared.artifact().instance_groups {
-        if matches!(group.template.kind, NodeKind::Text { .. }) {
-            for row in 0..group.rows() {
-                if let Some(key) = group.key_for_node(row, &group.template.key) {
-                    text_nodes.insert(key);
-                }
+        for template in instance_templates(group) {
+            if matches!(template.kind, NodeKind::Text { .. }) {
+                text_nodes.extend(
+                    (0..group.rows()).filter_map(|row| group.key_for_node(row, &template.key)),
+                );
             }
-        }
-        let mut children = group.template_children.iter().collect::<Vec<_>>();
-        while let Some(child) = children.pop() {
-            if matches!(child.node.kind, NodeKind::Text { .. }) {
-                for row in 0..group.rows() {
-                    if let Some(key) = group.key_for_node(row, &child.node.key) {
-                        text_nodes.insert(key);
-                    }
-                }
-            }
-            children.extend(&child.children);
         }
     }
     let jump_limit = opts
@@ -598,7 +623,21 @@ pub fn review_motion(
     let cache = LayoutCache::new(prepared, opts.fonts);
     let faces = crate::FaceCache::new();
     let mut previous = HashMap::<String, super::scene::ReviewNodeSample>::new();
-    let mut groups = BTreeMap::<String, String>::new();
+    // The rows of an instance group belong to its host, like the rows of a batch.
+    let mut hosts = BTreeMap::<String, String>::new();
+    for node in &prepared.artifact().nodes {
+        if let NodeKind::InstanceLayout { group } | NodeKind::InstanceBatch { group } = node.kind
+            && let Some(group) = prepared.artifact().instance_groups.get(group as usize)
+        {
+            for template in instance_templates(group) {
+                for row in 0..group.rows() {
+                    if let Some(key) = group.key_for_node(row, &template.key) {
+                        hosts.insert(key, node.key.clone());
+                    }
+                }
+            }
+        }
+    }
     let mut active = BTreeMap::<String, FastRun>::new();
     let mut active_text = BTreeMap::<String, TextRun>::new();
     let mut active_out_of_frame = BTreeMap::<String, FrameRun>::new();
@@ -711,7 +750,7 @@ pub fn review_motion(
         }
         for (key, sample) in &current {
             if let Some(group) = &sample.group {
-                groups.insert(key.clone(), group.clone());
+                hosts.insert(key.clone(), group.clone());
             }
         }
         // A reborn particle is a new trajectory even when its semantic key stays
@@ -791,7 +830,7 @@ pub fn review_motion(
                         active_text.insert(node.clone(), run);
                         continue;
                     }
-                    emit_text_run(node, run, fps, &mut issues);
+                    emit_text_run(node, run, fps, false, &mut issues);
                 }
                 active_text.insert(
                     node.clone(),
@@ -804,7 +843,7 @@ pub fn review_motion(
                     },
                 );
             } else if let Some(run) = previous_run {
-                emit_text_run(node, run, fps, &mut issues);
+                emit_text_run(node, run, fps, false, &mut issues);
             }
         }
         let mut out_of_frame = BTreeSet::new();
@@ -1045,7 +1084,7 @@ pub fn review_motion(
         emit_run(&node, run, &mut issues);
     }
     for (node, run) in active_text {
-        emit_text_run(&node, run, fps, &mut issues);
+        emit_text_run(&node, run, fps, true, &mut issues);
     }
     for (node, run) in active_out_of_frame {
         emit_out_of_frame(&node, run, &mut issues);
@@ -1071,7 +1110,7 @@ pub fn review_motion(
         emit_linear_motion(&node, run, viewport, &mut issues);
     }
     emit_stagger_timing(&candidates, &motion_onsets, fps, &mut issues);
-    merge_batch_strobes(&mut issues, &groups);
+    merge_row_strobes(&mut issues, &hosts, source_elements);
     issues.sort_by(|a, b| {
         a.node
             .cmp(&b.node)

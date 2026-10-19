@@ -202,6 +202,7 @@ fn review(
         delivery.duration,
         max_frames.unwrap_or(delivery.duration_frames.max(2)),
         trajectories || trajectory_sheet.is_some(),
+        &prepared.compiled.shared_source_elements(),
     )
     .map_err(|error| anyhow!(error))?;
     let mut output = serde_json::json!({

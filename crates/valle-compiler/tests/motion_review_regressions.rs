@@ -18,11 +18,11 @@ export default function Main(ctx) {
 "##;
 
 fn report(source: &str) -> valle_motion::layout::MotionReview {
-    let artifact = compile_motion(source).unwrap().artifact;
-    let prepared = prepare_scene(&artifact).unwrap();
+    let compiled = compile_motion(source).unwrap();
+    let prepared = prepare_scene(&compiled.artifact).unwrap();
     let mut fonts = Fonts::default();
     valle_motion::register_default_motion_fonts(&mut fonts).unwrap();
-    let props = resolve_props(&artifact.controls, &Default::default()).unwrap();
+    let props = resolve_props(&compiled.artifact.controls, &Default::default()).unwrap();
     valle_motion::review_motion(
         &prepared,
         &props,
@@ -36,6 +36,7 @@ fn report(source: &str) -> valle_motion::layout::MotionReview {
         valle_timeline::RationalTime::new(2, 1).unwrap(),
         60,
         true,
+        &compiled.shared_source_elements(),
     )
     .unwrap()
 }
@@ -259,4 +260,93 @@ fn reading_time_counts_words_and_cjk_characters() {
             .unwrap_or_else(|| panic!("two seconds is too short for {text}: {reviewed:?}"));
         assert!(issue.recommended_seconds.unwrap() >= minimum - 1e-9);
     }
+}
+
+const RUNNERS: &str = r##"
+const ROWS = Array.from({length: 4}, (_, i) => ({id:`runner${i}`, i}));
+export default function Main(ctx) {
+  return <Scene style={{width:640,height:360}}>{ROWS.map(row => <View key={row.id}
+    className="absolute" style={{left:20 + ctx.localFrame*12, top:20 + row.i*40,
+    width:10, height:10, backgroundColor:"#ffffff"}} />)}</Scene>;
+}
+"##;
+
+fn strobes(review: &valle_motion::layout::MotionReview) -> Vec<&valle_motion::MotionReviewIssue> {
+    review
+        .issues
+        .iter()
+        .filter(|i| i.code == "strobe")
+        .collect()
+}
+
+#[test]
+fn strobing_rows_of_one_map_merge_whichever_way_it_lowers() {
+    // Batch rows merge under their host, as before.
+    let batch = compile_motion(RUNNERS).unwrap().artifact;
+    let host = batch
+        .nodes
+        .iter()
+        .find(|node| matches!(node.kind, valle_motion::NodeKind::InstanceBatch { .. }))
+        .expect("absolute rows batch")
+        .key
+        .clone();
+    let reviewed = report(RUNNERS);
+    let merged = strobes(&reviewed);
+    assert_eq!(merged.len(), 1, "{:?}", reviewed.issues);
+    assert_eq!(merged[0].node, host);
+    assert_eq!(merged[0].affected_rows, Some(4));
+    // Rows of an expanded map are copies of one source element and merge under its position.
+    let expanded = RUNNERS.replace("key={row.id}", "key={`${row.id}`}");
+    assert!(
+        compile_motion(&expanded)
+            .unwrap()
+            .artifact
+            .instance_groups
+            .is_empty()
+    );
+    let at = expanded.find("<View").unwrap();
+    let line = expanded[..at].matches('\n').count() + 1;
+    let column = expanded[..at].rsplit('\n').next().unwrap().chars().count() + 1;
+    let reviewed = report(&expanded);
+    let merged = strobes(&reviewed);
+    assert_eq!(merged.len(), 1, "{:?}", reviewed.issues);
+    assert_eq!(merged[0].node, format!("<inline>:{line}:{column}"));
+    assert_eq!(merged[0].affected_rows, Some(4));
+    assert_eq!(merged[0].example_keys, ["runner0", "runner1", "runner2"]);
+    // Rows of a flow map lay out as instance rows and merge under their host.
+    let flow = RUNNERS.replace("className=\"absolute\" ", "").replace(
+        "left:20 + ctx.localFrame*12, top:20 + row.i*40,",
+        "marginLeft:ctx.localFrame*12,",
+    );
+    let layout = compile_motion(&flow).unwrap().artifact;
+    let host = layout
+        .nodes
+        .iter()
+        .find(|node| matches!(node.kind, valle_motion::NodeKind::InstanceLayout { .. }))
+        .expect("flow rows lay out as instances")
+        .key
+        .clone();
+    let reviewed = report(&flow);
+    let merged = strobes(&reviewed);
+    assert_eq!(merged.len(), 1, "{:?}", reviewed.issues);
+    assert_eq!(merged[0].node, host);
+    assert_eq!(merged[0].affected_rows, Some(4));
+}
+
+#[test]
+fn short_text_at_the_last_frame_is_information() {
+    let source = r##"export default function Main(ctx) { return <Scene>
+        <Text key="flash" visible={ctx.localFrame >= 10 && ctx.localFrame < 15} style={{position:"absolute",left:10,top:30,fontSize:24}}>Read this caption</Text>
+        <Text key="ending" visible={ctx.localFrame >= 55} style={{position:"absolute",left:10,top:120,fontSize:24}}>Read this caption</Text>
+    </Scene>; }"##;
+    let reviewed = report(source);
+    let severity = |node: &str| {
+        reviewed
+            .issues
+            .iter()
+            .find(|i| i.code == "text_readability" && i.node == node)
+            .map(|i| i.severity)
+    };
+    assert_eq!(severity("flash"), Some("warning"), "{:?}", reviewed.issues);
+    assert_eq!(severity("ending"), Some("info"), "{:?}", reviewed.issues);
 }

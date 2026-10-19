@@ -423,6 +423,7 @@ fn direct_and_component_text_roots_share_layout_and_glyph_sources() {
             valle_timeline::RationalTime::new(2, 15).unwrap(),
             4,
             false,
+            &Default::default(),
         )
         .unwrap();
         let first_key = compact.instance_groups[0]

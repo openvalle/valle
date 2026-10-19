@@ -307,6 +307,59 @@ pub struct CompiledMotion {
     pub prepared_data_digest: ContentDigest,
 }
 
+impl CompiledMotion {
+    /// Nodes drawn by a source element that draws more than one, such as the rows of an expanded
+    /// `.map` or a component used twice, mapped to that element's `path:line:column`. A node the
+    /// compiler adds around an element, such as the scene root, is not another copy of it.
+    pub fn shared_source_elements(&self) -> BTreeMap<String, String> {
+        let nodes = &self.artifact.nodes;
+        let mut parents = vec![None; nodes.len()];
+        for (at, node) in nodes.iter().enumerate() {
+            let children = node.children.start as usize..node.children.end as usize;
+            for child in &self.artifact.node_children[children] {
+                parents[child.0 as usize] = Some(at);
+            }
+        }
+        let mut elements = BTreeMap::<(&str, u32), Vec<&NodeSourceMapping>>::new();
+        for node in &self.source_map.nodes {
+            elements
+                .entry((node.source_path.as_str(), node.span.start))
+                .or_default()
+                .push(node);
+        }
+        let mut shared = BTreeMap::new();
+        for nodes in elements.into_values() {
+            let members = nodes
+                .iter()
+                .map(|node| node.id.0 as usize)
+                .collect::<BTreeSet<_>>();
+            let copies = nodes
+                .into_iter()
+                .filter(|node| {
+                    let mut parent = parents[node.id.0 as usize];
+                    while let Some(at) = parent {
+                        if members.contains(&at) {
+                            return false;
+                        }
+                        parent = parents[at];
+                    }
+                    true
+                })
+                .collect::<Vec<_>>();
+            if let [first, _, ..] = copies.as_slice() {
+                let element = format!(
+                    "{}:{}:{}",
+                    first.source_path, first.span.line, first.span.column
+                );
+                for node in copies {
+                    shared.insert(node.key.clone(), element.clone());
+                }
+            }
+        }
+        shared
+    }
+}
+
 /// One explicit, reproducible `controls.data` binding.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
