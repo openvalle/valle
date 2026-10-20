@@ -1263,7 +1263,7 @@ fn recording_filter_footprint(filter: &Filter) -> Insets {
         Filter::RadialBlur { amount, .. } => Insets::uniform(*amount + 1.0),
         Filter::FilmGrain { .. } => Insets::default(),
         Filter::LensDistortion { .. } => Insets::default(),
-        Filter::NoiseDisplacement { scale, .. } => Insets::uniform(*scale),
+        Filter::NoiseDisplacement { scale, .. } => Insets::uniform(scale.abs()),
         Filter::ChromaticAberration { offset } => Insets::new(
             offset[0].abs() * 0.5 + 1.0,
             offset[1].abs() * 0.5 + 1.0,

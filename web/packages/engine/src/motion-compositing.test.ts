@@ -114,6 +114,15 @@ test("Motion composition, easing and color interpolation match analytic pixels o
         <View key="frosted" className="absolute" style={{left:88,top:14,width:56,height:68,backdropFilter:"blur(2px)",
           backdropDisplacement:displacement(19,point(0.043,0.089),10,{mode:"turbulence"})}}/>
       </Scene>}`, body:"", width:160, height:96, frames:[0,30,0], probes:[] },
+    // A negative scale displaces the other way, a node and a backdrop alike.
+    { name:"displacement-negative", source:`export const composition={width:160,height:96,fps:30,duration:2};
+      export default function Main(){ return <Scene className="relative h-full w-full" style={{backgroundColor:"#e2e8f0"}}>
+        <View key="node" className="absolute" style={{left:8,top:14,width:64,height:68,overflow:"hidden",
+          displacement:displacement(7,point(0.071,0.057),-12,{octaves:2})}}>${stripes("node",64,68)}</View>
+        <View key="backdrop" className="absolute" style={{left:80,top:0,width:80,height:96}}>${stripes("backdrop",80,96)}</View>
+        <View key="lens" className="absolute" style={{left:88,top:14,width:56,height:68,
+          backdropDisplacement:displacement(19,point(0.043,0.089),-10,{mode:"turbulence"})}}/>
+      </Scene>}`, body:"", width:160, height:96, frames:[0], probes:[] },
     // A backdrop blur mixes in what lies just outside the node, across its edges and its corner radii.
     { name:"backdrop-blur-edge", source:`export const composition={width:96,height:64,fps:30,duration:2};
       export default function Main(){ const ctx = useTime();return <Scene className="relative h-full w-full" style={{backgroundColor:"#e2e8f0"}}>

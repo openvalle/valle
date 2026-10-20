@@ -995,7 +995,7 @@ fn validate_filter(filter: &Filter, location: &str) -> Result<(), DrawProgramErr
             if *octaves == 0 || *octaves > 8 {
                 return invalid(format!("{location}.octaves"), "must be in 1..=8");
             }
-            finite_nonnegative(*scale, &format!("{location}.scale"))?;
+            finite_f32(*scale, &format!("{location}.scale"))?;
         }
         Filter::VelocityBlur {
             velocity,
@@ -1942,7 +1942,7 @@ fn apply_filter_bounds(
         Filter::Glow { radius, .. } => outset_rect(rect, Insets::uniform(5.0 * *radius + 1.0))?,
         Filter::Bloom { radius, .. } => outset_rect(rect, Insets::uniform(4.0 * *radius + 1.0))?,
         Filter::RadialBlur { amount, .. } => outset_rect(rect, Insets::uniform(*amount + 1.0))?,
-        Filter::NoiseDisplacement { scale, .. } => outset_rect(rect, Insets::uniform(*scale))?,
+        Filter::NoiseDisplacement { scale, .. } => outset_rect(rect, Insets::uniform(scale.abs()))?,
         Filter::ChromaticAberration { offset } => outset_rect(
             rect,
             Insets::new(
@@ -2136,7 +2136,7 @@ fn filter_footprint(filter: &Filter) -> Insets {
         Filter::Glow { radius, .. } => Insets::uniform(5.0 * *radius + 1.0),
         Filter::Bloom { radius, .. } => Insets::uniform(4.0 * *radius + 1.0),
         Filter::RadialBlur { amount, .. } => Insets::uniform(*amount + 1.0),
-        Filter::NoiseDisplacement { scale, .. } => Insets::uniform(*scale),
+        Filter::NoiseDisplacement { scale, .. } => Insets::uniform(scale.abs()),
         Filter::ChromaticAberration { offset } => Insets::new(
             offset[0].abs() * 0.5 + 1.0,
             offset[1].abs() * 0.5 + 1.0,

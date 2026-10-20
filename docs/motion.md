@@ -1904,8 +1904,9 @@ uses `ctx.progress` as authored in the refactor acceptance scene.
 `style.displacement: displacement(seed, frequencyPoint, scale, options?)` distorts
 a node and its descendants. `style.backdropDisplacement` uses the same constructor
 to distort the backdrop. Seed is a static integer in `[0, 2^32−1]`; options are
-`octaves` (1–4) and `mode` (`fractal` or `turbulence`). Frequency is a point,
-scale a number; both may use admitted animation expressions. Like other filter
+`octaves` (1–4) and `mode` (`fractal` or `turbulence`). Frequency is a point and
+scale a number within ±512; a negative scale moves pixels the opposite way. Both
+may use admitted animation expressions. Like other filter
 lengths they are in the node's own units: the noise field is anchored to the node
 and moves, scales and rotates with it, so the result does not depend on the output
 size or on where the node is on screen. `backdropDisplacement` distorts the pixels

@@ -1269,7 +1269,7 @@ fn program_filter_bounds(bounds: LocalBounds, filter: &Filter) -> LocalBounds {
             LocalBounds::from_rect(outset(rect, Insets::uniform(*amount + 1.0)))
         }
         Filter::NoiseDisplacement { scale, .. } => {
-            LocalBounds::from_rect(outset(rect, Insets::uniform(*scale)))
+            LocalBounds::from_rect(outset(rect, Insets::uniform(scale.abs())))
         }
         Filter::ChromaticAberration { offset } => LocalBounds::from_rect(outset(
             rect,
@@ -1988,6 +1988,62 @@ export default function Scene() { const ctx = useTime();
             matches!(read.filters.as_slice(), [Filter::NoiseDisplacement { .. }]),
             "{:?}",
             read.filters
+        );
+    }
+
+    #[test]
+    fn motion_displacement_takes_a_negative_scale() {
+        let program = motion_program(
+            r##"
+export default function Scene() {
+  return <Scene className="relative" style={{width:100,height:40}}>
+    <View key="node" className="absolute" style={{left:0,top:0,width:40,height:40,
+      backgroundColor:"#16a34a",displacement:displacement(7,point(0.05,0.05),-6)}} />
+    <View key="lens" className="absolute" style={{left:50,top:0,width:40,height:40,
+      backdropDisplacement:displacement(7,point(0.05,0.05),-6)}} />
+  </Scene>;
+}
+"##,
+            (100, 40),
+        );
+        let negative = |filters: &[Filter]| match filters {
+            [Filter::NoiseDisplacement { scale, .. }] => *scale == -6.0,
+            _ => false,
+        };
+        let groups = program
+            .nodes()
+            .iter()
+            .filter_map(|node| match node {
+                Node::Group(group) => Some(group),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert!(groups.iter().any(|group| negative(&group.filters)));
+        let read = groups
+            .iter()
+            .find_map(|group| group.backdrop.as_ref())
+            .expect("the lens reads its backdrop");
+        assert!(negative(&read.filters), "{:?}", read.filters);
+        // Both reach as far as the scale's magnitude.
+        assert_eq!(read.footprint, Insets::uniform(6.0));
+        let plan = ProgramPlan::derive(&program).unwrap();
+        let (input, output) = plan
+            .passes()
+            .iter()
+            .find_map(|pass| match &pass.kind {
+                ProgramPassKind::ApplyFilter {
+                    input,
+                    output,
+                    filter: Filter::NoiseDisplacement { .. },
+                    ..
+                } => Some((*input, *output)),
+                _ => None,
+            })
+            .expect("the node's displacement runs as a filter pass");
+        let input = plan.resources()[input.index()].bounds.rect().unwrap();
+        assert_eq!(
+            plan.resources()[output.index()].bounds,
+            LocalBounds::from_rect(outset(input, Insets::uniform(6.0)))
         );
     }
 
