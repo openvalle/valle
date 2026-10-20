@@ -1116,7 +1116,8 @@ enum ProgramPassStructure {
         from: u32,
         to: u32,
         output: u32,
-        effect: valle_draw::transition::TransitionKind,
+        /// The built-in kernel, or none for a shader.
+        effect: Option<valle_draw::transition::TransitionKind>,
     },
     ApplyShader {
         node: u32,
@@ -1263,7 +1264,10 @@ impl From<&super::ProgramPass> for ProgramPassStructure {
                 from: from.get(),
                 to: to.get(),
                 output: output.get(),
-                effect: transition.kind,
+                effect: match transition.kernel {
+                    valle_draw::program::TransitionKernel::Builtin { kind, .. } => Some(kind),
+                    valle_draw::program::TransitionKernel::Shader { .. } => None,
+                },
             },
             Kind::ApplyShader {
                 node,

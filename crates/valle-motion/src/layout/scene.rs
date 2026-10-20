@@ -28,7 +28,7 @@ use valle_motion::{
     GeometryBatchGeometry, GradientStopValue, InstanceColumnValues, InstanceGroup,
     InstanceTemplateNode, MaskValue, NodeId, NodeKind, NumberValue, PaintValue, PathData,
     PathValue, PointValue, RectValue, ResolvedProps, SceneArtifact, ShaderUniformValue, StyleValue,
-    TextSplit, TextValue, ValidationError, css_token,
+    TextSplit, TextValue, TransitionEffect, ValidationError, css_token,
 };
 
 use super::activation::{ActivationPlan, InstanceRangeGate, InstanceRowSelection};
@@ -1287,33 +1287,49 @@ pub(super) fn build_tree_inner(
             text_paths.insert(node.key.clone(), path_value(path, &values, at)?.clone());
         }
         match &node.kind {
-            NodeKind::Transition {
-                effect,
-                progress,
-                params,
-            } => {
-                let bindings = params;
-                let params = params
-                    .iter()
-                    .map(|(name, value)| {
-                        Ok((
-                            name.clone(),
-                            number_value(value, &values, at, "transition parameter")?,
-                        ))
-                    })
-                    .collect::<Result<std::collections::BTreeMap<_, _>, LayoutError>>()?;
-                let params =
-                    effect
-                        .resolve_params(&params)
-                        .map_err(|error| LayoutError::BadTransition {
-                            node: node.key.clone(),
-                            reason: match bindings.get(&error.parameter) {
-                                Some(NumberValue::Expr { expr }) => {
-                                    format!("expression {}: {error}", expr.0)
-                                }
-                                _ => error.to_string(),
-                            },
+            NodeKind::Transition { effect, progress } => {
+                let kernel = match effect {
+                    TransitionEffect::Builtin {
+                        kind,
+                        params: bindings,
+                    } => {
+                        let params = bindings
+                            .iter()
+                            .map(|(name, value)| {
+                                Ok((
+                                    name.clone(),
+                                    number_value(value, &values, at, "transition parameter")?,
+                                ))
+                            })
+                            .collect::<Result<std::collections::BTreeMap<_, _>, LayoutError>>()?;
+                        let params = kind.resolve_params(&params).map_err(|error| {
+                            LayoutError::BadTransition {
+                                node: node.key.clone(),
+                                reason: match bindings.get(&error.parameter) {
+                                    Some(NumberValue::Expr { expr }) => {
+                                        format!("expression {}: {error}", expr.0)
+                                    }
+                                    _ => error.to_string(),
+                                },
+                            }
                         })?;
+                        crate::layout::bridge::ResolvedTransitionKernel::Builtin {
+                            kind: *kind,
+                            params,
+                        }
+                    }
+                    TransitionEffect::Shader {
+                        program,
+                        uniforms,
+                        inputs,
+                    } => crate::layout::bridge::ResolvedTransitionKernel::Shader(
+                        crate::layout::bridge::ResolvedShaderLayer {
+                            program: shader_program(program),
+                            uniforms: shader_uniforms(&node.key, uniforms, &values, at)?,
+                            inputs: inputs.clone(),
+                        },
+                    ),
+                };
                 let progress = number_value(progress, &values, at, "transition progress")?;
                 if !(0.0..=1.0).contains(&progress) {
                     return Err(LayoutError::BadTransition {
@@ -1326,8 +1342,7 @@ pub(super) fn build_tree_inner(
                 transitions.insert(
                     node.key.clone(),
                     crate::layout::bridge::ResolvedTransition {
-                        kind: *effect,
-                        params,
+                        kernel,
                         progress: progress as f32,
                         children: [
                             artifact.nodes[children[0].0 as usize].key.clone(),
@@ -1342,136 +1357,11 @@ pub(super) fn build_tree_inner(
                 uniforms,
                 inputs,
             } => {
-                let uniforms = uniforms
-                    .iter()
-                    .map(|binding| {
-                        let value = match &binding.value {
-                            ShaderUniformValue::Float { value } => {
-                                valle_draw::program::recording::ShaderUniformValue::Float {
-                                    value: number_value(value, &values, at, "shader float")? as f32,
-                                }
-                            }
-                            ShaderUniformValue::Float2 { value } => {
-                                let value = point_value(value, &values, at, "shader float2")?;
-                                valle_draw::program::recording::ShaderUniformValue::Float2 {
-                                    value: [value.x as f32, value.y as f32],
-                                }
-                            }
-                            ShaderUniformValue::Float3 { value } => {
-                                let mut components = [0.0f32; 3];
-                                for (slot, component) in components.iter_mut().zip(value) {
-                                    *slot =
-                                        number_value(component, &values, at, "shader component")?
-                                            as f32;
-                                }
-                                valle_draw::program::recording::ShaderUniformValue::Float3 {
-                                    value: components,
-                                }
-                            }
-                            ShaderUniformValue::Float4 { value } => {
-                                let mut components = [0.0f32; 4];
-                                for (slot, component) in components.iter_mut().zip(value) {
-                                    *slot =
-                                        number_value(component, &values, at, "shader component")?
-                                            as f32;
-                                }
-                                valle_draw::program::recording::ShaderUniformValue::Float4 {
-                                    value: components,
-                                }
-                            }
-                            ShaderUniformValue::Float2x2 { value } => {
-                                let mut components = [0.0f32; 4];
-                                for (slot, component) in components.iter_mut().zip(value) {
-                                    *slot =
-                                        number_value(component, &values, at, "shader component")?
-                                            as f32;
-                                }
-                                valle_draw::program::recording::ShaderUniformValue::Float2x2 {
-                                    value: components,
-                                }
-                            }
-                            ShaderUniformValue::Float3x3 { value } => {
-                                let mut components = [0.0f32; 9];
-                                for (slot, component) in components.iter_mut().zip(value) {
-                                    *slot =
-                                        number_value(component, &values, at, "shader component")?
-                                            as f32;
-                                }
-                                valle_draw::program::recording::ShaderUniformValue::Float3x3 {
-                                    value: components,
-                                }
-                            }
-                            ShaderUniformValue::Float4x4 { value } => {
-                                let mut components = [0.0f32; 16];
-                                for (slot, component) in components.iter_mut().zip(value) {
-                                    *slot =
-                                        number_value(component, &values, at, "shader component")?
-                                            as f32;
-                                }
-                                valle_draw::program::recording::ShaderUniformValue::Float4x4 {
-                                    value: components,
-                                }
-                            }
-                            ShaderUniformValue::Color { value } => {
-                                let value = color_value(value, &values, at)?;
-                                valle_draw::program::recording::ShaderUniformValue::Color {
-                                    value: value.to_srgb_straight(),
-                                }
-                            }
-                            ShaderUniformValue::Bool { value } => {
-                                let value = match value {
-                                    BoolValue::Static { value } => *value,
-                                    BoolValue::Expr { expr } => match values.get(expr.0 as usize) {
-                                        Some(MotionValue::Bool(value)) => *value,
-                                        _ => {
-                                            return Err(LayoutError::Eval(
-                                                EvalError::TypeMismatch {
-                                                    at,
-                                                    op: "shader bool",
-                                                },
-                                            ));
-                                        }
-                                    },
-                                };
-                                valle_draw::program::recording::ShaderUniformValue::Bool { value }
-                            }
-                        };
-                        for component in value.components() {
-                            if !component.is_finite()
-                                || binding
-                                    .range
-                                    .is_some_and(|[min, max]| *component < min || *component > max)
-                            {
-                                return Err(LayoutError::BadShader {
-                                    node: node.key.clone(),
-                                    reason: format!(
-                                        "uniform `{}` is non-finite or outside its declared range",
-                                        binding.name
-                                    ),
-                                });
-                            }
-                        }
-                        Ok(valle_draw::program::recording::ShaderUniformBinding {
-                            name: binding.name.clone(),
-                            value,
-                        })
-                    })
-                    .collect::<Result<Vec<_>, LayoutError>>()?;
                 shaders.insert(
                     node.key.clone(),
                     crate::layout::bridge::ResolvedShaderLayer {
-                        program: valle_draw::program::recording::ShaderProgram {
-                            work_per_pixel: program.work_per_pixel,
-                            padding: program.padding,
-                            uri: program.uri.clone(),
-                            content_hash: valle_draw::requirements::DigestBytes::from_bytes(
-                                *program.content_hash.as_bytes(),
-                            ),
-                            abi_hash: valle_draw::requirements::DigestBytes::from_bytes(
-                                *program.abi_hash.as_bytes(),
-                            ),
-                        },
-                        uniforms,
+                        program: shader_program(program),
+                        uniforms: shader_uniforms(&node.key, uniforms, &values, at)?,
                         inputs: inputs.clone(),
                     },
                 );
@@ -5198,6 +5088,129 @@ fn resolve_backdrop_advanced_filters(
         turbulence: mode == "turbulence",
     });
     Ok(filters)
+}
+
+/// The uniforms of a shader binding at this frame, in ABI order, each finite and in its range.
+fn shader_uniforms(
+    node: &str,
+    uniforms: &[valle_motion::ShaderUniformBinding],
+    values: &[MotionValue],
+    at: usize,
+) -> Result<Vec<valle_draw::program::recording::ShaderUniformBinding>, LayoutError> {
+    uniforms
+        .iter()
+        .map(|binding| {
+            let value = match &binding.value {
+                ShaderUniformValue::Float { value } => {
+                    valle_draw::program::recording::ShaderUniformValue::Float {
+                        value: number_value(value, values, at, "shader float")? as f32,
+                    }
+                }
+                ShaderUniformValue::Float2 { value } => {
+                    let value = point_value(value, values, at, "shader float2")?;
+                    valle_draw::program::recording::ShaderUniformValue::Float2 {
+                        value: [value.x as f32, value.y as f32],
+                    }
+                }
+                ShaderUniformValue::Float3 { value } => {
+                    let mut components = [0.0f32; 3];
+                    for (slot, component) in components.iter_mut().zip(value) {
+                        *slot = number_value(component, values, at, "shader component")? as f32;
+                    }
+                    valle_draw::program::recording::ShaderUniformValue::Float3 { value: components }
+                }
+                ShaderUniformValue::Float4 { value } => {
+                    let mut components = [0.0f32; 4];
+                    for (slot, component) in components.iter_mut().zip(value) {
+                        *slot = number_value(component, values, at, "shader component")? as f32;
+                    }
+                    valle_draw::program::recording::ShaderUniformValue::Float4 { value: components }
+                }
+                ShaderUniformValue::Float2x2 { value } => {
+                    let mut components = [0.0f32; 4];
+                    for (slot, component) in components.iter_mut().zip(value) {
+                        *slot = number_value(component, values, at, "shader component")? as f32;
+                    }
+                    valle_draw::program::recording::ShaderUniformValue::Float2x2 {
+                        value: components,
+                    }
+                }
+                ShaderUniformValue::Float3x3 { value } => {
+                    let mut components = [0.0f32; 9];
+                    for (slot, component) in components.iter_mut().zip(value) {
+                        *slot = number_value(component, values, at, "shader component")? as f32;
+                    }
+                    valle_draw::program::recording::ShaderUniformValue::Float3x3 {
+                        value: components,
+                    }
+                }
+                ShaderUniformValue::Float4x4 { value } => {
+                    let mut components = [0.0f32; 16];
+                    for (slot, component) in components.iter_mut().zip(value) {
+                        *slot = number_value(component, values, at, "shader component")? as f32;
+                    }
+                    valle_draw::program::recording::ShaderUniformValue::Float4x4 {
+                        value: components,
+                    }
+                }
+                ShaderUniformValue::Color { value } => {
+                    let value = color_value(value, values, at)?;
+                    valle_draw::program::recording::ShaderUniformValue::Color {
+                        value: value.to_srgb_straight(),
+                    }
+                }
+                ShaderUniformValue::Bool { value } => {
+                    let value = match value {
+                        BoolValue::Static { value } => *value,
+                        BoolValue::Expr { expr } => match values.get(expr.0 as usize) {
+                            Some(MotionValue::Bool(value)) => *value,
+                            _ => {
+                                return Err(LayoutError::Eval(EvalError::TypeMismatch {
+                                    at,
+                                    op: "shader bool",
+                                }));
+                            }
+                        },
+                    };
+                    valle_draw::program::recording::ShaderUniformValue::Bool { value }
+                }
+            };
+            for component in value.components() {
+                if !component.is_finite()
+                    || binding
+                        .range
+                        .is_some_and(|[min, max]| *component < min || *component > max)
+                {
+                    return Err(LayoutError::BadShader {
+                        node: node.to_owned(),
+                        reason: format!(
+                            "uniform `{}` is non-finite or outside its declared range",
+                            binding.name
+                        ),
+                    });
+                }
+            }
+            Ok(valle_draw::program::recording::ShaderUniformBinding {
+                name: binding.name.clone(),
+                value,
+            })
+        })
+        .collect()
+}
+
+/// The program pin a recording carries for an artifact's shader program.
+fn shader_program(
+    program: &valle_motion::ShaderProgramRef,
+) -> valle_draw::program::recording::ShaderProgram {
+    valle_draw::program::recording::ShaderProgram {
+        work_per_pixel: program.work_per_pixel,
+        padding: program.padding,
+        uri: program.uri.clone(),
+        content_hash: valle_draw::requirements::DigestBytes::from_bytes(
+            *program.content_hash.as_bytes(),
+        ),
+        abi_hash: valle_draw::requirements::DigestBytes::from_bytes(*program.abi_hash.as_bytes()),
+    }
 }
 
 fn point_value(

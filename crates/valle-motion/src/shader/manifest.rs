@@ -236,11 +236,62 @@ impl Default for OutputContract {
     }
 }
 
+/// What a shader draws over. A layer shader reads the subtree of its ShaderLayer as `content`; a
+/// transition shader reads the two children of its Transition as `from` and `to`, and the
+/// transition's `progress`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ShaderRole {
+    #[default]
+    Layer,
+    Transition,
+}
+
+impl ShaderRole {
+    pub fn is_layer(&self) -> bool {
+        *self == Self::Layer
+    }
+
+    /// The children the host binds, before the declared inputs.
+    pub fn children(self) -> &'static [&'static str] {
+        match self {
+            Self::Layer => &["content"],
+            Self::Transition => &["from", "to"],
+        }
+    }
+
+    /// The float uniforms the host binds after `resolution`.
+    pub fn system_uniforms(self) -> &'static [&'static str] {
+        match self {
+            Self::Layer => &[],
+            Self::Transition => &["progress"],
+        }
+    }
+
+    /// The functions that sample the host's children.
+    pub fn sample_functions(self) -> &'static [&'static str] {
+        match self {
+            Self::Layer => &["sampleContent"],
+            Self::Transition => &["sample_from", "sample_to"],
+        }
+    }
+
+    /// Names the host defines, which declarations and functions cannot take.
+    pub fn reserves(self, name: &str) -> bool {
+        name == "resolution"
+            || self.children().contains(&name)
+            || self.system_uniforms().contains(&name)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ShaderManifest {
     pub name: String,
     pub entry: String,
+    /// A descriptor is a layer shader; transition shaders are written inline.
+    #[serde(default, skip_serializing_if = "ShaderRole::is_layer")]
+    pub role: ShaderRole,
     #[serde(default)]
     pub inputs: Vec<ShaderInput>,
     #[serde(default)]
@@ -293,14 +344,23 @@ impl ShaderAbi {
 }
 
 impl ShaderManifest {
+    /// Parse a descriptor, which is always a layer shader.
     pub fn parse(bytes: &[u8]) -> Result<Self, ShaderDiagnostic> {
-        serde_json::from_slice(bytes).map_err(|error| {
+        let manifest: Self = serde_json::from_slice(bytes).map_err(|error| {
             ShaderDiagnostic::new(
                 DiagnosticCode::ManifestParse,
                 "manifest",
                 format!("invalid shader manifest JSON: {error}"),
             )
-        })
+        })?;
+        if !manifest.role.is_layer() {
+            return Err(ShaderDiagnostic::new(
+                DiagnosticCode::ManifestInvalid,
+                "role",
+                "a descriptor is a ShaderLayer shader; a Transition writes its shader as code",
+            ));
+        }
+        Ok(manifest)
     }
 
     pub fn canonical_bytes(&self) -> Result<Vec<u8>, ShaderDiagnostic> {
@@ -310,13 +370,18 @@ impl ShaderManifest {
 
     pub fn abi(&self) -> Result<ShaderAbi, ShaderDiagnostic> {
         self.validate_shape()?;
-        let mut children = vec![AbiChild {
-            kind: InputKind::Color,
-            name: "content".into(),
-            required: true,
-            sampling: InputSampling::Linear,
-            wrap: InputWrap::Clamp,
-        }];
+        let mut children = self
+            .role
+            .children()
+            .iter()
+            .map(|name| AbiChild {
+                kind: InputKind::Color,
+                name: (*name).into(),
+                required: true,
+                sampling: InputSampling::Linear,
+                wrap: InputWrap::Clamp,
+            })
+            .collect::<Vec<_>>();
         children.extend(self.inputs.iter().map(|input| AbiChild {
             kind: input.kind,
             name: input.name.clone(),
@@ -334,6 +399,16 @@ impl ShaderManifest {
             system: true,
         }];
         scalar_offset += 2;
+        for name in self.role.system_uniforms() {
+            uniforms.push(AbiUniform {
+                name: (*name).into(),
+                uniform_type: UniformType::Float,
+                scalar_offset,
+                scalar_width: 1,
+                system: true,
+            });
+            scalar_offset += 1;
+        }
         for input in &self.inputs {
             uniforms.push(AbiUniform {
                 name: format!("valle_size_{}", input.name),
@@ -400,6 +475,13 @@ impl ShaderManifest {
                 "padding exceeds the layer pixel budget even for a 1x1 layer",
             ));
         }
+        if !self.role.is_layer() && self.output.padding != [0; 4] {
+            return Err(ShaderDiagnostic::new(
+                DiagnosticCode::OutputContract,
+                "output.padding",
+                "a transition shader draws its canvas, without padding",
+            ));
+        }
         if self.inputs.len() > MAX_TEXTURE_INPUTS {
             return Err(ShaderDiagnostic::new(
                 DiagnosticCode::BudgetExceeded,
@@ -412,20 +494,18 @@ impl ShaderManifest {
         }
 
         let mut names = BTreeSet::new();
-        names.insert("content".to_owned());
-        names.insert("resolution".to_owned());
         for (index, input) in self.inputs.iter().enumerate() {
             validate_identifier(&input.name, &format!("inputs[{index}].name"))?;
-            if !names.insert(input.name.clone()) {
+            if self.role.reserves(&input.name) || !names.insert(input.name.clone()) {
                 return Err(duplicate_name(&input.name, format!("inputs[{index}].name")));
             }
         }
 
-        let mut scalar_count = 2_usize + self.inputs.len() * 2;
+        let mut scalar_count = 2_usize + self.role.system_uniforms().len() + self.inputs.len() * 2;
         for (index, uniform) in self.uniforms.iter().enumerate() {
             let path = format!("uniforms[{index}]");
             validate_identifier(&uniform.name, &format!("{path}.name"))?;
-            if !names.insert(uniform.name.clone()) {
+            if self.role.reserves(&uniform.name) || !names.insert(uniform.name.clone()) {
                 return Err(duplicate_name(&uniform.name, format!("{path}.name")));
             }
             validate_uniform(uniform, &path)?;

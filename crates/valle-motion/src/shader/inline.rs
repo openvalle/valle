@@ -1,10 +1,11 @@
-//! Shader code written in a ShaderLayer's `code`. It declares its uniforms and texture inputs at
-//! the top, as SkSL does, so it needs no descriptor: `uniform <type> <name>;` declares a uniform,
-//! and `uniform shader <name>;` an input read with `sample_<name>(uv)`.
+//! Shader code written in the `code` of a ShaderLayer or a Transition. It declares its uniforms
+//! and texture inputs at the top, as SkSL does, so it needs no descriptor: `uniform <type> <name>;`
+//! declares a uniform, and `uniform shader <name>;` an input read with `sample_<name>(uv)`.
 
 use super::{
     BudgetClass, DiagnosticCode, InputKind, InputSampling, InputWrap, OutputContract,
-    ShaderDiagnostic, ShaderInput, ShaderManifest, ShaderPackage, ShaderUniform, UniformType,
+    ShaderDiagnostic, ShaderInput, ShaderManifest, ShaderPackage, ShaderRole, ShaderUniform,
+    UniformType,
 };
 
 /// The descriptor name and entry of every inline package. The package's content hash, which
@@ -110,8 +111,7 @@ impl InlineCode {
                         Some("=") => {
                             return Err(error(
                                 position,
-                                "a uniform takes its value from the ShaderLayer's `uniforms`, not \
-                                 an initializer",
+                                "a uniform takes its value from `uniforms`, not an initializer",
                             ));
                         }
                         _ => return Err(malformed()),
@@ -152,10 +152,11 @@ impl InlineCode {
         })
     }
 
-    /// The package of this code, with each declared input sampled as `options` gives and the
-    /// output padded by `padding`, [left, top, right, bottom] local pixels.
+    /// The package of this code in `role`, with each declared input sampled as `options` gives
+    /// and the output padded by `padding`, [left, top, right, bottom] local pixels.
     pub fn package(
         &self,
+        role: ShaderRole,
         options: impl Fn(&str) -> InputOptions,
         padding: [u32; 4],
     ) -> Result<ShaderPackage, ShaderDiagnostic> {
@@ -189,6 +190,7 @@ impl InlineCode {
         let manifest = ShaderManifest {
             name: INLINE_NAME.to_owned(),
             entry: INLINE_ENTRY.to_owned(),
+            role,
             inputs,
             uniforms,
             output: OutputContract {
@@ -312,6 +314,7 @@ float4 valle_main(float2 uv) {
         let inline = InlineCode::parse(DISSOLVE).unwrap();
         let package = inline
             .package(
+                ShaderRole::Layer,
                 |_| InputOptions::new(InputKind::Color, Some(InputSampling::Nearest), None),
                 [4, 0, 4, 0],
             )
@@ -340,12 +343,13 @@ float4 valle_main(float2 uv) {
         // The same code and options make the same package; other options another one.
         let again = inline
             .package(
+                ShaderRole::Layer,
                 |_| InputOptions::new(InputKind::Color, Some(InputSampling::Nearest), None),
                 [4, 0, 4, 0],
             )
             .unwrap();
         assert_eq!(again.content_hash, package.content_hash);
-        let linear = inline.package(|_| InputOptions::default(), [4, 0, 4, 0]);
+        let linear = inline.package(ShaderRole::Layer, |_| InputOptions::default(), [4, 0, 4, 0]);
         assert_ne!(linear.unwrap().content_hash, package.content_hash);
         // A frozen package reads back to the same one.
         let frozen = ShaderPackage::from_frozen_shader(&package.frozen()).unwrap();
@@ -372,7 +376,11 @@ float4 valle_main(float2 uv) {
         let inline = InlineCode::parse(code).unwrap();
         assert!(inline.declarations.is_empty());
         assert_eq!(inline.body, code);
-        assert!(inline.package(|_| InputOptions::default(), [0; 4]).is_err());
+        assert!(
+            inline
+                .package(ShaderRole::Layer, |_| InputOptions::default(), [0; 4])
+                .is_err()
+        );
     }
 
     #[test]
@@ -408,8 +416,67 @@ float4 valle_main(float2 uv) {
         .unwrap();
         assert!(
             duplicate
-                .package(|_| InputOptions::default(), [0; 4])
+                .package(ShaderRole::Layer, |_| InputOptions::default(), [0; 4])
                 .is_err()
         );
+    }
+
+    #[test]
+    fn a_transition_reads_its_two_children_and_its_progress() {
+        let package = |code: &str, role| {
+            InlineCode::parse(code)
+                .unwrap()
+                .package(role, |_| InputOptions::default(), [0; 4])
+        };
+        let wipe = "uniform float softness;
+float4 valle_main(float2 uv) {
+  float edge = smoothstep(progress - softness, progress + softness, uv.x);
+  return mix(sample_to(uv), sample_from(uv), edge);
+}";
+        let transition = package(wipe, ShaderRole::Transition).unwrap();
+        for line in [
+            "uniform shader from;",
+            "uniform shader to;",
+            "uniform float progress;",
+            "float4 sample_from(float2 uv)",
+            "float4 sample_to(float2 uv)",
+        ] {
+            assert!(transition.generated_sksl.contains(line), "{line}");
+        }
+        assert!(
+            !transition
+                .generated_sksl
+                .contains("uniform shader content;")
+        );
+        let children = transition
+            .abi
+            .children
+            .iter()
+            .map(|child| child.name.as_str());
+        assert_eq!(children.collect::<Vec<_>>(), ["from", "to"]);
+        assert!(
+            transition
+                .abi
+                .uniforms
+                .iter()
+                .any(|uniform| uniform.name == "progress" && uniform.system)
+        );
+        // A layer has neither the children nor the progress; a transition has no content and
+        // defines `progress` itself.
+        assert!(package(wipe, ShaderRole::Layer).is_err());
+        for code in [
+            "uniform float progress; float4 valle_main(float2 uv) { return sample_from(uv); }",
+            "uniform shader to; float4 valle_main(float2 uv) { return sample_from(uv); }",
+            "float4 valle_main(float2 uv) { return sampleContent(uv); }",
+        ] {
+            assert!(package(code, ShaderRole::Transition).is_err(), "{code}");
+        }
+        // Its output is the canvas.
+        let padded = InlineCode::parse(wipe).unwrap().package(
+            ShaderRole::Transition,
+            |_| InputOptions::default(),
+            [1, 0, 0, 0],
+        );
+        assert!(padded.is_err());
     }
 }

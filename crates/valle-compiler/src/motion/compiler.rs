@@ -402,7 +402,11 @@ impl<'s> Compiler<'s> {
         }
         let mut shaders = Vec::new();
         for node in &nodes {
-            if let NodeKind::ShaderLayer { program, .. } = &node.kind
+            if let NodeKind::ShaderLayer { program, .. }
+            | NodeKind::Transition {
+                effect: TransitionEffect::Shader { program, .. },
+                ..
+            } = &node.kind
                 && let Some(shader) = self.inline_shaders.remove(&program.uri)
             {
                 shaders.push(shader);

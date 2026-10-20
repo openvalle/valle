@@ -522,18 +522,19 @@ impl<'s> Compiler<'s> {
                         );
                     }
                 }
-                "code" if kind_tag == "shader-layer" => {
+                "code" if kind_tag == "shader-layer" || kind_tag == "transition" => {
+                    let owner = shader_element(kind_tag);
                     let value = self.attr_static_string(
                         &attribute.value,
                         attribute.span(),
-                        "ShaderLayer code",
+                        &format!("{owner} code"),
                     );
                     if shader_code.replace((value, attribute.span())).is_some()
                     {
                         self.illegal(
                             DiagCode::GrammarForbidden,
                             attribute.span(),
-                            "ShaderLayer code may only be declared once",
+                            format!("{owner} code may only be declared once"),
                         );
                     }
                 }
@@ -548,7 +549,8 @@ impl<'s> Compiler<'s> {
                         );
                     }
                 }
-                "inputs" | "uniforms" if kind_tag == "shader-layer" => {
+                "inputs" | "uniforms" if kind_tag == "shader-layer" || kind_tag == "transition" => {
+                    let owner = shader_element(kind_tag);
                     let Some(JSXAttributeValue::ExpressionContainer(container)) = &attribute.value
                     else {
                         self.illegal(
@@ -571,7 +573,7 @@ impl<'s> Compiler<'s> {
                             self.illegal(
                                 DiagCode::GrammarForbidden,
                                 attribute.span(),
-                                "ShaderLayer inputs may only be declared once",
+                                format!("{owner} inputs may only be declared once"),
                             );
                         }
                     } else {
@@ -579,7 +581,7 @@ impl<'s> Compiler<'s> {
                             self.illegal(
                                 DiagCode::GrammarForbidden,
                                 attribute.span(),
-                                "ShaderLayer uniforms may only be declared once",
+                                format!("{owner} uniforms may only be declared once"),
                             );
                         }
                     }
@@ -1461,7 +1463,7 @@ impl<'s> Compiler<'s> {
             return None;
         }
         let shader_kind = if kind_tag == "shader-layer" {
-            match (shader_source, shader_code) {
+            match (shader_source, shader_code.take()) {
                 (Some(_), Some((_, code_span))) => {
                     self.illegal(
                         DiagCode::GrammarForbidden,
@@ -1479,7 +1481,8 @@ impl<'s> Compiler<'s> {
                     let (Some(code), Some(padding)) = (code, padding) else {
                         return None;
                     };
-                    self.lower_inline_shader_layer(
+                    self.lower_inline_shader(
+                        valle_motion::shader::ShaderRole::Layer,
                         &code,
                         code_span,
                         padding,
@@ -1487,6 +1490,7 @@ impl<'s> Compiler<'s> {
                         shader_uniforms,
                         element.opening_element.span(),
                     )
+                    .map(|binding| self.shader_layer_node(binding))
                 }
                 (Some(source), None) => {
                     if let Some((_, outset_span)) = shader_outset {
@@ -1548,32 +1552,90 @@ impl<'s> Compiler<'s> {
         if scoped_time.is_some() {
             self.time_scopes.pop();
         }
+        let mut transition_effect = None;
         if kind_tag == "transition" {
-            if transition_kind.is_none()
-                || transition_progress.is_none()
+            if transition_progress.is_none()
                 || children.len() != 2
                 || children
                     .iter()
                     .any(|child| matches!(child.kind, NodeKind::GlassField(_)))
             {
                 self.illegal(DiagCode::GrammarForbidden, element.span(),
-                    "Transition requires a static kind, numeric progress, and exactly two child subtrees with layout boxes");
+                    "Transition requires a static kind or its code, numeric progress, and exactly two child subtrees with layout boxes");
                 return None;
             }
             if let Some(NumberValue::Expr { expr }) = transition_progress.as_ref() {
                 self.diagnose_parameter_range(*expr, "Transition progress", "", 0.0, 1.0);
             }
-            for spec in transition_kind.unwrap().parameter_specs() {
-                if let Some(NumberValue::Expr { expr }) = transition_params.get(spec.name) {
-                    self.diagnose_parameter_range(
-                        *expr,
-                        &format!("Transition {}", spec.name),
-                        "",
-                        f64::from(spec.min),
-                        f64::from(spec.max),
+            let effect = match (transition_kind, shader_code) {
+                (Some(_), Some((_, code_span))) => {
+                    self.illegal(
+                        DiagCode::GrammarForbidden,
+                        code_span,
+                        "Transition takes either a built-in kind or code, not both",
                     );
+                    return None;
                 }
-            }
+                (Some(kind), None) => {
+                    if let Some(object) = shader_inputs.or(shader_uniforms) {
+                        self.illegal(
+                            DiagCode::GrammarForbidden,
+                            object.span(),
+                            "Transition inputs and uniforms bind its code; a built-in kind takes \
+                             params",
+                        );
+                        return None;
+                    }
+                    for spec in kind.parameter_specs() {
+                        if let Some(NumberValue::Expr { expr }) = transition_params.get(spec.name) {
+                            self.diagnose_parameter_range(
+                                *expr,
+                                &format!("Transition {}", spec.name),
+                                "",
+                                f64::from(spec.min),
+                                f64::from(spec.max),
+                            );
+                        }
+                    }
+                    TransitionEffect::Builtin {
+                        kind,
+                        params: transition_params,
+                    }
+                }
+                (None, Some((code, code_span))) => {
+                    if !transition_params.is_empty() {
+                        self.illegal(
+                            DiagCode::GrammarForbidden,
+                            element.opening_element.span(),
+                            "Transition params configure a built-in kind; code takes uniforms",
+                        );
+                        return None;
+                    }
+                    let binding = self.lower_inline_shader(
+                        valle_motion::shader::ShaderRole::Transition,
+                        &code?,
+                        code_span,
+                        [0; 4],
+                        shader_inputs,
+                        shader_uniforms,
+                        element.opening_element.span(),
+                    )?;
+                    TransitionEffect::Shader {
+                        program: binding.program,
+                        uniforms: binding.uniforms,
+                        inputs: binding.inputs,
+                    }
+                }
+                (None, None) => {
+                    self.illegal(
+                        DiagCode::GrammarForbidden,
+                        element.span(),
+                        "Transition requires a static kind, or its code",
+                    );
+                    return None;
+                }
+            };
+            transition_effect = Some(effect);
             self.extra_capabilities
                 .insert(valle_motion::TRANSITION_CAPABILITY.into());
         }
@@ -1706,9 +1768,8 @@ impl<'s> Compiler<'s> {
                     rect: mask_rect.expect("checked above"),
                 },
                 "transition" => NodeKind::Transition {
-                    effect: transition_kind.expect("checked above"),
+                    effect: transition_effect.expect("checked above"),
                     progress: transition_progress.expect("checked above"),
-                    params: transition_params,
                 },
                 "shutter" => NodeKind::Shutter {
                     samples: shutter_samples.expect("checked above"),
@@ -1741,5 +1802,14 @@ impl<'s> Compiler<'s> {
             is_mask_source: kind_tag == "mask-source",
             fragment: false,
         })
+    }
+}
+
+/// The element named in diagnostics about shader attributes of this kind of node.
+fn shader_element(kind_tag: &str) -> &'static str {
+    if kind_tag == "transition" {
+        "Transition"
+    } else {
+        "ShaderLayer"
     }
 }

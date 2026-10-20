@@ -23,12 +23,15 @@ use valle_draw::draw::Span;
 use valle_draw::program::LinearColor;
 use valle_draw::program::recording::{
     Affine, AtlasSource, BatchGeometry, BatchInstance, FillRule, FontFace, Glyph, GlyphSource,
-    Homography, MaskSource, Paint, ProgramRecording, RecordCmd, RoundRect, ShaderTextureInput,
-    Stroke,
+    Homography, MaskSource, Paint, ProgramRecording, RecordCmd, RoundRect, ShaderProgramId,
+    ShaderTextureInput, Stroke, TransitionKernel,
 };
 use valle_draw::{Cap, Join, Point, Rect, Rgba};
 
-use crate::layout::bridge::{LayoutTree, PerspectiveLength, ResolvedPaint, ResolvedStroke};
+use crate::layout::bridge::{
+    LayoutTree, PerspectiveLength, ResolvedPaint, ResolvedShaderLayer, ResolvedStroke,
+    ResolvedTransitionKernel,
+};
 
 /// Structured local drawing program plus explicit unsupported-feature accounting.
 pub struct EmitReport {
@@ -525,6 +528,39 @@ struct Open {
 }
 
 impl Emitter<'_> {
+    /// Intern one shader's program, uniforms and texture inputs, which decode at the size of
+    /// `bounds`.
+    fn intern_shader(
+        &mut self,
+        shader: ResolvedShaderLayer,
+        bounds: Rect,
+    ) -> (ShaderProgramId, Span, Span) {
+        let program = self.out.recording.intern_shader_program(shader.program);
+        let uniforms = self.out.recording.intern_shader_uniforms(&shader.uniforms);
+        let inputs = shader
+            .inputs
+            .into_iter()
+            .map(|input| ShaderTextureInput {
+                data: input.kind == crate::shader::InputKind::Data,
+                name: input.name,
+                sampling: input.sampling.mode(),
+                wrap: input.wrap.spread(),
+                image: input.source.map(|asset| {
+                    self.out
+                        .recording
+                        .intern_image(valle_draw::program::recording::ImageSource {
+                            asset,
+                            width: bounds.width.ceil().max(0.0) as u32,
+                            height: bounds.height.ceil().max(0.0) as u32,
+                            source_time_s: None,
+                        })
+                }),
+            })
+            .collect::<Vec<_>>();
+        let inputs = self.out.recording.intern_shader_inputs(&inputs);
+        (program, uniforms, inputs)
+    }
+
     /// Paint a stacking context's root and ordered child buckets using upstream scene ordering.
     fn context(&mut self, index: usize) -> Result<(), EmitError> {
         let Some(cx) = self.contexts.get(index) else {
@@ -571,9 +607,21 @@ impl Emitter<'_> {
                 layout.size.height as f64,
             );
             if !bounds.is_empty() {
+                let kernel = match transition.kernel {
+                    ResolvedTransitionKernel::Builtin { kind, params } => {
+                        TransitionKernel::Builtin { kind, params }
+                    }
+                    ResolvedTransitionKernel::Shader(shader) => {
+                        let (program, uniforms, inputs) = self.intern_shader(shader, bounds);
+                        TransitionKernel::Shader {
+                            program,
+                            uniforms,
+                            inputs,
+                        }
+                    }
+                };
                 self.push(RecordCmd::BeginTransition {
-                    kind: transition.kind,
-                    params: transition.params,
+                    kernel,
                     progress: transition.progress,
                     bounds,
                 });
@@ -1246,29 +1294,7 @@ impl Emitter<'_> {
         if let Some(key) = self.tree.keys.get(&u64::from(np.node_id))
             && let Some(shader) = self.tree.shaders.get(key).cloned()
         {
-            let program = self.out.recording.intern_shader_program(shader.program);
-            let uniforms = self.out.recording.intern_shader_uniforms(&shader.uniforms);
-            let inputs = shader
-                .inputs
-                .into_iter()
-                .map(|input| ShaderTextureInput {
-                    data: input.kind == crate::shader::InputKind::Data,
-                    name: input.name,
-                    sampling: input.sampling.mode(),
-                    wrap: input.wrap.spread(),
-                    image: input.source.map(|asset| {
-                        self.out.recording.intern_image(
-                            valle_draw::program::recording::ImageSource {
-                                asset,
-                                width: border_box.width.ceil().max(0.0) as u32,
-                                height: border_box.height.ceil().max(0.0) as u32,
-                                source_time_s: None,
-                            },
-                        )
-                    }),
-                })
-                .collect::<Vec<_>>();
-            let inputs = self.out.recording.intern_shader_inputs(&inputs);
+            let (program, uniforms, inputs) = self.intern_shader(shader, border_box);
             self.push(RecordCmd::BeginShaderLayer {
                 program,
                 uniforms,

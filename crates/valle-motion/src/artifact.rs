@@ -639,6 +639,27 @@ pub struct GeometryBatchSpec {
     pub stroke_width_field: Option<BatchNumberField>,
 }
 
+/// What a Transition draws from its two children: a built-in kernel with its parameters, or a
+/// shader written with `code`, which reads them as `from` and `to`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    tag = "type",
+    deny_unknown_fields
+)]
+pub enum TransitionEffect {
+    Builtin {
+        kind: valle_draw::transition::TransitionKind,
+        params: BTreeMap<String, NumberValue>,
+    },
+    Shader {
+        program: ShaderProgramRef,
+        uniforms: Vec<ShaderUniformBinding>,
+        inputs: Vec<ShaderTextureInput>,
+    },
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(
     rename_all = "camelCase",
@@ -691,9 +712,8 @@ pub enum NodeKind {
         source: String,
     },
     Transition {
-        effect: valle_draw::transition::TransitionKind,
+        effect: TransitionEffect,
         progress: NumberValue,
-        params: BTreeMap<String, NumberValue>,
     },
     Shutter {
         samples: u8,
@@ -1222,6 +1242,52 @@ impl SceneNode {
             }
         }
 
+        fn shader_uniforms(
+            base: &str,
+            uniforms: &[ShaderUniformBinding],
+            refs: &mut Vec<(String, ExprId)>,
+        ) {
+            for (at, uniform) in uniforms.iter().enumerate() {
+                let path = format!("{base}/uniforms/{at}/value");
+                match &uniform.value {
+                    ShaderUniformValue::Float { value } => number_at(path, value, refs),
+                    ShaderUniformValue::Float2 { value } => point(path, value, refs),
+                    ShaderUniformValue::Float3 { value } => {
+                        for (i, component) in value.iter().enumerate() {
+                            number_at(format!("{path}/{i}"), component, refs);
+                        }
+                    }
+                    ShaderUniformValue::Float4 { value } => {
+                        for (i, component) in value.iter().enumerate() {
+                            number_at(format!("{path}/{i}"), component, refs);
+                        }
+                    }
+                    ShaderUniformValue::Float2x2 { value } => {
+                        for (i, component) in value.iter().enumerate() {
+                            number_at(format!("{path}/{i}"), component, refs);
+                        }
+                    }
+                    ShaderUniformValue::Float3x3 { value } => {
+                        for (i, component) in value.iter().enumerate() {
+                            number_at(format!("{path}/{i}"), component, refs);
+                        }
+                    }
+                    ShaderUniformValue::Float4x4 { value } => {
+                        for (i, component) in value.iter().enumerate() {
+                            number_at(format!("{path}/{i}"), component, refs);
+                        }
+                    }
+                    ShaderUniformValue::Color { value } => color(path, value, refs),
+                    ShaderUniformValue::Bool {
+                        value: BoolValue::Expr { expr },
+                    } => refs.push((path, *expr)),
+                    ShaderUniformValue::Bool {
+                        value: BoolValue::Static { .. },
+                    } => {}
+                }
+            }
+        }
+
         if let Some(expr) = self.visibility {
             refs.push(("/visibility".into(), expr));
         }
@@ -1392,55 +1458,20 @@ impl SceneNode {
                     }
                 }
             }
-            NodeKind::Transition {
-                progress, params, ..
-            } => {
+            NodeKind::Transition { effect, progress } => {
                 number("/kind/progress".into(), progress, &mut refs);
-                for (name, value) in params {
-                    number(format!("/kind/params/{name}"), value, &mut refs);
-                }
-            }
-            NodeKind::ShaderLayer { uniforms, .. } => {
-                for (at, uniform) in uniforms.iter().enumerate() {
-                    let path = format!("/kind/uniforms/{at}/value");
-                    match &uniform.value {
-                        ShaderUniformValue::Float { value } => number(path, value, &mut refs),
-                        ShaderUniformValue::Float2 { value } => point(path, value, &mut refs),
-                        ShaderUniformValue::Float3 { value } => {
-                            for (i, component) in value.iter().enumerate() {
-                                number(format!("{path}/{i}"), component, &mut refs);
-                            }
+                match effect {
+                    TransitionEffect::Builtin { params, .. } => {
+                        for (name, value) in params {
+                            number(format!("/kind/effect/params/{name}"), value, &mut refs);
                         }
-                        ShaderUniformValue::Float4 { value } => {
-                            for (i, component) in value.iter().enumerate() {
-                                number(format!("{path}/{i}"), component, &mut refs);
-                            }
-                        }
-                        ShaderUniformValue::Float2x2 { value } => {
-                            for (i, component) in value.iter().enumerate() {
-                                number(format!("{path}/{i}"), component, &mut refs);
-                            }
-                        }
-                        ShaderUniformValue::Float3x3 { value } => {
-                            for (i, component) in value.iter().enumerate() {
-                                number(format!("{path}/{i}"), component, &mut refs);
-                            }
-                        }
-                        ShaderUniformValue::Float4x4 { value } => {
-                            for (i, component) in value.iter().enumerate() {
-                                number(format!("{path}/{i}"), component, &mut refs);
-                            }
-                        }
-                        ShaderUniformValue::Color { value } => color(path, value, &mut refs),
-                        ShaderUniformValue::Bool {
-                            value: BoolValue::Expr { expr },
-                        } => refs.push((path, *expr)),
-                        ShaderUniformValue::Bool {
-                            value: BoolValue::Static { .. },
-                        } => {}
+                    }
+                    TransitionEffect::Shader { uniforms, .. } => {
+                        shader_uniforms("/kind/effect", uniforms, &mut refs);
                     }
                 }
             }
+            NodeKind::ShaderLayer { uniforms, .. } => shader_uniforms("/kind", uniforms, &mut refs),
             NodeKind::Scene3D { frame, .. } => {
                 number(
                     "/kind/frame/environmentIntensity".into(),
@@ -1863,16 +1894,39 @@ pub struct InstanceTemplateNode {
     pub children: Vec<InstanceTemplateNode>,
 }
 
-/// Check one ShaderLayer against the package its program names: its pins, every uniform in ABI
-/// order with the declared type and range, and every texture input as declared.
-fn validate_shader_layer_package(
-    base: &str,
-    program: &ShaderProgramRef,
-    uniforms: &[ShaderUniformBinding],
-    inputs: &[ShaderTextureInput],
+/// A node that draws with a shader package: a ShaderLayer, or a Transition written with `code`.
+struct ShaderUse<'a> {
+    /// The JSON path of the node's program, uniforms and inputs.
+    base: String,
+    role: crate::shader::ShaderRole,
+    program: &'a ShaderProgramRef,
+    uniforms: &'a [ShaderUniformBinding],
+    inputs: &'a [ShaderTextureInput],
+}
+
+/// Check one use of a shader against the package its program names: the role, its pins, every
+/// uniform in ABI order with the declared type and range, and every texture input as declared.
+fn validate_shader_package_use(
+    shader: &ShaderUse<'_>,
     package: &crate::shader::ShaderPackage,
     errors: &mut Vec<ValidationError>,
 ) {
+    let ShaderUse {
+        base,
+        role,
+        program,
+        uniforms,
+        inputs,
+    } = shader;
+    if package.manifest.role != *role {
+        errors.push(ValidationError::new(
+            format!("{base}/program/uri"),
+            format!(
+                "the node uses a {:?} shader as a {role:?} shader",
+                package.manifest.role
+            ),
+        ));
+    }
     if program.content_hash != package.content_hash {
         errors.push(ValidationError::new(
             format!("{base}/program/contentHash"),
@@ -2769,36 +2823,57 @@ impl SceneArtifact {
             .map(|package| package.uri().to_string())
             .collect::<Vec<_>>();
         let mut used = vec![false; packages.len()];
-        for (node_at, node) in self.nodes.iter().enumerate() {
-            let NodeKind::ShaderLayer {
-                program,
-                uniforms,
-                inputs,
-            } = &node.kind
-            else {
-                continue;
-            };
-            let Some(slot) = uris.iter().position(|uri| *uri == program.uri) else {
+        for shader in self.shader_uses() {
+            let Some(slot) = uris.iter().position(|uri| *uri == shader.program.uri) else {
                 continue;
             };
             used[slot] = true;
-            validate_shader_layer_package(
-                &format!("/nodes/{node_at}/kind"),
-                program,
-                uniforms,
-                inputs,
-                &packages[slot],
-                errors,
-            );
+            validate_shader_package_use(&shader, &packages[slot], errors);
         }
         for (at, used) in used.into_iter().enumerate() {
             if !used {
                 errors.push(ValidationError::new(
                     format!("/shaders/{at}"),
-                    "inline shader is not used by any ShaderLayer",
+                    "inline shader is not used by any ShaderLayer or Transition",
                 ));
             }
         }
+    }
+
+    /// Each node that draws with a shader package, in node order.
+    fn shader_uses(&self) -> impl Iterator<Item = ShaderUse<'_>> {
+        self.nodes
+            .iter()
+            .enumerate()
+            .filter_map(|(at, node)| match &node.kind {
+                NodeKind::ShaderLayer {
+                    program,
+                    uniforms,
+                    inputs,
+                } => Some(ShaderUse {
+                    base: format!("/nodes/{at}/kind"),
+                    role: crate::shader::ShaderRole::Layer,
+                    program,
+                    uniforms,
+                    inputs,
+                }),
+                NodeKind::Transition {
+                    effect:
+                        TransitionEffect::Shader {
+                            program,
+                            uniforms,
+                            inputs,
+                        },
+                    ..
+                } => Some(ShaderUse {
+                    base: format!("/nodes/{at}/kind/effect"),
+                    role: crate::shader::ShaderRole::Transition,
+                    program,
+                    uniforms,
+                    inputs,
+                }),
+                _ => None,
+            })
     }
 
     fn validate_instance_groups(&self, errors: &mut Vec<ValidationError>) {
@@ -3319,17 +3394,9 @@ impl SceneArtifact {
             .iter()
             .filter_map(|frozen| frozen.uri().ok().map(|uri| uri.to_string()))
             .collect::<BTreeSet<_>>();
-        for (node_at, node) in self.nodes.iter().enumerate() {
-            let NodeKind::ShaderLayer {
-                program,
-                uniforms,
-                inputs,
-            } = &node.kind
-            else {
-                continue;
-            };
-            let base = format!("/nodes/{node_at}/kind");
-            let uri = match program.uri.parse::<crate::shader::ShaderUri>() {
+        for shader in self.shader_uses() {
+            let base = &shader.base;
+            let uri = match shader.program.uri.parse::<crate::shader::ShaderUri>() {
                 Ok(uri) => uri,
                 Err(error) => {
                     errors.push(ValidationError::new(
@@ -3339,8 +3406,8 @@ impl SceneArtifact {
                     continue;
                 }
             };
-            // `validate` checked the layers that name an inline shader against it.
-            if inline.contains(&program.uri) {
+            // `validate` checked the nodes that name an inline shader against it.
+            if inline.contains(&shader.program.uri) {
                 continue;
             }
             let package = match resolve(&uri.to_string()) {
@@ -3353,7 +3420,7 @@ impl SceneArtifact {
                     continue;
                 }
             };
-            validate_shader_layer_package(&base, program, uniforms, inputs, package, &mut errors);
+            validate_shader_package_use(&shader, package, &mut errors);
         }
         if errors.is_empty() {
             Ok(())
@@ -4259,6 +4326,159 @@ impl SceneArtifact {
         // instantiated with different assets without baking an instance choice into its hash.
     }
 
+    /// The shape of one shader binding at `base`: its program pin, typed uniforms within the ABI
+    /// scalar budget after `system_scalars`, and texture inputs bound to image controls.
+    #[allow(clippy::too_many_arguments)]
+    fn validate_shader_binding(
+        &self,
+        base: &str,
+        program: &ShaderProgramRef,
+        uniforms: &[ShaderUniformBinding],
+        inputs: &[ShaderTextureInput],
+        system_scalars: usize,
+        expr_types: &[Option<ExprType>],
+        errors: &mut Vec<ValidationError>,
+    ) {
+        if program.uri.parse::<crate::shader::ShaderUri>().is_err() {
+            errors.push(ValidationError::new(
+                format!("{base}/program/uri"),
+                "shader program must use canonical shader://<content-hash>",
+            ));
+        }
+        let mut uniform_names = BTreeSet::new();
+        let mut scalar_count = system_scalars;
+        for (uniform_at, uniform) in uniforms.iter().enumerate() {
+            if uniform.name.is_empty() || !uniform_names.insert(&uniform.name) {
+                errors.push(ValidationError::new(
+                    format!("{base}/uniforms/{uniform_at}/name"),
+                    "shader uniform names must be non-empty and unique",
+                ));
+            }
+            if let Some([min, max]) = uniform.range {
+                if !min.is_finite() || !max.is_finite() || min > max {
+                    errors.push(ValidationError::new(
+                        format!("{base}/uniforms/{uniform_at}/range"),
+                        "uniform range must be finite and ordered",
+                    ));
+                }
+            }
+            let valid = match &uniform.value {
+                ShaderUniformValue::Float { value } => {
+                    scalar_count += 1;
+                    scalar_value_valid(value, expr_types)
+                }
+                ShaderUniformValue::Float2 { value } => {
+                    scalar_count += 2;
+                    point_value_valid(value, expr_types)
+                }
+                ShaderUniformValue::Float3 { value } => {
+                    scalar_count += 3;
+                    value
+                        .iter()
+                        .all(|component| scalar_value_valid(component, expr_types))
+                }
+                ShaderUniformValue::Float4 { value } => {
+                    scalar_count += 4;
+                    value
+                        .iter()
+                        .all(|component| scalar_value_valid(component, expr_types))
+                }
+                ShaderUniformValue::Float2x2 { value } => {
+                    scalar_count += 4;
+                    value
+                        .iter()
+                        .all(|component| scalar_value_valid(component, expr_types))
+                }
+                ShaderUniformValue::Float3x3 { value } => {
+                    scalar_count += 9;
+                    value
+                        .iter()
+                        .all(|component| scalar_value_valid(component, expr_types))
+                }
+                ShaderUniformValue::Float4x4 { value } => {
+                    scalar_count += 16;
+                    value
+                        .iter()
+                        .all(|component| scalar_value_valid(component, expr_types))
+                }
+                ShaderUniformValue::Color { value } => {
+                    scalar_count += 4;
+                    color_value_valid(value, expr_types)
+                }
+                ShaderUniformValue::Bool {
+                    value: BoolValue::Static { .. },
+                } => {
+                    scalar_count += 1;
+                    true
+                }
+                ShaderUniformValue::Bool {
+                    value: BoolValue::Expr { expr },
+                } => {
+                    scalar_count += 1;
+                    expr_types.get(expr.0 as usize) == Some(&Some(ExprType::Bool))
+                }
+            };
+            if !valid {
+                errors.push(ValidationError::new(
+                    format!("{base}/uniforms/{uniform_at}/value"),
+                    "shader uniform value does not match its typed binding",
+                ));
+            }
+        }
+        if scalar_count > crate::shader::MAX_UNIFORM_SCALARS {
+            errors.push(ValidationError::new(
+                format!("{base}/uniforms"),
+                format!(
+                    "shader ABI uses {scalar_count} scalars; maximum is {}",
+                    crate::shader::MAX_UNIFORM_SCALARS
+                ),
+            ));
+        }
+
+        if inputs.len() > crate::shader::MAX_TEXTURE_INPUTS {
+            errors.push(ValidationError::new(
+                format!("{base}/inputs"),
+                format!(
+                    "shader declares {} texture inputs; maximum is {}",
+                    inputs.len(),
+                    crate::shader::MAX_TEXTURE_INPUTS
+                ),
+            ));
+        }
+        let mut input_names = BTreeSet::new();
+        for (input_at, input) in inputs.iter().enumerate() {
+            if input.name.is_empty() || !input_names.insert(&input.name) {
+                errors.push(ValidationError::new(
+                    format!("{base}/inputs/{input_at}/name"),
+                    "shader input names must be non-empty and unique",
+                ));
+            }
+            let Some(source) = &input.source else {
+                continue;
+            };
+            let control = source.strip_prefix("asset://");
+            let valid_image = control
+                .and_then(|name| self.controls.assets.get(name))
+                .is_some_and(|asset| asset.kind == crate::controls::AssetKind::Image);
+            if !valid_image {
+                errors.push(ValidationError::new(
+                    format!("{base}/inputs/{input_at}/source"),
+                    "shader texture input must be asset://<image-control>",
+                ));
+            } else if let Some(control) = control
+                && !self
+                    .resource_refs
+                    .iter()
+                    .any(|resource| resource.control == control)
+            {
+                errors.push(ValidationError::new(
+                    format!("{base}/inputs/{input_at}/source"),
+                    "shader texture input must have a content-addressed resourceRef",
+                ));
+            }
+        }
+    }
+
     fn validate_nodes(&self, expr_types: &[Option<ExprType>], errors: &mut Vec<ValidationError>) {
         if self.nodes.is_empty() || self.root.0 as usize >= self.nodes.len() {
             errors.push(ValidationError::new("/root", "root must reference a node"));
@@ -4619,34 +4839,45 @@ impl SceneArtifact {
                     "clip path must be valid typed PathData with matching geometry policy",
                 ));
             }
-            if let NodeKind::Transition {
-                effect,
-                progress,
-                params,
-            } = &node.kind
-            {
-                let mut static_params = BTreeMap::new();
-                for (name, value) in params {
-                    if !scalar_value_valid(value, expr_types)
-                        || !effect
-                            .parameter_specs()
-                            .iter()
-                            .any(|spec| spec.name == name)
-                    {
-                        errors.push(ValidationError::new(
-                            format!("{path}/kind/params/{name}"),
-                            "parameter must be a supported finite numeric value",
-                        ));
+            if let NodeKind::Transition { effect, progress } = &node.kind {
+                match effect {
+                    TransitionEffect::Builtin { kind, params } => {
+                        let mut static_params = BTreeMap::new();
+                        for (name, value) in params {
+                            if !scalar_value_valid(value, expr_types)
+                                || !kind.parameter_specs().iter().any(|spec| spec.name == name)
+                            {
+                                errors.push(ValidationError::new(
+                                    format!("{path}/kind/effect/params/{name}"),
+                                    "parameter must be a supported finite numeric value",
+                                ));
+                            }
+                            if let NumberValue::Static { value } = value {
+                                static_params.insert(name.clone(), *value);
+                            }
+                        }
+                        if let Err(error) = kind.resolve_params(&static_params) {
+                            errors.push(ValidationError::new(
+                                format!("{path}/kind/effect/params/{}", error.parameter),
+                                error.reason,
+                            ));
+                        }
                     }
-                    if let NumberValue::Static { value } = value {
-                        static_params.insert(name.clone(), *value);
-                    }
-                }
-                if let Err(error) = effect.resolve_params(&static_params) {
-                    errors.push(ValidationError::new(
-                        format!("{path}/kind/params/{}", error.parameter),
-                        error.reason,
-                    ));
+                    // `resolution` and `progress` are the system uniforms beside the declared
+                    // ones.
+                    TransitionEffect::Shader {
+                        program,
+                        uniforms,
+                        inputs,
+                    } => self.validate_shader_binding(
+                        &format!("{path}/kind/effect"),
+                        program,
+                        uniforms,
+                        inputs,
+                        3,
+                        expr_types,
+                        errors,
+                    ),
                 }
                 let children = self
                     .node_children
@@ -4834,144 +5065,16 @@ impl SceneArtifact {
                 inputs,
             } = &node.kind
             {
-                if program.uri.parse::<crate::shader::ShaderUri>().is_err() {
-                    errors.push(ValidationError::new(
-                        format!("{path}/kind/program/uri"),
-                        "shader program must use canonical shader://<content-hash>",
-                    ));
-                }
-                let mut uniform_names = BTreeSet::new();
-                let mut scalar_count = 2usize; // system `resolution` float2
-                for (uniform_at, uniform) in uniforms.iter().enumerate() {
-                    if uniform.name.is_empty() || !uniform_names.insert(&uniform.name) {
-                        errors.push(ValidationError::new(
-                            format!("{path}/kind/uniforms/{uniform_at}/name"),
-                            "shader uniform names must be non-empty and unique",
-                        ));
-                    }
-                    if let Some([min, max]) = uniform.range {
-                        if !min.is_finite() || !max.is_finite() || min > max {
-                            errors.push(ValidationError::new(
-                                format!("{path}/kind/uniforms/{uniform_at}/range"),
-                                "uniform range must be finite and ordered",
-                            ));
-                        }
-                    }
-                    let valid = match &uniform.value {
-                        ShaderUniformValue::Float { value } => {
-                            scalar_count += 1;
-                            scalar_value_valid(value, expr_types)
-                        }
-                        ShaderUniformValue::Float2 { value } => {
-                            scalar_count += 2;
-                            point_value_valid(value, expr_types)
-                        }
-                        ShaderUniformValue::Float3 { value } => {
-                            scalar_count += 3;
-                            value
-                                .iter()
-                                .all(|component| scalar_value_valid(component, expr_types))
-                        }
-                        ShaderUniformValue::Float4 { value } => {
-                            scalar_count += 4;
-                            value
-                                .iter()
-                                .all(|component| scalar_value_valid(component, expr_types))
-                        }
-                        ShaderUniformValue::Float2x2 { value } => {
-                            scalar_count += 4;
-                            value
-                                .iter()
-                                .all(|component| scalar_value_valid(component, expr_types))
-                        }
-                        ShaderUniformValue::Float3x3 { value } => {
-                            scalar_count += 9;
-                            value
-                                .iter()
-                                .all(|component| scalar_value_valid(component, expr_types))
-                        }
-                        ShaderUniformValue::Float4x4 { value } => {
-                            scalar_count += 16;
-                            value
-                                .iter()
-                                .all(|component| scalar_value_valid(component, expr_types))
-                        }
-                        ShaderUniformValue::Color { value } => {
-                            scalar_count += 4;
-                            color_value_valid(value, expr_types)
-                        }
-                        ShaderUniformValue::Bool {
-                            value: BoolValue::Static { .. },
-                        } => {
-                            scalar_count += 1;
-                            true
-                        }
-                        ShaderUniformValue::Bool {
-                            value: BoolValue::Expr { expr },
-                        } => {
-                            scalar_count += 1;
-                            expr_types.get(expr.0 as usize) == Some(&Some(ExprType::Bool))
-                        }
-                    };
-                    if !valid {
-                        errors.push(ValidationError::new(
-                            format!("{path}/kind/uniforms/{uniform_at}/value"),
-                            "shader uniform value does not match its typed binding",
-                        ));
-                    }
-                }
-                if scalar_count > crate::shader::MAX_UNIFORM_SCALARS {
-                    errors.push(ValidationError::new(
-                        format!("{path}/kind/uniforms"),
-                        format!(
-                            "shader ABI uses {scalar_count} scalars; maximum is {}",
-                            crate::shader::MAX_UNIFORM_SCALARS
-                        ),
-                    ));
-                }
-
-                if inputs.len() > crate::shader::MAX_TEXTURE_INPUTS {
-                    errors.push(ValidationError::new(
-                        format!("{path}/kind/inputs"),
-                        format!(
-                            "shader declares {} texture inputs; maximum is {}",
-                            inputs.len(),
-                            crate::shader::MAX_TEXTURE_INPUTS
-                        ),
-                    ));
-                }
-                let mut input_names = BTreeSet::new();
-                for (input_at, input) in inputs.iter().enumerate() {
-                    if input.name.is_empty() || !input_names.insert(&input.name) {
-                        errors.push(ValidationError::new(
-                            format!("{path}/kind/inputs/{input_at}/name"),
-                            "shader input names must be non-empty and unique",
-                        ));
-                    }
-                    let Some(source) = &input.source else {
-                        continue;
-                    };
-                    let control = source.strip_prefix("asset://");
-                    let valid_image = control
-                        .and_then(|name| self.controls.assets.get(name))
-                        .is_some_and(|asset| asset.kind == crate::controls::AssetKind::Image);
-                    if !valid_image {
-                        errors.push(ValidationError::new(
-                            format!("{path}/kind/inputs/{input_at}/source"),
-                            "shader texture input must be asset://<image-control>",
-                        ));
-                    } else if let Some(control) = control
-                        && !self
-                            .resource_refs
-                            .iter()
-                            .any(|resource| resource.control == control)
-                    {
-                        errors.push(ValidationError::new(
-                            format!("{path}/kind/inputs/{input_at}/source"),
-                            "shader texture input must have a content-addressed resourceRef",
-                        ));
-                    }
-                }
+                // `resolution` is the system uniform beside the declared ones.
+                self.validate_shader_binding(
+                    &format!("{path}/kind"),
+                    program,
+                    uniforms,
+                    inputs,
+                    2,
+                    expr_types,
+                    errors,
+                );
             }
             if let NodeKind::Scene3D { scene, frame } = &node.kind {
                 if let Some(environment) = &scene.pbr.environment {

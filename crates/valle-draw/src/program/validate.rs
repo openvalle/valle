@@ -597,8 +597,26 @@ fn validate_group(
         let path = format!("node[{}].transition", owner.raw());
         validate_rect(transition.bounds, &path)?;
         validate_unit(transition.progress, &path)?;
-        if let Err(error) = transition.kind.validate_values(transition.params) {
-            return invalid(path, error.to_string());
+        match &transition.kernel {
+            super::TransitionKernel::Builtin { kind, params } => {
+                if let Err(error) = kind.validate_values(*params) {
+                    return invalid(path, error.to_string());
+                }
+            }
+            super::TransitionKernel::Shader {
+                shader,
+                uniforms,
+                textures,
+            } => {
+                validate_key(&shader.uri, &format!("{path}.kernel.shader.uri"))?;
+                validate_shader_bindings(uniforms, textures, &format!("{path}.kernel"))?;
+                if uniforms.iter().any(|uniform| uniform.name == "progress") {
+                    return invalid(
+                        format!("{path}.kernel.uniforms"),
+                        "progress is the transition's own uniform",
+                    );
+                }
+            }
         }
         if group.children.len() != 2
             || !group.isolated
@@ -1345,8 +1363,24 @@ fn derive_requirements(
                 if group.glass_foreground.is_some() {
                     capabilities.insert(crate::requirements::DrawCapability::MotionGlass);
                 }
-                if group.transition.is_some() {
+                if let Some(transition) = &group.transition {
                     capabilities.insert(crate::requirements::DrawCapability::Transition);
+                    if let super::TransitionKernel::Shader {
+                        shader,
+                        textures: bindings,
+                        ..
+                    } = &transition.kernel
+                    {
+                        insert_shader_requirement(&mut shaders, shader)?;
+                        for texture in bindings
+                            .iter()
+                            .filter_map(|binding| binding.texture.as_ref())
+                        {
+                            insert_texture(&mut textures, &mut texture_formats, texture)?;
+                            color_domains.insert(texture.color_domain);
+                            alpha_modes.insert(texture.alpha);
+                        }
+                    }
                 }
                 if group.internal_blend != super::BlendMode::Normal {
                     capabilities.insert(crate::requirements::DrawCapability::Blend);

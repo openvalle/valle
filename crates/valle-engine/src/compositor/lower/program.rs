@@ -1090,6 +1090,14 @@ impl<'a> Compiler<'a> {
         let id = ProgramPassId::from_index(self.passes.len())?;
         let shader_work_per_pixel = match &kind {
             ProgramPassKind::ApplyShader { shader, .. } => shader.shader.work_per_pixel,
+            ProgramPassKind::ApplyTransition {
+                transition:
+                    valle_draw::program::TransitionLayer {
+                        kernel: valle_draw::program::TransitionKernel::Shader { shader, .. },
+                        ..
+                    },
+                ..
+            } => shader.work_per_pixel,
             ProgramPassKind::RasterNode { node, .. } => {
                 match &self.program.nodes()[node.raw() as usize] {
                     Node::RuntimeShader(shader) => shader.shader.work_per_pixel,
@@ -1374,8 +1382,10 @@ mod tests {
         let mut group = Group::plain(vec![from, to]);
         group.isolated = true;
         group.transition = Some(valle_draw::program::TransitionLayer {
-            kind: valle_draw::transition::TransitionKind::LinearBlur,
-            params: valle_draw::transition::TransitionKind::LinearBlur.default_values(),
+            kernel: valle_draw::program::TransitionKernel::Builtin {
+                kind: valle_draw::transition::TransitionKind::LinearBlur,
+                params: valle_draw::transition::TransitionKind::LinearBlur.default_values(),
+            },
             progress: 0.5,
             bounds: Rect::new(0.0, 0.0, 64.0, 48.0),
         });

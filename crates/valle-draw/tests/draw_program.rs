@@ -1276,8 +1276,10 @@ fn transition_contract_requires_two_inputs_finite_progress_and_a_canvas() {
         let mut group = Group::plain(vec![from, to]);
         group.isolated = true;
         group.transition = Some(valle_draw::program::TransitionLayer {
-            kind: valle_draw::transition::TransitionKind::CircleOpen,
-            params,
+            kernel: valle_draw::program::TransitionKernel::Builtin {
+                kind: valle_draw::transition::TransitionKind::CircleOpen,
+                params,
+            },
             progress: 0.5,
             bounds: Rect::new(0.0, 0.0, 64.0, 48.0),
         });
@@ -1302,13 +1304,50 @@ fn transition_contract_requires_two_inputs_finite_progress_and_a_canvas() {
         let mut group = Group::plain(children);
         group.isolated = isolated;
         group.transition = Some(valle_draw::program::TransitionLayer {
-            kind: valle_draw::transition::TransitionKind::Fade,
-            params: valle_draw::transition::TransitionKind::Fade.default_values(),
+            kernel: valle_draw::program::TransitionKernel::Builtin {
+                kind: valle_draw::transition::TransitionKind::Fade,
+                params: valle_draw::transition::TransitionKind::Fade.default_values(),
+            },
             progress,
             bounds: Rect::new(0.0, 0.0, width, 48.0),
         });
         let root = builder.push_node(Node::Group(group));
         builder.add_root(root);
         assert_eq!(builder.finish().is_ok(), accepted);
+    }
+    // A shader kernel is a runtime shader requirement, and `progress` is the transition's own.
+    for (uniform, accepted) in [("softness", true), ("progress", false)] {
+        let mut builder = builder();
+        let from = builder.push_node(Node::Group(Group::plain(vec![])));
+        let to = builder.push_node(Node::Group(Group::plain(vec![])));
+        let mut group = Group::plain(vec![from, to]);
+        group.isolated = true;
+        group.transition = Some(valle_draw::program::TransitionLayer {
+            kernel: valle_draw::program::TransitionKernel::Shader {
+                shader: RuntimeShaderKey {
+                    work_per_pixel: valle_draw::requirements::ShaderWork {
+                        operations: 1,
+                        samples: 2,
+                    },
+                    uri: format!("shader://{}", "22".repeat(32)),
+                    content_hash: DigestBytes::from_bytes([0x22; 32]),
+                    abi_hash: DigestBytes::from_bytes([0x33; 32]),
+                },
+                uniforms: vec![valle_draw::program::ShaderUniformBinding {
+                    name: uniform.into(),
+                    value: valle_draw::program::ShaderUniformValue::Float(0.1),
+                }],
+                textures: vec![],
+            },
+            progress: 0.5,
+            bounds: Rect::new(0.0, 0.0, 64.0, 48.0),
+        });
+        let root = builder.push_node(Node::Group(group));
+        builder.add_root(root);
+        let program = builder.finish();
+        assert_eq!(program.is_ok(), accepted, "{uniform}");
+        if let Ok(program) = program {
+            assert_eq!(program.requirements().runtime_shaders.len(), 1);
+        }
     }
 }

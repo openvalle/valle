@@ -198,6 +198,7 @@ fn shader_manifest_defaults_become_typed_artifact_bindings() {
     let manifest = ShaderManifest {
         name: "defaults".into(),
         entry: "shader.vsksl".into(),
+        role: valle_motion::shader::ShaderRole::Layer,
         inputs: vec![],
         uniforms: defaults
             .into_iter()

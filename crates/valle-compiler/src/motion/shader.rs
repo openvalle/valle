@@ -1,6 +1,7 @@
 //! ShaderLayer package admission, texture inputs, and uniform lowering.
 
 use super::*;
+use valle_motion::shader::ShaderRole;
 
 impl<'s> Compiler<'s> {
     pub(super) fn lower_shader_layer(
@@ -81,38 +82,56 @@ impl<'s> Compiler<'s> {
         if !self.diagnostics.is_empty() {
             return None;
         }
-        self.lower_shader_contract(
+        let binding = self.lower_shader_contract(
+            "ShaderLayer",
             &format!("shader package `{source}`"),
             contract,
             sources,
             uniforms_object,
             span,
-        )
+        )?;
+        Some(self.shader_layer_node(binding))
     }
 
-    /// A ShaderLayer written with `code`: the code declares its uniforms and inputs, and `inputs`
-    /// says how each input is sampled. `padding` is [left, top, right, bottom] local pixels.
-    pub(super) fn lower_inline_shader_layer(
+    /// A ShaderLayer node drawing its children through a bound shader.
+    pub(super) fn shader_layer_node(&mut self, binding: ShaderBinding) -> NodeKind {
+        self.extra_capabilities
+            .insert(SHADER_LAYER_CAPABILITY.to_owned());
+        NodeKind::ShaderLayer {
+            program: binding.program,
+            uniforms: binding.uniforms,
+            inputs: binding.inputs,
+        }
+    }
+
+    /// A shader written with `code` on a ShaderLayer or a Transition, as `role` says: the code
+    /// declares its uniforms and inputs, and `inputs` says how each input is sampled. `padding`
+    /// is [left, top, right, bottom] local pixels.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn lower_inline_shader(
         &mut self,
+        role: ShaderRole,
         code: &str,
         code_span: Span,
         padding: [u32; 4],
         inputs_object: Option<&'s ObjectExpression<'s>>,
         uniforms_object: Option<&'s ObjectExpression<'s>>,
         span: Span,
-    ) -> Option<NodeKind> {
+    ) -> Option<ShaderBinding> {
+        let owner = shader_owner(role);
         let inline = match valle_motion::shader::InlineCode::parse(code) {
             Ok(inline) => inline,
             Err(error) => {
                 self.illegal(
                     DiagCode::GrammarForbidden,
                     code_span,
-                    shader_code_message(&error),
+                    shader_code_message(owner, &error),
                 );
                 return None;
             }
         };
-        let authored_inputs = self.shader_object_values(inputs_object, "ShaderLayer inputs")?;
+        let authored_inputs =
+            self.shader_object_values(inputs_object, &format!("{owner} inputs"))?;
         let mut sources = BTreeMap::new();
         let mut options = BTreeMap::new();
         for (name, expression) in authored_inputs {
@@ -145,6 +164,7 @@ impl<'s> Compiler<'s> {
             return None;
         }
         let package = match inline.package(
+            role,
             |name| options.get(name).copied().unwrap_or_default(),
             padding,
         ) {
@@ -153,7 +173,7 @@ impl<'s> Compiler<'s> {
                 self.illegal(
                     DiagCode::GrammarForbidden,
                     code_span,
-                    shader_code_message(&error),
+                    shader_code_message(owner, &error),
                 );
                 return None;
             }
@@ -162,7 +182,8 @@ impl<'s> Compiler<'s> {
             .entry(package.uri().to_string())
             .or_insert_with(|| package.frozen());
         self.lower_shader_contract(
-            "ShaderLayer code",
+            owner,
+            &format!("{owner} code"),
             ShaderContract::of(&package),
             sources,
             uniforms_object,
@@ -223,15 +244,16 @@ impl<'s> Compiler<'s> {
     }
 
     /// Bind a package's texture inputs and uniforms. `sources` holds the authored asset of each
-    /// input; `label` names the package in diagnostics.
+    /// input; `owner` names the element in diagnostics and `label` the package.
     fn lower_shader_contract(
         &mut self,
+        owner: &str,
         label: &str,
         contract: ShaderContract,
         sources: BTreeMap<String, (String, Span)>,
         uniforms_object: Option<&'s ObjectExpression<'s>>,
         span: Span,
-    ) -> Option<NodeKind> {
+    ) -> Option<ShaderBinding> {
         let ShaderContract {
             program,
             inputs: declared_inputs,
@@ -328,7 +350,7 @@ impl<'s> Compiler<'s> {
         }
 
         let authored_uniforms =
-            self.shader_object_values(uniforms_object, "ShaderLayer uniforms")?;
+            self.shader_object_values(uniforms_object, &format!("{owner} uniforms"))?;
         if let Some(unknown) = authored_uniforms.keys().find(|name| {
             !declared_uniforms
                 .iter()
@@ -367,9 +389,7 @@ impl<'s> Compiler<'s> {
         if !self.diagnostics.is_empty() {
             return None;
         }
-        self.extra_capabilities
-            .insert(SHADER_LAYER_CAPABILITY.to_owned());
-        Some(NodeKind::ShaderLayer {
+        Some(ShaderBinding {
             program,
             uniforms,
             inputs,
@@ -641,7 +661,14 @@ impl<'s> Compiler<'s> {
     }
 }
 
-/// What lowering a ShaderLayer needs from its package, copied out so lowering can mutate the
+/// A shader's program with its uniforms and texture inputs bound.
+pub(super) struct ShaderBinding {
+    pub(super) program: ShaderProgramRef,
+    pub(super) uniforms: Vec<ShaderUniformBinding>,
+    pub(super) inputs: Vec<ShaderTextureInput>,
+}
+
+/// What lowering a shader needs from its package, copied out so lowering can mutate the
 /// compiler.
 struct ShaderContract {
     program: ShaderProgramRef,
@@ -665,18 +692,26 @@ impl ShaderContract {
     }
 }
 
+/// The element that writes a shader of this role.
+fn shader_owner(role: ShaderRole) -> &'static str {
+    match role {
+        ShaderRole::Layer => "ShaderLayer",
+        ShaderRole::Transition => "Transition",
+    }
+}
+
 /// A shader diagnostic about inline code, placed by line and column in the code when the shader
 /// language reports where it stopped, as `source:line:column`.
-fn shader_code_message(error: &valle_motion::shader::ShaderDiagnostic) -> String {
+fn shader_code_message(owner: &str, error: &valle_motion::shader::ShaderDiagnostic) -> String {
     match error
         .path
         .strip_prefix("source:")
         .and_then(|place| place.split_once(':'))
     {
         Some((line, column)) => format!(
-            "ShaderLayer code, line {line}, column {column}: {}",
+            "{owner} code, line {line}, column {column}: {}",
             error.message
         ),
-        None => format!("ShaderLayer code: {}", error.message),
+        None => format!("{owner} code: {}", error.message),
     }
 }

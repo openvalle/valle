@@ -2,12 +2,12 @@
 
 use valle_compiler::motion::compile_motion;
 use valle_draw::{
-    program::{DrawProgram, Node},
+    program::{DrawProgram, Node, ShaderUniformValue, TransitionKernel},
     transition::TransitionKind,
 };
 use valle_motion::{
-    Fonts, LayoutOptions, TRANSITION_CAPABILITY, Viewport, build_tree, default_font_naming, emit,
-    motion_context_at_frame, prepare_scene, resolve_props,
+    Fonts, LayoutOptions, SHADER_LAYER_CAPABILITY, TRANSITION_CAPABILITY, Viewport, build_tree,
+    default_font_naming, emit, motion_context_at_frame, prepare_scene, resolve_props,
 };
 use valle_timeline::FrameRate;
 
@@ -61,7 +61,9 @@ fn all_kernels_keep_two_independent_inputs_and_frame_progress() {
             assert_eq!(groups[0].children.len(), 2);
             assert!(groups[0].isolated);
             let transition = groups[0].transition.as_ref().unwrap();
-            assert_eq!(transition.kind, effect);
+            assert!(
+                matches!(transition.kernel, TransitionKernel::Builtin { kind, .. } if kind == effect)
+            );
             assert_eq!(transition.progress, frame as f32 / 60.0);
             assert_eq!(
                 (transition.bounds.width, transition.bounds.height),
@@ -132,7 +134,10 @@ fn parameters_are_typed_animated_validated_and_emitted() {
             .nodes()
             .iter()
             .find_map(|node| match node {
-                Node::Group(g) => g.transition.as_ref().map(|t| t.params),
+                Node::Group(g) => match g.transition.as_ref().map(|t| &t.kernel) {
+                    Some(TransitionKernel::Builtin { params, .. }) => Some(*params),
+                    _ => None,
+                },
                 _ => None,
             })
             .unwrap();
@@ -184,7 +189,10 @@ fn parameters_are_typed_animated_validated_and_emitted() {
     assert!(program(&animated_direction, 30).is_ok());
 
     let mut tampered = compile_motion(MOTION_TRANSITION).unwrap().artifact;
-    if let valle_motion::NodeKind::Transition { params, .. } = &mut tampered
+    if let valle_motion::NodeKind::Transition {
+        effect: valle_motion::TransitionEffect::Builtin { params, .. },
+        ..
+    } = &mut tampered
         .nodes
         .iter_mut()
         .find(|node| matches!(node.kind, valle_motion::NodeKind::Transition { .. }))
@@ -197,4 +205,139 @@ fn parameters_are_typed_animated_validated_and_emitted() {
         );
     }
     assert!(tampered.validate().is_err());
+}
+
+const WIPE: &str = "const wipe = `
+uniform float softness;
+
+float4 valle_main(float2 uv) {
+  float edge = smoothstep(progress - softness, progress + softness, uv.x);
+  return mix(sample_to(uv), sample_from(uv), edge);
+}`;
+";
+
+fn wipe_scene(attributes: &str) -> String {
+    format!(
+        "{WIPE}{}",
+        MOTION_TRANSITION.replace(r#"kind="circleOpen""#, attributes)
+    )
+}
+
+fn messages(source: &str) -> Vec<String> {
+    compile_motion(source)
+        .map(|_| Vec::new())
+        .unwrap_or_else(|diagnostics| {
+            diagnostics
+                .into_iter()
+                .map(|diagnostic| diagnostic.message)
+                .collect()
+        })
+}
+
+#[test]
+fn code_reads_both_children_and_the_progress() {
+    let source = wipe_scene("code={wipe} uniforms={{ softness: 0.1 + ctx.progress / 10 }}");
+    let artifact = compile_motion(&source).unwrap().artifact;
+    artifact.validate().unwrap();
+    assert_eq!(artifact.shaders.len(), 1);
+    let names = &artifact.capability_set.names;
+    assert!(names.iter().any(|name| name == TRANSITION_CAPABILITY));
+    assert!(!names.iter().any(|name| name == SHADER_LAYER_CAPABILITY));
+    let uri = artifact.shaders[0].uri().unwrap().to_string();
+    for frame in [30, 0, 59] {
+        let output = program(&source, frame).unwrap();
+        let transition = output
+            .nodes()
+            .iter()
+            .find_map(|node| match node {
+                Node::Group(group) => group.transition.as_ref(),
+                _ => None,
+            })
+            .unwrap();
+        let TransitionKernel::Shader {
+            shader,
+            uniforms,
+            textures,
+        } = &transition.kernel
+        else {
+            panic!("{:?}", transition.kernel);
+        };
+        assert_eq!(shader.uri, uri);
+        assert!(textures.is_empty());
+        let progress = frame as f32 / 60.0;
+        assert_eq!(transition.progress, progress);
+        assert_eq!(uniforms.len(), 1);
+        assert_eq!(uniforms[0].name, "softness");
+        assert!(
+            matches!(uniforms[0].value, ShaderUniformValue::Float(value)
+                if (value - (0.1 + progress / 10.0)).abs() < 1e-6),
+            "{:?}",
+            uniforms[0].value
+        );
+        assert_eq!(output.requirements().runtime_shaders.len(), 1);
+        output.validate().unwrap();
+    }
+
+    let mut unknown = artifact.clone();
+    for node in &mut unknown.nodes {
+        if let valle_motion::NodeKind::Transition {
+            effect: valle_motion::TransitionEffect::Shader { program, .. },
+            ..
+        } = &mut node.kind
+        {
+            program.uri = "shader://unknown".into();
+        }
+    }
+    assert!(unknown.validate().is_err());
+
+    let declared = |code: &str| {
+        format!(
+            "const wipe = `{code}`;\n{}",
+            MOTION_TRANSITION.replace(r#"kind="circleOpen""#, "code={wipe}")
+        )
+    };
+    for (source, expected) in [
+        (
+            wipe_scene(r#"kind="fade" code={wipe} uniforms={{ softness: 0.1 }}"#),
+            "either a built-in kind or code",
+        ),
+        (
+            wipe_scene("code={wipe} uniforms={{ softness: 0.1 }} params={{ softness: 1 }}"),
+            "params configure a built-in kind",
+        ),
+        (
+            wipe_scene(r#"kind="fade" uniforms={{ softness: 0.1 }}"#),
+            "inputs and uniforms bind its code",
+        ),
+        (
+            wipe_scene("code={wipe}"),
+            "Transition code requires uniform `softness`",
+        ),
+        (
+            wipe_scene("code={wipe} uniforms={{ softness: 0.1, width: 1 }}"),
+            "Transition code has no uniform `width`",
+        ),
+        (
+            declared(
+                "uniform float progress; float4 valle_main(float2 uv) { return sample_from(uv); }",
+            ),
+            "Transition code",
+        ),
+        (
+            declared("float4 valle_main(float2 uv) { return sampleContent(uv); }"),
+            "Transition code",
+        ),
+        (
+            wipe_scene("code={wipe} uniforms={{ softness: 0.1 }}")
+                .replace("return mix(", "return blend("),
+            "Transition code, line 6, column ",
+        ),
+    ] {
+        let messages = messages(&source);
+        assert!(
+            messages.iter().any(|message| message.contains(expected)),
+            "{expected}: {messages:#?}"
+        );
+        assert_eq!(messages.len(), 1, "{expected}: {messages:#?}");
+    }
 }

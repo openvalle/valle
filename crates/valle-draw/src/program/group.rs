@@ -341,11 +341,32 @@ impl ShaderLayer {
     }
 }
 
+/// What a transition draws from its two inputs: a built-in kernel with its canonical parameters,
+/// or an admitted shader that samples them as its `from` and `to` children.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub enum TransitionKernel {
+    Builtin {
+        kind: crate::transition::TransitionKind,
+        params: crate::transition::TransitionValues,
+    },
+    /// The shader's own uniforms and inputs; executors add `progress` beside `resolution`.
+    Shader {
+        shader: RuntimeShaderKey,
+        uniforms: Vec<ShaderUniformBinding>,
+        textures: Vec<ShaderTextureBinding>,
+    },
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TransitionLayer {
-    pub kind: crate::transition::TransitionKind,
-    pub params: crate::transition::TransitionValues,
+    pub kernel: TransitionKernel,
     pub progress: f32,
     /// Origin-anchored local canvas shared by both independent child subtrees.
     pub bounds: Rect,

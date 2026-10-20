@@ -44,8 +44,8 @@ use valle_motion::{
     Scene3DMaterialBinding, Scene3DMaterialOverrideBinding, Scene3DMeshBinding, Scene3DNodeBinding,
     Scene3DTransformBinding, SceneArtifact, SceneNode, SemanticMeta, ShaderProgramRef,
     ShaderTextureInput, ShaderUniformBinding, ShaderUniformValue, StyleBinding, StyleValue,
-    TRANSFORM_SCALE2D_CAPABILITY, TextSplit, TextValue, UnitStyle, VIEWPORT_CAPABILITY,
-    font_family_alias, geometry_eval_policy,
+    TRANSFORM_SCALE2D_CAPABILITY, TextSplit, TextValue, TransitionEffect, UnitStyle,
+    VIEWPORT_CAPABILITY, font_family_alias, geometry_eval_policy,
 };
 
 use crate::motion_sandbox::{Sandbox, THEME_SCOPE_BINDING, scan_forbidden};

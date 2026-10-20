@@ -314,6 +314,15 @@ fn strict_manifest_and_static_budgets_reject_expansion() {
             .code,
         DiagnosticCode::ManifestParse
     );
+    // Only Transition code makes a transition shader; a descriptor is a layer shader.
+    let mut value = serde_json::to_value(manifest()).unwrap();
+    value["role"] = serde_json::json!("transition");
+    assert_eq!(
+        ShaderManifest::parse(&serde_json::to_vec(&value).unwrap())
+            .unwrap_err()
+            .code,
+        DiagnosticCode::ManifestInvalid
+    );
 
     let calls = core::iter::repeat_n(
         "sampleContent(uv)",
@@ -401,6 +410,7 @@ fn manifest() -> ShaderManifest {
     ShaderManifest {
         name: "local-dissolve".into(),
         entry: "shader.vsksl".into(),
+        role: valle_motion::shader::ShaderRole::Layer,
         inputs: vec![ShaderInput {
             kind: valle_motion::shader::InputKind::Color,
             name: "noise".into(),

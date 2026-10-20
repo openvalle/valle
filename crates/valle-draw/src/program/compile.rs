@@ -321,16 +321,45 @@ impl<'a> RecordingCompiler<'a> {
         match command {
             RecordCmd::BeginGroup => self.begin(Group::plain(Vec::new())),
             RecordCmd::BeginTransition {
-                kind,
-                params,
+                kernel,
                 progress,
                 bounds,
             } => {
+                let kernel = match kernel {
+                    recording::TransitionKernel::Builtin { kind, params } => {
+                        super::TransitionKernel::Builtin {
+                            kind: *kind,
+                            params: *params,
+                        }
+                    }
+                    recording::TransitionKernel::Shader {
+                        program,
+                        uniforms,
+                        inputs,
+                    } => {
+                        let ShaderLayer {
+                            shader,
+                            uniforms,
+                            textures,
+                            ..
+                        } = self.shader_layer(
+                            command_index,
+                            *program,
+                            *uniforms,
+                            *inputs,
+                            *bounds,
+                        )?;
+                        super::TransitionKernel::Shader {
+                            shader,
+                            uniforms,
+                            textures,
+                        }
+                    }
+                };
                 let mut group = Group::plain(Vec::new());
                 group.isolated = true;
                 group.transition = Some(super::TransitionLayer {
-                    kind: *kind,
-                    params: *params,
+                    kernel,
                     progress: *progress,
                     bounds: *bounds,
                 });
@@ -434,68 +463,14 @@ impl<'a> RecordingCompiler<'a> {
                 inputs,
                 bounds,
             } => {
-                let program = self.source.shader_programs.get(program.index()).ok_or(
-                    ProgramRecordingError::InvalidReference {
-                        command: command_index,
-                        table: "shaderPrograms",
-                        index: program.0,
-                    },
-                )?;
-                let uniforms = self
-                    .source
-                    .shader_uniforms
-                    .get(uniforms.range())
-                    .ok_or(ProgramRecordingError::InvalidReference {
-                        command: command_index,
-                        table: "shaderUniforms",
-                        index: uniforms.start,
-                    })?
-                    .iter()
-                    .map(shader_uniform)
-                    .collect();
-                let inputs = self
-                    .source
-                    .shader_inputs
-                    .get(inputs.range())
-                    .ok_or(ProgramRecordingError::InvalidReference {
-                        command: command_index,
-                        table: "shaderInputs",
-                        index: inputs.start,
-                    })?
-                    .iter()
-                    .map(|input| {
-                        let texture = input
-                            .image
-                            .map(|image| {
-                                let mut texture = self.image_texture(command_index, image)?;
-                                if input.data {
-                                    texture.color_domain = ColorDomain::Data;
-                                    texture.alpha = AlphaMode::Straight;
-                                }
-                                Ok::<_, ProgramRecordingError>(texture)
-                            })
-                            .transpose()?;
-                        Ok(ShaderTextureBinding {
-                            name: input.name.clone(),
-                            texture,
-                            sampling: input.sampling,
-                            wrap: input.wrap,
-                        })
-                    })
-                    .collect::<Result<Vec<_>, ProgramRecordingError>>()?;
                 let mut group = Group::plain(Vec::new());
-                group.shader = Some(ShaderLayer {
-                    padding: program.padding,
-                    shader: RuntimeShaderKey {
-                        work_per_pixel: program.work_per_pixel,
-                        uri: program.uri.clone(),
-                        content_hash: program.content_hash,
-                        abi_hash: program.abi_hash,
-                    },
-                    bounds: *bounds,
-                    uniforms,
-                    textures: inputs,
-                });
+                group.shader = Some(self.shader_layer(
+                    command_index,
+                    *program,
+                    *uniforms,
+                    *inputs,
+                    *bounds,
+                )?);
                 self.begin(group);
             }
             RecordCmd::BeginMotionGlass { program } => {
@@ -1092,6 +1067,78 @@ impl<'a> RecordingCompiler<'a> {
                 table: "images",
                 index: image.0,
             })
+    }
+
+    /// One shader program over `bounds` with the uniforms and inputs its spans name.
+    fn shader_layer(
+        &self,
+        command: usize,
+        program: recording::ShaderProgramId,
+        uniforms: crate::Span,
+        inputs: crate::Span,
+        bounds: Rect,
+    ) -> Result<ShaderLayer, ProgramRecordingError> {
+        let program = self.source.shader_programs.get(program.index()).ok_or(
+            ProgramRecordingError::InvalidReference {
+                command,
+                table: "shaderPrograms",
+                index: program.0,
+            },
+        )?;
+        let uniforms = self
+            .source
+            .shader_uniforms
+            .get(uniforms.range())
+            .ok_or(ProgramRecordingError::InvalidReference {
+                command,
+                table: "shaderUniforms",
+                index: uniforms.start,
+            })?
+            .iter()
+            .map(shader_uniform)
+            .collect();
+        let textures = self
+            .source
+            .shader_inputs
+            .get(inputs.range())
+            .ok_or(ProgramRecordingError::InvalidReference {
+                command,
+                table: "shaderInputs",
+                index: inputs.start,
+            })?
+            .iter()
+            .map(|input| {
+                let texture = input
+                    .image
+                    .map(|image| {
+                        let mut texture = self.image_texture(command, image)?;
+                        if input.data {
+                            texture.color_domain = ColorDomain::Data;
+                            texture.alpha = AlphaMode::Straight;
+                        }
+                        Ok::<_, ProgramRecordingError>(texture)
+                    })
+                    .transpose()?;
+                Ok(ShaderTextureBinding {
+                    name: input.name.clone(),
+                    texture,
+                    sampling: input.sampling,
+                    wrap: input.wrap,
+                })
+            })
+            .collect::<Result<Vec<_>, ProgramRecordingError>>()?;
+        Ok(ShaderLayer {
+            padding: program.padding,
+            shader: RuntimeShaderKey {
+                work_per_pixel: program.work_per_pixel,
+                uri: program.uri.clone(),
+                content_hash: program.content_hash,
+                abi_hash: program.abi_hash,
+            },
+            bounds,
+            uniforms,
+            textures,
+        })
     }
 }
 

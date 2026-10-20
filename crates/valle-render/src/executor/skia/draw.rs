@@ -18,7 +18,7 @@ use valle_draw::{
         BlendMode, Clip, DrawProgram, FillRule, Filter, GlyphRun, ImageNode, InstanceBatchNode,
         InstanceShape, LinearColor, MaskMode, Node, Paint, PaintId, PathData, PathStroke, PathVerb,
         RoundRect, ShaderLayer, ShaderTextureBinding, ShaderUniformBinding, ShaderUniformValue,
-        SpreadMode, StrokeCap, StrokeJoin, Transform2d,
+        SpreadMode, StrokeCap, StrokeJoin, Transform2d, TransitionKernel,
     },
     requirements::{DrawCapability, ExternalTexture, FontKey, RuntimeShaderKey, SamplingMode},
 };
@@ -299,6 +299,7 @@ impl ProgramRuntime {
             if let Some((uri, bounds, uniforms, texture_bindings)) = shader {
                 preflight_shader_instance(
                     uri,
+                    LAYER_INPUTS,
                     bounds,
                     uniforms,
                     texture_bindings,
@@ -310,16 +311,31 @@ impl ProgramRuntime {
 
         for pass in plan.local_plan().passes() {
             if let ProgramPassKind::ApplyTransition { transition, .. } = &pass.kind {
-                for (uri, source) in [
-                    (
-                        format!("builtin://transition/{:?}", transition.kind),
-                        transition.kind.source(),
-                    ),
-                    (
-                        "builtin://transition-input".into(),
-                        include_str!("../../../../valle-draw/assets/shaders/transitioninput.sksl"),
-                    ),
-                ] {
+                let kernel = match &transition.kernel {
+                    TransitionKernel::Builtin { kind, .. } => {
+                        Some((format!("builtin://transition/{kind:?}"), kind.source()))
+                    }
+                    TransitionKernel::Shader {
+                        shader,
+                        uniforms,
+                        textures: texture_bindings,
+                    } => {
+                        preflight_shader_instance(
+                            &shader.uri,
+                            TRANSITION_INPUTS,
+                            transition.bounds,
+                            &transition_uniforms(uniforms, transition.progress),
+                            texture_bindings,
+                            &shaders,
+                            &textures,
+                        )?;
+                        None
+                    }
+                };
+                for (uri, source) in kernel.into_iter().chain([(
+                    "builtin://transition-input".into(),
+                    include_str!("../../../../valle-draw/assets/shaders/transitioninput.sksl"),
+                )]) {
                     if !shaders.contains_key(&uri) {
                         let effect =
                             RuntimeEffect::make_for_shader(source, None).map_err(|message| {
@@ -1669,11 +1685,6 @@ impl ProgramRuntime {
         let inverse = matrix.invert().ok_or_else(|| {
             DrawError::Unsupported("transition owner transform is not invertible".into())
         })?;
-        let uri = format!("builtin://transition/{:?}", transition.kind);
-        let effect = self
-            .shaders
-            .get(&uri)
-            .ok_or_else(|| DrawError::MissingShader(uri.clone()))?;
         let input_effect = self
             .shaders
             .get("builtin://transition-input")
@@ -1690,7 +1701,7 @@ impl ProgramRuntime {
                     .collect::<Vec<_>>(),
             )
         };
-        let mut children = Vec::new();
+        let mut scenes = Vec::new();
         for input in inputs {
             let content = match input {
                 Some(input) => input
@@ -1708,24 +1719,59 @@ impl ProgramRuntime {
                     })?,
                 None => skia_safe::shaders::color(Color::TRANSPARENT),
             };
-            let child = input_effect
+            let scene = input_effect
                 .make_shader(pack(&resolution), &[ChildPtr::Shader(content)], None)
                 .ok_or_else(|| DrawError::ShaderAbi {
                     uri: "builtin://transition-input".into(),
                 })?;
-            children.push(ChildPtr::Shader(child));
+            scenes.push(scene);
         }
-        let shader = effect
-            .make_shader(
-                pack(&transition.params.uniforms(
-                    resolution[0],
-                    resolution[1],
-                    transition.progress,
-                )),
-                &children,
-                None,
-            )
-            .ok_or_else(|| DrawError::ShaderAbi { uri })?;
+        let shader = match &transition.kernel {
+            TransitionKernel::Builtin { kind, params } => {
+                let uri = format!("builtin://transition/{kind:?}");
+                let effect = self
+                    .shaders
+                    .get(&uri)
+                    .ok_or_else(|| DrawError::MissingShader(uri.clone()))?;
+                let children = scenes.into_iter().map(ChildPtr::Shader).collect::<Vec<_>>();
+                effect
+                    .make_shader(
+                        pack(&params.uniforms(resolution[0], resolution[1], transition.progress)),
+                        &children,
+                        None,
+                    )
+                    .ok_or_else(|| DrawError::ShaderAbi { uri })?
+            }
+            TransitionKernel::Shader {
+                shader,
+                uniforms,
+                textures,
+            } => {
+                let effect = self
+                    .shaders
+                    .get(&shader.uri)
+                    .ok_or_else(|| DrawError::MissingShader(shader.uri.clone()))?;
+                let data = shader_uniforms(
+                    effect,
+                    transition.bounds,
+                    &transition_uniforms(uniforms, transition.progress),
+                    textures,
+                    &self.textures,
+                )?;
+                let inputs = TRANSITION_INPUTS
+                    .iter()
+                    .copied()
+                    .zip(scenes)
+                    .collect::<Vec<_>>();
+                let children = self.shader_children(&shader.uri, effect, &inputs, textures)?;
+                // The canvas is origin-anchored, so owner pixels are the shader's own.
+                effect
+                    .make_shader(Data::new_copy(&data), &children, None)
+                    .ok_or_else(|| DrawError::ShaderAbi {
+                        uri: shader.uri.clone(),
+                    })?
+            }
+        };
         let mut paint = SkPaint::default();
         paint.set_shader(shader);
         let canvas = surface.canvas();
@@ -1795,55 +1841,62 @@ impl ProgramRuntime {
             .get(uri)
             .ok_or_else(|| DrawError::MissingShader(uri.to_owned()))?;
         let data = shader_uniforms(effect, bounds, uniforms, textures, &self.textures)?;
+        let content = match content {
+            Some((image, local)) => image
+                .to_shader(
+                    (TileMode::Decal, TileMode::Decal),
+                    SamplingOptions::new(FilterMode::Linear, MipmapMode::None),
+                    &local,
+                )
+                .ok_or_else(|| DrawError::ShaderChild {
+                    uri: uri.to_owned(),
+                    child: "content".into(),
+                })?,
+            // An empty shader aborts the raster pipeline when sampled. Missing inputs must
+            // evaluate to zero and let the parent shader continue computing its output.
+            None => skia_safe::shaders::color(Color::TRANSPARENT),
+        };
+        let children = self.shader_children(uri, effect, &[("content", content)], textures)?;
+        let local = Matrix::translate((bounds.x as f32, bounds.y as f32));
+        Ok(effect.make_shader(Data::new_copy(&data), &children, Some(&local)))
+    }
+
+    /// A runtime shader's children: the images its node supplies by name, and its textures.
+    fn shader_children(
+        &self,
+        uri: &str,
+        effect: &RuntimeEffect,
+        supplied: &[(&str, Shader)],
+        textures: &[ShaderTextureBinding],
+    ) -> Result<Vec<ChildPtr>, DrawError> {
         let mut children = Vec::with_capacity(effect.children().len());
         for child in effect.children() {
-            if child.name() == "content" && content.is_none() {
-                // An empty shader aborts the raster pipeline when sampled. Missing inputs must
-                // evaluate to zero and let the parent shader continue computing its output.
+            if let Some((_, shader)) = supplied.iter().find(|(name, _)| *name == child.name()) {
+                children.push(ChildPtr::Shader(shader.clone()));
+                continue;
+            }
+            let binding = textures
+                .iter()
+                .find(|texture| texture.name == child.name())
+                .ok_or_else(|| DrawError::ShaderChild {
+                    uri: uri.to_owned(),
+                    child: child.name().to_owned(),
+                })?;
+            let Some(texture) = &binding.texture else {
                 children.push(ChildPtr::Shader(skia_safe::shaders::color(
                     Color::TRANSPARENT,
                 )));
                 continue;
-            }
-            let image = if child.name() == "content" {
-                content
-                    .as_ref()
-                    .expect("content presence was handled above")
-                    .0
-            } else {
-                let texture = textures
-                    .iter()
-                    .find(|texture| texture.name == child.name())
-                    .ok_or_else(|| DrawError::ShaderChild {
-                        uri: uri.to_owned(),
-                        child: child.name().to_owned(),
-                    })?;
-                let Some(texture) = &texture.texture else {
-                    children.push(ChildPtr::Shader(skia_safe::shaders::color(
-                        Color::TRANSPARENT,
-                    )));
-                    continue;
-                };
-                &self
-                    .textures
-                    .get(texture)
-                    .ok_or_else(|| DrawError::MissingTexture(texture.key.clone()))?
-                    .image
             };
-            let mode = textures
-                .iter()
-                .find(|texture| texture.name == child.name())
-                .map_or(
-                    SamplingOptions::new(FilterMode::Linear, MipmapMode::None),
-                    // The shared shader code filters individual working-linear texels.
-                    |_| SamplingOptions::new(FilterMode::Nearest, MipmapMode::None),
-                );
-            let wrap = textures
-                .iter()
-                .find(|texture| texture.name == child.name())
-                .map_or(TileMode::Decal, |texture| tile_mode(texture.wrap));
-            let local = (child.name() == "content").then(|| &content.as_ref().unwrap().1);
-            let shader = image.to_shader((wrap, wrap), mode, local).ok_or_else(|| {
+            let image = &self
+                .textures
+                .get(texture)
+                .ok_or_else(|| DrawError::MissingTexture(texture.key.clone()))?
+                .image;
+            let wrap = tile_mode(binding.wrap);
+            // The shared shader code filters individual working-linear texels.
+            let mode = SamplingOptions::new(FilterMode::Nearest, MipmapMode::None);
+            let shader = image.to_shader((wrap, wrap), mode, None).ok_or_else(|| {
                 DrawError::ShaderChild {
                     uri: uri.to_owned(),
                     child: child.name().to_owned(),
@@ -1851,8 +1904,7 @@ impl ProgramRuntime {
             })?;
             children.push(ChildPtr::Shader(shader));
         }
-        let local = Matrix::translate((bounds.x as f32, bounds.y as f32));
-        Ok(effect.make_shader(Data::new_copy(&data), &children, Some(&local)))
+        Ok(children)
     }
 }
 
@@ -2017,6 +2069,33 @@ fn structure_slot(
         })
 }
 
+/// The images a layer shader's node supplies, ahead of its textures.
+const LAYER_INPUTS: &[&str] = &["content"];
+/// The scenes a transition shader moves between, ahead of its textures.
+const TRANSITION_INPUTS: &[&str] = &["from", "to"];
+
+/// A transition shader's bindings: its own uniforms, then the progress the transition supplies.
+fn transition_uniforms(
+    uniforms: &[ShaderUniformBinding],
+    progress: f32,
+) -> Vec<ShaderUniformBinding> {
+    let mut bindings = uniforms.to_vec();
+    bindings.push(ShaderUniformBinding {
+        name: "progress".into(),
+        value: ShaderUniformValue::Float(progress),
+    });
+    bindings
+}
+
+/// Whether the effect's leading children are these inputs, in order.
+fn leads_with(effect: &RuntimeEffect, inputs: &[&str]) -> bool {
+    inputs.iter().enumerate().all(|(index, name)| {
+        effect
+            .find_child(name)
+            .is_some_and(|child| child.index() == index)
+    })
+}
+
 fn validate_shader_abi(
     effect: &RuntimeEffect,
     requirement: &RuntimeShaderKey,
@@ -2024,10 +2103,8 @@ fn validate_shader_abi(
     let has_resolution = effect
         .find_uniform("resolution")
         .is_some_and(|uniform| uniform.size_in_bytes() == 8);
-    let has_content = effect
-        .find_child("content")
-        .is_some_and(|child| child.index() == 0);
-    if !has_resolution || !has_content || !effect.allow_shader() {
+    let has_inputs = leads_with(effect, LAYER_INPUTS) || leads_with(effect, TRANSITION_INPUTS);
+    if !has_resolution || !has_inputs || !effect.allow_shader() {
         return Err(DrawError::ShaderAbi {
             uri: requirement.uri.clone(),
         });
@@ -2037,6 +2114,7 @@ fn validate_shader_abi(
 
 fn preflight_shader_instance(
     uri: &str,
+    inputs: &[&str],
     bounds: Rect,
     uniforms: &[ShaderUniformBinding],
     texture_bindings: &[ShaderTextureBinding],
@@ -2049,7 +2127,7 @@ fn preflight_shader_instance(
     let _ = shader_uniforms(effect, bounds, uniforms, texture_bindings, textures)?;
     let mut bound_children = 0_usize;
     for child in effect.children() {
-        if child.name() == "content" {
+        if inputs.contains(&child.name()) {
             bound_children += 1;
             continue;
         }
@@ -2067,14 +2145,7 @@ fn preflight_shader_instance(
         }
         bound_children += 1;
     }
-    if bound_children != texture_bindings.len() + 1
-        || effect
-            .children()
-            .iter()
-            .filter(|child| child.name() == "content")
-            .count()
-            != 1
-    {
+    if bound_children != texture_bindings.len() + inputs.len() || !leads_with(effect, inputs) {
         return Err(DrawError::ShaderAbi {
             uri: uri.to_owned(),
         });

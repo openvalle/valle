@@ -1027,6 +1027,28 @@ impl BatchInstance {
     }
 }
 
+/// What a transition computes from its two child groups: a built-in kernel, or a shader program
+/// with uniform and input spans, as a ShaderLayer names them.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    tag = "type",
+    deny_unknown_fields
+)]
+pub enum TransitionKernel {
+    Builtin {
+        kind: crate::transition::TransitionKind,
+        params: crate::transition::TransitionValues,
+    },
+    Shader {
+        program: ShaderProgramId,
+        uniforms: Span,
+        inputs: Span,
+    },
+}
+
 // Recording commands.
 
 /// One recording command. Begin commands and End must balance; all other commands are leaves.
@@ -1046,8 +1068,7 @@ pub enum RecordCmd {
     BeginAlphaMask,
     /// Exactly two independent child groups, from then to, sampled on this local canvas.
     BeginTransition {
-        kind: crate::transition::TransitionKind,
-        params: crate::transition::TransitionValues,
+        kernel: TransitionKernel,
         progress: f32,
         bounds: Rect,
     },
@@ -1633,12 +1654,17 @@ mod finite {
             RecordCmd::BeginBackdropFilter { bounds, .. } => bounds.as_ref().is_none_or(rect),
             RecordCmd::BeginShaderLayer { bounds, .. } => rect(bounds),
             RecordCmd::BeginTransition {
-                kind,
-                params,
+                kernel,
                 progress,
                 bounds,
             } => {
-                kind.validate_values(*params).is_ok()
+                let kernel = match kernel {
+                    TransitionKernel::Builtin { kind, params } => {
+                        kind.validate_values(*params).is_ok()
+                    }
+                    TransitionKernel::Shader { .. } => true,
+                };
+                kernel
                     && progress.is_finite()
                     && (0.0..=1.0).contains(progress)
                     && rect(bounds)
@@ -2140,9 +2166,7 @@ impl ProgramRecording {
                 inputs,
                 bounds,
             } => {
-                self.check_id(at, "shaderPrograms", program.0, self.shader_programs.len())?;
-                span("shaderUniforms", *uniforms, self.shader_uniforms.len())?;
-                span("shaderInputs", *inputs, self.shader_inputs.len())?;
+                self.check_shader(at, *program, *uniforms, *inputs)?;
                 if bounds.x != 0.0 || bounds.y != 0.0 || bounds.width <= 0.0 || bounds.height <= 0.0
                 {
                     return Err(RecordingError::InvalidShaderLayer {
@@ -2150,13 +2174,17 @@ impl ProgramRecording {
                         reason: "bounds must be an origin-anchored local box with positive axes",
                     });
                 }
-                for input in &self.shader_inputs[inputs.range()] {
-                    if let Some(image) = input.image {
-                        self.check_id(at, "images", image.0, self.images.len())?;
-                    }
-                }
                 Ok(())
             }
+            RecordCmd::BeginTransition {
+                kernel:
+                    TransitionKernel::Shader {
+                        program,
+                        uniforms,
+                        inputs,
+                    },
+                ..
+            } => self.check_shader(at, *program, *uniforms, *inputs),
             RecordCmd::BeginMotionGlass { program } => program
                 .validate()
                 .map_err(|_| RecordingError::InvalidMotionGlass { at }),
@@ -2349,6 +2377,37 @@ impl ProgramRecording {
                 index,
                 len,
             });
+        }
+        Ok(())
+    }
+
+    /// A shader program and its uniform and input spans, as a ShaderLayer or a transition names
+    /// them.
+    fn check_shader(
+        &self,
+        at: usize,
+        program: ShaderProgramId,
+        uniforms: Span,
+        inputs: Span,
+    ) -> Result<(), RecordingError> {
+        self.check_id(at, "shaderPrograms", program.0, self.shader_programs.len())?;
+        for (table, span, len) in [
+            ("shaderUniforms", uniforms, self.shader_uniforms.len()),
+            ("shaderInputs", inputs, self.shader_inputs.len()),
+        ] {
+            if span.start > span.end || span.end as usize > len {
+                return Err(RecordingError::OutOfRange {
+                    at,
+                    table,
+                    index: span.end,
+                    len,
+                });
+            }
+        }
+        for input in &self.shader_inputs[inputs.range()] {
+            if let Some(image) = input.image {
+                self.check_id(at, "images", image.0, self.images.len())?;
+            }
         }
         Ok(())
     }

@@ -111,6 +111,7 @@ fn shader_language_executes_bounded_math_and_sanitizes_invalid_values() {
     let descriptor = ShaderManifest {
         name: "math-check".into(),
         entry: "source.vsksl".into(),
+        role: valle_motion::shader::ShaderRole::Layer,
         inputs: vec![],
         uniforms: vec![ShaderUniform {
             name: "tint".into(),

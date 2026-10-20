@@ -1412,6 +1412,79 @@ float4 valle_main(float2 uv) {
 }
 
 #[test]
+fn transition_code_renders_as_the_builtin_kernel_it_spells_out() {
+    let temp = tempfile::tempdir().unwrap();
+    let dir = temp.path();
+    let scene = r##"const fade = `
+float4 valle_main(float2 uv) {
+  return mix(sample_from(uv), sample_to(uv), progress);
+}`;
+export const composition = { width: 64, height: 32, fps: 30, duration: 2 };
+export default function Fade() {
+  const ctx = useTime();
+  return (
+    <Scene style={{ width: 64, height: 32 }}>
+      <Transition EFFECT progress={ctx.progress} style={{ width: 64, height: 32 }}>
+        <View style={{ width: 64, height: 32, backgroundColor: "#ff2050" }}>
+          <View style={{ position: "absolute", left: 8, top: 8, width: 16, height: 16, backgroundColor: "#2040ff" }} />
+        </View>
+        <View style={{ width: 64, height: 32, backgroundColor: "#22cc88" }} />
+      </Transition>
+    </Scene>
+  );
+}"##;
+    std::fs::write(
+        dir.join("builtin.motion.tsx"),
+        scene.replace("EFFECT", r#"kind="fade""#),
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("code.motion.tsx"),
+        scene.replace("EFFECT", "code={fade}"),
+    )
+    .unwrap();
+    for frame in ["0", "20", "45", "59"] {
+        let render = |input: &str| {
+            let output = format!("{input}-{frame}.png");
+            success(run(
+                dir,
+                &[
+                    "motion",
+                    "render",
+                    input,
+                    "--frame",
+                    frame,
+                    "--backend",
+                    "raster",
+                    "-o",
+                    &output,
+                ],
+            ));
+            valle_media::codec::read_rgba_png(&dir.join(&output))
+                .unwrap()
+                .data
+        };
+        let builtin = render("builtin.motion.tsx");
+        let code = render("code.motion.tsx");
+        assert_eq!(builtin.len(), code.len());
+        // Opaque scenes mix the same with and without premultiplied alpha.
+        let worst = builtin
+            .iter()
+            .zip(&code)
+            .map(|(a, b)| a.abs_diff(*b))
+            .max()
+            .unwrap();
+        assert!(worst <= 1, "frame {frame} differs by {worst}");
+        if frame == "20" {
+            let colors = code
+                .chunks_exact(4)
+                .collect::<std::collections::BTreeSet<_>>();
+            assert!(colors.len() >= 2, "{colors:?}");
+        }
+    }
+}
+
+#[test]
 fn shader_content_preserves_local_coordinates_and_complete_input() {
     let temp = tempfile::tempdir().unwrap();
     let dir = temp.path();

@@ -2064,8 +2064,17 @@ async function executeProgramPass(
           try { children.push(builtins.shader("transitionInput", [bounds.width, bounds.height], [content])); }
           finally { content.delete(); }
         }
-        shader = builtins.shader(transitionKernel(String(transition.kind)),
-          [bounds.width, bounds.height, finiteNumber(transition.progress, "transition progress"), ...transitionValues(transition.params, String(transition.kind))], children);
+        const progress = finiteNumber(transition.progress, "transition progress");
+        const kernel = record(transition.kernel, "transition kernel");
+        if (kernel.type === "shader") {
+          const effect = required(admitted.shaders, String(record(kernel.shader, "transition shader key").uri), "transition shader");
+          // The canvas is origin-anchored, so owner pixels are the shader's own.
+          shader = makeRuntimeShader(CanvasKit, builtins, effect, bounds, array(kernel.uniforms, "transition uniforms"),
+            array(kernel.textures, "transition textures"), admitted, children.splice(0), [["progress", [progress]]]);
+        } else {
+          shader = builtins.shader(transitionKernel(String(kernel.kind)),
+            [bounds.width, bounds.height, progress, ...transitionValues(kernel.params, String(kernel.kind))], children);
+        }
         paint.setShader(shader);
         canvas.concat(matrix);
         canvas.drawRect(skRect(CanvasKit, bounds), paint);
@@ -2748,63 +2757,84 @@ function instantiateRuntimeShader(
   content: ImageValue | null,
   ownerToDevice: number[] = IDENTITY_MATRIX,
 ): Shader {
-  const values = new Map<string, number[]>([["resolution", [bounds.width, bounds.height]]]);
-  for (const raw of uniforms) {
-    const binding = record(raw, "shader uniform");
-    const value = record(binding.value, "shader uniform value");
-    const scalars: number[] = [];
-    if (value.kind === "float") scalars.push(finiteNumber(value.value, "shader float"));
-    else if (value.kind === "float2") scalars.push(...pair(value.value, "shader float2"));
-    else if (["float3", "float4", "float2x2", "float3x3", "float4x4"].includes(String(value.kind))) {
-      const widths: Record<string, number> = { float3: 3, float4: 4, float2x2: 4, float3x3: 9, float4x4: 16 };
-      const components = array(value.value, "shader components");
-      if (components.length !== widths[String(value.kind)]) fail("shader_abi", "shader component count mismatch");
-      scalars.push(...components.map((v) => finiteNumber(v, "shader component")));
-    }
-    else if (value.kind === "color") {
-      const components = array(value.value, "shader linear sRGB color");
-      if (components.length !== 4) fail("shader_abi", "shader color requires four components");
-      scalars.push(...components.map((v) => finiteNumber(v, "shader color component")));
-    } else if (value.kind === "bool") scalars.push(value.value === true ? 1 : 0);
-    else fail("shader_abi", `unknown shader uniform kind '${String(value.kind)}'`);
-    const name = value.kind === "bool" ? `valle_uniform_${String(binding.name)}` : String(binding.name);
-    if (values.has(name)) fail("shader_abi", `duplicate shader uniform '${name}'`);
-    values.set(name, scalars);
-  }
-  for (const raw of textures) {
-    const binding = record(raw, "shader texture binding");
-    const name = `valle_size_${String(binding.name)}`;
-    if (values.has(name)) fail("shader_abi", `duplicate shader texture '${String(binding.name)}'`);
-    if (binding.texture === null) { values.set(name, [1, 1]); continue; }
-    const object = resolveProgramTexture(admitted.textures, record(binding.texture, "shader texture key"), "shader texture");
-    if (!object.image) fail("shader_abi", "shader texture needs an image");
-    const data = object.kind === "dataTexture";
-    values.set(name, [object.image.width() / (data ? 2 : 1), object.image.height() / (data ? 4 : 1)]);
-  }
-  const scalars = new Float32Array(effect.getUniformFloatCount());
-  for (let i = 0; i < effect.getUniformCount(); i++) {
-    const name = effect.getUniformName(i);
-    const uniform = effect.getUniform(i);
-    const value = values.get(name);
-    if (!value || value.length !== uniform.columns * uniform.rows) fail("shader_abi", `missing or mismatched shader uniform '${name}'`);
-    scalars.set(value, uniform.slot);
-    values.delete(name);
-  }
-  if (values.size) fail("shader_abi", "shader has undeclared uniform bindings");
-  const children: Shader[] = [];
+  let child: Shader;
+  if (content?.image) {
+    const deviceToOwner = inverse3(ownerToDevice);
+    if (!deviceToOwner) fail("shader_transform", "shader owner transform is not invertible");
+    const imageToShader = mul3(
+      [1, 0, -bounds.x, 0, 1, -bounds.y, 0, 0, 1],
+      mul3(deviceToOwner, [1, 0, content.roi.x, 0, 1, content.roi.y, 0, 0, 1]),
+    );
+    const image = content.image.makeShaderOptions(CanvasKit.TileMode.Decal, CanvasKit.TileMode.Decal,
+      CanvasKit.FilterMode.Linear, CanvasKit.MipmapMode.None, imageToShader);
+    if (!image) fail("shader_transform", "content image cannot become a shader child");
+    child = image;
+  } else child = CanvasKit.Shader.MakeColor(CanvasKit.TRANSPARENT, CanvasKit.ColorSpace.SRGB);
+  return makeRuntimeShader(CanvasKit, builtins, effect, bounds, uniforms, textures, admitted, [child], [],
+    [1, 0, bounds.x, 0, 1, bounds.y, 0, 0, 1]);
+}
+
+/**
+ * A runtime shader over the images its node supplies, which it takes and deletes, then its
+ * textures. `system` holds the uniforms the node supplies beside `resolution`.
+ */
+function makeRuntimeShader(
+  CanvasKit: CanvasKit,
+  builtins: CanvasKitBuiltinRuntime,
+  effect: RuntimeEffect,
+  bounds: RectWire,
+  uniforms: unknown[],
+  textures: unknown[],
+  admitted: AdmittedProgram,
+  inputs: Shader[],
+  system: [string, number[]][],
+  local?: number[],
+): Shader {
+  const children = [...inputs];
   try {
-    if (content?.image) {
-      const deviceToOwner = inverse3(ownerToDevice);
-      if (!deviceToOwner) fail("shader_transform", "shader owner transform is not invertible");
-      const imageToShader = mul3(
-        [1, 0, -bounds.x, 0, 1, -bounds.y, 0, 0, 1],
-        mul3(deviceToOwner, [1, 0, content.roi.x, 0, 1, content.roi.y, 0, 0, 1]),
-      );
-      const child = content.image.makeShaderOptions(CanvasKit.TileMode.Decal, CanvasKit.TileMode.Decal,
-        CanvasKit.FilterMode.Linear, CanvasKit.MipmapMode.None, imageToShader);
-      if (!child) fail("shader_transform", "content image cannot become a shader child");
-      children.push(child);
-    } else children.push(CanvasKit.Shader.MakeColor(CanvasKit.TRANSPARENT, CanvasKit.ColorSpace.SRGB));
+    const values = new Map<string, number[]>([["resolution", [bounds.width, bounds.height]], ...system]);
+    for (const raw of uniforms) {
+      const binding = record(raw, "shader uniform");
+      const value = record(binding.value, "shader uniform value");
+      const scalars: number[] = [];
+      if (value.kind === "float") scalars.push(finiteNumber(value.value, "shader float"));
+      else if (value.kind === "float2") scalars.push(...pair(value.value, "shader float2"));
+      else if (["float3", "float4", "float2x2", "float3x3", "float4x4"].includes(String(value.kind))) {
+        const widths: Record<string, number> = { float3: 3, float4: 4, float2x2: 4, float3x3: 9, float4x4: 16 };
+        const components = array(value.value, "shader components");
+        if (components.length !== widths[String(value.kind)]) fail("shader_abi", "shader component count mismatch");
+        scalars.push(...components.map((v) => finiteNumber(v, "shader component")));
+      }
+      else if (value.kind === "color") {
+        const components = array(value.value, "shader linear sRGB color");
+        if (components.length !== 4) fail("shader_abi", "shader color requires four components");
+        scalars.push(...components.map((v) => finiteNumber(v, "shader color component")));
+      } else if (value.kind === "bool") scalars.push(value.value === true ? 1 : 0);
+      else fail("shader_abi", `unknown shader uniform kind '${String(value.kind)}'`);
+      const name = value.kind === "bool" ? `valle_uniform_${String(binding.name)}` : String(binding.name);
+      if (values.has(name)) fail("shader_abi", `duplicate shader uniform '${name}'`);
+      values.set(name, scalars);
+    }
+    for (const raw of textures) {
+      const binding = record(raw, "shader texture binding");
+      const name = `valle_size_${String(binding.name)}`;
+      if (values.has(name)) fail("shader_abi", `duplicate shader texture '${String(binding.name)}'`);
+      if (binding.texture === null) { values.set(name, [1, 1]); continue; }
+      const object = resolveProgramTexture(admitted.textures, record(binding.texture, "shader texture key"), "shader texture");
+      if (!object.image) fail("shader_abi", "shader texture needs an image");
+      const data = object.kind === "dataTexture";
+      values.set(name, [object.image.width() / (data ? 2 : 1), object.image.height() / (data ? 4 : 1)]);
+    }
+    const scalars = new Float32Array(effect.getUniformFloatCount());
+    for (let i = 0; i < effect.getUniformCount(); i++) {
+      const name = effect.getUniformName(i);
+      const uniform = effect.getUniform(i);
+      const value = values.get(name);
+      if (!value || value.length !== uniform.columns * uniform.rows) fail("shader_abi", `missing or mismatched shader uniform '${name}'`);
+      scalars.set(value, uniform.slot);
+      values.delete(name);
+    }
+    if (values.size) fail("shader_abi", "shader has undeclared uniform bindings");
     for (const raw of textures) {
       const binding = record(raw, "shader texture binding");
       if (binding.texture === null) {
@@ -2821,7 +2851,7 @@ function instantiateRuntimeShader(
         String(binding.wrap),
       ));
     }
-    const shader = effect.makeShaderWithChildren(scalars, children, [1, 0, bounds.x, 0, 1, bounds.y, 0, 0, 1]);
+    const shader = effect.makeShaderWithChildren(scalars, children, local);
     if (!shader) fail("shader_abi", "RuntimeEffect child/uniform ABI mismatch");
     return shader;
   } finally {
@@ -5492,7 +5522,8 @@ function requiredBuiltinKernels(plan: Wire, programs: Wire[]): Set<BuiltinKernel
       const kind = record(record(rawPass, "local pass").kind, "local pass kind");
       if (kind.kind === "blend" && String(kind.mode) !== "normal") kernels.add("creativeBlend");
       if (kind.kind === "applyTransition") {
-        kernels.add(transitionKernel(String(record(kind.transition, "local transition").kind)));
+        const kernel = record(record(kind.transition, "local transition").kernel, "transition kernel");
+        if (kernel.type !== "shader") kernels.add(transitionKernel(String(kernel.kind)));
         kernels.add("transitionInput");
       }
       if (kind.kind === "applyFilter") {

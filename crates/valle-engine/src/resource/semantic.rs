@@ -1192,6 +1192,7 @@ mod tests {
         let manifest = ShaderManifest {
             name: "identity".into(),
             entry: "shader.vsksl".into(),
+            role: valle_motion::shader::ShaderRole::Layer,
             inputs: Vec::new(),
             uniforms: Vec::new(),
             output: OutputContract::default(),

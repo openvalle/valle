@@ -414,7 +414,7 @@ below. Unknown attributes and event handlers are rejected.
 | `Mask`, `MaskSource` | Alpha/luminance masking; see [masks](#clipping-masks-and-effects) |
 | `MathFormula` | Formula leaf; static `latex`, `displayMode`, `ariaLabel` |
 | `Glass`, `GlassField` | Optical material surfaces and shared material fields |
-| `Transition` | Two child subtrees, static `kind`, numeric `progress`, optional `params`; see [transitions](#subtree-transitions) |
+| `Transition` | Two child subtrees, numeric `progress`, and a static `kind` with optional `params` or shader `code` with its `uniforms` and `inputs`; see [transitions](#subtree-transitions) |
 | `ShaderLayer` | Custom shader; inline `code` or a descriptor `source`, `inputs`, `uniforms`, `outset`, content children |
 | `Scene3D` | 3D scene leaf with its own camera and explicit 3D children |
 | `ThemeProvider` | Compile-time theme scope; `value` and its children |
@@ -1905,6 +1905,35 @@ export default function Reveal() {
   const ctx = useTime();
   const p = clamp(ctx.seconds, 0, 1);
   return <Transition kind="circleOpen" progress={p} style={{width:640,height:360}}>
+    <View style={{backgroundColor:"#2140ff"}} />
+    <View style={{backgroundColor:"#ff4a24"}} />
+  </Transition>;
+}
+```
+
+Instead of `kind`, write the kernel with `code` in the [ShaderLayer](#shaderlayer)
+language. The code reads the outgoing subtree with `sample_from(uv)`, the incoming
+one with `sample_to(uv)`, and the transition's `progress` as a float; like
+`sampleContent`, both return straight colors, and both clamp to the canvas edge as
+the built-in kernels do. It declares its own uniforms and inputs, bound through
+`uniforms` and `inputs` as on a ShaderLayer. `code` replaces `kind` and `params`;
+`progress` is still required, and the output is the canvas, with no `outset`.
+
+```tsx
+const wipe = `
+uniform float softness;
+
+float4 valle_main(float2 uv) {
+  float edge = smoothstep(progress - softness, progress + softness, uv.x);
+  return mix(sample_to(uv), sample_from(uv), edge);
+}`;
+
+export const composition = { width: 640, height: 360, fps: 30, duration: 2 };
+export default function Wipe() {
+  const ctx = useTime();
+  const p = clamp(ctx.seconds, 0, 1);
+  return <Transition code={wipe} uniforms={{ softness: 0.1 }} progress={p}
+    style={{width:640,height:360}}>
     <View style={{backgroundColor:"#2140ff"}} />
     <View style={{backgroundColor:"#ff4a24"}} />
   </Transition>;

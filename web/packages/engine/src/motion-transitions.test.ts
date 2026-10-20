@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { CanvasKit } from "canvaskit-wasm";
 import { initSync, ProductEngine } from "../generated/web/valle_engine.js";
-import { CanvasKitExecutor } from "./executor/canvaskit/executor.ts";
+import { decodePackedAbi, RESOURCE_REQUESTS_ABI } from "./abi/packed.ts";
+import { CanvasKitExecutor, type CanvasKitExternalObject } from "./executor/canvaskit/executor.ts";
 import { transitionLabels } from "../../../apps/studio/src/timeline-edit.ts";
 
 const root = resolve(import.meta.dir, "../../../../");
@@ -12,7 +13,7 @@ const cli = process.env.VALLE_TEST_CLI ?? join(root, "target/debug/valle");
 const { default: CanvasKitInit } = await import("canvaskit-wasm") as unknown as {
   default: (options: { locateFile(file: string): string }) => Promise<CanvasKit>;
 };
-type Fixture = { name:string; command:"motion"|"timeline"; content:string; width:number; height:number; frames:number[]; reference?:string; referenceOffset?:number; different?:string; probe?:(pixels:Uint8Array,frame:number)=>void };
+type Fixture = { name:string; command:"motion"|"timeline"; content:string; width:number; height:number; frames:number[]; reference?:string; referenceOffset?:number; different?:string; parity?:number; probe?:(pixels:Uint8Array,frame:number)=>void };
 const motion = (body:string) => `export const composition={width:96,height:64,fps:4,duration:1.25};
 export default function T(){const ctx=useTime();return <Scene style={{width:96,height:64,backgroundColor:"#ffffff"}}>${body}</Scene>;}`;
 const view = (color:string,extra="") => `<View style={{width:96,height:64,backgroundColor:"${color}"${extra}}}/>`;
@@ -103,6 +104,19 @@ test("Motion Transition shares all Timeline kernels and preserves nested subtree
     ["owner-clip",transition("fade",view("#000000"),view("#000000"),",borderRadius:32,overflow:'hidden'"),(p)=>{pixel(p,96,48,32,[0,0,0,255]);pixel(p,96,0,0,[255,255,255,255]);}],
   ];
   for(const [name,body,probe] of extra) cases.push({name,command:"motion",content:motion(body),width:96,height:64,frames:[2,0,4,2],probe});
+  // Transition code: a fade written out renders as the built-in one, and a wipe with a uniform over
+  // patterned scenes keeps backend parity and ends on the destination.
+  const code = (source:string,attributes:string,from:string,to:string) =>
+    source+motion(transition("fade",from,to).replace('kind="fade"',attributes));
+  const fadeCode = "const fade=`float4 valle_main(float2 uv){return mix(sample_from(uv),sample_to(uv),progress);}`;\n";
+  const wipeCode = "const wipe=`uniform float softness;\nfloat4 valle_main(float2 uv){float edge=smoothstep(progress-softness,progress+softness,uv.x);return mix(sample_to(uv),sample_from(uv),edge);}`;\n";
+  cases.push({name:"code-fade",command:"motion",content:code(fadeCode,"code={fade}",view("#404040"),view("#c0c0c0")),width:96,height:64,frames:[2,0,4,2],reference:"motion-fade"});
+  // The wipe's smallest edge weights leave its result a hair under opaque over the white scene.
+  // Skia stores F16 by truncation in WASM and to nearest on NEON, one step (2^-11) apart in alpha,
+  // which next to black is 1.6 sRGB levels.
+  cases.push({name:"code-wipe",command:"motion",content:code(wipeCode,"code={wipe} uniforms={{softness:0.1+ctx.seconds/10}}",patternedFrom,patternedTo),width:96,height:64,frames:[2,0,4,2],parity:3,probe:(p,f)=>{
+    if(f===4)pixel(p,96,48,32,[0,255,0,255]);
+  }});
   const filter = process.env.VALLE_TEST_TRANSITION_CASE;
   const selected = new Set(cases.filter(c=>!filter || new RegExp(filter).test(c.name)).map(c=>c.name));
   for (const fixture of [...cases].reverse()) if (selected.has(fixture.name)) {
@@ -135,8 +149,14 @@ test("Motion Transition shares all Timeline kernels and preserves nested subtree
           const ticket=engine.evaluate_prepare_preview(receipt.renderId,BigInt(frame),width,height,false);
           let web:Uint8Array;
           try {
+            // Transition code is the only dependency: its runtime shader, from the package.
+            const objects=new Map<number,CanvasKitExternalObject>();
+            for(const request of await decodePackedAbi(engine.resource_requests(ticket),RESOURCE_REQUESTS_ABI) as any[]) {
+              if(request.expected.kind!=="runtimeShader")throw new Error(`unexpected dependency ${request.expected.kind}`);
+              objects.set(request.handle,{key:request.key,kind:"runtimeShader",bytes:engine.compiled_resource_bytes(receipt.renderId,"runtime-shader",request.key.content,request.key.interpretation.abi_digest)});
+            }
             engine.lower_canvas_kit(ticket,64n*1024n*1024n,128n*1024n*1024n);engine.bind(ticket,1n);
-            await executor.execute(engine.plan_template_bytes(ticket),engine.binding_bytes(ticket),engine.bound_schedule_bytes(ticket),{generation:1n,objects:new Map()},{surface});
+            await executor.execute(engine.plan_template_bytes(ticket),engine.binding_bytes(ticket),engine.bound_schedule_bytes(ticket),{generation:1n,objects},{surface});
             web=Uint8Array.from(surface.getCanvas().readPixels(0,0,info)!);
           } finally {engine.release_ticket(ticket);}
           const output=join(dir,`${fixture.name}-${request}.png`);
@@ -146,7 +166,7 @@ test("Motion Transition shares all Timeline kernels and preserves nested subtree
           const image=ck.MakeImageFromEncoded(await readFile(output))!;
           const native=Uint8Array.from(image.readPixels(0,0,info)!);image.delete();
           const parity=diff(web,native);
-          if(parity>2) {
+          if(parity>(fixture.parity??2)) {
             const points=[];
             for(let i=0;i<web.length;i++) if(Math.abs(web[i]!-native[i]!)>2) points.push({x:Math.floor(i/4)%width,y:Math.floor(i/4/width),c:i%4,web:web[i],native:native[i]});
             console.info(fixture.name,JSON.stringify(points.slice(0,12)),"count",points.length);

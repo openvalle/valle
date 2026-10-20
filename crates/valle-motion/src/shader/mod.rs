@@ -19,7 +19,7 @@ pub use manifest::{
     ALPHA_MODE, AbiChild, AbiUniform, BudgetClass, COLOR_SPACE, DIALECT_ID, InputKind,
     InputSampling, InputWrap, MAX_LAYER_PIXELS, MAX_SAMPLES_PER_PIXEL, MAX_SOURCE_BYTES,
     MAX_TEXTURE_INPUTS, MAX_UNIFORM_SCALARS, OutputContract, ShaderAbi, ShaderInput,
-    ShaderManifest, ShaderUniform, UniformType, UniformValue,
+    ShaderManifest, ShaderRole, ShaderUniform, UniformType, UniformValue,
 };
 pub use package::{
     DiagnosticCode, FrozenShader, ShaderDiagnostic, ShaderPackage, ShaderRuntimeRecord, ShaderUri,

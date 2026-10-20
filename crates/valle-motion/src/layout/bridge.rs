@@ -236,10 +236,19 @@ pub struct ResolvedUnit {
 
 #[derive(Debug, Clone)]
 pub(crate) struct ResolvedTransition {
-    pub kind: valle_draw::transition::TransitionKind,
-    pub params: valle_draw::transition::TransitionValues,
+    pub kernel: ResolvedTransitionKernel,
     pub progress: f32,
     pub children: [String; 2],
+}
+
+/// A built-in kernel with its parameters, or a shader with its frame-evaluated uniforms.
+#[derive(Debug, Clone)]
+pub(crate) enum ResolvedTransitionKernel {
+    Builtin {
+        kind: valle_draw::transition::TransitionKind,
+        params: valle_draw::transition::TransitionValues,
+    },
+    Shader(ResolvedShaderLayer),
 }
 
 /// One exact output-time exposure sample. Its layout and expressions are independent of the

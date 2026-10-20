@@ -525,6 +525,7 @@ fn shader_artifact_metadata_is_checked_against_its_admitted_dependency() {
         ShaderManifest {
             name: "contract-probe".into(),
             entry: "source.vsksl".into(),
+            role: valle_motion::shader::ShaderRole::Layer,
             inputs: vec![valle_motion::shader::ShaderInput {
                 name: "optional".into(),
                 kind: valle_motion::shader::InputKind::Data,

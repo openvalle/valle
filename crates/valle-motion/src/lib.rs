@@ -63,7 +63,7 @@ pub use artifact::{
     Scene3DTransformBinding, SceneArtifact, SceneNode, SemanticMeta, ShaderProgramRef,
     ShaderTextureInput, ShaderUniformBinding, ShaderUniformValue, StyleBinding, StyleValue,
     TIME_SCOPE_CAPABILITY, TRANSFORM_SCALE2D_CAPABILITY, TRANSITION_CAPABILITY, TextSplit,
-    TextValue, UnitStyle, VIDEO_CAPABILITY, VIEWPORT_CAPABILITY, ValidationError,
+    TextValue, TransitionEffect, UnitStyle, VIDEO_CAPABILITY, VIEWPORT_CAPABILITY, ValidationError,
     font_family_alias,
 };
 pub use batch::{BatchFieldProgress, resolve_geometry_batch};
