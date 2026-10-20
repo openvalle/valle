@@ -1,5 +1,5 @@
 export const composition = { width: 640, height: 360, fps: 30, duration: 2 };
-export default function Modifiers(ctx) {
+export default function Modifiers() { const ctx = useTime();
   return (
     <Scene className="relative h-full w-full" style={{ backgroundColor: "#101010" }}>
       <Path key="round" d={roundCorners(path("M 40 40 L 240 40 L 240 200 L 40 200 Z"), 36)} fill="#8b7bff" />

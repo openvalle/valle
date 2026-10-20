@@ -13,7 +13,9 @@ const BODY: &str = r##"<View key="bar" className="absolute" style={{left:ctx.hos
     width:ctx.host.duration*20,height:20,backgroundColor:"white",opacity:ctx.host.progress}} />"##;
 
 fn source(body: &str) -> String {
-    format!("export default function Main(ctx) {{ return <Scene>{body}</Scene>; }}")
+    format!(
+        "export default function Main() {{ const ctx = useTime(); return <Scene>{body}</Scene>; }}"
+    )
 }
 
 #[test]

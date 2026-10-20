@@ -17,7 +17,7 @@ fn diagnostics_of(source: &str) -> Vec<String> {
 }
 
 const SPRING: &str = r##"
-export default function P(ctx) {
+export default function P() { const ctx = useTime();
   const enter = spring({
     elapsedFrames: ctx.localFrame,
     fps: ctx.fps,
@@ -64,7 +64,7 @@ fn spring_value(source: &str, fps_num: u32, duration_frames: u32, frame: u32) ->
 #[test]
 fn a_spring_with_a_constant_time_input_is_never_folded_away() {
     const CONSTANT_TIME: &str = r##"
-export default function P(ctx) {
+export default function P() { const ctx = useTime();
   return (<Scene className="h-full w-full">
     <View key="a" style={{ position: "absolute", left: 0, top: 0, height: 10,
                            width: spring({ elapsedFrames: 10, fps: ctx.fps, preset: "gentle" }) }} />
@@ -130,7 +130,7 @@ fn the_spring_keeps_converging_after_its_authored_window_closes() {
 #[test]
 fn the_spring_sits_at_its_start_value_before_its_authored_window_begins() {
     let source = r##"
-export default function P(ctx) {
+export default function P() { const ctx = useTime();
   const out = spring({ elapsedFrames: ctx.localFrame - 30, fps: ctx.fps, preset: "gentle" });
   return (<Scene className="h-full w-full">
     <View key="a" style={{ position: "absolute", left: 0, top: 0, width: 10, height: 10, opacity: out }} />
@@ -153,7 +153,7 @@ export default function P(ctx) {
 fn a_preset_and_bare_parameters_together_are_rejected_at_compile_time() {
     let messages = diagnostics_of(
         r##"
-export default function P(ctx) {
+export default function P() { const ctx = useTime();
   const e = spring({ elapsedFrames: ctx.localFrame, fps: ctx.fps, preset: "gentle", stiffness: 200 });
   return (<Scene className="h-full w-full">
     <View key="a" style={{ position: "absolute", left: 0, top: 0, width: 10, height: 10, opacity: e }} />
@@ -173,7 +173,7 @@ export default function P(ctx) {
 fn an_unknown_preset_lists_the_ones_that_exist() {
     let messages = diagnostics_of(
         r##"
-export default function P(ctx) {
+export default function P() { const ctx = useTime();
   const e = spring({ elapsedFrames: ctx.localFrame, fps: ctx.fps, preset: "springy" });
   return (<Scene className="h-full w-full">
     <View key="a" style={{ position: "absolute", left: 0, top: 0, width: 10, height: 10, opacity: e }} />
@@ -196,7 +196,7 @@ export default function P(ctx) {
 fn a_hand_written_frame_rate_is_rejected() {
     let messages = diagnostics_of(
         r##"
-export default function P(ctx) {
+export default function P() { const ctx = useTime();
   const e = spring({ elapsedFrames: ctx.localFrame, fps: 60, preset: "gentle" });
   return (<Scene className="h-full w-full">
     <View key="a" style={{ position: "absolute", left: 0, top: 0, width: 10, height: 10, opacity: e }} />
@@ -207,7 +207,7 @@ export default function P(ctx) {
     assert!(
         messages
             .iter()
-            .any(|message| message.contains("exactly `ctx.fps`")),
+            .any(|message| message.contains("must be `ctx.fps`")),
         "got {messages:#?}"
     );
 }
@@ -217,7 +217,7 @@ export default function P(ctx) {
 fn frame_varying_physical_parameters_are_rejected() {
     let messages = diagnostics_of(
         r##"
-export default function P(ctx) {
+export default function P() { const ctx = useTime();
   const e = spring({ elapsedFrames: ctx.localFrame, fps: ctx.fps, stiffness: ctx.progress * 100 });
   return (<Scene className="h-full w-full">
     <View key="a" style={{ position: "absolute", left: 0, top: 0, width: 10, height: 10, opacity: e }} />
@@ -240,7 +240,7 @@ export default function P(ctx) {
 fn keyframes_are_multi_stop_interpolate_with_per_segment_easing() {
     let compiled = compile_motion(
         r##"
-export default function P(ctx) {
+export default function P() { const ctx = useTime();
   const t = ctx.progress;
   return (<Scene className="h-full w-full">
     <View key="a" style={{ position: "absolute", left: 0, top: 0, width: 10, height: 10,
@@ -273,7 +273,7 @@ fn staggered_sequences_are_computed_at_compile_time() {
         r##"
 const CARDS = [0, 1, 2, 3];
 const stagger = (i, each, overlap) => i * (each - overlap);
-export default function P(ctx) {
+export default function P() { const ctx = useTime();
   const t = ctx.progress;
   return (<Scene className="h-full w-full">
     {CARDS.map((c, i) => (

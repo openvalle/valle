@@ -24,7 +24,7 @@ import { accent } from "./theme.motion";
 
 export const controls = ({});
 
-export default function ModuleDashboard(ctx, props) {
+export default function ModuleDashboard(props) { const ctx = useTime();
   return <Scene key="root">
     <Panel key="panel" label="Linked" color={accent} />
   </Scene>;
@@ -32,7 +32,7 @@ export default function ModuleDashboard(ctx, props) {
 "#;
 
 const CARD: &str = r#"
-export function Card(ctx, props) {
+export function Card(props) { const ctx = useTime();
   return <View key="card" style={{ backgroundColor: props.color }}>
     <Text key="label">{props.label}</Text>
   </View>;
@@ -56,7 +56,7 @@ export function paint() { return `${tone}`; }
 export const composition = { width: 1920, height: 1080, fps: 30, duration: 5 };
 import { timing, presence, paint } from './helpers';
 const span = timing(0.25);
-export default function Scene(ctx) {
+export default function Scene() { const ctx = useTime();
   return <View style={{ width: span.close, opacity: presence(ctx.seconds), color: paint() }} />;
 }
 "#;
@@ -283,17 +283,17 @@ export const composition = { width: 1920, height: 1080, fps: 30, duration: 5 };
 import { Left } from "./left";
 import { Right } from "./right";
 
-export default function Twins(ctx) {
+export default function Twins() { const ctx = useTime();
   return <Scene key="root"><Left key="left" /><Right key="right" /></Scene>;
 }
 "#;
     let left = r#"
 const label = "LEFT";
-export function Left(ctx) { return <Text key="text">{label}</Text>; }
+export function Left() { const ctx = useTime(); return <Text key="text">{label}</Text>; }
 "#;
     let right = r#"
 const label = "RIGHT";
-export function Right(ctx) { return <Text key="text">{label}</Text>; }
+export function Right() { const ctx = useTime(); return <Text key="text">{label}</Text>; }
 "#;
     let compiled = compile_motion_modules(&graph(
         "entry.motion.tsx",
@@ -485,11 +485,11 @@ fn missing_exports_report_the_complete_import_chain_at_the_import_site() {
 export const composition = { width: 1920, height: 1080, fps: 30, duration: 5 };
 import { Mid } from "./mid";
 
-export default function Broken(ctx) { return <Mid />; }
+export default function Broken() { const ctx = useTime(); return <Mid />; }
 "#;
     let mid = r#"
 import { Missing } from "./leaf";
-export function Mid(ctx) { return <Missing />; }
+export function Mid() { const ctx = useTime(); return <Missing />; }
 "#;
     let leaf = "export const present = 1;";
     let diagnostics = compile_motion_modules(&graph(
@@ -509,7 +509,7 @@ fn cycles_and_root_escape_are_rejected_before_lowering() {
         &[
             (
                 "a.tsx",
-                "import { b } from './b'; export default function A(ctx) { return <View />; }",
+                "import { b } from './b'; export default function A() { const ctx = useTime(); return <View />; }",
             ),
             ("b.ts", "import A from './a'; export const b = 1;"),
         ],
@@ -521,7 +521,7 @@ fn cycles_and_root_escape_are_rejected_before_lowering() {
         "entry.tsx",
         &[(
             "entry.tsx",
-            "import { x } from '../outside'; export default function Entry(ctx) { return <View />; }",
+            "import { x } from '../outside'; export default function Entry() { const ctx = useTime(); return <View />; }",
         )],
     ))
     .expect_err("root escape must fail");
@@ -535,7 +535,7 @@ fn cycles_and_root_escape_are_rejected_before_lowering() {
         "entry.tsx",
         &[(
             "entry.tsx",
-            "import { x } from 'some-package'; export default function Entry(ctx) { return <View />; }",
+            "import { x } from 'some-package'; export default function Entry() { const ctx = useTime(); return <View />; }",
         )],
     ))
     .expect_err("npm resolution must fail");
@@ -546,7 +546,7 @@ fn cycles_and_root_escape_are_rejected_before_lowering() {
         &[
             (
                 "entry.tsx",
-                "const later = import('./other'); export default function Entry(ctx) { return <View />; }",
+                "const later = import('./other'); export default function Entry() { const ctx = useTime(); return <View />; }",
             ),
             ("other.ts", "export const value = 1;"),
         ],
@@ -561,7 +561,7 @@ fn reexports_resolve_without_emitting_runtime_module_objects() {
 export const composition = { width: 1920, height: 1080, fps: 30, duration: 5 };
 import { Card } from "./public";
 
-export default function Reexport(ctx) { return <Scene key="root"><Card key="card" label="ok" color="#fff" /></Scene>; }
+export default function Reexport() { const ctx = useTime(); return <Scene key="root"><Card key="card" label="ok" color="#fff" /></Scene>; }
 "##;
     let public = "export { Card } from './components/card.motion';";
     let compiled = compile_motion_modules(&graph(
@@ -589,13 +589,13 @@ export const composition = { width: 1920, height: 1080, fps: 30, duration: 5 };
 import { TypedCard } from "./card";
 import type { Theme } from "./types";
 import { accent } from "./theme";
-export default function Typed(ctx: unknown) {
+export default function Typed() { const ctx = useTime();
   return <Scene key="root"><TypedCard key="card" color={accent} /></Scene>;
 }
 "#;
     let card = r#"
 import type { Theme } from "./types";
-export function TypedCard(ctx: unknown, props: { color: string }) {
+export function TypedCard(props: { color: string }) { const ctx = useTime();
   return <View key="box" style={{ backgroundColor: props.color }} />;
 }
 "#;

@@ -1,4 +1,4 @@
-export function MapPanel(ctx, { regions, x, y, width, height }) {
+export function MapPanel({ regions, x, y, width, height }) { const ctx = useTime();
   const theme = useTheme();
   const { panel, accent, ink, hairline, region: regionFill } = theme.colors;
   const geometries = geoPath({

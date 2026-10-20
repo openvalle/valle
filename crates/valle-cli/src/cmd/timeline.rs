@@ -1053,7 +1053,7 @@ mod preview_tests {
             .unwrap();
         std::fs::write(dir.path().join("caption.motion.tsx"), r##"export const composition={width:160,height:48,fps:4,duration:1};
 export const role=captionPresenter({intro:seconds(0.25),outro:seconds(0.25)});
-export default function Caption(ctx,props,data){return <Scene><Text style={{fontFamily:data.style.font,fontSize:data.style.fontSize,color:ctx.host.seconds<1?"#facc15":"white"}}>{data.text}</Text></Scene>; }"##).unwrap();
+export default function Caption(props){ const ctx = useTime(); const data = useData();return <Scene><Text style={{fontFamily:data.style.font,fontSize:data.style.fontSize,color:ctx.host.seconds<1?"#facc15":"white"}}>{data.text}</Text></Scene>; }"##).unwrap();
         let clips: Vec<_> = (0..300).map(|i| serde_json::json!({"start":f64::from(i*2)+0.125,"duration":2,"runs":[{"text":format!("Word {}",i%100),"start":0,"end":1.75}]})).collect();
         let author = serde_json::json!({"canvas":{"width":160,"height":48,"fps":4},"resources":{"caption":"caption.motion.tsx","font":font},"tracks":{"caption":[{"presenter":{"component":"caption"},"style":{"font":"font","fontSize":20},"clips":clips}]}});
         let start = std::time::Instant::now();

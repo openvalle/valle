@@ -1,6 +1,6 @@
 export const composition = { width: 640, height: 360, fps: 30, duration: 2 };
 
-export default function ShutterSampling(ctx) {
+export default function ShutterSampling() { const ctx = useTime();
   return (
     <Scene className="relative h-full w-full" style={{ backgroundColor: "#101010" }}>
       <Shutter key="shutter" samples={8} angle={180}>

@@ -4,7 +4,7 @@ const DOTS = Array.from({ length: 64 }, (_, i) => ({
 }));
 const MARK = path("M 0 0 L 20 0 L 20 4 Z");
 
-export default function Nested(ctx) {
+export default function Nested() { const ctx = useTime();
   return <Scene className="relative h-full w-full" style={{ backgroundColor: "#101010" }}>
     <Path key="marker" d={MARK} fill="#ff0000"
       style={{ opacity: bounds("d20").width / 4 }} />

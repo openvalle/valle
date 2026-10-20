@@ -51,7 +51,7 @@ const CY = G.centers.map((c) => c[1] + OFFSET_Y);
 const BEND = CANVAS_H * 0.055 * 0.6;
 const LABEL_FONT = CANVAS_H * 0.024;
 
-export default function ArchitectureDiagram(ctx) {
+export default function ArchitectureDiagram() { const ctx = useTime();
   const sx = ctx.viewport.width / CANVAS_W;
   const sy = ctx.viewport.height / CANVAS_H;
 

@@ -103,7 +103,7 @@ fn auto_blur_tracks_motion_and_stops_when_stationary() {
 fn auto_blur_includes_layout_and_ancestor_motion() {
     let source = r##"
 export const composition = { width: 640, height: 360, fps: 30, duration: 2 };
-export default function Flow(ctx) {
+export default function Flow() { const ctx = useTime();
   return <Scene className="flex" style={{ width:640,height:360,backgroundColor:"#101010" }}>
     <View style={{ width:100+ctx.seconds*60,height:40,backgroundColor:"#101010" }}/>
     <View key="follower" style={{ width:40,height:40,backgroundColor:"#ffffff",motionBlur:"auto" }}/>
@@ -116,7 +116,7 @@ export default function Flow(ctx) {
 
     let ancestor = r##"
 export const composition = { width: 640, height: 360, fps: 30, duration: 2 };
-export default function ParentMotion(ctx) {
+export default function ParentMotion() { const ctx = useTime();
   return <Scene style={{width:640,height:360,backgroundColor:"#101010"}}>
     <View key="parent" className="absolute"
       style={{left:0,top:80,width:40,height:40,translate:point(ctx.seconds*60,0)}}>
@@ -133,7 +133,7 @@ export default function ParentMotion(ctx) {
 fn auto_blur_suppresses_a_position_cut() {
     let source = r##"
 export const composition = { width: 640, height: 360, fps: 30, duration: 2 };
-export default function Cut(ctx) {
+export default function Cut() { const ctx = useTime();
   return <Scene style={{width:640,height:360,backgroundColor:"#101010"}}>
     <View key="bar" className="absolute" style={{left:40,top:120,width:40,height:120,
       backgroundColor:"#ffffff",translate:point(ctx.seconds < 0.5 ? 0 : 100,0),motionBlur:"auto"}}/>
@@ -147,7 +147,7 @@ export default function Cut(ctx) {
 fn affine_translation_uses_screen_space_chain_rule_without_neighbor_layouts() {
     let source = r##"
 export const composition = { width: 640, height: 360, fps: 30, duration: 2 };
-export default function Affine(ctx) {
+export default function Affine() { const ctx = useTime();
   return <Scene style={{width:640,height:360}}>
     <View key="parent" className="absolute" style={{
       left:100,top:100,width:40,height:40,rotate:"90deg",

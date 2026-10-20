@@ -80,24 +80,14 @@ impl<'s> Compiler<'s> {
 
     /// Bind a prepare-time constant and invalidate any dynamic binding with the same name.
     pub(super) fn bind_static(&mut self, name: String, value: serde_json::Value) {
-        self.bindings.objects.remove(&name);
-        self.bindings.instance_objects.remove(&name);
-        self.bindings.scalars.remove(&name);
-        self.bindings.paints.remove(&name);
-        self.bindings.tuples.remove(&name);
-        self.bindings.children.remove(&name);
+        self.bindings.unbind(&name);
         self.bindings.statics.insert(name, value);
     }
 
     /// Bind a runtime expression and invalidate static or tuple bindings with the same name.
     /// Otherwise the sandbox could fold a shadowed outer value into a constant.
     pub(super) fn bind_dynamic(&mut self, name: String, expr: ExprId) {
-        self.bindings.objects.remove(&name);
-        self.bindings.instance_objects.remove(&name);
-        self.bindings.paints.remove(&name);
-        self.bindings.statics.remove(&name);
-        self.bindings.tuples.remove(&name);
-        self.bindings.children.remove(&name);
+        self.bindings.unbind(&name);
         self.bindings.scalars.insert(name, expr);
     }
 
@@ -105,22 +95,12 @@ impl<'s> Compiler<'s> {
     /// only exists while lowering author code; every indexed use resolves back to
     /// one scalar ExprId before the SceneArtifact is emitted.
     pub(super) fn bind_dynamic_tuple(&mut self, name: String, values: Vec<ExprId>) {
-        self.bindings.objects.remove(&name);
-        self.bindings.instance_objects.remove(&name);
-        self.bindings.scalars.remove(&name);
-        self.bindings.paints.remove(&name);
-        self.bindings.statics.remove(&name);
-        self.bindings.children.remove(&name);
+        self.bindings.unbind(&name);
         self.bindings.tuples.insert(name, values);
     }
 
     pub(super) fn bind_paint(&mut self, name: String, paint: PaintValue) {
-        self.bindings.objects.remove(&name);
-        self.bindings.instance_objects.remove(&name);
-        self.bindings.scalars.remove(&name);
-        self.bindings.tuples.remove(&name);
-        self.bindings.statics.remove(&name);
-        self.bindings.children.remove(&name);
+        self.bindings.unbind(&name);
         self.bindings.paints.insert(name, paint);
     }
 
@@ -129,12 +109,7 @@ impl<'s> Compiler<'s> {
         name: String,
         fields: BTreeMap<String, (u32, valle_motion::expr::ExprType)>,
     ) {
-        self.bindings.objects.remove(&name);
-        self.bindings.scalars.remove(&name);
-        self.bindings.paints.remove(&name);
-        self.bindings.tuples.remove(&name);
-        self.bindings.statics.remove(&name);
-        self.bindings.children.remove(&name);
+        self.bindings.unbind(&name);
         self.bindings.instance_objects.insert(name, fields);
     }
 
@@ -446,6 +421,11 @@ impl<'s> Compiler<'s> {
         &mut self,
         expression: &Expression<'_>,
     ) -> Option<AuthorValue> {
+        if let Some(path) = self.time_path(expression)
+            && super::time::is_time_object(&path)
+        {
+            return Some(AuthorValue::Time(path));
+        }
         if let Some(paint) = self.bound_paint(expression) {
             return Some(AuthorValue::Paint(paint));
         }
@@ -476,12 +456,7 @@ impl<'s> Compiler<'s> {
 
     /// Bind JSX children in the same namespace as scalar and tuple values.
     pub(super) fn bind_children(&mut self, name: String, children: Vec<PendingNode>) {
-        self.bindings.objects.remove(&name);
-        self.bindings.instance_objects.remove(&name);
-        self.bindings.scalars.remove(&name);
-        self.bindings.paints.remove(&name);
-        self.bindings.tuples.remove(&name);
-        self.bindings.statics.remove(&name);
+        self.bindings.unbind(&name);
         self.bindings.children.insert(name, children);
     }
 
@@ -501,11 +476,13 @@ impl<'s> Compiler<'s> {
             && self.bindings.instance_objects.is_empty()
             && self.bindings.children.is_empty()
             && self.bindings.objects.is_empty()
+            && self.bindings.times.is_empty()
         {
             return false;
         }
         referenced_identifiers(expression).iter().any(|name| {
             self.bindings.scalars.contains_key(name)
+                || self.bindings.times.contains_key(name)
                 || self.bindings.paints.contains_key(name)
                 || self.bindings.tuples.contains_key(name)
                 || self.bindings.instance_objects.contains_key(name)
@@ -559,12 +536,16 @@ impl<'s> Compiler<'s> {
         pattern: &BindingPattern<'_>,
         initializer: &'s Expression<'s>,
     ) {
-        if let Some(span) = reserved_theme_binding(pattern) {
+        if let Some(span) = reserved_intrinsic_binding(pattern) {
             self.illegal(
                 DiagCode::GrammarForbidden,
                 span,
-                "`ThemeProvider` and `useTheme` are reserved compile-time Motion intrinsics and cannot be shadowed",
+                "`ThemeProvider`, `useTheme`, `useTime` and `useData` are reserved Motion intrinsics and cannot be shadowed",
             );
+            return;
+        }
+        if let Some(path) = self.time_path(initializer) {
+            self.bind_time_value(pattern, path, initializer.span());
             return;
         }
         match pattern {
@@ -601,11 +582,7 @@ impl<'s> Compiler<'s> {
                         self.bind_paint(name, paint);
                     }
                 } else if let Some(object) = object {
-                    self.bindings.scalars.remove(&name);
-                    self.bindings.paints.remove(&name);
-                    self.bindings.tuples.remove(&name);
-                    self.bindings.statics.remove(&name);
-                    self.bindings.children.remove(&name);
+                    self.bindings.unbind(&name);
                     self.bindings.objects.insert(name, object);
                 } else if self.is_dynamic_tuple_expression(initializer) {
                     if let Some(values) =
@@ -693,6 +670,7 @@ impl<'s> Compiler<'s> {
                 Some(AuthorValue::Children(children)) => {
                     self.bind_children(local_name, children);
                 }
+                Some(AuthorValue::Time(path)) => self.bind_time(local_name, path),
                 None if self.bindings.component_props.is_none() => {
                     if !self.controls.props.contains_key(&prop_name) {
                         self.illegal(
@@ -773,13 +751,7 @@ impl<'s> Compiler<'s> {
         };
         let excluded = self.destructured_names(pattern);
         self.bindings.local_functions.remove(&name);
-        self.bindings.scalars.remove(&name);
-        self.bindings.paints.remove(&name);
-        self.bindings.tuples.remove(&name);
-        self.bindings.instance_objects.remove(&name);
-        self.bindings.statics.remove(&name);
-        self.bindings.objects.remove(&name);
-        self.bindings.children.remove(&name);
+        self.bindings.unbind(&name);
         self.bindings.prop_rests.insert(name, excluded);
     }
 
@@ -1178,6 +1150,7 @@ impl<'s> Compiler<'s> {
                     self.bind_instance_object(local_name, fields);
                 }
                 Some(AuthorValue::Children(_)) => unreachable!("helper arguments are values"),
+                Some(AuthorValue::Time(path)) => self.bind_time(local_name, path),
                 None => self.illegal(
                     DiagCode::GrammarForbidden,
                     parameter.span(),
@@ -2552,12 +2525,7 @@ impl<'s> Compiler<'s> {
             return None;
         }
         let params = function.params();
-        if params.rest.is_some() || params.items.len() > 2 {
-            self.illegal(
-                DiagCode::ModuleShape,
-                params.span(),
-                format!("component `{name}` must use `(ctx, props)` parameters"),
-            );
+        if !self.validate_component_params(params) {
             return None;
         }
 
@@ -2568,24 +2536,9 @@ impl<'s> Compiler<'s> {
         self.component_stack.push(name.to_string());
 
         if let Some(first) = params.items.first()
-            && first.pattern.get_identifier_name().map(|id| id.as_str()) != Some("ctx")
+            && let BindingPattern::ObjectPattern(pattern) = &first.pattern
         {
-            self.illegal(
-                DiagCode::ModuleShape,
-                first.span(),
-                "component first parameter must be `ctx`",
-            );
-        }
-        if let Some(second) = params.items.get(1) {
-            match &second.pattern {
-                BindingPattern::BindingIdentifier(identifier) if identifier.name == "props" => {}
-                BindingPattern::ObjectPattern(pattern) => self.bind_props_pattern(pattern),
-                _ => self.illegal(
-                    DiagCode::ModuleShape,
-                    second.span(),
-                    "component second parameter must be `props` or an object destructure",
-                ),
-            }
+            self.bind_props_pattern(pattern);
         }
         let result = if let Some(expression) = function.expression_body() {
             self.compile_root_expression(expression)
@@ -2706,6 +2659,7 @@ impl<'s> Compiler<'s> {
                     self.bind_instance_object(local_name, fields);
                 }
                 Some(AuthorValue::Children(_)) => unreachable!("helper arguments are values"),
+                Some(AuthorValue::Time(path)) => self.bind_time(local_name, path),
                 None => self.illegal(
                     DiagCode::GrammarForbidden,
                     parameter.span(),

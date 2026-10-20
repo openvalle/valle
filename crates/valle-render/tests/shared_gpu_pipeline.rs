@@ -32,7 +32,7 @@ fn project() -> NativeProject {
     let artifact = Arc::new(valle_compiler::motion::compile_motion(r##"
 export const composition = { width: 96, height: 64, fps: 30, duration: 2 };
 const BALL = lathe(path("M 0 -1 C 0.5523 -1 1 -0.5523 1 0 C 1 0.5523 0.5523 1 0 1"), { segments: 16 });
-export default function Animated(ctx) {
+export default function Animated() { const ctx = useTime();
   return <Scene style={{backgroundColor: "#102030"}}>
     <Scene3D key="depth" style={{width:96,height:64}}
       camera={{position:[0,0,5],target:[0,0,0],fov:45,depthOfField:{focusDistance:5,maxBlurRadius:4}}}>

@@ -36,7 +36,7 @@ fn emit_source(source: &str) -> EmitReport {
 fn scene(body: &str) -> String {
     format!(
         r##"
-export default function Card(ctx) {{
+export default function Card() {{ const ctx = useTime();
   return (
     <Scene style={{{{ width: 320, height: 180, backgroundColor: "#111111" }}}}>
       {body}
@@ -219,7 +219,7 @@ fn multiline_code_preserves_newline_after_styled_spans_and_image() {
     let source = scene(
         r##"
 <Text key="code" className="absolute whitespace-pre-wrap tabular-nums line-clamp-12 overflow-hidden text-white" style={{ left: 34, top: 88, width: 970, height: 430, fontSize: 26, lineHeight: "38px", tabSize: 2, textOverflow: "ellipsis" }}>
-{"export default function Film(ctx) {\n"}
+{"export default function Film() { const ctx = useTime();\n"}
 <Span style={{ color: "#67e8f9" }}>{"  const p = ctx.progress;\n"}</Span>
 {"  return (\n    <Scene className=\"h-full w-full\">\n"}
 <Span style={{ color: "#f9a8d4" }}>{"      <GeometryBatch progress={p} /> "}</Span>

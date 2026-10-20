@@ -10,7 +10,7 @@ use valle_timeline::FrameRate;
 
 fn scene(attributes: &str) -> String {
     format!(
-        r#"export default function Demo(ctx) {{ return <Scene style={{{{width:320,height:180}}}}>
+        r#"export default function Demo() {{ const ctx = useTime(); return <Scene style={{{{width:320,height:180}}}}>
         <View key="grid" {attributes}><View key="first" style={{{{height:20,backgroundColor:"red"}}}} />
         <View key="second" style={{{{height:20,backgroundColor:"blue"}}}} /></View></Scene>; }}"#
     )

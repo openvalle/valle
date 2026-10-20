@@ -1,6 +1,6 @@
 export const composition = { width: 640, height: 360, fps: 30, duration: 2 };
 
-export default function FloatGradient(ctx) {
+export default function FloatGradient() { const ctx = useTime();
   const color = interpolate(ctx.progress, [0, 1], ["#2140ff", "#ffd000"],
     { colorSpace: "oklch" });
   return (

@@ -1782,7 +1782,7 @@ mod tests {
         use valle_timeline::FrameRate;
 
         let source = r##"
-export default function Scene(ctx) {
+export default function Scene() { const ctx = useTime();
   return <Scene className="relative" style={{width:100,height:40}}>
     <View key="before" className="absolute" style={{left:0,top:0,width:10,height:10,backgroundColor:"#ff0000"}} />
     <View key="reader" className="absolute" style={{left:20,top:0,width:20+ctx.localFrame*5,height:10,backdropFilter:"blur(2px)",backgroundColor:"#ffffff80"}} />
@@ -1918,7 +1918,7 @@ export default function Scene(ctx) {
     fn motion_backdrop_displacement_lays_out_into_a_backdrop_read() {
         let program = motion_program(
             r##"
-export default function Scene(ctx) {
+export default function Scene() { const ctx = useTime();
   return <Scene className="relative" style={{width:100,height:40}}>
     <View key="lens" className="absolute" style={{left:50,top:0,width:40,height:40,
       backdropDisplacement:displacement(17,point(0.01,0.02),4)}} />
@@ -1942,7 +1942,7 @@ export default function Scene(ctx) {
     fn motion_backdrop_read_is_clipped_to_corner_radii_and_nothing_else() {
         let program = motion_program(
             r##"
-export default function Scene(ctx) {
+export default function Scene() { const ctx = useTime();
   return <Scene className="relative" style={{width:100,height:40}}>
     <View key="round" className="absolute" style={{left:0,top:0,width:40,height:40,borderRadius:20,
       boxShadow:"0 0 6px #000000",backdropFilter:"blur(2px)",backgroundColor:"#ffffff80"}} />

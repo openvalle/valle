@@ -77,8 +77,8 @@ fn component_card_map_shares_one_template_and_preserves_component_keys() {
     assert!(expanded.instance_groups.is_empty());
     let module_compact = compile_card_module(&source);
     assert_eq!(module_compact.instance_groups.len(), 1);
-    let card_start = source.find("function Card(ctx, { item })").unwrap();
-    let entry_start = source.find("export default function Cards(ctx)").unwrap();
+    let card_start = source.find("function Card({ item })").unwrap();
+    let entry_start = source.find("export default function Cards()").unwrap();
     let entry = format!(
         "{}import {{ Card }} from \"./card.motion\";\n{}",
         &source[..card_start],
@@ -492,8 +492,8 @@ fn component_instance_item_supports_props_paths_and_local_destructuring() {
     let source = component_card_rows(4);
     let props_path = source
         .replace(
-            "function Card(ctx, { item }) {",
-            "function Card(ctx, props) {",
+            "function Card({ item }) { const ctx = useTime();",
+            "function Card(props) { const ctx = useTime();",
         )
         .replace(
             "const height = item.height;",
@@ -555,10 +555,10 @@ fn component_instance_item_supports_props_paths_and_local_destructuring() {
 #[test]
 fn nested_component_instance_forwards_item_and_keeps_nested_keys() {
     let source = component_card_rows(4)
-        .replace("function Card(ctx, { item }) {", "function CardBody(ctx, { item }) {")
+        .replace("function Card({ item }) { const ctx = useTime();", "function CardBody({ item }) { const ctx = useTime();")
         .replace(
-            "export default function Cards(ctx) {",
-            "function Card(ctx, { item }) { return <CardBody key=\"inner\" item={item} />; }\n\nexport default function Cards(ctx) {",
+            "export default function Cards() {",
+            "function Card({ item }) { return <CardBody key=\"inner\" item={item} />; }\n\nexport default function Cards() {",
         );
     let compact = compile_motion(&source).unwrap().artifact;
     let expanded = compile_motion(&source.replace("key={card.id}", "key={`${card.id}`}"))

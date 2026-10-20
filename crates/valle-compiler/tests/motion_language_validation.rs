@@ -12,11 +12,22 @@ fn diagnostics_of(source: &str) -> Vec<String> {
         .collect()
 }
 
+/// Assert that one diagnostic of `source` contains every needle.
+fn expect_message(source: &str, needles: &[&str]) {
+    let messages = diagnostics_of(source);
+    assert!(
+        messages
+            .iter()
+            .any(|message| needles.iter().all(|needle| message.contains(needle))),
+        "{needles:?} in {messages:#?}"
+    );
+}
+
 #[test]
 fn exactly_specified_math_members_work_at_frame_time_without_new_ir() {
     let compiled = compile_motion(
         r##"
-export default function P(ctx) {
+export default function P() { const ctx = useTime();
   const t = ctx.progress;
   return (<Scene className="h-full w-full">
     <View key="a" style={{ position: "absolute", left: 0, top: 0, width: 10, height: 10,
@@ -50,7 +61,7 @@ export default function P(ctx) {
 fn approximated_math_members_stay_rejected() {
     let messages = diagnostics_of(
         r##"
-export default function P(ctx) {
+export default function P() { const ctx = useTime();
   const t = ctx.progress;
   return (<Scene className="h-full w-full">
     <View key="a" style={{ position: "absolute", left: 0, top: 0, width: 10, height: 10,
@@ -71,7 +82,7 @@ export default function P(ctx) {
 fn comparing_a_length_against_a_number_names_the_call_the_author_wrote() {
     let messages = diagnostics_of(
         r##"
-export default function P(ctx) {
+export default function P() { const ctx = useTime();
   const t = ctx.progress;
   return (<Scene className="h-full w-full">
     <View key="a" style={{ position: "absolute", left: Math.min(t, "10px"), top: 0, width: 10, height: 10 }} />
@@ -92,7 +103,7 @@ fn exponentiation_assignment_points_at_the_plain_operator() {
     let messages = diagnostics_of(
         r##"
 function grow(x) { let y = x; y **= 2; return y; }
-export default function P(ctx) {
+export default function P() { const ctx = useTime();
   return (<Scene className="h-full w-full">
     <View key="a" style={{ position: "absolute", left: grow(3), top: 0, width: 10, height: 10 }} />
   </Scene>);
@@ -111,7 +122,7 @@ export default function P(ctx) {
 fn a_literal_double_star_in_authored_text_is_not_mistaken_for_the_operator() {
     compile_motion(
         r##"
-export default function P(ctx) {
+export default function P() { const ctx = useTime();
   return (<Scene className="h-full w-full">
     <Text key="t" style={{ position: "absolute", left: 0, top: 0, fontSize: 20, color: "#fff" }}>a ** b</Text>
   </Scene>);
@@ -125,7 +136,7 @@ export default function P(ctx) {
 fn branching_on_a_context_value_points_at_the_two_shapes_that_keep_one_topology() {
     let messages = diagnostics_of(
         r##"
-export default function P(ctx) {
+export default function P() { const ctx = useTime();
   const t = ctx.progress;
   if (t > 0.5) { return (<Scene className="h-full w-full" />); }
   return (<Scene className="h-full w-full" />);
@@ -144,7 +155,7 @@ export default function P(ctx) {
 fn a_loop_points_at_the_prepare_time_map_that_replaces_it() {
     let messages = diagnostics_of(
         r##"
-export default function P(ctx) {
+export default function P() { const ctx = useTime();
   for (let i = 0; i < 3; i++) {}
   return (<Scene className="h-full w-full" />);
 }
@@ -163,7 +174,7 @@ fn reversed_clamp_bounds_are_rejected_on_every_path() {
     // Constant arguments inside a component.
     let diagnostics = diagnostics_of(
         r##"
-export default function P(ctx) {
+export default function P() { const ctx = useTime();
   return (<Scene className="h-full w-full">
     <View key="a" style={{ position: "absolute", left: 0, top: 0, height: 10,
                            width: clamp(5, 10, 3) }} />
@@ -182,7 +193,7 @@ export default function P(ctx) {
     let diagnostics = diagnostics_of(
         r##"
 const x = clamp(5, 10, 3);
-export default function P(ctx) {
+export default function P() { const ctx = useTime();
   return (<Scene className="h-full w-full">
     <View key="a" style={{ position: "absolute", left: 0, top: 0, height: 10, width: x }} />
   </Scene>);
@@ -199,7 +210,7 @@ export default function P(ctx) {
     // Frame-time value with static bounds.
     let diagnostics = diagnostics_of(
         r##"
-export default function P(ctx) {
+export default function P() { const ctx = useTime();
   return (<Scene className="h-full w-full">
     <View key="a" style={{ position: "absolute", left: 0, top: 0, height: 10,
                            width: clamp(ctx.progress, 10, 3) }} />
@@ -220,7 +231,7 @@ fn well_formed_clamp_still_works_on_both_paths() {
     let folded = compile_motion(
         r##"
 const x = clamp(5, 0, 3);
-export default function P(ctx) {
+export default function P() { const ctx = useTime();
   return (<Scene className="h-full w-full">
     <View key="a" style={{ position: "absolute", left: 0, top: 0, height: 10, width: x,
                            opacity: clamp(ctx.progress, 0, 1) }} />
@@ -246,20 +257,12 @@ export default function P(ctx) {
 
 #[test]
 fn kept_restrictions_name_what_to_write_instead() {
-    let expect = |source: &str, needles: &[&str]| {
-        let messages = diagnostics_of(source);
-        assert!(
-            messages
-                .iter()
-                .any(|message| needles.iter().all(|needle| message.contains(needle))),
-            "{needles:?} in {messages:#?}"
-        );
-    };
+    let expect = expect_message;
     let scene =
         r#"<Scene><View key="a" style={{ width: 10, height: 10, opacity: VALUE }} /></Scene>"#;
     let component = |value: &str| {
         format!(
-            "export default function P(ctx) {{ return {}; }}",
+            "export default function P() {{ const ctx = useTime(); return {}; }}",
             scene.replace("VALUE", value)
         )
     };
@@ -303,4 +306,66 @@ fn kept_restrictions_name_what_to_write_instead() {
         ),
         &["number()", "select()"],
     );
+}
+
+#[test]
+fn components_take_props_and_read_the_time_and_data_through_hooks() {
+    let scene = r#"<Scene><View key="a" style={{ width: 10, height: 10 }} /></Scene>"#;
+    let root = |params: &str| format!("export default function P({params}) {{ return {scene}; }}");
+    expect_message(&root("ctx"), &["takes `(props)`", "const ctx = useTime()"]);
+    expect_message(
+        &root("props, data"),
+        &["takes `(props)`", "const data = useData()"],
+    );
+    expect_message(&root("options"), &["name the component parameter `props`"]);
+    expect_message(
+        "function Card(ctx, props) { return <View key=\"c\" />; }\n\
+         export default function P() { return <Scene><Card key=\"c\" /></Scene>; }",
+        &["takes `(props)`"],
+    );
+    let body = |statement: &str, opacity: &str| {
+        format!(
+            "export default function P() {{ {statement} return <Scene><View key=\"a\" \
+             style={{{{ width: 10, height: 10, opacity: {opacity} }}}} /></Scene>; }}"
+        )
+    };
+    expect_message(
+        &body("", "ctx.progress"),
+        &["`ctx` is not defined", "const ctx = useTime()"],
+    );
+    expect_message(&body("", "useTime()"), &["holds several numbers"]);
+    expect_message(
+        &body("const ctx = useTime();", "ctx.nope"),
+        &["is not a number in `useTime()`"],
+    );
+    expect_message(
+        &body("const t = useTime(1);", "1"),
+        &["useTime() takes no arguments"],
+    );
+    expect_message(
+        &format!("const NOW = useTime();\n{}", root("")),
+        &["inside a component or a helper"],
+    );
+    expect_message(
+        &format!("const useTime = () => 1;\n{}", root("")),
+        &["reserved Motion intrinsics"],
+    );
+    expect_message(
+        &body("const [count] = useState(0);", "1"),
+        &["`useState` is not available", "pure function of time"],
+    );
+    expect_message(
+        &body("const frame = useCurrentFrame();", "1"),
+        &["useTime().localFrame"],
+    );
+    expect_message(
+        &body("const config = useVideoConfig();", "1"),
+        &["composition", "durationFrames"],
+    );
+    // A module's own function of that name is not React's.
+    compile_motion(&format!(
+        "const useMemo = (make) => make();\n{}",
+        body("const half = useMemo(() => 0.5);", "half")
+    ))
+    .unwrap_or_else(|diagnostics| panic!("{diagnostics:#?}"));
 }

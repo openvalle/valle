@@ -1,6 +1,6 @@
 export const composition = { width: 640, height: 360, fps: 30, duration: 2 };
 const GLYPH = textOutline("V", { fontSize: 220, fontWeight: 800, align: "center" });
-export default function Extruded(ctx) {
+export default function Extruded() { const ctx = useTime();
   return (
     <Scene className="relative h-full w-full" style={{ backgroundColor: "#101010" }}>
       <Scene3D key="s" style={{ position: "absolute", left: 0, top: 0, width: 640, height: 360 }}

@@ -80,7 +80,7 @@ fn interpolate_rejects_invalid_color_space_and_hue_options() {
 fn animated_gradient_stop_reaches_draw_program_without_byte_rounding() {
     let source = r##"
 export const composition = { width: 160, height: 80, fps: 30, duration: 2 };
-export default function FloatGradient(ctx) {
+export default function FloatGradient() { const ctx = useTime();
   return <Scene className="relative h-full w-full">
     <Path key="gradient" d="M 0 0 L 160 0 L 160 80 L 0 80 Z"
       fill={linearGradient(point(0, 0), point(160, 0), [
@@ -136,7 +136,7 @@ export default function FloatGradient(ctx) {
 fn animated_per_unit_text_color_reaches_draw_program_without_byte_rounding() {
     let source = r##"
 export const composition = { width: 160, height: 80, fps: 30, duration: 2 };
-export default function FloatLetters(ctx) {
+export default function FloatLetters() { const ctx = useTime();
   return <Scene className="relative h-full w-full">
     <Text key="letters" split="char" style={{ fontSize: 56, color: "#ffffff" }}
       perUnit={{ color: interpolate(ctx.progress, [0, 1], ["#2140ff", "#ffd000"],
@@ -192,7 +192,7 @@ export default function FloatLetters(ctx) {
 fn animated_text_fill_reaches_draw_program_without_byte_rounding() {
     let source = r##"
 export const composition = { width: 160, height: 80, fps: 30, duration: 2 };
-export default function FloatText(ctx) {
+export default function FloatText() { const ctx = useTime();
   return <Scene className="relative h-full w-full">
     <Text key="letters" style={{ fontSize: 56,
       color: interpolate(ctx.progress, [0, 1], ["#2140ff", "#ffd000"],
@@ -239,7 +239,7 @@ export default function FloatText(ctx) {
 fn geometry_batch_fill_field_reaches_float_instance_column() {
     let source = r##"
 export const composition = { width: 160, height: 80, fps: 30, duration: 2 };
-export default function FloatBatch(ctx) {
+export default function FloatBatch() { const ctx = useTime();
   return <Scene className="relative h-full w-full">
     <GeometryBatch key="tiles" geometry="rect" positions={[point(80, 40)]}
       sizes={point(80, 40)}

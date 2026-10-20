@@ -15,12 +15,12 @@ impl<'s> Compiler<'s> {
         audio: Option<&AudioAnalysisEnv>,
         require_composition: bool,
     ) -> Result<Self, Vec<CompilerDiagnostic>> {
-        if let Some(span) = module_reserved_theme_binding(program) {
+        if let Some(span) = module_reserved_intrinsic_binding(program) {
             return Err(vec![diagnostic_at(
                 source,
                 DiagCode::GrammarForbidden,
                 span,
-                "`ThemeProvider` and `useTheme` are reserved compile-time Motion intrinsics; do not declare or import replacements",
+                "`ThemeProvider`, `useTheme`, `useTime` and `useData` are reserved Motion intrinsics; do not declare or import replacements",
             )]);
         }
         if let Some(diagnostic) = scan_forbidden(source, "module") {
@@ -42,6 +42,14 @@ impl<'s> Compiler<'s> {
                 DiagCode::GrammarForbidden,
                 span,
                 format!("Motion has no async code: {SYNCHRONOUS_PREPARATION}"),
+            )]);
+        }
+        if let Some((span, message)) = foreign_hook(program) {
+            return Err(vec![diagnostic_at(
+                source,
+                DiagCode::GrammarForbidden,
+                span,
+                message,
             )]);
         }
         if let Some((span, message)) = scan_sequence_labels(program) {
@@ -124,13 +132,19 @@ impl<'s> Compiler<'s> {
                 );
             }
         }
-        let sandbox = Sandbox::new(&prelude, measure).map_err(|diagnostic| {
-            vec![from_motion_diagnostic(
-                source,
-                diagnostic,
-                Span::new(0, source.len() as u32),
-            )]
-        })?;
+        let sandbox = Sandbox::new(&prelude, measure)
+            .and_then(|sandbox| {
+                let data = prepare_data
+                    .map_or_else(|| serde_json::json!({}), |binding| binding.value.clone());
+                sandbox.bind_data(&data).map(|()| sandbox)
+            })
+            .map_err(|diagnostic| {
+                vec![from_motion_diagnostic(
+                    source,
+                    diagnostic,
+                    Span::new(0, source.len() as u32),
+                )]
+            })?;
         // Register both function declarations and arrow-function helpers.
         let mut functions: BTreeMap<String, AuthoredFn<'s>> = BTreeMap::new();
         for statement in &program.body {
@@ -233,7 +247,7 @@ impl<'s> Compiler<'s> {
                     ExportDefaultDeclarationKind::FunctionDeclaration(function) => {
                         self.default_function = Some(function.as_ref());
                         self.component = function.id.as_ref().map(|id| id.name.to_string());
-                        self.validate_root_params(&function.params);
+                        self.validate_component_params(&function.params);
                     }
                     _ => self.illegal(DiagCode::ModuleShape, export.span(), "default export must be a named function declaration"),
                 },
@@ -696,64 +710,38 @@ impl<'s> Compiler<'s> {
         }
     }
 
-    pub(super) fn validate_root_params(&mut self, params: &FormalParameters<'_>) {
-        if params.rest.is_some() || params.items.len() > 3 {
+    /// A component takes one parameter, as in React: `props`, a destructure of it, or nothing.
+    /// The time and the prepared data come from `useTime()` and `useData()`.
+    pub(super) fn validate_component_params(&mut self, params: &FormalParameters<'_>) -> bool {
+        let first = params.items.first();
+        let first_name = first
+            .and_then(|first| first.pattern.get_identifier_name())
+            .map(|name| name.to_string());
+        if params.rest.is_some() || params.items.len() > 1 || first_name.as_deref() == Some("ctx") {
             self.illegal(
                 DiagCode::ModuleShape,
                 params.span(),
-                "component parameters must be `(ctx, props, data)`; props and data may be destructured in their positions",
+                "a component takes `(props)`, as in React; read the time with `const ctx = useTime()` and prepared data with `const data = useData()`",
             );
-            return;
+            return false;
         }
-        if let Some(first) = params.items.first()
-            && first
-                .pattern
-                .get_identifier_name()
-                .map(|name| name.as_str())
-                != Some("ctx")
+        if let Some(first) = first
+            && !matches!(first.pattern, BindingPattern::ObjectPattern(_))
+            && first_name.as_deref() != Some("props")
         {
             self.illegal(
                 DiagCode::ModuleShape,
                 first.span(),
-                "the first component parameter must be `ctx`",
+                "name the component parameter `props`, or destructure it",
             );
+            return false;
         }
-        if let Some(second) = params.items.get(1)
-            && !matches!(second.pattern, BindingPattern::ObjectPattern(_))
-            && second
-                .pattern
-                .get_identifier_name()
-                .map(|name| name.as_str())
-                != Some("props")
-        {
-            self.illegal(
-                DiagCode::ModuleShape,
-                second.span(),
-                "the second component parameter must be `props` or an object destructure",
-            );
-        }
-        if let Some(third) = params.items.get(2)
-            && !matches!(
-                third.pattern,
-                BindingPattern::ObjectPattern(_) | BindingPattern::ArrayPattern(_)
-            )
-            && third
-                .pattern
-                .get_identifier_name()
-                .map(|name| name.as_str())
-                != Some("data")
-        {
-            self.illegal(
-                DiagCode::ModuleShape,
-                third.span(),
-                "the third component parameter must be `data` or a data destructure",
-            );
-        }
+        true
     }
 
     pub(super) fn bind_root_params(&mut self, params: &FormalParameters<'_>) {
-        if let Some(second) = params.items.get(1)
-            && let BindingPattern::ObjectPattern(pattern) = &second.pattern
+        if let Some(first) = params.items.first()
+            && let BindingPattern::ObjectPattern(pattern) = &first.pattern
         {
             self.bind_props_rest(pattern);
             for property in &pattern.properties {
@@ -779,13 +767,6 @@ impl<'s> Compiler<'s> {
                 let expr = self.push(Expr::Prop { name: prop_name }, property.span());
                 self.bind_dynamic(local_name, expr);
             }
-        }
-        if let Some(third) = params.items.get(2) {
-            let value = self
-                .prepare_data
-                .as_ref()
-                .map_or_else(|| serde_json::json!({}), |binding| binding.value.clone());
-            self.bind_static_pattern(&third.pattern, value);
         }
     }
 

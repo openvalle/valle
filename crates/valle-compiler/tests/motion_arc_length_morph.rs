@@ -56,7 +56,7 @@ fn disjoint_concave_pair_and_sequence_are_certified_at_prepare_time() {
         export const composition = { width: 64, height: 64, fps: 30, duration: 2 };
         const FROM = path("M 26 6 L 5 18 L 23 17 L 14 15 L 28 16 Z");
         const TO = path("M 7 5 L 19 2 L 28 20 L 28 28 L 15 24 Z");
-        export default function Unsafe(ctx) {
+        export default function Unsafe() { const ctx = useTime();
           return <Scene style={{width:64,height:64}}>
             <Path d={morph(FROM, TO, ctx.progress, { method: "arcLength" })} fill="#fff" />
           </Scene>;

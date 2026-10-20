@@ -16,7 +16,7 @@ fn a_recursive_jsx_helper_is_rejected_rather_than_expanded_forever() {
     let messages = diagnostics_of(
         r##"
 const bar = (i) => (<View key={`g-${i}`} style={{ position: "absolute", left: 0, top: 0, width: 10, height: 10 }}>{bar(i)}</View>);
-export default function P(ctx) {
+export default function P() { const ctx = useTime();
   return (<Scene className="h-full w-full">{bar(0)}</Scene>);
 }
 "##,
@@ -39,7 +39,7 @@ fn exponential_helper_fan_out_hits_the_expansion_budget_instead_of_hanging() {
     }
     let source = format!(
         r##"
-export default function P(ctx) {{
+export default function P() {{ const ctx = useTime();
 {chain}
   return (<Scene className="h-full w-full">
     <View key="a" style={{{{ position: "absolute", left: 0, top: 0, height: 10,
@@ -61,7 +61,7 @@ export default function P(ctx) {{
 fn deep_expression_chain_hits_the_nesting_budget_instead_of_the_stack() {
     let chain = " + 0.001".repeat(300);
     let source = format!(
-        r##"export default function Deep(ctx) {{
+        r##"export default function Deep() {{ const ctx = useTime();
   return (<Scene key="s" className="relative" style={{{{ width: "64px", height: "64px" }}}}>
     <View key="b" className="absolute" style={{{{ left: "0px", top: "0px", width: "8px",
       height: "8px", backgroundColor: "#22c55e",
@@ -88,7 +88,7 @@ fn deep_expression_chain_hits_the_nesting_budget_instead_of_the_stack() {
 fn chains_inside_the_nesting_budget_still_compile() {
     let chain = " + 0.001".repeat(200);
     let source = format!(
-        r##"export default function Deep(ctx) {{
+        r##"export default function Deep() {{ const ctx = useTime();
   return (<Scene key="s" className="relative" style={{{{ width: "64px", height: "64px" }}}}>
     <View key="b" className="absolute" style={{{{ left: "0px", top: "0px", width: "8px",
       height: "8px", backgroundColor: "#22c55e",

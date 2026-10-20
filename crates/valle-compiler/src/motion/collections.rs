@@ -249,7 +249,7 @@ impl<'s> Compiler<'s> {
         self.shadowed_by_dynamic(expression)
             || referenced_identifiers(expression)
                 .iter()
-                .any(|name| matches!(name.as_str(), "ctx" | "props" | "data"))
+                .any(|name| matches!(name.as_str(), "useTime" | "props"))
     }
 
     /// Lower a fixed-length collection to frame-time Exprs.
@@ -289,7 +289,9 @@ impl<'s> Compiler<'s> {
             self.illegal(
                 DiagCode::GrammarForbidden,
                 expression.span(),
-                format!("{role} length cannot depend on ctx, props, data, or other frame values"),
+                format!(
+                    "{role} length cannot depend on `useTime()`, `props` or other frame values"
+                ),
             );
             return None;
         }
@@ -360,7 +362,7 @@ impl<'s> Compiler<'s> {
                 DiagCode::GrammarForbidden,
                 member.object.span(),
                 format!(
-                    "{role} .map() length cannot depend on ctx, props, data, or other frame values; the expanded topology is fixed at compile time"
+                    "{role} .map() length cannot depend on `useTime()`, `props` or other frame values; the expanded topology is fixed at compile time"
                 ),
             );
             return None;
@@ -670,15 +672,14 @@ impl<'s> Compiler<'s> {
                     initial_velocity = value;
                 }
                 "fps" => {
-                    // Only accept ctx.fps.
-                    let source = self.src(&property.value).trim().to_string();
-                    if source != "ctx.fps" {
+                    if !self.is_time_fps(&property.value) {
                         self.illegal(
                             DiagCode::GrammarForbidden,
                             property.value.span(),
-                            "spring's `fps` must be exactly `ctx.fps`: the spring is sampled at \
-                             the frame rate this render actually uses, so that changing the frame \
-                             rate changes only the sampling density, never the physical feel",
+                            "spring's `fps` must be `ctx.fps`, the frame rate from `useTime()`: \
+                             the spring is sampled at the frame rate this render actually uses, so \
+                             that changing the frame rate changes only the sampling density, never \
+                             the physical feel",
                         );
                         return None;
                     }

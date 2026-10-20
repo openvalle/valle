@@ -70,7 +70,7 @@ const CARDS = [
 ];
 const FORMULA_SIZES = [48, 38, 48, 34, 40, 38, 34, 38, 42, 48, 34, 48];
 
-export default function FormulaWall(ctx) {
+export default function FormulaWall() { const ctx = useTime();
   const t = ctx.progress;
   const header = interpolate(t, [0, 0.08], [0, 1], { easing: "easeOut" });
 

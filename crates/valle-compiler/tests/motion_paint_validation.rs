@@ -26,7 +26,7 @@ fn compile_ok(source: &str) -> valle_compiler::motion::CompiledMotion {
 fn scene(body: &str) -> String {
     format!(
         r##"
-export default function Card(ctx) {{
+export default function Card() {{ const ctx = useTime();
   return (
     <Scene style={{{{ width: 320, height: 180, backgroundColor: "#111111" }}}}>
       {body}

@@ -1,5 +1,5 @@
 export const composition = { width: 640, height: 360, fps: 30, duration: 2 };
-export default function Selector(ctx) {
+export default function Selector() { const ctx = useTime();
   return (
     <Scene className="relative h-full w-full" style={{ backgroundColor: "#101010" }}>
       <Text key="t" split="char" className="absolute" style={{ left: 40, top: 130, fontSize: 90, fontWeight: 800,

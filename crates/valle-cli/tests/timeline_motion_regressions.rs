@@ -74,7 +74,7 @@ fn environment_assets_are_frozen_and_render_in_arbitrary_frame_order() {
     png(dir, "map.png", [128, 128, 255]);
     let source = r##"export const composition = { width: 64, height: 64, fps: 30, duration: 3 };
 export const controls=({assets:{model:asset({kind:"model3d"}),sky:asset({kind:"environment"}),map:asset({kind:"image"})}});
-export default function T(ctx){return <Scene style={{width:64,height:64}}><Scene3D key="scene" camera={{position:[ctx.seconds*0.1,0,4],target:[0,ctx.seconds*0.05,0],near:0.1+ctx.seconds*0.01,far:10+ctx.seconds}} pbr={{environment:{src:"asset://sky",intensity:1,rotation:ctx.seconds*90,background:true},toneMapping:"aces",exposure:0.7+ctx.seconds*0.2}} style={{width:64,height:64}}><Mesh key="mesh" src="asset://model" nodes={[{id:0,position:[ctx.seconds*0.01,0,0],rotation:[0,ctx.seconds*5,0],scale:[-1,1,1]}]} material={{type:"pbr",color:interpolate(ctx.seconds,[0,2],["#ffaaaa","#aaaaff"]),metallic:ctx.seconds*0.2,roughness:0.3+ctx.seconds*0.2,emissive:"#ffffff",emissiveIntensity:ctx.seconds*0.1,normalScale:ctx.seconds*0.2,textures:{baseColor:"asset://map",normal:"asset://map",emissive:"asset://map"}}}/><DirectionalLight color={interpolate(ctx.seconds,[0,2],["#ff0000","#0000ff"])} direction={[ctx.seconds*0.1,0,1]} intensity={0.5+ctx.seconds*0.1}/></Scene3D></Scene>;}"##;
+export default function T(){ const ctx = useTime();return <Scene style={{width:64,height:64}}><Scene3D key="scene" camera={{position:[ctx.seconds*0.1,0,4],target:[0,ctx.seconds*0.05,0],near:0.1+ctx.seconds*0.01,far:10+ctx.seconds}} pbr={{environment:{src:"asset://sky",intensity:1,rotation:ctx.seconds*90,background:true},toneMapping:"aces",exposure:0.7+ctx.seconds*0.2}} style={{width:64,height:64}}><Mesh key="mesh" src="asset://model" nodes={[{id:0,position:[ctx.seconds*0.01,0,0],rotation:[0,ctx.seconds*5,0],scale:[-1,1,1]}]} material={{type:"pbr",color:interpolate(ctx.seconds,[0,2],["#ffaaaa","#aaaaff"]),metallic:ctx.seconds*0.2,roughness:0.3+ctx.seconds*0.2,emissive:"#ffffff",emissiveIntensity:ctx.seconds*0.1,normalScale:ctx.seconds*0.2,textures:{baseColor:"asset://map",normal:"asset://map",emissive:"asset://map"}}}/><DirectionalLight color={interpolate(ctx.seconds,[0,2],["#ff0000","#0000ff"])} direction={[ctx.seconds*0.1,0,1]} intensity={0.5+ctx.seconds*0.1}/></Scene3D></Scene>;}"##;
     std::fs::write(dir.join("scene.motion.tsx"), source).unwrap();
     put(
         dir,
@@ -180,7 +180,7 @@ fn over_budget_renders_name_the_first_failed_frame_and_node() {
     std::fs::write(
         dir.join("grow.motion.tsx"),
         r##"export const composition = { width: 64, height: 36, fps: 30, duration: 2 };
-export default function Grow(ctx) {
+export default function Grow() { const ctx = useTime();
   const size = interpolate(ctx.localFrame, [29, 30], [16, 20000]);
   return <Scene className="relative h-full w-full">
     <View key="card" className="absolute" style={{ left: 8, top: 8, width: size, height: size,
@@ -509,7 +509,7 @@ fn multiple_motion_components_share_fonts_and_keep_later_formula_dependencies() 
         let file = format!("{name}.motion.tsx");
         std::fs::write(dir.join(&file), format!(r##"
 export const composition = {{ width: 160, height: 96, fps: 10, duration: 9 }};
-export default function Card(ctx) {{return <Scene style={{{{width:160,height:96}}}}>
+export default function Card() {{ const ctx = useTime();return <Scene style={{{{width:160,height:96}}}}>
   <Text style={{{{fontSize:20,color:"#ffffff"}}}}>Card {index}</Text>
   <MathFormula latex="\\frac{{1}}{{2}}" style={{{{position:"absolute",left:8,top:40,fontSize:24,color:"#ffffff",opacity:ctx.localFrame > 0 ? 1 : 0}}}} />
 </Scene>;}}
@@ -568,7 +568,7 @@ fn motion_video_offsets_and_rates_select_the_numbered_source_frame() {
     std::fs::write(dir.join("numbered.motion.tsx"), r##"
 export const composition = { width: 80, height: 32, fps: 10, duration: 12 };
 const BITS = [0,1,2,3,4,5,6,7];
-export default function Numbered(ctx) {return <Scene style={{width:80,height:32,backgroundColor:"#000000"}}>
+export default function Numbered() { const ctx = useTime();return <Scene style={{width:80,height:32,backgroundColor:"#000000"}}>
   {BITS.map(bit => <View key={`bit-${bit}`} style={{position:"absolute",left:bit*10,top:0,width:10,height:32,
     backgroundColor:floor(ctx.localFrame / pow(2,bit)) % 2 === 1 ? "#ffffff" : "#000000"}} />)}
 </Scene>;}
@@ -605,7 +605,7 @@ export default function Numbered(ctx) {return <Scene style={{width:80,height:32,
         std::fs::write(dir.join("video.motion.tsx"), format!(r#"
 export const composition = {{ width: 80, height: 32, fps: 10, duration: 9 }};
 export const controls = ({{assets:{{clip:asset({{kind:"video"}})}}}});
-export default function Clip(ctx) {{return <Scene style={{{{width:80,height:32}}}}><Video src="asset://clip" sourceStart={{{}}} speed={{{}}} style={{{{width:80,height:32}}}} /></Scene>;}}
+export default function Clip() {{ const ctx = useTime();return <Scene style={{{{width:80,height:32}}}}><Video src="asset://clip" sourceStart={{{}}} speed={{{}}} style={{{{width:80,height:32}}}} /></Scene>;}}
 "#,attr(start),attr(speed))).unwrap();
         put(
             dir,
@@ -676,7 +676,7 @@ export default function T(){return <Scene style={{width:64,height:64,backgroundC
         (
             "shader.motion.tsx",
             r##"export const composition = { width: 64, height: 64, fps: 30, duration: 3 };
-export const controls=({assets:{noise:asset({kind:"image"}),effect:asset({kind:"shader"})}}); export default function T(ctx){return <Scene style={{width:64,height:64}}><ShaderLayer source="asset://effect" inputs={{noise:"asset://noise"}} uniforms={{progress:ctx.progress,edgeWidth:0.06,edgeColor:"#38bdf8"}} style={{width:64,height:64}}><View style={{width:64,height:64,background:"#ffffff"}}/></ShaderLayer></Scene>; }"##,
+export const controls=({assets:{noise:asset({kind:"image"}),effect:asset({kind:"shader"})}}); export default function T(){ const ctx = useTime();return <Scene style={{width:64,height:64}}><ShaderLayer source="asset://effect" inputs={{noise:"asset://noise"}} uniforms={{progress:ctx.progress,edgeWidth:0.06,edgeColor:"#38bdf8"}} style={{width:64,height:64}}><View style={{width:64,height:64,background:"#ffffff"}}/></ShaderLayer></Scene>; }"##,
         ),
     ];
     for (name, source) in sources {
@@ -700,7 +700,7 @@ fn motion_time_window_uses_ordinary_numeric_props() {
     let dir = temp.path();
     let source = r##"export const composition = { width: 64, height: 64, fps: 30, duration: 3 };
 export const controls = { props: { highlightStart: number({default:2,min:0}), highlightEnd: number({default:3,min:0}) } };
-export default function T(ctx, props) {
+export default function T(props) { const ctx = useTime();
   const active = ctx.seconds >= props.highlightStart && ctx.seconds < props.highlightEnd;
   return <Scene><View style={{width:64,height:64,backgroundColor:"#ffffff",opacity:active ? 1 : 0}}/></Scene>;
 }"##;
@@ -902,7 +902,7 @@ fn motion_props_use_css_values_in_both_cli_and_timeline() {
     let temp = tempfile::tempdir().unwrap();
     let dir = temp.path();
     std::fs::write(dir.join("props.motion.tsx"),r##"export const composition = { width: 64, height: 64, fps: 30, duration: 3 };
-export const controls=({props:{ink:color({default:"#ff0000"}),extent:length({default:"8px"}),turn:angle({default:"0deg"})}});export default function T(ctx,props){return <Scene style={{width:64,height:64}}><View style={{width:props.extent,height:32,background:props.ink,rotate:props.turn}}/></Scene>;}"##).unwrap();
+export const controls=({props:{ink:color({default:"#ff0000"}),extent:length({default:"8px"}),turn:angle({default:"0deg"})}});export default function T(props){ const ctx = useTime();return <Scene style={{width:64,height:64}}><View style={{width:props.extent,height:32,background:props.ink,rotate:props.turn}}/></Scene>;}"##).unwrap();
     let props = json!({"ink":"#00ff00","extent":"64px","turn":"0deg"});
     put(dir, "props.json", props.clone());
     success(run(
@@ -1064,7 +1064,7 @@ fn shader_file_assets_render_vectors_and_matrices_in_arbitrary_frame_order() {
     std::fs::write(dir.join("field.vsksl"), shader).unwrap();
     let source = r##"export const composition = { width: 64, height: 64, fps: 30, duration: 3 };
 export const controls=({assets:{effect:asset({kind:"shader",required:true})}});
-export default function T(ctx) { return <Scene style={{width:64,height:64}}><ShaderLayer source="asset://effect" uniforms={{amount:ctx.seconds*0.1,offset:[0,0,ctx.seconds*0.05],basis:[1,0,0,1],enabled:true}} style={{width:64,height:64}}><View style={{width:64,height:64,backgroundColor:"#fff"}}/></ShaderLayer></Scene>; }"##;
+export default function T() { const ctx = useTime(); return <Scene style={{width:64,height:64}}><ShaderLayer source="asset://effect" uniforms={{amount:ctx.seconds*0.1,offset:[0,0,ctx.seconds*0.05],basis:[1,0,0,1],enabled:true}} style={{width:64,height:64}}><View style={{width:64,height:64,backgroundColor:"#fff"}}/></ShaderLayer></Scene>; }"##;
     std::fs::write(dir.join("effect.motion.tsx"), source).unwrap();
     put(
         dir,
@@ -1175,7 +1175,7 @@ fn shader_frame_budget_counts_nested_layers_and_separate_clips() {
     let arithmetic = "float4 valle_main(float2 uv) { float4 value = float4(uv,0.0,1.0); for (int i = 0; i < 128; ++i) { value = value * 0.999 + float4(0.0001); } return value; }";
     let source = |body: &str| {
         format!(
-            r#"export const controls=({{assets:{{effect:asset({{kind:"shader"}})}}}});export default function T(ctx){{return <Scene style={{{{width:ctx.viewport.width,height:ctx.viewport.height}}}}>{body}</Scene>;}}"#
+            r#"export const controls=({{assets:{{effect:asset({{kind:"shader"}})}}}});export default function T(){{ const ctx = useTime();return <Scene style={{{{width:ctx.viewport.width,height:ctx.viewport.height}}}}>{body}</Scene>;}}"#
         )
     };
     let layer = |body: &str| {
@@ -1460,7 +1460,7 @@ fn timeline_inline_data_prepares_distinct_instances_and_rejects_missing_data() {
         dir.join("data.motion.tsx"),
         r##"export const composition = { width: 32, height: 32, fps: 10, duration: 1 };
 export const controls = { data: { rows: array(record({ id: string(), color: color() }), { minItems: 1, maxItems: 4, key: "id" }) } };
-export default function DataScene(ctx, props, data) {
+export default function DataScene(props) { const ctx = useTime(); const data = useData();
   return <Scene style={{ width: 32, height: 32 }}>
     {data.rows.map((row) => <View key={row.id} style={{ width: 32, height: 32, backgroundColor: row.color }} />)}
   </Scene>;
@@ -1551,7 +1551,7 @@ export const controls = { data: {
   item: record({ kind: string(), component: string(), font: string() }),
   decoy: record({ kind: string(), src: string() }),
 } };
-export default function Metadata(ctx, props, data) {
+export default function Metadata(props) { const ctx = useTime(); const data = useData();
   return <Scene style={{ width: 8, height: 8, backgroundColor: "#ff0000" }} />;
 }"##,
     )

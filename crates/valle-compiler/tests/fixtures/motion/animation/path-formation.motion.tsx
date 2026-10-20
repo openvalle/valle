@@ -3,7 +3,7 @@ export const composition = { width: 1920, height: 1080, fps: 30, duration: 5 };
 const agents = defineRepeater({ count: 26, keyPrefix: "agent" });
 const ROUTE = path("M 180 750 C 315 180 750 195 885 525 C 1020 855 1455 870 1740 285");
 
-export default function PathFormation(ctx) {
+export default function PathFormation() { const ctx = useTime();
   const t = ctx.progress;
   const draw = interpolate(t, [0, 0.28], [0, 1], { easing: "easeOut" });
   const labels = interpolate(t, [0.18, 0.4, 0.9, 1], [0, 1, 1, 0]);

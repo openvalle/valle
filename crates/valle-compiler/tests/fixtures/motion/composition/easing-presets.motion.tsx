@@ -1,5 +1,5 @@
 export const composition = { width: 640, height: 360, fps: 30, duration: 2 };
-export default function EasingPresets(ctx) {
+export default function EasingPresets() { const ctx = useTime();
   return (
     <Scene className="relative h-full w-full" style={{ backgroundColor: "#101010" }}>
       <View key="back" className="absolute" style={{ top: 80, width: 40, height: 40, backgroundColor: "#ffffff",

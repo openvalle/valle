@@ -323,12 +323,12 @@ impl<'s> Compiler<'s> {
         }
         let frame_expression = arguments[0].as_expression()?;
         let fps_expression = arguments[1].as_expression()?;
-        if self.src(fps_expression) != "ctx.fps" {
+        if !self.is_time_fps(fps_expression) {
             self.illegal(
                 DiagCode::GrammarForbidden,
                 fps_expression.span(),
                 format!(
-                    "{name}'s second argument must be exactly `ctx.fps`; Sequence seconds use the versioned frame × fps.den / fps.num conversion"
+                    "{name}'s second argument must be `ctx.fps`, the frame rate from `useTime()`; Sequence seconds use the versioned frame × fps.den / fps.num conversion"
                 ),
             );
             return None;
@@ -817,11 +817,11 @@ impl<'s> Compiler<'s> {
             return None;
         };
         let fps_expression = fps.as_expression()?;
-        if self.src(fps_expression) != "ctx.fps" {
+        if !self.is_time_fps(fps_expression) {
             self.illegal(
                 DiagCode::GrammarForbidden,
                 fps_expression.span(),
-                "wiggle's second argument must be exactly `ctx.fps` so frequency is measured in physical seconds",
+                "wiggle's second argument must be `ctx.fps`, the frame rate from `useTime()`, so frequency is measured in physical seconds",
             );
             return None;
         }
@@ -1022,11 +1022,11 @@ impl<'s> Compiler<'s> {
             return None;
         };
         let fps_expression = fps.as_expression()?;
-        if self.src(fps_expression) != "ctx.fps" {
+        if !self.is_time_fps(fps_expression) {
             self.illegal(
                 DiagCode::GrammarForbidden,
                 fps_expression.span(),
-                "wiggle2D's second argument must be exactly `ctx.fps`",
+                "wiggle2D's second argument must be `ctx.fps`, the frame rate from `useTime()`",
             );
             return None;
         }

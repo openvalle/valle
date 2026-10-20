@@ -76,7 +76,7 @@ fn all_kernels_keep_two_independent_inputs_and_frame_progress() {
 fn hidden_and_empty_endpoints_still_supply_two_inputs() {
     for attributes in ["visible={false}", r#"style={{display:"none"}}"#, ""] {
         let source = format!(
-            r#"export default function T(ctx) {{ return <Transition kind="fade" progress={{0.5}} style={{{{width:64,height:64}}}}><View key="from" {attributes}/><View key="to"/></Transition>; }}"#
+            r#"export default function T() {{ const ctx = useTime(); return <Transition kind="fade" progress={{0.5}} style={{{{width:64,height:64}}}}><View key="from" {attributes}/><View key="to"/></Transition>; }}"#
         );
         let output = program(&source, 0).unwrap();
         assert!(output.nodes().iter().any(
@@ -99,7 +99,7 @@ fn invalid_children_kind_progress_and_capability_are_rejected() {
     ] {
         assert!(
             compile_motion(&format!(
-                "export default function T(ctx) {{ return {body}; }}"
+                "export default function T() {{ const ctx = useTime(); return {body}; }}"
             ))
             .is_err(),
             "{body}"

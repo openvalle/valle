@@ -6,7 +6,7 @@ const DOTS = Array.from({ length: 128 }, (_, i) => ({
   y: 4 + Math.floor(i / 80) * 14,
 }));
 
-export default function AffineTime(ctx) {
+export default function AffineTime() { const ctx = useTime();
   return <Scene className="relative h-full w-full" style={{ backgroundColor: "#101010" }}>
     {DOTS.map((dot) => <View key={dot.id} className="absolute"
       visible={dot.i <= (ctx.seconds - 0.2) * 1000}

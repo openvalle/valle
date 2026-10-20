@@ -24,7 +24,7 @@ const FLOW = defineSequence({
 
 const GRID = Array.from({ length: 1200 }, (_, index) => point(15 + (index % 60) * 22.05, 18 + Math.floor(index / 60) * 35.4));
 
-function Cursor(ctx, { x, y, pressed, color }) {
+function Cursor({ x, y, pressed, color }) {
   return (
     <View key="pointer" className="absolute" style={{ borderStyle: "solid", left: x, top: y, width: 27, height: 27, borderRadius: 15, backgroundColor: color, borderWidth: 4.5, borderColor: "#ffffff", transform: `scale(${1 - pressed * 0.24})`, filter: "drop-shadow(0px 6px 14px #02061788)" }}>
       <View key="tail" className="absolute" style={{ left: 19.5, top: 19.5, width: 19.5, height: 6, borderRadius: 3, backgroundColor: "#ffffff", transform: "rotate(45deg)" }} />
@@ -32,15 +32,15 @@ function Cursor(ctx, { x, y, pressed, color }) {
   );
 }
 
-function Tap(ctx, { x, y, progress, color }) {
+function Tap({ x, y, progress, color }) {
   return <View key="ring" className="absolute" style={{ borderStyle: "solid", left: x - 42, top: y - 42, width: 84, height: 84, borderRadius: 45, borderWidth: 4.5, borderColor: color, opacity: interpolate(progress, [0, 0.15, 1], [0, 1, 0]), transform: `scale(${0.35 + progress * 1.35})` }} />;
 }
 
-function Focus(ctx, { progress, color }) {
+function Focus({ progress, color }) {
   return <View key="ring" className="absolute" style={{ borderStyle: "solid", left: 543, top: 498, width: 756, height: 99, borderRadius: 21, borderWidth: 3 + progress * 3, borderColor: color, opacity: progress, filter: `drop-shadow(0px 0px ${12 + progress * 15}px ${color})` }} />;
 }
 
-function StatePanel(ctx, { active, success, accent, text }) {
+function StatePanel({ active, success, accent, text }) {
   const states = ["IDLE", "FOCUS", "TYPE", "PUBLISH", "DONE"];
   return (
     <View key="panel" className="absolute" style={{ borderStyle: "solid", left: 1404, top: 174, width: 372, height: 666, borderRadius: 33, backgroundColor: "#08111fcc", borderWidth: 1.5, borderColor: "#ffffff1f" }}>
@@ -57,7 +57,7 @@ function StatePanel(ctx, { active, success, accent, text }) {
   );
 }
 
-function AppShell(ctx, { focus, typed, publish, success, surface, accent, successColor, text }) {
+function AppShell({ focus, typed, publish, success, surface, accent, successColor, text }) {
   return (
     <View key="window" className="absolute" style={{ borderStyle: "solid", left: 144, top: 174, width: 1218, height: 750, borderRadius: 36, backgroundColor: surface, borderWidth: 1.5, borderColor: "#ffffff22", overflow: "hidden", filter: "drop-shadow(0px 28px 58px #02061799)" }}>
       <View key="chrome" className="absolute flex items-center" style={{ borderStyle: "solid", left: 0, top: 0, width: 1218, height: 87, backgroundColor: "#0b1424", borderBottomWidth: 1.5, borderColor: "#ffffff12" }}>
@@ -91,7 +91,7 @@ function AppShell(ctx, { focus, typed, publish, success, surface, accent, succes
   );
 }
 
-export default function PublishFlow(ctx, props) {
+export default function PublishFlow(props) { const ctx = useTime();
   const moveTitle = stageProgress(ctx.localFrame, ctx.fps, FLOW.moveTitle);
   const focus = stageProgress(ctx.localFrame, ctx.fps, FLOW.focusTitle);
   const typed = stageProgress(ctx.localFrame, ctx.fps, FLOW.typeTitle);

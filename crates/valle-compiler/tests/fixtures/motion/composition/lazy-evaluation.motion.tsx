@@ -6,7 +6,7 @@ const DOTS = Array.from({ length: 2000 }, (_, i) => ({
   y: 4 + Math.floor(i / 80) * 14,
 }));
 
-export default function LazyEval(ctx) {
+export default function LazyEval() { const ctx = useTime();
   return (
     <Scene className="relative h-full w-full" style={{ backgroundColor: "#101010" }}>
       {DOTS.map((dot) => (

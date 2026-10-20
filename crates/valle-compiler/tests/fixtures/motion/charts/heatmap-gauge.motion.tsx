@@ -24,7 +24,7 @@ const GAUGE_SPAN = deg(260);
 const GX = 1542;
 const GY = 585;
 
-function Cell(ctx, { row, col, value }) {
+function Cell({ row, col, value }) { const ctx = useTime();
   const show = interpolate(ctx.progress - (row * 7 + col) * 0.012, [0, 0.28], [0, 1], {
     easing: "easeOut",
   });
@@ -45,7 +45,7 @@ function Cell(ctx, { row, col, value }) {
   );
 }
 
-export default function HeatmapGauge(ctx) {
+export default function HeatmapGauge() { const ctx = useTime();
   const needle = interpolate(ctx.progress, [0.15, 0.85], [GAUGE_START, GAUGE_START + GAUGE_SPAN * LOAD], {
     easing: "easeOut",
   });

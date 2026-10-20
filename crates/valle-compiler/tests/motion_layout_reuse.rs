@@ -11,7 +11,7 @@ use valle_timeline::FrameRate;
 const SOURCE: &str = r##"
 export const controls=({props:{alpha:number({default:1,min:0,max:1})}});
 const items=defineRepeater({count:12,keyPrefix:"row"});
-export default function Scene(ctx,props) {
+export default function Scene(props) { const ctx = useTime();
  return <Scene className="w-full h-full flex flex-wrap" style={{padding:12,gap:6}}>
   {items.map(row=><View key={row.key} style={{width:140,height:54,position:"relative",backgroundColor:"#28445b",translate:point(ctx.seconds*6,row.index%3),opacity:props.alpha*interpolate(ctx.seconds,[0,1],[0,1]),scale:point(1+ctx.progress*.05,1),rotate:interpolate(ctx.progress,[0,1],["0deg","4deg"])}}>
     <Text style={{fontSize:16}}>One fixed paragraph.</Text>
@@ -171,7 +171,7 @@ fn unsupported_and_geometry_changing_scenes_use_the_full_path() {
 #[test]
 fn css_3d_projection_and_filters_reuse_boxes_without_retaining_previous_paint() {
     let source = r##"
-export default function Projection(ctx) {
+export default function Projection() { const ctx = useTime();
  return <Scene style={{width:640,height:480,perspective:1200}}>
   <Group style={{width:640,height:480,transformStyle:"preserve-3d",transform:`rotateX(${ctx.localFrame*.1}deg) scale(1.05)`}}>
    <View style={{position:"absolute",left:90,top:60,width:300,height:180,transformOrigin:"15% 70%",backfaceVisibility:"hidden",transform:`translate3d(${ctx.localFrame}px,20px,${ctx.localFrame*.2}px) rotateY(${ctx.localFrame*.3}deg)`,filter:`blur(${ctx.localFrame*.01}px) brightness(0.9)`,backgroundColor:"#28445b",opacity:.85}}>

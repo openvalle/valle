@@ -14,7 +14,7 @@ const { default: CanvasKitInit } = await import("canvaskit-wasm") as unknown as 
 };
 type Fixture = { name:string; command:"motion"|"timeline"; content:string; width:number; height:number; frames:number[]; reference?:string; referenceOffset?:number; different?:string; probe?:(pixels:Uint8Array,frame:number)=>void };
 const motion = (body:string) => `export const composition={width:96,height:64,fps:4,duration:1.25};
-export default function T(ctx){return <Scene style={{width:96,height:64,backgroundColor:"#ffffff"}}>${body}</Scene>;}`;
+export default function T(){const ctx=useTime();return <Scene style={{width:96,height:64,backgroundColor:"#ffffff"}}>${body}</Scene>;}`;
 const view = (color:string,extra="") => `<View style={{width:96,height:64,backgroundColor:"${color}"${extra}}}/>`;
 const transition = (kind:string,from:string,to:string,extra="",progress="ctx.seconds") => `<Transition kind="${kind}" progress={${progress}} style={{width:96,height:64${extra}}}>${from}${to}</Transition>`;
 const diff = (a:Uint8Array,b:Uint8Array) => { let max=0; expect(a.length).toBe(b.length); for(let i=0;i<a.length;i++) max=Math.max(max,Math.abs(a[i]!-b[i]!));return max; };

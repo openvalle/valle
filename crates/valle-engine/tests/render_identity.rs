@@ -238,7 +238,7 @@ export const controls = ({
   props: { opacity: number({ default: 1, min: 0, max: 1 }) },
   assets: { logo: asset({ kind: "image", required: true }) },
 });
-export default function Title(ctx, props) {
+export default function Title(props) { const ctx = useTime();
   return <View style={{ width: 1920, height: 1080, opacity: props.opacity }} />;
 }
 "#,
@@ -264,7 +264,7 @@ export const controls = ({
   },
   assets: { footage: asset({ kind: "video", required: true }) },
 });
-export default function HeldVideo(ctx, props) {
+export default function HeldVideo(props) { const ctx = useTime();
   return (
     <View style={{ width: 1920, height: 1080 }}>
       <Video src="asset://footage" sourceStart={0.25} speed={0.75} style={{ display: "block", width: 1920, height: 1080, opacity: props.opacity }} />
@@ -2776,7 +2776,7 @@ fn motion_backdrop_fractional_projection_keeps_canonical_sample_bounds() {
         valle_compiler::motion::compile_motion(
             r##"
 export const composition = { width: 1920, height: 1080, duration: 10 };
-export default function Demo(ctx) {
+export default function Demo() { const ctx = useTime();
   const t = ctx.localFrame / 300;
   return <Scene style={{ width: 1920, height: 1080, backgroundColor: "#0891b2" }}>
     <View style={{ position: "absolute", left: 90, top: 190, width: 550, height: 350,
@@ -3176,7 +3176,7 @@ fn overlay_host_time_and_viewport_are_exact_in_any_request_order() {
         let artifact = Arc::new(valle_compiler::motion::compile_motion(&format!(r#"
 export const composition={{width:64,height:32,fps:4,duration:2}};
 export const role=overlay({{intro:seconds(0.5),outro:seconds(0.5),hold:"{hold}"}});
-export default function Main(ctx) {{return <Scene><View key="bar" className="absolute"
+export default function Main() {{ const ctx = useTime();return <Scene><View key="bar" className="absolute"
  style={{{{left:ctx.seconds*12,top:ctx.host.progress*20,width:ctx.viewport.width/2,height:ctx.viewport.height,backgroundColor:"white"}}}}/></Scene>;}}
 "#)).unwrap().artifact);
         let resources = manifest(json!({"component:title":motion_entry(&artifact)}));

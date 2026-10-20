@@ -1,4 +1,4 @@
-export function ChartPanel(ctx, { rows, x, y, width, height }) {
+export function ChartPanel({ rows, x, y, width, height }) { const ctx = useTime();
   const theme = useTheme();
   const { panel, accent, ink, hairline } = theme.colors;
   const values = rows.map((row) => row.value);

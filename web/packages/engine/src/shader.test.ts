@@ -97,7 +97,7 @@ test("frozen shaders align Native/CanvasKit sampling and arbitrary-frame results
     await writeFile(join(dir, "effect.motion.tsx"), `
       export const composition = { width: 64, height: 64, duration: 3 };
       export const controls={assets:{effect:asset({kind:"shader"}),image:asset({kind:"image"})}};
-      export default function T(ctx) { return <Scene style={{width:64,height:64}}>
+      export default function T() { const ctx = useTime(); return <Scene style={{width:64,height:64}}>
         <ShaderLayer source="asset://effect" inputs={{steps:"asset://image"}}
           uniforms={{basis:[1,0,0,1],offset:[ctx.seconds*0.1,0,0],amount:ctx.seconds*0.05,tint:"#ff000000",enabled:true}}
           style={{width:64,height:64}}><View style={{width:64,height:64,backgroundColor:"#fff"}}/></ShaderLayer>
@@ -154,7 +154,7 @@ test("frozen shaders align Native/CanvasKit sampling and arbitrary-frame results
       await writeFile(join(dir, "effect.motion.tsx"), content ? `
         export const composition = { width: 64, height: 64, duration: 3 };
         export const controls={assets:{effect:asset({kind:"shader"}),image:asset({kind:"image"})${scene3d?',model:asset({kind:"model3d"})':''}}};
-        export default function T(ctx) { return <Scene style={{width:64,height:64,backgroundColor:"#000"}}>${content.body}</Scene>; }
+        export default function T() { const ctx = useTime(); return <Scene style={{width:64,height:64,backgroundColor:"#000"}}>${content.body}</Scene>; }
       ` : fieldMotion);
       if (data) {
         await writeFile(join(dir, "effect.vsksl"), precision

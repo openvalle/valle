@@ -3,7 +3,7 @@ use valle_compiler::motion::{compile_motion, compile_motion_with_full_env};
 
 fn scene(style: &str) -> String {
     format!(
-        "export const composition = {{ width:64,height:64,fps:30,duration:1 }}; export default function Contract(ctx) {{ return <Scene><View style={{{{width:32,height:32,{style}}}}}/></Scene>; }}"
+        "export const composition = {{ width:64,height:64,fps:30,duration:1 }}; export default function Contract() {{ const ctx = useTime(); return <Scene><View style={{{{width:32,height:32,{style}}}}}/></Scene>; }}"
     )
 }
 
@@ -71,7 +71,9 @@ fn malformed_css_3d_arguments_produce_diagnostics_instead_of_partial_transforms(
 }
 
 fn body(value: &str) -> String {
-    format!("export default function Contract(ctx) {{ return <Scene>{value}</Scene>; }}")
+    format!(
+        "export default function Contract() {{ const ctx = useTime(); return <Scene>{value}</Scene>; }}"
+    )
 }
 
 #[test]
@@ -227,7 +229,7 @@ fn shader_manifest_defaults_become_typed_artifact_bindings() {
     assert_eq!(node.len(), 9);
     let authored = "{u0:ctx.progress,u1:point(0.2,0.4),u2:[ctx.progress,0.2,0.3],u3:[0.1,0.2,0.3,0.4],u4:[1,0,0,1],u5:[1,0,0,0,1,0,0,0,1],u6:[1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1],u7:'red',u8:ctx.progress>0}";
     let explicit = source
-        .replace("Contract()", "Contract(ctx)")
+        .replace("Contract(){", "Contract(){const ctx=useTime();")
         .replace("style={{", &format!("uniforms={{{authored}}} style={{{{"));
     let compiled = compile_motion_with_full_env(
         &explicit,
@@ -250,7 +252,7 @@ fn shader_manifest_defaults_become_typed_artifact_bindings() {
         "{unknown:1}",
     ] {
         let invalid = source
-            .replace("Contract()", "Contract(ctx)")
+            .replace("Contract(){", "Contract(){const ctx=useTime();")
             .replace("style={{", &format!("uniforms={{{uniforms}}} style={{{{"));
         assert!(
             compile_motion_with_full_env(
@@ -415,7 +417,7 @@ fn interpolation_options_reject_ambiguous_and_malformed_ranges() {
 
 #[test]
 fn interpolation_resolves_constant_object_arrays_and_validates_every_stop() {
-    let source = "const ranges={input:[0,0.5,1],output:[0,0.5,1],easing:['linear','easeIn']}; export default function Contract(ctx){return <Scene><View style={{opacity:interpolate(ctx.progress,ranges.input,ranges.output,{easing:ranges.easing})}}/></Scene>; }";
+    let source = "const ranges={input:[0,0.5,1],output:[0,0.5,1],easing:['linear','easeIn']}; export default function Contract(){ const ctx = useTime();return <Scene><View style={{opacity:interpolate(ctx.progress,ranges.input,ranges.output,{easing:ranges.easing})}}/></Scene>; }";
     compile_motion(source).unwrap_or_else(|d| panic!("{d:#?}"));
     for (from, to) in [
         ("input:[0,0.5,1]", "input:[0,'bad',1]"),

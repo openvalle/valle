@@ -7,7 +7,7 @@ const CELLS = Array.from({ length: COLS * COLS }, (_, i) => {
   const dy = r - COLS / 2;
   return { id: `t${i}`, x: 8 + c * (624 / COLS), y: 6 + r * (348 / COLS), d: Math.sqrt(dx * dx + dy * dy) / COLS };
 });
-export default function Grid(ctx) {
+export default function Grid() { const ctx = useTime();
   return (
     <Scene className="relative h-full w-full" style={{ backgroundColor: "#101010" }}>
       {CELLS.map((cell) => (

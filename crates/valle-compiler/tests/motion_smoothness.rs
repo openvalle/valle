@@ -35,7 +35,7 @@ fn style(artifact: &SceneArtifact, values: &[MotionValue], property: &str) -> Mo
 }
 
 const SPRING: &str = r#"
-export default function Spring(ctx) {
+export default function Spring() { const ctx = useTime();
   const p = spring({elapsedFrames: ctx.localFrame - 2, fps: ctx.fps, preset: "gentle", initialVelocity: -2});
   const v = springVelocity({elapsedFrames: ctx.localFrame - 2, fps: ctx.fps, preset: "gentle", initialVelocity: -2});
   return <View style={{width: 100, height: 20, translate: point(p * 100, 0),
@@ -150,7 +150,7 @@ fn flip(progress: &str) -> SceneArtifact {
 const layouts = defineLayoutStates({{
   a: {{card: rect(0, 20, 100, 80)}}, b: {{card: rect(200, 40, 200, 40)}}
 }});
-export default function Flip(ctx) {{
+export default function Flip() {{ const ctx = useTime();
   return <View layoutId="card" style={{{{layoutTransition: flip(layouts, "a", "b", {progress})}}}} />;
 }}
 "#)).unwrap().artifact

@@ -12,7 +12,7 @@ const tour = defineSequence({
 const STEPS = ["Connect", "Shape", "Publish"];
 const VALUES = [72, 91, 84, 96, 78, 100];
 
-export default function SequenceProductTour(ctx) {
+export default function SequenceProductTour() { const ctx = useTime();
   const chrome = stageProgress(ctx.localFrame, ctx.fps, tour.chrome);
   const nav = stageProgress(ctx.localFrame, ctx.fps, tour.navigation);
   const work = stageProgress(ctx.localFrame, ctx.fps, tour.workspace);

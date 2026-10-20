@@ -5,7 +5,7 @@ const SA = path("M 12 70 L 60 70 L 60 110 L 36 92 L 12 110 Z");
 const SB = path("M 86 70 L 144 70 L 134 90 L 144 112 L 86 112 Z");
 const SC = path("M 12 68 L 146 68 L 146 112 L 80 88 L 12 112 Z");
 
-export default function Compatible(ctx) {
+export default function Compatible() { const ctx = useTime();
   return (
     <Scene style={{ width: 160, height: 120, backgroundColor: "#101010" }}>
       <Path key="pair" d={morph(A, B, ctx.progress, { method: "compatible" })} fill="#ffffff" />

@@ -274,7 +274,7 @@ mod tests {
         let artifact = valle_compiler::motion::compile_motion(r##"
 export const composition = { width: 320, height: 180, duration: 1 };
 export const controls = { props: { alpha: number({ default: 1, min: 0, max: 1 }) } };
-export default function Card(ctx, props) {
+export default function Card(props) { const ctx = useTime();
   return <Scene style={{ width: 320, height: 180, perspective: 800 }}>
     <View key="card" style={{ position: "absolute", left: ctx.localFrame * 2, width: 140, height: 80,
       transform: `rotateY(${ctx.localFrame}deg)`, transformStyle: "preserve-3d", opacity: props.alpha,

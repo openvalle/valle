@@ -24,7 +24,7 @@ const TOP = curve(
 const BASE_BAND = areaBand(MID, ZERO);
 const PLUS_BAND = areaBand(TOP, MID);
 
-function LegendItem(ctx, { index, label, color }) {
+function LegendItem({ index, label, color }) {
   return (
     <View key="item" className="flex items-center" style={{ marginTop: index === 0 ? 0 : 18, width: 270, height: 48 }}>
       <View key="swatch" style={{ width: 24, height: 24, borderRadius: 6, backgroundColor: color }} />
@@ -33,7 +33,7 @@ function LegendItem(ctx, { index, label, color }) {
   );
 }
 
-export default function StackedArea(ctx) {
+export default function StackedArea() { const ctx = useTime();
   const reveal = interpolate(ctx.progress, [0.06, 0.82], [0, 1], { easing: "easeInOut" });
   return (
     <Scene key="scene" className="relative h-full w-full" style={{ backgroundColor: "#07111a" }}>

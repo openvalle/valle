@@ -55,7 +55,7 @@ const TICK_Y = TICKS.map((t) => Y.map(t));
 const AXIS_FONT = CANVAS_H * 0.022;
 const LABEL_FONT = CANVAS_H * 0.024;
 
-export default function BarChart(ctx) {
+export default function BarChart() { const ctx = useTime();
   // The viewport supplies the frame-time scale factors.
   const sx = ctx.viewport.width / CANVAS_W;
   const sy = ctx.viewport.height / CANVAS_H;

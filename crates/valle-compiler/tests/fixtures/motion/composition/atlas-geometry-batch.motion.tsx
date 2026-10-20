@@ -2,7 +2,7 @@ export const composition = { width: 320, height: 160, fps: 30, duration: 2 };
 export const controls = { assets: { sprites: asset({ kind: "image", required: true }) } };
 const TILE = atlasRegion("asset://sprites", rect(0, 0, 0.5, 1));
 
-export default function AtlasBatch(ctx) {
+export default function AtlasBatch() {
   return (
     <Scene className="relative h-full w-full" style={{ backgroundColor: "#101010" }}>
       <GeometryBatch key="tiles" geometry={TILE}

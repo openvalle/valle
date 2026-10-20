@@ -1,7 +1,7 @@
 export const composition = { width: 640, height: 360, fps: 60, duration: 10 };
 
 // The glow input grows every frame, so every frame asks for a larger working surface.
-export default function GrowGlow(ctx) {
+export default function GrowGlow() { const ctx = useTime();
   const r = 8 + clamp(ctx.localFrame, 0, 90) * 1.5;
   return (
     <Scene className="relative h-full w-full" style={{ backgroundColor: "#101010" }}>

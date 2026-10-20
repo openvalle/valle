@@ -1,4 +1,4 @@
-export function MapPanel(ctx, { regions, x, y, width, height }) {
+export function MapPanel({ regions, x, y, width, height }) { const ctx = useTime();
   const theme = useTheme();
   const geometries = geoPath({ polygons: regions.map((region) => region.rings), projection: "mercator", width: width - 68, height: height - 150, padding: 0.08 });
   return (

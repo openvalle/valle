@@ -1,5 +1,5 @@
 export const composition = { width: 640, height: 360, fps: 30, duration: 2 };
-export default function EchoTrail(ctx) {
+export default function EchoTrail() { const ctx = useTime();
   return (
     <Scene className="relative h-full w-full" style={{ backgroundColor: "#101010" }}>
       <Echo key="echo" count={4} interval={3} decay={0.5}>

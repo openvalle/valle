@@ -87,7 +87,7 @@ fn review_merges_the_strobes_of_an_expanded_map_under_its_element() {
     // A template key expands the map into one node per row.
     let source = r##"export const composition = { width: 640, height: 360, fps: 30, duration: 2 };
 const ROWS = Array.from({ length: 4 }, (_, i) => ({ id: `runner${i}`, i }));
-export default function Main(ctx) {
+export default function Main() { const ctx = useTime();
   return <Scene style={{ width: 640, height: 360 }}>{ROWS.map((row) =>
     <View key={`${row.id}`} className="absolute" style={{ left: 20 + ctx.localFrame * 12,
       top: 20 + row.i * 40, width: 10, height: 10, backgroundColor: "#ffffff" }} />)}</Scene>;
@@ -111,7 +111,7 @@ fn review_flags_sustained_linear_motion_but_not_eased_motion_or_a_sliver() {
     let dir = tempfile::tempdir().unwrap();
     let source = r##"
 export const composition = { width: 640, height: 360, fps: 30, duration: 2 };
-export default function Motion(ctx) {
+export default function Motion() { const ctx = useTime();
   return <Scene style={{width:640,height:360,backgroundColor:"#101010"}}>
     <View key="lead" style={{position:"absolute",left:20,top:100,width:80,height:80,
       backgroundColor:"#ffffff",translate:point(ctx.localFrame < 20 ? ctx.localFrame * 5 : 100,0)}} />
@@ -170,7 +170,7 @@ fn review_checks_observed_stagger_for_numbered_moving_groups() {
     let dir = tempfile::tempdir().unwrap();
     let source = r##"
 export const composition = { width: 640, height: 360, fps: 30, duration: 2 };
-export default function Stagger(ctx) {
+export default function Stagger() { const ctx = useTime();
   return <Scene style={{width:640,height:360,backgroundColor:"#101010"}}>
     <View key="bar-0" style={{position:"absolute",left:20,top:40,width:80,height:40,
       backgroundColor:"#ffffff",translate:point(clamp(ctx.localFrame - 0,0,100)*5,0)}} />
@@ -315,8 +315,8 @@ fn review_uses_bound_motion_props_for_the_trajectory() {
     let dir = tempfile::tempdir().unwrap();
     let source = STROBE
         .replace(
-            "export default function Strobe(ctx)",
-            "export const controls = { props: { speed: number({ default: 1200, min: 0, max: 1200 }) } };\nexport default function Strobe(ctx, props)",
+            "export default function Strobe()",
+            "export const controls = { props: { speed: number({ default: 1200, min: 0, max: 1200 }) } };\nexport default function Strobe(props)",
         )
         .replace("* 1200", "* props.speed");
     std::fs::write(dir.path().join("props.json"), r#"{"speed":60}"#).unwrap();
@@ -330,7 +330,7 @@ fn review_uses_final_layout_motion_when_a_sibling_pushes_the_target() {
     let dir = tempfile::tempdir().unwrap();
     let source = r##"
 export const composition = { width: 640, height: 360, fps: 30, duration: 2 };
-export default function LayoutPush(ctx) {
+export default function LayoutPush() { const ctx = useTime();
   return <Scene style={{width:640,height:360}}>
     <View key="row" style={{display:"flex",width:640,height:120}}>
       <View key="spacer" style={{width:clamp(ctx.seconds,0,0.5)*900,height:20}}/>
@@ -360,7 +360,7 @@ fn review_reports_short_text_dwell_and_accepts_long_hidden_or_offscreen_controls
     let dir = tempfile::tempdir().unwrap();
     let source = r##"
 export const composition = { width: 640, height: 360, fps: 30, duration: 2 };
-export default function Readability(ctx) {
+export default function Readability() { const ctx = useTime();
   return <Scene style={{width:640,height:360,backgroundColor:"#101010"}}>
     <Text key="caption" style={{position:"absolute",left:100,top:100,fontSize:32,
       color:"#ffffff",opacity:ctx.localFrame >= 10 && ctx.localFrame < 15 ? 1 : 0}}>
@@ -486,7 +486,10 @@ export default function Overlap() {
     );
 
     let timed = source
-        .replace("function Overlap()", "function Overlap(ctx)")
+        .replace(
+            "function Overlap() {",
+            "function Overlap() { const ctx = useTime();",
+        )
         .replace("left:110", "left:ctx.localFrame < 30 ? 110 : 400");
     let (ok, timed_report) = run(dir.path(), &timed, &[]);
     assert!(ok, "{timed_report}");
@@ -506,7 +509,7 @@ fn review_hints_when_prominent_actions_compete_with_reading_or_each_other() {
     let dir = tempfile::tempdir().unwrap();
     let source = r##"
 export const composition = { width: 640, height: 360, fps: 30, duration: 1 };
-export default function CompetingActions(ctx) {
+export default function CompetingActions() { const ctx = useTime();
   return <Scene style={{width:640,height:360,backgroundColor:"#101010"}}>
     <Text key="caption" style={{position:"absolute",left:60,top:30,fontSize:28,color:"#ffffff"}}>Read this title</Text>
     <View key="left" style={{position:"absolute",left:20 + ctx.seconds * 360,top:160,width:80,height:80,backgroundColor:"#ff0000"}}/>

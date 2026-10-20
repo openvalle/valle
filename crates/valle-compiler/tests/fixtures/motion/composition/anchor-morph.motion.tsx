@@ -12,7 +12,7 @@ const sequenceAnchors = [
   [point(140, 220), point(380, 220), point(590, 220)],
   [point(140, 300), point(380, 300), point(590, 300)],
 ];
-export default function AnchorMorph(ctx) {
+export default function AnchorMorph() { const ctx = useTime();
   return (
     <Scene className="relative h-full w-full" style={{ backgroundColor: "#101010" }}>
       <Path key="pair" d={morph(A, B, ctx.progress, { anchors: pairAnchors })} fill="#ffffff" />

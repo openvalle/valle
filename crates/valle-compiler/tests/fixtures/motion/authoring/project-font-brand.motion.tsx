@@ -15,7 +15,7 @@ const intro = defineSequence({
 
 const ORBIT = path("M 960 195 C 1353 195 1665 264 1665 540 C 1665 816 1353 945 960 945 C 567 945 255 816 255 540 C 255 264 567 195 960 195 Z");
 
-export default function ProjectFontBrand(ctx) {
+export default function ProjectFontBrand() { const ctx = useTime();
   const mark = stageProgress(ctx.localFrame, ctx.fps, intro.mark);
   const name = stageProgress(ctx.localFrame, ctx.fps, intro.name);
   const line = stageProgress(ctx.localFrame, ctx.fps, intro.line);

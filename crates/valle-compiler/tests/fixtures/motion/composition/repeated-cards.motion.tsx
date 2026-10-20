@@ -7,7 +7,7 @@ const CARDS = Array.from({ length: 4 }, (_, index) => ({
   color: index % 2 === 0 ? "#3154ad" : "#ac5732",
 }));
 
-export default function Cards(ctx) {
+export default function Cards() { const ctx = useTime();
   return <Scene className="relative h-full w-full" style={{ backgroundColor: "#101010" }}>
     {CARDS.map((card) => <View key={card.id} style={{ width: 116, height: card.height,
       marginBottom: 3, paddingTop: 3, paddingLeft: 5, backgroundColor: "#202020" }}>

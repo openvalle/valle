@@ -54,7 +54,7 @@ const RESOLUTION_INDEPENDENT: &str = r##"
 const DATA = [12, 45, 78, 33];
 const maxV = DATA.reduce((a, b) => (a > b ? a : b), 0);
 
-export default function Chart(ctx) {
+export default function Chart() { const ctx = useTime();
   const w = ctx.viewport.width;
   const h = ctx.viewport.height;
   const plotHeight = h * 0.6;
@@ -142,7 +142,7 @@ fn reading_the_viewport_declares_the_capability_and_not_otherwise() {
 
     let without = compile_motion(
         r##"
-export default function P(ctx) {
+export default function P() { const ctx = useTime();
   return (<Scene className="h-full w-full">
     <View key="a" style={{ position: "absolute", left: "10%", top: 0, width: "50%", height: 10 }} />
   </Scene>);
@@ -166,7 +166,7 @@ export default function P(ctx) {
 fn unknown_viewport_fields_fail_closed() {
     let diagnostics = compile_motion(
         r##"
-export default function P(ctx) {
+export default function P() { const ctx = useTime();
   return (<Scene className="h-full w-full">
     <View key="a" style={{ position: "absolute", left: ctx.viewport.dpr, top: 0, width: 10, height: 10 }} />
   </Scene>);
@@ -177,7 +177,7 @@ export default function P(ctx) {
     assert!(
         diagnostics
             .iter()
-            .any(|d| d.message.contains("ctx.viewport.dpr")),
+            .any(|d| d.message.contains("`viewport.dpr`")),
         "got {diagnostics:#?}"
     );
 }

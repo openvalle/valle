@@ -7,7 +7,7 @@ use valle_motion::{MotionValue, StyleBinding, StyleValue};
 
 fn source(attributes: &str) -> String {
     format!(
-        "export default function Demo(ctx) {{return <Scene>\n  <View key=\"bad\" {attributes}/>\n</Scene>;}}"
+        "export default function Demo() {{ const ctx = useTime();return <Scene>\n  <View key=\"bad\" {attributes}/>\n</Scene>;}}"
     )
 }
 
@@ -233,24 +233,24 @@ fn transform_type_diagnostics_have_stable_source_spans_and_replacements() {
         (
             "rotate",
             "ctx.seconds",
-            84,
-            95,
+            104,
+            115,
             35,
             "`rotate: <expression>`: expected Angle or a finite CSS string; received Number; use rotate: `${ctx.seconds * 90}deg`",
         ),
         (
             "translate",
             "ctx.seconds",
-            87,
-            98,
+            107,
+            118,
             38,
             "`translate: <expression>`: expected Length2, Length, Point, Vec2 or a finite CSS string; received Number; use translate: point(ctx.seconds * 100, 0) or translate: `${ctx.seconds * 100}px 0px`",
         ),
         (
             "scale",
             "ctx.seconds > 0",
-            83,
-            98,
+            103,
+            118,
             34,
             "`scale: <expression>`: expected Number, Point, Length, Length2 or a finite CSS string; received Bool; use scale: 1 + ctx.seconds or scale: `${1 + ctx.seconds} 1`",
         ),
@@ -295,7 +295,7 @@ fn transform_structure_diagnostic_rejects_text_injection_at_the_template() {
             diagnostic.span.line,
             diagnostic.span.column
         ),
-        (84, 84 + expression.len() as u32, 2, 35)
+        (104, 104 + expression.len() as u32, 2, 35)
     );
     assert_eq!(
         &authored[diagnostic.span.start as usize..diagnostic.span.end as usize],

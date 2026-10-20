@@ -77,7 +77,7 @@ test("standalone caption Studio uses a caption track and preserves the saved pre
   const descriptor = { faceIndex: 0, variationAxes: {} };
   const source = `export const composition={width:320,height:180,fps:4,duration:1};
     export const role=captionPresenter({intro:seconds(0.25),outro:seconds(0.25)});
-    export default function Caption(ctx,props,data){return <Scene>{data.runs.map((run,index)=><Text key={index} style={{fontFamily:data.style.font,fontSize:data.style.fontSize,color:ctx.host.seconds>=run.start&&ctx.host.seconds<run.end?"#facc15":"#ffffff"}}>{run.text}</Text>)}</Scene>;}`;
+    export default function Caption(props){ const ctx = useTime(); const data = useData();return <Scene>{data.runs.map((run,index)=><Text key={index} style={{fontFamily:data.style.font,fontSize:data.style.fontSize,color:ctx.host.seconds>=run.start&&ctx.host.seconds<run.end?"#facc15":"#ffffff"}}>{run.text}</Text>)}</Scene>;}`;
   const data = { text: "Build story", runs: [{ text: "Build ", start: 0, end: 0.5 }, { text: "story", start: 0.5, end: 1 }],
     style: { font: "asset://caption", fontSize: 28, color: "#ffffff" }, region: [32, 54, 256, 90], align: "bottom-center" };
   const instance = { clipPath: "/tracks/visual/0/clips/0", entry: "caption.motion.tsx", modules: { "caption.motion.tsx": source },
@@ -135,7 +135,7 @@ test("300 Timeline captions compile each immutable word input once and retain ex
   const descriptor = { faceIndex: 0, variationAxes: {} };
   const source = `export const composition={width:160,height:48,fps:4,duration:1};
     export const role=captionPresenter({intro:seconds(0.25),outro:seconds(0.25)});
-    export default function Caption(ctx,props,data){return <Scene><Text key="word" style={{fontFamily:data.style.font,fontSize:data.style.fontSize,color:ctx.host.seconds<1?"#facc15":"white"}}>{data.text}</Text></Scene>;}`;
+    export default function Caption(props){ const ctx = useTime(); const data = useData();return <Scene><Text key="word" style={{fontFamily:data.style.font,fontSize:data.style.fontSize,color:ctx.host.seconds<1?"#facc15":"white"}}>{data.text}</Text></Scene>;}`;
   const clips = Array.from({ length: 300 }, (_, i) => ({ start: i * 2 + 0.125, duration: 2,
     runs: [{ text: `Word ${i % 100}`, start: 0, end: 1.75 }] }));
   const request = {
@@ -191,7 +191,7 @@ test("Studio diagnoses misplaced roles before compiling host data with author na
     ["title", "caption", "overlay({intro:seconds(0),outro:seconds(0),hold:'once'})", "a caption track presenter must declare captionPresenter"],
   ] as const) {
     const source = `export const composition={width:64,height:32,duration:1}; export const role=${declaration};
-      export default function Template(ctx,props,data){return <Scene/>;}`;
+      export default function Template(props){ const data = useData();return <Scene/>;}`;
     const clipPath = `/tracks/${track}/0/clips/0`;
     const tracks = track === "visual"
       ? { visual: [{ clips: [{ kind: "motion" as const, component, start: 0, duration: 1 }] }] }

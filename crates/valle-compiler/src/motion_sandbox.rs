@@ -41,6 +41,24 @@ const useTheme = (...args) => {
 };
 "#;
 
+/// `useData()` returns the prepared data that `bind_data` installs once module constants have
+/// run, so only components and helpers read it. `useTime()` is lowered by the compiler; here it
+/// only fails, without a builtin mark, so preparation falls back to frame-time lowering.
+const HOOKS_JS: &str = r#"
+const __valleNoData = Symbol("valle:no-data");
+let __valleActiveData = __valleNoData;
+const useData = (...args) => {
+  if (args.length !== 0) throw new Error("valle:compute:useData() takes no arguments");
+  if (__valleActiveData === __valleNoData) {
+    throw new Error("valle:compute:useData() reads the prepared data bound to the composition, so call it inside a component or a helper");
+  }
+  return __valleActiveData;
+};
+const useTime = () => {
+  throw new Error("useTime() reads the time of the frame being drawn, so call it inside a component or a helper");
+};
+"#;
+
 /// Replace nondeterministic globals with throwing getters. Disable locale-sensitive operations,
 /// GC-timing APIs, and dynamic code construction independently of QuickJS build features.
 const HARDEN_JS: &str = r#"
@@ -548,6 +566,7 @@ impl Sandbox {
                 .map_err(|e| format!("cannot bind Motion builtin bridge: {e}"))?;
             run(&ctx, MOTION_BUILTIN_JS.as_bytes()).map(|_: Option<String>| ())?;
             run(&ctx, THEME_SCOPE_JS.as_bytes()).map(|_: Option<String>| ())?;
+            run(&ctx, HOOKS_JS.as_bytes()).map(|_: Option<String>| ())?;
             if !prelude.trim().is_empty() {
                 run(&ctx, prelude.as_bytes()).map(|_: Option<String>| ())?;
             }
@@ -555,6 +574,19 @@ impl Sandbox {
         })
         .map_err(|m| classify(&m, "prelude"))?;
         Ok(Sandbox { ctx, _rt: rt })
+    }
+
+    /// Make `value` the prepared data that `useData()` returns. Module constants have already run
+    /// and cannot read it.
+    pub fn bind_data(&self, value: &serde_json::Value) -> Result<(), MotionDiagnostic> {
+        // Encode JSON text as a JSON string literal before passing it to JSON.parse.
+        let payload = serde_json::Value::String(value.to_string());
+        let program =
+            format!("void (__valleActiveData = __valleFreezeTheme(JSON.parse({payload})));");
+        self.ctx
+            .with(|ctx| run::<Option<String>>(&ctx, program.as_bytes()))
+            .map(|_| ())
+            .map_err(|message| classify(&message, "data"))
     }
 
     /// Evaluate a static expression with temporary constant bindings. Reject functions, symbols,

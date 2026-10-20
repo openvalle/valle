@@ -37,10 +37,10 @@ fn program(source: &str, frame: u32) -> Vec<u8> {
 #[test]
 fn frame_time_gradient_survives_local_alias_and_component_prop() {
     let header = r##"export const composition={width:64,height:64,fps:30,duration:1};
-function Shape(ctx, {paint}) {
+function Shape({paint}) { const ctx = useTime();
   return <Path d="M 0 0 L 64 0 L 64 64 L 0 64 Z" fill={paint}/>;
 }
-function DirectShape(ctx, props) {
+function DirectShape(props) { const ctx = useTime();
   return <Path d="M 0 0 L 64 0 L 64 64 L 0 64 Z" fill={props.paint}/>;
 }
 const shape = (paint) => <Path d="M 0 0 L 64 0 L 64 64 L 0 64 Z" fill={paint}/>;
@@ -49,19 +49,19 @@ const shape = (paint) => <Path d="M 0 0 L 64 0 L 64 64 L 0 64 Z" fill={paint}/>;
       gradientStop(0,interpolate(ctx.seconds,[0,1],["#ff0000","#00ff00"])),
       gradientStop(1,"#0000ff")])"##;
     let direct = format!(
-        "{header}export default function Demo(ctx) {{return <Scene><Path d=\"M 0 0 L 64 0 L 64 64 L 0 64 Z\" fill={{{gradient}}}/></Scene>;}}"
+        "{header}export default function Demo() {{ const ctx = useTime();return <Scene><Path d=\"M 0 0 L 64 0 L 64 64 L 0 64 Z\" fill={{{gradient}}}/></Scene>;}}"
     );
     let local = format!(
-        "{header}export default function Demo(ctx) {{const paint={gradient}; const alias=paint; return <Scene><Path d=\"M 0 0 L 64 0 L 64 64 L 0 64 Z\" fill={{alias}}/></Scene>;}}"
+        "{header}export default function Demo() {{ const ctx = useTime();const paint={gradient}; const alias=paint; return <Scene><Path d=\"M 0 0 L 64 0 L 64 64 L 0 64 Z\" fill={{alias}}/></Scene>;}}"
     );
     let passed = format!(
-        "{header}export default function Demo(ctx) {{const paint={gradient}; return <Scene><Shape paint={{paint}}/></Scene>;}}"
+        "{header}export default function Demo() {{ const ctx = useTime();const paint={gradient}; return <Scene><Shape paint={{paint}}/></Scene>;}}"
     );
     let passed_direct = format!(
-        "{header}export default function Demo(ctx) {{const paint={gradient}; return <Scene><DirectShape paint={{paint}}/></Scene>;}}"
+        "{header}export default function Demo() {{ const ctx = useTime();const paint={gradient}; return <Scene><DirectShape paint={{paint}}/></Scene>;}}"
     );
     let passed_helper = format!(
-        "{header}export default function Demo(ctx) {{const paint={gradient}; return <Scene>{{shape(paint)}}</Scene>;}}"
+        "{header}export default function Demo() {{ const ctx = useTime();const paint={gradient}; return <Scene>{{shape(paint)}}</Scene>;}}"
     );
     for frame in [0, 15, 29] {
         let expected = program(&direct, frame);
@@ -83,7 +83,7 @@ const shape = (paint) => <Path d="M 0 0 L 64 0 L 64 64 L 0 64 Z" fill={paint}/>;
 
 #[test]
 fn frame_time_paint_cannot_be_used_as_a_scalar() {
-    let source = r##"export default function Demo(ctx) {
+    let source = r##"export default function Demo() { const ctx = useTime();
       const paint=linearGradient(point(0,0),point(64,0),[
         gradientStop(0,interpolate(ctx.seconds,[0,1],["red","blue"])),
         gradientStop(1,"green")]);

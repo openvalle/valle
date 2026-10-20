@@ -13,12 +13,12 @@ const TOP_A = VALUES.map((value) => Y_A.map(value));
 const TOP_B = VALUES.map((value, index) => Y_B.map(value + index * 4));
 const DENSE = Array.from({ length: 1200 }, (_, index) => point(105 + (index % 60) * 12, 585 + Math.floor(index / 60) * 7.5));
 
-function CardBar(ctx, { index, accent, progress }) {
+function CardBar({ index, accent, progress }) {
   const top = TOP_A[index] + (TOP_B[index] - TOP_A[index]) * progress;
   return <View key="bar" className="absolute" style={{ left: X.band(index)[0], top, width: X.bandwidth(), height: 525 - top, backgroundColor: accent, opacity: 0.7 + index * 0.08 }} />;
 }
 
-function ChartCard(ctx, { accent, title }) {
+function ChartCard({ accent, title }) { const ctx = useTime();
   const p = ctx.progress;
   return (
     <View key="card" className="absolute" style={{ borderStyle: "solid", width: 810, height: 660, borderRadius: 42, backgroundColor: "#0f172acc", borderWidth: 1.5, borderColor: accent, displacement: displacement(19, point(0.008, 0.006), 4.5 + p * 3, { octaves: 2, mode: "fractal" }) }}>
@@ -28,7 +28,7 @@ function ChartCard(ctx, { accent, title }) {
   );
 }
 
-export default function ChartIntegration(ctx) {
+export default function ChartIntegration() { const ctx = useTime();
   const p = ctx.progress;
   const first = bounds("primary/card");
   const second = bounds("secondary/card");

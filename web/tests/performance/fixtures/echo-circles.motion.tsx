@@ -1,7 +1,7 @@
 export const composition = { width: 640, height: 360, fps: 60, duration: 10 };
 export const controls = { props: { shift: number({default:0}) } };
 const DOTS = Array.from({length:1024}, (_,i)=>({id:`d${i}`,x:20+(i%32)*19,y:22+Math.floor(i/32)*10,k:i/1024}));
-export default function EchoCircles(ctx, props) {
+export default function EchoCircles(props) { const ctx = useTime();
   const t=ctx.seconds;
   return <Scene style={{width:640,height:360,backgroundColor:"#101010"}}>
     <Echo key="trail" count={3} interval={3} decay={0.36}>

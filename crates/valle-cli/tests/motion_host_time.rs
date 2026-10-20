@@ -8,7 +8,7 @@ use std::{
 };
 
 const SOURCE: &str = r##"export const composition={width:64,height:32,fps:4,duration:1};
-export default function Main(ctx) {return <Scene><View className="absolute" style={{
+export default function Main() { const ctx = useTime();return <Scene><View className="absolute" style={{
     left:ctx.host.progress*40,width:12,height:12,top:ctx.seconds*8,
     backgroundColor:ctx.host.duration===2?"white":"red"}}/></Scene>; }"##;
 
@@ -184,7 +184,7 @@ fn overlay_delivery_preserves_endpoints_and_uses_the_host_viewport() {
     std::fs::write(dir.path().join("overlay.motion.tsx"),r#"
 export const composition={width:64,height:32,fps:4,duration:2};
 export const role=overlay({intro:seconds(0.5),outro:seconds(0.5),hold:"once"});
-export default function Main(ctx) {return <Scene><View key="bar" className="absolute"
+export default function Main() { const ctx = useTime();return <Scene><View key="bar" className="absolute"
  style={{left:ctx.seconds*8,width:ctx.viewport.width/4,height:ctx.viewport.height/2,backgroundColor:"white"}}/></Scene>;}
 "#).unwrap();
     for size in ["64x32", "32x64"] {

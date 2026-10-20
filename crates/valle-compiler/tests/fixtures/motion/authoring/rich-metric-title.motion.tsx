@@ -16,7 +16,7 @@ const reveal = defineSequence({
 
 const BARS = [0.38, 0.52, 0.46, 0.68, 0.59, 0.77, 0.72, 0.91];
 
-export default function RichMetricTitle(ctx) {
+export default function RichMetricTitle() { const ctx = useTime();
   const label = stageProgress(ctx.localFrame, ctx.fps, reveal.label);
   const amount = stageProgress(ctx.localFrame, ctx.fps, reveal.amount);
   const detail = stageProgress(ctx.localFrame, ctx.fps, reveal.detail);

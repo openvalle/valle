@@ -23,7 +23,7 @@ test("CanvasKit RasterProgram cache reuses exact pixels and invalidates on frame
   let executor: CanvasKitExecutor | null = null;
   await writeFile(join(directory, "scene.motion.tsx"), `
       export const composition = { width: 48, height: 48, fps: 30, duration: 3 };
-      export default function CacheScene(ctx) {
+      export default function CacheScene() { const ctx = useTime();
         return <Scene style={{ width: 48, height: 48, backgroundColor: "#000" }}>
           <View style={{ position: "absolute", left: 4 + ctx.seconds * 8,
             top: 8, width: 16, height: 16,

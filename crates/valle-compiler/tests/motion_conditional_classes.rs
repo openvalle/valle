@@ -10,7 +10,7 @@ use valle_timeline::FrameRate;
 
 fn source(class: &str) -> String {
     format!(
-        r#"export default function Demo(ctx) {{
+        r#"export default function Demo() {{ const ctx = useTime();
         return <Scene style={{{{width:320,height:180}}}}>
             <View key="target" className={class} style={{{{height:40}}}} />
         </Scene>;
@@ -82,7 +82,7 @@ fn independent_conditions_and_token_fragments_select_the_right_frame_styles() {
 #[test]
 fn reused_class_choices_and_pure_helpers_preserve_important_and_inline_precedence() {
     let authored = r#"function color(active) { return active ? 'bg-blue-500' : 'bg-red-500'; }
-        export default function Demo(ctx) {
+        export default function Demo() { const ctx = useTime();
             const width = ctx.localFrame >= 30 ? 'w-40' : 'w-20!';
             return <Scene style={{width:320,height:180}}>
                 <View key="target" className={`${width} ${color(ctx.localFrame >= 50)}`} style={{height:40,width:100}}/>
@@ -144,7 +144,7 @@ fn independent_class_conditions_do_not_expand_complete_style_combinations() {
         ));
     }
     let shared = format!(
-        "export default function Demo(ctx) {{ {aliases} return <Scene className={{c24}}/>; }}"
+        "export default function Demo() {{ const ctx = useTime(); {aliases} return <Scene className={{c24}}/>; }}"
     );
     let artifact = compile_motion(&shared).unwrap().artifact;
     assert_eq!(artifact.nodes[0].class_names.len(), 2);
@@ -152,7 +152,7 @@ fn independent_class_conditions_do_not_expand_complete_style_combinations() {
 
 #[test]
 fn conditional_composition_utilities_enter_the_scene_dependency_graph() {
-    let authored = r#"export default function Demo(ctx) {
+    let authored = r#"export default function Demo() { const ctx = useTime();
         return <Scene style={{width:320,height:180}}>
             <Group key="conditional"
                 className={ctx.localFrame > 0 ? 'backdrop-blur-sm [mix-blend-mode:screen]' : ''}

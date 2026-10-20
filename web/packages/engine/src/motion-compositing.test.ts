@@ -72,18 +72,18 @@ test("Motion composition, easing and color interpolation match analytic pixels o
   const cases: Case[] = [
     { name:"regression-captured-map", source:`export const composition={width:64,height:64,fps:30,duration:2};
       const rows=[{id:"a",x:0},{id:"b",x:16},{id:"c",x:32}];
-      export default function Main(ctx){const k=ctx.progress*2;return <Scene style={{width:64,height:64,backgroundColor:"black"}}>
+      export default function Main(){ const ctx = useTime();const k=ctx.progress*2;return <Scene style={{width:64,height:64,backgroundColor:"black"}}>
         {rows.map(row=><View key={row.id} className="absolute" style={{left:row.x+k*10,top:20,width:8,height:8,backgroundColor:"white"}}/>)}</Scene>}`, body:"", probes:[],
       frameProbes:{0:[[1,24,255,255,255],[9,24,0,0,0]],30:[[11,24,255,255,255],[1,24,0,0,0]]} },
     { name:"regression-chromatic-alpha", source:`export const composition={width:64,height:64,fps:30,duration:2};
-      export default function Main(ctx){return <Scene style={{width:64,height:64}}><View style={{width:64,height:64,
+      export default function Main(){ const ctx = useTime();return <Scene style={{width:64,height:64}}><View style={{width:64,height:64,
         backgroundColor:"#ffffff80",filter:\`chromatic-aberration(\${ctx.seconds}px)\`}}/></Scene>}`, body:"",
       probes:[[32,32,255,255,255,128]], frames:[0,30,0] },
     { name:"noise-displacement", source:noiseDisplacementSource, body:"", width:160, height:96, frames:[0,30,0], probes:[] },
     // One panel moves inside the frame and one crosses its left edge, where the pass target is
     // clipped: neither the noise nor its vectors may follow where a target starts.
     { name:"noise-displacement-stripes", source:`export const composition={width:160,height:96,fps:30,duration:2};
-      export default function Main(ctx){const drift=ctx.localFrame*0.5;return <Scene className="relative h-full w-full" style={{backgroundColor:"#e2e8f0"}}>
+      export default function Main(){ const ctx = useTime();const drift=ctx.localFrame*0.5;return <Scene className="relative h-full w-full" style={{backgroundColor:"#e2e8f0"}}>
         <View key="inner" className="absolute" style={{left:60+drift,top:8,width:84,height:80,overflow:"hidden",
           displacement:displacement(7,point(0.071,0.057),14,{octaves:2})}}>${stripes("inner",84,80)}</View>
         <View key="edge" className="absolute" style={{left:-20,top:10,width:70,height:76,overflow:"hidden",
@@ -92,7 +92,7 @@ test("Motion composition, easing and color interpolation match analytic pixels o
       </Scene>}`, body:"", width:160, height:96, frames:[0,30,0], probes:[] },
     // Backdrop displacement in output pixels, alone and after a backdrop blur.
     { name:"backdrop-displacement", source:`export const composition={width:160,height:96,fps:30,duration:2};
-      export default function Main(ctx){return <Scene className="relative h-full w-full" style={{backgroundColor:"#e2e8f0"}}>
+      export default function Main(){ const ctx = useTime();return <Scene className="relative h-full w-full" style={{backgroundColor:"#e2e8f0"}}>
         <View key="backdrop" className="absolute" style={{left:0,top:0,width:160,height:96}}>${stripes("backdrop",160,96)}</View>
         <View key="lens" className="absolute" style={{left:16,top:14,width:56,height:68,
           backdropDisplacement:displacement(7,point(0.071,0.057),12+ctx.progress*8,{octaves:2})}}/>
@@ -101,7 +101,7 @@ test("Motion composition, easing and color interpolation match analytic pixels o
       </Scene>}`, body:"", width:160, height:96, frames:[0,30,0], probes:[] },
     // A backdrop blur mixes in what lies just outside the node, across its edges and its corner radii.
     { name:"backdrop-blur-edge", source:`export const composition={width:96,height:64,fps:30,duration:2};
-      export default function Main(ctx){return <Scene className="relative h-full w-full" style={{backgroundColor:"#e2e8f0"}}>
+      export default function Main(){ const ctx = useTime();return <Scene className="relative h-full w-full" style={{backgroundColor:"#e2e8f0"}}>
         <View key="backdrop" className="absolute" style={{left:0,top:0,width:96,height:64}}>${stripes("backdrop",96,64)}</View>
         <View key="bar-top" className="absolute" style={{left:0,top:8,width:96,height:4,backgroundColor:"#16a34a"}}/>
         <View key="bar-bottom" className="absolute" style={{left:0,top:47,width:96,height:4,backgroundColor:"#16a34a"}}/>
@@ -532,7 +532,7 @@ test("Motion composition, easing and color interpolation match analytic pixels o
       const width = fixture.width ?? 64, height = fixture.height ?? 64;
       const info = { width,height,colorType:ck.ColorType.RGBA_8888,alphaType:ck.AlphaType.Unpremul,colorSpace:ck.ColorSpace.SRGB };
       await writeFile(join(dir,"scene.motion.tsx"), fixture.source ?? `export const composition={width:64,height:64,fps:30,duration:2};
-        export default function SceneTest(ctx) { return <Scene style={{width:64,height:64,backgroundColor:"#000"}}>${fixture.body}</Scene>; }`);
+        export default function SceneTest() { const ctx = useTime(); return <Scene style={{width:64,height:64,backgroundColor:"#000"}}>${fixture.body}</Scene>; }`);
       const assetArgs = fixture.atlasAsset ? ["--asset","sprites=atlas-sprites.png"] : [];
       const server = spawn(["motion","studio","scene.motion.tsx",...assetArgs,"--port","0","--web-assets-dir",join(root,"web/dist")]);
       const surface = ck.MakeSurface(width,height)!;

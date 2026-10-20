@@ -1,5 +1,5 @@
 export const composition = { width: 640, height: 360, fps: 30, duration: 2 };
-export default function MultiFrame(ctx) {
+export default function MultiFrame() { const ctx = useTime();
   return (
     <Scene className="relative h-full w-full">
       <View key="dot" className="absolute" style={{ left: 40 + ctx.localFrame * 6, top: 130,

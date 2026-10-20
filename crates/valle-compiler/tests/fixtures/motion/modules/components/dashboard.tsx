@@ -30,7 +30,7 @@ export const controls = {
   },
 };
 
-export default function ReleaseDashboard(ctx, props, data) {
+export default function ReleaseDashboard(props) { const ctx = useTime(); const data = useData();
   const reveal = interpolate(ctx.progress, [0, 1], [0, 1], { easing: "easeOut" });
   return (
     <ThemeProvider value={brandTheme}>

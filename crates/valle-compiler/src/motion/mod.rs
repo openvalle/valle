@@ -93,6 +93,7 @@ mod style_objects;
 mod syntax;
 mod text;
 mod theme_provider;
+mod time;
 mod transform;
 mod values;
 pub use audio::{AudioAnalysisEnv, AudioPcm};
@@ -655,6 +656,9 @@ enum AuthorValue {
     /// It is expanded by the compiler and never becomes an Artifact/runtime array.
     DynamicTuple(Vec<ExprId>),
     Children(Vec<PendingNode>),
+    /// The time, or an object in it, passed on as an argument or prop. Its numbers lower where
+    /// they are read, as with `useTime()` itself.
+    Time(Vec<String>),
 }
 
 /// An authored function declaration or arrow-function helper.
@@ -707,10 +711,13 @@ fn authored_fn_of<'a>(initializer: &'a Expression<'a>) -> Option<AuthoredFn<'a>>
     }
 }
 
-fn reserved_theme_binding(pattern: &BindingPattern<'_>) -> Option<Span> {
+/// Compile-time intrinsics that a source can neither declare nor shadow.
+const RESERVED_INTRINSICS: &[&str] = &["ThemeProvider", "useTheme", "useTime", "useData"];
+
+fn reserved_intrinsic_binding(pattern: &BindingPattern<'_>) -> Option<Span> {
     match pattern {
         BindingPattern::BindingIdentifier(identifier)
-            if matches!(identifier.name.as_str(), "useTheme" | "ThemeProvider") =>
+            if RESERVED_INTRINSICS.contains(&identifier.name.as_str()) =>
         {
             Some(identifier.span())
         }
@@ -718,34 +725,34 @@ fn reserved_theme_binding(pattern: &BindingPattern<'_>) -> Option<Span> {
         BindingPattern::ObjectPattern(pattern) => pattern
             .properties
             .iter()
-            .find_map(|property| reserved_theme_binding(&property.value))
+            .find_map(|property| reserved_intrinsic_binding(&property.value))
             .or_else(|| {
                 pattern
                     .rest
                     .as_ref()
-                    .and_then(|rest| reserved_theme_binding(&rest.argument))
+                    .and_then(|rest| reserved_intrinsic_binding(&rest.argument))
             }),
         BindingPattern::ArrayPattern(pattern) => pattern
             .elements
             .iter()
             .flatten()
-            .find_map(reserved_theme_binding)
+            .find_map(reserved_intrinsic_binding)
             .or_else(|| {
                 pattern
                     .rest
                     .as_ref()
-                    .and_then(|rest| reserved_theme_binding(&rest.argument))
+                    .and_then(|rest| reserved_intrinsic_binding(&rest.argument))
             }),
-        BindingPattern::AssignmentPattern(pattern) => reserved_theme_binding(&pattern.left),
+        BindingPattern::AssignmentPattern(pattern) => reserved_intrinsic_binding(&pattern.left),
     }
 }
 
-fn module_reserved_theme_binding(program: &Program<'_>) -> Option<Span> {
+fn module_reserved_intrinsic_binding(program: &Program<'_>) -> Option<Span> {
     for statement in &program.body {
         match statement {
             Statement::FunctionDeclaration(function)
                 if function.id.as_ref().is_some_and(|identifier| {
-                    matches!(identifier.name.as_str(), "useTheme" | "ThemeProvider")
+                    RESERVED_INTRINSICS.contains(&identifier.name.as_str())
                 }) =>
             {
                 return function.id.as_ref().map(|identifier| identifier.span());
@@ -754,7 +761,7 @@ fn module_reserved_theme_binding(program: &Program<'_>) -> Option<Span> {
                 if let Some(span) = declaration
                     .declarations
                     .iter()
-                    .find_map(|declaration| reserved_theme_binding(&declaration.id))
+                    .find_map(|declaration| reserved_intrinsic_binding(&declaration.id))
                 {
                     return Some(span);
                 }
@@ -794,6 +801,8 @@ struct Bindings<'s> {
     component_props: Option<BTreeMap<String, AuthorValue>>,
     /// The rest of destructured props, `{ title, ...rest }`: the props it leaves out.
     prop_rests: BTreeMap<String, BTreeSet<String>>,
+    /// Names bound to the time `useTime()` returns, or to an object in it: the path under it.
+    times: BTreeMap<String, Vec<String>>,
 }
 
 #[derive(Clone)]
@@ -806,6 +815,7 @@ struct BindingFrame<'s> {
     statics: BTreeMap<String, serde_json::Value>,
     objects: BTreeMap<String, style_objects::AuthoredObject<'s>>,
     children: BTreeMap<String, Vec<PendingNode>>,
+    times: BTreeMap<String, Vec<String>>,
 }
 
 impl<'s> Bindings<'s> {
@@ -853,6 +863,11 @@ impl<'s> Bindings<'s> {
             children: std::mem::take(&mut self.children),
             component_props: self.component_props.take(),
             prop_rests: std::mem::take(&mut self.prop_rests),
+            times: if captures_scope {
+                self.times.clone()
+            } else {
+                std::mem::take(&mut self.times)
+            },
         }
     }
 
@@ -877,6 +892,7 @@ impl<'s> Bindings<'s> {
             statics: self.statics.clone(),
             objects: self.objects.clone(),
             children: self.children.clone(),
+            times: self.times.clone(),
         }
     }
 
@@ -889,6 +905,20 @@ impl<'s> Bindings<'s> {
         self.statics = frame.statics;
         self.objects = frame.objects;
         self.children = frame.children;
+        self.times = frame.times;
+    }
+
+    /// Forget every value bound to `name`, before it is bound again.
+    fn unbind(&mut self, name: &str) {
+        self.scalars.remove(name);
+        self.paints.remove(name);
+        self.tuples.remove(name);
+        self.instance_objects.remove(name);
+        self.statics.remove(name);
+        self.objects.remove(name);
+        self.children.remove(name);
+        self.prop_rests.remove(name);
+        self.times.remove(name);
     }
 }
 

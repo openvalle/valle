@@ -8,7 +8,7 @@ const DOTS = Array.from({ length: COLS * COLS }, (_, i) => ({
   color: i % 2 === 0 ? "#8b7bff" : "#22d3ee",
   delay: i / (COLS * COLS),
 }));
-export default function CircleGrid(ctx) {
+export default function CircleGrid() { const ctx = useTime();
   return <Scene className="relative h-full w-full" style={{ backgroundColor: "#101010" }}>
     {DOTS.map((dot) => (
       <Circle key={dot.id} cx={dot.x} cy={dot.y} r={dot.radius} fill={dot.color}

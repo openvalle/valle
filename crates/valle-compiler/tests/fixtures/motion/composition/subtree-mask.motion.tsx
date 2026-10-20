@@ -1,6 +1,6 @@
 export const composition = { width: 640, height: 360, fps: 30, duration: 2 };
 
-export default function IrisMask(ctx) {
+export default function IrisMask() { const ctx = useTime();
   return <Scene style={{ width: 640, height: 360, backgroundColor: "#101010" }}>
     <Mask key="iris" rect={rect(0, 0, 640, 360)} mode="alpha"
       style={{ position: "absolute", width: 640, height: 360 }}>

@@ -9,7 +9,7 @@ use valle_motion::{Expr, MotionValue, StyleValue};
 /// Insert style fields verbatim into a one-node scene.
 fn scene(style: &str) -> String {
     format!(
-        "export default function Probe(ctx) {{\n  return <Scene key=\"scene\" style={{{{ {style} }}}} />;\n}}\n"
+        "export default function Probe() {{ const ctx = useTime();\n  return <Scene key=\"scene\" style={{{{ {style} }}}} />;\n}}\n"
     )
 }
 

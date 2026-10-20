@@ -1112,11 +1112,11 @@ impl<'s> Compiler<'s> {
                 return None;
             }
             let fps = call.arguments[1].as_expression()?;
-            if self.src(fps) != "ctx.fps" {
+            if !self.is_time_fps(fps) {
                 self.illegal(
                     DiagCode::GrammarForbidden,
                     fps.span(),
-                    "particles' second argument must be exactly `ctx.fps`",
+                    "particles' second argument must be `ctx.fps`, the frame rate from `useTime()`",
                 );
                 return None;
             }

@@ -1,7 +1,7 @@
 export const composition = { width: 1920, height: 1080, fps: 30, duration: 5 };
 const stripes = Array.from({ length: 11 }, (_, index) => ({ index }));
 
-function Pattern(ctx, props) {
+function Pattern(props) {
   return (
     <View style={{ position: "absolute", inset: 0, overflow: "hidden", borderRadius: 24 }}>
       {stripes.map(({ index }) => (
@@ -19,7 +19,7 @@ function Pattern(ctx, props) {
   );
 }
 
-export default function AdvancedNodeEffects(ctx) {
+export default function AdvancedNodeEffects() { const ctx = useTime();
   const seconds = ctx.localFrame * ctx.fps.den / ctx.fps.num;
   const reveal = interpolate(ctx.progress, [0, 1], [0, 1], { easing: "easeOut" });
   const displacementScale = 18 + sin(seconds * 2.1) * 10;

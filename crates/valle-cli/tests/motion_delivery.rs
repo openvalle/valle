@@ -38,7 +38,7 @@ const CONTACT: &str = include_str!(
 );
 
 const COST: &str = r##"export const composition = { width: 64, height: 36, fps: 4, duration: 1 };
-export default function Cost(ctx) {
+export default function Cost() { const ctx = useTime();
   return (
     <Scene className="relative h-full w-full">
       <View key="card" className="absolute" style={{ left: 8, top: 8, width: 16 + ctx.localFrame * 8,
@@ -49,7 +49,7 @@ export default function Cost(ctx) {
 "##;
 
 const COST_TRANSITION: &str = r##"export const composition = { width: 64, height: 36, fps: 4, duration: 1 };
-export default function Blur(ctx) {
+export default function Blur() { const ctx = useTime();
   return <Transition kind="linearBlur" progress={ctx.progress} style={{ width: 64, height: 36 }}>
     <View style={{ backgroundColor: "#2140ff" }} />
     <View style={{ backgroundColor: "#ff4a24" }} />
@@ -59,7 +59,7 @@ export default function Blur(ctx) {
 
 const COST_SHADER: &str = r##"export const controls = { assets: { effect: asset({ kind: "shader" }) } };
 export const composition = { width: 64, height: 36, fps: 4, duration: 1 };
-export default function Work(ctx) {
+export default function Work() { const ctx = useTime();
   const size = { width: ctx.viewport.width, height: ctx.viewport.height };
   return <Scene style={size}><ShaderLayer source="asset://effect" style={size}>NESTED</ShaderLayer></Scene>;
 }
@@ -1134,7 +1134,7 @@ fn bare_filename_import_check_matches_dot_relative_entry() {
     std::fs::write(dir.path().join("module-entry.motion.tsx"), r##"
 import { SIZE } from "./lib";
 export const composition = { width: 640, height: 360, fps: 30, duration: 1 };
-export default function Main(ctx) { return <Scene className="relative h-full w-full" style={{backgroundColor:"#101010"}}>
+export default function Main() { const ctx = useTime(); return <Scene className="relative h-full w-full" style={{backgroundColor:"#101010"}}>
 <View key="box" className="absolute" style={{left:20,top:20,width:SIZE,height:SIZE,backgroundColor:"#ffffff"}} /></Scene>; }
 "##).unwrap();
     let mut bare = success(run(

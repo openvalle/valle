@@ -7,7 +7,7 @@ const EXTRUDED_TEXT: &str = include_str!("fixtures/motion/composition/extruded-t
 
 const SOURCE: &str = r##"
 export const composition={width:128,height:128,duration:1};
-export default function T(ctx){return <Scene style={{width:128,height:128}}>
+export default function T(){ const ctx = useTime();return <Scene style={{width:128,height:128}}>
   <Scene3D key="s" camera={{position:[0,0,5],target:[0,0,0]}} style={{width:128,height:128}}>
     <Mesh key="shape" geometry={extrude(path("M -1 -1 L 1 -1 L 1 1 L -1 1 Z"),{depth:0.8,bevel:0.1})}
       material={{type:"lambert",color:"#ffffff"}} rotateY={ctx.seconds*30}/>

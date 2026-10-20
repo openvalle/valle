@@ -81,7 +81,7 @@ fn span_units_keep_a_single_character_clock() {
 #[test]
 fn rich_units_keep_global_utf8_offsets_and_words_cross_span_boundaries() {
     let chars = r##"export const composition={width:640,height:360,fps:30,duration:2};
-export default function Units(ctx) { return <Scene><Text key="t" split="char"
+export default function Units() { const ctx = useTime(); return <Scene><Text key="t" split="char"
   perUnit={{opacity:ctx.unit.start / 10}}>{"Aé"}<Span style={{color:"#ff0000"}}>中B</Span></Text></Scene>; }"##;
     let (plain, span) = units(chars, 0);
     assert_eq!(plain.len(), 2);
@@ -92,7 +92,7 @@ export default function Units(ctx) { return <Scene><Text key="t" split="char"
     assert_eq!((span[1].start, span[1].end), (3, 4));
 
     let words = r##"export const composition={width:640,height:360,fps:30,duration:2};
-export default function Units(ctx) { return <Scene><Text key="t" split="word"
+export default function Units() { const ctx = useTime(); return <Scene><Text key="t" split="word"
   perUnit={{opacity:ctx.unit.end / 10}}>{"hel"}<Span style={{color:"#ff0000"}}>lo</Span></Text></Scene>; }"##;
     let (plain, span) = units(words, 0);
     assert_eq!(plain.len(), 1);
@@ -106,7 +106,7 @@ export default function Units(ctx) { return <Scene><Text key="t" split="word"
 #[test]
 fn common_dynamic_interpolation_stops_shift_the_input_per_unit() {
     let source = r##"export const composition={width:640,height:360,fps:30,duration:2};
-export default function Units(ctx) { return <Scene><Text key="t" split="char"
+export default function Units() { const ctx = useTime(); return <Scene><Text key="t" split="char"
   perUnit={{opacity:interpolate(ctx.seconds,
     [ctx.unit.index * 0.1, 1 + ctx.unit.index * 0.1], [0, 1])}}>
   {"AB"}<Span style={{color:"#ff0000"}}>CD</Span></Text></Scene>; }"##;
@@ -135,7 +135,7 @@ export default function Units(ctx) { return <Scene><Text key="t" split="char"
 #[test]
 fn dynamic_span_text_recomputes_the_shared_unit_count_per_frame() {
     let source = r##"export const composition={width:640,height:360,fps:30,duration:2};
-export default function Units(ctx) { return <Scene><Text key="t" split="char"
+export default function Units() { const ctx = useTime(); return <Scene><Text key="t" split="char"
   perUnit={{opacity:ctx.unit.count / 10}}>{"A"}<Span style={{color:"#ff0000"}}>
   {ctx.seconds < 0.5 ? "B" : "BC"}</Span></Text></Scene>; }"##;
     let (plain, span) = units(source, 0);

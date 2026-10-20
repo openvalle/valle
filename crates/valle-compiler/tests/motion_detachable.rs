@@ -184,6 +184,9 @@ fn the_reference_films_only_use_the_public_surface() {
         "angle",
         "select",
         "asset",
+        "useTime",
+        "useData",
+        "useTheme",
     ];
 
     for (name, source) in FILMS {

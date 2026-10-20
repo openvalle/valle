@@ -5,7 +5,7 @@ const RIGHT_REVERSED = path("M 280 30 L 360 30 L 360 110 L 280 110 Z M 80 30 L 1
 const SOLID = path("M 400 200 L 520 200 L 520 320 L 400 320 Z");
 const HOLED = path("M 400 200 L 520 200 L 520 320 L 400 320 Z M 440 240 L 480 240 L 480 280 L 440 280 Z");
 
-export default function PairedAnchors(ctx) {
+export default function PairedAnchors() { const ctx = useTime();
   return (
     <Scene className="relative h-full w-full" style={{ backgroundColor: "#101010" }}>
       <Path key="outers" d={morph(LEFT, RIGHT_REVERSED, ctx.progress, {

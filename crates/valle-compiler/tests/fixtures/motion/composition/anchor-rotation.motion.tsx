@@ -3,7 +3,7 @@ const TOP_A = arc(point(140, 60), 45, 0, TAU);
 const TOP_B = arc(point(500, 60), 45, 0, TAU);
 const BOTTOM_A = arc(point(140, 170), 45, 0, TAU);
 const BOTTOM_B = arc(point(500, 170), 45, 0, TAU);
-export default function AnchorRotation(ctx) {
+export default function AnchorRotation() { const ctx = useTime();
   return (
     <Scene className="relative h-full w-full" style={{ backgroundColor: "#101010" }}>
       <Path key="anchored" d={morph(TOP_A, TOP_B, ctx.progress, {

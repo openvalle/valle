@@ -19,7 +19,7 @@ const SIGNAL = Array.from({ length: COUNT }, (_, index) => {
   return point(120 + row * 16.8 + (column % 10) * 4.2, 40 + column * 9.8 + (row % 8) * 5.4);
 });
 
-export default function BrandPoster(ctx, props) {
+export default function BrandPoster(props) { const ctx = useTime();
   const progress = ctx.progress;
   const viewportScale = Math.min(ctx.viewport.width / 1920, ctx.viewport.height / 1080);
   const metric = 72 + progress * 27.9;

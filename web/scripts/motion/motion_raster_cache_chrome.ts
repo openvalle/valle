@@ -18,7 +18,7 @@ await writeFile(source, `
   export const composition = { width: 48, height: 48, fps: 30, duration: 1 };
   ${isCaption ? `export const role=captionPresenter({intro:seconds(0.2),outro:seconds(0.2)});` : ""}
   ${isOverlay ? `export const role=overlay({intro:seconds(0.2),outro:seconds(0.2),hold:"once"});` : ""}
-  export default function CacheScene(ctx,props,data) {
+  export default function CacheScene(props) { const ctx = useTime(); const data = useData();
     return <Scene style={{ width: ctx.viewport.width, height: ctx.viewport.height, backgroundColor: "#000" }}>
       <View style={{ position: "absolute", left: ctx.host.progress * 24,
         top: ctx.seconds * 8, width: 16, height: 16, backgroundColor: "#0f0" }} />

@@ -17,7 +17,7 @@ const BUILD = defineSequence({
 
 const STEPS = ["PARSE TSX", "FREEZE IR", "LAYOUT", "DRAW", "ENCODE"];
 
-export default function CodeBuild(ctx, props) {
+export default function CodeBuild(props) { const ctx = useTime();
   const author = stageProgress(ctx.localFrame, ctx.fps, BUILD.author);
   const compile = stageProgress(ctx.localFrame, ctx.fps, BUILD.compile);
   const render = stageProgress(ctx.localFrame, ctx.fps, BUILD.render);
@@ -35,7 +35,7 @@ export default function CodeBuild(ctx, props) {
             <Text key="file" style={{ marginLeft: 330, fontSize: 17, color: useTheme().colors.muted }}>release.motion.tsx</Text>
           </View>
           <Text key="code" className="absolute whitespace-pre-wrap tabular-nums line-clamp-12 overflow-hidden text-white" style={{ left: 34, top: 88, width: 970, height: 430, fontSize: 26, lineHeight: "38px", tabSize: 2, textOverflow: "ellipsis" }}>
-            {"export default function Film(ctx) {\n"}
+            {"export default function Film() {\n"}
             <Span style={{ color: "#67e8f9" }}>{"  const p = ctx.seconds / 6;\n"}</Span>
             {"  return (\n    <Scene className=\"h-full w-full\">\n"}
             <Span style={{ color: "#f9a8d4" }}>{"      <GeometryBatch progress={p} /> "}</Span>

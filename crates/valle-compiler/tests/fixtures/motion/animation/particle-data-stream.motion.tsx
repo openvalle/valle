@@ -1,6 +1,6 @@
 export const composition = { width: 1920, height: 1080, fps: 30, duration: 5 };
 
-export default function ParticleDataStream(ctx) {
+export default function ParticleDataStream() { const ctx = useTime();
   const t = ctx.progress;
   const reveal = interpolate(t, [0, 0.14], [0, 1], { easing: "easeOut" });
   return (

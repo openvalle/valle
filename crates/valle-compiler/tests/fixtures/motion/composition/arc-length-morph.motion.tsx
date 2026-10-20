@@ -4,7 +4,7 @@ const B = path("M 340 40 L 450 40 L 450 60 L 367.5 60 L 367.5 100 L 450 100 L 45
 const SA = path("M 40 220 L 140 220 L 140 240 L 65 240 L 65 280 L 140 280 L 140 300 L 40 300 Z");
 const SB = path("M 270 220 L 380 220 L 380 240 L 297.5 240 L 297.5 280 L 380 280 L 380 300 L 270 300 Z");
 const SC = path("M 470 220 L 590 220 L 590 240 L 500 240 L 500 280 L 590 280 L 590 300 L 470 300 Z");
-export default function ArcLengthMorph(ctx) {
+export default function ArcLengthMorph() { const ctx = useTime();
   return (
     <Scene className="relative h-full w-full" style={{ backgroundColor: "#101010" }}>
       <Path key="pair" d={morph(A, B, ctx.progress)} fill="#ffffff" />

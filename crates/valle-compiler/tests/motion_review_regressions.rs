@@ -8,7 +8,7 @@ use valle_timeline::FrameRate;
 
 const GRID: &str = r##"
 const ROWS = Array.from({length: 4}, (_, i) => ({id:`row${i}`, i}));
-export default function Main(ctx) {
+export default function Main() { const ctx = useTime();
   const k = ctx.progress * 2;
   const active = ctx.localFrame >= 0;
   return <Scene style={{width:640,height:360}}>{ROWS.map(row => <View key={row.id}
@@ -89,7 +89,7 @@ fn captured_animation_and_zero_size_match_expansion_in_review() {
 
 #[test]
 fn class_paint_and_inline_paint_have_identical_review_trajectories() {
-    let inline = "export default function Main(ctx) { return <Scene><View key=\"box\" className=\"absolute\" style={{left:ctx.localFrame*8,top:20,width:10,height:10,backgroundColor:'white'}} /></Scene>; }";
+    let inline = "export default function Main() { const ctx = useTime(); return <Scene><View key=\"box\" className=\"absolute\" style={{left:ctx.localFrame*8,top:20,width:10,height:10,backgroundColor:'white'}} /></Scene>; }";
     let class = inline
         .replace("className=\"absolute\"", "className=\"absolute bg-white\"")
         .replace(",backgroundColor:'white'", "");
@@ -103,7 +103,7 @@ fn class_paint_and_inline_paint_have_identical_review_trajectories() {
 
 #[test]
 fn counters_do_not_generate_one_reading_warning_per_frame() {
-    let source = "export default function Main(ctx) { return <Scene><Text key=\"counter\">{`${ctx.localFrame} USD`}</Text></Scene>; }";
+    let source = "export default function Main() { const ctx = useTime(); return <Scene><Text key=\"counter\">{`${ctx.localFrame} USD`}</Text></Scene>; }";
     let review = report(source);
     assert!(
         review
@@ -144,7 +144,7 @@ fn identity_time_scope_preserves_geometry_and_siblings() {
 
 fn particles(size: f64, alpha: f64, lifetime: f64) -> String {
     format!(
-        r##"export default function Main(ctx) {{ return <Scene>
+        r##"export default function Main() {{ const ctx = useTime(); return <Scene>
       <GeometryBatch key="dust" geometry="circle" positions={{particles(ctx.localFrame, ctx.fps, {{
         seed: 7, count: 4, emitter: rect(20, 100, 1, 1), birth: {{interval:0.25}}, lifetime:{lifetime},
         velocity: {{x:[300,300],y:[0,0]}}, gravity:point(0,0),loop:true
@@ -264,7 +264,7 @@ fn reading_time_counts_words_and_cjk_characters() {
 
 const RUNNERS: &str = r##"
 const ROWS = Array.from({length: 4}, (_, i) => ({id:`runner${i}`, i}));
-export default function Main(ctx) {
+export default function Main() { const ctx = useTime();
   return <Scene style={{width:640,height:360}}>{ROWS.map(row => <View key={row.id}
     className="absolute" style={{left:20 + ctx.localFrame*12, top:20 + row.i*40,
     width:10, height:10, backgroundColor:"#ffffff"}} />)}</Scene>;
@@ -335,7 +335,7 @@ fn strobing_rows_of_one_map_merge_whichever_way_it_lowers() {
 
 #[test]
 fn short_text_at_the_last_frame_is_information() {
-    let source = r##"export default function Main(ctx) { return <Scene>
+    let source = r##"export default function Main() { const ctx = useTime(); return <Scene>
         <Text key="flash" visible={ctx.localFrame >= 10 && ctx.localFrame < 15} style={{position:"absolute",left:10,top:30,fontSize:24}}>Read this caption</Text>
         <Text key="ending" visible={ctx.localFrame >= 55} style={{position:"absolute",left:10,top:120,fontSize:24}}>Read this caption</Text>
     </Scene>; }"##;

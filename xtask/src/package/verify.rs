@@ -81,7 +81,7 @@ fn verify_runtime(
     let motion = temp.path().join("check.motion.tsx");
     fs::write(
         &motion,
-        "export const composition = { width: 320, height: 180, fps: 30, duration: 1 / 30 };\nexport default function Check(ctx) { return <Scene style={{backgroundColor: '#102030'}}><Text style={{fontSize: 24, color: '#ffffff'}}>Valle</Text></Scene>; }\n",
+        "export const composition = { width: 320, height: 180, fps: 30, duration: 1 / 30 };\nexport default function Check() { const ctx = useTime(); return <Scene style={{backgroundColor: '#102030'}}><Text style={{fontSize: 24, color: '#ffffff'}}>Valle</Text></Scene>; }\n",
     )?;
     let check = capture(
         clean_command(executable, temp.path())

@@ -1,6 +1,6 @@
 export const composition = { width: 640, height: 360, fps: 30, duration: 2 };
 
-export default function RichUnits(ctx) {
+export default function RichUnits() { const ctx = useTime();
   return (
     <Scene className="relative h-full w-full" style={{ backgroundColor: "#101010" }}>
       <Text key="t" split="char" className="absolute" style={{ left: 60, top: 140, fontSize: 72, color: "#ffffff" }}

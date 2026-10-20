@@ -9,7 +9,7 @@ fn source(role: &str) -> String {
     format!(
         r#"export const composition={{width:64,height:32,duration:2}};
 {role}
-export default function Main(ctx) {{return <Scene><View style={{{{width:ctx.viewport.width,height:ctx.viewport.height}}}}/></Scene>;}}"#
+export default function Main() {{ const ctx = useTime();return <Scene><View style={{{{width:ctx.viewport.width,height:ctx.viewport.height}}}}/></Scene>;}}"#
     )
 }
 #[test]
@@ -125,7 +125,7 @@ fn overlay_temporal_samples_hold_at_the_authored_exclusive_boundary() {
     let compiled = compile_motion(
         r#"export const composition={width:64,height:32,fps:4,duration:1.14};
 export const role=overlay({intro:seconds(0),outro:seconds(0),hold:"once"});
-export default function Main(ctx){return <Scene><Shutter key="exposure" samples={4} angle={360}>
+export default function Main(){ const ctx = useTime();return <Scene><Shutter key="exposure" samples={4} angle={360}>
 <View style={{width:ctx.seconds*10,height:10,backgroundColor:"white"}}/></Shutter></Scene>;}
 "#,
     )

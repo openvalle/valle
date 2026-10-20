@@ -8,7 +8,7 @@ use valle_timeline::FrameRate;
 
 fn source(easing: &str) -> String {
     format!(
-        r#"export default function E(ctx) {{ return <View style={{{{
+        r#"export default function E() {{ const ctx = useTime(); return <View style={{{{
         left: interpolate(ctx.seconds, [0, 1], [40, 440], {{easing:{easing}}})
     }}}}/>; }}"#
     )

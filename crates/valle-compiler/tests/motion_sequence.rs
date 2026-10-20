@@ -88,7 +88,7 @@ const intro = defineSequence({
   title: stage({ duration: seconds(0.6) }),
   cards: stage({ after: "title", overlap: seconds(0.2), duration: seconds(1.0) }),
 });
-export default function P(ctx) {
+export default function P() { const ctx = useTime();
   return <View key="v" style={{ opacity: stageProgress(ctx.localFrame, ctx.fps, intro.cards) }} />;
 }
 "##;
@@ -98,7 +98,7 @@ fn named_stages_compile_to_the_same_artifact_as_manual_arithmetic() {
     let sequence = compile_motion(SECONDS_SEQUENCE).expect("Sequence").artifact;
     let manual = compile_motion(
         r##"
-export default function P(ctx) {
+export default function P() { const ctx = useTime();
   return <View key="v" style={{ opacity: clamp(((ctx.localFrame * ctx.fps.den / ctx.fps.num) - (0.6 - 0.2)) / 1.0, 0, 1) }} />;
 }
 "##,
@@ -154,7 +154,7 @@ fn frames_stages_and_dynamic_stagger_use_the_authored_unit() {
     let source = r##"
 export const controls = ({ props: { index: number({ default: 2 }) } });
 const intro = defineSequence({ cards: stage({ at: frames(4), duration: frames(10) }) });
-export default function P(ctx, props) {
+export default function P(props) { const ctx = useTime();
   const t = staggerProgress(ctx.localFrame, ctx.fps, intro.cards, props.index, frames(3));
   return <View key="v" style={{ opacity: t }} />;
 }
@@ -174,27 +174,27 @@ export default function P(ctx, props) {
 fn malformed_stage_graphs_fail_with_authored_labels() {
     let cases = [
         (
-            r#"const s=defineSequence({a:stage({duration:seconds(1)}),a:stage({at:seconds(2),duration:seconds(1)})}); export default function P(ctx){return <View/>;}"#,
+            r#"const s=defineSequence({a:stage({duration:seconds(1)}),a:stage({at:seconds(2),duration:seconds(1)})}); export default function P(){ const ctx = useTime();return <View/>;}"#,
             "duplicate stage label `a`",
         ),
         (
-            r#"const s=defineSequence({a:stage({duration:seconds(1)}),b:stage({after:"later",duration:seconds(1)})}); export default function P(ctx){return <View/>;}"#,
+            r#"const s=defineSequence({a:stage({duration:seconds(1)}),b:stage({after:"later",duration:seconds(1)})}); export default function P(){ const ctx = useTime();return <View/>;}"#,
             "later",
         ),
         (
-            r#"const s=defineSequence({a:stage({duration:seconds(1)}),b:stage({after:"a",delay:seconds(.1),overlap:seconds(.1),duration:seconds(1)})}); export default function P(ctx){return <View/>;}"#,
+            r#"const s=defineSequence({a:stage({duration:seconds(1)}),b:stage({after:"a",delay:seconds(.1),overlap:seconds(.1),duration:seconds(1)})}); export default function P(){ const ctx = useTime();return <View/>;}"#,
             "both delay and overlap",
         ),
         (
-            r#"const s=defineSequence({a:stage({duration:seconds(1)}),b:stage({after:"a",duration:frames(3)})}); export default function P(ctx){return <View/>;}"#,
+            r#"const s=defineSequence({a:stage({duration:seconds(1)}),b:stage({after:"a",duration:frames(3)})}); export default function P(){ const ctx = useTime();return <View/>;}"#,
             "cannot mix",
         ),
         (
-            r#"const s=defineSequence({a:stage({duration:seconds(0)})}); export default function P(ctx){return <View/>;}"#,
+            r#"const s=defineSequence({a:stage({duration:seconds(0)})}); export default function P(){ const ctx = useTime();return <View/>;}"#,
             "positive duration",
         ),
         (
-            r#"const s=defineSequence({a:stage({duration:seconds(1)}),b:stage({duration:seconds(1)})}); export default function P(ctx){return <View/>;}"#,
+            r#"const s=defineSequence({a:stage({duration:seconds(1)}),b:stage({duration:seconds(1)})}); export default function P(){ const ctx = useTime();return <View/>;}"#,
             "explicit at or after",
         ),
     ];
@@ -223,7 +223,7 @@ fn sequence_stage_count_has_a_hard_prepare_budget() {
         .collect::<Vec<_>>()
         .join(",");
     let source = format!(
-        "const s=defineSequence({{{stages}}}); export default function P(ctx){{return <View/>;}}"
+        "const s=defineSequence({{{stages}}}); export default function P(){{ const ctx = useTime();return <View/>;}}"
     );
     let diagnostics = messages(&source);
     assert!(
@@ -238,11 +238,11 @@ fn sequence_stage_count_has_a_hard_prepare_budget() {
 fn sampler_requires_real_sequence_values_and_the_context_fps() {
     for (source, needle) in [
         (
-            r#"export default function P(ctx){return <View style={{opacity:stageProgress(ctx.localFrame, 60, {start:0,duration:1})}}/>;}"#,
-            "exactly `ctx.fps`",
+            r#"export default function P(){ const ctx = useTime();return <View style={{opacity:stageProgress(ctx.localFrame, 60, {start:0,duration:1})}}/>;}"#,
+            "must be `ctx.fps`",
         ),
         (
-            r#"export default function P(ctx){return <View style={{opacity:stageProgress(ctx.localFrame, ctx.fps, {start:0,duration:1})}}/>;}"#,
+            r#"export default function P(){ const ctx = useTime();return <View style={{opacity:stageProgress(ctx.localFrame, ctx.fps, {start:0,duration:1})}}/>;}"#,
             "named stage",
         ),
     ] {
@@ -260,7 +260,7 @@ fn repeat_and_yoyo_reuse_the_public_modulo_math() {
         format!(
             r#"
 const s=defineSequence({{pulse:stage({{duration:frames(8)}})}});
-export default function P(ctx){{return <View key="v" style={{{{opacity:{sampler}(ctx.localFrame,ctx.fps,s.pulse,2)}}}}/>;}}
+export default function P(){{ const ctx = useTime();return <View key="v" style={{{{opacity:{sampler}(ctx.localFrame,ctx.fps,s.pulse,2)}}}}/>;}}
 "#
         )
     };
@@ -308,7 +308,7 @@ export default function P(ctx){{return <View key="v" style={{{{opacity:{sampler}
 fn repeat_cycle_count_is_static_and_bounded() {
     for (cycles, needle) in [("0", "1..=1024"), ("1025", "1..=1024"), ("1.5", "integer")] {
         let source = format!(
-            r#"const s=defineSequence({{a:stage({{duration:frames(8)}})}}); export default function P(ctx){{return <View style={{{{opacity:repeatProgress(ctx.localFrame,ctx.fps,s.a,{cycles})}}}}/>;}}"#
+            r#"const s=defineSequence({{a:stage({{duration:frames(8)}})}}); export default function P(){{ const ctx = useTime();return <View style={{{{opacity:repeatProgress(ctx.localFrame,ctx.fps,s.a,{cycles})}}}}/>;}}"#
         );
         let diagnostics = messages(&source);
         assert!(
@@ -321,12 +321,12 @@ fn repeat_cycle_count_is_static_and_bounded() {
 #[test]
 fn freeze_frame_holds_one_local_clock_without_new_ir() {
     let sugar = r#"
-export default function P(ctx) {
+export default function P() { const ctx = useTime();
   return <View key="v" style={{ width: freezeFrame(ctx.localFrame, { from: 3, to: 7 }) }} />;
 }
 "#;
     let manual = r#"
-export default function P(ctx) {
+export default function P() { const ctx = useTime();
   const frame = ctx.localFrame;
   return <View key="v" style={{ width: frame < 3 ? frame : frame < 7 ? 3 : frame - 4 }} />;
 }
@@ -372,23 +372,23 @@ export default function P() { return <View key="v" style={{ width: SAMPLE }} />;
 fn freeze_frame_interval_is_static_integer_and_fail_closed() {
     for (source, needle) in [
         (
-            r#"export default function P(ctx){return <View style={{width:freezeFrame(ctx.localFrame,{from:3})}}/>;}"#,
+            r#"export default function P(){ const ctx = useTime();return <View style={{width:freezeFrame(ctx.localFrame,{from:3})}}/>;}"#,
             "requires both",
         ),
         (
-            r#"export default function P(ctx){return <View style={{width:freezeFrame(ctx.localFrame,{from:3,to:7,easing:"linear"})}}/>;}"#,
+            r#"export default function P(){ const ctx = useTime();return <View style={{width:freezeFrame(ctx.localFrame,{from:3,to:7,easing:"linear"})}}/>;}"#,
             "unknown freezeFrame option",
         ),
         (
-            r#"export default function P(ctx){return <View style={{width:freezeFrame(ctx.localFrame,{from:3.5,to:7})}}/>;}"#,
+            r#"export default function P(){ const ctx = useTime();return <View style={{width:freezeFrame(ctx.localFrame,{from:3.5,to:7})}}/>;}"#,
             "integer frames",
         ),
         (
-            r#"export default function P(ctx){return <View style={{width:freezeFrame(ctx.localFrame,{from:7,to:3})}}/>;}"#,
+            r#"export default function P(){ const ctx = useTime();return <View style={{width:freezeFrame(ctx.localFrame,{from:7,to:3})}}/>;}"#,
             "0 <= from < to",
         ),
         (
-            r#"export const controls=({props:{from:number({default:3})}});export default function P(ctx,props){return <View style={{width:freezeFrame(ctx.localFrame,{from:props.from,to:7})}}/>;}"#,
+            r#"export const controls=({props:{from:number({default:3})}});export default function P(props){ const ctx = useTime();return <View style={{width:freezeFrame(ctx.localFrame,{from:props.from,to:7})}}/>;}"#,
             "known at compile time",
         ),
     ] {
@@ -407,7 +407,7 @@ fn first_class_sequence_surface_lowers_without_a_sequence_wire_type() {
 const intro = defineSequence({
   title: stage({ at: seconds(0), duration: seconds(0.6) }),
 });
-export default function Card(ctx) {
+export default function Card() { const ctx = useTime();
   const t = stageProgress(ctx.localFrame, ctx.fps, intro.title);
   return <View style={{ opacity: t }} />;
 }

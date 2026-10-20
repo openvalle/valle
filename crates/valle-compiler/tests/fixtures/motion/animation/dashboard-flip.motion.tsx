@@ -17,7 +17,7 @@ const layouts = defineLayoutStates({
 
 const BARS = [87, 123, 100.5, 141, 114, 162, 189, 177, 217.5];
 
-export default function DashboardFlip(ctx) {
+export default function DashboardFlip() { const ctx = useTime();
   const p = interpolate(ctx.progress, [0, 0.24, 0.76, 1], [0, 1, 1, 0], { easing: "easeInOut" });
   return (
     <Scene className="relative h-full w-full" style={{ backgroundColor: "#080b12" }}>

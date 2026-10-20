@@ -13,7 +13,7 @@ fn source(start: &str, speed: &str) -> String {
         r#"
 const START = 6;
 export const controls = ({{ assets: {{ clip: asset({{ kind: "video" }}) }} }});
-export default function VideoProbe(ctx) {{
+export default function VideoProbe() {{ const ctx = useTime();
     return <Scene><Video src="asset://clip" sourceStart={start} speed={speed} /></Scene>;
 }}
 "#
@@ -128,7 +128,7 @@ fn video_nonfinite_constants_fail_and_path_trim_bounds_are_unchanged() {
 fn time_scope_maps_video_source_clock() {
     let source = r#"
 export const controls = { assets: { clip: asset({ kind: "video" }) } };
-export default function VideoScope(ctx) {
+export default function VideoScope() { const ctx = useTime();
     return <Scene style={{width:640,height:360}}>
         <TimeScope key="scope" offset={0.5} speed={2}>
             <Video key="video" src="asset://clip" sourceStart={1} speed={1} style={{width:20,height:20}} />

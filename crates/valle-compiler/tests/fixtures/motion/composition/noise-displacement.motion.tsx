@@ -7,7 +7,7 @@ export const composition = { width: 160, height: 96, fps: 30, duration: 2 };
 // edges, which Ganesh and Raster cover differently, stay out of sight.
 const RAMP = "linear-gradient(135deg, rgb(50 70 210), rgb(180 180 80))";
 
-export default function NoiseDisplacement(ctx) {
+export default function NoiseDisplacement() { const ctx = useTime();
   return <Scene className="relative h-full w-full" style={{ backgroundColor: "#101820" }}>
     <View key="fractal" className="absolute" style={{
       left: 4, top: 6, width: 72, height: 84, backgroundImage: RAMP,

@@ -11,7 +11,7 @@ use valle_timeline::FrameRate;
 
 fn scene(attributes: &str, styles: &str) -> String {
     format!(
-        r##"export default function Demo(ctx) {{ return <Scene style={{{{width:320,height:180}}}}>
+        r##"export default function Demo() {{ const ctx = useTime(); return <Scene style={{{{width:320,height:180}}}}>
         <View key="card" {attributes} style={{{{width:120,height:80,borderWidth:4,padding:5,
             backgroundColor:"#168ddd",borderColor:"#fff",{styles}}}}}>
             <View key="child" style={{{{width:20,height:10,backgroundColor:"red"}}}} />
@@ -365,7 +365,7 @@ fn scene_bloom_is_a_bounded_threshold_filter() {
         "{ threshold: 0.8, intensity: 4.1, radius: 48 }",
         "{ threshold: 0.8, intensity: 1.2, radius: 129 }",
         "{ threshold: 0.8, intensity: 1.2 }",
-        "{ threshold: 0.8, intensity: 1.2, radius: ctx.progress }",
+        "{ threshold: 0.8, intensity: 1.2, radius: useTime().progress }",
         "{ threshold: 0.8, intensity: 1.2, radius: 48, bad: 1 }",
     ] {
         let source = source.replace("{ threshold: 0.8, intensity: 1.2, radius: 48 }", invalid);

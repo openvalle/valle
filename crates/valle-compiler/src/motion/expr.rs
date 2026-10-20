@@ -269,10 +269,20 @@ impl<'s> Compiler<'s> {
                         ),
                     );
                     return None;
+                } else if let Some(path) = self.bindings.times.get(identifier.name.as_str()) {
+                    let path = path.clone();
+                    return self.lower_time_path(&path, expression.span());
                 } else if identifier.name == "TAU" {
                     Expr::Const {
                         value: MotionValue::Number(core::f64::consts::TAU),
                     }
+                } else if identifier.name == "ctx" {
+                    self.illegal(
+                        DiagCode::UnknownIdentifier,
+                        expression.span(),
+                        "`ctx` is not defined; components take `(props)` as in React, so read the time with `const ctx = useTime()`",
+                    );
+                    return None;
                 } else {
                     self.illegal(
                         DiagCode::UnknownIdentifier,
@@ -506,6 +516,25 @@ impl<'s> Compiler<'s> {
                     return None;
                 };
                 match callee.name.as_str() {
+                    "useTime" => {
+                        if !call.arguments.is_empty() {
+                            self.illegal(
+                                DiagCode::GrammarForbidden,
+                                call.span(),
+                                "useTime() takes no arguments",
+                            );
+                            return None;
+                        }
+                        return self.lower_time_path(&[], call.span());
+                    }
+                    "useData" => {
+                        self.illegal(
+                            DiagCode::GrammarForbidden,
+                            call.span(),
+                            "useData() returns the prepared data, which does not change between frames; read it once, for example `const data = useData()`",
+                        );
+                        return None;
+                    }
                     "useTheme" => {
                         self.illegal(
                             DiagCode::GrammarForbidden,
@@ -957,6 +986,9 @@ impl<'s> Compiler<'s> {
     }
 
     pub(super) fn lower_member(&mut self, expression: &Expression<'_>) -> Option<ExprId> {
+        if let Some(path) = self.time_path(expression) {
+            return self.lower_time_path(&path, expression.span());
+        }
         if let Expression::StaticMemberExpression(field_member) = expression
             && let Expression::CallExpression(call) = strip_parens(&field_member.object)
             && let Expression::StaticMemberExpression(at_member) = strip_parens(&call.callee)
@@ -998,7 +1030,7 @@ impl<'s> Compiler<'s> {
                     self.illegal(
                         DiagCode::GrammarForbidden,
                         expression.span(),
-                        "only static `ctx.*` and `props.*` paths are allowed",
+                        "only static paths from `useTime()` and `props` are allowed",
                     );
                     return None;
                 }
@@ -1019,21 +1051,6 @@ impl<'s> Compiler<'s> {
                 return None;
             }
             segments[0] = "props".into();
-        }
-        if self.instance_scope.is_some() {
-            match segments.as_slice() {
-                [root, scope, field]
-                    if root == "ctx" && scope == "instance" && field == "index" =>
-                {
-                    return Some(self.push(Expr::InstanceIndex, expression.span()));
-                }
-                [root, scope, field]
-                    if root == "ctx" && scope == "instance" && field == "count" =>
-                {
-                    return Some(self.push(Expr::InstanceCount, expression.span()));
-                }
-                _ => {}
-            }
         }
         if let [local, field] = segments.as_slice()
             && let Some(scope) = &self.instance_scope
@@ -1232,6 +1249,9 @@ impl<'s> Compiler<'s> {
                             );
                             None
                         }
+                        Some(AuthorValue::Time(path)) => {
+                            self.lower_time_path(&path, expression.span())
+                        }
                         None => {
                             self.illegal(
                                 DiagCode::UnknownProp,
@@ -1253,31 +1273,19 @@ impl<'s> Compiler<'s> {
                     Some(self.push(Expr::Prop { name: name.clone() }, expression.span()))
                 }
             }
-            [root, rest @ ..] if root == "ctx" => {
-                let input = context_input(rest).or_else(|| {
-                    self.illegal(
-                        DiagCode::UnknownContextPath,
-                        expression.span(),
-                        format!("`ctx.{}` is not a MotionContext scalar", rest.join(".")),
-                    );
-                    None
-                })?;
-                // Declare viewport capability only when used so unsupported consumers reject the
-                // artifact.
-                if matches!(
-                    input,
-                    ContextInput::ViewportWidth | ContextInput::ViewportHeight
-                ) {
-                    self.extra_capabilities
-                        .insert(VIEWPORT_CAPABILITY.to_owned());
-                }
-                Some(self.scoped_context_expr(input, expression.span()))
+            [root, ..] if root == "ctx" => {
+                self.illegal(
+                    DiagCode::UnknownIdentifier,
+                    expression.span(),
+                    "`ctx` is not defined; components take `(props)` as in React, so read the time with `const ctx = useTime()`",
+                );
+                None
             }
             _ => {
                 self.illegal(
                     DiagCode::UnknownIdentifier,
                     expression.span(),
-                    "runtime member access must start with ctx or props",
+                    "a frame-time path starts at `useTime()`, a name bound to it, or `props`",
                 );
                 None
             }

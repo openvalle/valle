@@ -8,7 +8,7 @@ fn span_children_lower_to_the_existing_inline_text_path() {
     let compiled = compile_motion(
         r##"
 export const controls = ({ props: { value: number({ default: 42 }) } });
-export default function Card(ctx, props) {
+export default function Card(props) { const ctx = useTime();
   return (
     <Text style={{ fontSize: 48 }}>
       {"Revenue "}

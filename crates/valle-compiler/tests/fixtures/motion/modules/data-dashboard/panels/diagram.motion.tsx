@@ -1,4 +1,4 @@
-export function DiagramPanel(ctx, { nodes, edges, x, y, width, height }) {
+export function DiagramPanel({ nodes, edges, x, y, width, height }) { const ctx = useTime();
   const theme = useTheme();
   const { panel, panelRaised, accent, ink, hairline } = theme.colors;
   const sizes = nodes.map(() => [156, 70]);

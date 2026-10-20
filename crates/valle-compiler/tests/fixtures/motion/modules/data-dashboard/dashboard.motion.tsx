@@ -29,7 +29,7 @@ export const controls = {
   },
 };
 
-export default function DataDashboard(ctx, props, data) {
+export default function DataDashboard() { const data = useData();
   return (
     <ThemeProvider value={brandTheme}>
       <Scene key="scene" className="relative h-full w-full" style={{ backgroundColor: useTheme().colors.background }}>

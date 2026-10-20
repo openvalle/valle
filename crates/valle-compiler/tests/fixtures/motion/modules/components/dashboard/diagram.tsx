@@ -1,4 +1,4 @@
-export function DiagramPanel(ctx, { nodes, edges, x, y, width, height }) {
+export function DiagramPanel({ nodes, edges, x, y, width, height }) { const ctx = useTime();
   const theme = useTheme();
   const layout = graphLayout({ sizes: nodes.map(() => [156, 70]), edges: edges.map((edge) => [edge.from, edge.to]), nodeGap: 34, rankGap: 58 });
   return (

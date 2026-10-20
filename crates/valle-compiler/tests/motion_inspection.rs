@@ -6,7 +6,7 @@ use valle_motion::{EvalInputs, MotionValue, StyleValue};
 
 const SOURCE: &str = r##"
 export const controls=({props:{distance:number({default:100,min:0,max:1000})}});
-export default function Scene(ctx, props) {
+export default function Scene(props) { const ctx = useTime();
  return <Scene className="w-full h-full">
   <View key="track" style={{width:40,height:40,translate:point(props.distance*interpolate(ctx.seconds,[0,.25,.5],[0,1,1.1]),0),scale:point(1,1),rotate:interpolate(ctx.seconds,[0,1],["0deg","90deg"]),opacity:ctx.seconds<.5 ? .2 : 1}}/>
   <View key="bounce" style={{translate:point(100*spring({elapsedFrames:ctx.localFrame,fps:ctx.fps,initialVelocity:2,preset:"wobbly"}),0)}}/>

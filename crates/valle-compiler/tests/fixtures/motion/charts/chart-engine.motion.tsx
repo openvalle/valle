@@ -29,7 +29,7 @@ const LOWER = curve(
 );
 const BAND = areaBand(UPPER, LOWER);
 
-export default function ChartEngine(ctx) {
+export default function ChartEngine() { const ctx = useTime();
   const needle = interpolate(ctx.progress, [0, 1], [deg(-120), deg(120)]);
   return (
     <Scene key="scene" className="relative h-full w-full" style={{ backgroundColor: "#020617" }}>

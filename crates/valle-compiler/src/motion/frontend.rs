@@ -157,6 +157,95 @@ pub(super) fn first_async(program: &Program<'_>) -> Option<Span> {
     scan.0
 }
 
+/// The first call of a React or Remotion hook that Motion has no counterpart for, with what to
+/// write instead. A module that declares a function of that name calls its own helper.
+pub(super) fn foreign_hook(program: &Program<'_>) -> Option<(Span, String)> {
+    use oxc::ast_visit::{Visit, walk};
+
+    fn instead(name: &str) -> Option<&'static str> {
+        Some(match name {
+            "useState" | "useReducer" | "useRef" | "useEffect" | "useLayoutEffect" => {
+                "there is no state and nothing runs after a frame; each frame is a pure function \
+                 of time, so compute the value from `useTime()`"
+            }
+            "useMemo" | "useCallback" => {
+                "each value is computed once for its frame; write the value or the function \
+                 directly"
+            }
+            "useContext" => {
+                "pass values through props, or share a theme with `<ThemeProvider>` and \
+                 `useTheme()`"
+            }
+            "useCurrentFrame" => "it is Remotion's; read the frame with `useTime().localFrame`",
+            "useVideoConfig" => {
+                "it is Remotion's; the canvas comes from `composition`, and the frame rate and \
+                 duration from `useTime()` as `fps` and `durationFrames`"
+            }
+            _ => return None,
+        })
+    }
+
+    struct Scan<'d> {
+        declared: &'d BTreeSet<String>,
+        hit: Option<(Span, String)>,
+    }
+    impl<'a> Visit<'a> for Scan<'_> {
+        fn visit_call_expression(&mut self, call: &oxc::ast::ast::CallExpression<'a>) {
+            if self.hit.is_none()
+                && let Expression::Identifier(callee) = &call.callee
+                && !self.declared.contains(callee.name.as_str())
+                && let Some(instead) = instead(callee.name.as_str())
+            {
+                self.hit = Some((
+                    call.span,
+                    format!("`{}` is not available in Motion: {instead}", callee.name),
+                ));
+            }
+            walk::walk_call_expression(self, call);
+        }
+    }
+
+    fn declaration_names(declaration: &Declaration<'_>) -> Vec<String> {
+        match declaration {
+            Declaration::FunctionDeclaration(function) => {
+                function.id.iter().map(|id| id.name.to_string()).collect()
+            }
+            Declaration::VariableDeclaration(declaration) => declaration
+                .declarations
+                .iter()
+                .filter_map(|declarator| declarator.id.get_identifier_name())
+                .map(|name| name.to_string())
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    let declared = program
+        .body
+        .iter()
+        .flat_map(|statement| match statement {
+            Statement::FunctionDeclaration(_) | Statement::VariableDeclaration(_) => statement
+                .as_declaration()
+                .map(declaration_names)
+                .unwrap_or_default(),
+            Statement::ExportDeclaration(export) => declaration_names(&export.declaration),
+            Statement::ImportDeclaration(import) => import
+                .specifiers
+                .iter()
+                .flatten()
+                .map(|specifier| specifier.local().name.to_string())
+                .collect(),
+            _ => Vec::new(),
+        })
+        .collect::<BTreeSet<_>>();
+    let mut scan = Scan {
+        declared: &declared,
+        hit: None,
+    };
+    scan.visit_program(program);
+    scan.hit
+}
+
 /// Object evaluation would silently keep the last duplicate property before `defineSequence`
 /// can inspect it. Sequence labels are semantic addresses, so catch that lossy case on the AST.
 pub(super) fn scan_sequence_labels(program: &Program<'_>) -> Option<(Span, String)> {

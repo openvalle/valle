@@ -33,7 +33,8 @@ Save this complete file as `title.motion.tsx`:
 ```tsx
 export const composition = { width: 1920, height: 1080, fps: 30, duration: 5 };
 
-export default function Title(ctx) {
+export default function Title() {
+  const ctx = useTime();
   const reveal = interpolate(ctx.progress, [0, 0.25], [0, 1], { easing: "easeOut" });
   return (
     <Scene className="relative h-full w-full flex items-center justify-center"
@@ -149,10 +150,24 @@ The entry module needs a named default function declaration and a
 { ... }` declares external inputs. Helper modules may export reusable values
 and components.
 
-The root parameter positions are `(ctx, props, data)`. Omit unused trailing
-parameters. `props` and `data` may be destructured in their positions. An authored
-child component uses `(ctx, props)`; pass prepared data through its props.
-The first parameter is the Motion context, including in child components.
+A component takes `(props)`, as in React: the root receives the declared
+props, and a child component receives the attributes it is written with. Name the
+parameter `props` or destructure it, and omit it when unused. Read the time of the
+frame being drawn with `const ctx = useTime()`, or destructure it, as in
+`const { progress, seconds } = useTime()`, and the prepared data with
+`const data = useData()`. Both hooks work in any component or helper, but not in
+module constants, which run once before the first frame. A name bound to the time,
+or to an object in it such as `ctx.unit`, can be passed to a helper or a component
+like any other value; its numbers are read where they are used, so a `TimeScope`
+around that use applies.
+
+Nothing persists from one frame to the next: each frame is a pure function of its
+time. React's `useState`, `useReducer`, `useRef`, `useEffect`, `useMemo`,
+`useCallback` and `useContext` do not exist; compute values from the time, pass
+values through props, and share a theme with `<ThemeProvider>` and `useTheme()`.
+Remotion's `useCurrentFrame()` is `useTime().localFrame`, and its
+`useVideoConfig()` values come from `composition` and from `useTime()` as `fps`
+and `durationFrames`.
 
 Module declarations use `const` and functions. Component bodies use `const`
 bindings followed by a returned JSX expression. Function and arrow helpers can
@@ -174,10 +189,11 @@ construct a new tree on every frame.
 | JSX fragments | `<>…</>` puts its children in its place, as in React; so does a component that returns one. A fragment in a list cannot take a `key`, so key its children |
 | Spread | JSX attributes spread an object literal, `props` or its rest, a map row or a prepare-time object; as in React, the last setting of a name wins and a spread never sets `key`. Arrays spread a fixed tuple or a prepare-time array. Style objects spread fixed-shape objects. Option objects such as `perUnit` or `spring` options and call arguments do not spread, and arrays have no holes |
 
-Prepare-time means independent of `ctx` and runtime `props`. Module
-constants, bound `data`, static component arguments, a theme and explicit resources
-can participate in preparation. `props` have typed runtime bindings even when a
-default exists; use `data` for a collection that determines node count.
+Prepare-time means independent of `useTime()` and runtime `props`. Module
+constants, the data from `useData()`, static component arguments, a theme and
+explicit resources can participate in preparation. `props` have typed runtime
+bindings even when a default exists; use `data` for a collection that determines
+node count.
 
 ### Reusable components, children and themes
 
@@ -191,7 +207,8 @@ const cards = [
 ];
 const theme = { background: "#0f172a", card: "#1e293b", accent: "#38bdf8" };
 
-function Card(ctx, { title, index, children }) {
+function Card({ title, index, children }) {
+  const ctx = useTime();
   const palette = useTheme();
   const reveal = clamp(ctx.progress * 4 - index * 0.2, 0, 1);
   return (
@@ -203,7 +220,7 @@ function Card(ctx, { title, index, children }) {
   );
 }
 
-export default function Cards(ctx) {
+export default function Cards() {
   return (
     <ThemeProvider value={theme}>
       <Scene className="h-full w-full flex items-center justify-center gap-4"
@@ -244,7 +261,8 @@ can declare an overlay to preserve its intro and outro when the host duration ch
 export const composition = { width: 640, height: 360, duration: 2, fps: 30 };
 export const role = overlay({ intro: seconds(0.6), outro: seconds(0.4), hold: "once" });
 
-export default function Banner(ctx) {
+export default function Banner() {
+  const ctx = useTime();
   return <Scene><View style={{ width: ctx.viewport.width, height: ctx.viewport.height,
     opacity: interpolate(ctx.seconds, [0, 0.6, 1.6, 2], [0, 1, 1, 0]) }} /></Scene>;
 }
@@ -296,7 +314,9 @@ the template's source clock holds.
 export const composition = { width: 640, height: 360, duration: 1, fps: 30 };
 export const role = captionPresenter({ intro: seconds(0.2), outro: seconds(0.2) });
 
-export default function Words(ctx, props, data) {
+export default function Words() {
+  const ctx = useTime();
+  const data = useData();
   return <Scene>{data.runs.map((run, index) =>
     <Text key={index} className="absolute" style={{
       left: data.region[0] + index * 140, top: data.region[1],
@@ -387,7 +407,7 @@ with `viewBox`, `<defs>`, CSS selectors or arbitrary SVG attributes.
 | Namespace | Declaration and use |
 | --- | --- |
 | `props` | Typed scalar/geometric controls read through `props.name` |
-| `data` | Validated structured JSON available during prepare through the third root argument |
+| `data` | Validated structured JSON, read during prepare with `useData()` |
 | `assets` | `asset({ kind, required })`, referenced by `asset://name` |
 
 Prop constructors: `number`, `string`, `boolean`, `color`, `length`, `angle`,
@@ -452,7 +472,9 @@ export const controls = {
   },
 };
 
-export default function Bars(ctx, props, data) {
+export default function Bars() {
+  const ctx = useTime();
+  const data = useData();
   const reveal = interpolate(ctx.progress, [0, 0.5], [0, 1]);
   return (
     <Scene className="h-full w-full flex flex-col justify-center"
@@ -501,7 +523,7 @@ Save as `poster.motion.tsx` and provide your own `poster.png`:
 export const controls = {
   assets: { poster: asset({ kind: "image", required: true }) },
 };
-export default function Poster(ctx) {
+export default function Poster() {
   return (
     <Scene className="relative h-full w-full" style={{ backgroundColor: "#0f172a" }}>
       <Image src="asset://poster" style={{ position: "absolute", left: 32, top: 32,
@@ -684,7 +706,8 @@ Save as `spring.motion.tsx`:
 
 ```tsx
 export const composition = { width: 1920, height: 1080, fps: 30, duration: 5 };
-export default function SpringTitle(ctx) {
+export default function SpringTitle() {
+  const ctx = useTime();
   const enter = spring({ elapsedFrames: ctx.seconds * ctx.fps.num / ctx.fps.den, fps: ctx.fps, preset: "gentle" });
   const exit = interpolate(ctx.seconds, [4.4, 4.8], [1, 0]);
   return (
@@ -764,7 +787,8 @@ const sequence = defineSequence({
   items: stage({ after: "title", overlap: seconds(0.15), duration: seconds(0.8) }),
 });
 const labels = ["Prepare", "Preview", "Export"];
-export default function Sequence(ctx) {
+export default function Sequence() {
+  const ctx = useTime();
   const title = stageProgress(ctx.localFrame, ctx.fps, sequence.title);
   return (
     <Scene className="h-full w-full flex flex-col items-center justify-center"
@@ -836,7 +860,8 @@ as long as their property set is fixed:
 
 ```tsx
 const cardStyle = { padding: 24, borderRadius: 20, backgroundColor: "#123456" };
-export default function Demo(ctx) {
+export default function Demo() {
+  const ctx = useTime();
   const style = { ...cardStyle, width: 240 + ctx.localFrame, height: 120 };
   return <Scene><View style={style} /></Scene>;
 }
@@ -927,7 +952,7 @@ Save as `layout.motion.tsx`:
 
 ```tsx
 const items = ["01", "02", "03", "04"];
-export default function Layout(ctx) {
+export default function Layout() {
   return (
     <Scene className="h-full w-full" style={{ boxSizing: "border-box", padding: 32,
       backgroundColor: "#e2e8f0", display: "grid",
@@ -1137,7 +1162,8 @@ computed from actual bounds still fails on that frame.
 Save as `paint.motion.tsx`:
 
 ```tsx
-export default function Paint(ctx) {
+export default function Paint() {
+  const ctx = useTime();
   const t = ctx.progress;
   return (
     <Scene className="relative h-full w-full" style={{
@@ -1379,7 +1405,8 @@ arbitrary inline container trees and transformed inline images are not.
 Save as `text.motion.tsx`:
 
 ```tsx
-export default function Typography(ctx) {
+export default function Typography() {
+  const ctx = useTime();
   const progress = interpolate(ctx.progress, [0, 0.5], [0, 1]);
   return (
     <Scene className="h-full w-full flex flex-col items-center justify-center"
@@ -1484,7 +1511,8 @@ must supply the same font bytes used for rendering.
 
 ```tsx
 const word = textOutline("VALLE", { fontSize: 150, fontWeight: 800, origin: point(60, 240) });
-export default function DrawOn(ctx) {
+export default function DrawOn() {
+  const ctx = useTime();
   return <Scene style={{ width: 640, height: 360, backgroundColor: "#101010" }}>
     <Path d={word.path} fill="none" stroke="#ffffff" strokeWidth={3} trimEnd={ctx.progress} />
   </Scene>;
@@ -1502,7 +1530,7 @@ not a loop that measures and mutates JSX repeatedly.
 Save as `formula.motion.tsx`:
 
 ```tsx
-export default function Formula(ctx) {
+export default function Formula() {
   return (
     <Scene className="h-full w-full flex flex-col items-center justify-center"
       style={{ gap: 24, backgroundColor: "#0f172a" }}>
@@ -1693,7 +1721,8 @@ Save as `path.motion.tsx`:
 
 ```tsx
 const route = path("M 60 260 C 170 40 420 40 580 240");
-export default function Route(ctx) {
+export default function Route() {
+  const ctx = useTime();
   const p = interpolate(ctx.progress, [0, 0.8], [0, 1], { easing: "easeInOut" });
   return (
     <Scene className="relative h-full w-full" style={{ backgroundColor: "#0f172a" }}>
@@ -1764,7 +1793,7 @@ Save as `mask.motion.tsx`:
 
 ```tsx
 const outline = path("M 50 60 L 590 60 L 590 300 L 50 300 Z");
-export default function MaskedTitle(ctx) {
+export default function MaskedTitle() {
   return (
     <Scene className="relative h-full w-full" style={{ backgroundColor: "#0f172a" }}>
       <Clip path={outline} style={{ position: "absolute", left: 0, top: 0, width: 640, height: 360 }}>
@@ -1813,7 +1842,8 @@ reads inside an input start with that input's own transparent canvas.
 
 ```tsx
 export const composition = { width: 640, height: 360, fps: 30, duration: 2 };
-export default function Reveal(ctx) {
+export default function Reveal() {
+  const ctx = useTime();
   const p = clamp(ctx.seconds, 0, 1);
   return <Transition kind="circleOpen" progress={p} style={{width:640,height:360}}>
     <View style={{backgroundColor:"#2140ff"}} />
@@ -1937,7 +1967,8 @@ const layouts = defineLayoutStates({
   small: { card: rect(40,100,180,160) },
   large: { card: rect(280,60,320,240) },
 });
-export default function Flip(ctx) {
+export default function Flip() {
+  const ctx = useTime();
   const p = interpolate(ctx.progress, [0,0.7], [0,1], { easing: "easeInOut" });
   return (
     <Scene className="relative h-full w-full" style={{ backgroundColor: "#0f172a" }}>
@@ -1978,7 +2009,7 @@ separate effect from CSS `backdropFilter: "blur(...)"`.
 Save as `glass.motion.tsx`:
 
 ```tsx
-export default function GlassCard(ctx) {
+export default function GlassCard() {
   return (
     <Scene className="relative h-full w-full"
       style={{ backgroundImage: "linear-gradient(30deg, #0f172a, #2563eb, #38bdf8)" }}>
@@ -2156,7 +2187,8 @@ Both values default to zero and can be a scalar or a per-instance array.
 Save as `particles.motion.tsx`:
 
 ```tsx
-export default function Particles(ctx) {
+export default function Particles() {
+  const ctx = useTime();
   return (
     <Scene className="relative h-full w-full" style={{ backgroundColor: "#0f172a" }}>
       <GeometryBatch geometry="circle"
@@ -2207,7 +2239,8 @@ admission when constructing a new field.
 Save as `camera.motion.tsx`:
 
 ```tsx
-export default function Camera(ctx) {
+export default function Camera() {
+  const ctx = useTime();
   const zoom = 1 + ctx.progress * 0.4;
   return (
     <Scene className="relative h-full w-full" style={{ backgroundColor: "#0f172a" }}
@@ -2537,7 +2570,8 @@ export const controls = {
     noise: asset({ kind: "image", required: true }),
   },
 };
-export default function Dissolve(ctx) {
+export default function Dissolve() {
+  const ctx = useTime();
   return (
     <Scene>
       <ShaderLayer source="asset://effect" inputs={{ noise: "asset://noise" }}

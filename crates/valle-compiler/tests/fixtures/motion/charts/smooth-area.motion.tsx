@@ -21,7 +21,7 @@ const TREND = curve(
 const FILL = area(TREND, BASELINE);
 const TICKS = ticks(DOMAIN[0], DOMAIN[1], 4);
 
-function Marker(ctx, { index, value, accent, ink }) {
+function Marker({ index, value, accent, ink }) { const ctx = useTime();
   const show = interpolate(ctx.progress - 0.42 - index * 0.035, [0, 0.28], [0, 1], {
     easing: "easeOut",
   });
@@ -50,7 +50,7 @@ function Marker(ctx, { index, value, accent, ink }) {
   );
 }
 
-export default function SmoothArea(ctx, props) {
+export default function SmoothArea(props) { const ctx = useTime();
   const draw = interpolate(ctx.progress, [0.08, 0.78], [0, 1], { easing: "easeInOut" });
   return (
     <Scene key="scene" className="relative h-full w-full" style={{ backgroundColor: "#071018" }}>

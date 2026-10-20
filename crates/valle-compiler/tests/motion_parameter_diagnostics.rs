@@ -9,7 +9,7 @@ use valle_timeline::FrameRate;
 fn filter(amount: &str) -> String {
     format!(
         r##"export const composition={{width:320,height:180,fps:30,duration:2}};
-export default function Main(ctx) {{
+export default function Main() {{ const ctx = useTime();
  const amount = {amount};
  return <Scene><View key="blur" style={{{{width:320,height:180,
  filter:`radial-blur(160px 90px ${{amount}}px)`}}}} /></Scene>;
@@ -81,7 +81,7 @@ fn known_bad_ranges_fail_and_unknown_inputs_do_not_forge_proofs() {
 #[test]
 fn transitions_share_strict_range_diagnostics() {
     let source = r##"export const composition={width:320,height:180,fps:30,duration:2};
-    export default function Main(ctx) {return <Scene><Transition kind="circleOpen" progress={0.5}
+    export default function Main() { const ctx = useTime();return <Scene><Transition kind="circleOpen" progress={0.5}
         params={{centerX:ctx.progress*2,softness:3}}><View/><View/></Transition></Scene>; }"##;
     let compiled = compile_motion(source).unwrap();
     assert!(

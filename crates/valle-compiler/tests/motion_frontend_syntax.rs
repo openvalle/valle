@@ -84,10 +84,10 @@ fn fragments_put_their_children_in_their_place() {
         r##"
 const theme = {{ colors: {{ accent: "#38bdf8" }} }};
 const ROWS = [{{ id: "x" }}, {{ id: "y" }}];
-function Pair(ctx) {{
+function Pair() {{ const ctx = useTime();
   return <><View key="a" {BOX} /><View key="b" {BOX} /></>;
 }}
-export default function D(ctx) {{
+export default function D() {{ const ctx = useTime();
   return <Scene>
     <View key="row" className="flex">
       <><View key="first" {BOX} /><View key="second" {BOX} /></>
@@ -139,15 +139,15 @@ fn spread_attributes_set_what_the_object_holds_and_the_last_setting_wins() {
         r##"
 const SHARED = { className: "absolute", style: { width: 10, height: 10 } };
 const ITEMS = [{ id: "one", label: "One", size: 12 }, { id: "two", label: "Two", size: 14 }];
-function Tag(ctx, { id, label, size, ...rest }) {
+function Tag({ id, label, size, ...rest }) { const ctx = useTime();
   return <View key="tag" {...rest} style={{ width: size, height: size }}>
     <Text key="label">{label}</Text>
   </View>;
 }
-function Box(ctx, props) {
+function Box(props) { const ctx = useTime();
   return <View key="box" {...props} />;
 }
-export default function D(ctx) {
+export default function D() { const ctx = useTime();
   const local = { style: { width: 30, height: 30, opacity: ctx.progress } };
   return <Scene>
     <View key="shared" {...SHARED} />
@@ -180,7 +180,7 @@ fn spread_attributes_reach_scene3d_children_and_spans() {
         r##"
 const LAMBERT = { material: { type: "lambert", color: "#ffffff" }, rotateY: 15 };
 const STRONG = { style: { fontWeight: 700 } };
-export default function D(ctx) {
+export default function D() { const ctx = useTime();
   return <Scene style={{ width: 128, height: 128 }}>
     <Scene3D key="s" camera={{ position: [0, 0, 5], target: [0, 0, 0] }} style={{ width: 128, height: 128 }}>
       <Mesh key="shape" geometry={extrude(path("M -1 -1 L 1 -1 L 1 1 L -1 1 Z"), { depth: 0.8 })} {...LAMBERT} />
@@ -210,7 +210,11 @@ export default function D(ctx) {
     let bold = artifact
         .nodes
         .iter()
-        .find(|node| node.styles.iter().any(|style| style.property == "font-weight"))
+        .find(|node| {
+            node.styles
+                .iter()
+                .any(|style| style.property == "font-weight")
+        })
         .expect("the Span run carries its weight");
     assert_eq!(style_number(&artifact, &bold.key, "font-weight"), 700.0);
 }
@@ -223,10 +227,10 @@ export const controls = { props: { size: number({ default: 24 }), tint: number({
 const POINT = { x: 4, y: 6, z: 8 };
 const LIST = [1, 2, 3, 4];
 const FIELD = "z";
-function Swatch(ctx, { label, ...style }) {
+function Swatch({ label, ...style }) { const ctx = useTime();
   return <View key="swatch" style={{ width: style.size, height: style.size, opacity: style.tint }} />;
 }
-export default function D(ctx, { size, ...others }) {
+export default function D({ size, ...others }) { const ctx = useTime();
   const { x, ...rest } = POINT;
   const { [FIELD]: picked, ...flat } = POINT;
   const [first, ...more] = LIST;
@@ -251,7 +255,7 @@ fn array_spreads_write_out_prepared_arrays_and_fixed_tuples() {
         r##"
 const BASE = [10, 20];
 const INPUT = [0, 1];
-export default function D(ctx) {
+export default function D() { const ctx = useTime();
   const moving = [...BASE, ctx.progress * 100];
   const both = [...moving, ...BASE];
   return <Scene>
@@ -263,4 +267,61 @@ export default function D(ctx) {
     assert_eq!(style_number(&artifact, "a", "left"), 50.0);
     assert_eq!(style_number(&artifact, "a", "top"), 20.0);
     assert_eq!(style_number(&artifact, "a", "width"), 15.0);
+}
+
+#[test]
+fn use_time_is_read_where_it_is_used_and_passes_on_like_a_value() {
+    let artifact = compile(
+        r##"
+const later = (time, at) => time.seconds - at;
+const now = () => useTime().seconds;
+function Probe({ time }) {
+  return <View key="probe" style={{ width: 10, height: 10, left: time.seconds * 10 }} />;
+}
+function Clock(props) {
+  return <View key="clock" style={{ width: 10, height: 10, left: props.time.seconds * 10 }} />;
+}
+function Own() {
+  const { seconds } = useTime();
+  return <View key="own" style={{ width: 10, height: 10, left: seconds * 10 }} />;
+}
+export default function D() {
+  const ctx = useTime();
+  const { seconds, fps: rate } = useTime();
+  return <Scene>
+    <View key="alias" style={{ width: 10, height: 10, left: ctx.seconds * 10 }} />
+    <View key="inline" style={{ width: 10, height: 10, left: useTime().seconds * 10 }} />
+    <View key="destructured" style={{ width: 10, height: 10, left: seconds * 10, top: rate.num }} />
+    <View key="helper" style={{ width: 10, height: 10, left: (later(ctx, 0.5) + 0.5) * 10 }} />
+    <View key="hook-helper" style={{ width: 10, height: 10, left: now() * 10 }} />
+    <Probe key="prop" time={ctx} />
+    <Clock key="member" time={ctx} />
+    <TimeScope key="scope" offset={0.25} speed={1}>
+      <View key="scoped-alias" style={{ width: 10, height: 10, left: ctx.seconds * 10 }} />
+      <View key="scoped-number" style={{ width: 10, height: 10, left: seconds * 10 }} />
+      <Own key="scoped-hook" />
+    </TimeScope>
+  </Scene>;
+}
+"##,
+    );
+    // Frame 30 at 30 fps is one second in.
+    for key in [
+        "alias",
+        "inline",
+        "destructured",
+        "helper",
+        "hook-helper",
+        "prop/probe",
+        "member/clock",
+        "scoped-number",
+    ] {
+        assert_eq!(style_number(&artifact, key, "left"), 10.0, "{key}");
+    }
+    assert_eq!(style_number(&artifact, "destructured", "top"), 30.0);
+    // The time object is read inside the scope; a number read at its binding and a component's
+    // own `useTime()` follow where they were taken.
+    for key in ["scoped-alias", "scoped-hook/own"] {
+        assert_eq!(style_number(&artifact, key, "left"), 7.5, "{key}");
+    }
 }

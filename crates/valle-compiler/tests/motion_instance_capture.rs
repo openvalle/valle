@@ -7,7 +7,7 @@ fn source(prefix: &str, suffix: &str) -> String {
     format!(
         r##"
 const ROWS = Array.from({{length:80}}, (_, i) => ({{id:`row${{i}}`, x:i*4}}));
-export default function Main(ctx) {{
+export default function Main() {{ const ctx = useTime();
  const k = ctx.progress * 2;
  return <Scene style={{{{width:640,height:200}}}}>
  {prefix}

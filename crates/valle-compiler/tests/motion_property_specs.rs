@@ -11,7 +11,7 @@ use valle_timeline::FrameRate;
 
 fn source(style: &str) -> String {
     format!(
-        r#"export default function Demo(ctx) {{return <Scene style={{{{width:320,height:180}}}}>
+        r#"export default function Demo() {{ const ctx = useTime();return <Scene style={{{{width:320,height:180}}}}>
     <View key="target" style={{{{position:'absolute',left:0,top:0,width:80+ctx.localFrame,height:20}}}}/>
     <View key="consumer" style={{{{position:'absolute',left:40,top:30,width:100,height:60,
         borderWidth:3,padding:8,backgroundColor:'red',{style}}}}}>

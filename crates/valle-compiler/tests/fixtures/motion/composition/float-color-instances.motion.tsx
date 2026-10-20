@@ -4,7 +4,7 @@ const CELLS = Array.from({ length: 64 }, (_, i) => ({
   id: `c${i}`, x: (i % 8) * 80, y: Math.floor(i / 8) * 45
 }));
 
-export default function FloatInstances(ctx) {
+export default function FloatInstances() { const ctx = useTime();
   return (
     <Scene className="relative h-full w-full" style={{ backgroundColor: "#101010" }}>
       {CELLS.map((cell) => (

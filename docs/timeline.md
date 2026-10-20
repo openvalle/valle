@@ -681,7 +681,8 @@ export const controls = {
   assets: { hero: asset({ kind: "image", required: true }) },
 };
 
-export default function Overlay(ctx, props) {
+export default function Overlay(props) {
+  const ctx = useTime();
   const opacity = interpolate(ctx.seconds, [0,0.9], [0,1]);
   return (
     <Scene className="relative h-full w-full">

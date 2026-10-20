@@ -31,7 +31,7 @@ const NODES = [
   { id: "render", label: "RENDER", x: 1580, y: 270 },
 ];
 
-export default function RouteNetwork(ctx, props) {
+export default function RouteNetwork(props) { const ctx = useTime();
   const reveal = interpolate(ctx.seconds, [0, 0.6], [0, 1], { easing: "easeOut" });
   const flow = interpolate(ctx.seconds, [1.4, 5], [0, 1]);
   const center = interpolate(flow, [0, 1], [760, 1160], { easing: "easeInOut" });

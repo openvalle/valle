@@ -86,7 +86,7 @@ fn maps_component_time_and_restores_parent_scope() {
     assert!((width(&nested, "bar", 45) - 187.5).abs() < 1e-9);
     let with_sibling = TIME_SCOPE.replace(
         "</TimeScope>",
-        "</TimeScope><View key=\"outside\" className=\"absolute\" style={{width:100+ctx.seconds*100,height:10}}/>",
+        "</TimeScope><View key=\"outside\" className=\"absolute\" style={{width:100+useTime().seconds*100,height:10}}/>",
     );
     let siblings = compile_motion(&with_sibling).unwrap().artifact;
     assert!((width(&siblings, "outside", 45) - 250.0).abs() < 1e-9);
@@ -95,7 +95,9 @@ fn maps_component_time_and_restores_parent_scope() {
 #[test]
 fn time_scope_rejects_missing_or_invalid_parameters() {
     assert!(compile_motion(&TIME_SCOPE.replace(" speed={2}", "")).is_err());
-    assert!(compile_motion(&TIME_SCOPE.replace("offset={0.5}", "offset={ctx.seconds}")).is_err());
+    assert!(
+        compile_motion(&TIME_SCOPE.replace("offset={0.5}", "offset={useTime().seconds}")).is_err()
+    );
     assert!(
         compile_motion(&TIME_SCOPE.replace(
             "<TimeScope key=\"scope\"",
@@ -118,7 +120,7 @@ fn time_scope_rejects_missing_or_invalid_parameters() {
 
 #[test]
 fn identity_scope_retains_every_integer_frame_at_non_binary_rates() {
-    let source = r#"function Bar(ctx) { return <View key="bar" style={{width:ctx.localFrame,height:10}} />; }
+    let source = r#"function Bar() { const ctx = useTime(); return <View key="bar" style={{width:ctx.localFrame,height:10}} />; }
     export default function Main() { return <Scene><TimeScope key="scope" offset={0} speed={1}><Bar /></TimeScope></Scene>; }"#;
     let artifact = compile_motion(source).unwrap().artifact;
     let props = resolve_props(&artifact.controls, &Default::default()).unwrap();

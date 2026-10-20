@@ -63,7 +63,7 @@ function layoutCallouts(slices) {
 
 const CALLOUTS = layoutCallouts(SLICES);
 
-function Slice(ctx, { index, color }) {
+function Slice({ index, color }) { const ctx = useTime();
   const slice = SLICES[index];
   const opened = interpolate(ctx.progress - index * 0.05, [0, 0.55], [0, 1], {
     easing: "easeOut",
@@ -85,7 +85,7 @@ function Slice(ctx, { index, color }) {
   );
 }
 
-function Callout(ctx, { index, label, color }) {
+function Callout({ index, label, color }) { const ctx = useTime();
   const layout = CALLOUTS[index];
   const fade = interpolate(ctx.progress - 0.28 - index * 0.04, [0, 0.35], [0, 1], {
     easing: "easeOut",
@@ -138,7 +138,7 @@ function Callout(ctx, { index, label, color }) {
   );
 }
 
-export default function DonutShare(ctx, props) {
+export default function DonutShare(props) { const ctx = useTime();
   const total = interpolate(ctx.progress, [0.2, 0.75], [0, 1], { easing: "easeOut" });
   return (
     <Scene key="scene" className="relative h-full w-full" style={{ backgroundColor: "#071018" }}>

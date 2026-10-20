@@ -21,7 +21,7 @@ export const controls = ({
   },
 });
 
-export default function DataBars(ctx, props, data) {
+export default function DataBars(props) { const ctx = useTime(); const data = useData();
   const visible = data.rows.filter((item) => item.value > 0);
   const total = data.rows.reduce((sum, item) => sum + item.value, 0);
   return <Group key="root">
@@ -134,7 +134,7 @@ fn data_binding_is_required_and_reports_json_pointer_against_its_source() {
 #[test]
 fn frame_values_still_cannot_choose_prepare_cardinality() {
     let source = r#"
-export default function IllegalTopology(ctx) {
+export default function IllegalTopology() { const ctx = useTime();
   return <Group>{Array.from({ length: ctx.frame }, (_, i) => i).map((i) => <View key={i} />)}</Group>;
 }
 "#;
@@ -153,7 +153,7 @@ export const controls = ({
     rows: array(record({ id: string(), value: number() }), { maxItems: 8, key: "id" }),
   },
 });
-export default function ForOfBars(ctx, props, data) {
+export default function ForOfBars(props) { const ctx = useTime(); const data = useData();
   const bars = [];
   for (const item of data.rows) {
     const width = item.value * 10;
@@ -226,4 +226,75 @@ fn external_data_drives_the_multifile_chart_map_diagram_reference_without_domain
             "{key} panel remains source-addressable"
         );
     }
+}
+
+#[test]
+fn use_data_reads_the_prepared_data_in_components_and_helpers() {
+    let source = r#"
+export const controls = ({
+  data: {
+    rows: array(record({ id: string(), value: number({ min: 0 }) }), { minItems: 1, maxItems: 8, key: "id" }),
+  },
+});
+const share = (value) => value / useData().rows.reduce((sum, row) => sum + row.value, 0);
+function Bar({ value }) {
+  const { rows } = useData();
+  return <View key="bar" style={{ width: share(value) * 100, height: rows.length }} />;
+}
+export default function Bars() {
+  const data = useData();
+  return <Group key="root">
+    <Bar key="first" value={data.rows[0].value} />
+    <Bar key="second" value={data.rows[1].value} />
+  </Group>;
+}
+"#;
+    let rows = PrepareDataBinding {
+        source: "rows.json".into(),
+        value: json!({ "rows": [{ "id": "a", "value": 1 }, { "id": "b", "value": 3 }] }),
+    };
+    let compiled = compile_motion_with_full_env_and_data(source, &[], None, None, Some(&rows))
+        .unwrap_or_else(|diagnostics| panic!("{diagnostics:#?}"));
+    let style = |key: &str, property: &str| {
+        let node = compiled
+            .artifact
+            .nodes
+            .iter()
+            .find(|node| node.key == key)
+            .unwrap_or_else(|| panic!("node `{key}` exists"));
+        match &node
+            .styles
+            .iter()
+            .find(|style| style.property == property)
+            .unwrap_or_else(|| panic!("{key}.{property} exists"))
+            .value
+        {
+            valle_motion::StyleValue::Static {
+                value: valle_motion::MotionValue::Number(number),
+            } => *number,
+            valle_motion::StyleValue::Static {
+                value: valle_motion::MotionValue::Length(length),
+            } => length.value,
+            other => panic!("{key}.{property} is a prepared number: {other:?}"),
+        }
+    };
+    assert_eq!(style("first/bar", "width"), 25.0);
+    assert_eq!(style("second/bar", "width"), 75.0);
+    assert_eq!(style("second/bar", "height"), 2.0);
+
+    let module_scope = compile_motion_with_full_env_and_data(
+        &source.replace("const share", "const ROWS = useData();\nconst share"),
+        &[],
+        None,
+        None,
+        Some(&rows),
+    )
+    .err()
+    .unwrap_or_default();
+    assert!(
+        module_scope.iter().any(|diagnostic| diagnostic
+            .message
+            .contains("inside a component or a helper")),
+        "{module_scope:#?}"
+    );
 }

@@ -11,7 +11,7 @@ use valle_timeline::FrameRate;
 
 fn scene(class: &str, style: &str, position: &str) -> String {
     format!(
-        r#"export default function Demo(ctx) {{ return <Scene style={{{{width:320,height:180}}}}>
+        r#"export default function Demo() {{ const ctx = useTime(); return <Scene style={{{{width:320,height:180}}}}>
         <View key="parent" {class} style={{{{marginLeft:70,marginTop:40,width:100,height:60,
             borderWidth:3,padding:8,backgroundColor:'red',{style}}}}}>
             <View key="child" style={{{{position:'{position}',left:5,top:7,width:20,height:10,backgroundColor:'blue'}}}}/>
@@ -74,7 +74,7 @@ fn frames(source: &str, frames: &[u32]) -> Vec<(BTreeMap<String, [f32; 4]>, Vec<
 
 fn css_3d_scene(class: &str, inline: &str) -> String {
     format!(
-        r#"export default function Demo(ctx){{return <Scene style={{{{width:320,height:180}}}}>
+        r#"export default function Demo(){{ const ctx = useTime();return <Scene style={{{{width:320,height:180}}}}>
         <View key='red' {class} style={{{{position:'absolute',left:100,top:30,width:100,height:100,
             backgroundColor:'red',rotateY:45,{inline}}}}}/>
         <View key='blue' style={{{{position:'absolute',left:100,top:30,width:100,height:100,
@@ -308,9 +308,9 @@ fn dynamic_transform_presence_switches_rebuild_positioned_descendants() {
 #[test]
 fn transform_templates_can_be_reused_through_constants_helpers_and_components() {
     let source = r#"function angle(t) { return `${t}deg`; }
-    function Item(ctx, props) { return <View key='parent' style={{width:80,height:60,backgroundColor:'red',
+    function Item(props) { const ctx = useTime(); return <View key='parent' style={{width:80,height:60,backgroundColor:'red',
         translate:props.move,rotate:props.turn,scale:props.zoom,transform:props.skew}}/>; }
-    export default function Demo(ctx) {
+    export default function Demo() { const ctx = useTime();
         const move = `${ctx.localFrame}px 5px`;
         const turn = angle(ctx.localFrame);
         const zoom = `${1+ctx.localFrame/90} 1`;
@@ -332,7 +332,7 @@ fn css_template_choices_keep_literal_keywords_through_local_bindings() {
         ("scale", "${1+ctx.localFrame/90}"),
     ] {
         let dynamic = scene("", &format!("{property}:chosen"), "fixed")
-            .replace("{ return <Scene", &format!("{{ const reset = 'none'; const chosen = ctx.localFrame<30 ? reset : `{value}`; return <Scene"));
+            .replace("useTime(); return <Scene", &format!("useTime(); const reset = 'none'; const chosen = ctx.localFrame<30 ? reset : `{value}`; return <Scene"));
         let inline = scene(
             "",
             &format!("{property}:ctx.localFrame<30?'none':`{value}`"),

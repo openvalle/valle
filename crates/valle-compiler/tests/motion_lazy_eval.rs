@@ -16,7 +16,7 @@ fn expanded_absolute_leaves_match_full_evaluation() {
     let source = r##"
         export const composition = { width: 640, height: 360, fps: 30, duration: 2 };
         const DOTS = Array.from({ length: 64 }, (_, i) => ({ id: `d${i}`, i, x: 4 + (i % 8) * 8, y: 4 + Math.floor(i / 8) * 14 }));
-        export default function LazyEval(ctx) {
+        export default function LazyEval() { const ctx = useTime();
           return <Scene className="relative h-full w-full" style={{ backgroundColor: "#101010" }}>
             {DOTS.map((dot) => (
               <View key={dot.id} className="absolute" visible={ctx.seconds * 1000 >= dot.i}
@@ -83,7 +83,7 @@ fn time_scope_keeps_independent_leaves_lazy_at_mapped_and_random_access_times() 
     let source = r##"
         export const composition = { width: 640, height: 360, fps: 30, duration: 2 };
         const DOTS = Array.from({ length: 64 }, (_, i) => ({ id: `d${i}`, i, x: 4 + (i % 8) * 8, y: 4 + Math.floor(i / 8) * 14 }));
-        export default function Scoped(ctx) {
+        export default function Scoped() { const ctx = useTime();
           return <Scene className="relative h-full w-full" style={{ backgroundColor: "#101010" }}>
             <TimeScope key="scope" offset={0.5} speed={2}>
               {DOTS.map((dot) => (
@@ -795,7 +795,7 @@ fn nonmonotone_instance_visibility_evaluates_rows_individually() {
     let source = r##"
         export const composition = { width: 64, height: 32, fps: 30, duration: 1 };
         const DOTS = Array.from({ length: 8 }, (_, i) => ({ id: `d${i}`, i, x: i * 8 }));
-        export default function Alternating(ctx) {
+        export default function Alternating() { const ctx = useTime();
           return <Scene className="relative h-full w-full">
             {DOTS.map((dot) => <View key={dot.id} className="absolute"
               visible={dot.i % 2 === 0}
@@ -922,7 +922,7 @@ fn callback_index_drives_the_same_visible_prefix() {
 #[test]
 fn hidden_flow_node_still_positions_its_sibling() {
     let artifact = compile_motion(
-        r##"export default function Flow(ctx) { return (
+        r##"export default function Flow() { const ctx = useTime(); return (
           <Scene key="root" style={{display:"flex",width:160,height:60}}>
             <View key="hidden" visible={ctx.seconds > 1} style={{width:50,height:20}} />
             <View key="sibling" style={{width:10,height:20,backgroundColor:"#fff"}} />
@@ -955,7 +955,7 @@ fn hidden_flow_node_still_positions_its_sibling() {
 #[test]
 fn bounds_reference_keeps_hidden_absolute_geometry() {
     let artifact = compile_motion(
-        r##"export default function Referenced(ctx) { return (
+        r##"export default function Referenced() { const ctx = useTime(); return (
           <Scene key="root" style={{width:160,height:60}}>
             <View key="hidden" className="absolute" visible={ctx.seconds > 1}
               style={{left:10,top:4,width:40,height:20,backgroundColor:"#fff"}} />
@@ -995,7 +995,7 @@ fn bounds_reference_keeps_hidden_absolute_geometry() {
 #[test]
 fn visible_descendant_keeps_its_hidden_parent_in_layout() {
     let artifact = compile_motion(
-        r##"export default function Descendant(ctx) { return (
+        r##"export default function Descendant() { const ctx = useTime(); return (
           <Scene key="root" style={{width:160,height:60}}>
             <View key="parent" className="absolute" visible={ctx.seconds > 1}
               style={{left:10,top:4,width:40,height:20,backgroundColor:"#f00"}}>

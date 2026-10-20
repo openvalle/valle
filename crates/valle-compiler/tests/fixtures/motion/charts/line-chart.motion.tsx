@@ -16,13 +16,13 @@ const POINTS = DATA.map((value, index) => point(X.at(index), Y.map(value)));
 const TREND = line(POINTS);
 const FILL = area(POINTS, 885);
 
-function Grid(ctx, { color }) {
+function Grid({ color }) {
   return ticks(0, 80, 4).map((value, index) => (
     <View key={`line-${index}`} style={{ position: "absolute", left: 225, top: Y.map(value), width: 1470, height: 1.5, backgroundColor: color, opacity: 0.44 }} />
   ));
 }
 
-function Marker(ctx, { index, value, accent, label }) {
+function Marker({ index, value, accent, label }) { const ctx = useTime();
   const reveal = interpolate(ctx.progress - index * 0.045, [0, 0.45], [0, 1], { easing: "easeOut" });
   return (
     <View key="marker" style={{ position: "absolute", left: X.at(index) - 12, top: Y.map(value) - 12, width: 24, height: 24, borderRadius: 12, backgroundColor: accent, opacity: reveal, filter: `drop-shadow(0px 0px ${12 + reveal * 15}px ${accent})` }}>
@@ -31,15 +31,15 @@ function Marker(ctx, { index, value, accent, label }) {
   );
 }
 
-function Area(ctx, { pathValue, fill, opacity }) {
+function Area({ pathValue, fill, opacity }) {
   return <Path key="area" d={pathValue} fill={fill} style={{ opacity }} />;
 }
 
-function Line(ctx, { pathValue, stroke, reveal }) {
+function Line({ pathValue, stroke, reveal }) {
   return <Path key="line" d={pathValue} fill="none" stroke={stroke} strokeWidth="9" strokeLinecap="round" trimEnd={reveal} />;
 }
 
-function LineChart(ctx, { accent, areaColor, label }) {
+function LineChart({ accent, areaColor, label }) { const ctx = useTime();
   const reveal = interpolate(ctx.progress, [0.08, 0.88], [0, 1], { easing: "easeInOut" });
   return (
     <View key="chart" className="absolute" style={{ left: 0, top: 0, width: 1920, height: 1080 }}>
@@ -51,7 +51,7 @@ function LineChart(ctx, { accent, areaColor, label }) {
   );
 }
 
-export default function LineChartFilm(ctx, props) {
+export default function LineChartFilm(props) {
   return (
     <Scene key="scene" className="relative h-full w-full" style={{ backgroundColor: "#071018" }}>
       <View key="glow" className="absolute" style={{ right: -180, top: -270, width: 900, height: 900, borderRadius: 450, backgroundColor: props.area, opacity: 0.28, filter: "blur(150px)" }} />

@@ -37,12 +37,12 @@ const FLOWS = FLOW_PAIRS.map((pair, index) => {
   return cubic(point(from[0], from[1]), point(middle, from[1] - lift), point(middle, to[1] - lift), point(to[0], to[1]));
 });
 
-function Region(ctx, { geometry, fill, stroke, strokeWidth, index }) {
+function Region({ geometry, fill, stroke, strokeWidth, index }) { const ctx = useTime();
   const reveal = interpolate(ctx.progress - index * 0.035, [0, 0.48], [0, 1], { easing: "easeOut" });
   return <Path key="shape" d={path(geometry.d)} fill={fill} stroke={stroke} strokeWidth={strokeWidth} style={{ opacity: 0.34 + reveal * 0.66 }} />;
 }
 
-function Marker(ctx, { pointValue, color, index }) {
+function Marker({ pointValue, color, index }) { const ctx = useTime();
   const reveal = interpolate(ctx.progress, [0.08 + index * 0.08, 0.22 + index * 0.08], [0, 1], { easing: "easeOut" });
   return (
     <View key="marker" className="absolute" style={{ left: pointValue[0] - 12, top: pointValue[1] - 12, width: 24, height: 24, borderRadius: 12, backgroundColor: color, opacity: reveal, transform: `scale(${0.45 + reveal * 0.55})`, filter: `drop-shadow(0px 0px ${12 + reveal * 18}px ${color})` }}>
@@ -51,12 +51,12 @@ function Marker(ctx, { pointValue, color, index }) {
   );
 }
 
-function Flow(ctx, { route, color, index }) {
+function Flow({ route, color, index }) { const ctx = useTime();
   const reveal = interpolate(ctx.progress, [0.1 + index * 0.12, 0.52 + index * 0.12], [0, 1], { easing: "easeInOut" });
   return <Path key="route" d={route} fill="none" stroke={color} strokeWidth="4.5" strokeLinecap="round" trimEnd={reveal} arrowEnd="triangle" arrowSize="16.5" style={{ opacity: 0.92 }} />;
 }
 
-function MapLabel(ctx, { region, placement, color, index }) {
+function MapLabel({ region, placement, color, index }) { const ctx = useTime();
   const reveal = interpolate(ctx.progress, [0.22 + index * 0.035, 0.4 + index * 0.035], [0, 1]);
   return (
     <View key="label" className="absolute" style={{ borderStyle: "solid", left: placement.x, top: placement.y, height: 37.5, paddingLeft: 13.5, paddingRight: 13.5, borderRadius: 18, backgroundColor: "#020617c9", borderWidth: 1.5, borderColor: "#ffffff1f", opacity: placement.visible ? reveal : 0 }}>
@@ -65,7 +65,7 @@ function MapLabel(ctx, { region, placement, color, index }) {
   );
 }
 
-function WorldMap(ctx, { geometry, width, height, radius, gridOne, gridTwo, strokeWidth, ocean, land, accent }) {
+function WorldMap({ geometry, width, height, radius, gridOne, gridTwo, strokeWidth, ocean, land, accent }) {
   return (
     <View key="map" className="absolute" style={{ borderStyle: "solid", left: 0, top: 0, width, height, borderRadius: radius, backgroundColor: ocean, overflow: "hidden", borderWidth: 1.5, borderColor: accent }}>
       <View key="graticule-a" className="absolute" style={{ left: 0, top: gridOne, width, height: 1.5, backgroundColor: accent, opacity: 0.14 }} />
@@ -75,7 +75,7 @@ function WorldMap(ctx, { geometry, width, height, radius, gridOne, gridTwo, stro
   );
 }
 
-export default function MapAtlas(ctx, props) {
+export default function MapAtlas(props) {
   return (
     <Scene key="scene" className="relative h-full w-full" style={{ backgroundColor: "#030712", fontFamily: "asset://brandFont" }} camera={{ center: point(960, 540), zoom: 1, rotation: 0 }}>
       <World key="world">

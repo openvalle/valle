@@ -13,7 +13,7 @@ const SOURCE: &str = r##"
 export const composition = { width: 320, height: 180, fps: 30, duration: 2 };
 const OUTLINE = path("M 20 20 L 80 20 L 80 80 L 20 80 Z");
 const PREPARED = resamplePath(OUTLINE, 32);
-export default function Resampled(ctx) {
+export default function Resampled() { const ctx = useTime();
   return <Scene style={{ width: 320, height: 180, backgroundColor: "#101010" }}>
     <Path key="prepared" d={PREPARED} fill="#ffffff" />
     <Path key="animated" d={resamplePath(

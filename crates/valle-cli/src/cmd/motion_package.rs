@@ -720,7 +720,7 @@ mod tests {
         .unwrap()
         .artifact;
         let later = valle_compiler::motion::compile_motion(
-            r##"export default function T(ctx){return <Scene>
+            r##"export default function T(){ const ctx = useTime();return <Scene>
                 <MathFormula latex="\\frac{1}{2}" style={{opacity:ctx.seconds > 1 ? 1 : 0}} />
             </Scene>; }"##,
         )

@@ -6,7 +6,7 @@ use std::{
 
 const SOURCE: &str = r##"export const composition={width:160,height:48,fps:4,duration:1};
 export const role=captionPresenter({intro:seconds(0.25),outro:seconds(0.25)});
-export default function Words(ctx,props,data) {
+export default function Words(props) { const ctx = useTime(); const data = useData();
   return <Scene>{data.runs.map((run,index)=><Text key={index} className="absolute" style={{
     left:data.region[0]+index*60,top:data.region[1],fontFamily:data.style.font,
     fontSize:data.style.fontSize,color:ctx.host.seconds>=run.start && ctx.host.seconds<run.end?"#facc15":"#ffffff"
@@ -160,7 +160,7 @@ fn timeline_caption_presenters_render_after_gaps_with_exact_words_and_terminal_o
     std::fs::write(dir.path().join("words.motion.tsx"), SOURCE).unwrap();
     std::fs::write(dir.path().join("cover.motion.tsx"), r##"export const composition={width:160,height:48,fps:4,duration:1};
 export const role=captionPresenter({intro:seconds(0),outro:seconds(0)});
-export default function Cover(ctx,props,data){return <Scene><View style={{width:ctx.viewport.width,height:ctx.viewport.height,backgroundColor:"#0000ff"}}/></Scene>; }"##).unwrap();
+export default function Cover(props){ const ctx = useTime(); const data = useData();return <Scene><View style={{width:ctx.viewport.width,height:ctx.viewport.height,backgroundColor:"#0000ff"}}/></Scene>; }"##).unwrap();
     let font = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../assets/fonts/noto/NotoSans-Regular.ttf")
         .canonicalize()

@@ -252,7 +252,7 @@ fn runtime_projection_host_math_and_duplicate_region_ids_fail_closed() {
     );
 
     let frame_projection = r##"
-export default function BadMap(ctx) {
+export default function BadMap() { const ctx = useTime();
   const projected = geoPath({polygons: [[[[0,0],[10,0],[0,10]]]], width: 100 + ctx.frame, height: 100});
   return <Path key="region" d={path(projected[0].d)} fill="#fff"/>;
 }

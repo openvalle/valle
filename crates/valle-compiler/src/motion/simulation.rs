@@ -442,7 +442,7 @@ mod tests {
         let expression = "simulate({ dt: 1 / 97, duration: 1, init: () => ({ x: 271 }), step: (state, t, dt) => ({ x: state.x + dt }) })";
         let source = format!(
             "export const composition = {{ width: 640, height: 360, fps: 30, duration: 1 }}; \
-             const S = {expression}; export default function Demo(ctx) {{ return <Scene><View key=\"dot\" style={{{{ position: \"absolute\", left: S.at(ctx.seconds).x, top: 0, width: 10, height: 10 }}}} /></Scene>; }}"
+             const S = {expression}; export default function Demo() {{ const ctx = useTime(); return <Scene><View key=\"dot\" style={{{{ position: \"absolute\", left: S.at(ctx.seconds).x, top: 0, width: 10, height: 10 }}}} /></Scene>; }}"
         );
         let key = simulation_cache_key(expression);
         let first = compile_motion(&source).unwrap().artifact;
@@ -475,7 +475,7 @@ mod tests {
             const S = simulate({ dt: 1, duration: 2, init: () => ({ x: 0 }),
               step: (state, t, dt) => { counter.value += 1; return { x: state.x + 1 }; } });
             const COUNT = counter.value;
-            export default function Demo(ctx) { return <Scene><View key="dot"
+            export default function Demo() { const ctx = useTime(); return <Scene><View key="dot"
               style={{ position: "absolute", left: COUNT, top: 0, width: 10, height: 10 }} />
               </Scene>; }
         "#;
@@ -505,7 +505,7 @@ mod tests {
         let expression = "simulate({ dt: 1 / 113, duration: 1, init: () => ({ x: 913.125 }), step: (state, t, dt) => ({ x: state.x + dt }) })";
         let source = format!(
             "export const composition = {{ width: 640, height: 360, fps: 30, duration: 1 }}; \
-             const S = {expression}; export default function Demo(ctx) {{ return <Scene><View key=\"dot\" style={{{{ position: \"absolute\", left: S.at(ctx.seconds).x, top: 0, width: 10, height: 10 }}}} /></Scene>; }}"
+             const S = {expression}; export default function Demo() {{ const ctx = useTime(); return <Scene><View key=\"dot\" style={{{{ position: \"absolute\", left: S.at(ctx.seconds).x, top: 0, width: 10, height: 10 }}}} /></Scene>; }}"
         );
         let graph = |source: String| {
             MotionModuleGraph::new(

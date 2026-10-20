@@ -213,7 +213,7 @@ export const composition = { width: 48, height: 48, duration: 12 };
 export const controls = { props: { still: number({ default: 0, min: 0, max: 1 }) } };
 const UPPER = curve([point(3,35),point(16,28),point(30,33),point(45,27)]);
 const LOWER = curve([point(3,44),point(16,40),point(30,44),point(45,39)]);
-export default function Demo(ctx, props) {
+export default function Demo(props) { const ctx = useTime();
   const f = props.still > 0 ? 0 : ctx.localFrame;
   return <Scene style={{width:48,height:48,backgroundColor:'#14213d'}}>
     <View style={{position:'absolute',left:3,top:4,width:35,height:36,overflow:'hidden',borderRadius:7.3,opacity:0.63 + f / 3600}}>

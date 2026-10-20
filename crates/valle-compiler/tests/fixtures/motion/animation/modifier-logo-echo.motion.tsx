@@ -3,7 +3,7 @@ export const composition = { width: 1920, height: 1080, fps: 30, duration: 5 };
 const echoes = defineRepeater({ count: 18, keyPrefix: "echo" });
 const ROTATION_ROUTE = path("M 0 0 C 120 -180 240 180 360 0");
 
-export default function ModifierLogoEcho(ctx) {
+export default function ModifierLogoEcho() { const ctx = useTime();
   const t = ctx.progress;
   const reveal = interpolate(t, [0, 0.16], [0, 1], { easing: "easeOut" });
   const settle = spring({ elapsedFrames: ctx.localFrame, fps: ctx.fps, preset: "bouncy" });

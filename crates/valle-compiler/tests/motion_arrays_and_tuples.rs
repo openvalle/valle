@@ -65,7 +65,7 @@ fn path_line_len(compiled: &valle_compiler::motion::CompiledMotion) -> usize {
 fn width_source(ranges: &str) -> String {
     format!(
         r##"
-export default function Card(ctx) {{
+export default function Card() {{ const ctx = useTime();
   return <View style={{{{ width: interpolate(ctx.progress, {ranges}) }}}} />;
 }}
 "##
@@ -79,7 +79,7 @@ fn interpolate_module_const_matches_inline_bytes() {
         r##"
 const INPUT = [0, 1];
 const OUTPUT = [0, 40];
-export default function Card(ctx) {
+export default function Card() { const ctx = useTime();
   return <View style={{ width: interpolate(ctx.progress, INPUT, OUTPUT) }} />;
 }
 "##,
@@ -103,7 +103,7 @@ fn interpolate_easing_const_string_and_array() {
     let named = compile_ok(
         r##"
 const EASE = "easeOut";
-export default function Card(ctx) {
+export default function Card() { const ctx = useTime();
   return <View style={{ width: interpolate(ctx.progress, [0, 1], [0, 40], { easing: EASE }) }} />;
 }
 "##,
@@ -114,7 +114,7 @@ export default function Card(ctx) {
     let named_arr = compile_ok(
         r##"
 const EASES = ["easeIn", "easeOut"];
-export default function Card(ctx) {
+export default function Card() { const ctx = useTime();
   return <View style={{ width: interpolate(ctx.progress, [0, 0.5, 1], [0, 20, 40], { easing: EASES }) }} />;
 }
 "##,
@@ -139,7 +139,7 @@ fn interpolate_cross_module_const_array() {
                 r#"
 import { INPUT } from "./stops.motion";
 export const composition = { width: 1920, height: 1080, fps: 30, duration: 5 };
-export default function Card(ctx) {
+export default function Card() { const ctx = useTime();
   return <View style={{ width: interpolate(ctx.progress, INPUT, [0, 1]) }} />;
 }
 "#
@@ -167,7 +167,7 @@ fn line_map_unrolls_to_existing_path_line() {
     let compiled = compile_ok(
         r##"
 const OFFSETS = [0, 8, 16];
-export default function Card(ctx) {
+export default function Card() { const ctx = useTime();
   const t = ctx.localFrame;
   return <Path fill="none" stroke="#fff" d={line(OFFSETS.map((off) => point(off, t)))} />;
 }
@@ -191,7 +191,7 @@ fn line_map_two_seventy_points_is_one_path_line() {
     let compiled = compile_ok(
         r##"
 const INDICES = Array.from({ length: 270 }, (_, i) => i);
-export default function Card(ctx) {
+export default function Card() { const ctx = useTime();
   const t = ctx.localFrame;
   return <Path fill="none" stroke="#fff" d={line(INDICES.map((i) => point(i, t)))} />;
 }
@@ -205,17 +205,17 @@ fn fixed_dynamic_tuple_survives_component_props_and_static_map_scope() {
     let compiled = compile_ok(
         r##"
 const INDICES = [0, 1, 2];
-function Layers(ctx, { values }) {
+function Layers({ values }) { const ctx = useTime();
   return <LayerList key="list" values={values} />;
 }
-function LayerList(ctx, props) {
+function LayerList(props) { const ctx = useTime();
   return <View key="layers">
     {INDICES.map((_, i) => (
       <View key={`item-${i}`} style={{ opacity: props.values[i] }} />
     ))}
   </View>;
 }
-export default function Card(ctx) {
+export default function Card() { const ctx = useTime();
   const t = ctx.progress;
   const values = [t, t * 0.5, 1 - t];
   return <Scene key="scene"><Layers key="group" values={values} /></Scene>;
@@ -251,7 +251,7 @@ fn static_map_can_build_a_fixed_dynamic_scalar_tuple() {
         r##"
 const HEIGHTS = [40, 80, 120];
 const INDICES = [0, 1, 2];
-export default function Card(ctx) {
+export default function Card() { const ctx = useTime();
   const f = ctx.localFrame;
   const lifts = HEIGHTS.map((height, i) => {
     const p = Math.min(Math.max((f - i * 3) / 9, 0), 1);
@@ -281,7 +281,7 @@ fn inline_dynamic_tuple_can_flow_through_a_helper() {
     let compiled = compile_ok(
         r##"
 const first = (values) => values[0];
-export default function Card(ctx) {
+export default function Card() { const ctx = useTime();
   const t = ctx.progress;
   return <View key="card" style={{ opacity: first([t, 1 - t]) }} />;
 }
@@ -304,7 +304,7 @@ export default function Card(ctx) {
 fn dynamic_tuple_requires_a_static_in_bounds_index() {
     let dynamic_index = diagnostics(
         r##"
-export default function Card(ctx) {
+export default function Card() { const ctx = useTime();
   const t = ctx.progress;
   const values = [t, 1 - t];
   return <View style={{ opacity: values[Math.floor(t * 2)] }} />;
@@ -320,7 +320,7 @@ export default function Card(ctx) {
 
     let out_of_bounds = diagnostics(
         r##"
-export default function Card(ctx) {
+export default function Card() { const ctx = useTime();
   const t = ctx.progress;
   const values = [t, 1 - t];
   return <View style={{ opacity: values[2] }} />;
@@ -340,7 +340,7 @@ fn map_spread_elision_runtime_and_over_budget_fail_closed() {
     let prepared = compile_ok(
         r##"
 const OFFSETS = [0, 8];
-export default function Card(ctx) {
+export default function Card() { const ctx = useTime();
   const t = ctx.localFrame;
   return <Path fill="none" stroke="#fff" d={line([...OFFSETS, 16].map((off) => point(off, t)))} />;
 }
@@ -349,7 +349,7 @@ export default function Card(ctx) {
     assert_eq!(path_line_len(&prepared), 3);
     let spread = diagnostics(
         r##"
-export default function Card(ctx) {
+export default function Card() { const ctx = useTime();
   const t = ctx.localFrame;
   return <Path fill="none" stroke="#fff" d={line([...t].map((off) => point(off, t)))} />;
 }
@@ -361,7 +361,7 @@ export default function Card(ctx) {
     );
     let holes = diagnostics(
         r##"
-export default function Card(ctx) {
+export default function Card() { const ctx = useTime();
   const t = ctx.localFrame;
   return <Path fill="none" stroke="#fff" d={line([0, , 2].map((off) => point(off, t)))} />;
 }
@@ -375,7 +375,7 @@ export default function Card(ctx) {
     );
     let runtime = diagnostics(
         r##"
-export default function Card(ctx) {
+export default function Card() { const ctx = useTime();
   return <Path fill="none" stroke="#fff" d={line(ctx.progress.map((off) => point(off, 0)))} />;
 }
 "##,
@@ -389,7 +389,7 @@ export default function Card(ctx) {
     let over = format!(
         r##"
 const N = Array.from({{ length: {} }}, (_, i) => i);
-export default function Card(ctx) {{
+export default function Card() {{ const ctx = useTime();
   const t = ctx.localFrame;
   return <Path fill="none" stroke="#fff" d={{line(N.map((i) => point(i, t)))}} />;
 }}
@@ -410,7 +410,7 @@ fn mapped_path_is_shared_by_multiple_nodes() {
     let compiled = compile_ok(
         r##"
 const SAMPLES = [0, 10, 20, 30];
-export default function Probe(ctx) {
+export default function Probe() { const ctx = useTime();
   const path = line(SAMPLES.map((x) => point(x, ctx.localFrame + x)));
   return <Scene>
     <Path key="front" d={path} fill="none" stroke="#fff" />
@@ -450,7 +450,7 @@ fn nested_parameter_maps_expand_distinct_dynamic_nodes() {
     let compiled = compile_ok(
         r##"
 const GROUPS = [{ count: 2, delay: 0 }, { count: 3, delay: 4 }];
-export default function Probe(ctx) {
+export default function Probe() { const ctx = useTime();
   return <Scene>{GROUPS.map((group, g) => (
     <View key={`group-${g}`}>
       {Array.from({ length: group.count }, (_, i) => i).map((i) => (
@@ -490,11 +490,11 @@ fn repeated_components_share_frame_expressions() {
     let compiled = compile_ok(
         r##"
 const WIDTHS = [12, 24, 36];
-function Tile(ctx, { width }) {
+function Tile({ width }) { const ctx = useTime();
   const size = width * ctx.progress;
   return <View key="tile" style={{ width: size, height: size }} />;
 }
-export default function Probe(ctx) {
+export default function Probe() { const ctx = useTime();
   return <Scene>{WIDTHS.map((width, i) => <Tile key={`instance-${i}`} width={width} />)}</Scene>;
 }
 "##,
@@ -542,7 +542,7 @@ fn sparse_prepared_ids_preserve_keys_and_content_kinds() {
         r##"
 const IDS = [0, 2, 5];
 const CELLS = IDS.map((id, kind) => ({ id, kind }));
-export default function Probe(ctx) {
+export default function Probe() { const ctx = useTime();
   return <Scene>{CELLS.map((cell) => (
     <View key={`cell-${cell.id}`} style={{ left: cell.id * 10 }}>
       {cell.kind === 0 ? <Text key="label">A</Text> :
@@ -584,7 +584,7 @@ fn lookup_table_is_still_not_a_builtin() {
     let messages = diagnostics(
         r##"
 const TABLE = [1, 2, 3];
-export default function Card(ctx) {
+export default function Card() { const ctx = useTime();
   return <View style={{ opacity: lookupTable(TABLE, ctx.localFrame, { rounding: "floor", bounds: "clamp" }) }} />;
 }
 "##,

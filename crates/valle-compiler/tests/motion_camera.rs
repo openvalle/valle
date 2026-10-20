@@ -22,7 +22,7 @@ fn fonts() -> Fonts {
 
 /// A world-space box and screen-space HUD with an animated camera pan and zoom.
 const SOURCE: &str = r##"
-export default function Probe(ctx) {
+export default function Probe() { const ctx = useTime();
   const t = ctx.progress;
   const cx = interpolate(t, [0, 1], [260, 660], { easing: "linear" });
   const zoom = interpolate(t, [0, 1], [1, 2], { easing: "linear" });
@@ -140,7 +140,7 @@ fn screen_must_be_a_direct_child_of_scene_and_come_last() {
     );
 
     let reordered = r##"
-export default function Probe(ctx) {
+export default function Probe() { const ctx = useTime();
   return (
     <Scene className="h-full w-full" camera={{ center: point(0, 0), zoom: 1 }}>
       <Screen key="hud"><View key="hud/chip" style={{ width: 10, height: 10 }} /></Screen>
@@ -194,7 +194,7 @@ fn a_non_positive_zoom_fails_closed() {
 #[test]
 fn a_static_non_positive_zoom_is_refused_at_admission() {
     let source = r##"
-export default function Probe(ctx) {
+export default function Probe() { const ctx = useTime();
   return (
     <Scene className="h-full w-full" camera={{ center: point(0, 0), zoom: 0 }}>
       <World key="world"><View key="block" style={{ width: 10, height: 10 }} /></World>

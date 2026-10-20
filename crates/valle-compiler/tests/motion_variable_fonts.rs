@@ -104,7 +104,8 @@ fn default_pack_instances_continuous_weight_and_reuses_no_stale_glyphs() {
 fn axes_work_in_rich_text_and_measurement_and_preserve_fractional_weights() {
     let fonts = fonts();
     let render = |body: &str| {
-        let source = format!("export default function T(ctx) {{return {body};}}");
+        let source =
+            format!("export default function T() {{ const ctx = useTime();return {body};}}");
         let artifact = compile_motion(&source).unwrap().artifact;
         program(&prepare_scene(&artifact).unwrap(), &artifact, &fonts, 8)
     };
@@ -145,7 +146,7 @@ fn axes_work_in_rich_text_and_measurement_and_preserve_fractional_weights() {
 
 #[test]
 fn default_chinese_fallback_has_real_continuous_bold_outlines() {
-    let source = "export default function Main(ctx) { return <Scene><Text style={{fontSize:64,fontWeight:400+ctx.seconds*400}}>中文</Text></Scene>; }";
+    let source = "export default function Main() { const ctx = useTime(); return <Scene><Text style={{fontSize:64,fontWeight:400+ctx.seconds*400}}>中文</Text></Scene>; }";
     let artifact = compile_motion(source).unwrap().artifact;
     let prepared = prepare_scene(&artifact).unwrap();
     let fonts = fonts();

@@ -145,7 +145,7 @@ fn every_rejection_names_a_documented_replacement() {
 fn module_and_text_shape_rejections_are_documented() {
     for (body, phrase) in [
         (
-            r#"function Inner(ctx, { card: { title } }) { return <View style={{ opacity: title }} />; }
+            r#"function Inner({ card: { title } }) { const ctx = useTime(); return <View style={{ opacity: title }} />; }
 export default function D(){return <Scene style={{width:320,height:180}}><Inner card={{ title: 1 }} /></Scene>;}"#,
             "nested props destructuring is not supported; bind one scalar field at a time",
         ),

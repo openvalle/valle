@@ -11,7 +11,7 @@ const SPRING = simulate({
   },
 });
 
-export default function Simulated(ctx) {
+export default function Simulated() { const ctx = useTime();
   return (
     <Scene className="relative h-full w-full" style={{ backgroundColor: "#101010" }}>
       <View key="dot" className="absolute" style={{

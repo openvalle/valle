@@ -22,15 +22,15 @@ const TOP_FROM = FROM.map((value) => Y_FROM.map(value));
 const TOP_TO = TO.map((value) => Y_TO.map(value));
 const BASE = 885;
 
-function GridLine(ctx, { y, opacity, color }) {
+function GridLine({ y, opacity, color }) {
   return <View key="line" style={{ position: "absolute", left: 255, top: y, width: 1425, height: 1.5, backgroundColor: color, opacity }} />;
 }
 
-function AxisLabel(ctx, { y, value, opacity, color }) {
+function AxisLabel({ y, value, opacity, color }) {
   return <Text key="label" style={{ position: "absolute", left: 108, top: y - 18, width: 117, fontSize: 30, color, textAlign: "right", opacity }}>{`${value}`}</Text>;
 }
 
-function Axis(ctx, { values, positions, opacity, grid, label }) {
+function Axis({ values, positions, opacity, grid, label }) {
   return (
     <View key="axis" className="absolute" style={{ left: 0, top: 0, width: 1920, height: 1080 }}>
       {values.map((value, index) => <GridLine key={`grid-${index}`} y={positions[index]} opacity={opacity} color={grid} />)}
@@ -39,7 +39,7 @@ function Axis(ctx, { values, positions, opacity, grid, label }) {
   );
 }
 
-function Bar(ctx, { index, label, accent, labelColor, progress }) {
+function Bar({ index, label, accent, labelColor, progress }) {
   const top = interpolate(progress, [0, 1], [TOP_FROM[index], TOP_TO[index]]);
   return (
     <View key="bar" style={{ position: "absolute", left: X.band(index)[0], top, width: X.bandwidth(), height: BASE - top, backgroundColor: accent }}>
@@ -48,7 +48,7 @@ function Bar(ctx, { index, label, accent, labelColor, progress }) {
   );
 }
 
-function Legend(ctx, { accent, labelColor }) {
+function Legend({ accent, labelColor }) {
   return (
     <View key="legend" className="absolute flex items-center" style={{ right: 108, top: 81, width: 330, height: 63 }}>
       <View key="swatch" style={{ width: 27, height: 27, borderRadius: 7.5, backgroundColor: accent }} />
@@ -57,7 +57,7 @@ function Legend(ctx, { accent, labelColor }) {
   );
 }
 
-function BarChart(ctx, { accent, grid, label }) {
+function BarChart({ accent, grid, label }) { const ctx = useTime();
   const progress = ctx.progress;
   return (
     <View key="chart" className="absolute" style={{ left: 0, top: 0, width: 1920, height: 1080 }}>
@@ -69,7 +69,7 @@ function BarChart(ctx, { accent, grid, label }) {
   );
 }
 
-export default function ChartContract(ctx, props) {
+export default function ChartContract(props) {
   return (
     <Scene key="scene" className="relative h-full w-full" style={{ backgroundColor: "#07111f" }}>
       <Text key="title" className="absolute" style={{ left: 108, top: 72, fontSize: 51, color: props.label }}>Prepared domains, fixed frame topology</Text>

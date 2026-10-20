@@ -157,7 +157,7 @@ fn echo_prunes_unrelated_layout_beside_backdrop_readers_and_preserves_pixels() {
     let source = |extra: &str| {
         format!(
             r##"export const composition={{width:640,height:360,fps:30,duration:2}};
-export default function SceneMain(ctx) {{return <Scene style={{{{width:640,height:360,backgroundColor:"#203040"}}}}>{background}{extra}
+export default function SceneMain() {{ const ctx = useTime();return <Scene style={{{{width:640,height:360,backgroundColor:"#203040"}}}}>{background}{extra}
 <Echo key="echo" count={{4}} interval={{2}} decay={{0.6}}>
   <View key="moving" style={{{{position:"absolute",left:ctx.seconds*100,top:80,width:24,height:24,backgroundColor:"#f80"}}}}/>
   <View key="screen" style={{{{position:"absolute",left:ctx.seconds*120,top:90,width:30,height:12,backgroundColor:"#0af",mixBlendMode:"screen"}}}}/>
@@ -197,7 +197,7 @@ fn echo_below_a_hidden_ancestor_skips_its_unpainted_samples() {
     let source = |extra: &str| {
         format!(
             r##"export const composition = {{ width: 640, height: 360, fps: 30, duration: 2 }};
-export default function HiddenEcho(ctx) {{
+export default function HiddenEcho() {{ const ctx = useTime();
   return (
     <Scene className="relative h-full w-full" style={{{{ backgroundColor: "#101010" }}}}>
       <View key="gate" className="absolute" visible={{ctx.localFrame < 20}}

@@ -54,7 +54,7 @@ fn object_reuse_preserves_js_key_order_lexical_scope_and_frame_values() {
         const unit = 20;
         const base = { width: unit * 8, paddingLeft: 4, padding: 8, height: unit * 2 };
         const alias = base;
-        export default function Demo(ctx) {
+        export default function Demo() { const ctx = useTime();
             const unit = 2;
             const dimension = 'width';
             const width = 120 + ctx.localFrame;
@@ -68,7 +68,7 @@ fn object_reuse_preserves_js_key_order_lexical_scope_and_frame_values() {
         }
     "#;
     let explicit = r#"
-        export default function Demo(ctx) {
+        export default function Demo() { const ctx = useTime();
             return <Scene style={{ width: 320, height: 180 }}>
                 <View key="target" style={{ width: 120 + ctx.localFrame, paddingLeft: 12, padding: 8,
                     height: 40, backgroundColor: 'red' }}>
@@ -88,7 +88,7 @@ fn object_reuse_preserves_js_key_order_lexical_scope_and_frame_values() {
 
 #[test]
 fn duplicate_keys_replace_values_without_moving_declaration_positions() {
-    let authored = r#"export default function Demo(ctx) {
+    let authored = r#"export default function Demo() { const ctx = useTime();
         return <Scene style={{width:320,height:180}}><View key="target"
             style={{width:160,height:80,paddingLeft:2,padding:10,paddingLeft:20,backgroundColor:'red'}}>
             <View key="child" style={{width:10,height:10,backgroundColor:'blue'}} />
@@ -104,7 +104,7 @@ fn duplicate_keys_replace_values_without_moving_declaration_positions() {
 #[test]
 fn reused_styles_keep_typed_transforms_and_span_admission() {
     let source = r#"const textStyle = {color:'red',fontSize:24};
-        export default function Demo(ctx) {
+        export default function Demo() { const ctx = useTime();
             const movement = {translate:point(ctx.localFrame, 4),rotate:interpolate(ctx.localFrame,[0,60],["0deg","60deg"])};
             return <Scene><View style={movement}/><Text><Span style={{...textStyle,fontWeight:700}}>Hello</Span></Text></Scene>;
         }"#;
@@ -114,7 +114,7 @@ fn reused_styles_keep_typed_transforms_and_span_admission() {
 
 #[test]
 fn local_object_capture_survives_map_shadowing_and_new_iterations() {
-    let source = r#"export default function Demo(ctx) {
+    let source = r#"export default function Demo() { const ctx = useTime();
         const width = 30 + ctx.localFrame;
         const shared = {width, height:20, backgroundColor:'red'};
         return <Scene style={{width:320,height:180}}>
@@ -138,8 +138,9 @@ fn shape_changes_getters_and_shadowed_nonobjects_fail_at_compile_time() {
         "const base = 42; return <Scene style={base}/>;",
         "const base = ctx.localFrame; return <Scene style={base}/>;",
     ] {
-        let source =
-            format!("const base = {{width:10}}; export default function Demo(ctx) {{ {body} }}");
+        let source = format!(
+            "const base = {{width:10}}; export default function Demo() {{ const ctx = useTime(); {body} }}"
+        );
         assert!(compile_motion(&source).is_err(), "{body}");
     }
 }

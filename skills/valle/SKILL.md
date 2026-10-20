@@ -61,12 +61,15 @@ Check its limitations before choosing advanced effects or browser-style CSS.
 
 Motion is a restricted JSX language, not a React application. Use Valle's supplied
 `Scene`, `View`, `Text`, and animation helpers; do not assume React hooks, browser
-APIs, Remotion imports, or arbitrary JavaScript are supported. Start from existing
-working source when available. A minimal `title.motion.tsx` is:
+APIs, Remotion imports, or arbitrary JavaScript are supported. Components take
+`(props)` as in React, read the frame's time with `useTime()` and prepared data with
+`useData()`; nothing persists between frames, so there is no state or effect. Start
+from existing working source when available. A minimal `title.motion.tsx` is:
 
 ```tsx
 export const composition = { width: 640, height: 360, fps: 30, duration: 3 };
-export default function Title(ctx) {
+export default function Title() {
+  const ctx = useTime();
   const opacity = interpolate(ctx.seconds, [0, 0.6], [0, 1]);
   return (
     <Scene className="relative h-full w-full flex items-center justify-center"

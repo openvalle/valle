@@ -10,7 +10,7 @@ const PAIR: &str = r##"
 export const composition = { width: 160, height: 120, fps: 30, duration: 2 };
 const A = path("M 12 12 L 60 12 L 60 60 L 36 36 L 12 60 Z");
 const B = path("M 68 10 L 142 10 L 130 48 L 142 100 L 68 100 Z");
-export default function Compatible(ctx) {
+export default function Compatible() { const ctx = useTime();
   return <Scene style={{ width: 160, height: 120 }}>
     <Path d={morph(A, B, ctx.progress, { method: "compatible" })} fill="#ffffff" />
   </Scene>;
@@ -22,7 +22,7 @@ export const composition = { width: 160, height: 120, fps: 30, duration: 2 };
 const A = path("M 12 12 L 60 12 L 60 60 L 36 36 L 12 60 Z");
 const B = path("M 68 10 L 142 10 L 130 48 L 142 100 L 68 100 Z");
 const C = path("M 10 10 L 140 10 L 140 100 L 75 54 L 10 100 Z");
-export default function CompatibleSequence(ctx) {
+export default function CompatibleSequence() { const ctx = useTime();
   return <Scene style={{ width: 160, height: 120 }}>
     <Path d={morphSequence([A, B, C], [0, 0.5, 1], ctx.progress, { method: "compatible" })} fill="#ffffff" />
   </Scene>;
@@ -33,7 +33,7 @@ const AUTO_FALLBACK: &str = r##"
 export const composition = { width: 160, height: 64, fps: 30, duration: 2 };
 const A = path("M 26 6 L 5 18 L 23 17 L 14 15 L 28 16 Z");
 const B = path("M 107 5 L 119 2 L 128 20 L 128 28 L 115 24 Z");
-export default function AutoFallback(ctx) {
+export default function AutoFallback() { const ctx = useTime();
   return <Scene style={{width:160,height:64}}>
     <Path d={morph(A, B, ctx.progress)} fill="#ffffff" />
   </Scene>;
@@ -141,7 +141,7 @@ fn authored_triangle_and_square_keep_their_boundaries_after_count_equalization()
 export const composition = { width: 120, height: 120, fps: 30, duration: 2 };
 const A = path("M 10 10 L 50 10 L 50 50 L 10 50 Z");
 const B = path("M 60 10 L 110 10 L 60 60 Z");
-export default function DifferentCounts(ctx) {
+export default function DifferentCounts() { const ctx = useTime();
   return <Scene style={{width:120,height:120}}>
     <Path d={morph(A, B, ctx.progress, { method: "compatible" })} fill="#fff" />
   </Scene>;
@@ -167,7 +167,7 @@ export const composition = { width: 160, height: 120, fps: 30, duration: 2 };
 const A = path("M 10 10 L 50 10 L 50 50 L 10 50 Z");
 const B = path("M 60 10 L 110 10 L 60 60 Z");
 const C = path("M 70 10 L 140 10 L 130 50 L 140 100 L 70 100 Z");
-export default function DifferentSequence(ctx) {
+export default function DifferentSequence() { const ctx = useTime();
   return <Scene style={{width:160,height:120}}>
     <Path d={morphSequence([A, B, C], [0, 0.5, 1], ctx.progress, { method: "compatible" })} fill="#fff" />
   </Scene>;

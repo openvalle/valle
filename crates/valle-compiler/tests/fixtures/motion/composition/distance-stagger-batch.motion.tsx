@@ -2,7 +2,7 @@ export const composition = { width: 640, height: 360, fps: 30, duration: 2 };
 const POINTS = Array.from({ length: 5 }, (_, i) => point(120 + i * 100, 180));
 const DELAYS = Array.from({ length: 5 }, (_, i) => Math.abs(i - 2) * 0.2);
 
-export default function DistanceStagger(ctx) {
+export default function DistanceStagger() { const ctx = useTime();
   return (
     <Scene className="relative h-full w-full" style={{ backgroundColor: "#101010" }}>
       <GeometryBatch geometry="rect" positions={POINTS} sizes={point(48, 48)}

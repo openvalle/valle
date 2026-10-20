@@ -11,7 +11,7 @@ use valle_timeline::FrameRate;
 
 fn source(attributes: &str) -> String {
     format!(
-        r#"export default function Demo(ctx) {{return <Scene style={{{{width:320,height:180}}}}>
+        r#"export default function Demo() {{ const ctx = useTime();return <Scene style={{{{width:320,height:180}}}}>
         <View key="card" {attributes}><View key="child" style={{{{position:'fixed',left:5,top:7,
         width:20,height:10,backgroundColor:'blue'}}}}/></View></Scene>;}}"#
     )
@@ -245,7 +245,7 @@ fn arbitrary_values_cannot_bypass_shared_admission_in_unselected_branches_or_art
 fn quoted_font_names_and_finite_font_choices_use_registered_fonts() {
     let text = |attribute: &str| {
         format!(
-            r#"export default function Demo(ctx) {{return <Scene style={{{{width:320,height:180}}}}><Text key="label" {attribute} style={{{{fontSize:30,color:'red'}}}}>Motion<Span> AB</Span></Text></Scene>;}}"#
+            r#"export default function Demo() {{ const ctx = useTime();return <Scene style={{{{width:320,height:180}}}}><Text key="label" {attribute} style={{{{fontSize:30,color:'red'}}}}>Motion<Span> AB</Span></Text></Scene>;}}"#
         )
     };
     let frames = [60, 0, 29, 30, 60, 0];
@@ -271,7 +271,7 @@ fn quoted_font_names_and_finite_font_choices_use_registered_fonts() {
 fn generic_font_utilities_select_fixed_faces_and_follow_the_current_frame() {
     let source = |attributes: &str| {
         format!(
-            r#"export default function Demo(ctx) {{return <Scene style={{{{width:320,height:180}}}}>
+            r#"export default function Demo() {{ const ctx = useTime();return <Scene style={{{{width:320,height:180}}}}>
                 <View {attributes}><Text key="label" style={{{{fontSize:28,color:'red'}}}}>WiMi 0123<Span> AB</Span></Text></View>
             </Scene>;}}"#
         )
@@ -376,7 +376,7 @@ fn rich_inline_image_defaults_and_bounds_follow_current_frame_choices() {
         format!(
             r#"
         export const controls=({{assets:{{dot:asset({{kind:'image'}})}}}});
-        export default function Demo(ctx) {{return <Scene style={{{{width:320,height:180}}}}>
+        export default function Demo() {{ const ctx = useTime();return <Scene style={{{{width:320,height:180}}}}>
             <Text key="label" style={{{{fontSize:20,lineHeight:'30px'}}}}>A<Image key="image" src="asset://dot"
                 className={{{classes}}} style={{{{width:40,height:24}}}}/>B</Text>
             <View key="follower" style={{{{position:'absolute',left:0,top:120,width:10,height:10,

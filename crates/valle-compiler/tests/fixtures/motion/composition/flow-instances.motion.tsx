@@ -3,7 +3,7 @@ const ROWS = Array.from({ length: 4 }, (_, i) => ({
   id: `row${i}`, height: 8 + i % 3 * 4, gap: 2, color: i % 2 ? "#ff5522" : "#3377dd",
   until: i % 2 ? 100 : 5,
 }));
-export default function Flow(ctx) {
+export default function Flow() { const ctx = useTime();
   return <Scene className="relative h-full w-full" style={{ backgroundColor: "#101010" }}>
     {ROWS.map((row) => <View key={row.id} visible={ctx.localFrame < row.until}
       style={{ width: 60, height: row.height, marginBottom: row.gap,

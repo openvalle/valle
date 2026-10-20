@@ -11,7 +11,7 @@ use valle_timeline::FrameRate;
 
 fn program(body: &str) -> DrawProgram {
     let source = format!(
-        r#"export default function MaskTest(ctx) {{
+        r#"export default function MaskTest() {{ const ctx = useTime();
         return <Scene style={{{{width:64,height:64}}}}>{body}</Scene>;
     }}"#
     );

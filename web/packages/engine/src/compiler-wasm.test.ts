@@ -12,7 +12,7 @@ test("Wasm reuses closed expressions while random seeks keep current frame input
   const compiled = compileMotionJsxWithWasm({ compile_motion_jsx }, `
     export const composition={width:64,height:32,fps:4,duration:1};
     const width=(t)=>t*20+10;
-    export default function Main(ctx){return <Scene>
+    export default function Main(){ const ctx = useTime();return <Scene>
       <View key="a" className="absolute" style={{left:0,top:0,width:width(ctx.seconds),height:10}}/>
       <View key="b" className="absolute" style={{left:32,top:0,width:width(ctx.seconds),height:10}}/>
     </Scene>;}`);
@@ -43,7 +43,7 @@ test("Wasm reuses closed expressions while random seeks keep current frame input
 test("prepared inspection keeps visible Scene3D placement through nested transforms and random seeks", () => {
   const compiled = compileMotionJsxWithWasm({compile_motion_jsx}, `
     export const composition={width:64,height:32,fps:4,duration:1};
-    export default function Main(ctx){return <Scene>
+    export default function Main(){ const ctx = useTime();return <Scene>
       <View key="moving" className="absolute" style={{left:ctx.seconds*8,top:0,width:64,height:32}}>
         <Scene3D key="stage" style={{position:"absolute",left:4,top:3,width:16,height:16}}
           camera={{position:[0,0,3],target:[0,0,0],fov:45}}>
@@ -120,7 +120,7 @@ test("Wasm shares bounded Circle preparation with Echo and resets it on package 
 test("Wasm keeps host endpoints and geometry moving while the source holds", () => {
   const compiled = compileMotionJsxWithWasm({ compile_motion_jsx }, `
     export const composition={width:64,height:32,fps:4,duration:1};
-    export default function Host(ctx) {return <Scene><View key="bar" className="absolute"
+    export default function Host() { const ctx = useTime();return <Scene><View key="bar" className="absolute"
       style={{left:ctx.host.progress*40,top:ctx.seconds*8,width:ctx.host.duration*6,
       height:12,backgroundColor:"white"}}/></Scene>;}`);
   const preview = preparePreviewPackageWithWasm({ prepare_preview_package }, {
@@ -153,7 +153,7 @@ test("Wasm maps overlay timing and rounds the host viewport through the shared e
     const compiled = compileMotionJsxWithWasm({ compile_motion_jsx }, `
       export const composition={width:64,height:32,fps:4,duration:2};
       export const role=overlay({intro:seconds(0.5),outro:seconds(0.5),hold:"${hold}"});
-      export default function Main(ctx){return <Scene><View key="bar" className="absolute"
+      export default function Main(){ const ctx = useTime();return <Scene><View key="bar" className="absolute"
         style={{left:ctx.seconds*12,top:ctx.host.progress*20,width:ctx.viewport.width/2,
         height:ctx.viewport.height,backgroundColor:"white"}}/></Scene>;}`);
     expect(compiled.artifact.role).toEqual({type:"overlay",intro:"1/2",outro:"1/2",hold});
@@ -192,7 +192,7 @@ test("Wasm maps overlay timing and rounds the host viewport through the shared e
 
 test("merged Engine Wasm compiles standalone JSX and linked modules", () => {
   const source = `export const composition = { width: 320, height: 180, duration: 1 };
-    export default function Card(ctx) { return <Scene><View style={{ opacity: ctx.progress }} /></Scene>; }`;
+    export default function Card() { const ctx = useTime(); return <Scene><View style={{ opacity: ctx.progress }} /></Scene>; }`;
   const standalone = compileMotionJsxWithWasm({ compile_motion_jsx }, source);
   expect(standalone.artifact.component).toBe("Card");
   expect(standalone.artifactDigest).toMatch(/^sha256:[a-f0-9]{64}$/);
@@ -212,7 +212,7 @@ test("merged Engine Wasm freezes supplied PCM for audio-driven Motion", () => {
   const source = `export const composition={width:64,height:64,fps:30,duration:1};
     export const controls={assets:{beat:asset({kind:"audio",required:true})}};
     const BEAT=audioAnalysis("asset://beat",{bands:4,fps:30});
-    export default function Bars(ctx){return <Scene><View style={{width:10,
+    export default function Bars(){ const ctx = useTime();return <Scene><View style={{width:10,
       height:BEAT.level(ctx.seconds)*50,backgroundColor:"#fff"}}/></Scene>}`;
   const samples = new Float32Array(8000);
   for (let index = 4000; index < samples.length; index++) {
@@ -246,7 +246,7 @@ test("pulse audio analysis produces the Native artifact digest in WASM", async (
 
 test("WASM admits shared staggered stops and a local frame-time path paint", () => {
   const source = `export const composition={width:64,height:64,fps:30,duration:1};
-    export default function Demo(ctx) {
+    export default function Demo() { const ctx = useTime();
       const paint=linearGradient(point(0,0),point(64,0),[
         gradientStop(0,interpolate(ctx.seconds,[0,1],["red","blue"])),
         gradientStop(1,"green")]);

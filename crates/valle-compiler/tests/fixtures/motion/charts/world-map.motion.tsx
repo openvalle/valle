@@ -55,7 +55,7 @@ const LINKS = SITE_XY.slice(1).map((xy) => [SITE_XY[0], xy]);
 const DOT = CANVAS_H * 0.012;
 const NAME_FONT = CANVAS_H * 0.022;
 
-export default function WorldMap(ctx) {
+export default function WorldMap() { const ctx = useTime();
   const sx = ctx.viewport.width / CANVAS_W;
   const sy = ctx.viewport.height / CANVAS_H;
 

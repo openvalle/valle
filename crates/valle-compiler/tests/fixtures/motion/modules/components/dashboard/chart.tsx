@@ -1,4 +1,4 @@
-export function ChartPanel(ctx, { rows, x, y, width, height }) {
+export function ChartPanel({ rows, x, y, width, height }) { const ctx = useTime();
   const theme = useTheme();
   const values = rows.map((row) => row.value);
   const domain = niceDomain(0, extent(values)[1], 4);
