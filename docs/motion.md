@@ -1123,7 +1123,11 @@ Filters compose in written order. `filter` affects the node and descendants;
 `backdropFilter` samples already-painted content behind the node. It reads that
 content beyond the node's border box as far as the filters reach, so a blur next
 to an edge mixes in what lies just outside it, and the border box and its corner
-radii then clip the result.
+radii then clip the result. Its lengths are in the node's own units, as in `filter`:
+`backdropFilter: "blur(12px)"` on a node scaled by 2 blurs over 24 output pixels,
+and the result does not depend on the output size. Where the node is skewed or seen
+in perspective, the blur stays round, using the node's rotation and average scale
+at the centre of its border box.
 
 `filter: "chromatic-aberration(6px)"` is also available as a node filter. It
 shifts red and blue by 3 px in opposite directions while green

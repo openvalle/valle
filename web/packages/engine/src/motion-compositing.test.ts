@@ -107,6 +107,15 @@ test("Motion composition, easing and color interpolation match analytic pixels o
         <View key="bar-bottom" className="absolute" style={{left:0,top:47,width:96,height:4,backgroundColor:"#16a34a"}}/>
         <View key="frosted" className="absolute" style={{left:12,top:10,width:44,height:39,borderRadius:10,backdropFilter:\`blur(\${2+ctx.progress*2}px)\`}}/>
       </Scene>}`, body:"", width:96, height:64, frames:[0,30,0], probes:[] },
+    // Backdrop lengths are node units: a node scaled by 2 with blur(2px) blurs like an unscaled one
+    // with blur(4px) over the same backdrop.
+    { name:"backdrop-blur-scaled", source:`export const composition={width:160,height:64,fps:30,duration:2};
+      export default function Main(){ return <Scene className="relative h-full w-full" style={{backgroundColor:"#e2e8f0"}}>
+        ${["plain","scaled"].map((key,i) => `<View key="${key}-backdrop" className="absolute" style={{left:${i*80},top:0,width:64,height:64}}>${stripes(key,64,64)}
+          <View key="${key}-bar" className="absolute" style={{left:0,top:28,width:64,height:5,backgroundColor:"#16a34a"}}/></View>`).join("")}
+        <View key="plain" className="absolute" style={{left:12,top:12,width:40,height:40,backdropFilter:"blur(4px)"}}/>
+        <View key="scaled" className="absolute" style={{left:92,top:12,width:20,height:20,transform:"scale(2)",transformOrigin:"0% 0%",backdropFilter:"blur(2px)"}}/>
+      </Scene>}`, body:"", width:160, height:64, frames:[0], probes:[] },
     { name:"regression-grain-black-white", body:`<View style={{width:64,height:64,filter:"film-grain(7 0.5 1px)"}}>
       ${view("black",",width:32")}${view("white",",left:32,width:32")}</View>`, probes:[[16,32,0,0,0],[48,32,255,255,255]] },
     { name:"batch-rotation", body:`<GeometryBatch geometry="rect" positions={[point(8,16),point(40,16)]}
@@ -685,6 +694,17 @@ test("Motion composition, easing and color interpolation match analytic pixels o
             for (const [channel,expected] of [r,g,b].entries())
               expect(Math.abs(pixels[(y*width+x)*4+channel]!-expected),`${fixture.name}/${frame} (${x},${y}) channel ${channel}`).toBeLessThanOrEqual(2);
             if (a !== undefined) expect(Math.abs(pixels[(y*width+x)*4+3]!-a),`${fixture.name}/${frame} alpha`).toBeLessThanOrEqual(1);
+          }
+          if (fixture.name === "backdrop-blur-scaled") for (const [label,pixels] of [["CanvasKit",web],["Native",native]] as const) {
+            let difference = 0, contrast = 0;
+            for (let y=12;y<52;y++) for (let x=12;x<52;x++) for (let c=0;c<3;c++) {
+              const at = (y*width+x)*4+c;
+              difference = Math.max(difference,Math.abs(pixels[at]!-pixels[at+80*4]!));
+              if (x < 51) contrast = Math.max(contrast,Math.abs(pixels[at]!-pixels[at+4]!));
+            }
+            expect(difference,`${label} backdrop-blur-scaled scaled against plain`).toBeLessThanOrEqual(2);
+            // The plain panel does blur: its stripes, 7 px apart, are gone under a 4 px blur.
+            expect(contrast,`${label} backdrop-blur-scaled neighbor contrast`).toBeLessThanOrEqual(12);
           }
           if (fixture.name.startsWith("geometry-batch-atlas") && fixture.name !== "geometry-batch-atlas-right") for (const [label,pixels] of [["CanvasKit",web],["Native",native]] as const) {
             let magentaLeak = 0;

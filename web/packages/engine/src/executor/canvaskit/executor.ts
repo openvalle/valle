@@ -1755,14 +1755,15 @@ function drawDirectRasterBackdrop(
     // clip is already stored in device space, therefore filtering may still sample the admitted
     // destination outside the output bounds while only the requested backdrop region is written.
     canvas.clipRect(skRect(CanvasKit, bounds), CanvasKit.ClipOp.Intersect, true);
-    const inverse = inverse3(numberArray(canvas.getTotalMatrix(), 9, "direct raster canvas matrix"));
+    const matrix = numberArray(canvas.getTotalMatrix(), 9, "direct raster canvas matrix");
+    const inverse = inverse3(matrix);
     if (!inverse) fail("program_schedule", "direct raster backdrop has a non-invertible transform");
     canvas.concat(inverse);
     canvas.translate(-outputRoi.x, -outputRoi.y);
     if (filters.length === 0) {
       drawImageValue(CanvasKit, canvas, input, 1, "src");
     } else {
-      applyFiltersAsLayerValue(CanvasKit, canvas, input, filters, null);
+      applyFiltersAsLayerValue(CanvasKit, canvas, input, backdropFiltersInDeviceSpace(filters, matrix, bounds), null);
     }
   } finally {
     canvas.restore();
@@ -1817,12 +1818,13 @@ async function executeProgramPass(
       return;
     }
     case "backdrop": {
-      // The bounds are in the owner's local units, while the backdrop and the canvas are in device
-      // pixels: the filters read the backdrop around the bounds, which then clip what they produce.
+      // The bounds and the filter lengths are in the owner's local units, while the backdrop and the
+      // canvas are in device pixels: the filters, mapped into device pixels, read the backdrop around
+      // the bounds, which then clip what they produce.
       const clip = { kind: "rect", value: rect(kind.bounds, "program backdrop bounds") };
       const matrix = programMatrix(admitted, localPlan, kind.output, device);
       const input = programValue(values, kind.input);
-      const filters = array(kind.filters, "backdrop filters");
+      const filters = backdropFiltersInDeviceSpace(array(kind.filters, "backdrop filters"), matrix, clip.value);
       const last = filters.length === 0 ? null : record(filters[filters.length - 1], "backdrop filter");
       canvas.save();
       try {
@@ -3505,6 +3507,63 @@ export function programFilterInDeviceSpace(
     sigmaX: sigma[0],
     sigmaY: sigma[1],
   };
+}
+
+/**
+ * Map a backdrop chain's lengths, node units as in `filter`, into the device pixels its pass
+ * filters in. A transform `programFilterInDeviceSpace` represents maps them exactly; a skewed or
+ * projective one takes `backdropSimilarity` at the bounds centre instead of failing. Noise
+ * displacement stays in output pixels. Native maps them the same way.
+ */
+export function backdropFiltersInDeviceSpace(
+  filters: readonly unknown[],
+  matrix: readonly number[],
+  bounds: RectWire,
+): Record<string, unknown>[] {
+  const similarity = backdropSimilarity(matrix, [bounds.x + bounds.width * 0.5, bounds.y + bounds.height * 0.5]);
+  return filters.map((raw) => {
+    const filter = record(raw, "backdrop filter");
+    if (filter.kind === "noiseDisplacement") return filter;
+    try {
+      return programFilterInDeviceSpace(filter, matrix);
+    } catch (error) {
+      if (!similarity || !(error instanceof CanvasKitCompositorError) || error.code !== "unsupported_filter") throw error;
+      return programFilterInDeviceSpace(filter, similarity);
+    }
+  });
+}
+
+/**
+ * The similarity nearest `matrix` at local point `at`: the Jacobian there, with its rotation or
+ * reflection kept and its scale the square root of its area scale, translated to map `at` where
+ * the transform does. A similarity returns itself. `null` when `at` is not in front of the camera.
+ * Native computes it with the same operations, so both agree to the bit.
+ */
+export function backdropSimilarity(matrix: readonly number[], at: readonly [number, number]): number[] | null {
+  const [a, b, c, d, e, f, g, h, i] = matrix as [
+    number, number, number, number, number, number, number, number, number,
+  ];
+  const [x, y] = at;
+  const deviceX = a * x + b * y + c;
+  const deviceY = d * x + e * y + f;
+  const w = g * x + h * y + i;
+  if (!(w > 0)) return null;
+  const w2 = w * w;
+  const j11 = (a * w - deviceX * g) / w2;
+  const j12 = (b * w - deviceX * h) / w2;
+  const j21 = (d * w - deviceY * g) / w2;
+  const j22 = (e * w - deviceY * h) / w2;
+  const det = j11 * j22 - j12 * j21;
+  const scale = Math.sqrt(Math.abs(det));
+  const [p, q]: [number, number] = det >= 0 ? [j11 + j22, j21 - j12] : [j11 - j22, j21 + j12];
+  const k = scale === 0 ? 0 : scale / Math.sqrt(p * p + q * q);
+  const [l11, l12, l21, l22]: [number, number, number, number] = det >= 0
+    ? [k * p, -(k * q), k * q, k * p]
+    : [k * p, k * q, k * q, -(k * p)];
+  const tx = deviceX / w - (l11 * x + l12 * y);
+  const ty = deviceY / w - (l21 * x + l22 * y);
+  const similarity = [l11, l12, tx, l21, l22, ty, 0, 0, 1];
+  return similarity.every(Number.isFinite) ? similarity : null;
 }
 
 /** The 2 x 3 part of a local-to-device transform that has no projective row. */

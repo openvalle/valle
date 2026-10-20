@@ -596,16 +596,18 @@ impl ProgramRuntime {
         } = pass
             && !filters.is_empty()
         {
-            // The chain filters the backdrop the planner sampled around the bounds for its
-            // footprint, and then the bounds clip what it produces, as CanvasKit draws it.
+            // The chain, its lengths mapped from node units into device pixels, filters the
+            // backdrop the planner sampled around the bounds for its footprint, and then the
+            // bounds clip what it produces, as CanvasKit draws it.
             let helper_index = helper_index.ok_or(DrawError::MissingProgramHelper)?;
+            let local_to_device = self.device_matrix_values(plan, output, transform)?;
             let filtered = match resource(resources, *input)? {
                 Some(input) => {
                     let helper = surfaces.surface_mut(helper_index)?;
                     apply_backdrop_filters_into(
                         helper,
                         input,
-                        filters,
+                        &backdrop_filters_in_device_space(filters, local_to_device, *bounds)?,
                         [output_roi.x, output_roi.y],
                         output_roi,
                         Some(self.noise_fields.as_ref()),
@@ -622,7 +624,7 @@ impl ProgramRuntime {
                 target,
                 filtered.as_ref(),
                 &Clip::Rect(*bounds),
-                self.device_matrix(plan, output, transform)?,
+                sk_matrix(local_to_device),
                 self.program.paths(),
                 target_origin,
             )?;
@@ -3498,6 +3500,78 @@ fn program_filter_in_device_space(
         Filter::NoiseDisplacement { .. } => Ok(filter.clone()),
         _ => Ok(filter.clone()),
     }
+}
+
+/// Map a backdrop chain's lengths, node units as in `filter`, into the device pixels its pass
+/// filters in. A transform `program_filter_in_device_space` represents maps them exactly; a
+/// skewed or projective one takes [`backdrop_similarity`] at the bounds centre instead of
+/// failing. Noise displacement stays in output pixels. CanvasKit maps them the same way.
+fn backdrop_filters_in_device_space(
+    filters: &[Filter],
+    local_to_device: [f64; 9],
+    bounds: Rect,
+) -> Result<Vec<Filter>, DrawError> {
+    let similarity = backdrop_similarity(
+        local_to_device,
+        [
+            bounds.x + bounds.width * 0.5,
+            bounds.y + bounds.height * 0.5,
+        ],
+    );
+    filters
+        .iter()
+        .map(|filter| match filter {
+            Filter::NoiseDisplacement { .. } => Ok(filter.clone()),
+            _ => program_filter_in_device_space(filter, local_to_device)
+                .or_else(|error| program_filter_in_device_space(filter, similarity.ok_or(error)?)),
+        })
+        .collect()
+}
+
+/// The similarity nearest `local_to_device` at local point `at`: the Jacobian there, with its
+/// rotation or reflection kept and its scale the square root of its area scale, translated to map
+/// `at` where the transform does. A similarity returns itself. `None` when `at` is not in front
+/// of the camera. Divisions and square roots only, so CanvasKit's port agrees to the bit.
+fn backdrop_similarity(local_to_device: [f64; 9], at: [f64; 2]) -> Option<[f64; 9]> {
+    let [a, b, c, d, e, f, g, h, i] = local_to_device;
+    let [x, y] = at;
+    let device_x = a * x + b * y + c;
+    let device_y = d * x + e * y + f;
+    let w = g * x + h * y + i;
+    if !(w > 0.0) {
+        return None;
+    }
+    let w2 = w * w;
+    let j11 = (a * w - device_x * g) / w2;
+    let j12 = (b * w - device_x * h) / w2;
+    let j21 = (d * w - device_y * g) / w2;
+    let j22 = (e * w - device_y * h) / w2;
+    let det = j11 * j22 - j12 * j21;
+    let scale = det.abs().sqrt();
+    let (p, q) = if det >= 0.0 {
+        (j11 + j22, j21 - j12)
+    } else {
+        (j11 - j22, j21 + j12)
+    };
+    let k = if scale == 0.0 {
+        0.0
+    } else {
+        scale / (p * p + q * q).sqrt()
+    };
+    let linear = if det >= 0.0 {
+        [k * p, -(k * q), k * q, k * p]
+    } else {
+        [k * p, k * q, k * q, -(k * p)]
+    };
+    let tx = device_x / w - (linear[0] * x + linear[1] * y);
+    let ty = device_y / w - (linear[2] * x + linear[3] * y);
+    let similarity = [
+        linear[0], linear[1], tx, linear[2], linear[3], ty, 0.0, 0.0, 1.0,
+    ];
+    similarity
+        .iter()
+        .all(|value| value.is_finite())
+        .then_some(similarity)
 }
 
 /// The 2 x 3 part of a local-to-device transform that has no projective row.
@@ -6972,6 +7046,129 @@ mod tests {
                 sigma_y: 6.0,
             }
         );
+    }
+
+    #[test]
+    fn backdrop_similarity_keeps_similarities_and_averages_the_rest() {
+        let at = [12.0, -7.0];
+        for similarity in [
+            [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
+            [2.0, 0.0, 30.0, 0.0, 2.0, -4.0, 0.0, 0.0, 1.0],
+            [0.0, -2.0, 8.0, 2.0, 0.0, 9.0, 0.0, 0.0, 1.0],
+            [-2.0, 0.0, 5.0, 0.0, 2.0, 0.0, 0.0, 0.0, 1.0],
+        ] {
+            assert_eq!(backdrop_similarity(similarity, at), Some(similarity));
+        }
+        let close = |actual: [f64; 9], expected: [f64; 9]| {
+            assert!(
+                actual
+                    .iter()
+                    .zip(expected)
+                    .all(|(a, b)| (a - b).abs() < 1.0e-12),
+                "{actual:?} != {expected:?}"
+            );
+        };
+        // Uneven scale keeps its area; a shear keeps its area and its polar rotation.
+        close(
+            backdrop_similarity([2.0, 0.0, 0.0, 0.0, 8.0, 0.0, 0.0, 0.0, 1.0], at).unwrap(),
+            [4.0, 0.0, -24.0, 0.0, 4.0, -28.0, 0.0, 0.0, 1.0],
+        );
+        let shear = backdrop_similarity([1.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0], at).unwrap();
+        let root5 = 5.0_f64.sqrt();
+        for (actual, expected) in [shear[0], shear[1], shear[3], shear[4]]
+            .into_iter()
+            .zip([2.0, 1.0, -1.0, 2.0])
+        {
+            assert!((actual * root5 - expected).abs() < 1.0e-12, "{shear:?}");
+        }
+        // A perspective row takes the Jacobian at the point; behind the camera there is none.
+        let perspective = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.01, 0.0, 1.0];
+        let scale = 1.1_f64.powf(-1.5);
+        let projected = backdrop_similarity(perspective, [10.0, 0.0]).unwrap();
+        close(
+            projected,
+            [
+                scale,
+                0.0,
+                10.0 / 1.1 - 10.0 * scale,
+                0.0,
+                scale,
+                0.0,
+                0.0,
+                0.0,
+                1.0,
+            ],
+        );
+        assert_eq!(backdrop_similarity(perspective, [-100.0, 0.0]), None);
+        // CanvasKit's port pins the same bits.
+        assert_eq!(
+            backdrop_similarity(
+                [1.3, -0.75, 61.0, 0.75, 1.3, 37.0, 0.0005, -0.0003, 1.0],
+                [40.0, 25.0]
+            ),
+            Some([
+                1.2750681292645878,
+                -0.7024338366812504,
+                59.644540499534166,
+                0.7024338366812504,
+                1.2750681292645878,
+                38.29754823940689,
+                0.0,
+                0.0,
+                1.0
+            ])
+        );
+
+        let blur = Filter::Blur {
+            sigma_x: 5.0,
+            sigma_y: 5.0,
+        };
+        let noise = Filter::NoiseDisplacement {
+            frequency: [0.05, 0.05],
+            octaves: 2,
+            seed: 3,
+            scale: 7.0,
+            turbulence: false,
+        };
+        let bounds = Rect::new(0.0, 0.0, 20.0, 0.0);
+        let mapped = |matrix| {
+            backdrop_filters_in_device_space(&[blur.clone(), noise.clone()], matrix, bounds)
+        };
+        // Exact where the node-filter mapping is, the similarity where it would fail; the
+        // displacement stays in output pixels.
+        assert_eq!(
+            mapped([2.0, 0.0, 0.0, 0.0, 3.0, 0.0, 0.0, 0.0, 1.0]).unwrap(),
+            [
+                Filter::Blur {
+                    sigma_x: 10.0,
+                    sigma_y: 15.0
+                },
+                noise.clone()
+            ]
+        );
+        assert_eq!(
+            mapped([1.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]).unwrap(),
+            [blur.clone(), noise.clone()]
+        );
+        let sigma = (5.0 * projected[0]) as f32;
+        assert_eq!(
+            mapped(perspective).unwrap(),
+            [
+                Filter::Blur {
+                    sigma_x: sigma,
+                    sigma_y: sigma
+                },
+                noise.clone()
+            ]
+        );
+        assert!(matches!(
+            backdrop_filters_in_device_space(
+                &[blur],
+                perspective,
+                Rect::new(-110.0, 0.0, 20.0, 0.0)
+            ),
+            Err(DrawError::Unsupported(_))
+        ));
     }
 
     #[test]

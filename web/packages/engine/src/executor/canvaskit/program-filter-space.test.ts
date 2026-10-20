@@ -5,7 +5,12 @@ import type { Canvas, CanvasKit } from "canvaskit-wasm";
 import noiseDisplacementSource from "../../../../../../crates/valle-draw/assets/shaders/noisedisplacement.sksl" with { type: "text" };
 import { initSync, ProductEngine } from "../../../generated/web/valle_engine.js";
 import { CanvasKitBuiltinRuntime } from "./builtin-runtime.ts";
-import { drawNoiseDisplacement, programFilterInDeviceSpace } from "./executor.ts";
+import {
+  backdropFiltersInDeviceSpace,
+  backdropSimilarity,
+  drawNoiseDisplacement,
+  programFilterInDeviceSpace,
+} from "./executor.ts";
 
 initSync({
   module: await readFile(new URL("../../../generated/web/valle_engine_bg.wasm", import.meta.url)),
@@ -65,6 +70,41 @@ describe("scheduled DrawProgram filter space", () => {
     ]) {
       expect(() => programFilterInDeviceSpace(velocity([2, 1]), matrix)).toThrow();
     }
+  });
+
+  test("maps backdrop lengths exactly where it can and through the nearest similarity elsewhere", () => {
+    const at = [12, -7] as const;
+    for (const similarity of [
+      [1, 0, 0, 0, 1, 0, 0, 0, 1],
+      [2, 0, 30, 0, 2, -4, 0, 0, 1],
+      [0, -2, 8, 2, 0, 9, 0, 0, 1],
+      [-2, 0, 5, 0, 2, 0, 0, 0, 1],
+    ]) {
+      expect(backdropSimilarity(similarity, at)?.map(value => value + 0)).toEqual(similarity);
+    }
+    expect(backdropSimilarity([2, 0, 0, 0, 8, 0, 0, 0, 1], at)?.map(value => value + 0))
+      .toEqual([4, 0, -24, 0, 4, -28, 0, 0, 1]);
+    const perspective = [1, 0, 0, 0, 1, 0, 0.01, 0, 1];
+    expect(backdropSimilarity(perspective, [-100, 0])).toBeNull();
+    // Native pins the same bits.
+    expect(backdropSimilarity([1.3, -0.75, 61, 0.75, 1.3, 37, 0.0005, -0.0003, 1], [40, 25])).toEqual([
+      1.2750681292645878, -0.7024338366812504, 59.644540499534166,
+      0.7024338366812504, 1.2750681292645878, 38.29754823940689, 0, 0, 1,
+    ]);
+
+    const blur = { kind: "blur", sigmaX: 5, sigmaY: 5 };
+    const noise = { kind: "noiseDisplacement", frequency: [0.05, 0.05], octaves: 2, seed: 3, scale: 7, turbulence: false };
+    const bounds = { x: 0, y: 0, width: 20, height: 0 };
+    expect(backdropFiltersInDeviceSpace([blur, noise], [2, 0, 0, 0, 3, 0, 0, 0, 1], bounds))
+      .toEqual([{ kind: "blur", sigmaX: 10, sigmaY: 15 }, noise]);
+    const sheared = backdropFiltersInDeviceSpace([blur, noise], [1, 1, 0, 0, 1, 0, 0, 0, 1], bounds);
+    expect(Math.fround(Number(sheared[0]!.sigmaX))).toBe(5);
+    expect(Math.fround(Number(sheared[0]!.sigmaY))).toBe(5);
+    expect(sheared[1]).toEqual(noise);
+    const scale = backdropSimilarity(perspective, [10, 0])![0]!;
+    expect(backdropFiltersInDeviceSpace([blur], perspective, bounds))
+      .toEqual([{ kind: "blur", sigmaX: 5 * scale, sigmaY: 5 * scale }]);
+    expect(() => backdropFiltersInDeviceSpace([blur], perspective, { ...bounds, x: -110 })).toThrow();
   });
 
   test("rejects transform classes the scheduled axis-aligned kernel cannot represent", () => {
