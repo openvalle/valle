@@ -9,6 +9,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use serde_json::Value as JsonValue;
 
+use crate::easing::Easing;
 use crate::internal::time::ExactRational;
 
 pub type EntityId = String;
@@ -178,10 +179,10 @@ pub struct KeyframeWire<T> {
     pub value: T,
     #[cfg_attr(
         feature = "schema",
-        schemars(with = "crate::internal::schema::RequiredNullable<EasingWire>")
+        schemars(with = "crate::internal::schema::RequiredNullable<Easing>")
     )]
     #[serde(deserialize_with = "required_option")]
-    pub out_easing: Option<EasingWire>,
+    pub out_easing: Option<Easing>,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -197,44 +198,6 @@ pub enum InterpolationWire {
 #[serde(rename_all = "kebab-case")]
 pub enum ExtrapolationWire {
     Clamp,
-}
-
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum EasingWire {
-    Named(NamedEasingWire),
-    CubicBezier(CubicBezierEasingWire),
-}
-
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum NamedEasingWire {
-    Linear,
-    Ease,
-    EaseIn,
-    EaseOut,
-    EaseInOut,
-}
-
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct CubicBezierEasingWire {
-    #[serde(rename = "type")]
-    pub kind: CubicBezierTag,
-    pub x1: f64,
-    pub y1: f64,
-    pub x2: f64,
-    pub y2: f64,
-}
-
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum CubicBezierTag {
-    CubicBezier,
 }
 
 // ---- Visual ----------------------------------------------------------------------------------

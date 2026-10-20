@@ -1007,7 +1007,7 @@ fn timeline_param_to_canonical<T>(
                         id: format!("{curve_id}:keyframe:{index}"),
                         time: time.to_exact(),
                         value,
-                        out_easing: out_easing.map(lower_easing),
+                        out_easing,
                     }
                 })
                 .collect();
@@ -1276,27 +1276,6 @@ fn lower_interpolation(value: timeline::InterpolationWire) -> document::Interpol
     match value {
         timeline::InterpolationWire::Step => document::InterpolationWire::Step,
         timeline::InterpolationWire::Linear => document::InterpolationWire::Linear,
-    }
-}
-
-fn lower_easing(value: timeline::EasingWire) -> document::EasingWire {
-    match value {
-        timeline::EasingWire::Named(value) => document::EasingWire::Named(match value {
-            timeline::NamedEasingWire::Linear => document::NamedEasingWire::Linear,
-            timeline::NamedEasingWire::Ease => document::NamedEasingWire::Ease,
-            timeline::NamedEasingWire::EaseIn => document::NamedEasingWire::EaseIn,
-            timeline::NamedEasingWire::EaseOut => document::NamedEasingWire::EaseOut,
-            timeline::NamedEasingWire::EaseInOut => document::NamedEasingWire::EaseInOut,
-        }),
-        timeline::EasingWire::CubicBezier(value) => {
-            document::EasingWire::CubicBezier(document::CubicBezierEasingWire {
-                kind: document::CubicBezierTag::CubicBezier,
-                x1: value.x1,
-                y1: value.y1,
-                x2: value.x2,
-                y2: value.y2,
-            })
-        }
     }
 }
 

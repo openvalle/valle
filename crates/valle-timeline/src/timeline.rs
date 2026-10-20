@@ -7,12 +7,12 @@ use serde_json::json;
 
 use crate::{
     canonical_json::{CanonicalJsonError, parse_strict, to_canonical_bytes},
+    easing::Easing,
     quantize::quantize_canonical_scalar,
     wire::timeline::{
-        EasingWire, JsonObject, TimelineAdjustmentWire, TimelineCaptionBehaviorWire,
-        TimelineCaptionClipWire, TimelineCaptionLayoutWire, TimelineCaptionPresentationWire,
-        TimelineParamWire, TimelineTextRunWire, TimelineVisualClipWire, TimelineVisualSourceWire,
-        TimelineWire,
+        JsonObject, TimelineAdjustmentWire, TimelineCaptionBehaviorWire, TimelineCaptionClipWire,
+        TimelineCaptionLayoutWire, TimelineCaptionPresentationWire, TimelineParamWire,
+        TimelineTextRunWire, TimelineVisualClipWire, TimelineVisualSourceWire, TimelineWire,
     },
 };
 
@@ -553,7 +553,7 @@ fn normalize_param<T: ClosedTimelineValue>(
                 };
                 value.normalize_q6(&format!("{path}/keyframes/{index}/1"), validator);
                 if let Some(easing) = easing {
-                    normalize_easing(easing, &format!("{path}/keyframes/{index}/2"), validator);
+                    normalize_easing(easing);
                 }
             }
         }
@@ -577,7 +577,7 @@ fn normalize_open_param_easing(
                 };
                 normalize_json_numbers(value, &format!("{path}/keyframes/{index}/1"), validator);
                 if let Some(easing) = easing {
-                    normalize_easing(easing, &format!("{path}/keyframes/{index}/2"), validator);
+                    normalize_easing(easing);
                 }
             }
         }
@@ -719,12 +719,12 @@ fn normalize_f64(value: &mut f64, path: &str, validator: &mut TimelineValidator)
     *value = quantize_canonical_scalar(*value);
 }
 
-fn normalize_easing(easing: &mut EasingWire, path: &str, validator: &mut TimelineValidator) {
-    if let EasingWire::CubicBezier(bezier) = easing {
-        normalize_f64(&mut bezier.x1, &format!("{path}/x1"), validator);
-        normalize_f64(&mut bezier.y1, &format!("{path}/y1"), validator);
-        normalize_f64(&mut bezier.x2, &format!("{path}/x2"), validator);
-        normalize_f64(&mut bezier.y2, &format!("{path}/y2"), validator);
+/// Parsing has checked the curve; its Bézier coordinates are q6 like every other number.
+fn normalize_easing(easing: &mut Easing) {
+    if let Easing::CubicBezier { p } = easing {
+        for value in p {
+            *value = quantize_canonical_scalar(*value);
+        }
     }
 }
 

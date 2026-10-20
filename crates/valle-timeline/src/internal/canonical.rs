@@ -9,6 +9,7 @@ use std::collections::BTreeMap;
 use serde::Serialize;
 use serde_json::{Value as JsonValue, json};
 
+use crate::easing::Easing;
 use crate::internal::{
     canonical_json::{CanonicalJsonError, parse_strict, to_canonical_bytes},
     document::{MAX_CAPTION_BLUR_SIGMA, MAX_CAPTION_FONT_SIZE, TimelineDocument},
@@ -271,6 +272,35 @@ fn quantize_visual_layer(layer: &mut VisualLayerWire) {
     }
 }
 
+/// A keyframe value that linear interpolation carries past its keyframes when the easing
+/// overshoots.
+trait EasedValue: Sized {
+    /// The value at `progress` from `self` to `to`, as rendering interpolates it, or `None` when
+    /// the field's values are checked where they are used.
+    fn eased(&self, to: &Self, progress: f64) -> Option<Self>;
+}
+
+impl EasedValue for f64 {
+    fn eased(&self, to: &Self, progress: f64) -> Option<Self> {
+        Some(self + (to - self) * progress)
+    }
+}
+
+impl<const N: usize> EasedValue for [f64; N] {
+    fn eased(&self, to: &Self, progress: f64) -> Option<Self> {
+        Some(std::array::from_fn(|axis| {
+            self[axis] + (to[axis] - self[axis]) * progress
+        }))
+    }
+}
+
+/// Motion props are checked against the artifact's controls when the render is admitted.
+impl EasedValue for JsonValue {
+    fn eased(&self, _: &Self, _: f64) -> Option<Self> {
+        None
+    }
+}
+
 fn quantize_param<T>(param: &mut ParamWire<T>, mut quantize_value: impl FnMut(&mut T)) {
     match param {
         ParamWire::Constant(constant) => quantize_value(&mut constant.value),
@@ -285,12 +315,9 @@ fn quantize_param<T>(param: &mut ParamWire<T>, mut quantize_value: impl FnMut(&m
     }
 }
 
-fn quantize_easing(easing: &mut EasingWire) {
-    if let EasingWire::CubicBezier(bezier) = easing {
-        quantize_scalar(&mut bezier.x1);
-        quantize_scalar(&mut bezier.y1);
-        quantize_scalar(&mut bezier.x2);
-        quantize_scalar(&mut bezier.y2);
+fn quantize_easing(easing: &mut Easing) {
+    if let Easing::CubicBezier { p } = easing {
+        p.iter_mut().for_each(quantize_scalar);
     }
 }
 
@@ -1346,26 +1373,38 @@ impl<'a> Validator<'a> {
             return;
         }
         for (segment, pair) in curve.keyframes.windows(2).enumerate() {
+            let [low, high] = pair[0].out_easing.map_or([0.0, 1.0], Easing::range);
             for axis in 0..2 {
                 let from = pair[0].value[axis];
                 let to = pair[1].value[axis];
-                if from.is_finite()
-                    && to.is_finite()
-                    && from != 0.0
-                    && to != 0.0
-                    && from.is_sign_positive() != to.is_sign_positive()
-                {
-                    self.error(
-                        "scale_curve_crosses_zero",
-                        &format!("{path}/keyframes/{}/value/{axis}", segment + 1),
-                        Some(&pair[1].id),
-                        details([
-                            ("axis", json!(axis)),
-                            ("from", json!(from)),
-                            ("to", json!(to)),
-                        ]),
-                    );
+                if !from.is_finite() || !to.is_finite() || from == 0.0 || to == 0.0 {
+                    continue;
                 }
+                let crosses = |value: f64| {
+                    value == 0.0 || value.is_sign_positive() != from.is_sign_positive()
+                };
+                // An overshooting curve turns around beyond a keyframe, here.
+                let turn = |progress: f64| from + (to - from) * progress;
+                let (pointer, id) = if crosses(to) {
+                    (
+                        format!("{path}/keyframes/{}/value/{axis}", segment + 1),
+                        &pair[1].id,
+                    )
+                } else if (low < 0.0 && crosses(turn(low))) || (high > 1.0 && crosses(turn(high))) {
+                    (format!("{path}/keyframes/{segment}/outEasing"), &pair[0].id)
+                } else {
+                    continue;
+                };
+                self.error(
+                    "scale_curve_crosses_zero",
+                    &pointer,
+                    Some(id),
+                    details([
+                        ("axis", json!(axis)),
+                        ("from", json!(from)),
+                        ("to", json!(to)),
+                    ]),
+                );
             }
         }
     }
@@ -1392,6 +1431,7 @@ impl<'a> Validator<'a> {
         path: &str,
         mut validate_value: F,
     ) where
+        T: EasedValue,
         F: FnMut(&mut Self, &T, &str),
     {
         match param {
@@ -1449,8 +1489,38 @@ impl<'a> Validator<'a> {
                             JsonObject::new(),
                         );
                     }
+                    if keyframe.out_easing.is_some_and(|easing| !easing.is_valid()) {
+                        self.error(
+                            "invalid_easing",
+                            &format!("{keyframe_path}/outEasing"),
+                            Some(&keyframe.id),
+                            JsonObject::new(),
+                        );
+                    }
                     validate_value(self, &keyframe.value, &format!("{keyframe_path}/value"));
                     previous = Some(keyframe.time);
+                }
+                if curve.interpolation != InterpolationWire::Linear {
+                    return;
+                }
+                // A curve that overshoots carries the value past its keyframes, and the field
+                // must accept the farthest values too.
+                for (index, pair) in curve.keyframes.windows(2).enumerate() {
+                    let Some(easing) = pair[0].out_easing else {
+                        continue;
+                    };
+                    for progress in easing.range() {
+                        if (0.0..=1.0).contains(&progress) {
+                            continue;
+                        }
+                        if let Some(value) = pair[0].value.eased(&pair[1].value, progress) {
+                            validate_value(
+                                self,
+                                &value,
+                                &format!("{path}/keyframes/{index}/outEasing"),
+                            );
+                        }
+                    }
                 }
             }
         }

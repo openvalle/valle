@@ -280,7 +280,7 @@ Constants are written directly. An animated parameter uses:
 
 ```json
 {
-  "keyframes": [[0, 0, "ease-out"], [0.4, 1], [2.6, 1], [3, 0]],
+  "keyframes": [[0, 0, "easeOut"], [0.4, 1], [2.6, 1], [3, 0]],
   "interpolation": "linear"
 }
 ```
@@ -302,11 +302,17 @@ last keyframe clamp to the endpoint. `interpolation` is `linear` by default;
 `step` holds each keyframe's value until the next one. Values must remain valid
 for their field, including values produced by easing.
 
-Named easing values are `linear`, `ease`, `ease-in`, `ease-out`, `ease-in-out`.
-These Timeline names differ from Motion's helper spelling. A custom easing is
-`{"type":"cubic-bezier","x1":0.25,"y1":0.1,"x2":0.25,"y2":1}`; both x
-control points must be in 0–1. Easing is useful for linear segments; omit it for
-step interpolation.
+An easing is a string spelled as in Motion: `linear`, `ease`, `easeIn`, `easeOut`,
+`easeInOut` (CSS's `ease-in`, `ease-out` and `ease-in-out` also work), the
+easings.net curves such as `easeOutCubic` and `easeOutBack`, `step-start`,
+`step-end`, `steps(n, position)`, and `cubic-bezier(x1, y1, x2, y2)` with both x
+control points in 0–1. [Interpolation and springs](motion.md#interpolation-and-springs)
+lists the whole set. The document is written back with the camelCase spelling and
+q6 Bézier coordinates. Back and elastic curves, and a Bézier whose y control points
+leave 0–1, overshoot the next keyframe before settling on it, and the overshoot must
+stay valid for the field: `[[0, 0, "easeOutBack"], [0.4, 0.9]]` is a valid opacity
+curve, while ending at `1` would go past full opacity. Easing is useful for linear
+segments; omit it for step interpolation.
 
 ### Transitions
 
@@ -555,7 +561,7 @@ slides a three-second caption into position:
 ```json
 {
   "opacity": { "keyframes": [[0,0],[0.4,1],[2.6,1],[3,0]] },
-  "translation": { "keyframes": [[0,[0,24],"ease-out"],[0.4,[0,0]]] }
+  "translation": { "keyframes": [[0,[0,24],"easeOut"],[0.4,[0,0]]] }
 }
 ```
 

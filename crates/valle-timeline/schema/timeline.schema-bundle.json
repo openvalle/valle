@@ -44,44 +44,6 @@
           ],
           "type": "string"
         },
-        "CubicBezierEasingWire": {
-          "additionalProperties": false,
-          "properties": {
-            "type": {
-              "$ref": "#/$defs/CubicBezierTag"
-            },
-            "x1": {
-              "format": "double",
-              "type": "number"
-            },
-            "x2": {
-              "format": "double",
-              "type": "number"
-            },
-            "y1": {
-              "format": "double",
-              "type": "number"
-            },
-            "y2": {
-              "format": "double",
-              "type": "number"
-            }
-          },
-          "required": [
-            "type",
-            "x1",
-            "y1",
-            "x2",
-            "y2"
-          ],
-          "type": "object"
-        },
-        "CubicBezierTag": {
-          "enum": [
-            "cubic-bezier"
-          ],
-          "type": "string"
-        },
         "DisplayCaptionPresetName": {
           "enum": [
             "breathe",
@@ -92,15 +54,9 @@
           ],
           "type": "string"
         },
-        "EasingWire": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/NamedEasingWire"
-            },
-            {
-              "$ref": "#/$defs/CubicBezierEasingWire"
-            }
-          ]
+        "Easing": {
+          "description": "An easing: linear, ease, easeIn, easeOut, easeInOut (or ease-in, ease-out, ease-in-out), easeIn, easeOut or easeInOut followed by Sine, Quad, Cubic, Quart, Quint, Expo, Circ, Back, Elastic or Bounce (such as easeOutCubic), step-start, step-end, steps(n) or steps(n, jump-start|jump-end|jump-none|jump-both|start|end) with a positive integer n (at least 2 for jump-none), and cubic-bezier(x1, y1, x2, y2) with finite numbers and x1, x2 in [0, 1].",
+          "type": "string"
         },
         "EnterCaptionPresetName": {
           "enum": [
@@ -153,16 +109,6 @@
             "error",
             "hold",
             "loop"
-          ],
-          "type": "string"
-        },
-        "NamedEasingWire": {
-          "enum": [
-            "linear",
-            "ease",
-            "ease-in",
-            "ease-out",
-            "ease-in-out"
           ],
           "type": "string"
         },
@@ -906,13 +852,13 @@
                   "type": "number"
                 },
                 {
-                  "$ref": "#/$defs/EasingWire"
+                  "$ref": "#/$defs/Easing"
                 }
               ],
               "type": "array"
             }
           ],
-          "description": "Compact `[time, value]` or `[time, value, easing]` keyframe."
+          "description": "Compact `[time, value]` or `[time, value, easing]` keyframe, with the easing spelled as in\nMotion."
         },
         "TimelineKeyframeWire2": {
           "anyOf": [
@@ -936,13 +882,13 @@
                 },
                 true,
                 {
-                  "$ref": "#/$defs/EasingWire"
+                  "$ref": "#/$defs/Easing"
                 }
               ],
               "type": "array"
             }
           ],
-          "description": "Compact `[time, value]` or `[time, value, easing]` keyframe."
+          "description": "Compact `[time, value]` or `[time, value, easing]` keyframe, with the easing spelled as in\nMotion."
         },
         "TimelineKeyframeWire3": {
           "anyOf": [
@@ -982,13 +928,13 @@
                   "type": "array"
                 },
                 {
-                  "$ref": "#/$defs/EasingWire"
+                  "$ref": "#/$defs/Easing"
                 }
               ],
               "type": "array"
             }
           ],
-          "description": "Compact `[time, value]` or `[time, value, easing]` keyframe."
+          "description": "Compact `[time, value]` or `[time, value, easing]` keyframe, with the easing spelled as in\nMotion."
         },
         "TimelineKeyframeWire4": {
           "anyOf": [
@@ -1028,13 +974,13 @@
                   "type": "array"
                 },
                 {
-                  "$ref": "#/$defs/EasingWire"
+                  "$ref": "#/$defs/Easing"
                 }
               ],
               "type": "array"
             }
           ],
-          "description": "Compact `[time, value]` or `[time, value, easing]` keyframe."
+          "description": "Compact `[time, value]` or `[time, value, easing]` keyframe, with the easing spelled as in\nMotion."
         },
         "TimelineParamWire": {
           "anyOf": [
@@ -1720,44 +1666,6 @@
           ],
           "type": "string"
         },
-        "CubicBezierEasingWire": {
-          "additionalProperties": false,
-          "properties": {
-            "type": {
-              "$ref": "#/$defs/CubicBezierTag"
-            },
-            "x1": {
-              "format": "double",
-              "type": "number"
-            },
-            "x2": {
-              "format": "double",
-              "type": "number"
-            },
-            "y1": {
-              "format": "double",
-              "type": "number"
-            },
-            "y2": {
-              "format": "double",
-              "type": "number"
-            }
-          },
-          "required": [
-            "type",
-            "x1",
-            "y1",
-            "x2",
-            "y2"
-          ],
-          "type": "object"
-        },
-        "CubicBezierTag": {
-          "enum": [
-            "cubic-bezier"
-          ],
-          "type": "string"
-        },
         "DisplayCaptionPresetName": {
           "enum": [
             "breathe",
@@ -1768,15 +1676,9 @@
           ],
           "type": "string"
         },
-        "EasingWire": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/NamedEasingWire"
-            },
-            {
-              "$ref": "#/$defs/CubicBezierEasingWire"
-            }
-          ]
+        "Easing": {
+          "description": "An easing: linear, ease, easeIn, easeOut, easeInOut (or ease-in, ease-out, ease-in-out), easeIn, easeOut or easeInOut followed by Sine, Quad, Cubic, Quart, Quint, Expo, Circ, Back, Elastic or Bounce (such as easeOutCubic), step-start, step-end, steps(n) or steps(n, jump-start|jump-end|jump-none|jump-both|start|end) with a positive integer n (at least 2 for jump-none), and cubic-bezier(x1, y1, x2, y2) with finite numbers and x1, x2 in [0, 1].",
+          "type": "string"
         },
         "EnterCaptionPresetName": {
           "enum": [
@@ -1829,16 +1731,6 @@
             "error",
             "hold",
             "loop"
-          ],
-          "type": "string"
-        },
-        "NamedEasingWire": {
-          "enum": [
-            "linear",
-            "ease",
-            "ease-in",
-            "ease-out",
-            "ease-in-out"
           ],
           "type": "string"
         },
@@ -2582,13 +2474,13 @@
                   "type": "number"
                 },
                 {
-                  "$ref": "#/$defs/EasingWire"
+                  "$ref": "#/$defs/Easing"
                 }
               ],
               "type": "array"
             }
           ],
-          "description": "Compact `[time, value]` or `[time, value, easing]` keyframe."
+          "description": "Compact `[time, value]` or `[time, value, easing]` keyframe, with the easing spelled as in\nMotion."
         },
         "TimelineKeyframeWire2": {
           "anyOf": [
@@ -2612,13 +2504,13 @@
                 },
                 true,
                 {
-                  "$ref": "#/$defs/EasingWire"
+                  "$ref": "#/$defs/Easing"
                 }
               ],
               "type": "array"
             }
           ],
-          "description": "Compact `[time, value]` or `[time, value, easing]` keyframe."
+          "description": "Compact `[time, value]` or `[time, value, easing]` keyframe, with the easing spelled as in\nMotion."
         },
         "TimelineKeyframeWire3": {
           "anyOf": [
@@ -2658,13 +2550,13 @@
                   "type": "array"
                 },
                 {
-                  "$ref": "#/$defs/EasingWire"
+                  "$ref": "#/$defs/Easing"
                 }
               ],
               "type": "array"
             }
           ],
-          "description": "Compact `[time, value]` or `[time, value, easing]` keyframe."
+          "description": "Compact `[time, value]` or `[time, value, easing]` keyframe, with the easing spelled as in\nMotion."
         },
         "TimelineKeyframeWire4": {
           "anyOf": [
@@ -2704,13 +2596,13 @@
                   "type": "array"
                 },
                 {
-                  "$ref": "#/$defs/EasingWire"
+                  "$ref": "#/$defs/Easing"
                 }
               ],
               "type": "array"
             }
           ],
-          "description": "Compact `[time, value]` or `[time, value, easing]` keyframe."
+          "description": "Compact `[time, value]` or `[time, value, easing]` keyframe, with the easing spelled as in\nMotion."
         },
         "TimelineParamWire": {
           "anyOf": [

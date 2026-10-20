@@ -25,6 +25,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use valle_motion::{AssetKind, ControlType, SceneArtifact, shader::ShaderPackage};
 use valle_timeline::Color;
+use valle_timeline::easing::Easing;
 use valle_timeline::internal::quantize::{
     quantize_frame_boundary, quantize_frame_interval, quantize_sample_boundary,
     quantize_sample_interval,
@@ -45,9 +46,9 @@ pub use valle_timeline::internal::{FrameKey, RenderId};
 #[cfg(test)]
 use evaluate::evaluate_source_sample_index;
 use evaluate::{
-    crossfade_progress, cubic_bezier_progress, euclidean_source_modulo, evaluate_audio_sample,
-    evaluate_camera, evaluate_caption_program, evaluate_visual_program, frame_sample_time,
-    sample_time, transition_progress,
+    crossfade_progress, euclidean_source_modulo, evaluate_audio_sample, evaluate_camera,
+    evaluate_caption_program, evaluate_visual_program, frame_sample_time, sample_time,
+    transition_progress,
 };
 
 const MAX_SAFE_JSON_INTEGER: i64 = 9_007_199_254_740_991;
@@ -1198,7 +1199,7 @@ struct CompiledCurve<T> {
 struct CompiledKeyframe<T> {
     time: RationalTime,
     value: T,
-    easing: CompiledEasing,
+    easing: Easing,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -1206,13 +1207,6 @@ struct CompiledKeyframe<T> {
 enum CompiledInterpolation {
     Step,
     Linear,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
-#[serde(tag = "type", rename_all = "kebab-case", deny_unknown_fields)]
-enum CompiledEasing {
-    Linear,
-    CubicBezier { x1: f64, y1: f64, x2: f64, y2: f64 },
 }
 
 trait CompiledParamValueType: Clone {
@@ -1290,16 +1284,7 @@ impl<T: CompiledParamValueType> CompiledCurve<T> {
             .expect("admitted curve segment duration is positive")
             .as_f64()
             .clamp(0.0, 1.0);
-        from.value.interpolate(&to.value, from.easing.apply(raw))
-    }
-}
-
-impl CompiledEasing {
-    fn apply(self, progress: f64) -> f64 {
-        match self {
-            Self::Linear => progress,
-            Self::CubicBezier { x1, y1, x2, y2 } => cubic_bezier_progress(progress, x1, y1, x2, y2),
-        }
+        from.value.interpolate(&to.value, from.easing.evaluate(raw))
     }
 }
 
@@ -4304,6 +4289,45 @@ fn details<const N: usize>(items: [(&str, String); N]) -> BTreeMap<String, Strin
         .into_iter()
         .map(|(key, value)| (key.to_owned(), value))
         .collect()
+}
+
+#[cfg(test)]
+mod compiled_curve_tests {
+    use super::*;
+
+    #[test]
+    fn eased_curves_overshoot_as_in_motion() {
+        let at = |easing, quarter| {
+            CompiledCurve {
+                interpolation: CompiledInterpolation::Linear,
+                keyframes: vec![
+                    CompiledKeyframe {
+                        time: RationalTime::ZERO,
+                        value: 0.0,
+                        easing,
+                    },
+                    CompiledKeyframe {
+                        time: RationalTime::ONE,
+                        value: 100.0,
+                        easing: Easing::Linear,
+                    },
+                ],
+            }
+            .evaluate(RationalTime::new(quarter, 4).unwrap())
+        };
+        // easeOutBack passes its destination before settling on it.
+        assert_eq!(
+            at(Easing::EaseOutBack, 3),
+            100.0 * Easing::EaseOutBack.evaluate(0.75)
+        );
+        assert!(at(Easing::EaseOutBack, 3) > 100.0);
+        assert_eq!(at(Easing::EaseOutBack, 4), 100.0);
+        // So does a Bézier with a y control point above 1.
+        let bezier = Easing::CubicBezier {
+            p: [0.3, 0.0, 0.2, 1.4],
+        };
+        assert!(at(bezier, 3) > 100.0);
+    }
 }
 
 #[cfg(test)]

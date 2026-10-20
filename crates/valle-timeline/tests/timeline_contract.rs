@@ -1,9 +1,10 @@
 use serde_json::json;
 use valle_timeline::{
-    Timeline, TimelineDecodeError, TimelineJsonIssue, decode_timeline, timeline_bytes,
+    Timeline, TimelineDecodeError, TimelineJsonIssue, decode_timeline,
+    easing::Easing,
+    timeline_bytes,
     wire::timeline::{
-        EasingWire, TimelineFrameRateWire, TimelineKeyframeWire, TimelineParamWire,
-        TimelineVisualSourceWire,
+        TimelineFrameRateWire, TimelineKeyframeWire, TimelineParamWire, TimelineVisualSourceWire,
     },
 };
 
@@ -22,13 +23,7 @@ fn solid_with_curve() -> String {
                         "keyframes": [[
                             5e-7,
                             0.9299999999999999,
-                            {
-                                "type": "cubic-bezier",
-                                "x1": 0.133333333333,
-                                "y1": 0.266666666666,
-                                "x2": 0.9299999999999999,
-                                "y2": -0.0000004
-                            }
+                            "cubic-bezier(0.133333333333, 0.266666666666, 0.9299999999999999, -0.0000004)"
                         ]]
                     }
                 }]
@@ -78,18 +73,68 @@ fn exact_times_and_closed_scalars_normalize_to_q6_and_reencode_idempotently() {
     };
     assert_eq!(time.token(), "0.000001");
     assert_eq!(*value, 0.93);
-    let EasingWire::CubicBezier(bezier) = easing else {
-        panic!("expected cubic bezier")
-    };
     assert_eq!(
-        [bezier.x1, bezier.y1, bezier.x2, bezier.y2],
-        [0.133333, 0.266667, 0.93, 0.0]
+        *easing,
+        Easing::CubicBezier {
+            p: [0.133333, 0.266667, 0.93, 0.0]
+        }
     );
 
     let once = timeline_bytes(&timeline).unwrap();
     let decoded_again = decode_timeline(std::str::from_utf8(&once).unwrap()).unwrap();
     let twice = timeline_bytes(&decoded_again).unwrap();
     assert_eq!(once, twice);
+}
+
+#[test]
+fn easings_take_the_motion_spellings_and_reencode_in_the_canonical_one() {
+    let timeline = |easing: &str| {
+        serde_json::to_string(&json!({
+            "canvas": { "width": 640, "height": 360, "fps": 30 },
+            "tracks": {
+                "visual": [{
+                    "clips": [{
+                        "start": 0,
+                        "duration": 1,
+                        "kind": "solid",
+                        "color": "#ffffffff",
+                        "opacity": { "keyframes": [[0, 0, easing], [1, 0.8]] }
+                    }]
+                }]
+            }
+        }))
+        .unwrap()
+    };
+    for (written, canonical) in [
+        ("ease-out", "easeOut"),
+        ("easeOutBack", "easeOutBack"),
+        ("steps(4, end)", "steps(4)"),
+        ("step-start", "steps(1, jump-start)"),
+        (
+            "cubic-bezier(0.2, 0, 0.0000004, 1)",
+            "cubic-bezier(0.2, 0, 0, 1)",
+        ),
+    ] {
+        let decoded = decode_timeline(&timeline(written)).unwrap();
+        let encoded: serde_json::Value =
+            serde_json::from_slice(&timeline_bytes(&decoded).unwrap()).unwrap();
+        assert_eq!(
+            encoded["tracks"]["visual"][0]["clips"][0]["opacity"]["keyframes"][0][2],
+            json!(canonical),
+            "{written}"
+        );
+    }
+    for invalid in ["exp", "ease_out", "steps(0)", "cubic-bezier(1.5, 0, 0, 1)"] {
+        let Err(TimelineDecodeError::InvalidShape { message }) =
+            decode_timeline(&timeline(invalid))
+        else {
+            panic!("{invalid} must not decode");
+        };
+        assert!(
+            message.contains(&format!("invalid easing `{invalid}`; use linear")),
+            "{message}"
+        );
+    }
 }
 
 #[test]
@@ -113,13 +158,7 @@ fn motion_prop_json_numbers_are_recursively_quantized_to_q6() {
                             "keyframes": [[
                                 0,
                                 0.266666666666,
-                                {
-                                    "type": "cubic-bezier",
-                                    "x1": 0.133333333333,
-                                    "y1": 0.266666666666,
-                                    "x2": 0.929999999999,
-                                    "y2": 1
-                                }
+                                "cubic-bezier(0.133333333333, 0.266666666666, 0.929999999999, 1)"
                             ]]
                         }
                     }
@@ -146,8 +185,8 @@ fn motion_prop_json_numbers_are_recursively_quantized_to_q6() {
     let source = &encoded["tracks"]["visual"][0]["clips"][0];
     assert_eq!(source["props"]["curve"]["keyframes"][0][1], json!(0.266667));
     assert_eq!(
-        source["props"]["curve"]["keyframes"][0][2]["x1"],
-        json!(0.133333)
+        source["props"]["curve"]["keyframes"][0][2],
+        json!("cubic-bezier(0.133333, 0.266667, 0.93, 1)")
     );
     assert!(source.get("source_duration").is_none());
 }

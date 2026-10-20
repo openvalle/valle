@@ -9,11 +9,11 @@ use valle_compiler::caption_presets::{
     CaptionPresetPhase, CaptionPresetRequest, DisplayCaptionPreset, MAX_CAPTION_PRESET_SAMPLES,
     TimedCaptionPreset, expand_caption_presets, parse_caption_preset,
 };
+use valle_timeline::easing::Easing;
 use valle_timeline::internal::{
     CanonicalTimeline, ExactRational, FrameRate, RationalTime, decode_canonical,
     wire::document::{
-        CaptionItemWire, CaptionPresentationWire, CubicBezierEasingWire, EasingWire,
-        NamedEasingWire, ParamWire, TimelineDocumentEnvelopeWire,
+        CaptionItemWire, CaptionPresentationWire, ParamWire, TimelineDocumentEnvelopeWire,
     },
 };
 
@@ -372,45 +372,22 @@ fn assert_sparse_typed<T>(parameter: &ParamWire<T>, preset_id: &str, channel: &s
     1
 }
 
-fn assert_reversed_easing(enter: Option<&EasingWire>, exit: Option<&EasingWire>, context: &str) {
+fn assert_reversed_easing(enter: Option<&Easing>, exit: Option<&Easing>, context: &str) {
     match (enter, exit) {
         (None, None) => {}
-        (Some(EasingWire::Named(enter)), Some(EasingWire::Named(exit))) => {
-            let expected = match enter {
-                NamedEasingWire::Linear => NamedEasingWire::Linear,
-                NamedEasingWire::EaseIn => NamedEasingWire::EaseOut,
-                NamedEasingWire::EaseOut => NamedEasingWire::EaseIn,
-                NamedEasingWire::EaseInOut => NamedEasingWire::EaseInOut,
-                NamedEasingWire::Ease => panic!(
-                    "{context}: CSS `ease` has no named exact time reverse; use cubic-bezier"
-                ),
-            };
-            assert_eq!(*exit, expected, "{context}");
-        }
-        (Some(EasingWire::Named(NamedEasingWire::Ease)), Some(EasingWire::CubicBezier(exit))) => {
-            assert_bezier(exit, [0.75, 0.0, 0.75, 0.9], context);
-        }
-        (Some(EasingWire::CubicBezier(enter)), Some(EasingWire::CubicBezier(exit))) => {
-            assert_bezier(
-                exit,
-                [
-                    1.0 - enter.x2,
-                    1.0 - enter.y2,
-                    1.0 - enter.x1,
-                    1.0 - enter.y1,
-                ],
-                context,
-            );
+        (Some(Easing::CubicBezier { p: enter }), Some(Easing::CubicBezier { p: exit })) => {
+            let expected = [
+                1.0 - enter[2],
+                1.0 - enter[3],
+                1.0 - enter[0],
+                1.0 - enter[1],
+            ];
+            for (actual, expected) in exit.iter().zip(expected) {
+                approx(*actual, expected, context);
+            }
         }
         _ => panic!("{context}: easing is not the exact time reverse"),
     }
-}
-
-fn assert_bezier(actual: &CubicBezierEasingWire, expected: [f64; 4], context: &str) {
-    approx(actual.x1, expected[0], context);
-    approx(actual.y1, expected[1], context);
-    approx(actual.x2, expected[2], context);
-    approx(actual.y2, expected[3], context);
 }
 
 fn assert_reversed_param<T: ApproxValue>(
@@ -515,22 +492,13 @@ fn cubic_bezier_progress(progress: f64, x1: f64, y1: f64, x2: f64, y2: f64) -> f
     cubic_axis((lower + upper) * 0.5, y1, y2)
 }
 
-fn eased_progress(easing: Option<&EasingWire>, progress: f64) -> f64 {
+fn eased_progress(easing: Option<&Easing>, progress: f64) -> f64 {
     match easing {
-        None | Some(EasingWire::Named(NamedEasingWire::Linear)) => progress,
-        Some(EasingWire::Named(named)) => {
-            let [x1, y1, x2, y2] = match named {
-                NamedEasingWire::Linear => unreachable!("linear handled above"),
-                NamedEasingWire::Ease => [0.25, 0.1, 0.25, 1.0],
-                NamedEasingWire::EaseIn => [0.42, 0.0, 1.0, 1.0],
-                NamedEasingWire::EaseOut => [0.0, 0.0, 0.58, 1.0],
-                NamedEasingWire::EaseInOut => [0.42, 0.0, 0.58, 1.0],
-            };
-            cubic_bezier_progress(progress, x1, y1, x2, y2)
-        }
-        Some(EasingWire::CubicBezier(bezier)) => {
-            cubic_bezier_progress(progress, bezier.x1, bezier.y1, bezier.x2, bezier.y2)
-        }
+        None | Some(Easing::Linear) => progress,
+        Some(Easing::CubicBezier {
+            p: [x1, y1, x2, y2],
+        }) => cubic_bezier_progress(progress, *x1, *y1, *x2, *y2),
+        Some(other) => panic!("the built-in plans ease with Bézier curves, not {other}"),
     }
 }
 

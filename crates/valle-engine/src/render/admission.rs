@@ -644,19 +644,13 @@ struct AdmittedCurve<T> {
 struct AdmittedKeyframe<T> {
     time: RationalTime,
     value: T,
-    easing: AdmittedEasing,
+    easing: Easing,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AdmittedInterpolation {
     Step,
     Linear,
-}
-
-#[derive(Debug, Clone, Copy)]
-enum AdmittedEasing {
-    Linear,
-    CubicBezier { x1: f64, y1: f64, x2: f64, y2: f64 },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1178,7 +1172,7 @@ fn admit_param_mapped<T, U>(
                 .map(|keyframe| AdmittedKeyframe {
                     time: keyframe.time,
                     value: map_value(&keyframe.value),
-                    easing: admit_easing(keyframe.out_easing.as_ref()),
+                    easing: keyframe.out_easing.unwrap_or_default(),
                 })
                 .collect();
             AdmittedParamValue::Curve {
@@ -1190,42 +1184,6 @@ fn admit_param_mapped<T, U>(
         }
     };
     AdmittedParam { owner_clock, value }
-}
-
-fn admit_easing(easing: Option<&Easing>) -> AdmittedEasing {
-    match easing {
-        None | Some(Easing::Named(NamedEasing::Linear)) => AdmittedEasing::Linear,
-        Some(Easing::Named(NamedEasing::Ease)) => AdmittedEasing::CubicBezier {
-            x1: 0.25,
-            y1: 0.1,
-            x2: 0.25,
-            y2: 1.0,
-        },
-        Some(Easing::Named(NamedEasing::EaseIn)) => AdmittedEasing::CubicBezier {
-            x1: 0.42,
-            y1: 0.0,
-            x2: 1.0,
-            y2: 1.0,
-        },
-        Some(Easing::Named(NamedEasing::EaseOut)) => AdmittedEasing::CubicBezier {
-            x1: 0.0,
-            y1: 0.0,
-            x2: 0.58,
-            y2: 1.0,
-        },
-        Some(Easing::Named(NamedEasing::EaseInOut)) => AdmittedEasing::CubicBezier {
-            x1: 0.42,
-            y1: 0.0,
-            x2: 0.58,
-            y2: 1.0,
-        },
-        Some(Easing::CubicBezier(bezier)) => AdmittedEasing::CubicBezier {
-            x1: bezier.x1,
-            y1: bezier.y1,
-            x2: bezier.x2,
-            y2: bezier.y2,
-        },
-    }
 }
 
 fn extension_parameters_valid(abi: &str, parameters: &JsonObject) -> bool {
@@ -1972,10 +1930,30 @@ fn motion_param_matches_artifact_control(param: &Param<JsonValue>, control: &Con
     let accepts = |value: &JsonValue| motion_json_matches_artifact_control(value, control);
     match param {
         Param::Constant(constant) => accepts(&constant.value),
-        Param::Curve(curve) => curve
-            .keyframes
-            .iter()
-            .all(|keyframe| accepts(&keyframe.value)),
+        Param::Curve(curve) => {
+            curve
+                .keyframes
+                .iter()
+                .all(|keyframe| accepts(&keyframe.value))
+                && (curve.interpolation == Interpolation::Step
+                    || curve.keyframes.windows(2).all(|pair| {
+                        // An overshooting curve carries a number past its keyframes, and the
+                        // control's range must hold the farthest values too.
+                        let (Some(from), Some(to)) =
+                            (pair[0].value.as_f64(), pair[1].value.as_f64())
+                        else {
+                            return true;
+                        };
+                        let easing = pair[0].out_easing.unwrap_or_default();
+                        easing
+                            .range()
+                            .into_iter()
+                            .filter(|progress| !(0.0..=1.0).contains(progress))
+                            .all(|progress| {
+                                accepts(&JsonValue::from(from + (to - from) * progress))
+                            })
+                    }))
+        }
     }
 }
 
@@ -2080,7 +2058,7 @@ fn admit_motion_typed_param<T: Clone>(
                         Some(AdmittedKeyframe {
                             time: keyframe.time,
                             value: convert(&keyframe.value)?,
-                            easing: admit_easing(keyframe.out_easing.as_ref()),
+                            easing: keyframe.out_easing.unwrap_or_default(),
                         })
                     })
                     .collect::<Option<Vec<_>>>()?,

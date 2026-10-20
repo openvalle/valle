@@ -14,15 +14,6 @@ pub(super) fn compile_admitted_timeline(
         }
     }
 
-    fn compile_easing(easing: AdmittedEasing) -> CompiledEasing {
-        match easing {
-            AdmittedEasing::Linear => CompiledEasing::Linear,
-            AdmittedEasing::CubicBezier { x1, y1, x2, y2 } => {
-                CompiledEasing::CubicBezier { x1, y1, x2, y2 }
-            }
-        }
-    }
-
     fn compile_param<T>(param: AdmittedParam<T>) -> CompiledParam<T> {
         let value = match param.value {
             AdmittedParamValue::Constant { value } => CompiledParamValue::Constant { value },
@@ -38,7 +29,7 @@ pub(super) fn compile_admitted_timeline(
                         .map(|keyframe| CompiledKeyframe {
                             time: keyframe.time,
                             value: keyframe.value,
-                            easing: compile_easing(keyframe.easing),
+                            easing: keyframe.easing,
                         })
                         .collect(),
                 },

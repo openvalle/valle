@@ -1231,53 +1231,9 @@
           ],
           "type": "string"
         },
-        "CubicBezierEasingWire": {
-          "additionalProperties": false,
-          "properties": {
-            "type": {
-              "$ref": "#/$defs/CubicBezierTag"
-            },
-            "x1": {
-              "format": "double",
-              "type": "number"
-            },
-            "x2": {
-              "format": "double",
-              "type": "number"
-            },
-            "y1": {
-              "format": "double",
-              "type": "number"
-            },
-            "y2": {
-              "format": "double",
-              "type": "number"
-            }
-          },
-          "required": [
-            "type",
-            "x1",
-            "y1",
-            "x2",
-            "y2"
-          ],
-          "type": "object"
-        },
-        "CubicBezierTag": {
-          "enum": [
-            "cubic-bezier"
-          ],
+        "Easing": {
+          "description": "An easing: linear, ease, easeIn, easeOut, easeInOut (or ease-in, ease-out, ease-in-out), easeIn, easeOut or easeInOut followed by Sine, Quad, Cubic, Quart, Quint, Expo, Circ, Back, Elastic or Bounce (such as easeOutCubic), step-start, step-end, steps(n) or steps(n, jump-start|jump-end|jump-none|jump-both|start|end) with a positive integer n (at least 2 for jump-none), and cubic-bezier(x1, y1, x2, y2) with finite numbers and x1, x2 in [0, 1].",
           "type": "string"
-        },
-        "EasingWire": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/NamedEasingWire"
-            },
-            {
-              "$ref": "#/$defs/CubicBezierEasingWire"
-            }
-          ]
         },
         "ExactRational": {
           "pattern": "^(0|[1-9][0-9]*|-[1-9][0-9]*)/[1-9][0-9]*$",
@@ -1310,7 +1266,7 @@
               "type": "string"
             },
             "outEasing": {
-              "$ref": "#/$defs/RequiredNullable_for_EasingWire"
+              "$ref": "#/$defs/RequiredNullable_for_Easing"
             },
             "time": {
               "$ref": "#/$defs/ExactRational"
@@ -1340,7 +1296,7 @@
               "type": "string"
             },
             "outEasing": {
-              "$ref": "#/$defs/RequiredNullable_for_EasingWire"
+              "$ref": "#/$defs/RequiredNullable_for_Easing"
             },
             "time": {
               "$ref": "#/$defs/ExactRational"
@@ -1365,7 +1321,7 @@
               "type": "string"
             },
             "outEasing": {
-              "$ref": "#/$defs/RequiredNullable_for_EasingWire"
+              "$ref": "#/$defs/RequiredNullable_for_Easing"
             },
             "time": {
               "$ref": "#/$defs/ExactRational"
@@ -1395,7 +1351,7 @@
               "type": "string"
             },
             "outEasing": {
-              "$ref": "#/$defs/RequiredNullable_for_EasingWire"
+              "$ref": "#/$defs/RequiredNullable_for_Easing"
             },
             "time": {
               "$ref": "#/$defs/ExactRational"
@@ -1628,16 +1584,6 @@
               "type": "object"
             }
           ]
-        },
-        "NamedEasingWire": {
-          "enum": [
-            "linear",
-            "ease",
-            "ease-in",
-            "ease-out",
-            "ease-in-out"
-          ],
-          "type": "string"
         },
         "NamespacedKernelTypeWire": {
           "pattern": "^[^/\\s]+/[^/\\s]+$",
@@ -1929,10 +1875,10 @@
             }
           ]
         },
-        "RequiredNullable_for_EasingWire": {
+        "RequiredNullable_for_Easing": {
           "anyOf": [
             {
-              "$ref": "#/$defs/EasingWire"
+              "$ref": "#/$defs/Easing"
             },
             {
               "type": "null"

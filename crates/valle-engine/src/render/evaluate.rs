@@ -14,32 +14,6 @@ use super::{
     ResolvedResourceSnapshot, RuntimeFault, SampleRange, audio_gain,
 };
 
-pub(super) fn cubic_bezier_progress(progress: f64, x1: f64, y1: f64, x2: f64, y2: f64) -> f64 {
-    if progress <= 0.0 {
-        return 0.0;
-    }
-    if progress >= 1.0 {
-        return 1.0;
-    }
-    fn coordinate(t: f64, first: f64, second: f64) -> f64 {
-        let inverse = 1.0 - t;
-        3.0 * inverse * inverse * t * first + 3.0 * inverse * t * t * second + t * t * t
-    }
-    // A fixed iteration count is deterministic across preview/export and does
-    // not make convergence part of the authoring document.
-    let mut low = 0.0;
-    let mut high = 1.0;
-    for _ in 0..32 {
-        let midpoint = (low + high) * 0.5;
-        if coordinate(midpoint, x1, x2) < progress {
-            low = midpoint;
-        } else {
-            high = midpoint;
-        }
-    }
-    coordinate((low + high) * 0.5, y1, y2).clamp(0.0, 1.0)
-}
-
 pub(super) fn frame_sample_time(
     frame: i64,
     frame_rate: FrameRate,

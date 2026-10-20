@@ -156,7 +156,7 @@ fn layer_with_curve() -> Value {
                 "id": "kf:opacity:0",
                 "time": "0/1",
                 "value": 0.0,
-                "outEasing": "ease-out"
+                "outEasing": "easeOut"
             },
             {
                 "id": "kf:opacity:1",

@@ -11,12 +11,12 @@ pub use valle_timeline::caption_presets::{
     CAPTION_PRESET_COUNT, CAPTION_PRESET_PACK_ID, CaptionPreset, CaptionPresetDescriptor,
     CaptionPresetPhase, DisplayCaptionPresetName, EnterCaptionPresetName, ExitCaptionPresetName,
 };
+use valle_timeline::easing::Easing;
 use valle_timeline::internal::{
     ExactRational, FrameRate, MAX_CAPTION_BLUR_SIGMA, RationalTime,
     wire::document::{
-        CaptionPresentationWire, ConstantParamWire, CubicBezierEasingWire, CubicBezierTag,
-        CurveWire, EasingWire, ExtrapolationWire, InterpolationWire, KeyframeWire, NamedEasingWire,
-        ParamWire,
+        CaptionPresentationWire, ConstantParamWire, CurveWire, ExtrapolationWire,
+        InterpolationWire, KeyframeWire, ParamWire,
     },
 };
 
@@ -587,14 +587,14 @@ fn constant<T>(value: T) -> ParamWire<T> {
 struct NormalizedKey<T> {
     time: ExactRational,
     value: T,
-    out_easing: Option<EasingWire>,
+    out_easing: Option<Easing>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 struct AbsoluteKey<T> {
     time: ExactRational,
     value: T,
-    out_easing: Option<EasingWire>,
+    out_easing: Option<Easing>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -611,21 +611,17 @@ fn unit_time(numerator: i64, denominator: u32) -> ExactRational {
     ExactRational::new(numerator, denominator).expect("static normalized time")
 }
 
-fn cubic_easing(y1: f64, y2: f64) -> EasingWire {
-    EasingWire::CubicBezier(CubicBezierEasingWire {
-        kind: CubicBezierTag::CubicBezier,
-        x1: 1.0 / 3.0,
-        y1,
-        x2: 2.0 / 3.0,
-        y2,
-    })
+fn cubic_easing(y1: f64, y2: f64) -> Easing {
+    Easing::CubicBezier {
+        p: [1.0 / 3.0, y1, 2.0 / 3.0, y2],
+    }
 }
 
-fn smoothstep_easing() -> EasingWire {
+fn smoothstep_easing() -> Easing {
     cubic_easing(0.0, 1.0)
 }
 
-fn two_key_curve<T>(from: T, to: T, easing: EasingWire) -> Vec<NormalizedKey<T>> {
+fn two_key_curve<T>(from: T, to: T, easing: Easing) -> Vec<NormalizedKey<T>> {
     vec![
         NormalizedKey {
             time: ExactRational::ZERO,
@@ -680,8 +676,8 @@ fn enter_plan(preset: CaptionPreset, canvas_size: [u32; 2]) -> EdgePlan {
         }
         EnterPop => {
             plan.opacity = arrival_curve(0.0, 1.0);
-            // Timeline easing progress is canonically clamped to [0, 1], so overshoot must be
-            // carried by a real middle value rather than an out-of-range bezier control point.
+            // The overshoot is a real middle value between two smoothstep segments, which keeps
+            // the recipe's analytic shape rather than a Bézier's.
             // 94/125 is the sparse exact-time approximation of this recipe's analytic apex. The
             // evaluator uses these same two smoothstep segments when display sampling is present,
             // so adding a display preset cannot reshape the enter motion.
@@ -729,23 +725,14 @@ fn enter_plan(preset: CaptionPreset, canvas_size: [u32; 2]) -> EdgePlan {
     plan
 }
 
-fn reverse_easing(easing: EasingWire) -> EasingWire {
+fn reverse_easing(easing: Easing) -> Easing {
     match easing {
-        EasingWire::CubicBezier(value) => EasingWire::CubicBezier(CubicBezierEasingWire {
-            kind: CubicBezierTag::CubicBezier,
-            x1: 1.0 - value.x2,
-            y1: 1.0 - value.y2,
-            x2: 1.0 - value.x1,
-            y2: 1.0 - value.y1,
-        }),
-        EasingWire::Named(value) => EasingWire::Named(match value {
-            NamedEasingWire::Linear => NamedEasingWire::Linear,
-            NamedEasingWire::EaseIn => NamedEasingWire::EaseOut,
-            NamedEasingWire::EaseOut => NamedEasingWire::EaseIn,
-            NamedEasingWire::EaseInOut => NamedEasingWire::EaseInOut,
-            // The built-in plans do not use CSS `ease`; preserve the named value defensively.
-            NamedEasingWire::Ease => NamedEasingWire::Ease,
-        }),
+        Easing::CubicBezier {
+            p: [x1, y1, x2, y2],
+        } => Easing::CubicBezier {
+            p: [1.0 - x2, 1.0 - y2, 1.0 - x1, 1.0 - y1],
+        },
+        other => unreachable!("the built-in plans ease with Bézier curves, not {other}"),
     }
 }
 
@@ -761,7 +748,7 @@ fn reverse_curve<T: Clone>(curve: Vec<NormalizedKey<T>>) -> Vec<NormalizedKey<T>
             out_easing: if index == 0 {
                 None
             } else {
-                curve[index - 1].out_easing.clone().map(reverse_easing)
+                curve[index - 1].out_easing.map(reverse_easing)
             },
         });
     }
@@ -791,7 +778,7 @@ fn map_curve<T: Clone>(
             Ok(AbsoluteKey {
                 time: checked_add(start, checked_mul(duration, key.time)?)?,
                 value: key.value.clone(),
-                out_easing: key.out_easing.clone(),
+                out_easing: key.out_easing,
             })
         })
         .collect()
@@ -804,7 +791,7 @@ fn append_curve<T: Clone + PartialEq>(target: &mut Vec<AbsoluteKey<T>>, source: 
         {
             debug_assert!(last.value == key.value, "edge plans must meet at identity");
             last.value = key.value.clone();
-            last.out_easing = key.out_easing.clone();
+            last.out_easing = key.out_easing;
         } else {
             target.push(key.clone());
         }
@@ -1186,7 +1173,7 @@ mod tests {
         assert_eq!(translation.keyframes.len(), 2);
         assert!(matches!(
             opacity.keyframes[0].out_easing,
-            Some(EasingWire::CubicBezier(_))
+            Some(Easing::CubicBezier { .. })
         ));
         assert_eq!(opacity.keyframes[1].time, unit_time(126, 625));
         assert_eq!(translation.keyframes[1].time, unit_time(7, 25));

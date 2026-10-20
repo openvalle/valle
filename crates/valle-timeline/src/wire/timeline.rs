@@ -18,6 +18,7 @@ pub use valle_draw::transition::TransitionKind;
 use crate::caption_presets::{
     DisplayCaptionPresetName, EnterCaptionPresetName, ExitCaptionPresetName,
 };
+use crate::easing::Easing;
 
 /// Open JSON object used only at the explicitly extensible public leaves.
 pub type JsonObject = BTreeMap<String, JsonValue>;
@@ -31,44 +32,6 @@ pub type JsonObject = BTreeMap<String, JsonValue>;
 pub enum InterpolationWire {
     Step,
     Linear,
-}
-
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum EasingWire {
-    Named(NamedEasingWire),
-    CubicBezier(CubicBezierEasingWire),
-}
-
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum NamedEasingWire {
-    Linear,
-    Ease,
-    EaseIn,
-    EaseOut,
-    EaseInOut,
-}
-
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct CubicBezierEasingWire {
-    #[serde(rename = "type")]
-    pub kind: CubicBezierTag,
-    pub x1: f64,
-    pub y1: f64,
-    pub x2: f64,
-    pub y2: f64,
-}
-
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum CubicBezierTag {
-    CubicBezier,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -563,13 +526,14 @@ pub struct TimelineCurveWire<T> {
     pub interpolation: Option<InterpolationWire>,
 }
 
-/// Compact `[time, value]` or `[time, value, easing]` keyframe.
+/// Compact `[time, value]` or `[time, value, easing]` keyframe, with the easing spelled as in
+/// Motion.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(untagged)]
 pub enum TimelineKeyframeWire<T> {
     Plain((TimelineTimeWire, T)),
-    Eased((TimelineTimeWire, T, EasingWire)),
+    Eased((TimelineTimeWire, T, Easing)),
 }
 
 impl<'de, T> Deserialize<'de> for TimelineKeyframeWire<T>
@@ -599,14 +563,14 @@ where
 }
 
 impl<T> TimelineKeyframeWire<T> {
-    pub fn into_parts(self) -> (TimelineTimeWire, T, Option<EasingWire>) {
+    pub fn into_parts(self) -> (TimelineTimeWire, T, Option<Easing>) {
         match self {
             Self::Plain((time, value)) => (time, value, None),
             Self::Eased((time, value, easing)) => (time, value, Some(easing)),
         }
     }
 
-    pub fn parts(&self) -> (&TimelineTimeWire, &T, Option<&EasingWire>) {
+    pub fn parts(&self) -> (&TimelineTimeWire, &T, Option<&Easing>) {
         match self {
             Self::Plain((time, value)) => (time, value, None),
             Self::Eased((time, value, easing)) => (time, value, Some(easing)),

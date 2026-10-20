@@ -9,6 +9,7 @@ use std::collections::BTreeMap;
 
 use serde_json::Value as JsonValue;
 
+use crate::easing::Easing;
 use crate::internal::{
     time::{FrameRate, RationalRate, RationalTime},
     wire::document as wire,
@@ -203,29 +204,6 @@ pub enum Interpolation {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Extrapolation {
     Clamp,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum Easing {
-    Named(NamedEasing),
-    CubicBezier(CubicBezierEasing),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NamedEasing {
-    Linear,
-    Ease,
-    EaseIn,
-    EaseOut,
-    EaseInOut,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct CubicBezierEasing {
-    pub x1: f64,
-    pub y1: f64,
-    pub x2: f64,
-    pub y2: f64,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -739,7 +717,7 @@ fn param_from_wire<T, U>(
                         id: keyframe.id,
                         time: RationalTime::from_exact(keyframe.time),
                         value: convert(keyframe.value)?,
-                        out_easing: keyframe.out_easing.map(easing_from_wire),
+                        out_easing: keyframe.out_easing,
                     })
                 })
                 .collect::<Result<_, DocumentConversionError>>()?,
@@ -763,7 +741,7 @@ fn param_into_wire<T, U>(param: Param<T>, mut convert: impl FnMut(T) -> U) -> wi
                     id: keyframe.id,
                     time: keyframe.time.into_exact(),
                     value: convert(keyframe.value),
-                    out_easing: keyframe.out_easing.map(easing_into_wire),
+                    out_easing: keyframe.out_easing,
                 })
                 .collect(),
             extrapolation: extrapolation_into_wire(curve.extrapolation),
@@ -828,51 +806,6 @@ fn extrapolation_from_wire(value: wire::ExtrapolationWire) -> Extrapolation {
 fn extrapolation_into_wire(value: Extrapolation) -> wire::ExtrapolationWire {
     match value {
         Extrapolation::Clamp => wire::ExtrapolationWire::Clamp,
-    }
-}
-
-fn easing_from_wire(value: wire::EasingWire) -> Easing {
-    match value {
-        wire::EasingWire::Named(named) => Easing::Named(named_easing_from_wire(named)),
-        wire::EasingWire::CubicBezier(bezier) => Easing::CubicBezier(CubicBezierEasing {
-            x1: bezier.x1,
-            y1: bezier.y1,
-            x2: bezier.x2,
-            y2: bezier.y2,
-        }),
-    }
-}
-
-fn easing_into_wire(value: Easing) -> wire::EasingWire {
-    match value {
-        Easing::Named(named) => wire::EasingWire::Named(named_easing_into_wire(named)),
-        Easing::CubicBezier(bezier) => wire::EasingWire::CubicBezier(wire::CubicBezierEasingWire {
-            kind: wire::CubicBezierTag::CubicBezier,
-            x1: bezier.x1,
-            y1: bezier.y1,
-            x2: bezier.x2,
-            y2: bezier.y2,
-        }),
-    }
-}
-
-fn named_easing_from_wire(value: wire::NamedEasingWire) -> NamedEasing {
-    match value {
-        wire::NamedEasingWire::Linear => NamedEasing::Linear,
-        wire::NamedEasingWire::Ease => NamedEasing::Ease,
-        wire::NamedEasingWire::EaseIn => NamedEasing::EaseIn,
-        wire::NamedEasingWire::EaseOut => NamedEasing::EaseOut,
-        wire::NamedEasingWire::EaseInOut => NamedEasing::EaseInOut,
-    }
-}
-
-fn named_easing_into_wire(value: NamedEasing) -> wire::NamedEasingWire {
-    match value {
-        NamedEasing::Linear => wire::NamedEasingWire::Linear,
-        NamedEasing::Ease => wire::NamedEasingWire::Ease,
-        NamedEasing::EaseIn => wire::NamedEasingWire::EaseIn,
-        NamedEasing::EaseOut => wire::NamedEasingWire::EaseOut,
-        NamedEasing::EaseInOut => wire::NamedEasingWire::EaseInOut,
     }
 }
 

@@ -126,13 +126,7 @@ fn closed_schema_scalars_quantize_before_validation_and_canonicalization() {
                 "id": "keyframe:quantized:opacity:0",
                 "time": "1/25",
                 "value": 0.13333333333333333,
-                "outEasing": {
-                    "type": "cubic-bezier",
-                    "x1": 0.123456789,
-                    "y1": 0.234567891,
-                    "x2": 0.765432109,
-                    "y2": 0.876543219
-                }
+                "outEasing": "cubic-bezier(0.123456789, 0.234567891, 0.765432109, 0.876543219)"
             },
             {
                 "id": "keyframe:quantized:opacity:1",
@@ -173,13 +167,7 @@ fn closed_schema_scalars_quantize_before_validation_and_canonicalization() {
                         "id": "keyframe:motion:open-value:0",
                         "time": "0/1",
                         "value": {"precision": 0.123456789},
-                        "outEasing": {
-                            "type": "cubic-bezier",
-                            "x1": 0.123456789,
-                            "y1": 0.234567891,
-                            "x2": 0.765432109,
-                            "y2": 0.876543219
-                        }
+                        "outEasing": "cubic-bezier(0.123456789, 0.234567891, 0.765432109, 0.876543219)"
                     },
                     {
                         "id": "keyframe:motion:open-value:1",
@@ -314,13 +302,7 @@ fn closed_schema_scalars_quantize_before_validation_and_canonicalization() {
     );
     assert_eq!(
         encoded_clip["layer"]["opacity"]["keyframes"][0]["outEasing"],
-        json!({
-            "type": "cubic-bezier",
-            "x1": 0.123457,
-            "y1": 0.234568,
-            "x2": 0.765432,
-            "y2": 0.876543
-        })
+        json!("cubic-bezier(0.123457, 0.234568, 0.765432, 0.876543)")
     );
     assert_eq!(
         encoded_clip["layer"]["opacity"]["keyframes"][1]["value"],
@@ -413,13 +395,7 @@ fn closed_schema_scalars_quantize_before_validation_and_canonicalization() {
     );
     assert_eq!(
         encoded_clip["source"]["props"]["animated"]["keyframes"][0]["outEasing"],
-        json!({
-            "type": "cubic-bezier",
-            "x1": 0.123457,
-            "y1": 0.234568,
-            "x2": 0.765432,
-            "y2": 0.876543
-        })
+        json!("cubic-bezier(0.123457, 0.234568, 0.765432, 0.876543)")
     );
     assert_eq!(
         document["visual"]["tracks"][0]["items"][1]["kernel"]["parameters"]["precision"],
@@ -666,6 +642,83 @@ fn linear_scale_curves_cannot_cross_a_singular_transform() {
 }
 
 #[test]
+fn overshooting_easings_keep_their_farthest_values_valid_for_the_field() {
+    let curve = |name: &str, from: Value, to: Value, easing: &str| {
+        json!({
+            "type": "curve",
+            "id": format!("curve:{name}"),
+            "interpolation": "linear",
+            "keyframes": [
+                {
+                    "id": format!("keyframe:{name}:from"),
+                    "time": "0/1",
+                    "value": from,
+                    "outEasing": easing
+                },
+                {
+                    "id": format!("keyframe:{name}:to"),
+                    "time": "1/1",
+                    "value": to,
+                    "outEasing": null
+                }
+            ],
+            "extrapolation": "clamp"
+        })
+    };
+    let opacity = |to: f64, easing: &str| curve("opacity", json!(0.0), json!(to), easing);
+    let scale =
+        |from: f64, easing: &str| curve("scale", json!([from, 1.0]), json!([1.0, 1.0]), easing);
+    let diagnostics = |opacity: Value, scale: Value| {
+        let mut value = empty_document();
+        let mut clip = solid_clip("clip:eased", "2/1");
+        clip["layer"]["opacity"] = opacity;
+        clip["layer"]["transform"]["scale"] = scale;
+        value["document"]["visual"]["tracks"] = json!([{"id": "visual:main", "items": [clip]}]);
+        match decode_value(&value) {
+            Ok(_) => std::collections::BTreeSet::new(),
+            Err(CanonicalDecodeError::InvalidDocument(report)) => report
+                .diagnostics
+                .into_iter()
+                .map(|diagnostic| (diagnostic.code, diagnostic.path))
+                .collect(),
+            Err(error) => panic!("expected a local invariant rejection, not {error:?}"),
+        }
+    };
+    let layer = "/document/visual/tracks/0/items/0/layer";
+
+    // easeOutBack goes about a tenth of the distance past its destination, and easeInBack as far
+    // back before it starts.
+    assert!(diagnostics(opacity(0.9, "easeOutBack"), scale(0.5, "easeInBack")).is_empty());
+    assert_eq!(
+        diagnostics(opacity(1.0, "easeOutBack"), scale(0.05, "easeInBack")),
+        [
+            (
+                "opacity_out_of_range".to_owned(),
+                format!("{layer}/opacity/keyframes/0/outEasing")
+            ),
+            (
+                "scale_curve_crosses_zero".to_owned(),
+                format!("{layer}/transform/scale/keyframes/0/outEasing")
+            ),
+        ]
+        .into()
+    );
+    // A Bézier with a control point above 1 overshoots the same way; the other curves stay
+    // between their keyframes.
+    assert_eq!(
+        diagnostics(
+            opacity(1.0, "cubic-bezier(0.3, 0, 0.2, 1.4)"),
+            scale(0.05, "easeOutCubic")
+        ),
+        [(
+            "opacity_out_of_range".to_owned(),
+            format!("{layer}/opacity/keyframes/0/outEasing")
+        )]
+        .into()
+    );
+}
+
+#[test]
 fn camera_center_uses_normalized_composition_units_without_clamping() {
     let mut value = empty_document();
     value["document"]["camera"] = json!({
@@ -758,7 +811,7 @@ fn caption_rich_style_shadow_and_presentation_are_closed() {
                     "id": "keyframe:caption:opacity:start",
                     "time": "0/1",
                     "value": 0.0,
-                    "outEasing": "ease-out"
+                    "outEasing": "easeOut"
                 },
                 {
                     "id": "keyframe:caption:opacity:end",
