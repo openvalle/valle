@@ -722,7 +722,11 @@ impl Checker<'_> {
                         .inputs
                         .iter()
                         .find(|i| *name == format!("sample_{}", i.name));
-                    let linear = input.is_some_and(|i| i.sampling == super::InputSampling::Linear);
+                    // The device filters the host's children and the backdrop in one sample.
+                    let linear = input.is_some_and(|i| {
+                        i.sampling == super::InputSampling::Linear
+                            && i.kind != super::InputKind::Backdrop
+                    });
                     let data = input.is_some_and(|i| i.kind == super::InputKind::Data);
                     Value {
                         ty: Type::Float(4),
@@ -1228,6 +1232,16 @@ fn prelude(manifest: &ShaderManifest) -> String {
     }
     for input in &manifest.inputs {
         let name = &input.name;
+        if input.kind == super::InputKind::Backdrop {
+            // In place, as the host's children are: the point under uv, kept inside what the
+            // layer draws, its border box and padding, which is where the host reads it.
+            let [left, top, right, bottom] = manifest.output.padding;
+            output.push_str(&format!(
+                "float4 sample_{name}(float2 uv) {{ return valle_unpremul({name}.eval(clamp(valle_finite(uv * resolution), \
+                 float2(-{left}.0, -{top}.0), resolution + float2({right}.0, {bottom}.0)))); }}\n"
+            ));
+            continue;
+        }
         if input.kind == super::InputKind::Data {
             let address = match input.wrap {
                 super::InputWrap::Clamp => {

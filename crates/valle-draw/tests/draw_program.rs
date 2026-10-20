@@ -5,7 +5,7 @@ use valle_draw::program::{
     BackdropRead, BackdropScope, BlendMode, Clip, DrawProgram, DrawProgramBuilder,
     DrawProgramError, Filter, Glyph, GlyphRun, Group, ImageNode, LinearColor, Mask, MaskMode, Node,
     NodeGeometry, NodeId, Paint, PathData, PathNode, PathStroke, PathVerb, RuntimeShaderNode,
-    Scene3dNode, ShaderTextureBinding,
+    SHADER_BACKDROP_FOOTPRINT, Scene3dNode, ShaderTextureBinding, ShaderTextureSource,
 };
 use valle_draw::requirements::{
     AlphaMode, ColorDomain, DestinationOperation, DigestBytes, ExternalTexture, FontKey, Insets,
@@ -119,12 +119,14 @@ fn fixture(reverse_arena_insertion: bool) -> DrawProgram {
         textures: vec![ShaderTextureBinding {
             wrap: valle_draw::program::SpreadMode::Pad,
             name: "noise".into(),
-            texture: Some(ExternalTexture {
-                key: "asset:test-noise".into(),
-                kind: TextureKind::Image,
-                color_domain: ColorDomain::LinearRec2020,
-                alpha: AlphaMode::Premultiplied,
-                sample_time_micros: None,
+            source: Some(ShaderTextureSource::External {
+                texture: ExternalTexture {
+                    key: "asset:test-noise".into(),
+                    kind: TextureKind::Image,
+                    color_domain: ColorDomain::LinearRec2020,
+                    alpha: AlphaMode::Premultiplied,
+                    sample_time_micros: None,
+                },
             }),
             sampling: SamplingMode::LinearClamp,
         }],
@@ -1350,4 +1352,140 @@ fn transition_contract_requires_two_inputs_finite_progress_and_a_canvas() {
             assert_eq!(program.requirements().runtime_shaders.len(), 1);
         }
     }
+}
+
+#[test]
+fn a_shader_backdrop_reads_at_the_entry_of_a_group_it_reaches() {
+    /// How a group holds what it wraps.
+    #[derive(Clone, Copy)]
+    enum Around {
+        Plain,
+        Isolated,
+        Transition,
+        Mask,
+    }
+    let key = || RuntimeShaderKey {
+        work_per_pixel: valle_draw::requirements::ShaderWork {
+            operations: 1,
+            samples: 1,
+        },
+        uri: format!("shader://{}", "22".repeat(32)),
+        content_hash: DigestBytes::from_bytes([0x22; 32]),
+        abi_hash: DigestBytes::from_bytes([0x33; 32]),
+    };
+    let behind = |through, sampling| ShaderTextureBinding {
+        wrap: valle_draw::program::SpreadMode::Pad,
+        name: "behind".into(),
+        source: Some(ShaderTextureSource::Backdrop { through }),
+        sampling,
+    };
+    // A shader group reading the backdrop `through` groups up, wrapped from the inside out.
+    let program = |through: u32, around: &[Around], sampling: SamplingMode| {
+        let mut builder = builder();
+        let mut group = Group::plain(vec![]);
+        group.shader = Some(valle_draw::program::ShaderLayer {
+            shader: key(),
+            bounds: Rect::new(8.0, 8.0, 16.0, 16.0),
+            padding: [0; 4],
+            uniforms: vec![],
+            textures: vec![behind(through, sampling)],
+        });
+        let mut node = builder.push_node(Node::Group(group));
+        for around in around {
+            let outer = match around {
+                Around::Plain => Group::plain(vec![node]),
+                Around::Isolated => Group {
+                    isolated: true,
+                    ..Group::plain(vec![node])
+                },
+                Around::Transition => {
+                    let to = builder.push_node(Node::Group(Group::plain(vec![])));
+                    Group {
+                        isolated: true,
+                        transition: Some(valle_draw::program::TransitionLayer {
+                            kernel: valle_draw::program::TransitionKernel::Builtin {
+                                kind: valle_draw::transition::TransitionKind::Fade,
+                                params: valle_draw::transition::TransitionKind::Fade
+                                    .default_values(),
+                            },
+                            progress: 0.5,
+                            bounds: Rect::new(0.0, 0.0, 64.0, 48.0),
+                        }),
+                        ..Group::plain(vec![node, to])
+                    }
+                }
+                Around::Mask => Group {
+                    mask: Some(Mask {
+                        source: node,
+                        mode: MaskMode::Alpha,
+                    }),
+                    ..Group::plain(vec![])
+                },
+            };
+            node = builder.push_node(Node::Group(outer));
+        }
+        builder.add_root(node);
+        builder.finish()
+    };
+    let uses = |through, around: &[Around]| {
+        program(through, around, SamplingMode::LinearClamp)
+            .unwrap()
+            .requirements()
+            .destination_uses
+            .clone()
+    };
+
+    // At the root, the shader's own entry is the program's: it reads the destination where it
+    // draws, and a pixel beyond for its filtering.
+    let root = program(0, &[], SamplingMode::LinearClamp).unwrap();
+    let read = &root.requirements().destination_uses;
+    assert_eq!(read.len(), 1);
+    assert_eq!(read[0].output_bounds, Rect::new(8.0, 8.0, 16.0, 16.0));
+    assert_eq!(read[0].sample_bounds, Rect::new(7.0, 7.0, 18.0, 18.0));
+    assert_eq!(
+        read[0].operation,
+        DestinationOperation::Backdrop {
+            footprint: SHADER_BACKDROP_FOOTPRINT,
+            sampling: SamplingMode::LinearClamp,
+        }
+    );
+    assert!(
+        root.requirements()
+            .capabilities
+            .contains(&valle_draw::requirements::DrawCapability::BackdropRead)
+    );
+    // An isolated group begins transparent inside; at its own entry it sees the destination.
+    assert!(uses(0, &[Around::Isolated]).is_empty());
+    assert_eq!(uses(1, &[Around::Isolated]).len(), 1);
+    assert_eq!(uses(2, &[Around::Plain, Around::Isolated]).len(), 1);
+    // Inside a transition's input or a mask, the shader's own entry sees nothing outside.
+    assert!(uses(0, &[Around::Transition]).is_empty());
+    assert!(uses(0, &[Around::Mask]).is_empty());
+
+    for (through, around, expected) in [
+        (1, &[][..], "reaches past the outermost group"),
+        (2, &[Around::Plain][..], "reaches past the outermost group"),
+        (1, &[Around::Transition][..], "crosses only groups"),
+        (2, &[Around::Plain, Around::Mask][..], "crosses only groups"),
+    ] {
+        let error = program(through, around, SamplingMode::LinearClamp).unwrap_err();
+        assert!(error.to_string().contains(expected), "{error}");
+    }
+    let error = program(0, &[], SamplingMode::NearestClamp).unwrap_err();
+    assert!(error.to_string().contains("sampled in place"), "{error}");
+    let mut builder = builder();
+    let node = builder.push_node(Node::RuntimeShader(RuntimeShaderNode {
+        shader: key(),
+        bounds: Rect::new(0.0, 0.0, 64.0, 48.0),
+        uniforms: Vec::new(),
+        textures: vec![behind(0, SamplingMode::LinearClamp)],
+    }));
+    builder.add_root(node);
+    let error = builder.finish().unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("only a group's shader layer reads the backdrop"),
+        "{error}"
+    );
 }

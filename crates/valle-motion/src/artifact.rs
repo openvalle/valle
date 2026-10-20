@@ -4456,6 +4456,18 @@ impl SceneArtifact {
             let Some(source) = &input.source else {
                 continue;
             };
+            if input.kind == crate::shader::InputKind::Backdrop {
+                if source != crate::shader::BACKDROP_INPUT {
+                    errors.push(ValidationError::new(
+                        format!("{base}/inputs/{input_at}/source"),
+                        format!(
+                            "a backdrop input is bound as {}",
+                            crate::shader::BACKDROP_INPUT
+                        ),
+                    ));
+                }
+                continue;
+            }
             let control = source.strip_prefix("asset://");
             let valid_image = control
                 .and_then(|name| self.controls.assets.get(name))

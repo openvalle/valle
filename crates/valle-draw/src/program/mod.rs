@@ -34,9 +34,9 @@ pub use glass::{
 };
 pub use group::{
     BackdropRead, BackdropScope, BlendMode, BlendSpace, Clip, FILTER_GAUSSIAN_SUPPORT_SIGMAS,
-    FillRule, Filter, Group, MAX_SHADER_LAYER_PIXELS, Mask, MaskMode, RoundRect, ShaderLayer,
-    ShaderTextureBinding, ShaderUniformBinding, ShaderUniformValue, TransitionKernel,
-    TransitionLayer,
+    FillRule, Filter, Group, MAX_SHADER_LAYER_PIXELS, Mask, MaskMode, RoundRect,
+    SHADER_BACKDROP_FOOTPRINT, ShaderLayer, ShaderTextureBinding, ShaderTextureSource,
+    ShaderUniformBinding, ShaderUniformValue, TransitionKernel, TransitionLayer,
 };
 pub use interpolation::{GradientInterpolation, HueDirection, interpolate_author_colors};
 pub use node::{

@@ -142,12 +142,19 @@ test("frozen shaders align Native/CanvasKit sampling and arbitrary-frame results
           inputs={{steps:{src:"asset://image",sampling:"nearest"}}} uniforms={{amount:0.5+ctx.seconds*0.25}} outset={[0,8]}
           style={{position:"absolute",left:16,top:16,width:32,height:32}}/>`,
         source: "return float4(0.0);", points: [[12,32,0,0,0], [24,32,0,0,0], [40,32,255,255,255], [52,32,255,255,255], [60,32,0,0,0]] },
+      // The backdrop under a scaled layer, read in place a quarter of its height lower and kept
+      // inside its border box.
+      { name: "backdrop", body: `<View style={{position:"absolute",width:64,height:32,backgroundColor:"#f00"}}/>
+          <View style={{position:"absolute",top:32,width:64,height:32,backgroundColor:"#00f"}}/>
+          <ShaderLayer code={"uniform shader behind; float4 valle_main(float2 uv) { float4 c = sample_behind(uv + float2(0.0, 0.25)); return float4(c.b, c.g, c.r, 1.0); }"}
+            inputs={{behind:"input://backdrop"}} style={{position:"absolute",left:16,top:16,width:32,height:32,transform:"scale(1.5)"}}/>`,
+        source: "return float4(0.0);", points: [[32,4,255,0,0], [32,60,0,0,255], [32,14,0,0,255], [32,40,255,0,0], [32,50,255,0,0]] },
     ];
     const failures: string[] = [];
     for (const [sampling, wrap] of [["optional-middle", "clamp"], ["optional-empty", "clamp"], ["data-nearest", "mirror"], ["data-linear", "repeat"], ["data-precision", "clamp"], ["nearest", "mirror"], ["linear", "repeat"], ...contents.map(c => [c.name, "clamp"])]) {
       const content = contents.find(c => c.name === sampling);
       const scene3d = sampling === "scene3d";
-      const inline = sampling === "inline";
+      const inline = sampling === "inline" || sampling === "backdrop";
       const caseAssets = [...(inline ? assets.slice(2) : assets), ...(scene3d ? ["--asset","model=model.glb"] : [])];
       if (scene3d) await writeFile(join(dir,"model.glb"),await readFile(join(root,"crates/valle-motion/tests/fixtures/scene3d/triangle.glb")));
       const data = sampling!.startsWith("data-");

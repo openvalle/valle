@@ -22,8 +22,8 @@ use super::{
     DrawProgramError, FillRule, Filter, Glyph, GlyphRun, Group, ImageNode, InstanceBatchNode,
     InstanceColumns, InstanceShape, LinearColor, Mask, MaskMode, Node, NodeId, Paint, PaintId,
     PathData, PathId, PathNode, PathStroke, RoundRect, Scene3dNode, ShaderLayer,
-    ShaderTextureBinding, ShaderUniformBinding, ShaderUniformValue, ShadowNode, SpreadMode,
-    StrokeCap, StrokeJoin, Transform2d,
+    ShaderTextureBinding, ShaderTextureSource, ShaderUniformBinding, ShaderUniformValue,
+    ShadowNode, SpreadMode, StrokeCap, StrokeJoin, Transform2d,
 };
 
 #[derive(Debug, Error)]
@@ -1108,20 +1108,23 @@ impl<'a> RecordingCompiler<'a> {
             })?
             .iter()
             .map(|input| {
-                let texture = input
-                    .image
-                    .map(|image| {
+                let source = match input.source {
+                    Some(recording::ShaderInputSource::Image { image }) => {
                         let mut texture = self.image_texture(command, image)?;
                         if input.data {
                             texture.color_domain = ColorDomain::Data;
                             texture.alpha = AlphaMode::Straight;
                         }
-                        Ok::<_, ProgramRecordingError>(texture)
-                    })
-                    .transpose()?;
+                        Some(ShaderTextureSource::External { texture })
+                    }
+                    Some(recording::ShaderInputSource::Backdrop { through }) => {
+                        Some(ShaderTextureSource::Backdrop { through })
+                    }
+                    None => None,
+                };
                 Ok(ShaderTextureBinding {
                     name: input.name.clone(),
-                    texture,
+                    source,
                     sampling: input.sampling,
                     wrap: input.wrap,
                 })

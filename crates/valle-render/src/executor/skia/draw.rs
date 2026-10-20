@@ -17,8 +17,8 @@ use valle_draw::{
     program::{
         BlendMode, Clip, DrawProgram, FillRule, Filter, GlyphRun, ImageNode, InstanceBatchNode,
         InstanceShape, LinearColor, MaskMode, Node, Paint, PaintId, PathData, PathStroke, PathVerb,
-        RoundRect, ShaderLayer, ShaderTextureBinding, ShaderUniformBinding, ShaderUniformValue,
-        SpreadMode, StrokeCap, StrokeJoin, Transform2d, TransitionKernel,
+        RoundRect, ShaderLayer, ShaderTextureBinding, ShaderTextureSource, ShaderUniformBinding,
+        ShaderUniformValue, SpreadMode, StrokeCap, StrokeJoin, Transform2d, TransitionKernel,
     },
     requirements::{DrawCapability, ExternalTexture, FontKey, RuntimeShaderKey, SamplingMode},
 };
@@ -935,9 +935,18 @@ impl ProgramRuntime {
                 self.device_matrix(plan, output, transform)?,
                 target_origin,
             ),
-            ProgramPassKind::ApplyShader { input, shader, .. } => self.apply_shader_into(
+            ProgramPassKind::ApplyShader {
+                input,
+                backdrops,
+                shader,
+                ..
+            } => self.apply_shader_into(
                 target,
                 resource(resources, *input)?,
+                &backdrops
+                    .iter()
+                    .map(|backdrop| resource(resources, *backdrop))
+                    .collect::<Result<Vec<_>, _>>()?,
                 shader,
                 self.device_matrix(plan, output, transform)?,
                 info,
@@ -1480,7 +1489,7 @@ impl ProgramRuntime {
             Node::Shadow(shadow) => draw_shadow(canvas, shadow)?,
             Node::RuntimeShader(node) => {
                 if let Some(runtime) = self.runtime_shader(
-                    None,
+                    &[("content", transparent())],
                     &node.shader.uri,
                     node.bounds,
                     &node.uniforms,
@@ -1784,10 +1793,12 @@ impl ProgramRuntime {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn apply_shader_into(
         &self,
         surface: &mut Surface,
         input: Option<&ProgramImage>,
+        backdrops: &[Option<&ProgramImage>],
         shader: &ShaderLayer,
         matrix: Matrix,
         _info: &ImageInfo,
@@ -1796,25 +1807,48 @@ impl ProgramRuntime {
         let device_to_owner = matrix.invert().ok_or_else(|| {
             DrawError::Unsupported("shader owner transform is not invertible".into())
         })?;
-        let content = input.map(|input| {
-            // A content snapshot is in device pixels. The runtime entry and its child
-            // evaluations use pixels relative to the shader's local border box.
+        // The content and the backdrops are snapshots in device pixels. The runtime entry and
+        // its child evaluations use pixels relative to the shader's local border box, so each
+        // is sampled where it lies.
+        let in_place = |image: Option<&ProgramImage>, child: &str| {
+            let Some(image) = image else {
+                return Ok(transparent());
+            };
             let image_to_shader = Matrix::concat(
                 &Matrix::translate((-shader.bounds.x as f32, -shader.bounds.y as f32)),
                 &Matrix::concat(
                     &device_to_owner,
-                    &Matrix::translate((input.roi.x as f32, input.roi.y as f32)),
+                    &Matrix::translate((image.roi.x as f32, image.roi.y as f32)),
                 ),
             );
-            (&input.image, image_to_shader)
-        });
+            image
+                .image
+                .to_shader(
+                    (TileMode::Decal, TileMode::Decal),
+                    SamplingOptions::new(FilterMode::Linear, MipmapMode::None),
+                    &image_to_shader,
+                )
+                .ok_or_else(|| DrawError::ShaderChild {
+                    uri: shader.shader.uri.clone(),
+                    child: child.to_owned(),
+                })
+        };
+        let mut supplied = vec![("content", in_place(input, "content")?)];
+        let mut backdrops = backdrops.iter().copied();
+        for binding in &shader.textures {
+            if let Some(ShaderTextureSource::Backdrop { .. }) = binding.source {
+                // An invisible shader layer reads no backdrop.
+                let backdrop = in_place(backdrops.next().flatten(), &binding.name)?;
+                supplied.push((binding.name.as_str(), backdrop));
+            }
+        }
         let canvas = surface.canvas();
         canvas.clear(Color4f::new(0.0, 0.0, 0.0, 0.0));
         canvas.save();
         canvas.translate((-target_origin[0] as f32, -target_origin[1] as f32));
         canvas.concat(&matrix);
         if let Some(runtime) = self.runtime_shader(
-            content,
+            &supplied,
             &shader.shader.uri,
             shader.bounds,
             &shader.uniforms,
@@ -1828,9 +1862,10 @@ impl ProgramRuntime {
         Ok(())
     }
 
+    /// A layer shader over the images its node supplies by name, then its textures.
     fn runtime_shader(
         &self,
-        content: Option<(&Image, Matrix)>,
+        supplied: &[(&str, Shader)],
         uri: &str,
         bounds: Rect,
         uniforms: &[ShaderUniformBinding],
@@ -1841,22 +1876,7 @@ impl ProgramRuntime {
             .get(uri)
             .ok_or_else(|| DrawError::MissingShader(uri.to_owned()))?;
         let data = shader_uniforms(effect, bounds, uniforms, textures, &self.textures)?;
-        let content = match content {
-            Some((image, local)) => image
-                .to_shader(
-                    (TileMode::Decal, TileMode::Decal),
-                    SamplingOptions::new(FilterMode::Linear, MipmapMode::None),
-                    &local,
-                )
-                .ok_or_else(|| DrawError::ShaderChild {
-                    uri: uri.to_owned(),
-                    child: "content".into(),
-                })?,
-            // An empty shader aborts the raster pipeline when sampled. Missing inputs must
-            // evaluate to zero and let the parent shader continue computing its output.
-            None => skia_safe::shaders::color(Color::TRANSPARENT),
-        };
-        let children = self.shader_children(uri, effect, &[("content", content)], textures)?;
+        let children = self.shader_children(uri, effect, supplied, textures)?;
         let local = Matrix::translate((bounds.x as f32, bounds.y as f32));
         Ok(effect.make_shader(Data::new_copy(&data), &children, Some(&local)))
     }
@@ -1882,11 +1902,19 @@ impl ProgramRuntime {
                     uri: uri.to_owned(),
                     child: child.name().to_owned(),
                 })?;
-            let Some(texture) = &binding.texture else {
-                children.push(ChildPtr::Shader(skia_safe::shaders::color(
-                    Color::TRANSPARENT,
-                )));
-                continue;
+            let texture = match &binding.source {
+                Some(ShaderTextureSource::External { texture }) => texture,
+                None => {
+                    children.push(ChildPtr::Shader(transparent()));
+                    continue;
+                }
+                // The node supplies its backdrop by name.
+                Some(ShaderTextureSource::Backdrop { .. }) => {
+                    return Err(DrawError::ShaderChild {
+                        uri: uri.to_owned(),
+                        child: child.name().to_owned(),
+                    });
+                }
             };
             let image = &self
                 .textures
@@ -2074,6 +2102,12 @@ const LAYER_INPUTS: &[&str] = &["content"];
 /// The scenes a transition shader moves between, ahead of its textures.
 const TRANSITION_INPUTS: &[&str] = &["from", "to"];
 
+/// What a missing input reads. An empty shader aborts the raster pipeline when sampled, so a
+/// missing input evaluates to zero and lets the parent shader compute its output.
+fn transparent() -> Shader {
+    skia_safe::shaders::color(Color::TRANSPARENT)
+}
+
 /// A transition shader's bindings: its own uniforms, then the progress the transition supplies.
 fn transition_uniforms(
     uniforms: &[ShaderUniformBinding],
@@ -2138,7 +2172,7 @@ fn preflight_shader_instance(
                 uri: uri.to_owned(),
                 child: child.name().to_owned(),
             })?;
-        if let Some(texture) = &binding.texture
+        if let Some(texture) = binding.texture()
             && !textures.contains_key(texture)
         {
             return Err(DrawError::MissingTexture(texture.key.clone()));
@@ -2200,8 +2234,13 @@ fn read_outside_roi(
             ProgramPassKind::ApplyTransition { from, to, .. } => {
                 read.extend([*from, *to]);
             }
-            ProgramPassKind::ApplyShader { input, .. }
-            | ProgramPassKind::MotionGlass { input, .. }
+            ProgramPassKind::ApplyShader {
+                input, backdrops, ..
+            } => {
+                read.insert(*input);
+                read.extend(backdrops.iter().copied());
+            }
+            ProgramPassKind::MotionGlass { input, .. }
             | ProgramPassKind::ApplyMotionGlassForeground { input, .. } => {
                 read.insert(*input);
             }
@@ -4079,19 +4118,21 @@ fn shader_uniforms(
         if uniform.size_in_bytes() != 8 {
             return Err(DrawError::ShaderUniform(name));
         }
-        let size = if let Some(texture) = &binding.texture {
-            textures
-                .get(texture)
-                .ok_or_else(|| DrawError::MissingTexture(texture.key.clone()))?
-                .size
-        } else {
-            [1, 1]
+        let size = match &binding.source {
+            Some(ShaderTextureSource::External { texture }) => {
+                let [width, height] = textures
+                    .get(texture)
+                    .ok_or_else(|| DrawError::MissingTexture(texture.key.clone()))?
+                    .size;
+                [width as f32, height as f32]
+            }
+            // The backdrop lies under the layer, at its size.
+            Some(ShaderTextureSource::Backdrop { .. }) => {
+                [bounds.width as f32, bounds.height as f32]
+            }
+            None => [1.0, 1.0],
         };
-        write_f32s(
-            &mut data,
-            uniform.offset(),
-            &[size[0] as f32, size[1] as f32],
-        )?;
+        write_f32s(&mut data, uniform.offset(), &size)?;
     }
     for binding in bindings {
         let backend_name = if matches!(binding.value, ShaderUniformValue::Bool(_)) {

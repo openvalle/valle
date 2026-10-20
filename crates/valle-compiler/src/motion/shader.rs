@@ -136,6 +136,11 @@ impl<'s> Compiler<'s> {
         let mut options = BTreeMap::new();
         for (name, expression) in authored_inputs {
             let (asset, input_options) = match self.eval_static(expression) {
+                Some(serde_json::Value::String(source))
+                    if source == valle_motion::shader::BACKDROP_INPUT =>
+                {
+                    (source, valle_motion::shader::InputOptions::backdrop())
+                }
                 Some(serde_json::Value::String(asset)) => {
                     (asset, valle_motion::shader::InputOptions::default())
                 }
@@ -237,6 +242,18 @@ impl<'s> Compiler<'s> {
             );
             return None;
         };
+        if src == valle_motion::shader::BACKDROP_INPUT {
+            self.illegal(
+                DiagCode::GrammarForbidden,
+                span,
+                format!(
+                    "shader texture input `{name}` reads the backdrop, which takes no options: \
+                     write `{name}: \"{}\"`",
+                    valle_motion::shader::BACKDROP_INPUT
+                ),
+            );
+            return None;
+        }
         Some((
             src,
             valle_motion::shader::InputOptions::new(kind, sampling, wrap),
@@ -289,6 +306,36 @@ impl<'s> Compiler<'s> {
                 continue;
             };
             let asset_span = *asset_span;
+            let backdrop = input.kind == valle_motion::shader::InputKind::Backdrop;
+            if backdrop != (asset == valle_motion::shader::BACKDROP_INPUT) {
+                self.illegal(
+                    DiagCode::GrammarForbidden,
+                    asset_span,
+                    if backdrop {
+                        format!(
+                            "shader texture input `{}` is the backdrop: bind it as \"{}\"",
+                            input.name,
+                            valle_motion::shader::BACKDROP_INPUT
+                        )
+                    } else {
+                        format!(
+                            "{label} declares `{}` as a texture, not the backdrop",
+                            input.name
+                        )
+                    },
+                );
+                continue;
+            }
+            if backdrop {
+                inputs.push(ShaderTextureInput {
+                    kind: input.kind,
+                    sampling: input.sampling,
+                    wrap: input.wrap,
+                    name: input.name.clone(),
+                    source: Some(asset.clone()),
+                });
+                continue;
+            }
             let Some(control_name) = asset.strip_prefix("asset://") else {
                 self.illegal(
                     DiagCode::GrammarForbidden,

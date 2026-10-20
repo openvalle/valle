@@ -328,6 +328,16 @@ fn code_reads_both_children_and_the_progress() {
             "Transition code",
         ),
         (
+            declared(
+                "uniform shader behind; float4 valle_main(float2 uv) { return sample_behind(uv); }",
+            )
+            .replace(
+                "code={wipe}",
+                r#"code={wipe} inputs={{ behind: "input://backdrop" }}"#,
+            ),
+            "Transition code: only a ShaderLayer reads the backdrop",
+        ),
+        (
             wipe_scene("code={wipe} uniforms={{ softness: 0.1 }}")
                 .replace("return mix(", "return blend("),
             "Transition code, line 6, column ",

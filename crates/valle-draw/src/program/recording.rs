@@ -965,9 +965,30 @@ pub struct ShaderUniformBinding {
 pub struct ShaderTextureInput {
     pub data: bool,
     pub name: String,
-    pub image: Option<ImageId>,
+    /// What the input samples; an unbound input reads transparent pixels.
+    pub source: Option<ShaderInputSource>,
     pub sampling: crate::requirements::SamplingMode,
     pub wrap: super::SpreadMode,
+}
+
+/// Where a recorded shader input comes from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub enum ShaderInputSource {
+    Image {
+        image: ImageId,
+    },
+    /// The destination at the entry of the group `through` levels above the shader layer's
+    /// own; see [`super::ShaderTextureSource::Backdrop`].
+    Backdrop {
+        through: u32,
+    },
 }
 
 /// Glyph-run source location anchored to a Scene node and byte offsets in that node's own text,
@@ -2405,8 +2426,17 @@ impl ProgramRecording {
             }
         }
         for input in &self.shader_inputs[inputs.range()] {
-            if let Some(image) = input.image {
-                self.check_id(at, "images", image.0, self.images.len())?;
+            match input.source {
+                Some(ShaderInputSource::Image { image }) => {
+                    self.check_id(at, "images", image.0, self.images.len())?;
+                }
+                Some(ShaderInputSource::Backdrop { .. }) if input.data => {
+                    return Err(RecordingError::InvalidShaderLayer {
+                        at,
+                        reason: "a backdrop shader input is color, not data",
+                    });
+                }
+                Some(ShaderInputSource::Backdrop { .. }) | None => {}
             }
         }
         Ok(())
@@ -2783,7 +2813,7 @@ mod tests {
             sampling: crate::requirements::SamplingMode::LinearClamp,
             wrap: super::super::SpreadMode::Pad,
             name: "noise".into(),
-            image: Some(ImageId(0)),
+            source: Some(ShaderInputSource::Image { image: ImageId(0) }),
         }]);
 
         d.clear();

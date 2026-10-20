@@ -53,11 +53,16 @@ impl InputOptions {
         Self {
             kind,
             sampling: sampling.unwrap_or(match kind {
-                InputKind::Color => InputSampling::Linear,
+                InputKind::Color | InputKind::Backdrop => InputSampling::Linear,
                 InputKind::Data => InputSampling::Nearest,
             }),
             wrap: wrap.unwrap_or_default(),
         }
+    }
+
+    /// The backdrop, which takes no options.
+    pub fn backdrop() -> Self {
+        Self::new(InputKind::Backdrop, None, None)
     }
 }
 

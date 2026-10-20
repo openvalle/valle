@@ -2695,6 +2695,7 @@ number may take any finite value.
 Bind an input as `"asset://<image-control>"`, or as `{ src, kind, sampling, wrap }`
 to choose how it is read: `kind` is `"color"` (default) or `"data"`, `sampling`
 defaults to `"linear"` for color and `"nearest"` for data, and `wrap` to `"clamp"`.
+Bind it as `"input://backdrop"` to read what lies behind the layer (see below).
 `outset` extends the output beyond the border box by whole local pixels, as one
 number or one to four in CSS order (top, right, bottom, left); it is the
 descriptor's `output.padding`. The code must be known at compile time, for example
@@ -2744,12 +2745,13 @@ value on every path. Texture access uses `sampleContent(uv)` and declared
 (default clamp). Linear filtering interpolates premultiplied linear texels before
 returning a straight color; it counts four texel reads toward the sampling budget.
 
-Set an input's `kind` to `"color"` (the default) or `"data"`. Color inputs follow
-these color/alpha rules. Data inputs decode PNG/JPEG channels as normalized numbers,
-including 16-bit PNG values and RGB under zero alpha. They ignore color profiles,
-transfer functions and orientation metadata; linear filtering interpolates each
-channel independently. The same image can be bound once as color and once as data;
-those interpretations have separate resource identities and decode caches.
+Set an input's `kind` to `"color"` (the default), `"data"`, or `"backdrop"` (below).
+Color inputs follow these color/alpha rules. Data inputs decode PNG/JPEG channels as
+normalized numbers, including 16-bit PNG values and RGB under zero alpha. They
+ignore color profiles, transfer functions and orientation metadata; linear filtering
+interpolates each channel independently. The same image can be bound once as color
+and once as data; those interpretations have separate resource identities and decode
+caches.
 
 Data inputs use a shared byte-plane representation to preserve numeric values
 through both backends' shader interfaces. Nearest sampling costs eight texel reads;
@@ -2761,6 +2763,33 @@ Content coordinates follow the layer through translation, rotation and scaling.
 The complete subtree is available for sampling, including pixels outside the final
 viewport. Sampling outside the content returns transparent pixels. A layer can
 also omit children and generate pixels entirely from its shader.
+
+An input bound as `"input://backdrop"` reads what lies behind the layer: the
+pixels a `backdropFilter` on the same node would read, including what that filter
+painted, taken before the node's own opacity, blend, filters and 3D plane, which
+then apply to the shader's result. `sample_<name>(uv)` reads the backdrop under
+the layer point `uv`, as `sampleContent` reads the content, and keeps `uv` inside
+the layer's output, its border box and `outset`, so a sample past its edge repeats
+the edge; like `sampleContent`, it counts one read toward the sampling budget. The
+backdrop takes no options; a descriptor declares it as an input with
+`kind: "backdrop"`, `sampling: "linear"` and `wrap: "clamp"`. A Transition's code
+reads its two children and no backdrop.
+
+```tsx
+const ripple = `
+uniform float time;
+uniform shader behind;
+
+float4 valle_main(float2 uv) {
+  float2 wave = 0.01 * float2(sin(uv.y * 40.0 + time * 6.0), cos(uv.x * 40.0 + time * 6.0));
+  float4 glass = sample_behind(uv + wave);
+  return float4(mix(glass.rgb, float3(1.0), 0.15), 1.0);
+}`;
+
+<ShaderLayer code={ripple} inputs={{ behind: "input://backdrop" }}
+  uniforms={{ time: ctx.seconds }}
+  style={{ position: "absolute", left: 80, top: 60, width: 320, height: 180 }} />
+```
 
 For output beyond the border box, set `output.padding: [left, top, right, bottom]`
 in the descriptor, or `outset` with inline code (non-negative integer local

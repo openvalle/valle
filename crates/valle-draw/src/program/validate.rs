@@ -13,7 +13,8 @@ use crate::{
 use super::{
     Affine2d, BackdropScope, Clip, DrawProgram, FILTER_GAUSSIAN_SUPPORT_SIGMAS, Filter,
     GradientStop, Group, LinearColor, Node, NodeGeometry, NodeId, Paint, PaintId, PathData, PathId,
-    RoundRect, ShaderLayer, ShaderUniformValue, Transform2d,
+    RoundRect, SHADER_BACKDROP_FOOTPRINT, ShaderLayer, ShaderTextureBinding, ShaderTextureSource,
+    ShaderUniformValue, Transform2d,
 };
 
 pub const MAX_NODES: usize = 65_536;
@@ -501,6 +502,7 @@ fn validate_raw(
                 validate_shader_bindings(
                     &shader.uniforms,
                     &shader.textures,
+                    false,
                     &format!("node[{index}]"),
                 )?;
                 shader_bindings = shader_bindings
@@ -609,7 +611,7 @@ fn validate_group(
                 textures,
             } => {
                 validate_key(&shader.uri, &format!("{path}.kernel.shader.uri"))?;
-                validate_shader_bindings(uniforms, textures, &format!("{path}.kernel"))?;
+                validate_shader_bindings(uniforms, textures, false, &format!("{path}.kernel"))?;
                 if uniforms.iter().any(|uniform| uniform.name == "progress") {
                     return invalid(
                         format!("{path}.kernel.uniforms"),
@@ -1045,12 +1047,15 @@ fn validate_shader_layer(shader: &ShaderLayer, location: &str) -> Result<(), Dra
         usize::try_from(pixels).unwrap_or(usize::MAX),
         super::MAX_SHADER_LAYER_PIXELS as usize,
     )?;
-    validate_shader_bindings(&shader.uniforms, &shader.textures, location)
+    validate_shader_bindings(&shader.uniforms, &shader.textures, true, location)
 }
 
+/// Check a shader's bindings. Only a group's shader layer, which draws over the destination,
+/// reads the `backdrop`.
 fn validate_shader_bindings(
     uniforms: &[super::ShaderUniformBinding],
     textures: &[super::ShaderTextureBinding],
+    backdrop: bool,
     location: &str,
 ) -> Result<(), DrawProgramError> {
     let mut names = BTreeSet::new();
@@ -1132,8 +1137,26 @@ fn validate_shader_bindings(
                 "binding names must be unique across uniforms and textures",
             );
         }
-        if let Some(texture) = &texture.texture {
-            validate_texture(texture, &format!("{location}.textures[{index}].texture"))?;
+        match &texture.source {
+            Some(ShaderTextureSource::External { texture }) => {
+                validate_texture(texture, &format!("{location}.textures[{index}].source"))?;
+            }
+            Some(ShaderTextureSource::Backdrop { .. }) if !backdrop => {
+                return invalid(
+                    format!("{location}.textures[{index}].source"),
+                    "only a group's shader layer reads the backdrop",
+                );
+            }
+            Some(ShaderTextureSource::Backdrop { .. })
+                if texture.sampling != SamplingMode::LinearClamp
+                    || texture.wrap != super::SpreadMode::Pad =>
+            {
+                return invalid(
+                    format!("{location}.textures[{index}]"),
+                    "the backdrop is sampled in place, with linearClamp sampling and pad",
+                );
+            }
+            Some(ShaderTextureSource::Backdrop { .. }) | None => {}
         }
     }
     Ok(())
@@ -1372,10 +1395,7 @@ fn derive_requirements(
                     } = &transition.kernel
                     {
                         insert_shader_requirement(&mut shaders, shader)?;
-                        for texture in bindings
-                            .iter()
-                            .filter_map(|binding| binding.texture.as_ref())
-                        {
+                        for texture in bindings.iter().filter_map(ShaderTextureBinding::texture) {
                             insert_texture(&mut textures, &mut texture_formats, texture)?;
                             color_domains.insert(texture.color_domain);
                             alpha_modes.insert(texture.alpha);
@@ -1390,11 +1410,16 @@ fn derive_requirements(
                     for texture in shader
                         .textures
                         .iter()
-                        .filter_map(|binding| binding.texture.as_ref())
+                        .filter_map(ShaderTextureBinding::texture)
                     {
                         insert_texture(&mut textures, &mut texture_formats, texture)?;
                         color_domains.insert(texture.color_domain);
                         alpha_modes.insert(texture.alpha);
+                    }
+                    if shader.textures.iter().any(|binding| {
+                        matches!(binding.source, Some(ShaderTextureSource::Backdrop { .. }))
+                    }) {
+                        capabilities.insert(crate::requirements::DrawCapability::BackdropRead);
                     }
                     capabilities.insert(crate::requirements::DrawCapability::GroupShader);
                 }
@@ -1433,7 +1458,7 @@ fn derive_requirements(
                 for texture in shader
                     .textures
                     .iter()
-                    .filter_map(|binding| binding.texture.as_ref())
+                    .filter_map(ShaderTextureBinding::texture)
                 {
                     insert_texture(&mut textures, &mut texture_formats, texture)?;
                     color_domains.insert(texture.color_domain);
@@ -1542,12 +1567,53 @@ fn derive_destination_uses(
     program: &DrawProgram,
     geometry: &[NodeGeometry],
 ) -> Result<Vec<DestinationUse>, DrawProgramError> {
+    /// A group around the visited node, as a backdrop read from inside it sees it.
+    #[derive(Clone, Copy)]
+    struct Enclosing {
+        /// Whether the destination at the group's entry reaches the program entry.
+        entry_is_external: bool,
+        /// Whether a read from inside may begin at the group's entry: the inside is among its
+        /// children, and the group draws no transition between isolated inputs.
+        crossable: bool,
+    }
+
+    /// Whether a shader's backdrop, read at the entry of the group `through` levels above the
+    /// shader's own, reaches the program entry.
+    fn backdrop_entry_is_external(
+        enclosing: &[Enclosing],
+        entry_is_external: bool,
+        through: u32,
+        location: String,
+    ) -> Result<bool, DrawProgramError> {
+        let Some(start) = usize::try_from(through)
+            .ok()
+            .and_then(|through| enclosing.len().checked_sub(through))
+        else {
+            return invalid(
+                location,
+                "the backdrop read reaches past the outermost group",
+            );
+        };
+        let crossed = &enclosing[start..];
+        if crossed.iter().any(|group| !group.crossable) {
+            return invalid(
+                location,
+                "a backdrop read crosses only groups that hold it among their children and draw \
+                 no transition",
+            );
+        }
+        Ok(crossed
+            .first()
+            .map_or(entry_is_external, |group| group.entry_is_external))
+    }
+
     fn visit(
         program: &DrawProgram,
         geometry: &[NodeGeometry],
         id: NodeId,
         entry_is_external: bool,
         parent_to_program: Transform2d,
+        enclosing: &mut Vec<Enclosing>,
         uses: &mut Vec<DestinationUse>,
     ) -> Result<(), DrawProgramError> {
         let Node::Group(group) = &program.nodes[id.index()] else {
@@ -1596,6 +1662,39 @@ fn derive_destination_uses(
                 });
             }
         }
+        if let Some(shader) = &group.shader {
+            for (index, binding) in shader.textures.iter().enumerate() {
+                let Some(ShaderTextureSource::Backdrop { through }) = binding.source else {
+                    continue;
+                };
+                let external = backdrop_entry_is_external(
+                    enclosing,
+                    entry_is_external,
+                    through,
+                    format!("node[{}].shader.textures[{index}].source", id.raw()),
+                )?;
+                if external && group_is_visible {
+                    let output = shader.output_bounds();
+                    uses.push(DestinationUse {
+                        node: id,
+                        scope: BackdropScope::Current,
+                        output_bounds: map_required_bounds(output, local_to_program)?,
+                        sample_bounds: map_required_bounds(
+                            outset_rect(output, SHADER_BACKDROP_FOOTPRINT)?,
+                            local_to_program,
+                        )?,
+                        operation: DestinationOperation::Backdrop {
+                            footprint: SHADER_BACKDROP_FOOTPRINT,
+                            sampling: SamplingMode::LinearClamp,
+                        },
+                    });
+                }
+            }
+        }
+        enclosing.push(Enclosing {
+            entry_is_external,
+            crossable: group.transition.is_none(),
+        });
         for child in &group.children {
             visit(
                 program,
@@ -1603,20 +1702,28 @@ fn derive_destination_uses(
                 *child,
                 child_entry_is_external,
                 local_to_program,
+                enclosing,
                 uses,
             )?;
         }
+        enclosing.pop();
         if let Some(mask) = &group.mask {
             // Mask sources are local coverage programs: Current begins transparent, while an
             // explicit LayerEntry/ScopeEntry still remains an external destination dependency.
+            enclosing.push(Enclosing {
+                entry_is_external: false,
+                crossable: false,
+            });
             visit(
                 program,
                 geometry,
                 mask.source,
                 false,
                 local_to_program,
+                enclosing,
                 uses,
             )?;
+            enclosing.pop();
         }
         if group.internal_blend != super::BlendMode::Normal
             && entry_is_external
@@ -1644,6 +1751,7 @@ fn derive_destination_uses(
             *root,
             true,
             Transform2d::IDENTITY,
+            &mut Vec::new(),
             &mut uses,
         )?;
     }

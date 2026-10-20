@@ -10,6 +10,8 @@ use super::{DiagnosticCode, ShaderDiagnostic};
 pub const DIALECT_ID: &str = "valle-sksl";
 pub const COLOR_SPACE: &str = "linear-srgb";
 pub const ALPHA_MODE: &str = "straight";
+/// How a ShaderLayer binds a backdrop input in its `inputs`.
+pub const BACKDROP_INPUT: &str = "input://backdrop";
 
 // Bound shader source size, sampling, and local surface allocation. A local ShaderLayer must not
 // silently allocate a full-canvas surface.
@@ -38,6 +40,9 @@ pub enum InputKind {
     #[default]
     Color,
     Data,
+    /// The pixels behind a ShaderLayer, which the host binds: read where the layer draws and
+    /// filtered by the device as `content` is, so it takes linear sampling and clamps.
+    Backdrop,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -498,6 +503,22 @@ impl ShaderManifest {
             validate_identifier(&input.name, &format!("inputs[{index}].name"))?;
             if self.role.reserves(&input.name) || !names.insert(input.name.clone()) {
                 return Err(duplicate_name(&input.name, format!("inputs[{index}].name")));
+            }
+            if input.kind == InputKind::Backdrop {
+                if !self.role.is_layer() {
+                    return Err(ShaderDiagnostic::new(
+                        DiagnosticCode::ManifestInvalid,
+                        format!("inputs[{index}].kind"),
+                        "only a ShaderLayer reads the backdrop",
+                    ));
+                }
+                if input.sampling != InputSampling::Linear || input.wrap != InputWrap::Clamp {
+                    return Err(ShaderDiagnostic::new(
+                        DiagnosticCode::ManifestInvalid,
+                        format!("inputs[{index}]"),
+                        "the backdrop is sampled in place: sampling \"linear\" and wrap \"clamp\"",
+                    ));
+                }
             }
         }
 

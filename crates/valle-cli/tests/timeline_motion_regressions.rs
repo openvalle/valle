@@ -1485,6 +1485,218 @@ export default function Fade() {
 }
 
 #[test]
+fn shader_backdrop_reads_what_lies_behind_the_layer() {
+    let temp = tempfile::tempdir().unwrap();
+    let dir = temp.path();
+    let swap = r#"const swap = `
+uniform shader behind;
+float4 valle_main(float2 uv) {
+  float4 c = sample_behind(uv);
+  return float4(c.b, c.g, c.r, 1.0);
+}`;
+"#;
+    // Red and blue halves under four layers across the middle: one swaps the two, one swaps them
+    // at half opacity, one reads a whole width to its right, and one swaps what its own
+    // backdropFilter painted.
+    let scene = r##"const edge = `
+uniform shader behind;
+float4 valle_main(float2 uv) {
+  return float4(sample_behind(uv + float2(1.0, 0.0)).rgb, 1.0);
+}`;
+export const composition = { width: 64, height: 64, fps: 30, duration: 1 };
+export default function Behind() {
+  return (
+    <Scene style={{ width: 64, height: 64 }}>
+      <View style={{ position: "absolute", left: 0, top: 0, width: 32, height: 64, backgroundColor: "#ff0000" }} />
+      <View style={{ position: "absolute", left: 32, top: 0, width: 32, height: 64, backgroundColor: "#0000ff" }} />
+      <ShaderLayer SWAP inputs={{ behind: "input://backdrop" }} style={{ position: "absolute", left: 16, top: 0, width: 32, height: 16 }} />
+      <ShaderLayer SWAP inputs={{ behind: "input://backdrop" }} style={{ position: "absolute", left: 16, top: 16, width: 32, height: 16, opacity: 0.5 }} />
+      <ShaderLayer code={edge} inputs={{ behind: "input://backdrop" }} style={{ position: "absolute", left: 16, top: 32, width: 32, height: 16 }} />
+      <ShaderLayer SWAP inputs={{ behind: "input://backdrop" }} style={{ position: "absolute", left: 16, top: 48, width: 32, height: 16, backdropFilter: "invert(1)" }} />
+    </Scene>
+  );
+}"##;
+    std::fs::write(
+        dir.join("inline.motion.tsx"),
+        format!("{swap}{}", scene.replace("SWAP", "code={swap}")),
+    )
+    .unwrap();
+    // The same swap as a descriptor, whose input is the backdrop.
+    put(
+        dir,
+        "swap.shader.json",
+        json!({"name":"swap","entry":"swap.vsksl","inputs":[{"name":"behind","kind":"backdrop","required":true,"sampling":"linear","wrap":"clamp"}],"output":{"colorSpace":"linear-srgb","alphaMode":"straight","allowTransparent":true},"budget":"local"}),
+    );
+    std::fs::write(
+        dir.join("swap.vsksl"),
+        "half4 valle_main(float2 uv) {\n    half4 c = sample_behind(uv);\n    return half4(c.b, c.g, c.r, 1.0);\n}\n",
+    )
+    .unwrap();
+    let controls = "export const controls = { assets: { swap: asset({ kind: \"shader\" }) } };\n";
+    std::fs::write(
+        dir.join("descriptor.motion.tsx"),
+        format!(
+            "{controls}{}",
+            scene.replace("SWAP", r#"source="asset://swap""#)
+        ),
+    )
+    .unwrap();
+    let render = |input: &str, assets: &[&str]| {
+        let output = format!("{input}.png");
+        let mut args = vec![
+            "motion",
+            "render",
+            input,
+            "--frame",
+            "0",
+            "--backend",
+            "raster",
+            "-o",
+            &output,
+        ];
+        for asset in assets {
+            args.extend(["--asset", asset]);
+        }
+        run(dir, &args)
+    };
+    success(render("inline.motion.tsx", &[]));
+    let close = |name: &str, x: usize, y: usize, expected: [u8; 3]| {
+        let got = pixel(dir, name, x, y);
+        assert!(
+            got.iter()
+                .zip(expected)
+                .all(|(got, expected)| got.abs_diff(expected) <= 2),
+            "{name} ({x}, {y}): {got:?}, expected {expected:?}"
+        );
+    };
+    let image = "inline.motion.tsx.png";
+    close(image, 8, 8, [255, 0, 0]);
+    close(image, 56, 8, [0, 0, 255]);
+    close(image, 20, 8, [0, 0, 255]);
+    close(image, 44, 8, [255, 0, 0]);
+    // Read under the layer's own opacity: half of the swapped color over what it swapped.
+    for x in [20, 44] {
+        let mixed = pixel(dir, image, x, 24);
+        assert!(
+            mixed[0] > 100 && mixed[2] > 100 && mixed[1] < 8,
+            "({x}, 24): {mixed:?}"
+        );
+    }
+    // A point past the layer clamps to its edge, which lies on the blue half.
+    close(image, 20, 40, [0, 0, 255]);
+    close(image, 44, 40, [0, 0, 255]);
+    // The last layer swaps what its backdrop filter painted: the halves inverted, as the filter
+    // alone paints them.
+    std::fs::write(
+        dir.join("filtered.motion.tsx"),
+        format!("{swap}{}", scene.replace("SWAP", "code={swap}")).replace(
+            r#"<ShaderLayer code={swap} inputs={{ behind: "input://backdrop" }} style={{ position: "absolute", left: 16, top: 48,"#,
+            r#"<View style={{ position: "absolute", left: 16, top: 48,"#,
+        ),
+    )
+    .unwrap();
+    success(render("filtered.motion.tsx", &[]));
+    for (x, inverted) in [(20, [0, 255, 255]), (44, [255, 255, 0])] {
+        let filtered = pixel(dir, "filtered.motion.tsx.png", x, 56);
+        assert!(
+            filtered
+                .iter()
+                .zip(inverted)
+                .all(|(got, expected)| got.abs_diff(expected) <= 8),
+            "({x}, 56) filtered: {filtered:?}"
+        );
+        // Swapped, the inverted blue keeps its red a hair above zero. Out of the Rec2020 working
+        // space a red that small comes back only by cancellation, so each half-float store of the
+        // swapped layer moves it by up to a level next to black.
+        let swapped = pixel(dir, image, x, 56);
+        assert!(
+            swapped
+                .iter()
+                .zip([filtered[2], filtered[1], filtered[0]])
+                .all(|(got, expected)| got.abs_diff(expected) <= 4),
+            "({x}, 56): {swapped:?}, the filter painted {filtered:?}"
+        );
+    }
+
+    success(render("descriptor.motion.tsx", &["swap=swap.shader.json"]));
+    let worst = valle_media::codec::read_rgba_png(&dir.join(image))
+        .unwrap()
+        .data
+        .iter()
+        .zip(
+            &valle_media::codec::read_rgba_png(&dir.join("descriptor.motion.tsx.png"))
+                .unwrap()
+                .data,
+        )
+        .map(|(code, descriptor)| code.abs_diff(*descriptor))
+        .max()
+        .unwrap();
+    assert!(
+        worst <= 1,
+        "the descriptor differs from the code by {worst}"
+    );
+
+    // A descriptor input is the backdrop exactly when the descriptor says so.
+    std::fs::write(
+        dir.join("asset.motion.tsx"),
+        format!(
+            "export const controls = {{ assets: {{ swap: asset({{ kind: \"shader\" }}), map: asset({{ kind: \"image\" }}) }} }};\n{}",
+            scene.replace(
+                r#"SWAP inputs={{ behind: "input://backdrop" }}"#,
+                r#"source="asset://swap" inputs={{ behind: "asset://map" }}"#
+            )
+        ),
+    )
+    .unwrap();
+    png(dir, "map.png", [0, 255, 0]);
+    let output = render(
+        "asset.motion.tsx",
+        &["swap=swap.shader.json", "map=map.png"],
+    );
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("is the backdrop: bind it as"), "{stdout}");
+
+    // In a Timeline the backdrop is the tracks under the clip.
+    std::fs::write(
+        dir.join("left.motion.tsx"),
+        format!(
+            r##"{swap}export const composition = {{ width: 64, height: 48, fps: 30, duration: 1 }};
+export default function Left() {{
+  return (
+    <Scene style={{{{ width: 64, height: 48 }}}}>
+      <ShaderLayer code={{swap}} inputs={{{{ behind: "input://backdrop" }}}} style={{{{ position: "absolute", left: 0, top: 0, width: 32, height: 48 }}}} />
+    </Scene>
+  );
+}}"##
+        ),
+    )
+    .unwrap();
+    put(
+        dir,
+        "left.timeline.json",
+        json!({"canvas":{"width":64,"height":48,"fps":30},"resources":{"left":"left.motion.tsx"},"tracks":{"visual":[
+          {"clips":[{"kind":"solid","color":"#ff0000","start":0,"duration":1}]},
+          {"clips":[{"kind":"motion","component":"left","start":0,"duration":1}]}
+        ]}}),
+    );
+    success(run(
+        dir,
+        &[
+            "timeline",
+            "render",
+            "left.timeline.json",
+            "--frame",
+            "0",
+            "-o",
+            "timeline.png",
+        ],
+    ));
+    close("timeline.png", 8, 24, [0, 0, 255]);
+    close("timeline.png", 56, 24, [255, 0, 0]);
+}
+
+#[test]
 fn shader_content_preserves_local_coordinates_and_complete_input() {
     let temp = tempfile::tempdir().unwrap();
     let dir = temp.path();

@@ -670,3 +670,50 @@ fn data_textures_preserve_raw_channels_and_admit_actual_storage_and_samples() {
     assert_ne!(color.abi_hash, data.abi_hash);
     assert_ne!(color.content_hash, data.content_hash);
 }
+
+#[test]
+fn a_backdrop_input_belongs_to_a_layer_and_is_sampled_in_place() {
+    use valle_motion::shader::{InputKind, InputWrap, ShaderRole};
+
+    let mut descriptor = manifest();
+    descriptor.inputs[0].kind = InputKind::Backdrop;
+    descriptor.inputs[0].sampling = InputSampling::Linear;
+    let source = b"float4 valle_main(float2 uv) { return sample_noise(uv); }";
+    let backdrop = ShaderPackage::compile(descriptor.clone(), source).unwrap();
+    // The device filters it in one sample, as it does the content.
+    assert_eq!(backdrop.dialect_report.samples_per_pixel, 1);
+    assert!(
+        backdrop
+            .generated_sksl
+            .contains("noise.eval(clamp(valle_finite(uv * resolution)"),
+        "{}",
+        backdrop.generated_sksl
+    );
+    let mut color = descriptor.clone();
+    color.inputs[0].kind = InputKind::Color;
+    let color = ShaderPackage::compile(color, source).unwrap();
+    assert_eq!(color.dialect_report.samples_per_pixel, 4);
+    assert_ne!(color.abi_hash, backdrop.abi_hash);
+
+    let edits: [(fn(&mut ShaderManifest), &str); 3] = [
+        (
+            |manifest| manifest.inputs[0].sampling = InputSampling::Nearest,
+            "sampled in place",
+        ),
+        (
+            |manifest| manifest.inputs[0].wrap = InputWrap::Repeat,
+            "sampled in place",
+        ),
+        (
+            |manifest| manifest.role = ShaderRole::Transition,
+            "only a ShaderLayer reads the backdrop",
+        ),
+    ];
+    for (edit, expected) in edits {
+        let mut invalid = descriptor.clone();
+        edit(&mut invalid);
+        let error = invalid.validate_shape().unwrap_err();
+        assert_eq!(error.code, DiagnosticCode::ManifestInvalid, "{error:?}");
+        assert!(error.message.contains(expected), "{error:?}");
+    }
+}

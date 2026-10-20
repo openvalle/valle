@@ -310,12 +310,47 @@ pub struct ShaderUniformBinding {
 pub struct ShaderTextureBinding {
     pub wrap: super::SpreadMode,
     pub name: String,
-    pub texture: Option<crate::requirements::ExternalTexture>,
+    /// What the input samples; an unbound input reads transparent pixels.
+    pub source: Option<ShaderTextureSource>,
     pub sampling: SamplingMode,
+}
+
+impl ShaderTextureBinding {
+    /// The external texture the input samples, if it samples one.
+    pub fn texture(&self) -> Option<&crate::requirements::ExternalTexture> {
+        match &self.source {
+            Some(ShaderTextureSource::External { texture }) => Some(texture),
+            Some(ShaderTextureSource::Backdrop { .. }) | None => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub enum ShaderTextureSource {
+    /// A texture the host supplies before execution.
+    External {
+        texture: crate::requirements::ExternalTexture,
+    },
+    /// What a group's shader layer draws over: the destination at the entry of the group
+    /// `through` levels above it, 0 being its own, sampled in place as its content is. The read
+    /// covers the shader's output bounds and [`SHADER_BACKDROP_FOOTPRINT`]; each group it reaches
+    /// across holds the next among its children and draws no transition.
+    Backdrop { through: u32 },
 }
 
 /// Maximum local shader output area, including static padding.
 pub const MAX_SHADER_LAYER_PIXELS: u64 = 1920 * 1080;
+
+/// How far a shader layer's backdrop read reaches beyond its output bounds, in local pixels: the
+/// device filters a sample at their edge with the pixel past it.
+pub const SHADER_BACKDROP_FOOTPRINT: crate::requirements::Insets =
+    crate::requirements::Insets::new(1.0, 1.0, 1.0, 1.0);
 
 /// One admitted shader applied to the complete child contribution of a group.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -16,8 +16,8 @@ pub use crate::ContentDigest;
 pub use dialect::{DialectReport, SHADER_LIMITS, ShaderLimits, lower_to_sksl, validate_dialect};
 pub use inline::{InlineCode, InlineDeclaration, InputOptions};
 pub use manifest::{
-    ALPHA_MODE, AbiChild, AbiUniform, BudgetClass, COLOR_SPACE, DIALECT_ID, InputKind,
-    InputSampling, InputWrap, MAX_LAYER_PIXELS, MAX_SAMPLES_PER_PIXEL, MAX_SOURCE_BYTES,
+    ALPHA_MODE, AbiChild, AbiUniform, BACKDROP_INPUT, BudgetClass, COLOR_SPACE, DIALECT_ID,
+    InputKind, InputSampling, InputWrap, MAX_LAYER_PIXELS, MAX_SAMPLES_PER_PIXEL, MAX_SOURCE_BYTES,
     MAX_TEXTURE_INPUTS, MAX_UNIFORM_SCALARS, OutputContract, ShaderAbi, ShaderInput,
     ShaderManifest, ShaderRole, ShaderUniform, UniformType, UniformValue,
 };

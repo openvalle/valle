@@ -2085,7 +2085,9 @@ async function executeProgramPass(
       return;
     }
     case "applyShader":
-      applyProgramShader(CanvasKit, builtins, canvas, admitted, programValue(values, kind.input), record(kind.shader, "program shader"), programMatrix(admitted, localPlan, kind.output, device));
+      applyProgramShader(CanvasKit, builtins, canvas, admitted, programValue(values, kind.input),
+        (kind.backdrops === undefined ? [] : array(kind.backdrops, "shader backdrops")).map((id) => programValue(values, id)),
+        record(kind.shader, "program shader"), programMatrix(admitted, localPlan, kind.output, device));
       return;
     case "applyTransform":
       drawImageValue(CanvasKit, canvas, programValue(values, kind.input), 1, "src");
@@ -2728,10 +2730,10 @@ function drawSceneNode(CanvasKit: CanvasKit, builtins: CanvasKitBuiltinRuntime, 
   } finally { paint.delete(); shader.delete(); }
 }
 
-function applyProgramShader(CanvasKit: CanvasKit, builtins: CanvasKitBuiltinRuntime, canvas: Canvas, admitted: AdmittedProgram, input: ImageValue, shaderWire: Wire, ownerToDevice: number[]): void {
+function applyProgramShader(CanvasKit: CanvasKit, builtins: CanvasKitBuiltinRuntime, canvas: Canvas, admitted: AdmittedProgram, input: ImageValue, backdrops: ImageValue[], shaderWire: Wire, ownerToDevice: number[]): void {
   const key = record(shaderWire.shader, "group shader key");
   const effect = required(admitted.shaders, String(key.uri), "group shader");
-  const runtime = instantiateRuntimeShader(CanvasKit, builtins, effect, rect(shaderWire.bounds, "group shader bounds"), array(shaderWire.uniforms, "group uniforms"), array(shaderWire.textures, "group textures"), admitted, input, ownerToDevice);
+  const runtime = instantiateRuntimeShader(CanvasKit, builtins, effect, rect(shaderWire.bounds, "group shader bounds"), array(shaderWire.uniforms, "group uniforms"), array(shaderWire.textures, "group textures"), admitted, input, ownerToDevice, backdrops);
   const paint = new CanvasKit.Paint();
   const bounds = rect(shaderWire.bounds, "group shader bounds");
   const padding = numberArray(shaderWire.padding, 4, "shader padding");
@@ -2756,27 +2758,40 @@ function instantiateRuntimeShader(
   admitted: AdmittedProgram,
   content: ImageValue | null,
   ownerToDevice: number[] = IDENTITY_MATRIX,
+  backdrops: ImageValue[] = [],
 ): Shader {
-  let child: Shader;
-  if (content?.image) {
+  // The content and the backdrops are snapshots in device pixels. The runtime entry and its child
+  // evaluations use pixels relative to the shader's local border box, so each is sampled where it lies.
+  const inPlace = (value: ImageValue | null): Shader => {
+    if (!value?.image) return CanvasKit.Shader.MakeColor(CanvasKit.TRANSPARENT, CanvasKit.ColorSpace.SRGB);
     const deviceToOwner = inverse3(ownerToDevice);
     if (!deviceToOwner) fail("shader_transform", "shader owner transform is not invertible");
     const imageToShader = mul3(
       [1, 0, -bounds.x, 0, 1, -bounds.y, 0, 0, 1],
-      mul3(deviceToOwner, [1, 0, content.roi.x, 0, 1, content.roi.y, 0, 0, 1]),
+      mul3(deviceToOwner, [1, 0, value.roi.x, 0, 1, value.roi.y, 0, 0, 1]),
     );
-    const image = content.image.makeShaderOptions(CanvasKit.TileMode.Decal, CanvasKit.TileMode.Decal,
+    const image = value.image.makeShaderOptions(CanvasKit.TileMode.Decal, CanvasKit.TileMode.Decal,
       CanvasKit.FilterMode.Linear, CanvasKit.MipmapMode.None, imageToShader);
-    if (!image) fail("shader_transform", "content image cannot become a shader child");
-    child = image;
-  } else child = CanvasKit.Shader.MakeColor(CanvasKit.TRANSPARENT, CanvasKit.ColorSpace.SRGB);
+    if (!image) fail("shader_transform", "an image cannot become a shader child");
+    return image;
+  };
+  const child = inPlace(content);
+  const supplied: Shader[] = [];
+  try {
+    for (const backdrop of backdrops) supplied.push(inPlace(backdrop));
+  } catch (error) {
+    child.delete();
+    for (const shader of supplied) shader.delete();
+    throw error;
+  }
   return makeRuntimeShader(CanvasKit, builtins, effect, bounds, uniforms, textures, admitted, [child], [],
-    [1, 0, bounds.x, 0, 1, bounds.y, 0, 0, 1]);
+    [1, 0, bounds.x, 0, 1, bounds.y, 0, 0, 1], supplied);
 }
 
 /**
  * A runtime shader over the images its node supplies, which it takes and deletes, then its
- * textures. `system` holds the uniforms the node supplies beside `resolution`.
+ * textures. `system` holds the uniforms the node supplies beside `resolution`, and `backdrops`
+ * the images its backdrop textures read, in binding order; an invisible layer reads none.
  */
 function makeRuntimeShader(
   CanvasKit: CanvasKit,
@@ -2789,8 +2804,10 @@ function makeRuntimeShader(
   inputs: Shader[],
   system: [string, number[]][],
   local?: number[],
+  backdrops: Shader[] = [],
 ): Shader {
   const children = [...inputs];
+  const pending = [...backdrops];
   try {
     const values = new Map<string, number[]>([["resolution", [bounds.width, bounds.height]], ...system]);
     for (const raw of uniforms) {
@@ -2819,8 +2836,11 @@ function makeRuntimeShader(
       const binding = record(raw, "shader texture binding");
       const name = `valle_size_${String(binding.name)}`;
       if (values.has(name)) fail("shader_abi", `duplicate shader texture '${String(binding.name)}'`);
-      if (binding.texture === null) { values.set(name, [1, 1]); continue; }
-      const object = resolveProgramTexture(admitted.textures, record(binding.texture, "shader texture key"), "shader texture");
+      const source = shaderTextureSource(binding);
+      if (source === null) { values.set(name, [1, 1]); continue; }
+      // The backdrop lies under the layer, at its size.
+      if (source.type === "backdrop") { values.set(name, [bounds.width, bounds.height]); continue; }
+      const object = resolveProgramTexture(admitted.textures, record(source.texture, "shader texture key"), "shader texture");
       if (!object.image) fail("shader_abi", "shader texture needs an image");
       const data = object.kind === "dataTexture";
       values.set(name, [object.image.width() / (data ? 2 : 1), object.image.height() / (data ? 4 : 1)]);
@@ -2837,11 +2857,14 @@ function makeRuntimeShader(
     if (values.size) fail("shader_abi", "shader has undeclared uniform bindings");
     for (const raw of textures) {
       const binding = record(raw, "shader texture binding");
-      if (binding.texture === null) {
+      const source = shaderTextureSource(binding);
+      const backdrop = source?.type === "backdrop" ? pending.shift() : undefined;
+      if (backdrop) { children.push(backdrop); continue; }
+      if (source === null || source.type === "backdrop") {
         children.push(CanvasKit.Shader.MakeColor(CanvasKit.TRANSPARENT, CanvasKit.ColorSpace.SRGB));
         continue;
       }
-      const texture = record(binding.texture, "shader texture key");
+      const texture = record(source.texture, "shader texture key");
       children.push(normalizedExternalShader(
         CanvasKit,
         builtins,
@@ -2856,7 +2879,18 @@ function makeRuntimeShader(
     return shader;
   } finally {
     for (const child of children) child.delete();
+    for (const backdrop of pending) backdrop.delete();
   }
+}
+
+/** What a shader texture binding samples: nothing, an external texture, or the backdrop. */
+function shaderTextureSource(binding: Wire): Wire | null {
+  if (binding.source == null) return null;
+  const source = record(binding.source, "shader texture source");
+  if (source.type !== "external" && source.type !== "backdrop") {
+    fail("shader_abi", `unknown shader texture source '${String(source.type)}'`);
+  }
+  return source;
 }
 
 function executeKernel(
@@ -4671,8 +4705,9 @@ function admitBoundProgramSchedules(
       const kind = record(record(raw, "program local pass").kind, "program local pass kind");
       const output = passOutput(kind), needed = beyondRoot.get(output);
       const filter = kind.kind === "applyFilter" ? String(record(kind.filter, "program filter").kind) : undefined;
-      if (kind.kind === "applyShader"
-        || ["lensDistortion", "glow", "bloom", "radialBlur", "chromaticAberration"].includes(filter ?? "")) {
+      if (kind.kind === "applyShader") {
+        for (const input of programPassReads(kind)) need(input, unclipped(input));
+      } else if (["lensDistortion", "glow", "bloom", "radialBlur", "chromaticAberration"].includes(filter ?? "")) {
         const input = positiveId(kind.input, "kernel input");
         need(input, unclipped(input));
       } else if (["blur", "dropShadow", "noiseDisplacement", "velocityBlur"].includes(filter ?? "")) {
@@ -6274,9 +6309,11 @@ function programPassReads(kind: Wire): number[] {
     case "applyClip":
     case "applyFilter":
     case "applyOpacity":
-    case "applyShader":
     case "applyTransform":
       return [positiveId(kind.input, "program input")];
+    case "applyShader":
+      return [positiveId(kind.input, "program input"), ...(kind.backdrops === undefined ? [] : array(kind.backdrops, "shader backdrops"))
+        .map((backdrop) => positiveId(backdrop, "program shader backdrop"))];
     default:
       return fail("program_schedule", `unknown program pass kind '${String(kind.kind)}'`);
   }

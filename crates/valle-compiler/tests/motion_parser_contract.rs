@@ -418,6 +418,10 @@ fn shader_layer_code_declares_its_uniforms_and_inputs() {
     let edited = |from: &str, to: &str| shader_code_scene(&[&SHADER_CODE_LAYER.replace(from, to)]);
     for (source, expected) in [
         (
+            edited(r#""asset://field""#, r#"{ src: "input://backdrop" }"#),
+            "reads the backdrop, which takes no options",
+        ),
+        (
             shader_code_scene(&[&format!(r#"{SHADER_CODE_LAYER} source="asset://field""#)]),
             "either source=",
         ),
@@ -486,6 +490,43 @@ fn shader_layer_code_declares_its_uniforms_and_inputs() {
             .any(|message| message.contains("outset is for ShaderLayer code")),
         "{messages:#?}"
     );
+}
+
+#[test]
+fn shader_layer_code_reads_the_backdrop_in_place() {
+    use valle_motion::shader::{InputKind, InputSampling, InputWrap};
+
+    let layer = SHADER_CODE_LAYER.replace(r#""asset://field""#, r#""input://backdrop""#);
+    let compiled = compile_shader_code(&shader_code_scene(&[&layer]))
+        .unwrap_or_else(|messages| panic!("{messages:#?}"));
+    let artifact = &compiled.artifact;
+    artifact.validate().unwrap();
+    let input = &artifact.shaders[0].manifest.inputs[0];
+    assert_eq!(
+        (input.name.as_str(), input.kind, input.sampling, input.wrap),
+        (
+            "field",
+            InputKind::Backdrop,
+            InputSampling::Linear,
+            InputWrap::Clamp
+        )
+    );
+    let inputs = artifact
+        .nodes
+        .iter()
+        .find_map(|node| match &node.kind {
+            valle_motion::NodeKind::ShaderLayer { inputs, .. } => Some(inputs),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(inputs[0].source.as_deref(), Some("input://backdrop"));
+    let mut tampered = artifact.clone();
+    for node in &mut tampered.nodes {
+        if let valle_motion::NodeKind::ShaderLayer { inputs, .. } = &mut node.kind {
+            inputs[0].source = Some("asset://field".into());
+        }
+    }
+    assert!(tampered.validate().is_err());
 }
 
 #[test]

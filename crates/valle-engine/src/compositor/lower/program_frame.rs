@@ -745,13 +745,13 @@ fn bind_program(
         resolve_destination_rois(program, bounds_reason, transform, root, bindings)?;
 
     // Shader UVs, lens distortion and the pyramid, radial and chromatic kernels can address
-    // pixels outside the output ROI, so their inputs keep their complete projection instead of
-    // being clipped to the viewport. A blur, drop shadow, displacement or velocity blur reads
-    // its input up to its footprint away from the pixels it writes, including pixels beyond the
-    // root, so the pixels it writes inside the root never depend on whether an ancestor reads
-    // it beyond the root. A predecessor needs only what can reach those pixels: a clip passes
-    // on its own region, and composites pass on what their output needs. Other samplers keep
-    // their whole input.
+    // pixels outside the output ROI, so their inputs, and a shader's backdrops, keep their
+    // complete projection instead of being clipped to the viewport. A blur, drop shadow,
+    // displacement or velocity blur reads its input up to its footprint away from the pixels it
+    // writes, including pixels beyond the root, so the pixels it writes inside the root never
+    // depend on whether an ancestor reads it beyond the root. A predecessor needs only what can
+    // reach those pixels: a clip passes on its own region, and composites pass on what their
+    // output needs. Other samplers keep their whole input.
     // The final program output and external destination reads keep their output ROI.
     let unclipped = |resource: ProgramResourceId| {
         let resource = program
@@ -775,8 +775,14 @@ fn bind_program(
         let output = pass.kind.output();
         let needed = beyond_root.get(&output).copied();
         match &pass.kind {
-            ProgramPassKind::ApplyShader { input, .. }
-            | ProgramPassKind::ApplyFilter {
+            ProgramPassKind::ApplyShader {
+                input, backdrops, ..
+            } => {
+                for input in std::iter::once(input).chain(backdrops) {
+                    need(&mut beyond_root, path, *input, unclipped(*input)?)?;
+                }
+            }
+            ProgramPassKind::ApplyFilter {
                 input,
                 filter:
                     valle_draw::program::Filter::LensDistortion { .. }

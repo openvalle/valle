@@ -1122,6 +1122,8 @@ enum ProgramPassStructure {
     ApplyShader {
         node: u32,
         input: u32,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        backdrops: Vec<u32>,
         output: u32,
     },
     ApplyTransform {
@@ -1272,11 +1274,13 @@ impl From<&super::ProgramPass> for ProgramPassStructure {
             Kind::ApplyShader {
                 node,
                 input,
+                backdrops,
                 output,
                 ..
             } => Self::ApplyShader {
                 node: node.raw(),
                 input: input.get(),
+                backdrops: backdrops.iter().map(|backdrop| backdrop.get()).collect(),
                 output: output.get(),
             },
             Kind::ApplyTransform {

@@ -6,8 +6,8 @@ use valle_draw::{
     Rect,
     program::{
         BackdropScope, BlendMode, Clip, DrawProgram, FILTER_GAUSSIAN_SUPPORT_SIGMAS, Filter, Group,
-        MaskMode, MotionGlassForegroundProgram, MotionGlassProgram, Node, NodeId, ShaderLayer,
-        Transform2d,
+        MaskMode, MotionGlassForegroundProgram, MotionGlassProgram, Node, NodeId,
+        SHADER_BACKDROP_FOOTPRINT, ShaderLayer, ShaderTextureSource, Transform2d,
     },
     requirements::{DestinationOperation, Insets, LocalBounds, SamplingMode},
 };
@@ -298,6 +298,9 @@ pub enum ProgramPassKind {
     ApplyShader {
         node: NodeId,
         input: ProgramResourceId,
+        /// The destination each backdrop input reads, in binding order.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        backdrops: Vec<ProgramResourceId>,
         output: ProgramResourceId,
         shader: ShaderLayer,
     },
@@ -328,8 +331,12 @@ impl ProgramPassKind {
             | Self::ApplyClip { input, .. }
             | Self::ApplyFilter { input, .. }
             | Self::ApplyOpacity { input, .. }
-            | Self::ApplyShader { input, .. }
             | Self::ApplyTransform { input, .. } => vec![*input],
+            Self::ApplyShader {
+                input, backdrops, ..
+            } => std::iter::once(*input)
+                .chain(backdrops.iter().copied())
+                .collect(),
             Self::SourceOver {
                 source,
                 destination,
@@ -382,6 +389,17 @@ struct Compiler<'a> {
     next_destination: usize,
     raster_subtrees: Vec<Option<bool>>,
     raster_layer_depths: Vec<usize>,
+    /// The groups around the node being lowered, innermost last, where a backdrop read from
+    /// inside may begin; `None` for a mask source or a transition input, which none crosses.
+    enclosing: Vec<Option<GroupEntry>>,
+}
+
+/// The destination at a group's entry: what its parent drew before it, over the external
+/// destination when that reaches the group.
+#[derive(Clone)]
+struct GroupEntry {
+    prefix: Vec<ProgramResourceId>,
+    external: bool,
 }
 
 impl<'a> Compiler<'a> {
@@ -393,6 +411,7 @@ impl<'a> Compiler<'a> {
             next_destination: 0,
             raster_subtrees: vec![None; program.nodes().len()],
             raster_layer_depths: vec![0; program.nodes().len()],
+            enclosing: Vec::new(),
         }
     }
 
@@ -720,7 +739,43 @@ impl<'a> Compiler<'a> {
             output = self.source_over(source, output, format!("{node_path}.backdrop.composite"))?;
         }
 
+        // A shader's backdrop is what lies under it where its group, or an enclosing one, begins.
+        let mut backdrops = Vec::new();
+        if let Some(shader) = &group.shader
+            && group_is_visible
+        {
+            let entry = GroupEntry {
+                prefix: parent_prefix.to_vec(),
+                external: entry_is_external,
+            };
+            for (index, binding) in shader.textures.iter().enumerate() {
+                let Some(ShaderTextureSource::Backdrop { through }) = binding.source else {
+                    continue;
+                };
+                let path = format!("{node_path}.shader.backdrops[{index}]");
+                let GroupEntry { prefix, external } =
+                    self.backdrop_entry(&entry, through, &path)?;
+                let output_bounds = shader.output_bounds();
+                backdrops.push(self.read_destination(
+                    id,
+                    ProgramDestinationKind::Backdrop,
+                    BackdropScope::Current,
+                    DestinationOperation::Backdrop {
+                        footprint: SHADER_BACKDROP_FOOTPRINT,
+                        sampling: SamplingMode::LinearClamp,
+                    },
+                    output_bounds,
+                    LocalBounds::from_rect(outset(output_bounds, SHADER_BACKDROP_FOOTPRINT)),
+                    local_to_program,
+                    external,
+                    prefix,
+                    path,
+                )?);
+            }
+        }
+
         if let Some(transition) = &group.transition {
+            self.enclosing.push(None);
             let from = self.node(
                 group.children[0],
                 &[],
@@ -735,6 +790,7 @@ impl<'a> Compiler<'a> {
                 local_to_program,
                 child_glass_owner_to_program,
             )?;
+            self.enclosing.pop();
             let transitioned =
                 self.resource(LocalBounds::from_rect(transition.bounds), local_to_program)?;
             self.pass(
@@ -753,6 +809,10 @@ impl<'a> Compiler<'a> {
                 format!("{node_path}.transition.composite"),
             )?;
         } else {
+            self.enclosing.push(Some(GroupEntry {
+                prefix: parent_prefix.to_vec(),
+                external: entry_is_external,
+            }));
             output = self.compose_nodes(
                 &group.children,
                 output,
@@ -762,6 +822,7 @@ impl<'a> Compiler<'a> {
                 child_glass_owner_to_program,
                 &format!("{node_path}.children"),
             )?;
+            self.enclosing.pop();
         }
 
         if let Some(foreground) = group.glass_foreground.as_deref() {
@@ -841,6 +902,7 @@ impl<'a> Compiler<'a> {
         }
 
         if let Some(mask) = &group.mask {
+            self.enclosing.push(None);
             let mask_source = self.node(
                 mask.source,
                 &[],
@@ -848,6 +910,7 @@ impl<'a> Compiler<'a> {
                 local_to_program,
                 child_glass_owner_to_program,
             )?;
+            self.enclosing.pop();
             let masked = self.resource(
                 if mask.mode.is_inverted() {
                     self.bounds(output)
@@ -896,6 +959,7 @@ impl<'a> Compiler<'a> {
                 ProgramPassKind::ApplyShader {
                     node: id,
                     input: output,
+                    backdrops,
                     output: shaded,
                     shader: shader.clone(),
                 },
@@ -959,6 +1023,28 @@ impl<'a> Compiler<'a> {
             );
         }
         Ok(output)
+    }
+
+    /// Where a backdrop read `through` groups above the one entered at `own` begins. The
+    /// validator has checked that each group it crosses holds the next among its children.
+    fn backdrop_entry(
+        &self,
+        own: &GroupEntry,
+        through: u32,
+        path: &str,
+    ) -> Result<GroupEntry, ProgramPlanError> {
+        let Some(crossed) = usize::try_from(through)
+            .ok()
+            .and_then(|through| self.enclosing.len().checked_sub(through))
+            .map(|start| &self.enclosing[start..])
+            .filter(|crossed| crossed.iter().all(Option::is_some))
+        else {
+            return self.invalid(path, "backdrop read crosses a group it cannot");
+        };
+        Ok(match crossed.first() {
+            Some(Some(entry)) => entry.clone(),
+            _ => own.clone(),
+        })
     }
 
     #[allow(clippy::too_many_arguments)]
