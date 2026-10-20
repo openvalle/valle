@@ -278,47 +278,15 @@ impl<'s> Compiler<'s> {
                 }
                 continue;
             }
-            if property_name == "transform-style" {
-                let value = self.eval_static(&property.value);
-                if !matches!(value, Some(serde_json::Value::String(ref value)) if value == "preserve-3d")
+            if matches!(
+                property_name.as_str(),
+                "transform-style" | "backface-visibility"
+            ) {
+                if let Some(binding) =
+                    self.lower_css_3d_keyword_style(&property_name, &property.value)
                 {
-                    self.illegal(
-                        DiagCode::GrammarForbidden,
-                        property.span(),
-                        "transformStyle must be the static string `preserve-3d`",
-                    );
-                    continue;
+                    styles.push(binding);
                 }
-                self.extra_capabilities
-                    .insert(CSS_3D_TRANSFORM_CAPABILITY.to_owned());
-                styles.push(StyleBinding {
-                    property: property_name,
-                    value: StyleValue::Static {
-                        value: MotionValue::Enum("preserve-3d".into()),
-                    },
-                });
-                continue;
-            }
-            if property_name == "backface-visibility" {
-                let value = self.eval_static(&property.value);
-                let Some(value @ ("hidden" | "visible")) =
-                    value.as_ref().and_then(|value| value.as_str())
-                else {
-                    self.illegal(
-                        DiagCode::GrammarForbidden,
-                        property.span(),
-                        "backfaceVisibility must be the static string `hidden` or `visible`",
-                    );
-                    continue;
-                };
-                self.extra_capabilities
-                    .insert(CSS_3D_TRANSFORM_CAPABILITY.to_owned());
-                styles.push(StyleBinding {
-                    property: property_name,
-                    value: StyleValue::Static {
-                        value: MotionValue::Enum(value.into()),
-                    },
-                });
                 continue;
             }
             if matches!(property_name.as_str(), "filter" | "backdrop-filter") {

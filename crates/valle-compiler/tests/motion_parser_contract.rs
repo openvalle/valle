@@ -15,6 +15,10 @@ fn ordered_css_3d_transforms_accept_static_and_typed_template_arguments() {
         "'rotateY(0.5rad) rotateZ(0.25turn) rotate(30deg) scale(2) scale(1,2) scaleX(1) scaleY(2) scaleZ(3)'",
         "`translate3d(${ctx.progress}px,${ctx.progress}%,${ctx.progress}px) scale3d(${ctx.progress},2,3) rotate3d(1,0,0,${ctx.progress}turn)`",
         "`rotateX(${ctx.progress}rad) rotateY(${ctx.progress}deg) scale(${ctx.progress},2) translate(${ctx.progress}%,0)`",
+        "'perspective(400px) rotateY(30deg) skew(10deg, 5deg) skewX(1deg) skewY(2deg) matrix(1,0,0,1,4,5)'",
+        "'matrix3d(1,0,0,0,0,1,0,0,0,0,1,0,10,20,0,1)'",
+        "'perspective(none) rotateX(10deg)'",
+        "`perspective(${200 + ctx.progress * 100}px) rotateX(20deg) skew(${ctx.progress}deg, 0deg) matrix3d(1,0,0,0,0,1,0,0,0,0,1,0,${ctx.progress},0,0,1)`",
     ] {
         let compiled = compile_motion(&scene(&format!("transform:{transform}")))
             .unwrap_or_else(|diagnostics| panic!("{transform}: {diagnostics:#?}"));
@@ -22,6 +26,17 @@ fn ordered_css_3d_transforms_accept_static_and_typed_template_arguments() {
         let wire = serde_json::to_string(&compiled.artifact).unwrap();
         assert!(wire.contains("motion-transform-3d"), "{transform}");
         assert_eq!(compiled.artifact.component, "Contract");
+    }
+    for style in [
+        "transformStyle:'flat'",
+        "transformStyle:ctx.progress<0.5?'flat':'preserve-3d'",
+        "backfaceVisibility:ctx.progress<0.5?'hidden':'visible'",
+    ] {
+        compile_motion(&scene(style))
+            .unwrap_or_else(|diagnostics| panic!("{style}: {diagnostics:#?}"))
+            .artifact
+            .validate()
+            .unwrap();
     }
     for origin in [
         "'left top'",
@@ -64,6 +79,16 @@ fn malformed_css_3d_arguments_produce_diagnostics_instead_of_partial_transforms(
         "transform:`rotateX(2${ctx.progress}deg)`",
         "transform:`rotateX(20deg) translateX(2${ctx.progress}px)`",
         "transform:'rotateX(20deg) scaleX(Infinity)'",
+        "transform:'matrix3d(1,2,3)'",
+        "transform:'rotateX(20deg) matrix(1,0,0,1)'",
+        "transform:'perspective(-10px) rotateX(1deg)'",
+        "transform:'perspective(10em) rotateX(1deg)'",
+        "transform:'rotateX(20deg) skew(1deg,2deg,3deg)'",
+        "transform:'rotateX(20deg) skewX(1px)'",
+        "transform:`perspective(${ctx.progress}) rotateX(1deg)`",
+        "transformStyle:'none'",
+        "transformStyle:ctx.progress",
+        "backfaceVisibility:ctx.progress<0.5?'hidden':'nope'",
     ] {
         let diagnostics = compile_motion(&scene(style)).expect_err(style);
         assert!(!diagnostics.is_empty(), "{style}");

@@ -3175,6 +3175,17 @@ enum Css3dOp {
     ScaleX(f64),
     ScaleY(f64),
     ScaleZ(f64),
+    /// `skew(x, y)` in degrees.
+    Skew {
+        x: f64,
+        y: f64,
+    },
+    /// `matrix(a, b, c, d, e, f)`.
+    Matrix([f64; 6]),
+    /// `matrix3d(…)` in CSS's column-major order.
+    Matrix3d([f64; 16]),
+    /// `perspective(d)` in px.
+    Perspective(f64),
 }
 
 #[derive(Debug, Default)]
@@ -3292,7 +3303,9 @@ impl Matrix4 {
         let ty = m[4] * x + m[5] * y + m[6] * z + m[7];
         let tz = m[8] * x + m[9] * y + m[10] * z + m[11];
         let w = m[12] * x + m[13] * y + m[14] * z + m[15];
-        if !tx.is_finite() || !ty.is_finite() || !tz.is_finite() || !w.is_finite() || w == 0.0 {
+        // Only `perspective()` and `matrix3d()` move w from 1; a point at or behind their camera
+        // has none.
+        if !tx.is_finite() || !ty.is_finite() || !tz.is_finite() || !w.is_finite() || w <= 0.0 {
             return None;
         }
         Some([tx / w, ty / w, tz / w])
@@ -3306,12 +3319,45 @@ fn css_3d_style(
 ) -> Result<Css3dStyle, LayoutError> {
     let mut out = Css3dStyle::default();
     let mut rotate_axis = [None, None, None];
+    let mut skew_x = None;
+    let mut matrix = Vec::new();
+    let mut matrix3d = Vec::new();
+    let out_of_order = |function: &str| LayoutError::BadStyle {
+        node: node.key.clone(),
+        declarations: function.into(),
+        reason: format!("{function} components must be complete and in order"),
+    };
     for binding in &node.styles {
         let value = match &binding.value {
             StyleValue::Static { value } => value,
             StyleValue::Expr { expr } => value(values, *expr, at)?,
         };
         let scalar = |property: &str| layer_scalar(value, &node.key, property);
+        if let Some((function, index)) = binding
+            .property
+            .strip_prefix("motion-transform-3d-")
+            .and_then(|suffix| suffix.rsplit_once('-'))
+            .filter(|(function, _)| matches!(*function, "matrix" | "matrix3d"))
+        {
+            let (parts, count) = if function == "matrix" {
+                (&mut matrix, 6)
+            } else {
+                (&mut matrix3d, 16)
+            };
+            if index.parse::<usize>().ok() != Some(parts.len()) {
+                return Err(out_of_order(function));
+            }
+            parts.push(scalar(function)?);
+            if parts.len() == count {
+                out.ops.push(if count == 6 {
+                    Css3dOp::Matrix(parts[..].try_into().expect("six components"))
+                } else {
+                    Css3dOp::Matrix3d(parts[..].try_into().expect("sixteen components"))
+                });
+                parts.clear();
+            }
+            continue;
+        }
         match binding.property.as_str() {
             "motion-transform-3d-translate-x" => {
                 out.ops.push(Css3dOp::TranslateX(scalar("translateX")?))
@@ -3362,12 +3408,32 @@ fn css_3d_style(
             "motion-transform-3d-scale-x" => out.ops.push(Css3dOp::ScaleX(scalar("scaleX")?)),
             "motion-transform-3d-scale-y" => out.ops.push(Css3dOp::ScaleY(scalar("scaleY")?)),
             "motion-transform-3d-scale-z" => out.ops.push(Css3dOp::ScaleZ(scalar("scaleZ")?)),
+            "motion-transform-3d-skew-x" => skew_x = Some(scalar("skew")?),
+            "motion-transform-3d-skew-y" => {
+                let x = skew_x.take().ok_or_else(|| out_of_order("skew"))?;
+                out.ops.push(Css3dOp::Skew {
+                    x,
+                    y: scalar("skew")?,
+                });
+            }
+            "motion-transform-3d-perspective" => {
+                let depth = scalar("perspective()")?;
+                if depth < 0.0 {
+                    return Err(LayoutError::BadStyle {
+                        node: node.key.clone(),
+                        declarations: "perspective()".into(),
+                        reason: "perspective() depth must not be negative".into(),
+                    });
+                }
+                out.ops.push(Css3dOp::Perspective(depth));
+            }
             "transform-style" => {
                 out.preserve_3d =
-                    matches!(value, MotionValue::Enum(value) if value == "preserve-3d")
+                    css_3d_keyword(node, value, "transformStyle", ["flat", "preserve-3d"])?
             }
             "backface-visibility" => {
-                out.backface_hidden = matches!(value, MotionValue::Enum(value) if value == "hidden")
+                out.backface_hidden =
+                    css_3d_keyword(node, value, "backfaceVisibility", ["visible", "hidden"])?
             }
             "perspective" => out.perspective = Some(layer_perspective(value, &node.key)?),
             "motion-perspective-origin-x" => {
@@ -3399,7 +3465,40 @@ fn css_3d_style(
             _ => {}
         }
     }
+    if skew_x.is_some() {
+        return Err(out_of_order("skew"));
+    }
+    if !matrix.is_empty() {
+        return Err(out_of_order("matrix"));
+    }
+    if !matrix3d.is_empty() {
+        return Err(out_of_order("matrix3d"));
+    }
     Ok(out)
+}
+
+/// Whether a two-keyword 3D style holds its second keyword. A value chosen per frame is checked
+/// here, so a wrong one fails the frame that draws it.
+fn css_3d_keyword(
+    node: &valle_motion::SceneNode,
+    value: &MotionValue,
+    property: &str,
+    [initial, other]: [&str; 2],
+) -> Result<bool, LayoutError> {
+    match value {
+        MotionValue::Str(text) | MotionValue::Enum(text) if text == initial => Ok(false),
+        MotionValue::Str(text) | MotionValue::Enum(text) if text == other => Ok(true),
+        value => Err(LayoutError::BadStyle {
+            node: node.key.clone(),
+            declarations: property.into(),
+            reason: match value {
+                MotionValue::Str(text) | MotionValue::Enum(text) => {
+                    format!("{property} takes `{initial}` or `{other}`, not `{text}`")
+                }
+                _ => format!("{property} takes `{initial}` or `{other}`"),
+            },
+        }),
+    }
 }
 
 fn css_3d_local_matrix(
@@ -3426,6 +3525,40 @@ fn css_3d_local_matrix(
             Css3dOp::ScaleX(value) => Matrix4::scale(value, 1.0, 1.0),
             Css3dOp::ScaleY(value) => Matrix4::scale(1.0, value, 1.0),
             Css3dOp::ScaleZ(value) => Matrix4::scale(1.0, 1.0, value),
+            Css3dOp::Skew { x, y } => {
+                let (x, y) = (
+                    valle_draw::math::tan(x.to_radians()),
+                    valle_draw::math::tan(y.to_radians()),
+                );
+                Matrix4([
+                    1.0, x, 0.0, 0.0, //
+                    y, 1.0, 0.0, 0.0, //
+                    0.0, 0.0, 1.0, 0.0, //
+                    0.0, 0.0, 0.0, 1.0,
+                ])
+            }
+            Css3dOp::Matrix([a, b, c, d, e, f]) => Matrix4([
+                a, c, 0.0, e, //
+                b, d, 0.0, f, //
+                0.0, 0.0, 1.0, 0.0, //
+                0.0, 0.0, 0.0, 1.0,
+            ]),
+            Css3dOp::Matrix3d(m) => Matrix4([
+                m[0], m[4], m[8], m[12], //
+                m[1], m[5], m[9], m[13], //
+                m[2], m[6], m[10], m[14], //
+                m[3], m[7], m[11], m[15],
+            ]),
+            Css3dOp::Perspective(depth) => {
+                // CSS treats a depth below 1px as 1px.
+                let w = -1.0 / depth.max(1.0);
+                Matrix4([
+                    1.0, 0.0, 0.0, 0.0, //
+                    0.0, 1.0, 0.0, 0.0, //
+                    0.0, 0.0, 1.0, 0.0, //
+                    0.0, 0.0, w, 1.0,
+                ])
+            }
         };
         // CSS transform functions compose in authored order; with column vectors the
         // right-most function acts first, so the authored list multiplies left-to-right.
@@ -3655,7 +3788,9 @@ fn resolve_css_3d_node(
             .ok_or_else(|| LayoutError::BadStyle {
                 node: node.key.clone(),
                 declarations: "transform".into(),
-                reason: "CSS 3D transform produced a non-finite plane".into(),
+                reason: "CSS 3D transform produced a non-finite plane, or one at or behind a \
+                         perspective() camera"
+                    .into(),
             })?;
         let mut quad = [valle_draw::Point::default(); 4];
         for (index, point) in transformed.iter().enumerate() {

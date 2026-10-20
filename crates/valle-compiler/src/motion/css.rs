@@ -50,6 +50,12 @@ pub(super) fn parse_ordered_transform(source: &str) -> Option<Vec<(String, Strin
                 | "scaleY"
                 | "scaleZ"
                 | "scale3d"
+                | "skew"
+                | "skewX"
+                | "skewY"
+                | "matrix"
+                | "matrix3d"
+                | "perspective"
         ) || bytes.get(at) != Some(&b'(')
         {
             return None;

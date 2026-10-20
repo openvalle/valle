@@ -182,6 +182,84 @@ impl<'s> Compiler<'s> {
         }])
     }
 
+    /// `transformStyle` and `backfaceVisibility` take their two CSS keywords, fixed or chosen per
+    /// frame. Literal keywords are checked here, other values when the frame is drawn.
+    pub(super) fn lower_css_3d_keyword_style(
+        &mut self,
+        property: &str,
+        expression: &'s Expression<'s>,
+    ) -> Option<StyleBinding> {
+        let (name, keywords) = if property == "transform-style" {
+            ("transformStyle", ["flat", "preserve-3d"])
+        } else {
+            ("backfaceVisibility", ["visible", "hidden"])
+        };
+        let expected = format!("style.{name} takes `{}` or `{}`", keywords[0], keywords[1]);
+        let value = if let Some(serde_json::Value::String(text)) = self.eval_static(expression) {
+            if !keywords.contains(&text.as_str()) {
+                self.illegal(
+                    DiagCode::GrammarForbidden,
+                    expression.span(),
+                    format!("{expected}, not `{text}`"),
+                );
+                return None;
+            }
+            // `flat` is the initial value and asks for nothing.
+            if text == "flat" {
+                return None;
+            }
+            StyleValue::Static {
+                value: MotionValue::Enum(text),
+            }
+        } else {
+            let expr = self.lower_css_value_expression(expression)?;
+            let mut pending = vec![expr];
+            let mut unknown = None;
+            while let Some(id) = pending.pop() {
+                match &self.expr_arena.values[id.0 as usize] {
+                    Expr::Select {
+                        when_true,
+                        when_false,
+                        ..
+                    } => pending.extend([*when_true, *when_false]),
+                    Expr::Const {
+                        value: MotionValue::Str(text) | MotionValue::Enum(text),
+                    } if !keywords.contains(&text.as_str()) => {
+                        unknown = Some((self.expr_arena.spans[id.0 as usize], text.clone()));
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+            if let Some((span, text)) = unknown {
+                self.illegal(
+                    DiagCode::GrammarForbidden,
+                    span,
+                    format!("{expected}, not `{text}`"),
+                );
+                return None;
+            }
+            if !matches!(
+                self.expr_arena.types[expr.0 as usize],
+                Some(valle_motion::expr::ExprType::String | valle_motion::expr::ExprType::Enum)
+            ) {
+                self.illegal(
+                    DiagCode::GrammarForbidden,
+                    expression.span(),
+                    format!("{expected} as a string"),
+                );
+                return None;
+            }
+            StyleValue::Expr { expr }
+        };
+        self.extra_capabilities
+            .insert(CSS_3D_TRANSFORM_CAPABILITY.to_owned());
+        Some(StyleBinding {
+            property: property.into(),
+            value,
+        })
+    }
+
     pub(super) fn lower_css_3d_transform_parts(
         &mut self,
         span: Span,
@@ -334,6 +412,100 @@ impl<'s> Compiler<'s> {
                         value,
                     });
                 }
+                continue;
+            }
+            if matches!(name.as_str(), "skew" | "skewX" | "skewY") {
+                let arguments = argument.split(',').map(str::trim).collect::<Vec<_>>();
+                let counts = if name == "skew" { 1..=2 } else { 1..=1 };
+                if !counts.contains(&arguments.len())
+                    || arguments.iter().any(|value| value.is_empty())
+                {
+                    self.illegal(
+                        DiagCode::GrammarForbidden,
+                        span,
+                        if name == "skew" {
+                            "skew requires one angle or exactly two comma-separated angles".into()
+                        } else {
+                            format!("{name} requires one angle")
+                        },
+                    );
+                    return None;
+                }
+                // One function, so `skew(a, b)` is not `skewX(a) skewY(b)`.
+                let (x, y) = match name.as_str() {
+                    "skew" => (arguments[0], arguments.get(1).copied().unwrap_or("0deg")),
+                    "skewX" => (arguments[0], "0deg"),
+                    _ => ("0deg", arguments[0]),
+                };
+                for (axis, argument) in [("x", x), ("y", y)] {
+                    let value = self.lower_css_3d_argument(
+                        span,
+                        &name,
+                        argument,
+                        holes,
+                        Css3dArgument::Angle,
+                    )?;
+                    bindings.push(StyleBinding {
+                        property: format!("motion-transform-3d-skew-{axis}"),
+                        value,
+                    });
+                }
+                continue;
+            }
+            if matches!(name.as_str(), "matrix" | "matrix3d") {
+                let (count, words) = if name == "matrix" {
+                    (6, "six")
+                } else {
+                    (16, "sixteen")
+                };
+                let Some(arguments) = split_transform_arguments(&argument, count) else {
+                    self.illegal(
+                        DiagCode::GrammarForbidden,
+                        span,
+                        format!("transform function {name} requires exactly {words} comma-separated numbers"),
+                    );
+                    return None;
+                };
+                for (index, argument) in arguments.into_iter().enumerate() {
+                    let value = self.lower_css_3d_argument(
+                        span,
+                        &name,
+                        argument,
+                        holes,
+                        Css3dArgument::Number,
+                    )?;
+                    bindings.push(StyleBinding {
+                        property: format!("motion-transform-3d-{name}-{index}"),
+                        value,
+                    });
+                }
+                continue;
+            }
+            if name == "perspective" {
+                // `perspective(none)` is the identity.
+                if argument == "none" {
+                    continue;
+                }
+                let value = self.lower_css_3d_argument(
+                    span,
+                    "perspective()",
+                    &argument,
+                    holes,
+                    Css3dArgument::Length,
+                )?;
+                if matches!(value, StyleValue::Static { value: MotionValue::Number(depth) } if depth < 0.0)
+                {
+                    self.illegal(
+                        DiagCode::GrammarForbidden,
+                        span,
+                        "perspective() requires a non-negative px length or `none`",
+                    );
+                    return None;
+                }
+                bindings.push(StyleBinding {
+                    property: "motion-transform-3d-perspective".into(),
+                    value,
+                });
                 continue;
             }
             if matches!(name.as_str(), "translateX" | "translateY" | "translateZ") {
@@ -575,5 +747,7 @@ fn is_css_3d_function(name: &str) -> bool {
             | "rotate3d"
             | "scaleZ"
             | "scale3d"
+            | "matrix3d"
+            | "perspective"
     )
 }

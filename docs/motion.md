@@ -1029,7 +1029,7 @@ extending/remapping the gradient rather than clamping its stops remains unimplem
 | `transformOrigin` | `"50% 50%"`, `point(x,y)`; defaults to center |
 | `transform` | Ordered 2D translate/rotate/scale/skew/matrix list, closed templates and finite branches; admitted 3D forms use the projection adapter |
 | `perspective`, `perspectiveOrigin` | Positive perspective distance and static/dynamic supported origin components |
-| `transformStyle`, `backfaceVisibility` | Explicit `transformStyle` must be static `"preserve-3d"`; backface visibility is static `"visible"` / `"hidden"` |
+| `transformStyle`, `backfaceVisibility` | `"flat"` / `"preserve-3d"` and `"visible"` / `"hidden"`, fixed or chosen per frame |
 
 For animated 2D translation, use `translate: point(x,y)` or the CSS list
 `` transform: `translate(${x}px, ${y}px)` ``. Transform functions use CSS comma
@@ -1083,11 +1083,12 @@ across branches. The final values are evaluated from
 the requested frame's layout, without using previously rendered frames.
 
 The separate CSS 3D adapter supports ordered `translateZ`, `translate3d`,
-`rotateX/Y/Z`, `rotate3d`, `scaleZ`, `scale3d` and its admitted translate/rotate/scale
-2D functions. A mixed 3D list does not yet accept skew/matrix or nested length math.
-Use the separate `perspective` style rather than a `perspective()` transform function.
-`matrix3d` remains unsupported. A 2D list's support does not establish full CSS 3D
-flattening or composition semantics.
+`rotateX/Y/Z`, `rotate3d`, `scaleZ`, `scale3d`, `perspective()` and `matrix3d()`,
+mixed with the 2D `translate`, `rotate`, `scale`, `skew` and `matrix` functions. As in
+CSS, `perspective()` below 1px is 1px and `perspective(none)` is the identity. A plane
+that reaches a `perspective()` or `perspective` camera fails the frame instead of
+being clipped. A mixed 3D list does not accept nested length math. A 2D list's
+support does not establish full CSS 3D flattening or composition semantics.
 Native raster currently rejects spatial blur/drop-shadow combinations whose final
 affine transform produces a non-axis-aligned Gaussian covariance (for example,
 skew plus blur). This is an explicit backend limitation, even when layout and

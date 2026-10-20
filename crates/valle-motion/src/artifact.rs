@@ -5337,28 +5337,25 @@ impl SceneArtifact {
                         ),
                     ));
                 }
+                // A value chosen per frame is checked when the frame is drawn.
                 if style.property == "transform-style"
-                    && !matches!(
-                        &style.value,
-                        StyleValue::Static { value: MotionValue::Enum(value) }
-                            if value == "preserve-3d"
-                    )
+                    && let StyleValue::Static { value } = &style.value
+                    && !matches!(value, MotionValue::Enum(value)
+                        if matches!(value.as_str(), "flat" | "preserve-3d"))
                 {
                     errors.push(ValidationError::new(
                         format!("{path}/styles/{style_index}/value"),
-                        "transformStyle must be the static enum `preserve-3d`",
+                        "transformStyle must be the enum `flat` or `preserve-3d`",
                     ));
                 }
                 if style.property == "backface-visibility"
-                    && !matches!(
-                        &style.value,
-                        StyleValue::Static { value: MotionValue::Enum(value) }
-                            if matches!(value.as_str(), "hidden" | "visible")
-                    )
+                    && let StyleValue::Static { value } = &style.value
+                    && !matches!(value, MotionValue::Enum(value)
+                        if matches!(value.as_str(), "hidden" | "visible"))
                 {
                     errors.push(ValidationError::new(
                         format!("{path}/styles/{style_index}/value"),
-                        "backfaceVisibility must be the static enum `hidden` or `visible`",
+                        "backfaceVisibility must be the enum `hidden` or `visible`",
                     ));
                 }
                 if matches!(

@@ -181,6 +181,167 @@ fn conditional_3d_styles_and_rotation_seek_without_history() {
 }
 
 #[test]
+fn css_3d_lists_draw_the_matrices_css_defines_for_perspective_matrix3d_skew_and_matrix() {
+    let tan = |degrees: f64| valle_draw::math::tan(degrees.to_radians());
+    let list = |value: &str| css_3d_scene("", &format!("transform:'{value}'"));
+    for (functions, matrices) in [
+        (
+            "rotateX(20deg) skew(20deg, 10deg)".to_owned(),
+            format!(
+                "rotateX(20deg) matrix(1, {}, {}, 1, 0, 0)",
+                tan(10.0),
+                tan(20.0)
+            ),
+        ),
+        (
+            "rotateX(20deg) skewX(20deg) skewY(10deg)".to_owned(),
+            format!(
+                "rotateX(20deg) matrix(1, 0, {}, 1, 0, 0) matrix(1, {}, 0, 1, 0, 0)",
+                tan(20.0),
+                tan(10.0)
+            ),
+        ),
+        (
+            "perspective(400px) rotateX(20deg)".to_owned(),
+            format!(
+                "matrix3d(1,0,0,0, 0,1,0,0, 0,0,1,{}, 0,0,0,1) rotateX(20deg)",
+                -1.0 / 400.0
+            ),
+        ),
+        (
+            "translate3d(12px, 8px, 30px) rotateX(20deg)".to_owned(),
+            "matrix3d(1,0,0,0, 0,1,0,0, 0,0,1,0, 12,8,30,1) rotateX(20deg)".to_owned(),
+        ),
+        // A depth below 1px is 1px, and `none` is the identity.
+        (
+            "perspective(0.5px) translateZ(-10px)".to_owned(),
+            "perspective(1px) translateZ(-10px)".to_owned(),
+        ),
+        (
+            "perspective(none) translateZ(-10px)".to_owned(),
+            "translateZ(-10px)".to_owned(),
+        ),
+    ] {
+        assert_eq!(
+            frames(&list(&functions), &[0])[0],
+            frames(&list(&matrices), &[0])[0],
+            "{functions}"
+        );
+    }
+    assert_ne!(
+        frames(&list("perspective(400px) rotateX(20deg)"), &[0])[0].1,
+        frames(&list("rotateX(20deg)"), &[0])[0].1,
+    );
+    assert_ne!(
+        frames(&list("rotateX(20deg) skew(20deg, 10deg)"), &[0])[0].1,
+        frames(&list("rotateX(20deg) skewX(20deg) skewY(10deg)"), &[0])[0].1,
+    );
+    let requested = [60, 0, 30];
+    let dynamic = css_3d_scene(
+        "",
+        "transform:`perspective(${400 + ctx.localFrame}px) rotateX(${ctx.localFrame}deg)`",
+    );
+    let actual = frames(&dynamic, &requested);
+    for (index, frame) in requested.into_iter().enumerate() {
+        assert_eq!(
+            actual[index],
+            frames(
+                &list(&format!(
+                    "perspective({}px) rotateX({frame}deg)",
+                    400 + frame
+                )),
+                &[0]
+            )[0],
+            "frame {frame}"
+        );
+    }
+}
+
+fn stage_scene(transform_style: &str, backface: &str) -> String {
+    format!(
+        r#"export default function Demo(){{ const ctx = useTime();return <Scene style={{{{width:320,height:180}}}}>
+        <View key='stage' style={{{{position:'absolute',left:60,top:20,width:200,height:140,
+            perspective:400,rotateY:50,transformStyle:{transform_style}}}}}>
+            <View key='card' style={{{{position:'absolute',left:50,top:20,width:100,height:100,
+                backgroundColor:'red',rotateY:50,backfaceVisibility:{backface}}}}}/>
+        </View>
+    </Scene>}}"#
+    )
+}
+
+#[test]
+fn transform_style_and_backface_visibility_can_change_per_frame() {
+    // Preserved, the card turns 100° in all and shows its back; flattened, it turns 50°.
+    let preserved_hidden = frames(&stage_scene("'preserve-3d'", "'hidden'"), &[0]).remove(0);
+    assert_ne!(
+        preserved_hidden.1,
+        frames(&stage_scene("'preserve-3d'", "'visible'"), &[0])[0].1
+    );
+    assert_ne!(
+        preserved_hidden.1,
+        frames(&stage_scene("'flat'", "'hidden'"), &[0])[0].1
+    );
+    let dynamic = stage_scene(
+        "ctx.localFrame<30?'preserve-3d':'flat'",
+        "ctx.localFrame<15||ctx.localFrame>=45?'hidden':'visible'",
+    );
+    let requested = [60, 0, 30, 15, 45, 0];
+    let actual = frames(&dynamic, &requested);
+    for (index, frame) in requested.into_iter().enumerate() {
+        let expected = stage_scene(
+            if frame < 30 {
+                "'preserve-3d'"
+            } else {
+                "'flat'"
+            },
+            if !(15..45).contains(&frame) {
+                "'hidden'"
+            } else {
+                "'visible'"
+            },
+        );
+        assert_eq!(actual[index], frames(&expected, &[0])[0], "frame {frame}");
+    }
+
+    // A keyword that only the frame knows is checked on the frame that draws it.
+    let mut artifact = compile_motion(&dynamic).unwrap().artifact;
+    for expr in &mut artifact.exprs {
+        if let valle_motion::Expr::Const {
+            value: valle_motion::MotionValue::Str(text),
+        } = expr
+            && text == "flat"
+        {
+            *text = "flatten".into();
+        }
+    }
+    artifact.validate().unwrap();
+    let prepared = prepare_scene(&artifact).unwrap();
+    let fonts = Fonts::default();
+    let props = resolve_props(&artifact.controls, &BTreeMap::new()).unwrap();
+    let build = |frame| {
+        build_tree(
+            &prepared,
+            &motion_context_at_frame(frame, 90, FrameRate::new(30, 1).unwrap()).unwrap(),
+            &props,
+            &LayoutOptions {
+                viewport: Viewport::new((320, 180)),
+                fonts: &fonts,
+                styles: None,
+            },
+        )
+    };
+    build(0).unwrap();
+    let error = build(30)
+        .err()
+        .expect("frame 30 draws `flatten`")
+        .to_string();
+    assert!(
+        error.contains("transformStyle takes `flat` or `preserve-3d`, not `flatten`"),
+        "{error}"
+    );
+}
+
+#[test]
 fn identity_and_none_have_distinct_containing_blocks_in_every_entry() {
     for position in ["fixed", "absolute"] {
         let identity = frames(&scene("", "rotate:'0deg'", position), &[0]).remove(0);

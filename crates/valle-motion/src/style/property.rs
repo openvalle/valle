@@ -544,24 +544,39 @@ pub fn property_spec(name: &str) -> PropertySpec<'_> {
         return spec;
     }
     if let Some(suffix) = name.strip_prefix("motion-transform-3d-") {
-        if matches!(
-            suffix,
-            "translate-x"
-                | "translate-y"
-                | "translate-z"
-                | "translate-x-percent"
-                | "translate-y-percent"
-                | "rotate-x"
-                | "rotate-y"
-                | "rotate-z"
-                | "rotate-axis-x"
-                | "rotate-axis-y"
-                | "rotate-axis-z"
-                | "rotate-axis-angle"
-                | "scale-x"
-                | "scale-y"
-                | "scale-z"
-        ) {
+        let matrix_component = suffix.rsplit_once('-').is_some_and(|(function, index)| {
+            let count = match function {
+                "matrix" => 6,
+                "matrix3d" => 16,
+                _ => 0,
+            };
+            index
+                .parse::<usize>()
+                .is_ok_and(|at| at < count && at.to_string() == index)
+        });
+        if matrix_component
+            || matches!(
+                suffix,
+                "translate-x"
+                    | "translate-y"
+                    | "translate-z"
+                    | "translate-x-percent"
+                    | "translate-y-percent"
+                    | "rotate-x"
+                    | "rotate-y"
+                    | "rotate-z"
+                    | "rotate-axis-x"
+                    | "rotate-axis-y"
+                    | "rotate-axis-z"
+                    | "rotate-axis-angle"
+                    | "scale-x"
+                    | "scale-y"
+                    | "scale-z"
+                    | "skew-x"
+                    | "skew-y"
+                    | "perspective"
+            )
+        {
             spec.lowering = Lowering::Motion;
             spec.impact = Impact::TRANSFORM;
             spec.geometry_reuse = Reuse::AcrossFrames;
@@ -652,7 +667,8 @@ pub fn property_spec(name: &str) -> PropertySpec<'_> {
                 match name {
                     "rotate-x" | "rotate-y" => &[T::Number, T::Angle],
                     "perspective" => &[T::Number, T::Length],
-                    _ => &[T::Enum],
+                    // A keyword, or a CSS string chosen per frame.
+                    _ => &[T::Enum, T::String],
                 },
                 false,
             )
