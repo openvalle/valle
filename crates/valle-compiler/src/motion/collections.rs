@@ -633,6 +633,8 @@ impl<'s> Compiler<'s> {
         let mut saw_fps = false;
         let mut preset: Option<(String, Span)> = None;
         let mut bare: Vec<(&'static str, f64, Span)> = Vec::new();
+        let mut duration: Option<(f64, Span)> = None;
+        let mut bounce: Option<(f64, Span)> = None;
         let mut initial_velocity = 0.0;
         let mut seen = BTreeSet::new();
         for property in &object.properties {
@@ -701,6 +703,37 @@ impl<'s> Compiler<'s> {
                     };
                     preset = Some((value, property.value.span()));
                 }
+                "duration" => {
+                    let Some(value) = self
+                        .fold_to_number(&property.value)
+                        .filter(|value| value.is_finite() && *value > 0.0)
+                    else {
+                        self.illegal(
+                            DiagCode::GrammarForbidden,
+                            property.value.span(),
+                            "spring `duration` must be a positive number of seconds known at \
+                             compile time",
+                        );
+                        return None;
+                    };
+                    duration = Some((value, property.value.span()));
+                }
+                "bounce" => {
+                    let Some(value) = self
+                        .fold_to_number(&property.value)
+                        .filter(|value| *value > -1.0 && *value < 1.0)
+                    else {
+                        self.illegal(
+                            DiagCode::GrammarForbidden,
+                            property.value.span(),
+                            "spring `bounce` must be a number above -1 and below 1 known at \
+                             compile time: 0 settles without overshooting, higher values bounce \
+                             more and lower ones settle more slowly",
+                        );
+                        return None;
+                    };
+                    bounce = Some((value, property.value.span()));
+                }
                 name @ ("mass" | "stiffness" | "damping") => {
                     let Some(value) = self.fold_to_number(&property.value) else {
                         self.illegal(
@@ -725,8 +758,9 @@ impl<'s> Compiler<'s> {
                         DiagCode::GrammarForbidden,
                         property.span(),
                         format!(
-                            "`{other}` is not a spring option; use elapsedFrames, fps, preset, \
-                             initialVelocity, or mass/stiffness/damping"
+                            "`{other}` is not a spring option; use elapsedFrames, fps, \
+                             initialVelocity, and preset, duration/bounce or \
+                             mass/stiffness/damping"
                         ),
                     );
                     return None;
@@ -765,6 +799,18 @@ impl<'s> Compiler<'s> {
             );
             return None;
         }
+        let swing = duration.or(bounce).map(|(_, span)| span);
+        if let Some(swing_span) = swing
+            && (preset.is_some() || !bare.is_empty())
+        {
+            self.illegal(
+                DiagCode::GrammarForbidden,
+                swing_span,
+                "spring `duration`/`bounce`, `preset` and `mass`/`stiffness`/`damping` are three \
+                 ways to describe one spring; use one of them",
+            );
+            return None;
+        }
 
         let params = if let Some((name, preset_span)) = preset {
             let Some(params) = valle_motion::spring::preset(&name) else {
@@ -779,6 +825,24 @@ impl<'s> Compiler<'s> {
                 return None;
             };
             params
+        } else if swing.is_some() {
+            // SwiftUI's spring(duration:bounce:): the undamped spring swings once per `duration`,
+            // and `bounce` sets the damping ratio, 1 - bounce, or 1 / (1 + bounce) below 0.
+            let duration = duration.map_or(0.5, |(value, _)| value);
+            let bounce = bounce.map_or(0.0, |(value, _)| value);
+            let ratio = if bounce < 0.0 {
+                1.0 / (1.0 + bounce)
+            } else {
+                1.0 - bounce
+            };
+            let frequency = std::f64::consts::TAU / duration;
+            let stiffness = frequency * frequency;
+            valle_motion::SpringParams {
+                mass: 1.0,
+                stiffness,
+                damping: 2.0 * ratio * valle_draw::math::sqrt(stiffness),
+                initial_velocity: 0.0,
+            }
         } else {
             // Default physical parameters: mass 1, stiffness 100, damping 10.
             let mut params = valle_motion::SpringParams {

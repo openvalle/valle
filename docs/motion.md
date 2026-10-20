@@ -762,10 +762,14 @@ export default function SpringTitle() {
 `spring({ elapsedFrames, fps: ctx.fps, preset })` starts at 0 with zero velocity by default
 and converges to 1; it can overshoot. It continues settling after its authored window when
 given `elapsedFrames`. Presets: `gentle`, `wobbly`, `stiff`, `slow`, `bouncy`.
-Alternatively provide static `mass`, `stiffness`, `damping` (defaults 1, 100, 10).
-Mass/stiffness must be positive; damping must be non-negative. A preset and physical
-parameters are mutually exclusive. There are no `from`, `to`, `duration` or
-`overshootClamping` options: scale/offset/clamp the result explicitly.
+Or describe it with static `duration` in seconds (default 0.5) and `bounce` above -1
+and below 1 (default 0), as SwiftUI's `spring(duration:bounce:)` defines them:
+`duration` is one swing of the undamped spring, and with `bounce: 0` the spring is
+within 2% of 1 by then without overshooting; higher `bounce` overshoots more, and
+negative `bounce` settles more slowly. Or provide static `mass`, `stiffness`, `damping`
+(defaults 1, 100, 10); mass and stiffness must be positive and damping non-negative.
+Use one of the three. There are no `from`, `to` or `overshootClamping` options: scale, offset or
+clamp the result explicitly.
 
 Optional `initialVelocity` is a finite, compile-time number in **normalized distance
 per second**, default 0. It can accompany a preset. For a segment moving from 100px

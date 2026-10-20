@@ -303,3 +303,79 @@ export default function P() { const ctx = useTime();
         );
     }
 }
+
+#[test]
+fn duration_and_bounce_describe_the_spring_as_swiftui_does() {
+    let source = |options: &str| SPRING.replace("damping: 18,\n    stiffness: 140,", options);
+    let physics = |options: &str| {
+        let compiled = compile_motion(&source(options)).expect("compiles");
+        compiled
+            .artifact
+            .exprs
+            .iter()
+            .find_map(|expr| match expr {
+                Expr::Spring {
+                    mass,
+                    stiffness,
+                    damping,
+                    ..
+                } => Some([*mass, *stiffness, *damping]),
+                _ => None,
+            })
+            .expect("a spring node exists")
+    };
+    let close = |actual: f64, expected: f64| (actual - expected).abs() < 1e-9;
+    // One undamped swing per half second.
+    let frequency = std::f64::consts::TAU / 0.5;
+    let [mass, stiffness, damping] = physics("duration: 0.5,");
+    assert_eq!(mass, 1.0);
+    assert!(close(stiffness, frequency * frequency), "{stiffness}");
+    assert!(close(damping, 2.0 * frequency), "{damping}");
+    let [_, _, damping] = physics("duration: 0.5, bounce: 0.5,");
+    assert!(close(damping, frequency), "{damping}");
+    // The default duration is half a second.
+    let [_, _, damping] = physics("bounce: -0.5,");
+    assert!(close(damping, 4.0 * frequency), "{damping}");
+
+    // At 30 fps the half-second duration ends at frame 15.
+    let positions = |options: &str| {
+        (0..=60)
+            .step_by(3)
+            .map(|frame| spring_value(&source(options), 30, 120, frame))
+            .collect::<Vec<_>>()
+    };
+    let critical = positions("duration: 0.5,");
+    assert!(critical[5] > 0.98, "{critical:?}");
+    assert!(
+        critical.iter().all(|position| *position <= 1.0),
+        "{critical:?}"
+    );
+    let bouncy = positions("duration: 0.5, bounce: 0.5,");
+    assert!(bouncy.iter().any(|position| *position > 1.05), "{bouncy:?}");
+
+    for options in [
+        r#"duration: 0.5, preset: "gentle","#,
+        "bounce: 0.2, damping: 10,",
+    ] {
+        let messages = diagnostics_of(&source(options));
+        assert!(
+            messages
+                .iter()
+                .any(|message| message.contains("three ways to describe one spring")),
+            "{options}: {messages:?}"
+        );
+    }
+    for (options, name) in [
+        ("duration: 0,", "`duration`"),
+        ("bounce: 1,", "`bounce`"),
+        ("bounce: -1,", "`bounce`"),
+    ] {
+        let messages = diagnostics_of(&source(options));
+        assert!(
+            messages
+                .iter()
+                .any(|message| message.contains(name) && message.contains("compile time")),
+            "{options}: {messages:?}"
+        );
+    }
+}
