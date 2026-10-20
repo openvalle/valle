@@ -1890,7 +1890,8 @@ impl<'s> Compiler<'s> {
             .collect();
         #[cfg(not(target_family = "wasm"))]
         let instance_data_elapsed = instance_data_started.elapsed();
-        let template_key = self.scoped_key(&format!("{path}.__template__"));
+        let local_template_key = format!("{path}.__template__");
+        let template_key = self.scoped_key(&local_template_key);
         let saved = self.snapshot_instance_attempt();
         // Lower in the outer arena so captured values retain their identity, then extract
         // only the template's reachable closure before rolling back temporary expressions.
@@ -1899,7 +1900,7 @@ impl<'s> Compiler<'s> {
         let saved_scope = self.instance_scope.replace(InstanceCompileScope {
             parameter,
             key_field,
-            template_key: template_key.clone(),
+            template_key: local_template_key,
             fields,
         });
         let index_binding = arrow
@@ -2456,7 +2457,7 @@ impl<'s> Compiler<'s> {
                                 if id.name.as_str() == scope.parameter)
                                 && member.property.name.as_str() == scope.key_field))
                 {
-                    scoped_instance_key = Some(scope.template_key.clone());
+                    scoped_instance_key = Some(self.scoped_key(&scope.template_key));
                 } else {
                     instance_key =
                         self.attr_static_string(&attribute.value, attribute.span(), "key");

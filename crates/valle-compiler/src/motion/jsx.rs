@@ -933,9 +933,11 @@ impl<'s> Compiler<'s> {
                 path_d = self.lower_svg_shape(shape, &shape_numbers, shape_points, element.span());
             }
         }
-        let key = self.scoped_key(&key.unwrap_or_else(|| path.to_string()));
-        // Static descendants are stable when keyed list items are reordered.
-        let path = if list_root { key.as_str() } else { path };
+        let local_key = key.unwrap_or_else(|| path.to_string());
+        let key = self.scoped_key(&local_key);
+        // Static descendants are stable when keyed list items are reordered. Their paths are
+        // scoped like any other, so they take the key before its scope.
+        let path = if list_root { local_key.as_str() } else { path };
         if !self.keys.insert(key.clone()) {
             self.illegal(
                 DiagCode::ArtifactInvalid,

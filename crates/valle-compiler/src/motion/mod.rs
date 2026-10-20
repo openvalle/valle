@@ -1035,6 +1035,8 @@ struct Compiler<'s> {
 struct InstanceCompileScope {
     parameter: String,
     key_field: String,
+    /// The template's key before the component's key scope, which its element or component
+    /// applies as it does to any key.
     template_key: String,
     fields: BTreeMap<String, (u32, valle_motion::expr::ExprType)>,
 }

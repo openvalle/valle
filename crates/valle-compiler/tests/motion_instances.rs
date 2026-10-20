@@ -608,6 +608,74 @@ fn nested_component_instance_forwards_item_and_keeps_nested_keys() {
 }
 
 #[test]
+fn a_map_inside_a_child_component_is_instanced_like_one_in_the_root() {
+    // The map moves from the root into a `Deck` the root renders, so its keys are scoped.
+    let in_deck = |source: String| {
+        source
+            .replace("export default function Cards() {", "function Deck() {")
+            .replace("<Scene ", "<View ")
+            .replace("</Scene>;", "</View>;")
+            + "\nexport default function Cards() {\n  return <Scene className=\"relative h-full w-full\"><Deck key=\"deck\" /></Scene>;\n}\n"
+    };
+    let mut fonts = Fonts::default();
+    fonts
+        .register(FontResource::new(
+            include_bytes!("../../../assets/fonts/noto/NotoSans-Variable.ttf").to_vec(),
+        ))
+        .unwrap();
+    let opts = LayoutOptions {
+        viewport: Viewport::new((160, 180)),
+        fonts: &fonts,
+        styles: None,
+    };
+    for (source, first_key) in [
+        (in_deck(card_rows(4)), "deck/card0"),
+        (in_deck(component_card_rows(4)), "deck/card0/body"),
+    ] {
+        let compiled = compile_motion(&source).unwrap();
+        assert!(
+            compiled
+                .warnings
+                .iter()
+                .all(|warning| warning.code != DiagCode::InstanceFallback),
+            "{:#?}",
+            compiled.warnings
+        );
+        let compact = compiled.artifact;
+        compact.validate().unwrap();
+        assert_eq!(compact.instance_groups.len(), 1, "{first_key}");
+        let group = &compact.instance_groups[0];
+        assert_eq!(
+            group.key_for_node(0, &group.template.key).as_deref(),
+            Some(first_key)
+        );
+        let expanded = compile_motion(&source.replace("key={card.id}", "key={`${card.id}`}"))
+            .unwrap()
+            .artifact;
+        assert!(expanded.instance_groups.is_empty());
+        for frame in [0, 30] {
+            let context =
+                motion_context_at_frame(frame, 60, FrameRate::new(30, 1).unwrap()).unwrap();
+            let props = resolve_props(&compact.controls, &Default::default()).unwrap();
+            let compact_tree =
+                build_tree(&prepare_scene(&compact).unwrap(), &context, &props, &opts).unwrap();
+            let expanded_tree =
+                build_tree(&prepare_scene(&expanded).unwrap(), &context, &props, &opts).unwrap();
+            assert_eq!(
+                valle_motion::layout_boxes(&compact, &compact_tree).unwrap(),
+                valle_motion::layout_boxes(&expanded, &expanded_tree).unwrap(),
+                "{first_key} frame {frame}"
+            );
+            assert_eq!(
+                emit(&compact_tree, &default_font_naming).unwrap().program,
+                emit(&expanded_tree, &default_font_naming).unwrap().program,
+                "{first_key} frame {frame}"
+            );
+        }
+    }
+}
+
+#[test]
 fn flow_card_subtrees_share_one_template_and_preserve_descendant_layout() {
     let source = card_rows(4);
     let compact = compile_motion(&source).unwrap().artifact;
