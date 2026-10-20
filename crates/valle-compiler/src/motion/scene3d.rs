@@ -855,6 +855,23 @@ impl<'s> Compiler<'s> {
             }
         }
         let Some(items) = array_items(value).filter(|a| a.len() == 3) else {
+            // A binding of a frame-dependent array, such as `const position = [0, 0, 5 - t]`,
+            // or a `.map` that builds one.
+            if !matches!(peel_expr(value), Expression::ArrayExpression(_))
+                && self.is_dynamic_tuple_expression(value)
+            {
+                let values = self.lower_dynamic_tuple_expression(value, label)?;
+                if values.len() == 3
+                    && values.iter().all(|expr| {
+                        self.expr_arena.types[expr.0 as usize]
+                            == Some(valle_motion::expr::ExprType::Number)
+                    })
+                {
+                    return Some(std::array::from_fn(|i| NumberValue::Expr {
+                        expr: values[i],
+                    }));
+                }
+            }
             self.illegal(
                 DiagCode::GrammarForbidden,
                 span,

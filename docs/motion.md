@@ -2303,7 +2303,9 @@ boxes. Use camera movement for a viewport pan/zoom rather than changing every no
 `Scene3D` rasterizes a bounded 3D scene into a composited leaf. Give it explicit
 width/height and `camera={{ position:[x,y,z], target:[x,y,z], ... }}`.
 Position/target components, `orbitYaw`, `orbitPitch`, `distance`, `fov`, `near`
-and `far` may use frame expressions. Motion resolves orbit controls into the final
+and `far` may use frame expressions. A vector can also be a binding of a frame-dependent
+array, as in `const position = [0, 0, 5 - ctx.progress]` or a `let` that an `if`
+reassigns, or a `.map` that builds one. Motion resolves orbit controls into the final
 position before submitting the frame; the renderer receives one complete camera.
 FOV defaults to 38° and is restricted to 10–120°; near defaults to 0.1 and far to 1000.
 Optional `depthOfField: { focusDistance, maxBlurRadius }` accepts frame expressions
@@ -2468,7 +2470,8 @@ Double-sided materials render both faces with reversed back-face normals. Normal
 occlusion maps share the same semantics for lit materials; occlusion affects indirect
 illumination.
 
-Mesh vector attributes may contain frame expressions. Axis translations and rotations
+Mesh vector attributes may contain frame expressions or, like camera vectors, be a
+binding of a frame-dependent array. Axis translations and rotations
 add to the corresponding vector components; axis scales multiply them. The compiler
 combines these into one complete transform. Rotation uses degrees and `T * Rz * Ry * Rx * S`.
 Scale may be negative; its magnitude must remain between 0.000001 and 1000, with no

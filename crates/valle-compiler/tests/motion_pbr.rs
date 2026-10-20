@@ -196,6 +196,54 @@ fn camera_vectors_light_colors_and_exposure_use_frame_expressions() {
 }
 
 #[test]
+fn vector_parameters_take_bindings_of_frame_dependent_arrays() {
+    let source = SOURCE
+        .replace(
+            "const ctx = useTime();",
+            "const ctx = useTime(); const position = [ctx.seconds * 0.1, 0, 4]; \
+             let target = [0, 0, 0]; if (ctx.seconds > 1) target = [0, 1, 0]; \
+             const spin = [0, 1, 0].map((axis) => axis * ctx.seconds * 30);",
+        )
+        .replace(
+            "camera={{position:[0,0,4],target:[0,0,0]}}",
+            "camera={{position,target}}",
+        )
+        .replace("rotateY={ctx.seconds*60}", "rotation={spin}");
+    let artifact = compile_motion(&source).unwrap().artifact;
+    artifact.validate().unwrap();
+    let frame = artifact
+        .nodes
+        .iter()
+        .find_map(|n| match &n.kind {
+            NodeKind::Scene3D { frame, .. } => Some(frame),
+            _ => None,
+        })
+        .unwrap();
+    for value in [
+        &frame.camera.position[0],
+        &frame.camera.target[1],
+        &frame.meshes[0].transform.rotation_degrees[1],
+    ] {
+        assert!(
+            matches!(value, valle_motion::NumberValue::Expr { .. }),
+            "{value:?}"
+        );
+    }
+    for (from, to) in [
+        ("[ctx.seconds * 0.1, 0, 4]", "[ctx.seconds * 0.1, 0]"),
+        ("[ctx.seconds * 0.1, 0, 4]", "[`${ctx.seconds}`, 0, 4]"),
+    ] {
+        let diagnostics = compile_motion(&source.replace(from, to)).unwrap_err();
+        assert!(
+            diagnostics.iter().any(|diagnostic| diagnostic
+                .message
+                .contains("camera.position requires a numeric [x,y,z] array")),
+            "{to}: {diagnostics:?}"
+        );
+    }
+}
+
+#[test]
 fn mesh_vectors_and_model_node_replacements_are_typed_complete_transforms() {
     let bindings = r#"position={[ctx.seconds,0,0]} translateX={2} rotation={[0,10,0]} scale={[2,1,1]} scaleX={ctx.seconds+1} nodes={[{id:2,position:[ctx.seconds,0,0],rotation:[0,ctx.seconds*10,0],scale:[-1,2,1]},{id:0}]}"#;
     let source = SOURCE.replace(
