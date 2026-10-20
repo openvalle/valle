@@ -64,6 +64,9 @@ Motion is a restricted JSX language, not a React application. Use Valle's suppli
 APIs, Remotion imports, or arbitrary JavaScript are supported. Components take
 `(props)` as in React, read the frame's time with `useTime()` and prepared data with
 `useData()`; nothing persists between frames, so there is no state or effect.
+Bodies take `let`, `if`/`else`, early `return` and loops. A loop's condition cannot
+depend on the time, and both sides of a time-dependent `if` stay in the scene, so
+their keys must differ.
 Built-ins need no import; `import { View, useTime } from "valle"` also works. Start
 from existing working source when available. A minimal `title.motion.tsx` is:
 

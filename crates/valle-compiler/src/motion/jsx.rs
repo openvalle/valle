@@ -942,7 +942,10 @@ impl<'s> Compiler<'s> {
             self.illegal(
                 DiagCode::ArtifactInvalid,
                 element.span(),
-                format!("duplicate node key `{key}`"),
+                format!(
+                    "duplicate node key `{key}`; keys are unique in the scene, and both sides of \
+                     a frame-dependent condition stay in it"
+                ),
             );
         }
 

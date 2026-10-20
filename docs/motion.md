@@ -170,19 +170,38 @@ Remotion's `useCurrentFrame()` is `useTime().localFrame`, and its
 `useVideoConfig()` values come from `composition` and from `useTime()` as `fps`
 and `durationFrames`.
 
-Module declarations use `const` and functions. Component bodies use `const`
-bindings followed by a returned JSX expression. Function and arrow helpers can
-return scalars or JSX. Pure prepare-time helpers can perform bounded data work;
-frame-dependent helper bodies must lower to supported expressions. Do not use
-async functions, generators, recursive components/helpers, mutation or loops to
-construct a new tree on every frame.
+Module declarations use `const` and functions. Function and arrow helpers can
+return scalars or JSX. The body of a component, a helper or a list callback runs
+once, while the scene is prepared, and takes ordinary JavaScript statements:
+`const` and `let`, assignment, `if`/`else`, early `return`, `for`, `for...of` and
+`while`. The compiler lowers the body into one function of the time:
+
+- A condition known while the scene is prepared takes its branch. A condition
+  that depends on the frame keeps both branches: what they assign or return
+  becomes `cond ? a : b`, and the JSX they return or push shows only while its
+  branch holds. Both sides stay in the scene, so their keys must differ, and a
+  hidden side keeps its place in the layout, as with `visibility: hidden`; give
+  alternatives that share one place `position: absolute`.
+- A loop unrolls while the scene is prepared, so its condition cannot depend on
+  the frame; build long lists with `.map`. `break` and `continue` work unless a
+  frame-dependent condition decides them.
+- A body assigns only its own `let` bindings and its parameters. Objects and
+  arrays are built anew rather than changed in place; the exception is
+  `items.push(<View />)`, which adds JSX to a local list that starts as
+  `const items = []`, for JSX children to read as `{items}`.
+- The callback of a value map inside an expression, such as
+  `points.map((p) => p * scale)`, takes `const` bindings and one `return`.
+
+Async functions, generators, recursive components and helpers, `switch`, `try`
+and `do...while` are not supported.
 
 | Construct | Contract |
 | --- | --- |
 | Numbers, strings, booleans, template literals | Finite numbers; template holes must have supported value types |
 | Arithmetic and comparisons | `+`, `-`, `*`, `/`, `%`, `**`, unary signs, equality and ordered comparisons; operands must type-check |
 | Conditional values | `condition ? a : b`, boolean expressions; branches need compatible types |
-| JSX conditions | Static conditions can choose a subtree; frame-dependent conditions retain prepared branches and gate visibility |
+| Statements | `let`, assignment, `if`/`else`, early `return` and loops in bodies, lowered as described above |
+| JSX conditions | Static conditions can choose a subtree; frame-dependent conditions retain prepared branches and gate visibility, and a hidden branch keeps its layout space |
 | Lists | Map a prepare-time array with a synchronous arrow callback; each returned node/component needs a stable `key` |
 | Arrays and tuples | Fixed shape; supported typed constructors and bounded maps; runtime indexing has explicit bounds/type checks |
 | Destructuring | Object fields, array entries, supported defaults, computed keys that are prepare-time strings, and `...rest`; the rest of `props` reads and spreads like `props` |

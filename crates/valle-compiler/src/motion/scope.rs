@@ -537,11 +537,7 @@ impl<'s> Compiler<'s> {
         initializer: &'s Expression<'s>,
     ) {
         if let Some(span) = reserved_intrinsic_binding(pattern) {
-            self.illegal(
-                DiagCode::GrammarForbidden,
-                span,
-                "`ThemeProvider`, `useTheme`, `useTime` and `useData` are reserved Motion intrinsics and cannot be shadowed",
-            );
+            self.illegal(DiagCode::GrammarForbidden, span, SHADOWED_INTRINSIC);
             return;
         }
         if let Some(path) = self.time_path(initializer) {
@@ -550,49 +546,7 @@ impl<'s> Compiler<'s> {
         }
         match pattern {
             BindingPattern::BindingIdentifier(identifier) => {
-                let name = identifier.name.to_string();
-                // Register component-local function declarations as helpers instead of Motion
-                // values.
-                if let Some(authored) = authored_fn_of(initializer) {
-                    self.bindings.objects.remove(&name);
-                    self.bindings.paints.remove(&name);
-                    self.bindings.local_functions.insert(name, authored);
-                    return;
-                }
-                if let Some(fields) = self.instance_object_fields(initializer) {
-                    self.bind_instance_object(name, fields);
-                    return;
-                }
-                let object = self.capture_authored_object(initializer);
-                if let Some(value) = self.eval_static(initializer) {
-                    self.bind_static(name.clone(), value);
-                    if let Some(object) = object {
-                        self.bindings.objects.insert(name, object);
-                    }
-                } else if let Some(paint) = self.bound_paint(initializer) {
-                    self.bind_paint(name, paint);
-                } else if let Expression::CallExpression(call) = peel_expr(initializer)
-                    && let Expression::Identifier(callee) = &call.callee
-                    && matches!(
-                        callee.name.as_str(),
-                        "linearGradient" | "radialGradient" | "conicGradient"
-                    )
-                {
-                    if let Some(paint) = self.lower_gradient_call(call, initializer.span()) {
-                        self.bind_paint(name, paint);
-                    }
-                } else if let Some(object) = object {
-                    self.bindings.unbind(&name);
-                    self.bindings.objects.insert(name, object);
-                } else if self.is_dynamic_tuple_expression(initializer) {
-                    if let Some(values) =
-                        self.lower_dynamic_tuple_expression(initializer, "local dynamic tuple")
-                    {
-                        self.bind_dynamic_tuple(name, values);
-                    }
-                } else if let Some(expr) = self.lower_expr(initializer) {
-                    self.bind_dynamic(name, expr);
-                }
+                self.bind_local_value(identifier.name.to_string(), initializer);
             }
             BindingPattern::ObjectPattern(pattern) => {
                 if matches!(strip_parens(initializer), Expression::Identifier(id) if id.name == "props")
@@ -629,6 +583,55 @@ impl<'s> Compiler<'s> {
                 pattern.span(),
                 "a top-level local binding cannot itself be an assignment pattern",
             ),
+        }
+    }
+
+    /// Bind one name to what `initializer` evaluates to, as a declaration or an assignment does.
+    pub(super) fn bind_local_value(&mut self, name: String, initializer: &'s Expression<'s>) {
+        self.bindings.local_functions.remove(&name);
+        if let Some(path) = self.time_path(initializer) {
+            self.bind_time_name(name, path, initializer.span());
+            return;
+        }
+        // Register component-local function declarations as helpers instead of Motion values.
+        if let Some(authored) = authored_fn_of(initializer) {
+            self.bindings.unbind(&name);
+            self.bindings.local_functions.insert(name, authored);
+            return;
+        }
+        if let Some(fields) = self.instance_object_fields(initializer) {
+            self.bind_instance_object(name, fields);
+            return;
+        }
+        let object = self.capture_authored_object(initializer);
+        if let Some(value) = self.eval_static(initializer) {
+            self.bind_static(name.clone(), value);
+            if let Some(object) = object {
+                self.bindings.objects.insert(name, object);
+            }
+        } else if let Some(paint) = self.bound_paint(initializer) {
+            self.bind_paint(name, paint);
+        } else if let Expression::CallExpression(call) = peel_expr(initializer)
+            && let Expression::Identifier(callee) = &call.callee
+            && matches!(
+                callee.name.as_str(),
+                "linearGradient" | "radialGradient" | "conicGradient"
+            )
+        {
+            if let Some(paint) = self.lower_gradient_call(call, initializer.span()) {
+                self.bind_paint(name, paint);
+            }
+        } else if let Some(object) = object {
+            self.bindings.unbind(&name);
+            self.bindings.objects.insert(name, object);
+        } else if self.is_dynamic_tuple_expression(initializer) {
+            if let Some(values) =
+                self.lower_dynamic_tuple_expression(initializer, "local dynamic tuple")
+            {
+                self.bind_dynamic_tuple(name, values);
+            }
+        } else if let Some(expr) = self.lower_expr(initializer) {
+            self.bind_dynamic(name, expr);
         }
     }
 
@@ -1159,40 +1162,19 @@ impl<'s> Compiler<'s> {
             }
         }
 
-        let mut nodes = function
-            .expression_body()
-            .and_then(|expression| self.lower_node_expression(strip_parens(expression), path));
-        if let Some(body) = function.body() {
-            for statement in &body.statements {
-                match statement {
-                    Statement::VariableDeclaration(declaration) if declaration.kind.is_const() => {
-                        for declarator in &declaration.declarations {
-                            let Some(initializer) = &declarator.init else {
-                                self.illegal(
-                                    DiagCode::GrammarForbidden,
-                                    declarator.span(),
-                                    "helper const needs an initializer",
-                                );
-                                continue;
-                            };
-                            self.bind_local_pattern(&declarator.id, initializer);
-                        }
-                    }
-                    Statement::ReturnStatement(statement) if nodes.is_none() => {
-                        nodes = statement.argument.as_ref().and_then(|value| {
-                            self.lower_node_expression(strip_parens(value), path)
-                        });
-                    }
-                    _ => self.illegal(
-                        DiagCode::GrammarForbidden,
-                        statement.span(),
-                        format!(
-                            "helper `{name}` only allows const bindings and one returned JSX expression"
-                        ),
-                    ),
-                }
-            }
-        }
+        let nodes = match function.body() {
+            Some(body) => self
+                .lower_node_body(
+                    &body.statements,
+                    path,
+                    &format!("helper `{name}`"),
+                    param_names(function.params()),
+                )
+                .map(|body| body.nodes),
+            None => function
+                .expression_body()
+                .and_then(|expression| self.lower_node_expression(expression, path)),
+        };
 
         self.helper_stack.pop();
         self.bindings.restore(saved_bindings);
@@ -2309,43 +2291,14 @@ impl<'s> Compiler<'s> {
             );
             return None;
         };
-        let mut result = None;
-        for statement in &body.statements {
-            match statement {
-                Statement::VariableDeclaration(declaration) if declaration.kind.is_const() => {
-                    if result.is_some() {
-                        self.illegal(
-                            DiagCode::GrammarForbidden,
-                            statement.span(),
-                            "array map callback cannot execute declarations after return",
-                        );
-                        continue;
-                    }
-                    for declarator in &declaration.declarations {
-                        let Some(initializer) = &declarator.init else {
-                            self.illegal(
-                                DiagCode::GrammarForbidden,
-                                declarator.span(),
-                                "map callback const needs an initializer",
-                            );
-                            continue;
-                        };
-                        self.bind_local_pattern(&declarator.id, initializer);
-                    }
-                }
-                Statement::ReturnStatement(statement) if result.is_none() => {
-                    result = statement
-                        .argument
-                        .as_ref()
-                        .and_then(|expression| self.lower_node_expression(expression, path));
-                }
-                other => self.illegal(
-                    DiagCode::GrammarForbidden,
-                    other.span(),
-                    "array map callback only allows prepare-time const bindings and one returned JSX expression",
-                ),
-            }
-        }
+        let result = self
+            .lower_node_body(
+                &body.statements,
+                path,
+                "this map callback",
+                param_names(&arrow.params),
+            )
+            .map(|body| body.nodes);
         if result.is_none() && self.diagnostics.is_empty() {
             self.illegal(
                 DiagCode::GrammarForbidden,
@@ -2544,7 +2497,10 @@ impl<'s> Compiler<'s> {
         let result = if let Some(expression) = function.expression_body() {
             self.compile_root_expression(expression)
         } else {
-            self.compile_body(function.body().expect("component block body checked above"))
+            self.compile_body(
+                function.body().expect("component block body checked above"),
+                props_names(params),
+            )
         };
         self.component_stack.pop();
         self.bindings.restore(saved_bindings);
@@ -2669,41 +2625,16 @@ impl<'s> Compiler<'s> {
             }
         }
 
-        let mut result = function
-            .expression_body()
-            .and_then(|expression| self.lower_expr(expression));
-        if let Some(body) = function.body() {
-            for statement in &body.statements {
-                match statement {
-                    Statement::VariableDeclaration(declaration) if declaration.kind.is_const() => {
-                        for declarator in &declaration.declarations {
-                            let Some(initializer) = &declarator.init else {
-                                self.illegal(
-                                    DiagCode::GrammarForbidden,
-                                    declarator.span(),
-                                    "pure helper const needs an initializer",
-                                );
-                                continue;
-                            };
-                            self.bind_local_pattern(&declarator.id, initializer);
-                        }
-                    }
-                    Statement::ReturnStatement(statement) if result.is_none() => {
-                        result = statement
-                            .argument
-                            .as_ref()
-                            .and_then(|value| self.lower_expr(value));
-                    }
-                    _ => self.illegal(
-                        DiagCode::GrammarForbidden,
-                        statement.span(),
-                        format!(
-                            "pure helper `{name}` only allows const bindings and one return expression"
-                        ),
-                    ),
-                }
-            }
-        }
+        let result = match function.body() {
+            Some(body) => self.lower_value_body(
+                &body.statements,
+                &format!("helper `{name}`"),
+                param_names(function.params()),
+            ),
+            None => function
+                .expression_body()
+                .and_then(|expression| self.lower_expr(expression)),
+        };
 
         self.helper_stack.pop();
         self.bindings.restore(saved_bindings);

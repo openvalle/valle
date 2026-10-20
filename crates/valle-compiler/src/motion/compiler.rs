@@ -332,7 +332,7 @@ impl<'s> Compiler<'s> {
         };
 
         self.bind_root_params(&function.params);
-        let authored_root = self.compile_body(body);
+        let authored_root = self.compile_body(body, props_names(&function.params));
         if !self.diagnostics.is_empty() {
             return Err(std::mem::take(&mut self.diagnostics));
         }
@@ -775,233 +775,17 @@ impl<'s> Compiler<'s> {
         }
     }
 
-    pub(super) fn compile_body(&mut self, body: &'s FunctionBody<'s>) -> Option<PendingNode> {
-        let mut root = None;
-        for statement in &body.statements {
-            match statement {
-                Statement::VariableDeclaration(declaration) if declaration.kind.is_const() => {
-                    for declarator in &declaration.declarations {
-                        let Some(initializer) = &declarator.init else {
-                            self.illegal(
-                                DiagCode::GrammarForbidden,
-                                declarator.span(),
-                                "const local needs an initializer",
-                            );
-                            continue;
-                        };
-                        self.bind_local_pattern(&declarator.id, initializer);
-                    }
-                }
-                Statement::ReturnStatement(statement) => {
-                    if root.is_some() {
-                        self.illegal(
-                            DiagCode::GrammarForbidden,
-                            statement.span(),
-                            "component has more than one return",
-                        );
-                        continue;
-                    }
-                    root = statement
-                        .argument
-                        .as_ref()
-                        .and_then(|expression| self.compile_root_expression(expression));
-                }
-                Statement::ForOfStatement(statement) => {
-                    self.lower_prepare_for_of(statement);
-                }
-                other => {
-                    let message = self.control_flow_advice(other);
-                    self.illegal(DiagCode::GrammarForbidden, other.span(), message);
-                }
-            }
-        }
-        root
-    }
-
-    pub(super) fn lower_prepare_for_of(
+    pub(super) fn compile_body(
         &mut self,
-        statement: &'s oxc::ast::ast::ForOfStatement<'s>,
-    ) {
-        let Some(serde_json::Value::Array(items)) = self.eval_static(&statement.right) else {
-            self.illegal(
-                DiagCode::GrammarForbidden,
-                statement.right.span(),
-                "for...of input must be a prepare-time static array; frame values cannot choose topology",
-            );
-            return;
-        };
-        if items.len() > MAX_STATIC_MAP_ITEMS
-            || self.expanded_list_items.saturating_add(items.len()) > MAX_TOTAL_EXPANDED_LIST_ITEMS
-        {
-            self.illegal(
-                DiagCode::GrammarForbidden,
-                statement.right.span(),
-                format!(
-                    "prepare-time for...of expands {} items; the per-loop limit is {MAX_STATIC_MAP_ITEMS} and the module budget is {MAX_TOTAL_EXPANDED_LIST_ITEMS}",
-                    items.len()
-                ),
-            );
-            return;
-        }
-        let oxc::ast::ast::ForStatementLeft::VariableDeclaration(declaration) = &statement.left
-        else {
-            self.illegal(
-                DiagCode::GrammarForbidden,
-                statement.left.span(),
-                "prepare for...of left side must be one `const` binding",
-            );
-            return;
-        };
-        if !declaration.kind.is_const() || declaration.declarations.len() != 1 {
-            self.illegal(
-                DiagCode::GrammarForbidden,
-                declaration.span(),
-                "prepare for...of left side must be one `const` binding",
-            );
-            return;
-        }
-        let declarator = &declaration.declarations[0];
-        if declarator.init.is_some() {
-            self.illegal(
-                DiagCode::GrammarForbidden,
-                declarator.span(),
-                "prepare for...of binding cannot have an initializer",
-            );
-            return;
-        }
-        let Statement::BlockStatement(body) = &statement.body else {
-            self.illegal(
-                DiagCode::GrammarForbidden,
-                statement.body.span(),
-                "prepare for...of body must be a block",
-            );
-            return;
-        };
-
-        self.expanded_list_items += items.len();
-        let saved_frame = self.bindings.snapshot_frame();
-        let mut accumulated_children = saved_frame.children.clone();
-        let mut accumulators = BTreeSet::new();
-        self.list_depth += 1;
-        for item in items {
-            self.bindings.restore_frame(saved_frame.clone());
-            self.bindings.children = accumulated_children;
-            self.bind_static_pattern(&declarator.id, item);
-            self.lower_prepare_for_of_body(body, &mut accumulators);
-            accumulated_children = self.bindings.children.clone();
-        }
-        self.list_depth -= 1;
-        self.bindings.restore_frame(saved_frame);
-        for name in accumulators {
-            self.bindings.statics.remove(&name);
-            self.bindings.scalars.remove(&name);
-            self.bindings.tuples.remove(&name);
-            if let Some(children) = accumulated_children.remove(&name) {
-                self.bindings.children.insert(name, children);
-            }
-        }
-    }
-
-    pub(super) fn lower_prepare_for_of_body(
-        &mut self,
-        body: &'s oxc::ast::ast::BlockStatement<'s>,
-        accumulators: &mut BTreeSet<String>,
-    ) {
-        for statement in &body.body {
-            match statement {
-                Statement::VariableDeclaration(declaration) if declaration.kind.is_const() => {
-                    for declarator in &declaration.declarations {
-                        let Some(initializer) = &declarator.init else {
-                            self.illegal(
-                                DiagCode::GrammarForbidden,
-                                declarator.span(),
-                                "for...of const needs an initializer",
-                            );
-                            continue;
-                        };
-                        self.bind_local_pattern(&declarator.id, initializer);
-                    }
-                }
-                Statement::ExpressionStatement(statement) => {
-                    self.lower_prepare_push(&statement.expression, accumulators);
-                }
-                other => self.illegal(
-                    DiagCode::GrammarForbidden,
-                    other.span(),
-                    "prepare for...of only allows const bindings and `children.push(JSX)`",
-                ),
-            }
-        }
-    }
-
-    pub(super) fn lower_prepare_push(
-        &mut self,
-        expression: &'s Expression<'s>,
-        accumulators: &mut BTreeSet<String>,
-    ) {
-        let Expression::CallExpression(call) = strip_parens(expression) else {
-            self.illegal(
-                DiagCode::GrammarForbidden,
-                expression.span(),
-                "prepare loop expression must be `children.push(JSX)`",
-            );
-            return;
-        };
-        let Expression::StaticMemberExpression(member) = &call.callee else {
-            self.illegal(
-                DiagCode::GrammarForbidden,
-                call.span(),
-                "prepare loop expression must be `children.push(JSX)`",
-            );
-            return;
-        };
-        let Expression::Identifier(target) = &member.object else {
-            self.illegal(
-                DiagCode::GrammarForbidden,
-                member.object.span(),
-                "prepare loop accumulator must be a local identifier",
-            );
-            return;
-        };
-        if member.property.name != "push" || call.arguments.len() != 1 {
-            self.illegal(
-                DiagCode::GrammarForbidden,
-                call.span(),
-                "prepare loop only admits one `children.push(JSX)` argument",
-            );
-            return;
-        }
-        let name = target.name.to_string();
-        let initialized_empty = matches!(
-            self.bindings.statics.get(&name),
-            Some(serde_json::Value::Array(items)) if items.is_empty()
-        );
-        if !initialized_empty && !self.bindings.children.contains_key(&name) {
-            self.illegal(
-                DiagCode::GrammarForbidden,
-                target.span(),
-                format!("for...of accumulator `{name}` must be initialized as `const {name} = []`"),
-            );
-            return;
-        }
-        self.bindings.statics.remove(&name);
-        self.bindings.children.entry(name.clone()).or_default();
-        let Some(argument) = call.arguments[0].as_expression() else {
-            self.illegal(
-                DiagCode::GrammarForbidden,
-                call.arguments[0].span(),
-                "prepare loop push argument cannot spread",
-            );
-            return;
-        };
-        if let Some(mut nodes) = self.lower_node_expression(argument, &format!("for.{name}")) {
-            self.bindings
-                .children
-                .get_mut(&name)
-                .expect("accumulator installed")
-                .append(&mut nodes);
-            accumulators.insert(name);
-        }
+        body: &'s FunctionBody<'s>,
+        props: BTreeSet<String>,
+    ) -> Option<PendingNode> {
+        let lowered = self.lower_node_body(&body.statements, "root", "this component", props)?;
+        self.root_node(
+            lowered.nodes,
+            lowered.only_return.unwrap_or(body.span),
+            lowered.fragment,
+        )
     }
 
     pub(super) fn compile_root_expression(
@@ -1009,19 +793,27 @@ impl<'s> Compiler<'s> {
         expression: &'s Expression<'s>,
     ) -> Option<PendingNode> {
         let fragment = matches!(peel_expr(expression), Expression::JSXFragment(_));
-        self.lower_node_expression(strip_parens(expression), "root")
-            .and_then(|mut nodes| {
-                if nodes.len() == 1 {
-                    nodes.pop()
-                } else if nodes.is_empty() {
-                    None
-                } else {
-                    let mut node =
-                        self.fragment_node(expression.span(), "__component_group__", nodes);
-                    node.fragment = fragment;
-                    Some(node)
-                }
-            })
+        let nodes = self.lower_node_expression(strip_parens(expression), "root")?;
+        self.root_node(nodes, expression.span(), fragment)
+    }
+
+    /// The node a component renders: the one node it returns, or a Group of several, which a
+    /// parent that collects child nodes takes in its place when they came from fragments.
+    fn root_node(
+        &self,
+        mut nodes: Vec<PendingNode>,
+        span: Span,
+        fragment: bool,
+    ) -> Option<PendingNode> {
+        match nodes.len() {
+            0 => None,
+            1 => nodes.pop(),
+            _ => {
+                let mut node = self.fragment_node(span, "__component_group__", nodes);
+                node.fragment = fragment;
+                Some(node)
+            }
+        }
     }
 
     /// A Group that holds `children` in place of one node, and gives them to a parent that
@@ -1046,36 +838,6 @@ impl<'s> Compiler<'s> {
             children,
             is_mask_source: false,
             fragment: true,
-        }
-    }
-
-    /// Explain both alternatives for rejected statement-level control flow: conditional values or
-    /// visibility preserve runtime topology, while constant ternaries can fold during preparation.
-    /// Do not guess whether an unlowered condition depends on the frame context.
-    pub(super) fn control_flow_advice(&self, statement: &Statement<'_>) -> String {
-        let kind = match statement {
-            Statement::IfStatement(_) => Some("if"),
-            Statement::WhileStatement(_) | Statement::DoWhileStatement(_) => Some("while"),
-            Statement::ForStatement(_)
-            | Statement::ForInStatement(_)
-            | Statement::ForOfStatement(_) => Some("for"),
-            Statement::SwitchStatement(_) => Some("switch"),
-            _ => None,
-        };
-        match kind {
-            Some(kind @ ("if" | "switch")) => format!(
-                "`{kind}` cannot pick the scene's topology: the frame-time IR is fixed-topology \
-                 data, so a branch that depends on ctx has nothing to switch on. Put the branch \
-                 on the value — `cond ? a : b` — or on visibility — `{{cond && <View/>}}`. \
-                 Both keep one topology"
-            ),
-            Some(kind) => format!(
-                "`{kind}` loops cannot run at frame time. Build the list at prepare time and \
-                 expand it with `.map`, which produces one node per item and one fixed topology"
-            ),
-            None => "component body only allows `const` bindings and one final return; effects, \
-                     loops and mutable state are illegal"
-                .to_string(),
         }
     }
 

@@ -88,6 +88,7 @@ mod scope;
 mod shader;
 mod simulation;
 mod spread;
+mod statements;
 mod style;
 mod style_objects;
 mod syntax;
@@ -114,6 +115,7 @@ pub use rewrite::{
     MotionSourceEdit, MotionSourceEditResult, MotionSourceEditTarget, rewrite_motion_source,
 };
 use spread::SPREAD_BINDING;
+use statements::{param_names, props_names};
 use syntax::*;
 use theme_provider::*;
 use values::*;
@@ -714,6 +716,9 @@ fn authored_fn_of<'a>(initializer: &'a Expression<'a>) -> Option<AuthoredFn<'a>>
 /// Compile-time intrinsics that a source can neither declare nor shadow.
 const RESERVED_INTRINSICS: &[&str] = &["ThemeProvider", "useTheme", "useTime", "useData"];
 
+const SHADOWED_INTRINSIC: &str = "`ThemeProvider`, `useTheme`, `useTime` and `useData` are \
+     reserved Motion intrinsics and cannot be shadowed";
+
 fn reserved_intrinsic_binding(pattern: &BindingPattern<'_>) -> Option<Span> {
     match pattern {
         BindingPattern::BindingIdentifier(identifier)
@@ -803,6 +808,22 @@ struct Bindings<'s> {
     prop_rests: BTreeMap<String, BTreeSet<String>>,
     /// Names bound to the time `useTime()` returns, or to an object in it: the path under it.
     times: BTreeMap<String, Vec<String>>,
+}
+
+/// Everything one name is bound to, kept while a block hides it and compared across the branches
+/// of a frame-dependent `if`.
+#[derive(Clone, Default)]
+struct NameBinding<'s> {
+    local_function: Option<AuthoredFn<'s>>,
+    scalar: Option<ExprId>,
+    paint: Option<PaintValue>,
+    tuple: Option<Vec<ExprId>>,
+    instance_object: Option<BTreeMap<String, (u32, valle_motion::expr::ExprType)>>,
+    statik: Option<serde_json::Value>,
+    object: Option<style_objects::AuthoredObject<'s>>,
+    children: Option<Vec<PendingNode>>,
+    prop_rest: Option<BTreeSet<String>>,
+    time: Option<Vec<String>>,
 }
 
 #[derive(Clone)]
@@ -906,6 +927,59 @@ impl<'s> Bindings<'s> {
         self.objects = frame.objects;
         self.children = frame.children;
         self.times = frame.times;
+    }
+
+    /// Everything bound to `name`.
+    fn name_binding(&self, name: &str) -> NameBinding<'s> {
+        NameBinding {
+            local_function: self.local_functions.get(name).copied(),
+            scalar: self.scalars.get(name).copied(),
+            paint: self.paints.get(name).cloned(),
+            tuple: self.tuples.get(name).cloned(),
+            instance_object: self.instance_objects.get(name).cloned(),
+            statik: self.statics.get(name).cloned(),
+            object: self.objects.get(name).cloned(),
+            children: self.children.get(name).cloned(),
+            prop_rest: self.prop_rests.get(name).cloned(),
+            time: self.times.get(name).cloned(),
+        }
+    }
+
+    /// Bind `name` to exactly what `binding` holds.
+    fn put_name(&mut self, name: &str, binding: NameBinding<'s>) {
+        self.unbind(name);
+        self.local_functions.remove(name);
+        let name = name.to_owned();
+        if let Some(function) = binding.local_function {
+            self.local_functions.insert(name.clone(), function);
+        }
+        if let Some(expr) = binding.scalar {
+            self.scalars.insert(name.clone(), expr);
+        }
+        if let Some(paint) = binding.paint {
+            self.paints.insert(name.clone(), paint);
+        }
+        if let Some(values) = binding.tuple {
+            self.tuples.insert(name.clone(), values);
+        }
+        if let Some(fields) = binding.instance_object {
+            self.instance_objects.insert(name.clone(), fields);
+        }
+        if let Some(value) = binding.statik {
+            self.statics.insert(name.clone(), value);
+        }
+        if let Some(object) = binding.object {
+            self.objects.insert(name.clone(), object);
+        }
+        if let Some(children) = binding.children {
+            self.children.insert(name.clone(), children);
+        }
+        if let Some(omitted) = binding.prop_rest {
+            self.prop_rests.insert(name.clone(), omitted);
+        }
+        if let Some(path) = binding.time {
+            self.times.insert(name, path);
+        }
     }
 
     /// Forget every value bound to `name`, before it is bound again.

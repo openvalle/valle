@@ -133,30 +133,11 @@ export default function P() { const ctx = useTime();
 }
 
 #[test]
-fn branching_on_a_context_value_points_at_the_two_shapes_that_keep_one_topology() {
+fn a_frame_dependent_loop_points_at_the_prepare_time_map_that_replaces_it() {
     let messages = diagnostics_of(
         r##"
 export default function P() { const ctx = useTime();
-  const t = ctx.progress;
-  if (t > 0.5) { return (<Scene className="h-full w-full" />); }
-  return (<Scene className="h-full w-full" />);
-}
-"##,
-    );
-    assert!(
-        messages
-            .iter()
-            .any(|message| message.contains("cond ? a : b") && message.contains("visibility")),
-        "the diagnostic must name both fixes, got {messages:#?}"
-    );
-}
-
-#[test]
-fn a_loop_points_at_the_prepare_time_map_that_replaces_it() {
-    let messages = diagnostics_of(
-        r##"
-export default function P() { const ctx = useTime();
-  for (let i = 0; i < 3; i++) {}
+  for (let i = 0; i < ctx.progress * 3; i++) {}
   return (<Scene className="h-full w-full" />);
 }
 "##,

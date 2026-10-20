@@ -117,6 +117,15 @@ impl<'s> Compiler<'s> {
         self.bindings.times.insert(name, path);
     }
 
+    /// Bind one name to what it reads from the time.
+    pub(super) fn bind_time_name(&mut self, name: String, path: Vec<String>, span: Span) {
+        if is_time_object(&path) {
+            self.bind_time(name, path);
+        } else if let Some(expr) = self.lower_time_path(&path, span) {
+            self.bind_dynamic(name, expr);
+        }
+    }
+
     /// Bind what an initializer reads from the time: a name keeps an object of the time, and a
     /// number is read once, where it is bound, like any other local.
     pub(super) fn bind_time_value(
@@ -127,12 +136,7 @@ impl<'s> Compiler<'s> {
     ) {
         match pattern {
             BindingPattern::BindingIdentifier(identifier) => {
-                let name = identifier.name.to_string();
-                if is_time_object(&path) {
-                    self.bind_time(name, path);
-                } else if let Some(expr) = self.lower_time_path(&path, span) {
-                    self.bind_dynamic(name, expr);
-                }
+                self.bind_time_name(identifier.name.to_string(), path, span);
             }
             // Every field of the time exists, so a default never applies.
             BindingPattern::AssignmentPattern(assignment) => {

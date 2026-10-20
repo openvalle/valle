@@ -32,6 +32,11 @@ impl<'s> AuthoredObject<'s> {
     pub(super) fn expression(&self) -> &'s Expression<'s> {
         self.expression
     }
+
+    /// Whether both are the same object syntax captured in the same scope.
+    pub(super) fn same_object(&self, other: &Self) -> bool {
+        std::ptr::eq(self.expression, other.expression) && Arc::ptr_eq(&self.scope, &other.scope)
+    }
 }
 
 impl ResolvedStyle<'_> {
