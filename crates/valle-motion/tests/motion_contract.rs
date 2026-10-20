@@ -3,13 +3,13 @@ use std::collections::BTreeMap;
 use valle_motion::{
     ARTIFACT_FORMAT_VERSION, ArtifactEnvelope, AssetControl, AssetKind, BuildFingerprint,
     BundledAsset, BundledFont, BundledSource, CapabilitySet, ChildRange, CompareOp, ContentDigest,
-    ContextInput, ControlType, ControlsSchema, Expr, ExprId, Extrapolation, InterpolateStop,
-    LockError, MOTION_BUNDLE_FORMAT_VERSION, MotionBundleManifest, MotionEasing, MotionValue,
+    ContextInput, ControlType, ControlsSchema, Easing, Expr, ExprId, Extrapolation,
+    InterpolateStop, LockError, MOTION_BUNDLE_FORMAT_VERSION, MotionBundleManifest, MotionValue,
     MotionViewport, NodeId, NodeKind, NumberValue, PropControl, ResourceRef, SceneArtifact,
     SceneNode, SemanticMeta, StyleBinding, StyleValue, TemplatePart, TextValue, canonical_bytes,
 };
 
-const ENVELOPE_SHA256: &str = "4ffaad7fe68b706bc25aefa4cc10d9a740f8296fc34286ee6e6977d211585541";
+const ENVELOPE_SHA256: &str = "dd14619949e33dc56e958bfc27818356ad87df7748466a400c3ab1d0721964c4";
 
 fn prop(control: ControlType, default: MotionValue) -> PropControl {
     PropControl {
@@ -105,7 +105,7 @@ fn envelope() -> ArtifactEnvelope {
                     output: MotionValue::Number(1.0),
                 },
             ],
-            easings: vec![MotionEasing::EaseOut],
+            easings: vec![Easing::EaseOut],
             color_space: valle_draw::program::GradientInterpolation::Srgb,
             extrapolate_left: Extrapolation::Clamp,
             extrapolate_right: Extrapolation::Clamp,
@@ -394,7 +394,7 @@ fn canonical_and_artifact_validation_reject_every_non_finite_path() {
 
     let mut changed = envelope();
     if let Expr::Interpolate { easings, .. } = &mut changed.artifact.exprs[12] {
-        easings[0] = MotionEasing::CubicBezier {
+        easings[0] = Easing::CubicBezier {
             p: [0.0, f64::INFINITY, 1.0, 1.0],
         };
     } else {

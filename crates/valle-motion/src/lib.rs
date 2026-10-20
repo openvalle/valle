@@ -127,7 +127,8 @@ pub use text::{
     measure_text, text_outline,
 };
 pub use time::{frame_at_sample_floor, frame_rate_as_f64, sample_time_at_frame};
-pub use value::{MotionEasing, MotionValue, StepPosition};
+pub use valle_timeline::easing::{Easing, StepPosition};
+pub use value::MotionValue;
 
 pub const MOTION_MATH_ENGINE_ID: &str = valle_draw::math::ENGINE_ID;
 

@@ -146,58 +146,6 @@ pub(super) fn parse_path_data(data: &str) -> Option<PathData> {
     PathData::new(verbs, points).ok()
 }
 
-/// Map easing names directly to IR tags. Cubic-bezier x coordinates must be in [0,1] for monotonic
-/// inversion; y coordinates may overshoot.
-pub(super) fn parse_easing(name: &str) -> Option<MotionEasing> {
-    match name.trim() {
-        "linear" => Some(MotionEasing::Linear),
-        "ease" => Some(MotionEasing::Ease),
-        "easeIn" => Some(MotionEasing::EaseIn),
-        "easeOut" => Some(MotionEasing::EaseOut),
-        "easeInOut" => Some(MotionEasing::EaseInOut),
-        "exp" => Some(MotionEasing::Exp),
-        "easeInBack" => Some(MotionEasing::EaseInBack),
-        "easeOutBack" => Some(MotionEasing::EaseOutBack),
-        "easeInOutBack" => Some(MotionEasing::EaseInOutBack),
-        "elastic" => Some(MotionEasing::Elastic),
-        "bounce" => Some(MotionEasing::Bounce),
-        other if other.starts_with("steps(") => {
-            let args = other.strip_prefix("steps(")?.strip_suffix(')')?;
-            let mut args = args.split(',').map(str::trim);
-            let count = args.next()?;
-            if count.is_empty() || !count.bytes().all(|byte| byte.is_ascii_digit()) {
-                return None;
-            }
-            let count = count.parse::<u32>().ok().filter(|count| *count > 0)?;
-            let position = match args.next() {
-                None | Some("end") => valle_motion::StepPosition::End,
-                Some("start") => valle_motion::StepPosition::Start,
-                _ => return None,
-            };
-            args.next()
-                .is_none()
-                .then_some(MotionEasing::Steps { count, position })
-        }
-        other => {
-            let args = other.strip_prefix("cubic-bezier(")?.strip_suffix(')')?;
-            let mut p = [0.0_f64; 4];
-            let mut seen = 0usize;
-            for part in args.split(',') {
-                if seen == p.len() {
-                    return None;
-                }
-                p[seen] = part.trim().parse().ok()?;
-                seen += 1;
-            }
-            if seen != p.len() || !p.iter().all(|value| value.is_finite()) {
-                return None;
-            }
-            ((0.0..=1.0).contains(&p[0]) && (0.0..=1.0).contains(&p[2]))
-                .then_some(MotionEasing::CubicBezier { p })
-        }
-    }
-}
-
 pub(super) fn strip_parens<'a>(mut expression: &'a Expression<'a>) -> &'a Expression<'a> {
     while let Expression::ParenthesizedExpression(parenthesized) = expression {
         expression = &parenthesized.expression;

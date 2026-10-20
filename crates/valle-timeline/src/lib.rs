@@ -11,6 +11,7 @@ pub mod motion;
 pub use motion::{MotionRole, MotionSourceMetadata, OverlayHold};
 pub mod caption_presets;
 pub mod color_value;
+pub mod easing;
 pub mod edit;
 #[doc(hidden)]
 pub mod internal;

@@ -1845,7 +1845,7 @@ impl<'s> Compiler<'s> {
                             output: MotionValue::PathData(path),
                         })
                         .collect(),
-                    easings: vec![MotionEasing::Linear; stop_count - 1],
+                    easings: vec![Easing::Linear; stop_count - 1],
                     color_space: valle_draw::program::GradientInterpolation::Srgb,
                     extrapolate_left: Extrapolation::Clamp,
                     extrapolate_right: Extrapolation::Clamp,

@@ -716,16 +716,23 @@ backgroundColor: interpolate(ctx.progress, [0, 1], ["#2140ff", "#ffd000"],
   { colorSpace: "oklch", hue: "shorter" })
 ```
 
-Easing names: `linear` (default), `ease`, `easeIn`, `easeOut`, `easeInOut`, `exp`,
-`easeInBack`, `easeOutBack`, `easeInOutBack`, `elastic`, `bounce`,
-`steps(n, start|end)`, and `cubic-bezier(x1,y1,x2,y2)` with finite coordinates and
-x coordinates in `[0,1]`. Back curves and the decaying elastic-out curve can
-overshoot; `bounce` uses a piecewise quadratic bounce-out curve. `steps(n)` defaults
-to `end`, with a positive integer step count. `start` jumps to the first step at
-the segment's first input, including the first frame; `end` jumps at each interval's
-end. Both finish at the destination. `easing` can be one string or an array with
-one entry per segment, including immutable constants. Custom function easings
-are not yet admitted. Other option names, including
+Easing names follow CSS and easings.net: `linear` (default), `ease`, `easeIn`, `easeOut`,
+`easeInOut` (CSS's `ease-in`, `ease-out` and `ease-in-out` also work), and `easeIn`,
+`easeOut` or `easeInOut` followed by `Sine`, `Quad`, `Cubic`, `Quart`, `Quint`, `Expo`,
+`Circ`, `Back`, `Elastic` or `Bounce`, such as `easeOutCubic`, each the easings.net
+curve of that name. CSS's `step-start`, `step-end`, `steps()` and `cubic-bezier()`
+complete the set. The ease-out curves suit most entrances and `easeOutBack` a small
+overshoot; elastic and bounce curves are there, but rarely suit a modern design.
+
+Back and elastic curves overshoot their destination before settling on it.
+`steps(n, position)` takes a positive integer and CSS's positions: `jump-end` (the
+default, or `end`) jumps at the end of each interval; `jump-start` (or `start`) jumps
+at its start, so the first step shows from the segment's first input, including the
+first frame; `jump-none` holds both ends for a step each and needs `n` of at least 2;
+`jump-both` jumps at both ends. All finish at the destination. `cubic-bezier(x1, y1,
+x2, y2)` takes finite coordinates with x in `[0,1]`; y may overshoot. `easing` can be
+one string or an array with one entry per segment, including immutable constants.
+Custom function easings are not yet admitted. Other option names, including
 `extrapolateLeft`/`extrapolateRight`, are not author options in this CLI language.
 
 Save as `spring.motion.tsx`:

@@ -5,6 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 use valle_draw::{Point, Rect, Vec2, program::AuthorColor};
+use valle_timeline::easing::Easing;
 
 use crate::geometry::PathData;
 
@@ -324,196 +325,6 @@ fn number_token(value: f64) -> String {
     }
 }
 
-/// Closed set of Motion easing curves shared by expressions and keyframes. Deserialization rejects
-/// unknown curve names.
-#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
-#[serde(
-    rename_all = "camelCase",
-    rename_all_fields = "camelCase",
-    tag = "kind",
-    deny_unknown_fields
-)]
-pub enum MotionEasing {
-    #[default]
-    Linear,
-    Ease,
-    EaseIn,
-    EaseOut,
-    EaseInOut,
-    Exp,
-    EaseInBack,
-    EaseOutBack,
-    EaseInOutBack,
-    /// Exponentially decaying oscillation, with exact endpoints.
-    Elastic,
-    /// Piecewise quadratic bounce-out curve.
-    Bounce,
-    Steps {
-        count: u32,
-        position: StepPosition,
-    },
-    /// CSS cubic Bezier with fixed endpoints (0,0) and (1,1).
-    CubicBezier {
-        p: [f64; 4],
-    },
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
-#[serde(rename_all = "camelCase")]
-pub enum StepPosition {
-    Start,
-    End,
-}
-
-impl MotionEasing {
-    /// Evaluate the locked Motion easing curve at `t`.
-    pub fn evaluate(self, t: f64) -> f64 {
-        const EASE: [f64; 4] = [0.25, 0.1, 0.25, 1.0];
-        const EASE_IN: [f64; 4] = [0.42, 0.0, 1.0, 1.0];
-        const EASE_OUT: [f64; 4] = [0.0, 0.0, 0.58, 1.0];
-        const EASE_IN_OUT: [f64; 4] = [0.42, 0.0, 0.58, 1.0];
-
-        let t = t.clamp(0.0, 1.0);
-        match self {
-            MotionEasing::Linear => t,
-            MotionEasing::Ease => unit_bezier(EASE, t),
-            MotionEasing::EaseIn => unit_bezier(EASE_IN, t),
-            MotionEasing::EaseOut => unit_bezier(EASE_OUT, t),
-            MotionEasing::EaseInOut => unit_bezier(EASE_IN_OUT, t),
-            MotionEasing::Exp => {
-                if t <= 0.0 {
-                    0.0
-                } else {
-                    valle_draw::math::pow(2.0, 10.0 * (t - 1.0))
-                }
-            }
-            MotionEasing::EaseInBack => back_in(t),
-            MotionEasing::EaseOutBack => 1.0 - back_in(1.0 - t),
-            MotionEasing::EaseInOutBack => {
-                const C: f64 = 1.70158 * 1.525;
-                let x = if t < 0.5 { 2.0 * t } else { 2.0 * t - 2.0 };
-                if t < 0.5 {
-                    x * x * ((C + 1.0) * x - C) * 0.5
-                } else {
-                    (x * x * ((C + 1.0) * x + C) + 2.0) * 0.5
-                }
-            }
-            MotionEasing::Elastic => {
-                if t == 0.0 || t == 1.0 {
-                    t
-                } else {
-                    valle_draw::math::pow(2.0, -10.0 * t)
-                        * valle_draw::math::sin((10.0 * t - 0.75) * (std::f64::consts::TAU / 3.0))
-                        + 1.0
-                }
-            }
-            MotionEasing::Bounce => bounce_out(t),
-            MotionEasing::Steps { count, position } => {
-                let count = f64::from(count);
-                let jump = if position == StepPosition::Start {
-                    1.0
-                } else {
-                    0.0
-                };
-                ((t * count).floor() + jump).min(count) / count
-            }
-            MotionEasing::CubicBezier { p } => unit_bezier(p, t),
-        }
-    }
-
-    /// Check the curve domain before evaluation, including deserialized artifacts and tracks.
-    pub fn is_valid(&self) -> bool {
-        match self {
-            MotionEasing::CubicBezier { p } => {
-                p.iter().all(|v| v.is_finite())
-                    && (0.0..=1.0).contains(&p[0])
-                    && (0.0..=1.0).contains(&p[2])
-            }
-            MotionEasing::Steps { count, .. } => *count > 0,
-            _ => true,
-        }
-    }
-}
-
-fn back_in(t: f64) -> f64 {
-    // Polynomial form preserves both endpoints exactly.
-    t * t * (t + 1.70158 * (t - 1.0))
-}
-
-fn bounce_out(t: f64) -> f64 {
-    const N: f64 = 7.5625;
-    const D: f64 = 2.75;
-    let (x, offset) = if t < 1.0 / D {
-        (t, 0.0)
-    } else if t < 2.0 / D {
-        (t - 1.5 / D, 0.75)
-    } else if t < 2.5 / D {
-        (t - 2.25 / D, 0.9375)
-    } else {
-        (t - 2.625 / D, 0.984375)
-    };
-    N * x * x + offset
-}
-
-/// WebKit-style unit cubic Bézier solve with fixed iteration and convergence constants.
-fn unit_bezier([x1, y1, x2, y2]: [f64; 4], x: f64) -> f64 {
-    const SOLVE_X_EPSILON: f64 = 1e-6;
-    const NEWTON_MAX_ITERS: usize = 8;
-    const MIN_SLOPE: f64 = 1e-9;
-    const BISECT_MIN_INTERVAL: f64 = 1e-7;
-
-    if x <= 0.0 {
-        return 0.0;
-    }
-    if x >= 1.0 {
-        return 1.0;
-    }
-
-    let cx = 3.0 * x1;
-    let bx = 3.0 * (x2 - x1) - cx;
-    let ax = 1.0 - cx - bx;
-    let cy = 3.0 * y1;
-    let by = 3.0 * (y2 - y1) - cy;
-    let ay = 1.0 - cy - by;
-    let sample_x = |t: f64| ((ax * t + bx) * t + cx) * t;
-    let sample_dx = |t: f64| (3.0 * ax * t + 2.0 * bx) * t + cx;
-    let sample_y = |t: f64| ((ay * t + by) * t + cy) * t;
-
-    let mut t = x;
-    for _ in 0..NEWTON_MAX_ITERS {
-        let error = sample_x(t) - x;
-        if error.abs() < SOLVE_X_EPSILON {
-            return sample_y(t);
-        }
-        let slope = sample_dx(t);
-        if slope.abs() < MIN_SLOPE {
-            break;
-        }
-        t -= error / slope;
-    }
-
-    let (mut lower, mut upper) = (0.0, 1.0);
-    t = x;
-    while lower < upper {
-        let sampled = sample_x(t);
-        if (sampled - x).abs() < SOLVE_X_EPSILON {
-            break;
-        }
-        if x > sampled {
-            lower = t;
-        } else {
-            upper = t;
-        }
-        t = (lower + upper) * 0.5;
-        if upper - lower < BISECT_MIN_INTERVAL {
-            break;
-        }
-    }
-    sample_y(t)
-}
-
 /// Typed keyframe indexed by frames. Seconds are authoring syntax converted at compilation;
 /// negative frames are valid.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -524,7 +335,8 @@ pub struct MotionKeyframe {
     pub value: MotionValue,
     /// Easing for the interval to the next keyframe; ignored on the final keyframe.
     #[serde(default)]
-    pub easing: MotionEasing,
+    #[cfg_attr(feature = "ts", ts(type = "string"))]
+    pub easing: Easing,
 }
 
 /// Typed keyframe track. Clamp outside the first and last frames. Discrete types use the preceding
@@ -634,6 +446,8 @@ impl MotionTrack {
 
 #[cfg(test)]
 mod tests {
+    use valle_timeline::easing::StepPosition;
+
     use super::*;
 
     #[test]
@@ -680,65 +494,13 @@ mod tests {
     }
 
     #[test]
-    fn named_easings_are_evaluated_inside_the_motion_domain() {
-        assert!((MotionEasing::Linear.evaluate(0.25) - 0.25).abs() < 1e-12);
-        assert!(MotionEasing::EaseIn.evaluate(0.5) < 0.5);
-        assert!(MotionEasing::EaseOut.evaluate(0.5) > 0.5);
-        assert_eq!(MotionEasing::EaseInOut.evaluate(0.0), 0.0);
-        assert_eq!(MotionEasing::EaseInOut.evaluate(1.0), 1.0);
-    }
-
-    #[test]
-    fn motion_presets_have_exact_endpoints_and_distinct_shapes() {
-        for easing in [
-            MotionEasing::EaseInBack,
-            MotionEasing::EaseOutBack,
-            MotionEasing::EaseInOutBack,
-            MotionEasing::Elastic,
-            MotionEasing::Bounce,
-        ] {
-            assert_eq!(easing.evaluate(0.0), 0.0, "{easing:?}");
-            assert_eq!(easing.evaluate(1.0), 1.0, "{easing:?}");
-            assert_eq!(easing.evaluate(-1.0), 0.0);
-            assert_eq!(easing.evaluate(2.0), 1.0);
-        }
-        assert!(MotionEasing::EaseInBack.evaluate(0.25) < 0.0);
-        assert!(MotionEasing::EaseOutBack.evaluate(0.75) > 1.0);
-        assert!(MotionEasing::EaseInOutBack.evaluate(0.25) < 0.0);
-        assert!(MotionEasing::EaseInOutBack.evaluate(0.75) > 1.0);
-        assert!(MotionEasing::Elastic.evaluate(0.15) > 1.3);
-        assert_eq!(MotionEasing::Bounce.evaluate(1.5 / 2.75), 0.75);
-        assert_eq!(MotionEasing::Bounce.evaluate(2.25 / 2.75), 0.9375);
-        assert_eq!(MotionEasing::Bounce.evaluate(2.625 / 2.75), 0.984375);
-        for step in 0..4 {
-            let t = f64::from(step) / 4.0;
-            assert_eq!(
-                MotionEasing::Steps {
-                    count: 4,
-                    position: StepPosition::End
-                }
-                .evaluate(t),
-                t
-            );
-            assert_eq!(
-                MotionEasing::Steps {
-                    count: 4,
-                    position: StepPosition::Start
-                }
-                .evaluate(t),
-                t + 0.25
-            );
-        }
-    }
-
-    #[test]
     fn invalid_easing_parameters_cannot_enter_a_track() {
         for easing in [
-            MotionEasing::Steps {
+            Easing::Steps {
                 count: 0,
-                position: StepPosition::End,
+                position: StepPosition::JumpEnd,
             },
-            MotionEasing::CubicBezier {
+            Easing::CubicBezier {
                 p: [-0.1, 0.0, 1.0, 1.0],
             },
         ] {
@@ -755,13 +517,6 @@ mod tests {
     }
 
     #[test]
-    fn unknown_easing_name_is_rejected_at_the_serde_layer() {
-        // Unknown easing variants must fail during deserialization.
-        assert!(serde_json::from_str::<MotionEasing>(r#"{"kind":"wobble"}"#).is_err());
-        assert!(serde_json::from_str::<MotionEasing>(r#"{"kind":"easeIn"}"#).is_ok());
-    }
-
-    #[test]
     fn track_validation_catches_disorder_and_type_drift() {
         let ok = MotionTrack {
             ty: PropType::Number,
@@ -769,12 +524,12 @@ mod tests {
                 MotionKeyframe {
                     frame: 0,
                     value: MotionValue::Number(0.0),
-                    easing: MotionEasing::Linear,
+                    easing: Easing::Linear,
                 },
                 MotionKeyframe {
                     frame: 10,
                     value: MotionValue::Number(1.0),
-                    easing: MotionEasing::Linear,
+                    easing: Easing::Linear,
                 },
             ],
         };
@@ -831,13 +586,13 @@ mod tests {
             keyframes: vec![MotionKeyframe {
                 frame: 0,
                 value: MotionValue::Number(f64::NAN),
-                easing: MotionEasing::Linear,
+                easing: Easing::Linear,
             }],
         };
         assert_eq!(t.validate(), Err(TrackError::NonFinite { at: 0 }));
 
         t.keyframes[0].value = MotionValue::Number(0.0);
-        t.keyframes[0].easing = MotionEasing::CubicBezier {
+        t.keyframes[0].easing = Easing::CubicBezier {
             p: [0.0, f64::INFINITY, 1.0, 1.0],
         };
         assert_eq!(t.validate(), Err(TrackError::InvalidEasing { at: 0 }));
@@ -847,7 +602,7 @@ mod tests {
             keyframes: vec![MotionKeyframe {
                 frame: 0,
                 value: MotionValue::Enum("x".into()),
-                easing: MotionEasing::Linear,
+                easing: Easing::Linear,
             }],
         };
         assert_eq!(empty_enum.validate(), Err(TrackError::EmptyEnum));
@@ -862,12 +617,12 @@ mod tests {
                 MotionKeyframe {
                     frame: -5,
                     value: MotionValue::Number(0.0),
-                    easing: MotionEasing::Linear,
+                    easing: Easing::Linear,
                 },
                 MotionKeyframe {
                     frame: 5,
                     value: MotionValue::Number(1.0),
-                    easing: MotionEasing::Linear,
+                    easing: Easing::Linear,
                 },
             ],
         };
@@ -889,12 +644,12 @@ mod tests {
                 MotionKeyframe {
                     frame: 0,
                     value: MotionValue::PathData(line(0.0)),
-                    easing: MotionEasing::Linear,
+                    easing: Easing::Linear,
                 },
                 MotionKeyframe {
                     frame: 10,
                     value: MotionValue::PathData(line(10.0)),
-                    easing: MotionEasing::Linear,
+                    easing: Easing::Linear,
                 },
             ],
         };

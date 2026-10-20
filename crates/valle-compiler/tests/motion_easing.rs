@@ -107,15 +107,51 @@ fn step_start_jumps_at_zero_and_at_each_segment_start() {
 }
 
 #[test]
+fn css_and_easings_net_spellings_name_the_shared_curves() {
+    // easeOutCubic at half time: 1 - 0.5³ of the way.
+    assert_eq!(positions(r#""easeOutCubic""#, &[15]), vec![390.0]);
+    for (css, camel) in [
+        ("ease-in", "easeIn"),
+        ("ease-out", "easeOut"),
+        ("ease-in-out", "easeInOut"),
+        ("step-start", "steps(1, start)"),
+        ("step-end", "steps(1)"),
+        ("steps(4, jump-end)", "steps(4, end)"),
+    ] {
+        let artifact = |name: &str| {
+            compile_motion(&source(&format!("{name:?}")))
+                .unwrap()
+                .artifact
+        };
+        assert_eq!(artifact(css).exprs, artifact(camel).exprs, "{css}");
+    }
+    // jump-none holds both ends for a step each; jump-both jumps at both ends.
+    assert_eq!(
+        positions(r#""steps(5, jump-none)""#, &[0, 3, 9, 15, 21, 27, 30]),
+        vec![40.0, 40.0, 140.0, 240.0, 340.0, 440.0, 440.0]
+    );
+    assert_eq!(
+        positions(r#""steps(3, jump-both)""#, &[0, 5, 15, 25, 30]),
+        vec![140.0, 140.0, 240.0, 340.0, 440.0]
+    );
+}
+
+#[test]
 fn presets_accept_immutable_names_and_round_trip_artifacts() {
     for name in [
         "easeInBack",
         "easeOutBack",
         "easeInOutBack",
-        "elastic",
-        "bounce",
+        "easeOutElastic",
+        "easeOutBounce",
+        "easeInOutSine",
+        "easeOutExpo",
+        "ease-in-out",
+        "step-start",
         "steps(4)",
         "steps(4, start)",
+        "steps(4, jump-both)",
+        "cubic-bezier(0.34, 1.56, 0.64, 1)",
     ] {
         let direct = compile_motion(&source(&format!("{name:?}")))
             .unwrap()
@@ -143,7 +179,12 @@ fn invalid_step_counts_positions_and_beziers_report_the_authored_value() {
         "steps(4,)",
         "steps(4, end, start)",
         "steps()",
+        "steps(1, jump-none)",
         "cubic-bezier(2,0,1,1)",
+        "exp",
+        "elastic",
+        "bounce",
+        "easeOutcubic",
     ] {
         let diagnostics = compile_motion(&source(&format!("{name:?}"))).unwrap_err();
         assert!(

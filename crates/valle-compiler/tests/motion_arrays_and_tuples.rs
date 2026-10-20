@@ -3,9 +3,7 @@
 use std::collections::BTreeMap;
 
 use valle_compiler::motion::{MotionModuleGraph, compile_motion, compile_motion_modules};
-use valle_motion::{
-    Expr, Extrapolation, InterpolateStop, MotionEasing, NodeKind, PathValue, StyleValue,
-};
+use valle_motion::{Easing, Expr, Extrapolation, InterpolateStop, NodeKind, PathValue, StyleValue};
 
 fn compile_ok(source: &str) -> valle_compiler::motion::CompiledMotion {
     compile_motion(source)
@@ -24,7 +22,7 @@ fn interpolate_payload(
     compiled: &valle_compiler::motion::CompiledMotion,
 ) -> (
     Vec<InterpolateStop>,
-    Vec<MotionEasing>,
+    Vec<Easing>,
     Extrapolation,
     Extrapolation,
 ) {

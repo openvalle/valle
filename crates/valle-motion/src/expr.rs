@@ -4,8 +4,9 @@ use crate::geometry::{
     CompatibleBarycentricMorph, GeometryEvalPolicy, MAX_FRAME_GEOMETRY_POINTS,
     MAX_GEOMETRY_TRAJECTORY_FRAMES, PathData,
 };
-use crate::value::{MotionEasing, MotionValue};
+use crate::value::MotionValue;
 use valle_draw::PathVerb;
+use valle_timeline::easing::Easing;
 
 use super::artifact::ValidationError;
 use super::controls::{ControlType, ControlsSchema};
@@ -398,7 +399,7 @@ pub enum Expr {
     Interpolate {
         input: ExprId,
         stops: Vec<InterpolateStop>,
-        easings: Vec<MotionEasing>,
+        easings: Vec<Easing>,
         color_space: valle_draw::program::GradientInterpolation,
         extrapolate_left: Extrapolation,
         extrapolate_right: Extrapolation,

@@ -572,7 +572,7 @@ impl<'s> Compiler<'s> {
         let easing_count = stops.len() - 1;
         let (easings, color_space) = match arguments.get(3) {
             None => (
-                vec![MotionEasing::Linear; easing_count],
+                vec![Easing::Linear; easing_count],
                 valle_draw::program::GradientInterpolation::Srgb,
             ),
             Some(options) => self.lower_interpolate_options(options, easing_count)?,
@@ -825,10 +825,7 @@ impl<'s> Compiler<'s> {
         &mut self,
         options: &Argument<'_>,
         easing_count: usize,
-    ) -> Option<(
-        Vec<MotionEasing>,
-        valle_draw::program::GradientInterpolation,
-    )> {
+    ) -> Option<(Vec<Easing>, valle_draw::program::GradientInterpolation)> {
         let expression = options.as_expression()?;
         let Expression::ObjectExpression(object) = strip_parens(expression) else {
             self.illegal(
@@ -938,7 +935,7 @@ impl<'s> Compiler<'s> {
             (space, None) => space.unwrap_or(valle_draw::program::GradientInterpolation::Srgb),
         };
         Some((
-            easings.unwrap_or_else(|| vec![MotionEasing::Linear; easing_count]),
+            easings.unwrap_or_else(|| vec![Easing::Linear; easing_count]),
             color_space,
         ))
     }
@@ -949,7 +946,7 @@ impl<'s> Compiler<'s> {
         &mut self,
         value: &Expression<'_>,
         easing_count: usize,
-    ) -> Option<Vec<MotionEasing>> {
+    ) -> Option<Vec<Easing>> {
         if self.array_shape_illegal(value, "interpolate easing array") {
             return None;
         }
@@ -1006,7 +1003,7 @@ impl<'s> Compiler<'s> {
         Some(vec![self.easing_name(value)?; easing_count])
     }
 
-    pub(super) fn easing_name(&mut self, value: &Expression<'_>) -> Option<MotionEasing> {
+    pub(super) fn easing_name(&mut self, value: &Expression<'_>) -> Option<Easing> {
         if let Expression::StringLiteral(name) = peel_expr(value) {
             return self.parse_easing_or_diag(name.value.as_str(), value.span());
         }
@@ -1021,13 +1018,14 @@ impl<'s> Compiler<'s> {
         None
     }
 
-    pub(super) fn parse_easing_or_diag(&mut self, name: &str, span: Span) -> Option<MotionEasing> {
-        parse_easing(name).or_else(|| {
+    pub(super) fn parse_easing_or_diag(&mut self, name: &str, span: Span) -> Option<Easing> {
+        Easing::parse(name).or_else(|| {
             self.illegal(
                 DiagCode::GrammarForbidden,
                 span,
                 format!(
-                    "invalid easing `{name}`; use linear/ease/easeIn/easeOut/easeInOut/exp, easeInBack/easeOutBack/easeInOutBack, elastic, bounce, steps(n, start|end) with a positive integer n, or cubic-bezier(x1,y1,x2,y2) with finite values and x in [0,1]"
+                    "invalid easing `{name}`; use {}",
+                    valle_timeline::easing::EASING_SPELLINGS
                 ),
             );
             None

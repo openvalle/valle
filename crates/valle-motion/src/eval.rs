@@ -13,10 +13,10 @@ use valle_draw::{Point, Rect, Vec2, program::GradientInterpolation};
 use crate::context::MotionContext;
 use crate::geometry::{GeometryError, PathData};
 pub use crate::value::css_token;
-use crate::value::{Angle, AngleUnit, Length, Length2, MotionEasing, MotionValue};
+use crate::value::{Angle, AngleUnit, Length, Length2, MotionValue};
 
 use super::{
-    CompareOp, ContextInput, ControlType, ControlsSchema, Expr, ExprId, Extrapolation,
+    CompareOp, ContextInput, ControlType, ControlsSchema, Easing, Expr, ExprId, Extrapolation,
     GeometryField, InstanceGroup, InterpolateStop, MAX_TEMPLATE_OUTPUT_BYTES, RangeShape,
     SceneArtifact, TemplatePart,
 };
@@ -1781,7 +1781,7 @@ fn interpolate(
     at: usize,
     input: f64,
     stops: &[InterpolateStop],
-    easings: &[MotionEasing],
+    easings: &[Easing],
     color_space: GradientInterpolation,
     left: Extrapolation,
     right: Extrapolation,
@@ -1826,7 +1826,7 @@ fn interpolate_segment(
     input: f64,
     lhs: &InterpolateStop,
     rhs: &InterpolateStop,
-    easing: Option<MotionEasing>,
+    easing: Option<Easing>,
     color_space: GradientInterpolation,
 ) -> Result<MotionValue, EvalError> {
     let span = rhs.input - lhs.input;
@@ -1838,7 +1838,7 @@ fn interpolate_segment(
     lerp_value(at, &lhs.output, &rhs.output, t, color_space)
 }
 
-fn ease(easing: MotionEasing, t: f64) -> f64 {
+fn ease(easing: Easing, t: f64) -> f64 {
     easing.evaluate(t)
 }
 
@@ -1919,7 +1919,7 @@ mod tests {
     #[test]
     fn easings_actually_bend_the_curve_and_overshoot_passes_the_endpoint() {
         use super::*;
-        let at = |easing: MotionEasing, t: f64| -> f64 {
+        let at = |easing: Easing, t: f64| -> f64 {
             let stops = [
                 InterpolateStop {
                     input: 0.0,
@@ -1944,22 +1944,22 @@ mod tests {
             value
         };
 
-        let linear_mid = at(MotionEasing::Linear, 0.5);
+        let linear_mid = at(Easing::Linear, 0.5);
         assert!(
             (linear_mid - 0.5).abs() < 1e-12,
             "the linear midpoint is 0.5"
         );
         assert!(
-            at(MotionEasing::EaseOut, 0.5) > linear_mid + 0.05,
+            at(Easing::EaseOut, 0.5) > linear_mid + 0.05,
             "easeOut must exceed the linear midpoint",
         );
         assert!(
-            at(MotionEasing::EaseIn, 0.5) < linear_mid - 0.05,
+            at(Easing::EaseIn, 0.5) < linear_mid - 0.05,
             "easeIn must remain below the linear midpoint",
         );
 
         // Unclamped Bezier y values permit back-out overshoot.
-        let back_out = MotionEasing::CubicBezier {
+        let back_out = Easing::CubicBezier {
             p: [0.34, 1.56, 0.64, 1.0],
         };
         let peak = (60..=90)
@@ -2561,7 +2561,7 @@ mod tests {
                         output: MotionValue::Length(Length::px(40.0)),
                     },
                 ],
-                easings: vec![MotionEasing::Linear],
+                easings: vec![Easing::Linear],
                 color_space: GradientInterpolation::Srgb,
                 extrapolate_left: Extrapolation::Clamp,
                 extrapolate_right: Extrapolation::Clamp,
