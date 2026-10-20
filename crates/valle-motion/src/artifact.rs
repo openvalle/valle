@@ -3731,7 +3731,7 @@ impl SceneArtifact {
                 .any(|class| crate::tailwind::sets_advanced_filter(class))
                 || node.styles.iter().any(|style| {
                     style.property == "motion-filter-frame"
-                        || (style.property == "filter"
+                        || (matches!(style.property.as_str(), "filter" | "backdrop-filter")
                             && matches!(&style.value,
                         StyleValue::Static { value: MotionValue::Str(value) }
                         if crate::style::advanced_filter::names_advanced(value)))

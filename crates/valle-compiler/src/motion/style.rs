@@ -290,10 +290,19 @@ impl<'s> Compiler<'s> {
                 continue;
             }
             if matches!(property_name.as_str(), "filter" | "backdrop-filter") {
-                if let Some(mut bindings) =
-                    self.lower_css_filter_style(&property.value, &property_name)
+                for binding in self
+                    .lower_css_filter_style(&property.value, &property_name)
+                    .into_iter()
+                    .flatten()
                 {
-                    styles.append(&mut bindings);
+                    // Both lists share the node's grain frame.
+                    if binding.property != "motion-filter-frame"
+                        || !styles
+                            .iter()
+                            .any(|style| style.property == binding.property)
+                    {
+                        styles.push(binding);
+                    }
                 }
                 continue;
             }

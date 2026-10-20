@@ -6,6 +6,7 @@ import noiseDisplacementSource from "../../../../../../crates/valle-draw/assets/
 import { initSync, ProductEngine } from "../../../generated/web/valle_engine.js";
 import { CanvasKitBuiltinRuntime } from "./builtin-runtime.ts";
 import {
+  backdropFilterMatrix,
   backdropFiltersInDeviceSpace,
   backdropSimilarity,
   drawNoiseDisplacement,
@@ -105,6 +106,23 @@ describe("scheduled DrawProgram filter space", () => {
     expect(backdropFiltersInDeviceSpace([blur], perspective, bounds))
       .toEqual([{ kind: "blur", sigmaX: 5 * scale, sigmaY: 5 * scale }]);
     expect(() => backdropFiltersInDeviceSpace([blur], perspective, { ...bounds, x: -110 })).toThrow();
+  });
+
+  test("backdrop filters keep their shape under any transform", () => {
+    const bounds = { x: 0, y: 0, width: 20, height: 10 };
+    const lens = { kind: "lensDistortion", k1: 0.2, k2: 0 };
+    const radial = { kind: "radialBlur", center: [10, 5], amount: 4 };
+    const scaled = [2, 0, 3, 0, 2, 4, 0, 0, 1];
+    const uneven = [2, 0, 0, 0, 3, 0, 0, 0, 1];
+    const shear = [1, 1, 0, 0, 1, 0, 0, 0, 1];
+    // A transform the filter takes stays; one it cannot take gives way to the similarity nearest
+    // it at the bounds centre. Blur takes an uneven scale.
+    expect(backdropFilterMatrix(lens, scaled, bounds)).toBe(scaled);
+    expect(backdropFilterMatrix(radial, scaled, bounds)).toBe(scaled);
+    for (const [filter, matrix] of [[lens, uneven], [lens, shear], [radial, uneven], [radial, shear]] as const) {
+      expect(backdropFilterMatrix(filter, matrix, bounds)).toEqual(backdropSimilarity(matrix, [10, 5])!);
+    }
+    expect(backdropFilterMatrix({ kind: "blur", sigmaX: 2, sigmaY: 2 }, uneven, bounds)).toBe(uneven);
   });
 
   test("rejects transform classes the scheduled axis-aligned kernel cannot represent", () => {

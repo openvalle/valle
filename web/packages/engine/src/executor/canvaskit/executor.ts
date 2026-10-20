@@ -1519,7 +1519,8 @@ function directRasterPlan(draw: DrawProgramWire, localPlan: Wire): DirectRasterP
       // saveLayer's image-filter crop truncates the wide glow tail; use scheduled ROI passes.
       // Noise displacement runs the kernel Native shares, which only a scheduled pass draws.
       && !kinds.some(kind => ["glow", "bloom", "radialBlur", "filmGrain", "lensDistortion", "chromaticAberration", "noiseDisplacement"].includes(kind))
-      && !backdropKinds.includes("noiseDisplacement")
+      // A backdrop list that names an advanced filter runs a scheduled pass per function.
+      && !backdropKinds.some(kind => ["glow", "bloom", "radialBlur", "filmGrain", "lensDistortion", "chromaticAberration", "velocityBlur", "noiseDisplacement"].includes(kind))
       // Skia filters a blur or drop-shadow layer under a rotated or skewed CTM in scale/translate
       // space and resamples the result, softening its content; scheduled passes filter in device space.
       && !(spatial && transformed)
@@ -1820,7 +1821,8 @@ async function executeProgramPass(
     case "backdrop": {
       // The bounds and the filter lengths are in the owner's local units, while the backdrop and the
       // canvas are in device pixels: the filters, mapped into device pixels, read the backdrop around
-      // the bounds, which then clip what they produce.
+      // the bounds, which then clip what they produce. One draw covers the cleared target: a second
+      // one over the unfiltered backdrop would leave some of it along anti-aliased edges.
       const clip = { kind: "rect", value: rect(kind.bounds, "program backdrop bounds") };
       const matrix = programMatrix(admitted, localPlan, kind.output, device);
       const input = programValue(values, kind.input);
@@ -1829,7 +1831,6 @@ async function executeProgramPass(
       canvas.save();
       try {
         applyClip(CanvasKit, canvas, admitted.draw, clip, matrix);
-        drawImageValue(CanvasKit, canvas, input, 1, "src");
         if (last?.kind === "noiseDisplacement") {
           drawDisplacedBackdrop(CanvasKit, builtins, engineKernels, arena, canvas, input, filters.slice(0, -1), last, outputRoi);
         } else {
@@ -1885,7 +1886,8 @@ async function executeProgramPass(
       return;
     }
     case "applyFilter": {
-      const matrix = programMatrix(admitted, localPlan, kind.output, device);
+      const exact = programMatrix(admitted, localPlan, kind.output, device);
+      const matrix = programFilterMatrix(kind, exact);
       const filter = programFilterInDeviceSpace(record(kind.filter, "program filter"), matrix);
       if (filter.kind === "noiseDisplacement") {
         const tables = engineKernels?.perlin_noise_tables;
@@ -1932,7 +1934,7 @@ async function executeProgramPass(
         const inputRoi = source.roi;
         if (arena.gpu && filter.kind === "lensDistortion") {
           drawLensDistortion(CanvasKit, builtins, canvas, source.image, inputRoi, outputRoi,
-            programLensFrame(localPlan, kind.input, matrix),
+            programLensFrame(localPlan, kind, matrix, exact),
             finiteNumber(filter.k1, "lens distortion k1"), finiteNumber(filter.k2, "lens distortion k2"));
           return;
         }
@@ -1979,7 +1981,7 @@ async function executeProgramPass(
         const output = await (filter.kind === "lensDistortion" ? (() => {
           const kernel = engineKernels?.apply_lens_distortion_f16;
           if (!kernel) fail("lens_distortion_kernel", "working-linear F16 lens distortion kernel is unavailable");
-          const frame = programLensFrame(localPlan, kind.input, matrix);
+          const frame = programLensFrame(localPlan, kind, matrix, exact);
           return kernel.call(engineKernels, input, ...dimensions, outputRoi.x, outputRoi.y,
             finiteNumber(filter.k1, "lens distortion k1"),
             finiteNumber(filter.k2, "lens distortion k2"),
@@ -3511,26 +3513,51 @@ export function programFilterInDeviceSpace(
 
 /**
  * Map a backdrop chain's lengths, node units as in `filter`, into the device pixels its pass
- * filters in. A transform `programFilterInDeviceSpace` represents maps them exactly; a skewed or
- * projective one takes `backdropSimilarity` at the bounds centre instead of failing. Noise
- * displacement stays in output pixels. Native maps them the same way.
+ * filters in, through `backdropFilterMatrix`. Noise displacement stays in output pixels.
  */
 export function backdropFiltersInDeviceSpace(
   filters: readonly unknown[],
   matrix: readonly number[],
   bounds: RectWire,
 ): Record<string, unknown>[] {
-  const similarity = backdropSimilarity(matrix, [bounds.x + bounds.width * 0.5, bounds.y + bounds.height * 0.5]);
   return filters.map((raw) => {
     const filter = record(raw, "backdrop filter");
-    if (filter.kind === "noiseDisplacement") return filter;
-    try {
-      return programFilterInDeviceSpace(filter, matrix);
-    } catch (error) {
-      if (!similarity || !(error instanceof CanvasKitCompositorError) || error.code !== "unsupported_filter") throw error;
-      return programFilterInDeviceSpace(filter, similarity);
-    }
+    return filter.kind === "noiseDisplacement"
+      ? filter
+      : programFilterInDeviceSpace(filter, backdropFilterMatrix(filter, matrix, bounds));
   });
+}
+
+/**
+ * The transform a backdrop filter maps its lengths with. One that `programFilterInDeviceSpace`
+ * represents for the filter maps them exactly, as for a node's `filter`; a skewed or projective
+ * one gives way to `backdropSimilarity` at the centre of `bounds`, so the filter keeps its shape
+ * instead of failing. Native chooses the same way.
+ */
+export function backdropFilterMatrix(filter: Wire, matrix: readonly number[], bounds: RectWire): readonly number[] {
+  let exact = true;
+  try {
+    if (filter.kind === "lensDistortion") {
+      // Lens distortion has no lengths, but its frame needs a similarity.
+      const [x, y] = programGaussianInDeviceSpace([1, 1], matrix);
+      exact = Math.abs(x - y) <= Math.max(x, y, 1) * 1e-9;
+    } else {
+      programFilterInDeviceSpace(filter, matrix);
+    }
+  } catch (error) {
+    if (!(error instanceof CanvasKitCompositorError) || error.code !== "unsupported_filter") throw error;
+    exact = false;
+  }
+  return exact
+    ? matrix
+    : backdropSimilarity(matrix, [bounds.x + bounds.width * 0.5, bounds.y + bounds.height * 0.5]) ?? matrix;
+}
+
+/** The transform an ApplyFilter pass maps its filter with: a backdrop stage's, or the node's own. */
+function programFilterMatrix(kind: Wire, exact: number[]): number[] {
+  return kind.backdrop == null
+    ? exact
+    : [...backdropFilterMatrix(record(kind.filter, "program filter"), exact, rect(kind.backdrop, "backdrop stage bounds"))];
 }
 
 /**
@@ -3583,7 +3610,7 @@ function programVectorInDeviceSpace(vector: [number, number], matrix: readonly n
   ];
 }
 
-function programGaussianInDeviceSpace(sigma: [number, number], matrix: number[]): [number, number] {
+function programGaussianInDeviceSpace(sigma: [number, number], matrix: readonly number[]): [number, number] {
   const [a, b, , d, e, , g, h, i] = matrix as [
     number, number, number, number, number, number, number, number, number,
   ];
@@ -3866,26 +3893,39 @@ function programMatrix(admitted: ProgramStructure, localPlan: Wire, output: unkn
   );
 }
 
-function programLensFrame(localPlan: Wire, input: unknown, matrix: number[]): [number, number, number, number] {
+/**
+ * Lens distortion's frame in device pixels: the bounds, under the node's exact transform, of a
+ * backdrop stage's border box or else of the uncropped input. `matrix`, the transform the pass
+ * filters with, must be a similarity. Native maps the frame the same way.
+ */
+function programLensFrame(localPlan: Wire, kind: Wire, matrix: number[], exact: number[]): [number, number, number, number] {
   const [sx, sy] = programGaussianInDeviceSpace([1, 1], matrix);
   if (Math.abs(sx - sy) > Math.max(sx, sy, 1) * 1e-9)
     fail("unsupported_filter", "lens distortion needs a similarity device transform");
-  const id = positiveId(input, "lens input resource");
-  const resources = array(localPlan.resources, "localPlan.resources");
-  const resource = record(requiredIndex(resources, id - 1, "lens input resource"), "lens input resource");
-  if (resource.id !== id) fail("program_resource", "lens input resource identity is invalid");
-  const bounds = record(resource.bounds, "lens input bounds");
-  if (bounds.kind !== "finite") fail("unsupported_filter", "lens distortion has no finite source frame");
-  const source = rect(bounds.rect, "lens source frame");
+  let source: RectWire;
+  if (kind.backdrop == null) {
+    const id = positiveId(kind.input, "lens input resource");
+    const resources = array(localPlan.resources, "localPlan.resources");
+    const resource = record(requiredIndex(resources, id - 1, "lens input resource"), "lens input resource");
+    if (resource.id !== id) fail("program_resource", "lens input resource identity is invalid");
+    const bounds = record(resource.bounds, "lens input bounds");
+    if (bounds.kind !== "finite") fail("unsupported_filter", "lens distortion has no finite source frame");
+    source = rect(bounds.rect, "lens source frame");
+  } else {
+    source = rect(kind.backdrop, "lens backdrop frame");
+  }
   const corners = [
     [source.x, source.y],
     [source.x + source.width, source.y],
     [source.x + source.width, source.y + source.height],
     [source.x, source.y + source.height],
   ];
-  const points = corners.map(([x, y]) => [
-    matrix[0]! * x! + matrix[1]! * y! + matrix[2]!,
-    matrix[3]! * x! + matrix[4]! * y! + matrix[5]!,
+  const w = corners.map(([x, y]) => exact[6]! * x! + exact[7]! * y! + exact[8]!);
+  if (w.some(value => !Number.isFinite(value) || Math.abs(value) <= Number.EPSILON || Math.sign(value) !== Math.sign(w[0]!)))
+    fail("unsupported_filter", "lens distortion has no finite source frame");
+  const points = corners.map(([x, y], i) => [
+    (exact[0]! * x! + exact[1]! * y! + exact[2]!) / w[i]!,
+    (exact[3]! * x! + exact[4]! * y! + exact[5]!) / w[i]!,
   ]);
   const left = Math.min(...points.map(point => point[0]!));
   const top = Math.min(...points.map(point => point[1]!));
@@ -4824,9 +4864,12 @@ function planProgramRuns(
     const device = dynamicTransform(dynamic, kind.transform);
     const bound = cropProgramInputs(localPlan, required(schedule.programs, id, "bound program schedule"), planner,
       local => programFilterInDeviceSpace(record(local.filter, "program filter"),
-        programMatrix(program, localPlan, local.output, device)),
+        programFilterMatrix(local, programMatrix(program, localPlan, local.output, device))),
       local => programPassReads(local),
-      local => programLensFrame(localPlan, local.input, programMatrix(program, localPlan, local.output, device)),
+      local => {
+        const exact = programMatrix(program, localPlan, local.output, device);
+        return programLensFrame(localPlan, local, programFilterMatrix(local, exact), exact);
+      },
       local => geometryRenderer?.canCrop(program.draw, local.roots as number[],
         programMatrix(program, localPlan, local.output, device)) ?? false);
     const direct = program.directRaster !== null && !(program.directRaster.spatialFilters
@@ -4982,7 +5025,7 @@ function programWorkingSet(
     if (kind.kind === "rasterNode" || kind.kind === "rasterTree") need += atlas;
     if (kind.kind === "applyFilter") {
       const filter = programFilterInDeviceSpace(record(kind.filter, "program filter"),
-        programMatrix(program, localPlan, kind.output, run.device));
+        programFilterMatrix(kind, programMatrix(program, localPlan, kind.output, run.device)));
       const input = values.get(positiveId(kind.input, "program input")) ?? null;
       const pyramid = filter.kind === "glow" || filter.kind === "bloom";
       if (filter.kind === "radialBlur" && input) {

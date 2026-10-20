@@ -831,9 +831,20 @@ impl ProgramRuntime {
                 self.program.paths(),
                 target_origin,
             ),
-            ProgramPassKind::ApplyFilter { input, filter, .. } => {
+            ProgramPassKind::ApplyFilter {
+                input,
+                filter,
+                backdrop,
+                ..
+            } => {
                 if let Some(image) = cpu_filter_input.or(resource(resources, *input)?) {
-                    let local_to_device = self.device_matrix_values(plan, output, transform)?;
+                    let exact = self.device_matrix_values(plan, output, transform)?;
+                    // A backdrop stage maps its lengths as the backdrop does, and its border
+                    // box frames lens distortion; a node's uncropped input frames it otherwise.
+                    let local_to_device = match backdrop {
+                        Some(bounds) => backdrop_filter_matrix(filter, exact, *bounds),
+                        None => exact,
+                    };
                     let lens_frame = if matches!(filter, Filter::LensDistortion { .. }) {
                         let [x, y] = program_gaussian_in_device_space([1.0, 1.0], local_to_device)?;
                         if (x - y).abs() > x.max(y).max(1.0) * 1.0e-9 {
@@ -841,13 +852,17 @@ impl ProgramRuntime {
                                 "lens distortion needs a similarity device transform".into(),
                             ));
                         }
-                        let bounds = plan
-                            .local_plan()
-                            .resources()
-                            .get((input.get() - 1) as usize)
-                            .filter(|resource| resource.id == *input)
-                            .and_then(|resource| resource.bounds.rect())
-                            .and_then(|rect| Transform2d(local_to_device).map_bounds(rect))
+                        let frame = match backdrop {
+                            Some(bounds) => Some(*bounds),
+                            None => plan
+                                .local_plan()
+                                .resources()
+                                .get((input.get() - 1) as usize)
+                                .filter(|resource| resource.id == *input)
+                                .and_then(|resource| resource.bounds.rect()),
+                        };
+                        let bounds = frame
+                            .and_then(|rect| Transform2d(exact).map_bounds(rect))
                             .ok_or_else(|| {
                                 DrawError::Unsupported(
                                     "lens distortion has no finite source frame".into(),
@@ -2977,8 +2992,15 @@ pub(crate) fn program_f16_filter_bytes(
                 Some(step.device_roi()).filter(|roi| !roi.is_empty())
             }
         };
-        if let (Some(output), ProgramPassKind::ApplyFilter { input, filter, .. }) =
-            (roi, &pass.kind)
+        if let (
+            Some(output),
+            ProgramPassKind::ApplyFilter {
+                input,
+                filter,
+                backdrop,
+                ..
+            },
+        ) = (roi, &pass.kind)
             && uses_cpu_f16_filter(filter)
             && !uses_gpu_f16_filter(filter, backend)
             && let Some(input) = rois.get(input)
@@ -2990,8 +3012,11 @@ pub(crate) fn program_f16_filter_bytes(
                 .filter(|resource| resource.id == step.output())
                 .ok_or(DrawError::MissingProgramResource(step.output().get()))?
                 .local_to_program;
-            let local_to_device =
+            let mut local_to_device =
                 program_local_to_device(plan.viewport, local_to_program, transform)?;
+            if let Some(bounds) = backdrop {
+                local_to_device = backdrop_filter_matrix(filter, local_to_device, *bounds);
+            }
             let filter = program_filter_in_device_space(filter, local_to_device)?;
             if let Some(work) = F16FilterWork::new(&filter, *input, output)? {
                 peak = peak.max(work.reserved_bytes());
@@ -3503,29 +3528,48 @@ fn program_filter_in_device_space(
 }
 
 /// Map a backdrop chain's lengths, node units as in `filter`, into the device pixels its pass
-/// filters in. A transform `program_filter_in_device_space` represents maps them exactly; a
-/// skewed or projective one takes [`backdrop_similarity`] at the bounds centre instead of
-/// failing. Noise displacement stays in output pixels. CanvasKit maps them the same way.
+/// filters in, through [`backdrop_filter_matrix`]. Noise displacement stays in output pixels.
 fn backdrop_filters_in_device_space(
     filters: &[Filter],
     local_to_device: [f64; 9],
     bounds: Rect,
 ) -> Result<Vec<Filter>, DrawError> {
-    let similarity = backdrop_similarity(
+    filters
+        .iter()
+        .map(|filter| match filter {
+            Filter::NoiseDisplacement { .. } => Ok(filter.clone()),
+            _ => program_filter_in_device_space(
+                filter,
+                backdrop_filter_matrix(filter, local_to_device, bounds),
+            ),
+        })
+        .collect()
+}
+
+/// The transform a backdrop filter maps its lengths with. One that
+/// `program_filter_in_device_space` represents for the filter maps them exactly, as for a node's
+/// `filter`; a skewed or projective one gives way to [`backdrop_similarity`] at the centre of
+/// `bounds`, so the filter keeps its shape instead of failing. CanvasKit chooses the same way.
+fn backdrop_filter_matrix(filter: &Filter, local_to_device: [f64; 9], bounds: Rect) -> [f64; 9] {
+    let exact = match filter {
+        // Lens distortion has no lengths, but its frame needs a similarity.
+        Filter::LensDistortion { .. } => {
+            program_gaussian_in_device_space([1.0, 1.0], local_to_device)
+                .is_ok_and(|[x, y]| (x - y).abs() <= x.max(y).max(1.0) * 1.0e-9)
+        }
+        _ => program_filter_in_device_space(filter, local_to_device).is_ok(),
+    };
+    if exact {
+        return local_to_device;
+    }
+    backdrop_similarity(
         local_to_device,
         [
             bounds.x + bounds.width * 0.5,
             bounds.y + bounds.height * 0.5,
         ],
-    );
-    filters
-        .iter()
-        .map(|filter| match filter {
-            Filter::NoiseDisplacement { .. } => Ok(filter.clone()),
-            _ => program_filter_in_device_space(filter, local_to_device)
-                .or_else(|error| program_filter_in_device_space(filter, similarity.ok_or(error)?)),
-        })
-        .collect()
+    )
+    .unwrap_or(local_to_device)
 }
 
 /// The similarity nearest `local_to_device` at local point `at`: the Jacobian there, with its
@@ -7046,6 +7090,39 @@ mod tests {
                 sigma_y: 6.0,
             }
         );
+    }
+
+    #[test]
+    fn backdrop_filters_keep_their_shape_under_any_transform() {
+        let bounds = Rect::new(0.0, 0.0, 20.0, 10.0);
+        let lens = Filter::LensDistortion { k1: 0.2, k2: 0.0 };
+        let radial = Filter::RadialBlur {
+            center: [10.0, 5.0],
+            amount: 4.0,
+        };
+        let scaled = [2.0, 0.0, 3.0, 0.0, 2.0, 4.0, 0.0, 0.0, 1.0];
+        let uneven = [2.0, 0.0, 0.0, 0.0, 3.0, 0.0, 0.0, 0.0, 1.0];
+        let shear = [1.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0];
+        // A transform the filter takes stays; one it cannot take gives way to the similarity
+        // nearest it at the bounds centre. Blur takes an uneven scale.
+        assert_eq!(backdrop_filter_matrix(&lens, scaled, bounds), scaled);
+        assert_eq!(backdrop_filter_matrix(&radial, scaled, bounds), scaled);
+        for (filter, matrix) in [
+            (&lens, uneven),
+            (&lens, shear),
+            (&radial, uneven),
+            (&radial, shear),
+        ] {
+            assert_eq!(
+                backdrop_filter_matrix(filter, matrix, bounds),
+                backdrop_similarity(matrix, [10.0, 5.0]).unwrap()
+            );
+        }
+        let blur = Filter::Blur {
+            sigma_x: 2.0,
+            sigma_y: 2.0,
+        };
+        assert_eq!(backdrop_filter_matrix(&blur, uneven, bounds), uneven);
     }
 
     #[test]

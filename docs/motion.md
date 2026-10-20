@@ -1131,23 +1131,21 @@ at the centre of its border box.
 
 `filter: "chromatic-aberration(6px)"` is also available as a node filter. It
 shifts red and blue by 3 px in opposite directions while green
-stays centered. The signed offset must be finite and within ±256 px. It is not
-admitted in `backdropFilter`.
+stays centered. The signed offset must be finite and within ±256 px.
 
 `filter: "radial-blur(40px 20px 16px)"` blurs the node and its descendants along
 rays from a center at local `(40, 20)` px. The last length is the maximum sample
 displacement in either direction along each ray (0–128 px). It uses a shared working-linear RGBA16F approximation with geometrically increasing
 three-tap passes, so cost grows logarithmically with device radius. Near the center,
 a bounded exact kernel avoids rings and excess diffusion; samples never cross the
-center. Native and CanvasKit use the same shader, including at enlarged output sizes. It is not
-admitted in `backdropFilter`.
+center. Native and CanvasKit use the same shader, including at enlarged output sizes.
 
 `filter: "film-grain(7 0.12 2px)"` adds seeded monochrome grain in sRGB display encoding to the node and its descendants. The unsigned integer seed fixes the sequence;
 amount is in 0–1 and grain size in 1–64 local px. Noise changes once per local frame and stays deterministic across ROI crops and
 random frame seeks. Noise amplitude follows each channel's distance to black and white, preserving
 both endpoints without asymmetric clipping. Display-gray mean brightness remains
 stable at high amounts. The result returns to working-linear light, scales with
-source alpha, and does not alter alpha. It is not admitted in `backdropFilter`.
+source alpha, and does not alter alpha.
 
 These advanced filters use the same cascade as ordinary CSS filters, including
 important utilities, and stand anywhere in a filter list. Each function filters the
@@ -1155,6 +1153,14 @@ result of the one before it: `filter: "blur(2px) glow(24px 1.5 #22d3ee) saturate
 blurs the node, adds a halo around the blurred result, then saturates both. A class
 sets the same list as `filter-[blur(2px)_glow(24px_1.5_#22d3ee)]` or
 `[filter:blur(2px)_glow(24px_1.5_#22d3ee)]`.
+`backdropFilter` takes them the same way, as in
+`backdropFilter: "blur(8px) chromatic-aberration(4px)"` or
+`backdrop-filter-[blur(8px)_chromatic-aberration(4px)]`: each function filters the
+backdrop the one before it produced, and the border box then clips the result. There
+the backdrop is their source, so `radial-blur()` centers are in the node's own units
+from its border box, and `lens-distortion()` bends around the centre of the border
+box. Under a skew or perspective, where a function would need the node's transform to
+be a similarity, it uses the similarity described for `backdropFilter` lengths.
 Template strings and conditional expressions can animate parameters,
 for example ``filter: `glow(${ctx.progress * 24}px 1 #22d3ee)` ``. Each frame must
 satisfy the parameter bounds below.
@@ -1171,13 +1177,12 @@ within ±0.5; negative values pull source samples toward the center, making cont
 appear farther from it. Pixels outside the source are transparent, and the effect
 stays inside the original frame. After a blur or glow earlier in the list, the frame
 is their result's, which they enlarge. The frame and coefficients remain stable across
-ROI crops. It requires a similarity device transform and is not admitted in
-`backdropFilter`.
+ROI crops. It requires a similarity device transform.
 
 `filter: "glow(24px 1.5 #22d3ee)"` adds a tinted halo behind the node and its
 descendants while retaining the source. It uses the same multilevel F16 pyramid
 as scene bloom, driven by the subtree alpha. The radius controls the halo extent
-in 0–128 px; intensity is in 0–4. It is not admitted in `backdropFilter`.
+in 0–128 px; intensity is in 0–4.
 
 `Scene bloom={{ threshold: 0.8, intensity: 1.2, radius: 48 }}` extracts bright
 pixels from the whole scene and adds a soft halo through a five-level F16

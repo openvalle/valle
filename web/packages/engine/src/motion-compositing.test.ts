@@ -69,6 +69,21 @@ test("Motion composition, easing and color interpolation match analytic pixels o
     `<View key="${key}-base" className="absolute" style={{left:0,top:0,width:${width},height:${height},backgroundColor:"#2ec4ff"}}/>`
     + Array.from({ length: Math.ceil(width / 7) }, (_, i) =>
       `<View key="${key}-${i}" className="absolute" style={{left:${i * 7},top:0,width:3,height:${height},backgroundColor:"#ff3d7f"}}/>`).join("");
+  // Panels whose backdrop lists name advanced functions, two of them rotated and skewed.
+  const backdropPanels = [
+    [8,8,44,36,"","blur(1px) chromatic-aberration(6px)"],
+    [60,8,44,36,"","radial-blur(22px 18px 10px) saturate(1.4)"],
+    [112,8,40,36,"","lens-distortion(-0.35 0.1)"],
+    [8,52,44,36,"","film-grain(7 0.25 2px) contrast(1.2)"],
+    [64,54,36,30,"rotate(18deg) scale(1.2)","blur(1px) radial-blur(18px 15px 8px)"],
+    [116,54,36,30,"skewX(14deg)","blur(1.5px) lens-distortion(0.2 0)"],
+  ] as const;
+  const backdropAdvanced = `export const composition={width:160,height:96,fps:30,duration:2};
+    export default function Main(){ return <Scene className="relative h-full w-full" style={{backgroundColor:"#e2e8f0"}}>
+      <View key="backdrop" className="absolute" style={{left:0,top:0,width:160,height:96}}>${stripes("backdrop",160,96)}
+        <View key="bar" className="absolute" style={{left:0,top:44,width:160,height:6,backgroundColor:"#16a34a"}}/></View>
+      ${backdropPanels.map(([left,top,width,height,transform,filter],i) => `<View key="panel-${i}" className="absolute" style={{left:${left},top:${top},width:${width},height:${height}${transform ? `,transform:"${transform}"` : ""},backdropFilter:"${filter}"}}/>`).join("")}
+    </Scene>}`;
   const cases: Case[] = [
     { name:"regression-captured-map", source:`export const composition={width:64,height:64,fps:30,duration:2};
       const rows=[{id:"a",x:0},{id:"b",x:16},{id:"c",x:32}];
@@ -116,6 +131,10 @@ test("Motion composition, easing and color interpolation match analytic pixels o
         <View key="plain" className="absolute" style={{left:12,top:12,width:40,height:40,backdropFilter:"blur(4px)"}}/>
         <View key="scaled" className="absolute" style={{left:92,top:12,width:20,height:20,transform:"scale(2)",transformOrigin:"0% 0%",backdropFilter:"blur(2px)"}}/>
       </Scene>}`, body:"", width:160, height:64, frames:[0], probes:[] },
+    // Each function of a backdrop list filters the sampled backdrop in turn, also under a rotation
+    // and a skew, before the border box clips the result.
+    { name:"backdrop-advanced", source:backdropAdvanced, body:"", width:160, height:96, frames:[0,30,0], probes:[] },
+    { name:"backdrop-advanced-none", source:backdropAdvanced.replace(/,backdropFilter:"[^"]*"/g, ""), body:"", width:160, height:96, frames:[0], probes:[] },
     { name:"regression-grain-black-white", body:`<View style={{width:64,height:64,filter:"film-grain(7 0.5 1px)"}}>
       ${view("black",",width:32")}${view("white",",left:32,width:32")}</View>`, probes:[[16,32,0,0,0],[48,32,255,255,255]] },
     { name:"batch-rotation", body:`<GeometryBatch geometry="rect" positions={[point(8,16),point(40,16)]}
@@ -731,6 +750,19 @@ test("Motion composition, easing and color interpolation match analytic pixels o
       } finally {
         server.kill(); await server.exited;
         executor?.dispose(); engine?.free(); surface.delete();
+      }
+    }
+    if (frameImages.has("backdrop-advanced/0") && frameImages.has("backdrop-advanced-none/0")) for (const label of ["native","web"] as const) {
+      const filtered = frameImages.get("backdrop-advanced/0")![label];
+      const plain = frameImages.get("backdrop-advanced-none/0")![label];
+      // Inside each panel, clear of the rotated and skewed edges, most pixels change.
+      for (const [left,top,width,height] of [[8,8,44,36],[60,8,44,36],[112,8,40,36],[8,52,44,36],[72,62,20,14],[124,62,20,14]]) {
+        let changed = 0;
+        for (let y=top;y<top+height;y++) for (let x=left;x<left+width;x++) {
+          const at = (y*160+x)*4;
+          if ([0,1,2].some(c=>Math.abs(filtered[at+c]!-plain[at+c]!)>8)) changed++;
+        }
+        expect(changed,`${label} backdrop-advanced panel at ${left},${top}`).toBeGreaterThan(width*height/10);
       }
     }
     if (!only || only === "scene-bloom") for (const label of ["native","web"] as const) {

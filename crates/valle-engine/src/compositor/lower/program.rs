@@ -269,6 +269,11 @@ pub enum ProgramPassKind {
         input: ProgramResourceId,
         output: ProgramResourceId,
         filter: Filter,
+        /// The border box of a node whose backdrop this pass filters. `filter_index` then
+        /// indexes the backdrop's filters, its lengths reach device pixels the way a backdrop's
+        /// do, and lens distortion takes the border box as its frame.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        backdrop: Option<Rect>,
     },
     ApplyMask {
         node: NodeId,
@@ -666,18 +671,50 @@ impl<'a> Compiler<'a> {
                 local_inputs,
                 format!("{node_path}.backdrop.destination"),
             )?;
+            // A list that names an advanced filter runs each function as its own pass over the
+            // sampled backdrop, as a node's `filter` list does; the bounds then clip the result,
+            // with a trailing displacement. Every pass keeps the sampled bounds: only the border
+            // box is drawn, and the sample reaches as far beyond it as the whole list does.
+            let mut input = destination;
+            let mut filters = backdrop.filters.as_slice();
+            if filters.iter().any(is_advanced_filter) {
+                let stages = match filters {
+                    [stages @ .., Filter::NoiseDisplacement { .. }] => stages,
+                    stages => stages,
+                };
+                for (index, filter) in stages.iter().cloned().enumerate() {
+                    let filtered = self.resource(sample_bounds, local_to_program)?;
+                    let filter_index =
+                        u32::try_from(index).map_err(|_| PlanIdError::BudgetExceeded {
+                            kind: "program filter",
+                        })?;
+                    self.pass(
+                        format!("{node_path}.backdrop.filters[{index}]"),
+                        ProgramPassKind::ApplyFilter {
+                            node: id,
+                            filter_index,
+                            input,
+                            output: filtered,
+                            filter,
+                            backdrop: Some(backdrop.bounds),
+                        },
+                    )?;
+                    input = filtered;
+                }
+                filters = &filters[stages.len()..];
+            }
             let source =
                 self.resource(LocalBounds::from_rect(backdrop.bounds), local_to_program)?;
             self.pass(
                 format!("{node_path}.backdrop"),
                 ProgramPassKind::Backdrop {
                     node: id,
-                    input: destination,
+                    input,
                     output: source,
                     bounds: backdrop.bounds,
                     footprint: backdrop.footprint,
                     sampling: backdrop.sampling,
-                    filters: backdrop.filters.clone(),
+                    filters: filters.to_vec(),
                 },
             )?;
             output = self.source_over(source, output, format!("{node_path}.backdrop.composite"))?;
@@ -797,6 +834,7 @@ impl<'a> Compiler<'a> {
                     input: output,
                     output: filtered,
                     filter,
+                    backdrop: None,
                 },
             )?;
             output = filtered;
@@ -1176,6 +1214,21 @@ fn clip_bounds(program: &DrawProgram, clip: &Clip) -> LocalBounds {
             LocalBounds::from_rect(Rect::from_edges(left, top, right, bottom))
         }
     }
+}
+
+/// Filters that run as F16 kernels rather than image filters. A backdrop list that names one
+/// runs a pass per function.
+fn is_advanced_filter(filter: &Filter) -> bool {
+    matches!(
+        filter,
+        Filter::Glow { .. }
+            | Filter::Bloom { .. }
+            | Filter::RadialBlur { .. }
+            | Filter::FilmGrain { .. }
+            | Filter::LensDistortion { .. }
+            | Filter::ChromaticAberration { .. }
+            | Filter::VelocityBlur { .. }
+    )
 }
 
 fn program_filter_bounds(bounds: LocalBounds, filter: &Filter) -> LocalBounds {
@@ -1935,6 +1988,122 @@ export default function Scene() { const ctx = useTime();
             matches!(read.filters.as_slice(), [Filter::NoiseDisplacement { .. }]),
             "{:?}",
             read.filters
+        );
+    }
+
+    #[test]
+    fn motion_backdrop_list_with_an_advanced_filter_runs_a_pass_per_function() {
+        let program = motion_program(
+            r##"
+export default function Scene() {
+  return <Scene className="relative" style={{width:100,height:40}}>
+    <View key="glow" className="absolute" style={{left:0,top:0,width:40,height:40,
+      backdropFilter:"blur(2px) glow(8px 1 #22d3ee) saturate(1.2)",
+      backdropDisplacement:displacement(17,point(0.01,0.02),4)}} />
+    <View key="frosted" className="absolute" style={{left:50,top:0,width:40,height:40,
+      backdropFilter:"blur(2px) saturate(1.2)"}} />
+  </Scene>;
+}
+"##,
+            (100, 40),
+        );
+        // The node at the origin opens no transform group, so its read may be a root.
+        let reads = program
+            .nodes()
+            .iter()
+            .filter_map(|node| match node {
+                Node::Group(group) => group.backdrop.as_ref(),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(reads.len(), 2);
+        let kinds = |read: &BackdropRead| {
+            read.filters
+                .iter()
+                .map(|filter| match filter {
+                    Filter::Blur { .. } => "blur",
+                    Filter::Glow { .. } => "glow",
+                    Filter::ColorMatrix { .. } | Filter::Saturate { .. } => "saturate",
+                    Filter::NoiseDisplacement { .. } => "displacement",
+                    _ => "other",
+                })
+                .collect::<Vec<_>>()
+        };
+        let mut lists = reads.iter().copied().map(kinds).collect::<Vec<_>>();
+        lists.sort_by_key(|list| std::cmp::Reverse(list.len()));
+        assert_eq!(
+            lists,
+            [
+                vec!["blur", "glow", "saturate", "displacement"],
+                vec!["blur", "saturate"]
+            ]
+        );
+
+        let plan = ProgramPlan::derive(&program).unwrap();
+        plan.validate_shape(2).unwrap();
+        let bounds = Rect::new(0.0, 0.0, 40.0, 40.0);
+        // The advanced list: each function filters the sampled backdrop in turn, keeping its
+        // bounds, and the Backdrop pass clips the result with the trailing displacement.
+        let stages = plan
+            .passes()
+            .iter()
+            .filter_map(|pass| match &pass.kind {
+                ProgramPassKind::ApplyFilter {
+                    filter_index,
+                    input,
+                    output,
+                    backdrop,
+                    ..
+                } => Some((*filter_index, *input, *output, *backdrop)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            stages.iter().map(|stage| stage.0).collect::<Vec<_>>(),
+            [0, 1, 2]
+        );
+        assert!(stages.iter().all(|stage| stage.3 == Some(bounds)));
+        let destination = plan
+            .passes()
+            .iter()
+            .find_map(|pass| match &pass.kind {
+                ProgramPassKind::ReadDestination { output, .. } if *output == stages[0].1 => {
+                    Some(*output)
+                }
+                _ => None,
+            })
+            .expect("the first stage reads the backdrop");
+        let sampled = plan.resources()[destination.index()].bounds;
+        for pair in stages.windows(2) {
+            assert_eq!(pair[0].2, pair[1].1);
+        }
+        assert!(
+            stages
+                .iter()
+                .all(|stage| plan.resources()[stage.2.index()].bounds == sampled)
+        );
+        let backdrops = plan
+            .passes()
+            .iter()
+            .filter_map(|pass| match &pass.kind {
+                ProgramPassKind::Backdrop { input, filters, .. } => Some((*input, filters)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(backdrops.len(), 2);
+        let clipped = backdrops
+            .iter()
+            .find(|(input, _)| *input == stages[2].2)
+            .expect("the Backdrop pass reads the last stage");
+        assert!(matches!(
+            clipped.1.as_slice(),
+            [Filter::NoiseDisplacement { .. }]
+        ));
+        // A list of CSS functions alone stays one Backdrop pass.
+        assert!(
+            backdrops
+                .iter()
+                .any(|(input, filters)| *input != stages[2].2 && filters.len() == 2)
         );
     }
 

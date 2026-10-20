@@ -208,7 +208,8 @@ impl<'i> DeclarationParser<'i> for StrictDeclarations {
         } else {
             &value
         };
-        let advanced = if name == "filter" {
+        let slots = advanced_filter::slots(&name);
+        let advanced = if slots.is_some() {
             advanced_filter::stages(&value).map_err(|reason| input.new_custom_error(reason))?
         } else {
             None
@@ -216,7 +217,7 @@ impl<'i> DeclarationParser<'i> for StrictDeclarations {
         let mut style = if let Some(stages) = &advanced {
             // The cascade keeps the CSS functions in order; emission puts the advanced ones
             // back between them. A list of advanced filters alone keeps an identity filter so
-            // the node still establishes a containing block.
+            // the node still establishes a containing block and reads its backdrop.
             let css = stages
                 .iter()
                 .filter_map(|stage| match stage {
@@ -225,7 +226,7 @@ impl<'i> DeclarationParser<'i> for StrictDeclarations {
                 })
                 .collect::<Vec<_>>();
             Style::from_str(&format!(
-                "filter: {}",
+                "{name}: {}",
                 if css.is_empty() {
                     "opacity(1)".to_owned()
                 } else {
@@ -282,15 +283,10 @@ impl<'i> DeclarationParser<'i> for StrictDeclarations {
             }
             validate_filter_values(&style).map_err(|reason| input.new_custom_error(reason))?;
         }
-        if name == "filter" {
+        if let Some([slot, important_slot]) = slots {
             style.push(
                 StyleDeclaration::CustomProperty(
-                    if important {
-                        advanced_filter::IMPORTANT_SLOT
-                    } else {
-                        advanced_filter::SLOT
-                    }
-                    .into(),
+                    if important { important_slot } else { slot }.into(),
                     if advanced.is_some() {
                         value.clone()
                     } else {

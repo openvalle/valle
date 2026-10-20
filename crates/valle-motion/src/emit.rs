@@ -1092,13 +1092,21 @@ impl Emitter<'_> {
         // Paint the filtered backdrop before this node paints, clipped to the border box and its
         // corner radii. It is an empty group so the corner clip leaves shadows and overflow alone.
         // Record explicit sampling bounds so backends do not infer different full-canvas regions.
-        let backdrop_advanced = self
-            .tree
-            .keys
-            .get(&u64::from(np.node_id))
-            .and_then(|key| self.tree.backdrop_advanced_filters.get(key));
-        if !style.backdrop_filter.is_empty() || backdrop_advanced.is_some_and(|f| !f.is_empty()) {
-            let mut ops = self.filter_ops(np, &style.backdrop_filter, &node.context)?;
+        let tree = self.tree;
+        let key = tree.keys.get(&u64::from(np.node_id));
+        let backdrop_list = key.and_then(|key| Some((key, tree.backdrop_filter_lists.get(key)?)));
+        let backdrop_advanced = key.and_then(|key| tree.backdrop_advanced_filters.get(key));
+        if !style.backdrop_filter.is_empty()
+            || backdrop_list.is_some()
+            || backdrop_advanced.is_some_and(|f| !f.is_empty())
+        {
+            // The list in written order, then backdrop displacement.
+            let mut ops = match backdrop_list {
+                Some((key, list)) => {
+                    self.filter_list_ops(np, list, &style.backdrop_filter, &node.context, key)?
+                }
+                None => self.filter_ops(np, &style.backdrop_filter, &node.context)?,
+            };
             if let Some(advanced) = backdrop_advanced {
                 ops.extend_from_slice(advanced);
             }
@@ -1149,8 +1157,6 @@ impl Emitter<'_> {
 
         // Apply the `filter` list in written order, then bloom, displacement and velocity blur in
         // a fixed semantic order.
-        let tree = self.tree;
-        let key = tree.keys.get(&u64::from(np.node_id));
         if let Some(key) = key
             && let Some(filters) = tree.advanced_filters.get(key)
             && !filters.is_empty()
@@ -1169,27 +1175,8 @@ impl Emitter<'_> {
         }
 
         // Keep CSS filters inside the opacity/blend group.
-        if let Some(list) = key.and_then(|key| tree.filter_lists.get(key)) {
-            // The cascade holds the list's CSS functions in order; a list of advanced filters
-            // alone holds an identity filter instead, which is not painted.
-            let mut css = style.filter.iter();
-            let mut ops = Vec::with_capacity(list.len());
-            for stage in list {
-                match stage {
-                    Some(filter) => ops.push(filter.clone()),
-                    None => {
-                        let filter = css.next().ok_or_else(|| EmitError::BadStyle {
-                            node: key.cloned().unwrap_or_default(),
-                            reason: "the filter list lost a CSS function in the cascade".into(),
-                        })?;
-                        ops.extend(self.filter_ops(
-                            np,
-                            std::slice::from_ref(filter),
-                            &node.context,
-                        )?);
-                    }
-                }
-            }
+        if let Some((key, list)) = key.and_then(|key| Some((key, tree.filter_lists.get(key)?))) {
+            let ops = self.filter_list_ops(np, list, &style.filter, &node.context, key)?;
             let filters = self.out.recording.intern_filters(&ops);
             self.push(RecordCmd::BeginFilter {
                 filters,
@@ -3458,6 +3445,34 @@ impl Emitter<'_> {
     ) -> Result<valle_draw::Span, EmitError> {
         let ops = self.filter_ops(np, filters, ctx)?;
         Ok(self.out.recording.intern_filters(&ops))
+    }
+
+    /// A `filter` or `backdrop-filter` list that names an advanced filter, in written order. The
+    /// cascade holds the list's CSS functions in the same order; a list of advanced filters alone
+    /// holds an identity filter instead, which is not painted.
+    fn filter_list_ops(
+        &mut self,
+        np: &NodePaint,
+        list: &[Option<valle_draw::program::recording::FilterOp>],
+        css: &[takumi_core::style::Filter],
+        ctx: &takumi_core::context::RenderContext,
+        key: &str,
+    ) -> Result<Vec<valle_draw::program::recording::FilterOp>, EmitError> {
+        let mut css = css.iter();
+        let mut ops = Vec::with_capacity(list.len());
+        for stage in list {
+            match stage {
+                Some(filter) => ops.push(filter.clone()),
+                None => {
+                    let filter = css.next().ok_or_else(|| EmitError::BadStyle {
+                        node: key.to_owned(),
+                        reason: "the filter list lost a CSS function in the cascade".into(),
+                    })?;
+                    ops.extend(self.filter_ops(np, std::slice::from_ref(filter), ctx)?);
+                }
+            }
+        }
+        Ok(ops)
     }
 
     fn filter_ops(

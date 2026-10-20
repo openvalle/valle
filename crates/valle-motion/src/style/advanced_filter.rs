@@ -6,6 +6,18 @@ use valle_draw::{
 
 pub(crate) const SLOT: &str = "--tw-motion-filter";
 pub(crate) const IMPORTANT_SLOT: &str = "--tw-important-motion-filter";
+pub(crate) const BACKDROP_SLOT: &str = "--tw-motion-backdrop-filter";
+pub(crate) const BACKDROP_IMPORTANT_SLOT: &str = "--tw-important-motion-backdrop-filter";
+
+/// The private slots, plain and important, that keep a `filter` or `backdrop-filter` list whole
+/// beside the cascade, which only holds its CSS functions.
+pub(crate) fn slots(property: &str) -> Option<[&'static str; 2]> {
+    match property {
+        "filter" => Some([SLOT, IMPORTANT_SLOT]),
+        "backdrop-filter" => Some([BACKDROP_SLOT, BACKDROP_IMPORTANT_SLOT]),
+        _ => None,
+    }
+}
 
 /// Numeric positions in the public filter grammar, shared by parsing and
 /// compile-time range diagnostics. Colors are intentionally not numeric slots.

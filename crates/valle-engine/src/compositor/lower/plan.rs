@@ -1096,6 +1096,8 @@ enum ProgramPassStructure {
         filter_index: u32,
         input: u32,
         output: u32,
+        #[serde(skip_serializing_if = "std::ops::Not::not")]
+        backdrop: bool,
     },
     ApplyMask {
         node: u32,
@@ -1218,12 +1220,14 @@ impl From<&super::ProgramPass> for ProgramPassStructure {
                 filter_index,
                 input,
                 output,
+                backdrop,
                 ..
             } => Self::ApplyFilter {
                 node: node.raw(),
                 filter_index: *filter_index,
                 input: input.get(),
                 output: output.get(),
+                backdrop: backdrop.is_some(),
             },
             Kind::ApplyMask {
                 node,

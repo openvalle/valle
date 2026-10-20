@@ -200,6 +200,125 @@ fn advanced_filters_chain_with_css_filters_in_written_order() {
     }
 }
 
+/// The filters of the one backdrop read, in order.
+fn backdrop_filters(program: &DrawProgram) -> Vec<Filter> {
+    let reads = program
+        .nodes()
+        .iter()
+        .filter_map(|node| match node {
+            Node::Group(group) => group.backdrop.as_ref(),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(reads.len(), 1, "one list is one backdrop read");
+    reads[0].filters.clone()
+}
+
+#[test]
+fn backdrop_filter_lists_take_advanced_filters_in_written_order() {
+    let kinds = |program: &DrawProgram| {
+        backdrop_filters(program)
+            .iter()
+            .map(|filter| match filter {
+                Filter::Blur { .. } => "blur",
+                Filter::Saturate { .. } => "saturate",
+                Filter::Glow { .. } => "glow",
+                Filter::ChromaticAberration { .. } => "chromatic-aberration",
+                Filter::RadialBlur { .. } => "radial-blur",
+                Filter::FilmGrain { .. } => "film-grain",
+                Filter::LensDistortion { .. } => "lens-distortion",
+                Filter::NoiseDisplacement { .. } => "displacement",
+                _ => "other",
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        kinds(&snapshot(
+            "",
+            "backdropFilter:'blur(2px) glow(24px 1.5 #22d3ee) saturate(1.5)'"
+        )),
+        ["blur", "glow", "saturate"]
+    );
+    assert_eq!(
+        kinds(&snapshot(
+            "",
+            "backdropFilter:'chromatic-aberration(6px) radial-blur(40px 20px 16px) lens-distortion(-0.3 0.2) film-grain(7 0.12 2px)',backdropDisplacement:displacement(7,point(0.05,0.05),6)"
+        )),
+        [
+            "chromatic-aberration",
+            "radial-blur",
+            "lens-distortion",
+            "film-grain",
+            "displacement"
+        ]
+    );
+    // An advanced list alone keeps the read; `filter` stays separate.
+    let both = snapshot(
+        "",
+        "backdropFilter:'glow(12px 1 white)',filter:'blur(1px) glow(8px 1 red)'",
+    );
+    assert_eq!(kinds(&both), ["glow"]);
+    assert_eq!(filters(&both).len(), 2);
+    let inline = backdrop_filters(&snapshot(
+        "",
+        "backdropFilter:'blur(2px) glow(24px 1.5 #22d3ee)'",
+    ));
+    for class in [
+        "[backdrop-filter:blur(2px)_glow(24px_1.5_#22d3ee)]",
+        "backdrop-filter-[blur(2px)_glow(24px_1.5_#22d3ee)]",
+    ] {
+        assert_eq!(backdrop_filters(&snapshot(class, "")), inline, "{class}");
+        let artifact = compile_motion(&scene(&format!("className=\"{class}\""), ""))
+            .unwrap()
+            .artifact;
+        assert!(
+            artifact
+                .capability_set
+                .names
+                .iter()
+                .any(|name| name == valle_motion::NODE_ADVANCED_FILTER_CAPABILITY),
+            "{class}"
+        );
+    }
+    // A later CSS-only class or style replaces the whole list, advanced functions included.
+    assert_eq!(
+        kinds(&snapshot(
+            "[backdrop-filter:glow(12px_1_white)]",
+            "backdropFilter:'blur(8px)'"
+        )),
+        ["blur"]
+    );
+    // Grain in a backdrop list changes once per frame, beside grain in `filter`.
+    let grain = samples(
+        &scene(
+            "",
+            "backdropFilter:'blur(1px) film-grain(7 0.12 2px)',filter:'film-grain(3 0.1 1px)'",
+        ),
+        &[0, 30, 0],
+    );
+    assert_ne!(backdrop_filters(&grain[0]), backdrop_filters(&grain[1]));
+    assert_eq!(backdrop_filters(&grain[0]), backdrop_filters(&grain[2]));
+    assert_ne!(filters(&grain[0]), filters(&grain[1]));
+    let dynamic = samples(
+        &scene(
+            "",
+            "backdropFilter:`blur(${ctx.progress * 2 + 1}px) glow(${ctx.progress * 24}px 1 #22d3ee)`",
+        ),
+        &[0, 45],
+    );
+    assert_ne!(backdrop_filters(&dynamic[0]), backdrop_filters(&dynamic[1]));
+    for value in [
+        "blur(2px) glow(129px 1 #22d3ee)",
+        "none glow(24px 1 #22d3ee)",
+        "glow(24px 1 #22d3ee) not-a-filter(1)",
+    ] {
+        assert!(
+            compile_motion(&scene("", &format!("backdropFilter:'{value}'"))).is_err(),
+            "{value}"
+        );
+    }
+}
+
 #[test]
 fn visual_utilities_match_inline_properties_and_class_permutations() {
     for (classes, style) in [

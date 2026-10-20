@@ -23,7 +23,7 @@ impl<'s> Compiler<'s> {
                 self.style_diagnostic(expression.span(), None, reason);
                 return None;
             }
-            if property == "filter" && valle_motion::style::advanced_filter::names_advanced(&text) {
+            if valle_motion::style::advanced_filter::names_advanced(&text) {
                 self.extra_capabilities
                     .insert(valle_motion::NODE_ADVANCED_FILTER_CAPABILITY.to_owned());
                 frame_dependent = valle_motion::style::advanced_filter::functions(&text)
@@ -34,21 +34,17 @@ impl<'s> Compiler<'s> {
                 value: MotionValue::Str(text),
             }
         } else {
-            if property == "filter" {
-                self.extra_capabilities
-                    .insert(valle_motion::NODE_ADVANCED_FILTER_CAPABILITY.to_owned());
-            }
+            self.extra_capabilities
+                .insert(valle_motion::NODE_ADVANCED_FILTER_CAPABILITY.to_owned());
             let expr = self.lower_css_value_expression(expression)?;
-            if property == "filter" {
-                self.diagnose_filter_ranges(expr);
-            }
+            self.diagnose_filter_ranges(expr);
             StyleValue::Expr { expr }
         };
         let mut styles = vec![StyleBinding {
             property: property.into(),
             value,
         }];
-        if property == "filter" && frame_dependent {
+        if frame_dependent {
             // Grain changes once per local frame, including random seeks and TimeScope.
             let frame = self.scoped_context_expr(ContextInput::LocalFrame, expression.span());
             styles.push(StyleBinding {

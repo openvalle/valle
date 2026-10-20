@@ -1,4 +1,7 @@
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 
 use thiserror::Error;
 use ttf_parser::{Face, GlyphId, OutlineBuilder};
@@ -851,8 +854,13 @@ fn preflight_program(
                 node,
                 filter_index,
                 output,
+                backdrop,
                 ..
             } => {
+                // Like a filtered Backdrop pass, its stages are left to the production executors.
+                if backdrop.is_some() {
+                    return Err(ReferenceExecuteError::UnsupportedPass { pass });
+                }
                 let filter = program.filter(*node, *filter_index)?;
                 match filter {
                     Filter::Blur { sigma_x, sigma_y }
@@ -1214,6 +1222,7 @@ fn prepare_reference_program(
         .take(program.nodes().len())
         .collect::<Vec<_>>();
     let mut filters = BTreeMap::new();
+    let mut backdrop_stages = BTreeSet::new();
     let mut masks = BTreeMap::new();
     let mut raster_trees = BTreeMap::new();
     for local_pass in prepared.local_plan().passes() {
@@ -1288,6 +1297,7 @@ fn prepare_reference_program(
                 node,
                 filter_index,
                 filter,
+                backdrop,
                 ..
             } => {
                 let node_index = node.raw() as usize;
@@ -1305,11 +1315,22 @@ fn prepare_reference_program(
                         filter_index: *filter_index,
                     });
                 };
-                if group.filters.get(index) != Some(filter)
-                    || filters
-                        .insert((node.raw(), *filter_index), filter.clone())
-                        .is_some()
-                {
+                // A backdrop stage indexes the backdrop's own list, and the border box it names
+                // must be the backdrop's.
+                let unique = match backdrop {
+                    None => {
+                        group.filters.get(index) == Some(filter)
+                            && filters
+                                .insert((node.raw(), *filter_index), filter.clone())
+                                .is_none()
+                    }
+                    Some(bounds) => {
+                        group.backdrop.as_ref().is_some_and(|read| {
+                            read.bounds == *bounds && read.filters.get(index) == Some(filter)
+                        }) && backdrop_stages.insert((node.raw(), *filter_index))
+                    }
+                };
+                if !unique {
                     return Err(ReferenceExecuteError::InvalidProgramFilter {
                         program: id,
                         node: *node,

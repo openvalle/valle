@@ -205,19 +205,20 @@ fn arbitrary_property_parts(candidate: &str) -> Option<(&str, &str)> {
     Some((property, value))
 }
 
-/// Both `[filter:…]` and `filter-[…]` carry the list in the private filter slot.
+/// `[filter:…]` and `filter-[…]` carry the list in the private filter slot, and their
+/// `backdrop-filter` forms in the private backdrop slot.
 pub(super) fn sets_advanced_filter(candidate: &str) -> bool {
-    explicit_property(candidate) == Some("filter")
-        && utility(candidate).is_ok_and(|utility| {
-            utility.declarations.split(';').any(|declaration| {
-                declaration.split_once(':').is_some_and(|(name, value)| {
-                    matches!(
-                        name.trim(),
-                        crate::style::advanced_filter::SLOT
-                            | crate::style::advanced_filter::IMPORTANT_SLOT
-                    ) && crate::style::advanced_filter::names_advanced(
-                        value.trim().trim_end_matches("!important").trim_end(),
-                    )
+    explicit_property(candidate)
+        .and_then(crate::style::advanced_filter::slots)
+        .is_some_and(|slots| {
+            utility(candidate).is_ok_and(|utility| {
+                utility.declarations.split(';').any(|declaration| {
+                    declaration.split_once(':').is_some_and(|(name, value)| {
+                        slots.contains(&name.trim())
+                            && crate::style::advanced_filter::names_advanced(
+                                value.trim().trim_end_matches("!important").trim_end(),
+                            )
+                    })
                 })
             })
         })
@@ -269,15 +270,13 @@ fn add_node_candidates(
         }
         // Composed filter utilities use private CSS slots rather than parse_property.
         // Mirror their priority so an important class can override an inline advanced filter.
-        if explicit_property(class) == Some("filter")
-            && !utility.declarations.contains("motion-filter:")
+        if let Some([slot, important_slot]) =
+            explicit_property(class).and_then(crate::style::advanced_filter::slots)
+            && !utility.declarations.contains(&format!("{slot}:"))
+            && !utility.declarations.contains(&format!("{important_slot}:"))
         {
             let important = class.ends_with('!');
-            let slot = if important {
-                crate::style::advanced_filter::IMPORTANT_SLOT
-            } else {
-                crate::style::advanced_filter::SLOT
-            };
+            let slot = if important { important_slot } else { slot };
             utility.declarations.push_str(&format!(
                 ";{slot}:none{};",
                 if important { " !important" } else { "" }
