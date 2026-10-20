@@ -229,12 +229,14 @@ pub(super) fn foreign_hook(program: &Program<'_>) -> Option<(Span, String)> {
                 .map(declaration_names)
                 .unwrap_or_default(),
             Statement::ExportDeclaration(export) => declaration_names(&export.declaration),
-            Statement::ImportDeclaration(import) => import
-                .specifiers
-                .iter()
-                .flatten()
-                .map(|specifier| specifier.local().name.to_string())
-                .collect(),
+            Statement::ImportDeclaration(import) if !super::modules::is_builtin_import(import) => {
+                import
+                    .specifiers
+                    .iter()
+                    .flatten()
+                    .map(|specifier| specifier.local().name.to_string())
+                    .collect()
+            }
             _ => Vec::new(),
         })
         .collect::<BTreeSet<_>>();

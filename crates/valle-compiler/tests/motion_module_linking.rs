@@ -623,3 +623,88 @@ export const accent: string = ("#22d3ee" as const) satisfies string;
             .any(|node| node.key.ends_with("/box"))
     );
 }
+
+#[test]
+fn builtins_can_be_imported_from_valle_in_every_module() {
+    let entry = r#"
+export const composition = { width: 320, height: 180, fps: 30, duration: 2 };
+import { Scene, View, interpolate, useTime } from "valle";
+import type { Unused } from "valle";
+import { fade } from "./fade";
+export default function Imported() {
+  const ctx = useTime();
+  return <Scene key="root">
+    <View key="box" style={{ width: 10, height: 10, opacity: fade(0.5), left: interpolate(ctx.progress, [0, 1], [0, 100]) }} />
+  </Scene>;
+}
+"#;
+    let fade = r#"
+import { clamp, useTime } from "valle";
+export const fade = (at) => clamp(useTime().seconds - at, 0, 1);
+"#;
+    let imported = compile_motion_modules(&graph(
+        "entry.tsx",
+        &[("entry.tsx", entry), ("fade.ts", fade)],
+    ))
+    .unwrap_or_else(|diagnostics| panic!("built-in imports compile: {diagnostics:#?}"))
+    .artifact;
+    let plain_entry = entry
+        .replace(
+            "import { Scene, View, interpolate, useTime } from \"valle\";\n",
+            "",
+        )
+        .replace("import type { Unused } from \"valle\";\n", "");
+    let plain_fade = fade.replace("import { clamp, useTime } from \"valle\";\n", "");
+    let plain = compile_motion_modules(&graph(
+        "entry.tsx",
+        &[
+            ("entry.tsx", plain_entry.as_str()),
+            ("fade.ts", plain_fade.as_str()),
+        ],
+    ))
+    .unwrap()
+    .artifact;
+    assert_eq!(imported.nodes.len(), plain.nodes.len());
+    assert_eq!(imported.exprs.len(), plain.exprs.len());
+
+    let rejected = |entry: &str| {
+        let source = format!(
+            "{entry}\nexport const composition = {{ width: 32, height: 32, duration: 1 }};\nexport default function E() {{ return <Scene />; }}"
+        );
+        compile_motion_modules(&graph(
+            "entry.tsx",
+            &[
+                ("entry.tsx", source.as_str()),
+                ("other.ts", "export const value = 1;"),
+            ],
+        ))
+        .expect_err(entry)
+        .into_iter()
+        .map(|diagnostic| diagnostic.message)
+        .collect::<Vec<_>>()
+        .join("\n")
+    };
+    for (entry, phrase) in [
+        (
+            "import { spring as s } from \"valle\";",
+            "under its own name",
+        ),
+        ("import valle from \"valle\";", "only named exports"),
+        ("import * as V from \"valle\";", "only named exports"),
+        ("import \"valle\";", "only named exports"),
+        ("export { clamp } from \"valle\";", "need no re-export"),
+        ("export * from \"valle\";", "need no re-export"),
+        ("import React from \"react\";", "has no `react` runtime"),
+        (
+            "import { useCurrentFrame } from \"remotion\";",
+            "is not Remotion",
+        ),
+        (
+            "import { motion } from \"framer-motion\";",
+            "is not relative",
+        ),
+    ] {
+        let messages = rejected(entry);
+        assert!(messages.contains(phrase), "{entry}: {messages}");
+    }
+}

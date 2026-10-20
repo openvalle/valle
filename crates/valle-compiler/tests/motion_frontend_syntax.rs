@@ -325,3 +325,28 @@ export default function D() {
         assert_eq!(style_number(&artifact, key, "left"), 7.5, "{key}");
     }
 }
+
+#[test]
+fn one_source_imports_builtins_from_valle() {
+    let artifact = compile(
+        r##"
+import { Scene, View, useTime } from "valle";
+export default function D() {
+  const ctx = useTime();
+  return <Scene><View key="a" style={{ width: 10, height: 10, left: ctx.seconds * 10 }} /></Scene>;
+}
+"##,
+    );
+    assert_eq!(style_number(&artifact, "a", "left"), 10.0);
+    let messages = compile_motion(
+        "import { useState } from \"valle\";\nexport default function D() { const [n] = useState(0); return <Scene />; }",
+    )
+    .err()
+    .unwrap_or_default();
+    assert!(
+        messages
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("`useState` is not available")),
+        "{messages:#?}"
+    );
+}

@@ -253,6 +253,11 @@ impl<'s> Compiler<'s> {
                 },
                 Statement::VariableDeclaration(declaration) if declaration.kind.is_const() => {}
                 Statement::FunctionDeclaration(_) | Statement::EmptyStatement(_) => {}
+                Statement::ImportDeclaration(import) if super::modules::is_builtin_import(import) => {
+                    if let Some((span, message)) = super::modules::builtin_import_error(import) {
+                        self.illegal(DiagCode::ModuleShape, span, message);
+                    }
+                }
                 other => self.illegal(DiagCode::GrammarForbidden, other.span(), "module scope only allows static const/function declarations and the component exports"),
             }
         }

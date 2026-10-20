@@ -11,8 +11,8 @@ use std::path::{Component, Path, PathBuf};
 
 use oxc::allocator::Allocator;
 use oxc::ast::ast::{
-    Declaration, ExportDefaultDeclarationKind, ImportDeclarationSpecifier, ImportOrExportKind,
-    Program, Statement,
+    Declaration, ExportDefaultDeclarationKind, ImportDeclaration, ImportDeclarationSpecifier,
+    ImportOrExportKind, Program, Statement,
 };
 use oxc::ast_visit::{Visit, walk};
 use oxc::codegen::{Codegen, CodegenOptions, CommentOptions};
@@ -450,6 +450,9 @@ impl LinkedSource<'_> {
     }
 }
 
+const BUILTIN_REEXPORT: &str =
+    "built-ins need no re-export; import them from \"valle\" in the module that uses them";
+
 fn discover_dependencies(
     path: &str,
     source: &str,
@@ -485,6 +488,32 @@ fn discover_dependencies(
         let mut dependencies = Vec::new();
         for statement in &program.body {
             let dependency = match statement {
+                Statement::ImportDeclaration(import) if is_builtin_import(import) => {
+                    if let Some((span, message)) = builtin_import_error(import) {
+                        return Err(vec![path_diagnostic(path, source, span, message)]);
+                    }
+                    None
+                }
+                Statement::ExportFromDeclaration(export)
+                    if export.source.value == BUILTIN_MODULE =>
+                {
+                    return Err(vec![path_diagnostic(
+                        path,
+                        source,
+                        export.span,
+                        BUILTIN_REEXPORT,
+                    )]);
+                }
+                Statement::ExportAllDeclaration(export)
+                    if export.source.value == BUILTIN_MODULE =>
+                {
+                    return Err(vec![path_diagnostic(
+                        path,
+                        source,
+                        export.span,
+                        BUILTIN_REEXPORT,
+                    )]);
+                }
                 Statement::ImportDeclaration(import) => {
                     Some((import.source.value.as_str(), import.span))
                 }
@@ -607,6 +636,17 @@ fn static_dependency_specifiers(
         let mut dependencies = Vec::new();
         for statement in &program.body {
             let dependency = match statement {
+                Statement::ImportDeclaration(import) if is_builtin_import(import) => None,
+                Statement::ExportFromDeclaration(export)
+                    if export.source.value == BUILTIN_MODULE =>
+                {
+                    None
+                }
+                Statement::ExportAllDeclaration(export)
+                    if export.source.value == BUILTIN_MODULE =>
+                {
+                    None
+                }
                 Statement::ImportDeclaration(import) => {
                     Some((import.source.value.to_string(), import.span))
                 }
@@ -626,11 +666,71 @@ fn static_dependency_specifiers(
     })
 }
 
+/// The module that names Motion's built-ins. Importing from it binds nothing new: built-ins are
+/// available without an import, and the import only names them, as frontend code does.
+pub(super) const BUILTIN_MODULE: &str = "valle";
+
+/// Whether `import` names built-ins.
+pub(super) fn is_builtin_import(import: &ImportDeclaration<'_>) -> bool {
+    import.source.value == BUILTIN_MODULE
+}
+
+/// Why an import from `"valle"` cannot stand. Built-ins are recognized by their names, so each
+/// keeps its own.
+pub(super) fn builtin_import_error(import: &ImportDeclaration<'_>) -> Option<(Span, String)> {
+    const NAMED: &str =
+        "\"valle\" has only named exports, such as `import { interpolate, View } from \"valle\"`";
+    if import.phase.is_some() || import.with_clause.is_some() {
+        return Some((
+            import.span,
+            "import phase/attributes are outside the deterministic Motion module contract".into(),
+        ));
+    }
+    if import.import_kind == ImportOrExportKind::Type {
+        return None;
+    }
+    let Some(specifiers) = &import.specifiers else {
+        return Some((import.span, NAMED.into()));
+    };
+    for specifier in specifiers {
+        let ImportDeclarationSpecifier::ImportSpecifier(specifier) = specifier else {
+            return Some((specifier.span(), NAMED.into()));
+        };
+        let imported = specifier.imported.name();
+        if specifier.import_kind != ImportOrExportKind::Type && imported != specifier.local.name {
+            return Some((
+                specifier.span,
+                format!(
+                    "import `{imported}` from \"valle\" under its own name; Motion recognizes \
+                     built-ins by name"
+                ),
+            ));
+        }
+    }
+    None
+}
+
+/// The rejection for a specifier that is neither relative nor `"valle"`.
+fn bare_specifier_message(specifier: &str) -> String {
+    match specifier.split('/').next().unwrap_or(specifier) {
+        "react" | "react-dom" => format!(
+            "Motion compiles JSX itself and has no `{specifier}` runtime; remove the import, and \
+             import Motion's hooks and primitives from \"valle\" to name them"
+        ),
+        "remotion" | "@remotion" => format!(
+            "Motion is not Remotion and has no `{specifier}`; its primitives and hooks come from \
+             \"valle\", and `useTime().localFrame` is `useCurrentFrame()`"
+        ),
+        _ => format!(
+            "module specifier `{specifier}` is not relative; npm, URL, absolute and host \
+             resolution are forbidden, and built-ins come from \"valle\""
+        ),
+    }
+}
+
 fn resolve_disk_specifier(root: &Path, importer: &str, specifier: &str) -> Result<String, String> {
     if !specifier.starts_with("./") && !specifier.starts_with("../") {
-        return Err(format!(
-            "module specifier `{specifier}` is not relative; npm, URL, absolute and host resolution are forbidden"
-        ));
+        return Err(bare_specifier_message(specifier));
     }
     let base = Path::new(importer)
         .parent()
@@ -741,6 +841,16 @@ fn analyze_module(
                 }
                 continue;
             };
+            if is_builtin_import(import) {
+                for specifier in import.specifiers.iter().flatten() {
+                    let local = specifier.local();
+                    if let Some(symbol) = local.symbol_id.get() {
+                        renamed.remove(&symbol);
+                    }
+                    local_names.insert(local.name.to_string(), local.name.to_string());
+                }
+                continue;
+            }
             let dependency = &dependencies[dependency_cursor];
             dependency_cursor += 1;
             if import.phase.is_some() || import.with_clause.is_some() {
@@ -849,6 +959,7 @@ fn analyze_module(
         let mut dependency_cursor = 0usize;
         for statement in &program.body {
             match statement {
+                Statement::ImportDeclaration(import) if is_builtin_import(import) => {}
                 Statement::ImportDeclaration(_) => dependency_cursor += 1,
                 Statement::ExportDeclaration(export) => {
                     if is_type_declaration(&export.declaration) {
@@ -1291,9 +1402,7 @@ fn resolve_specifier(
     graph: &MotionModuleGraph,
 ) -> Result<String, String> {
     if !specifier.starts_with("./") && !specifier.starts_with("../") {
-        return Err(format!(
-            "module specifier `{specifier}` is not relative; npm, URL, absolute and host resolution are forbidden"
-        ));
+        return Err(bare_specifier_message(specifier));
     }
     let base = Path::new(importer)
         .parent()

@@ -7,8 +7,9 @@ installation and the other Valle command groups.
 
 Motion compiles a constrained, deterministic JSX language. Its component tree is
 prepared before rendering; expressions then supply values for each requested
-frame. Components and builtins below are available without imports. React hooks,
-the browser DOM and arbitrary npm packages are not part of this environment.
+frame. Components and builtins below are available without imports, and
+`import { … } from "valle"` names them. React's state and effect hooks, the
+browser DOM and arbitrary npm packages are not part of this environment.
 
 ## Contents
 
@@ -360,9 +361,15 @@ use `.ts`/`.tsx` files and unambiguous relative paths. Explicit named imports an
 supported default imports are linked before compilation. Type-only imports do
 not create runtime dependencies.
 
+Built-ins need no import. `import { interpolate, useTime, View } from "valle"`
+names them, as frontend code imports what it uses; each keeps its own name, and
+`"valle"` has no default or namespace export.
+
 No npm/bare imports, URLs, absolute imports, dynamic `import()`, side-effect imports,
-namespace imports or module cycles. Filesystem/network work belongs outside the
-Motion source. Bind JSON using `--data`, and media using `--asset`.
+namespace imports or module cycles. There is no React or Remotion runtime to import:
+JSX compiles directly, and the hooks and primitives are Motion's own. Filesystem and
+network work belongs outside the Motion source. Bind JSON using `--data`, and media
+using `--asset`.
 
 ### Primitive catalog
 
