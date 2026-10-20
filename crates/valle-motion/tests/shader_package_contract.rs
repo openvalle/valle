@@ -278,6 +278,17 @@ fn manifest_shape_and_layer_area_are_bounded() {
         DiagnosticCode::UniformDefault
     );
 
+    // A number declares its whole range, or none and takes any finite value.
+    let mut unbounded = manifest();
+    (unbounded.uniforms[0].min, unbounded.uniforms[0].max) = (None, None);
+    unbounded.validate_shape().unwrap();
+    let mut one_sided = manifest();
+    one_sided.uniforms[0].max = None;
+    assert_eq!(
+        one_sided.validate_shape().unwrap_err().code,
+        DiagnosticCode::UniformRange
+    );
+
     let package = package();
     assert_eq!(
         package.validate_layer_pixels(1920, 1080).unwrap(),

@@ -1997,6 +1997,7 @@ mod tests {
             composition: None,
             controls: controls(),
             resource_refs: vec![],
+            shaders: Vec::new(),
             exprs,
             instance_groups: vec![],
             nodes: vec![SceneNode {

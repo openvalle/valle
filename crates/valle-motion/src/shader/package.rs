@@ -120,12 +120,23 @@ pub struct ShaderPackage {
     pub abi_hash: ContentDigest,
 }
 
-/// Portable author source and its contract. Generated backend code is never trusted input.
-#[derive(Serialize, Deserialize)]
+/// Portable author source and its contract: the frozen form of a descriptor package, and the
+/// form a Motion artifact carries for a ShaderLayer written with `code`. Generated backend code is
+/// never trusted input.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct FrozenShader {
-    manifest: ShaderManifest,
-    source: String,
+pub struct FrozenShader {
+    pub manifest: ShaderManifest,
+    pub source: String,
+}
+
+impl FrozenShader {
+    /// The URI of the package these make, named by its content hash, without compiling it.
+    pub fn uri(&self) -> Result<ShaderUri, ShaderDiagnostic> {
+        Ok(ShaderUri {
+            digest: ContentDigest::of_bytes(&canonical_bytes(self)?),
+        })
+    }
 }
 
 /// Backend-neutral runtime record exported by the single Rust admission path.
@@ -163,10 +174,18 @@ impl ShaderPackage {
     }
 
     pub fn frozen_bytes(&self) -> Result<Vec<u8>, ShaderDiagnostic> {
-        canonical_bytes(&FrozenShader {
+        canonical_bytes(&self.frozen())
+    }
+
+    pub fn frozen(&self) -> FrozenShader {
+        FrozenShader {
             manifest: self.manifest.clone(),
             source: self.source.clone(),
-        })
+        }
+    }
+
+    pub fn from_frozen_shader(frozen: &FrozenShader) -> Result<Self, ShaderDiagnostic> {
+        Self::compile(frozen.manifest.clone(), frozen.source.as_bytes())
     }
 
     pub fn admit(manifest_bytes: &[u8], source_bytes: &[u8]) -> Result<Self, ShaderDiagnostic> {

@@ -1307,6 +1307,111 @@ export const controls=({assets:{effect:asset({kind:"shader"}),image:asset({kind:
 }
 
 #[test]
+fn shader_layer_code_renders_as_the_descriptor_it_replaces() {
+    let temp = tempfile::tempdir().unwrap();
+    let dir = temp.path();
+    // A noise ramp, so that the middle frame has revealed, edge and hidden columns.
+    let mut encoder = png::Encoder::new(std::fs::File::create(dir.join("ramp.png")).unwrap(), 8, 1);
+    encoder.set_color(png::ColorType::Rgb);
+    let ramp = (0..8u8).flat_map(|x| [x * 32; 3]).collect::<Vec<_>>();
+    encoder
+        .write_header()
+        .unwrap()
+        .write_image_data(&ramp)
+        .unwrap();
+    let package = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../valle-compiler/tests/fixtures/motion/shader-packages/local-dissolve");
+    std::fs::copy(
+        package.join("manifest.json"),
+        dir.join("dissolve.shader.json"),
+    )
+    .unwrap();
+    std::fs::copy(package.join("shader.vsksl"), dir.join("shader.vsksl")).unwrap();
+    let layer = r##"
+        uniforms={{ progress: ctx.progress, edgeWidth: 0.06, edgeColor: "#38bdf8" }}
+        style={{ width: 64, height: 32 }}>
+        <View style={{ width: 64, height: 32, backgroundColor: "#ffffff" }} />
+      </ShaderLayer>
+    </Scene>
+  );
+}"##;
+    let head = r##"export const composition = { width: 64, height: 32, fps: 30, duration: 3 };
+export default function Dissolve() {
+  const ctx = useTime();
+  return (
+    <Scene style={{ width: 64, height: 32 }}>
+      "##;
+    std::fs::write(
+        dir.join("descriptor.motion.tsx"),
+        format!(
+            r#"export const controls = {{ assets: {{ effect: asset({{ kind: "shader" }}), noise: asset({{ kind: "image" }}) }} }};
+{head}<ShaderLayer source="asset://effect" inputs={{{{ noise: "asset://noise" }}}}{layer}"#
+        ),
+    )
+    .unwrap();
+    // The example in docs/motion.md.
+    let code = r#"const dissolve = `
+uniform float progress;
+uniform float edgeWidth;
+uniform color edgeColor;
+uniform shader noise;
+
+float4 valle_main(float2 uv) {
+  float4 source = sampleContent(uv);
+  float threshold = sample_noise(uv).r;
+  float reveal = smoothstep(threshold - edgeWidth, threshold + edgeWidth, progress);
+  float edge = 1.0 - smoothstep(edgeWidth, edgeWidth * 2.0, abs(progress - threshold));
+  edge *= source.a > 0.0 ? 1.0 : 0.0;
+  return float4(mix(source.rgb, edgeColor.rgb, edge), source.a * max(reveal, edge * edgeColor.a));
+}`;
+"#;
+    std::fs::write(
+        dir.join("inline.motion.tsx"),
+        format!(
+            r#"{code}export const controls = {{ assets: {{ noise: asset({{ kind: "image" }}) }} }};
+{head}<ShaderLayer code={{dissolve}}
+        inputs={{{{ noise: {{ src: "asset://noise", sampling: "nearest" }} }}}}{layer}"#
+        ),
+    )
+    .unwrap();
+    for frame in ["15", "45", "75"] {
+        let render = |input: &str, assets: &[&str]| {
+            let output = format!("{input}-{frame}.png");
+            let mut args = vec![
+                "motion",
+                "render",
+                input,
+                "--frame",
+                frame,
+                "--backend",
+                "raster",
+                "-o",
+                &output,
+            ];
+            for asset in assets {
+                args.extend(["--asset", asset]);
+            }
+            success(run(dir, &args));
+            valle_media::codec::read_rgba_png(&dir.join(&output))
+                .unwrap()
+                .data
+        };
+        let inline = render("inline.motion.tsx", &["noise=ramp.png"]);
+        let descriptor = render(
+            "descriptor.motion.tsx",
+            &["effect=dissolve.shader.json", "noise=ramp.png"],
+        );
+        assert!(inline == descriptor, "frame {frame} differs");
+        if frame == "45" {
+            let colors = inline
+                .chunks_exact(4)
+                .collect::<std::collections::BTreeSet<_>>();
+            assert!(colors.len() >= 3, "{colors:?}");
+        }
+    }
+}
+
+#[test]
 fn shader_content_preserves_local_coordinates_and_complete_input() {
     let temp = tempfile::tempdir().unwrap();
     let dir = temp.path();

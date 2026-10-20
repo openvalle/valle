@@ -415,7 +415,7 @@ below. Unknown attributes and event handlers are rejected.
 | `MathFormula` | Formula leaf; static `latex`, `displayMode`, `ariaLabel` |
 | `Glass`, `GlassField` | Optical material surfaces and shared material fields |
 | `Transition` | Two child subtrees, static `kind`, numeric `progress`, optional `params`; see [transitions](#subtree-transitions) |
-| `ShaderLayer` | Package-backed custom shader; `source`, `inputs`, `uniforms`, content children |
+| `ShaderLayer` | Custom shader; inline `code` or a descriptor `source`, `inputs`, `uniforms`, `outset`, content children |
 | `Scene3D` | 3D scene leaf with its own camera and explicit 3D children |
 | `ThemeProvider` | Compile-time theme scope; `value` and its children |
 
@@ -2621,11 +2621,62 @@ asset and renderer contract.
 
 ### ShaderLayer
 
-Bind a `.shader.json` descriptor through an `asset({ kind: "shader" })` control.
-Its `entry` is a relative `.vsksl` source path. The compiler validates and freezes
+Write the shader inline with `code`, or bind a descriptor with `source`; a layer
+takes one of them. Inline code declares its uniforms and image inputs at the top
+level, beside its functions:
+
+```tsx
+const dissolve = `
+uniform float progress;
+uniform float edgeWidth;
+uniform color edgeColor;
+uniform shader noise;
+
+float4 valle_main(float2 uv) {
+  float4 source = sampleContent(uv);
+  float threshold = sample_noise(uv).r;
+  float reveal = smoothstep(threshold - edgeWidth, threshold + edgeWidth, progress);
+  float edge = 1.0 - smoothstep(edgeWidth, edgeWidth * 2.0, abs(progress - threshold));
+  edge *= source.a > 0.0 ? 1.0 : 0.0;
+  return float4(mix(source.rgb, edgeColor.rgb, edge), source.a * max(reveal, edge * edgeColor.a));
+}`;
+
+export const controls = {
+  assets: { noise: asset({ kind: "image", required: true }) },
+};
+export default function Dissolve() {
+  const ctx = useTime();
+  return (
+    <Scene>
+      <ShaderLayer code={dissolve}
+        inputs={{ noise: { src: "asset://noise", sampling: "nearest" } }}
+        uniforms={{ progress: ctx.progress, edgeWidth: 0.06, edgeColor: "#38bdf8" }}
+        style={{ width: 520, height: 200 }}>
+        <View style={{ width: 520, height: 200, backgroundColor: "#ffffff" }} />
+      </ShaderLayer>
+    </Scene>
+  );
+}
+```
+
+`uniform <type> <name>;` declares a uniform of one of the types below, and
+`uniform shader <name>;` an image input that `sample_<name>(uv)` reads. Every
+declaration must be bound; declarations carry no defaults or initializers, and a
+number may take any finite value.
+Bind an input as `"asset://<image-control>"`, or as `{ src, kind, sampling, wrap }`
+to choose how it is read: `kind` is `"color"` (default) or `"data"`, `sampling`
+defaults to `"linear"` for color and `"nearest"` for data, and `wrap` to `"clamp"`.
+`outset` extends the output beyond the border box by whole local pixels, as one
+number or one to four in CSS order (top, right, bottom, left); it is the
+descriptor's `output.padding`. The code must be known at compile time, for example
+a module constant; the render package carries it, so nothing else is bound.
+
+A descriptor is a `.shader.json` file bound through an `asset({ kind: "shader" })`
+control. Its `entry` is a relative `.vsksl` source path. The compiler validates and freezes
 both files, computes their content and ABI hashes, and includes them in the render
 package. Author files declare inputs, uniform types/defaults/ranges, and the
-output contract; they carry no versions or hand-maintained hashes.
+output contract; they carry no versions or hand-maintained hashes. A number
+declares `min` and `max` together, or neither to take any finite value.
 
 ```tsx
 export const controls = {
@@ -2683,7 +2734,8 @@ viewport. Sampling outside the content returns transparent pixels. A layer can
 also omit children and generate pixels entirely from its shader.
 
 For output beyond the border box, set `output.padding: [left, top, right, bottom]`
-in the descriptor (non-negative integer local pixels; default `[0, 0, 0, 0]`).
+in the descriptor, or `outset` with inline code (non-negative integer local
+pixels; default none).
 Padding expands the output rectangle without changing `resolution` or the UV
 origin. Both padded area and full input surfaces count toward allocation budgets;
 the final viewport and explicit ancestor clips still clip the output. Each local

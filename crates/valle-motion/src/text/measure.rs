@@ -560,6 +560,7 @@ fn text_artifact(request: &TextMeasure<'_>, styles: Vec<StyleBinding>) -> SceneA
         },
         camera: None,
         resource_refs: vec![],
+        shaders: Vec::new(),
         exprs: vec![],
         instance_groups: vec![],
         nodes: vec![

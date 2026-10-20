@@ -196,6 +196,7 @@ impl<'s> Compiler<'s> {
             exponentiations,
             source_ledger: SourceLedger::default(),
             resource_refs: resources.to_vec(),
+            inline_shaders: BTreeMap::new(),
             used_font_controls: BTreeSet::new(),
             bindings: Bindings::default(),
             module_const_inits,
@@ -399,6 +400,14 @@ impl<'s> Compiler<'s> {
             self.extra_capabilities
                 .insert(valle_motion::glass::MOTION_GLASS_CAPABILITY.to_string());
         }
+        let mut shaders = Vec::new();
+        for node in &nodes {
+            if let NodeKind::ShaderLayer { program, .. } = &node.kind
+                && let Some(shader) = self.inline_shaders.remove(&program.uri)
+            {
+                shaders.push(shader);
+            }
+        }
         let artifact = SceneArtifact {
             camera: self.camera.clone(),
             format_version: ARTIFACT_FORMAT_VERSION,
@@ -413,6 +422,7 @@ impl<'s> Compiler<'s> {
             role: self.role,
             controls: self.controls.clone(),
             resource_refs,
+            shaders,
             exprs: std::mem::take(&mut self.expr_arena.values),
             instance_groups: std::mem::take(&mut self.instance_groups),
             nodes,

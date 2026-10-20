@@ -295,6 +295,198 @@ fn shader_manifest_defaults_become_typed_artifact_bindings() {
     }
 }
 
+const SHADER_CODE_SCENE: &str = r##"const effect = `
+uniform float progress;
+uniform color tint;
+uniform shader field;
+
+float4 valle_main(float2 uv) {
+  return mix(sampleContent(uv), tint, progress * sample_field(uv).r);
+}`;
+export const controls = { assets: { field: asset({ kind: "image" }) } };
+export default function Contract() {
+  const ctx = useTime();
+  return <Scene>LAYERS</Scene>;
+}"##;
+
+const SHADER_CODE_LAYER: &str = r##"code={effect} inputs={{ field: "asset://field" }} uniforms={{ progress: ctx.progress, tint: "#38bdf8" }}"##;
+
+fn shader_code_scene(layers: &[&str]) -> String {
+    let layers = layers
+        .iter()
+        .map(|attributes| {
+            format!("<ShaderLayer {attributes} style={{{{ width: 32, height: 32 }}}} />")
+        })
+        .collect::<String>();
+    SHADER_CODE_SCENE.replace("LAYERS", &layers)
+}
+
+fn compile_shader_code(
+    source: &str,
+) -> Result<valle_compiler::motion::CompiledMotion, Vec<String>> {
+    let field = valle_motion::ResourceRef {
+        control: "field".into(),
+        content_hash: valle_motion::ContentDigest::of_bytes(b"field"),
+    };
+    compile_motion_with_full_env(source, std::slice::from_ref(&field), None, None).map_err(
+        |diagnostics| {
+            diagnostics
+                .into_iter()
+                .map(|diagnostic| diagnostic.message)
+                .collect()
+        },
+    )
+}
+
+#[test]
+fn shader_layer_code_declares_its_uniforms_and_inputs() {
+    use valle_motion::shader::{InputKind, InputSampling, InputWrap};
+
+    let programs = |artifact: &valle_motion::SceneArtifact| {
+        artifact
+            .nodes
+            .iter()
+            .filter_map(|node| match &node.kind {
+                valle_motion::NodeKind::ShaderLayer { program, .. } => Some(program.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+
+    // Two layers with the same code and input options share one package.
+    let data = SHADER_CODE_LAYER.replace(
+        r#"field: "asset://field""#,
+        r#"field: { src: "asset://field", kind: "data" }"#,
+    ) + " outset={[2, 4]}";
+    let compiled = compile_shader_code(&shader_code_scene(&[&data, &data]))
+        .unwrap_or_else(|messages| panic!("{messages:#?}"));
+    let artifact = &compiled.artifact;
+    artifact.validate().unwrap();
+    assert_eq!(artifact.shaders.len(), 1);
+    let shader = &artifact.shaders[0];
+    let input = &shader.manifest.inputs[0];
+    assert_eq!(
+        (input.name.as_str(), input.kind, input.sampling, input.wrap),
+        (
+            "field",
+            InputKind::Data,
+            InputSampling::Nearest,
+            InputWrap::Clamp
+        )
+    );
+    assert_eq!(
+        shader
+            .manifest
+            .uniforms
+            .iter()
+            .map(|uniform| uniform.name.as_str())
+            .collect::<Vec<_>>(),
+        ["progress", "tint"]
+    );
+    assert!(!shader.source.contains("uniform"), "{}", shader.source);
+    // CSS order, top and bottom 2 and the sides 4, as [left, top, right, bottom].
+    assert_eq!(shader.manifest.output.padding, [4, 2, 4, 2]);
+    let uri = shader.uri().unwrap().to_string();
+    let layers = programs(artifact);
+    assert_eq!(layers.len(), 2);
+    assert!(
+        layers
+            .iter()
+            .all(|program| program.uri == uri && program.padding == [4, 2, 4, 2])
+    );
+    let scene = valle_motion::prepare_scene(artifact).unwrap();
+    assert_eq!(scene.inline_shaders().len(), 1);
+    assert_eq!(scene.inline_shaders()[0].uri().to_string(), uri);
+
+    // A color input filters linearly by default; other options make another package.
+    let compiled = compile_shader_code(&shader_code_scene(&[SHADER_CODE_LAYER, &data]))
+        .unwrap_or_else(|messages| panic!("{messages:#?}"));
+    let artifact = &compiled.artifact;
+    assert_eq!(artifact.shaders.len(), 2);
+    let color = artifact
+        .shaders
+        .iter()
+        .map(|shader| &shader.manifest)
+        .find(|manifest| manifest.inputs[0].kind == InputKind::Color)
+        .expect("the color layer has its own package");
+    assert_eq!(color.inputs[0].sampling, InputSampling::Linear);
+    assert_eq!(color.output.padding, [0; 4]);
+    let layers = programs(artifact);
+    assert_ne!(layers[0].uri, layers[1].uri);
+
+    let edited = |from: &str, to: &str| shader_code_scene(&[&SHADER_CODE_LAYER.replace(from, to)]);
+    for (source, expected) in [
+        (
+            shader_code_scene(&[&format!(r#"{SHADER_CODE_LAYER} source="asset://field""#)]),
+            "either source=",
+        ),
+        (
+            edited(r##", tint: "#38bdf8""##, ""),
+            "ShaderLayer code requires uniform `tint`",
+        ),
+        (
+            edited("progress: ctx.progress", "progress: ctx.progress, glow: 1"),
+            "ShaderLayer code has no uniform `glow`",
+        ),
+        (
+            edited(r#"inputs={{ field: "asset://field" }}"#, ""),
+            "ShaderLayer code requires texture input `field`",
+        ),
+        (
+            edited(
+                r#""asset://field""#,
+                r#"{ src: "asset://field", filter: "linear" }"#,
+            ),
+            "not `filter`",
+        ),
+        (
+            edited(r#""asset://field""#, r#"{ kind: "data" }"#),
+            "needs `src`",
+        ),
+        (
+            shader_code_scene(&[&format!("{SHADER_CODE_LAYER} outset={{-1}}")]),
+            "ShaderLayer outset must be a whole number of pixels",
+        ),
+        (
+            shader_code_scene(&[&format!("{SHADER_CODE_LAYER} outset={{[1, 2, 3, 4, 5]}}")]),
+            "ShaderLayer outset must be a whole number of pixels",
+        ),
+        (
+            edited(
+                "code={effect}",
+                "code={ctx.progress > 0.5 ? effect : effect}",
+            ),
+            "ShaderLayer code must be a static string",
+        ),
+        (
+            shader_code_scene(&[SHADER_CODE_LAYER])
+                .replace("uniform float progress;", "uniform float progress = 0.5;"),
+            "not an initializer",
+        ),
+        (
+            shader_code_scene(&[SHADER_CODE_LAYER]).replace("return mix(", "return blend("),
+            "ShaderLayer code, line 7, column ",
+        ),
+    ] {
+        let messages = compile_shader_code(&source).expect_err(expected);
+        assert!(
+            messages.iter().any(|message| message.contains(expected)),
+            "{expected}: {messages:#?}"
+        );
+        assert_eq!(messages.len(), 1, "{expected}: {messages:#?}");
+    }
+    let messages = compile_shader_code(&shader_code_scene(&[
+        r#"source="asset://field" outset={2}"#,
+    ]))
+    .expect_err("outset with a descriptor");
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains("outset is for ShaderLayer code")),
+        "{messages:#?}"
+    );
+}
+
 #[test]
 fn dynamic_gradients_preserve_spread_and_geometry_batches_keep_semantic_keys() {
     for (kind, geometry) in [

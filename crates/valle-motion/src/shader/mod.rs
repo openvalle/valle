@@ -7,12 +7,14 @@
 mod canonical;
 mod data;
 mod dialect;
+mod inline;
 mod manifest;
 mod package;
 mod registry;
 
 pub use crate::ContentDigest;
 pub use dialect::{DialectReport, SHADER_LIMITS, ShaderLimits, lower_to_sksl, validate_dialect};
+pub use inline::{InlineCode, InlineDeclaration, InputOptions};
 pub use manifest::{
     ALPHA_MODE, AbiChild, AbiUniform, BudgetClass, COLOR_SPACE, DIALECT_ID, InputKind,
     InputSampling, InputWrap, MAX_LAYER_PIXELS, MAX_SAMPLES_PER_PIXEL, MAX_SOURCE_BYTES,
@@ -20,7 +22,7 @@ pub use manifest::{
     ShaderManifest, ShaderUniform, UniformType, UniformValue,
 };
 pub use package::{
-    DiagnosticCode, ShaderDiagnostic, ShaderPackage, ShaderRuntimeRecord, ShaderUri,
+    DiagnosticCode, FrozenShader, ShaderDiagnostic, ShaderPackage, ShaderRuntimeRecord, ShaderUri,
     UniformBindings,
 };
 pub use registry::{ShaderRegistry, ShaderRegistryError};

@@ -172,6 +172,9 @@ impl<'s> Compiler<'s> {
         let mut time_offset = None;
         let mut time_speed = None;
         let mut shader_source = None;
+        // Each holds `None` once its attribute has reported why it is invalid.
+        let mut shader_code: Option<(Option<String>, Span)> = None;
+        let mut shader_outset: Option<(Option<[u32; 4]>, Span)> = None;
         let mut shader_inputs: Option<&'s ObjectExpression<'s>> = None;
         let mut shader_uniforms: Option<&'s ObjectExpression<'s>> = None;
         let mut scene3d_camera: Option<&'s ObjectExpression<'s>> = None;
@@ -516,6 +519,32 @@ impl<'s> Compiler<'s> {
                             DiagCode::GrammarForbidden,
                             attribute.span(),
                             "ShaderLayer source may only be declared once",
+                        );
+                    }
+                }
+                "code" if kind_tag == "shader-layer" => {
+                    let value = self.attr_static_string(
+                        &attribute.value,
+                        attribute.span(),
+                        "ShaderLayer code",
+                    );
+                    if shader_code.replace((value, attribute.span())).is_some()
+                    {
+                        self.illegal(
+                            DiagCode::GrammarForbidden,
+                            attribute.span(),
+                            "ShaderLayer code may only be declared once",
+                        );
+                    }
+                }
+                "outset" if kind_tag == "shader-layer" => {
+                    let value = self.shader_outset(&attribute.value, attribute.span());
+                    if shader_outset.replace((value, attribute.span())).is_some()
+                    {
+                        self.illegal(
+                            DiagCode::GrammarForbidden,
+                            attribute.span(),
+                            "ShaderLayer outset may only be declared once",
                         );
                     }
                 }
@@ -1432,20 +1461,60 @@ impl<'s> Compiler<'s> {
             return None;
         }
         let shader_kind = if kind_tag == "shader-layer" {
-            let Some(source) = shader_source else {
-                self.illegal(
-                    DiagCode::GrammarForbidden,
-                    element.span(),
-                    "ShaderLayer requires a static source=\"asset://<shader-control>\"",
-                );
-                return None;
-            };
-            self.lower_shader_layer(
-                &source,
-                shader_inputs,
-                shader_uniforms,
-                element.opening_element.span(),
-            )
+            match (shader_source, shader_code) {
+                (Some(_), Some((_, code_span))) => {
+                    self.illegal(
+                        DiagCode::GrammarForbidden,
+                        code_span,
+                        "ShaderLayer takes either source=\"asset://<shader-control>\" or code, \
+                         not both",
+                    );
+                    return None;
+                }
+                (None, Some((code, code_span))) => {
+                    let padding = match shader_outset {
+                        Some((padding, _)) => padding,
+                        None => Some([0; 4]),
+                    };
+                    let (Some(code), Some(padding)) = (code, padding) else {
+                        return None;
+                    };
+                    self.lower_inline_shader_layer(
+                        &code,
+                        code_span,
+                        padding,
+                        shader_inputs,
+                        shader_uniforms,
+                        element.opening_element.span(),
+                    )
+                }
+                (Some(source), None) => {
+                    if let Some((_, outset_span)) = shader_outset {
+                        self.illegal(
+                            DiagCode::GrammarForbidden,
+                            outset_span,
+                            "a descriptor sets its own output padding; outset is for ShaderLayer \
+                             code",
+                        );
+                        return None;
+                    }
+                    self.lower_shader_layer(
+                        &source,
+                        shader_inputs,
+                        shader_uniforms,
+                        element.opening_element.span(),
+                    )
+                }
+                (None, None) => {
+                    self.illegal(
+                        DiagCode::GrammarForbidden,
+                        element.span(),
+                        "ShaderLayer requires its code, or a static \
+                         source=\"asset://<shader-control>\" naming a descriptor",
+                    );
+                    return None;
+                }
+            }
         } else {
             None
         };

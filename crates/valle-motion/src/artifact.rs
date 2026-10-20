@@ -1575,6 +1575,10 @@ pub struct SceneArtifact {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub composition: Option<crate::composition::Composition>,
     pub resource_refs: Vec<ResourceRef>,
+    /// Shader packages written inline with `<ShaderLayer code>`, in first-use order. A ShaderLayer
+    /// names one by its `shader://<content-hash>` URI, as it names a descriptor bound to an asset.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub shaders: Vec<crate::shader::FrozenShader>,
     pub exprs: Vec<Expr>,
     /// Prepared instance tables and their single expression/template program.
     pub instance_groups: Vec<InstanceGroup>,
@@ -1857,6 +1861,213 @@ pub struct InstanceGroup {
 pub struct InstanceTemplateNode {
     pub node: SceneNode,
     pub children: Vec<InstanceTemplateNode>,
+}
+
+/// Check one ShaderLayer against the package its program names: its pins, every uniform in ABI
+/// order with the declared type and range, and every texture input as declared.
+fn validate_shader_layer_package(
+    base: &str,
+    program: &ShaderProgramRef,
+    uniforms: &[ShaderUniformBinding],
+    inputs: &[ShaderTextureInput],
+    package: &crate::shader::ShaderPackage,
+    errors: &mut Vec<ValidationError>,
+) {
+    if program.content_hash != package.content_hash {
+        errors.push(ValidationError::new(
+            format!("{base}/program/contentHash"),
+            format!(
+                "artifact pins {}, registry resolves {}",
+                program.content_hash, package.content_hash
+            ),
+        ));
+    }
+    if program.abi_hash != package.abi_hash {
+        errors.push(ValidationError::new(
+            format!("{base}/program/abiHash"),
+            format!(
+                "artifact pins {}, registry resolves {}",
+                program.abi_hash, package.abi_hash
+            ),
+        ));
+    }
+    if program.work_per_pixel != package.work_per_pixel() {
+        errors.push(ValidationError::new(
+            format!("{base}/program/workPerPixel"),
+            "shader work estimate differs from its admitted source",
+        ));
+    }
+    if program.padding != package.manifest.output.padding {
+        errors.push(ValidationError::new(
+            format!("{base}/program/padding"),
+            "shader padding differs from the admitted package",
+        ));
+    }
+
+    if uniforms.len() != package.manifest.uniforms.len() {
+        errors.push(ValidationError::new(
+            format!("{base}/uniforms"),
+            "artifact must materialize every manifest uniform in ABI order",
+        ));
+    }
+    for (slot, declared) in package.manifest.uniforms.iter().enumerate() {
+        let Some(binding) = uniforms.get(slot) else {
+            continue;
+        };
+        let actual_type = match binding.value {
+            ShaderUniformValue::Float { .. } => crate::shader::UniformType::Float,
+            ShaderUniformValue::Float2 { .. } => crate::shader::UniformType::Float2,
+            ShaderUniformValue::Float3 { .. } => crate::shader::UniformType::Float3,
+            ShaderUniformValue::Float4 { .. } => crate::shader::UniformType::Float4,
+            ShaderUniformValue::Float2x2 { .. } => crate::shader::UniformType::Float2x2,
+            ShaderUniformValue::Float3x3 { .. } => crate::shader::UniformType::Float3x3,
+            ShaderUniformValue::Float4x4 { .. } => crate::shader::UniformType::Float4x4,
+            ShaderUniformValue::Color { .. } => crate::shader::UniformType::Color,
+            ShaderUniformValue::Bool { .. } => crate::shader::UniformType::Bool,
+        };
+        if binding.name != declared.name || actual_type != declared.uniform_type {
+            errors.push(ValidationError::new(
+                format!("{base}/uniforms/{slot}"),
+                format!(
+                    "expected ABI slot `{}` ({:?}), got `{}` ({actual_type:?})",
+                    declared.name, declared.uniform_type, binding.name
+                ),
+            ));
+        }
+        if binding.range != declared.min.zip(declared.max).map(|(min, max)| [min, max]) {
+            errors.push(ValidationError::new(
+                format!("{base}/uniforms/{slot}/range"),
+                format!(
+                    "uniform `{}` range differs from its admitted package",
+                    declared.name
+                ),
+            ));
+        }
+        let static_value = match &binding.value {
+            ShaderUniformValue::Float {
+                value: NumberValue::Static { value },
+            } => Some(crate::shader::UniformValue::Float(*value as f32)),
+            ShaderUniformValue::Float2 {
+                value: PointValue::Static { value },
+            } => Some(crate::shader::UniformValue::Float2([
+                value.x as f32,
+                value.y as f32,
+            ])),
+            ShaderUniformValue::Float3 { value } => {
+                let values = value
+                    .iter()
+                    .map(|component| match component {
+                        NumberValue::Static { value } => Some(*value as f32),
+                        _ => None,
+                    })
+                    .collect::<Option<Vec<_>>>();
+                values.map(|values| crate::shader::UniformValue::Float3(values.try_into().unwrap()))
+            }
+            ShaderUniformValue::Float4 { value } => {
+                let values = value
+                    .iter()
+                    .map(|component| match component {
+                        NumberValue::Static { value } => Some(*value as f32),
+                        _ => None,
+                    })
+                    .collect::<Option<Vec<_>>>();
+                values.map(|values| crate::shader::UniformValue::Float4(values.try_into().unwrap()))
+            }
+            ShaderUniformValue::Float2x2 { value } => {
+                let values = value
+                    .iter()
+                    .map(|component| match component {
+                        NumberValue::Static { value } => Some(*value as f32),
+                        _ => None,
+                    })
+                    .collect::<Option<Vec<_>>>();
+                values
+                    .map(|values| crate::shader::UniformValue::Float2x2(values.try_into().unwrap()))
+            }
+            ShaderUniformValue::Float3x3 { value } => {
+                let values = value
+                    .iter()
+                    .map(|component| match component {
+                        NumberValue::Static { value } => Some(*value as f32),
+                        _ => None,
+                    })
+                    .collect::<Option<Vec<_>>>();
+                values
+                    .map(|values| crate::shader::UniformValue::Float3x3(values.try_into().unwrap()))
+            }
+            ShaderUniformValue::Float4x4 { value } => {
+                let values = value
+                    .iter()
+                    .map(|component| match component {
+                        NumberValue::Static { value } => Some(*value as f32),
+                        _ => None,
+                    })
+                    .collect::<Option<Vec<_>>>();
+                values
+                    .map(|values| crate::shader::UniformValue::Float4x4(values.try_into().unwrap()))
+            }
+            ShaderUniformValue::Color {
+                value: ColorValue::Static { value },
+            } => Some(crate::shader::UniformValue::Color(value.to_srgb_straight())),
+            ShaderUniformValue::Bool {
+                value: BoolValue::Static { value },
+            } => Some(crate::shader::UniformValue::Bool(*value)),
+            _ => None,
+        };
+        if let Some(value) = static_value
+            && let Err(error) = declared.validate_value(&value)
+        {
+            errors.push(ValidationError::new(
+                format!("{base}/uniforms/{slot}/value"),
+                error.to_string(),
+            ));
+        }
+    }
+
+    for declared in &package.manifest.inputs {
+        if declared.required
+            && !inputs
+                .iter()
+                .any(|input| input.name == declared.name && input.source.is_some())
+        {
+            errors.push(ValidationError::new(
+                format!("{base}/inputs"),
+                format!("missing required texture input `{}`", declared.name),
+            ));
+        }
+    }
+    for (slot, input) in inputs.iter().enumerate() {
+        if !package.manifest.inputs.iter().any(|declared| {
+            declared.name == input.name
+                && declared.kind == input.kind
+                && declared.sampling == input.sampling
+                && declared.wrap == input.wrap
+        }) {
+            errors.push(ValidationError::new(
+                format!("{base}/inputs/{slot}/name"),
+                format!(
+                    "texture `{}` does not match its declared name/sampling/wrap",
+                    input.name
+                ),
+            ));
+        }
+    }
+    let expected_order = package
+        .manifest
+        .inputs
+        .iter()
+        .map(|declared| declared.name.as_str())
+        .collect::<Vec<_>>();
+    let actual_order = inputs
+        .iter()
+        .map(|input| input.name.as_str())
+        .collect::<Vec<_>>();
+    if actual_order != expected_order {
+        errors.push(ValidationError::new(
+            format!("{base}/inputs"),
+            "shader texture inputs must follow manifest ABI order",
+        ));
+    }
 }
 
 fn validate_node_classes(
@@ -2498,10 +2709,95 @@ impl SceneArtifact {
         if let Err(glass_errors) = crate::glass::validate_glass_schema(self) {
             errors.extend(glass_errors);
         }
+        self.validate_inline_shaders(&mut errors);
         if errors.is_empty() {
             Ok(())
         } else {
             Err(errors)
+        }
+    }
+
+    /// The packages of the artifact's inline shaders, in artifact order.
+    pub fn inline_shader_packages(
+        &self,
+    ) -> Result<Vec<crate::shader::ShaderPackage>, Vec<ValidationError>> {
+        let mut packages: Vec<crate::shader::ShaderPackage> = Vec::new();
+        let mut errors = Vec::new();
+        for (at, frozen) in self.shaders.iter().enumerate() {
+            match crate::shader::ShaderPackage::from_frozen_shader(frozen) {
+                Ok(package)
+                    if packages
+                        .iter()
+                        .any(|other| other.content_hash == package.content_hash) =>
+                {
+                    errors.push(ValidationError::new(
+                        format!("/shaders/{at}"),
+                        "inline shaders must be distinct",
+                    ));
+                }
+                Ok(package) => packages.push(package),
+                Err(error) => {
+                    errors.push(ValidationError::new(
+                        format!("/shaders/{at}"),
+                        error.to_string(),
+                    ));
+                }
+            }
+        }
+        if errors.is_empty() {
+            Ok(packages)
+        } else {
+            Err(errors)
+        }
+    }
+
+    /// Inline shaders compile, differ and are each used, and a ShaderLayer that names one matches
+    /// it as it would match an admitted descriptor package.
+    fn validate_inline_shaders(&self, errors: &mut Vec<ValidationError>) {
+        if self.shaders.is_empty() {
+            return;
+        }
+        let packages = match self.inline_shader_packages() {
+            Ok(packages) => packages,
+            Err(mut problems) => {
+                errors.append(&mut problems);
+                return;
+            }
+        };
+        let uris = packages
+            .iter()
+            .map(|package| package.uri().to_string())
+            .collect::<Vec<_>>();
+        let mut used = vec![false; packages.len()];
+        for (node_at, node) in self.nodes.iter().enumerate() {
+            let NodeKind::ShaderLayer {
+                program,
+                uniforms,
+                inputs,
+            } = &node.kind
+            else {
+                continue;
+            };
+            let Some(slot) = uris.iter().position(|uri| *uri == program.uri) else {
+                continue;
+            };
+            used[slot] = true;
+            validate_shader_layer_package(
+                &format!("/nodes/{node_at}/kind"),
+                program,
+                uniforms,
+                inputs,
+                &packages[slot],
+                errors,
+            );
+        }
+        for (at, used) in used.into_iter().enumerate() {
+            if !used {
+                errors.push(ValidationError::new(
+                    format!("/shaders/{at}"),
+                    "inline shader is not used by any ShaderLayer",
+                ));
+            }
         }
     }
 
@@ -3018,6 +3314,11 @@ impl SceneArtifact {
         mut resolve: impl FnMut(&str) -> Option<&'a crate::shader::ShaderPackage>,
     ) -> Result<(), Vec<ValidationError>> {
         let mut errors = self.validate().err().unwrap_or_default();
+        let inline = self
+            .shaders
+            .iter()
+            .filter_map(|frozen| frozen.uri().ok().map(|uri| uri.to_string()))
+            .collect::<BTreeSet<_>>();
         for (node_at, node) in self.nodes.iter().enumerate() {
             let NodeKind::ShaderLayer {
                 program,
@@ -3038,6 +3339,10 @@ impl SceneArtifact {
                     continue;
                 }
             };
+            // `validate` checked the layers that name an inline shader against it.
+            if inline.contains(&program.uri) {
+                continue;
+            }
             let package = match resolve(&uri.to_string()) {
                 Some(package) => package,
                 None => {
@@ -3048,208 +3353,7 @@ impl SceneArtifact {
                     continue;
                 }
             };
-            if program.content_hash != package.content_hash {
-                errors.push(ValidationError::new(
-                    format!("{base}/program/contentHash"),
-                    format!(
-                        "artifact pins {}, registry resolves {}",
-                        program.content_hash, package.content_hash
-                    ),
-                ));
-            }
-            if program.abi_hash != package.abi_hash {
-                errors.push(ValidationError::new(
-                    format!("{base}/program/abiHash"),
-                    format!(
-                        "artifact pins {}, registry resolves {}",
-                        program.abi_hash, package.abi_hash
-                    ),
-                ));
-            }
-            if program.work_per_pixel != package.work_per_pixel() {
-                errors.push(ValidationError::new(
-                    format!("{base}/program/workPerPixel"),
-                    "shader work estimate differs from its admitted source",
-                ));
-            }
-            if program.padding != package.manifest.output.padding {
-                errors.push(ValidationError::new(
-                    format!("{base}/program/padding"),
-                    "shader padding differs from the admitted package",
-                ));
-            }
-
-            if uniforms.len() != package.manifest.uniforms.len() {
-                errors.push(ValidationError::new(
-                    format!("{base}/uniforms"),
-                    "artifact must materialize every manifest uniform in ABI order",
-                ));
-            }
-            for (slot, declared) in package.manifest.uniforms.iter().enumerate() {
-                let Some(binding) = uniforms.get(slot) else {
-                    continue;
-                };
-                let actual_type = match binding.value {
-                    ShaderUniformValue::Float { .. } => crate::shader::UniformType::Float,
-                    ShaderUniformValue::Float2 { .. } => crate::shader::UniformType::Float2,
-                    ShaderUniformValue::Float3 { .. } => crate::shader::UniformType::Float3,
-                    ShaderUniformValue::Float4 { .. } => crate::shader::UniformType::Float4,
-                    ShaderUniformValue::Float2x2 { .. } => crate::shader::UniformType::Float2x2,
-                    ShaderUniformValue::Float3x3 { .. } => crate::shader::UniformType::Float3x3,
-                    ShaderUniformValue::Float4x4 { .. } => crate::shader::UniformType::Float4x4,
-                    ShaderUniformValue::Color { .. } => crate::shader::UniformType::Color,
-                    ShaderUniformValue::Bool { .. } => crate::shader::UniformType::Bool,
-                };
-                if binding.name != declared.name || actual_type != declared.uniform_type {
-                    errors.push(ValidationError::new(
-                        format!("{base}/uniforms/{slot}"),
-                        format!(
-                            "expected ABI slot `{}` ({:?}), got `{}` ({actual_type:?})",
-                            declared.name, declared.uniform_type, binding.name
-                        ),
-                    ));
-                }
-                if binding.range != declared.min.zip(declared.max).map(|(min, max)| [min, max]) {
-                    errors.push(ValidationError::new(
-                        format!("{base}/uniforms/{slot}/range"),
-                        format!(
-                            "uniform `{}` range differs from its admitted package",
-                            declared.name
-                        ),
-                    ));
-                }
-                let static_value = match &binding.value {
-                    ShaderUniformValue::Float {
-                        value: NumberValue::Static { value },
-                    } => Some(crate::shader::UniformValue::Float(*value as f32)),
-                    ShaderUniformValue::Float2 {
-                        value: PointValue::Static { value },
-                    } => Some(crate::shader::UniformValue::Float2([
-                        value.x as f32,
-                        value.y as f32,
-                    ])),
-                    ShaderUniformValue::Float3 { value } => {
-                        let values = value
-                            .iter()
-                            .map(|component| match component {
-                                NumberValue::Static { value } => Some(*value as f32),
-                                _ => None,
-                            })
-                            .collect::<Option<Vec<_>>>();
-                        values.map(|values| {
-                            crate::shader::UniformValue::Float3(values.try_into().unwrap())
-                        })
-                    }
-                    ShaderUniformValue::Float4 { value } => {
-                        let values = value
-                            .iter()
-                            .map(|component| match component {
-                                NumberValue::Static { value } => Some(*value as f32),
-                                _ => None,
-                            })
-                            .collect::<Option<Vec<_>>>();
-                        values.map(|values| {
-                            crate::shader::UniformValue::Float4(values.try_into().unwrap())
-                        })
-                    }
-                    ShaderUniformValue::Float2x2 { value } => {
-                        let values = value
-                            .iter()
-                            .map(|component| match component {
-                                NumberValue::Static { value } => Some(*value as f32),
-                                _ => None,
-                            })
-                            .collect::<Option<Vec<_>>>();
-                        values.map(|values| {
-                            crate::shader::UniformValue::Float2x2(values.try_into().unwrap())
-                        })
-                    }
-                    ShaderUniformValue::Float3x3 { value } => {
-                        let values = value
-                            .iter()
-                            .map(|component| match component {
-                                NumberValue::Static { value } => Some(*value as f32),
-                                _ => None,
-                            })
-                            .collect::<Option<Vec<_>>>();
-                        values.map(|values| {
-                            crate::shader::UniformValue::Float3x3(values.try_into().unwrap())
-                        })
-                    }
-                    ShaderUniformValue::Float4x4 { value } => {
-                        let values = value
-                            .iter()
-                            .map(|component| match component {
-                                NumberValue::Static { value } => Some(*value as f32),
-                                _ => None,
-                            })
-                            .collect::<Option<Vec<_>>>();
-                        values.map(|values| {
-                            crate::shader::UniformValue::Float4x4(values.try_into().unwrap())
-                        })
-                    }
-                    ShaderUniformValue::Color {
-                        value: ColorValue::Static { value },
-                    } => Some(crate::shader::UniformValue::Color(value.to_srgb_straight())),
-                    ShaderUniformValue::Bool {
-                        value: BoolValue::Static { value },
-                    } => Some(crate::shader::UniformValue::Bool(*value)),
-                    _ => None,
-                };
-                if let Some(value) = static_value
-                    && let Err(error) = declared.validate_value(&value)
-                {
-                    errors.push(ValidationError::new(
-                        format!("{base}/uniforms/{slot}/value"),
-                        error.to_string(),
-                    ));
-                }
-            }
-
-            for declared in &package.manifest.inputs {
-                if declared.required
-                    && !inputs
-                        .iter()
-                        .any(|input| input.name == declared.name && input.source.is_some())
-                {
-                    errors.push(ValidationError::new(
-                        format!("{base}/inputs"),
-                        format!("missing required texture input `{}`", declared.name),
-                    ));
-                }
-            }
-            for (slot, input) in inputs.iter().enumerate() {
-                if !package.manifest.inputs.iter().any(|declared| {
-                    declared.name == input.name
-                        && declared.kind == input.kind
-                        && declared.sampling == input.sampling
-                        && declared.wrap == input.wrap
-                }) {
-                    errors.push(ValidationError::new(
-                        format!("{base}/inputs/{slot}/name"),
-                        format!(
-                            "texture `{}` does not match its declared name/sampling/wrap",
-                            input.name
-                        ),
-                    ));
-                }
-            }
-            let expected_order = package
-                .manifest
-                .inputs
-                .iter()
-                .map(|declared| declared.name.as_str())
-                .collect::<Vec<_>>();
-            let actual_order = inputs
-                .iter()
-                .map(|input| input.name.as_str())
-                .collect::<Vec<_>>();
-            if actual_order != expected_order {
-                errors.push(ValidationError::new(
-                    format!("{base}/inputs"),
-                    "shader texture inputs must follow manifest ABI order",
-                ));
-            }
+            validate_shader_layer_package(&base, program, uniforms, inputs, package, &mut errors);
         }
         if errors.is_empty() {
             Ok(())

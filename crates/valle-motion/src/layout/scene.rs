@@ -217,6 +217,8 @@ pub struct PreparedScene {
     /// gives paper grain the remainder. Unpainted samples may be skipped only when the scene has
     /// no batch or no paper grain, so that remainder cannot change.
     skip_unpainted_samples: bool,
+    /// The admitted packages of the artifact's inline shaders, in artifact order.
+    inline_shaders: Arc<[crate::shader::ShaderPackage]>,
 }
 
 struct LayoutInstanceRow {
@@ -277,6 +279,12 @@ impl PreparedScene {
 
     pub fn artifact(&self) -> &SceneArtifact {
         &self.artifact
+    }
+
+    /// The admitted packages of the artifact's inline shaders, which a host serves as it serves
+    /// the descriptor packages the artifact depends on.
+    pub fn inline_shaders(&self) -> &[crate::shader::ShaderPackage] {
+        &self.inline_shaders
     }
 
     /// Configure preparation reuse for this scene and its internal temporal projection. A zero
@@ -426,7 +434,12 @@ pub fn prepare(artifact: &SceneArtifact) -> Result<PreparedScene, LayoutError> {
 pub fn prepare_owned(artifact: SceneArtifact) -> Result<PreparedScene, LayoutError> {
     artifact.validate().map_err(LayoutError::InvalidArtifact)?;
     admit_supported_surface(&artifact)?;
-    prepare_admitted(artifact, false)
+    let inline_shaders = artifact
+        .inline_shader_packages()
+        .map_err(LayoutError::InvalidArtifact)?;
+    let mut scene = prepare_admitted(artifact, false)?;
+    scene.inline_shaders = inline_shaders.into();
+    Ok(scene)
 }
 
 fn prepare_admitted(
@@ -618,6 +631,7 @@ fn prepare_admitted(
         layout_probes,
         positioned_children: Arc::new(positioned_children),
         has_post_layout_values: post_layout.iter().any(|dependent| *dependent),
+        inline_shaders: Arc::from([]),
     })
 }
 

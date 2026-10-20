@@ -2451,7 +2451,7 @@ impl CompiledRender {
         self.resources
             .resources
             .iter()
-            .filter_map(compiled_execution_resource_ref)
+            .flat_map(compiled_execution_resource_refs)
             .collect()
     }
 
@@ -2498,10 +2498,12 @@ impl CompiledRender {
             return Err(CompiledExecutionResourceError::RenderMismatch);
         }
         let mut content_match = None;
-        for resource in &self.resources.resources {
-            let Some(resource) = compiled_execution_resource_ref(resource) else {
-                continue;
-            };
+        for resource in self
+            .resources
+            .resources
+            .iter()
+            .flat_map(compiled_execution_resource_refs)
+        {
             if resource.kind != kind || resource.content_digest != content_digest {
                 continue;
             }
@@ -2613,6 +2615,26 @@ fn quantized_motion_source_frame_count(
         .map_err(|_| ())?
         .duration_frames;
     (frame_count > 0).then_some(frame_count).ok_or(())
+}
+
+/// The resource's own payload, then the shaders a Motion artifact writes inline: a backend
+/// fetches those by content and ABI, as it fetches a descriptor's shader.
+fn compiled_execution_resource_refs(
+    resource: &ResolvedResource,
+) -> impl Iterator<Item = CompiledExecutionResourceRef<'_>> {
+    let inline = match &resource.execution {
+        ResolvedExecutionPayload::Motion(scene) => scene.inline_shaders(),
+        _ => &[],
+    };
+    compiled_execution_resource_ref(resource)
+        .into_iter()
+        .chain(inline.iter().map(|package| CompiledExecutionResourceRef {
+            resource_id: &resource.resource_id,
+            kind: CompiledExecutionResourceKind::RuntimeShader,
+            content_digest: &package.content_hash,
+            abi_digest: Some(&package.abi_hash),
+            bytes: package.generated_sksl.as_bytes(),
+        }))
 }
 
 fn compiled_execution_resource_ref(

@@ -124,6 +124,7 @@ fn envelope() -> ArtifactEnvelope {
             control: "hero".into(),
             content_hash: ContentDigest::of_bytes(b"hero.png"),
         }],
+        shaders: Vec::new(),
         exprs,
         instance_groups: vec![],
         nodes: vec![

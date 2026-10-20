@@ -137,12 +137,18 @@ test("frozen shaders align Native/CanvasKit sampling and arbitrary-frame results
             <Mesh key="part" src="asset://model" rotateY={ctx.seconds*20} nodes={[{id:0,rotation:[0,0,ctx.seconds*5],scale:[-1,1,1]}]} material={{type:"unlit",color:ctx.seconds<1?"#ff0000":"#0000ff"}}/>
           </Scene3D>
         </ShaderLayer>`, source: "float4 c = sampleContent(uv); return float4(c.b,c.g,c.r,c.a);", points: [[32,32,0,0,255],[10,10,0,0,0]], samples: 48*48 },
+      // Inline code with an input, a frame uniform and an outset that the right side of `steps` fills.
+      { name: "inline", body: `<ShaderLayer code={"uniform float amount; uniform shader steps; float4 valle_main(float2 uv) { return float4(sample_steps(uv).rgb * amount, 1.0); }"}
+          inputs={{steps:{src:"asset://image",sampling:"nearest"}}} uniforms={{amount:0.5+ctx.seconds*0.25}} outset={[0,8]}
+          style={{position:"absolute",left:16,top:16,width:32,height:32}}/>`,
+        source: "return float4(0.0);", points: [[12,32,0,0,0], [24,32,0,0,0], [40,32,255,255,255], [52,32,255,255,255], [60,32,0,0,0]] },
     ];
     const failures: string[] = [];
     for (const [sampling, wrap] of [["optional-middle", "clamp"], ["optional-empty", "clamp"], ["data-nearest", "mirror"], ["data-linear", "repeat"], ["data-precision", "clamp"], ["nearest", "mirror"], ["linear", "repeat"], ...contents.map(c => [c.name, "clamp"])]) {
       const content = contents.find(c => c.name === sampling);
       const scene3d = sampling === "scene3d";
-      const caseAssets = [...assets, ...(scene3d ? ["--asset","model=model.glb"] : [])];
+      const inline = sampling === "inline";
+      const caseAssets = [...(inline ? assets.slice(2) : assets), ...(scene3d ? ["--asset","model=model.glb"] : [])];
       if (scene3d) await writeFile(join(dir,"model.glb"),await readFile(join(root,"crates/valle-motion/tests/fixtures/scene3d/triangle.glb")));
       const data = sampling!.startsWith("data-");
       const precision = sampling === "data-precision";
@@ -153,7 +159,7 @@ test("frozen shaders align Native/CanvasKit sampling and arbitrary-frame results
       await writeFile(join(dir, "effect.vsksl"), content ? `float4 valle_main(float2 uv) { ${content.source} }` : fieldSource);
       await writeFile(join(dir, "effect.motion.tsx"), content ? `
         export const composition = { width: 64, height: 64, duration: 3 };
-        export const controls={assets:{effect:asset({kind:"shader"}),image:asset({kind:"image"})${scene3d?',model:asset({kind:"model3d"})':''}}};
+        export const controls={assets:{${inline?'':'effect:asset({kind:"shader"}),'}image:asset({kind:"image"})${scene3d?',model:asset({kind:"model3d"})':''}}};
         export default function T() { const ctx = useTime(); return <Scene style={{width:64,height:64,backgroundColor:"#000"}}>${content.body}</Scene>; }
       ` : fieldMotion);
       if (data) {

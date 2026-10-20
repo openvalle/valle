@@ -54,44 +54,207 @@ impl<'s> Compiler<'s> {
             );
             return None;
         }
-        let uri = package.uri();
-        // Clone the manifest contract before lowering expressions, which mutates `self`.
-        let manifest_inputs = package.manifest.inputs.clone();
-        let manifest_uniforms = package.manifest.uniforms.clone();
-        let program = ShaderProgramRef {
-            work_per_pixel: package.work_per_pixel(),
-            uri: uri.to_string(),
-            content_hash: package.content_hash,
-            abi_hash: package.abi_hash,
-            padding: package.manifest.output.padding,
-        };
-
+        // Copy the package contract before lowering expressions, which mutates `self`.
+        let contract = ShaderContract::of(package);
         let authored_inputs = self.shader_object_values(inputs_object, "ShaderLayer inputs")?;
-        let known_inputs = manifest_inputs
-            .iter()
-            .map(|input| input.name.as_str())
-            .collect::<BTreeSet<_>>();
-        if let Some(unknown) = authored_inputs
-            .keys()
-            .find(|name| !known_inputs.contains(name.as_str()))
-        {
-            self.illegal(
-                DiagCode::UnknownProp,
-                span,
-                format!("shader package `{source}` has no texture input `{unknown}`"),
-            );
+        let mut sources = BTreeMap::new();
+        for (name, expression) in authored_inputs {
+            match self.eval_static(expression) {
+                Some(serde_json::Value::String(asset)) => {
+                    sources.insert(name, (asset, expression.span()));
+                }
+                Some(serde_json::Value::Object(_)) => self.illegal(
+                    DiagCode::GrammarForbidden,
+                    expression.span(),
+                    format!(
+                        "shader texture input `{name}` takes an asset:// reference; its descriptor \
+                         sets how it is sampled"
+                    ),
+                ),
+                _ => self.illegal(
+                    DiagCode::GrammarForbidden,
+                    expression.span(),
+                    format!("shader texture input `{name}` must be a static asset:// reference"),
+                ),
+            }
         }
-        let mut inputs = Vec::new();
-        for input in &manifest_inputs {
-            let Some(expression) = authored_inputs.get(&input.name).copied() else {
-                if input.required {
+        if !self.diagnostics.is_empty() {
+            return None;
+        }
+        self.lower_shader_contract(
+            &format!("shader package `{source}`"),
+            contract,
+            sources,
+            uniforms_object,
+            span,
+        )
+    }
+
+    /// A ShaderLayer written with `code`: the code declares its uniforms and inputs, and `inputs`
+    /// says how each input is sampled. `padding` is [left, top, right, bottom] local pixels.
+    pub(super) fn lower_inline_shader_layer(
+        &mut self,
+        code: &str,
+        code_span: Span,
+        padding: [u32; 4],
+        inputs_object: Option<&'s ObjectExpression<'s>>,
+        uniforms_object: Option<&'s ObjectExpression<'s>>,
+        span: Span,
+    ) -> Option<NodeKind> {
+        let inline = match valle_motion::shader::InlineCode::parse(code) {
+            Ok(inline) => inline,
+            Err(error) => {
+                self.illegal(
+                    DiagCode::GrammarForbidden,
+                    code_span,
+                    shader_code_message(&error),
+                );
+                return None;
+            }
+        };
+        let authored_inputs = self.shader_object_values(inputs_object, "ShaderLayer inputs")?;
+        let mut sources = BTreeMap::new();
+        let mut options = BTreeMap::new();
+        for (name, expression) in authored_inputs {
+            let (asset, input_options) = match self.eval_static(expression) {
+                Some(serde_json::Value::String(asset)) => {
+                    (asset, valle_motion::shader::InputOptions::default())
+                }
+                Some(serde_json::Value::Object(fields)) => {
+                    match self.inline_input_options(&name, &fields, expression.span()) {
+                        Some(input) => input,
+                        None => continue,
+                    }
+                }
+                _ => {
+                    self.illegal(
+                        DiagCode::GrammarForbidden,
+                        expression.span(),
+                        format!(
+                            "shader texture input `{name}` must be a static asset:// reference, or \
+                             {{ src, kind, sampling, wrap }} with one"
+                        ),
+                    );
+                    continue;
+                }
+            };
+            options.insert(name.clone(), input_options);
+            sources.insert(name, (asset, expression.span()));
+        }
+        if !self.diagnostics.is_empty() {
+            return None;
+        }
+        let package = match inline.package(
+            |name| options.get(name).copied().unwrap_or_default(),
+            padding,
+        ) {
+            Ok(package) => package,
+            Err(error) => {
+                self.illegal(
+                    DiagCode::GrammarForbidden,
+                    code_span,
+                    shader_code_message(&error),
+                );
+                return None;
+            }
+        };
+        self.inline_shaders
+            .entry(package.uri().to_string())
+            .or_insert_with(|| package.frozen());
+        self.lower_shader_contract(
+            "ShaderLayer code",
+            ShaderContract::of(&package),
+            sources,
+            uniforms_object,
+            span,
+        )
+    }
+
+    /// `{ src, kind, sampling, wrap }`, how inline code samples one input.
+    fn inline_input_options(
+        &mut self,
+        name: &str,
+        fields: &serde_json::Map<String, serde_json::Value>,
+        span: Span,
+    ) -> Option<(String, valle_motion::shader::InputOptions)> {
+        use valle_motion::shader::{InputKind, InputSampling, InputWrap};
+
+        let mut src = None;
+        let mut kind = InputKind::Color;
+        let mut sampling = None;
+        let mut wrap = None;
+        for (key, value) in fields {
+            let text = value.as_str();
+            match (key.as_str(), text) {
+                ("src", Some(text)) => src = Some(text.to_owned()),
+                ("kind", Some("color")) => kind = InputKind::Color,
+                ("kind", Some("data")) => kind = InputKind::Data,
+                ("sampling", Some("nearest")) => sampling = Some(InputSampling::Nearest),
+                ("sampling", Some("linear")) => sampling = Some(InputSampling::Linear),
+                ("wrap", Some("clamp")) => wrap = Some(InputWrap::Clamp),
+                ("wrap", Some("repeat")) => wrap = Some(InputWrap::Repeat),
+                ("wrap", Some("mirror")) => wrap = Some(InputWrap::Mirror),
+                _ => {
                     self.illegal(
                         DiagCode::GrammarForbidden,
                         span,
                         format!(
-                            "shader package `{source}` requires texture input `{}`",
-                            input.name
+                            "shader texture input `{name}` takes src, an asset:// reference; kind, \
+                             \"color\" or \"data\"; sampling, \"nearest\" or \"linear\"; and wrap, \
+                             \"clamp\", \"repeat\" or \"mirror\" (not `{key}`: {value})"
                         ),
+                    );
+                    return None;
+                }
+            }
+        }
+        let Some(src) = src else {
+            self.illegal(
+                DiagCode::GrammarForbidden,
+                span,
+                format!("shader texture input `{name}` needs `src`, an asset:// reference"),
+            );
+            return None;
+        };
+        Some((
+            src,
+            valle_motion::shader::InputOptions::new(kind, sampling, wrap),
+        ))
+    }
+
+    /// Bind a package's texture inputs and uniforms. `sources` holds the authored asset of each
+    /// input; `label` names the package in diagnostics.
+    fn lower_shader_contract(
+        &mut self,
+        label: &str,
+        contract: ShaderContract,
+        sources: BTreeMap<String, (String, Span)>,
+        uniforms_object: Option<&'s ObjectExpression<'s>>,
+        span: Span,
+    ) -> Option<NodeKind> {
+        let ShaderContract {
+            program,
+            inputs: declared_inputs,
+            uniforms: declared_uniforms,
+        } = contract;
+        if let Some(unknown) = sources
+            .keys()
+            .find(|name| !declared_inputs.iter().any(|input| input.name == **name))
+        {
+            self.illegal(
+                DiagCode::UnknownProp,
+                span,
+                format!("{label} has no texture input `{unknown}`"),
+            );
+        }
+        let mut inputs = Vec::new();
+        for input in &declared_inputs {
+            let Some((asset, asset_span)) = sources.get(&input.name) else {
+                if input.required {
+                    self.illegal(
+                        DiagCode::GrammarForbidden,
+                        span,
+                        format!("{label} requires texture input `{}`", input.name),
                     );
                 }
                 inputs.push(ShaderTextureInput {
@@ -103,21 +266,11 @@ impl<'s> Compiler<'s> {
                 });
                 continue;
             };
-            let Some(serde_json::Value::String(asset)) = self.eval_static(expression) else {
-                self.illegal(
-                    DiagCode::GrammarForbidden,
-                    expression.span(),
-                    format!(
-                        "shader texture input `{}` must be a static asset:// reference",
-                        input.name
-                    ),
-                );
-                continue;
-            };
+            let asset_span = *asset_span;
             let Some(control_name) = asset.strip_prefix("asset://") else {
                 self.illegal(
                     DiagCode::GrammarForbidden,
-                    expression.span(),
+                    asset_span,
                     format!(
                         "shader texture input `{}` must use asset://<image-control>",
                         input.name
@@ -130,7 +283,7 @@ impl<'s> Compiler<'s> {
                 Some(_) => {
                     self.illegal(
                         DiagCode::GrammarForbidden,
-                        expression.span(),
+                        asset_span,
                         format!(
                             "shader texture input `{}` control `{control_name}` is not an image",
                             input.name
@@ -141,7 +294,7 @@ impl<'s> Compiler<'s> {
                 None => {
                     self.illegal(
                         DiagCode::UnknownProp,
-                        expression.span(),
+                        asset_span,
                         format!(
                             "shader texture input `{}` references unknown control `{control_name}`",
                             input.name
@@ -156,7 +309,7 @@ impl<'s> Compiler<'s> {
                 .any(|resource| resource.control == control_name)
             {
                 self.unsupported(
-                    expression.span(),
+                    asset_span,
                     format!(
                         "shader texture input `{}` has no content-addressed resource binding for \
                          image control `{control_name}`",
@@ -170,28 +323,25 @@ impl<'s> Compiler<'s> {
                 sampling: input.sampling,
                 wrap: input.wrap,
                 name: input.name.clone(),
-                source: Some(asset),
+                source: Some(asset.clone()),
             });
         }
 
         let authored_uniforms =
             self.shader_object_values(uniforms_object, "ShaderLayer uniforms")?;
-        let known_uniforms = manifest_uniforms
-            .iter()
-            .map(|uniform| uniform.name.as_str())
-            .collect::<BTreeSet<_>>();
-        if let Some(unknown) = authored_uniforms
-            .keys()
-            .find(|name| !known_uniforms.contains(name.as_str()))
-        {
+        if let Some(unknown) = authored_uniforms.keys().find(|name| {
+            !declared_uniforms
+                .iter()
+                .any(|uniform| uniform.name == **name)
+        }) {
             self.illegal(
                 DiagCode::UnknownProp,
                 span,
-                format!("shader package `{source}` has no uniform `{unknown}`"),
+                format!("{label} has no uniform `{unknown}`"),
             );
         }
-        let mut uniforms = Vec::with_capacity(manifest_uniforms.len());
-        for uniform in &manifest_uniforms {
+        let mut uniforms = Vec::with_capacity(declared_uniforms.len());
+        for uniform in &declared_uniforms {
             let value = if let Some(expression) = authored_uniforms.get(&uniform.name).copied() {
                 self.shader_uniform_binding(uniform, expression)?
             } else if let Some(default) = &uniform.default {
@@ -201,7 +351,7 @@ impl<'s> Compiler<'s> {
                     DiagCode::GrammarForbidden,
                     span,
                     format!(
-                        "shader package `{source}` requires uniform `{}` of type {:?}",
+                        "{label} requires uniform `{}` of type {:?}",
                         uniform.name, uniform.uniform_type
                     ),
                 );
@@ -224,6 +374,54 @@ impl<'s> Compiler<'s> {
             uniforms,
             inputs,
         })
+    }
+
+    /// `outset`: a number of pixels, or one to four in CSS order (top, right, bottom, left), as
+    /// the [left, top, right, bottom] padding of a package's output.
+    pub(super) fn shader_outset(
+        &mut self,
+        value: &Option<JSXAttributeValue<'_>>,
+        span: Span,
+    ) -> Option<[u32; 4]> {
+        let json = match value {
+            Some(JSXAttributeValue::ExpressionContainer(container)) => container
+                .expression
+                .as_expression()
+                .and_then(|expression| self.eval_static(expression)),
+            _ => None,
+        };
+        let values = match json {
+            Some(serde_json::Value::Array(items)) => items,
+            Some(number @ serde_json::Value::Number(_)) => vec![number],
+            _ => Vec::new(),
+        };
+        let pixels = values
+            .iter()
+            .map(|value| {
+                value
+                    .as_f64()
+                    .filter(|pixels| {
+                        *pixels >= 0.0 && pixels.fract() == 0.0 && *pixels <= f64::from(u32::MAX)
+                    })
+                    .map(|pixels| pixels as u32)
+            })
+            .collect::<Option<Vec<_>>>();
+        let [top, right, bottom, left] = match pixels.as_deref() {
+            Some(&[all]) => [all; 4],
+            Some(&[vertical, horizontal]) => [vertical, horizontal, vertical, horizontal],
+            Some(&[top, horizontal, bottom]) => [top, horizontal, bottom, horizontal],
+            Some(&[top, right, bottom, left]) => [top, right, bottom, left],
+            _ => {
+                self.illegal(
+                    DiagCode::GrammarForbidden,
+                    span,
+                    "ShaderLayer outset must be a whole number of pixels, or one to four of them \
+                     in CSS order (top, right, bottom, left), none negative",
+                );
+                return None;
+            }
+        };
+        Some([left, top, right, bottom])
     }
 
     pub(super) fn shader_object_values(
@@ -440,5 +638,45 @@ impl<'s> Compiler<'s> {
                 value: BoolValue::Static { value: *value },
             },
         }
+    }
+}
+
+/// What lowering a ShaderLayer needs from its package, copied out so lowering can mutate the
+/// compiler.
+struct ShaderContract {
+    program: ShaderProgramRef,
+    inputs: Vec<valle_motion::shader::ShaderInput>,
+    uniforms: Vec<valle_motion::shader::ShaderUniform>,
+}
+
+impl ShaderContract {
+    fn of(package: &valle_motion::shader::ShaderPackage) -> Self {
+        Self {
+            program: ShaderProgramRef {
+                work_per_pixel: package.work_per_pixel(),
+                uri: package.uri().to_string(),
+                content_hash: package.content_hash,
+                abi_hash: package.abi_hash,
+                padding: package.manifest.output.padding,
+            },
+            inputs: package.manifest.inputs.clone(),
+            uniforms: package.manifest.uniforms.clone(),
+        }
+    }
+}
+
+/// A shader diagnostic about inline code, placed by line and column in the code when the shader
+/// language reports where it stopped, as `source:line:column`.
+fn shader_code_message(error: &valle_motion::shader::ShaderDiagnostic) -> String {
+    match error
+        .path
+        .strip_prefix("source:")
+        .and_then(|place| place.split_once(':'))
+    {
+        Some((line, column)) => format!(
+            "ShaderLayer code, line {line}, column {column}: {}",
+            error.message
+        ),
+        None => format!("ShaderLayer code: {}", error.message),
     }
 }

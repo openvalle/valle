@@ -474,19 +474,17 @@ fn validate_uniform(uniform: &ShaderUniform, path: &str) -> Result<(), ShaderDia
             ));
         }
     } else {
-        let (Some(min), Some(max)) = (uniform.min, uniform.max) else {
-            return Err(ShaderDiagnostic::new(
-                DiagnosticCode::UniformRange,
-                path,
-                "numeric uniforms require finite min and max",
-            ));
-        };
-        if !min.is_finite() || !max.is_finite() || min > max {
-            return Err(ShaderDiagnostic::new(
-                DiagnosticCode::UniformRange,
-                path,
-                "uniform range must be finite and min <= max",
-            ));
+        match (uniform.min, uniform.max) {
+            // A number without a range takes any finite value.
+            (None, None) => {}
+            (Some(min), Some(max)) if min.is_finite() && max.is_finite() && min <= max => {}
+            _ => {
+                return Err(ShaderDiagnostic::new(
+                    DiagnosticCode::UniformRange,
+                    path,
+                    "a numeric uniform declares finite min <= max together, or neither",
+                ));
+            }
         }
     }
     Ok(())

@@ -556,7 +556,8 @@ fn prepare_endpoint(
                     .with_asset(format!("asset://{name}"), asset.clone());
             }
             fixture = install_compiled_motion_fonts(fixture, source, path)?;
-            fixture = install_compiled_motion_shaders(render, fixture, source, path)?;
+            fixture =
+                install_compiled_motion_shaders(render, prepared_scene, fixture, source, path)?;
             let program_id = state.next_program_id(path)?;
             let program_path = format!("{path}.motion");
             let program = motion::prepare_program(
@@ -686,30 +687,34 @@ fn install_compiled_motion_fonts(
     Ok(fixture)
 }
 
+/// Descriptor shaders come from the artifact's dependencies; shaders written inline come with
+/// the artifact itself.
 fn install_compiled_motion_shaders(
     render: &CompiledRender,
+    scene: &valle_motion::PreparedScene,
     mut fixture: motion::FixtureProgram,
     source: &EvaluatedSourceRef,
     path: &str,
 ) -> Result<motion::FixtureProgram, PrepareError> {
+    let mut packages = Vec::new();
     for resource in source.motion_artifact_dependencies() {
         if !matches!(resource.facts(), VerifiedResourceFacts::Shader { .. }) {
             continue;
         }
-        let package = render.shader_package(resource).ok_or_else(|| {
+        packages.push(render.shader_package(resource).ok_or_else(|| {
             PrepareError::at(
                 format!("{path}.motion.shader"),
                 "admitted shader executable payload missing",
             )
-        })?;
-        let digest = package.content_hash;
-        let abi_digest = package.abi_hash;
+        })?);
+    }
+    for package in packages.into_iter().chain(scene.inline_shaders()) {
         fixture = fixture.with_structure(SemanticStructure::new(
             package.uri().to_string(),
-            digest,
+            package.content_hash,
             StructureDescriptor::RuntimeShader {
                 work_per_pixel: package.work_per_pixel(),
-                abi_digest,
+                abi_digest: package.abi_hash,
                 color_domain: OperatorColorDomain::LinearSrgb,
                 alpha_behavior: OperatorAlphaBehavior::RewritesCoverage,
                 footprint: StructureFootprint::Unbounded,

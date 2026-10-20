@@ -1076,6 +1076,9 @@ struct Compiler<'s> {
     /// Node/object source provenance used to build the standalone source-map format.
     source_ledger: SourceLedger,
     resource_refs: Vec<ResourceRef>,
+    /// Packages of the ShaderLayers written with `code`, by URI. The artifact keeps the ones its
+    /// nodes name.
+    inline_shaders: BTreeMap<String, valle_motion::shader::FrozenShader>,
     /// Font resources are instance-specific compilation inputs. Unlike image/audio resources,
     /// only controls actually consumed by `fontFamily` remain in the Artifact fingerprint.
     used_font_controls: BTreeSet<String>,

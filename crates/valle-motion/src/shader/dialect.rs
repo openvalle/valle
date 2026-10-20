@@ -179,15 +179,18 @@ pub(super) fn compile_dialect(
     manifest: &ShaderManifest,
     source: &str,
 ) -> Result<(DialectReport, String), ShaderDiagnostic> {
-    compile_inner(manifest, source).map_err(|mut e| {
-        if let Ok(pos) = e.path.parse::<usize>() {
-            let prefix = &source[..pos.min(source.len())];
-            let line = prefix.bytes().filter(|b| *b == b'\n').count() + 1;
-            let column = prefix.len() - prefix.rfind('\n').map_or(0, |n| n + 1) + 1;
-            e.path = format!("source:{line}:{column}");
-        }
-        e
-    })
+    compile_inner(manifest, source).map_err(|e| locate(source, e))
+}
+
+/// Reports a diagnostic's byte position in `source` as `source:line:column`.
+pub(super) fn locate(source: &str, mut e: ShaderDiagnostic) -> ShaderDiagnostic {
+    if let Ok(pos) = e.path.parse::<usize>() {
+        let prefix = &source[..pos.min(source.len())];
+        let line = prefix.bytes().filter(|b| *b == b'\n').count() + 1;
+        let column = prefix.len() - prefix.rfind('\n').map_or(0, |n| n + 1) + 1;
+        e.path = format!("source:{line}:{column}");
+    }
+    e
 }
 
 fn compile_inner(
