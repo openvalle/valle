@@ -28,6 +28,12 @@ pub(super) struct ResolvedStyle<'s> {
     pub properties: Vec<StyleProperty<'s>>,
 }
 
+impl<'s> AuthoredObject<'s> {
+    pub(super) fn expression(&self) -> &'s Expression<'s> {
+        self.expression
+    }
+}
+
 impl ResolvedStyle<'_> {
     pub fn contains(&self, name: &str) -> bool {
         self.properties

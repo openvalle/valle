@@ -423,8 +423,8 @@ impl<'s> Compiler<'s> {
                 }),
             Some(JSXAttributeValue::ExpressionContainer(container)) => {
                 let expression = container.expression.as_expression()?;
-                // Reject spreads and holes even when QuickJS could evaluate every coordinate
-                // statically.
+                // Reject holes, and spreads of anything but a fixed tuple or a prepare-time
+                // array, even when QuickJS could evaluate every coordinate statically.
                 if let Expression::CallExpression(call) = peel_expr(expression)
                     && matches!(&call.callee, Expression::Identifier(id) if id.name == "line")
                     && let Some(arg) = call.arguments.first().and_then(Argument::as_expression)

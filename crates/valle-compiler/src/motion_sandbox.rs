@@ -110,7 +110,8 @@ const FORBIDDEN_NAMES: &[&str] = &[
 ];
 
 /// Reject host-dependent Math implementations without a deterministic Rust bridge. Bridged
-/// operations share the static and runtime kernel; exponentiation remains an AST-level rejection.
+/// operations share the static and runtime kernel; `**` reaches the sandbox spelled as the
+/// bridged `Math.pow`.
 const APPROXIMATED_MATH: &[&str] = &[
     "Math.asin",
     "Math.acos",

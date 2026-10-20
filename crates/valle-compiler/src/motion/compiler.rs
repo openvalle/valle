@@ -3,8 +3,10 @@
 use super::*;
 
 impl<'s> Compiler<'s> {
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn new(
         source: &'s str,
+        allocator: &'s Allocator,
         program: &'s Program<'s>,
         resources: &[ResourceRef],
         measure: Option<&MeasureEnv>,
@@ -25,13 +27,13 @@ impl<'s> Compiler<'s> {
             let span = forbidden_span(source, &diagnostic.message);
             return Err(vec![from_motion_diagnostic(source, diagnostic, span)]);
         }
-        if let Some(span) = scan_exponentiation(program) {
+        let exponentiations = Exponentiations::scan(program);
+        if let Some(span) = exponentiations.assignment {
             return Err(vec![diagnostic_at(
                 source,
                 DiagCode::GrammarForbidden,
                 span,
-                "`**` is implementation-approximated in ECMAScript and cannot be intercepted by \
-                 Valle's deterministic math bridge. Use `Math.pow(base, exponent)` instead",
+                "`x **= y` is not supported; write `x = x ** y`",
             )]);
         }
         if let Some((span, message)) = scan_sequence_labels(program) {
@@ -75,28 +77,28 @@ impl<'s> Compiler<'s> {
                 _ => false,
             };
             if is_prepare_declaration {
-                let prelude_start = prelude.len();
-                if let Statement::VariableDeclaration(declaration) = statement
-                    && prelude_peeled_const_text(source, declaration).is_none()
-                    && let Some(span) = simulation::simulation_cache_candidate(declaration)
-                {
-                    let statement_start = statement.span().start as usize;
-                    cache_candidates.push((
-                        prelude_start + span.start as usize - statement_start,
-                        prelude_start + span.end as usize - statement_start,
-                    ));
-                }
                 // Strip TypeScript-only wrappers before evaluating module constants in QuickJS.
                 if let Statement::VariableDeclaration(declaration) = statement
-                    && let Some(text) = prelude_peeled_const_text(source, declaration)
+                    && let Some(text) =
+                        prelude_peeled_const_text(source, declaration, &exponentiations)
                 {
                     prelude.push_str(&text);
                     prelude.push('\n');
                     continue;
                 }
-                prelude.push_str(
-                    &source[statement.span().start as usize..statement.span().end as usize],
-                );
+                let text = exponentiations.rewrite(source, statement.span());
+                // A cached simulation replaces its initializer in place, at its source offsets.
+                if let Statement::VariableDeclaration(declaration) = statement
+                    && matches!(text, std::borrow::Cow::Borrowed(_))
+                    && let Some(span) = simulation::simulation_cache_candidate(declaration)
+                {
+                    let statement_start = statement.span().start as usize;
+                    cache_candidates.push((
+                        prelude.len() + span.start as usize - statement_start,
+                        prelude.len() + span.end as usize - statement_start,
+                    ));
+                }
+                prelude.push_str(&text);
                 prelude.push('\n');
             }
         }
@@ -146,6 +148,7 @@ impl<'s> Compiler<'s> {
         }
         Ok(Self {
             source,
+            allocator,
             sandbox,
             camera: None,
             extra_capabilities: BTreeSet::new(),
@@ -168,6 +171,7 @@ impl<'s> Compiler<'s> {
             instance_groups: Vec::new(),
             instance_scope: None,
             geometry_references: geometry_references(program),
+            exponentiations,
             source_ledger: SourceLedger::default(),
             resource_refs: resources.to_vec(),
             used_font_controls: BTreeSet::new(),
@@ -179,6 +183,7 @@ impl<'s> Compiler<'s> {
             component_stack: Vec::new(),
             helper_stack: Vec::new(),
             list_depth: 0,
+            spread_bindings: 0,
             expanded_list_items: 0,
             expanded_helper_calls: 0,
             keys: BTreeSet::new(),
@@ -330,6 +335,7 @@ impl<'s> Compiler<'s> {
                 semantic: None,
                 children: vec![authored_root],
                 is_mask_source: false,
+                fragment: false,
             }
         };
         self.normalize_glass_scopes(&mut root, None);
@@ -563,7 +569,7 @@ impl<'s> Compiler<'s> {
         self.controls_span = Some(span);
         match self
             .sandbox
-            .eval_json(self.src(expression), &[], "controls")
+            .eval_json(&self.js(expression), &[], "controls")
         {
             Ok(value) => match controls_from_json(&value) {
                 Ok(controls) => {
@@ -741,20 +747,9 @@ impl<'s> Compiler<'s> {
         if let Some(second) = params.items.get(1)
             && let BindingPattern::ObjectPattern(pattern) = &second.pattern
         {
-            if pattern.rest.is_some() {
-                self.illegal(
-                    DiagCode::GrammarForbidden,
-                    pattern.span(),
-                    "props rest destructuring is not deterministic because it hides the admitted schema",
-                );
-            }
+            self.bind_props_rest(pattern);
             for property in &pattern.properties {
-                let Some(prop_name) = static_property_name(&property.key) else {
-                    self.illegal(
-                        DiagCode::GrammarForbidden,
-                        property.key.span(),
-                        "computed props destructuring is illegal",
-                    );
+                let Some(prop_name) = self.destructured_name(property) else {
                     continue;
                 };
                 let Some(local_name) = binding_local_name(&property.value) else {
@@ -1027,6 +1022,7 @@ impl<'s> Compiler<'s> {
         &mut self,
         expression: &'s Expression<'s>,
     ) -> Option<PendingNode> {
+        let fragment = matches!(peel_expr(expression), Expression::JSXFragment(_));
         self.lower_node_expression(strip_parens(expression), "root")
             .and_then(|mut nodes| {
                 if nodes.len() == 1 {
@@ -1034,22 +1030,37 @@ impl<'s> Compiler<'s> {
                 } else if nodes.is_empty() {
                     None
                 } else {
-                    Some(PendingNode {
-                        space: None,
-                        span: expression.span(),
-                        expansion_stack: self.component_stack.clone(),
-                        key: self.scoped_key("__component_group__"),
-                        kind: NodeKind::Group,
-                        class_names: Vec::new(),
-                        class_conditions: Default::default(),
-                        styles: Vec::new(),
-                        visibility: None,
-                        semantic: None,
-                        children: nodes,
-                        is_mask_source: false,
-                    })
+                    let mut node =
+                        self.fragment_node(expression.span(), "__component_group__", nodes);
+                    node.fragment = fragment;
+                    Some(node)
                 }
             })
+    }
+
+    /// A Group that holds `children` in place of one node, and gives them to a parent that
+    /// collects child nodes, as a fragment does.
+    pub(super) fn fragment_node(
+        &self,
+        span: Span,
+        path: &str,
+        children: Vec<PendingNode>,
+    ) -> PendingNode {
+        PendingNode {
+            space: None,
+            span,
+            expansion_stack: self.component_stack.clone(),
+            key: self.scoped_key(path),
+            kind: NodeKind::Group,
+            class_names: Vec::new(),
+            class_conditions: Default::default(),
+            styles: Vec::new(),
+            visibility: None,
+            semantic: None,
+            children,
+            is_mask_source: false,
+            fragment: true,
+        }
     }
 
     /// Explain both alternatives for rejected statement-level control flow: conditional values or
@@ -1084,6 +1095,17 @@ impl<'s> Compiler<'s> {
 
     pub(super) fn src(&self, expression: &Expression<'_>) -> &str {
         &self.source[expression.span().start as usize..expression.span().end as usize]
+    }
+
+    /// The expression as JavaScript for the sandbox.
+    pub(super) fn js(&self, expression: &Expression<'_>) -> std::borrow::Cow<'s, str> {
+        match expression {
+            // A spread value's hidden local has no source text of its own.
+            Expression::Identifier(identifier) if identifier.name.starts_with(SPREAD_BINDING) => {
+                identifier.name.to_string().into()
+            }
+            _ => self.exponentiations.rewrite(self.source, expression.span()),
+        }
     }
 
     /// Try constant folding without mutating the expression arena. Return None when the expression

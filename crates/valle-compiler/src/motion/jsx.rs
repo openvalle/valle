@@ -178,11 +178,8 @@ impl<'s> Compiler<'s> {
         let mut scene3d_pbr: Option<&'s ObjectExpression<'s>> = None;
         let mut scene_bloom = None;
         let mut saw_scene_bloom = false;
-        for attribute in &element.opening_element.attributes {
-            let JSXAttributeItem::Attribute(attribute) = attribute else {
-                self.illegal(DiagCode::GrammarForbidden, attribute.span(), "JSX spread attributes are illegal because property order and provenance must stay explicit");
-                continue;
-            };
+        let (attributes, spread_children) = self.jsx_attributes(element);
+        for attribute in attributes {
             let JSXAttributeName::Identifier(name) = &attribute.name else {
                 self.illegal(
                     DiagCode::GrammarForbidden,
@@ -1089,6 +1086,7 @@ impl<'s> Compiler<'s> {
                     semantic: None,
                     children: Vec::new(),
                     is_mask_source: false,
+                    fragment: false,
                 });
             }
 
@@ -1131,6 +1129,7 @@ impl<'s> Compiler<'s> {
                             semantic: None,
                             children: Vec::new(),
                             is_mask_source: false,
+                            fragment: false,
                         });
                     }
                     RichItem::InlineImage(image) => children.push(image),
@@ -1149,6 +1148,7 @@ impl<'s> Compiler<'s> {
                 semantic: None,
                 children,
                 is_mask_source: false,
+                fragment: false,
             });
         }
 
@@ -1206,6 +1206,7 @@ impl<'s> Compiler<'s> {
                 semantic: None,
                 children: Vec::new(),
                 is_mask_source: false,
+                fragment: false,
             });
         }
 
@@ -1288,6 +1289,7 @@ impl<'s> Compiler<'s> {
                 semantic: None,
                 children: Vec::new(),
                 is_mask_source: false,
+                fragment: false,
             });
         }
 
@@ -1334,6 +1336,7 @@ impl<'s> Compiler<'s> {
                 semantic: None,
                 children: Vec::new(),
                 is_mask_source: false,
+                fragment: false,
             });
         }
 
@@ -1385,6 +1388,7 @@ impl<'s> Compiler<'s> {
                 semantic: None,
                 children: Vec::new(),
                 is_mask_source: false,
+                fragment: false,
             });
         }
 
@@ -1410,6 +1414,7 @@ impl<'s> Compiler<'s> {
                 semantic: None,
                 children: Vec::new(),
                 is_mask_source: false,
+                fragment: false,
             });
         }
 
@@ -1456,27 +1461,15 @@ impl<'s> Compiler<'s> {
         if let Some(transform) = scoped_time {
             self.time_scopes.push(transform);
         }
-        let mut children = Vec::new();
-        for (index, child) in element.children.iter().enumerate() {
-            match child {
-                JSXChild::Element(child) => {
-                    if let Some(child) = self.lower_jsx(child, &format!("{path}.{index}")) {
-                        children.push(child);
-                    }
-                }
-                JSXChild::Text(value) if value.value.trim().is_empty() => {}
-                JSXChild::ExpressionContainer(container)
-                    if matches!(container.expression, JSXExpression::EmptyExpression(_)) => {}
-                JSXChild::ExpressionContainer(container) => {
-                    if let Some(expression) = container.expression.as_expression()
-                        && let Some(mut lowered) =
-                            self.lower_node_expression(expression, &format!("{path}.{index}"))
-                    {
-                        children.append(&mut lowered);
-                    }
-                }
-                _ => self.unsupported(child.span(), "container child is not valid Motion JSX"),
-            }
+        let mut children = self.lower_child_nodes(
+            &element.children,
+            &format!("{path}."),
+            "container child is not valid Motion JSX",
+        );
+        if children.is_empty()
+            && let Some(spread_children) = spread_children
+        {
+            children = spread_children;
         }
         if scoped_time.is_some() {
             self.time_scopes.pop();
@@ -1672,6 +1665,7 @@ impl<'s> Compiler<'s> {
             semantic: None,
             children,
             is_mask_source: kind_tag == "mask-source",
+            fragment: false,
         })
     }
 }

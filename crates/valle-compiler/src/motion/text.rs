@@ -69,15 +69,8 @@ impl<'s> Compiler<'s> {
         path: &str,
     ) -> Vec<(TextValue, Vec<StyleBinding>, Span)> {
         let mut styles = Vec::new();
-        for attribute in &element.opening_element.attributes {
-            let JSXAttributeItem::Attribute(attribute) = attribute else {
-                self.illegal(
-                    DiagCode::GrammarForbidden,
-                    attribute.span(),
-                    "Span spread attributes are illegal",
-                );
-                continue;
-            };
+        let (attributes, _) = self.jsx_attributes(element);
+        for attribute in attributes {
             let JSXAttributeName::Identifier(name) = &attribute.name else {
                 self.illegal(
                     DiagCode::GrammarForbidden,
@@ -180,8 +173,8 @@ impl<'s> Compiler<'s> {
 
     /// Lower the compile-time-only theme intrinsic. A provider is deliberately transparent: it
     /// contributes neither a key nor a node and therefore cannot perturb layout, locate paths, or
-    /// renderer wire versions. Requiring one Motion root keeps that promise explicit; authors can
-    /// wrap siblings in `<Group>` just as any component must return one root.
+    /// renderer wire versions. Several children take its place among the parent's children, like
+    /// a fragment's.
     pub(super) fn lower_theme_provider(
         &mut self,
         element: &'s JSXElement<'s>,
@@ -285,48 +278,27 @@ impl<'s> Compiler<'s> {
 
         let saved_theme = self.current_theme.replace(merged);
         let diagnostics_before_children = self.diagnostics.len();
-        let mut children = Vec::new();
-        for (index, child) in element.children.iter().enumerate() {
-            match child {
-                JSXChild::Element(child) => {
-                    if let Some(node) =
-                        self.lower_jsx(child, &format!("{path}.children.{index}"))
-                    {
-                        children.push(node);
-                    }
-                }
-                JSXChild::ExpressionContainer(container)
-                    if matches!(container.expression, JSXExpression::EmptyExpression(_)) => {}
-                JSXChild::ExpressionContainer(container) => {
-                    if let Some(expression) = container.expression.as_expression()
-                        && let Some(mut nodes) = self
-                            .lower_node_expression(expression, &format!("{path}.children.{index}"))
-                    {
-                        children.append(&mut nodes);
-                    }
-                }
-                JSXChild::Text(text) if text.value.trim().is_empty() => {}
-                _ => self.unsupported(
-                    child.span(),
-                    "ThemeProvider children must be one Motion JSX root; wrap text in `<Text>` and siblings in `<Group>`",
-                ),
-            }
-        }
+        let mut children = self.lower_child_nodes(
+            &element.children,
+            &format!("{path}.children."),
+            "ThemeProvider children must be Motion JSX nodes; wrap text in `<Text>`",
+        );
         self.current_theme = saved_theme;
 
-        if children.len() != 1 {
-            if self.diagnostics.len() == diagnostics_before_children || children.len() > 1 {
-                self.illegal(
-                    DiagCode::GrammarForbidden,
-                    element.span(),
-                    format!(
-                        "ThemeProvider must contain exactly one Motion JSX root, found {}; wrap siblings in `<Group>`",
-                        children.len()
-                    ),
-                );
+        match children.len() {
+            0 => {
+                if self.diagnostics.len() == diagnostics_before_children {
+                    self.illegal(
+                        DiagCode::GrammarForbidden,
+                        element.span(),
+                        "ThemeProvider must contain a Motion JSX node",
+                    );
+                }
+                None
             }
-            return None;
+            1 => children.pop(),
+            // A theme scope adds no box: its children take its place, like a fragment's.
+            _ => Some(self.fragment_node(element.span(), path, children)),
         }
-        children.pop()
     }
 }

@@ -77,7 +77,6 @@ fn body(value: &str) -> String {
 #[test]
 fn spans_reject_unsupported_attributes_children_and_layout_styles() {
     for span in [
-        "<Span {...{style:{color:'red'}}}>x</Span>",
         "<Span bad:name='x'>x</Span>",
         "<Span key='x'>x</Span>",
         "<Span style='red'>x</Span>",
@@ -401,7 +400,6 @@ fn interpolation_options_reject_ambiguous_and_malformed_ranges() {
     for ranges in [
         "[0,'bad'],[0,1]",
         "[0,1],[0,{}]",
-        "[0,...[1]],[0,1]",
         "[0,,1],[0,1,2]",
         "[0,ctx.progress],[0,1]",
     ] {

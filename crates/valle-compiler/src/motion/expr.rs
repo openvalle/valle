@@ -309,6 +309,15 @@ impl<'s> Compiler<'s> {
                     BinaryOperator::Remainder => {
                         return self.lower_remainder(lhs, rhs, &binary.right, binary.span());
                     }
+                    BinaryOperator::Exponential => {
+                        self.extra_capabilities
+                            .insert(MOTION_MATH_CAPABILITY.to_owned());
+                        Expr::MathBinary {
+                            op: MathBinaryOp::Pow,
+                            lhs,
+                            rhs,
+                        }
+                    }
                     BinaryOperator::Equality | BinaryOperator::StrictEquality => Expr::Compare {
                         op: CompareOp::Eq,
                         lhs,
@@ -996,6 +1005,21 @@ impl<'s> Compiler<'s> {
             }
         }
         segments.reverse();
+        // The rest of destructured props reads the props it holds.
+        if let [rest, field, ..] = segments.as_slice()
+            && !self.is_local_name(rest)
+            && let Some(excluded) = self.bindings.prop_rests.get(rest)
+        {
+            if excluded.contains(field) {
+                self.illegal(
+                    DiagCode::UnknownProp,
+                    expression.span(),
+                    format!("`{rest}` holds the props the destructuring leaves out; read `{field}` itself"),
+                );
+                return None;
+            }
+            segments[0] = "props".into();
+        }
         if self.instance_scope.is_some() {
             match segments.as_slice() {
                 [root, scope, field]

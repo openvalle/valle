@@ -129,6 +129,43 @@ export default function P(ctx, props) { return <Scene>
 }
 
 #[test]
+fn exponentiation_is_the_deterministic_math_pow_at_frame_and_prepare_time() {
+    let source = r##"
+export const controls = ({ props: { base: number({ default: 1.7 }) } });
+const SQUARE = 3 ** 2;
+function cube(x) { return x ** 3; }
+export default function P(ctx, props) { return <Scene>
+  <View key="frame" style={{ opacity: props.base ** 2.5, left: Math.pow(props.base, 2.5) }} />
+  <View key="prepare" style={{ opacity: 1.7 ** 2.5, left: SQUARE + cube(1.5) }} />
+  <View key="nested" style={{ opacity: 2 ** 3 ** 2, left: (2 ** 3) ** 2 }} />
+</Scene>; }
+"##;
+    let (artifact, values) = evaluate(source);
+    let number = |key: &str, property: &str| match style_value(&artifact, &values, key, property) {
+        MotionValue::Number(value) => *value,
+        MotionValue::Length(length) => length.value,
+        other => panic!("expected number, got {other:?}"),
+    };
+    let pow = valle_draw::math::pow(1.7, 2.5);
+    assert_eq!(number("frame", "opacity").to_bits(), pow.to_bits());
+    assert_eq!(number("frame", "left").to_bits(), pow.to_bits());
+    assert_eq!(number("prepare", "opacity").to_bits(), pow.to_bits());
+    assert_eq!(
+        number("prepare", "left").to_bits(),
+        (9.0 + valle_draw::math::pow(1.5, 3.0)).to_bits()
+    );
+    assert_eq!(number("nested", "opacity"), 512.0);
+    assert_eq!(number("nested", "left"), 64.0);
+    assert!(artifact.exprs.iter().any(|expr| matches!(
+        expr,
+        Expr::MathBinary {
+            op: valle_motion::MathBinaryOp::Pow,
+            ..
+        }
+    )));
+}
+
+#[test]
 fn dynamic_number_text_angle_helpers_transform_axes_and_wiggle2d_are_author_sugar() {
     let source = r##"
 export const controls = ({ props: {

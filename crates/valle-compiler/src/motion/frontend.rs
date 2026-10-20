@@ -40,35 +40,77 @@ pub(super) fn geometry_references(program: &Program<'_>) -> GeometryReferences {
     scan.0
 }
 
-/// Reject exponentiation through the AST because host-dependent results break deterministic
-/// artifacts. Text and CSS containing the same characters must remain valid.
-pub(super) fn scan_exponentiation(program: &Program<'_>) -> Option<Span> {
-    use oxc::ast_visit::{Visit, walk};
+/// The `**` expressions of a module. QuickJS computes `**` with the host's `pow`, so source text
+/// handed to the sandbox spells each one as the deterministic `Math.pow`, which frame-time
+/// lowering also uses. Text and CSS containing the same characters are not operators.
+#[derive(Default)]
+pub(super) struct Exponentiations {
+    /// Expression start, end of the base, start of the exponent, expression end.
+    spans: Vec<[u32; 4]>,
+    /// The first `**=`, which has no deterministic spelling of the same length.
+    pub assignment: Option<Span>,
+}
 
-    #[derive(Default)]
-    struct Scan {
-        hit: Option<Span>,
-    }
-    impl<'a> Visit<'a> for Scan {
-        fn visit_binary_expression(&mut self, it: &oxc::ast::ast::BinaryExpression<'a>) {
-            if it.operator == BinaryOperator::Exponential && self.hit.is_none() {
-                self.hit = Some(it.span);
+impl Exponentiations {
+    pub(super) fn scan(program: &Program<'_>) -> Self {
+        use oxc::ast_visit::{Visit, walk};
+
+        struct Scan(Exponentiations);
+        impl<'a> Visit<'a> for Scan {
+            fn visit_binary_expression(&mut self, it: &oxc::ast::ast::BinaryExpression<'a>) {
+                if it.operator == BinaryOperator::Exponential {
+                    self.0.spans.push([
+                        it.span.start,
+                        it.left.span().end,
+                        it.right.span().start,
+                        it.span.end,
+                    ]);
+                }
+                walk::walk_binary_expression(self, it);
             }
-            walk::walk_binary_expression(self, it);
-        }
-        fn visit_assignment_expression(&mut self, it: &oxc::ast::ast::AssignmentExpression<'a>) {
-            if it.operator == oxc::syntax::operator::AssignmentOperator::Exponential
-                && self.hit.is_none()
-            {
-                self.hit = Some(it.span);
+            fn visit_assignment_expression(
+                &mut self,
+                it: &oxc::ast::ast::AssignmentExpression<'a>,
+            ) {
+                if it.operator == oxc::syntax::operator::AssignmentOperator::Exponential {
+                    self.0.assignment.get_or_insert(it.span);
+                }
+                walk::walk_assignment_expression(self, it);
             }
-            walk::walk_assignment_expression(self, it);
         }
+
+        let mut scan = Scan(Self::default());
+        scan.visit_program(program);
+        scan.0
     }
 
-    let mut scan = Scan::default();
-    scan.visit_program(program);
-    scan.hit
+    /// The source text of `span` with every `a ** b` inside it written as `Math.pow(a, b)`.
+    pub(super) fn rewrite<'t>(&self, source: &'t str, span: Span) -> std::borrow::Cow<'t, str> {
+        let text = &source[span.start as usize..span.end as usize];
+        let mut edits = Vec::new();
+        for &[start, base_end, exponent_start, end] in &self.spans {
+            if span.start <= start && end <= span.end {
+                edits.push((start, start, "Math.pow("));
+                edits.push((base_end, exponent_start, ", "));
+                edits.push((end, end, ")"));
+            }
+        }
+        if edits.is_empty() {
+            return text.into();
+        }
+        // Edits of nested expressions never overlap; at one offset an insertion precedes the
+        // replacement that starts there.
+        edits.sort_by_key(|&(start, end, _)| (start, end));
+        let mut output = String::with_capacity(text.len() + edits.len() * 4);
+        let mut at = span.start;
+        for (start, end, replacement) in edits {
+            output.push_str(&source[at as usize..start as usize]);
+            output.push_str(replacement);
+            at = end;
+        }
+        output.push_str(&source[at as usize..span.end as usize]);
+        output.into()
+    }
 }
 
 /// Object evaluation would silently keep the last duplicate property before `defineSequence`

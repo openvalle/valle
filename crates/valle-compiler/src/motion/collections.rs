@@ -57,7 +57,9 @@ impl<'s> Compiler<'s> {
         if self.array_shape_illegal(expression, "interpolate inputRange") {
             return None;
         }
-        if let Expression::ArrayExpression(_) = peel_expr(expression) {
+        if let Expression::ArrayExpression(_) = peel_expr(expression)
+            && !spreads_array(expression)
+        {
             return array_items(expression)?
                 .into_iter()
                 .map(|item| {
@@ -116,7 +118,9 @@ impl<'s> Compiler<'s> {
         if self.array_shape_illegal(expression, "interpolate outputRange") {
             return None;
         }
-        if let Expression::ArrayExpression(_) = peel_expr(expression) {
+        if let Expression::ArrayExpression(_) = peel_expr(expression)
+            && !spreads_array(expression)
+        {
             return array_items(expression)?
                 .into_iter()
                 .map(|item| {
@@ -185,12 +189,19 @@ impl<'s> Compiler<'s> {
             Expression::ArrayExpression(array) => {
                 for element in &array.elements {
                     match element {
+                        // A fixed tuple or a prepare-time array is written out in place.
+                        ArrayExpressionElement::SpreadElement(spread)
+                            if self.dynamic_tuple_value(&spread.argument).is_some()
+                                || matches!(
+                                    self.eval_static(&spread.argument),
+                                    Some(serde_json::Value::Array(_))
+                                ) => {}
                         ArrayExpressionElement::SpreadElement(spread) => {
                             self.illegal(
                                 DiagCode::GrammarForbidden,
                                 spread.span(),
                                 format!(
-                                    "{role} cannot use spread; the expanded length must be a compile-time-fixed list"
+                                    "{role} can spread a fixed tuple or a prepare-time array; the expanded length must be a compile-time-fixed list"
                                 ),
                             );
                             return true;
@@ -256,6 +267,9 @@ impl<'s> Compiler<'s> {
         }
         if let Some(call) = as_map_call(expression) {
             return self.unroll_array_map(call, role);
+        }
+        if spreads_array(expression) {
+            return self.lower_dynamic_tuple_expression(expression, role);
         }
         if let Some(items) = array_items(expression) {
             return items

@@ -16,6 +16,15 @@ pub(super) fn array_items<'a>(expression: &'a Expression<'a>) -> Option<Vec<&'a 
         .collect()
 }
 
+/// Whether an array literal spreads values into itself.
+pub(super) fn spreads_array(expression: &Expression<'_>) -> bool {
+    matches!(peel_expr(expression), Expression::ArrayExpression(array)
+        if array
+            .elements
+            .iter()
+            .any(|element| matches!(element, ArrayExpressionElement::SpreadElement(_))))
+}
+
 pub(super) fn static_number(expression: &Expression<'_>) -> Option<f64> {
     match strip_parens(expression) {
         Expression::NumericLiteral(value) if value.value.is_finite() => Some(value.value),
@@ -250,6 +259,7 @@ pub(super) fn record_module_const_inits<'s>(
 pub(super) fn prelude_peeled_const_text(
     source: &str,
     declaration: &oxc::ast::ast::VariableDeclaration<'_>,
+    exponentiations: &Exponentiations,
 ) -> Option<String> {
     if !declaration.kind.is_const() || declaration.declarations.len() != 1 {
         return None;
@@ -263,7 +273,7 @@ pub(super) fn prelude_peeled_const_text(
     }
     Some(format!(
         "const {name} = {};",
-        &source[peeled.span().start as usize..peeled.span().end as usize]
+        exponentiations.rewrite(source, peeled.span())
     ))
 }
 

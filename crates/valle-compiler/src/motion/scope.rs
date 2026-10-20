@@ -236,17 +236,11 @@ impl<'s> Compiler<'s> {
             );
             return None;
         }
-        array
-            .elements
-            .iter()
-            .map(|element| match element {
+        let mut values = Vec::new();
+        for element in &array.elements {
+            match element {
                 ArrayExpressionElement::SpreadElement(spread) => {
-                    self.illegal(
-                        DiagCode::GrammarForbidden,
-                        spread.span(),
-                        format!("{role} cannot use spread; tuple length must stay explicit"),
-                    );
-                    None
+                    values.extend(self.spread_tuple_values(&spread.argument, role)?);
                 }
                 ArrayExpressionElement::Elision(elision) => {
                     self.illegal(
@@ -254,13 +248,60 @@ impl<'s> Compiler<'s> {
                         elision.span(),
                         format!("{role} cannot contain holes"),
                     );
-                    None
+                    return None;
                 }
-                value => value
-                    .as_expression()
-                    .and_then(|value| self.lower_expr(value)),
-            })
-            .collect()
+                value => values.push(self.lower_expr(value.as_expression()?)?),
+            }
+        }
+        if values.len() > MAX_EXPR_MAP_UNROLL {
+            self.illegal(
+                DiagCode::GrammarForbidden,
+                array.span,
+                format!(
+                    "{role} expands {} elements; the compile-time tuple budget is {MAX_EXPR_MAP_UNROLL}",
+                    values.len()
+                ),
+            );
+            return None;
+        }
+        Some(values)
+    }
+
+    /// The values a spread writes into a fixed tuple: those of a fixed tuple, or the items of a
+    /// prepare-time array.
+    pub(super) fn spread_tuple_values(
+        &mut self,
+        argument: &Expression<'_>,
+        role: &str,
+    ) -> Option<Vec<ExprId>> {
+        if let Some(values) = self.dynamic_tuple_value(argument) {
+            return Some(values);
+        }
+        if let Some(serde_json::Value::Array(items)) = self.eval_static(argument) {
+            return items
+                .iter()
+                .map(|item| match motion_value_from_json(item) {
+                    Some(value) => Some(self.push(Expr::Const { value }, argument.span())),
+                    None => {
+                        self.illegal(
+                            DiagCode::GrammarForbidden,
+                            argument.span(),
+                            format!("{role} spreads an item that is not a Motion value"),
+                        );
+                        None
+                    }
+                })
+                .collect();
+        }
+        if matches!(peel_expr(argument), Expression::ArrayExpression(_)) {
+            return self.lower_dynamic_tuple_expression(argument, role);
+        }
+        self.illegal(
+            DiagCode::GrammarForbidden,
+            argument.span(),
+            format!("{role} can spread a fixed tuple or a prepare-time array"),
+        );
+        None
     }
 
     /// Compile-time-unroll a static collection whose callback returns one
@@ -485,7 +526,7 @@ impl<'s> Compiler<'s> {
         let expression = peel_expr(expression);
         match self
             .sandbox
-            .eval_json(self.src(expression), &self.static_bindings(), "prepare")
+            .eval_json(&self.js(expression), &self.static_bindings(), "prepare")
         {
             // Reject typed-value markers embedded in strings, including JSON.stringify results.
             // Object keys identifying legitimate typed values remain allowed.
@@ -577,13 +618,6 @@ impl<'s> Compiler<'s> {
                 }
             }
             BindingPattern::ObjectPattern(pattern) => {
-                if pattern.rest.is_some() {
-                    self.illegal(
-                        DiagCode::GrammarForbidden,
-                        pattern.span(),
-                        "object rest destructuring is illegal because admitted fields must stay explicit",
-                    );
-                }
                 if matches!(strip_parens(initializer), Expression::Identifier(id) if id.name == "props")
                 {
                     self.bind_props_pattern(pattern);
@@ -602,26 +636,16 @@ impl<'s> Compiler<'s> {
                 };
                 self.bind_static_object_pattern(pattern, &value);
             }
-            BindingPattern::ArrayPattern(pattern) => {
-                if pattern.rest.is_some() {
-                    self.illegal(
-                        DiagCode::GrammarForbidden,
-                        pattern.span(),
-                        "array rest destructuring is not admitted",
-                    );
-                }
-                let Some(serde_json::Value::Array(values)) = self.eval_static(initializer) else {
+            BindingPattern::ArrayPattern(_) => {
+                let Some(value @ serde_json::Value::Array(_)) = self.eval_static(initializer)
+                else {
                     self.unsupported(
                         initializer.span(),
                         "array destructuring requires prepare-time static data",
                     );
                     return;
                 };
-                for (binding, value) in pattern.elements.iter().zip(values) {
-                    if let Some(binding) = binding {
-                        self.bind_static_pattern(binding, value);
-                    }
-                }
+                self.bind_static_pattern(pattern, value);
             }
             BindingPattern::AssignmentPattern(_) => self.illegal(
                 DiagCode::GrammarForbidden,
@@ -632,13 +656,9 @@ impl<'s> Compiler<'s> {
     }
 
     pub(super) fn bind_props_pattern(&mut self, pattern: &oxc::ast::ast::ObjectPattern<'_>) {
+        self.bind_props_rest(pattern);
         for property in &pattern.properties {
-            let Some(prop_name) = static_property_name(&property.key) else {
-                self.illegal(
-                    DiagCode::GrammarForbidden,
-                    property.key.span(),
-                    "computed props destructuring is illegal",
-                );
+            let Some(prop_name) = self.destructured_name(property) else {
                 continue;
             };
             let Some(local_name) = binding_local_name(&property.value) else {
@@ -702,18 +722,74 @@ impl<'s> Compiler<'s> {
         }
     }
 
+    /// The field a destructuring property reads: its name, or a computed prepare-time string.
+    pub(super) fn destructured_name(
+        &mut self,
+        property: &oxc::ast::ast::BindingProperty<'_>,
+    ) -> Option<String> {
+        let name = self.destructured_key(property);
+        if name.is_none() {
+            self.illegal(
+                DiagCode::GrammarForbidden,
+                property.key.span(),
+                "a computed destructuring key must be a prepare-time string",
+            );
+        }
+        name
+    }
+
+    fn destructured_key(
+        &mut self,
+        property: &oxc::ast::ast::BindingProperty<'_>,
+    ) -> Option<String> {
+        if !property.computed {
+            return static_property_name(&property.key);
+        }
+        let key = self.eval_static(property.key.as_expression()?)?;
+        key.as_str().map(str::to_owned)
+    }
+
+    /// The fields an object pattern names, which its rest leaves out.
+    fn destructured_names(
+        &mut self,
+        pattern: &oxc::ast::ast::ObjectPattern<'_>,
+    ) -> BTreeSet<String> {
+        pattern
+            .properties
+            .iter()
+            .filter_map(|property| self.destructured_key(property))
+            .collect()
+    }
+
+    /// `{ title, ...rest }` over props binds `rest` to the props the pattern leaves out. It reads
+    /// and spreads like `props`.
+    pub(super) fn bind_props_rest(&mut self, pattern: &oxc::ast::ast::ObjectPattern<'_>) {
+        let Some(rest) = &pattern.rest else {
+            return;
+        };
+        let Some(name) = binding_local_name(&rest.argument) else {
+            self.unsupported(rest.span(), "bind the rest of props to one name");
+            return;
+        };
+        let excluded = self.destructured_names(pattern);
+        self.bindings.local_functions.remove(&name);
+        self.bindings.scalars.remove(&name);
+        self.bindings.paints.remove(&name);
+        self.bindings.tuples.remove(&name);
+        self.bindings.instance_objects.remove(&name);
+        self.bindings.statics.remove(&name);
+        self.bindings.objects.remove(&name);
+        self.bindings.children.remove(&name);
+        self.bindings.prop_rests.insert(name, excluded);
+    }
+
     fn bind_instance_object_pattern(
         &mut self,
         pattern: &oxc::ast::ast::ObjectPattern<'_>,
         fields: &BTreeMap<String, (u32, valle_motion::expr::ExprType)>,
     ) {
         for property in &pattern.properties {
-            let Some(field) = static_property_name(&property.key) else {
-                self.illegal(
-                    DiagCode::GrammarForbidden,
-                    property.span(),
-                    "computed instance fields are illegal",
-                );
+            let Some(field) = self.destructured_name(property) else {
                 continue;
             };
             let Some(name) = binding_local_name(&property.value) else {
@@ -734,6 +810,16 @@ impl<'s> Compiler<'s> {
             let expr = self.push(Expr::InstanceField { column, value_type }, property.span());
             self.bind_dynamic(name, expr);
         }
+        if let Some(rest) = &pattern.rest {
+            let Some(name) = binding_local_name(&rest.argument) else {
+                self.unsupported(rest.span(), "bind the rest of a row to one name");
+                return;
+            };
+            let excluded = self.destructured_names(pattern);
+            let mut others = fields.clone();
+            others.retain(|field, _| !excluded.contains(field));
+            self.bind_instance_object(name, others);
+        }
     }
 
     pub(super) fn bind_static_object_pattern(
@@ -750,12 +836,7 @@ impl<'s> Compiler<'s> {
             return;
         };
         for property in &pattern.properties {
-            let Some(name) = static_property_name(&property.key) else {
-                self.illegal(
-                    DiagCode::GrammarForbidden,
-                    property.span(),
-                    "computed destructuring is illegal",
-                );
+            let Some(name) = self.destructured_name(property) else {
                 continue;
             };
             if let Some(value) = object.get(&name).cloned() {
@@ -771,6 +852,12 @@ impl<'s> Compiler<'s> {
                     format!("prepare object has no field `{name}` and no default"),
                 );
             }
+        }
+        if let Some(rest) = &pattern.rest {
+            let excluded = self.destructured_names(pattern);
+            let mut others = object.clone();
+            others.retain(|name, _| !excluded.contains(name));
+            self.bind_static_pattern(&rest.argument, serde_json::Value::Object(others));
         }
     }
 
@@ -805,8 +892,53 @@ impl<'s> Compiler<'s> {
                         self.bind_static_pattern(binding, value);
                     }
                 }
+                if let Some(rest) = &pattern.rest {
+                    let more = values
+                        .get(pattern.elements.len()..)
+                        .unwrap_or_default()
+                        .to_vec();
+                    self.bind_static_pattern(&rest.argument, serde_json::Value::Array(more));
+                }
             }
         }
+    }
+
+    /// Lower the children of an element or a fragment; child `index` lowers at `{prefix}{index}`.
+    /// A fragment, or a component that returns one, puts its children in its place, as in React.
+    pub(super) fn lower_child_nodes(
+        &mut self,
+        children: &'s [JSXChild<'s>],
+        prefix: &str,
+        invalid_child: &str,
+    ) -> Vec<PendingNode> {
+        let mut nodes = Vec::new();
+        for (index, child) in children.iter().enumerate() {
+            let path = format!("{prefix}{index}");
+            match child {
+                JSXChild::Element(child) => {
+                    if let Some(node) = self.lower_jsx(child, &path) {
+                        nodes.extend(node.into_nodes());
+                    }
+                }
+                JSXChild::Fragment(fragment) => nodes.extend(self.lower_child_nodes(
+                    &fragment.children,
+                    &format!("{path}."),
+                    invalid_child,
+                )),
+                JSXChild::ExpressionContainer(container)
+                    if matches!(container.expression, JSXExpression::EmptyExpression(_)) => {}
+                JSXChild::ExpressionContainer(container) => {
+                    if let Some(expression) = container.expression.as_expression()
+                        && let Some(lowered) = self.lower_node_expression(expression, &path)
+                    {
+                        nodes.extend(lowered);
+                    }
+                }
+                JSXChild::Text(text) if text.value.trim().is_empty() => {}
+                _ => self.unsupported(child.span(), invalid_child),
+            }
+        }
+        nodes
     }
 
     pub(super) fn lower_node_expression(
@@ -816,7 +948,14 @@ impl<'s> Compiler<'s> {
     ) -> Option<Vec<PendingNode>> {
         let expression = strip_parens(expression);
         match expression {
-            Expression::JSXElement(element) => self.lower_jsx(element, path).map(|node| vec![node]),
+            Expression::JSXElement(element) => {
+                self.lower_jsx(element, path).map(PendingNode::into_nodes)
+            }
+            Expression::JSXFragment(fragment) => Some(self.lower_child_nodes(
+                &fragment.children,
+                &format!("{path}."),
+                "fragment children must be Motion JSX nodes; wrap text in `<Text>`",
+            )),
             Expression::NullLiteral(_) => Some(Vec::new()),
             Expression::Identifier(identifier) => self
                 .bindings
@@ -1820,6 +1959,11 @@ impl<'s> Compiler<'s> {
                 Some("template could not be lowered with instance row values".into());
             return None;
         };
+        if template.fragment {
+            self.restore_instance_attempt(saved);
+            *fallback_reason = Some("template returns several root nodes".into());
+            return None;
+        }
         if self.diagnostics.len() > saved.diagnostics_len {
             self.restore_instance_attempt(saved);
             *fallback_reason =
@@ -2171,6 +2315,7 @@ impl<'s> Compiler<'s> {
             semantic: None,
             children: Vec::new(),
             is_mask_source: false,
+            fragment: false,
         }])
     }
 
@@ -2317,15 +2462,8 @@ impl<'s> Compiler<'s> {
         let mut props = BTreeMap::new();
         let mut instance_key = None;
         let mut scoped_instance_key = None;
-        for attribute in &element.opening_element.attributes {
-            let JSXAttributeItem::Attribute(attribute) = attribute else {
-                self.illegal(
-                    DiagCode::GrammarForbidden,
-                    attribute.span(),
-                    "component prop spread is illegal; props must remain explicit",
-                );
-                continue;
-            };
+        let (attributes, spread_children) = self.jsx_attributes(element);
+        for attribute in attributes {
             let JSXAttributeName::Identifier(prop_name) = &attribute.name else {
                 self.illegal(
                     DiagCode::GrammarForbidden,
@@ -2392,30 +2530,15 @@ impl<'s> Compiler<'s> {
             scoped_instance_key.unwrap_or_else(|| self.scoped_key(&instance_key));
         self.key_prefix = component_prefix.clone();
 
-        let mut children = Vec::new();
-        for (index, child) in element.children.iter().enumerate() {
-            match child {
-                JSXChild::Element(child) => {
-                    if let Some(node) = self.lower_jsx(child, &format!("{path}.children.{index}")) {
-                        children.push(node);
-                    }
-                }
-                JSXChild::ExpressionContainer(container)
-                    if matches!(container.expression, JSXExpression::EmptyExpression(_)) => {}
-                JSXChild::ExpressionContainer(container) => {
-                    if let Some(expression) = container.expression.as_expression()
-                        && let Some(mut lowered) = self
-                            .lower_node_expression(expression, &format!("{path}.children.{index}"))
-                    {
-                        children.append(&mut lowered);
-                    }
-                }
-                JSXChild::Text(text) if text.value.trim().is_empty() => {}
-                _ => self.unsupported(
-                    child.span(),
-                    "component children must be Motion JSX nodes; wrap text in `<Text>`",
-                ),
-            }
+        let mut children = self.lower_child_nodes(
+            &element.children,
+            &format!("{path}.children."),
+            "component children must be Motion JSX nodes; wrap text in `<Text>`",
+        );
+        if children.is_empty()
+            && let Some(spread_children) = spread_children
+        {
+            children = spread_children;
         }
         self.key_prefix = caller_prefix;
         props.insert("children".into(), AuthorValue::Children(children));

@@ -11,9 +11,9 @@ use oxc::allocator::Allocator;
 use oxc::ast::ast::{
     Argument, ArrayExpressionElement, BinaryOperator, BindingPattern, Declaration,
     ExportDefaultDeclarationKind, Expression, FormalParameters, Function, FunctionBody,
-    JSXAttributeItem, JSXAttributeName, JSXAttributeValue, JSXChild, JSXElement, JSXElementName,
-    JSXExpression, ObjectExpression, ObjectPropertyKind, Program, PropertyKey, Statement,
-    UnaryOperator,
+    JSXAttribute, JSXAttributeItem, JSXAttributeName, JSXAttributeValue, JSXChild, JSXElement,
+    JSXElementName, JSXExpression, ObjectExpression, ObjectPropertyKind, Program, PropertyKey,
+    Statement, UnaryOperator,
 };
 use oxc::codegen::{Codegen, CodegenOptions, CommentOptions};
 use oxc::parser::Parser;
@@ -87,6 +87,7 @@ mod scene3d;
 mod scope;
 mod shader;
 mod simulation;
+mod spread;
 mod style;
 mod style_objects;
 mod syntax;
@@ -111,6 +112,7 @@ use prelude::STATIC_HELPERS;
 pub use rewrite::{
     MotionSourceEdit, MotionSourceEditResult, MotionSourceEditTarget, rewrite_motion_source,
 };
+use spread::SPREAD_BINDING;
 use syntax::*;
 use theme_provider::*;
 use values::*;
@@ -500,6 +502,7 @@ fn compile_motion_impl(
     let normalized_ast_digest = ContentDigest::of_bytes(normalized_source.as_bytes());
     let mut compiler = Compiler::new(
         source,
+        &allocator,
         &program,
         resources,
         measure,
@@ -619,6 +622,20 @@ struct PendingNode {
     children: Vec<PendingNode>,
     /// Compiler-only marker. It is consumed by the direct parent `<Mask>` and does not enter wire.
     is_mask_source: bool,
+    /// Compiler-only marker: the children of a fragment that a component returned. A parent
+    /// that collects child nodes takes the children in its place, as in React.
+    fragment: bool,
+}
+
+impl PendingNode {
+    /// The nodes this node stands for among its parent's children.
+    fn into_nodes(self) -> Vec<PendingNode> {
+        if self.fragment {
+            self.children
+        } else {
+            vec![self]
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -778,6 +795,8 @@ struct Bindings<'s> {
     children: BTreeMap<String, Vec<PendingNode>>,
     /// Props of the component currently being expanded.
     component_props: Option<BTreeMap<String, AuthorValue>>,
+    /// The rest of destructured props, `{ title, ...rest }`: the props it leaves out.
+    prop_rests: BTreeMap<String, BTreeSet<String>>,
 }
 
 #[derive(Clone)]
@@ -836,6 +855,7 @@ impl<'s> Bindings<'s> {
             },
             children: std::mem::take(&mut self.children),
             component_props: self.component_props.take(),
+            prop_rests: std::mem::take(&mut self.prop_rests),
         }
     }
 
@@ -917,6 +937,8 @@ struct TimeTransform {
 
 struct Compiler<'s> {
     source: &'s str,
+    /// The arena of the parsed program, which also holds the attributes that spreads write out.
+    allocator: &'s Allocator,
     sandbox: Sandbox,
     /// Scene-level camera lowered from the Scene attribute.
     camera: Option<CameraBinding>,
@@ -948,6 +970,8 @@ struct Compiler<'s> {
     instance_groups: Vec<InstanceGroup>,
     instance_scope: Option<InstanceCompileScope>,
     geometry_references: GeometryReferences,
+    /// `**` expressions, spelled as `Math.pow` in text handed to the sandbox.
+    exponentiations: Exponentiations,
     /// Node/object source provenance used to build the standalone source-map format.
     source_ledger: SourceLedger,
     resource_refs: Vec<ResourceRef>,
@@ -970,6 +994,8 @@ struct Compiler<'s> {
     component_stack: Vec<String>,
     helper_stack: Vec<String>,
     list_depth: usize,
+    /// Hidden locals bound for spread values so far.
+    spread_bindings: usize,
     expanded_list_items: usize,
     expanded_helper_calls: usize,
     keys: BTreeSet<String>,

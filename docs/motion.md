@@ -164,15 +164,15 @@ construct a new tree on every frame.
 | Construct | Contract |
 | --- | --- |
 | Numbers, strings, booleans, template literals | Finite numbers; template holes must have supported value types |
-| Arithmetic and comparisons | `+`, `-`, `*`, `/`, `%`, unary signs, equality and ordered comparisons; operands must type-check |
+| Arithmetic and comparisons | `+`, `-`, `*`, `/`, `%`, `**`, unary signs, equality and ordered comparisons; operands must type-check |
 | Conditional values | `condition ? a : b`, boolean expressions; branches need compatible types |
 | JSX conditions | Static conditions can choose a subtree; frame-dependent conditions retain prepared branches and gate visibility |
 | Lists | Map a prepare-time array with a synchronous arrow callback; each returned node/component needs a stable `key` |
 | Arrays and tuples | Fixed shape; supported typed constructors and bounded maps; runtime indexing has explicit bounds/type checks |
-| Destructuring | Explicit object fields and array entries, including supported defaults; no rest or computed field names |
+| Destructuring | Object fields, array entries, supported defaults, computed keys that are prepare-time strings, and `...rest`; the rest of `props` reads and spreads like `props` |
 | TypeScript | `as const`, `satisfies`, assertions and non-null wrappers are peeled where supported; this is not a TypeScript type checker |
-| JSX fragments | Use a `Group` or `View` to give multiple children one root |
-| Spread | Fixed-shape style objects support spreads. JSX prop/per-unit spread and list/interpolation array spreads or holes are not admitted |
+| JSX fragments | `<>…</>` puts its children in its place, as in React; so does a component that returns one. A fragment in a list cannot take a `key`, so key its children |
+| Spread | JSX attributes spread an object literal, `props` or its rest, a map row or a prepare-time object; as in React, the last setting of a name wins and a spread never sets `key`. Arrays spread a fixed tuple or a prepare-time array. Style objects spread fixed-shape objects. Option objects such as `perUnit` or `spring` options and call arguments do not spread, and arrays have no holes |
 
 Prepare-time means independent of `ctx` and runtime `props`. Module
 constants, bound `data`, static component arguments, a theme and explicit resources
@@ -219,7 +219,8 @@ export default function Cards(ctx) {
 }
 ```
 
-`ThemeProvider` is a prepare-time scope, with one JSX root; it adds no rendered box.
+`ThemeProvider` is a prepare-time scope; it adds no rendered box, so its children take its
+place among its parent's children, like a fragment's.
 Its value must be static, serializable theme data. `useTheme()` reads the nearest
 provider and fails outside one. A nested provider supplies its own value; explicitly
 compose any desired inheritance in the prepared object. These two intrinsic names
@@ -370,7 +371,7 @@ below. Unknown attributes and event handlers are rejected.
 | `Transition` | Two child subtrees, static `kind`, numeric `progress`, optional `params`; see [transitions](#subtree-transitions) |
 | `ShaderLayer` | Package-backed custom shader; `source`, `inputs`, `uniforms`, content children |
 | `Scene3D` | 3D scene leaf with its own camera and explicit 3D children |
-| `ThemeProvider` | Compile-time theme scope; `value` and one root child |
+| `ThemeProvider` | Compile-time theme scope; `value` and its children |
 
 HTML aliases are deliberately small: `div`, `section`, `main`, `article`, `svg`
 map to `View`; `span`, `p`, `strong`, `h1`, `h2`, `h3` map to `Text`; `img` and
@@ -812,7 +813,7 @@ the separate modulo helper. Avoid zero divisors and non-finite values.
 
 `noise1d(seed,x)` and `noise2d(seed,x,y)` take a static seed and may have dynamic
 coordinates. `seededRandom(seed,count,range)` generates a prepared array; do not
-call `Math.random()`. `**` is rejected; use `Math.pow`/`pow`.
+call `Math.random()`. `a ** b` is the same deterministic power as `Math.pow(a, b)`.
 
 | Text helper | Options |
 | --- | --- |

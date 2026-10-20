@@ -469,6 +469,7 @@ impl<'s> Compiler<'s> {
             semantic: None,
             children: Vec::new(),
             is_mask_source: false,
+            fragment: false,
         })
     }
 
@@ -555,15 +556,15 @@ impl<'s> Compiler<'s> {
         allowed: &[&str],
     ) -> Option<BTreeMap<String, (&'s Option<JSXAttributeValue<'s>>, Span)>> {
         let mut values = BTreeMap::new();
-        for item in &element.opening_element.attributes {
-            let JSXAttributeItem::Attribute(attribute) = item else {
-                self.illegal(
-                    DiagCode::GrammarForbidden,
-                    item.span(),
-                    format!("{label} cannot use spread attributes"),
-                );
-                continue;
-            };
+        let (attributes, children) = self.jsx_attributes(element);
+        if children.is_some_and(|children| !children.is_empty()) {
+            self.illegal(
+                DiagCode::GrammarForbidden,
+                element.opening_element.span(),
+                format!("Scene3D child <{label}> is a leaf"),
+            );
+        }
+        for attribute in attributes {
             let JSXAttributeName::Identifier(name) = &attribute.name else {
                 self.illegal(
                     DiagCode::GrammarForbidden,

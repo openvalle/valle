@@ -337,18 +337,27 @@ export default function Card(ctx) {
 
 #[test]
 fn map_spread_elision_runtime_and_over_budget_fail_closed() {
-    let spread = diagnostics(
+    let prepared = compile_ok(
         r##"
 const OFFSETS = [0, 8];
 export default function Card(ctx) {
   const t = ctx.localFrame;
-  return <Path fill="none" stroke="#fff" d={line([...OFFSETS].map((off) => point(off, t)))} />;
+  return <Path fill="none" stroke="#fff" d={line([...OFFSETS, 16].map((off) => point(off, t)))} />;
+}
+"##,
+    );
+    assert_eq!(path_line_len(&prepared), 3);
+    let spread = diagnostics(
+        r##"
+export default function Card(ctx) {
+  const t = ctx.localFrame;
+  return <Path fill="none" stroke="#fff" d={line([...t].map((off) => point(off, t)))} />;
 }
 "##,
     );
     assert!(
         spread.iter().any(|message| message.contains("spread")),
-        "spread must fail closed: {spread:?}"
+        "a spread of a frame value must fail closed: {spread:?}"
     );
     let holes = diagnostics(
         r##"

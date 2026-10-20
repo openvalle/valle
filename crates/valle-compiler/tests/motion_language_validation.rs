@@ -88,12 +88,13 @@ export default function P(ctx) {
 }
 
 #[test]
-fn compile_time_exponentiation_is_rejected_like_math_pow() {
+fn exponentiation_assignment_points_at_the_plain_operator() {
     let messages = diagnostics_of(
         r##"
+function grow(x) { let y = x; y **= 2; return y; }
 export default function P(ctx) {
   return (<Scene className="h-full w-full">
-    <View key="a" style={{ position: "absolute", left: 2 ** 5, top: 0, width: 10, height: 10 }} />
+    <View key="a" style={{ position: "absolute", left: grow(3), top: 0, width: 10, height: 10 }} />
   </Scene>);
 }
 "##,
@@ -101,7 +102,7 @@ export default function P(ctx) {
     assert!(
         messages
             .iter()
-            .any(|message| message.contains("**") && message.contains("Math.pow")),
+            .any(|message| message.contains("**=") && message.contains("x = x ** y")),
         "got {messages:#?}"
     );
 }
