@@ -243,3 +243,64 @@ export default function P(ctx) {
         "clamp(5, 0, 3) folds to 3 at compile time"
     );
 }
+
+#[test]
+fn kept_restrictions_name_what_to_write_instead() {
+    let expect = |source: &str, needles: &[&str]| {
+        let messages = diagnostics_of(source);
+        assert!(
+            messages
+                .iter()
+                .any(|message| needles.iter().all(|needle| message.contains(needle))),
+            "{needles:?} in {messages:#?}"
+        );
+    };
+    let scene =
+        r#"<Scene><View key="a" style={{ width: 10, height: 10, opacity: VALUE }} /></Scene>"#;
+    let component = |value: &str| {
+        format!(
+            "export default function P(ctx) {{ return {}; }}",
+            scene.replace("VALUE", value)
+        )
+    };
+    expect(&component("Math.random()"), &["seededRandom", "wiggle"]);
+    expect(&component("Date.now()"), &["pure function of time"]);
+    expect(
+        &format!(
+            "async function load() {{ return 1; }}\n{}",
+            component("load()")
+        ),
+        &["no async code", "asset()", "--data"],
+    );
+    expect(
+        &component("1").replace("export default function", "export default async function"),
+        &["no async code", "controls.assets"],
+    );
+    expect(
+        &format!(
+            "const LOADED = await Promise.resolve(1);\n{}",
+            component("LOADED")
+        ),
+        &["no async code", "asset://name"],
+    );
+    for control in [
+        r#"{ type: "array", default: [1, 2, 3] }"#,
+        "array(number(), { maxItems: 3 })",
+        "[1, 2, 3]",
+    ] {
+        expect(
+            &format!(
+                "export const controls = {{ props: {{ items: {control} }} }};\n{}",
+                component("1")
+            ),
+            &["controls.data", "--data"],
+        );
+    }
+    expect(
+        &format!(
+            "export const controls = {{ props: {{ size: {{ type: \"number\" }} }} }};\n{}",
+            component("1")
+        ),
+        &["number()", "select()"],
+    );
+}

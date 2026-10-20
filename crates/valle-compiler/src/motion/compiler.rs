@@ -36,6 +36,14 @@ impl<'s> Compiler<'s> {
                 "`x **= y` is not supported; write `x = x ** y`",
             )]);
         }
+        if let Some(span) = first_async(program) {
+            return Err(vec![diagnostic_at(
+                source,
+                DiagCode::GrammarForbidden,
+                span,
+                format!("Motion has no async code: {SYNCHRONOUS_PREPARATION}"),
+            )]);
+        }
         if let Some((span, message)) = scan_sequence_labels(program) {
             return Err(vec![diagnostic_at(
                 source,
@@ -828,14 +836,6 @@ impl<'s> Compiler<'s> {
         &mut self,
         statement: &'s oxc::ast::ast::ForOfStatement<'s>,
     ) {
-        if statement.r#await {
-            self.illegal(
-                DiagCode::GrammarForbidden,
-                statement.span(),
-                "prepare for...of cannot be async",
-            );
-            return;
-        }
         let Some(serde_json::Value::Array(items)) = self.eval_static(&statement.right) else {
             self.illegal(
                 DiagCode::GrammarForbidden,

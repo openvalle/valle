@@ -113,6 +113,50 @@ impl Exponentiations {
     }
 }
 
+/// The first async function, `await` or `for await`. Preparation and frames are synchronous, so
+/// nothing could wait for them.
+pub(super) fn first_async(program: &Program<'_>) -> Option<Span> {
+    use oxc::ast_visit::{Visit, walk};
+
+    #[derive(Default)]
+    struct Scan(Option<Span>);
+    impl<'a> Visit<'a> for Scan {
+        fn visit_function(
+            &mut self,
+            it: &oxc::ast::ast::Function<'a>,
+            flags: oxc::semantic::ScopeFlags,
+        ) {
+            if it.r#async {
+                self.0.get_or_insert(it.span);
+            }
+            walk::walk_function(self, it, flags);
+        }
+        fn visit_arrow_function_expression(
+            &mut self,
+            it: &oxc::ast::ast::ArrowFunctionExpression<'a>,
+        ) {
+            if it.r#async {
+                self.0.get_or_insert(it.span);
+            }
+            walk::walk_arrow_function_expression(self, it);
+        }
+        fn visit_await_expression(&mut self, it: &oxc::ast::ast::AwaitExpression<'a>) {
+            self.0.get_or_insert(it.span);
+            walk::walk_await_expression(self, it);
+        }
+        fn visit_for_of_statement(&mut self, it: &oxc::ast::ast::ForOfStatement<'a>) {
+            if it.r#await {
+                self.0.get_or_insert(it.span);
+            }
+            walk::walk_for_of_statement(self, it);
+        }
+    }
+
+    let mut scan = Scan::default();
+    scan.visit_program(program);
+    scan.0
+}
+
 /// Object evaluation would silently keep the last duplicate property before `defineSequence`
 /// can inspect it. Sequence labels are semantic addresses, so catch that lossy case on the AST.
 pub(super) fn scan_sequence_labels(program: &Program<'_>) -> Option<(Span, String)> {

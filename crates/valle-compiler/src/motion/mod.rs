@@ -152,6 +152,10 @@ const THEME_TYPED_TOKEN_KINDS: &[&str] = &[
 ];
 
 const MAX_STATIC_MAP_ITEMS: usize = 10_000;
+/// What replaces loading at run time: Motion prepares synchronously.
+const SYNCHRONOUS_PREPARATION: &str = "preparation runs synchronously; declare files with \
+    `asset()` in `controls.assets`, reference them as `asset://name`, and bind prepared data \
+    with `--data`";
 /// Bound total helper expansion, including nonrecursive fan-out that can grow exponentially.
 const MAX_EXPANDED_HELPER_CALLS: usize = 2_000;
 const MAX_TOTAL_EXPANDED_LIST_ITEMS: usize = 50_000;
@@ -679,13 +683,6 @@ impl<'s> AuthoredFn<'s> {
         match self {
             AuthoredFn::Declared(_) => None,
             AuthoredFn::Arrow(arrow) => arrow.get_expression(),
-        }
-    }
-
-    fn is_async(&self) -> bool {
-        match self {
-            AuthoredFn::Declared(function) => function.r#async,
-            AuthoredFn::Arrow(arrow) => arrow.r#async,
         }
     }
 

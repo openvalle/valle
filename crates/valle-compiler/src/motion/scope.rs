@@ -1097,11 +1097,11 @@ impl<'s> Compiler<'s> {
             );
             return None;
         }
-        if function.is_async() || function.is_generator() || function.params().rest.is_some() {
+        if function.is_generator() || function.params().rest.is_some() {
             self.illegal(
                 DiagCode::GrammarForbidden,
                 function.span(),
-                format!("helper `{name}` cannot be async, a generator, or variadic"),
+                format!("helper `{name}` cannot be a generator or variadic"),
             );
             return None;
         }
@@ -2628,11 +2628,11 @@ impl<'s> Compiler<'s> {
             );
             return None;
         }
-        if function.is_async() || function.is_generator() || function.params().rest.is_some() {
+        if function.is_generator() || function.params().rest.is_some() {
             self.illegal(
                 DiagCode::GrammarForbidden,
                 function.span(),
-                format!("pure helper `{name}` cannot be async, a generator, or variadic"),
+                format!("pure helper `{name}` cannot be a generator or variadic"),
             );
             return None;
         }

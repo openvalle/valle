@@ -131,6 +131,50 @@ const APPROXIMATED_MATH: &[&str] = &[
     "Math.hypot",
 ];
 
+/// Why a forbidden name is unavailable, and what to write instead.
+fn forbidden_message(name: &str) -> String {
+    if APPROXIMATED_MATH.contains(&name) {
+        return format!(
+            "`{name}` is implementation-approximated in ECMAScript and evaluates \
+             through the host libm — the same source would compile to different \
+             artifact bytes on different build hosts. Precompute the value outside \
+             the source, or express the curve with `interpolate` easings"
+        );
+    }
+    let instead = match name {
+        "Math.random" | "crypto" => {
+            "every frame is a pure function of time, so randomness needs a seed; use \
+             `seededRandom(seed, count, range)` for prepared random values, or `wiggle` / \
+             `wiggle2D` for values that wander over time"
+        }
+        "Date"
+        | "performance"
+        | "setTimeout"
+        | "setInterval"
+        | "requestAnimationFrame"
+        | "queueMicrotask" => {
+            "every frame is a pure function of time; compute the value from the frame's time \
+             instead of reading a clock or scheduling work"
+        }
+        "fetch" | "XMLHttpRequest" | "WebSocket" | "Worker" | "require" | "process" => {
+            "preparation reads nothing outside the source; declare files with `asset()` in \
+             `controls.assets`, reference them as `asset://name`, and bind prepared data with \
+             `--data`"
+        }
+        "navigator" | "document" | "window" | "globalThis" => {
+            "Motion has no browser or global object; draw with Motion JSX and its primitives"
+        }
+        "Intl" | "toLocaleString" | "localeCompare" => {
+            "locale data differs between hosts; format numbers with `formatNumber(value, { \
+             decimals, grouping })`"
+        }
+        "eval" | "Function" => "write the code in the source itself",
+        "WeakRef" | "FinalizationRegistry" => "garbage collection runs at different times",
+        _ => "it belongs to the compiler",
+    };
+    format!("`{name}` is not available in Motion: {instead}")
+}
+
 /// Return a diagnostic for a forbidden name matched at identifier boundaries.
 pub fn scan_forbidden(src: &str, path: &str) -> Option<MotionDiagnostic> {
     for name in FORBIDDEN_NAMES {
@@ -138,11 +182,7 @@ pub fn scan_forbidden(src: &str, path: &str) -> Option<MotionDiagnostic> {
             return Some(MotionDiagnostic::new(
                 DiagCode::SandboxForbidden,
                 path,
-                format!(
-                    "`{name}` is forbidden in the deterministic compile-time sandbox \
-                     (artifacts must be reproducible; use an explicit `seededRandom(seed)` \
-                     primitive if you need randomness)"
-                ),
+                forbidden_message(name),
             ));
         }
     }
@@ -151,12 +191,7 @@ pub fn scan_forbidden(src: &str, path: &str) -> Option<MotionDiagnostic> {
             return Some(MotionDiagnostic::new(
                 DiagCode::SandboxForbidden,
                 path,
-                format!(
-                    "`{name}` is implementation-approximated in ECMAScript and evaluates \
-                     through the host libm — the same source would compile to different \
-                     artifact bytes on different build hosts. Precompute the value outside \
-                     the source, or express the curve with `interpolate` easings"
-                ),
+                forbidden_message(name),
             ));
         }
     }
@@ -1102,11 +1137,7 @@ fn classify(message: &str, path: &str) -> MotionDiagnostic {
                 .chars()
                 .take_while(|c| c.is_alphanumeric() || *c == '.' || *c == '_')
                 .collect();
-            MotionDiagnostic::new(
-                DiagCode::SandboxForbidden,
-                path,
-                format!("`{name}` is forbidden in the deterministic compile-time sandbox"),
-            )
+            MotionDiagnostic::new(DiagCode::SandboxForbidden, path, forbidden_message(&name))
         }
         None => eval_error(path, message.replace('\n', " ")),
     }

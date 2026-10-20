@@ -223,19 +223,36 @@ pub(super) fn parse_named<T>(
 }
 
 pub(super) fn parse_prop(value: &serde_json::Value) -> Result<PropControl, &'static str> {
-    let object = value
-        .as_object()
-        .ok_or("prop must be a control helper call")?;
+    const COLLECTION: &str = "a prop is one value that can change at render time, so it cannot \
+        decide how many nodes there are; declare the collection in `controls.data`, for example \
+        `data: { items: array(number(), { maxItems: 8 }) }`, and bind it with `--data`";
+    const HELPERS: &str = "declare a prop with number(), string(), boolean(), color(), length(), \
+        angle(), point(), rect() or select()";
+    if value.is_array() {
+        return Err(COLLECTION);
+    }
+    let object = value.as_object().ok_or(HELPERS)?;
+    if matches!(
+        object.get("kind").and_then(serde_json::Value::as_str),
+        Some("array" | "record" | "tuple")
+    ) || object
+        .get("default")
+        .is_some_and(serde_json::Value::is_array)
+        || object.contains_key("items")
+    {
+        return Err(COLLECTION);
+    }
     ensure_keys(
         object,
         &[
             "kind", "default", "required", "label", "min", "max", "step", "values",
         ],
-    )?;
+    )
+    .map_err(|_| HELPERS)?;
     let kind = object
         .get("kind")
         .and_then(serde_json::Value::as_str)
-        .ok_or("control kind is missing")?;
+        .ok_or(HELPERS)?;
     let control = match kind {
         "number" => ControlType::Number {
             min: object.get("min").and_then(serde_json::Value::as_f64),
@@ -263,7 +280,7 @@ pub(super) fn parse_prop(value: &serde_json::Value) -> Result<PropControl, &'sta
                 })
                 .collect::<Result<_, _>>()?,
         },
-        _ => return Err("unknown prop control helper"),
+        _ => return Err(HELPERS),
     };
     let default = object
         .get("default")
