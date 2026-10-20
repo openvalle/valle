@@ -2,20 +2,28 @@
 
 use valle_compiler::motion::compile_motion;
 use valle_motion::{
-    EvalInputs, Expr, MotionValue, eval_all, motion_context_at_frame, resolve_props,
+    Easing, EvalInputs, Expr, MotionValue, eval_all, motion_context_at_frame, resolve_props,
 };
 use valle_timeline::FrameRate;
 
 fn source(easing: &str) -> String {
+    with_options(&format!("{{easing:{easing}}}"))
+}
+
+fn with_options(options: &str) -> String {
     format!(
         r#"export default function E() {{ const ctx = useTime(); return <View style={{{{
-        left: interpolate(ctx.seconds, [0, 1], [40, 440], {{easing:{easing}}})
+        left: interpolate(ctx.seconds, [0, 1], [40, 440], {options})
     }}}}/>; }}"#
     )
 }
 
 fn positions(easing: &str, frames: &[u32]) -> Vec<f64> {
-    let compiled = compile_motion(&source(easing)).unwrap();
+    positions_of(&source(easing), frames)
+}
+
+fn positions_of(source: &str, frames: &[u32]) -> Vec<f64> {
+    let compiled = compile_motion(source).unwrap();
     let artifact = &compiled.artifact;
     let props = resolve_props(&artifact.controls, &Default::default()).unwrap();
     let index = artifact
@@ -192,6 +200,77 @@ fn invalid_step_counts_positions_and_beziers_report_the_authored_value() {
                 .iter()
                 .any(|d| d.message.contains(name) && d.message.contains("positive integer")),
             "{diagnostics:?}"
+        );
+    }
+}
+
+#[test]
+fn extrapolation_clamps_by_default_or_extends_the_end_segments() {
+    // At 30 fps frame 45 is 1.5 s, half a segment past the last stop.
+    let clamp = with_options(r#"{extrapolateRight: "clamp"}"#);
+    assert_eq!(positions_of(&clamp, &[0, 45]), vec![40.0, 440.0]);
+    // Past the end the segment goes on as a straight line; its easing applies only inside it.
+    let extend = with_options(r#"{extrapolateRight: "extend", easing: "easeOutCubic"}"#);
+    assert_eq!(
+        positions_of(&extend, &[15, 30, 45]),
+        vec![390.0, 440.0, 640.0]
+    );
+    let left = with_options(r#"{extrapolateLeft: "extend"}"#)
+        .replace("[0, 1], [40, 440]", "[0.5, 1], [40, 440]");
+    assert_eq!(positions_of(&left, &[0, 15]), vec![-360.0, 40.0]);
+    for value in ["identity", "wrap"] {
+        let options = format!(r#"{{extrapolateRight: "{value}"}}"#);
+        let diagnostics = compile_motion(&with_options(&options)).unwrap_err();
+        assert!(
+            diagnostics
+                .iter()
+                .any(|d| d.message.contains(&format!("`{value}`"))
+                    && d.message.contains(r#""extend""#)),
+            "{diagnostics:?}"
+        );
+    }
+}
+
+#[test]
+fn remotion_easing_objects_name_the_string_that_draws_the_same_curve() {
+    for (remotion, spelling) in [
+        ("Easing.out(Easing.cubic)", "easeOutCubic"),
+        ("Easing.inOut(Easing.quad)", "easeInOutQuad"),
+        ("Easing.in(Easing.poly(4))", "easeInQuart"),
+        ("Easing.ease", "easeIn"),
+        ("Easing.out(Easing.back())", "easeOutBack"),
+        ("Easing.bounce", "easeOutBounce"),
+        (
+            "Easing.bezier(0.33, 1, 0.68, 1)",
+            "cubic-bezier(0.33, 1, 0.68, 1)",
+        ),
+        (
+            "Easing.out(Easing.bezier(0.5, 0, 0.75, 0))",
+            "cubic-bezier(0.25, 1, 0.5, 1)",
+        ),
+    ] {
+        let diagnostics = compile_motion(&source(remotion)).unwrap_err();
+        assert!(
+            diagnostics.iter().any(|d| d
+                .message
+                .contains(&format!("write this curve as \"{spelling}\""))),
+            "{remotion}: {diagnostics:?}"
+        );
+        assert_eq!(
+            Easing::parse(spelling)
+                .map(|easing| easing.to_string())
+                .as_deref(),
+            Some(spelling)
+        );
+    }
+    for remotion in ["Easing.elastic(2)", "Easing.inOut(Easing.back(2))"] {
+        let diagnostics = compile_motion(&source(remotion)).unwrap_err();
+        assert!(
+            diagnostics
+                .iter()
+                .any(|d| d.message.contains("no `Easing` object")
+                    && d.message.contains("such as easeOutCubic")),
+            "{remotion}: {diagnostics:?}"
         );
     }
 }

@@ -732,8 +732,14 @@ first frame; `jump-none` holds both ends for a step each and needs `n` of at lea
 `jump-both` jumps at both ends. All finish at the destination. `cubic-bezier(x1, y1,
 x2, y2)` takes finite coordinates with x in `[0,1]`; y may overshoot. `easing` can be
 one string or an array with one entry per segment, including immutable constants.
-Custom function easings are not yet admitted. Other option names, including
-`extrapolateLeft`/`extrapolateRight`, are not author options in this CLI language.
+Custom function easings and Remotion's `Easing` object are not admitted; for an
+`Easing` expression the compiler names the string that draws the same curve, where
+there is one, such as `"easeOutCubic"` for `Easing.out(Easing.cubic)`.
+
+`extrapolateLeft` and `extrapolateRight` take `"clamp"`, the default, which holds the
+first or last output outside the input range, or `"extend"`, which continues the
+first or last segment as a straight line; that segment's easing applies only inside
+it. Other option names are errors.
 
 Save as `spring.motion.tsx`:
 

@@ -570,10 +570,12 @@ impl<'s> Compiler<'s> {
             stops.push(InterpolateStop { input, output });
         }
         let easing_count = stops.len() - 1;
-        let (easings, color_space) = match arguments.get(3) {
+        let (easings, color_space, extrapolate_left, extrapolate_right) = match arguments.get(3) {
             None => (
                 vec![Easing::Linear; easing_count],
                 valle_draw::program::GradientInterpolation::Srgb,
+                Extrapolation::Clamp,
+                Extrapolation::Clamp,
             ),
             Some(options) => self.lower_interpolate_options(options, easing_count)?,
         };
@@ -593,8 +595,8 @@ impl<'s> Compiler<'s> {
                 stops,
                 easings,
                 color_space,
-                extrapolate_left: Extrapolation::Clamp,
-                extrapolate_right: Extrapolation::Clamp,
+                extrapolate_left,
+                extrapolate_right,
             },
             span,
         ))
@@ -825,7 +827,12 @@ impl<'s> Compiler<'s> {
         &mut self,
         options: &Argument<'_>,
         easing_count: usize,
-    ) -> Option<(Vec<Easing>, valle_draw::program::GradientInterpolation)> {
+    ) -> Option<(
+        Vec<Easing>,
+        valle_draw::program::GradientInterpolation,
+        Extrapolation,
+        Extrapolation,
+    )> {
         let expression = options.as_expression()?;
         let Expression::ObjectExpression(object) = strip_parens(expression) else {
             self.illegal(
@@ -838,6 +845,8 @@ impl<'s> Compiler<'s> {
         let mut easings = None;
         let mut color_space = None;
         let mut hue = None;
+        let mut extrapolate_left = Extrapolation::Clamp;
+        let mut extrapolate_right = Extrapolation::Clamp;
         for property in &object.properties {
             let ObjectPropertyKind::ObjectProperty(property) = property else {
                 self.illegal(
@@ -861,6 +870,12 @@ impl<'s> Compiler<'s> {
             };
             match name.as_str() {
                 "easing" => easings = self.lower_easing(&property.value, easing_count),
+                "extrapolateLeft" => {
+                    extrapolate_left = self.lower_extrapolation(&property.value)?
+                }
+                "extrapolateRight" => {
+                    extrapolate_right = self.lower_extrapolation(&property.value)?;
+                }
                 "colorSpace" => {
                     let Expression::StringLiteral(value) = strip_parens(&property.value) else {
                         self.illegal(
@@ -937,7 +952,37 @@ impl<'s> Compiler<'s> {
         Some((
             easings.unwrap_or_else(|| vec![Easing::Linear; easing_count]),
             color_space,
+            extrapolate_left,
+            extrapolate_right,
         ))
+    }
+
+    /// `"clamp"` holds the first and last outputs outside the input range; `"extend"` continues
+    /// the first and last segments as straight lines, without their easing.
+    fn lower_extrapolation(&mut self, value: &Expression<'_>) -> Option<Extrapolation> {
+        let Expression::StringLiteral(text) = strip_parens(value) else {
+            self.illegal(
+                DiagCode::GrammarForbidden,
+                value.span(),
+                "interpolate extrapolateLeft and extrapolateRight must be a literal string",
+            );
+            return None;
+        };
+        match text.value.as_str() {
+            "clamp" => Some(Extrapolation::Clamp),
+            "extend" => Some(Extrapolation::Extend),
+            other => {
+                self.illegal(
+                    DiagCode::GrammarForbidden,
+                    value.span(),
+                    format!(
+                        "interpolate extrapolation `{other}` is not available; use \"clamp\", \
+                         the default, or \"extend\""
+                    ),
+                );
+                None
+            }
+        }
     }
 
     /// Accept one easing for all intervals or one per interval, with exactly one fewer entries than
@@ -1010,12 +1055,118 @@ impl<'s> Compiler<'s> {
         if let Some(serde_json::Value::String(name)) = self.eval_static(value) {
             return self.parse_easing_or_diag(&name, value.span());
         }
-        self.illegal(
-            DiagCode::GrammarForbidden,
-            value.span(),
-            "interpolate easing must be a compile-time easing name (string literal or immutable constant)",
-        );
+        let message = if let Some(easing) = self.remotion_easing(value) {
+            format!("Motion has no `Easing` object; write this curve as \"{easing}\"")
+        } else if names_easing_object(value) {
+            format!(
+                "Motion has no `Easing` object; write the easing as a string: {}",
+                valle_timeline::easing::EASING_SPELLINGS
+            )
+        } else {
+            "interpolate easing must be a compile-time easing name (string literal or immutable \
+             constant)"
+                .to_owned()
+        };
+        self.illegal(DiagCode::GrammarForbidden, value.span(), message);
         None
+    }
+
+    /// The curve a Remotion `Easing` expression draws, where one of the spellings draws exactly
+    /// it. Remotion's `ease` is CSS's ease-in, and its `bounce` bounces at the end.
+    fn remotion_easing(&mut self, expression: &Expression<'_>) -> Option<Easing> {
+        match peel_expr(expression) {
+            Expression::StaticMemberExpression(member) if is_easing_object(&member.object) => {
+                Some(match member.property.name.as_str() {
+                    "linear" => Easing::Linear,
+                    "ease" => Easing::EaseIn,
+                    "quad" => Easing::EaseInQuad,
+                    "cubic" => Easing::EaseInCubic,
+                    "sin" => Easing::EaseInSine,
+                    "circle" => Easing::EaseInCirc,
+                    "exp" => Easing::EaseInExpo,
+                    "bounce" => Easing::EaseOutBounce,
+                    _ => return None,
+                })
+            }
+            Expression::CallExpression(call) => {
+                let Expression::StaticMemberExpression(member) = peel_expr(&call.callee) else {
+                    return None;
+                };
+                if !is_easing_object(&member.object) {
+                    return None;
+                }
+                let arguments = call
+                    .arguments
+                    .iter()
+                    .map(Argument::as_expression)
+                    .collect::<Option<Vec<_>>>()?;
+                match (member.property.name.as_str(), arguments.as_slice()) {
+                    ("in", [curve]) => self.remotion_easing(curve),
+                    // Time reversed: easeOut(t) = 1 - easeIn(1 - t).
+                    ("out", [curve]) => Some(match self.remotion_easing(curve)? {
+                        Easing::Linear => Easing::Linear,
+                        Easing::EaseIn => Easing::EaseOut,
+                        Easing::EaseInQuad => Easing::EaseOutQuad,
+                        Easing::EaseInCubic => Easing::EaseOutCubic,
+                        Easing::EaseInQuart => Easing::EaseOutQuart,
+                        Easing::EaseInQuint => Easing::EaseOutQuint,
+                        Easing::EaseInSine => Easing::EaseOutSine,
+                        Easing::EaseInCirc => Easing::EaseOutCirc,
+                        Easing::EaseInExpo => Easing::EaseOutExpo,
+                        Easing::EaseInBack => Easing::EaseOutBack,
+                        Easing::EaseOutBounce => Easing::EaseInBounce,
+                        Easing::CubicBezier {
+                            p: [x1, y1, x2, y2],
+                        } => Easing::CubicBezier {
+                            p: [1.0 - x2, 1.0 - y2, 1.0 - x1, 1.0 - y1],
+                        },
+                        _ => return None,
+                    }),
+                    // Each half is the curve scaled into it, which is easings.net's in-out form
+                    // for these families.
+                    ("inOut", [curve]) => Some(match self.remotion_easing(curve)? {
+                        Easing::Linear => Easing::Linear,
+                        Easing::EaseInQuad => Easing::EaseInOutQuad,
+                        Easing::EaseInCubic => Easing::EaseInOutCubic,
+                        Easing::EaseInQuart => Easing::EaseInOutQuart,
+                        Easing::EaseInQuint => Easing::EaseInOutQuint,
+                        Easing::EaseInSine => Easing::EaseInOutSine,
+                        Easing::EaseInCirc => Easing::EaseInOutCirc,
+                        Easing::EaseInExpo => Easing::EaseInOutExpo,
+                        _ => return None,
+                    }),
+                    ("poly", [exponent]) => {
+                        let exponent = self.fold_to_number(exponent)?;
+                        [
+                            (2.0, Easing::EaseInQuad),
+                            (3.0, Easing::EaseInCubic),
+                            (4.0, Easing::EaseInQuart),
+                            (5.0, Easing::EaseInQuint),
+                        ]
+                        .into_iter()
+                        .find(|(power, _)| *power == exponent)
+                        .map(|(_, easing)| easing)
+                    }
+                    ("back", []) => Some(Easing::EaseInBack),
+                    ("back", [overshoot]) => {
+                        (self.fold_to_number(overshoot)? == 1.70158).then_some(Easing::EaseInBack)
+                    }
+                    ("bezier", [x1, y1, x2, y2]) => {
+                        let easing = Easing::CubicBezier {
+                            p: [
+                                self.fold_to_number(x1)?,
+                                self.fold_to_number(y1)?,
+                                self.fold_to_number(x2)?,
+                                self.fold_to_number(y2)?,
+                            ],
+                        };
+                        easing.is_valid().then_some(easing)
+                    }
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
     }
 
     pub(super) fn parse_easing_or_diag(&mut self, name: &str, span: Span) -> Option<Easing> {
@@ -1030,5 +1181,21 @@ impl<'s> Compiler<'s> {
             );
             None
         })
+    }
+}
+
+fn is_easing_object(expression: &Expression<'_>) -> bool {
+    matches!(peel_expr(expression), Expression::Identifier(identifier) if identifier.name == "Easing")
+}
+
+/// `Easing.name` or `Easing.name(...)`, Remotion's easing object.
+fn names_easing_object(expression: &Expression<'_>) -> bool {
+    match peel_expr(expression) {
+        Expression::StaticMemberExpression(member) => is_easing_object(&member.object),
+        Expression::CallExpression(call) => matches!(
+            peel_expr(&call.callee),
+            Expression::StaticMemberExpression(member) if is_easing_object(&member.object)
+        ),
+        _ => false,
     }
 }
