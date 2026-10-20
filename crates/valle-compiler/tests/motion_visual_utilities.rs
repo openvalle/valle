@@ -75,16 +75,19 @@ fn filters(program: &DrawProgram) -> Vec<Filter> {
 
 #[test]
 fn advanced_filter_classes_share_cascade_and_frame_dependencies() {
-    let class = scene("className=\"[filter:film-grain(7_0.12_2px)]\"", "");
-    let inline = scene("", "filter:'film-grain(7 0.12 2px)'");
     let frames = [0, 30, 0];
-    let class = samples(&class, &frames);
-    let inline = samples(&inline, &frames);
-    for (a, b) in class.iter().zip(&inline) {
-        assert_eq!(filters(a), filters(b));
+    let inline = samples(&scene("", "filter:'film-grain(7 0.12 2px)'"), &frames);
+    for class in [
+        "[filter:film-grain(7_0.12_2px)]",
+        "filter-[film-grain(7_0.12_2px)]",
+    ] {
+        let class = samples(&scene(&format!("className=\"{class}\""), ""), &frames);
+        for (a, b) in class.iter().zip(&inline) {
+            assert_eq!(filters(a), filters(b));
+        }
+        assert_ne!(filters(&class[0]), filters(&class[1]));
+        assert_eq!(filters(&class[0]), filters(&class[2]));
     }
-    assert_ne!(filters(&class[0]), filters(&class[1]));
-    assert_eq!(filters(&class[0]), filters(&class[2]));
     let overridden = snapshot("[filter:glow(12px_1_white)]", "filter:'blur(8px)'");
     assert!(
         filters(&overridden)
@@ -96,6 +99,105 @@ fn advanced_filter_classes_share_cascade_and_frame_dependencies() {
             .iter()
             .any(|filter| matches!(filter, Filter::Glow { .. }))
     );
+}
+
+/// The filter kinds of the one filtered group, in order.
+fn filter_chain(program: &DrawProgram) -> Vec<&'static str> {
+    let groups = program
+        .nodes()
+        .iter()
+        .filter_map(|node| match node {
+            Node::Group(group) if !group.filters.is_empty() => Some(group),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(groups.len(), 1, "one list is one filter group");
+    groups[0]
+        .filters
+        .iter()
+        .map(|filter| match filter {
+            Filter::Blur { .. } => "blur",
+            Filter::Saturate { .. } => "saturate",
+            Filter::DropShadow { .. } => "drop-shadow",
+            Filter::Glow { .. } => "glow",
+            Filter::ChromaticAberration { .. } => "chromatic-aberration",
+            Filter::RadialBlur { .. } => "radial-blur",
+            Filter::FilmGrain { .. } => "film-grain",
+            Filter::LensDistortion { .. } => "lens-distortion",
+            _ => "other",
+        })
+        .collect()
+}
+
+#[test]
+fn advanced_filters_chain_with_css_filters_in_written_order() {
+    assert_eq!(
+        filter_chain(&snapshot(
+            "",
+            "filter:'blur(2px) glow(24px 1.5 rgba(34, 211, 238, 0.8)) saturate(1.5)'"
+        )),
+        ["blur", "glow", "saturate"]
+    );
+    assert_eq!(
+        filter_chain(&snapshot(
+            "",
+            "filter:'chromatic-aberration(6px) radial-blur(40px 20px 16px) drop-shadow(2px 2px 3px #000) lens-distortion(-0.3 0.2) film-grain(7 0.12 2px)'"
+        )),
+        [
+            "chromatic-aberration",
+            "radial-blur",
+            "drop-shadow",
+            "lens-distortion",
+            "film-grain"
+        ]
+    );
+    let inline = filters(&snapshot("", "filter:'blur(2px) glow(24px 1.5 #22d3ee)'"));
+    for class in [
+        "[filter:blur(2px)_glow(24px_1.5_#22d3ee)]",
+        "filter-[blur(2px)_glow(24px_1.5_#22d3ee)]",
+    ] {
+        assert_eq!(filters(&snapshot(class, "")), inline, "{class}");
+        let artifact = compile_motion(&scene(&format!("className=\"{class}\""), ""))
+            .unwrap()
+            .artifact;
+        assert!(
+            artifact
+                .capability_set
+                .names
+                .iter()
+                .any(|name| name == valle_motion::NODE_ADVANCED_FILTER_CAPABILITY),
+            "{class}"
+        );
+    }
+    // Grain inside a list still changes once per frame.
+    let grain = samples(
+        &scene("", "filter:'blur(1px) film-grain(7 0.12 2px)'"),
+        &[0, 30, 0],
+    );
+    assert_ne!(filters(&grain[0]), filters(&grain[1]));
+    assert_eq!(filters(&grain[0]), filters(&grain[2]));
+    // A frame-dependent lens coefficient after another function keeps its own domain.
+    let lens = samples(
+        &scene(
+            "",
+            "filter:`blur(${ctx.progress * 2}px) lens-distortion(${ctx.progress * 0.4 - 0.2} 0)`",
+        ),
+        &[0, 89],
+    );
+    // At frame 0 the blur is 0px, an identity the program drops.
+    assert_eq!(filter_chain(&lens[0]), ["lens-distortion"]);
+    assert_eq!(filter_chain(&lens[1]), ["blur", "lens-distortion"]);
+    assert_ne!(filters(&lens[0]), filters(&lens[1]));
+    for value in [
+        "blur(2px) glow(129px 1 #22d3ee)",
+        "none glow(24px 1 #22d3ee)",
+        "glow(24px 1 #22d3ee) not-a-filter(1)",
+    ] {
+        assert!(
+            compile_motion(&scene("", &format!("filter:'{value}'"))).is_err(),
+            "{value}"
+        );
+    }
 }
 
 #[test]
@@ -311,7 +413,6 @@ fn chromatic_aberration_is_a_real_bounded_node_filter() {
         "chromatic-aberration(257px)",
         "chromatic-aberration(6%)",
         "chromatic-aberration(NaNpx)",
-        "chromatic-aberration(6px) blur(2px)",
     ] {
         assert!(
             compile_motion(&scene("", &format!("filter:'{value}'"))).is_err(),
@@ -335,7 +436,6 @@ fn glow_is_a_colored_bounded_node_filter() {
         "glow(24px 4.1 #22d3ee)",
         "glow(24px NaN #22d3ee)",
         "glow(24px 1.5 not-a-color)",
-        "glow(24px 1.5 #22d3ee) blur(2px)",
     ] {
         assert!(
             compile_motion(&scene("", &format!("filter:'{value}'"))).is_err(),
@@ -391,7 +491,6 @@ fn lens_distortion_is_a_bounded_static_frame_filter() {
         "lens-distortion(0 0.6)",
         "lens-distortion(NaN 0)",
         "lens-distortion(0.2)",
-        "lens-distortion(0.2 0) blur(1px)",
     ] {
         assert!(
             compile_motion(&scene("", &format!("filter:'{value}'"))).is_err(),
@@ -419,7 +518,6 @@ fn film_grain_has_a_bounded_static_seed_amount_and_size() {
         "film-grain(7 1.1 2px)",
         "film-grain(7 0.12 0px)",
         "film-grain(7 0.12 2%)",
-        "film-grain(7 0.12 2px) blur(1px)",
     ] {
         assert!(
             compile_motion(&scene("", &format!("filter:'{value}'"))).is_err(),
@@ -447,7 +545,6 @@ fn radial_blur_is_a_bounded_local_center_filter() {
         "radial-blur(40% 20px 16px)",
         "radial-blur(NaNpx 20px 16px)",
         "radial-blur(40px 20px)",
-        "radial-blur(40px 20px 16px) blur(2px)",
     ] {
         assert!(
             compile_motion(&scene("", &format!("filter:'{value}'"))).is_err(),

@@ -52,6 +52,74 @@ pub fn parameters(name: &str) -> &'static [Parameter] {
     }
 }
 
+/// One function of a `filter` list.
+pub enum Stage<'a> {
+    /// A CSS filter function, left to the CSS cascade.
+    Css(&'a str),
+    Advanced(FilterOp),
+}
+
+/// The functions of a filter list in written order. Whitespace inside parentheses belongs to
+/// the arguments, so a color such as `rgba(…)` stays with its function.
+pub fn functions(value: &str) -> Vec<&str> {
+    let mut functions = Vec::new();
+    let mut depth = 0_usize;
+    let mut start = None;
+    for (at, ch) in value.char_indices() {
+        match ch {
+            '(' => depth += 1,
+            ')' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    functions.push(&value[start.take().unwrap_or(at)..at + 1]);
+                    continue;
+                }
+            }
+            _ if depth == 0 && ch.is_whitespace() => {
+                if let Some(from) = start.take() {
+                    functions.push(&value[from..at]);
+                }
+                continue;
+            }
+            _ => {}
+        }
+        start.get_or_insert(at);
+    }
+    if let Some(from) = start {
+        functions.push(&value[from..]);
+    }
+    functions
+}
+
+/// The stages of a filter list, or `None` when it names no advanced filter.
+pub fn stages(value: &str) -> Result<Option<Vec<Stage<'_>>>, String> {
+    let mut advanced = false;
+    let mut stages = Vec::new();
+    for function in functions(value) {
+        stages.push(match parse(function)? {
+            Some(filter) => {
+                advanced = true;
+                Stage::Advanced(filter)
+            }
+            None => Stage::Css(function),
+        });
+    }
+    if advanced
+        && stages.iter().any(
+            |stage| matches!(stage, Stage::Css(function) if function.eq_ignore_ascii_case("none")),
+        )
+    {
+        return Err("`none` stands alone; a filter list is either `none` or functions".into());
+    }
+    Ok(advanced.then_some(stages))
+}
+
+/// Whether a filter list names an advanced filter with valid parameters.
+pub fn names_advanced(value: &str) -> bool {
+    stages(value).is_ok_and(|stages| stages.is_some())
+}
+
+/// One advanced filter function, or `None` for any other function.
 pub fn parse(value: &str) -> Result<Option<FilterOp>, String> {
     let value = value.trim();
     let Some((name, body)) = value.split_once('(') else {

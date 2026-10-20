@@ -888,7 +888,7 @@ impl<'s> Compiler<'s> {
         }
         if class_names
             .iter()
-            .any(|class| valle_motion::tailwind::advanced_filter(class).is_some())
+            .any(|class| valle_motion::tailwind::sets_advanced_filter(class))
         {
             self.extra_capabilities
                 .insert(valle_motion::NODE_ADVANCED_FILTER_CAPABILITY.to_owned());

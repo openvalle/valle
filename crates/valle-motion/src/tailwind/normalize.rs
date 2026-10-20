@@ -205,15 +205,22 @@ fn arbitrary_property_parts(candidate: &str) -> Option<(&str, &str)> {
     Some((property, value))
 }
 
-pub(super) fn advanced_filter(candidate: &str) -> Option<valle_draw::program::recording::FilterOp> {
-    let candidate = candidate.strip_suffix('!').unwrap_or(candidate);
-    let (property, value) = arbitrary_property_parts(candidate)?;
-    if property != "filter" {
-        return None;
-    }
-    crate::style::advanced_filter::parse(&decode_arbitrary(value).ok()?)
-        .ok()
-        .flatten()
+/// Both `[filter:…]` and `filter-[…]` carry the list in the private filter slot.
+pub(super) fn sets_advanced_filter(candidate: &str) -> bool {
+    explicit_property(candidate) == Some("filter")
+        && utility(candidate).is_ok_and(|utility| {
+            utility.declarations.split(';').any(|declaration| {
+                declaration.split_once(':').is_some_and(|(name, value)| {
+                    matches!(
+                        name.trim(),
+                        crate::style::advanced_filter::SLOT
+                            | crate::style::advanced_filter::IMPORTANT_SLOT
+                    ) && crate::style::advanced_filter::names_advanced(
+                        value.trim().trim_end_matches("!important").trim_end(),
+                    )
+                })
+            })
+        })
 }
 
 pub(super) fn default_theme(name: &str) -> Option<&'static str> {
@@ -1038,10 +1045,26 @@ fn base_utility(
     if class.ends_with('!') {
         return Err(TailwindClassError::Unsupported);
     }
-    if class.starts_with('[') {
-        let (property, raw) = arbitrary_property_parts(class).ok_or(TailwindClassError::Syntax(
-            "expected [property:value] with a nonempty property and value",
-        ))?;
+    // `filter-[…]` and `backdrop-filter-[…]` set the whole property, as `[filter:…]` and
+    // `[backdrop-filter:…]` do, so they take the same path, private filter slot included.
+    let arbitrary = if class.starts_with('[') {
+        Some(
+            arbitrary_property_parts(class).ok_or(TailwindClassError::Syntax(
+                "expected [property:value] with a nonempty property and value",
+            ))?,
+        )
+    } else {
+        ["filter", "backdrop-filter"]
+            .into_iter()
+            .find_map(|property| {
+                let value = class
+                    .strip_prefix(property)?
+                    .strip_prefix("-[")?
+                    .strip_suffix(']')?;
+                Some((property, value))
+            })
+    };
+    if let Some((property, raw)) = arbitrary {
         let value = resolve(property, &decode_arbitrary(raw)?)?;
         let inline_display = if property == "display" {
             let parsed =

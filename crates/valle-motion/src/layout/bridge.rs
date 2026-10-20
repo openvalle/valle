@@ -289,9 +289,16 @@ pub struct LayoutTree {
     pub(crate) masks: Rc<std::collections::HashMap<String, MaskContent>>,
     /// Resolved video content by Scene key, including the source time for this frame.
     pub(crate) videos: Rc<std::collections::HashMap<String, VideoContent>>,
-    /// Scene key to node-local advanced filters resolved for this frame.
+    /// Scene key to the node's effect properties (bloom, displacement, motion blur and the typed
+    /// filter slots) resolved for this frame. They apply after its `filter` list.
     pub(crate) advanced_filters:
         Rc<std::collections::HashMap<String, Vec<valle_draw::program::recording::FilterOp>>>,
+    /// Scene key to a `filter` list that names an advanced filter: each advanced function resolved
+    /// for this frame, and `None` where a CSS function stands. Emission takes the CSS functions
+    /// from the cascade in the same order.
+    pub(crate) filter_lists: Rc<
+        std::collections::HashMap<String, Vec<Option<valle_draw::program::recording::FilterOp>>>,
+    >,
     /// Scene keys whose advanced velocity blur comes from auto motion blur, measured in screen
     /// pixels per frame. Emission carries it into the node's local units.
     pub(crate) screen_velocity_blurs: Rc<std::collections::HashSet<String>>,

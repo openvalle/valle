@@ -23,15 +23,12 @@ impl<'s> Compiler<'s> {
                 self.style_diagnostic(expression.span(), None, reason);
                 return None;
             }
-            if property == "filter"
-                && valle_motion::style::advanced_filter::parse(&text)
-                    .ok()
-                    .flatten()
-                    .is_some()
-            {
+            if property == "filter" && valle_motion::style::advanced_filter::names_advanced(&text) {
                 self.extra_capabilities
                     .insert(valle_motion::NODE_ADVANCED_FILTER_CAPABILITY.to_owned());
-                frame_dependent = text.trim().starts_with("film-grain(");
+                frame_dependent = valle_motion::style::advanced_filter::functions(&text)
+                    .iter()
+                    .any(|function| function.starts_with("film-grain("));
             }
             StyleValue::Static {
                 value: MotionValue::Str(text),
@@ -81,31 +78,33 @@ impl<'s> Compiler<'s> {
                 }
             }
         }
-        let Some((name, body)) = template.trim().split_once('(') else {
-            return;
-        };
-        let Some(body) = body.strip_suffix(')') else {
-            return;
-        };
-        for (raw, parameter) in body
-            .split_whitespace()
-            .zip(valle_motion::style::advanced_filter::parameters(name))
-        {
-            let raw = raw.strip_suffix(parameter.unit).unwrap_or(raw);
-            let Some(id) = raw
-                .strip_prefix('@')
-                .and_then(|s| s.strip_suffix('@'))
-                .and_then(|s| s.parse::<u32>().ok())
-            else {
+        for function in valle_motion::style::advanced_filter::functions(&template) {
+            let Some((name, body)) = function.split_once('(') else {
                 continue;
             };
-            self.diagnose_parameter_range(
-                ExprId(id),
-                &format!("{name} {}", parameter.name),
-                parameter.unit,
-                parameter.min,
-                parameter.max,
-            );
+            let Some(body) = body.strip_suffix(')') else {
+                continue;
+            };
+            for (raw, parameter) in body
+                .split_whitespace()
+                .zip(valle_motion::style::advanced_filter::parameters(name))
+            {
+                let raw = raw.strip_suffix(parameter.unit).unwrap_or(raw);
+                let Some(id) = raw
+                    .strip_prefix('@')
+                    .and_then(|s| s.strip_suffix('@'))
+                    .and_then(|s| s.parse::<u32>().ok())
+                else {
+                    continue;
+                };
+                self.diagnose_parameter_range(
+                    ExprId(id),
+                    &format!("{name} {}", parameter.name),
+                    parameter.unit,
+                    parameter.min,
+                    parameter.max,
+                );
+            }
         }
     }
 

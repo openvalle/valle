@@ -209,12 +209,30 @@ impl<'i> DeclarationParser<'i> for StrictDeclarations {
             &value
         };
         let advanced = if name == "filter" {
-            advanced_filter::parse(&value).map_err(|reason| input.new_custom_error(reason))?
+            advanced_filter::stages(&value).map_err(|reason| input.new_custom_error(reason))?
         } else {
             None
         };
-        let mut style = if advanced.is_some() {
-            Style::from_str("filter: opacity(1)").expect("identity filter")
+        let mut style = if let Some(stages) = &advanced {
+            // The cascade keeps the CSS functions in order; emission puts the advanced ones
+            // back between them. A list of advanced filters alone keeps an identity filter so
+            // the node still establishes a containing block.
+            let css = stages
+                .iter()
+                .filter_map(|stage| match stage {
+                    advanced_filter::Stage::Css(function) => Some(*function),
+                    advanced_filter::Stage::Advanced(_) => None,
+                })
+                .collect::<Vec<_>>();
+            Style::from_str(&format!(
+                "filter: {}",
+                if css.is_empty() {
+                    "opacity(1)".to_owned()
+                } else {
+                    css.join(" ")
+                }
+            ))
+            .map_err(|reason| input.new_custom_error(reason.to_string()))?
         } else if name == "transform" && keyword.is_none() {
             transform_style(&value).map_err(|reason| input.new_custom_error(reason))?
         } else {

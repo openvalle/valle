@@ -390,6 +390,9 @@ test("Motion composition, easing and color interpolation match analytic pixels o
     { name:"node-glow", source:nodeGlow, body:"", width:640, height:360, frames:[0,30,0], probes:[] },
     { name:"node-glow-half", source:nodeGlow.replace("glow(24px 1.5 #22d3ee)","glow(24px 0.75 #22d3ee)"), body:"", width:640, height:360, frames:[0], probes:[] },
     { name:"node-glow-no-filter", source:nodeGlow.replace(', filter: "glow(24px 1.5 #22d3ee)"', ''), body:"", width:640, height:360, frames:[0], probes:[] },
+    // Each function of a filter list filters the result of the one before it.
+    { name:"filter-list", source:nodeGlow.replace('filter: "glow(24px 1.5 #22d3ee)"', 'filter: "blur(3px) glow(24px 1.5 #22d3ee) saturate(1.4)"'), body:"", width:640, height:360, frames:[0], probes:[] },
+    { name:"filter-list-advanced", source:radialBlur.replace('filter: "radial-blur(40px 20px 20px)"', 'filter: "chromatic-aberration(6px) radial-blur(40px 20px 20px) film-grain(7 0.12 2px) lens-distortion(-0.2 0)"'), body:"", width:640, height:360, frames:[0,30,0], probes:[] },
     { name:"scene-bloom", source:sceneBloom, body:"", width:640, height:360, frames:[0,30,0], probes:[] },
     { name:"scene-bloom-half", source:sceneBloom.replace("intensity: 1.2", "intensity: 0.6"), body:"", width:640, height:360, frames:[0], probes:[] },
     { name:"scene-bloom-no-filter", source:sceneBloom.replace(' bloom={{ threshold: 0.8, intensity: 1.2, radius: 48 }}', ''), body:"", width:640, height:360, frames:[0], probes:[] },

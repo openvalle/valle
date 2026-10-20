@@ -1147,53 +1147,15 @@ impl Emitter<'_> {
             depth += 1;
         }
 
-        // Apply standard CSS filters, then displacement, then velocity blur in a fixed semantic
-        // order.
-        let advanced_css = style
-            .custom_properties
-            .get(crate::style::advanced_filter::IMPORTANT_SLOT)
-            .or_else(|| {
-                style
-                    .custom_properties
-                    .get(crate::style::advanced_filter::SLOT)
-            })
-            .is_some_and(|value| {
-                crate::style::advanced_filter::parse(value)
-                    .ok()
-                    .flatten()
-                    .is_some()
-            });
-        if !advanced_css
-            && !style.filter.is_empty()
-            && self
-                .node_key(np)
-                .and_then(|key| self.tree.advanced_filters.get(key))
-                .is_some_and(|filters| {
-                    filters.iter().any(|filter| {
-                        matches!(
-                            filter,
-                            valle_draw::program::recording::FilterOp::ChromaticAberration { .. }
-                                | valle_draw::program::recording::FilterOp::Glow { .. }
-                                | valle_draw::program::recording::FilterOp::Bloom { .. }
-                                | valle_draw::program::recording::FilterOp::RadialBlur { .. }
-                                | valle_draw::program::recording::FilterOp::FilmGrain { .. }
-                                | valle_draw::program::recording::FilterOp::LensDistortion { .. }
-                        )
-                    })
-                })
-        {
-            return Err(EmitError::BadStyle {
-                node: self.node_key(np).unwrap_or_default().to_owned(),
-                reason:
-                    "bloom, glow(), radial-blur(), film-grain(), lens-distortion() and chromatic-aberration() cannot be combined with another CSS filter"
-                        .into(),
-            });
-        }
-        if let Some(key) = self.tree.keys.get(&u64::from(np.node_id))
-            && let Some(filters) = self.tree.advanced_filters.get(key)
+        // Apply the `filter` list in written order, then bloom, displacement and velocity blur in
+        // a fixed semantic order.
+        let tree = self.tree;
+        let key = tree.keys.get(&u64::from(np.node_id));
+        if let Some(key) = key
+            && let Some(filters) = tree.advanced_filters.get(key)
             && !filters.is_empty()
         {
-            let filters = if self.tree.screen_velocity_blurs.contains(key) {
+            let filters = if tree.screen_velocity_blurs.contains(key) {
                 let local = local_velocity_blurs(filters, np.transform);
                 self.out.recording.intern_filters(&local)
             } else {
@@ -1207,7 +1169,34 @@ impl Emitter<'_> {
         }
 
         // Keep CSS filters inside the opacity/blend group.
-        if !advanced_css && !style.filter.is_empty() {
+        if let Some(list) = key.and_then(|key| tree.filter_lists.get(key)) {
+            // The cascade holds the list's CSS functions in order; a list of advanced filters
+            // alone holds an identity filter instead, which is not painted.
+            let mut css = style.filter.iter();
+            let mut ops = Vec::with_capacity(list.len());
+            for stage in list {
+                match stage {
+                    Some(filter) => ops.push(filter.clone()),
+                    None => {
+                        let filter = css.next().ok_or_else(|| EmitError::BadStyle {
+                            node: key.cloned().unwrap_or_default(),
+                            reason: "the filter list lost a CSS function in the cascade".into(),
+                        })?;
+                        ops.extend(self.filter_ops(
+                            np,
+                            std::slice::from_ref(filter),
+                            &node.context,
+                        )?);
+                    }
+                }
+            }
+            let filters = self.out.recording.intern_filters(&ops);
+            self.push(RecordCmd::BeginFilter {
+                filters,
+                bounds: None,
+            });
+            depth += 1;
+        } else if !style.filter.is_empty() {
             let filters = self.filters(np, &style.filter, &node.context)?;
             self.push(RecordCmd::BeginFilter {
                 filters,
@@ -3474,7 +3463,7 @@ impl Emitter<'_> {
     fn filter_ops(
         &mut self,
         np: &NodePaint,
-        filters: &takumi_core::style::Filters,
+        filters: &[takumi_core::style::Filter],
         ctx: &takumi_core::context::RenderContext,
     ) -> Result<Vec<valle_draw::program::recording::FilterOp>, EmitError> {
         use takumi_core::style::Filter as TF;

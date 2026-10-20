@@ -3728,13 +3728,13 @@ impl SceneArtifact {
         let uses = self.nodes.iter().any(|node| {
             node.class_names
                 .iter()
-                .any(|class| crate::tailwind::advanced_filter(class).is_some())
+                .any(|class| crate::tailwind::sets_advanced_filter(class))
                 || node.styles.iter().any(|style| {
                     style.property == "motion-filter-frame"
                         || (style.property == "filter"
                             && matches!(&style.value,
                         StyleValue::Static { value: MotionValue::Str(value) }
-                        if crate::style::advanced_filter::parse(value).ok().flatten().is_some()))
+                        if crate::style::advanced_filter::names_advanced(value)))
                         || style.property.starts_with("motion-displacement-")
                         || style.property.starts_with("motion-velocity-blur-")
                         || style.property == "motion-chromatic-aberration-offset"
@@ -5692,7 +5692,9 @@ pub(crate) fn css_expression_variants(
                             text.push_str(match types.get(expr.0 as usize)? {
                                 // A structural probe must itself fit the function's domain.
                                 Some(ExprType::Number)
-                                    if text.trim_start().starts_with("lens-distortion(") =>
+                                    if text
+                                        .rfind("lens-distortion(")
+                                        .is_some_and(|at| !text[at..].contains(')')) =>
                                 {
                                     "0"
                                 }

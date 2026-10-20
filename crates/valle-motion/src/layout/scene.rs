@@ -1154,8 +1154,8 @@ pub(super) fn build_tree_inner(
             if let Some(text) = properties
                 .get(crate::style::advanced_filter::IMPORTANT_SLOT)
                 .or_else(|| properties.get(crate::style::advanced_filter::SLOT))
-                && let Some(filter) =
-                    crate::style::advanced_filter::parse(text).map_err(|reason| {
+                && let Some(stages) =
+                    crate::style::advanced_filter::stages(text).map_err(|reason| {
                         LayoutError::BadStyle {
                             node: key.clone(),
                             declarations: text.clone(),
@@ -1163,7 +1163,14 @@ pub(super) fn build_tree_inner(
                         }
                     })?
             {
-                css_filters.insert(key.clone(), filter);
+                let list = stages
+                    .into_iter()
+                    .map(|stage| match stage {
+                        crate::style::advanced_filter::Stage::Advanced(filter) => Some(filter),
+                        crate::style::advanced_filter::Stage::Css(_) => None,
+                    })
+                    .collect::<Vec<_>>();
+                css_filters.insert(key.clone(), list);
             }
         }
         if let (Some(children), Ok(boxes)) = (&render_node.children, layout.box_children(id)) {
@@ -1181,6 +1188,7 @@ pub(super) fn build_tree_inner(
     let mut masks = HashMap::new();
     let mut videos = HashMap::new();
     let mut advanced_filters = HashMap::new();
+    let mut filter_lists = HashMap::new();
     let mut screen_velocity_blurs = std::collections::HashSet::new();
     let mut backdrop_advanced_filters = HashMap::new();
     let mut transitions = HashMap::new();
@@ -1213,7 +1221,7 @@ pub(super) fn build_tree_inner(
             }
         }
         let auto_velocity = auto_velocities.get(&node.key).copied();
-        let mut filters = resolve_advanced_filters(node, &values, at, auto_velocity)?;
+        let filters = resolve_advanced_filters(node, &values, at, auto_velocity)?;
         if auto_velocity.is_some()
             && filters.iter().any(|filter| {
                 matches!(
@@ -1224,15 +1232,17 @@ pub(super) fn build_tree_inner(
         {
             screen_velocity_blurs.insert(node.key.clone());
         }
-        if let Some(mut filter) = css_filters.remove(&node.key) {
-            if let valle_draw::program::recording::FilterOp::FilmGrain { seed, .. } = &mut filter {
-                let frame = match resolved_style(node, &values, at, "motion-filter-frame")? {
-                    Some(MotionValue::Number(frame)) => *frame as i64 as u32,
-                    _ => ctx.local_frame,
-                };
-                *seed = seed.wrapping_add(frame.wrapping_mul(0x9e37_79b9));
+        if let Some(mut list) = css_filters.remove(&node.key) {
+            for filter in list.iter_mut().flatten() {
+                if let valle_draw::program::recording::FilterOp::FilmGrain { seed, .. } = filter {
+                    let frame = match resolved_style(node, &values, at, "motion-filter-frame")? {
+                        Some(MotionValue::Number(frame)) => *frame as i64 as u32,
+                        _ => ctx.local_frame,
+                    };
+                    *seed = seed.wrapping_add(frame.wrapping_mul(0x9e37_79b9));
+                }
             }
-            filters.push(filter);
+            filter_lists.insert(node.key.clone(), list);
         }
         if !filters.is_empty() {
             advanced_filters.insert(node.key.clone(), filters);
@@ -1817,6 +1827,7 @@ pub(super) fn build_tree_inner(
         masks: Rc::new(masks),
         videos: Rc::new(videos),
         advanced_filters: Rc::new(advanced_filters),
+        filter_lists: Rc::new(filter_lists),
         screen_velocity_blurs: Rc::new(screen_velocity_blurs),
         backdrop_advanced_filters: Rc::new(backdrop_advanced_filters),
         transitions: Rc::new(transitions),
@@ -5905,7 +5916,7 @@ fn declarations(
         if style.property == "filter" {
             // Preserve the numeric parameter diagnostic before the generic CSS
             // parser wraps the entire declaration block into one error.
-            if let Err(reason) = crate::style::advanced_filter::parse(&css_token(value)) {
+            if let Err(reason) = crate::style::advanced_filter::stages(&css_token(value)) {
                 let reason = match style.value {
                     StyleValue::Expr { expr } => format!("expression {}: {reason}", expr.0),
                     _ => reason,

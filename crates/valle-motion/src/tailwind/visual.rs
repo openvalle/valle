@@ -320,14 +320,11 @@ pub(super) fn utility(
                 return Err(fail.clone());
             }
             if function == "filter" {
-                let value = if token.is_empty() {
-                    chain(backdrop)
-                } else if token == "none" {
-                    "none".into()
-                } else {
-                    let value = arbitrary(token, property, resolve)?.ok_or_else(|| fail.clone())?;
-                    checked(property, &value)?;
-                    value
+                // `filter-[…]` lowers as the arbitrary property it names.
+                let value = match token {
+                    "" => chain(backdrop),
+                    "none" => "none".into(),
+                    _ => return Err(fail.clone()),
                 };
                 declarations.push((property.into(), value));
                 representative = property.into();
