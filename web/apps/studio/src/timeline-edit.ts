@@ -133,7 +133,7 @@ export function trimTimelineClipFrames(
       } else if (target.band === "visual"
         && target.clip.kind !== "image"
         && target.clip.kind !== "solid"
-        && !(target.clip.kind === "motion" && motionRole?.type === "overlay")) {
+        && !(target.clip.kind === "motion" && (motionRole?.type === "overlay" || motionRole?.type === "transition"))) {
         const sourceDelta = finiteNumber(
           sourceTimeDeltaFromFrames(deltaFrames, timeline.canvas.fps, target.clip.rate),
           "source trim delta",
@@ -186,7 +186,7 @@ export function moveTimelineVisualClipBefore(
   }
   const originalClips = [...track.clips];
   const transitions = (track.transitions ?? []).map(t => ({
-    ...t, fromClip: originalClips[t.from]!, toClip: originalClips[t.to]!,
+    transition: t, fromClip: originalClips[t.from]!, toClip: originalClips[t.to]!,
     duration: originalClips[t.from]!.start + originalClips[t.from]!.duration - originalClips[t.to]!.start,
   }));
   const slots = track.clips.map((clip, index) => ({
@@ -204,14 +204,14 @@ export function moveTimelineVisualClipBefore(
   track.clips.splice(insertion, 0, clip);
   const retained = transitions.flatMap(t => {
     const from = track.clips.indexOf(t.fromClip), to = track.clips.indexOf(t.toClip);
-    return to === from + 1 ? [{ from, to, kind: t.kind, params: t.params, duration: t.duration }] : [];
+    return to === from + 1 ? [{ transition: { ...t.transition, from, to }, duration: t.duration }] : [];
   });
-  track.transitions = retained.map(({ from, to, kind, params }) => ({ from, to, kind, ...(params ? { params } : {}) }));
+  track.transitions = retained.map(t => t.transition);
   let cursor = slots[0]?.start ?? 0;
   for (let index = 0; index < track.clips.length; index += 1) {
     const current = track.clips[index]!;
     current.start = cursor;
-    const transition = retained.find(t => t.from === index);
+    const transition = retained.find(t => t.transition.from === index);
     cursor += finiteNumber(current.duration, `clip ${index} duration`)
       + (transition ? -transition.duration : (slots[index]?.gapAfter ?? 0));
   }
@@ -332,6 +332,9 @@ function finiteOptionalNumber(value: unknown, fallback: number): number {
 
 
 export type TimelineTransitionKind = TimelineSchema.TransitionKind;
+type TimelineTransition = TimelineSchema.TimelineTransitionWire;
+/** A built-in kernel, or the resource alias of a Motion template that declares `transition()`. */
+export type TimelineTransitionEffect = TimelineTransitionKind | { component: string };
 export const transitionParameterSpecs = transitionParameters;
 export const transitionLabels = {
   fade: "Fade", wipeLeft: "Wipe left", wipeRight: "Wipe right", circleOpen: "Circle open",
@@ -344,7 +347,7 @@ export const transitionLabels = {
 export function setTimelineTransition(
   timeline: Timeline,
   timelinePath: string,
-  kind: TimelineTransitionKind | null,
+  effect: TimelineTransitionEffect | null,
   durationSeconds?: number,
 ): Timeline {
   const next = structuredClone(timeline);
@@ -355,19 +358,30 @@ export function setTimelineTransition(
   const from = address.clipIndex, to = from + 1;
   const a = track.clips[from]!, b = track.clips[to];
   if (!b) throw new Error("Select a visual clip with a following clip");
-  if (kind !== null && !Object.hasOwn(transitionLabels, kind)) throw new Error("Unknown transition kind");
+  if (typeof effect === "string" && !Object.hasOwn(transitionLabels, effect)) throw new Error("Unknown transition kind");
+  if (typeof effect === "object" && effect !== null && !effect.component) throw new Error("A Motion transition needs a component");
   const existing = track.transitions?.find(t => t.from === from && t.to === to);
-  if (!kind && !existing) return next;
+  if (!effect && !existing) return next;
   const overlap = existing ? a.start + a.duration - b.start : 0;
-  const duration = kind ? durationSeconds ?? (existing ? overlap : Math.min(0.5, a.duration / 2, b.duration / 2)) : 0;
-  if (!Number.isFinite(duration) || (kind && (duration <= 0 || duration >= a.duration || duration >= b.duration))) {
+  const duration = effect ? durationSeconds ?? (existing ? overlap : Math.min(0.5, a.duration / 2, b.duration / 2)) : 0;
+  if (!Number.isFinite(duration) || (effect && (duration <= 0 || duration >= a.duration || duration >= b.duration))) {
     throw new Error("Transition duration must be positive and shorter than both clips");
   }
   const delta = a.start + a.duration - duration - b.start;
   for (let index = to; index < track.clips.length; index++) track.clips[index]!.start += delta;
   track.transitions = (track.transitions ?? []).filter(t => t.from !== from);
-  if (kind) track.transitions.push({ from, to, kind, ...(existing?.kind === kind && existing.params ? { params: existing.params } : {}) });
+  if (effect) track.transitions.push(transitionWith(effect, existing, from, to));
   return next;
+}
+
+/** The same effect keeps its parameters, or its template props and resources. */
+function transitionWith(effect: TimelineTransitionEffect, existing: TimelineTransition | undefined, from: number, to: number): TimelineTransition {
+  if (typeof effect === "string") {
+    const params = existing && existing.kind !== "motion" && existing.kind === effect ? existing.params : undefined;
+    return { from, to, kind: effect, ...(params ? { params } : {}) };
+  }
+  const same = existing?.kind === "motion" && existing.component === effect.component ? existing : undefined;
+  return { ...same, from, to, kind: "motion", component: effect.component };
 }
 
 /** Parameters use generated Rust metadata; compilation remains the final semantic admission. */
@@ -378,6 +392,7 @@ export function setTimelineTransitionParameter(timeline: Timeline, timelinePath:
   if (target.band !== "visual") throw new Error("Transitions require visual clips");
   const transition = target.track.transitions?.find(t => t.from === address.clipIndex);
   if (!transition) throw new Error("Transition does not exist");
+  if (transition.kind === "motion") throw new Error("A Motion transition takes props, not parameters");
   const spec = transitionParameterSpecs[transition.kind].find(spec => spec.name === name);
   if (!spec) throw new Error(`Unknown transition parameter '${name}'`);
   if (!Number.isFinite(value) || Math.fround(value) < Math.fround(spec.min) || Math.fround(value) > Math.fround(spec.max)) throw new Error(`${spec.label} must be in [${spec.min}, ${spec.max}]`);

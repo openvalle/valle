@@ -379,3 +379,4 @@ const audioAnalysis = (source, options = {}) => __typed({
 
 const overlay = (options) => ({ __valleType: "overlay", ...options });
 const captionPresenter = (options) => ({ __valleType: "captionPresenter", ...options });
+const transition = (options) => ({ __valleType: "transition", ...options });

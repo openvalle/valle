@@ -120,11 +120,25 @@ pub struct PreparedTransition {
     pub to: PreparedLayer,
 }
 
+/// A Motion template drawn over the canvas between two clips. It reads the clips as the host
+/// frames `input://from` and `input://to`; only the clips it reads are prepared.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PreparedMotionTransition {
+    pub semantic_path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from: Option<PreparedLayer>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to: Option<PreparedLayer>,
+    pub template: PreparedLayer,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
 pub enum PreparedVisualItem {
     Layer(Box<PreparedLayer>),
     Transition(Box<PreparedTransition>),
+    MotionTransition(Box<PreparedMotionTransition>),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

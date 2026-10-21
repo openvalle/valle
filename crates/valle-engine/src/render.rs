@@ -1728,6 +1728,10 @@ pub enum CompiledTransitionKernel {
     Extension {
         call: CompiledKernelCall,
     },
+    /// A Motion template over the window, the source at this index of the catalog.
+    Motion {
+        source: u32,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -2779,6 +2783,21 @@ pub enum EvaluatedVisualMask {
 }
 
 impl EvaluatedVisualLayer {
+    /// The whole canvas, untouched: where caption presenters and transition templates lie.
+    pub(crate) const fn canvas() -> Self {
+        Self {
+            size: None,
+            position: [0.5, 0.5],
+            scale: [1.0, 1.0],
+            rotation: 0.0,
+            anchor: [0.5, 0.5],
+            opacity: 1.0,
+            blend: CompiledBlendMode::Normal,
+            mask: None,
+            filters: Vec::new(),
+        }
+    }
+
     pub const fn size(&self) -> Option<[f64; 2]> {
         self.size
     }
@@ -2861,6 +2880,8 @@ pub struct EvaluatedVisualTransition {
     from_layer: EvaluatedVisualLayer,
     to_layer: EvaluatedVisualLayer,
     kernel: CompiledTransitionKernel,
+    /// The Motion template's source at this frame, for a Motion kernel.
+    template: Option<EvaluatedSourceRef>,
 }
 
 impl EvaluatedVisualTransition {
@@ -2914,6 +2935,10 @@ impl EvaluatedVisualTransition {
 
     pub const fn kernel(&self) -> &CompiledTransitionKernel {
         &self.kernel
+    }
+
+    pub const fn template(&self) -> Option<&EvaluatedSourceRef> {
+        self.template.as_ref()
     }
 }
 
@@ -3662,8 +3687,8 @@ fn collect_document_requirements(
                         });
                     }
                 }
-                VisualItem::Transition(transition) => {
-                    if let TransitionKernel::Extension(extension) = &transition.kernel {
+                VisualItem::Transition(transition) => match &transition.kernel {
+                    TransitionKernel::Extension(extension) => {
                         kernels.push(KernelRequirement {
                             role: format!("{item_path}/kernel"),
                             kind: extension.kind.as_str().to_owned(),
@@ -3671,7 +3696,26 @@ fn collect_document_requirements(
                             parameters: extension.parameters.clone(),
                         });
                     }
-                }
+                    TransitionKernel::Motion(source) => {
+                        resources.push(ResourceUse {
+                            role: format!("visual/{track_index}/{item_index}/motion-component"),
+                            path: format!("{item_path}/kernel/motion/component"),
+                            resource_id: source.component.clone(),
+                            expected_kind: Some(ResourceKind::MotionArtifact),
+                        });
+                        for (name, resource_id) in &source.resources {
+                            resources.push(ResourceUse {
+                                role: format!(
+                                    "visual/{track_index}/{item_index}/motion-resource/{name}"
+                                ),
+                                path: format!("{item_path}/kernel/motion/resources/{name}"),
+                                resource_id: resource_id.clone(),
+                                expected_kind: None,
+                            });
+                        }
+                    }
+                    TransitionKernel::Builtin { .. } => {}
+                },
                 VisualItem::Gap(_) => {}
             }
         }

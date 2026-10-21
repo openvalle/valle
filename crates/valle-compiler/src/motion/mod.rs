@@ -392,6 +392,8 @@ pub struct MotionPlacement {
 pub enum MotionTrack {
     Visual,
     Caption,
+    /// A transition between two clips of a visual track.
+    Transition,
 }
 
 /// Compile one deterministic Motion TSX module directly into the Scene IR.

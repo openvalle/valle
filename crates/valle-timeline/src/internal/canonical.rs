@@ -175,8 +175,17 @@ impl CanonicalTimeline {
 fn quantize_document_scalars(document: &mut TimelineDocumentWire) {
     for track in &mut document.visual.tracks {
         for item in &mut track.items {
-            let VisualItemWire::Clip(clip) = item else {
-                continue;
+            let clip = match item {
+                VisualItemWire::Clip(clip) => clip,
+                VisualItemWire::Transition(transition) => {
+                    if let TransitionKernelWire::Motion(kernel) = &mut transition.kernel {
+                        for param in kernel.motion.props.values_mut() {
+                            quantize_param(param, quantize_json_numbers);
+                        }
+                    }
+                    continue;
+                }
+                VisualItemWire::Gap(_) => continue,
             };
             quantize_visual_layer(&mut clip.layer);
             if let Some(size) = &mut clip.layer.transform.size {
@@ -557,15 +566,37 @@ impl<'a> Validator<'a> {
                         cursor = self.advance(cursor, gap.duration, &path, Some(&gap.id));
                     }
                     VisualItemWire::Transition(transition) => {
-                        if let TransitionKernelWire::Builtin(kernel) = &transition.kernel {
-                            if let Err(error) = kernel.kind.resolve_params(&kernel.params) {
-                                self.error(
-                                    "invalid_transition_params",
-                                    format!("{path}/kernel/params/{}", error.parameter),
-                                    Some(&transition.id),
-                                    details([("reason", json!(error.reason))]),
+                        match &transition.kernel {
+                            TransitionKernelWire::Builtin(kernel) => {
+                                if let Err(error) = kernel.kind.resolve_params(&kernel.params) {
+                                    self.error(
+                                        "invalid_transition_params",
+                                        format!("{path}/kernel/params/{}", error.parameter),
+                                        Some(&transition.id),
+                                        details([("reason", json!(error.reason))]),
+                                    );
+                                }
+                            }
+                            TransitionKernelWire::Motion(kernel) => {
+                                if !matches!(kernel.motion.role, crate::MotionRole::Transition) {
+                                    self.error(
+                                        "motion_role_invalid",
+                                        &format!("{path}/kernel/motion/role"),
+                                        Some(&transition.id),
+                                        details([(
+                                            "reason",
+                                            json!("a Motion transition must declare transition()"),
+                                        )]),
+                                    );
+                                }
+                                self.validate_motion_source(
+                                    &kernel.motion,
+                                    transition.duration,
+                                    &transition.id,
+                                    &format!("{path}/kernel/motion"),
                                 );
                             }
+                            TransitionKernelWire::Extension(_) => {}
                         }
                         self.register_id(
                             &transition.id,
@@ -687,7 +718,12 @@ impl<'a> Validator<'a> {
                         )]),
                     );
                 }
-                self.validate_motion_source(source, clip.duration, &clip.id, path);
+                self.validate_motion_source(
+                    source,
+                    clip.duration,
+                    &clip.id,
+                    &format!("{path}/source"),
+                );
             }
             VisualSourceWire::Solid(source) => {
                 if !crate::internal::Color(source.color.clone()).is_valid() {
@@ -707,6 +743,7 @@ impl<'a> Validator<'a> {
         source: &MotionInstanceWire,
         duration: ExactRational,
         id: &str,
+        // The instance's own pointer: a clip's `source` or a transition's `kernel/motion`.
         path: &str,
     ) {
         if !matches!(source.role, crate::MotionRole::Clip) {
@@ -722,7 +759,7 @@ impl<'a> Validator<'a> {
                 if !valid {
                     self.error(
                         "motion_role_invalid",
-                        &format!("{path}/source/{field}"),
+                        &format!("{path}/{field}"),
                         Some(id),
                         details([(
                             "reason",
@@ -738,7 +775,7 @@ impl<'a> Validator<'a> {
         ) {
             self.error(
                 "motion_role_invalid",
-                &format!("{path}/source/role"),
+                &format!("{path}/role"),
                 Some(id),
                 details([("reason", json!(reason))]),
             );
@@ -746,7 +783,7 @@ impl<'a> Validator<'a> {
         if source.props.len() > MAX_MOTION_PROPS {
             self.error(
                 "motion_prop_budget_exceeded",
-                &format!("{path}/source/props"),
+                &format!("{path}/props"),
                 Some(id),
                 details([
                     ("limit", json!(MAX_MOTION_PROPS)),
@@ -754,21 +791,21 @@ impl<'a> Validator<'a> {
                 ]),
             );
         }
-        self.validate_resource_id(&source.component, &format!("{path}/source/component"));
+        self.validate_resource_id(&source.component, &format!("{path}/component"));
         self.require_non_negative(
             source.source_start,
-            &format!("{path}/source/sourceStart"),
+            &format!("{path}/sourceStart"),
             Some(id),
         );
         self.require_positive(
             source.source_duration,
-            &format!("{path}/source/sourceDuration"),
+            &format!("{path}/sourceDuration"),
             Some(id),
             "duration_non_positive",
         );
         self.require_positive(
             source.rate,
-            &format!("{path}/source/rate"),
+            &format!("{path}/rate"),
             Some(id),
             "rate_non_positive",
         );
@@ -776,13 +813,13 @@ impl<'a> Validator<'a> {
             self.validate_json_param(
                 param,
                 duration,
-                &format!("{path}/source/props/{}", pointer_token(name)),
+                &format!("{path}/props/{}", pointer_token(name)),
             );
         }
         for (name, resource) in &source.resources {
             self.validate_resource_id(
                 resource,
-                &format!("{path}/source/resources/{}", pointer_token(name)),
+                &format!("{path}/resources/{}", pointer_token(name)),
             );
         }
     }
@@ -1267,7 +1304,7 @@ impl<'a> Validator<'a> {
                             &caption.source,
                             caption.duration,
                             &caption.id,
-                            &path,
+                            &format!("{path}/source"),
                         );
                         cursor = self.advance(cursor, caption.duration, &path, Some(&caption.id));
                     }

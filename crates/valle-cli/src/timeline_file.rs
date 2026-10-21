@@ -147,6 +147,19 @@ impl TimelineFile {
                                 }
                             }
                         }
+                        for transition in track["transitions"].as_array().into_iter().flatten() {
+                            if transition["kind"] == "motion" {
+                                if let Some(component) = transition["component"].as_str() {
+                                    durations.insert(
+                                        component.to_owned(),
+                                        valle_timeline::MotionSourceMetadata {
+                                            duration: valle_timeline::RationalTime::new(86_400, 1)?,
+                                            role: valle_timeline::MotionRole::Transition,
+                                        },
+                                    );
+                                }
+                            }
+                        }
                     }
                     for track in document["tracks"]["caption"]
                         .as_array()

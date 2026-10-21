@@ -275,6 +275,24 @@ impl AdmittedReferenceFrame<'_> {
                     let pixel = PremulRgba32::from_premultiplied(*working_linear_rec2020_premul)?;
                     surfaces.insert(*output, ReferenceImage::solid(extent, pixel)?);
                 }
+                ExecutionPassKind::FrameRegion { layer, output } => {
+                    let transparent = ReferenceImage::transparent(extent)?;
+                    let image = match layer {
+                        Some(layer) => {
+                            let pipeline = LayerPipeline::new(
+                                dynamic_scalar(bindings, layer.opacity)?,
+                                ReferenceBlendMode::Normal,
+                            )?;
+                            composite_layer(
+                                surface(&surfaces, layer.layer)?,
+                                &transparent,
+                                &pipeline,
+                            )?
+                        }
+                        None => transparent,
+                    };
+                    surfaces.insert(*output, image);
+                }
                 ExecutionPassKind::ImportRegion {
                     external,
                     source_pipeline,
@@ -552,7 +570,12 @@ fn preflight_passes(
     };
     for pass in template.passes() {
         let supported = match &pass.kind {
+            // The reference rasterizer binds no host frames.
+            ExecutionPassKind::RasterProgram { frame_inputs, .. } if !frame_inputs.is_empty() => {
+                false
+            }
             ExecutionPassKind::ClearRegion { .. }
+            | ExecutionPassKind::FrameRegion { .. }
             | ExecutionPassKind::CompositeRegion { .. }
             | ExecutionPassKind::BindBackdropView { .. }
             | ExecutionPassKind::AliasResource { .. }

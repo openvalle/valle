@@ -59,7 +59,7 @@ export interface MotionShaderPackage {
 
 export interface MotionCompileOptions {
   /** Timeline placement for role validation before host data is expanded. */
-  placement?: { component: string; path: string; track: "visual" | "caption" };
+  placement?: { component: string; path: string; track: "visual" | "caption" | "transition" };
   resources?: readonly { control: string; contentHash: string }[];
   data?: { source: string; value: unknown };
   /** Frozen decoded mono PCM matching a resource digest, resampled by the caller. */

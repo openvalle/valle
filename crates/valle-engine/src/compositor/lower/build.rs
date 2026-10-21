@@ -21,12 +21,12 @@ use crate::{
 use super::{
     BackendCapabilities, BindingContractError, CapabilityContractError, CompositeMode,
     CopyOperation, DynamicSlot, ExecutionPass, ExecutionPassId, ExecutionPassKind, ExternalSlot,
-    ExternalSlotId, KernelInvocation, PlanBindingLayout, PlanEffect, PlanFontBinding, PlanIdError,
-    PlanProgram, PlanProgramLayout, PlanProgramResources, PlanResource, PlanResourceId,
-    PlanResourceKind, PlanSourcePipeline, PlanStructureBinding, PlanTextureBinding,
-    PlanValidationError, ProgramPlan, ProgramPlanError, ProgramSchedule, ProgramScheduleError,
-    RenderPlanTemplate, ResolveReason, ResourceAliasReason, SurfaceAllocation,
-    SurfaceAllocationReason, SurfaceSlot, SurfaceSlotId,
+    ExternalSlotId, KernelInvocation, PlanBindingLayout, PlanEffect, PlanFontBinding,
+    PlanFrameInput, PlanFrameLayer, PlanIdError, PlanProgram, PlanProgramLayout,
+    PlanProgramResources, PlanResource, PlanResourceId, PlanResourceKind, PlanSourcePipeline,
+    PlanStructureBinding, PlanTextureBinding, PlanValidationError, ProgramPlan, ProgramPlanError,
+    ProgramSchedule, ProgramScheduleError, RenderPlanTemplate, ResolveReason, ResourceAliasReason,
+    SurfaceAllocation, SurfaceAllocationReason, SurfaceSlot, SurfaceSlotId,
     plan::{peak_surface_bytes, resource_interval, texture_bytes},
 };
 
@@ -386,6 +386,21 @@ fn validate_dynamic_projection(
                     DynamicBindingKind::Opacity,
                 )?;
             }
+            LogicalPassKind::Frame {
+                layer: Some(layer), ..
+            } => {
+                // `{reader}.frame.{key}` pictures the clip at `{reader}.{key}`.
+                let (reader, key) = pass
+                    .semantic_path
+                    .rsplit_once(".frame.")
+                    .ok_or(LowerError::InvalidSemanticPath { pass: pass.id })?;
+                insert_dynamic(
+                    &mut expected,
+                    layer.opacity,
+                    format!("{reader}.{key}.opacity"),
+                    DynamicBindingKind::Opacity,
+                )?;
+            }
             LogicalPassKind::Transition {
                 progress,
                 from_opacity,
@@ -592,6 +607,7 @@ fn lower_passes(
                 program,
                 external_inputs,
                 destination_inputs,
+                frame_inputs,
                 output,
                 transform,
                 bounds_reason,
@@ -599,10 +615,30 @@ fn lower_passes(
                 program: *program,
                 external_inputs: plan_resource_ids(external_inputs)?,
                 destination_inputs: plan_resource_ids(destination_inputs)?,
+                frame_inputs: frame_inputs
+                    .iter()
+                    .map(|frame| {
+                        Ok(PlanFrameInput {
+                            frame: frame.frame,
+                            input: plan_resource_id(frame.input)?,
+                        })
+                    })
+                    .collect::<Result<_, LowerError>>()?,
                 output: plan_resource_id(*output)?,
                 transform: *transform,
                 bounds: resource_bounds_binding(graph, *output)?,
                 bounds_reason: *bounds_reason,
+            },
+            LogicalPassKind::Frame { layer, output } => ExecutionPassKind::FrameRegion {
+                layer: layer
+                    .map(|layer| {
+                        Ok::<_, LowerError>(PlanFrameLayer {
+                            layer: plan_resource_id(layer.layer)?,
+                            opacity: layer.opacity,
+                        })
+                    })
+                    .transpose()?,
+                output: plan_resource_id(*output)?,
             },
             LogicalPassKind::Group { input, output } => ExecutionPassKind::DispatchKernel {
                 invocation: KernelInvocation::Group {
@@ -1163,7 +1199,9 @@ fn lower_resources(
                     }
                 }
             }
-            GraphResourceKind::Composite { .. } | GraphResourceKind::Layer { .. } => {
+            GraphResourceKind::Composite { .. }
+            | GraphResourceKind::Layer { .. }
+            | GraphResourceKind::Frame => {
                 let slot = SurfaceSlotId::from_index(surfaces.len())?;
                 let reason = surface_allocation_reason(&logical.kind).ok_or(
                     LowerError::UnsupportedResource {
@@ -1199,6 +1237,7 @@ fn lower_resources(
 fn surface_allocation_reason(kind: &GraphResourceKind) -> Option<SurfaceAllocationReason> {
     match kind {
         GraphResourceKind::Composite { .. } => Some(SurfaceAllocationReason::WorkingComposite),
+        GraphResourceKind::Frame => Some(SurfaceAllocationReason::HostFrame),
         GraphResourceKind::Layer {
             role: LayerRole::ImportedSource | LayerRole::ProgramSource,
         } => Some(SurfaceAllocationReason::LayerIntermediate),

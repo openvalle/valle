@@ -213,6 +213,36 @@ impl DeviceTransform {
         self.matrix
     }
 
+    /// Where a program drawn through this transform finds a host frame: the whole device pixels
+    /// under its layer box. Each edge of the box's bounds rounds to the nearest pixel, half up;
+    /// the region stays inside the `width` × `height` frame and keeps at least one pixel.
+    pub fn frame_region(self, width: u32, height: u32) -> Result<DeviceRect, BoundsError> {
+        let mut bounds = [
+            f64::INFINITY,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            f64::NEG_INFINITY,
+        ];
+        for corner in [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]] {
+            let [x, y] = self.project(corner)?;
+            bounds = [
+                bounds[0].min(x),
+                bounds[1].min(y),
+                bounds[2].max(x),
+                bounds[3].max(y),
+            ];
+        }
+        let span = |low: f64, high: f64, size: u32| {
+            let size = i64::from(size.max(1));
+            let low = ((low + 0.5).floor() as i64).clamp(0, size - 1);
+            let high = ((high + 0.5).floor() as i64).clamp(low + 1, size);
+            (low as i32, (high - low) as u32)
+        };
+        let (x, region_width) = span(bounds[0], bounds[2], width);
+        let (y, region_height) = span(bounds[1], bounds[3], height);
+        Ok(DeviceRect::new(x, y, region_width, region_height))
+    }
+
     /// Rejects a serialized homography before it can enter planning. Prepared transforms always
     /// map the normalized layer box, so a horizon or an over-budget coordinate anywhere on that
     /// box is invalid even when a later drawable happens not to touch the bad corner.
@@ -1357,6 +1387,51 @@ mod tests {
             )
             .unwrap(),
             DeviceRect::new(96, 15, 4, 20)
+        );
+    }
+
+    /// The same vectors pin the CanvasKit executor's `frameRegion`.
+    #[test]
+    fn frame_regions_round_each_edge_to_the_nearest_pixel_inside_the_frame() {
+        let region = |affine: [f64; 6], width, height| {
+            DeviceTransform::from_affine(affine).frame_region(width, height)
+        };
+        for (affine, size, expected) in [
+            // The whole frame, twice its canvas, and a letterbox on whole pixels.
+            ([64.0, 0.0, 0.0, 0.0, 32.0, 0.0], [64, 32], (0, 0, 64, 32)),
+            (
+                [192.0, 0.0, 0.0, 0.0, 128.0, 32.0],
+                [192, 192],
+                (0, 32, 192, 128),
+            ),
+            // A letterbox between pixels, and halves rounding up.
+            (
+                [100.0, 0.0, 0.0, 0.0, 200.0 / 3.0, 50.0 / 3.0],
+                [100, 100],
+                (0, 17, 100, 66),
+            ),
+            ([10.0, 0.0, 10.5, 0.0, 10.0, 0.0], [64, 32], (11, 0, 10, 10)),
+            // A turned box takes its bounds; one outside the frame keeps one pixel at its edge.
+            ([0.0, 20.0, 10.0, 20.0, 0.0, 5.0], [64, 32], (10, 5, 20, 20)),
+            (
+                [10.0, 0.0, 100.0, 0.0, 10.0, -40.0],
+                [64, 32],
+                (63, 0, 1, 1),
+            ),
+        ] {
+            let (x, y, width, height) = expected;
+            assert_eq!(
+                region(affine, size[0], size[1]).unwrap(),
+                DeviceRect::new(x, y, width, height),
+                "{affine:?}"
+            );
+        }
+        let horizon =
+            DeviceTransform::from_projective([1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0, -1.0])
+                .unwrap();
+        assert_eq!(
+            horizon.frame_region(64, 32),
+            Err(BoundsError::PerspectiveHorizon)
         );
     }
 

@@ -223,34 +223,71 @@ test("deleting and reordering visual clips keep only adjacent transition endpoin
   expect(clips[1]!.start+clips[1]!.duration-clips[2]!.start).toBe(0.25);
 });
 
+/** The first transition's parameters; Motion transitions take props instead. */
+function paramsOf(timeline: Timeline) {
+  const transition = timeline.tracks.visual![0]!.transitions![0]!;
+  return transition.kind === "motion" ? undefined : transition.params;
+}
+
 test("transition parameters survive duration changes, reorder and deletion; kind changes reset them", async () => {
   const { setTimelineTransition, setTimelineTransitionParameter, transitionParameterSpecs } = await import("./timeline-edit.ts");
   const four = timeline();
   four.tracks.visual![0]!.clips.push({kind:"solid",color:"#444444",start:6,duration:1});
   const source = setTimelineTransition(four, "/tracks/visual/0/clips/1", "circleOpen", 0.25);
   const edited = setTimelineTransitionParameter(source, "/tracks/visual/0/clips/1", "centerX", 0.2);
-  expect(source.tracks.visual![0]!.transitions![0]!.params).toBeUndefined();
+  expect(paramsOf(source)).toBeUndefined();
   const resized = setTimelineTransition(edited, "/tracks/visual/0/clips/1", "circleOpen", 0.4);
-  expect(resized.tracks.visual![0]!.transitions![0]!.params).toEqual({centerX:0.2});
+  expect(paramsOf(resized)).toEqual({centerX:0.2});
   const deletedHead = deleteTimelineClip(resized, "/tracks/visual/0/clips/0");
   expect(deletedHead.tracks.visual![0]!.transitions![0]).toEqual({from:0,to:1,kind:"circleOpen",params:{centerX:0.2}});
   const preserved = moveTimelineVisualClipBefore(resized, "/tracks/visual/0/clips/3", "/tracks/visual/0/clips/0");
-  expect(preserved.tracks.visual![0]!.transitions![0]!.params).toEqual({centerX:0.2});
-  expect(setTimelineTransition(resized, "/tracks/visual/0/clips/1", "ripple").tracks.visual![0]!.transitions![0]!.params).toBeUndefined();
+  expect(paramsOf(preserved)).toEqual({centerX:0.2});
+  expect(paramsOf(setTimelineTransition(resized, "/tracks/visual/0/clips/1", "ripple"))).toBeUndefined();
   expect(() => setTimelineTransitionParameter(edited, "/tracks/visual/0/clips/1", "centerX", 2)).toThrow();
   expect(() => setTimelineTransitionParameter(edited, "/tracks/visual/0/clips/1", "frequency", 4)).toThrow();
   const zoom = setTimelineTransition(timeline(), "/tracks/visual/0/clips/0", "simpleZoom", 0.25);
-  expect(setTimelineTransitionParameter(zoom, "/tracks/visual/0/clips/0", "quickness", 0.2).tracks.visual![0]!.transitions![0]!.params).toEqual({quickness:0.2});
+  expect(paramsOf(setTimelineTransitionParameter(zoom, "/tracks/visual/0/clips/0", "quickness", 0.2))).toEqual({quickness:0.2});
   const ripple = setTimelineTransition(timeline(), "/tracks/visual/0/clips/0", "ripple", 0.25);
-  expect(setTimelineTransitionParameter(ripple, "/tracks/visual/0/clips/0", "amplitude", 1/30).tracks.visual![0]!.transitions![0]!.params).toEqual({});
+  expect(paramsOf(setTimelineTransitionParameter(ripple, "/tracks/visual/0/clips/0", "amplitude", 1/30))).toEqual({});
   for (const [kind, specs] of Object.entries(transitionParameterSpecs)) {
     const base = setTimelineTransition(timeline(), "/tracks/visual/0/clips/0", kind as keyof typeof transitionParameterSpecs, 0.25);
     for (const spec of specs) {
       const changed = setTimelineTransitionParameter(base, "/tracks/visual/0/clips/0", spec.name, spec.max);
-      expect(changed.tracks.visual![0]!.transitions![0]!.params?.[spec.name] ?? spec.default).toBe(spec.max);
+      expect(paramsOf(changed)?.[spec.name] ?? spec.default).toBe(spec.max);
       expect(() => setTimelineTransitionParameter(base, "/tracks/visual/0/clips/0", spec.name, NaN)).toThrow();
     }
   }
+});
+
+test("Motion transitions keep their template through duration changes and reorder", async () => {
+  const { setTimelineTransition, setTimelineTransitionParameter } = await import("./timeline-edit.ts");
+  const four = timeline();
+  four.tracks.visual![0]!.clips.push({kind:"solid",color:"#444444",start:6,duration:1});
+  const source = setTimelineTransition(four, "/tracks/visual/0/clips/1", { component: "wipe" }, 0.25);
+  expect(source.tracks.visual![0]!.transitions).toEqual([{from:1,to:2,kind:"motion",component:"wipe"}]);
+  Object.assign(source.tracks.visual![0]!.transitions![0]!, { props: { softness: 0.2 }, resources: { noise: "grain" } });
+  const authored = {from:1,to:2,kind:"motion" as const,component:"wipe",props:{softness:0.2},resources:{noise:"grain"}};
+  const resized = setTimelineTransition(source, "/tracks/visual/0/clips/1", { component: "wipe" }, 0.4);
+  expect(resized.tracks.visual![0]!.transitions).toEqual([authored]);
+  const clips = resized.tracks.visual![0]!.clips;
+  expect(clips[1]!.start + clips[1]!.duration - clips[2]!.start).toBeCloseTo(0.4);
+  const moved = moveTimelineVisualClipBefore(resized, "/tracks/visual/0/clips/3", "/tracks/visual/0/clips/0");
+  expect(moved.tracks.visual![0]!.transitions).toEqual([{...authored,from:2,to:3}]);
+  // Another template or a built-in kernel starts from its own defaults.
+  expect(setTimelineTransition(resized, "/tracks/visual/0/clips/1", { component: "glitch" }).tracks.visual![0]!.transitions)
+    .toEqual([{from:1,to:2,kind:"motion",component:"glitch"}]);
+  expect(setTimelineTransition(resized, "/tracks/visual/0/clips/1", "fade").tracks.visual![0]!.transitions).toEqual([{from:1,to:2,kind:"fade"}]);
+  expect(() => setTimelineTransitionParameter(resized, "/tracks/visual/0/clips/1", "softness", 0.5)).toThrow("props");
+  expect(() => setTimelineTransition(four, "/tracks/visual/0/clips/1", { component: "" })).toThrow("component");
+});
+
+test("a transition template placed as a clip trims its host window without a source trim", () => {
+  const authored = { canvas: { width:64, height:32, fps:4 }, tracks:{visual:[{clips:[
+    {kind:"motion",component:"wipe",start:1,duration:3},
+  ]}]} } as Timeline;
+  const trimmed = trimTimelineClipFrames(authored,"/tracks/visual/0/clips/0","start",2,
+    (frames) => frames/4, () => {throw new Error("a template has no media source delta");}, {type:"transition"});
+  expect(trimmed.tracks.visual![0]!.clips[0]).toEqual({kind:"motion",component:"wipe",start:1.5,duration:2.5});
 });
 
 test("overlay leading trim edits the host window without creating a source trim", () => {

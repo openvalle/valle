@@ -146,6 +146,35 @@ pub enum TextureKind {
     Image,
     Video,
     Generated,
+    /// A picture the host renders earlier in the same frame, named by a [`HostFrame`].
+    Frame,
+}
+
+/// A host frame: one clip of the Timeline transition that reads it, alone over transparent
+/// pixels, as it lies under the reading program's viewport. Its intrinsic size is the viewport.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum HostFrame {
+    /// `input://from`, the outgoing clip.
+    From,
+    /// `input://to`, the incoming clip.
+    To,
+}
+
+impl HostFrame {
+    pub const ALL: [Self; 2] = [Self::From, Self::To];
+
+    /// The source a program names the frame by.
+    pub const fn source(self) -> &'static str {
+        match self {
+            Self::From => "input://from",
+            Self::To => "input://to",
+        }
+    }
+
+    pub fn from_source(source: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|key| key.source() == source)
+    }
 }
 
 /// Semantic texture identity plus its interpretation.
@@ -159,6 +188,19 @@ pub struct ExternalTexture {
     /// Exact source timestamp for a frame-evaluated video texture, in microseconds.
     /// Static and host-generated textures use `None`.
     pub sample_time_micros: Option<i64>,
+}
+
+impl ExternalTexture {
+    /// The host frame `key`, a premultiplied working-space picture.
+    pub fn frame(key: HostFrame) -> Self {
+        Self {
+            key: key.source().to_owned(),
+            kind: TextureKind::Frame,
+            color_domain: ColorDomain::LinearRec2020,
+            alpha: AlphaMode::Premultiplied,
+            sample_time_micros: None,
+        }
+    }
 }
 
 /// Stable font face identity. Glyph shaping is completed before execution.
@@ -349,6 +391,10 @@ pub struct DrawRequirements {
     pub content_bounds: LocalBounds,
     pub output_bounds: LocalBounds,
     pub external_textures: Vec<ExternalTexture>,
+    /// The host frames the program reads, sorted. They are no external resources: the host
+    /// renders them in the frame that reads them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub frames: Vec<HostFrame>,
     pub fonts: Vec<FontKey>,
     pub runtime_shaders: Vec<RuntimeShaderKey>,
     pub scene3d: Vec<Scene3dKey>,
@@ -367,6 +413,7 @@ impl Default for DrawRequirements {
             content_bounds: LocalBounds::Empty,
             output_bounds: LocalBounds::Empty,
             external_textures: Vec::new(),
+            frames: Vec::new(),
             fonts: Vec::new(),
             runtime_shaders: Vec::new(),
             scene3d: Vec::new(),

@@ -268,6 +268,7 @@ fn write_resource_kind(writer: &mut StructureHash, kind: &GraphResourceKind) {
             writer.tag(7);
             write_output_spec(writer, *spec);
         }
+        GraphResourceKind::Frame => writer.tag(8),
     }
 }
 
@@ -516,6 +517,7 @@ fn write_pass_kind(writer: &mut StructureHash, kind: &LogicalPassKind) {
             program,
             external_inputs,
             destination_inputs,
+            frame_inputs,
             output,
             transform,
             bounds_reason,
@@ -524,9 +526,22 @@ fn write_pass_kind(writer: &mut StructureHash, kind: &LogicalPassKind) {
             writer.u32(program.get());
             write_resource_ids(writer, external_inputs);
             write_resource_ids(writer, destination_inputs);
+            writer.len(frame_inputs.len());
+            for input in frame_inputs {
+                write_host_frame(writer, input.frame);
+                writer.u32(input.input.get());
+            }
             writer.u32(output.get());
             writer.u32(transform.get());
             write_bounds_reason(writer, *bounds_reason);
+        }
+        LogicalPassKind::Frame { layer, output } => {
+            writer.tag(13);
+            writer.option(layer.as_ref(), |writer, layer| {
+                writer.u32(layer.layer.get());
+                writer.u32(layer.opacity.get());
+            });
+            writer.u32(output.get());
         }
         LogicalPassKind::Group { input, output } => {
             writer.tag(3);
@@ -654,6 +669,13 @@ fn write_pass_kind(writer: &mut StructureHash, kind: &LogicalPassKind) {
             write_output_spec(writer, *spec);
         }
     }
+}
+
+fn write_host_frame(writer: &mut StructureHash, frame: valle_draw::requirements::HostFrame) {
+    writer.tag(match frame {
+        valle_draw::requirements::HostFrame::From => 0,
+        valle_draw::requirements::HostFrame::To => 1,
+    });
 }
 
 fn write_resource_ids(writer: &mut StructureHash, ids: &[super::ResourceId]) {
@@ -925,6 +947,7 @@ fn write_graph_capability(writer: &mut StructureHash, capability: GraphCapabilit
         GraphCapability::AdjustmentEffect => 10,
         GraphCapability::Caption => 11,
         GraphCapability::OutputTransform => 12,
+        GraphCapability::HostFrame => 13,
     });
 }
 

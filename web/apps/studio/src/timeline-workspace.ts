@@ -218,7 +218,10 @@ function itemLabel(item: TimelineSequenceItem): string {
     return item.runs.map((run: { text: string }) => run.text).join("");
   }
   if ("effect" in item) return item.effect.type;
-  if ("type" in item && item.type === "transition") return item.kernel.type in transitionLabels ? transitionLabels[item.kernel.type as TimelineTransitionKind] : "Transition";
+  if ("type" in item && item.type === "transition") {
+    if ("motion" in item.kernel) return (item.kernel.motion.component.split(/[\\/]/).pop() ?? item.kernel.motion.component).replace(/^resource:/, "");
+    return item.kernel.type in transitionLabels ? transitionLabels[item.kernel.type as TimelineTransitionKind] : "Transition";
+  }
   if ("type" in item) return item.type === "gap" ? "Gap" : item.type === "crossfade" ? "Audio crossfade" : "Transition";
   return "Adjustment";
 }
@@ -988,10 +991,15 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
       if (address && track?.clips[address.clipIndex + 1]) {
         const transition = track.transitions?.find(t => t.from === address.clipIndex);
         const a = track.clips[address.clipIndex]!, b = track.clips[address.clipIndex + 1]!;
+        // Motion templates are offered like caption presenters; the compiler checks they declare transition().
+        const templates = Object.entries(workingCopy.resources ?? {}).filter(([, locator]) => /\.(?:tsx|jsx)$/i.test(locator)).map(([alias]) => `motion:${alias}`);
+        const effect = !transition ? "none" : transition.kind === "motion" ? `motion:${transition.component}` : transition.kind;
+        const effects = [...new Set(["none", ...Object.keys(transitionLabels), ...templates, effect])];
         sections.push({ title: "Transition to next clip", rows: [
-          { kind: "select", key: "transition:kind", label: "Effect", value: transition?.kind ?? "none", values: ["none", ...Object.keys(transitionLabels)], valueLabels: { none: "None", ...transitionLabels } },
+          { kind: "select", key: "transition:kind", label: "Effect", value: effect, values: effects,
+            valueLabels: { none: "None", ...transitionLabels, ...Object.fromEntries(effects.filter(value => value.startsWith("motion:")).map(value => [value, value.slice("motion:".length)])) } },
           ...(transition ? [{ kind: "number" as const, key: "transition:duration", label: "Overlap", value: Math.round((a.start + a.duration - b.start) * fps), min: 1, step: 1, unit: "f" }] : []),
-          ...(transition ? transitionParameterSpecs[transition.kind].map(spec => ({
+          ...(transition && transition.kind !== "motion" ? transitionParameterSpecs[transition.kind].map(spec => ({
             kind: "number" as const, key: `transition:param:${spec.name}`, label: spec.label,
             value: transition.params?.[spec.name] ?? spec.default, min: spec.min, max: spec.max, step: spec.step,
           })) : []),
@@ -1314,14 +1322,20 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
       return queueWorkingCopy(() => {
         const projected = findProjectedItem(compiledCopy.timeline, documentView, itemId);
         if (!projected?.timelinePath) throw new Error("Select a visual clip to edit its transition");
-        if (key === "transition:kind") return setTimelineTransition(workingCopy, projected.timelinePath, value === "none" ? null : String(value) as TimelineTransitionKind);
+        if (key === "transition:kind") {
+          const effect = String(value);
+          return setTimelineTransition(workingCopy, projected.timelinePath, effect === "none" ? null
+            : effect.startsWith("motion:") ? { component: effect.slice("motion:".length) } : effect as TimelineTransitionKind);
+        }
         const address = timelineClipAddress(projected.timelinePath)!;
         const transition = workingCopy.tracks.visual?.[address.trackIndex]?.transitions?.find(t => t.from === address.clipIndex);
         if (!transition) throw new Error("Transition does not exist");
         if (key.startsWith("transition:param:")) return setTimelineTransitionParameter(workingCopy, projected.timelinePath, key.slice("transition:param:".length), Number(value));
         const frames = Number(value);
         if (!Number.isSafeInteger(frames) || frames <= 0) throw new Error("Overlap must be a positive whole number of frames");
-        return setTimelineTransition(workingCopy, projected.timelinePath, transition.kind, timelineTimeFromFrames(frames, workingCopy.canvas.fps));
+        return setTimelineTransition(workingCopy, projected.timelinePath,
+          transition.kind === "motion" ? { component: transition.component } : transition.kind,
+          timelineTimeFromFrames(frames, workingCopy.canvas.fps));
       });
     }
     if (key.startsWith("component:")) {

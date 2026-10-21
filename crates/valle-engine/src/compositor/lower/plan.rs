@@ -9,7 +9,7 @@ use thiserror::Error;
 use valle_draw::{
     Rect,
     program::{BlendMode, DrawProgram},
-    requirements::DrawRequirements,
+    requirements::{DrawRequirements, HostFrame},
 };
 use valle_timeline::internal::RenderId;
 
@@ -927,6 +927,8 @@ struct ProgramStructureProjection {
     kind: PreparedProgramKind,
     viewport_empty: bool,
     texture_kinds: Vec<valle_draw::requirements::TextureKind>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    frames: Vec<HostFrame>,
     font_count: usize,
     runtime_shader_count: usize,
     scene_count: usize,
@@ -950,6 +952,7 @@ impl ProgramStructureProjection {
                 .iter()
                 .map(|texture| texture.kind)
                 .collect(),
+            frames: program.requirements.frames.clone(),
             font_count: program.requirements.fonts.len(),
             runtime_shader_count: program.requirements.runtime_shaders.len(),
             scene_count: program.requirements.scene3d.len(),
@@ -1528,6 +1531,8 @@ pub enum ResolveReason {
 #[serde(rename_all = "camelCase")]
 pub enum SurfaceAllocationReason {
     WorkingComposite,
+    /// A full-frame host frame a raster program reads.
+    HostFrame,
     LayerIntermediate,
     BackdropResolve,
     ProgramIntermediate,
@@ -1714,6 +1719,22 @@ pub enum CopyOperation {
     },
 }
 
+/// A host frame a raster program reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PlanFrameInput {
+    pub frame: HostFrame,
+    pub input: PlanResourceId,
+}
+
+/// The clip a frame region pictures, at the clip's opacity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PlanFrameLayer {
+    pub layer: PlanResourceId,
+    pub opacity: DynamicBindingId,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(
     tag = "kind",
@@ -1725,6 +1746,11 @@ pub enum ExecutionPassKind {
     ClearRegion {
         output: PlanResourceId,
         working_linear_rec2020_premul: [f32; 4],
+    },
+    /// Clear the whole output to transparent, then draw the clip, if any, at its opacity.
+    FrameRegion {
+        layer: Option<PlanFrameLayer>,
+        output: PlanResourceId,
     },
     ImportRegion {
         external: PlanResourceId,
@@ -1738,6 +1764,8 @@ pub enum ExecutionPassKind {
         program: ProgramId,
         external_inputs: Vec<PlanResourceId>,
         destination_inputs: Vec<PlanResourceId>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        frame_inputs: Vec<PlanFrameInput>,
         output: PlanResourceId,
         transform: DynamicBindingId,
         bounds: DynamicBindingId,
@@ -1791,15 +1819,18 @@ impl ExecutionPassKind {
     pub fn reads(&self) -> Vec<PlanResourceId> {
         let mut reads = match self {
             Self::ClearRegion { .. } => Vec::new(),
+            Self::FrameRegion { layer, .. } => layer.iter().map(|layer| layer.layer).collect(),
             Self::ImportRegion { external, .. } => vec![*external],
             Self::RasterProgram {
                 external_inputs,
                 destination_inputs,
+                frame_inputs,
                 ..
             } => external_inputs
                 .iter()
                 .chain(destination_inputs)
                 .copied()
+                .chain(frame_inputs.iter().map(|frame| frame.input))
                 .collect(),
             Self::RasterCaption {
                 external_inputs,
@@ -1827,6 +1858,7 @@ impl ExecutionPassKind {
     pub const fn output(&self) -> PlanResourceId {
         match self {
             Self::ClearRegion { output, .. }
+            | Self::FrameRegion { output, .. }
             | Self::ImportRegion { output, .. }
             | Self::RasterProgram { output, .. }
             | Self::RasterCaption { output, .. }
@@ -1842,6 +1874,7 @@ impl ExecutionPassKind {
     fn capabilities(&self) -> Vec<GraphCapability> {
         match self {
             Self::ClearRegion { .. } => vec![GraphCapability::Clear],
+            Self::FrameRegion { .. } => vec![GraphCapability::HostFrame],
             Self::ImportRegion {
                 source_pipeline, ..
             } => {
@@ -2896,6 +2929,21 @@ impl<'a> PlanValidator<'a> {
                     ));
                 }
             }
+            ExecutionPassKind::FrameRegion { layer, output } => {
+                let resource = self.resource(*output, &path)?;
+                if !matches!(resource.kind, PlanResourceKind::Surface { .. })
+                    || resource.roi != GraphRoi::FullFrame
+                    || resource.semantic_path != pass.semantic_path
+                {
+                    return Err(invalid(
+                        path,
+                        "a frame region writes its full-frame surface",
+                    ));
+                }
+                if let Some(layer) = layer {
+                    self.require_dynamic(layer.opacity, DynamicBindingKind::Opacity, &path)?;
+                }
+            }
             ExecutionPassKind::ImportRegion {
                 external,
                 source_pipeline,
@@ -2956,6 +3004,7 @@ impl<'a> PlanValidator<'a> {
                 program,
                 external_inputs,
                 destination_inputs,
+                frame_inputs,
                 output,
                 transform,
                 bounds,
@@ -2990,6 +3039,7 @@ impl<'a> PlanValidator<'a> {
                     ));
                 }
                 self.validate_program_destinations(prepared, destination_inputs, owner, &path)?;
+                self.validate_program_frames(frame_inputs, owner, &path)?;
                 referenced_programs.insert(program.get());
                 self.require_dynamic(*transform, DynamicBindingKind::DeviceTransform, &path)?;
                 self.require_dynamic(*bounds, DynamicBindingKind::Bounds, &path)?;
@@ -3367,6 +3417,47 @@ impl<'a> PlanValidator<'a> {
             .get(id.index())
             .filter(|slot| slot.id == id)
             .ok_or_else(|| invalid(path, format!("undefined external slot {}", id.get())))
+    }
+
+    /// One ordered frame per host frame, each written by its frame region.
+    fn validate_program_frames(
+        &self,
+        inputs: &[PlanFrameInput],
+        owner: &str,
+        path: &str,
+    ) -> Result<(), PlanValidationError> {
+        if !inputs.windows(2).all(|pair| pair[0].frame < pair[1].frame) {
+            return Err(invalid(
+                path,
+                "raster frame inputs are not ordered host frames",
+            ));
+        }
+        for input in inputs {
+            let expected_path = format!(
+                "{owner}.frame.{}",
+                match input.frame {
+                    HostFrame::From => "from",
+                    HostFrame::To => "to",
+                }
+            );
+            let writer = self
+                .writers
+                .get(&input.input)
+                .and_then(|id| self.template.passes.get(id.index()))
+                .ok_or_else(|| invalid(path, "raster frame input has no execution writer"))?;
+            if writer.semantic_path != expected_path
+                || !matches!(
+                    writer.kind,
+                    ExecutionPassKind::FrameRegion { output, .. } if output == input.input
+                )
+            {
+                return Err(invalid(
+                    path,
+                    "raster frame input is not written by its frame region",
+                ));
+            }
+        }
+        Ok(())
     }
 
     fn program_external_inputs(

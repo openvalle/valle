@@ -20,7 +20,9 @@ use valle_draw::{
         RoundRect, ShaderLayer, ShaderTextureBinding, ShaderTextureSource, ShaderUniformBinding,
         ShaderUniformValue, SpreadMode, StrokeCap, StrokeJoin, Transform2d, TransitionKernel,
     },
-    requirements::{DrawCapability, ExternalTexture, FontKey, RuntimeShaderKey, SamplingMode},
+    requirements::{
+        DrawCapability, ExternalTexture, FontKey, HostFrame, RuntimeShaderKey, SamplingMode,
+    },
 };
 use valle_engine::compositor::{
     BoundExternalObjects, ExternalObject,
@@ -32,7 +34,10 @@ use valle_engine::compositor::{
 };
 use valle_engine::{
     prepare::{DeviceRect, DeviceTransform, ExternalSample},
-    resource::{ContentDigest, Extent2d, ResourceInterpretation, VisualInterpretation},
+    resource::{
+        ColorDescription, ContentDigest, Extent2d, InputAlphaMode, ResourceInterpretation,
+        SignalLuminance, VisualInterpretation,
+    },
 };
 
 use super::{
@@ -121,6 +126,22 @@ pub(crate) struct ProgramTexture {
     size: [u32; 2],
 }
 
+impl ProgramTexture {
+    /// A host frame: working-space pixels the compositor drew for the program this frame.
+    pub(crate) fn frame(image: Image) -> Self {
+        let size = [image.width() as u32, image.height() as u32];
+        Self {
+            image,
+            interpretation: Some(VisualInterpretation::new(
+                ColorDescription::LINEAR_REC2020,
+                SignalLuminance::SDR_100,
+                InputAlphaMode::PremultipliedCoverage,
+            )),
+            size,
+        }
+    }
+}
+
 impl core::fmt::Debug for ProgramRuntime {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -205,6 +226,15 @@ impl ProgramRuntime {
             {
                 return Err(DrawError::DuplicateResource(requirement.key.clone()));
             }
+        }
+
+        // A host frame arrives with the pass that reads it. Until then one transparent pixel
+        // stands in, so the program's shaders admit against every texture they bind.
+        for frame in &plan.requirements.frames {
+            textures.insert(
+                ExternalTexture::frame(*frame),
+                ProgramTexture::frame(transparent_pixel()?),
+            );
         }
 
         let mut fonts = BTreeMap::new();
@@ -390,6 +420,15 @@ impl ProgramRuntime {
             glass,
             blend,
         })
+    }
+
+    /// Binds the host frames one pass hands the program, each the frame's pixels under the
+    /// program's viewport.
+    pub(crate) fn bind_frames(&mut self, frames: impl IntoIterator<Item = (HostFrame, Image)>) {
+        for (frame, image) in frames {
+            self.textures
+                .insert(ExternalTexture::frame(frame), ProgramTexture::frame(image));
+        }
     }
 
     pub(crate) fn resolve_deferred_scenes(
@@ -1939,6 +1978,17 @@ impl ProgramRuntime {
 enum SceneImage {
     Ready(Image),
     Deferred(ExternalSlotId),
+}
+
+fn transparent_pixel() -> Result<Image, DrawError> {
+    let info = ImageInfo::new(
+        (1, 1),
+        ColorType::RGBAF16,
+        AlphaType::Premul,
+        Some(working_color_space()?),
+    );
+    images::raster_from_data(&info, Data::new_copy(&[0; 8]), 8)
+        .ok_or_else(|| DrawError::Surface("transparent frame pixel allocation failed".into()))
 }
 
 fn visual<'a>(

@@ -248,6 +248,9 @@ pub(super) fn compile_admitted_timeline(
                                 call: compile_kernel_call(call),
                             }
                         }
+                        AdmittedTransitionKernel::Motion { source } => {
+                            CompiledTransitionKernel::Motion { source }
+                        }
                     },
                     footprint: transition.footprint,
                 },

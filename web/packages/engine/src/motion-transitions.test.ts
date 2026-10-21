@@ -13,7 +13,7 @@ const cli = process.env.VALLE_TEST_CLI ?? join(root, "target/debug/valle");
 const { default: CanvasKitInit } = await import("canvaskit-wasm") as unknown as {
   default: (options: { locateFile(file: string): string }) => Promise<CanvasKit>;
 };
-type Fixture = { name:string; command:"motion"|"timeline"; content:string; width:number; height:number; frames:number[]; reference?:string; referenceOffset?:number; different?:string; parity?:number; probe?:(pixels:Uint8Array,frame:number)=>void };
+type Fixture = { name:string; command:"motion"|"timeline"; content:string; width:number; height:number; frames:number[]; reference?:string; referenceOffset?:number; different?:string; parity?:number; native?:false; probe?:(pixels:Uint8Array,frame:number)=>void };
 const motion = (body:string) => `export const composition={width:96,height:64,fps:4,duration:1.25};
 export default function T(){const ctx=useTime();return <Scene style={{width:96,height:64,backgroundColor:"#ffffff"}}>${body}</Scene>;}`;
 const view = (color:string,extra="") => `<View style={{width:96,height:64,backgroundColor:"${color}"${extra}}}/>`;
@@ -117,11 +117,45 @@ test("Motion Transition shares all Timeline kernels and preserves nested subtree
   cases.push({name:"code-wipe",command:"motion",content:code(wipeCode,"code={wipe} uniforms={{softness:0.1+ctx.seconds/10}}",patternedFrom,patternedTo),width:96,height:64,frames:[2,0,4,2],parity:3,probe:(p,f)=>{
     if(f===4)pixel(p,96,48,32,[0,255,0,255]);
   }});
+  // Motion templates draw a Timeline transition from the clips' frames: the documented dissolve
+  // and a shader mixing premultiplied colors render as the built-in fade, also for placed and
+  // translucent clips, and in previews that scale or letterbox the canvas.
+  await writeFile(join(dir,"dissolve.motion.tsx"),`export const composition={width:48,height:48,duration:1,fps:4};
+export const role=transition();
+export default function D(){const ctx=useTime();return <Scene className="relative h-full w-full"><Image src="input://from" className="absolute inset-0 h-full w-full"/><Image src="input://to" className="absolute inset-0 h-full w-full" style={{opacity:ctx.host.progress}}/></Scene>;}`);
+  await writeFile(join(dir,"mix.motion.tsx"),"const mix=`uniform float progress;\nuniform shader outgoing;\nuniform shader incoming;\nfloat4 valle_main(float2 uv){float4 p=sample_outgoing(uv);float4 q=sample_incoming(uv);float4 m=mix(float4(p.rgb*p.a,p.a),float4(q.rgb*q.a,q.a),progress);return float4(m.rgb/m.a,m.a);}`;\n"
+    +`export const composition={width:96,height:64,duration:1,fps:4};
+export const role=transition();
+export default function M(){const ctx=useTime();return <Scene><ShaderLayer code={mix} inputs={{outgoing:"input://from",incoming:"input://to"}} uniforms={{progress:ctx.host.progress}} style={{width:ctx.viewport.width,height:ctx.viewport.height}}/></Scene>;}`);
+  const templated = (clips:unknown[],effect:Record<string,unknown>) => JSON.stringify({canvas:{width:96,height:64,fps:4,background:"#ffffff"},
+    resources:{dissolve:"dissolve.motion.tsx",mix:"mix.motion.tsx",from:"param-from.motion.tsx",to:"param-to.motion.tsx"},
+    tracks:{visual:[{clips,transitions:[{from:0,to:1,...effect}]}]}});
+  const solids = [{kind:"solid",color:"#404040",start:0,duration:1.5},{kind:"solid",color:"#c0c0c0",start:0.25,duration:2}];
+  const placed = [{kind:"motion",component:"from",start:0,duration:1.5,position:[0.4,0.5],scale:[0.8,0.8],opacity:0.7},
+    {kind:"motion",component:"to",start:0.25,duration:2,rotation:15,opacity:0.8}];
+  for (const component of ["dissolve","mix"]) {
+    cases.push({name:`template-${component}`,command:"timeline",content:templated(solids,{kind:"motion",component}),width:96,height:64,frames:[3,1,5,3],reference:"timeline-fade"});
+  }
+  cases.push({name:"placed-fade",command:"timeline",content:templated(placed,{kind:"fade"}),width:96,height:64,frames:[3,1,5,3]});
+  cases.push({name:"placed-mix",command:"timeline",content:templated(placed,{kind:"motion",component:"mix"}),width:96,height:64,frames:[3,1,5,3],reference:"placed-fade"});
+  // Previews other than the canvas: twice its size, letterboxed on whole pixels, and letterboxed
+  // between pixels, where the frame rounds to whole pixels and only the viewport's edge rows move.
+  for (const [size,width,height] of [["scaled",192,128],["letterbox",192,192],["fraction",100,100]] as const) {
+    cases.push({name:`${size}-fade`,command:"timeline",content:templated(solids,{kind:"fade"}),width,height,frames:[3,1,5,3],native:false});
+    cases.push({name:`${size}-dissolve`,command:"timeline",content:templated(solids,{kind:"motion",component:"dissolve"}),width,height,frames:[3,1,5,3],native:false,
+      ...(size==="fraction" ? {probe:(p:Uint8Array,f:number)=>{
+        const fade=images.get(`fraction-fade/${f}`)!;
+        let worst=0;
+        for(let i=20*width*4;i<80*width*4;i++) worst=Math.max(worst,Math.abs(p[i]!-fade[i]!));
+        expect(worst,`fraction-dissolve/${f} inside the viewport`).toBeLessThanOrEqual(2);
+      }} : {reference:`${size}-fade`})});
+  }
   const filter = process.env.VALLE_TEST_TRANSITION_CASE;
   const selected = new Set(cases.filter(c=>!filter || new RegExp(filter).test(c.name)).map(c=>c.name));
   for (const fixture of [...cases].reverse()) if (selected.has(fixture.name)) {
     if (fixture.reference) selected.add(fixture.reference);
     if (fixture.different) selected.add(fixture.different);
+    if (fixture.name === "fraction-dissolve") selected.add("fraction-fade");
     if (fixture.name.startsWith("param-dynamic-")) selected.add(fixture.name.replace("param-dynamic-", "param-motion-"));
   }
   const images = new Map<string,Uint8Array>();
@@ -159,20 +193,23 @@ test("Motion Transition shares all Timeline kernels and preserves nested subtree
             await executor.execute(engine.plan_template_bytes(ticket),engine.binding_bytes(ticket),engine.bound_schedule_bytes(ticket),{generation:1n,objects},{surface});
             web=Uint8Array.from(surface.getCanvas().readPixels(0,0,info)!);
           } finally {engine.release_ticket(ticket);}
-          const output=join(dir,`${fixture.name}-${request}.png`);
-          const nativeRun=spawn([fixture.command,"render",entry,"--frame",String(frame),...(fixture.command==="motion"?["--backend","raster"]:[]),"-o",output]);
-          const [stdout,stderr,code]=await Promise.all([new Response(nativeRun.stdout).text(),new Response(nativeRun.stderr).text(),nativeRun.exited]);
-          if(code!==0)throw new Error(`${stdout}\n${stderr}`);
-          const image=ck.MakeImageFromEncoded(await readFile(output))!;
-          const native=Uint8Array.from(image.readPixels(0,0,info)!);image.delete();
-          const parity=diff(web,native);
-          if(parity>(fixture.parity??2)) {
-            const points=[];
-            for(let i=0;i<web.length;i++) if(Math.abs(web[i]!-native[i]!)>2) points.push({x:Math.floor(i/4)%width,y:Math.floor(i/4/width),c:i%4,web:web[i],native:native[i]});
-            console.info(fixture.name,JSON.stringify(points.slice(0,12)),"count",points.length);
-            parityFailures.push({fixture:fixture.name,frame,delta:parity});
+          if (fixture.native !== false) {
+            const output=join(dir,`${fixture.name}-${request}.png`);
+            const nativeRun=spawn([fixture.command,"render",entry,"--frame",String(frame),...(fixture.command==="motion"?["--backend","raster"]:[]),"-o",output]);
+            const [stdout,stderr,code]=await Promise.all([new Response(nativeRun.stdout).text(),new Response(nativeRun.stderr).text(),nativeRun.exited]);
+            if(code!==0)throw new Error(`${stdout}\n${stderr}`);
+            const image=ck.MakeImageFromEncoded(await readFile(output))!;
+            const native=Uint8Array.from(image.readPixels(0,0,info)!);image.delete();
+            const parity=diff(web,native);
+            if(parity>(fixture.parity??2)) {
+              const points=[];
+              for(let i=0;i<web.length;i++) if(Math.abs(web[i]!-native[i]!)>2) points.push({x:Math.floor(i/4)%width,y:Math.floor(i/4/width),c:i%4,web:web[i],native:native[i]});
+              console.info(fixture.name,JSON.stringify(points.slice(0,12)),"count",points.length);
+              parityFailures.push({fixture:fixture.name,frame,delta:parity});
+            }
+            fixture.probe?.(native,frame);
           }
-          fixture.probe?.(web,frame);fixture.probe?.(native,frame);
+          fixture.probe?.(web,frame);
           const key=`${fixture.name}/${frame}`;
           if(images.has(key))expect(web,`${key} random access`).toEqual(images.get(key)!);
           images.set(key,web);

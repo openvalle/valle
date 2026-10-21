@@ -8,8 +8,8 @@ use valle_draw::program::{
     SHADER_BACKDROP_FOOTPRINT, Scene3dNode, ShaderTextureBinding, ShaderTextureSource,
 };
 use valle_draw::requirements::{
-    AlphaMode, ColorDomain, DestinationOperation, DigestBytes, ExternalTexture, FontKey, Insets,
-    LocalBounds, RuntimeShaderKey, SamplingMode, Scene3dKey, TextureKind,
+    AlphaMode, ColorDomain, DestinationOperation, DigestBytes, ExternalTexture, FontKey, HostFrame,
+    Insets, LocalBounds, RuntimeShaderKey, SamplingMode, Scene3dKey, TextureKind,
 };
 
 fn builder() -> DrawProgramBuilder {
@@ -732,6 +732,63 @@ fn forest_and_side_tables_have_single_owners() {
         orphan.finish(),
         Err(DrawProgramError::UnreachablePath { id }) if id == orphan_path
     ));
+}
+
+#[test]
+fn host_frames_are_listed_apart_from_external_textures() {
+    let image = |texture: ExternalTexture, x: f64| {
+        Node::Image(ImageNode {
+            texture,
+            src: Rect::new(0.0, 0.0, 1.0, 1.0),
+            dst: Rect::new(x, 0.0, 1.0, 1.0),
+            sampling: SamplingMode::LinearClamp,
+            opacity: 1.0,
+        })
+    };
+    let asset = ExternalTexture {
+        key: "asset:test-image".into(),
+        kind: TextureKind::Image,
+        color_domain: ColorDomain::LinearRec2020,
+        alpha: AlphaMode::Premultiplied,
+        sample_time_micros: None,
+    };
+    let mut program = builder();
+    let nodes = vec![
+        program.push_node(image(ExternalTexture::frame(HostFrame::To), 0.0)),
+        program.push_node(image(asset.clone(), 1.0)),
+        program.push_node(image(ExternalTexture::frame(HostFrame::From), 2.0)),
+    ];
+    let root = program.push_node(Node::Group(Group::plain(nodes)));
+    program.add_root(root);
+    let program = program.finish().unwrap();
+    assert_eq!(
+        program.requirements().frames,
+        [HostFrame::From, HostFrame::To]
+    );
+    assert_eq!(program.requirements().external_textures, [asset.clone()]);
+    // Only input:// keys are frames, and a frame is a premultiplied working-space picture.
+    for texture in [
+        ExternalTexture {
+            kind: TextureKind::Image,
+            ..ExternalTexture::frame(HostFrame::From)
+        },
+        ExternalTexture {
+            kind: TextureKind::Frame,
+            ..asset
+        },
+        ExternalTexture {
+            alpha: AlphaMode::Straight,
+            ..ExternalTexture::frame(HostFrame::To)
+        },
+    ] {
+        let mut program = builder();
+        let node = program.push_node(image(texture.clone(), 0.0));
+        program.add_root(node);
+        assert!(
+            matches!(program.finish(), Err(DrawProgramError::InvalidValue { .. })),
+            "{texture:?}"
+        );
+    }
 }
 
 #[test]

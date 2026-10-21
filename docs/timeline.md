@@ -365,6 +365,27 @@ Parameter names and limits come from the [shared registry](../crates/valle-draw/
 Studio controls consume its [generated metadata](../crates/valle-timeline/schema/transition-parameters.generated.json).
 Timeline parameters are constant for the overlap. Motion can animate the same fields.
 
+`kind: "motion"` draws the transition with a Motion template instead:
+`{ from, to, kind: "motion", component, props?, resources? }`. The component must
+declare `transition()` and reads the two clips as `input://from` and `input://to`
+([Motion transition role](motion.md#transition-role)). `props` curves use seconds
+from the start of the overlap, and `resources` binds its asset slots as on a Motion
+clip. A Motion transition takes no `params`.
+
+```json
+{
+  "canvas": { "width": 640, "height": 360, "fps": 30 },
+  "resources": { "wipe": "wipe.motion.tsx" },
+  "tracks": { "visual": [{
+    "clips": [
+      { "kind": "solid", "color": "#2140ff", "start": 0, "duration": 2.5 },
+      { "kind": "solid", "color": "#ff4a24", "start": 1.5, "duration": 2.5 }
+    ],
+    "transitions": [{ "from": 0, "to": 1, "kind": "motion", "component": "wipe" }]
+  }] }
+}
+```
+
 The overlap must be positive and shorter than each endpoint. Duplicate pairs,
 non-adjacent indices, contained clips and overlapping transition windows are
 rejected. Unmarked within-track overlaps are also rejected. Endpoint layers must
@@ -385,6 +406,10 @@ cut. The timeline displays the overlap as a striped band. Reordering preserves a
 transition only when its original endpoints remain adjacent in the same order.
 Parameter controls appear for the selected kind. Changing duration or moving a
 surviving transition preserves its parameters; changing kind resets them to defaults.
+The effect menu also lists the Timeline's `.tsx` resources; choosing one sets a
+Motion transition, and the compiler reports a component that does not declare
+`transition()`. A Motion transition keeps its props and resources through the same
+edits until another effect is chosen.
 
 ## Audio and video sound
 
@@ -650,6 +675,11 @@ Overlays lay out directly in `size` (rounded to positive pixels, halves away fro
 zero), or the Timeline canvas. They preserve intro/outro and map only the middle
 segment to the host duration. Component duration and role travel together as exact
 prepared metadata; Timeline JSON does not repeat the declaration.
+
+A component declaring `transition()` belongs in a track's [`transitions`](#transitions).
+Placed as a clip it lays out like an overlay that stretches over the clip, with
+transparent frames, and rejects the same fields. A caption presenter belongs on a
+caption track.
 
 In Studio, selecting a Motion clip shows its instance overrides alongside the
 component defaults. Changing an override edits only that clip's author `props`;

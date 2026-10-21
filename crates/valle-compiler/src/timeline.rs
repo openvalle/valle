@@ -138,6 +138,13 @@ fn bind_motion_instances(
                 *component = by_path[&format!("/tracks/visual/{ti}/clips/{ci}")].clone();
             }
         }
+        for (ri, transition) in track.transitions.iter_mut().enumerate() {
+            if let timeline::TimelineTransitionEffectWire::Motion { component, .. } =
+                &mut transition.effect
+            {
+                *component = by_path[&format!("/tracks/visual/{ti}/transitions/{ri}")].clone();
+            }
+        }
     }
     Ok(components)
 }
@@ -237,7 +244,8 @@ impl TimelineNormalizer {
         let track_id = track_id("visual", track_index);
         let transitions: BTreeMap<_, _> = transitions
             .into_iter()
-            .map(|value| (value.to, value))
+            .enumerate()
+            .map(|(index, value)| (value.to, (index, value)))
             .collect();
         let mut cursor = ExactRational::ZERO;
         let mut items = Vec::new();
@@ -245,21 +253,25 @@ impl TimelineNormalizer {
             let clip_path = format!("/tracks/visual/{track_index}/clips/{clip_index}");
             let clip_id = clip_id("visual", track_index, clip_index);
             let start = exact_time(&clip.start);
-            if let Some(transition) = transitions.get(&clip_index) {
+            if let Some((transition_index, transition)) = transitions.get(&clip_index) {
+                let id = format!("{track_id}:transition:{}", transition.from);
+                let duration =
+                    cursor
+                        .checked_sub(start)
+                        .map_err(|_| CompileTimelineError::TimeOverflow {
+                            path: clip_path.clone(),
+                        })?;
+                let kernel = self.transition_kernel(
+                    &transition.effect,
+                    &id,
+                    duration,
+                    &format!("/tracks/visual/{track_index}/transitions/{transition_index}"),
+                )?;
                 items.push(document::VisualItemWire::Transition(
                     document::VisualTransitionWire {
-                        id: format!("{track_id}:transition:{}", transition.from),
-                        duration: cursor.checked_sub(start).map_err(|_| {
-                            CompileTimelineError::TimeOverflow {
-                                path: clip_path.clone(),
-                            }
-                        })?,
-                        kernel: document::TransitionKernelWire::Builtin(
-                            document::BuiltinTransitionKernelWire {
-                                kind: transition.kind,
-                                params: transition.params.clone(),
-                            },
-                        ),
+                        id,
+                        duration,
+                        kernel,
                     },
                 ));
             } else {
@@ -331,6 +343,90 @@ impl TimelineNormalizer {
             id: track_id,
             items,
         })
+    }
+
+    /// A transition's kernel: a built-in, or a Motion template placed over its window.
+    fn transition_kernel(
+        &self,
+        effect: &timeline::TimelineTransitionEffectWire,
+        owner: &str,
+        duration: ExactRational,
+        path: &str,
+    ) -> Result<document::TransitionKernelWire, CompileTimelineError> {
+        let (component, props, resources) = match effect {
+            timeline::TimelineTransitionEffectWire::Builtin { kind, params } => {
+                return Ok(document::TransitionKernelWire::Builtin(
+                    document::BuiltinTransitionKernelWire {
+                        kind: *kind,
+                        params: params.clone(),
+                    },
+                ));
+            }
+            timeline::TimelineTransitionEffectWire::Motion {
+                component,
+                props,
+                resources,
+                ..
+            } => (component, props, resources),
+        };
+        let metadata = self.motion_sources.get(component).ok_or_else(|| {
+            CompileTimelineError::MissingMotionMetadata {
+                path: path.to_owned(),
+            }
+        })?;
+        let role_error = |reason: String| CompileTimelineError::MotionRole {
+            component: self
+                .motion_components
+                .get(path)
+                .expect("author Motion component was captured before binding")
+                .clone(),
+            role: metadata.role.name().into(),
+            path: path.to_owned(),
+            reason,
+        };
+        if !matches!(metadata.role, valle_timeline::MotionRole::Transition) {
+            return Err(role_error(
+                "a track transition must declare transition()".into(),
+            ));
+        }
+        metadata
+            .role
+            .validate(metadata.duration, Some(RationalTime::from_exact(duration)))
+            .map_err(role_error)?;
+        let props = props
+            .clone()
+            .into_iter()
+            .enumerate()
+            .map(|(index, (name, value))| {
+                (
+                    name,
+                    timeline_param_to_canonical(value, owner, &format!("prop:{index}")),
+                )
+            })
+            .collect();
+        let resources = resources
+            .iter()
+            .map(|(slot, alias)| {
+                self.resolve(alias, &format!("{path}/resources/{slot}"))
+                    .map(|resource| (slot.clone(), resource))
+            })
+            .collect::<Result<_, _>>()?;
+        Ok(document::TransitionKernelWire::Motion(
+            document::MotionTransitionKernelWire {
+                motion: document::MotionInstanceWire {
+                    component: self.resolve(component, &format!("{path}/component"))?,
+                    role: metadata.role,
+                    fit: document::RasterFitWire::Contain,
+                    source_start: ExactRational::ZERO,
+                    source_duration: metadata.duration.into_exact(),
+                    rate: ExactRational::ONE,
+                    end_behavior: document::MediaEndBehaviorWire::Hold,
+                    props,
+                    data: BTreeMap::new(),
+                    resources,
+                },
+            },
+        ))
     }
 
     fn visual_source(
@@ -438,7 +534,14 @@ impl TimelineNormalizer {
                         Some(RationalTime::from_exact(exact_time(_clip_duration))),
                     )
                     .map_err(role_error)?;
-                if matches!(metadata.role, valle_timeline::MotionRole::Overlay { .. }) {
+                // Templates follow their host's window, so they take none of a clip's source
+                // timing or fit.
+                let template = matches!(
+                    metadata.role,
+                    valle_timeline::MotionRole::Overlay { .. }
+                        | valle_timeline::MotionRole::Transition
+                );
+                if template {
                     for (field, present) in [
                         ("fit", fit.is_some()),
                         ("trimStart", trim_start.is_some()),
@@ -446,7 +549,10 @@ impl TimelineNormalizer {
                         ("end", end.is_some()),
                     ] {
                         if present {
-                            return Err(role_error(format!("overlay does not admit `{field}`")));
+                            return Err(role_error(format!(
+                                "{} does not admit `{field}`",
+                                metadata.role.name()
+                            )));
                         }
                     }
                 }
@@ -459,10 +565,7 @@ impl TimelineNormalizer {
                     source_duration: metadata.duration.into_exact(),
                     role: metadata.role,
                     rate: rate.as_ref().map_or(ExactRational::ONE, exact_time),
-                    end_behavior: if matches!(
-                        metadata.role,
-                        valle_timeline::MotionRole::Overlay { .. }
-                    ) {
+                    end_behavior: if template {
                         document::MediaEndBehaviorWire::Hold
                     } else {
                         end.map(lower_media_end)

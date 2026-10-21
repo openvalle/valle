@@ -372,6 +372,75 @@ compile the original and normalized inputs on first preparation; repeated inputs
 reuse the existing bounded cache. The saved track contains its timed runs, style,
 layout and presenter bindings, and reopens with the same prepared input.
 
+### Transition role
+
+Declare `transition()` in the entry module to draw a Timeline transition between
+two clips ([Timeline transitions](timeline.md#transitions)). The template stretches
+over the transition window: `ctx.seconds` maps the whole composition onto it, and
+`ctx.host.progress` is exactly 0 on the window's first frame and exactly 1 on its
+last, as a built-in kernel's progress is. Prop curves use seconds from the start of
+the window. Like an overlay, the template lays out on the Timeline canvas.
+
+The template reads the two clips as frames: `input://from` is the outgoing clip and
+`input://to` the incoming one. Each frame is that clip alone over transparent
+pixels, after its transform, opacity, mask and filters, as it lies under the
+template's viewport; a frame drawn over the whole viewport lines up with its clip.
+The template's output composites over what lies under the transition, as a built-in
+kernel's mix does. Read a frame as an image source:
+
+```tsx
+export const composition = { width: 1920, height: 1080, duration: 1, fps: 30 };
+export const role = transition();
+
+export default function Dissolve() {
+  const ctx = useTime();
+  return <Scene className="relative h-full w-full">
+    <Image src="input://from" className="absolute inset-0 h-full w-full" />
+    <Image src="input://to" className="absolute inset-0 h-full w-full"
+      style={{ opacity: ctx.host.progress }} />
+  </Scene>;
+}
+```
+
+or as a [ShaderLayer](#shaderlayer) or [Transition](#subtree-transitions) input of
+kind `"color"`, as `"input://from"` or `{ src: "input://to", sampling, wrap }`:
+
+```tsx
+const wipe = `
+uniform float progress;
+uniform shader a;
+uniform shader b;
+
+float4 valle_main(float2 uv) {
+  return uv.x < progress ? sample_b(uv) : sample_a(uv);
+}`;
+
+export const composition = { width: 1920, height: 1080, duration: 1, fps: 30 };
+export const role = transition();
+
+export default function Wipe() {
+  const ctx = useTime();
+  return <Scene>
+    <ShaderLayer code={wipe} inputs={{ a: "input://from", b: "input://to" }}
+      uniforms={{ progress: ctx.host.progress }}
+      style={{ width: ctx.viewport.width, height: ctx.viewport.height }} />
+  </Scene>;
+}
+```
+
+A frame's intrinsic size is the viewport, so `objectFit` and shader UVs treat it
+like an image of that size. It holds the device pixels under the viewport: a
+preview or export that scales the canvas keeps the clip's full resolution, and a
+viewport edge between device pixels rounds to the nearest one, shifting the frame
+by at most half a pixel. Each frame a template reads takes one surface of that size
+against the frame memory limit. Only `transition()` templates read frames, and a
+frame cannot be a GeometryBatch atlas.
+
+Outside a Timeline transition the frames are transparent: in `motion check`,
+`review` and `render`, in Studio's file preview, and when a Timeline places the
+template as an ordinary clip. As a clip it behaves like an overlay with
+`hold: "stretch"` and takes no `fit`, `trimStart`, `rate` or `end`.
+
 ### Local modules
 
 Use explicit relative imports, for example `import { Card } from

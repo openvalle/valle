@@ -259,6 +259,15 @@ pub struct VisualTransitionWire {
 pub enum TransitionKernelWire {
     Builtin(BuiltinTransitionKernelWire),
     Extension(TransitionKernelExtensionWire),
+    Motion(MotionTransitionKernelWire),
+}
+
+/// A transition drawn by a Motion template that declares `transition()`, placed over the window.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MotionTransitionKernelWire {
+    pub motion: MotionInstanceWire,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]

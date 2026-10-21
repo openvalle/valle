@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use skia_safe::{BlendMode, Color4f, Image, Paint, Surface};
+use skia_safe::{BlendMode, Color4f, IRect, Image, Paint, Surface};
 use thiserror::Error;
 use valle_engine::{
     compositor::{
@@ -8,8 +8,8 @@ use valle_engine::{
         lower::{
             BackendCapabilities, BoundExecutionPass, BoundProgramSchedule, BoundProgramSchedules,
             CompositeMode, CopyOperation, ExecutionPassId, ExecutionPassKind, KernelInvocation,
-            PlanProgram, PlanResourceId, PlanResourceKind, ProgramBindingError, ProgramPassKind,
-            RenderBindings, RenderPlanTemplate, SurfaceSlotId,
+            PlanFrameInput, PlanProgram, PlanResourceId, PlanResourceKind, ProgramBindingError,
+            ProgramPassKind, RenderBindings, RenderPlanTemplate, SurfaceSlotId,
         },
     },
     prepare::{
@@ -430,6 +430,36 @@ impl AdmittedSkiaFrame<'_> {
                     )?,
                     true,
                 ),
+                ExecutionPassKind::FrameRegion { layer, .. } => {
+                    let layer = match layer {
+                        Some(layer) => Some((
+                            surface(&surfaces, layer.layer)?,
+                            dynamic_scalar(self.bindings, layer.opacity)?,
+                        )),
+                        None => None,
+                    };
+                    (
+                        render_plan_surface(
+                            &mut surface_frame,
+                            required_output_slot(output, output_slot)?,
+                            output_roi,
+                            |target| {
+                                target.canvas().clear(Color4f::new(0.0, 0.0, 0.0, 0.0));
+                                if let Some((source, opacity)) = layer {
+                                    draw_plan_image(
+                                        target,
+                                        source,
+                                        output_roi,
+                                        BlendMode::SrcOver,
+                                        opacity,
+                                    );
+                                }
+                                Ok(())
+                            },
+                        )?,
+                        true,
+                    )
+                }
                 ExecutionPassKind::ImportRegion {
                     external,
                     source_pipeline,
@@ -479,6 +509,7 @@ impl AdmittedSkiaFrame<'_> {
                     program,
                     external_inputs,
                     destination_inputs,
+                    frame_inputs,
                     transform,
                     ..
                 } => {
@@ -486,8 +517,26 @@ impl AdmittedSkiaFrame<'_> {
                     let schedule = program_schedule(&self.schedules, *program, pass.id)?;
                     let plan = plan_program(self.bindings, *program)?;
                     let transform = dynamic_transform(self.bindings, *transform)?;
+                    if !frame_inputs.is_empty() || !plan.requirements.frames.is_empty() {
+                        let frames = frame_images(
+                            self.template,
+                            &mut surface_frame,
+                            &surfaces,
+                            plan,
+                            frame_inputs,
+                            transform,
+                            extent,
+                        )?;
+                        self.programs
+                            .get_mut(program)
+                            .ok_or(SkiaExecuteError::InvalidProgram {
+                                program: program.get(),
+                            })?
+                            .bind_frames(frames);
+                    }
                     let cache_key = (external_inputs.is_empty()
                         && destination_inputs.is_empty()
+                        && frame_inputs.is_empty()
                         && plan.resources.textures.is_empty()
                         && plan.resources.fonts.is_empty()
                         && plan.resources.runtime_shaders.is_empty()
@@ -1034,6 +1083,72 @@ fn in_place_backdrop(
     }
 }
 
+/// The host frames one pass hands its program: each frame's pixels under the program's
+/// viewport, cut from the full-frame picture its frame region drew.
+fn frame_images(
+    template: &RenderPlanTemplate,
+    frame: &mut SurfaceFrame<'_>,
+    surfaces: &BTreeMap<PlanResourceId, PlanImage>,
+    plan: &PlanProgram,
+    inputs: &[PlanFrameInput],
+    transform: DeviceTransform,
+    extent: Extent2d,
+) -> Result<Vec<(valle_draw::requirements::HostFrame, Image)>, SkiaExecuteError> {
+    if plan
+        .requirements
+        .frames
+        .iter()
+        .any(|key| !inputs.iter().any(|input| input.frame == *key))
+    {
+        return Err(SkiaExecuteError::Program(
+            "a program reads a host frame its pass does not supply".into(),
+        ));
+    }
+    let region = transform
+        .frame_region(extent.width(), extent.height())
+        .map_err(|error| SkiaExecuteError::Program(error.to_string()))?;
+    let root = DeviceRect::full(extent.width(), extent.height());
+    inputs
+        .iter()
+        .map(|input| {
+            let picture = surface(surfaces, input.input)?;
+            // Under a viewport that covers the frame, as when the canvas fills the output, the
+            // program reads the picture as it is.
+            if region == root
+                && picture.roi() == root
+                && let Some(image) = picture.image()
+            {
+                return Ok((input.frame, image.clone()));
+            }
+            // Otherwise it reads the pixels the frame region left in its surface, which stays
+            // live until this pass.
+            let slot = match template
+                .resources()
+                .get(input.input.get() as usize - 1)
+                .filter(|resource| resource.id == input.input)
+                .map(|resource| &resource.kind)
+            {
+                Some(PlanResourceKind::Surface { slot }) => *slot,
+                _ => {
+                    return Err(SkiaExecuteError::MissingResource {
+                        resource: input.input.get(),
+                    });
+                }
+            };
+            let image = frame
+                .surface_mut(slot)?
+                .image_snapshot_with_bounds(IRect::from_xywh(
+                    region.x,
+                    region.y,
+                    region.width as i32,
+                    region.height as i32,
+                ))
+                .ok_or(SurfaceError::Allocation)?;
+            Ok((input.frame, image))
+        })
+        .collect()
+}
+
 fn required_output_slot(
     resource: PlanResourceId,
     slot: Option<SurfaceSlotId>,
@@ -1183,10 +1298,13 @@ fn preflight_executor_surface_budget(
                 .unwrap_or(0),
             _ => 0,
         };
-        let terminal_bytes = if matches!(&pass.kind, ExecutionPassKind::RasterCaption { .. }) {
-            full_surface_bytes
-        } else {
-            0
+        let terminal_bytes = match &pass.kind {
+            ExecutionPassKind::RasterCaption { .. } => full_surface_bytes,
+            // Each host frame is cut from its surface into an image of its own.
+            ExecutionPassKind::RasterProgram { frame_inputs, .. } => full_surface_bytes
+                .checked_mul(frame_inputs.len() as u64)
+                .ok_or(SurfaceError::ByteOverflow)?,
+            _ => 0,
         };
         let kernel_scratch_bytes = full_surface_bytes
             .checked_mul(kernel_scratch_surfaces)
@@ -1285,6 +1403,7 @@ pub(crate) fn planned_frame_bytes(
             ExecutionPassKind::RasterProgram {
                 program,
                 destination_inputs,
+                frame_inputs,
                 transform,
                 ..
             } => {
@@ -1312,7 +1431,8 @@ pub(crate) fn planned_frame_bytes(
                     None,
                     backend,
                 )?;
-                (scratch, 0, working)
+                // Each host frame is cut from its surface into an image of its own.
+                (scratch, frame_inputs.len() as u64 * full, working)
             }
             ExecutionPassKind::RasterCaption {
                 program, transform, ..

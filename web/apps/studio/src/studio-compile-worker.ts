@@ -181,7 +181,8 @@ export async function compileStudioPreview(request: StudioCompileRequest): Promi
         if (!input) throw new Error(`Motion preparation input is missing for ${instance.clipPath}`);
         return { ...instance, options: { ...instance.options,
           placement: { component: input.component, path: input.clipPath,
-            track: input.clipPath.startsWith("/tracks/caption/") ? "caption" : "visual" },
+            track: input.clipPath.startsWith("/tracks/caption/") ? "caption"
+              : input.clipPath.includes("/transitions/") ? "transition" : "visual" },
           data: input.data === null ? undefined : { source: `timeline:${instance.clipPath}`, value: input.data } } };
       }) };
     }

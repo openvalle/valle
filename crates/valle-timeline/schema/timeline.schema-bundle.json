@@ -112,6 +112,13 @@
           ],
           "type": "string"
         },
+        "MotionTransitionKindWire": {
+          "description": "The `kind` of a transition a Motion template draws.",
+          "enum": [
+            "motion"
+          ],
+          "type": "string"
+        },
         "RasterFitWire": {
           "enum": [
             "contain",
@@ -1120,23 +1127,60 @@
           "type": "object"
         },
         "TimelineTransitionWire": {
-          "additionalProperties": false,
+          "anyOf": [
+            {
+              "properties": {
+                "kind": {
+                  "$ref": "#/$defs/TransitionKind"
+                },
+                "params": {
+                  "additionalProperties": {
+                    "format": "double",
+                    "type": "number"
+                  },
+                  "type": "object"
+                }
+              },
+              "required": [
+                "kind"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "component": {
+                  "type": "string"
+                },
+                "kind": {
+                  "$ref": "#/$defs/MotionTransitionKindWire"
+                },
+                "props": {
+                  "additionalProperties": {
+                    "$ref": "#/$defs/TimelineParamWire2"
+                  },
+                  "description": "Template props; curves use seconds from the start of the transition.",
+                  "type": "object"
+                },
+                "resources": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                }
+              },
+              "required": [
+                "kind",
+                "component"
+              ],
+              "type": "object"
+            }
+          ],
           "description": "A transition occupies the intersection of two adjacent visual clips.",
           "properties": {
             "from": {
               "format": "uint",
               "minimum": 0,
               "type": "integer"
-            },
-            "kind": {
-              "$ref": "#/$defs/TransitionKind"
-            },
-            "params": {
-              "additionalProperties": {
-                "format": "double",
-                "type": "number"
-              },
-              "type": "object"
             },
             "to": {
               "format": "uint",
@@ -1146,10 +1190,10 @@
           },
           "required": [
             "from",
-            "to",
-            "kind"
+            "to"
           ],
-          "type": "object"
+          "type": "object",
+          "unevaluatedProperties": false
         },
         "TimelineVisualClipWire": {
           "oneOf": [
@@ -1734,6 +1778,13 @@
           ],
           "type": "string"
         },
+        "MotionTransitionKindWire": {
+          "description": "The `kind` of a transition a Motion template draws.",
+          "enum": [
+            "motion"
+          ],
+          "type": "string"
+        },
         "RasterFitWire": {
           "enum": [
             "contain",
@@ -2742,23 +2793,60 @@
           "type": "object"
         },
         "TimelineTransitionWire": {
-          "additionalProperties": false,
+          "anyOf": [
+            {
+              "properties": {
+                "kind": {
+                  "$ref": "#/$defs/TransitionKind"
+                },
+                "params": {
+                  "additionalProperties": {
+                    "format": "double",
+                    "type": "number"
+                  },
+                  "type": "object"
+                }
+              },
+              "required": [
+                "kind"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "component": {
+                  "type": "string"
+                },
+                "kind": {
+                  "$ref": "#/$defs/MotionTransitionKindWire"
+                },
+                "props": {
+                  "additionalProperties": {
+                    "$ref": "#/$defs/TimelineParamWire2"
+                  },
+                  "description": "Template props; curves use seconds from the start of the transition.",
+                  "type": "object"
+                },
+                "resources": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                }
+              },
+              "required": [
+                "kind",
+                "component"
+              ],
+              "type": "object"
+            }
+          ],
           "description": "A transition occupies the intersection of two adjacent visual clips.",
           "properties": {
             "from": {
               "format": "uint",
               "minimum": 0,
               "type": "integer"
-            },
-            "kind": {
-              "$ref": "#/$defs/TransitionKind"
-            },
-            "params": {
-              "additionalProperties": {
-                "format": "double",
-                "type": "number"
-              },
-              "type": "object"
             },
             "to": {
               "format": "uint",
@@ -2768,10 +2856,10 @@
           },
           "required": [
             "from",
-            "to",
-            "kind"
+            "to"
           ],
-          "type": "object"
+          "type": "object",
+          "unevaluatedProperties": false
         },
         "TimelineVisualClipWire": {
           "oneOf": [

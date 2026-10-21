@@ -268,20 +268,27 @@ impl<'s> Compiler<'s> {
                 self.role,
                 valle_timeline::MotionRole::CaptionPresenter { .. }
             );
-            if caption != matches!(placement.track, MotionTrack::Caption) {
+            let transition = matches!(self.role, valle_timeline::MotionRole::Transition);
+            let mismatch = match placement.track {
+                MotionTrack::Visual => {
+                    caption.then_some("captionPresenter belongs on a caption track")
+                }
+                MotionTrack::Caption => {
+                    (!caption).then_some("a caption track presenter must declare captionPresenter")
+                }
+                MotionTrack::Transition => {
+                    (!transition).then_some("a track transition must declare transition()")
+                }
+            };
+            if let Some(reason) = mismatch {
                 self.illegal(
                     DiagCode::ModuleShape,
                     Span::new(0, 0),
                     format!(
-                        "Motion component `{}` declared role `{}` at `{}`: {}",
+                        "Motion component `{}` declared role `{}` at `{}`: {reason}",
                         placement.component,
                         self.role.name(),
                         placement.path,
-                        if caption {
-                            "captionPresenter belongs on a caption track"
-                        } else {
-                            "a caption track presenter must declare captionPresenter"
-                        }
                     ),
                 );
                 return Err(std::mem::take(&mut self.diagnostics));

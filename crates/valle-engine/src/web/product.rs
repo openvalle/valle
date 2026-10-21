@@ -1420,6 +1420,13 @@ impl ProductEngine {
                     push_scene3d_placements(&mut scene3d, &transition.from, &frame.programs)?;
                     push_scene3d_placements(&mut scene3d, &transition.to, &frame.programs)?;
                 }
+                // The clips the template reads are what a click selects.
+                PreparedVisualItem::MotionTransition(transition) => {
+                    for clip in transition.from.iter().chain(&transition.to) {
+                        push_hit(&mut hits, clip);
+                        push_scene3d_placements(&mut scene3d, clip, &frame.programs)?;
+                    }
+                }
             }
         }
         for caption in &frame.captions {
@@ -1475,6 +1482,7 @@ impl ProductEngine {
                 GraphCapability::AdjustmentEffect,
                 GraphCapability::Caption,
                 GraphCapability::OutputTransform,
+                GraphCapability::HostFrame,
             ],
             true,
             None,

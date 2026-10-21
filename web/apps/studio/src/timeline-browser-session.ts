@@ -21,6 +21,12 @@ function mediaInputKey(timeline: Timeline): string | null {
         media.push(clip);
       }
     }
+    for (const transition of track.transitions ?? []) {
+      if (transition.kind === "motion") {
+        motionComponents.add(transition.component);
+        bindings.push(transition.resources ?? null);
+      }
+    }
   }
   for (const track of timeline.tracks.caption ?? []) {
     if (track.presenter) { motionComponents.add(track.presenter.component); bindings.push({ ...track.presenter.resources, caption: track.style.font }); }

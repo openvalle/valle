@@ -32,6 +32,9 @@ pub enum MotionRole {
         outro: RationalTime,
         hold: OverlayHold,
     },
+    /// A track transition: the template stretches over the window and reads the outgoing and
+    /// incoming clips as `input://from` and `input://to`.
+    Transition,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -82,6 +85,7 @@ impl MotionRole {
             Self::Clip => "clip",
             Self::Overlay { .. } => "overlay",
             Self::CaptionPresenter { .. } => "captionPresenter",
+            Self::Transition => "transition",
         }
     }
 
@@ -90,6 +94,9 @@ impl MotionRole {
             Self::Clip => None,
             Self::Overlay { intro, outro, hold } => Some((intro, outro, hold)),
             Self::CaptionPresenter { intro, outro } => Some((intro, outro, OverlayHold::Once)),
+            Self::Transition => {
+                Some((RationalTime::ZERO, RationalTime::ZERO, OverlayHold::Stretch))
+            }
         }
     }
 
@@ -250,5 +257,16 @@ mod tests {
             .validate(t(2, 1), None)
             .is_err()
         );
+    }
+    #[test]
+    fn a_transition_stretches_the_whole_template_over_its_window() {
+        let role = MotionRole::Transition;
+        role.validate(t(1, 1), Some(t(1, 2))).unwrap();
+        for (sample, mapped) in [(t(-1, 4), t(0, 1)), (t(1, 4), t(1, 2)), (t(1, 2), t(1, 1))] {
+            assert_eq!(
+                role.template_time(sample, t(1, 2), t(1, 1)).unwrap(),
+                mapped
+            );
+        }
     }
 }

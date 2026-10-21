@@ -365,6 +365,95 @@ fn transition_author(kind: &str) -> serde_json::Value {
 }
 
 #[test]
+fn motion_transitions_place_a_transition_template_over_the_window() {
+    let mut author = transition_author("motion");
+    author["resources"] = json!({"wipe": "wipe.motion.tsx", "grain": "grain.png"});
+    let transition = &mut author["tracks"]["visual"][0]["transitions"][0];
+    transition["component"] = json!("wipe");
+    transition["props"] = json!({"softness": {"keyframes": [[0, 0.1], [1, 0.3]]}});
+    transition["resources"] = json!({"noise": "grain"});
+    let compile = |author: serde_json::Value, role| {
+        compile_timeline_with_motion_sources(
+            decode(author),
+            &BTreeMap::from([(
+                "wipe".to_owned(),
+                valle_timeline::MotionSourceMetadata {
+                    duration: RationalTime::new(1, 2).unwrap(),
+                    role,
+                },
+            )]),
+        )
+    };
+    let canonical = compile(author.clone(), valle_timeline::MotionRole::Transition).unwrap();
+    let compiled = canonical.to_wire();
+    let items = &compiled.document.visual.tracks[0].items;
+    let document::VisualItemWire::Transition(transition) = &items[1] else {
+        panic!("expected a transition, got {items:?}")
+    };
+    assert_eq!(transition.duration.to_string(), "1/1");
+    let document::TransitionKernelWire::Motion(kernel) = &transition.kernel else {
+        panic!("expected a Motion kernel")
+    };
+    assert_eq!(kernel.motion.role, valle_timeline::MotionRole::Transition);
+    assert!(kernel.motion.component.starts_with("resource:motion-"));
+    assert_eq!(kernel.motion.resources["noise"], "resource:grain");
+    assert_eq!(kernel.motion.source_duration.to_string(), "1/2");
+    assert!(kernel.motion.props.contains_key("softness"));
+    // The canonical document reads back.
+    let json = valle_timeline::internal::encode_canonical(&canonical).unwrap();
+    let reread = valle_timeline::internal::decode_canonical(&json).unwrap();
+    assert_eq!(reread.to_wire(), compiled);
+    // Its component and resources name root resources.
+    let mut missing = author.clone();
+    missing["resources"] = json!({});
+    assert_eq!(
+        validation_codes(missing),
+        ["missing_resource", "missing_resource"]
+    );
+
+    // Only a transition() template draws a transition.
+    for role in [
+        valle_timeline::MotionRole::Clip,
+        valle_timeline::MotionRole::Overlay {
+            intro: RationalTime::new(0, 1).unwrap(),
+            outro: RationalTime::new(0, 1).unwrap(),
+            hold: valle_timeline::OverlayHold::Stretch,
+        },
+    ] {
+        let error = compile(author.clone(), role).unwrap_err().to_string();
+        assert!(
+            error.contains("/tracks/visual/0/transitions/0") && error.contains("transition()"),
+            "{error}"
+        );
+    }
+    // Prop curves run over the window, which is one second long.
+    let mut late = author.clone();
+    late["tracks"]["visual"][0]["transitions"][0]["props"]["softness"] =
+        json!({"keyframes": [[0, 0.1], [2, 0.3]]});
+    let error = compile(late, valle_timeline::MotionRole::Transition)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("keyframe_time_out_of_owner_range"),
+        "{error}"
+    );
+    // A built-in kernel takes no template fields, and a template no parameters.
+    let mut builtin = author.clone();
+    builtin["tracks"]["visual"][0]["transitions"][0]["kind"] = json!("fade");
+    let mut params = author;
+    params["tracks"]["visual"][0]["transitions"][0]["params"] = json!({"softness": 1});
+    for (timeline, field) in [(builtin, "component"), (params, "params")] {
+        let error = decode_timeline(&timeline.to_string())
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains(&format!("unknown field `{field}`")),
+            "{error}"
+        );
+    }
+}
+
+#[test]
 fn all_builtin_transitions_keep_endpoint_durations_and_overlap() {
     for kind in valle_timeline::wire::timeline::TransitionKind::ALL {
         let name = serde_json::to_value(kind).unwrap();

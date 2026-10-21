@@ -6,7 +6,7 @@ use crate::{
     Rect,
     requirements::{
         AlphaMode, ColorDomain, DestinationOperation, DestinationUse, DrawRequirements,
-        ExternalTexture, Insets, LocalBounds, SamplingMode, TextureKind,
+        ExternalTexture, HostFrame, Insets, LocalBounds, SamplingMode, TextureKind,
     },
 };
 
@@ -1498,7 +1498,14 @@ fn derive_requirements(
         }
     }
 
-    requirements.external_textures = textures.into_values().collect();
+    let (frames, textures): (Vec<_>, Vec<_>) = textures
+        .into_values()
+        .partition(|texture| texture.kind == TextureKind::Frame);
+    requirements.external_textures = textures;
+    requirements.frames = frames
+        .iter()
+        .filter_map(|texture| HostFrame::from_source(&texture.key))
+        .collect();
     requirements.fonts = fonts.into_iter().collect();
     requirements.runtime_shaders = shaders.into_values().collect();
     requirements.scene3d = scenes.into_iter().collect();
@@ -2515,6 +2522,21 @@ fn validate_texture(texture: &ExternalTexture, location: &str) -> Result<(), Dra
             "data textures require static image channels with straight alpha",
         );
     }
+    let frame = HostFrame::from_source(&texture.key);
+    if frame.is_some() != (texture.kind == TextureKind::Frame) {
+        return invalid(
+            location,
+            "a host frame is named input://from or input://to, and only a frame is",
+        );
+    }
+    if let Some(frame) = frame
+        && *texture != ExternalTexture::frame(frame)
+    {
+        return invalid(
+            location,
+            "a host frame is a premultiplied working-space picture without a timestamp",
+        );
+    }
     match (texture.kind, texture.sample_time_micros) {
         (TextureKind::Video, None) => {
             return invalid(
@@ -2522,7 +2544,7 @@ fn validate_texture(texture: &ExternalTexture, location: &str) -> Result<(), Dra
                 "video textures must carry a source timestamp",
             );
         }
-        (TextureKind::Image | TextureKind::Generated, Some(_)) => {
+        (TextureKind::Image | TextureKind::Generated | TextureKind::Frame, Some(_)) => {
             return invalid(
                 format!("{location}.sampleTimeMicros"),
                 "only video textures may carry a source timestamp",
@@ -2534,7 +2556,8 @@ fn validate_texture(texture: &ExternalTexture, location: &str) -> Result<(), Dra
                 "video source timestamp must be a non-negative safe integer",
             );
         }
-        (TextureKind::Video, Some(_)) | (TextureKind::Image | TextureKind::Generated, None) => {}
+        (TextureKind::Video, Some(_))
+        | (TextureKind::Image | TextureKind::Generated | TextureKind::Frame, None) => {}
     }
     Ok(())
 }

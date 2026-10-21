@@ -12,6 +12,7 @@ use super::expr::{
 use super::tailwind::TAILWIND_CATALOG;
 use crate::ContentDigest;
 use valle_draw::program::recording::{FillRule, MaskMode, SpreadMode};
+use valle_draw::requirements::HostFrame;
 use valle_draw::{Point, Rect, program::AuthorColor};
 
 /// Exact decoder format for the complete canonical Motion artifact.
@@ -2560,6 +2561,22 @@ pub struct CameraBinding {
     pub rotation: NumberValue,
 }
 
+/// Whether `node` draws the host frame `key`, as an Image or a shader input.
+fn node_reads_frame(node: &SceneNode, key: HostFrame) -> bool {
+    let inputs = match &node.kind {
+        NodeKind::Image { source } => return source == key.source(),
+        NodeKind::ShaderLayer { inputs, .. }
+        | NodeKind::Transition {
+            effect: TransitionEffect::Shader { inputs, .. },
+            ..
+        } => inputs,
+        _ => return false,
+    };
+    inputs
+        .iter()
+        .any(|input| input.source.as_deref() == Some(key.source()))
+}
+
 impl SceneArtifact {
     /// Whether evaluating this artifact samples the immutable compositor entry
     /// backdrop. This is derived from the admitted IR so package builders and
@@ -2577,6 +2594,15 @@ impl SceneArtifact {
                     .any(|style| crate::style::property_spec(&style.property).reads_destination)
         };
         self.any_node(reads_node)
+    }
+
+    /// The clips a `transition()` template reads as `input://from` and `input://to`, in
+    /// [`HostFrame`] order. The host renders only these before the template.
+    pub fn frames(&self) -> Vec<HostFrame> {
+        HostFrame::ALL
+            .into_iter()
+            .filter(|key| self.any_node(|node| node_reads_frame(node, *key)))
+            .collect()
     }
 
     /// Whether any authored node, including every instance template node, passes `test`.
@@ -4468,6 +4494,17 @@ impl SceneArtifact {
                 }
                 continue;
             }
+            if HostFrame::from_source(source).is_some() {
+                if input.kind != crate::shader::InputKind::Color
+                    || self.role != valle_timeline::MotionRole::Transition
+                {
+                    errors.push(ValidationError::new(
+                        format!("{base}/inputs/{input_at}/source"),
+                        "only a transition() template reads a clip, through a color input",
+                    ));
+                }
+                continue;
+            }
             let control = source.strip_prefix("asset://");
             let valid_image = control
                 .and_then(|name| self.controls.assets.get(name))
@@ -5035,15 +5072,24 @@ impl SceneArtifact {
                 }
             }
             if let NodeKind::Image { source } = &node.kind {
-                let valid = source
-                    .strip_prefix("asset://")
-                    .and_then(|name| self.controls.assets.get(name))
-                    .is_some_and(|asset| asset.kind == crate::controls::AssetKind::Image);
-                if !valid {
-                    errors.push(ValidationError::new(
-                        format!("{path}/kind/source"),
-                        "image source must be asset://<image-control>",
-                    ));
+                if HostFrame::from_source(source).is_some() {
+                    if self.role != valle_timeline::MotionRole::Transition {
+                        errors.push(ValidationError::new(
+                            format!("{path}/kind/source"),
+                            "only a transition() template reads a clip",
+                        ));
+                    }
+                } else {
+                    let valid = source
+                        .strip_prefix("asset://")
+                        .and_then(|name| self.controls.assets.get(name))
+                        .is_some_and(|asset| asset.kind == crate::controls::AssetKind::Image);
+                    if !valid {
+                        errors.push(ValidationError::new(
+                            format!("{path}/kind/source"),
+                            "image source must be asset://<image-control>",
+                        ));
+                    }
                 }
             }
             if let NodeKind::Video {

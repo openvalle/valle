@@ -177,6 +177,21 @@ pub(crate) fn prepare_timeline_media_facts(
                 });
             }
         }
+        for transition in track["transitions"].as_array_mut().into_iter().flatten() {
+            if transition["kind"] != "motion" {
+                continue;
+            }
+            if let Some(bindings) = transition["resources"].as_object() {
+                motion_assets.extend(
+                    bindings
+                        .values()
+                        .filter_map(|value| value.as_str().map(str::to_owned)),
+                );
+            }
+            *transition = serde_json::json!({
+                "from": transition["from"], "to": transition["to"], "kind": "fade",
+            });
+        }
     }
     for track in doc
         .pointer_mut("/tracks/caption")
@@ -892,9 +907,13 @@ pub(crate) fn motion_source_paths(
         .as_array()
         .into_iter()
         .flatten()
-        .flat_map(|track| track["clips"].as_array().into_iter().flatten())
-        .filter(|clip| clip["kind"] == "motion")
-        .filter_map(|clip| clip["component"].as_str());
+        .flat_map(|track| {
+            ["clips", "transitions"]
+                .into_iter()
+                .flat_map(|items| track[items].as_array().into_iter().flatten())
+        })
+        .filter(|item| item["kind"] == "motion")
+        .filter_map(|item| item["component"].as_str());
     let caption = document["tracks"]["caption"]
         .as_array()
         .into_iter()
@@ -936,8 +955,17 @@ pub(crate) fn motion_source_metadata(
             .flatten()
         {
             for item in track["items"].as_array().into_iter().flatten() {
-                let source = &item["source"];
-                if source["type"] != "motion" && !(band == "captions" && item["type"] == "motion") {
+                let (source, motion) = if item["type"] == "transition" {
+                    // A Motion transition's template is its kernel's instance.
+                    let source = &item["kernel"]["motion"];
+                    (source, source.is_object())
+                } else {
+                    let source = &item["source"];
+                    let motion = source["type"] == "motion"
+                        || (band == "captions" && item["type"] == "motion");
+                    (source, motion)
+                };
+                if !motion {
                     continue;
                 }
                 let alias = source["component"]

@@ -1,5 +1,8 @@
 use serde::{Deserialize, Serialize};
-use valle_draw::program::{BackdropScope, BlendMode};
+use valle_draw::{
+    program::{BackdropScope, BlendMode},
+    requirements::HostFrame,
+};
 
 use crate::{
     prepare::{
@@ -27,6 +30,7 @@ pub enum GraphCapability {
     AdjustmentEffect,
     Caption,
     OutputTransform,
+    HostFrame,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -57,6 +61,22 @@ pub struct BackdropToken {
     pub version: CompositeVersionId,
 }
 
+/// A host frame a Draw program reads, named as the program names it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct FrameInput {
+    pub frame: HostFrame,
+    pub input: ResourceId,
+}
+
+/// The clip a host frame pictures, at the clip's opacity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct FrameLayer {
+    pub layer: ResourceId,
+    pub opacity: DynamicBindingId,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
 pub enum LogicalPassKind {
@@ -75,9 +95,17 @@ pub enum LogicalPassKind {
         program: ProgramId,
         external_inputs: Vec<ResourceId>,
         destination_inputs: Vec<ResourceId>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        frame_inputs: Vec<FrameInput>,
         output: ResourceId,
         transform: DynamicBindingId,
         bounds_reason: BoundsReason,
+    },
+    /// A full-frame picture of one clip over transparent pixels, for the program that reads it.
+    /// Without a clip, as outside a Motion transition, the frame stays transparent.
+    Frame {
+        layer: Option<FrameLayer>,
+        output: ResourceId,
     },
     Group {
         input: ResourceId,
@@ -158,6 +186,7 @@ impl LogicalPassKind {
                 capabilities
             }
             Self::Draw { .. } => vec![GraphCapability::DrawProgram],
+            Self::Frame { .. } => vec![GraphCapability::HostFrame],
             Self::Group { .. } => vec![GraphCapability::Group],
             Self::BackdropRead { .. } => vec![GraphCapability::BackdropRead],
             Self::Filter { .. } => vec![GraphCapability::Filter],
@@ -177,12 +206,15 @@ impl LogicalPassKind {
             Self::Draw {
                 external_inputs,
                 destination_inputs,
+                frame_inputs,
                 ..
             } => external_inputs
                 .iter()
                 .chain(destination_inputs)
                 .copied()
+                .chain(frame_inputs.iter().map(|frame| frame.input))
                 .collect(),
+            Self::Frame { layer, .. } => layer.iter().map(|layer| layer.layer).collect(),
             Self::Group { input, .. }
             | Self::Mask { input, .. }
             | Self::OutputTransform { input, .. } => vec![*input],
@@ -215,6 +247,7 @@ impl LogicalPassKind {
             Self::ClearComposite { output, .. }
             | Self::Import { output, .. }
             | Self::Draw { output, .. }
+            | Self::Frame { output, .. }
             | Self::Group { output, .. }
             | Self::BackdropRead { output, .. }
             | Self::Filter { output, .. }

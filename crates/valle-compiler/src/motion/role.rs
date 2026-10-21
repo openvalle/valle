@@ -4,22 +4,32 @@ use valle_timeline::{MotionRole, OverlayHold, RationalTime};
 
 impl Compiler<'_> {
     pub(super) fn compile_role(&mut self, expression: &Expression<'_>) {
+        const ROLES: &str = "role must use overlay(...), captionPresenter(...) or transition()";
+        let reported = self.diagnostics.len();
         let Some(value) = self.eval_static(expression) else {
+            // A value that is no JSON, such as the uncalled `transition`, would otherwise leave
+            // the component an ordinary clip without a word.
+            if self.diagnostics.len() == reported {
+                self.illegal(DiagCode::ModuleShape, expression.span(), ROLES);
+            }
             return;
         };
         let parse = || -> Result<MotionRole, String> {
-            let obj = value
-                .as_object()
-                .ok_or("role must use overlay(...) or captionPresenter(...)")?;
+            let obj = value.as_object().ok_or(ROLES)?;
             let kind = obj.get("__valleType").and_then(|v| v.as_str());
             let allowed: &[&str] = match kind {
                 Some("overlay") => &["__valleType", "intro", "outro", "hold"],
                 Some("captionPresenter") => &["__valleType", "intro", "outro"],
-                _ => return Err("role must use overlay(...) or captionPresenter(...)".into()),
+                Some("transition") => &["__valleType"],
+                _ => return Err(ROLES.into()),
             };
             let kind = kind.unwrap();
             if let Some(key) = obj.keys().find(|key| !allowed.contains(&key.as_str())) {
                 return Err(format!("{kind} has no field `{key}`"));
+            }
+            // A transition always spans its window; it has no timing of its own.
+            if kind == "transition" {
+                return Ok(MotionRole::Transition);
             }
             let time = |name: &str| -> Result<RationalTime, String> {
                 let v = obj

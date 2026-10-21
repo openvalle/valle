@@ -36,11 +36,11 @@ pub use packed::{
 pub use plan::{
     CompositeMode, CopyOperation, CopyReason, ExecutionPass, ExecutionPassKind,
     FormatConversionReason, KernelInvocation, OptimizationReport, OptimizationRewrite,
-    OptimizationRewriteKind, PassInterval, PlanEffect, PlanFontBinding, PlanProgram,
-    PlanProgramLayout, PlanProgramResources, PlanResource, PlanResourceKind, PlanSourcePipeline,
-    PlanStructureBinding, PlanTextureBinding, PlanValidationError, RENDER_PLAN_FORMAT_VERSION,
-    RenderPlanTemplate, ResolveReason, ResourceAliasReason, SurfaceAllocation,
-    SurfaceAllocationReason, SurfaceSlot,
+    OptimizationRewriteKind, PassInterval, PlanEffect, PlanFontBinding, PlanFrameInput,
+    PlanFrameLayer, PlanProgram, PlanProgramLayout, PlanProgramResources, PlanResource,
+    PlanResourceKind, PlanSourcePipeline, PlanStructureBinding, PlanTextureBinding,
+    PlanValidationError, RENDER_PLAN_FORMAT_VERSION, RenderPlanTemplate, ResolveReason,
+    ResourceAliasReason, SurfaceAllocation, SurfaceAllocationReason, SurfaceSlot,
 };
 pub use program::{
     ProgramDestinationKind, ProgramPass, ProgramPassKind, ProgramPlan, ProgramPlanError,

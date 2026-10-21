@@ -252,6 +252,8 @@ pub enum TransitionKernel {
         params: valle_draw::transition::TransitionValues,
     },
     Extension(TransitionKernelExtension),
+    /// A Motion template over the window that reads both clips as frames.
+    Motion(MotionInstance),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -914,6 +916,9 @@ fn transition_kernel_from_wire(
                 parameters: extension.parameters,
             }))
         }
+        wire::TransitionKernelWire::Motion(kernel) => Ok(TransitionKernel::Motion(
+            motion_instance_from_wire(kernel.motion)?,
+        )),
     }
 }
 
@@ -929,6 +934,11 @@ fn transition_kernel_into_wire(kernel: TransitionKernel) -> wire::TransitionKern
             wire::TransitionKernelWire::Extension(wire::TransitionKernelExtensionWire {
                 kind: kernel_type_into_wire(extension.kind),
                 parameters: extension.parameters,
+            })
+        }
+        TransitionKernel::Motion(motion) => {
+            wire::TransitionKernelWire::Motion(wire::MotionTransitionKernelWire {
+                motion: motion_instance_into_wire(motion),
             })
         }
     }

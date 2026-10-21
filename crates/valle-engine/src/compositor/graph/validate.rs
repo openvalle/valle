@@ -16,9 +16,9 @@ use crate::{
 };
 
 use super::{
-    GraphCapability, GraphOrigin, GraphResource, GraphResourceKind, GraphRoi, LayerRole,
-    LogicalPassKind, OrderEdge, OrderReason, PassId, PassStage, RenderGraph, ResourceAccess,
-    ResourceEdge, ResourceId,
+    FrameInput, GraphCapability, GraphOrigin, GraphResource, GraphResourceKind, GraphRoi,
+    LayerRole, LogicalPassKind, OrderEdge, OrderReason, PassId, PassStage, RenderGraph,
+    ResourceAccess, ResourceEdge, ResourceId, build::frame_name,
 };
 
 pub fn validate_graph(graph: &RenderGraph) -> Result<(), GraphValidationError> {
@@ -131,7 +131,7 @@ fn validate_resource_contracts(graph: &RenderGraph) -> Result<(), GraphValidatio
                     &path,
                 )?;
             }
-            GraphResourceKind::Composite { .. } => {
+            GraphResourceKind::Composite { .. } | GraphResourceKind::Frame => {
                 reached_internal = true;
                 expect_layout(
                     resource,
@@ -484,6 +484,7 @@ fn validate_pass_contracts(graph: &RenderGraph) -> Result<(), GraphValidationErr
                 program,
                 external_inputs,
                 destination_inputs,
+                frame_inputs,
                 output,
                 ..
             } => {
@@ -496,7 +497,22 @@ fn validate_pass_contracts(graph: &RenderGraph) -> Result<(), GraphValidationErr
                         matches!(kind, GraphResourceKind::BackdropView { .. })
                     })?;
                 }
+                for frame in frame_inputs {
+                    expect_frame(graph, pass.id, frame.input)?;
+                }
                 expect_layer_role(graph, pass.id, *output, LayerRole::ProgramSource)?;
+            }
+            LogicalPassKind::Frame { layer, output } => {
+                if let Some(layer) = layer {
+                    expect_layer(graph, pass.id, layer.layer)?;
+                }
+                expect_frame(graph, pass.id, *output)?;
+                if graph.resources[output.index()].semantic_path != pass.semantic_path {
+                    return Err(invalid(
+                        &pass.semantic_path,
+                        "Frame output semantic path does not match its pass",
+                    ));
+                }
             }
             LogicalPassKind::Group { input, output } => {
                 expect_layer(graph, pass.id, *input)?;
@@ -666,6 +682,7 @@ fn validate_program_bindings(graph: &RenderGraph) -> Result<(), GraphValidationE
                 program,
                 external_inputs,
                 destination_inputs,
+                frame_inputs,
                 output,
                 bounds_reason,
                 ..
@@ -734,6 +751,7 @@ fn validate_program_bindings(graph: &RenderGraph) -> Result<(), GraphValidationE
                     destination_inputs,
                     owner,
                 )?;
+                validate_program_frames(graph, &writers, prepared, frame_inputs, owner)?;
             }
             LogicalPassKind::Caption {
                 program,
@@ -755,6 +773,7 @@ fn validate_program_bindings(graph: &RenderGraph) -> Result<(), GraphValidationE
                     || prepared.semantic_path != format!("{}.program", pass.semantic_path)
                     || !prepared.destination_uses.is_empty()
                     || !prepared.requirements.destination_uses.is_empty()
+                    || !prepared.requirements.frames.is_empty()
                 {
                     return Err(invalid(
                         &pass.semantic_path,
@@ -1000,6 +1019,51 @@ fn validate_program_destinations(
     Ok(())
 }
 
+/// A Draw reads one frame per host frame, in order: each its program samples, plus each clip a
+/// transition hands its template. A frame that pictures no clip is one the program samples.
+fn validate_program_frames(
+    graph: &RenderGraph,
+    writers: &BTreeMap<ResourceId, PassId>,
+    program: &PreparedProgram,
+    inputs: &[FrameInput],
+    owner: &str,
+) -> Result<(), GraphValidationError> {
+    if !inputs.windows(2).all(|pair| pair[0].frame < pair[1].frame)
+        || program
+            .requirements
+            .frames
+            .iter()
+            .any(|frame| !inputs.iter().any(|input| input.frame == *frame))
+    {
+        return Err(invalid(
+            owner,
+            "Draw frame inputs are not one ordered input per frame the program reads",
+        ));
+    }
+    for input in inputs {
+        let expected_path = format!("{owner}.frame.{}", frame_name(input.frame));
+        let writer = writers
+            .get(&input.input)
+            .map(|writer| &graph.passes[writer.index()])
+            .ok_or_else(|| invalid(&expected_path, "host frame has no writer"))?;
+        let LogicalPassKind::Frame { layer, .. } = &writer.kind else {
+            return Err(invalid(
+                &expected_path,
+                "host frame writer is not a Frame pass",
+            ));
+        };
+        if writer.semantic_path != expected_path
+            || (layer.is_none() && !program.requirements.frames.contains(&input.frame))
+        {
+            return Err(invalid(
+                &expected_path,
+                "host frame pass does not exactly project the frame its program reads",
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn validate_effect_bindings(graph: &RenderGraph) -> Result<(), GraphValidationError> {
     for pass in &graph.passes {
         let (effect, root_space) = match &pass.kind {
@@ -1041,6 +1105,9 @@ fn validate_effect_binding(
 #[derive(Debug)]
 struct LayerSlots {
     owner: String,
+    /// The clips the layer's program reads as host frames, each with its opacity slot. Their
+    /// slots precede the layer's own.
+    frames: Vec<(LayerSlots, DynamicBindingId)>,
     source_lengths: Vec<(DynamicBindingId, String)>,
     transform: DynamicBindingId,
     bounds: DynamicBindingId,
@@ -1173,6 +1240,7 @@ fn validate_dynamic_contracts(graph: &RenderGraph) -> Result<(), GraphValidation
             pass.kind,
             LogicalPassKind::Import { .. }
                 | LogicalPassKind::Draw { .. }
+                | LogicalPassKind::Frame { .. }
                 | LogicalPassKind::Group { .. }
                 | LogicalPassKind::Filter { .. }
                 | LogicalPassKind::Mask { .. }
@@ -1226,6 +1294,7 @@ fn trace_layer_slots(
             }
             Ok(LayerSlots {
                 owner: owner.to_owned(),
+                frames: Vec::new(),
                 source_lengths: match placement.backdrop {
                     Some(PreparedExternalBackdrop::Blur {
                         sigma_device_px, ..
@@ -1256,6 +1325,7 @@ fn trace_layer_slots(
         LogicalPassKind::Draw {
             program,
             destination_inputs,
+            frame_inputs,
             output,
             transform,
             ..
@@ -1269,6 +1339,32 @@ fn trace_layer_slots(
                     &pass.semantic_path,
                     "Draw output does not match the traced layer resource",
                 ));
+            }
+            let mut frames = Vec::new();
+            for input in frame_inputs {
+                let writer = writers.get(&input.input).copied().ok_or_else(|| {
+                    invalid(&pass.semantic_path, "host frame input has no writer")
+                })?;
+                if !visited.insert(writer) {
+                    return Err(invalid(
+                        &graph.passes[writer.index()].semantic_path,
+                        "host frame is shared instead of uniquely owned",
+                    ));
+                }
+                let LogicalPassKind::Frame {
+                    layer: Some(layer), ..
+                } = &graph.passes[writer.index()].kind
+                else {
+                    continue;
+                };
+                let slots = trace_layer_slots(graph, writers, layer.layer, visited)?;
+                if slots.owner != format!("{owner}.{}", frame_name(input.frame)) {
+                    return Err(invalid(
+                        &pass.semantic_path,
+                        "host frame clip semantic owner is not canonical",
+                    ));
+                }
+                frames.push((slots, layer.opacity));
             }
             let prepared = prepared_program(graph, *program)?;
             let mut destinations = Vec::with_capacity(prepared.destination_uses.len());
@@ -1292,6 +1388,7 @@ fn trace_layer_slots(
             }
             Ok(LayerSlots {
                 owner: owner.to_owned(),
+                frames,
                 source_lengths: Vec::new(),
                 transform: *transform,
                 bounds: layer_bounds_binding(graph, resource)?,
@@ -1380,6 +1477,9 @@ fn admit_layer_slots(
     expected_backdrop: ResourceId,
     next: &mut u32,
 ) -> Result<(), GraphValidationError> {
+    for (frame, opacity) in &slots.frames {
+        admit_layer_slots(frame, *opacity, expected_backdrop, next)?;
+    }
     for (id, path) in &slots.source_lengths {
         expect_next_dynamic(*id, path, next)?;
     }
@@ -1507,6 +1607,16 @@ fn expect_composite(
     })
 }
 
+fn expect_frame(
+    graph: &RenderGraph,
+    pass: PassId,
+    resource: ResourceId,
+) -> Result<(), GraphValidationError> {
+    expect_resource(graph, pass, resource, "host frame", |kind| {
+        matches!(kind, GraphResourceKind::Frame)
+    })
+}
+
 fn expect_resource(
     graph: &RenderGraph,
     pass: PassId,
@@ -1622,6 +1732,7 @@ fn validate_order_edges(graph: &RenderGraph) -> Result<(), GraphValidationError>
             LogicalPassKind::OutputTransform { .. } => Some(OrderReason::OutputTerminal),
             LogicalPassKind::Import { .. }
             | LogicalPassKind::Draw { .. }
+            | LogicalPassKind::Frame { .. }
             | LogicalPassKind::Group { .. }
             | LogicalPassKind::BackdropRead { .. }
             | LogicalPassKind::Filter { .. }
@@ -1670,12 +1781,14 @@ fn validate_reachability(graph: &RenderGraph) -> Result<(), GraphValidationError
     for resource in &graph.resources {
         let count = reader_counts[resource.id.index()];
         match resource.kind {
-            GraphResourceKind::Layer { .. } | GraphResourceKind::BackdropView { .. }
+            GraphResourceKind::Layer { .. }
+            | GraphResourceKind::BackdropView { .. }
+            | GraphResourceKind::Frame
                 if count != 1 =>
             {
                 return Err(invalid(
                     format!("resources[{}]", resource.id.index()),
-                    "ephemeral layer/backdrop resources must have exactly one consumer",
+                    "ephemeral layer/backdrop/frame resources must have exactly one consumer",
                 ));
             }
             GraphResourceKind::Output { .. } if count != 0 => {

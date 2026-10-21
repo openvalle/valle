@@ -1,11 +1,13 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use thiserror::Error;
+use valle_draw::requirements::HostFrame;
 
 use crate::{
     prepare::{
-        PreparedEffect, PreparedEffectKernel, PreparedFrame, PreparedLayer, PreparedProgram,
-        PreparedSource, PreparedTransition, PreparedVisualItem, ProgramId,
+        PreparedEffect, PreparedEffectKernel, PreparedFrame, PreparedLayer,
+        PreparedMotionTransition, PreparedProgram, PreparedSource, PreparedTransition,
+        PreparedVisualItem, ProgramId,
     },
     resource::{
         Extent2d, ExternalHandleId, LogicalTextureDesc, ResourceContractError, TextureUsage,
@@ -13,9 +15,10 @@ use crate::{
 };
 
 use super::{
-    BackdropToken, CompositeVersionId, GraphCapability, GraphPass, GraphResource,
-    GraphResourceKind, GraphRoi, GraphSourcePipeline, LayerRole, LogicalPassKind, OrderEdge,
-    OrderReason, PassId, PassStage, RenderGraph, ResourceAccess, ResourceEdge, ResourceId,
+    BackdropToken, CompositeVersionId, FrameInput, FrameLayer, GraphCapability, GraphPass,
+    GraphResource, GraphResourceKind, GraphRoi, GraphSourcePipeline, LayerRole, LogicalPassKind,
+    OrderEdge, OrderReason, PassId, PassStage, RenderGraph, ResourceAccess, ResourceEdge,
+    ResourceId,
 };
 
 pub fn build_render_graph(frame: &PreparedFrame) -> Result<RenderGraph, GraphBuildError> {
@@ -127,6 +130,9 @@ impl<'a> Builder<'a> {
                 PreparedVisualItem::Transition(transition) => {
                     self.transition(transition, current)?
                 }
+                PreparedVisualItem::MotionTransition(transition) => {
+                    self.motion_transition(transition, current)?
+                }
             };
         }
         for effect in &self.frame.adjustments {
@@ -184,7 +190,18 @@ impl<'a> Builder<'a> {
         backdrop: ResourceId,
         stage: PassStage,
     ) -> Result<ResourceId, GraphBuildError> {
-        let source = self.layer_source(layer, backdrop, stage)?;
+        self.composite_framed_layer(layer, backdrop, stage, &[])
+    }
+
+    /// Composite a layer whose program may read the host frames in `frames`.
+    fn composite_framed_layer(
+        &mut self,
+        layer: &PreparedLayer,
+        backdrop: ResourceId,
+        stage: PassStage,
+        frames: &[(HostFrame, FrameLayer)],
+    ) -> Result<ResourceId, GraphBuildError> {
+        let source = self.framed_layer_source(layer, backdrop, stage, frames)?;
         let output = self.composite_resource(format!("{}.composite", layer.semantic_path))?;
         let kind = if layer.blend.is_normal() {
             LogicalPassKind::CompositeLayer {
@@ -220,6 +237,16 @@ impl<'a> Builder<'a> {
         entry_composite: ResourceId,
         stage: PassStage,
     ) -> Result<ResourceId, GraphBuildError> {
+        self.framed_layer_source(layer, entry_composite, stage, &[])
+    }
+
+    fn framed_layer_source(
+        &mut self,
+        layer: &PreparedLayer,
+        entry_composite: ResourceId,
+        stage: PassStage,
+        frames: &[(HostFrame, FrameLayer)],
+    ) -> Result<ResourceId, GraphBuildError> {
         let mut current = match &layer.source {
             PreparedSource::External {
                 handle, placement, ..
@@ -250,7 +277,7 @@ impl<'a> Builder<'a> {
                 output
             }
             PreparedSource::Program { program, .. } => {
-                self.program_layer(layer, *program, entry_composite, stage)?
+                self.program_layer(layer, *program, entry_composite, stage, frames)?
             }
         };
 
@@ -300,6 +327,7 @@ impl<'a> Builder<'a> {
         program_id: ProgramId,
         entry_composite: ResourceId,
         stage: PassStage,
+        frames: &[(HostFrame, FrameLayer)],
     ) -> Result<ResourceId, GraphBuildError> {
         let program = self.program(program_id, &layer.semantic_path)?.clone();
         if program.destination_uses.len() != program.requirements.destination_uses.len() {
@@ -307,6 +335,37 @@ impl<'a> Builder<'a> {
                 &layer.semantic_path,
                 "prepared destination bindings do not match DrawRequirements",
             ));
+        }
+        // The frames a transition hands its template, then a transparent one for every other
+        // frame the program reads.
+        let mut frame_inputs = Vec::new();
+        for frame in HostFrame::ALL {
+            let layer_frame = frames
+                .iter()
+                .find(|(key, _)| *key == frame)
+                .map(|(_, layer)| *layer);
+            if layer_frame.is_none() && !program.requirements.frames.contains(&frame) {
+                continue;
+            }
+            let path = format!("{}.frame.{}", layer.semantic_path, frame_name(frame));
+            let output = self.push_resource(
+                &path,
+                GraphResourceKind::Frame,
+                Some(self.working_texture.clone()),
+                GraphRoi::FullFrame,
+            )?;
+            self.add_pass(
+                path,
+                stage,
+                LogicalPassKind::Frame {
+                    layer: layer_frame,
+                    output,
+                },
+            )?;
+            frame_inputs.push(FrameInput {
+                frame,
+                input: output,
+            });
         }
         let version = self.composite_version(entry_composite, &layer.semantic_path)?;
         let mut destination_inputs = Vec::with_capacity(program.destination_uses.len());
@@ -351,12 +410,39 @@ impl<'a> Builder<'a> {
                 program: program_id,
                 external_inputs,
                 destination_inputs,
+                frame_inputs,
                 output,
                 transform: layer.dynamic.transform,
                 bounds_reason: layer.bounds.reason,
             },
         )?;
         Ok(output)
+    }
+
+    /// The clips a Motion template reads, each pictured alone in a frame, then the template
+    /// composited over what lies under the transition.
+    fn motion_transition(
+        &mut self,
+        transition: &PreparedMotionTransition,
+        backdrop: ResourceId,
+    ) -> Result<ResourceId, GraphBuildError> {
+        let mut frames = Vec::new();
+        for (frame, clip) in [
+            (HostFrame::From, &transition.from),
+            (HostFrame::To, &transition.to),
+        ] {
+            if let Some(clip) = clip {
+                let layer = self.layer_source(clip, backdrop, PassStage::Visual)?;
+                frames.push((
+                    frame,
+                    FrameLayer {
+                        layer,
+                        opacity: clip.dynamic.opacity,
+                    },
+                ));
+            }
+        }
+        self.composite_framed_layer(&transition.template, backdrop, PassStage::Visual, &frames)
     }
 
     fn transition(
@@ -599,6 +685,14 @@ impl<'a> Builder<'a> {
             });
         }
         self.last_spine_pass = Some(pass);
+    }
+}
+
+/// The semantic-path segment naming a host frame.
+pub(super) const fn frame_name(frame: HostFrame) -> &'static str {
+    match frame {
+        HostFrame::From => "from",
+        HostFrame::To => "to",
     }
 }
 

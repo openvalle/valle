@@ -1407,6 +1407,9 @@ fn spread_mode(value: recording::SpreadMode) -> SpreadMode {
 }
 
 fn image_texture(source: &recording::ImageSource) -> ExternalTexture {
+    if let Some(frame) = crate::requirements::HostFrame::from_source(&source.asset) {
+        return ExternalTexture::frame(frame);
+    }
     ExternalTexture {
         key: source.asset.clone(),
         kind: if source.source_time_s.is_some() {

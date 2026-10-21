@@ -6,12 +6,12 @@ use valle_timeline::{FrameRate, RationalTime};
 use super::{
     CompiledAudioClip, CompiledAudioItem, CompiledAudioProgram, CompiledCameraProgram,
     CompiledCaptionItem, CompiledCaptionProgram, CompiledEndBehavior, CompiledMask, CompiledSource,
-    CompiledSourceCatalog, CompiledVisualClip, CompiledVisualItem, CompiledVisualProgram,
-    EvaluatedAudioEndpoint, EvaluatedAudioSample, EvaluatedAudioTrack, EvaluatedCamera,
-    EvaluatedCaption, EvaluatedCaptionPresentation, EvaluatedResourceRef, EvaluatedSourceRef,
-    EvaluatedVisualClip, EvaluatedVisualLayer, EvaluatedVisualMask, EvaluatedVisualOperation,
-    EvaluatedVisualTransition, EvaluationClocks, FrameRange, MappedSourceTime,
-    ResolvedResourceSnapshot, RuntimeFault, SampleRange, audio_gain,
+    CompiledSourceCatalog, CompiledTransitionKernel, CompiledVisualClip, CompiledVisualItem,
+    CompiledVisualProgram, EvaluatedAudioEndpoint, EvaluatedAudioSample, EvaluatedAudioTrack,
+    EvaluatedCamera, EvaluatedCaption, EvaluatedCaptionPresentation, EvaluatedResourceRef,
+    EvaluatedSourceRef, EvaluatedVisualClip, EvaluatedVisualLayer, EvaluatedVisualMask,
+    EvaluatedVisualOperation, EvaluatedVisualTransition, EvaluationClocks, FrameRange,
+    MappedSourceTime, ResolvedResourceSnapshot, RuntimeFault, SampleRange, audio_gain,
 };
 
 pub(super) fn frame_sample_time(
@@ -132,6 +132,18 @@ pub(super) fn evaluate_visual_program(
                 &format!("visual/{}/transition/to", track.order),
                 resources,
             )?;
+            let template = match transition.kernel {
+                CompiledTransitionKernel::Motion { source } => Some(evaluate_source_ref(
+                    sources,
+                    snapshot,
+                    source,
+                    composition_time,
+                    &format!("visual/{}/transition/template", track.order),
+                    resources,
+                )?),
+                CompiledTransitionKernel::Builtin { .. }
+                | CompiledTransitionKernel::Extension { .. } => None,
+            };
             let progress_f64 = progress.as_f64();
             operations.push(EvaluatedVisualOperation::Transition(
                 EvaluatedVisualTransition {
@@ -148,6 +160,7 @@ pub(super) fn evaluate_visual_program(
                     from_layer: evaluate_visual_layer(from_clip, composition_time)?,
                     to_layer: evaluate_visual_layer(to_clip, composition_time)?,
                     kernel: transition.kernel.clone(),
+                    template,
                 },
             ));
             continue;
@@ -360,17 +373,7 @@ pub(super) fn evaluate_caption_program(
                             &format!("caption/{}/clip", track.order),
                             resources,
                         )?,
-                        layer: super::EvaluatedVisualLayer {
-                            size: None,
-                            position: [0.5, 0.5],
-                            scale: [1.0, 1.0],
-                            rotation: 0.0,
-                            anchor: [0.5, 0.5],
-                            opacity: 1.0,
-                            blend: super::CompiledBlendMode::Normal,
-                            mask: None,
-                            filters: Vec::new(),
-                        },
+                        layer: super::EvaluatedVisualLayer::canvas(),
                     }));
                 }
                 continue;

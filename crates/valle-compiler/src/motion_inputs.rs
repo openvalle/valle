@@ -20,9 +20,11 @@ impl MotionPreparationInput {
         crate::motion::MotionPlacement {
             component: self.component.clone(),
             path: self.clip_path.clone(),
-            // Paths are produced by the two closed track loops below.
+            // Paths are produced by the closed track loops below.
             track: if self.clip_path.starts_with("/tracks/caption/") {
                 crate::motion::MotionTrack::Caption
+            } else if self.clip_path.contains("/transitions/") {
+                crate::motion::MotionTrack::Transition
             } else {
                 crate::motion::MotionTrack::Visual
             },
@@ -71,6 +73,23 @@ pub(crate) fn motion_preparation_inputs_wire(
                     } else {
                         serde_json::to_value(data).expect("data serializes")
                     },
+                });
+            }
+        }
+        for (ri, transition) in track.transitions.iter().enumerate() {
+            if let TimelineTransitionEffectWire::Motion {
+                component,
+                resources,
+                ..
+            } = &transition.effect
+            {
+                let path = format!("/tracks/visual/{ti}/transitions/{ri}");
+                inputs.push(MotionPreparationInput {
+                    locator: locator(&timeline.resources, component, &path)?,
+                    component: component.clone(),
+                    clip_path: path,
+                    resources: resources.clone(),
+                    data: Value::Null,
                 });
             }
         }

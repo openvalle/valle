@@ -225,9 +225,10 @@ impl<'s> Compiler<'s> {
                         DiagCode::GrammarForbidden,
                         span,
                         format!(
-                            "shader texture input `{name}` takes src, an asset:// reference; kind, \
-                             \"color\" or \"data\"; sampling, \"nearest\" or \"linear\"; and wrap, \
-                             \"clamp\", \"repeat\" or \"mirror\" (not `{key}`: {value})"
+                            "shader texture input `{name}` takes src, an asset:// or input:// \
+                             reference; kind, \"color\" or \"data\"; sampling, \"nearest\" or \
+                             \"linear\"; and wrap, \"clamp\", \"repeat\" or \"mirror\" (not \
+                             `{key}`: {value})"
                         ),
                     );
                     return None;
@@ -238,7 +239,10 @@ impl<'s> Compiler<'s> {
             self.illegal(
                 DiagCode::GrammarForbidden,
                 span,
-                format!("shader texture input `{name}` needs `src`, an asset:// reference"),
+                format!(
+                    "shader texture input `{name}` needs `src`, an asset:// reference or a \
+                     transition() template's input://from or input://to"
+                ),
             );
             return None;
         };
@@ -336,12 +340,35 @@ impl<'s> Compiler<'s> {
                 });
                 continue;
             }
+            // A transition() template reads its clips; the artifact checks the role.
+            if valle_draw::requirements::HostFrame::from_source(asset).is_some() {
+                if input.kind != valle_motion::shader::InputKind::Color {
+                    self.illegal(
+                        DiagCode::GrammarForbidden,
+                        asset_span,
+                        format!(
+                            "shader texture input `{}` reads a clip, which needs kind \"color\"",
+                            input.name
+                        ),
+                    );
+                    continue;
+                }
+                inputs.push(ShaderTextureInput {
+                    kind: input.kind,
+                    sampling: input.sampling,
+                    wrap: input.wrap,
+                    name: input.name.clone(),
+                    source: Some(asset.clone()),
+                });
+                continue;
+            }
             let Some(control_name) = asset.strip_prefix("asset://") else {
                 self.illegal(
                     DiagCode::GrammarForbidden,
                     asset_span,
                     format!(
-                        "shader texture input `{}` must use asset://<image-control>",
+                        "shader texture input `{}` must use asset://<image-control>, or \
+                         input://from or input://to in a transition() template",
                         input.name
                     ),
                 );

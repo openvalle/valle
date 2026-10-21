@@ -59,11 +59,14 @@ export function timelineCompilePayload(
   const resources = new Map(resourceInputs.map((resource) => [resource.id, resource]));
   const instances: CompilePayload["instances"] = [];
   const frozenFonts = new Map<string, Uint8Array>();
-  const clips = (timeline.tracks.visual ?? []).flatMap((track, ti) => track.clips.flatMap((clip, ci) => clip.kind === "motion" ? [{ ...clip, clipPath: `/tracks/visual/${ti}/clips/${ci}` }] : []));
+  const clips: { component: string; resources?: Record<string, string>; data?: Record<string, unknown>; clipPath: string }[] = (timeline.tracks.visual ?? []).flatMap((track, ti) => [
+    ...track.clips.flatMap((clip, ci) => clip.kind === "motion" ? [{ ...clip, clipPath: `/tracks/visual/${ti}/clips/${ci}` }] : []),
+    ...(track.transitions ?? []).flatMap((transition, ri) => transition.kind === "motion" ? [{ ...transition, clipPath: `/tracks/visual/${ti}/transitions/${ri}` }] : []),
+  ]);
   for (const [ti, track] of (timeline.tracks.caption ?? []).entries()) {
     if (!track.presenter) continue;
     for (const [ci] of track.clips.entries()) {
-      clips.push({ kind: "motion", component: track.presenter.component, resources: { ...track.presenter.resources, caption: track.style.font }, start: 0, duration: 1, clipPath: `/tracks/caption/${ti}/clips/${ci}` });
+      clips.push({ component: track.presenter.component, resources: { ...track.presenter.resources, caption: track.style.font }, clipPath: `/tracks/caption/${ti}/clips/${ci}` });
     }
   }
   for (const clip of clips) {

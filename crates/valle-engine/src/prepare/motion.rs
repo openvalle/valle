@@ -291,6 +291,7 @@ pub(super) fn build_motion_program(
     let catalog = CompiledMotionProgramCatalog {
         assets: &input.assets,
         model_resources: &input.model_resources,
+        viewport: input.viewport,
     };
     let report = match input.source_clip {
         Some(clip) => valle_motion::emit::emit_program_with_faces_clipped(
@@ -430,10 +431,18 @@ fn compiled_motion_overrides(
 struct CompiledMotionProgramCatalog<'a> {
     assets: &'a BTreeMap<String, SemanticAsset>,
     model_resources: &'a BTreeMap<String, ContentDigest>,
+    viewport: Extent2d,
 }
 
 impl valle_draw::program::ProgramResourceCatalog for CompiledMotionProgramCatalog<'_> {
     fn texture_extent(&self, asset_key: &str) -> Option<ProgramTextureExtent> {
+        // A host frame pictures the output under the program's viewport, at the viewport's size.
+        if valle_draw::requirements::HostFrame::from_source(asset_key).is_some() {
+            return Some(ProgramTextureExtent {
+                width: f64::from(self.viewport.width()),
+                height: f64::from(self.viewport.height()),
+            });
+        }
         let control = asset_key.strip_prefix("asset://").unwrap_or(asset_key);
         let asset = self.assets.get(control)?;
         let extent = asset.descriptor.extent()?;
@@ -1082,6 +1091,7 @@ pub(crate) fn prepare_program(
         let kind_matches = match texture.kind {
             TextureKind::Video => asset.kind == SemanticAssetKind::Video,
             TextureKind::Image | TextureKind::Generated => asset.kind == SemanticAssetKind::Image,
+            TextureKind::Frame => false,
         };
         if !kind_matches {
             return Err(ProgramPrepareError::TextureKindMismatch {

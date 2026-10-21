@@ -273,7 +273,7 @@ function validateInstanceBatches(nodes: TaggedWire[], table: BatchInstanceTableW
       const texture = exactRecord(region.texture, ["key", "kind", "colorDomain", "alpha", "sampleTimeMicros"], `nodes[${nodeIndex}].shape.value.texture`);
       if (typeof texture.key !== "string" || texture.key.length === 0
         || new TextEncoder().encode(texture.key).length > 4096
-        || !["image", "video", "generated"].includes(String(texture.kind))
+        || !["image", "video", "generated", "frame"].includes(String(texture.kind))
         || texture.colorDomain !== "linearRec2020"
         || !["opaque", "straight", "premultiplied"].includes(String(texture.alpha))
         || (texture.kind === "video"

@@ -51,6 +51,8 @@ pub enum GraphResourceKind {
         source_version: CompositeVersionId,
         scope: BackdropScope,
     },
+    /// A host frame: one full-frame picture a program reads.
+    Frame,
     Mask,
     Auxiliary,
     HistorySlot {

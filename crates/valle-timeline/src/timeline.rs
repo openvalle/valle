@@ -12,7 +12,8 @@ use crate::{
     wire::timeline::{
         JsonObject, TimelineAdjustmentWire, TimelineCaptionBehaviorWire, TimelineCaptionClipWire,
         TimelineCaptionLayoutWire, TimelineCaptionPresentationWire, TimelineParamWire,
-        TimelineTextRunWire, TimelineVisualClipWire, TimelineVisualSourceWire, TimelineWire,
+        TimelineTextRunWire, TimelineTransitionEffectWire, TimelineVisualClipWire,
+        TimelineVisualSourceWire, TimelineWire,
     },
 };
 
@@ -163,7 +164,7 @@ impl TimelineValidator {
                 let path = format!("{track_path}/clips/{clip_index}");
                 self.visual_clip(clip, &path, &valid_resources);
             }
-            self.visual_transitions(track, &track_path);
+            self.visual_transitions(track, &track_path, &valid_resources);
         }
 
         for (track_index, track) in timeline.tracks.audio.iter_mut().enumerate() {
@@ -267,23 +268,51 @@ impl TimelineValidator {
 
     fn visual_transitions(
         &mut self,
-        track: &crate::wire::timeline::TimelineVisualTrackWire,
+        track: &mut crate::wire::timeline::TimelineVisualTrackWire,
         track_path: &str,
+        resources: &BTreeSet<&str>,
     ) {
         let mut pairs = BTreeSet::new();
         let mut windows = Vec::new();
-        for (index, transition) in track.transitions.iter().enumerate() {
+        let clips = &track.clips;
+        for (index, transition) in track.transitions.iter_mut().enumerate() {
             let path = format!("{track_path}/transitions/{index}");
-            if let Err(error) = transition.kind.resolve_params(&transition.params) {
-                self.error(
-                    "invalid_transition_params",
-                    &format!("{path}/params/{}", error.parameter),
-                    json!({"reason":error.reason}),
-                );
+            match &mut transition.effect {
+                TimelineTransitionEffectWire::Builtin { kind, params } => {
+                    if let Err(error) = kind.resolve_params(params) {
+                        self.error(
+                            "invalid_transition_params",
+                            &format!("{path}/params/{}", error.parameter),
+                            json!({"reason":error.reason}),
+                        );
+                    }
+                }
+                TimelineTransitionEffectWire::Motion {
+                    component,
+                    props,
+                    resources: bindings,
+                    ..
+                } => {
+                    self.resource_ref(component, &format!("{path}/component"), resources);
+                    for (name, param) in props {
+                        normalize_open_param_easing(
+                            param,
+                            &format!("{path}/props/{}", pointer_escape(name)),
+                            self,
+                        );
+                    }
+                    for (name, resource) in bindings {
+                        self.resource_ref(
+                            resource,
+                            &format!("{path}/resources/{}", pointer_escape(name)),
+                            resources,
+                        );
+                    }
+                }
             }
             let from = transition.from;
             let to = transition.to;
-            if from.checked_add(1) != Some(to) || to >= track.clips.len() {
+            if from.checked_add(1) != Some(to) || to >= clips.len() {
                 self.error(
                     "transition_adjacency",
                     &path,
@@ -299,8 +328,8 @@ impl TimelineValidator {
                 );
                 continue;
             }
-            let a = &track.clips[from];
-            let b = &track.clips[to];
+            let a = &clips[from];
+            let b = &clips[to];
             let a_start = a.start.to_exact();
             let b_start = b.start.to_exact();
             let (Ok(a_end), Ok(b_end)) = (

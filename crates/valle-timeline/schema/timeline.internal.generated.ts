@@ -45,7 +45,8 @@ export namespace TimelineDocumentSchema {
   export type LayerTransformWire = { "anchor": [number, number]; "position": ParamWire; "rotation": ParamWire2; "scale": ParamWire; "size"?: (ParamWire | null) };
   export type MediaEndBehaviorWire = ("error" | "hold" | "loop");
   export type MotionInstanceWire = { "component": string; "data"?: Record<string, JsonValue>; "endBehavior": MediaEndBehaviorWire; "fit": RasterFitWire; "props": Record<string, ParamWire4>; "rate": ExactRational; "resources": Record<string, string>; "role": MotionRole; "sourceDuration": ExactRational; "sourceStart": ExactRational };
-  export type MotionRole = ({ "type": "clip" } | { "intro": RationalTime; "outro": RationalTime; "type": "captionPresenter" } | { "hold": OverlayHold; "intro": RationalTime; "outro": RationalTime; "type": "overlay" });
+  export type MotionRole = ({ "type": "clip" } | { "intro": RationalTime; "outro": RationalTime; "type": "captionPresenter" } | { "hold": OverlayHold; "intro": RationalTime; "outro": RationalTime; "type": "overlay" } | { "type": "transition" });
+  export type MotionTransitionKernelWire = { "motion": MotionInstanceWire };
   export type NamespacedKernelTypeWire = string;
   export type OverlayHold = ("once" | "loop" | "stretch");
   export type ParamWire = ({ "type": "constant"; "value": [number, number] } | { "extrapolation": ExtrapolationWire; "id": string; "interpolation": InterpolationWire; "keyframes": Array<KeyframeWire>; "type": "curve" });
@@ -71,7 +72,7 @@ export namespace TimelineDocumentSchema {
   export type TimedAdjustmentWire = { "duration": ExactRational; "effect": AdjustmentEffectWire; "id": string; "start": ExactRational };
   export type TimelineDocumentWire = { "adjustments": Array<TimedAdjustmentWire>; "audio": AudioCompositionWire; "background": BackgroundWire; "camera": RequiredNullable_for_CameraTrackWire; "canvas": CanvasWire; "captions": CaptionCompositionWire; "metadata": Record<string, JsonValue>; "visual": VisualCompositionWire };
   export type TransitionKernelExtensionWire = { "parameters": Record<string, JsonValue>; "type": NamespacedKernelTypeWire };
-  export type TransitionKernelWire = (BuiltinTransitionKernelWire | TransitionKernelExtensionWire);
+  export type TransitionKernelWire = (BuiltinTransitionKernelWire | TransitionKernelExtensionWire | MotionTransitionKernelWire);
   export type TransitionKind = ("fade" | "wipeLeft" | "wipeRight" | "circleOpen" | "simpleZoom" | "crossWarp" | "linearBlur" | "directionalWarp" | "dreamyZoom" | "ripple" | "flyEye" | "multiplyBlend" | "perlin");
   export type VisualCompositionWire = { "tracks": Array<VisualTrackWire> };
   export type VisualFilterWire = { "id": string; "parameters": Record<string, JsonValue>; "type": NamespacedKernelTypeWire };

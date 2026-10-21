@@ -722,6 +722,7 @@ impl MotionGlassProgram {
             content_bounds: LocalBounds::from_rect(output),
             output_bounds: LocalBounds::from_rect(output),
             external_textures: Vec::new(),
+            frames: Vec::new(),
             fonts: Vec::new(),
             runtime_shaders: Vec::new(),
             scene3d: Vec::new(),

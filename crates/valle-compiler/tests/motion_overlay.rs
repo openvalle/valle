@@ -180,3 +180,61 @@ fn only_the_entry_module_may_declare_a_role() {
                 && diagnostic.message.contains("entry"))
     );
 }
+
+#[test]
+fn a_transition_declares_no_options_and_only_it_reads_clips() {
+    use valle_draw::requirements::HostFrame;
+    let artifact = compile_motion(&source("export const role=transition();"))
+        .unwrap()
+        .artifact;
+    assert_eq!(artifact.role, MotionRole::Transition);
+    assert!(artifact.frames().is_empty());
+    for declaration in [
+        "transition({hold:'once'})",
+        "transition",
+        "{type:'transition'}",
+    ] {
+        assert!(
+            compile_motion(&source(&format!("export const role={declaration};"))).is_err(),
+            "{declaration}"
+        );
+    }
+    let reader = |role: &str, element: &str| {
+        compile_motion(&format!(
+            r#"export const composition={{width:64,height:32,duration:1}};
+{role}
+export default function T(){{return <Scene>{element}</Scene>;}}"#
+        ))
+    };
+    let image = r#"<Image src="input://to" className="absolute inset-0 h-full w-full"/>"#;
+    let shader = r#"<ShaderLayer code={`uniform shader a; float4 valle_main(float2 uv){return sample_a(uv);}`} inputs={{a:{src:"input://from",sampling:"nearest"}}} style={{width:64,height:32}}/>"#;
+    let transition = "export const role=transition();";
+    assert_eq!(
+        reader(transition, image).unwrap().artifact.frames(),
+        [HostFrame::To]
+    );
+    assert_eq!(
+        reader(transition, &format!("{shader}{image}"))
+            .unwrap()
+            .artifact
+            .frames(),
+        [HostFrame::From, HostFrame::To]
+    );
+    for element in [image, shader] {
+        let diagnostics = reader("", element).unwrap_err();
+        assert!(
+            diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.message.contains("transition() template")),
+            "{diagnostics:?}"
+        );
+    }
+    let data = shader.replace(r#"sampling:"nearest""#, r#"kind:"data""#);
+    let diagnostics = reader(transition, &data).unwrap_err();
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("reads a clip")),
+        "{diagnostics:?}"
+    );
+}

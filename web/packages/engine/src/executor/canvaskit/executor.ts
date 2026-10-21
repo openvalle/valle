@@ -58,7 +58,7 @@ const RASTER_LAYER_CACHE_BYTES = 64 * 1024 * 1024;
 export interface CanvasKitExternalObject {
   /** Exact ResourceKey from the request fulfilled for this handle. */
   readonly key: PackedValue;
-  readonly kind: "visual" | "dataTexture" | "font" | "runtimeShader" | "scene3d";
+  readonly kind: "visual" | "dataTexture" | "font" | "runtimeShader" | "scene3d" | "frame";
   readonly image?: Image;
   readonly bytes?: Uint8Array;
 }
@@ -929,6 +929,13 @@ async function runCanvasKitFrame(
         case "clearRegion":
           canvas.clear(color4(kind.workingLinearRec2020Premul));
           break;
+        case "frameRegion":
+          if (kind.layer != null) {
+            const layer = record(kind.layer, "frame layer");
+            drawImageValue(CanvasKit, canvas, resourceValue(resources, layer.layer),
+              dynamicScalar(dynamic, layer.opacity), "srcOver");
+          }
+          break;
         case "importRegion":
           renderImport(CanvasKit, builtins, canvas, externalObject(externalResourceById, kind.external), kind, dynamic, externalResourceById);
           break;
@@ -940,7 +947,12 @@ async function runCanvasKitFrame(
           const device = dynamicTransform(dynamic, kind.transform);
           const cacheKey = rasterLayerKey(program, kind, device, outputRoi, plan);
           const cached = cacheKey === null ? null : executor.rasterLayer(cacheKey);
-          const result = cached ?? await runProgram(id, destinations, device);
+          let result: ImageValue;
+          if (cached) result = cached;
+          else {
+            const releaseFrames = bindFrames(CanvasKit, arena, program, kind, resources, device, extent);
+            try { result = await runProgram(id, destinations, device); } finally { releaseFrames(); }
+          }
           let retained = false;
           try {
             drawImageValue(CanvasKit, canvas, result, 1, "src");
@@ -1111,6 +1123,7 @@ function rasterLayerKey(
   const resources = record(program.plan.resources, "program.resources");
   if (array(pass.externalInputs, "RasterProgram.externalInputs").length !== 0
     || array(pass.destinationInputs, "RasterProgram.destinationInputs").length !== 0
+    || frameInputs(pass).length !== 0
     || array(resources.textures, "program textures").length !== 0
     || array(resources.fonts, "program fonts").length !== 0
     || array(resources.runtimeShaders, "program shaders").length !== 0
@@ -1133,6 +1146,99 @@ function rasterLayerKey(
     JSON.stringify(record(plan.renderSpec, "plan.renderSpec"), bigintJson),
     matrix.join(""), roi.x, roi.y, roi.width, roi.height,
   ].join("|");
+}
+
+/** The host frames a raster program pass hands its program. */
+function frameInputs(pass: Wire): Wire[] {
+  return pass.frameInputs === undefined ? [] : array(pass.frameInputs, "RasterProgram.frameInputs")
+    .map((input) => record(input, "frame input"));
+}
+
+/**
+ * Where a program drawn through `device` finds a host frame, as native
+ * `DeviceTransform::frame_region` rounds it: the whole pixels under its layer box, each edge of
+ * the box's bounds rounded to the nearest pixel, half up, inside the frame and never empty.
+ */
+export function frameRegion(device: readonly number[], extent: { width: number; height: number }): DeviceRoi {
+  const m = device;
+  let left = Infinity, top = Infinity, right = -Infinity, bottom = -Infinity;
+  for (const [x, y] of [[0, 0], [1, 0], [0, 1], [1, 1]] as const) {
+    const w = m[6]! * x + m[7]! * y + m[8]!;
+    if (!Number.isFinite(w) || w === 0) fail("frame_region", "program transform crosses the perspective horizon");
+    const px = (m[0]! * x + m[1]! * y + m[2]!) / w, py = (m[3]! * x + m[4]! * y + m[5]!) / w;
+    if (!Number.isFinite(px) || !Number.isFinite(py)) fail("frame_region", "program transform is not finite");
+    left = Math.min(left, px); top = Math.min(top, py); right = Math.max(right, px); bottom = Math.max(bottom, py);
+  }
+  const span = (low: number, high: number, size: number): [number, number] => {
+    const limit = Math.max(size, 1);
+    const start = Math.min(Math.max(Math.floor(low + 0.5), 0), limit - 1);
+    const end = Math.min(Math.max(Math.floor(high + 0.5), start + 1), limit);
+    return [start, end - start];
+  };
+  const [x, width] = span(left, right, extent.width);
+  const [y, height] = span(top, bottom, extent.height);
+  return { x, y, width, height };
+}
+
+/**
+ * Hands a program the host frames its pass reads, each the frame's pixels under the program's
+ * viewport, as native `frame_images` cuts them. Returns what releases them after the run.
+ */
+function bindFrames(
+  CanvasKit: CanvasKit,
+  arena: SurfaceArena,
+  program: AdmittedProgram,
+  pass: Wire,
+  resources: Map<number, ImageValue>,
+  device: readonly number[],
+  extent: { width: number; height: number },
+): () => void {
+  const inputs = frameInputs(pass);
+  const reads = record(program.plan.requirements, "program.requirements").frames;
+  const readFrames = reads === undefined ? [] : array(reads, "program frames");
+  if (readFrames.some((frame) => !inputs.some((input) => input.frame === frame))) {
+    fail("frame_contract", "a program reads a host frame its pass does not supply");
+  }
+  if (inputs.length === 0) return () => {};
+  const region = frameRegion(device, extent);
+  const root: DeviceRoi = { x: 0, y: 0, ...extent };
+  const held: { surface: Surface; image: Image }[] = [];
+  const identities: string[] = [];
+  const release = (): void => {
+    for (const identity of identities.splice(0)) program.textures.delete(identity);
+    for (const { surface, image } of held.splice(0)) { image.delete(); arena.releaseTransient(surface); }
+  };
+  try {
+    for (const input of inputs) {
+      const frame = String(input.frame);
+      if (frame !== "from" && frame !== "to") fail("frame_contract", `unknown host frame '${frame}'`);
+      const key = `input://${frame}`;
+      const picture = resourceValue(resources, input.input);
+      let image: Image;
+      // Under a viewport that covers the frame, as when the canvas fills the output, the program
+      // reads the picture as it is.
+      if (sameRoi(region, root) && sameRoi(picture.roi, root) && picture.image) image = picture.image;
+      else {
+        const surface = arena.transient(region.width, region.height);
+        const canvas = surface.getCanvas();
+        canvas.clear(CanvasKit.TRANSPARENT);
+        canvas.save();
+        canvas.translate(-region.x, -region.y);
+        drawImageValue(CanvasKit, canvas, picture, 1, "src");
+        canvas.restore();
+        surface.flush();
+        image = surface.makeImageSnapshot();
+        held.push({ surface, image });
+      }
+      const identity = textureIdentity({ key, kind: "frame", colorDomain: "linearRec2020", sampleTimeMicros: null });
+      program.textures.set(identity, { key, kind: "frame", image });
+      identities.push(identity);
+    }
+  } catch (error) {
+    release();
+    throw error;
+  }
+  return release;
 }
 
 function inspectProgramDiagnostics(programs: ReadonlyMap<number, ProgramStructure>) {
@@ -4991,6 +5097,13 @@ function frameWorkingSet(
         const need = programWorkingSet(executor, program, run, destinations, externalSlots, gpu, transients);
         surfaces = need.surfaces;
         images = need.images;
+        // A host frame under a viewport short of the frame is cut into a transient of its own.
+        const frames = kind.kind === "rasterProgram" ? frameInputs(kind).length : 0;
+        const region = frames === 0 ? root : frameRegion(run.device, extent);
+        if (!sameRoi(region, root)) {
+          transients.add(`${region.width}x${region.height}`);
+          surfaces += BigInt(frames) * roiBytes(region);
+        }
         if (kind.kind === "rasterProgram" && rasterLayerKey(program, kind, run.device, step.deviceRoi, plan) !== null) {
           const output = required(run.bound.resourceRois, positiveId(record(program.plan.localPlan, "program.localPlan").output,
             "program output"), "program output ROI");
@@ -6177,6 +6290,8 @@ function normalizedExternalShader(
     // Generated sampling wraps logical coordinates before selecting each numeric plane.
     return imageShader(CanvasKit, object.image, "nearestClamp", "pad");
   }
+  // A host frame is already working-space pixels.
+  if (object.kind === "frame") return imageShader(CanvasKit, object.image, sampling, wrap);
   let primaries = "rec709";
   let transfer = "srgb";
   let referenceWhite = 100;
@@ -6372,7 +6487,7 @@ function textureIdentity(texture: Wire): string {
     if (sample === null || sample === undefined) {
       fail("texture_contract", "video textures must carry sampleTimeMicros");
     }
-  } else if (kind === "image" || kind === "generated") {
+  } else if (kind === "image" || kind === "generated" || kind === "frame") {
     if (sample !== null && sample !== undefined) {
       fail("texture_contract", "only video textures may carry sampleTimeMicros");
     }

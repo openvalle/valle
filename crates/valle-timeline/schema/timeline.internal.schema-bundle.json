@@ -1582,8 +1582,35 @@
                 "hold"
               ],
               "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "A track transition: the template stretches over the window and reads the outgoing and\nincoming clips as `input://from` and `input://to`.",
+              "properties": {
+                "type": {
+                  "const": "transition",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "type": "object"
             }
           ]
+        },
+        "MotionTransitionKernelWire": {
+          "additionalProperties": false,
+          "description": "A transition drawn by a Motion template that declares `transition()`, placed over the window.",
+          "properties": {
+            "motion": {
+              "$ref": "#/$defs/MotionInstanceWire"
+            }
+          },
+          "required": [
+            "motion"
+          ],
+          "type": "object"
         },
         "NamespacedKernelTypeWire": {
           "pattern": "^[^/\\s]+/[^/\\s]+$",
@@ -2084,6 +2111,9 @@
             },
             {
               "$ref": "#/$defs/TransitionKernelExtensionWire"
+            },
+            {
+              "$ref": "#/$defs/MotionTransitionKernelWire"
             }
           ]
         },

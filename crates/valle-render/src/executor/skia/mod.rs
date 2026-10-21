@@ -93,6 +93,7 @@ pub fn cpu_capabilities(
             GraphCapability::AdjustmentEffect,
             GraphCapability::Caption,
             GraphCapability::OutputTransform,
+            GraphCapability::HostFrame,
         ],
         true,
         None,

@@ -855,6 +855,10 @@ enum AdmittedTransitionKernel {
     Extension {
         call: AdmittedKernelCall,
     },
+    /// The admitted template source, placed over the window.
+    Motion {
+        source: u32,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -1425,9 +1429,24 @@ fn admit_visual_program(
                         diagnostics,
                     ),
                 },
+                TransitionKernel::Motion(template) => AdmittedTransitionKernel::Motion {
+                    source: admit_visual_source(
+                        &VisualSource::Motion(template.clone()),
+                        to_clip.exact_start,
+                        transition.duration,
+                        window,
+                        canvas.frame_rate,
+                        resource_targets,
+                        resources,
+                        sources,
+                        &format!("{path}/kernel/motion"),
+                        diagnostics,
+                    ),
+                },
             };
             let transition_footprint = match &kernel {
-                AdmittedTransitionKernel::Builtin { .. } => VisualFootprint::default(),
+                AdmittedTransitionKernel::Builtin { .. }
+                | AdmittedTransitionKernel::Motion { .. } => VisualFootprint::default(),
                 AdmittedTransitionKernel::Extension { call } => kernels
                     .get(call.kernel as usize)
                     .map(|kernel| kernel.visual_footprint)

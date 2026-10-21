@@ -129,6 +129,32 @@ test("standalone caption Studio uses a caption track and preserves the saved pre
   expect(repeated.warnings).toEqual(normalized.warnings);
 });
 
+test("Timeline Motion transitions compile at their transition path as transition() templates", async () => {
+  const dissolve = `export const composition={width:64,height:32,fps:4,duration:1};
+    export const role=transition();
+    export default function Dissolve(){ const ctx = useTime(); return <Scene className="relative h-full w-full">
+      <Image src="input://from" className="absolute inset-0 h-full w-full"/>
+      <Image src="input://to" className="absolute inset-0 h-full w-full" style={{opacity:ctx.host.progress}}/>
+    </Scene>;}`;
+  const request = (source: string) => ({
+    id: 40, runtimeAssets, runtimeBaseUrl,
+    authorTimeline: { canvas: { width: 64, height: 32, fps: 4 }, resources: { dissolve: "dissolve.motion.tsx" },
+      tracks: { visual: [{ clips: [
+        { kind: "solid", color: "#ff0000", start: 0, duration: 1.5 },
+        { kind: "solid", color: "#0000ff", start: 0.5, duration: 1.5 },
+      ], transitions: [{ from: 0, to: 1, kind: "motion", component: "dissolve" }] }] } },
+    instances: [{ clipPath: "/tracks/visual/0/transitions/0", entry: "dissolve.motion.tsx",
+      modules: { "dissolve.motion.tsx": source }, fonts: [] }],
+  }) as Parameters<typeof compileStudioPreview>[0];
+  const result = await compileStudioPreview(request(dissolve));
+  if (result.status !== "ok") throw new Error(result.message);
+  const items = JSON.parse(result.package.timelineJson).document.visual.tracks[0].items;
+  expect(items[1].kernel.motion.role).toEqual({ type: "transition" });
+  const clip = await compileStudioPreview(request(dissolve.replace("export const role=transition();", "")));
+  expect(clip.status).toBe("error");
+  if (clip.status === "error") expect(clip.message).toContain("transition()");
+});
+
 test("300 Timeline captions compile each immutable word input once and retain exact frame identity", async () => {
   const font = new Uint8Array(await readFile(new URL("../../../../assets/fonts/noto/NotoSans-Regular.ttf", import.meta.url)));
   const digest = `sha256:${new Bun.CryptoHasher("sha256").update(font).digest("hex")}`;

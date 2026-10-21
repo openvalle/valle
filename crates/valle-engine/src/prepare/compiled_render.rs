@@ -11,6 +11,7 @@ use valle_draw::{
         Affine2d, DrawProgramBuilder, InstanceBatchNode, InstanceColumns, InstanceShape,
         LinearColor, Node,
     },
+    requirements::HostFrame,
 };
 
 use valle_timeline::internal::wire::resource::{
@@ -43,9 +44,9 @@ use crate::{
 use super::{
     DynamicBindingKind, DynamicValue, FrameInspection, FrameMetadata, PrepareError, PrepareOutput,
     PrepareState, PreparedEffect, PreparedEffectKernel, PreparedEffectSpace, PreparedFrame,
-    PreparedLayer, PreparedProgramKind, PreparedSource, PreparedSourceKind, PreparedTransition,
-    PreparedTransitionKernel, PreparedVisualItem, ProductPrepareCaches, motion, prepare_background,
-    validate,
+    PreparedLayer, PreparedMotionTransition, PreparedProgramKind, PreparedSource,
+    PreparedSourceKind, PreparedTransition, PreparedTransitionKernel, PreparedVisualItem,
+    ProductPrepareCaches, motion, prepare_background, validate,
 };
 
 #[cfg(feature = "text")]
@@ -109,9 +110,16 @@ pub fn prepare_compiled_render_frame_cached(
                 visual.push(PreparedVisualItem::Layer(Box::new(layer)));
             }
             EvaluatedVisualOperation::Transition(transition) => {
-                visual.push(PreparedVisualItem::Transition(Box::new(
-                    prepare_transition(render, evaluated, transition, &path, &mut state)?,
-                )));
+                visual.push(match transition.template() {
+                    Some(template) => {
+                        PreparedVisualItem::MotionTransition(Box::new(prepare_motion_transition(
+                            render, evaluated, transition, template, &path, &mut state,
+                        )?))
+                    }
+                    None => PreparedVisualItem::Transition(Box::new(prepare_transition(
+                        render, evaluated, transition, &path, &mut state,
+                    )?)),
+                });
             }
         }
     }
@@ -238,6 +246,12 @@ fn prepare_transition(
                 future_frames: descriptor.visual_footprint().future_frames(),
             }
         }
+        CompiledTransitionKernel::Motion { .. } => {
+            return Err(PrepareError::at(
+                format!("{path}.kernel"),
+                "a Motion transition is prepared with its template",
+            ));
+        }
     };
     let progress = state
         .dynamic
@@ -273,6 +287,78 @@ fn prepare_transition(
         progress,
         from,
         to,
+    })
+}
+
+/// The clips a Motion transition's template reads come first, so their programs and slots precede
+/// the template that samples them. Clips it never reads are not prepared.
+fn prepare_motion_transition(
+    render: &CompiledRender,
+    evaluated: &EvaluatedRenderFrame,
+    transition: &EvaluatedRenderTransition,
+    template: &EvaluatedSourceRef,
+    path: &str,
+    state: &mut PrepareState<'_>,
+) -> Result<PreparedMotionTransition, PrepareError> {
+    let frames = render
+        .sources()
+        .source(template.source_index())
+        .and_then(|source| source.motion())
+        .and_then(|instance| render.motion_scene(instance))
+        .ok_or_else(|| {
+            PrepareError::at(
+                format!("{path}.source.component"),
+                "admitted Motion template payload missing",
+            )
+        })?
+        .artifact()
+        .frames();
+    let from = if frames.contains(&HostFrame::From) {
+        Some(prepare_endpoint(
+            render,
+            evaluated,
+            transition.from_clip_id(),
+            transition.track_id(),
+            transition.from(),
+            transition.from_layer(),
+            &format!("{path}.from"),
+            state,
+        )?)
+    } else {
+        None
+    };
+    let to = if frames.contains(&HostFrame::To) {
+        Some(prepare_endpoint(
+            render,
+            evaluated,
+            transition.to_clip_id(),
+            transition.track_id(),
+            transition.to(),
+            transition.to_layer(),
+            &format!("{path}.to"),
+            state,
+        )?)
+    } else {
+        None
+    };
+    // The camera already moved the clips; the template lies on the canvas they are seen in.
+    let camera = state.frame.camera.take();
+    let prepared = prepare_endpoint(
+        render,
+        evaluated,
+        &format!("{}->{}", transition.from_clip_id(), transition.to_clip_id()),
+        transition.track_id(),
+        template,
+        &EvaluatedRenderLayer::canvas(),
+        path,
+        state,
+    );
+    state.frame.camera = camera;
+    Ok(PreparedMotionTransition {
+        semantic_path: path.to_owned(),
+        from,
+        to,
+        template: prepared?,
     })
 }
 
@@ -385,10 +471,10 @@ fn prepare_endpoint(
                         "Motion source has no base canvas",
                     )
                 })?;
-            let overlay = matches!(
+            // Templates lay out on their host's viewport; only a clip keeps its own canvas.
+            let overlay = !matches!(
                 prepared_scene.artifact().role,
-                valle_timeline::MotionRole::Overlay { .. }
-                    | valle_timeline::MotionRole::CaptionPresenter { .. }
+                valle_timeline::MotionRole::Clip
             );
             let source_extent = if overlay {
                 let size = layer.size().unwrap_or([
@@ -1040,13 +1126,7 @@ fn adapt_program_clip(
         .sources()
         .source(source.source_index())
         .and_then(|s| s.motion())
-        .is_some_and(|m| {
-            matches!(
-                m.role(),
-                valle_timeline::MotionRole::Overlay { .. }
-                    | valle_timeline::MotionRole::CaptionPresenter { .. }
-            )
-        });
+        .is_some_and(|m| !matches!(m.role(), valle_timeline::MotionRole::Clip));
     let canvas = render.canvas();
     let (source_width, source_height) = source_extent.unwrap_or((canvas.width(), canvas.height()));
     let transform = if source_extent.is_some() && !overlay {

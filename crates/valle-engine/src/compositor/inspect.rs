@@ -479,6 +479,7 @@ impl FrameCost {
                 ExecutionPassKind::BindBackdropView { .. }
                 | ExecutionPassKind::AliasResource { .. } => continue,
                 ExecutionPassKind::ClearRegion { .. } => "clear",
+                ExecutionPassKind::FrameRegion { .. } => "frame",
                 ExecutionPassKind::ImportRegion { .. } => "import",
                 // A program writes its result only through its local passes: count those, not
                 // the outer pass again.
@@ -812,6 +813,7 @@ fn pass_kind_label(kind: &LogicalPassKind) -> &'static str {
         LogicalPassKind::ClearComposite { .. } => "clear",
         LogicalPassKind::Import { .. } => "import",
         LogicalPassKind::Draw { .. } => "draw",
+        LogicalPassKind::Frame { .. } => "frame",
         LogicalPassKind::Group { .. } => "group",
         LogicalPassKind::BackdropRead { .. } => "backdrop-read",
         LogicalPassKind::Filter { .. } => "filter",
@@ -833,6 +835,7 @@ fn resource_kind_label(kind: &GraphResourceKind) -> String {
         GraphResourceKind::BackdropView { source_version, .. } => {
             format!("backdrop-view:v{}", source_version.get())
         }
+        GraphResourceKind::Frame => "frame".to_owned(),
         GraphResourceKind::Mask => "mask".to_owned(),
         GraphResourceKind::Auxiliary => "auxiliary".to_owned(),
         GraphResourceKind::HistorySlot { slot } => format!("history:{slot}"),

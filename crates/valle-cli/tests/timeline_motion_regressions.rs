@@ -1965,3 +1965,269 @@ export default function Metadata(props) { const ctx = useTime(); const data = us
     );
     success(run(dir, &["timeline", "check", "metadata.timeline.json"]));
 }
+
+/// The documented templates: a dissolve of two images, and a shader that mixes premultiplied
+/// colors as the built-in fade does.
+const DISSOLVE: &str = r##"export const composition = { width: 48, height: 48, duration: 1, fps: 30 };
+export const role = transition();
+
+export default function Dissolve() {
+  const ctx = useTime();
+  return <Scene className="relative h-full w-full">
+    <Image src="input://from" className="absolute inset-0 h-full w-full" />
+    <Image src="input://to" className="absolute inset-0 h-full w-full"
+      style={{ opacity: ctx.host.progress }} />
+  </Scene>;
+}"##;
+const MIX: &str = r##"const mix = `
+uniform float progress;
+uniform shader outgoing;
+uniform shader incoming;
+
+float4 valle_main(float2 uv) {
+  float4 p = sample_outgoing(uv);
+  float4 q = sample_incoming(uv);
+  float4 m = mix(float4(p.rgb * p.a, p.a), float4(q.rgb * q.a, q.a), progress);
+  return float4(m.rgb / m.a, m.a);
+}`;
+export const composition = { width: 64, height: 32, duration: 1, fps: 30 };
+export const role = transition();
+
+export default function Mix() {
+  const ctx = useTime();
+  return <Scene>
+    <ShaderLayer code={mix} inputs={{ outgoing: "input://from", incoming: "input://to" }}
+      uniforms={{ progress: ctx.host.progress }}
+      style={{ width: ctx.viewport.width, height: ctx.viewport.height }} />
+  </Scene>;
+}"##;
+
+fn transition_timeline(clips: Value, transitions: Value) -> Value {
+    json!({
+        "canvas": {"width": 64, "height": 32, "fps": 30, "background": "#ffffff"},
+        "resources": {"dissolve": "dissolve.motion.tsx", "mix": "mix.motion.tsx",
+            "card": "card.motion.tsx"},
+        "tracks": {"visual": [{"clips": clips, "transitions": transitions}]}
+    })
+}
+
+#[test]
+fn motion_transitions_read_both_clips_as_frames() {
+    let temp = tempfile::tempdir().unwrap();
+    let dir = temp.path();
+    // The dissolve's composition is not the canvas: templates lay out on the canvas, so the
+    // frames still line up with their clips.
+    std::fs::write(dir.join("dissolve.motion.tsx"), DISSOLVE).unwrap();
+    std::fs::write(dir.join("mix.motion.tsx"), MIX).unwrap();
+    std::fs::write(
+        dir.join("card.motion.tsx"),
+        r##"export const composition = { width: 64, height: 32, fps: 30, duration: 3 };
+export default function Card() {
+  return <Scene style={{ width: 64, height: 32 }}>
+    <View style={{ position: "absolute", left: 8, top: 6, width: 40, height: 20, borderRadius: 6,
+      backgroundImage: "linear-gradient(90deg in srgb, #ff2050, #2040ff)", opacity: 0.7 }} />
+  </Scene>;
+}"##,
+    )
+    .unwrap();
+    // The window is [0.5, 1.5): frames 15 to 44, with progress exactly 0 and 1 at its ends.
+    let frames = [10, 15, 22, 30, 44, 50];
+    let render = |name: &str, timeline: Value| -> Vec<Vec<u8>> {
+        put(dir, &format!("{name}.json"), timeline);
+        let list = frames.map(|frame| frame.to_string()).join(",");
+        let pattern = format!("{name}-%d.png");
+        success(run(
+            dir,
+            &[
+                "timeline",
+                "render",
+                &format!("{name}.json"),
+                "--frames",
+                &list,
+                "-o",
+                &pattern,
+            ],
+        ));
+        frames
+            .iter()
+            .map(|frame| {
+                valle_media::codec::read_rgba_png(&dir.join(format!("{name}-{frame}.png")))
+                    .unwrap()
+                    .data
+            })
+            .collect()
+    };
+    let solids = json!([
+        {"kind": "solid", "color": "#ff2050", "start": 0, "duration": 1.5},
+        {"kind": "solid", "color": "#22cc88", "start": 0.5, "duration": 1.5}
+    ]);
+    // Moved, scaled, turned and translucent clips: each frame carries its clip's own placement.
+    let placed = json!([
+        {"kind": "solid", "color": "#2040ff", "start": 0, "duration": 1.5,
+            "position": [0.35, 0.5], "scale": [0.5, 0.75], "opacity": 0.6},
+        {"kind": "motion", "component": "card", "start": 0.5, "duration": 1.5,
+            "rotation": 12, "opacity": 0.8}
+    ]);
+    for (scene, clips, components) in [
+        ("solids", &solids, &["dissolve", "mix"][..]),
+        ("placed", &placed, &["mix"][..]),
+    ] {
+        let builtin = render(
+            &format!("{scene}-fade"),
+            transition_timeline(clips.clone(), json!([{"from": 0, "to": 1, "kind": "fade"}])),
+        );
+        for component in components {
+            let template = render(
+                &format!("{scene}-{component}"),
+                transition_timeline(
+                    clips.clone(),
+                    json!([{"from": 0, "to": 1, "kind": "motion", "component": component}]),
+                ),
+            );
+            for ((frame, builtin), template) in frames.iter().zip(&builtin).zip(&template) {
+                let worst = builtin
+                    .iter()
+                    .zip(template)
+                    .map(|(a, b)| a.abs_diff(*b))
+                    .max()
+                    .unwrap();
+                assert!(
+                    worst <= 1,
+                    "{scene} {component} frame {frame} differs by {worst}"
+                );
+            }
+        }
+        // Mid-transition the frame shows neither clip alone.
+        assert!(
+            builtin[2] != builtin[0] && builtin[2] != builtin[5],
+            "{scene}: frame 22 shows one clip alone"
+        );
+    }
+}
+
+#[test]
+fn transition_templates_read_no_clips_outside_a_transition() {
+    let temp = tempfile::tempdir().unwrap();
+    let dir = temp.path();
+    std::fs::write(dir.join("dissolve.motion.tsx"), DISSOLVE).unwrap();
+    std::fs::write(dir.join("mix.motion.tsx"), MIX).unwrap();
+    std::fs::write(
+        dir.join("card.motion.tsx"),
+        r##"export const composition = { width: 64, height: 32, fps: 30, duration: 3 };
+export default function Card() {
+  return <Scene className="h-full w-full" style={{ backgroundColor: "#102030" }} />;
+}"##,
+    )
+    .unwrap();
+    // Alone, both frames are transparent.
+    for input in ["dissolve.motion.tsx", "mix.motion.tsx"] {
+        let output = format!("{input}.png");
+        success(run(
+            dir,
+            &["motion", "render", input, "--frame", "15", "-o", &output],
+        ));
+        let pixels = valle_media::codec::read_rgba_png(&dir.join(&output))
+            .unwrap()
+            .data;
+        assert!(pixels.chunks_exact(4).all(|pixel| pixel[3] == 0), "{input}");
+    }
+    // As an ordinary clip it lays out like an overlay, over transparent frames.
+    let clip = |extra: Value| {
+        let mut clip =
+            json!({"kind": "motion", "component": "dissolve", "start": 0, "duration": 2});
+        clip.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        json!({
+            "canvas": {"width": 64, "height": 32, "fps": 30, "background": "#ffffff"},
+            "resources": {"dissolve": "dissolve.motion.tsx"},
+            "tracks": {"visual": [
+                {"clips": [{"kind": "solid", "color": "#22cc88", "start": 0, "duration": 2}]},
+                {"clips": [clip]}
+            ]}
+        })
+    };
+    put(dir, "clip.json", clip(json!({})));
+    success(run(
+        dir,
+        &[
+            "timeline",
+            "render",
+            "clip.json",
+            "--frame",
+            "20",
+            "-o",
+            "clip.png",
+        ],
+    ));
+    assert_eq!(pixel(dir, "clip.png", 32, 16), vec![0x22, 0xcc, 0x88]);
+    let error = |name: &str, timeline: Value| -> String {
+        put(dir, name, timeline);
+        let output = run(dir, &["timeline", "check", name]);
+        assert!(!output.status.success(), "{name}");
+        let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+        report["error"]["message"].as_str().unwrap().to_owned()
+    };
+    let message = error("fit.json", clip(json!({"fit": "cover"})));
+    assert!(
+        message.contains("transition does not admit `fit`"),
+        "{message}"
+    );
+    // A transition draws through a transition() template, and only such a template reads clips.
+    let solids = json!([
+        {"kind": "solid", "color": "#ff2050", "start": 0, "duration": 1.5},
+        {"kind": "solid", "color": "#22cc88", "start": 0.5, "duration": 1.5}
+    ]);
+    let message = error(
+        "role.json",
+        transition_timeline(
+            solids.clone(),
+            json!([{"from": 0, "to": 1, "kind": "motion", "component": "card"}]),
+        ),
+    );
+    assert!(message.contains("transition()"), "{message}");
+    let message = error(
+        "params.json",
+        transition_timeline(
+            solids.clone(),
+            json!([{"from": 0, "to": 1, "kind": "motion", "component": "mix",
+                "params": {"softness": 1}}]),
+        ),
+    );
+    assert!(message.contains("unknown field `params`"), "{message}");
+    let message = error(
+        "component.json",
+        transition_timeline(
+            solids.clone(),
+            json!([{"from": 0, "to": 1, "kind": "fade", "component": "mix"}]),
+        ),
+    );
+    assert!(message.contains("unknown field `component`"), "{message}");
+    std::fs::write(
+        dir.join("reader.motion.tsx"),
+        r##"export const composition = { width: 64, height: 32, fps: 30, duration: 1 };
+export default function Reader() {
+  return <Scene><Image src="input://from" className="absolute inset-0 h-full w-full" /></Scene>;
+}"##,
+    )
+    .unwrap();
+    let output = run(dir, &["motion", "check", "reader.motion.tsx"]);
+    assert!(!output.status.success());
+    let report = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        report.contains("only a transition() template reads a clip"),
+        "{report}"
+    );
+    std::fs::write(
+        dir.join("data.motion.tsx"),
+        MIX.replace(
+            r#"outgoing: "input://from""#,
+            r#"outgoing: { src: "input://from", kind: "data" }"#,
+        ),
+    )
+    .unwrap();
+    let output = run(dir, &["motion", "check", "data.motion.tsx"]);
+    assert!(!output.status.success());
+    let report = String::from_utf8_lossy(&output.stdout);
+    assert!(report.contains("reads a clip"), "{report}");
+}

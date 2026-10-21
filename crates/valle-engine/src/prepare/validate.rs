@@ -1,7 +1,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use thiserror::Error;
-use valle_draw::{program::DrawProgram, requirements::TextureKind};
+use valle_draw::{
+    program::DrawProgram,
+    requirements::{HostFrame, TextureKind},
+};
 use valle_timeline::RationalTime;
 
 use crate::{
@@ -16,9 +19,9 @@ use super::{
     BoundsReason, Diagnostic, DiagnosticCode, DiagnosticSeverity, DynamicBindingId,
     DynamicBindingKind, DynamicBindings, DynamicValue, FrameGeometry, PrepareOutput,
     PreparedCaption, PreparedDestinationUse, PreparedEffect, PreparedEffectSpace,
-    PreparedExternalBackdrop, PreparedFrame, PreparedLayer, PreparedProgram, PreparedProgramKind,
-    PreparedResource, PreparedSource, PreparedSourceKind, PreparedTransition, PreparedVisualItem,
-    ProgramId, bounds::MAX_DEVICE_INTERMEDIATE_PIXELS,
+    PreparedExternalBackdrop, PreparedFrame, PreparedLayer, PreparedMotionTransition,
+    PreparedProgram, PreparedProgramKind, PreparedResource, PreparedSource, PreparedSourceKind,
+    PreparedTransition, PreparedVisualItem, ProgramId, bounds::MAX_DEVICE_INTERMEDIATE_PIXELS,
 };
 
 pub fn validate_prepare_output(output: &PrepareOutput) -> Result<(), PreparedFrameValidationError> {
@@ -65,6 +68,12 @@ pub(crate) fn validate_prepare_output_bindings(
                 )?;
                 bindings.layer(&transition.from)?;
                 bindings.layer(&transition.to)?;
+            }
+            PreparedVisualItem::MotionTransition(transition) => {
+                for clip in transition.from.iter().chain(&transition.to) {
+                    bindings.layer(clip)?;
+                }
+                bindings.layer(&transition.template)?;
             }
         }
     }
@@ -325,6 +334,9 @@ fn validate_prepared_frame_impl(
             PreparedVisualItem::Transition(transition) => {
                 admission.transition(transition, &path)?
             }
+            PreparedVisualItem::MotionTransition(transition) => {
+                admission.motion_transition(transition, &path)?
+            }
         }
     }
     validate_effect_order(&frame.adjustments, "adjustments")?;
@@ -364,6 +376,47 @@ impl Admission<'_> {
         self.dynamic(transition.progress, &format!("{path}.progress"))?;
         self.layer(&transition.from, &format!("{path}.from"))?;
         self.layer(&transition.to, &format!("{path}.to"))
+    }
+
+    /// The template lies at the transition's path and reads only the clips prepared before it.
+    fn motion_transition(
+        &mut self,
+        transition: &PreparedMotionTransition,
+        path: &str,
+    ) -> Result<(), PreparedFrameValidationError> {
+        expect_path(&transition.semantic_path, path)?;
+        if let Some(from) = &transition.from {
+            self.layer(from, &format!("{path}.from"))?;
+        }
+        if let Some(to) = &transition.to {
+            self.layer(to, &format!("{path}.to"))?;
+        }
+        let PreparedSource::Program {
+            source_kind: PreparedSourceKind::Motion,
+            program,
+        } = transition.template.source
+        else {
+            return Err(invalid(path, "a Motion transition draws a Motion template"));
+        };
+        let prepared = (program.get() as usize)
+            .checked_sub(1)
+            .and_then(|index| self.frame.programs.get(index));
+        if prepared.is_some_and(|prepared| {
+            prepared
+                .requirements
+                .frames
+                .iter()
+                .any(|frame| match frame {
+                    HostFrame::From => transition.from.is_none(),
+                    HostFrame::To => transition.to.is_none(),
+                })
+        }) {
+            return Err(invalid(
+                path,
+                "the template reads a clip that was not prepared",
+            ));
+        }
+        self.layer(&transition.template, path)
     }
 
     fn layer(
@@ -628,6 +681,9 @@ impl Admission<'_> {
                     )?)
                 }
                 TextureKind::Image | TextureKind::Generated => ResourceSample::Static,
+                TextureKind::Frame => {
+                    return Err(invalid(path, "a host frame is no external texture"));
+                }
             };
             if request.sample() != expected_sample {
                 return Err(invalid(

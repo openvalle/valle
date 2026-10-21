@@ -229,14 +229,57 @@ pub struct TimelineVisualTrackWire {
 
 /// A transition occupies the intersection of two adjacent visual clips.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TimelineTransitionWire {
     pub from: usize,
     pub to: usize,
-    pub kind: TransitionKind,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub params: valle_draw::transition::TransitionParams,
+    #[serde(flatten)]
+    pub effect: TimelineTransitionEffectWire,
+}
+
+impl<'de> Deserialize<'de> for TimelineTransitionWire {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = Box::<RawValue>::deserialize(deserializer)?;
+        let mut fields = raw_object(raw.get()).map_err(de::Error::custom)?;
+        let from = required_raw(&mut fields, "from").map_err(de::Error::custom)?;
+        let to = required_raw(&mut fields, "to").map_err(de::Error::custom)?;
+        let effect = parse_transition_effect(&mut fields).map_err(de::Error::custom)?;
+        Ok(Self { from, to, effect })
+    }
+}
+
+/// What draws a transition: a built-in kernel, or a Motion template that declares
+/// `transition()` and reads both clips as frames.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(untagged)]
+pub enum TimelineTransitionEffectWire {
+    Builtin {
+        kind: TransitionKind,
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        params: valle_draw::transition::TransitionParams,
+    },
+    Motion {
+        kind: MotionTransitionKindWire,
+        component: String,
+        /// Template props; curves use seconds from the start of the transition.
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        props: BTreeMap<String, TimelineParamWire<JsonValue>>,
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        resources: BTreeMap<String, String>,
+    },
+}
+
+/// The `kind` of a transition a Motion template draws.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MotionTransitionKindWire {
+    Motion,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -998,6 +1041,28 @@ fn parse_visual_source(
     };
     reject_unknown(std::mem::take(fields))?;
     Ok(source)
+}
+
+fn parse_transition_effect(
+    fields: &mut BTreeMap<String, Box<RawValue>>,
+) -> Result<TimelineTransitionEffectWire, String> {
+    let kind: String = required_raw(fields, "kind")?;
+    let effect = if kind == "motion" {
+        TimelineTransitionEffectWire::Motion {
+            kind: MotionTransitionKindWire::Motion,
+            component: required_raw(fields, "component")?,
+            props: take_raw(fields, "props")?.unwrap_or_default(),
+            resources: take_raw(fields, "resources")?.unwrap_or_default(),
+        }
+    } else {
+        TimelineTransitionEffectWire::Builtin {
+            kind: serde_json::from_value(JsonValue::String(kind))
+                .map_err(|error| format!("kind: {error}, or `motion` for a Motion template"))?,
+            params: take_raw(fields, "params")?.unwrap_or_default(),
+        }
+    };
+    reject_unknown(std::mem::take(fields))?;
+    Ok(effect)
 }
 
 impl fmt::Display for TimelineTimeWire {
