@@ -170,8 +170,9 @@ Remotion's `useCurrentFrame()` is `useTime().localFrame`, and its
 `useVideoConfig()` values come from `composition` and from `useTime()` as `fps`
 and `durationFrames`.
 
-Module declarations use `const` and functions. Function and arrow helpers can
-return scalars or JSX. The body of a component, a helper or a list callback runs
+Module declarations use `const` and functions. They run in the scope of Motion's
+built-in helpers, so a module-level `const` cannot take one of their names, such as
+`clamp`, `path` or `effect`. Function and arrow helpers can return scalars or JSX. The body of a component, a helper or a list callback runs
 once, while the scene is prepared, and takes ordinary JavaScript statements:
 `const` and `let`, assignment, `if`/`else`, early `return`, `for`, `for...of` and
 `while`. The compiler lowers the body into one function of the time:

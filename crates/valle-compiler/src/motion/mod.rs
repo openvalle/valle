@@ -781,6 +781,20 @@ fn module_reserved_intrinsic_binding(program: &Program<'_>) -> Option<Span> {
     None
 }
 
+/// A name a module-level constant takes from a built-in helper, which it runs beside. A function
+/// declaration may take one.
+fn helper_redeclaration(statement: &Statement<'_>) -> Option<(Span, String)> {
+    let Statement::VariableDeclaration(declaration) = statement else {
+        return None;
+    };
+    let identifier = declaration
+        .declarations
+        .iter()
+        .flat_map(|declarator| declarator.id.get_binding_identifiers())
+        .find(|identifier| prelude::declares(identifier.name.as_str()))?;
+    Some((identifier.span(), identifier.name.to_string()))
+}
+
 struct BatchFieldParts<'s> {
     from: &'s Expression<'s>,
     to: &'s Expression<'s>,

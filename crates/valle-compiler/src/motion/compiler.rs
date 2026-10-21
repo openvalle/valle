@@ -92,6 +92,17 @@ impl<'s> Compiler<'s> {
                 }
                 _ => false,
             };
+            if is_prepare_declaration && let Some((span, name)) = helper_redeclaration(statement) {
+                return Err(vec![diagnostic_at(
+                    source,
+                    DiagCode::GrammarForbidden,
+                    span,
+                    format!(
+                        "`{name}` is a Motion built-in, and module-level declarations run beside \
+                         the built-ins; give this one another name"
+                    ),
+                )]);
+            }
             if is_prepare_declaration {
                 // Strip TypeScript-only wrappers before evaluating module constants in QuickJS.
                 if let Statement::VariableDeclaration(declaration) = statement

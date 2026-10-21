@@ -332,6 +332,10 @@ fn components_take_props_and_read_the_time_and_data_through_hooks() {
         &["reserved Motion intrinsics"],
     );
     expect_message(
+        &format!("const effect = `half`;\n{}", root("")),
+        &["`effect` is a Motion built-in", "another name"],
+    );
+    expect_message(
         &body("const [count] = useState(0);", "1"),
         &["`useState` is not available", "pure function of time"],
     );
