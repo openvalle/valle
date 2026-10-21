@@ -3487,9 +3487,11 @@ function drawProgramImageFilter(CanvasKit: CanvasKit, filter: Wire, input: Image
   if (filter.kind === "velocityBlur") {
     const velocity = pair(filter.velocity, "velocity blur vector");
     const shutter = Math.min(1, Math.max(0, finiteNumber(filter.shutterAngleDegrees, "shutter angle") / 360));
-    if (Math.max(Math.abs(velocity[0]), Math.abs(velocity[1])) * shutter <= 1e-6) return input;
+    const travel = Math.max(Math.abs(velocity[0]), Math.abs(velocity[1])) * shutter;
+    if (travel <= 1e-6) return input;
     const sampling = { filter: CanvasKit.FilterMode.Nearest, mipmap: CanvasKit.MipmapMode.None };
-    const samples = 9;
+    // As Filter::velocity_blur_samples counts them: a copy for every 2px of travel, 9 to 32.
+    const samples = Math.min(32, Math.max(9, Math.ceil(travel / 2) + 1));
     const weight = 1 / samples;
     const alpha = CanvasKit.ColorFilter.MakeMatrix([
       1,0,0,0,0, 0,1,0,0,0, 0,0,1,0,0, 0,0,0,weight,0,

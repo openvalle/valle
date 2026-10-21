@@ -3,30 +3,31 @@
 //! through the filter's intermediate surfaces.
 
 use skia_safe::{IRect, Image, Surface};
+use valle_draw::program::Filter;
 
 use super::draw::DrawError;
 
-/// Shutter positions the blur averages.
-pub(super) const SAMPLES: usize = 9;
-
-/// The offset of each shutter position, or `None` where the blur leaves its input unchanged.
-pub(super) fn offsets(
-    velocity: [f32; 2],
-    shutter_angle_degrees: f32,
-) -> Option<[(f32, f32); SAMPLES]> {
+/// The offset of each shutter position, as many as the travel takes, or `None` where the blur
+/// leaves its input unchanged.
+pub(super) fn offsets(velocity: [f32; 2], shutter_angle_degrees: f32) -> Option<Vec<(f32, f32)>> {
     let shutter = (shutter_angle_degrees / 360.0).clamp(0.0, 1.0);
     if velocity[0].abs().max(velocity[1].abs()) * shutter <= 1.0e-6 {
         return None;
     }
-    Some(std::array::from_fn(|index| {
-        let phase = index as f32 / (SAMPLES - 1) as f32 - 0.5;
-        (velocity[0] * shutter * phase, velocity[1] * shutter * phase)
-    }))
+    let samples = Filter::velocity_blur_samples(velocity, shutter_angle_degrees);
+    Some(
+        (0..samples)
+            .map(|index| {
+                let phase = index as f32 / (samples - 1) as f32 - 0.5;
+                (velocity[0] * shutter * phase, velocity[1] * shutter * phase)
+            })
+            .collect(),
+    )
 }
 
-/// The row-major color matrix that weights each position: its alpha by one share.
-pub(super) fn weight() -> [f32; 20] {
-    let weight = 1.0 / SAMPLES as f32;
+/// The row-major color matrix that weights each of `samples` positions: its alpha by one share.
+pub(super) fn weight(samples: usize) -> [f32; 20] {
+    let weight = 1.0 / samples as f32;
     [
         1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0,
         weight, 0.0,
@@ -36,7 +37,7 @@ pub(super) fn weight() -> [f32; 20] {
 /// The velocity blur of the `source` subset of `input`, placed at canvas `origin`, as the image
 /// filter computes it on Raster, written straight into the pixels of the canvas's clip.
 ///
-/// The filter samples nine translated copies of the input at their nearest pixels, weights each
+/// The filter samples translated copies of the input at their nearest pixels, weights each
 /// through the color matrix and adds them with Plus blends, each drawn into a surface of its own.
 /// Here each pixel takes the same samples, the same arithmetic and the same rounding of every
 /// partial sum to half floats. Returns `false`, drawing nothing, where the filter's own draw
@@ -85,7 +86,7 @@ mod fused {
 
     use super::{
         super::draw::{DrawError, rows_clip},
-        SAMPLES, offsets, weight,
+        offsets, weight,
     };
 
     /// Pixels per vector.
@@ -131,7 +132,6 @@ mod fused {
             row_bytes: pixels.row_bytes(),
             width: source.width(),
         };
-        let transparent = vec![0.0; 4 * taps.plane()];
         // As for a Src draw: pixels a snapshot still shares are replaced before they are written,
         // by a copy unless the clip is the whole surface.
         let whole = clip == IRect::from_wh(surface.width(), surface.height());
@@ -151,9 +151,9 @@ mod fused {
             clip.top as usize * row_bytes..(clip.bottom as usize * row_bytes).min(bytes.len());
         // The pipeline reads the coefficients from memory and applies each by a fused
         // multiply-add, including the ones and zeros; keep them data here too.
-        let matrix = std::hint::black_box(weight());
+        let matrix = std::hint::black_box(weight(offsets.len()));
         fill_image_rows(&mut bytes[span], row_bytes, |first, rows| {
-            blur_rows(&taps, &input, &matrix, &transparent, first, rows, row_bytes);
+            blur_rows(&taps, &input, &matrix, first, rows, row_bytes);
         });
         Ok(true)
     }
@@ -163,9 +163,9 @@ mod fused {
         clip: IRect,
         /// Clip column `x` of position `j` reads input column `x + columns[j]`, transparent
         /// outside the input.
-        columns: [i32; SAMPLES],
-        /// For each clip row, the input row each position reads, or -1.
-        rows: Vec<[i32; SAMPLES]>,
+        columns: Vec<i32>,
+        /// For each clip row in turn, the input row each position reads, or -1.
+        rows: Vec<i32>,
         /// The input columns the positions read across the clip, past the input's edges too.
         reach: [i32; 2],
     }
@@ -173,7 +173,8 @@ mod fused {
     impl Taps {
         /// The samples of an input placed at `placed`, its copies translated by `offsets`, for
         /// the pixels of `clip`, or `None` where the filter's draw does not take them this way.
-        fn new(clip: IRect, placed: IRect, offsets: &[(f32, f32); SAMPLES]) -> Option<Self> {
+        fn new(clip: IRect, placed: IRect, offsets: &[(f32, f32)]) -> Option<Self> {
+            let samples = offsets.len();
             // Skia scales a filter's layer down past this size.
             let largest = (2 * clip.width().max(clip.height())).max(2048);
             // Keep whole pixels and pixel centers exact in f32.
@@ -190,10 +191,15 @@ mod fused {
             let size = (placed.width(), placed.height());
             // The filter maps each copy's bounds in double precision, and places its image by the
             // copy's translation composed with the input's in f32.
-            let bounds = offsets.map(|offset| map_bounds(placed, offset));
-            let translations =
-                offsets.map(|(x, y)| (placed.left as f32 + x, placed.top as f32 + y));
-            for tap in 0..SAMPLES {
+            let bounds = offsets
+                .iter()
+                .map(|&offset| map_bounds(placed, offset))
+                .collect::<Vec<_>>();
+            let translations = offsets
+                .iter()
+                .map(|&(x, y)| (placed.left as f32 + x, placed.top as f32 + y))
+                .collect::<Vec<_>>();
+            for tap in 0..samples {
                 let image = map_bounds(IRect::from_wh(size.0, size.1), translations[tap]);
                 // It crops a copy whose bounds miss part of its image, and filters a copy
                 // bilinearly where its offset is whole pixels within a thousandth but its
@@ -206,17 +212,17 @@ mod fused {
             }
             // Partial sum `i` adds copy `i` to the sum before it, over the union of the bounds
             // so far within the clip; the first adds copies 0 and 1.
-            let mut areas = [None; SAMPLES];
+            let mut areas = vec![None; samples];
             let mut union = bounds[0];
-            for tap in 1..SAMPLES {
+            for tap in 1..samples {
                 union = join(union, bounds[tap]);
                 areas[tap] = IRect::intersect(&union, &clip);
             }
-            let mut columns = [0; SAMPLES];
-            let mut rows = vec![[-1; SAMPLES]; clip.height() as usize];
+            let mut columns = vec![0; samples];
+            let mut rows = vec![-1; samples * clip.height() as usize];
             let mut reach = None::<[i32; 2]>;
-            let mut read = [false; SAMPLES];
-            for tap in 0..SAMPLES {
+            let mut read = vec![false; samples];
+            for tap in 0..samples {
                 let Some(area) = areas[tap.max(1)] else {
                     continue;
                 };
@@ -244,7 +250,7 @@ mod fused {
                 let [low, high] = reach.get_or_insert([clip.left + offset, clip.right + offset]);
                 *low = (*low).min(clip.left + offset);
                 *high = (*high).max(clip.right + offset);
-                for (row, sources) in (clip.top..clip.bottom).zip(&mut rows) {
+                for (row, sources) in (clip.top..clip.bottom).zip(rows.chunks_mut(samples)) {
                     if (area.top..area.bottom).contains(&row)
                         && let Some(at) = sample(row, area.top, y, size.1)
                     {
@@ -258,7 +264,7 @@ mod fused {
                 return None;
             }
             // Positions that read nothing read transparent planes from their start.
-            for tap in 0..SAMPLES {
+            for tap in 0..samples {
                 if !read[tap] {
                     columns[tap] = reach[0] - clip.left;
                 }
@@ -351,16 +357,16 @@ mod fused {
 
     /// Writes clip rows `first..` of the blur into `rows`, the target's bytes from the first of
     /// them. Each input row a position reads is weighed once into a slot of channel planes and
-    /// kept while the next clip rows read it.
+    /// kept while the next clip rows read it; a last slot stays transparent.
     fn blur_rows(
         taps: &Taps,
         input: &Input<'_>,
         matrix: &[f32; 20],
-        transparent: &[f32],
         first: usize,
         rows: &mut [u8],
         row_bytes: usize,
     ) {
+        let samples = taps.columns.len();
         let plane = taps.plane();
         let size = 4 * plane;
         let [low, high] = taps.reach;
@@ -368,13 +374,19 @@ mod fused {
         let weighed = [low.max(0), high.min(input.width)];
         // SAFETY: NEON is part of the aarch64 baseline.
         let matrix = matrix.map(|value| unsafe { vdupq_n_f32(value) });
-        let mut slots = vec![0.0; SAMPLES * size];
-        let mut held = [-1; SAMPLES];
+        let mut slots = vec![0.0; (samples + 1) * size];
+        let mut held = vec![-1; samples];
+        let mut starts = vec![0; samples];
         let offsets = taps
             .columns
-            .map(|offset| (taps.clip.left + offset - low) as usize);
+            .iter()
+            .map(|offset| (taps.clip.left + offset - low) as usize)
+            .collect::<Vec<_>>();
         let columns = taps.clip.left as usize * 8..taps.clip.right as usize * 8;
-        for (sources, row) in taps.rows[first..].iter().zip(rows.chunks_mut(row_bytes)) {
+        for (sources, row) in taps.rows[first * samples..]
+            .chunks(samples)
+            .zip(rows.chunks_mut(row_bytes))
+        {
             for &source in sources.iter().filter(|&&source| source >= 0) {
                 if !held.contains(&source) {
                     // A slot no position of this row reads.
@@ -394,13 +406,14 @@ mod fused {
                     );
                 }
             }
-            let planes = sources.map(|source| {
-                match held.iter().position(|&slot| source >= 0 && slot == source) {
-                    Some(slot) => &slots[slot * size..][..size],
-                    None => transparent,
-                }
-            });
-            blur_row(&planes, &offsets, plane, &mut row[columns.clone()]);
+            for (start, &source) in starts.iter_mut().zip(sources) {
+                let slot = held
+                    .iter()
+                    .position(|&slot| source >= 0 && slot == source)
+                    .unwrap_or(samples);
+                *start = slot * size;
+            }
+            blur_row(&slots, &starts, &offsets, plane, &mut row[columns.clone()]);
         }
     }
 
@@ -485,34 +498,36 @@ mod fused {
         }
     }
 
-    /// Sums the positions of one clip row into its pixels `out`: position `j` reads index
-    /// `offsets[j] + i` of its planes for clip column `i`. Each partial sum is the Plus blend of
-    /// the next copy over the sum before it, clamped to one and rounded to half floats as the
-    /// surface that held it stored it.
-    fn blur_row(
-        planes: &[&[f32]; SAMPLES],
-        offsets: &[usize; SAMPLES],
-        plane: usize,
-        out: &mut [u8],
-    ) {
+    /// Sums the positions of one clip row into its pixels `out`: position `j` reads the channel
+    /// planes from `slots[starts[j]..]`, index `offsets[j] + i` for clip column `i`. Each partial
+    /// sum is the Plus blend of the next copy over the sum before it, clamped to one and rounded
+    /// to half floats as the surface that held it stored it.
+    fn blur_row(slots: &[f32], starts: &[usize], offsets: &[usize], plane: usize, out: &mut [u8]) {
+        let samples = starts.len();
         let width = out.len() / 8;
         let blocks = width.div_ceil(LANES);
-        for (planes, offset) in planes.iter().zip(offsets) {
-            assert!(offset + blocks * LANES <= plane && planes.len() == 4 * plane);
+        assert!(samples >= 2 && offsets.len() == samples);
+        for (start, offset) in starts.iter().zip(offsets) {
+            assert!(offset + blocks * LANES <= plane && start + 4 * plane <= slots.len());
         }
         // SAFETY: NEON is part of the aarch64 baseline.
         let one = unsafe { vdupq_n_f32(1.0) };
         for block in 0..blocks {
             let column = block * LANES;
-            // SAFETY: the assertion above keeps every block of every plane inside `planes`.
-            let copy = |tap: usize| unsafe { load(planes[tap], offsets[tap] + column, plane) };
+            // SAFETY: the assertions above keep every block of every plane inside `slots`.
+            let copy = |tap: usize| unsafe {
+                load(
+                    slots.as_ptr().add(starts[tap] + offsets[tap] + column),
+                    plane,
+                )
+            };
             let first = copy(0);
             let mut sum = plus(copy(1), first, one).map(round);
-            for tap in 2..SAMPLES - 1 {
+            for tap in 2..samples - 1 {
                 sum = plus(copy(tap), sum, one).map(round);
             }
             // SAFETY: NEON is part of the aarch64 baseline.
-            let [red, green, blue, alpha] = plus(copy(SAMPLES - 1), sum, one)
+            let [red, green, blue, alpha] = plus(copy(samples - 1), sum, one)
                 .map(|channel| unsafe { vreinterpret_u16_f16(vcvt_f16_f32(channel)) });
             let pixels = uint16x4x4_t(red, green, blue, alpha);
             let out = &mut out[column * 8..];
@@ -530,16 +545,15 @@ mod fused {
         }
     }
 
-    /// The four channels of four columns from planes `plane` floats apart, from index `at`.
+    /// The four channels of four columns from planes `plane` floats apart, from `at`.
     ///
     /// # Safety
     ///
-    /// `at + LANES <= plane` and `planes.len() == 4 * plane`.
+    /// The four floats from `at` and from each of the next three planes are readable.
     #[inline(always)]
-    unsafe fn load(planes: &[f32], at: usize, plane: usize) -> [float32x4_t; 4] {
-        // SAFETY: the caller keeps the four loads inside `planes`.
+    unsafe fn load(at: *const f32, plane: usize) -> [float32x4_t; 4] {
+        // SAFETY: the caller keeps the four loads readable.
         unsafe {
-            let at = planes.as_ptr().add(at);
             [
                 vld1q_f32(at),
                 vld1q_f32(at.add(plane)),

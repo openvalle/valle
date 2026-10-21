@@ -173,6 +173,9 @@ pub enum Filter {
         scale: f32,
         turbulence: bool,
     },
+    /// The average of copies spread evenly along the travel of the shutter, `velocity` scaled by
+    /// the open fraction of the frame and centred on the input; see
+    /// [`Filter::velocity_blur_samples`] for how many.
     VelocityBlur {
         velocity: [f32; 2],
         shutter_angle_degrees: f32,
@@ -180,6 +183,17 @@ pub enum Filter {
 }
 
 impl Filter {
+    /// The copies a velocity blur averages for its velocity in device pixels: one for every 2px
+    /// of travel along the larger axis, so a long trail stays smooth, but at least 9 and at most
+    /// 32, which bounds the cost; past 62px the copies spread further apart.
+    pub fn velocity_blur_samples(velocity: [f32; 2], shutter_angle_degrees: f32) -> usize {
+        let shutter = (shutter_angle_degrees / 360.0).clamp(0.0, 1.0);
+        let travel = velocity[0].abs().max(velocity[1].abs()) * shutter;
+        ((travel / 2.0).ceil() as usize)
+            .saturating_add(1)
+            .clamp(9, 32)
+    }
+
     /// Whether the filter leaves every pixel unchanged, so canonical programs omit it. Only
     /// sampling and generated-light filters at zero strength qualify; colour filters may clamp
     /// extended-range working values even at their neutral setting.
@@ -486,5 +500,21 @@ impl Group {
             && self.transform == Transform2d::IDENTITY
             && !self.isolated
             && self.layer_bounds.is_none()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Filter;
+
+    #[test]
+    fn a_velocity_blur_takes_a_copy_for_every_two_pixels_of_travel_within_bounds() {
+        let samples = Filter::velocity_blur_samples;
+        assert_eq!(samples([0.0, 0.0], 180.0), 9);
+        assert_eq!(samples([16.0, 0.0], 360.0), 9);
+        assert_eq!(samples([-17.0, 3.0], 360.0), 10);
+        assert_eq!(samples([5.0, -40.0], 180.0), 11);
+        assert_eq!(samples([62.0, 0.0], 360.0), 32);
+        assert_eq!(samples([1.0e9, 0.0], 720.0), 32);
     }
 }

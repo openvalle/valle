@@ -5805,7 +5805,8 @@ mod tests {
             let image = backing(pixels.0, pixels.1);
             let source = IRect::from_wh(size.0, size.1);
             // Velocity and shutter: fractional and whole-pixel offsets, offsets within a
-            // thousandth of whole pixels, every copy within one pixel, and copies past the clip.
+            // thousandth of whole pixels, every copy within one pixel, copies past the clip, and
+            // the 9, 11, 27 and 32 copies of longer and longer travel.
             for (velocity, shutter) in [
                 ([13.0, 0.0], 180.0),
                 ([-7.3, 2.9], 360.0),
@@ -5813,6 +5814,8 @@ mod tests {
                 ([16.0, 0.0], 180.0),
                 ([8.002, -0.001], 180.0),
                 ([0.6, 0.0], 90.0),
+                ([40.0, 10.0], 180.0),
+                ([-50.5, 3.0], 360.0),
                 ([300.0, -40.0], 720.0),
             ] {
                 for clip in [None, Some(IRect::from_ltrb(4, 9, 190, 270))] {

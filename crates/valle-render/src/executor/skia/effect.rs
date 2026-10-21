@@ -1256,10 +1256,11 @@ pub(crate) fn image_filter(filter: &Filter) -> Result<Option<ImageFilter>, DrawE
             let Some(offsets) = super::velocity::offsets(*velocity, *shutter_angle_degrees) else {
                 return Ok(None);
             };
-            // Nine uniformly weighted shutter positions use the same public Skia primitives on
-            // native and CanvasKit. Their Gaussian blur kernels differ at the tails across Skia
-            // builds, while translated samples have stable coverage on both backends.
-            let alpha = color_filters::matrix_row_major(&super::velocity::weight(), None);
+            // Uniformly weighted shutter positions use the same public Skia primitives on native
+            // and CanvasKit. Their Gaussian blur kernels differ at the tails across Skia builds,
+            // while translated samples have stable coverage on both backends.
+            let alpha =
+                color_filters::matrix_row_major(&super::velocity::weight(offsets.len()), None);
             let mut sum = None;
             for offset in offsets {
                 let shifted = image_filters::matrix_transform(

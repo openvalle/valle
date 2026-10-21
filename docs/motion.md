@@ -2099,8 +2099,12 @@ velocity in the element's own units per frame: composition pixels per frame when
 neither the element nor its ancestors rotate or scale, and otherwise turned and
 stretched by that transform like other filter lengths. Its shutter angle defaults
 to 180°. Both forms use a spatial directional blur based on the element's anchor
-velocity. Rotation and scaling can give different velocities to different pixels,
-so they require shutter sampling for a faithful result.
+velocity: the average of copies of the element spread evenly along the shutter's
+travel, one for every 2 output pixels of travel, at least 9 and at most 32. Past 62
+pixels of travel the copies spread further apart and can show as separate steps.
+For such long trails, and for rotation and scaling, which give different velocities
+to different pixels, use [`Shutter`](#shutter-sampling): it renders the subframes
+themselves.
 
 Use `springVelocity` for an exact spring derivative. For an arbitrary pure position
 helper `position(t)`, a centered one-frame displacement is
