@@ -140,8 +140,9 @@ export default function IllegalTopology() { const ctx = useTime();
 "#;
     let errors = valle_compiler::motion::compile_motion(source).unwrap_err();
     assert!(errors.iter().any(|diagnostic| {
-        diagnostic.message.contains("prepare-time static")
-            || diagnostic.message.contains("frame-time")
+        diagnostic
+            .message
+            .contains("the array it repeats cannot change with the frame")
     }));
 }
 

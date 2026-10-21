@@ -372,7 +372,25 @@ impl<'s> Compiler<'s> {
                         rhs,
                     },
                     _ => {
-                        self.unsupported(binary.span(), format!("binary operator `{}` is legal JavaScript but is not in the typed expression IR", binary.operator.as_str()));
+                        let advice = match binary.operator {
+                            BinaryOperator::In | BinaryOperator::Instanceof => {
+                                "every prop and value keeps one shape for the whole scene; give \
+                                 a prop its default in the parameter, as in \
+                                 `function Card({ width = 100 })`, instead of testing for it"
+                            }
+                            _ => {
+                                "a value of the frame is a number, not bits; write \
+                                 `Math.trunc(x)` for `x | 0`, and arithmetic such as `x * 2` \
+                                 for `x << 1`"
+                            }
+                        };
+                        self.unsupported(
+                            binary.span(),
+                            format!(
+                                "`{}` does not run per frame: {advice}",
+                                binary.operator.as_str()
+                            ),
+                        );
                         return None;
                     }
                 }
@@ -430,7 +448,9 @@ impl<'s> Compiler<'s> {
                     LogicalOperator::Coalesce => {
                         self.unsupported(
                             logical.span(),
-                            "nullish coalescing is only admitted for prepare-time static values",
+                            "`??` takes only values known while the scene is prepared; give a \
+                             prop its default in the parameter, as in \
+                             `function Card({ width = 100 })`",
                         );
                         return None;
                     }
@@ -525,7 +545,10 @@ impl<'s> Compiler<'s> {
                         if self.reads_caption(&call.callee) {
                             CAPTION_CONTENT
                         } else {
-                            "only named motion primitives may be called at runtime"
+                            "a value of the frame calls only Motion's built-in functions, \
+                             helpers declared in this file, and `Math`; compute a method call \
+                             such as `list.indexOf(x)` in a module-level `const`, from values \
+                             known while the scene is prepared"
                         },
                     );
                     return None;
@@ -821,11 +844,8 @@ impl<'s> Compiler<'s> {
                     }
                 }
             }
-            _ => {
-                self.unsupported(
-                    expression.span(),
-                    "this side-effect-free expression shape is not in the typed expression IR subset",
-                );
+            other => {
+                self.unsupported(expression.span(), expression_advice(other));
                 return None;
             }
         };
@@ -1388,5 +1408,52 @@ impl<'s> Compiler<'s> {
             }
         };
         Some(self.push(Expr::GeometryField { input, field }, span))
+    }
+}
+
+/// What to write instead of an expression a value of the frame does not take.
+fn expression_advice(expression: &Expression<'_>) -> &'static str {
+    use oxc::ast::ast::UnaryOperator;
+    match expression {
+        Expression::NewExpression(_) => {
+            "`new` does not run per frame; build the value with object and array literals, or \
+             construct it in a module-level `const`, which runs while the scene is prepared"
+        }
+        Expression::UnaryExpression(unary) => match unary.operator {
+            UnaryOperator::Typeof => {
+                "`typeof` does not run per frame: every prop and value keeps one type for the \
+                 whole scene; give a prop its default in the parameter, as in \
+                 `function Card({ width = 100 })`, instead of testing its type"
+            }
+            UnaryOperator::Delete => REST_INSTEAD_OF_DELETE,
+            UnaryOperator::BitwiseNot => {
+                "a value of the frame is a number, not bits; write `-x - 1` for `~x`, and \
+                 `Math.trunc(x)` for `~~x`"
+            }
+            _ => "write the value itself; `void` and `+` do not run per frame",
+        },
+        Expression::NullLiteral(_) => {
+            "`null` is not a value of the frame; choose between two values with `cond ? a : b`"
+        }
+        Expression::ThisExpression(_) => {
+            "a value of the frame has no `this`; pass the value to the helper as a parameter"
+        }
+        Expression::ChainExpression(_) => {
+            "`?.` takes only values known while the scene is prepared; give a prop its default \
+             in the parameter, as in `function Card({ title = \"\" })`"
+        }
+        Expression::RegExpLiteral(_) => {
+            "a regular expression does not run per frame; test the text in a module-level \
+             `const`, which runs while the scene is prepared"
+        }
+        Expression::AssignmentExpression(_) | Expression::UpdateExpression(_) => {
+            "assign on a line of its own in the body, as in `x = x + 1;`; a value of the frame \
+             changes nothing"
+        }
+        _ => {
+            "a value of the frame takes literals, names, arithmetic, comparisons, \
+             `cond ? a : b`, `&&`, `||`, member reads, template literals and Motion's built-in \
+             functions"
+        }
     }
 }

@@ -908,7 +908,7 @@ impl<'s> Compiler<'s> {
                 name if matches!(kind_tag, "glass" | "glass-field") => {
                     self.lower_glass_attribute(kind_tag, name, attribute, &mut glass_props);
                 }
-                other if other.starts_with("on") => self.illegal(DiagCode::GrammarForbidden, attribute.span(), format!("event handler `{other}` is a side effect and is illegal in frame-pure Motion JSX")),
+                other if other.starts_with("on") => self.illegal(DiagCode::GrammarForbidden, attribute.span(), format!("event handler `{other}` is a side effect, and a frame draws from time and props alone; remove it, and drive the change with `useTime()` or a prop")),
                 other => self.unsupported(attribute.span(), format!("attribute `{other}` is legal on some frontend elements but is not in the admitted capability set")),
             }
         }

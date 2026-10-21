@@ -276,7 +276,7 @@ impl<'s> Compiler<'s> {
                     }
                 }
                 statement if super::modules::is_type_statement(statement) => {}
-                other => self.illegal(DiagCode::GrammarForbidden, other.span(), "module scope only allows static const/function declarations and the component exports"),
+                other => self.illegal(DiagCode::GrammarForbidden, other.span(), module_statement_advice(other)),
             }
         }
 
@@ -1005,6 +1005,22 @@ impl<'s> Compiler<'s> {
                 && existing.message == diagnostic.message
         }) {
             self.warnings.push(diagnostic);
+        }
+    }
+}
+
+/// What to write instead of a statement module scope does not take.
+fn module_statement_advice(statement: &Statement<'_>) -> &'static str {
+    match statement {
+        Statement::ClassDeclaration(_) => {
+            "a Motion module declares no classes; write a function that returns an object"
+        }
+        Statement::VariableDeclaration(_) => {
+            "module scope keeps no state; declare the value with `const`, and compute a value that \
+             changes per frame inside the component"
+        }
+        _ => {
+            "module scope only allows static const/function declarations and the component exports"
         }
     }
 }

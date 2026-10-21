@@ -205,7 +205,7 @@ and `do...while` are not supported.
 | Conditional values | `condition ? a : b`, boolean expressions; branches need compatible types |
 | Statements | `let`, assignment, `if`/`else`, early `return` and loops in bodies, lowered as described above |
 | JSX conditions | Static conditions can choose a subtree; frame-dependent conditions retain prepared branches and gate visibility, and a hidden branch keeps its layout space |
-| Lists | Map a prepare-time array with a synchronous arrow callback; each returned node/component needs a stable `key` |
+| Lists | Map a prepare-time array with a synchronous arrow callback, or write `Array.from(source, (item, index) => …)`; each returned node/component needs a stable `key`. To show items over time, map the whole array and decide each item per frame |
 | Arrays and tuples | Fixed shape; supported typed constructors and bounded maps; runtime indexing has explicit bounds/type checks |
 | Destructuring | Object fields, array entries, supported defaults, computed keys that are prepare-time strings, and `...rest`; the rest of `props` reads and spreads like `props` |
 | TypeScript | Types are erased: annotations, type parameters and arguments, `type` and `interface` declarations, `as const`, `satisfies`, assertions and non-null wrappers; this is not a TypeScript type checker |

@@ -1027,6 +1027,9 @@ impl<'s> Compiler<'s> {
             Expression::CallExpression(call) if self.is_static_map_call(call) => {
                 self.lower_static_map(call, path)
             }
+            Expression::CallExpression(call) if self.is_array_from_call(call) => {
+                self.lower_array_from(call, path)
+            }
             // Recognize JSX helpers by their registered names rather than inspecting return syntax.
             Expression::CallExpression(call) => {
                 let Expression::Identifier(callee) = &call.callee else {
@@ -1074,7 +1077,10 @@ impl<'s> Compiler<'s> {
             self.illegal(
                 DiagCode::GrammarForbidden,
                 call.span(),
-                format!("recursive helper `{name}` cannot be expanded at compile time"),
+                format!(
+                    "helper `{name}` is recursive, which the compiler cannot expand; flatten \
+                     the nested data into a prepared array and draw it with `.map`"
+                ),
             );
             return None;
         }
@@ -1092,12 +1098,8 @@ impl<'s> Compiler<'s> {
             );
             return None;
         }
-        if function.is_generator() || function.params().rest.is_some() {
-            self.illegal(
-                DiagCode::GrammarForbidden,
-                function.span(),
-                format!("helper `{name}` cannot be a generator or variadic"),
-            );
+        if let Some(reason) = helper_shape_advice(name, function) {
+            self.illegal(DiagCode::GrammarForbidden, function.span(), reason);
             return None;
         }
         if call.arguments.len() > function.params().items.len() {
@@ -1216,6 +1218,17 @@ impl<'s> Compiler<'s> {
         )
     }
 
+    /// `Array.from(source, callback)`, the other way JavaScript writes a mapped list.
+    pub(super) fn is_array_from_call(&self, call: &oxc::ast::ast::CallExpression<'_>) -> bool {
+        call.arguments.len() == 2
+            && matches!(
+                &call.callee,
+                Expression::StaticMemberExpression(member)
+                    if member.property.name == "from"
+                        && matches!(&member.object, Expression::Identifier(id) if id.name == "Array")
+            )
+    }
+
     pub(super) fn lower_static_map(
         &mut self,
         call: &'s oxc::ast::ast::CallExpression<'s>,
@@ -1228,7 +1241,7 @@ impl<'s> Compiler<'s> {
             self.illegal(
                 DiagCode::GrammarForbidden,
                 member.object.span(),
-                "JSX array map input must be prepare-time static",
+                PREPARED_LIST,
             );
             return None;
         };
@@ -1240,11 +1253,52 @@ impl<'s> Compiler<'s> {
             );
             return None;
         }
-        let Some(Expression::ArrowFunctionExpression(arrow)) = call.arguments[0].as_expression()
-        else {
+        self.lower_prepared_rows(call, items, &member.object, &call.arguments[0], path)
+    }
+
+    /// `Array.from(source, (item, index) => JSX)` draws what `Array.from(source).map(...)` draws.
+    pub(super) fn lower_array_from(
+        &mut self,
+        call: &'s oxc::ast::ast::CallExpression<'s>,
+        path: &str,
+    ) -> Option<Vec<PendingNode>> {
+        let Some(source) = call.arguments[0].as_expression() else {
             self.illegal(
                 DiagCode::GrammarForbidden,
                 call.arguments[0].span(),
+                PREPARED_LIST,
+            );
+            return None;
+        };
+        let rows = self.eval_static(source).and_then(|value| {
+            self.sandbox
+                .eval_json(
+                    "Array.from(__valleRows)",
+                    &[("__valleRows".to_string(), value)],
+                    "prepare",
+                )
+                .ok()
+        });
+        let Some(serde_json::Value::Array(items)) = rows else {
+            self.illegal(DiagCode::GrammarForbidden, source.span(), PREPARED_LIST);
+            return None;
+        };
+        self.lower_prepared_rows(call, items, source, &call.arguments[1], path)
+    }
+
+    /// Repeat a list callback over prepared rows, as instances where the rows allow it.
+    fn lower_prepared_rows(
+        &mut self,
+        call: &'s oxc::ast::ast::CallExpression<'s>,
+        items: Vec<serde_json::Value>,
+        source: &'s Expression<'s>,
+        callback: &'s oxc::ast::ast::Argument<'s>,
+        path: &str,
+    ) -> Option<Vec<PendingNode>> {
+        let Some(Expression::ArrowFunctionExpression(arrow)) = callback.as_expression() else {
+            self.illegal(
+                DiagCode::GrammarForbidden,
+                callback.span(),
                 "array map callback must be an arrow function",
             );
             return None;
@@ -1261,13 +1315,8 @@ impl<'s> Compiler<'s> {
         // A caption row repeats its nodes as they are; an instance group repeats in place.
         if self.caption_row.is_none()
             && items.len() <= valle_motion::MAX_GEOMETRY_BATCH_INSTANCES_PER_NODE
-            && let Some(nodes) = self.try_lower_instance_map(
-                &items,
-                &member.object,
-                arrow,
-                path,
-                &mut fallback_reason,
-            )
+            && let Some(nodes) =
+                self.try_lower_instance_map(&items, source, arrow, path, &mut fallback_reason)
         {
             return Some(nodes);
         }
@@ -1276,7 +1325,7 @@ impl<'s> Compiler<'s> {
         {
             self.illegal(
                 DiagCode::GrammarForbidden,
-                member.object.span(),
+                source.span(),
                 format!(
                     "prepare-time map expands {} items; the per-map limit is {MAX_STATIC_MAP_ITEMS} and the module budget is {MAX_TOTAL_EXPANDED_LIST_ITEMS}; homogeneous absolute View or translated solid Path instance groups can use up to {} rows",
                     items.len(), valle_motion::MAX_GEOMETRY_BATCH_INSTANCES_PER_NODE,
@@ -2405,7 +2454,10 @@ impl<'s> Compiler<'s> {
             self.illegal(
                 DiagCode::GrammarForbidden,
                 element.span(),
-                format!("recursive component expansion is illegal: {name}"),
+                format!(
+                    "component `{name}` is recursive, which the compiler cannot expand; \
+                     flatten the nested data into a prepared array and draw it with `.map`"
+                ),
             );
             return None;
         }
@@ -2544,7 +2596,11 @@ impl<'s> Compiler<'s> {
             self.illegal(
                 DiagCode::GrammarForbidden,
                 call_span,
-                format!("recursive pure helper `{name}` cannot be bounded at compile time"),
+                format!(
+                    "helper `{name}` is recursive and takes a value of the frame, which the \
+                     compiler cannot expand; write the repetition as a `for` loop whose bound \
+                     is known while the scene is prepared"
+                ),
             );
             return None;
         }
@@ -2562,12 +2618,8 @@ impl<'s> Compiler<'s> {
             );
             return None;
         }
-        if function.is_generator() || function.params().rest.is_some() {
-            self.illegal(
-                DiagCode::GrammarForbidden,
-                function.span(),
-                format!("pure helper `{name}` cannot be a generator or variadic"),
-            );
+        if let Some(reason) = helper_shape_advice(name, function) {
+            self.illegal(DiagCode::GrammarForbidden, function.span(), reason);
             return None;
         }
         if arguments.len() > function.params().items.len() {
@@ -2671,6 +2723,23 @@ impl<'s> Compiler<'s> {
             );
         }
         result
+    }
+}
+
+/// What to write instead of a generator or a variadic helper, which the compiler cannot inline.
+fn helper_shape_advice(name: &str, function: AuthoredFn<'_>) -> Option<String> {
+    if function.is_generator() {
+        Some(format!(
+            "helper `{name}` is a generator; return an array instead, built with `.map` or \
+             `Array.from`"
+        ))
+    } else if function.params().rest.is_some() {
+        Some(format!(
+            "helper `{name}` takes `...rest`; take one array parameter instead and call it as \
+             `{name}([a, b, c])`"
+        ))
+    } else {
+        None
     }
 }
 

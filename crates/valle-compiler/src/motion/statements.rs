@@ -1041,6 +1041,14 @@ impl<'s> Compiler<'s> {
             {
                 self.lower_push(call, body)
             }
+            Expression::UnaryExpression(unary) if unary.operator == UnaryOperator::Delete => {
+                self.illegal(
+                    DiagCode::GrammarForbidden,
+                    unary.span(),
+                    REST_INSTEAD_OF_DELETE,
+                );
+                None
+            }
             other => {
                 self.illegal(
                     DiagCode::GrammarForbidden,
@@ -1457,7 +1465,7 @@ fn type_phrase(ty: Option<ExprType>) -> &'static str {
 fn statement_advice(statement: &Statement<'_>) -> &'static str {
     match statement {
         Statement::SwitchStatement(_) => {
-            "`switch` is not supported; write `if`/`else if`, or look the value up in an object"
+            "`switch` is not supported; write `if`/`else if`, or a chain of `cond ? a : b`"
         }
         Statement::DoWhileStatement(_) => "`do...while` is not supported; write `while`",
         Statement::ForInStatement(_) => {

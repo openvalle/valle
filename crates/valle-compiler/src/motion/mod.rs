@@ -157,6 +157,14 @@ const THEME_TYPED_TOKEN_KINDS: &[&str] = &[
 ];
 
 const MAX_STATIC_MAP_ITEMS: usize = 10_000;
+/// What replaces `delete`: an object never changes in place.
+const REST_INSTEAD_OF_DELETE: &str = "`delete` cannot change an object, which never changes in \
+    place; leave the field out of a new one with rest destructuring, as in \
+    `const { removed, ...rest } = object`";
+/// What a JSX list repeats over: rows fixed while the scene is prepared.
+const PREPARED_LIST: &str = "a JSX list is built while the scene is prepared, so the array it \
+    repeats cannot change with the frame; map the whole prepared array and decide each item per \
+    frame, as in `items.map((item) => (item.at < ctx.seconds ? <View key={item.id} /> : null))`";
 /// What replaces loading at run time: Motion prepares synchronously.
 const SYNCHRONOUS_PREPARATION: &str = "preparation runs synchronously; declare files with \
     `asset()` in `controls.assets`, reference them as `asset://name`, and bind prepared data \
