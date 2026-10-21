@@ -1614,6 +1614,10 @@ pub struct SceneArtifact {
     pub exprs: Vec<Expr>,
     /// Prepared instance tables and their single expression/template program.
     pub instance_groups: Vec<InstanceGroup>,
+    /// The children of a captionPresenter template that repeat once per caption run. Binding the
+    /// template to a caption expands them, so a bound artifact has none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub caption_rows: Vec<crate::caption::CaptionRows>,
     pub nodes: Vec<SceneNode>,
     pub node_children: Vec<NodeId>,
     pub root: NodeId,
@@ -2733,6 +2737,7 @@ impl SceneArtifact {
         self.validate_instance_groups(&mut errors);
         self.validate_nodes(&expr_types, &mut errors);
         self.validate_unit_scope(&mut errors);
+        self.validate_caption_scope(&mut errors);
         self.validate_bounds_scope(&expr_types, &mut errors);
         self.validate_camera(&mut errors);
         self.validate_viewport_capability(&mut errors);
@@ -3499,6 +3504,110 @@ impl SceneArtifact {
                 errors.push(ValidationError::new(
                     format!("{path}/kind/perUnit/style"),
                     "per-unit style must bind at least one property",
+                ));
+            }
+        }
+    }
+
+    /// A captionPresenter template may read its caption, and a caption row its run; nothing else
+    /// reads either. Only the nodes in a caption row read what depends on the run.
+    fn validate_caption_scope(&self, errors: &mut Vec<ValidationError>) {
+        let presenter = matches!(
+            self.role,
+            valle_timeline::MotionRole::CaptionPresenter { .. }
+        );
+        if !presenter {
+            if !self.caption_rows.is_empty() {
+                errors.push(ValidationError::new(
+                    "/captionRows",
+                    "only a captionPresenter template has caption rows",
+                ));
+            }
+            for (at, expr) in self.exprs.iter().enumerate() {
+                if matches!(expr, Expr::Caption { .. }) {
+                    errors.push(ValidationError::new(
+                        format!("/exprs/{at}"),
+                        "only a captionPresenter template reads a caption",
+                    ));
+                }
+            }
+        }
+        for (index, group) in self.instance_groups.iter().enumerate() {
+            for (at, expr) in group.exprs.iter().enumerate() {
+                if let Expr::Caption { input } = expr
+                    && (input.reads_row() || !presenter)
+                {
+                    errors.push(ValidationError::new(
+                        format!("/instanceGroups/{index}/exprs/{at}"),
+                        "an instance template cannot read a caption run",
+                    ));
+                }
+            }
+        }
+        let row_keys = match self.caption_row_keys() {
+            Ok(keys) => keys,
+            Err(error) => {
+                errors.push(ValidationError::new("/captionRows", error.0));
+                return;
+            }
+        };
+        let row_dependent = crate::caption::caption_row_dependent(&self.exprs, &row_keys);
+        let in_row = self.caption_row_nodes();
+        for (at, node) in self.nodes.iter().enumerate() {
+            let path = format!("/nodes/{at}");
+            if in_row[at] {
+                if let Err(error) =
+                    crate::caption::remap_node_exprs(&mut node.clone(), &mut |expr| expr)
+                {
+                    errors.push(ValidationError::new(format!("{path}/kind"), error.0));
+                }
+                continue;
+            }
+            // Binding names the nodes of row `index` `{key}#{index}`.
+            if let Some((key, row)) = node.key.rsplit_once('#')
+                && row_keys.contains(key)
+                && row.bytes().all(|byte| byte.is_ascii_digit())
+            {
+                errors.push(ValidationError::new(
+                    format!("{path}/key"),
+                    "a key `{key}#{index}` is the key of a node in a caption row",
+                ));
+            }
+            for (slot, expr) in node
+                .expr_refs_outside_per_unit()
+                .into_iter()
+                .chain(node.per_unit_expr_refs())
+            {
+                if row_dependent.get(expr.0 as usize).copied().unwrap_or(false) {
+                    errors.push(ValidationError::new(
+                        format!("{path}{slot}"),
+                        "a caption run is only read inside the `runs.map(...)` row that draws it",
+                    ));
+                }
+            }
+        }
+        if let Some(camera) = &self.camera {
+            let reads_row = [
+                match camera.center {
+                    PointValue::Expr { expr } => Some(expr),
+                    PointValue::Static { .. } => None,
+                },
+                match camera.zoom {
+                    NumberValue::Expr { expr } => Some(expr),
+                    NumberValue::Static { .. } => None,
+                },
+                match camera.rotation {
+                    NumberValue::Expr { expr } => Some(expr),
+                    NumberValue::Static { .. } => None,
+                },
+            ]
+            .into_iter()
+            .flatten()
+            .any(|expr| row_dependent.get(expr.0 as usize).copied().unwrap_or(false));
+            if reads_row {
+                errors.push(ValidationError::new(
+                    "/camera",
+                    "a caption run is only read inside the `runs.map(...)` row that draws it",
                 ));
             }
         }

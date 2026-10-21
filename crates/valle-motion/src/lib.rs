@@ -93,7 +93,7 @@ pub use eval::{
     subtree_reads_runtime_inputs,
 };
 pub use expr::{
-    CompareOp, ContextInput, Expr, ExprId, ExprType, Extrapolation, GeometryField, InterpolateStop,
+    CaptionInput, CompareOp, ContextInput, Expr, ExprId, ExprType, Extrapolation, GeometryField, InterpolateStop,
     MAX_TEMPLATE_OUTPUT_BYTES, MAX_TEMPLATE_PARTS, MAX_TEMPLATE_STATIC_BYTES, MathBinaryOp,
     MathUnaryOp, NumberFormat, RangeShape, TemplatePart, bounds_dependent, geometry_eval_policy,
     post_layout_dependent, projection_dependent,

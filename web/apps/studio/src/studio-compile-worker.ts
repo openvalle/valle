@@ -271,7 +271,9 @@ export async function compileStudioPreview(request: StudioCompileRequest): Promi
       const input = compiler.motionPreparationInputs(authorTimeline)[0];
       if (!input) throw new Error("Caption Studio preparation input is missing");
       instances[0]!.clipPath = input.clipPath;
-      if (!jsonEqual(input.data, request.standalone.data)) {
+      // The template compiles with the track layout; the words travel in the Timeline as given.
+      const { style, region, align } = request.standalone.data ?? {};
+      if (!jsonEqual(input.data, { style, region, align })) {
         const original = request.instances[0]!;
         const options: MotionCompileOptions = { ...original.options,
           data: { source: "studio:caption", value: input.data },

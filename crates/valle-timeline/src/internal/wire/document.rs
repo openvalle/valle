@@ -612,7 +612,10 @@ pub enum CaptionItemWire {
 pub struct CaptionMotionWire {
     pub id: EntityId,
     pub duration: ExactRational,
+    /// The template, compiled once for its track's layout.
     pub source: MotionInstanceWire,
+    /// The caption the template draws, each run with its times, size and color.
+    pub runs: Vec<TextRunWire>,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]

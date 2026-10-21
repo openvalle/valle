@@ -2,10 +2,9 @@
 use serde_json::{Value, json};
 use valle_compiler::{
     motion::{PrepareDataBinding, compile_motion_with_full_env_and_data},
-    motion_instance_key,
     timeline::prepare_caption_presenter_data,
 };
-use valle_motion::{AssetControl, AssetKind, SceneArtifact};
+use valle_motion::{AssetControl, AssetKind, ContentDigest, ResourceRef, SceneArtifact};
 use valle_timeline::{MotionRole, OverlayHold, RationalTime, wire::timeline::*};
 
 const ROLE: &str = "captionPresenter({intro:seconds(0.15),outro:seconds(0.15)})";
@@ -13,11 +12,23 @@ fn source(role: &str, controls: &str) -> String {
     format!(
         r#"export const composition={{width:240,height:80,fps:30,duration:1}};
 export const role={role}; {controls}
-export default function Words(props) {{ const ctx = useTime(); const data = useData();return <Scene>{{data.runs.map((run,index)=><View key={{index}} className="absolute" style={{{{left:index*30,width:24,height:12,top:ctx.seconds*10,backgroundColor:ctx.host.seconds>=run.start && ctx.host.seconds<run.end?"yellow":"white"}}}}/>)}}</Scene>;}}"#
+export default function Words(props) {{ const ctx = useTime(); const caption = useCaption();return <Scene>{{caption.runs.map((run,index)=><View key={{index}} className="absolute" style={{{{left:index*30,width:24,height:12,top:ctx.seconds*10,backgroundColor:ctx.host.seconds>=run.start && ctx.host.seconds<run.end?"yellow":"white"}}}}/>)}}</Scene>;}}"#
     )
 }
 fn input() -> Value {
     json!({"text":"Build your story","runs":[{"text":"Build ","start":0,"end":0.4},{"text":"your story","start":0.4,"end":1.3,"fontSize":32,"color":"#facc15"}],"style":{"font":"asset://caption","fontSize":24,"color":"#ffffffff"},"region":[24,40,192,32],"align":"bottom-center"})
+}
+/// What a caption track compiles its template with.
+fn layout() -> Value {
+    let mut layout = input();
+    let object = layout.as_object_mut().unwrap();
+    object.remove("text");
+    object.remove("runs");
+    layout
+}
+fn bound_input() -> valle_motion::caption::BoundCaption {
+    let data = serde_json::from_value(input()).unwrap();
+    valle_motion::caption::BoundCaption::from_data(&data, 1.0).unwrap()
 }
 fn compile(
     src: &str,
@@ -35,9 +46,29 @@ fn compile(
         }),
     )
 }
+/// Compile with the host's caption font bound, as a template that draws text needs.
+fn compile_with_font(
+    src: &str,
+    value: Value,
+) -> Result<valle_compiler::motion::CompiledMotion, Vec<valle_compiler::motion::CompilerDiagnostic>>
+{
+    compile_motion_with_full_env_and_data(
+        src,
+        &[ResourceRef {
+            control: "caption".into(),
+            content_hash: ContentDigest::of_bytes(b"caption font"),
+        }],
+        None,
+        None,
+        Some(&PrepareDataBinding {
+            source: "captions.json".into(),
+            value,
+        }),
+    )
+}
 #[test]
-fn caption_role_expands_static_runs_and_reserves_the_host_font() {
-    let compiled = compile(&source(ROLE, ""), input()).unwrap();
+fn caption_role_draws_a_row_per_run_and_reserves_the_host_font() {
+    let compiled = compile(&source(ROLE, ""), layout()).unwrap();
     assert_eq!(
         compiled.artifact.role,
         MotionRole::CaptionPresenter {
@@ -45,7 +76,18 @@ fn caption_role_expands_static_runs_and_reserves_the_host_font() {
             outro: RationalTime::new(3, 20).unwrap()
         }
     );
-    assert_eq!(compiled.artifact.nodes.len(), 3);
+    // The template draws one row, which a caption repeats for each of its runs.
+    assert_eq!(compiled.artifact.nodes.len(), 2);
+    assert_eq!(compiled.artifact.caption_rows.len(), 1);
+    assert!(compiled.artifact.reads_caption());
+    let bound = compiled.artifact.bind_caption(&bound_input()).unwrap();
+    assert_eq!(bound.nodes.len(), 3);
+    assert!(bound.caption_rows.is_empty());
+    // `--data` gives a whole caption; the template is prepared with its layout alone.
+    assert_eq!(
+        compile(&source(ROLE, ""), input()).unwrap().artifact,
+        compiled.artifact
+    );
     assert!(compiled.artifact.controls.data.is_empty());
     assert_eq!(
         compiled.artifact.controls.assets["caption"],
@@ -71,6 +113,26 @@ fn caption_role_expands_static_runs_and_reserves_the_host_font() {
         .replace(&format!("export const role={ROLE};"), "")
         + &format!("export const role={ROLE};");
     assert!(compile(&before, input()).is_err());
+    // Only a captionPresenter reads a caption, and no other node takes the key a row binds to.
+    let mut clip = compiled.artifact.clone();
+    clip.role = MotionRole::Clip;
+    assert!(
+        clip.validate()
+            .unwrap_err()
+            .iter()
+            .any(|error| error.path == "/captionRows")
+    );
+    let mut taken = compiled.artifact.clone();
+    let row = taken.node_children[taken.caption_rows[0].children.start as usize];
+    let root = taken.root.0 as usize;
+    taken.nodes[root].key = format!("{}#1", taken.nodes[row.0 as usize].key);
+    assert!(
+        taken
+            .validate()
+            .unwrap_err()
+            .iter()
+            .any(|error| error.path == format!("/nodes/{root}/key"))
+    );
     let mut forged: SceneArtifact = compiled.artifact;
     forged.controls.assets.remove("caption");
     assert!(
@@ -178,28 +240,30 @@ fn caption_preparation_inherits_layout_converts_pixels_and_validates_host_runs()
     }
 }
 #[test]
-fn complete_caption_input_identity_ignores_placement_but_includes_text_timing_style_and_canvas() {
-    let key = |clip: &TimelineCaptionClipWire, style: &TimelineCaptionStyleWire, canvas| {
-        let data = prepare_caption_presenter_data(style, None, clip, canvas, "clip").unwrap();
-        motion_instance_key(
-            "words.motion.tsx",
-            &json!({"caption":style.font}),
-            &serde_json::to_value(data).unwrap(),
-        )
-    };
+fn caption_template_identity_is_the_track_layout_not_the_caption() {
+    let key =
+        |clip: &TimelineCaptionClipWire, style: &TimelineCaptionStyleWire, canvas: [u32; 2]| {
+            let author = json!({"canvas":{"width":canvas[0],"height":canvas[1],"fps":30},
+          "resources":{"words":"words.motion.tsx","bodyFont":"body.ttf","otherFont":"other.ttf"},
+          "tracks":{"caption":[{"presenter":{"component":"words"},"style":style,"clips":[clip]}]}});
+            let timeline = valle_timeline::decode_timeline(&author.to_string()).unwrap();
+            valle_compiler::motion_preparation_inputs(&timeline).unwrap()[0].key()
+        };
     let clip = author_clip();
     let style = style();
     let original = key(&clip, &style, [240, 80]);
+    // A track's captions share one compile: placement, words and timing are bound as each draws.
     let mut shifted = clip.clone();
     shifted.start = TimelineTimeWire::new("90").unwrap();
     shifted.duration = TimelineTimeWire::new("2.5").unwrap();
     assert_eq!(original, key(&shifted, &style, [240, 80]));
     let mut words = clip.clone();
     words.runs.as_mut().unwrap()[0].text = "Write ".into();
-    assert_ne!(original, key(&words, &style, [240, 80]));
+    assert_eq!(original, key(&words, &style, [240, 80]));
     let mut timed = clip.clone();
     timed.runs.as_mut().unwrap()[1].end = Some(TimelineTimeWire::new("1.4").unwrap());
-    assert_ne!(original, key(&timed, &style, [240, 80]));
+    assert_eq!(original, key(&timed, &style, [240, 80]));
+    // The track style, its font and the canvas the region is in pixels of are compiled in.
     let mut colored = style.clone();
     colored.color = Some("#ff0000".into());
     assert_ne!(original, key(&clip, &colored, [240, 80]));
@@ -212,8 +276,105 @@ fn complete_caption_input_identity_ignores_placement_but_includes_text_timing_st
     changed["runs"][1]["end"] = json!(1.4);
     let two = compile(&source(ROLE, ""), changed).unwrap();
     assert_eq!(one.normalized_ast_digest, two.normalized_ast_digest);
-    assert_ne!(one.prepared_data_digest, two.prepared_data_digest);
+    assert_eq!(one.artifact, two.artifact);
 }
+
+#[test]
+fn caption_template_reads_the_caption_where_it_draws() {
+    let presenter = |body: &str| {
+        format!(
+            "export const composition={{width:240,height:80,fps:30,duration:1}};\nexport const role={ROLE};\n{body}"
+        )
+    };
+    let caption = bound_input();
+    // One Text draws a Span per run; the layout is prepared, the words are bound.
+    let spans = compile_with_font(
+        &presenter(
+            r#"export default function Words() { const { runs, style } = useCaption(); const size = style.fontSize * 2;
+return <Scene><Text style={{fontFamily:style.font,fontSize:size}}>{runs.map((run) => <Span style={{color:run.color,fontSize:run.fontSize}}>{run.text}</Span>)}</Text></Scene>; }"#,
+        ),
+        layout(),
+    )
+    .unwrap();
+    assert_eq!(spans.artifact.caption_rows.len(), 1);
+    let bound = spans.artifact.bind_caption(&caption).unwrap();
+    assert_eq!(bound.nodes.len(), spans.artifact.nodes.len() + 1);
+    assert!(!bound.reads_caption());
+    // A component prop, the whole text and the run count read the caption where they are drawn.
+    let prop = compile_with_font(
+        &presenter(
+            r#"function Line(props) { return <Text style={{fontFamily:props.caption.style.font,fontSize:12,opacity:props.caption.runs.length>1?1:0.5}}>{props.caption.text}</Text>; }
+export default function Words() { const caption = useCaption(); return <Scene><Line caption={caption}/></Scene>; }"#,
+        ),
+        layout(),
+    )
+    .unwrap();
+    assert!(prop.artifact.reads_caption() && prop.artifact.caption_rows.is_empty());
+    prop.artifact.bind_caption(&caption).unwrap();
+    // A template that does not read its caption draws the same for every caption.
+    let still = compile_with_font(
+        &presenter(
+            r##"export default function Cover() { const caption = useCaption(); return <Scene><View style={{width:caption.region[2],height:caption.style.fontSize,backgroundColor:"#0000ff"}}/></Scene>; }"##,
+        ),
+        layout(),
+    )
+    .unwrap();
+    assert!(!still.artifact.reads_caption());
+
+    for (body, message) in [
+        (
+            "export default function Words() { const data = useData(); return <Scene/>; }",
+            "useCaption()",
+        ),
+        (
+            "export default function Words() { const caption = useCaption(); const loud = caption.text.toUpperCase(); return <Scene><Text style={{fontFamily:caption.style.font,fontSize:12}}>{loud}</Text></Scene>; }",
+            "textTransform",
+        ),
+        (
+            "export default function Words() { const caption = useCaption(); return <Scene>{caption.runs.map((run) => <View key=\"row\">{caption.runs.map((other) => <View/>)}</View>)}</Scene>; }",
+            "each run has one row",
+        ),
+        (
+            "export default function Words() { const [first] = useCaption().runs; return <Scene/>; }",
+            "cannot be destructured",
+        ),
+        (
+            "export default function Words() { const caption = useCaption(); return <Scene><View style={{opacity:caption.runs[0].start}}/></Scene>; }",
+            "runs.map",
+        ),
+        (
+            "export default function Words() { const caption = useCaption(); return <Scene><View style={{opacity:caption.speaker}}/></Scene>; }",
+            "not part of the caption",
+        ),
+    ] {
+        let errors = compile_with_font(&presenter(body), layout()).unwrap_err();
+        assert!(
+            errors.iter().any(|error| error.message.contains(message)),
+            "{body}: {errors:?}"
+        );
+    }
+    let overlay = "export const composition={width:240,height:80,fps:30,duration:1};\nexport default function Title() { const caption = useCaption(); return <Scene/>; }";
+    assert!(
+        compile_motion_with_full_env_and_data(overlay, &[], None, None, None)
+            .unwrap_err()
+            .iter()
+            .any(|error| error.message.contains("captionPresenter"))
+    );
+}
+
+#[test]
+fn documented_caption_presenter_draws_each_run() {
+    let guide = include_str!("../../../docs/motion.md");
+    let section = &guide[guide.find("### Caption presenter role").unwrap()..];
+    let start = section.find("```tsx\n").unwrap() + "```tsx\n".len();
+    let example = &section[start..start + section[start..].find("```").unwrap()];
+    let compiled = compile_with_font(example, layout()).unwrap();
+    assert_eq!(compiled.artifact.caption_rows.len(), 1);
+    let bound = compiled.artifact.bind_caption(&bound_input()).unwrap();
+    assert!(!bound.reads_caption());
+    valle_motion::prepare_scene(&bound).unwrap();
+}
+
 #[test]
 fn caption_timing_equals_once_overlay_at_exact_endpoints_and_fractional_frames() {
     let t = |n, d| RationalTime::new(n, d).unwrap();
@@ -259,7 +420,7 @@ fn native_caption_fixture_has_a_canonical_artifact_shared_with_wasm() {
     );
     assert_eq!(
         digest.to_string(),
-        "sha256:db7103728d50db2bb6ea16a4e3147e64193e4d61b7adc20b06309b8b17b7ff42"
+        "sha256:ddda40286d58b1c34b678ea351d80bb347e3d37cf09577a04dd597cc881ae206"
     );
 }
 
@@ -316,7 +477,12 @@ fn caption_track_presenter_has_a_closed_wire_shape_and_uses_caption_items() {
     assert_eq!(prepared.len(), 1);
     assert_eq!(prepared[0].clip_path, "/tracks/caption/0/clips/0");
     assert_eq!(prepared[0].resources["caption"], "bodyFont");
-    assert_eq!(prepared[0].data["text"], "Build your story");
+    // The template compiles with the layout; the words travel with the caption item.
+    let fields = |data: &serde_json::Map<String, Value>| data.keys().cloned().collect::<Vec<_>>();
+    assert_eq!(
+        fields(prepared[0].data.as_object().unwrap()),
+        ["align", "region", "style"]
+    );
     let metadata = std::collections::BTreeMap::from([(
         "words".into(),
         valle_timeline::MotionSourceMetadata {
@@ -335,7 +501,17 @@ fn caption_track_presenter_has_a_closed_wire_shape_and_uses_caption_items() {
     let CaptionItemWire::Motion(clip) = &canonical.document.captions.tracks[0].items[1] else {
         panic!("presenter must belong to the caption band")
     };
-    assert_eq!(clip.source.data["text"], "Build your story");
+    assert_eq!(
+        fields(&clip.source.data.clone().into_iter().collect()),
+        ["align", "region", "style"]
+    );
+    assert_eq!(
+        clip.runs
+            .iter()
+            .map(|run| run.text.as_str())
+            .collect::<String>(),
+        "Build your story"
+    );
     assert_eq!(clip.source.resources["caption"], "resource:bodyFont");
     let wrong_role = std::collections::BTreeMap::from([(
         "words".into(),

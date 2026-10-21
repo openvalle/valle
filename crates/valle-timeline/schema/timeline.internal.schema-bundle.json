@@ -1034,8 +1034,16 @@
                 "id": {
                   "type": "string"
                 },
+                "runs": {
+                  "description": "The caption the template draws, each run with its times, size and color.",
+                  "items": {
+                    "$ref": "#/$defs/TextRunWire"
+                  },
+                  "type": "array"
+                },
                 "source": {
-                  "$ref": "#/$defs/MotionInstanceWire"
+                  "$ref": "#/$defs/MotionInstanceWire",
+                  "description": "The template, compiled once for its track's layout."
                 },
                 "type": {
                   "const": "motion",
@@ -1046,7 +1054,8 @@
                 "type",
                 "id",
                 "duration",
-                "source"
+                "source",
+                "runs"
               ],
               "type": "object"
             },

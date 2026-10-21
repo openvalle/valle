@@ -127,6 +127,7 @@ fn envelope() -> ArtifactEnvelope {
         shaders: Vec::new(),
         exprs,
         instance_groups: vec![],
+        caption_rows: vec![],
         nodes: vec![
             SceneNode {
                 key: "root".into(),

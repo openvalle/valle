@@ -795,7 +795,7 @@ impl ResolvedResourceSnapshot {
         }
     }
 
-    pub(crate) fn motion_scene(&self, target: u32) -> Option<&valle_motion::PreparedScene> {
+    pub(crate) fn motion_scene(&self, target: u32) -> Option<&Arc<valle_motion::PreparedScene>> {
         match &self.resources.get(target as usize)?.execution {
             ResolvedExecutionPayload::Motion(scene) => Some(scene),
             _ => None,
@@ -1368,6 +1368,10 @@ pub struct CompiledMotionInstance {
     props: BTreeMap<String, CompiledMotionParam>,
     resources: BTreeMap<String, u32>,
     artifact_dependencies: Vec<CompiledMotionArtifactDependency>,
+    /// The caption a captionPresenter template draws, when the template reads it. The template
+    /// compiles once for its track and is bound to each caption as the caption is drawn.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    caption: Option<Arc<valle_motion::caption::BoundCaption>>,
     #[serde(skip)]
     artifact: Arc<SceneArtifact>,
 }
@@ -2270,6 +2274,49 @@ pub struct CompiledRender {
     camera: Option<CompiledCameraProgram>,
     kernels: Vec<AdmittedKernel>,
     resources: Arc<ResolvedResourceSnapshot>,
+    caption_scenes: Arc<CaptionScenes>,
+}
+
+/// Caption templates bound to the captions drawn last, by source. Binding is a pure function of
+/// the template and the caption, so a scene dropped here is bound again the same way.
+#[derive(Debug, Default)]
+pub(crate) struct CaptionScenes(
+    std::sync::Mutex<std::collections::VecDeque<(u32, Arc<valle_motion::PreparedScene>)>>,
+);
+
+impl CaptionScenes {
+    /// Captions are drawn one after another; a few cover every worker's current caption.
+    const CAPACITY: usize = 16;
+
+    fn get(&self, source: u32) -> Option<Arc<valle_motion::PreparedScene>> {
+        let scenes = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        scenes
+            .iter()
+            .find(|(entry, _)| *entry == source)
+            .map(|(_, scene)| Arc::clone(scene))
+    }
+
+    fn insert(
+        &self,
+        source: u32,
+        scene: Arc<valle_motion::PreparedScene>,
+    ) -> Arc<valle_motion::PreparedScene> {
+        let mut scenes = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some((_, existing)) = scenes.iter().find(|(entry, _)| *entry == source) {
+            return Arc::clone(existing);
+        }
+        if scenes.len() == Self::CAPACITY {
+            scenes.pop_front();
+        }
+        scenes.push_back((source, Arc::clone(&scene)));
+        scene
+    }
 }
 
 /// Exact composition-to-Motion frame mapping owned by one compiled render.
@@ -2543,11 +2590,39 @@ impl CompiledRender {
         self.resources.shader_package(resource.target)
     }
 
+    /// The prepared template of a Motion instance.
     pub(crate) fn motion_scene(
         &self,
         instance: &CompiledMotionInstance,
     ) -> Option<&valle_motion::PreparedScene> {
-        self.resources.motion_scene(instance.component_target)
+        self.resources
+            .motion_scene(instance.component_target)
+            .map(Arc::as_ref)
+    }
+
+    /// The scene Motion source `source` draws: its template, bound to its caption when it is a
+    /// caption.
+    pub(crate) fn motion_source_scene(
+        &self,
+        source: u32,
+        instance: &CompiledMotionInstance,
+    ) -> Result<Arc<valle_motion::PreparedScene>, String> {
+        let template = self
+            .resources
+            .motion_scene(instance.component_target)
+            .ok_or("admitted Motion executable payload missing")?;
+        let Some(caption) = &instance.caption else {
+            return Ok(Arc::clone(template));
+        };
+        if let Some(scene) = self.caption_scenes.get(source) {
+            return Ok(scene);
+        }
+        let bound = template
+            .artifact()
+            .bind_caption(caption)
+            .map_err(|error| error.to_string())?;
+        let scene = valle_motion::prepare_owned_scene(bound).map_err(|error| error.to_string())?;
+        Ok(self.caption_scenes.insert(source, Arc::new(scene)))
     }
 
     /// Evaluates one visual frame entirely from immutable compiled schedules.

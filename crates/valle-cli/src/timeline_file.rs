@@ -671,7 +671,7 @@ mod tests {
     fn caption_edits_save_and_reopen_with_browser_confirmed_font_dependencies() {
         let dir = tempfile::tempdir().unwrap();
         let source = dir.path().join("words.motion.tsx");
-        std::fs::write(&source, "export const composition={width:160,height:48,duration:1}; export const role=captionPresenter({intro:seconds(0),outro:seconds(0)}); export default function Words(props){ const ctx = useTime(); const data = useData();return <Scene><Text style={{fontFamily:data.style.font,fontSize:data.style.fontSize}}>{data.text}</Text></Scene>;}").unwrap();
+        std::fs::write(&source, "export const composition={width:160,height:48,duration:1}; export const role=captionPresenter({intro:seconds(0),outro:seconds(0)}); export default function Words(props){ const caption = useCaption();return <Scene><Text style={{fontFamily:caption.style.font,fontSize:caption.style.fontSize}}>{caption.text}</Text></Scene>;}").unwrap();
         let font = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../assets/fonts/noto/NotoSans-Regular.ttf")
             .canonicalize()

@@ -563,6 +563,7 @@ fn text_artifact(request: &TextMeasure<'_>, styles: Vec<StyleBinding>) -> SceneA
         shaders: Vec::new(),
         exprs: vec![],
         instance_groups: vec![],
+        caption_rows: vec![],
         nodes: vec![
             SceneNode {
                 key: "measureRoot".into(),

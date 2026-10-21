@@ -799,7 +799,7 @@ impl TimelineNormalizer {
                             data: input
                                 .data
                                 .as_object()
-                                .expect("caption data object")
+                                .expect("caption layout object")
                                 .iter()
                                 .map(|(k, v)| (k.clone(), v.clone()))
                                 .collect(),
@@ -811,6 +811,14 @@ impl TimelineNormalizer {
                                 })
                                 .collect::<Result<_, _>>()?,
                         },
+                        runs: presenter_runs(
+                            clip.text,
+                            clip.runs,
+                            &canonical_style,
+                            &id,
+                            duration,
+                            &clip_path,
+                        )?,
                     },
                 ));
                 continue;
@@ -1291,6 +1299,34 @@ fn caption_runs(
             }
         })
         .collect())
+}
+
+/// The runs a presenter caption binds its template to. A run without times spans the caption, and
+/// a run without a size or color takes the track style's.
+fn presenter_runs(
+    text: Option<String>,
+    runs: Option<Vec<timeline::TimelineTextRunWire>>,
+    style: &document::CaptionStyleWire,
+    owner_id: &str,
+    duration: ExactRational,
+    path: &str,
+) -> Result<Vec<document::TextRunWire>, CompileTimelineError> {
+    let mut runs = caption_runs(text, runs, owner_id, path)?;
+    for run in &mut runs {
+        run.timing.get_or_insert(document::TextRunTimingWire {
+            start: ExactRational::ZERO,
+            end: duration,
+        });
+        let run_style = run.style.get_or_insert(document::TextRunStyleWire {
+            font_size: None,
+            color: None,
+        });
+        run_style.font_size.get_or_insert(style.font_size);
+        run_style
+            .color
+            .get_or_insert_with(|| style.color.clone());
+    }
+    Ok(runs)
 }
 
 /// Freeze one caption's text, timed runs and inherited style/layout for Motion preparation.

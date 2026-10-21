@@ -32,6 +32,7 @@ pub(super) fn render(
     assets: &BTreeMap<String, BoundAsset>,
     explicit_fonts: &[std::sync::Arc<[u8]>],
     prop_bindings: &BTreeMap<String, Value>,
+    caption: Option<&valle_motion::caption::CaptionPresenterData>,
     trajectories: &[MotionTrajectory],
     delivery: &Delivery,
 ) -> Result<Value> {
@@ -42,12 +43,17 @@ pub(super) fn render(
         return Err(anyhow!("--trajectory-sheet requires a .png output path"));
     }
     super::super::fixed_render::require_new_output(output)?;
-    let fonts = fixed_package_font_blobs(artifact, explicit_fonts)?;
+    let fonts = fixed_package_font_blobs(
+        artifact,
+        explicit_fonts,
+        caption.map(|caption| caption.text.as_str()),
+    )?;
     let package = build_standalone_motion_package(StandaloneMotionPackageInput {
         artifact,
         assets,
         font_blobs: &fonts,
         prop_bindings,
+        caption,
         duration: delivery.duration,
         frame_rate: delivery.fps,
         canvas: delivery.canvas.tuple(),

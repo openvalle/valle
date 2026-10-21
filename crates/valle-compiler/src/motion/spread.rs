@@ -258,6 +258,7 @@ impl<'s> Compiler<'s> {
             || self.bindings.objects.contains_key(name)
             || self.bindings.local_functions.contains_key(name)
             || self.bindings.times.contains_key(name)
+            || self.bindings.captions.contains_key(name)
     }
 
     /// Bind a component prop or helper argument under a local name.
@@ -270,6 +271,7 @@ impl<'s> Compiler<'s> {
             AuthorValue::InstanceObject(fields) => self.bind_instance_object(name, fields),
             AuthorValue::Children(children) => self.bind_children(name, children),
             AuthorValue::Time(path) => self.bind_time(name, path),
+            AuthorValue::Caption(path) => self.bind_caption(name, path),
         }
     }
 }

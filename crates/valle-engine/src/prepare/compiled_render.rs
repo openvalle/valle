@@ -568,12 +568,10 @@ fn prepare_endpoint(
             let instance = compiled_source.motion().ok_or_else(|| {
                 PrepareError::at(format!("{path}.source"), "compiled Motion instance missing")
             })?;
-            let prepared_scene = render.motion_scene(instance).ok_or_else(|| {
-                PrepareError::at(
-                    format!("{path}.source.component"),
-                    "admitted Motion executable payload missing",
-                )
-            })?;
+            let scene = render
+                .motion_source_scene(source.source_index(), instance)
+                .map_err(|error| PrepareError::at(format!("{path}.source.component"), error))?;
+            let prepared_scene = scene.as_ref();
             let composition = prepared_scene
                 .artifact()
                 .composition

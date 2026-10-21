@@ -86,6 +86,7 @@ pub(super) fn compile_admitted_timeline(
                     target: dependency.target,
                 })
                 .collect(),
+            caption: instance.caption,
             artifact: instance.artifact,
         }
     }

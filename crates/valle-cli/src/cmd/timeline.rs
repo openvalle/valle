@@ -577,6 +577,8 @@ fn prepare_timeline_package_impl(
                     .as_ref()
                     .ok_or_else(|| anyhow!("Motion {name} needs composition.duration"))?
                     .duration_frames(frame_rate)?;
+                // A caption template draws the text of every caption bound to it.
+                let mut caption_text = String::new();
                 for band in ["visual", "captions"] {
                     for track in compiled_json["document"][band]["tracks"]
                         .as_array()
@@ -589,6 +591,9 @@ fn prepare_timeline_package_impl(
                                 "clipId": item["id"],
                                 "authoring": {"sourceMap": source_map, "totalFrames": total_frames}
                             }));
+                                for run in item["runs"].as_array().into_iter().flatten() {
+                                    caption_text.push_str(run["text"].as_str().unwrap_or_default());
+                                }
                             }
                         }
                     }
@@ -614,7 +619,11 @@ fn prepare_timeline_package_impl(
                         }
                     }
                 }
-                let font_blobs = super::motion::fixed_package_font_blobs(&artifact, &[])?;
+                let font_blobs = super::motion::fixed_package_font_blobs(
+                    &artifact,
+                    &[],
+                    (!caption_text.is_empty()).then_some(caption_text.as_str()),
+                )?;
                 for (i, bytes) in font_blobs.iter().enumerate() {
                     let digest = resources.intern_font(bytes)?;
                     deps.push(super::motion_package::FixedResourceDependency {
@@ -1139,7 +1148,7 @@ mod preview_tests {
     use super::*;
 
     #[test]
-    fn caption_baseline_prepares_three_hundred_clips_from_one_hundred_immutable_inputs() {
+    fn caption_baseline_compiles_one_template_for_three_hundred_clips() {
         let dir = tempfile::tempdir().unwrap();
         let font = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../assets/fonts/noto/NotoSans-Regular.ttf")
@@ -1147,31 +1156,37 @@ mod preview_tests {
             .unwrap();
         std::fs::write(dir.path().join("caption.motion.tsx"), r##"export const composition={width:160,height:48,fps:4,duration:1};
 export const role=captionPresenter({intro:seconds(0.25),outro:seconds(0.25)});
-export default function Caption(props){ const ctx = useTime(); const data = useData();return <Scene><Text style={{fontFamily:data.style.font,fontSize:data.style.fontSize,color:ctx.host.seconds<1?"#facc15":"white"}}>{data.text}</Text></Scene>; }"##).unwrap();
+export default function Caption(props){ const ctx = useTime(); const caption = useCaption();return <Scene><Text style={{fontFamily:caption.style.font,fontSize:caption.style.fontSize,color:ctx.host.seconds<1?"#facc15":"white"}}>{caption.text}</Text></Scene>; }"##).unwrap();
         let clips: Vec<_> = (0..300).map(|i| serde_json::json!({"start":f64::from(i*2)+0.125,"duration":2,"runs":[{"text":format!("Word {}",i%100),"start":0,"end":1.75}]})).collect();
         let author = serde_json::json!({"canvas":{"width":160,"height":48,"fps":4},"resources":{"caption":"caption.motion.tsx","font":font},"tracks":{"caption":[{"presenter":{"component":"caption"},"style":{"font":"font","fontSize":20},"clips":clips}]}});
         let start = std::time::Instant::now();
+        // The track's captions share its layout, so one template serves every word.
         let captured = capture_motion_sources(&author, dir.path()).unwrap();
-        assert_eq!(captured.instances.len(), 100);
+        assert_eq!(captured.instances.len(), 1);
         let (prepared, metadata) = captured.prepare().unwrap();
-        assert_eq!(prepared.len(), 100);
-        assert_eq!(metadata.len(), 100);
-        let hashes: std::collections::BTreeSet<_> = prepared
-            .values()
-            .map(|input| {
-                ContentDigest::of_bytes(
-                    &valle_motion::canonical_bytes(&input.compiled.artifact).unwrap(),
-                )
-            })
-            .collect();
-        assert_eq!(hashes.len(), 100);
-        valle_compiler::compile_timeline_with_motion_sources(
+        assert_eq!(prepared.len(), 1);
+        assert_eq!(metadata.len(), 1);
+        let template = &prepared.values().next().unwrap().compiled.artifact;
+        assert!(template.reads_caption());
+        let canonical = valle_compiler::compile_timeline_with_motion_sources(
             decode_timeline(&author.to_string()).unwrap(),
             &metadata,
         )
-        .unwrap();
+        .unwrap()
+        .to_wire();
+        use valle_timeline::internal::wire::document::CaptionItemWire;
+        let words = canonical.document.captions.tracks[0]
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                CaptionItemWire::Motion(caption) => Some(caption.runs[0].text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(words.len(), 300);
+        assert_eq!(words[1], "Word 1");
         eprintln!(
-            "native-caption-baseline: clips=300 immutable-inputs=100 compilations=100 elapsed-ms={}",
+            "native-caption-baseline: clips=300 compilations=1 elapsed-ms={}",
             start.elapsed().as_millis()
         );
     }

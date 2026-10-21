@@ -58,6 +58,7 @@ pub type ShaderRegistryEnv = valle_motion::shader::ShaderRegistry;
 mod attrs;
 mod audio;
 mod builtins;
+mod caption;
 mod classes;
 mod collections;
 mod compiler;
@@ -98,6 +99,7 @@ mod time;
 mod transform;
 mod values;
 pub use audio::{AudioAnalysisEnv, AudioPcm};
+use caption::{CAPTION_CONTENT, is_caption_object, returns_jsx};
 use controls::*;
 use css::*;
 use diagnostics::*;
@@ -636,6 +638,9 @@ struct PendingNode {
     /// Compiler-only marker: the children of a fragment that a component returned. A parent
     /// that collects child nodes takes the children in its place, as in React.
     fragment: bool,
+    /// Compiler-only marker: the `caption.runs.map(...)` row this node is drawn in. The row
+    /// repeats once for each run of the caption it is bound to.
+    caption_row: Option<u32>,
 }
 
 impl PendingNode {
@@ -665,6 +670,9 @@ enum AuthorValue {
     /// The time, or an object in it, passed on as an argument or prop. Its numbers lower where
     /// they are read, as with `useTime()` itself.
     Time(Vec<String>),
+    /// The caption, its runs or one run, passed on as an argument or prop. Like the time, its
+    /// fields lower where they are read.
+    Caption(Vec<String>),
 }
 
 /// An authored function declaration or arrow-function helper.
@@ -718,10 +726,16 @@ fn authored_fn_of<'a>(initializer: &'a Expression<'a>) -> Option<AuthoredFn<'a>>
 }
 
 /// Compile-time intrinsics that a source can neither declare nor shadow.
-const RESERVED_INTRINSICS: &[&str] = &["ThemeProvider", "useTheme", "useTime", "useData"];
+const RESERVED_INTRINSICS: &[&str] = &[
+    "ThemeProvider",
+    "useTheme",
+    "useTime",
+    "useData",
+    "useCaption",
+];
 
-const SHADOWED_INTRINSIC: &str = "`ThemeProvider`, `useTheme`, `useTime` and `useData` are \
-     reserved Motion intrinsics and cannot be shadowed";
+const SHADOWED_INTRINSIC: &str = "`ThemeProvider`, `useTheme`, `useTime`, `useData` and \
+     `useCaption` are reserved Motion intrinsics and cannot be shadowed";
 
 fn reserved_intrinsic_binding(pattern: &BindingPattern<'_>) -> Option<Span> {
     match pattern {
@@ -826,6 +840,9 @@ struct Bindings<'s> {
     prop_rests: BTreeMap<String, BTreeSet<String>>,
     /// Names bound to the time `useTime()` returns, or to an object in it: the path under it.
     times: BTreeMap<String, Vec<String>>,
+    /// Names bound to the caption `useCaption()` returns, its runs, or one run: the path under
+    /// it, where `#` stands for the run of a `runs.map(...)` row.
+    captions: BTreeMap<String, Vec<String>>,
 }
 
 /// Everything one name is bound to, kept while a block hides it and compared across the branches
@@ -842,6 +859,7 @@ struct NameBinding<'s> {
     children: Option<Vec<PendingNode>>,
     prop_rest: Option<BTreeSet<String>>,
     time: Option<Vec<String>>,
+    caption: Option<Vec<String>>,
 }
 
 #[derive(Clone)]
@@ -855,6 +873,7 @@ struct BindingFrame<'s> {
     objects: BTreeMap<String, style_objects::AuthoredObject<'s>>,
     children: BTreeMap<String, Vec<PendingNode>>,
     times: BTreeMap<String, Vec<String>>,
+    captions: BTreeMap<String, Vec<String>>,
 }
 
 impl<'s> Bindings<'s> {
@@ -907,6 +926,11 @@ impl<'s> Bindings<'s> {
             } else {
                 std::mem::take(&mut self.times)
             },
+            captions: if captures_scope {
+                self.captions.clone()
+            } else {
+                std::mem::take(&mut self.captions)
+            },
         }
     }
 
@@ -932,6 +956,7 @@ impl<'s> Bindings<'s> {
             objects: self.objects.clone(),
             children: self.children.clone(),
             times: self.times.clone(),
+            captions: self.captions.clone(),
         }
     }
 
@@ -945,6 +970,7 @@ impl<'s> Bindings<'s> {
         self.objects = frame.objects;
         self.children = frame.children;
         self.times = frame.times;
+        self.captions = frame.captions;
     }
 
     /// Everything bound to `name`.
@@ -960,6 +986,7 @@ impl<'s> Bindings<'s> {
             children: self.children.get(name).cloned(),
             prop_rest: self.prop_rests.get(name).cloned(),
             time: self.times.get(name).cloned(),
+            caption: self.captions.get(name).cloned(),
         }
     }
 
@@ -996,7 +1023,10 @@ impl<'s> Bindings<'s> {
             self.prop_rests.insert(name.clone(), omitted);
         }
         if let Some(path) = binding.time {
-            self.times.insert(name, path);
+            self.times.insert(name.clone(), path);
+        }
+        if let Some(path) = binding.caption {
+            self.captions.insert(name, path);
         }
     }
 
@@ -1011,6 +1041,7 @@ impl<'s> Bindings<'s> {
         self.children.remove(name);
         self.prop_rests.remove(name);
         self.times.remove(name);
+        self.captions.remove(name);
     }
 }
 
@@ -1116,6 +1147,9 @@ struct Compiler<'s> {
     component_stack: Vec<String>,
     helper_stack: Vec<String>,
     list_depth: usize,
+    /// The `caption.runs.map(...)` row being lowered, and how many rows there are so far.
+    caption_row: Option<u32>,
+    caption_row_count: u32,
     /// Hidden locals bound for spread values so far.
     spread_bindings: usize,
     expanded_list_items: usize,

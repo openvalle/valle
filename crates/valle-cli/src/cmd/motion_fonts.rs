@@ -3,8 +3,8 @@
 //! retains coverage.
 use std::collections::BTreeSet;
 use valle_motion::{
-    ControlType, ControlsSchema, Expr, ExprId, InstanceColumnValues, InstanceGroup, MotionValue,
-    NodeKind, SceneArtifact, StyleValue, TemplatePart, TextValue,
+    CaptionInput, ControlType, ControlsSchema, Expr, ExprId, InstanceColumnValues, InstanceGroup,
+    MotionValue, NodeKind, SceneArtifact, StyleValue, TemplatePart, TextValue,
 };
 
 /// The characters a set of text values can produce, bounded to 1 MiB.
@@ -101,6 +101,11 @@ fn append_expr_text(
                 | ControlType::Point
                 | ControlType::Rect,
             ) => bound.ascii(),
+        },
+        // A caption's words are bound as it draws; its numbers print in ASCII.
+        Expr::Caption { input } => match input {
+            CaptionInput::Text | CaptionInput::RunText => false,
+            _ => bound.ascii(),
         },
         Expr::InstanceIndex
         | Expr::InstanceCount

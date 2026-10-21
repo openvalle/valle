@@ -491,6 +491,7 @@ pub struct CaptionMotion {
     pub id: EntityId,
     pub duration: RationalTime,
     pub source: MotionInstance,
+    pub runs: Vec<TextRun>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1420,22 +1421,7 @@ fn caption_item_from_wire(
         wire::CaptionItemWire::Clip(caption) => Ok(CaptionItem::Clip(Caption {
             id: caption.id,
             duration: RationalTime::from_exact(caption.duration),
-            runs: caption
-                .runs
-                .into_iter()
-                .map(|run| TextRun {
-                    id: run.id,
-                    text: run.text,
-                    timing: run.timing.map(|timing| TextRunTiming {
-                        start: RationalTime::from_exact(timing.start),
-                        end: RationalTime::from_exact(timing.end),
-                    }),
-                    style: run.style.map(|style| TextRunStyle {
-                        font_size: style.font_size,
-                        color: style.color,
-                    }),
-                })
-                .collect(),
+            runs: caption.runs.into_iter().map(text_run_from_wire).collect(),
             style: CaptionStyle {
                 font: caption.style.font,
                 font_size: caption.style.font_size,
@@ -1465,6 +1451,7 @@ fn caption_item_from_wire(
             id: caption.id,
             duration: RationalTime::from_exact(caption.duration),
             source: motion_instance_from_wire(caption.source)?,
+            runs: caption.runs.into_iter().map(text_run_from_wire).collect(),
         })),
         wire::CaptionItemWire::Gap(gap) => Ok(CaptionItem::Gap(gap_from_wire(gap))),
     }
@@ -1475,22 +1462,7 @@ fn caption_item_into_wire(item: CaptionItem) -> wire::CaptionItemWire {
         CaptionItem::Clip(caption) => wire::CaptionItemWire::Clip(wire::CaptionWire {
             id: caption.id,
             duration: caption.duration.into_exact(),
-            runs: caption
-                .runs
-                .into_iter()
-                .map(|run| wire::TextRunWire {
-                    id: run.id,
-                    text: run.text,
-                    timing: run.timing.map(|timing| wire::TextRunTimingWire {
-                        start: timing.start.into_exact(),
-                        end: timing.end.into_exact(),
-                    }),
-                    style: run.style.map(|style| wire::TextRunStyleWire {
-                        font_size: style.font_size,
-                        color: style.color,
-                    }),
-                })
-                .collect(),
+            runs: caption.runs.into_iter().map(text_run_into_wire).collect(),
             style: wire::CaptionStyleWire {
                 font: caption.style.font,
                 font_size: caption.style.font_size,
@@ -1519,8 +1491,39 @@ fn caption_item_into_wire(item: CaptionItem) -> wire::CaptionItemWire {
             id: caption.id,
             duration: caption.duration.into_exact(),
             source: motion_instance_into_wire(caption.source),
+            runs: caption.runs.into_iter().map(text_run_into_wire).collect(),
         }),
         CaptionItem::Gap(gap) => wire::CaptionItemWire::Gap(gap_into_wire(gap)),
+    }
+}
+
+fn text_run_from_wire(run: wire::TextRunWire) -> TextRun {
+    TextRun {
+        id: run.id,
+        text: run.text,
+        timing: run.timing.map(|timing| TextRunTiming {
+            start: RationalTime::from_exact(timing.start),
+            end: RationalTime::from_exact(timing.end),
+        }),
+        style: run.style.map(|style| TextRunStyle {
+            font_size: style.font_size,
+            color: style.color,
+        }),
+    }
+}
+
+fn text_run_into_wire(run: TextRun) -> wire::TextRunWire {
+    wire::TextRunWire {
+        id: run.id,
+        text: run.text,
+        timing: run.timing.map(|timing| wire::TextRunTimingWire {
+            start: timing.start.into_exact(),
+            end: timing.end.into_exact(),
+        }),
+        style: run.style.map(|style| wire::TextRunStyleWire {
+            font_size: style.font_size,
+            color: style.color,
+        }),
     }
 }
 

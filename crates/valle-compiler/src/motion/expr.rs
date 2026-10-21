@@ -272,6 +272,9 @@ impl<'s> Compiler<'s> {
                 } else if let Some(path) = self.bindings.times.get(identifier.name.as_str()) {
                     let path = path.clone();
                     return self.lower_time_path(&path, expression.span());
+                } else if let Some(path) = self.bindings.captions.get(identifier.name.as_str()) {
+                    let path = path.clone();
+                    return self.lower_caption_path(&path, expression.span());
                 } else if identifier.name == "TAU" {
                     Expr::Const {
                         value: MotionValue::Number(core::f64::consts::TAU),
@@ -294,6 +297,14 @@ impl<'s> Compiler<'s> {
             }
             Expression::StaticMemberExpression(_) => return self.lower_member(expression),
             Expression::ComputedMemberExpression(member) => {
+                if self.reads_caption(&member.object) {
+                    self.illegal(
+                        DiagCode::GrammarForbidden,
+                        member.span,
+                        "draw the runs with `caption.runs.map((run, index) => ...)`; a caption is bound as it is drawn, so its runs and text are not read by index",
+                    );
+                    return None;
+                }
                 return self.lower_dynamic_tuple_index(member);
             }
             Expression::UnaryExpression(unary)
@@ -511,7 +522,11 @@ impl<'s> Compiler<'s> {
                     self.illegal(
                         DiagCode::GrammarForbidden,
                         call.callee.span(),
-                        "only named motion primitives may be called at runtime",
+                        if self.reads_caption(&call.callee) {
+                            CAPTION_CONTENT
+                        } else {
+                            "only named motion primitives may be called at runtime"
+                        },
                     );
                     return None;
                 };
@@ -527,6 +542,7 @@ impl<'s> Compiler<'s> {
                         }
                         return self.lower_time_path(&[], call.span());
                     }
+                    "useCaption" => return self.lower_caption_path(&[], call.span()),
                     "useData" => {
                         self.illegal(
                             DiagCode::GrammarForbidden,
@@ -989,6 +1005,9 @@ impl<'s> Compiler<'s> {
         if let Some(path) = self.time_path(expression) {
             return self.lower_time_path(&path, expression.span());
         }
+        if let Some(path) = self.caption_path(expression) {
+            return self.lower_caption_path(&path, expression.span());
+        }
         if let Expression::StaticMemberExpression(field_member) = expression
             && let Expression::CallExpression(call) = strip_parens(&field_member.object)
             && let Expression::StaticMemberExpression(at_member) = strip_parens(&call.callee)
@@ -1251,6 +1270,9 @@ impl<'s> Compiler<'s> {
                         }
                         Some(AuthorValue::Time(path)) => {
                             self.lower_time_path(&path, expression.span())
+                        }
+                        Some(AuthorValue::Caption(path)) => {
+                            self.lower_caption_path(&path, expression.span())
                         }
                         None => {
                             self.illegal(

@@ -276,6 +276,7 @@ pub(super) fn open_engine_render(
         camera: compiled.camera,
         kernels,
         resources: snapshot,
+        caption_scenes: Arc::default(),
     })
 }
 
@@ -701,6 +702,7 @@ struct AdmittedMotionInstance {
     props: BTreeMap<String, AdmittedMotionParam>,
     resources: BTreeMap<String, u32>,
     artifact_dependencies: Vec<AdmittedMotionArtifactDependency>,
+    caption: Option<Arc<valle_motion::caption::BoundCaption>>,
     artifact: Arc<SceneArtifact>,
 }
 
@@ -1931,6 +1933,7 @@ fn admit_motion_instance(
         props,
         resources: compiled_resources,
         artifact_dependencies,
+        caption: None,
         artifact,
     }
 }
@@ -2553,6 +2556,16 @@ fn admit_caption_program(
                         &format!("{path}/source"),
                         diagnostics,
                     );
+                    if let Some(AdmittedSource {
+                        payload: AdmittedSourcePayload::Motion { instance, .. },
+                        ..
+                    }) = sources.get_mut(source as usize)
+                        && instance.artifact.reads_caption()
+                    {
+                        instance.caption =
+                            admit_caption_content(caption, &format!("{path}/runs"), diagnostics)
+                                .map(Arc::new);
+                    }
                     items.push(AdmittedCaptionItem::Motion {
                         clip: AdmittedCaptionMotion {
                             id: caption.id.clone(),
@@ -2581,6 +2594,39 @@ fn admit_caption_program(
         });
     }
     Some(AdmittedCaptionProgram { tracks })
+}
+
+/// The caption a presenter template is bound to. Canonical validation gives every run of a Motion
+/// caption its times and style.
+fn admit_caption_content(
+    caption: &CaptionMotion,
+    path: &str,
+    diagnostics: &mut Vec<EngineOpenDiagnostic>,
+) -> Option<valle_motion::caption::BoundCaption> {
+    let runs = caption
+        .runs
+        .iter()
+        .map(|run| {
+            let timing = run.timing.as_ref()?;
+            let style = run.style.as_ref()?;
+            Some(valle_motion::caption::BoundCaptionRun {
+                text: run.text.clone(),
+                start: timing.start.as_f64(),
+                end: timing.end.as_f64(),
+                font_size: style.font_size?,
+                color: valle_motion::caption::parse_color(style.color.as_deref()?).ok()?,
+            })
+        })
+        .collect::<Option<Vec<_>>>()
+        .filter(|runs| !runs.is_empty());
+    if runs.is_none() {
+        diagnostics.push(motion_schema_diagnostic(
+            EngineOpenDiagnosticCode::MotionControlSchemaMismatch,
+            path,
+            "caption-runs-unresolved",
+        ));
+    }
+    runs.map(|runs| valle_motion::caption::BoundCaption { runs })
 }
 
 fn validate_caption_font_admission(

@@ -470,6 +470,7 @@ impl<'s> Compiler<'s> {
             children: Vec::new(),
             is_mask_source: false,
             fragment: false,
+            caption_row: None,
         })
     }
 

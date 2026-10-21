@@ -104,6 +104,10 @@ pub enum EvalError {
     InstanceOutsideGroup {
         at: usize,
     },
+    /// A captionPresenter template read its caption before it was bound to one.
+    UnboundCaption {
+        at: usize,
+    },
     /// Layout bounds accessed before the post-layout pass; reject instead of substituting a zero
     /// rectangle.
     BoundsOutsidePostLayout {
@@ -169,6 +173,11 @@ impl core::fmt::Display for EvalError {
             EvalError::InstanceOutsideGroup { at } => write!(
                 f,
                 "expression {at}: instance fields are only defined during instance evaluation"
+            ),
+            EvalError::UnboundCaption { at } => write!(
+                f,
+                "expression {at}: a captionPresenter template draws only once it is bound to a \
+                 caption"
             ),
             EvalError::ViewportUnavailable { at } => write!(
                 f,
@@ -1004,6 +1013,7 @@ fn reads_runtime_inputs(expr: &Expr) -> bool {
         Expr::InstanceField { .. }
         | Expr::InstanceIndex
         | Expr::InstanceCount
+        | Expr::Caption { .. }
         | Expr::Context { .. }
         | Expr::Prop { .. }
         | Expr::NodeBounds { .. }
@@ -1168,6 +1178,7 @@ fn eval_one_with<'a>(
         Expr::InstanceCount => instance
             .map(|(group, _)| MotionValue::Number(group.rows() as f64))
             .ok_or(EvalError::InstanceOutsideGroup { at }),
+        Expr::Caption { .. } => Err(EvalError::UnboundCaption { at }),
         Expr::Context { input } => context_value(*input, inputs.ctx, inputs.unit, inputs.viewport)
             .ok_or_else(|| match input {
                 ContextInput::ViewportWidth | ContextInput::ViewportHeight => {
@@ -2000,6 +2011,7 @@ mod tests {
             shaders: Vec::new(),
             exprs,
             instance_groups: vec![],
+            caption_rows: vec![],
             nodes: vec![SceneNode {
                 key: "root".into(),
                 kind: NodeKind::Group,

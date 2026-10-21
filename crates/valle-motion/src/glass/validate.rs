@@ -559,6 +559,7 @@ mod tests {
             shaders: Vec::new(),
             exprs: vec![],
             instance_groups: vec![],
+            caption_rows: vec![],
             nodes: vec![
                 SceneNode {
                     key: "root".into(),

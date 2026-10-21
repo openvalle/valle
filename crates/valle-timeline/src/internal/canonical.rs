@@ -236,6 +236,15 @@ fn quantize_document_scalars(document: &mut TimelineDocumentWire) {
                 for param in caption.source.props.values_mut() {
                     quantize_param(param, quantize_json_numbers);
                 }
+                for run in &mut caption.runs {
+                    if let Some(font_size) = run
+                        .style
+                        .as_mut()
+                        .and_then(|style| style.font_size.as_mut())
+                    {
+                        quantize_scalar(font_size);
+                    }
+                }
             }
             let CaptionItemWire::Clip(caption) = item else {
                 continue;
@@ -1351,6 +1360,7 @@ impl<'a> Validator<'a> {
                             &caption.id,
                             &format!("{path}/source"),
                         );
+                        self.validate_presenter_runs(caption, &path);
                         cursor = self.advance(cursor, caption.duration, &path, Some(&caption.id));
                     }
                     CaptionItemWire::Gap(gap) => {
@@ -1371,6 +1381,83 @@ impl<'a> Validator<'a> {
                 }
             }
             self.require_track_within_canvas(cursor, canvas, &track_path, Some(&track.id));
+        }
+    }
+
+    /// A presenter's runs are bound to its template as they stand, so each carries its times,
+    /// size and color.
+    fn validate_presenter_runs(&mut self, caption: &CaptionMotionWire, path: &str) {
+        if caption.runs.is_empty() {
+            self.error(
+                "caption_runs_empty",
+                &format!("{path}/runs"),
+                Some(&caption.id),
+                JsonObject::new(),
+            );
+        }
+        for (run_index, run) in caption.runs.iter().enumerate() {
+            let run_path = format!("{path}/runs/{run_index}");
+            self.register_id(&run.id, "text-run", &format!("{run_path}/id"));
+            match &run.timing {
+                Some(timing) => {
+                    self.require_non_negative(
+                        timing.start,
+                        &format!("{run_path}/timing/start"),
+                        Some(&run.id),
+                    );
+                    if timing.end <= timing.start || timing.end > caption.duration {
+                        self.error(
+                            "caption_run_timing_invalid",
+                            &format!("{run_path}/timing"),
+                            Some(&run.id),
+                            JsonObject::new(),
+                        );
+                    }
+                }
+                None => self.error(
+                    "presenter_run_timing_required",
+                    &format!("{run_path}/timing"),
+                    Some(&run.id),
+                    JsonObject::new(),
+                ),
+            }
+            let Some(TextRunStyleWire {
+                font_size: Some(font_size),
+                color: Some(color),
+            }) = &run.style
+            else {
+                self.error(
+                    "presenter_run_style_required",
+                    &format!("{run_path}/style"),
+                    Some(&run.id),
+                    JsonObject::new(),
+                );
+                continue;
+            };
+            if !(font_size.is_finite() && *font_size > 0.0) {
+                self.error(
+                    "font_size_non_positive",
+                    &format!("{run_path}/style/fontSize"),
+                    Some(&run.id),
+                    JsonObject::new(),
+                );
+            }
+            if *font_size > MAX_CAPTION_FONT_SIZE {
+                self.error(
+                    "font_size_out_of_range",
+                    &format!("{run_path}/style/fontSize"),
+                    Some(&run.id),
+                    details([("maximum", json!(MAX_CAPTION_FONT_SIZE))]),
+                );
+            }
+            if !crate::internal::Color(color.clone()).is_valid() {
+                self.error(
+                    "invalid_color",
+                    &format!("{run_path}/style/color"),
+                    Some(&run.id),
+                    JsonObject::new(),
+                );
+            }
         }
     }
 

@@ -20,7 +20,7 @@ impl<'s> Compiler<'s> {
                 source,
                 DiagCode::GrammarForbidden,
                 span,
-                "`ThemeProvider`, `useTheme`, `useTime` and `useData` are reserved Motion intrinsics; do not declare or import replacements",
+                "`ThemeProvider`, `useTheme`, `useTime`, `useData` and `useCaption` are reserved Motion intrinsics; do not declare or import replacements",
             )]);
         }
         if let Some(diagnostic) = scan_forbidden(source, "module") {
@@ -217,6 +217,8 @@ impl<'s> Compiler<'s> {
             component_stack: Vec::new(),
             helper_stack: Vec::new(),
             list_depth: 0,
+            caption_row: None,
+            caption_row_count: 0,
             spread_bindings: 0,
             expanded_list_items: 0,
             expanded_helper_calls: 0,
@@ -308,6 +310,7 @@ impl<'s> Compiler<'s> {
             }
         }
         self.bind_caption_contract();
+        self.check_caption_hooks(program);
         self.validate_prepare_data();
         if !self.diagnostics.is_empty() {
             return Err(std::mem::take(&mut self.diagnostics));
@@ -384,6 +387,7 @@ impl<'s> Compiler<'s> {
                 children: vec![authored_root],
                 is_mask_source: false,
                 fragment: false,
+                caption_row: None,
             }
         };
         self.normalize_glass_scopes(&mut root, None);
@@ -392,10 +396,12 @@ impl<'s> Compiler<'s> {
         }
         let mut nodes = Vec::new();
         let mut node_children = Vec::new();
+        let mut caption_rows = Vec::new();
         let root = emit_node(
             root,
             &mut nodes,
             &mut node_children,
+            &mut caption_rows,
             &mut self.source_ledger.node_spans,
             &mut self.source_ledger.node_expansion_stacks,
         );
@@ -449,6 +455,7 @@ impl<'s> Compiler<'s> {
             shaders,
             exprs: std::mem::take(&mut self.expr_arena.values),
             instance_groups: std::mem::take(&mut self.instance_groups),
+            caption_rows,
             nodes,
             node_children,
             root,
@@ -690,7 +697,7 @@ impl<'s> Compiler<'s> {
                 self.illegal(
                     DiagCode::ModuleShape,
                     Span::new(0, 0),
-                    "captionPresenter needs frozen caption data from its host",
+                    "captionPresenter needs caption data from its host: its caption track's layout, or a whole caption",
                 );
             } else if !self.controls.data.is_empty() {
                 self.illegal(
@@ -715,10 +722,17 @@ impl<'s> Compiler<'s> {
             self.role,
             valle_timeline::MotionRole::CaptionPresenter { .. }
         ) {
-            let result =
+            // A caption track compiles its template with the layout; `--data` gives a whole
+            // caption, which the template is prepared with the layout of.
+            let result = if value.get("runs").is_some() {
                 serde_json::from_value::<valle_motion::caption::CaptionPresenterData>(value)
                     .map_err(|error| error.to_string())
-                    .and_then(|data| data.validate(None));
+                    .and_then(|caption| caption.validate(None))
+            } else {
+                serde_json::from_value::<valle_motion::caption::CaptionPresenterLayout>(value)
+                    .map_err(|error| error.to_string())
+                    .and_then(|layout| layout.validate())
+            };
             if let Err(message) = result {
                 let mut diagnostic =
                     diagnostic_at(self.source, DiagCode::ModuleShape, Span::new(0, 0), message);
@@ -872,6 +886,7 @@ impl<'s> Compiler<'s> {
             children,
             is_mask_source: false,
             fragment: true,
+            caption_row: None,
         }
     }
 

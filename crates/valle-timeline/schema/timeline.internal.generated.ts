@@ -22,7 +22,7 @@ export namespace TimelineDocumentSchema {
   export type CaptionAlignWire = ("top-left" | "top-center" | "top-right" | "center-left" | "center" | "center-right" | "bottom-left" | "bottom-center" | "bottom-right");
   export type CaptionBehaviorWire = ({ "axis": ScrollAxisWire; "speed": number; "type": "scroll" } | { "mode": KaraokeModeWire; "type": "karaoke" });
   export type CaptionCompositionWire = { "tracks": Array<CaptionTrackWire> };
-  export type CaptionItemWire = ({ "behavior": RequiredNullable_for_CaptionBehaviorWire; "duration": ExactRational; "id": string; "layout": CaptionLayoutWire; "presentation": CaptionPresentationWire; "runs": Array<TextRunWire>; "style": CaptionStyleWire; "type": "clip" } | { "duration": ExactRational; "id": string; "source": MotionInstanceWire; "type": "motion" } | { "duration": ExactRational; "id": string; "type": "gap" });
+  export type CaptionItemWire = ({ "behavior": RequiredNullable_for_CaptionBehaviorWire; "duration": ExactRational; "id": string; "layout": CaptionLayoutWire; "presentation": CaptionPresentationWire; "runs": Array<TextRunWire>; "style": CaptionStyleWire; "type": "clip" } | { "duration": ExactRational; "id": string; "runs": Array<TextRunWire>; "source": MotionInstanceWire; "type": "motion" } | { "duration": ExactRational; "id": string; "type": "gap" });
   export type CaptionLayoutWire = { "align": CaptionAlignWire; "region": [number, number, number, number] };
   export type CaptionPresentationWire = { "blurSigma": ParamWire2; "clipInset": ParamWire3; "opacity": ParamWire2; "rotation": ParamWire2; "scale": ParamWire2; "translation": ParamWire };
   export type CaptionShadowWire = { "blurSigma": number; "color": string; "offset": [number, number] };

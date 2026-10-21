@@ -156,11 +156,13 @@ props, and a child component receives the attributes it is written with. Name th
 parameter `props` or destructure it, and omit it when unused. Read the time of the
 frame being drawn with `const ctx = useTime()`, or destructure it, as in
 `const { progress, seconds } = useTime()`, and the prepared data with
-`const data = useData()`. Both hooks work in any component or helper, but not in
-module constants, which run once before the first frame. A name bound to the time,
-or to an object in it such as `ctx.unit`, can be passed to a helper or a component
-like any other value; its numbers are read where they are used, so a `TimeScope`
-around that use applies.
+`const data = useData()`; a [caption presenter](#caption-presenter-role) reads the
+caption it draws with `const caption = useCaption()` instead. These hooks work in any
+component or helper, but not in module constants, which run once before the first
+frame. A name bound to the time, or to an object in it such as `ctx.unit`, can be
+passed to a helper or a component like any other value; its numbers are read where
+they are used, so a `TimeScope` around that use applies. A caption is passed the
+same way.
 
 Nothing persists from one frame to the next: each frame is a pure function of its
 time. React's `useState`, `useReducer`, `useRef`, `useEffect`, `useMemo`,
@@ -325,11 +327,13 @@ changes the host window without adding `trimStart`.
 
 Declare `captionPresenter({ intro: seconds(...), outro: seconds(...) })` in the
 entry module to draw a Timeline caption through Motion. It uses the same exact
-intro/outro mapping as an overlay with `hold: "once"`. The third root argument is
-the frozen `{ text, runs, style, region, align }` input prepared for that caption.
-`region` uses canvas pixels. Timed runs use ordered, nonoverlapping clip-local q6
-seconds; compare them with `ctx.host.seconds` so word highlighting continues when
-the template's source clock holds.
+intro/outro mapping as an overlay with `hold: "once"`. The template reads the caption
+it draws with `const caption = useCaption()`: `{ text, runs, style, region, align }`.
+`region` uses canvas pixels. A run has `text`, `start`, `end`, `fontSize` and `color`:
+timed runs use ordered, nonoverlapping clip-local q6 seconds, a run without times spans
+the caption, and a run without a size or color takes the track style's. Compare the
+times with `ctx.host.seconds` so word highlighting continues when the template's source
+clock holds.
 
 ```tsx
 export const composition = { width: 640, height: 360, duration: 1, fps: 30 };
@@ -337,39 +341,45 @@ export const role = captionPresenter({ intro: seconds(0.2), outro: seconds(0.2) 
 
 export default function Words() {
   const ctx = useTime();
-  const data = useData();
-  return <Scene>{data.runs.map((run, index) =>
-    <Text key={index} className="absolute" style={{
-      left: data.region[0] + index * 140, top: data.region[1],
-      fontFamily: data.style.font, fontSize: data.style.fontSize,
-      color: ctx.host.seconds >= run.start && ctx.host.seconds < run.end
-        ? "#facc15" : data.style.color,
-    }}>{run.text}</Text>
-  )}</Scene>;
+  const caption = useCaption();
+  const [x, y, width] = caption.region;
+  return <Scene>
+    <Text className="absolute" style={{ left: x, top: y, width,
+      fontFamily: caption.style.font, fontSize: caption.style.fontSize }}>
+      {caption.runs.map((run) => <Span style={{ fontSize: run.fontSize,
+        color: ctx.host.seconds >= run.start && ctx.host.seconds < run.end ? "#facc15" : run.color,
+      }}>{run.text}</Span>)}
+    </Text>
+  </Scene>;
 }
 ```
 
-This example expects timed runs. The track's font is automatically bound to the
-required `asset://caption` slot. Do not declare that asset control, bind the
-reserved slot yourself, or declare `controls.data`. Use a track's `presenter`
-field to choose the component and optional props/resource bindings; see
-[Timeline caption tracks](timeline.md#captions). Output follows caption
-track order above the visual/adjustment bands. Built-in caption animation fields
-cannot be combined with a presenter.
+`caption.runs.map((run, index) => ...)` draws a row for each run: elements, or
+`<Span>`s inside one `<Text>`, which shape and wrap as one paragraph. The rows are keyed
+by their index, and a row cannot map the runs again. The track's font is automatically
+bound to the required `asset://caption` slot. Do not declare that asset control, bind
+the reserved slot yourself, declare `controls.data`, or call `useData()`. Use a track's
+`presenter` field to choose the component and optional props/resource bindings; see
+[Timeline caption tracks](timeline.md#captions). Output follows caption track order
+above the visual/adjustment bands. Built-in caption animation fields cannot be combined
+with a presenter.
 
-Each different static caption input compiles once during preparation. Frame
-rendering evaluates the prepared program. Equal inputs can reuse compilation;
-different text, word times, style, font bindings or viewport produce different
-inputs. The caption track does not compile into one artifact for all text.
-For standalone CLI check/review/render, supply this same typed object with
-`--data caption.json`, bind the font with `--asset caption=font.ttf`, and optionally
-set a different `--host-duration`.
+A caption track compiles its template once, with the track's style, region and
+alignment, so `caption.style`, `caption.region` and `caption.align` are prepare-time
+values. Each caption's text and runs are bound as it is drawn, like the time: read
+`caption.text`, `caption.runs.length` and a run's fields in JSX and frame expressions,
+not in prepare-time code. Change case with CSS `textTransform`, and style a keyword
+with its run's `color` or `fontSize` in the Timeline. Editing words or their times
+compiles nothing; a different style, layout, font binding or canvas compiles again.
+For standalone CLI check/review/render, supply one caption as
+`{ text, runs, style, region, align }` with `--data caption.json`, bind the font with
+`--asset caption=font.ttf`, and optionally set a different `--host-duration`.
 
 `motion studio` accepts those same data and font bindings. Its caption wrapper
 uses Timeline's existing q6 layout precision. When conversion changes the pixel
 region or style, Studio reports `caption-input-normalized` and prepares the
-normalized input for both preview and **Save as Timeline**. This conversion can
-compile the original and normalized inputs on first preparation; repeated inputs
+normalized layout for both preview and **Save as Timeline**. This conversion can
+compile the original and normalized layouts on first preparation; repeated inputs
 reuse the existing bounded cache. The saved track contains its timed runs, style,
 layout and presenter bindings, and reopens with the same prepared input.
 

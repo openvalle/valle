@@ -158,13 +158,22 @@ fn review(
     let artifact = &prepared.compiled.artifact;
     let delivery = Delivery::of(artifact, output_fps)?
         .with_host_duration(host_duration)?
-        .with_host_size(host_size, artifact)?
-        .with_caption_data(&prepared)?;
+        .with_host_size(host_size, artifact)?;
+    let caption = prepared.presenter_caption(delivery.duration)?;
+    let scene = caption
+        .as_ref()
+        .and_then(|caption| caption.scene.as_ref())
+        .unwrap_or(&prepared.scene);
+    let caption_data = caption.as_ref().map(|caption| &caption.data);
     let prop_bindings = read_prop_bindings(bindings.props.as_deref())?;
     let overrides = review_prop_overrides(artifact, &prop_bindings)?;
     let props = valle_motion::resolve_props(&artifact.controls, &overrides)?;
     let mut fonts = valle_motion::Fonts::default();
-    for bytes in fixed_package_font_blobs(artifact, &explicit_fonts)? {
+    for bytes in fixed_package_font_blobs(
+        artifact,
+        &explicit_fonts,
+        caption_data.map(|caption| caption.text.as_str()),
+    )? {
         fonts.register(valle_motion::motion_font_resource(
             valle_motion::FontSource::from_shared(Arc::new(bytes)),
         ))?;
@@ -194,7 +203,7 @@ fn review(
         styles: Some(&styles),
     };
     let report = valle_motion::review_motion(
-        &prepared.scene,
+        scene,
         &props,
         &opts,
         delivery.fps,
@@ -223,6 +232,7 @@ fn review(
             &prepared.assets,
             &explicit_fonts,
             &prop_bindings,
+            caption_data,
             &report.trajectories,
             &delivery,
         )?;
@@ -286,8 +296,13 @@ fn render(
     let artifact = &prepared.compiled.artifact;
     let delivery = Delivery::of(artifact, tuning.fps.as_deref())?
         .with_host_duration(host_duration)?
-        .with_host_size(host_size, artifact)?
-        .with_caption_data(&prepared)?;
+        .with_host_size(host_size, artifact)?;
+    let caption = prepared.presenter_caption(delivery.duration)?;
+    let scene = caption
+        .as_ref()
+        .and_then(|caption| caption.scene.as_ref())
+        .unwrap_or(&prepared.scene);
+    let caption_data = caption.as_ref().map(|caption| &caption.data);
     let (duration, fps, canvas) = (delivery.duration, delivery.fps, delivery.canvas);
     if let Some((width, height)) = tuning.output_size {
         // Delivery scaling must preserve the composition's aspect ratio: another shape is another
@@ -303,13 +318,18 @@ fn render(
         }
     }
     let props = read_prop_bindings(bindings.props.as_deref())?;
-    let font_blobs = fixed_package_font_blobs(artifact, &explicit_fonts)?;
+    let font_blobs = fixed_package_font_blobs(
+        artifact,
+        &explicit_fonts,
+        caption_data.map(|caption| caption.text.as_str()),
+    )?;
     let package = super::motion_package::build_standalone_motion_package(
         super::motion_package::StandaloneMotionPackageInput {
             artifact,
             assets: &prepared.assets,
             font_blobs: &font_blobs,
             prop_bindings: &props,
+            caption: caption_data,
             duration,
             frame_rate: fps,
             canvas: canvas.tuple(),
@@ -397,7 +417,7 @@ fn render(
             fps,
         )
         .context("checked frame is outside the template")?;
-        let evaluation = prepared.scene.frame_evaluation_stats(&motion_context);
+        let evaluation = scene.frame_evaluation_stats(&motion_context);
         let compilation = observation.trace.metrics();
         let mut report = serde_json::json!({"status":"ok", "component":artifact.component,
         "warnings":prepared.compiled.warnings,
@@ -693,6 +713,45 @@ pub(crate) struct PreparedInput {
     pub(super) assets: BTreeMap<String, BoundAsset>,
     pub(super) shaders: valle_motion::shader::ShaderRegistry,
     canvas_size: MotionViewport,
+}
+
+/// The caption a captionPresenter is drawn with: `--data` gives one, and the template compiled with
+/// its layout is bound to it.
+pub(crate) struct PresenterCaption {
+    pub(super) data: valle_motion::caption::CaptionPresenterData,
+    /// The template bound to the caption, when it reads it.
+    scene: Option<valle_motion::PreparedScene>,
+}
+
+impl PreparedInput {
+    /// The caption a captionPresenter draws for `duration`; none for any other template.
+    fn presenter_caption(&self, duration: RationalTime) -> Result<Option<PresenterCaption>> {
+        let artifact = &self.compiled.artifact;
+        if !matches!(
+            artifact.role,
+            valle_timeline::MotionRole::CaptionPresenter { .. }
+        ) {
+            return Ok(None);
+        }
+        let shape = "a captionPresenter draws the caption --data gives: text, runs, style, region and align";
+        let binding = self.data_binding.as_ref().context(shape)?;
+        let data: valle_motion::caption::CaptionPresenterData =
+            serde_json::from_value(binding.value.clone())
+                .with_context(|| format!("{}: {shape}", binding.source))?;
+        data.validate(Some(duration))
+            .map_err(|reason| anyhow!("{}: {reason}", binding.source))?;
+        let scene = if artifact.reads_caption() {
+            let caption = valle_motion::caption::BoundCaption::from_data(&data, duration.as_f64())?;
+            let bound = artifact.bind_caption(&caption)?;
+            Some(
+                valle_motion::prepare_owned_scene(bound)
+                    .map_err(|error| anyhow!("the bound caption template: {error}"))?,
+            )
+        } else {
+            None
+        };
+        Ok(Some(PresenterCaption { data, scene }))
+    }
 }
 
 /// Source closure and asset bytes captured before a Timeline save starts compiling.
@@ -1080,8 +1139,17 @@ fn studio_native_state_json(request: &StudioRequest, generation: u64) -> Result<
     let duration_frames = delivery.duration_frames;
     let props = read_prop_bindings(request.bindings.props.as_deref())?;
     let frame_rate = delivery.fps;
-    let runtime_font_blobs =
-        fixed_package_font_blobs(&prepared.compiled.artifact, &explicit_font_blobs)?;
+    let caption = match prepared.presenter_caption(delivery.duration) {
+        Ok(caption) => caption.map(|caption| caption.data),
+        Err(error) => {
+            return studio_runtime_error_json(request, generation, "motion-caption-input", &error);
+        }
+    };
+    let runtime_font_blobs = fixed_package_font_blobs(
+        &prepared.compiled.artifact,
+        &explicit_font_blobs,
+        caption.as_ref().map(|caption| caption.text.as_str()),
+    )?;
     let fixed_package = match super::motion_package::build_standalone_motion_package(
         super::motion_package::StandaloneMotionPackageInput {
             artifact: &prepared.compiled.artifact,
@@ -1091,6 +1159,7 @@ fn studio_native_state_json(request: &StudioRequest, generation: u64) -> Result<
             // ProgramRecording; ordinary Motion packages keep the smaller default closure.
             font_blobs: &runtime_font_blobs,
             prop_bindings: &props,
+            caption: caption.as_ref(),
             duration: delivery.duration,
             frame_rate,
             canvas: delivery.canvas.tuple(),
@@ -1710,23 +1779,6 @@ impl Delivery {
         Ok(self)
     }
 
-    fn with_caption_data(self, prepared: &PreparedInput) -> Result<Self> {
-        if matches!(
-            prepared.compiled.artifact.role,
-            valle_timeline::MotionRole::CaptionPresenter { .. }
-        ) {
-            let binding = prepared
-                .data_binding
-                .as_ref()
-                .context("captionPresenter needs frozen caption input")?;
-            let data: valle_motion::caption::CaptionPresenterData =
-                serde_json::from_value(binding.value.clone())?;
-            data.validate(Some(self.duration))
-                .map_err(|reason| anyhow!("{}: {reason}", binding.source))?;
-        }
-        Ok(self)
-    }
-
     fn with_host_duration(mut self, input: Option<&str>) -> Result<Self> {
         if let Some(input) = input {
             let duration = RationalTime::from_exact(TimelineTimeWire::new(input)?.to_exact());
@@ -1800,12 +1852,33 @@ fn authoring_font_blobs(explicit: &[Arc<[u8]>]) -> Vec<Arc<[u8]>> {
     blobs
 }
 
+/// The faces a package of `artifact` freezes. A caption template draws the text its captions bind,
+/// so it takes the faces for `caption_text`, every character of those captions.
 pub(super) fn fixed_package_font_blobs(
     artifact: &valle_motion::SceneArtifact,
     explicit: &[Arc<[u8]>],
+    caption_text: Option<&str>,
 ) -> Result<Vec<Arc<[u8]>>> {
     let mut blobs = explicit.to_vec();
-    blobs.extend(super::motion_fonts::selected_default_fonts(artifact));
+    match caption_text.filter(|_| artifact.reads_caption()) {
+        Some(text) => {
+            let caption = valle_motion::caption::BoundCaption {
+                runs: vec![valle_motion::caption::BoundCaptionRun {
+                    text: text.chars().collect::<BTreeSet<_>>().into_iter().collect(),
+                    start: 0.0,
+                    end: 1.0,
+                    font_size: 1.0,
+                    color: valle_draw::program::AuthorColor::from_srgb8(valle_draw::Rgba::rgb(
+                        0, 0, 0,
+                    )),
+                }],
+            };
+            blobs.extend(super::motion_fonts::selected_default_fonts(
+                &artifact.bind_caption(&caption)?,
+            ));
+        }
+        None => blobs.extend(super::motion_fonts::selected_default_fonts(artifact)),
+    }
     blobs.extend(used_formula_font_blobs(artifact)?);
     deduplicate_font_blobs(&mut blobs);
     Ok(blobs)

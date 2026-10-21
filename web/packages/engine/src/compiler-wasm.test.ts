@@ -362,7 +362,7 @@ test("Wasm compiles the same closed caption role and frozen input as Native", as
     {data:{source:"captions.json",value:data}});
   expect(compiled.artifact.role).toEqual({type:"captionPresenter",intro:"3/20",outro:"3/20"});
   expect(compiled.artifact.controls).toEqual({props:{},data:{},assets:{caption:{kind:"font",required:true}}});
-  expect(compiled.artifactDigest).toBe("sha256:db7103728d50db2bb6ea16a4e3147e64193e4d61b7adc20b06309b8b17b7ff42");
+  expect(compiled.artifactDigest).toBe("sha256:ddda40286d58b1c34b678ea351d80bb347e3d37cf09577a04dd597cc881ae206");
   const movedOrigin = compileMotionJsxWithWasm({compile_motion_jsx}, source,
     {data:{source:"elsewhere.json",value:data}});
   expect(movedOrigin.artifactDigest).toBe(compiled.artifactDigest);

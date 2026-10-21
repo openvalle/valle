@@ -64,6 +64,43 @@ impl ContextInput {
     }
 }
 
+/// What a captionPresenter template reads from the caption it draws. Binding the template to a
+/// caption ([`crate::SceneArtifact::bind_caption`]) replaces each read with its value, so a
+/// prepared scene never holds one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CaptionInput {
+    /// The caption's text: its runs, joined.
+    Text,
+    /// How many runs the caption has.
+    RunCount,
+    /// The position of the run a caption row repeats for.
+    RunIndex,
+    RunText,
+    /// Clip-local seconds.
+    RunStart,
+    RunEnd,
+    RunFontSize,
+    RunColor,
+}
+
+impl CaptionInput {
+    /// Whether this reads the run of the caption row it is in, rather than the whole caption.
+    pub fn reads_row(self) -> bool {
+        !matches!(self, Self::Text | Self::RunCount)
+    }
+
+    pub fn value_type(self) -> ExprType {
+        match self {
+            Self::Text | Self::RunText => ExprType::String,
+            Self::RunColor => ExprType::Color,
+            Self::RunCount | Self::RunIndex | Self::RunStart | Self::RunEnd | Self::RunFontSize => {
+                ExprType::Number
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum GeometryField {
@@ -198,6 +235,10 @@ pub enum Expr {
     },
     InstanceIndex,
     InstanceCount,
+    /// A value of the caption a captionPresenter draws, replaced when the template is bound.
+    Caption {
+        input: CaptionInput,
+    },
     Context {
         input: ContextInput,
     },
@@ -513,6 +554,7 @@ impl Expr {
             | Expr::InstanceField { .. }
             | Expr::InstanceIndex
             | Expr::InstanceCount
+            | Expr::Caption { .. }
             | Expr::Context { .. }
             | Expr::Prop { .. }
             | Expr::NodeBounds { .. }
@@ -619,6 +661,7 @@ impl Expr {
             | Expr::InstanceField { .. }
             | Expr::InstanceIndex
             | Expr::InstanceCount
+            | Expr::Caption { .. }
             | Expr::Context { .. }
             | Expr::Prop { .. }
             | Expr::NodeBounds { .. }
@@ -952,6 +995,7 @@ pub fn validate_next_expr(
         }
         Expr::InstanceField { value_type, .. } => Some(*value_type),
         Expr::InstanceIndex | Expr::InstanceCount => Some(ExprType::Number),
+        Expr::Caption { input } => Some(input.value_type()),
         Expr::Context { .. } => Some(ExprType::Number),
         Expr::RangeSelector {
             start,

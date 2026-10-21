@@ -40,3 +40,29 @@ export default function Card(props) { const ctx = useTime();
         "Span syntax lowers to adjacent existing Text leaves"
     );
 }
+
+#[test]
+fn a_prepared_list_maps_to_the_spans_of_one_paragraph() {
+    let compiled = compile_motion(
+        r##"
+const WORDS = [{ text: "Build ", color: "#ffffff" }, { text: "your ", color: "#facc15" }, { text: "story", color: "#ffffff" }];
+export default function Card() {
+  return <Text style={{ fontSize: 48 }}>{WORDS.map((word) => <Span style={{ color: word.color }}>{word.text}</Span>)}</Text>;
+}
+"##,
+    )
+    .expect("a prepared map draws Spans");
+    let runs = compiled
+        .artifact
+        .nodes
+        .iter()
+        .filter_map(|node| match &node.kind {
+            valle_motion::NodeKind::Text {
+                text: valle_motion::TextValue::Static { value },
+                ..
+            } => Some(value.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(runs, ["Build ", "your ", "story"]);
+}

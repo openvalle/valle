@@ -6,10 +6,10 @@ use std::{
 
 const SOURCE: &str = r##"export const composition={width:160,height:48,fps:4,duration:1};
 export const role=captionPresenter({intro:seconds(0.25),outro:seconds(0.25)});
-export default function Words(props) { const ctx = useTime(); const data = useData();
-  return <Scene>{data.runs.map((run,index)=><Text key={index} className="absolute" style={{
-    left:data.region[0]+index*60,top:data.region[1],fontFamily:data.style.font,
-    fontSize:data.style.fontSize,color:ctx.host.seconds>=run.start && ctx.host.seconds<run.end?"#facc15":"#ffffff"
+export default function Words(props) { const ctx = useTime(); const caption = useCaption();
+  return <Scene>{caption.runs.map((run,index)=><Text key={index} className="absolute" style={{
+    left:caption.region[0]+index*60,top:caption.region[1],fontFamily:caption.style.font,
+    fontSize:caption.style.fontSize,color:ctx.host.seconds>=run.start && ctx.host.seconds<run.end?"#facc15":"#ffffff"
   }}>{run.text}</Text>)}</Scene>;
 }"##;
 fn run(dir: &Path, args: &[&str]) -> Output {
@@ -160,7 +160,7 @@ fn timeline_caption_presenters_render_after_gaps_with_exact_words_and_terminal_o
     std::fs::write(dir.path().join("words.motion.tsx"), SOURCE).unwrap();
     std::fs::write(dir.path().join("cover.motion.tsx"), r##"export const composition={width:160,height:48,fps:4,duration:1};
 export const role=captionPresenter({intro:seconds(0),outro:seconds(0)});
-export default function Cover(props){ const ctx = useTime(); const data = useData();return <Scene><View style={{width:ctx.viewport.width,height:ctx.viewport.height,backgroundColor:"#0000ff"}}/></Scene>; }"##).unwrap();
+export default function Cover(props){ const ctx = useTime(); return <Scene><View style={{width:ctx.viewport.width,height:ctx.viewport.height,backgroundColor:"#0000ff"}}/></Scene>; }"##).unwrap();
     let font = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../assets/fonts/noto/NotoSans-Regular.ttf")
         .canonicalize()
@@ -320,7 +320,7 @@ fn timeline_reports_author_alias_and_wrong_role_before_caption_input_errors() {
         );
         assert!(
             !message.contains("motion-")
-                && !message.contains("needs frozen caption data")
+                && !message.contains("needs caption data")
                 && !message.contains("binding is not declared"),
             "{message}"
         );

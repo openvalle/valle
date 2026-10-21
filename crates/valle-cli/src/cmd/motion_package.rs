@@ -43,6 +43,8 @@ pub(super) struct StandaloneMotionPackageInput<'a> {
     pub assets: &'a BTreeMap<String, BoundAsset>,
     pub font_blobs: &'a [std::sync::Arc<[u8]>],
     pub prop_bindings: &'a BTreeMap<String, Value>,
+    /// The caption a captionPresenter draws.
+    pub caption: Option<&'a valle_motion::caption::CaptionPresenterData>,
     pub duration: RationalTime,
     pub frame_rate: FrameRate,
     pub canvas: (u32, u32),
@@ -220,10 +222,47 @@ fn build_timeline(
             .as_object_mut()
             .expect("source object")
             .remove("type");
+        let caption = input
+            .caption
+            .context("a captionPresenter draws a caption; give one with --data")?;
+        let runs = caption_runs(caption, input.duration)?;
         document["document"]["visual"]["tracks"] = json!([]);
-        document["document"]["captions"]["tracks"] = json!([{ "id": "caption:motion", "items": [{ "type": "motion", "id": "clip:motion", "duration": input.duration, "source": source }] }]);
+        document["document"]["captions"]["tracks"] = json!([{ "id": "caption:motion", "items": [{ "type": "motion", "id": "clip:motion", "duration": input.duration, "source": source, "runs": runs }] }]);
     }
     decode_canonical(&serde_json::to_string(&document)?).map_err(Into::into)
+}
+
+/// The runs of a caption as a canonical caption item holds them: each with its times, size and
+/// color, an untimed run spanning the caption.
+fn caption_runs(
+    caption: &valle_motion::caption::CaptionPresenterData,
+    duration: RationalTime,
+) -> Result<Value> {
+    let time = |seconds: f64| -> Result<RationalTime> {
+        let wire = valle_timeline::wire::timeline::TimelineTimeWire::new(&seconds.to_string())?;
+        Ok(RationalTime::from_exact(wire.to_exact()))
+    };
+    let runs = caption
+        .runs
+        .iter()
+        .enumerate()
+        .map(|(index, run)| {
+            let (start, end) = match (run.start, run.end) {
+                (Some(start), Some(end)) => (time(start)?, time(end)?),
+                _ => (RationalTime::ZERO, duration),
+            };
+            Ok(json!({
+                "id": format!("clip:motion:run:{index}"),
+                "text": run.text,
+                "timing": {"start": start, "end": end},
+                "style": {
+                    "fontSize": run.font_size.unwrap_or(caption.style.font_size),
+                    "color": run.color.as_deref().unwrap_or(&caption.style.color),
+                },
+            }))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(Value::Array(runs))
 }
 
 fn standalone_motion_layer(canvas: (u32, u32)) -> Value {
@@ -726,8 +765,10 @@ mod tests {
         )
         .unwrap()
         .artifact;
-        let plain_fonts = super::super::motion::fixed_package_font_blobs(&plain, &[]).unwrap();
-        let formula_fonts = super::super::motion::fixed_package_font_blobs(&later, &[]).unwrap();
+        let plain_fonts =
+            super::super::motion::fixed_package_font_blobs(&plain, &[], None).unwrap();
+        let formula_fonts =
+            super::super::motion::fixed_package_font_blobs(&later, &[], None).unwrap();
         let all_formula_count = valle_motion::math_formula::formula_font_pack().count();
         assert!(formula_fonts.len() > plain_fonts.len());
         assert!(formula_fonts.len() < plain_fonts.len() + all_formula_count);
@@ -741,12 +782,13 @@ mod tests {
         let artifact = valle_compiler::motion::compile_motion(source)
             .unwrap()
             .artifact;
-        let fonts = super::super::motion::fixed_package_font_blobs(&artifact, &[]).unwrap();
+        let fonts = super::super::motion::fixed_package_font_blobs(&artifact, &[], None).unwrap();
         build_standalone_motion_package(StandaloneMotionPackageInput {
             artifact: &artifact,
             assets: &BTreeMap::new(),
             font_blobs: &fonts,
             prop_bindings: &BTreeMap::new(),
+            caption: None,
             duration: RationalTime::ONE,
             frame_rate: FrameRate::new(30, 1).unwrap(),
             canvas: (320, 180),

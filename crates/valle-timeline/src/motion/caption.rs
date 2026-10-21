@@ -1,4 +1,5 @@
-//! Frozen caption input for captionPresenter. Placement and host clocks are runtime inputs.
+//! Caption input for captionPresenter. A template compiles with the track's layout; the text and
+//! runs of each caption are bound when it draws. Placement and host clocks are runtime inputs.
 use crate::internal::wire::document::CaptionAlignWire;
 use crate::{RationalTime, wire::timeline::TimelineTimeWire};
 use serde::{Deserialize, Serialize};
@@ -11,6 +12,16 @@ pub const CAPTION_FONT_URI: &str = "asset://caption";
 pub struct CaptionPresenterData {
     pub text: String,
     pub runs: Vec<CaptionPresenterRun>,
+    pub style: CaptionPresenterStyle,
+    /// Canvas pixels: x, y, width, height.
+    pub region: [f64; 4],
+    pub align: CaptionAlignWire,
+}
+
+/// What a captionPresenter template compiles with: the track's style and where its captions go.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CaptionPresenterLayout {
     pub style: CaptionPresenterStyle,
     /// Canvas pixels: x, y, width, height.
     pub region: [f64; 4],
@@ -49,8 +60,46 @@ pub struct CaptionPresenterShadow {
     pub blur: f64,
 }
 
+impl CaptionPresenterLayout {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.style.font != CAPTION_FONT_URI {
+            return Err("caption style.font must use the reserved asset://caption font".into());
+        }
+        positive_size(self.style.font_size, "style/fontSize")?;
+        color(&self.style.color, "style/color")?;
+        if self.region.iter().any(|v| !v.is_finite())
+            || self.region[2] <= 0.0
+            || self.region[3] <= 0.0
+        {
+            return Err(
+                "caption region must contain finite pixel coordinates and positive dimensions"
+                    .into(),
+            );
+        }
+        if let Some(shadow) = &self.style.shadow {
+            color(&shadow.color, "style/shadow/color")?;
+            if shadow.offset.iter().any(|v| !v.is_finite())
+                || !shadow.blur.is_finite()
+                || shadow.blur < 0.0
+            {
+                return Err("caption shadow needs finite offsets and non-negative blur".into());
+            }
+        }
+        Ok(())
+    }
+}
+
 impl CaptionPresenterData {
-    /// Compile checks the static shape; hosts additionally check timed runs against placement duration.
+    /// What a template compiles with; the text and runs are bound per caption.
+    pub fn layout(&self) -> CaptionPresenterLayout {
+        CaptionPresenterLayout {
+            style: self.style.clone(),
+            region: self.region,
+            align: self.align,
+        }
+    }
+
+    /// Hosts check timed runs against the placement duration as well.
     pub fn validate(&self, host_duration: Option<RationalTime>) -> Result<(), String> {
         if self.runs.len() > super::MAX_PREPARE_DATA_ARRAY_ITEMS {
             return Err("caption runs exceed the prepare-data array budget".into());
@@ -87,29 +136,7 @@ impl CaptionPresenterData {
         {
             return Err("caption text must equal the concatenation of its runs".into());
         }
-        if self.style.font != CAPTION_FONT_URI {
-            return Err("caption style.font must use the reserved asset://caption font".into());
-        }
-        positive_size(self.style.font_size, "style/fontSize")?;
-        color(&self.style.color, "style/color")?;
-        if self.region.iter().any(|v| !v.is_finite())
-            || self.region[2] <= 0.0
-            || self.region[3] <= 0.0
-        {
-            return Err(
-                "caption region must contain finite pixel coordinates and positive dimensions"
-                    .into(),
-            );
-        }
-        if let Some(shadow) = &self.style.shadow {
-            color(&shadow.color, "style/shadow/color")?;
-            if shadow.offset.iter().any(|v| !v.is_finite())
-                || !shadow.blur.is_finite()
-                || shadow.blur < 0.0
-            {
-                return Err("caption shadow needs finite offsets and non-negative blur".into());
-            }
-        }
+        self.layout().validate()?;
         let mut previous_end = RationalTime::ZERO;
         for (index, run) in self.runs.iter().enumerate() {
             let path = format!("runs/{index}");

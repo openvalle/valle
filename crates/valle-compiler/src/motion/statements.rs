@@ -1292,6 +1292,7 @@ impl<'s> BindingFrame<'s> {
             .chain(self.objects.keys())
             .chain(self.children.keys())
             .chain(self.times.keys())
+            .chain(self.captions.keys())
             .cloned()
             .collect()
     }
@@ -1309,6 +1310,7 @@ impl<'s> BindingFrame<'s> {
             children: self.children.get(name).cloned(),
             prop_rest: None,
             time: self.times.get(name).cloned(),
+            caption: self.captions.get(name).cloned(),
         }
     }
 }
@@ -1321,6 +1323,7 @@ impl NameBinding<'_> {
             && self.statik == other.statik
             && self.tuple == other.tuple
             && self.time == other.time
+            && self.caption == other.caption
             && self.paint == other.paint
             && self.instance_object == other.instance_object
             && self.prop_rest == other.prop_rest
@@ -1359,6 +1362,8 @@ impl NameBinding<'_> {
             "a paint".into()
         } else if self.time.is_some() {
             "an object of the time".into()
+        } else if self.caption.is_some() {
+            "an object of the caption".into()
         } else if self.object.is_some() || self.instance_object.is_some() {
             "an object".into()
         } else {

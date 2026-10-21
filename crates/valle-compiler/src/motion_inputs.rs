@@ -173,12 +173,14 @@ pub(crate) fn caption_motion_input(
     for alias in resources.values() {
         locator(locators, alias, path)?;
     }
+    // The template compiles with the layout alone, so the captions of a track share one compile;
+    // each caption's runs are bound when it draws.
     Ok(MotionPreparationInput {
         locator: locator(locators, &presenter.component, path)?,
         component: presenter.component.clone(),
         clip_path: path.into(),
         resources,
-        data: serde_json::to_value(data).expect("caption input serializes"),
+        data: serde_json::to_value(data.layout()).expect("caption layout serializes"),
     })
 }
 fn locator(

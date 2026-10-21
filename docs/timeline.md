@@ -531,11 +531,13 @@ override. Timed run `start`/`end` fields are supported by karaoke and Motion pre
 
 A track can use `presenter: { component, props?, resources? }` to render its existing
 text/runs through a Motion template declaring `captionPresenter({ intro, outro })`.
-The compiler prepares `{ text, runs, style, region, align }` once per distinct input;
+The template compiles once for the track, with its `style`, `region` and `align`;
 `region` is in canvas pixels, and `style.font` is bound as `asset://caption` from
-the track's font resource. Do not bind a `caption` resource slot or supply a
-presenter `data` field. Word times are clip-local q6 seconds, ordered and contained
-within the caption duration. Compare them with `ctx.host.seconds` in the template.
+the track's font resource. Each caption's text and runs are bound as it draws, and
+the template reads them with `useCaption()`. Do not bind a `caption` resource slot or
+supply a presenter `data` field. Word times are clip-local q6 seconds, ordered and
+contained within the caption duration. Compare them with `ctx.host.seconds` in the
+template.
 
 ```json
 {
@@ -551,8 +553,8 @@ within the caption duration. Compare them with `ctx.host.seconds` in the templat
 `words` and `font` must be declared in `resources`. Presenter captions reject
 `enter`, `display`, `exit`, `presentation` and `behavior`; their animation belongs
 to the template. They share the caption band and track order with built-in text.
-Different text or word times require different compiled inputs; playback only
-evaluates the prepared result. Studio can select declared templates and edit
+Editing text or word times compiles nothing; a different style, layout, font or
+canvas compiles the template again. Studio can select declared templates and edit
 words/times through the existing Timeline working copy.
 
 ### Preset animation example

@@ -426,6 +426,11 @@ impl<'s> Compiler<'s> {
         {
             return Some(AuthorValue::Time(path));
         }
+        if let Some(path) = self.caption_path(expression)
+            && is_caption_object(&path)
+        {
+            return Some(AuthorValue::Caption(path));
+        }
         if let Some(paint) = self.bound_paint(expression) {
             return Some(AuthorValue::Paint(paint));
         }
@@ -468,6 +473,9 @@ impl<'s> Compiler<'s> {
             .as_ref()
             .is_some_and(|scope| referenced_identifiers(expression).contains(&scope.parameter))
         {
+            return true;
+        }
+        if self.reads_caption(expression) {
             return true;
         }
         if self.bindings.scalars.is_empty()
@@ -544,6 +552,10 @@ impl<'s> Compiler<'s> {
             self.bind_time_value(pattern, path, initializer.span());
             return;
         }
+        if let Some(path) = self.caption_path(initializer) {
+            self.bind_caption_value(pattern, path, initializer.span());
+            return;
+        }
         match pattern {
             BindingPattern::BindingIdentifier(identifier) => {
                 self.bind_local_value(identifier.name.to_string(), initializer);
@@ -591,6 +603,10 @@ impl<'s> Compiler<'s> {
         self.bindings.local_functions.remove(&name);
         if let Some(path) = self.time_path(initializer) {
             self.bind_time_name(name, path, initializer.span());
+            return;
+        }
+        if let Some(path) = self.caption_path(initializer) {
+            self.bind_caption_name(name, path, initializer.span());
             return;
         }
         // Register component-local function declarations as helpers instead of Motion values.
@@ -674,6 +690,7 @@ impl<'s> Compiler<'s> {
                     self.bind_children(local_name, children);
                 }
                 Some(AuthorValue::Time(path)) => self.bind_time(local_name, path),
+                Some(AuthorValue::Caption(path)) => self.bind_caption(local_name, path),
                 None if self.bindings.component_props.is_none() => {
                     if !self.controls.props.contains_key(&prop_name) {
                         self.illegal(
@@ -1004,6 +1021,9 @@ impl<'s> Compiler<'s> {
                 self.apply_visibility(&mut nodes, condition);
                 Some(nodes)
             }
+            Expression::CallExpression(call) if self.is_caption_map_call(call) => {
+                self.lower_caption_rows(call, path)
+            }
             Expression::CallExpression(call) if self.is_static_map_call(call) => {
                 self.lower_static_map(call, path)
             }
@@ -1154,6 +1174,7 @@ impl<'s> Compiler<'s> {
                 }
                 Some(AuthorValue::Children(_)) => unreachable!("helper arguments are values"),
                 Some(AuthorValue::Time(path)) => self.bind_time(local_name, path),
+                Some(AuthorValue::Caption(path)) => self.bind_caption(local_name, path),
                 None => self.illegal(
                     DiagCode::GrammarForbidden,
                     parameter.span(),
@@ -1237,7 +1258,9 @@ impl<'s> Compiler<'s> {
             return None;
         }
         let mut fallback_reason = None;
-        if items.len() <= valle_motion::MAX_GEOMETRY_BATCH_INSTANCES_PER_NODE
+        // A caption row repeats its nodes as they are; an instance group repeats in place.
+        if self.caption_row.is_none()
+            && items.len() <= valle_motion::MAX_GEOMETRY_BATCH_INSTANCES_PER_NODE
             && let Some(nodes) = self.try_lower_instance_map(
                 &items,
                 &member.object,
@@ -2272,6 +2295,7 @@ impl<'s> Compiler<'s> {
             children: Vec::new(),
             is_mask_source: false,
             fragment: false,
+            caption_row: None,
         }])
     }
 
@@ -2617,6 +2641,7 @@ impl<'s> Compiler<'s> {
                 }
                 Some(AuthorValue::Children(_)) => unreachable!("helper arguments are values"),
                 Some(AuthorValue::Time(path)) => self.bind_time(local_name, path),
+                Some(AuthorValue::Caption(path)) => self.bind_caption(local_name, path),
                 None => self.illegal(
                     DiagCode::GrammarForbidden,
                     parameter.span(),

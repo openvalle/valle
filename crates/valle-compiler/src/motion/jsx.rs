@@ -202,6 +202,13 @@ impl<'s> Compiler<'s> {
                                     && member.property.name.as_str() == scope.key_field))
                     }) {
                         self.instance_scope.as_ref().map(|scope| scope.template_key.clone())
+                    } else if self.caption_row.is_some()
+                        && matches!(&attribute.value,
+                            Some(JSXAttributeValue::ExpressionContainer(container))
+                            if container.expression.as_expression().is_some_and(|expression| self.shadowed_by_dynamic(expression)))
+                    {
+                        // The rows of `runs.map(...)` are keyed by their index.
+                        None
                     } else {
                         self.attr_static_string(&attribute.value, attribute.span(), "key")
                     };
@@ -982,7 +989,8 @@ impl<'s> Compiler<'s> {
 
         if kind_tag == "text" {
             enum RichItem {
-                Text(TextValue, Vec<StyleBinding>, Span),
+                /// A run, and the `runs.map(...)` row it is drawn in.
+                Text(TextValue, Vec<StyleBinding>, Span, Option<u32>),
                 InlineImage(PendingNode),
             }
             let mut items = Vec::new();
@@ -996,16 +1004,36 @@ impl<'s> Compiler<'s> {
                                 TextValue::Static { value },
                                 Vec::new(),
                                 child.span(),
+                                None,
                             ));
                         }
                     }
                     JSXChild::ExpressionContainer(container)
                         if matches!(container.expression, JSXExpression::EmptyExpression(_)) => {}
+                    // A map whose callback returns JSX draws a run for each item.
+                    JSXChild::ExpressionContainer(container)
+                        if container.expression.as_expression().and_then(as_map_call).is_some_and(
+                            |call| call.arguments.first().and_then(|argument| argument.as_expression()).is_some_and(returns_jsx),
+                        ) =>
+                    {
+                        let call = container
+                            .expression
+                            .as_expression()
+                            .and_then(as_map_call)
+                            .expect("matched a map call");
+                        saw_span = true;
+                        items.extend(
+                            self.lower_span_map(call, &format!("{path}.span.{index}"))
+                                .into_iter()
+                                .flatten()
+                                .map(|(text, styles, span, row)| RichItem::Text(text, styles, span, row)),
+                        );
+                    }
                     JSXChild::ExpressionContainer(container) => {
                         if let Some(expression) = container.expression.as_expression()
                             && let Some(text) = self.lower_text_value(expression)
                         {
-                            items.push(RichItem::Text(text, Vec::new(), child.span()));
+                            items.push(RichItem::Text(text, Vec::new(), child.span(), None));
                         }
                     }
                     JSXChild::Element(child)
@@ -1021,7 +1049,7 @@ impl<'s> Compiler<'s> {
                         items.extend(
                             self.lower_span_runs(child, &format!("{path}.span.{index}"))
                                 .into_iter()
-                                .map(|(text, styles, span)| RichItem::Text(text, styles, span)),
+                                .map(|(text, styles, span)| RichItem::Text(text, styles, span, None)),
                         );
                     }
                     JSXChild::Element(child)
@@ -1063,7 +1091,7 @@ impl<'s> Compiler<'s> {
                 let mut parts = Vec::new();
                 let mut dynamic = false;
                 for item in std::mem::take(&mut items) {
-                    let RichItem::Text(text, _, _) = item else {
+                    let RichItem::Text(text, _, _, _) = item else {
                         unreachable!("plain Text fusion only contains text items")
                     };
                     match text {
@@ -1084,7 +1112,7 @@ impl<'s> Compiler<'s> {
                 } else {
                     TextValue::Static { value }
                 };
-                items.push(RichItem::Text(text, Vec::new(), element.span()));
+                items.push(RichItem::Text(text, Vec::new(), element.span(), None));
             }
 
             let rich = saw_span || saw_inline_image || items.len() > 1;
@@ -1099,7 +1127,7 @@ impl<'s> Compiler<'s> {
                 let text = items
                     .pop()
                     .and_then(|item| match item {
-                        RichItem::Text(text, _, _) => Some(text),
+                        RichItem::Text(text, _, _, _) => Some(text),
                         RichItem::InlineImage(_) => None,
                     })
                     .unwrap_or(TextValue::Static {
@@ -1123,6 +1151,7 @@ impl<'s> Compiler<'s> {
                     children: Vec::new(),
                     is_mask_source: false,
                     fragment: false,
+                    caption_row: None,
                 });
             }
 
@@ -1135,7 +1164,7 @@ impl<'s> Compiler<'s> {
             let mut children = Vec::with_capacity(items.len());
             for (index, item) in items.into_iter().enumerate() {
                 match item {
-                    RichItem::Text(text, run_styles, span) => {
+                    RichItem::Text(text, run_styles, span, row) => {
                         let run_key = format!("{key}/__run_{index}__");
                         if !self.keys.insert(run_key.clone()) {
                             self.illegal(
@@ -1166,6 +1195,7 @@ impl<'s> Compiler<'s> {
                             children: Vec::new(),
                             is_mask_source: false,
                             fragment: false,
+                            caption_row: row,
                         });
                     }
                     RichItem::InlineImage(image) => children.push(image),
@@ -1185,6 +1215,7 @@ impl<'s> Compiler<'s> {
                 children,
                 is_mask_source: false,
                 fragment: false,
+                caption_row: None,
             });
         }
 
@@ -1243,6 +1274,7 @@ impl<'s> Compiler<'s> {
                 children: Vec::new(),
                 is_mask_source: false,
                 fragment: false,
+                caption_row: None,
             });
         }
 
@@ -1326,6 +1358,7 @@ impl<'s> Compiler<'s> {
                 children: Vec::new(),
                 is_mask_source: false,
                 fragment: false,
+                caption_row: None,
             });
         }
 
@@ -1373,6 +1406,7 @@ impl<'s> Compiler<'s> {
                 children: Vec::new(),
                 is_mask_source: false,
                 fragment: false,
+                caption_row: None,
             });
         }
 
@@ -1425,6 +1459,7 @@ impl<'s> Compiler<'s> {
                 children: Vec::new(),
                 is_mask_source: false,
                 fragment: false,
+                caption_row: None,
             });
         }
 
@@ -1451,6 +1486,7 @@ impl<'s> Compiler<'s> {
                 children: Vec::new(),
                 is_mask_source: false,
                 fragment: false,
+                caption_row: None,
             });
         }
 
@@ -1801,6 +1837,7 @@ impl<'s> Compiler<'s> {
             children,
             is_mask_source: kind_tag == "mask-source",
             fragment: false,
+            caption_row: None,
         })
     }
 }

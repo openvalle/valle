@@ -77,7 +77,7 @@ test("standalone caption Studio uses a caption track and preserves the saved pre
   const descriptor = { faceIndex: 0, variationAxes: {} };
   const source = `export const composition={width:320,height:180,fps:4,duration:1};
     export const role=captionPresenter({intro:seconds(0.25),outro:seconds(0.25)});
-    export default function Caption(props){ const ctx = useTime(); const data = useData();return <Scene>{data.runs.map((run,index)=><Text key={index} style={{fontFamily:data.style.font,fontSize:data.style.fontSize,color:ctx.host.seconds>=run.start&&ctx.host.seconds<run.end?"#facc15":"#ffffff"}}>{run.text}</Text>)}</Scene>;}`;
+    export default function Caption(props){ const ctx = useTime(); const caption = useCaption();return <Scene>{caption.runs.map((run,index)=><Text key={index} style={{fontFamily:caption.style.font,fontSize:caption.style.fontSize,color:ctx.host.seconds>=run.start&&ctx.host.seconds<run.end?"#facc15":"#ffffff"}}>{run.text}</Text>)}</Scene>;}`;
   const data = { text: "Build story", runs: [{ text: "Build ", start: 0, end: 0.5 }, { text: "story", start: 0.5, end: 1 }],
     style: { font: "asset://caption", fontSize: 28, color: "#ffffff" }, region: [32, 54, 256, 90], align: "bottom-center" };
   const instance = { clipPath: "/tracks/visual/0/clips/0", entry: "caption.motion.tsx", modules: { "caption.motion.tsx": source },
@@ -183,13 +183,13 @@ test("Timeline effects compile at their effect and adjustment paths as effect() 
   if (clip.status === "error") expect(clip.message).toContain("effect()");
 });
 
-test("300 Timeline captions compile each immutable word input once and retain exact frame identity", async () => {
+test("300 Timeline captions compile their track's template once and retain exact frame identity", async () => {
   const font = new Uint8Array(await readFile(new URL("../../../../assets/fonts/noto/NotoSans-Regular.ttf", import.meta.url)));
   const digest = `sha256:${new Bun.CryptoHasher("sha256").update(font).digest("hex")}`;
   const descriptor = { faceIndex: 0, variationAxes: {} };
   const source = `export const composition={width:160,height:48,fps:4,duration:1};
     export const role=captionPresenter({intro:seconds(0.25),outro:seconds(0.25)});
-    export default function Caption(props){ const ctx = useTime(); const data = useData();return <Scene><Text key="word" style={{fontFamily:data.style.font,fontSize:data.style.fontSize,color:ctx.host.seconds<1?"#facc15":"white"}}>{data.text}</Text></Scene>;}`;
+    export default function Caption(props){ const ctx = useTime(); const caption = useCaption();return <Scene><Text key="word" style={{fontFamily:caption.style.font,fontSize:caption.style.fontSize,color:ctx.host.seconds<1?"#facc15":"white"}}>{caption.text}</Text></Scene>;}`;
   const clips = Array.from({ length: 300 }, (_, i) => ({ start: i * 2 + 0.125, duration: 2,
     runs: [{ text: `Word ${i % 100}`, start: 0, end: 1.75 }] }));
   const request = {
@@ -205,11 +205,13 @@ test("300 Timeline captions compile each immutable word input once and retain ex
   const result = await compileStudioPreview(request);
   if (result.status !== "ok") throw new Error(result.message);
   expect(result.status).toBe("ok");
-  expect(result.timings.compilations).toBe(100);
-  expect(new Set(result.instances.map(instance => instance.artifactDigest)).size).toBe(100);
-  expect(result.instances[0]!.artifactDigest).toBe(result.instances[100]!.artifactDigest);
-  expect(JSON.parse(result.package.timelineJson).document.captions.tracks[0].items[1].type).toBe("motion");
-  console.log(JSON.stringify({ captionBaseline: 300, immutableInputs: 100, compilations: result.timings.compilations,
+  // The captions of a track share its layout; each caption's words are bound as it draws.
+  expect(result.timings.compilations).toBe(1);
+  expect(new Set(result.instances.map(instance => instance.artifactDigest)).size).toBe(1);
+  const items = JSON.parse(result.package.timelineJson).document.captions.tracks[0].items;
+  expect(items[1].type).toBe("motion");
+  expect(items[1].runs[0].text).toBe("Word 0");
+  console.log(JSON.stringify({ captionBaseline: 300, compilations: result.timings.compilations,
     elapsedMs: Math.round(performance.now() - start), rssGrowthBytes: process.memoryUsage().rss - before }));
   const { ProductEngine } = await import("../../../packages/engine/generated/web/valle_engine.js");
   const engine = new ProductEngine();
@@ -229,14 +231,15 @@ test("300 Timeline captions compile each immutable word input once and retain ex
       } finally { engine.release_ticket(ticket); }
     }
   } finally { engine.free(); }
-  // Saving/reopening preserves author words/timing; editing words changes preparation identity.
+  // Saving/reopening preserves author words/timing; editing words recompiles nothing.
   const reopened = JSON.parse(JSON.stringify(result.authorTimeline));
   reopened.tracks.caption[0].clips[0].runs[0].text = "Changed";
   const edited = await compileStudioPreview({ ...request, id: 31, authorTimeline: reopened });
   expect(edited.status).toBe("ok");
   if (edited.status !== "ok") throw new Error(edited.message);
-  expect(edited.instances[0]!.artifactDigest).not.toBe(result.instances[0]!.artifactDigest);
-  expect(edited.instances[100]!.artifactDigest).toBe(result.instances[100]!.artifactDigest);
+  expect(edited.timings.compilations).toBe(0);
+  expect(edited.instances[0]!.artifactDigest).toBe(result.instances[0]!.artifactDigest);
+  expect(JSON.parse(edited.package.timelineJson).document.captions.tracks[0].items[1].runs[0].text).toBe("Changed");
 });
 
 test("Studio diagnoses misplaced roles before compiling host data with author names", async () => {
@@ -259,7 +262,7 @@ test("Studio diagnoses misplaced roles before compiling host data with author na
     expect(result.message).toContain(`component \`${component}\``);
     expect(result.message).toContain(clipPath);
     expect(result.message).toContain(expected);
-    expect(result.message).not.toContain("needs frozen caption data");
+    expect(result.message).not.toContain("needs caption data");
     expect(result.message).not.toContain("binding is not declared");
   }
 });
