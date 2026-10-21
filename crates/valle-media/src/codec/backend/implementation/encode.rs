@@ -13,6 +13,7 @@ use super::ffi::{
     tag_bt709_limited, write_mp4_header,
 };
 use crate::Encoder;
+use crate::codec::muxer::VideoTransfer;
 
 /// Shared x264 quality and speed defaults used by encoder and muxer paths.
 pub(crate) const DEFAULT_X264_CRF: &str = "20";
@@ -72,7 +73,7 @@ impl Mp4Encoder {
         eb.set_time_base(enc_tb);
         eb.set_frame_rate(Some(Rational(fps as i32, 1)));
         eb.set_aspect_ratio(Rational(1, 1));
-        tag_bt709_limited(&mut eb); // Tag output as BT.709 with limited range.
+        tag_bt709_limited(&mut eb, VideoTransfer::Bt709);
         if global_header {
             eb.set_flags(codec::Flags::GLOBAL_HEADER);
         }

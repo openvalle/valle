@@ -18,6 +18,17 @@ pub enum Mp4VideoCodec {
     Hevc,
 }
 
+/// Transfer function of the RGB values a muxer receives, written into the stream's color tags.
+/// Conversion to YUV uses the BT.709 matrix either way; only the tag differs.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum VideoTransfer {
+    /// BT.709, the tag of decoded video that media tools pass through.
+    #[default]
+    Bt709,
+    /// IEC 61966-2-1, for rendered frames encoded like PNG.
+    Srgb,
+}
+
 backend_type!(Muxer, muxer);
 impl Muxer {
     pub fn open(
@@ -136,6 +147,7 @@ impl Muxer {
         fps_num: u32,
         fps_den: u32,
         codec: Mp4VideoCodec,
+        transfer: VideoTransfer,
         bitrate: Option<usize>,
         hw: bool,
         encode_threads: Option<usize>,
@@ -149,6 +161,7 @@ impl Muxer {
                 fps_num,
                 fps_den,
                 codec,
+                transfer,
                 bitrate,
                 hw,
                 encode_threads,
@@ -162,6 +175,7 @@ impl Muxer {
                 fps_num,
                 fps_den,
                 codec,
+                transfer,
                 bitrate,
                 hw,
                 encode_threads,
@@ -175,6 +189,7 @@ impl Muxer {
                 fps_num,
                 fps_den,
                 codec,
+                transfer,
                 bitrate,
                 hw,
                 encode_threads,

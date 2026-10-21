@@ -12,10 +12,10 @@ use ff::{ChannelLayout, Dictionary, Rational, codec, encoder, format, frame, sof
 use super::encode::{DEFAULT_X264_CRF, DEFAULT_X264_PRESET, software_h264_encoder};
 use super::ffi::{
     YuvMatrix, drain_audio_encoder, drain_video_encoder, ffmpeg_init, fill_plane0,
-    set_sws_colorspace, tag_bt709_limited, write_mp4_header,
+    set_sws_colorspace, tag_bt709_limited, transfer_characteristic, write_mp4_header,
 };
 use super::shared_frame::{SharedVideoFrame, SharedVideoFramePool, VideoFrameTransport};
-use crate::codec::muxer::Mp4VideoCodec;
+use crate::codec::muxer::{Mp4VideoCodec, VideoTransfer};
 
 /// Platform hardware H.264 encoder name.
 const HW_H264_ENCODER: &str = "h264_videotoolbox";
@@ -44,7 +44,7 @@ pub fn hw_h264_available() -> bool {
     video.set_frame_rate(Some(Rational(30, 1)));
     video.set_aspect_ratio(Rational(1, 1));
     video.set_bit_rate(16 * 16 * 30);
-    tag_bt709_limited(&mut video);
+    tag_bt709_limited(&mut video, VideoTransfer::Bt709);
     video.open_as(codec).is_ok()
 }
 /// Default hardware bitrate density in bits per pixel per frame, derived from resolution and frame
@@ -101,6 +101,8 @@ pub struct Muxer {
     finished: bool,
     /// Renderer/encoder frame handoff. SharedGpu owns the AVHWFramesContext used by `venc`.
     video_transport: VideoFrameTransport,
+    /// Transfer of the submitted RGB, tagged on the stream and on shared frames.
+    transfer: VideoTransfer,
     shared_frame_pool: Option<SharedVideoFramePool>,
     encoder_timings: Option<crate::perf::EncoderTimings>,
     /// The CPU RGBA path's staging frame and a YUV frame the encoder has released, reused by the
@@ -167,6 +169,7 @@ impl Muxer {
             fps.max(1),
             1,
             Mp4VideoCodec::H264,
+            VideoTransfer::Bt709,
             bitrate,
             hw,
             encode_threads,
@@ -184,6 +187,7 @@ impl Muxer {
         fps_num: u32,
         fps_den: u32,
         codec: Mp4VideoCodec,
+        transfer: VideoTransfer,
         bitrate: Option<usize>,
         hw: bool,
         encode_threads: Option<usize>,
@@ -196,6 +200,7 @@ impl Muxer {
             fps_num,
             fps_den,
             codec,
+            transfer,
             true,
             bitrate,
             hw,
@@ -227,6 +232,7 @@ impl Muxer {
             fps_num,
             fps_den,
             Mp4VideoCodec::H264,
+            VideoTransfer::Bt709,
             include_audio,
             bitrate,
             hw,
@@ -243,6 +249,7 @@ impl Muxer {
         fps_num: u32,
         fps_den: u32,
         codec: Mp4VideoCodec,
+        transfer: VideoTransfer,
         include_audio: bool,
         bitrate: Option<usize>,
         hw: bool,
@@ -260,6 +267,7 @@ impl Muxer {
             false,
             1,
             codec,
+            transfer,
             include_audio,
             bitrate,
             hw,
@@ -348,6 +356,7 @@ impl Muxer {
             true,
             nominal_frame_ticks,
             Mp4VideoCodec::H264,
+            VideoTransfer::Bt709,
             include_audio,
             bitrate,
             hw,
@@ -367,6 +376,7 @@ impl Muxer {
         timestamped_video: bool,
         nominal_frame_ticks: i64,
         codec: Mp4VideoCodec,
+        transfer: VideoTransfer,
         include_audio: bool,
         bitrate: Option<usize>,
         hw: bool,
@@ -448,7 +458,7 @@ impl Muxer {
             vb.set_max_b_frames(0);
         }
         vb.set_aspect_ratio(Rational(1, 1));
-        tag_bt709_limited(&mut vb); // Tag output as BT.709 limited range.
+        tag_bt709_limited(&mut vb, transfer);
         if global_header {
             vb.set_flags(codec::Flags::GLOBAL_HEADER);
         }
@@ -593,6 +603,7 @@ impl Muxer {
             audio_fifo: Vec::new(),
             finished: false,
             video_transport,
+            transfer,
             shared_frame_pool,
             encoder_timings: crate::perf::EncoderTimings::from_env(),
             rgba_staging: None,
@@ -828,7 +839,7 @@ impl Muxer {
         unsafe {
             let raw = inner.as_mut_ptr();
             (*raw).color_primaries = ff::ffi::AVColorPrimaries::AVCOL_PRI_BT709;
-            (*raw).color_trc = ff::ffi::AVColorTransferCharacteristic::AVCOL_TRC_BT709;
+            (*raw).color_trc = transfer_characteristic(self.transfer);
             (*raw).colorspace = ff::ffi::AVColorSpace::AVCOL_SPC_BT709;
             (*raw).color_range = ff::ffi::AVColorRange::AVCOL_RANGE_MPEG;
         }

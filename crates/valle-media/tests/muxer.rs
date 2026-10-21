@@ -290,7 +290,7 @@ fn hw_muxer_roundtrip_if_available() {
 
 #[test]
 fn hevc_is_hardware_only_and_tagged_hvc1() {
-    use valle_media::codec::{Mp4VideoCodec, Muxer, VideoFrameTransport, probe_av};
+    use valle_media::codec::{Mp4VideoCodec, Muxer, VideoFrameTransport, VideoTransfer, probe_av};
     let temp = tempfile::tempdir().expect("temp dir");
     let open = |path: &std::path::Path, hardware: bool| {
         Muxer::open_ext_rational_with_transport(
@@ -300,6 +300,7 @@ fn hevc_is_hardware_only_and_tagged_hvc1() {
             30,
             1,
             Mp4VideoCodec::Hevc,
+            VideoTransfer::Srgb,
             None,
             hardware,
             None,

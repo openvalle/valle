@@ -21,7 +21,7 @@ use valle_engine::{
 };
 use valle_media::codec::{
     AudioMuxer, Mp4VideoCodec, Muxer, TransparentVideoCodec, TransparentVideoMuxer,
-    VideoFrameTransport,
+    VideoFrameTransport, VideoTransfer,
 };
 
 use crate::executor::skia::SkiaBackendKind;
@@ -422,8 +422,10 @@ impl NativeRenderer {
             }
             _ => return Err(NativeRenderError::VideoNeedsOpaqueBackground),
         };
+        // MP4 carries the sRGB values of PNG and the preview, tagged as sRGB so that players
+        // show them unchanged.
         let output_spec = OutputSpec::new(
-            OutputColorEncoding::REC709,
+            OutputColorEncoding::SRGB,
             OutputAlphaMode::Opaque,
             background,
             ToneMap::None,
@@ -448,6 +450,7 @@ impl NativeRenderer {
             fps_num,
             fps.denominator(),
             codec,
+            VideoTransfer::Srgb,
             self.options.bitrate,
             hardware,
             self.encoder_threads(hardware)?,
@@ -493,7 +496,7 @@ impl NativeRenderer {
         let (width, height) =
             bounded_even_extent(source_width, source_height, maximum_long_edge.max(2))?;
         let output_spec = OutputSpec::new(
-            OutputColorEncoding::REC709,
+            OutputColorEncoding::SRGB,
             OutputAlphaMode::Opaque,
             OutputBackground::opaque_srgb([0, 0, 0]),
             ToneMap::None,
@@ -521,6 +524,7 @@ impl NativeRenderer {
             fps_num,
             fps.denominator(),
             Mp4VideoCodec::H264,
+            VideoTransfer::Srgb,
             self.options.bitrate,
             self.options.hardware_encode,
             self.encoder_threads(self.options.hardware_encode)?,

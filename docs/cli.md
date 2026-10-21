@@ -126,6 +126,8 @@ accept H.264 or HEVC `.mp4`, transparent qtrle or ProRes 4444 `.mov`, or a PNG f
 hardware HEVC encoder at speed priority and tags the stream `hvc1` for Apple players, and fails
 instead of falling back when that encoder is unavailable. `.mov` defaults to lossless qtrle; use `--codec prores4444`
 for ProRes 4444. PNG and MOV retain alpha; Motion MP4 uses a black output background.
+MP4 keeps the sRGB colors of PNG and tags them as sRGB (BT.709 primaries and matrix, limited
+range), so players show the same colors.
 Transparent MOV currently delivers video only; a Timeline with audio is rejected
 instead of silently dropping its audio.
 

@@ -1287,9 +1287,77 @@ fn video_codec_and_selection_mismatches_fail_before_reading_source() {
     }
 }
 
+/// An MP4 `colr` box of BT.709 primaries, the IEC 61966-2-1 (sRGB) transfer, the BT.709 matrix
+/// and limited range.
+fn tagged_srgb(mp4: &[u8]) -> bool {
+    let colr = b"colrnclx\x00\x01\x00\x0d\x00\x01\x00";
+    mp4.windows(colr.len()).any(|window| window == colr)
+}
+
+/// MP4 stores the sRGB values of the PNG frame and tags them as sRGB, so players show the same
+/// colors. Dark colors expose any other transfer: BT.709 encoding writes #102030 as #071121.
+#[test]
+fn mp4_carries_the_png_colors_tagged_as_srgb() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("bands.motion.tsx"),
+        r##"export const composition = { width: 192, height: 64, fps: 30, duration: 0.2 };
+export default function Bands() {
+  return <Scene className="relative h-full w-full">
+    <View className="absolute" style={{ left: 0, top: 0, width: 64, height: 64, backgroundColor: "#102030" }} />
+    <View className="absolute" style={{ left: 64, top: 0, width: 64, height: 64, backgroundColor: "#808080" }} />
+    <View className="absolute" style={{ left: 128, top: 0, width: 64, height: 64, backgroundColor: "#3c78c8" }} />
+  </Scene>;
+}
+"##,
+    )
+    .unwrap();
+    success(run(
+        dir.path(),
+        &[
+            "motion",
+            "render",
+            "bands.motion.tsx",
+            "--frame",
+            "0",
+            "-o",
+            "frame.png",
+            "--json",
+        ],
+    ));
+    let expected = png(&dir.path().join("frame.png"));
+    let mut encodings = vec![("software.mp4", vec![])];
+    if valle_media::codec::hw_h264_available() {
+        encodings.push(("hardware.mp4", vec!["--hardware-encode"]));
+        encodings.push((
+            "hardware-raster.mp4",
+            vec!["--hardware-encode", "--backend", "raster"],
+        ));
+    }
+    for (file, flags) in encodings {
+        let mut command = vec!["motion", "render", "bands.motion.tsx", "-o", file, "--json"];
+        command.extend(flags);
+        success(run(dir.path(), &command));
+        assert!(
+            tagged_srgb(&std::fs::read(dir.path().join(file)).unwrap()),
+            "{file}"
+        );
+        let decoded = decode_rgba_frames(&dir.path().join(file), None).unwrap();
+        for x in [32, 96, 160] {
+            let offset = (32 * 192 + x) * 4;
+            let actual = &decoded[0].data[offset..][..3];
+            let source = &expected.data[offset..][..3];
+            assert!(
+                actual.iter().zip(source).all(|(a, b)| a.abs_diff(*b) <= 3),
+                "{file} at x {x}: {actual:?} != {source:?}"
+            );
+        }
+    }
+}
+
 #[test]
 fn hevc_mp4_is_tagged_hvc1_for_motion_and_timeline() {
-    use valle_media::codec::{Mp4VideoCodec, Muxer, VideoFrameTransport};
+    use valle_media::codec::{Mp4VideoCodec, Muxer, VideoFrameTransport, VideoTransfer};
     // Skip where the platform cannot open a hardware HEVC encoder.
     let probe = tempfile::tempdir().unwrap();
     if let Err(error) = Muxer::open_ext_rational_with_transport(
@@ -1299,6 +1367,7 @@ fn hevc_mp4_is_tagged_hvc1_for_motion_and_timeline() {
         30,
         1,
         Mp4VideoCodec::Hevc,
+        VideoTransfer::Srgb,
         None,
         true,
         None,
@@ -1354,10 +1423,10 @@ fn hevc_mp4_is_tagged_hvc1_for_motion_and_timeline() {
         let bytes = std::fs::read(dir.path().join(file)).unwrap();
         let has = |tag: &[u8]| bytes.windows(4).any(|w| w == tag);
         assert!(has(b"hvc1") && has(b"hvcC") && !has(b"hev1"), "{file}");
+        assert!(tagged_srgb(&bytes), "{file}");
         let decoded = decode_rgba_frames(&dir.path().join(file), None).unwrap();
         assert_eq!(decoded.len(), 15, "{file}");
-        // Codes 0 and 255 read the same under sRGB and the BT.709 transfer of MP4 delivery, so a
-        // flat primary survives the encoder's conversion to BT.709 YUV within a few codes.
+        // A flat primary survives the encoder's conversion to BT.709 YUV within a few codes.
         let center = &decoded[7].data[(90 * 320 + 160) * 4..][..3];
         assert!(
             center

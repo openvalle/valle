@@ -4,6 +4,7 @@
 use std::sync::OnceLock;
 
 use super::ff;
+use crate::codec::muxer::VideoTransfer;
 use anyhow::{Context as _, Result, bail};
 use ff::{Packet, Rational, color, encoder, format, frame, software};
 
@@ -169,14 +170,22 @@ pub fn set_sws_colorspace(
     }
 }
 
-/// Set primaries, transfer, matrix, and range tags before opening the video encoder.
-pub fn tag_bt709_limited(enc: &mut encoder::video::Video) {
+/// Set BT.709 primaries and matrix, limited range and the frames' transfer before opening the
+/// video encoder.
+pub fn tag_bt709_limited(enc: &mut encoder::video::Video, transfer: VideoTransfer) {
     unsafe {
         let p = enc.as_mut_ptr();
         (*p).color_primaries = ff::ffi::AVColorPrimaries::AVCOL_PRI_BT709;
-        (*p).color_trc = ff::ffi::AVColorTransferCharacteristic::AVCOL_TRC_BT709;
+        (*p).color_trc = transfer_characteristic(transfer);
         (*p).colorspace = ff::ffi::AVColorSpace::AVCOL_SPC_BT709;
         (*p).color_range = ff::ffi::AVColorRange::AVCOL_RANGE_MPEG;
+    }
+}
+
+pub fn transfer_characteristic(transfer: VideoTransfer) -> ff::ffi::AVColorTransferCharacteristic {
+    match transfer {
+        VideoTransfer::Bt709 => ff::ffi::AVColorTransferCharacteristic::AVCOL_TRC_BT709,
+        VideoTransfer::Srgb => ff::ffi::AVColorTransferCharacteristic::AVCOL_TRC_IEC61966_2_1,
     }
 }
 

@@ -11,6 +11,7 @@ use super::ffi::{
     YuvMatrix, ffmpeg_init, fill_plane0, set_sws_colorspace, tag_bt709_limited, write_mp4_header,
 };
 use crate::codec::alpha::TransparentVideoCodec;
+use crate::codec::muxer::VideoTransfer;
 use crate::frame::RgbaFrame;
 
 const QTRLE_ENCODER: &str = "qtrle";
@@ -177,7 +178,7 @@ impl TransparentVideoMuxer {
         video.set_frame_rate(nominal_frame_rate);
         video.set_aspect_ratio(Rational(1, 1));
         if codec_kind == TransparentVideoCodec::ProRes4444 {
-            tag_bt709_limited(&mut video);
+            tag_bt709_limited(&mut video, VideoTransfer::Bt709);
         }
         if global_header {
             video.set_flags(codec::Flags::GLOBAL_HEADER);
