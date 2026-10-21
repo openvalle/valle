@@ -208,7 +208,7 @@ and `do...while` are not supported.
 | Lists | Map a prepare-time array with a synchronous arrow callback; each returned node/component needs a stable `key` |
 | Arrays and tuples | Fixed shape; supported typed constructors and bounded maps; runtime indexing has explicit bounds/type checks |
 | Destructuring | Object fields, array entries, supported defaults, computed keys that are prepare-time strings, and `...rest`; the rest of `props` reads and spreads like `props` |
-| TypeScript | `as const`, `satisfies`, assertions and non-null wrappers are peeled where supported; this is not a TypeScript type checker |
+| TypeScript | Types are erased: annotations, type parameters and arguments, `type` and `interface` declarations, `as const`, `satisfies`, assertions and non-null wrappers; this is not a TypeScript type checker |
 | JSX fragments | `<>…</>` puts its children in its place, as in React; so does a component that returns one. A fragment in a list cannot take a `key`, so key its children |
 | Spread | JSX attributes spread an object literal, `props` or its rest, a map row or a prepare-time object; as in React, the last setting of a name wins and a spread never sets `key`. Arrays spread a fixed tuple or a prepare-time array. Style objects spread fixed-shape objects. Option objects such as `perUnit` or `spring` options and call arguments do not spread, and arrays have no holes |
 

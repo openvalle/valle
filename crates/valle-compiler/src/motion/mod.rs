@@ -1087,6 +1087,8 @@ struct TimeTransform {
 
 struct Compiler<'s> {
     source: &'s str,
+    /// The source as JavaScript, at the same offsets: the text the sandbox evaluates.
+    script: &'s str,
     /// The arena of the parsed program, which also holds the attributes that spreads write out.
     allocator: &'s Allocator,
     sandbox: Sandbox,

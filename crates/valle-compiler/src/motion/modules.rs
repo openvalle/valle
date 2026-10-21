@@ -26,7 +26,7 @@ use valle_motion::{ContentDigest, ResourceRef};
 
 use super::{
     AudioAnalysisEnv, CompiledMotion, CompilerDiagnostic, MeasureEnv, ModuleSourceInfo,
-    PrepareDataBinding, ShaderRegistryEnv, SourceSpan, compile_motion_impl,
+    PrepareDataBinding, ShaderRegistryEnv, SourceSpan, compile_motion_impl, type_only_spans,
 };
 
 /// Complete, explicit source closure accepted by every Motion host.
@@ -931,12 +931,14 @@ fn analyze_module(
             edits: Vec::new(),
         };
         edits.visit_program(program);
-        let mut erasures = TypeEraseCollector {
-            source,
-            edits: Vec::new(),
-        };
-        erasures.visit_program(program);
-        edits.edits.extend(erasures.edits);
+        edits.edits.extend(
+            type_only_spans(source, program)
+                .into_iter()
+                .map(|span| RenameEdit {
+                    span,
+                    replacement: String::new(),
+                }),
+        );
         edits.edits.sort_by_key(|edit| edit.span.start);
         edits
             .edits
@@ -1195,93 +1197,6 @@ impl<'a> Visit<'a> for RenameCollector<'_> {
     }
 }
 
-struct TypeEraseCollector<'a> {
-    source: &'a str,
-    edits: Vec<RenameEdit>,
-}
-
-impl TypeEraseCollector<'_> {
-    fn erase(&mut self, span: Span) {
-        if span.start < span.end {
-            self.edits.push(RenameEdit {
-                span,
-                replacement: String::new(),
-            });
-        }
-    }
-
-    fn erase_suffix(&mut self, expression: &oxc::ast::ast::Expression<'_>, span: Span) {
-        self.erase(Span::new(expression.span().end, span.end));
-    }
-}
-
-impl<'a> Visit<'a> for TypeEraseCollector<'_> {
-    fn visit_ts_type_annotation(&mut self, annotation: &oxc::ast::ast::TSTypeAnnotation<'a>) {
-        self.erase(annotation.span);
-    }
-
-    fn visit_ts_type_parameter_declaration(
-        &mut self,
-        declaration: &oxc::ast::ast::TSTypeParameterDeclaration<'a>,
-    ) {
-        self.erase(declaration.span);
-    }
-
-    fn visit_ts_type_parameter_instantiation(
-        &mut self,
-        instantiation: &oxc::ast::ast::TSTypeParameterInstantiation<'a>,
-    ) {
-        self.erase(instantiation.span);
-    }
-
-    fn visit_ts_as_expression(&mut self, expression: &oxc::ast::ast::TSAsExpression<'a>) {
-        self.erase_suffix(&expression.expression, expression.span);
-        self.visit_expression(&expression.expression);
-    }
-
-    fn visit_ts_satisfies_expression(
-        &mut self,
-        expression: &oxc::ast::ast::TSSatisfiesExpression<'a>,
-    ) {
-        self.erase_suffix(&expression.expression, expression.span);
-        self.visit_expression(&expression.expression);
-    }
-
-    fn visit_ts_non_null_expression(
-        &mut self,
-        expression: &oxc::ast::ast::TSNonNullExpression<'a>,
-    ) {
-        self.erase_suffix(&expression.expression, expression.span);
-        self.visit_expression(&expression.expression);
-    }
-
-    fn visit_ts_instantiation_expression(
-        &mut self,
-        expression: &oxc::ast::ast::TSInstantiationExpression<'a>,
-    ) {
-        self.erase(expression.type_arguments.span);
-        self.visit_expression(&expression.expression);
-    }
-
-    fn visit_formal_parameter(&mut self, parameter: &oxc::ast::ast::FormalParameter<'a>) {
-        if parameter.optional {
-            let start = parameter.pattern.span().end as usize;
-            let end = parameter
-                .type_annotation
-                .as_ref()
-                .map_or(parameter.span.end, |annotation| annotation.span.start)
-                as usize;
-            if let Some(offset) = self.source[start..end].find('?') {
-                self.erase(Span::new(
-                    (start + offset) as u32,
-                    (start + offset + 1) as u32,
-                ));
-            }
-        }
-        walk::walk_formal_parameter(self, parameter);
-    }
-}
-
 fn render_span(source: &str, span: Span, edits: &[RenameEdit]) -> Vec<SourceChunk> {
     let relevant = edits
         .iter()
@@ -1349,7 +1264,7 @@ fn insert_export(
     Ok(())
 }
 
-fn is_type_declaration(declaration: &Declaration<'_>) -> bool {
+pub(super) fn is_type_declaration(declaration: &Declaration<'_>) -> bool {
     matches!(
         declaration,
         Declaration::TSTypeAliasDeclaration(_)
@@ -1361,7 +1276,7 @@ fn is_type_declaration(declaration: &Declaration<'_>) -> bool {
     )
 }
 
-fn is_type_statement(statement: &Statement<'_>) -> bool {
+pub(super) fn is_type_statement(statement: &Statement<'_>) -> bool {
     matches!(
         statement,
         Statement::TSTypeAliasDeclaration(_)

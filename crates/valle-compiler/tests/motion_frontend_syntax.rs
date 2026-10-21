@@ -350,3 +350,31 @@ export default function D() {
         "{messages:#?}"
     );
 }
+
+#[test]
+fn one_source_reads_its_typescript_as_javascript() {
+    let artifact = compile(
+        r##"
+type Size = { width: number; height: number };
+interface Tinted { opacity: number }
+const BASE: number = 10;
+const SCALE = { small: 2, large: 3 } satisfies Record<string, number>;
+function scaled<T extends number>(value: T, factor?: number): number {
+  return value * (factor ?? SCALE.small);
+}
+const half = (value: number): number => (value as number) / 2;
+function tinted(size: Size): Size & Tinted {
+  return { width: size.width!, height: size.height, opacity: 0.5 };
+}
+export default function D() { const ctx = useTime();
+  const size = tinted({ width: scaled(BASE), height: half(BASE) + SCALE.large });
+  return <Scene>
+    <View key="a" style={{ width: size.width, height: size.height, opacity: size.opacity }} />
+  </Scene>;
+}
+"##,
+    );
+    assert_eq!(style_number(&artifact, "a", "width"), 20.0);
+    assert_eq!(style_number(&artifact, "a", "height"), 8.0);
+    assert_eq!(style_number(&artifact, "a", "opacity"), 0.5);
+}

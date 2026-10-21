@@ -36,6 +36,7 @@ impl<'s> Compiler<'s> {
                 "`x **= y` is not supported; write `x = x ** y`",
             )]);
         }
+        let script = sandbox_script(source, program, allocator);
         if let Some(span) = first_async(program) {
             return Err(vec![diagnostic_at(
                 source,
@@ -107,13 +108,13 @@ impl<'s> Compiler<'s> {
                 // Strip TypeScript-only wrappers before evaluating module constants in QuickJS.
                 if let Statement::VariableDeclaration(declaration) = statement
                     && let Some(text) =
-                        prelude_peeled_const_text(source, declaration, &exponentiations)
+                        prelude_peeled_const_text(script, declaration, &exponentiations)
                 {
                     prelude.push_str(&text);
                     prelude.push('\n');
                     continue;
                 }
-                let text = exponentiations.rewrite(source, statement.span());
+                let text = exponentiations.rewrite(script, statement.span());
                 // A cached simulation replaces its initializer in place, at its source offsets.
                 if let Statement::VariableDeclaration(declaration) = statement
                     && matches!(text, std::borrow::Cow::Borrowed(_))
@@ -181,6 +182,7 @@ impl<'s> Compiler<'s> {
         }
         Ok(Self {
             source,
+            script,
             allocator,
             sandbox,
             camera: None,
@@ -255,6 +257,7 @@ impl<'s> Compiler<'s> {
                             }
                         }
                     }
+                    declaration if super::modules::is_type_declaration(declaration) => {}
                     _ => self.illegal(DiagCode::ModuleShape, export.span(), "named exports must be `export const controls`, `export const composition` or `export const role`"),
                 },
                 Statement::ExportDefaultDeclaration(export) => match &export.declaration {
@@ -272,6 +275,7 @@ impl<'s> Compiler<'s> {
                         self.illegal(DiagCode::ModuleShape, span, message);
                     }
                 }
+                statement if super::modules::is_type_statement(statement) => {}
                 other => self.illegal(DiagCode::GrammarForbidden, other.span(), "module scope only allows static const/function declarations and the component exports"),
             }
         }
@@ -901,7 +905,7 @@ impl<'s> Compiler<'s> {
             Expression::Identifier(identifier) if identifier.name.starts_with(SPREAD_BINDING) => {
                 identifier.name.to_string().into()
             }
-            _ => self.exponentiations.rewrite(self.source, expression.span()),
+            _ => self.exponentiations.rewrite(self.script, expression.span()),
         }
     }
 

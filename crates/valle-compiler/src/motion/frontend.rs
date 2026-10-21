@@ -113,6 +113,122 @@ impl Exponentiations {
     }
 }
 
+/// The TypeScript-only syntax of a module: annotations, type parameters and arguments, the
+/// suffixes of `as`, `satisfies` and `!`, and the `?` of optional parameters. Without it the text
+/// is JavaScript.
+pub(super) fn type_only_spans(source: &str, program: &Program<'_>) -> Vec<Span> {
+    use oxc::ast_visit::{Visit, walk};
+
+    struct Scan<'t> {
+        source: &'t str,
+        spans: Vec<Span>,
+    }
+    impl Scan<'_> {
+        fn erase(&mut self, span: Span) {
+            if span.start < span.end {
+                self.spans.push(span);
+            }
+        }
+
+        fn erase_suffix(&mut self, expression: &Expression<'_>, span: Span) {
+            self.erase(Span::new(expression.span().end, span.end));
+        }
+    }
+    impl<'a> Visit<'a> for Scan<'_> {
+        fn visit_ts_type_annotation(&mut self, annotation: &oxc::ast::ast::TSTypeAnnotation<'a>) {
+            self.erase(annotation.span);
+        }
+
+        fn visit_ts_type_parameter_declaration(
+            &mut self,
+            declaration: &oxc::ast::ast::TSTypeParameterDeclaration<'a>,
+        ) {
+            self.erase(declaration.span);
+        }
+
+        fn visit_ts_type_parameter_instantiation(
+            &mut self,
+            instantiation: &oxc::ast::ast::TSTypeParameterInstantiation<'a>,
+        ) {
+            self.erase(instantiation.span);
+        }
+
+        fn visit_ts_as_expression(&mut self, expression: &oxc::ast::ast::TSAsExpression<'a>) {
+            self.erase_suffix(&expression.expression, expression.span);
+            self.visit_expression(&expression.expression);
+        }
+
+        fn visit_ts_satisfies_expression(
+            &mut self,
+            expression: &oxc::ast::ast::TSSatisfiesExpression<'a>,
+        ) {
+            self.erase_suffix(&expression.expression, expression.span);
+            self.visit_expression(&expression.expression);
+        }
+
+        fn visit_ts_non_null_expression(
+            &mut self,
+            expression: &oxc::ast::ast::TSNonNullExpression<'a>,
+        ) {
+            self.erase_suffix(&expression.expression, expression.span);
+            self.visit_expression(&expression.expression);
+        }
+
+        fn visit_ts_instantiation_expression(
+            &mut self,
+            expression: &oxc::ast::ast::TSInstantiationExpression<'a>,
+        ) {
+            self.erase(expression.type_arguments.span);
+            self.visit_expression(&expression.expression);
+        }
+
+        fn visit_formal_parameter(&mut self, parameter: &oxc::ast::ast::FormalParameter<'a>) {
+            if parameter.optional {
+                let start = parameter.pattern.span().end as usize;
+                let end = parameter
+                    .type_annotation
+                    .as_ref()
+                    .map_or(parameter.span.end, |annotation| annotation.span.start)
+                    as usize;
+                if let Some(offset) = self.source[start..end].find('?') {
+                    self.erase(Span::new(
+                        (start + offset) as u32,
+                        (start + offset + 1) as u32,
+                    ));
+                }
+            }
+            walk::walk_formal_parameter(self, parameter);
+        }
+    }
+
+    let mut scan = Scan {
+        source,
+        spans: Vec::new(),
+    };
+    scan.visit_program(program);
+    scan.spans
+}
+
+/// The module as JavaScript for QuickJS. Its TypeScript-only syntax becomes spaces, so every span
+/// of the program points at the same text in both.
+pub(super) fn sandbox_script<'s>(
+    source: &'s str,
+    program: &Program<'_>,
+    allocator: &'s Allocator,
+) -> &'s str {
+    let spans = type_only_spans(source, program);
+    if spans.is_empty() {
+        return source;
+    }
+    let mut script = source.as_bytes().to_vec();
+    for span in spans {
+        script[span.start as usize..span.end as usize].fill(b' ');
+    }
+    allocator.alloc_str(
+        std::str::from_utf8(&script).expect("TypeScript syntax starts and ends between characters"),
+    )
+}
+
 /// The first async function, `await` or `for await`. Preparation and frames are synchronous, so
 /// nothing could wait for them.
 pub(super) fn first_async(program: &Program<'_>) -> Option<Span> {
