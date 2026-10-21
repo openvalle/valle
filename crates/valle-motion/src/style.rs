@@ -23,8 +23,9 @@ mod property;
 pub mod tokens;
 pub(crate) use property::layout_probe_value;
 pub use property::{
-    GeometryReuse, PropertyAdmissionError, PropertyImpact, PropertyLowering, PropertySpec,
-    ValueLimit, property_spec,
+    CUSTOM_PROPERTIES, GeometryReuse, PropertyAdmissionError, PropertyImpact, PropertyLowering,
+    PropertySpec, UNAVAILABLE_PROPERTIES, UnavailableProperty, VALUE_LIMITS, VARIABLE_REFERENCES,
+    ValueLimit, property_spec, unsupported_css_markdown,
 };
 
 /// Author CSS variables are a permanent boundary: shared values are `const`s in the file.
@@ -33,9 +34,9 @@ pub(crate) fn custom_property_issue(name: &str, value: &str) -> StyleIssue {
         StyleIssueKind::UnsupportedProperty,
         name,
         value,
-        "author CSS custom properties are not supported",
+        CUSTOM_PROPERTIES.reason,
     )
-    .with_suggestion("a `const` at the top of the file, or a style object literal")
+    .with_suggestion(CUSTOM_PROPERTIES.suggestion)
 }
 
 /// Whether Motion admits this CSS property (each value is checked separately).

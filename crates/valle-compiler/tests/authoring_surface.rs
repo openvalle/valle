@@ -74,7 +74,7 @@ fn every_rejection_names_a_documented_replacement() {
         ),
         (
             r##"<View style={{ "--tone": "#fff" }} />"##,
-            "a `const` at the top of the file, or a style object literal",
+            "a `const` at the top of the file, or an expression for a value that changes per frame",
         ),
         (
             r#"<View className="bg-brand-500" />"#,

@@ -1075,6 +1075,33 @@ to the utility lowerer and are not author API.
 Frame-varying values are expressions, not variables. Write the expression where the value
 is used; a helper may take the value as a parameter and keep the expression in one place.
 
+### Unsupported CSS
+
+The compiler rejects these properties and values, and its diagnostic gives the reason and the
+replacement shown here. The tables are generated from the records the compiler reads.
+
+<!-- Generated from the admission records; VALLE_UPDATE_DOCS=1 cargo test -p valle-motion --test style_suggestions rewrites it. -->
+
+| Property | Why | Write instead |
+| --- | --- | --- |
+| `animation`, `animation-*` | CSS keyframes are permanently unsupported: the timeline must be a function of the sampled frame | `interpolate` over local time, for example `interpolate(ctx.seconds % 1, [0, 1], [0, 360])` |
+| `transition`, `transition-*` | transitions need an explicit state timeline; a previous rendered frame cannot be used as an event | an explicit range: `interpolate(ctx.seconds, [start, end], [a, b])` |
+| `clip-path` | CSS clip-path lowering is not implemented | `<Clip path={...} />` |
+| `mask`, `mask-image`, `mask-size`, `mask-position`, `mask-repeat`, `mask-origin`, `mask-clip`, `mask-mode`, `mask-composite`, `mask-type` | CSS mask lowering is not implemented | `<Mask paint={...} />` or a bound image source |
+| `offset`, `offset-path`, `offset-distance`, `offset-rotate`, `offset-anchor`, `offset-position` | CSS offset-path lowering is not implemented | the `motionPath` helper |
+| `border-image`, `border-image-source`, `border-image-slice`, `border-image-width`, `border-image-outset`, `border-image-repeat` | border images have no Motion paint lowering | a border, a background gradient, or an explicit `<Image>` |
+| `--*` | author CSS custom properties are not supported | a `const` at the top of the file, or an expression for a value that changes per frame |
+
+| Value | Properties | Why | Write instead |
+| --- | --- | --- | --- |
+| `min-content`, `max-content`, `fit-content`, `fit-content()` | `width`, `height`, `min-width`, `max-width`, `min-height`, `max-height`, `flex-basis` | intrinsic sizing is not implemented | an explicit length or percentage, or `measureText` for text-sized boxes |
+| `min()`, `max()`, `clamp()` | `width`, `height`, `min-width`, `max-width`, `min-height`, `max-height`, `flex-basis`, `margin`, `margin-inline`, `margin-block`, `margin-top`, `margin-right`, `margin-bottom`, `margin-left`, `margin-inline-start`, `margin-inline-end`, `padding`, `padding-inline`, `padding-block`, `padding-top`, `padding-right`, `padding-bottom`, `padding-left`, `padding-inline-start`, `padding-inline-end`, `gap`, `column-gap`, `row-gap`, `inset`, `inset-inline`, `inset-block`, `top`, `right`, `bottom`, `left`, `font-size`, `letter-spacing`, `word-spacing` | min()/max()/clamp() length math is not implemented | `calc()`, or a Motion expression for the numeric part |
+| `subgrid`, `masonry` | `grid-template-columns`, `grid-template-rows`, `grid-auto-columns`, `grid-auto-rows` | subgrid and masonry layout are not implemented | explicit tracks such as `grid-cols-[1fr_2fr]` |
+| `auto`, `scroll` | `overflow`, `overflow-x`, `overflow-y` | scrolling overflow has no Motion layout/paint implementation | `overflow-hidden`, `overflow-clip`, or `overflow-visible` |
+| `var()` | every property | CSS variable references are not supported | a `const` at the top of the file, or a literal value |
+
+<!-- End of the generated tables. -->
+
 ### Layout and sizing
 
 | Properties | Values / example | Timing and behavior |
@@ -3091,8 +3118,8 @@ events, local and remote stylesheets, selectors and media queries, CSS keyframe 
 arbitrary npm modules, runtime network/filesystem access, unseeded randomness,
 dynamic resource identities and frame-varying tree sizes.
 
-Use `Clip`/`Mask` instead of CSS `clip-path`/`mask-image`; use `motionPath` instead
-of CSS `offset-path`; use the supported ordered transform list for 2D skew/matrix.
+[Unsupported CSS](#unsupported-css) lists each rejected property and value with its
+replacement; use the supported ordered transform list for 2D skew/matrix.
 An upstream CSS parser may recognize an otherwise unsupported declaration. Always
 check the rendered frame and any prepare/render diagnostics; `motion check` cannot
 prove every future frame's numeric validity or every backend's visual behavior.

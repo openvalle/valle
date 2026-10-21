@@ -56,9 +56,9 @@ pub(crate) fn resolve(property: &str, raw: &str) -> Result<String, crate::style:
                 crate::style::StyleIssueKind::UnsupportedValue,
                 property,
                 raw,
-                "CSS variable references are not supported",
+                crate::style::VARIABLE_REFERENCES.reason,
             )
-            .with_suggestion("a `const` at the top of the file, or a literal value"));
+            .with_suggestion(crate::style::VARIABLE_REFERENCES.suggestion));
         };
         let end = matching_paren(&value, start).ok_or_else(|| {
             crate::style::StyleIssue::new(

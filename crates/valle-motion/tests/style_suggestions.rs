@@ -86,3 +86,33 @@ fn suggestions_never_ask_for_css_the_project_removed() {
         }
     }
 }
+
+/// The guide's Unsupported CSS tables come from the same records as the diagnostics. A stale table
+/// fails; `VALLE_UPDATE_DOCS=1` rewrites it in place.
+#[test]
+fn the_guide_lists_the_admission_records() {
+    const START: &str = "<!-- Generated from the admission records; VALLE_UPDATE_DOCS=1 cargo test \
+                         -p valle-motion --test style_suggestions rewrites it. -->\n";
+    const END: &str = "<!-- End of the generated tables. -->";
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../docs/motion.md");
+    let guide = std::fs::read_to_string(path).expect("docs/motion.md");
+    let (head, rest) = guide
+        .split_once(START)
+        .expect("the guide marks the generated tables");
+    let (current, tail) = rest
+        .split_once(END)
+        .expect("the guide ends the generated tables");
+    let expected = format!("\n{}\n", valle_motion::style::unsupported_css_markdown());
+    if current == expected {
+        return;
+    }
+    if std::env::var_os("VALLE_UPDATE_DOCS").is_some() {
+        std::fs::write(path, format!("{head}{START}{expected}{END}{tail}"))
+            .expect("rewrite docs/motion.md");
+        return;
+    }
+    panic!(
+        "the Unsupported CSS tables in docs/motion.md differ from the admission records; rerun \
+         with VALLE_UPDATE_DOCS=1"
+    );
+}

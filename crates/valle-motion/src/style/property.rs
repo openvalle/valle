@@ -84,39 +84,241 @@ pub struct PropertySpec<'a> {
     syntax: ValueSyntax,
 }
 
+/// A CSS property family Motion recognizes and rejects. The same records produce the admission
+/// diagnostic and the Unsupported CSS table of the Motion guide.
+pub struct UnavailableProperty {
+    /// Property names; a name ending in `*` stands for every name with that prefix.
+    pub names: &'static [&'static str],
+    pub reason: &'static str,
+    /// Paste-able replacement for the rejected declaration.
+    pub suggestion: &'static str,
+}
+pub const UNAVAILABLE_PROPERTIES: &[UnavailableProperty] = &[
+    UnavailableProperty {
+        names: &["animation", "animation-*"],
+        reason: "CSS keyframes are permanently unsupported: the timeline must be a function of the sampled frame",
+        suggestion: "`interpolate` over local time, for example `interpolate(ctx.seconds % 1, [0, 1], [0, 360])`",
+    },
+    UnavailableProperty {
+        names: &["transition", "transition-*"],
+        reason: "transitions need an explicit state timeline; a previous rendered frame cannot be used as an event",
+        suggestion: "an explicit range: `interpolate(ctx.seconds, [start, end], [a, b])`",
+    },
+    UnavailableProperty {
+        names: &["clip-path"],
+        reason: "CSS clip-path lowering is not implemented",
+        suggestion: "`<Clip path={...} />`",
+    },
+    UnavailableProperty {
+        names: &[
+            "mask",
+            "mask-image",
+            "mask-size",
+            "mask-position",
+            "mask-repeat",
+            "mask-origin",
+            "mask-clip",
+            "mask-mode",
+            "mask-composite",
+            "mask-type",
+        ],
+        reason: "CSS mask lowering is not implemented",
+        suggestion: "`<Mask paint={...} />` or a bound image source",
+    },
+    UnavailableProperty {
+        names: &[
+            "offset",
+            "offset-path",
+            "offset-distance",
+            "offset-rotate",
+            "offset-anchor",
+            "offset-position",
+        ],
+        reason: "CSS offset-path lowering is not implemented",
+        suggestion: "the `motionPath` helper",
+    },
+    UnavailableProperty {
+        names: &[
+            "border-image",
+            "border-image-source",
+            "border-image-slice",
+            "border-image-width",
+            "border-image-outset",
+            "border-image-repeat",
+        ],
+        reason: "border images have no Motion paint lowering",
+        suggestion: "a border, a background gradient, or an explicit `<Image>`",
+    },
+];
+/// Author CSS variables are a permanent boundary: a shared value is a `const` in the file. The
+/// internal `--tw-*` composition slots belong to the utility lowerer and are not author API.
+pub const CUSTOM_PROPERTIES: UnavailableProperty = UnavailableProperty {
+    names: &["--*"],
+    reason: "author CSS custom properties are not supported",
+    suggestion: "a `const` at the top of the file, or an expression for a value that changes per \
+                 frame",
+};
+
+impl UnavailableProperty {
+    fn covers(&self, name: &str) -> bool {
+        self.names
+            .iter()
+            .any(|pattern| match pattern.strip_suffix('*') {
+                Some(prefix) => name.starts_with(prefix),
+                None => name == *pattern,
+            })
+    }
+}
+
 /// Known value families that must fail explicitly until their lowering is implemented.
-/// The same records describe the restriction and produce the admission diagnostic.
+/// The same records describe the restriction, produce the admission diagnostic and the
+/// Unsupported CSS table of the Motion guide.
 pub struct ValueLimit {
+    /// The properties whose values are checked; empty for every property.
+    pub properties: &'static [&'static str],
     pub keywords: &'static [&'static str],
     pub functions: &'static [&'static str],
     pub reason: &'static str,
     /// Paste-able replacement for the rejected value.
     pub suggestion: &'static str,
 }
-const INTRINSIC: ValueLimit = ValueLimit {
-    keywords: &["min-content", "max-content", "fit-content"],
-    functions: &["fit-content"],
-    reason: "intrinsic sizing is not implemented",
-    suggestion: "an explicit length or percentage, or `measureText` for text-sized boxes",
-};
-const LENGTH_MATH: ValueLimit = ValueLimit {
+pub const VALUE_LIMITS: &[ValueLimit] = &[
+    ValueLimit {
+        properties: &[
+            "width",
+            "height",
+            "min-width",
+            "max-width",
+            "min-height",
+            "max-height",
+            "flex-basis",
+        ],
+        keywords: &["min-content", "max-content", "fit-content"],
+        functions: &["fit-content"],
+        reason: "intrinsic sizing is not implemented",
+        suggestion: "an explicit length or percentage, or `measureText` for text-sized boxes",
+    },
+    ValueLimit {
+        properties: &[
+            "width",
+            "height",
+            "min-width",
+            "max-width",
+            "min-height",
+            "max-height",
+            "flex-basis",
+            "margin",
+            "margin-inline",
+            "margin-block",
+            "margin-top",
+            "margin-right",
+            "margin-bottom",
+            "margin-left",
+            "margin-inline-start",
+            "margin-inline-end",
+            "padding",
+            "padding-inline",
+            "padding-block",
+            "padding-top",
+            "padding-right",
+            "padding-bottom",
+            "padding-left",
+            "padding-inline-start",
+            "padding-inline-end",
+            "gap",
+            "column-gap",
+            "row-gap",
+            "inset",
+            "inset-inline",
+            "inset-block",
+            "top",
+            "right",
+            "bottom",
+            "left",
+            "font-size",
+            "letter-spacing",
+            "word-spacing",
+        ],
+        keywords: &[],
+        functions: &["min", "max", "clamp"],
+        reason: "min()/max()/clamp() length math is not implemented",
+        suggestion: "`calc()`, or a Motion expression for the numeric part",
+    },
+    ValueLimit {
+        properties: &[
+            "grid-template-columns",
+            "grid-template-rows",
+            "grid-auto-columns",
+            "grid-auto-rows",
+        ],
+        keywords: &["subgrid", "masonry"],
+        functions: &[],
+        reason: "subgrid and masonry layout are not implemented",
+        suggestion: "explicit tracks such as `grid-cols-[1fr_2fr]`",
+    },
+    ValueLimit {
+        properties: &["overflow", "overflow-x", "overflow-y"],
+        keywords: &["auto", "scroll"],
+        functions: &[],
+        reason: "scrolling overflow has no Motion layout/paint implementation",
+        suggestion: "`overflow-hidden`, `overflow-clip`, or `overflow-visible`",
+    },
+];
+/// Variable consumers fail with the custom properties they would read.
+pub const VARIABLE_REFERENCES: ValueLimit = ValueLimit {
+    properties: &[],
     keywords: &[],
-    functions: &["min", "max", "clamp"],
-    reason: "min()/max()/clamp() length math is not implemented",
-    suggestion: "`calc()`, or a Motion expression for the numeric part",
+    functions: &["var"],
+    reason: "CSS variable references are not supported",
+    suggestion: "a `const` at the top of the file, or a literal value",
 };
-const SUBGRID: ValueLimit = ValueLimit {
-    keywords: &["subgrid", "masonry"],
-    functions: &[],
-    reason: "subgrid and masonry layout are not implemented",
-    suggestion: "explicit tracks such as `grid-cols-[1fr_2fr]`",
-};
-const SCROLLING: ValueLimit = ValueLimit {
-    keywords: &["auto", "scroll"],
-    functions: &[],
-    reason: "scrolling overflow has no Motion layout/paint implementation",
-    suggestion: "`overflow-hidden`, `overflow-clip`, or `overflow-visible`",
-};
+
+/// The Unsupported CSS tables of the Motion guide, generated from the admission records.
+pub fn unsupported_css_markdown() -> String {
+    fn code(names: impl Iterator<Item = String>) -> String {
+        names
+            .map(|name| format!("`{name}`"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+    fn row(cells: &[&str]) -> String {
+        let cells = cells
+            .iter()
+            .map(|cell| cell.replace('|', "\\|"))
+            .collect::<Vec<_>>();
+        format!("| {} |\n", cells.join(" | "))
+    }
+    let mut out = row(&["Property", "Why", "Write instead"]);
+    out += "| --- | --- | --- |\n";
+    for family in UNAVAILABLE_PROPERTIES.iter().chain([&CUSTOM_PROPERTIES]) {
+        let names = code(family.names.iter().map(|name| name.to_string()));
+        out += &row(&[&names, family.reason, family.suggestion]);
+    }
+    out += "\n";
+    out += &row(&["Value", "Properties", "Why", "Write instead"]);
+    out += "| --- | --- | --- | --- |\n";
+    for limit in VALUE_LIMITS.iter().chain([&VARIABLE_REFERENCES]) {
+        let values = code(
+            limit
+                .keywords
+                .iter()
+                .map(|keyword| keyword.to_string())
+                .chain(
+                    limit
+                        .functions
+                        .iter()
+                        .map(|function| format!("{function}()")),
+                ),
+        );
+        let properties = if limit.properties.is_empty() {
+            "every property".to_string()
+        } else {
+            code(limit.properties.iter().map(|name| name.to_string()))
+        };
+        out += &row(&[&values, &properties, limit.reason, limit.suggestion]);
+    }
+    out
+}
 
 impl ValueLimit {
     fn matches(&self, value: &str) -> bool {
@@ -190,48 +392,11 @@ impl std::fmt::Display for PropertyAdmissionError {
 impl std::error::Error for PropertyAdmissionError {}
 
 impl PropertySpec<'_> {
-    pub fn value_limits(&self) -> &'static [&'static ValueLimit] {
-        match self.name {
-            "width" | "height" | "min-width" | "max-width" | "min-height" | "max-height"
-            | "flex-basis" => &[&INTRINSIC, &LENGTH_MATH],
-            "grid-template-columns"
-            | "grid-template-rows"
-            | "grid-auto-columns"
-            | "grid-auto-rows" => &[&SUBGRID],
-            "overflow" | "overflow-x" | "overflow-y" => &[&SCROLLING],
-            "margin"
-            | "margin-inline"
-            | "margin-block"
-            | "margin-top"
-            | "margin-right"
-            | "margin-bottom"
-            | "margin-left"
-            | "margin-inline-start"
-            | "margin-inline-end"
-            | "padding"
-            | "padding-inline"
-            | "padding-block"
-            | "padding-top"
-            | "padding-right"
-            | "padding-bottom"
-            | "padding-left"
-            | "padding-inline-start"
-            | "padding-inline-end"
-            | "gap"
-            | "column-gap"
-            | "row-gap"
-            | "inset"
-            | "inset-inline"
-            | "inset-block"
-            | "top"
-            | "right"
-            | "bottom"
-            | "left"
-            | "font-size"
-            | "letter-spacing"
-            | "word-spacing" => &[&LENGTH_MATH],
-            _ => &[],
-        }
+    /// The value families this property cannot lower yet.
+    pub fn value_limits(&self) -> impl Iterator<Item = &'static ValueLimit> + '_ {
+        VALUE_LIMITS
+            .iter()
+            .filter(|limit| limit.properties.contains(&self.name))
     }
 
     /// Reject a value this property cannot lower, with the replacement to write instead.
@@ -241,9 +406,9 @@ impl PropertySpec<'_> {
                 super::StyleIssueKind::UnsupportedValue,
                 self.name,
                 value,
-                "CSS variable references are not supported",
+                VARIABLE_REFERENCES.reason,
             )
-            .with_suggestion("a `const` at the top of the file, or a literal value"));
+            .with_suggestion(VARIABLE_REFERENCES.suggestion));
         }
         for limit in self.value_limits() {
             if limit.matches(value) {
@@ -260,14 +425,11 @@ impl PropertySpec<'_> {
     }
 
     pub fn admit(&self) -> Result<(), PropertyAdmissionError> {
-        if self.name.starts_with("--") {
-            // Author CSS variables are gone: a value that has to be shared is a `const` in the
-            // file, and a value that changes per frame is an expression.
+        if CUSTOM_PROPERTIES.covers(self.name) {
             return Err(PropertyAdmissionError::Unavailable {
                 property: self.name.into(),
-                reason: "author CSS custom properties are not supported",
-                suggestion: "a `const` at the top of the file, or an expression for a value that \
-                             changes per frame",
+                reason: CUSTOM_PROPERTIES.reason,
+                suggestion: CUSTOM_PROPERTIES.suggestion,
             });
         }
         if self.name.is_empty()
@@ -500,46 +662,14 @@ pub fn property_spec(name: &str) -> PropertySpec<'_> {
     if name.starts_with("--") {
         return spec.typed(&[T::String, T::Number], false);
     }
-    let unavailable = if name == "animation" || name.starts_with("animation-") {
-        Some((
-            "CSS keyframes are permanently unsupported: the timeline must be a function of the sampled frame",
-            "`interpolate` over local time, for example `interpolate(ctx.seconds % 1, [0, 1], [0, 360])`",
-        ))
-    } else if name == "transition" || name.starts_with("transition-") {
-        Some((
-            "transitions need an explicit state timeline; a previous rendered frame cannot be used as an event",
-            "an explicit range: `interpolate(ctx.seconds, [start, end], [a, b])`",
-        ))
-    } else {
-        match name {
-            "clip-path" => Some((
-                "CSS clip-path lowering is not implemented",
-                "`<Clip path={...} />`",
-            )),
-            "mask" | "mask-image" | "mask-size" | "mask-position" | "mask-repeat"
-            | "mask-origin" | "mask-clip" | "mask-mode" | "mask-composite" | "mask-type" => Some((
-                "CSS mask lowering is not implemented",
-                "`<Mask paint={...} />` or a bound image source",
-            )),
-            "offset" | "offset-path" | "offset-distance" | "offset-rotate" | "offset-anchor"
-            | "offset-position" => Some((
-                "CSS offset-path lowering is not implemented",
-                "the `motionPath` helper",
-            )),
-            "border-image"
-            | "border-image-source"
-            | "border-image-slice"
-            | "border-image-width"
-            | "border-image-outset"
-            | "border-image-repeat" => Some((
-                "border images have no Motion paint lowering",
-                "a border, a background gradient, or an explicit `<Image>`",
-            )),
-            _ => None,
-        }
-    };
-    if let Some((reason, suggestion)) = unavailable {
-        spec.lowering = Lowering::Unavailable { reason, suggestion };
+    if let Some(family) = UNAVAILABLE_PROPERTIES
+        .iter()
+        .find(|family| family.covers(name))
+    {
+        spec.lowering = Lowering::Unavailable {
+            reason: family.reason,
+            suggestion: family.suggestion,
+        };
         spec.geometry_reuse = Reuse::Rebuild;
         return spec;
     }
