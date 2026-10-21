@@ -141,6 +141,12 @@ fn shared_f16_filters_render_on_real_metal() {
                 "../../valle-compiler/tests/fixtures/motion/composition/scene-bloom.motion.tsx"
             ),
         ),
+        (
+            "node-bloom",
+            include_str!(
+                "../../valle-compiler/tests/fixtures/motion/composition/node-bloom.motion.tsx"
+            ),
+        ),
         ("radial-blur", radial),
         ("radial-clipped", clipped_radial.as_str()),
         ("radial-translucent", translucent_radial.as_str()),

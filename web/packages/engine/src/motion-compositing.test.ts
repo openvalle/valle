@@ -293,6 +293,7 @@ test("Motion composition, easing and color interpolation match analytic pixels o
   const multilinePathText = await readFile(join(fixtureDir,"multiline-path-text.motion.tsx"),"utf8");
   const nodeGlow = await readFile(join(fixtureDir,"node-glow.motion.tsx"),"utf8");
   const sceneBloom = await readFile(join(fixtureDir,"scene-bloom.motion.tsx"),"utf8");
+  const nodeBloom = await readFile(join(fixtureDir,"node-bloom.motion.tsx"),"utf8");
   const chromaticAberration = await readFile(join(fixtureDir,"chromatic-aberration.motion.tsx"),"utf8");
   const radialBlur = await readFile(join(fixtureDir,"radial-blur.motion.tsx"),"utf8");
   const filmGrain = await readFile(join(fixtureDir,"film-grain.motion.tsx"),"utf8");
@@ -433,6 +434,10 @@ test("Motion composition, easing and color interpolation match analytic pixels o
     { name:"scene-bloom", source:sceneBloom, body:"", width:640, height:360, frames:[0,30,0], probes:[] },
     { name:"scene-bloom-half", source:sceneBloom.replace("intensity: 1.2", "intensity: 0.6"), body:"", width:640, height:360, frames:[0], probes:[] },
     { name:"scene-bloom-no-filter", source:sceneBloom.replace(' bloom={{ threshold: 0.8, intensity: 1.2, radius: 48 }}', ''), body:"", width:640, height:360, frames:[0], probes:[] },
+    // Halfway through, the animated intensity is the half fixture's.
+    { name:"scene-bloom-animated", source:sceneBloom.replace("  return <Scene", "  const ctx = useTime();\n  return <Scene").replace("intensity: 1.2", "intensity: 1.2 * ctx.progress"), body:"", width:640, height:360, frames:[30], probes:[] },
+    { name:"node-bloom", source:nodeBloom, body:"", width:640, height:360, frames:[0,30,0], probes:[] },
+    { name:"node-bloom-no-filter", source:nodeBloom.replace(', filter: "bloom(32px 1.5 0.4)"', ''), body:"", width:640, height:360, frames:[0], probes:[] },
     { name:"chromatic-aberration", source:chromaticAberration, body:"", width:640, height:360, frames:[0,30,0], probes:[] },
     { name:"chromatic-aberration-no-filter", source:chromaticAberration.replace(', filter: "chromatic-aberration(6px)"', ''), body:"", width:640, height:360, frames:[0], probes:[] },
     { name:"radial-blur", source:radialBlur, body:"", width:640, height:360, frames:[0,30,0], probes:[] },
@@ -787,6 +792,27 @@ test("Motion composition, easing and color interpolation match analytic pixels o
       expect(dim,`${label} scene-bloom gray edge +30`).toBeLessThanOrEqual(20);
       expect(hot,`${label} scene-bloom intensity control`).toBeGreaterThan(brightness(pixel("scene-bloom-half",210,180)));
       expect(brightness(pixel("scene-bloom-no-filter",210,180)),`${label} scene-bloom filter control`).toBeLessThanOrEqual(20);
+      const animated = frameImages.get("scene-bloom-animated/30")![label];
+      const half = frameImages.get("scene-bloom-half/0")![label];
+      expect(animated.every((value,index)=>Math.abs(value-half[index]!)<=1),`${label} scene-bloom animated intensity`).toBe(true);
+    }
+    if (!only || only === "node-bloom") for (const label of ["native","web"] as const) {
+      const pixel = (name:string,x:number,y:number) => {
+        const image = frameImages.get(`${name}/0`)![label];
+        const at = (y*640+x)*4;
+        return [image[at]!,image[at+1]!,image[at+2]!] as const;
+      };
+      // The cyan spot's halo lights the dark card around it and crosses the card's edge, where
+      // added light barely shows on the bright background.
+      const halo = pixel("node-bloom",414,180), plain = pixel("node-bloom-no-filter",414,180);
+      expect(halo[1]-plain[1],`${label} node-bloom halo on the card`).toBeGreaterThanOrEqual(20);
+      expect(halo[2]-plain[2],`${label} node-bloom cyan halo`).toBeGreaterThanOrEqual(20);
+      expect(pixel("node-bloom",422,180)[2],`${label} node-bloom halo past the card`)
+        .toBeGreaterThan(pixel("node-bloom-no-filter",422,180)[2]);
+      // Only the node's bright pixels bloom: the background and the dark card stay as drawn.
+      for (const [x,y] of [[40,40],[600,320],[240,140],[240,220]])
+        for (const [channel,value] of pixel("node-bloom",x,y).entries())
+          expect(Math.abs(value-pixel("node-bloom-no-filter",x,y)[channel]!),`${label} node-bloom leaves (${x},${y})`).toBeLessThanOrEqual(1);
     }
     if (!only || only === "radial-blur") for (const label of ["native","web"] as const) {
       const red = (name:string,x:number,y:number) =>

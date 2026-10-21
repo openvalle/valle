@@ -4147,16 +4147,22 @@ impl SceneArtifact {
                     ]
                     .iter()
                     .all(|(property, max)| {
+                        // An expression's value is checked against the same bounds each frame.
                         bloom_styles.iter().any(|style| {
                             style.property == *property
-                                && matches!(&style.value, StyleValue::Static { value: MotionValue::Number(value) }
-                                    if value.is_finite() && (0.0..=*max).contains(value))
+                                && match &style.value {
+                                    StyleValue::Static {
+                                        value: MotionValue::Number(value),
+                                    } => value.is_finite() && (0.0..=*max).contains(value),
+                                    StyleValue::Static { .. } => false,
+                                    StyleValue::Expr { .. } => true,
+                                }
                         })
                     });
                 if !complete {
                     errors.push(ValidationError::new(
                         format!("/nodes/{at}/styles"),
-                        "bloom needs static threshold, knee, intensity, and radius slots within bounds",
+                        "bloom needs threshold, knee, intensity, and radius slots, each static within bounds or an expression",
                     ));
                 }
             }

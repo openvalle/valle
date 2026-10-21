@@ -120,6 +120,7 @@ fn filter_chain(program: &DrawProgram) -> Vec<&'static str> {
             Filter::Saturate { .. } => "saturate",
             Filter::DropShadow { .. } => "drop-shadow",
             Filter::Glow { .. } => "glow",
+            Filter::Bloom { .. } => "bloom",
             Filter::ChromaticAberration { .. } => "chromatic-aberration",
             Filter::RadialBlur { .. } => "radial-blur",
             Filter::FilmGrain { .. } => "film-grain",
@@ -584,12 +585,92 @@ fn scene_bloom_is_a_bounded_threshold_filter() {
         "{ threshold: 0.8, intensity: 4.1, radius: 48 }",
         "{ threshold: 0.8, intensity: 1.2, radius: 129 }",
         "{ threshold: 0.8, intensity: 1.2 }",
-        "{ threshold: 0.8, intensity: 1.2, radius: useTime().progress }",
+        "{ threshold: 0.8, intensity: 1.2, radius: 129 + ctx.progress }",
         "{ threshold: 0.8, intensity: 1.2, radius: 48, bad: 1 }",
     ] {
-        let source = source.replace("{ threshold: 0.8, intensity: 1.2, radius: 48 }", invalid);
+        let source = animated(source, invalid);
         assert!(compile_motion(&source).is_err(), "{invalid}");
     }
+}
+
+/// The Scene bloom fixture with `ctx` in scope and other bloom parameters.
+fn animated(source: &str, bloom: &str) -> String {
+    source
+        .replace(
+            "  return <Scene",
+            "  const ctx = useTime();\n  return <Scene",
+        )
+        .replace("{ threshold: 0.8, intensity: 1.2, radius: 48 }", bloom)
+}
+
+#[test]
+fn scene_bloom_parameters_animate() {
+    let source = animated(
+        include_str!("fixtures/motion/composition/scene-bloom.motion.tsx"),
+        "{ threshold: 0.8, intensity: 1.2, radius: 96 * ctx.progress, knee: ctx.progress }",
+    );
+    let blooms = samples(&source, &[30, 60])
+        .iter()
+        .map(|program| {
+            filters(program)
+                .into_iter()
+                .find_map(|filter| match filter {
+                    Filter::Bloom { knee, radius, .. } => Some((knee, radius)),
+                    _ => None,
+                })
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(blooms, [(1.0 / 3.0, 32.0), (2.0 / 3.0, 64.0)]);
+}
+
+#[test]
+fn bloom_is_a_bounded_threshold_node_filter() {
+    let program = snapshot("", "filter:'bloom(48px 1.2 0.8)'");
+    assert!(filters(&program).iter().any(|filter| {
+        matches!(filter, Filter::Bloom { threshold, knee, intensity, radius }
+            if *threshold == 0.8 && *knee == 0.1
+                && *intensity == 1.2 && *radius == 48.0)
+    }));
+    let program = snapshot(
+        "",
+        "filter:'blur(2px) bloom(48px 1.2 0.8 0.25) saturate(1.5)'",
+    );
+    assert_eq!(filter_chain(&program), ["blur", "bloom", "saturate"]);
+    assert!(
+        filters(&program)
+            .iter()
+            .any(|filter| matches!(filter, Filter::Bloom { knee, .. } if *knee == 0.25))
+    );
+    let animated = samples(
+        &scene("", "filter:`bloom(${ctx.progress * 96}px 1.2 0.8)`"),
+        &[30, 60],
+    );
+    let radii = animated
+        .iter()
+        .flat_map(filters)
+        .filter_map(|filter| match filter {
+            Filter::Bloom { radius, .. } => Some(radius),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(radii, [32.0, 64.0]);
+    for value in [
+        "bloom(129px 1.2 0.8)",
+        "bloom(-1px 1.2 0.8)",
+        "bloom(48 1.2 0.8)",
+        "bloom(48px 4.1 0.8)",
+        "bloom(48px 1.2 1.1)",
+        "bloom(48px 1.2 0.8 -0.1)",
+        "bloom(48px 1.2)",
+        "bloom(48px 1.2 0.8 0.1 1)",
+    ] {
+        assert!(
+            compile_motion(&scene("", &format!("filter:'{value}'"))).is_err(),
+            "{value}"
+        );
+    }
+    assert!(compile_motion(&scene("", "filter:`bloom(48px 1.2 ${1.5 + ctx.progress})`")).is_err());
 }
 
 #[test]

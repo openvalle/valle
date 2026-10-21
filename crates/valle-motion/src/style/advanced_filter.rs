@@ -40,6 +40,16 @@ pub fn parameters(name: &str) -> &'static [Parameter] {
     }
     match name {
         "glow" => const { &[p("radius", "px", 0.0, 128.0), p("intensity", "", 0.0, 4.0)] },
+        "bloom" => {
+            const {
+                &[
+                    p("radius", "px", 0.0, 128.0),
+                    p("intensity", "", 0.0, 4.0),
+                    p("threshold", "", 0.0, 1.0),
+                    p("knee", "", 0.0, 1.0),
+                ]
+            }
+        }
         "chromatic-aberration" => const { &[p("offset", "px", -256.0, 256.0)] },
         "radial-blur" => {
             const {
@@ -139,7 +149,12 @@ pub fn parse(value: &str) -> Result<Option<FilterOp>, String> {
     };
     if !matches!(
         name,
-        "glow" | "chromatic-aberration" | "radial-blur" | "film-grain" | "lens-distortion"
+        "glow"
+            | "bloom"
+            | "chromatic-aberration"
+            | "radial-blur"
+            | "film-grain"
+            | "lens-distortion"
     ) {
         return Ok(None);
     }
@@ -148,6 +163,8 @@ pub fn parse(value: &str) -> Result<Option<FilterOp>, String> {
             "invalid {name}() parameters: {}",
             match name {
                 "glow" => "radius 0..=128px, intensity 0..=4, and color",
+                "bloom" =>
+                    "radius 0..=128px, intensity 0..=4, threshold 0..=1, and optional knee 0..=1",
                 "chromatic-aberration" => "one finite pixel offset within ±256px",
                 "radial-blur" => "center x/y within ±10000000px and amount 0..=128px",
                 "film-grain" => "unsigned integer seed, amount 0..=1, size 1..=64px",
@@ -184,6 +201,16 @@ pub fn parse(value: &str) -> Result<Option<FilterOp>, String> {
             radius: number(0, true, 0.0, 128.0)?,
             intensity: number(1, false, 0.0, 4.0)?,
             color: AuthorColor::from_srgb8(Rgba::parse(&parts[2..].join(" ")).ok_or_else(invalid)?),
+        },
+        "bloom" if matches!(parts.len(), 3 | 4) => FilterOp::Bloom {
+            radius: number(0, true, 0.0, 128.0)?,
+            intensity: number(1, false, 0.0, 4.0)?,
+            threshold: number(2, false, 0.0, 1.0)?,
+            knee: if parts.len() == 4 {
+                number(3, false, 0.0, 1.0)?
+            } else {
+                0.1
+            },
         },
         "chromatic-aberration" if parts.len() == 1 => FilterOp::ChromaticAberration {
             offset_x: number(0, true, -256.0, 256.0)?,

@@ -234,7 +234,12 @@ impl<'s> Compiler<'s> {
                     ) else {
                         continue;
                     };
-                    let mut numbers = [None; 4];
+                    if ["threshold", "intensity", "radius"].iter().any(|name| !fields.contains_key(*name)) {
+                        self.illegal(DiagCode::GrammarForbidden, object.span(),
+                            "Scene bloom requires threshold, intensity, and radius");
+                        continue;
+                    }
+                    let mut values: [Option<StyleValue>; 4] = Default::default();
                     for (index, (name, max)) in [
                         ("threshold", 1.0),
                         ("knee", 1.0),
@@ -244,21 +249,26 @@ impl<'s> Compiler<'s> {
                     .into_iter()
                     .enumerate()
                     {
-                        let Some(expression) = fields.get(name) else { continue };
-                        numbers[index] = self.eval_static(expression).and_then(|value| value.as_f64())
-                            .filter(|value| value.is_finite() && (0.0..=max).contains(value));
-                        if numbers[index].is_none() {
-                            self.illegal(DiagCode::GrammarForbidden, expression.span(),
-                                format!("Scene bloom {name} must be a static number in 0..={max}"));
-                        }
+                        let Some(expression) = fields.get(name) else {
+                            values[index] = Some(StyleValue::Static { value: MotionValue::Number(0.1) });
+                            continue;
+                        };
+                        values[index] = if let Some(value) = self.eval_static(expression) {
+                            let value = value.as_f64().filter(|value| value.is_finite() && (0.0..=max).contains(value));
+                            if value.is_none() {
+                                self.illegal(DiagCode::GrammarForbidden, expression.span(),
+                                    format!("Scene bloom {name} must be a number in 0..={max}"));
+                            }
+                            value.map(|value| StyleValue::Static { value: MotionValue::Number(value) })
+                        } else {
+                            // Each frame's value is checked against the same bounds as it draws.
+                            self.lower_expr(expression).inspect(|expr| {
+                                self.diagnose_parameter_range(*expr, &format!("Scene bloom {name}"), "", 0.0, max);
+                            }).map(|expr| StyleValue::Expr { expr })
+                        };
                     }
-                    if let (Some(threshold), Some(intensity), Some(radius)) =
-                        (numbers[0], numbers[2], numbers[3])
-                    {
-                        scene_bloom = Some([threshold, numbers[1].unwrap_or(0.1), intensity, radius]);
-                    } else {
-                        self.illegal(DiagCode::GrammarForbidden, object.span(),
-                            "Scene bloom requires threshold, intensity, and radius");
+                    if let [Some(threshold), Some(knee), Some(intensity), Some(radius)] = values {
+                        scene_bloom = Some([threshold, knee, intensity, radius]);
                     }
                 }
                 "camera" if kind_tag == "scene3d" => {
@@ -952,9 +962,7 @@ impl<'s> Compiler<'s> {
             ] {
                 styles.push(StyleBinding {
                     property: property.into(),
-                    value: StyleValue::Static {
-                        value: MotionValue::Number(value),
-                    },
+                    value,
                 });
             }
         }

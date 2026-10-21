@@ -4669,26 +4669,29 @@ fn resolve_advanced_filters(
         .any(|style| style.property.starts_with("motion-bloom-"))
     {
         let mut params = [0.0; 4];
-        for (index, (property, max)) in [
-            ("motion-bloom-threshold", 1.0),
-            ("motion-bloom-knee", 1.0),
-            ("motion-bloom-intensity", 4.0),
-            ("motion-bloom-radius", 128.0),
+        for (index, (name, max)) in [
+            ("threshold", 1.0),
+            ("knee", 1.0),
+            ("intensity", 4.0),
+            ("radius", 128.0),
         ]
         .into_iter()
         .enumerate()
         {
-            let Some(MotionValue::Number(value)) = resolved_style(node, values, at, property)?
+            let property = format!("motion-bloom-{name}");
+            let Some(MotionValue::Number(value)) = resolved_style(node, values, at, &property)?
             else {
                 return Err(bad_advanced_filter(
                     node,
-                    "bloom parameter is missing or invalid",
+                    format!("Scene bloom {name} is missing or not a number"),
                 ));
             };
             if !value.is_finite() || !(0.0..=max).contains(value) {
                 return Err(bad_advanced_filter(
                     node,
-                    "bloom parameter is out of bounds",
+                    format!(
+                        "Scene bloom {name} = {value} is outside 0..={max}; use clamp() explicitly if intended"
+                    ),
                 ));
             }
             params[index] = *value;

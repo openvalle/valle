@@ -1328,8 +1328,18 @@ in 0–128 px; intensity is in 0–4.
 `Scene bloom={{ threshold: 0.8, intensity: 1.2, radius: 48 }}` extracts bright
 pixels from the whole scene and adds a soft halo through a five-level F16
 downsample/upsample pyramid. `threshold` is in 0–1, `intensity` in 0–4, and
-`radius` in 0–128 px. The optional `knee` is in 0–1 and defaults to 0.1. These
-values must be static; the effect runs after the scene's children are composed.
+`radius` in 0–128 px. The optional `knee` is in 0–1 and defaults to 0.1. Each
+value may be an expression, as in `intensity: 1.2 * ctx.progress`, and each frame's
+value must stay within these bounds. The effect runs after the scene's children are
+composed.
+
+`filter: "bloom(48px 1.2 0.8)"` does the same for one node and its descendants:
+only their bright pixels glow, so a highlight can bloom over a bright background
+that Scene bloom would light up too. The radius and intensity come first, as in
+`glow()`, then the threshold and an optional knee: `bloom(48px 1.2 0.8 0.2)`. The
+bounds and the pyramid are Scene bloom's. Inside the node the halo adds to its
+light; beyond it, the halo is drawn over what lies behind with an opacity equal to
+its brightest channel.
 
 Use non-negative blur lengths, finite scalar/percentage factors and explicit
 angle units for hue rotation. `drop-shadow` uses offsets, optional blur and color;
